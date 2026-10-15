@@ -187,13 +187,17 @@ struct SettingsView: View {
     @ViewBuilder private var detail: some View {
         switch model.settingsTab {
         case .appearance:
-            SettingsPage("Appearance", subtitle: "Fonts for chat, code and tool output.") { AppearanceSettings() }
+            SettingsPage("Appearance", subtitle: "Fonts for chat, code and tool output.") {
+                AppearanceDefaultsButton()
+            } content: {
+                AppearanceSettings()
+            }
         case .notifications:
             SettingsPage("Notifications", subtitle: "Pilot only interrupts you for things that need you.") { NotificationSettings() }
         case .energy:
             SettingsPage("Energy", subtitle: "Keep work moving. Let the display rest.") { EnergySettings() }
         case .terminal:
-            SettingsPage("Terminal", subtitle: "The session terminal runs on Ghostty.") { TerminalSettings() }
+            SettingsPage("Terminal", subtitle: "The chat terminal runs on Ghostty.") { TerminalSettings() }
         case .updates:
             SettingsPage("Updates", subtitle: "Pilot updates itself from private GitHub releases.") { UpdateSettings() }
         case let .project(id):
@@ -246,7 +250,7 @@ private struct SettingsSidebar: View {
                             .tag(SettingsTab.project(project.id))
                     }
                     if projects.isEmpty {
-                        Text("Add a project to group sessions by repository.")
+                        Text("Add a project to group chats by repository.")
                             .font(.pilot(.caption))
                             .foregroundStyle(Theme.mutedForeground)
                             .fixedSize(horizontal: false, vertical: true)
@@ -318,6 +322,12 @@ extension SettingsPage where Accessory == EmptyView, Footer == EmptyView {
     }
 }
 
+extension SettingsPage where Footer == EmptyView {
+    init(_ title: String, subtitle: String, @ViewBuilder accessory: () -> Accessory, @ViewBuilder content: () -> Content) {
+        self.init(title, subtitle: subtitle, accessory: accessory, content: content, footer: { EmptyView() })
+    }
+}
+
 /// Explanatory text under a settings section, leading-aligned like the rows above it.
 struct SettingsFooter: View {
     let text: String
@@ -335,13 +345,25 @@ struct SettingsFooter: View {
     }
 }
 
+/// The Appearance page's accessory: puts every font back to the system defaults.
+private struct AppearanceDefaultsButton: View {
+    @ObservedObject private var settings = AppSettings.shared
+
+    var body: some View {
+        Button("Restore Defaults") { settings.resetFonts() }
+            .controlSize(.small)
+            .disabled(settings.fonts == .standard)
+            .help("Use the system fonts and default sizes")
+    }
+}
+
 private struct AppearanceSettings: View {
     @ObservedObject private var settings = AppSettings.shared
 
     var body: some View {
         Section("Preview") {
             VStack(alignment: .leading, spacing: 8) {
-                Text("The flaky test was a race in the session reopen path.").font(settings.fonts.body)
+                Text("The flaky test was a race in the chat reopen path.").font(settings.fonts.body)
                 Text("npm test -- --grep reopen").font(settings.fonts.mono)
             }
             .padding(.vertical, 4)
@@ -353,12 +375,6 @@ private struct AppearanceSettings: View {
         Section("Code and tool output") {
             FontFamilyPicker(title: "Font", selection: $settings.codeFontFamily, system: AppSettings.systemMono, families: AppSettings.monospacedFamilies)
             SizeStepper(title: "Size", value: $settings.codeFontSize, range: 9 ... 20)
-        }
-        Section {
-            HStack {
-                Spacer()
-                Button("Restore Defaults") { settings.resetFonts() }
-            }
         }
     }
 }
@@ -373,7 +389,7 @@ private struct NotificationSettings: View {
                 Text("Notify when an open pull request has no blockers left. Pilot never merges.")
             }
         } footer: {
-            SettingsFooter("Failed sessions, unreviewed results and mission questions always show in the sidebar and menu bar.")
+            SettingsFooter("Failed chats, unreviewed results and mission questions always show under Needs you, in the sidebar, Inbox and menu bar.")
         }
     }
 }
@@ -433,7 +449,7 @@ private struct SizeStepper: View {
                 Spacer()
                 Text("\(value, specifier: value.rounded() == value ? "%.0f" : "%.1f") pt")
                     .monospacedDigit()
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.mutedForeground)
             }
         }
     }
@@ -543,12 +559,12 @@ private struct ProjectSettings: View {
             }
             Section("Workspace") {
                 Toggle(isOn: $editor.privateClones) {
-                    Text("Isolated workspace per session")
-                    Text("Sessions get their own working copy, so they never touch your checkout. Turn off to run in the folder itself.")
+                    Text("Isolated workspace per chat")
+                    Text("Chats get their own working copy, so they never touch your checkout. Turn off to run in the folder itself.")
                 }
                 Toggle(isOn: $editor.requirePullRequest) {
                     Text("Require a pull request")
-                    Text("Publish changes through a pull request. Turning this off allows direct pushes to the default branch. Applies when a session worker next starts.")
+                    Text("Publish changes through a pull request. Turning this off allows direct pushes to the default branch. Applies when a chat next starts working.")
                 }
             }
             TrackingSettingsSection(project: project, editor: editor)
@@ -574,7 +590,7 @@ private struct ProjectSettings: View {
         .confirmationDialog("Remove \(project.name)?", isPresented: $confirmingRemoval) {
             Button("Remove Project", role: .destructive) { Task { await remove() } }
         } message: {
-            Text("Its sessions are kept and the folder on disk is not changed.")
+            Text("Its chats are kept and the folder on disk is not changed.")
         }
     }
 

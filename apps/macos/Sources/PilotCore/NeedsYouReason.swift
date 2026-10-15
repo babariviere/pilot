@@ -34,8 +34,7 @@ public struct NeedsYouReason: Codable, Hashable, Sendable {
             let date = Date(timeIntervalSince1970: resumesAt / 1000)
             return "Limit reached · resumes \(UsageFormatting.clock(date, now: now))"
         case .notReviewed:
-            let age = SessionTimeFormatting.relative(at.isFinite ? at : now.timeIntervalSince1970 * 1000, now: now)
-            return "Not reviewed: finished \(age == "now" ? "just now" : "\(age) ago")"
+            return "Not reviewed: finished \(RelativeDate.ago(at.isFinite ? at : now.timeIntervalSince1970 * 1000, now: now))"
         }
     }
 

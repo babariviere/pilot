@@ -1,7 +1,9 @@
 import PilotCore
 import SwiftUI
 
-/// Archives remain in the client's WebSocket inventory, but never in normal session lists.
+/// Archived chats in the reading column: project and mission chips, search in the toolbar, and one-line rows that
+/// open the chat, with Restore under the pointer, in the context menu and on keyboard focus. Archives remain in the
+/// client's WebSocket inventory, but never in normal chat lists.
 struct ArchiveView: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
@@ -17,36 +19,21 @@ struct ArchiveView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        let shown = sessions
+        VStack(alignment: .leading, spacing: 12) {
             PageHeader("Archived chats", subtitle: "History and workspaces are kept. Restore a chat to send messages again.")
-            ResponsiveControlsLayout(horizontalSpacing: 16, verticalSpacing: 8) { filters }
-            TextField("Search archived chats", text: $browser.query)
-                .textFieldStyle(.roundedBorder)
-            if browser.loading {
-                ProgressView("Loading archived chats…")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let error = browser.error {
-                EmptyStateView(icon: PilotIcon.warning, title: "Couldn't load archived chats", message: error) {
-                    Button("Retry") { browser.reloadRevision += 1 }
-                }
-                .frame(maxHeight: .infinity)
-            } else if sessions.isEmpty {
-                EmptyStateView(icon: PilotIcon.archive,
-                               title: browser.query.isEmpty ? "No archived chats" : "No matching archived chats",
-                               message: browser.query.isEmpty
-                                   ? "Chats you archive appear here, with their history."
-                                   : "Try another search, project or mission.")
-                    .frame(maxHeight: .infinity)
-            } else {
-                archiveList
-            }
+                .padding(.horizontal, 8)
+            ArchiveFilterBar(shown: browser.loading || browser.error != nil ? nil : shown.count)
+            HairlineDivider()
+            content(shown)
         }
-        .padding(24)
+        .padding(.horizontal, 24)
+        .padding(.top, 24)
+        .frame(maxWidth: Theme.column, maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.background)
         .navigationTitle("Archived chats")
-        .toolbar {
-            Button("Home") { model.newSession(in: nil) }
-        }
+        .searchable(text: $browser.query, placement: .toolbar, prompt: "Search archived chats")
         .task(id: Request(filter: model.archiveFilter, connected: client.connected, revision: browser.reloadRevision)) {
             let filter = model.archiveFilter
             await browser.load(filter) { try await client.archivedSessions(filter: filter) }
@@ -67,65 +54,160 @@ struct ArchiveView: View {
         let revision: Int
     }
 
-    @ViewBuilder private var filters: some View {
-        Picker("Project", selection: Binding(
-            get: { model.archiveProjectId ?? "" },
-            set: { model.chooseArchiveProject($0.isEmpty ? nil : $0) }
-        )) {
-            Text("All projects").tag("")
-            ForEach(client.projects) { project in
-                Text(project.name).tag(project.id)
+    @ViewBuilder private func content(_ shown: [SessionSummary]) -> some View {
+        if browser.loading {
+            ProgressView("Loading archived chats…")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let error = browser.error {
+            EmptyStateView(icon: PilotIcon.warning, title: "Couldn't load archived chats", message: error) {
+                Button("Retry") { browser.reloadRevision += 1 }
             }
-        }
-        .frame(maxWidth: 280)
-        Picker("Mission", selection: Binding(
-            get: { model.archiveMissionId ?? "" },
-            set: { model.chooseArchiveMission($0.isEmpty ? nil : $0) }
-        )) {
-            Text("All missions").tag("")
-            ForEach(client.missions.filter { model.archiveProjectId == nil || $0.projectId == model.archiveProjectId }) { mission in
-                Text(model.archiveProjectId == nil
-                     ? "\(mission.title) · \(client.project(mission.projectId)?.name ?? "Unknown project")"
-                     : mission.title).tag(mission.id)
-            }
-        }
-        .frame(maxWidth: 320)
-    }
-
-    private var archiveList: some View {
-        List(sessions) { session in
-            HStack(spacing: 16) {
-                Button { model.open(session: session.id) } label: {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(session.title).font(.headline).foregroundStyle(Theme.foreground)
-                        Text(client.project(session.projectId)?.name ?? session.cwd.abbreviatingHome)
-                            .font(.caption).foregroundStyle(Theme.mutedForeground)
-                        if let archivedAt = session.archivedAt {
-                            Text("Archived \(Date(timeIntervalSince1970: archivedAt / 1000).formatted(date: .abbreviated, time: .shortened))")
-                                .font(.caption).foregroundStyle(Theme.faintForeground)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
+            .frame(maxHeight: .infinity)
+        } else if shown.isEmpty {
+            let filtered = !browser.query.isEmpty || model.archiveProjectId != nil || model.archiveMissionId != nil
+            EmptyStateView(icon: PilotIcon.archive,
+                           title: filtered ? "No matching archived chats" : "No archived chats",
+                           message: filtered
+                               ? "Try another search, project or mission."
+                               : "Chats you archive appear here, with their history.")
+                .frame(maxHeight: .infinity)
+        } else {
+            // List keeps long archives virtualised. Relative times refresh once a minute.
+            TimelineView(.periodic(from: .now, by: 60)) { context in
+                List(shown) { session in
+                    ArchiveRow(session: session, projectName: client.project(session.projectId)?.name,
+                               now: context.date)
+                        .listRowInsets(EdgeInsets(top: 1, leading: 0, bottom: 1, trailing: 0))
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
                 }
-                .buttonStyle(.plain)
-                .help("Read archived chat")
-                SessionArchiveAction(session: session)
-                    .buttonStyle(.bordered)
-            }
-            .padding(.vertical, 8)
-            .contextMenu {
-                Button("Read Chat") { model.open(session: session.id) }
-                SessionRenameAction(session: session)
-                SessionArchiveAction(session: session)
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
             }
         }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
     }
 }
 
-/// Used in the toolbar, session context menu, archive browser, and archived composer.
+/// Project and mission chips, as in Slack triage's filter bar, then how many chats are shown.
+private struct ArchiveFilterBar: View {
+    /// Shown chats, or nil while loading or failed.
+    let shown: Int?
+    @EnvironmentObject private var model: AppModel
+    @ObservedObject private var client = AppModel.shared.client
+
+    var body: some View {
+        let missions = client.missions.filter { model.archiveProjectId == nil || $0.projectId == model.archiveProjectId }
+        let mission = model.archiveMissionId.flatMap { id in client.missions.first { $0.id == id } }
+        HStack(spacing: 8) {
+            Menu {
+                Picker("Project", selection: Binding(get: { model.archiveProjectId },
+                                                     set: { model.chooseArchiveProject($0) })) {
+                    Text("All projects").tag(String?.none)
+                    if !model.orderedProjects.isEmpty { Divider() }
+                    ForEach(model.orderedProjects) { project in
+                        Text(project.name).tag(String?.some(project.id))
+                    }
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            } label: {
+                ChipLabel(title: client.project(model.archiveProjectId)?.name ?? "All projects", icon: PilotIcon.project,
+                          maxTitleWidth: 180)
+            }
+            .chipMenuStyle().fixedSize()
+            .help("Show archived chats from every project or from one")
+            .accessibilityLabel("Project filter, \(client.project(model.archiveProjectId)?.name ?? "all projects")")
+            if !missions.isEmpty || mission != nil {
+                Menu {
+                    Picker("Mission", selection: Binding(get: { model.archiveMissionId },
+                                                         set: { model.chooseArchiveMission($0) })) {
+                        Text("All missions").tag(String?.none)
+                        if !missions.isEmpty { Divider() }
+                        ForEach(missions) { mission in
+                            Text(model.archiveProjectId == nil
+                                 ? "\(mission.title) · \(client.project(mission.projectId)?.name ?? "Unknown project")"
+                                 : mission.title).tag(String?.some(mission.id))
+                        }
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+                } label: {
+                    ChipLabel(title: mission?.title ?? "All missions", icon: PilotIcon.mission, maxTitleWidth: 200)
+                }
+                .chipMenuStyle().fixedSize()
+                .help("Show archived chats from every mission or from one")
+                .accessibilityLabel("Mission filter, \(mission?.title ?? "all missions")")
+            }
+            Spacer(minLength: 8)
+            if let shown {
+                MetaText("\(shown) \(shown == 1 ? "chat" : "chats")")
+                    .monospacedDigit()
+            }
+        }
+        .padding(.horizontal, 8)
+    }
+}
+
+/// One archived chat on one line: its title, then "pilot · archived 3d ago". Clicking reads the chat; Restore shows
+/// under the pointer or keyboard focus and stays in the context menu.
+private struct ArchiveRow: View {
+    let session: SessionSummary
+    let projectName: String?
+    let now: Date
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        HoverRow { hovered in
+            HStack(spacing: 12) {
+                Button { model.open(session: session.id) } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(session.title)
+                            .font(.pilot(.body))
+                            .foregroundStyle(Theme.foreground)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .layoutPriority(1)
+                        Text(meta)
+                            .font(.pilot(.caption))
+                            .foregroundStyle(Theme.mutedForeground)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .rowButtonStyle(outset: 2)
+                .help(readHelp)
+                .accessibilityLabel("\(session.title), \(meta)")
+                .accessibilityHint("Reads the archived chat")
+                SessionArchiveAction(session: session)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .revealed(hovered)
+            }
+        }
+        .contextMenu {
+            Button("Read Chat") { model.open(session: session.id) }
+            SessionRenameAction(session: session)
+            SessionArchiveAction(session: session)
+        }
+        .accessibilityAction(named: "Restore") { model.setArchived(false, sessionId: session.id) }
+    }
+
+    /// "pilot · archived 3d ago", or the folder for chats outside a project.
+    private var meta: String {
+        let place = projectName ?? session.cwd.abbreviatingHome
+        guard let archivedAt = session.archivedAt else { return place }
+        return "\(place) · archived \(RelativeDate.ago(archivedAt, now: now))"
+    }
+
+    private var readHelp: String {
+        guard let archivedAt = session.archivedAt else { return "Read archived chat" }
+        return "Read archived chat. Archived \(RelativeDate.exact(archivedAt))."
+    }
+}
+
+/// Used in the toolbar, chat context menu, archive browser, and archived composer.
 struct SessionArchiveAction: View {
     let session: SessionSummary
     @EnvironmentObject private var model: AppModel
@@ -139,7 +221,7 @@ struct SessionArchiveAction: View {
         }
         .disabled(pending || (!session.isArchived && !session.canArchive))
         .help(session.isArchived ? "Restore this chat to send messages again" :
-              session.isWorking ? "Stop the session before archiving it" : "Archive chat. History and workspace are kept.")
+              session.isWorking ? "Stop the chat before archiving it" : "Archive chat. History and workspace are kept.")
     }
 
     private func title(pending: Bool) -> String {
@@ -157,9 +239,9 @@ struct ArchivedComposer: View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 Label("Archived chat · Read-only", icon: PilotIcon.archive)
-                    .font(.callout.weight(.medium))
+                    .font(.pilot(.body, weight: .medium))
                 Text("Restore to send messages. History and workspace are kept.")
-                    .font(.caption).foregroundStyle(Theme.mutedForeground)
+                    .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
             }
             Spacer()
             SessionArchiveAction(session: session)

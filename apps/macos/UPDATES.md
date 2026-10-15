@@ -96,7 +96,7 @@ but do not publish them. No workflow deletes existing releases.
    used by Sparkle updates. If a DMG was manually generated, you can instead open **`Pilot-arm64.dmg`**,
    drag **Pilot.app** onto the **Applications** shortcut, and eject the disk image. Open the installed
    app, not a copy on the disk image or in a transient download folder.
-2. When migrating from a checkout-based Pilot, wait for agents to finish, then choose **Restart pilotd**
+2. When migrating from a checkout-based Pilot, wait for agents to finish, then choose **pilotd > Restart pilotd**
    in the new app's menu bar. This switches the launch agent to the bundled runtime. Terminal shells
    close on that initial restart. Your projects, sessions and pi configuration stay in their existing
    locations. Foreground/unmanaged daemons must be stopped manually before using the app-managed daemon.

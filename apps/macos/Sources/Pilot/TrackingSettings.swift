@@ -93,7 +93,7 @@ struct LinearTeamPicker: View {
             }
         } label: {
             Text("Linear team")
-            Text(detail).font(.caption).foregroundStyle(.secondary)
+            Text(detail).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
         }
         .task { await load(force: false) }
         .onChange(of: signIns[.linear]?.state) { _, state in
@@ -180,14 +180,14 @@ struct SlackChannelsEditor: View {
             Text("Slack channels")
             Text(editor.slackChannels.isEmpty ? "Add the channels to follow. New messages are sorted into bugs, questions and requests by a small model."
                 : "Each channel is read from the moment you add it, with a short look back.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
         }
         ForEach(editor.slackChannels) { channel in
             SlackChannelRow(channel: channel, status: source?.channels?.first { $0.id == channel.id },
                             saved: saved.contains(channel.id)) { editor.removeChannel(channel.id) }
         }
         HStack(spacing: 6) {
-            PilotSymbol(PilotIcon.search).foregroundStyle(.secondary).accessibilityHidden(true)
+            PilotSymbol(PilotIcon.search).foregroundStyle(Theme.mutedForeground).accessibilityHidden(true)
             TextField("Add channel", text: $query, prompt: Text("Search channels to add"))
                 .textFieldStyle(.plain)
                 .labelsHidden()
@@ -216,10 +216,10 @@ struct SlackChannelsEditor: View {
     private var suggestions: some View {
         let lookup = query.isEmpty ? mine : results
         return VStack(alignment: .leading, spacing: 2) {
-            Text(query.isEmpty ? "Channels you're in" : "Matching channels").font(.caption).foregroundStyle(.secondary)
+            Text(query.isEmpty ? "Channels you're in" : "Matching channels").font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
             ForEach(candidates.prefix(6)) { option in
                 HStack(spacing: 6) {
-                    PilotSymbol(option.isPrivate ? PilotIcon.privateChannel : PilotIcon.slackChannel).foregroundStyle(.secondary)
+                    PilotSymbol(option.isPrivate ? PilotIcon.privateChannel : PilotIcon.slackChannel).foregroundStyle(Theme.mutedForeground)
                         .frame(width: 14)
                         .accessibilityLabel(option.isPrivate ? "Private channel" : "Channel")
                     Text(option.name).lineLimit(1)
@@ -229,14 +229,14 @@ struct SlackChannelsEditor: View {
                 .padding(.vertical, 2)
             }
             if let lookup, lookup.status == .signInRequired {
-                Text("Sign in to Slack below to search channels.").font(.caption).foregroundStyle(.secondary)
+                Text("Sign in to Slack below to search channels.").font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
             } else if let lookup, lookup.status != .ok {
                 TrackingLookupProblem(service: "Slack", lookup: lookup) { retry() }
             } else if candidates.isEmpty, !searching, lookup != nil {
                 Text(query.isEmpty ? "No more channels to suggest. Search to find others." : "No channels match.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
             } else if lookup?.more == true || candidates.count > 6 {
-                Text("Refine the search to see more.").font(.caption).foregroundStyle(.secondary)
+                Text("Refine the search to see more.").font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
             }
         }
         .task(id: query) { await search() }
@@ -317,8 +317,8 @@ private struct SlackChannelRow: View {
                 }
                 Text(line.text)
             }
-            .font(.caption)
-            .foregroundStyle(line.tone == .attention ? Theme.blocked : Color.secondary)
+            .font(.pilot(.caption))
+            .foregroundStyle(line.tone == .attention ? Theme.blocked : Theme.mutedForeground)
             .help(status?.error ?? (status?.status == .signInRequired ? "Sign in to Slack below." : line.text))
             Button(action: remove) { PilotSymbol(PilotIcon.remove) }
                 .rowIconButtonStyle(hoverTint: Theme.destructive)
@@ -380,7 +380,7 @@ struct SlackLabelsSection: View {
         Section {
             if editor.slackLabels.isEmpty {
                 Text("No labels yet. Add one for each kind of message you sort, such as an owning team.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
             }
             ForEach($editor.slackLabels) { $label in
                 SlackLabelRow(label: $label, duplicate: duplicates.contains(label.label.name)) {
@@ -411,11 +411,11 @@ private struct SlackLabelRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 TextField("Name", text: $label.name, prompt: Text("Label name"))
                     .textFieldStyle(.plain).labelsHidden()
-                    .fontWeight(.medium)
+                    .font(.pilot(.body, weight: .medium))
                 TextField("Description", text: $label.description,
                           prompt: Text("Which messages get this label, in one line"))
                     .textFieldStyle(.plain).labelsHidden()
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
                 if duplicate {
                     Text("Another label has this name.").font(.pilot(.caption)).foregroundStyle(Theme.error)
                 }
@@ -456,20 +456,20 @@ private struct SlackCorrectionsList: View {
             Text(failed ? "Couldn't load your corrections."
                 : items.isEmpty ? "Changes you make in Slack triage appear here. The latest 20 teach the classifier."
                 : "The latest 20 teach the classifier.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
         }
         .task(id: projectId) { await load() }
         ForEach(Array(items.prefix(Self.shown).enumerated()), id: \.offset) { _, correction in
             HStack(spacing: 8) {
                 Text(correction.summary).lineLimit(1).truncationMode(.tail)
                 Spacer(minLength: 8)
-                Text(SlackTriageText.correction(correction.values)).font(.caption).foregroundStyle(.secondary)
+                Text(SlackTriageText.correction(correction.values)).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
                     .lineLimit(1).fixedSize()
             }
             .accessibilityElement(children: .combine)
         }
         if items.count > Self.shown {
-            Text("And \(items.count - Self.shown) more").font(.caption).foregroundStyle(.secondary)
+            Text("And \(items.count - Self.shown) more").font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
         }
     }
 
@@ -510,8 +510,8 @@ private struct SourceAccountRow: View {
                 }
                 Text(state.text).fixedSize(horizontal: false, vertical: true)
             }
-            .font(.caption)
-            .foregroundStyle(state.attention ? Theme.blocked : Color.secondary)
+            .font(.pilot(.caption))
+            .foregroundStyle(state.attention ? Theme.blocked : Theme.mutedForeground)
         }
         .accessibilityElement(children: .contain)
     }

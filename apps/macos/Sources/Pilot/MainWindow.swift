@@ -54,7 +54,7 @@ struct MainWindow: View {
             if visible { client.refreshRepositoryCaches() }
             repositoryPollingVisible = visible
         }.frame(width: 0, height: 0))
-        .alert("Session action failed", isPresented: Binding(
+        .alert("Chat action failed", isPresented: Binding(
             get: { model.sessionActionError != nil },
             set: { if !$0 { model.sessionActionError = nil } }
         )) {
@@ -223,15 +223,15 @@ struct SessionMoreActions: View {
             }
             Divider()
             Button { model.debugSession(session) } label: {
-                Label("Debug session", icon: PilotIcon.bug)
+                Label("Debug Chat", icon: PilotIcon.bug)
             }
         } label: {
             PilotSymbol(PilotIcon.more, context: .toolbar)
                 .frame(width: 36, height: 36)
         }
         .menuIndicator(.hidden)
-        .help("More session actions")
-        .accessibilityLabel("More session actions")
+        .help("More chat actions")
+        .accessibilityLabel("More chat actions")
     }
 }
 

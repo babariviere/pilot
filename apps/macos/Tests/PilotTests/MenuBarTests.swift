@@ -40,7 +40,8 @@ import Testing
     model.daemon.markRunningForSnapshot()
     await drainMenuUpdates()
     #expect(menu.snapshot.rows.map(\.id) == ["menu-test"])
-    #expect(menu.snapshot.statusText == "pilotd running · idle")
+    #expect(menu.snapshot.statusText == "Nothing needs you")
+    #expect(menu.snapshot.daemonText == "pilotd running")
     let baseline = changes
     for i in 0..<100 {
         model.sidebarQuery = "query \(i)"
@@ -58,57 +59,62 @@ import Testing
     #expect(changes == baseline + 1)
     #expect(menu.snapshot.rows[0].session.title == "Renamed")
     #expect(menu.snapshot.rows[0].session.status == .working)
-    #expect(menu.snapshot.statusText == "pilotd running · 1 working")
+    #expect(menu.snapshot.sections.map(\.title) == ["Working"])
+    #expect(menu.snapshot.statusText == "1 working")
 
     model.client.loadFixture(projects: [], sessions: [menuSession(archivedAt: 20)])
     await drainMenuUpdates()
     #expect(menu.snapshot.rows.isEmpty)
-    #expect(menu.snapshot.statusText == "pilotd running · idle")
+    #expect(menu.snapshot.statusText == "Nothing needs you")
     withExtendedLifetime(observation) {}
 }
 
-@Test @MainActor func menuBarSnapshotTracksUnreadPRDetailsOrderingAndControls() {
-    let sessions = (0..<10).map { menuSession(id: "s\($0)") }
-    func snapshot(_ list: [SessionSummary], unread: Bool = false,
+@Test @MainActor func menuBarSnapshotListsChatsByUrgencyWithinItsLimit() {
+    func snapshot(_ list: [SessionSummary], unread: Set<String> = [],
                   status: DaemonController.Status = .running, busy: Bool = false,
                   waiting: Bool = false) -> MenuBarSnapshot {
-        MenuBarSnapshot(sessions: list, isUnread: { _ in unread }, status: status,
+        MenuBarSnapshot(sessions: list, isUnread: { unread.contains($0.id) }, status: status,
                         lifecycleBusy: busy, waitingToInstall: waiting)
     }
-    let original = snapshot(sessions)
-    #expect(original.rows.count == 8)
-    #expect(original.rows.map(\.id) == Array(sessions.prefix(8)).map(\.id))
-    let unread = snapshot(sessions, unread: true)
-    #expect(unread != original && unread.rows.allSatisfy(\.isUnread))
-    #expect(unread.statusText == "pilotd running · 10 unread")
-    #expect(snapshot(Array(sessions.reversed())) != original)
-    #expect(snapshot(sessions, busy: true) != original)
-    #expect(snapshot(sessions, waiting: true) != original)
-    #expect(snapshot(sessions, status: .stopped).statusText == "pilotd stopped")
-    #expect(snapshot(sessions, status: .failed("a")) == snapshot(sessions, status: .failed("b")))
-    #expect(snapshot(sessions, status: .starting) == snapshot(sessions, status: .unknown))
+    let quiet = (0..<10).map { menuSession(id: "s\($0)") }
+    let original = snapshot(quiet)
+    #expect(original.rows.count == MenuBarSnapshot.limit)
+    #expect(original.rows.map(\.id) == Array(quiet.prefix(8)).map(\.id))
+    #expect(original.sections.map(\.title) == ["Recent"])
+    #expect(snapshot(Array(quiet.reversed())) != original)
+    #expect(snapshot(quiet, busy: true) != original)
+    #expect(snapshot(quiet, waiting: true) != original)
+    #expect(snapshot(quiet, status: .stopped).statusText == "pilotd stopped")
+    #expect(snapshot(quiet, status: .failed("a")) == snapshot(quiet, status: .failed("b")))
+    #expect(snapshot(quiet, status: .starting) == snapshot(quiet, status: .unknown))
 
+    // Needs you leads, then Working, then Recent, in the sidebar's order, whatever the list order.
+    let mixed = [menuSession(id: "quiet"), menuSession(id: "busy", state: "working"),
+                 menuSession(id: "unread"), menuSession(id: "failed", state: "failed")]
+    let urgent = snapshot(mixed, unread: ["unread"])
+    #expect(urgent.sections.map(\.title) == ["Needs you", "Working", "Recent"])
+    #expect(urgent.rows.map(\.id) == ["failed", "unread", "busy", "quiet"])
+    #expect(urgent.rows.first?.accessibilityLabel == "Session, Failed")
+    #expect(urgent.statusText == "2 need you · 1 working")
+    #expect(snapshot([menuSession(id: "unread")], unread: ["unread"]).statusText == "1 needs you")
+
+    // Chats past the limit still count in the heading.
+    let outside = Array(quiet.prefix(8)) + [menuSession(id: "outside", state: "working")]
+    #expect(snapshot(outside).rows.count == MenuBarSnapshot.limit)
+    #expect(snapshot(outside).rows.map(\.id) == ["outside"] + Array(quiet.prefix(7)).map(\.id))
+    #expect(snapshot(outside).statusText == "1 working")
+
+    // PR details are not shown, so they do not change the menu.
     let pr = SessionPullRequest(number: 1, url: "https://github.com/a/b/pull/1",
-                                title: "PR", state: .open, checkedAt: 1)
-    let row = snapshot([menuSession(pullRequest: pr)])
-    #expect(row != snapshot([menuSession()]))
-    #expect(row != snapshot([menuSession(pullRequest: pr, pullRequestError: "Lookup failed")]))
-    let checked = SessionPullRequest(number: 1, url: pr.url, title: pr.title, state: .open, checkedAt: 2)
-    #expect(row != snapshot([menuSession(pullRequest: checked)]))
-    let merged = SessionPullRequest(number: 1, url: pr.url, title: pr.title, state: .merged, checkedAt: 1)
-    #expect(row != snapshot([menuSession(pullRequest: merged)]))
-
-    // Sessions outside the eight-row limit still contribute to activity totals.
-    let outside = Array(sessions.prefix(8)) + [menuSession(id: "outside", state: "working")]
-    #expect(snapshot(outside).rows == original.rows)
-    #expect(snapshot(outside).statusText == "pilotd running · 1 working")
+                                title: "PR", state: .draft, checkedAt: 1)
+    #expect(snapshot([menuSession(pullRequest: pr)]) == snapshot([menuSession()]))
 }
 
 private func menuSession(id: String = "menu-test", title: String = "Session", state: String = "idle",
                          updatedAt: Double = 1, pullRequest: SessionPullRequest? = nil,
-                         pullRequestError: String? = nil, archivedAt: Double? = nil) -> SessionSummary {
+                         archivedAt: Double? = nil) -> SessionSummary {
     SessionSummary(id: id, title: title, cwd: "/tmp", createdAt: 1, updatedAt: updatedAt, state: state,
-                   pullRequest: pullRequest, pullRequestError: pullRequestError, archivedAt: archivedAt)
+                   pullRequest: pullRequest, archivedAt: archivedAt)
 }
 
 @MainActor

@@ -12,9 +12,8 @@ struct EnergySettings: View {
                 EnergySettingsContent(status: status, busy: busy, error: error, update: update)
             } else {
                 Section {
-                    if let error { Text(error).foregroundStyle(Theme.mutedForeground) }
+                    if let error { InlineProblem(error) { Task { await load() } } }
                     else { ProgressView("Loading energy settings…") }
-                    Button("Retry") { Task { await load() } }
                 }
             }
         }
@@ -37,7 +36,8 @@ struct EnergySettings: View {
     }
 }
 
-/// Stateless content, shared by native snapshots and the live daemon-backed settings page.
+/// Stateless content, shared by native snapshots and the live daemon-backed settings page. What happens when the lid
+/// closes is told by the closed-lid toggle and the one footer, not a section of its own.
 struct EnergySettingsContent: View {
     let status: PowerStatus
     var busy = false
@@ -51,27 +51,18 @@ struct EnergySettingsContent: View {
                 set: { update(PowerSettings(keepAwake: $0, closedLid: status.settings.closedLid)) }
             ))
             .disabled(busy || (!status.available && !status.settings.keepAwake))
-            Toggle("Keep going with the lid closed", isOn: Binding(
+            Toggle(isOn: Binding(
                 get: { status.settings.closedLid },
                 set: { update(PowerSettings(keepAwake: status.settings.keepAwake, closedLid: $0)) }
-            ))
+            )) {
+                Text("Keep going with the lid closed")
+                Text("Only while on power and Wi-Fi. If either disconnects, Pilot pauses agents and lets this Mac sleep.")
+            }
             .disabled(busy || (!status.available && !status.settings.closedLid) || !status.settings.keepAwake)
         } header: {
             Text("While agents work")
         } footer: {
-            SettingsFooter("The display can sleep and the screen can lock. Closing Pilot’s window or quitting the app does not stop agents.")
-        }
-        Section {
-            Label("On power and Wi-Fi", icon: PilotIcon.power)
-                .foregroundStyle(Theme.foreground)
-            Text("When closed-lid work is enabled, agents can keep working only with both connected. If either disconnects, Pilot pauses agents and lets this Mac sleep.")
-                .font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
-            Text("Paused work resumes after the next wake with a connection. Interrupted commands and background jobs are not automatically rerun.")
-                .font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
-        } header: {
-            Text("When the lid closes")
-        } footer: {
-            SettingsFooter("Closed-lid operation needs a one-time administrator approval for two sleep commands. No Wi-Fi names or Location Services are used. Keep ventilation clear.")
+            SettingsFooter("The display can sleep and the screen can lock. Closing Pilot’s window or quitting the app does not stop agents. Paused work resumes after the next wake with a connection; interrupted commands and background jobs are not rerun. Closed-lid work needs a one-time administrator approval for two sleep commands, uses no Wi-Fi names or Location Services, and needs clear ventilation.")
         }
         Section {
             HStack(alignment: .top, spacing: 8) {

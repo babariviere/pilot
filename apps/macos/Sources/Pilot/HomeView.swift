@@ -329,7 +329,7 @@ struct TaskComposer: View {
                 Button(action: start) { PilotSymbol(PilotIcon.send, context: .toolbar) }
                     .buttonStyle(CircleIconButtonStyle())
                     .disabled(!canStart)
-                    .help("Start session (↩)")
+                    .help("Start chat (↩)")
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 8)

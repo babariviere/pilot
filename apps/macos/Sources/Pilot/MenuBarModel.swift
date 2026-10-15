@@ -2,48 +2,88 @@ import Combine
 import Foundation
 import PilotCore
 
+/// One chat in the menu bar: its title, status icon and the urgency group it sits in.
 struct MenuBarSessionRow: Identifiable, Equatable {
     let session: SessionSummary
-    let isUnread: Bool
+    /// The sidebar state the row is grouped by, for help and VoiceOver. nil for quiet chats.
+    let signal: SessionSignal?
     var id: String { session.id }
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        // Include every field rendered by the row and PullRequestBadge, but ignore
-        // transcript/usage/workspace metadata that does not appear in this menu.
+        // Include every field the row renders, but ignore transcript, usage, PR and workspace metadata that does not
+        // appear in this menu.
         lhs.id == rhs.id && lhs.session.title == rhs.session.title
-            && lhs.session.status == rhs.session.status && lhs.isUnread == rhs.isUnread
-            && lhs.session.pullRequest == rhs.session.pullRequest
-            && lhs.session.pullRequestError == rhs.session.pullRequestError
+            && lhs.session.status == rhs.session.status && lhs.signal == rhs.signal
+    }
+
+    /// "Fix login, Needs you", or the agent status for quiet chats.
+    var accessibilityLabel: String {
+        "\(session.title), \(signal?.label ?? session.status.rawValue)"
     }
 }
 
-struct MenuBarSnapshot: Equatable {
+/// One urgency group of the menu, titled like the sidebar's.
+struct MenuBarSection: Identifiable, Equatable {
+    let title: String
     let rows: [MenuBarSessionRow]
+    var id: String { title }
+}
+
+struct MenuBarSnapshot: Equatable {
+    /// Chats in the sidebar's urgency order (Needs you, Ready to merge, Working, Recent), at most `limit` in all.
+    let sections: [MenuBarSection]
+    /// "1 needs you · 2 working", or the daemon's state while it is not running.
     let statusText: String
+    /// pilotd's state, at the top of its submenu.
+    let daemonText: String
     let lifecycleBusy: Bool
     let waitingToInstall: Bool
+
+    static let limit = 8
+
+    var rows: [MenuBarSessionRow] { sections.flatMap(\.rows) }
 
     @MainActor
     init(sessions: [SessionSummary], isUnread: (SessionSummary) -> Bool,
          status: DaemonController.Status, lifecycleBusy: Bool, waitingToInstall: Bool) {
-        let active = sessions.unarchivedSessions
-        rows = active.prefix(8).map { MenuBarSessionRow(session: $0, isUnread: isUnread($0)) }
+        // Sessions arrive in list order. Like pilotd's counts, pinned chats count by their state.
+        let groups = SidebarUrgency.groups(sessions.unarchivedSessions, unread: isUnread, separatingPinned: false)
+        var remaining = Self.limit
+        var sections: [MenuBarSection] = []
+        for (title, chats) in [("Needs you", groups.needsYou), ("Ready to merge", groups.readyToMerge),
+                               ("Working", groups.working), ("Recent", groups.recent)] {
+            guard remaining > 0, !chats.isEmpty else { continue }
+            let rows = chats.prefix(remaining).map { MenuBarSessionRow(session: $0, signal: $0.signal(unread: isUnread($0))) }
+            remaining -= rows.count
+            sections.append(MenuBarSection(title: title, rows: rows))
+        }
+        self.sections = sections
         self.lifecycleBusy = lifecycleBusy
         self.waitingToInstall = waitingToInstall
         switch status {
         case .running:
-            let working = active.filter(\.isWorking).count
-            let waiting = active.filter { $0.status == .question }.count
-            let unread = active.filter { $0.status != .question && isUnread($0) }.count
-            var activity: [String] = []
-            if working > 0 { activity.append("\(working) working") }
-            if waiting > 0 { activity.append("\(waiting) waiting for you") }
-            if unread > 0 { activity.append("\(unread) unread") }
-            statusText = "pilotd running · \(activity.isEmpty ? "idle" : activity.joined(separator: " · "))"
-        case .starting, .unknown: statusText = "pilotd starting…"
-        case .stopped: statusText = "pilotd stopped"
-        case .failed: statusText = "pilotd failed"
+            daemonText = "pilotd running"
+            statusText = MenuBarText.heading(needsYou: groups.needsYou.count, working: groups.working.count)
+        case .starting, .unknown:
+            daemonText = "pilotd starting…"
+            statusText = daemonText
+        case .stopped:
+            daemonText = "pilotd stopped"
+            statusText = daemonText
+        case .failed:
+            daemonText = "pilotd failed"
+            statusText = daemonText
         }
+    }
+}
+
+enum MenuBarText {
+    /// "1 needs you · 2 working", leaving out zeros, or "Nothing needs you".
+    static func heading(needsYou: Int, working: Int) -> String {
+        var parts: [String] = []
+        if needsYou > 0 { parts.append(SidebarScopeCounts.needsYou(needsYou)) }
+        if working > 0 { parts.append("\(working) working") }
+        return parts.isEmpty ? "Nothing needs you" : parts.joined(separator: " · ")
     }
 }
 
