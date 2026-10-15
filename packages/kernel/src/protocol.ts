@@ -39,6 +39,8 @@ export interface KernelSpec {
 	/** Used only when the session is created; later starts reuse the pinned model. */
 	model?: string;
 	thinking?: string;
+	/** Cancel parked work before recovery can dispatch a model request or tool. */
+	stopOnOpen?: boolean;
 	/** Explicit same-provider continuation after the previous worker's tool drain and close. */
 	continuationModel?: { model: string; thinking?: string; requestId: string };
 	agentDir?: string;

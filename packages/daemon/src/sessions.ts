@@ -55,8 +55,8 @@ import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
 import { githubRepository, linkedPullRequest, type PullRequestProblems } from "./github.ts";
 import { LongJobTimers, longJobAttention } from "./long-jobs.ts";
-import { McpChatAttention, type McpStatusSource } from "./mcp-attention.ts";
 import { forkMainViewWorker, MainViewStore } from "./main-view.ts";
+import { McpChatAttention, type McpStatusSource } from "./mcp-attention.ts";
 import { ModelCatalog } from "./models.ts";
 import { stuckPullRequestReason } from "./needs-you-reason.ts";
 import { PullRequestAutoRebase } from "./pr-auto-rebase.ts";
@@ -3458,19 +3458,23 @@ export class SessionManager {
 	}
 
 	async stop(id: string): Promise<StopResponse> {
-		if (this.sleepPause)
-			throw new ServiceUnavailable(
-				"Agents are paused for sleep. Wake this Mac before stopping work, or archive the chat.",
-			);
 		const meta = this.require(id);
 		this.assertNotContinued(meta);
 		if (this.changingModels.has(id)) throw new Conflict("Session is changing its model or conversation");
 		if (this.closing) throw new Error("pilotd is shutting down");
 		if (meta.failure) return { ok: true };
-		if (!meta.initializing && !this.workers.has(id) && !meta.pending?.length && !meta.kernelRestartPending)
+		if (
+			!meta.initializing &&
+			!this.workers.has(id) &&
+			!meta.pending?.length &&
+			!meta.kernelRestartPending &&
+			!meta.sleepPaused &&
+			!meta.working
+		)
 			return { ok: true };
 		// Stop is allowed for an existing worker, but must not reopen a parked worker during a lease.
-		if (!this.workers.has(id)) this.updateGate.assertOpen();
+		// A sleep pause needs no admission: persist cancellation now, drain it before recovery on wake.
+		if (!this.workers.has(id) && !this.sleepPause) this.updateGate.assertOpen();
 		// Drop queued input, and abort anything whose acknowledgement was in flight. The user's own undelivered messages
 		// go back to the composer. One in flight reaches the kernel first, which either withdraws it too or runs it.
 		const delivering = this.delivering.get(id);
@@ -3505,6 +3509,7 @@ export class SessionManager {
 		meta.pending = [{ type: "abort", requestId }, ...automatic];
 		if (meta.preparing) meta.cancelled = true;
 		await this.save(meta);
+		this.emit(meta);
 		if (meta.preparing) for (const listener of this.watchers.get(id)?.values() ?? []) listener([emptySnapshot]);
 		this.stopResults.set(requestId, []);
 		try {
@@ -3514,7 +3519,7 @@ export class SessionManager {
 			// acknowledgement. Those are deliberately released by the caller after Stop returns. Their
 			// existing drain will see the persisted abort; a settled drain can be awaited and retried below.
 			const worker = this.workers.get(id);
-			if (!meta.preparing && !this.delivering.has(id) && worker && worker.state !== "starting") {
+			if (!this.sleepPause && !meta.preparing && !this.delivering.has(id) && worker && worker.state !== "starting") {
 				let rejected = await admission;
 				if (rejected.has(requestId)) throw rejected.get(requestId);
 				// An existing drain can finish just before observing the abort saved above.
@@ -4646,6 +4651,7 @@ export class SessionManager {
 				cwd: meta.coordinatorView?.scratch ?? meta.cwd,
 				model: meta.model,
 				thinking: meta.thinking,
+				...(meta.pending?.[0]?.type === "abort" ? { stopOnOpen: true } : {}),
 				...(meta.continuationModel ? { continuationModel: meta.continuationModel } : {}),
 				agentDir: this.agentDir,
 				...(meta.workspace ? { trustDirectory: meta.workspace.source } : {}),

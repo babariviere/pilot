@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import type { KernelCommand } from "@pilot/kernel";
+import type { KernelCommand, KernelSpec } from "@pilot/kernel";
 import type { AgentEvent, SessionState } from "@pilot/protocol";
 import { ProjectStore } from "./projects.ts";
 import { SessionManager, type SessionWorker } from "./sessions.ts";
@@ -29,11 +29,13 @@ test("sleep pause closes workers without abort, persists across restart, and res
 	const home = await mkdtemp(join(tmpdir(), "pilot-sleep-sessions-"));
 	const workers: Array<SessionWorker & { id: string; commands: KernelCommand[]; closed: boolean }> = [];
 	const managers: SessionManager[] = [];
+	const specs: KernelSpec[] = [];
 	const manager = async () => {
 		const sessions = new SessionManager(home, new ProjectStore(home), undefined, {
 			title: async () => undefined,
 			snapshot: async () => ({ events: [snapshot] }),
 			worker(spec, packet, exited) {
+				specs.push(spec);
 				const worker = {
 					id: spec.sessionId,
 					commands: [] as KernelCommand[],
@@ -84,11 +86,13 @@ test("sleep pause closes workers without abort, persists across restart, and res
 	const active = await sessions.spawn({ cwd: home, title: "Active", message: "work" });
 	const stopped = await sessions.spawn({ cwd: home, title: "Stopped", message: "stop" });
 	const archived = await sessions.spawn({ cwd: home, title: "Archived", message: "archive" });
+	const cancelled = await sessions.spawn({ cwd: home, title: "Stop during sleep", message: "work" });
 	await until(
 		() =>
 			sessions.get(active.id)?.state === "working" &&
 			sessions.get(stopped.id)?.state === "working" &&
-			sessions.get(archived.id)?.state === "working",
+			sessions.get(archived.id)?.state === "working" &&
+			sessions.get(cancelled.id)?.state === "working",
 	);
 	await sessions.stop(stopped.id);
 	const pausing = sessions.pauseForSleep("100:1");
@@ -103,6 +107,19 @@ test("sleep pause closes workers without abort, persists across restart, and res
 		false,
 	);
 	const count = workers.length;
+	await sessions.send(cancelled.id, "return this draft", "followUp", "sleep-stop-queued");
+	await sessions.send(cancelled.id, "hold automatic work", "followUp", "mission:send:sleep-stop");
+	assert.equal(sessions.pauseForUpdate().ready, true, "a sleep-paused update lease can be ready");
+	assert.deepEqual(await sessions.stop(cancelled.id), { ok: true, draft: "return this draft" });
+	assert.deepEqual(await sessions.stop(stopped.id), { ok: true }, "idle Stop is harmless during a global pause");
+	(sessions as unknown as { resumeAfterUpdate(): void }).resumeAfterUpdate();
+	assert.equal(workers.length, count, "Stop must not bypass the sleep admission latch");
+	assert.equal(sessions.powerPause?.wakeToken, "100:1", "Stop cannot resume other chats");
+	const stoppedMeta = JSON.parse(await readFile(join(home, "sessions", cancelled.id, "meta.json"), "utf8"));
+	assert.deepEqual(
+		stoppedMeta.pending.map((command: KernelCommand) => command.type),
+		["abort", "input"],
+	);
 	const off = sessions.subscribe(active.id, () => {});
 	await delay(10);
 	off();
@@ -117,10 +134,19 @@ test("sleep pause closes workers without abort, persists across restart, and res
 	assert.equal(reopened.powerPause?.wakeToken, "100:1");
 	assert.equal(reopened.get(active.id)?.sleepPaused, true);
 	await reopened.resumeAfterSleep();
-	await until(() => workers.length === count + 1);
-	assert.equal(workers.at(-1)!.id, active.id);
+	await until(() => workers.length === count + 2);
+	const resumed = workers.slice(count);
+	const cancelledWorker = resumed.find((worker) => worker.id === cancelled.id)!;
+	assert.equal(specs.findLast((spec) => spec.sessionId === cancelled.id)?.stopOnOpen, true);
+	await until(() => cancelledWorker.commands.length === 2);
+	assert.deepEqual(
+		cancelledWorker.commands.map((command) => command.type),
+		["abort", "input"],
+	);
 	await until(() =>
-		workers.at(-1)!.commands.some((command) => command.type === "input" && command.requestId === "sleep-queued-id"),
+		resumed
+			.find((worker) => worker.id === active.id)!
+			.commands.some((command) => command.type === "input" && command.requestId === "sleep-queued-id"),
 	);
 	assert.equal(JSON.parse(await readFile(join(home, "power-pause.json"), "utf8")), null);
 });

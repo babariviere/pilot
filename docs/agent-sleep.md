@@ -25,7 +25,11 @@ Wi-Fi while the lid is still closed, display wake, dark wake, screen unlock and 
 the same wake do not count. A later wake observed after a daemon restart does count. On a desktop,
 an absent lid is treated as open. Archived chats and stopped/idle chats do not automatically restart.
 New messages submitted during a pause are saved for wake. History remains readable without starting
-a kernel. A paused chat can be archived to opt out of automatic resume.
+a kernel. Stop remains available during a pause: it saves cancellation without reopening a kernel or
+resuming other chats. At the next eligible wake, cancellation drains before recovered model requests
+or tools can run. Undelivered daemon messages return to the composer immediately; messages already
+queued in the kernel are withdrawn when cancellation drains. A paused chat can also be archived to
+opt out of automatic resume.
 
 ## Implementation and authorization
 
