@@ -8,13 +8,17 @@ import {
 	ftruncateSync,
 	mkdirSync,
 	openSync,
-	readSync,
 	readdirSync,
+	readSync,
+	renameSync,
+	unlinkSync,
+	writeFileSync,
 	writeSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { MemoryEntry, MemoryNode, MemoryView, ProjectMemorySummary } from "@pilot/protocol";
+import type { MemoryCompactionTrace } from "./memory-compaction.ts";
 import { cover } from "./memory-cover.ts";
 export const RECORD_BYTES = 2048;
 /** Summary records carry the log count they were built at, so later corrections can mark them stale. */
@@ -381,6 +385,36 @@ export class MemoryDisk {
 		this.write(size, block, text);
 		return true;
 	}
+	/** Private, bounded diagnostic snapshots. A later success must not erase the last failure. */
+	diagnostic(trace: MemoryCompactionTrace): void {
+		const json = JSON.stringify(trace);
+		if (Buffer.byteLength(json) > 128 * 1024) throw new Error("Memory compaction diagnostic exceeds 128 KiB");
+		for (const name of [
+			"compaction-latest.json",
+			...(trace.status === "failed" ? ["compaction-failure.json"] : []),
+		]) {
+			const path = join(this.dir, name);
+			const temporary = `${path}.tmp`;
+			// Remove a crash-left temporary before exclusive creation, never follow a pre-existing symlink.
+			try {
+				unlinkSync(temporary);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			}
+			try {
+				writeFileSync(temporary, json, { mode: 0o600, flag: "wx" });
+				renameSync(temporary, path);
+			} catch (error) {
+				try {
+					unlinkSync(temporary);
+				} catch {
+					// Best effort cleanup; preserve the original diagnostic-write failure.
+				}
+				throw error;
+			}
+		}
+	}
+
 	/** Appends a summary, or rewrites a stale one in place (the tree is a cache; the log is never rewritten). */
 	private write(size: number, block: number, text: string): void {
 		let level = this.levels.get(size);

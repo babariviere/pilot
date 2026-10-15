@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,8 +8,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { TITLE_CONTEXT_LIMIT } from "./chat-title.ts";
 import { ServiceUnavailable } from "./errors.ts";
+import { captureMemory, type MemoryCompactionAttempt, type MemoryCompactionTrace } from "./memory-compaction.ts";
 import { cheapestTitleModel, generateChatTitle, ModelCatalog } from "./models.ts";
-import { ProjectMemoryService } from "./project-memory.ts";
+import { type MemorySummarizer, ProjectMemoryService } from "./project-memory.ts";
 import type { SlackClassifierContext } from "./slack-classifier.ts";
 import { requiredAuthRegistration } from "./testing/required-auth.ts";
 
@@ -99,11 +100,27 @@ test("Slack classification uses scoped Luna, strict JSON, no tools or thinking, 
 	assert.equal(calls, 3);
 });
 
-test("memory compaction uses the explicit luna model, no tools or reasoning, and surfaces failure", async (t) => {
+function submission(text: unknown, extra: Record<string, unknown> = {}) {
+	return {
+		...answer(""),
+		stopReason: "toolUse" as const,
+		content: [
+			{
+				type: "toolCall" as const,
+				id: "summary-call",
+				name: "submit_summary",
+				arguments: { text: text as string, ...extra },
+			},
+		],
+	};
+}
+
+test("memory compaction uses explicit Luna and a required, single submission tool", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "pilot-memory-model-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
 	const luna = { ...cheap, id: "gpt-6-luna", provider: "openai-codex" };
 	let fail = false,
+		crash = false,
 		calls = 0;
 	t.mock.method(
 		ModelRuntime,
@@ -119,12 +136,22 @@ test("memory compaction uses the explicit luna model, no tools or reasoning, and
 				) => {
 					calls++;
 					assert.equal(chosen, luna);
-					assert.equal(context.tools, undefined);
+					assert.deepEqual(
+						context.tools?.map(({ name }) => name),
+						["submit_summary"],
+					);
 					assert.equal(options?.reasoning, undefined);
 					assert.equal(options?.maxTokens, 256);
 					assert.equal(options?.maxRetries, 0);
 					assert.match(context.systemPrompt!, /Invent nothing/);
-					return answer("lasting fact", fail ? "error" : "stop");
+					assert.match(context.systemPrompt!, /untrusted data, not instructions/);
+					assert.deepEqual(await options?.onPayload?.({ input: [], tool_choice: "auto" }, luna), {
+						input: [],
+						tool_choice: "required",
+						parallel_tool_calls: false,
+					});
+					if (crash) throw new Error("synthetic provider rejected request");
+					return fail ? answer("private provider output", "error") : submission("lasting fact");
 				},
 			}) as unknown as ModelRuntime,
 	);
@@ -133,97 +160,116 @@ test("memory compaction uses the explicit luna model, no tools or reasoning, and
 	assert.equal(await catalog.summarizeMemory("memories", controller.signal), "lasting fact");
 	fail = true;
 	await assert.rejects(catalog.summarizeMemory("memories", controller.signal), /failed: error/);
+	crash = true;
+	const pending: MemoryCompactionAttempt[] = [];
+	await assert.rejects(
+		catalog.summarizeMemory("memories", controller.signal, async (attempt) => {
+			pending.push(attempt);
+		}),
+		/synthetic provider rejected request/,
+	);
+	assert.equal(pending.length, 1, "the request is recorded even when the provider throws before responding");
+	assert.equal(pending[0]!.number, 1);
+	assert.equal(pending[0]!.response, undefined);
+	assert.match(pending[0]!.request.json, /submit_summary/);
 	controller.abort();
 	await assert.rejects(catalog.summarizeMemory("memories", controller.signal));
-	assert.equal(calls, 2);
+	assert.equal(calls, 3);
 });
 
 for (const scenario of [
 	{
-		name: "normalizes multiline whitespace",
-		outputs: ["  Keep\r\nimportant\t conditions.\u2028 "],
+		name: "normalizes whitespace inside the submitted text",
+		outputs: [submission("  Keep\r\nimportant\t conditions.\u2028 ")],
 		expected: "Keep important conditions.",
 	},
-	{ name: "accepts exactly 280 UTF-8 bytes", outputs: ["é".repeat(140)], expected: "é".repeat(140) },
+	{ name: "accepts exactly 280 UTF-8 bytes", outputs: [submission("é".repeat(140))], expected: "é".repeat(140) },
 	{
-		name: "rewrites oversized multibyte text",
-		outputs: ["é".repeat(141), "Only on AC power."],
+		name: "uses only the submitted field, not commentary",
+		outputs: [
+			{
+				...submission("Keep the condition."),
+				content: [
+					{ type: "text" as const, text: "Here is my summary." },
+					...submission("Keep the condition.").content,
+				],
+			},
+		],
+		expected: "Keep the condition.",
+	},
+	{
+		name: "rejects plain-text summaries",
+		outputs: [answer("Here is a summary."), submission("Keep the condition.")],
+		expected: "Keep the condition.",
+		feedback: /plain text is not a submission/,
+	},
+	{
+		name: "reports the exact multibyte count for rewriting",
+		outputs: [submission("é".repeat(141)), submission("Only on AC power.")],
 		expected: "Only on AC power.",
 		feedback: /282 UTF-8 bytes/,
 	},
 	{
-		name: "rewrites empty output",
-		outputs: [" \n\t ", "Keep the condition."],
+		name: "rewrites empty submissions",
+		outputs: [submission(" \n\t "), submission("Keep the condition.")],
 		expected: "Keep the condition.",
 		feedback: /was empty/,
 	},
 	{
-		name: "shortens the latest attempt rather than the original overshoot",
-		outputs: ["first ".repeat(74), "second ".repeat(50), "Keep the condition."],
-		expected: "Keep the condition.",
-		feedback: /UTF-8 bytes/,
-	},
-	{
-		name: "rewrites NUL output",
-		outputs: ["bad\0summary", "Valid summary."],
+		name: "rewrites NUL submissions",
+		outputs: [submission("bad\0summary"), submission("Valid summary.")],
 		expected: "Valid summary.",
 		feedback: /NUL character/,
 	},
 	{
-		name: "trims persistent overshoot after two corrective attempts",
-		outputs: ["é".repeat(141), "é".repeat(141), "é".repeat(141)],
-		expected: "é".repeat(140),
-		trimmed: true,
+		name: "rejects non-string arguments",
+		outputs: [submission(123), submission("Valid summary.")],
+		expected: "Valid summary.",
+		feedback: /text string/,
+	},
+	{
+		name: "rejects extra arguments",
+		outputs: [submission("Fact", { commentary: "extra" }), submission("Valid summary.")],
+		expected: "Valid summary.",
+		feedback: /text string/,
+	},
+	{
+		name: "rejects unknown tools",
+		outputs: [
+			{ ...submission("bad"), content: [{ ...submission("bad").content[0]!, name: "run_code" }] },
+			submission("Valid summary."),
+		],
+		expected: "Valid summary.",
+		feedback: /exactly once/,
+	},
+	{
+		name: "rejects multiple submissions",
+		outputs: [
+			{
+				...submission("bad"),
+				content: [...submission("bad").content, { ...submission("bad").content[0]!, id: "second-call" }],
+			},
+			submission("Valid summary."),
+		],
+		expected: "Valid summary.",
+		feedback: /exactly once/,
+	},
+	{
+		name: "never hard-trims a persistent overshoot",
+		outputs: [submission("é".repeat(141)), submission("é".repeat(141)), submission("é".repeat(141))],
+		error: /282 UTF-8 bytes.*after 3 attempts/,
 		feedback: /282 UTF-8 bytes/,
 	},
-	...[
-		{ name: "does not split a three-byte code point", text: "界".repeat(94), expected: "界".repeat(93) },
-		{ name: "does not split a four-byte code point", text: `a${"🛫".repeat(70)}`, expected: `a${"🛫".repeat(69)}` },
-		{ name: "recognizes clauses without spaces", text: `条件を保持。${"界".repeat(100)}`, expected: "条件を保持。" },
-		{
-			name: "prefers a complete clause with its condition",
-			text: `Work with the lid closed only on AC power and Wi-Fi; ${"lower priority ".repeat(30)}`,
-			expected: "Work with the lid closed only on AC power and Wi-Fi;",
-		},
-		{
-			name: "cuts at a word boundary when no clause fits",
-			text: `Keep ${"important ".repeat(30)}`,
-			expected: `Keep ${"important ".repeat(27)}`.trim(),
-		},
-		{
-			name: "keeps a whole word ending exactly at 280 bytes",
-			text: `${"a".repeat(280)} more`,
-			expected: "a".repeat(280),
-		},
-		{
-			name: "keeps a clause ending exactly at 280 bytes",
-			text: `${"a".repeat(279)}; more`,
-			expected: `${"a".repeat(279)};`,
-		},
-	].map(({ name, text, expected }) => ({
-		name,
-		outputs: [text, text, text],
-		expected,
-		trimmed: true,
-		feedback: /UTF-8 bytes/,
-	})),
 	{
-		name: "reports persistently empty output",
-		outputs: ["", "", ""],
-		error: /was empty after 3 attempts/,
-		feedback: /was empty/,
-	},
-	{
-		name: "reports persistently invalid output without trimming it",
-		outputs: ["bad\0summary", "bad\0summary", "bad\0summary"],
-		error: /NUL character after 3 attempts/,
-		feedback: /NUL character/,
-	},
-	{
-		name: "does not mask a final invalid response with earlier oversized output",
-		outputs: ["x".repeat(281), "x".repeat(281), ""],
+		name: "does not mask invalid final output with a previous overshoot",
+		outputs: [submission("x".repeat(281)), submission("x".repeat(281)), submission("")],
 		error: /was empty after 3 attempts/,
 		feedback: /281 UTF-8 bytes/,
+	},
+	{
+		name: "records provider failures without treating output as valid",
+		outputs: [answer("private partial summary", "error")],
+		error: /failed: error/,
 	},
 ]) {
 	test(`memory compaction ${scenario.name}`, async (t) => {
@@ -232,8 +278,7 @@ for (const scenario of [
 		const luna = { ...cheap, id: "gpt-6-luna", provider: "openai-codex" };
 		const controller = new AbortController();
 		let calls = 0;
-		const warnings: string[] = [];
-		t.mock.method(console, "warn", (message: string) => warnings.push(message));
+		const attempts: MemoryCompactionAttempt[] = [];
 		t.mock.method(
 			ModelRuntime,
 			"create",
@@ -242,47 +287,49 @@ for (const scenario of [
 					...requiredAuthRegistration,
 					getAvailable: async () => [luna],
 					completeSimple: async (
-						chosen: Model,
+						_chosen: Model,
 						context: Parameters<ModelRuntime["completeSimple"]>[1],
 						options: Parameters<ModelRuntime["completeSimple"]>[2],
 					) => {
-						assert.equal(chosen, luna);
-						assert.equal(context.tools, undefined);
 						assert.equal(options?.signal, controller.signal);
-						assert.equal(options?.maxRetries, 0);
-						assert.equal(options?.reasoning, undefined);
-						assert.equal(context.messages.length, 1, "attempts do not accumulate history");
-						const previous = scenario.outputs[calls - 1]?.replace(/\s+/gu, " ").trim();
-						if (previous && !previous.includes("\0") && Buffer.byteLength(previous) > 280) {
-							assert.deepEqual(JSON.parse(context.messages[0]!.content as string), {
-								previousSummary: previous,
-								utf8Bytes: Buffer.byteLength(previous),
-								targetBytes: 220,
-							});
-							assert.match(context.systemPrompt!, /Shorten the supplied previous summary/);
-						} else assert.equal(context.messages[0]!.content, "original memories");
-						if (calls) {
-							assert.match(context.systemPrompt!, scenario.feedback!);
-							assert.match(context.systemPrompt!, /preserve important conditions/);
-						}
 						assert.ok(calls < scenario.outputs.length, "model attempts stay bounded");
-						return answer(scenario.outputs[calls++]!);
+						assert.equal(
+							context.messages[0]!.content,
+							"original memories",
+							"original facts remain available on every retry",
+						);
+						if (calls) {
+							const feedback = context.messages
+								.filter((m) => m.role === "toolResult" || m.role === "user")
+								.at(-1)!;
+							const text =
+								typeof feedback.content === "string"
+									? feedback.content
+									: feedback.content.map((block) => (block.type === "text" ? block.text : "")).join("");
+							assert.match(text, scenario.feedback!);
+						}
+						return scenario.outputs[calls++]!;
 					},
 				}) as unknown as ModelRuntime,
 		);
-		const result = new ModelCatalog(root).summarizeMemory("original memories", controller.signal);
+		const result = new ModelCatalog(root).summarizeMemory("original memories", controller.signal, async (attempt) => {
+			attempts[attempt.number - 1] = attempt;
+		});
 		if (scenario.error) await assert.rejects(result, scenario.error);
 		else assert.equal(await result, scenario.expected);
 		assert.equal(calls, scenario.outputs.length);
-		assert.equal(warnings.length, scenario.trimmed ? 1 : 0);
-		if (scenario.trimmed) {
-			assert.ok(Buffer.byteLength(scenario.expected!) <= 280);
-			assert.match(warnings[0]!, /^pilotd: trimmed memory summary from \d+ to \d+ UTF-8 bytes after 3 attempts$/);
+		assert.equal(attempts.length, calls);
+		for (const [i, attempt] of attempts.entries()) {
+			assert.equal(attempt.model, "openai-codex/gpt-6-luna");
+			assert.equal(JSON.parse(attempt.response!.json).stopReason, scenario.outputs[i]!.stopReason);
+			assert.doesNotMatch(attempt.response!.json, /Not part of the title|thinkingSignature/);
+			assert.doesNotMatch(attempt.request.json, /Not part of the title|thinkingSignature/);
 		}
+		if (scenario.feedback) assert.match(attempts[0]!.issue!, scenario.feedback);
 	});
 }
 
-test("paused memory recovers after restart and stores summaries even when every model attempt overshoots", async (t) => {
+test("persistent overshoots preserve notes and recover after restart, retaining inspectable failures", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "pilot-memory-model-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
 	const waitFor = async (check: () => boolean) => {
@@ -292,17 +339,7 @@ test("paused memory recovers after restart and stores summaries even when every 
 			await delay(5);
 		}
 	};
-	const paused = new ProjectMemoryService(root, async () => {
-		throw new Error("Memory summary was 444 UTF-8 bytes (limit 280) after 3 attempts; will retry automatically");
-	});
-	t.after(() => paused.stop());
-	for (let i = 0; i < 4; i++) await paused.note("p", `condition ${i} ${"é".repeat(130)}`, "chat");
-	await waitFor(() => paused.summary("p").compaction.state === "backoff");
-	const log = await readFile(join(root, "memory", "p", "log"));
-	await paused.stop();
-
-	let calls = 0;
-	t.mock.method(console, "warn", () => {});
+	let overshoot = true;
 	t.mock.method(
 		ModelRuntime,
 		"create",
@@ -310,37 +347,57 @@ test("paused memory recovers after restart and stores summaries even when every 
 			({
 				...requiredAuthRegistration,
 				getAvailable: async () => [{ ...cheap, id: "gpt-6-luna", provider: "openai-codex" }],
-				completeSimple: async () => {
-					calls++;
-					return answer(`Keep lasting conditions; ${"évidence ".repeat(42)}`);
-				},
+				completeSimple: async () => submission(overshoot ? "é".repeat(141) : "Keep lasting conditions."),
 			}) as unknown as ModelRuntime,
 	);
 	const catalog = new ModelCatalog(root);
-	const resumed = new ProjectMemoryService(root, (prompt, signal) => catalog.summarizeMemory(prompt, signal));
+	const summarize: MemorySummarizer = (prompt, signal, observe) => catalog.summarizeMemory(prompt, signal, observe);
+	const paused = new ProjectMemoryService(root, summarize);
+	t.after(() => paused.stop());
+	await paused.note("p", "first private condition", "chat");
+	await paused.note("p", "second private condition", "chat");
+	await waitFor(() => paused.summary("p").compaction.state === "backoff");
+	const dir = join(root, "memory", "p");
+	const log = await readFile(join(dir, "log"));
+	const failure = await readFile(join(dir, "compaction-failure.json"), "utf8");
+	const trace: MemoryCompactionTrace = JSON.parse(failure);
+	assert.equal(trace.status, "failed");
+	assert.deepEqual([trace.lo, trace.hi], [0, 1]);
+	assert.equal(trace.attempts.length, 3);
+	assert.deepEqual(
+		trace.attempts.map((a) => a.bytes),
+		[282, 282, 282],
+	);
+	assert.ok(trace.attempts.every((a) => a.issue!.includes("282 UTF-8 bytes")));
+	assert.match(trace.prompt.json, /first private condition/);
+	assert.match(trace.attempts[0]!.response!.json, /é/);
+	assert.equal((await stat(join(dir, "compaction-failure.json"))).mode & 0o777, 0o600);
+	assert.equal((await stat(join(dir, "compaction-latest.json"))).mode & 0o777, 0o600);
+	assert.ok((await paused.load("p")).compaction.pending > 0);
+	await paused.stop();
+	overshoot = false;
+	const resumed = new ProjectMemoryService(root, summarize);
 	t.after(() => resumed.stop());
 	await resumed.load("p");
 	await waitFor(() => resumed.summary("p").compaction.state === "idle");
-	assert.equal(resumed.summary("p").compaction.pending, 0);
-	assert.equal(resumed.summary("p").compaction.error, undefined);
-	assert.equal(calls, 9, "three blocks progress after three bounded attempts each");
-	const stored = (await resumed.wake("p", 1)).nodes[0]!;
-	assert.deepEqual([stored.lo, stored.hi], [0, 3]);
-	assert.equal(stored.text, "Keep lasting conditions;");
-	for (const node of [stored, ...(await resumed.zoom("p", 0, 3))]) {
-		assert.ok(node.text && Buffer.byteLength(node.text) <= 280);
-		assert.equal(node.pending, undefined);
-	}
-	assert.deepEqual(await readFile(join(root, "memory", "p", "log")), log, "source notes are never trimmed");
-	await resumed.stop();
-	const reopened = new ProjectMemoryService(root);
-	t.after(() => reopened.stop());
-	assert.equal((await reopened.load("p")).compaction.pending, 0);
-	assert.deepEqual((await reopened.wake("p", 1)).nodes[0], stored, "trimmed summaries survive restart");
+	assert.equal((await resumed.zoom("p", 0, 1)).length, 2);
+	assert.deepEqual(await readFile(join(dir, "log")), log, "source notes are never rewritten");
+	assert.equal(
+		await readFile(join(dir, "compaction-failure.json"), "utf8"),
+		failure,
+		"a successful retry keeps the last failure",
+	);
+	const latest: MemoryCompactionTrace = JSON.parse(await readFile(join(dir, "compaction-latest.json"), "utf8"));
+	assert.equal(latest.status, "succeeded");
+	assert.equal(latest.attempts.length, 1);
+	assert.deepEqual((await readdir(dir)).filter((name) => name.startsWith("compaction-")).sort(), [
+		"compaction-failure.json",
+		"compaction-latest.json",
+	]);
 });
 
 for (const abortAt of [1, 3]) {
-	test(`memory compaction honors cancellation on attempt ${abortAt} before correcting or trimming`, async (t) => {
+	test(`memory compaction honors cancellation on attempt ${abortAt}`, async (t) => {
 		const root = await mkdtemp(join(tmpdir(), "pilot-memory-model-"));
 		t.after(() => rm(root, { recursive: true, force: true }));
 		const controller = new AbortController();
@@ -353,9 +410,8 @@ for (const abortAt of [1, 3]) {
 					...requiredAuthRegistration,
 					getAvailable: async () => [{ ...cheap, id: "gpt-6-luna", provider: "openai-codex" }],
 					completeSimple: async () => {
-						calls++;
-						if (calls === abortAt) controller.abort();
-						return answer("x".repeat(281));
+						if (++calls === abortAt) controller.abort();
+						return submission("x".repeat(281));
 					},
 				}) as unknown as ModelRuntime,
 		);
@@ -366,7 +422,16 @@ for (const abortAt of [1, 3]) {
 	});
 }
 
-test("memory compaction never falls back to another model when luna is unavailable", async (t) => {
+test("memory diagnostic capture bounds JSON-escaped multibyte payloads explicitly", () => {
+	for (const value of ["é".repeat(30_000), "\0".repeat(30_000), "🛫".repeat(30_000), { text: "normal" }]) {
+		const captured = captureMemory(value);
+		assert.ok(Buffer.byteLength(JSON.stringify(captured)) <= 12_288);
+		assert.equal(captured.bytes, Buffer.byteLength(JSON.stringify(value)));
+		assert.equal(captured.truncated, typeof value === "string");
+	}
+});
+
+test("memory compaction never falls back when Luna is unavailable", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "pilot-memory-model-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
 	t.mock.method(

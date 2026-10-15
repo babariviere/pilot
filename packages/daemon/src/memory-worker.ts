@@ -92,6 +92,10 @@ if (workerData.recall) {
 				case "put":
 					value = store.put(args.lo, args.hi, args.epoch, args.text);
 					break;
+				case "diagnostic":
+					store.diagnostic(args.trace);
+					value = { ok: true };
+					break;
 				default:
 					throw new Error("Unknown memory operation");
 			}

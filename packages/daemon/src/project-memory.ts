@@ -2,9 +2,14 @@ import { join } from "node:path";
 import { Worker } from "node:worker_threads";
 import type { MemoryEntry, MemoryNode, MemoryRecall, MemoryView, ProjectMemorySummary } from "@pilot/protocol";
 import { Conflict, ServiceUnavailable } from "./errors.ts";
+import { captureMemory, type MemoryCompactionObserver, type MemoryCompactionTrace } from "./memory-compaction.ts";
 
 type Nap = { lo: number; hi: number; epoch: number; prompt: string };
-export type MemorySummarizer = (prompt: string, signal: AbortSignal) => Promise<string>;
+export type MemorySummarizer = (
+	prompt: string,
+	signal: AbortSignal,
+	observe: MemoryCompactionObserver,
+) => Promise<string>;
 export function emptyMemorySummary(): ProjectMemorySummary {
 	return { count: 0, recent: [], compaction: { state: "idle", pending: 0 } };
 }
@@ -195,24 +200,66 @@ export class ProjectMemoryService {
 	}
 	private async compact(projectId: string, controller: AbortController): Promise<void> {
 		let timer: NodeJS.Timeout | undefined;
+		let onAbort: (() => void) | undefined;
+		let trace: MemoryCompactionTrace | undefined;
+		let diagnosticFailed = false;
+		const saveTrace = async () => {
+			if (!trace || this.stopped || this.retired.has(projectId)) return;
+			try {
+				await this.rpc(projectId, "diagnostic", { trace });
+			} catch {
+				// Diagnostics must not block valid summaries or leak private payloads in general logs.
+				if (!diagnosticFailed) console.warn(`pilotd: memory ${projectId}: could not save compaction diagnostics`);
+				diagnosticFailed = true;
+			}
+		};
 		try {
 			const nap = await this.rpc<Nap | undefined>(projectId, "next");
 			if (!nap || this.stopped || controller.signal.aborted) return;
+			trace = {
+				version: 1,
+				lo: nap.lo,
+				hi: nap.hi,
+				epoch: nap.epoch,
+				startedAt: Date.now(),
+				status: "running",
+				prompt: captureMemory(nap.prompt),
+				attempts: [],
+			};
+			await saveTrace();
+			if (this.stopped || controller.signal.aborted) return;
 			// Do not rely on a provider honoring cancellation to free the queue or stop the daemon.
-			const aborted = new Promise<never>((_, reject) =>
-				controller.signal.addEventListener(
-					"abort",
-					() => reject(new Error("Memory compaction aborted or timed out")),
-					{ once: true },
-				),
-			);
+			const aborted = new Promise<never>((_, reject) => {
+				onAbort = () => reject(new Error("Memory compaction aborted or timed out"));
+				controller.signal.addEventListener("abort", onAbort, { once: true });
+			});
 			timer = setTimeout(() => controller.abort(), 60_000);
 			timer.unref();
-			const text = await Promise.race([this.summarize!(nap.prompt, controller.signal), aborted]);
+			const text = await Promise.race([
+				this.summarize!(nap.prompt, controller.signal, async (attempt) => {
+					if (controller.signal.aborted || !trace || trace.status !== "running") return;
+					if (attempt.number >= 1 && attempt.number <= 3) trace.attempts[attempt.number - 1] = attempt;
+					await saveTrace();
+				}),
+				aborted,
+			]);
 			if (this.stopped || controller.signal.aborted) return;
-			await this.rpc(projectId, "put", { ...nap, text });
+			const stored = await this.rpc<boolean>(projectId, "put", { ...nap, text });
+			trace.status = stored ? "succeeded" : "failed";
+			if (!stored) trace.error = "Source memories changed during compaction; summary was not stored";
+			trace.finishedAt = Date.now();
+			await saveTrace();
 			this.failures.delete(projectId);
 		} catch (error) {
+			if (trace) {
+				trace.status = "failed";
+				trace.finishedAt = Date.now();
+				trace.error = "Compaction failed or was interrupted; inspect attempts for validation details";
+				trace.failure = captureMemory(
+					error instanceof Error ? { name: error.name, message: error.message } : String(error),
+				);
+				await saveTrace();
+			}
 			if (!this.stopped && !this.retired.has(projectId)) {
 				this.queue.delete(projectId);
 				const attempt = (this.failures.get(projectId) ?? 0) + 1;
@@ -232,6 +279,7 @@ export class ProjectMemoryService {
 			}
 		} finally {
 			clearTimeout(timer);
+			if (onAbort) controller.signal.removeEventListener("abort", onAbort);
 			this.running.delete(projectId);
 			this.emit();
 			this.schedule(projectId);
