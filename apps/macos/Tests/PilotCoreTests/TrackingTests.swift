@@ -2,10 +2,25 @@ import Foundation
 import Testing
 @testable import PilotCore
 
+@Test func slackLabelEffectsMigrateAndLabelCloseReasonRoundTrips() throws {
+    let legacy = try JSONDecoder().decode(SlackProjectLabel.self, from: Data(
+        #"{"name":"Product","description":"Invented requests","hideFromInbox":true}"#.utf8))
+    #expect(legacy.effect == .hide)
+    for effect in SlackLabelEffect.allCases {
+        let label = SlackProjectLabel(name: "Product", description: "Invented requests", effect: effect)
+        #expect(try JSONDecoder().decode(SlackProjectLabel.self, from: JSONEncoder().encode(label)) == label)
+        #expect(try JSONValue.decode(JSONEncoder().encode(label))["hideFromInbox"] == nil)
+    }
+    let closed = SlackTriage(type: .request, label: "Product", severity: .low, status: .dismissed,
+                             closedByLabel: "Product")
+    #expect(try JSONDecoder().decode(SlackTriage.self, from: JSONEncoder().encode(closed)) == closed)
+    #expect(closed.overrides.status == nil)
+}
+
 @Test func slackTriageDecodesAndEncodesExplicitOverrides() throws {
-    let config = ProjectTrackingConfig(slackLabels: [.init(name: "Client", description: "App support", hideFromInbox: true)])
+    let config = ProjectTrackingConfig(slackLabels: [.init(name: "Client", description: "App support", effect: .hide)])
     let roundtrip = try JSONDecoder().decode(ProjectTrackingConfig.self, from: JSONEncoder().encode(config))
-    #expect(roundtrip.slackLabels?.first?.hideFromInbox == true)
+    #expect(roundtrip.slackLabels?.first?.effect == .hide)
     let triage = try JSONDecoder().decode(SlackTriage.self, from: Data(#"""
     {"type":"question","label":null,"severity":"low","status":"done",
      "overrides":{"type":"question","label":null,"severity":"low","status":"done"}}

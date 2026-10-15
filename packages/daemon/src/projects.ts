@@ -2,7 +2,13 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
-import type { Project, ProjectRequest, ProjectTrackingConfig, RemoteBranchList } from "@pilot/protocol";
+import type {
+	Project,
+	ProjectRequest,
+	ProjectTrackingConfig,
+	RemoteBranchList,
+	SlackProjectLabel,
+} from "@pilot/protocol";
 import { NotFound } from "./errors.ts";
 import { listRemoteBranches } from "./workspaces.ts";
 
@@ -38,7 +44,23 @@ export class ProjectStore {
 			this.projects = Array.isArray(parsed) ? parsed : [];
 			let migrated = false;
 			this.projects = this.projects.map((project) => {
-				if (!project.tracking || !Object.hasOwn(project.tracking, "mcp")) return project;
+				if (!project.tracking) return project;
+				// Labels from before effects: hideFromInbox: true becomes hide, every label states its effect.
+				if (
+					!Object.hasOwn(project.tracking, "mcp") &&
+					(project.tracking.slackLabels ?? []).some(
+						(label) => Object.hasOwn(label, "hideFromInbox") || !Object.hasOwn(label, "effect"),
+					)
+				) {
+					try {
+						const tracking = validateTrackingConfig(project.tracking);
+						migrated = true;
+						return { ...project, tracking };
+					} catch {
+						return project;
+					}
+				}
+				if (!Object.hasOwn(project.tracking, "mcp")) return project;
 				migrated = true;
 				return {
 					...project,
@@ -184,7 +206,7 @@ export function validateTrackingConfig(value: unknown): ProjectTrackingConfig {
 					!label ||
 					typeof label !== "object" ||
 					Array.isArray(label) ||
-					Object.keys(label).some((key) => !["name", "description", "hideFromInbox"].includes(key)) ||
+					Object.keys(label).some((key) => !["name", "description", "effect", "hideFromInbox"].includes(key)) ||
 					typeof label.name !== "string" ||
 					!label.name.trim() ||
 					label.name.length > 80 ||
@@ -192,7 +214,8 @@ export function validateTrackingConfig(value: unknown): ProjectTrackingConfig {
 					typeof label.description !== "string" ||
 					label.description.length > 240 ||
 					/[\x00-\x1f]/.test(label.description) ||
-					(label.hideFromInbox !== undefined && typeof label.hideFromInbox !== "boolean"),
+					(label.effect !== undefined && !["none", "hide", "close"].includes(label.effect)) ||
+					(legacyHide(label) !== undefined && typeof legacyHide(label) !== "boolean"),
 			) ||
 			new Set(labels.map((label) => label.name.trim())).size !== labels.length)
 	)
@@ -221,9 +244,9 @@ export function validateTrackingConfig(value: unknown): ProjectTrackingConfig {
 		...(labels
 			? {
 					slackLabels: labels.map((label) => ({
-						...label,
 						name: label.name.trim(),
 						description: label.description.trim(),
+						effect: label.effect ?? (legacyHide(label) ? "hide" : "none"),
 					})),
 				}
 			: {}),
@@ -232,4 +255,9 @@ export function validateTrackingConfig(value: unknown): ProjectTrackingConfig {
 		...(linearTeam && config.linearTeamName?.trim() ? { linearTeamName: config.linearTeamName.trim() } : {}),
 	};
 	return result;
+}
+
+/** Labels saved before effects existed hid their messages with hideFromInbox: true. */
+function legacyHide(label: SlackProjectLabel): unknown {
+	return (label as SlackProjectLabel & { hideFromInbox?: unknown }).hideFromInbox;
 }

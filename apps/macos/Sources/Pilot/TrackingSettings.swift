@@ -348,18 +348,18 @@ struct EditableSlackLabel: Identifiable, Equatable {
     let id = UUID()
     var name: String
     var description: String
-    var hideFromInbox: Bool
+    var effect: SlackLabelEffect
 
     init(_ label: SlackProjectLabel) {
         name = label.name
         description = label.description
-        hideFromInbox = label.hideFromInbox == true
+        effect = label.effect
     }
 
     /// The label as saved: one trimmed line each, within pilotd's limits.
     var label: SlackProjectLabel {
         SlackProjectLabel(name: Self.line(name, limit: 80), description: Self.line(description, limit: 240),
-                          hideFromInbox: hideFromInbox ? true : nil)
+                          effect: effect)
     }
 
     private static func line(_ value: String, limit: Int) -> String {
@@ -369,8 +369,7 @@ struct EditableSlackLabel: Identifiable, Equatable {
 }
 
 /// Labels Slack messages are sorted into, defined per project, then the latest corrections. The classifier
-/// reads each label's name and description and picks at most one; "Hide from Inbox" keeps that label's
-/// messages out of the Inbox (they stay in Slack triage behind Show hidden).
+/// reads each label's name and description and picks at most one. Effects hide or close messages locally.
 struct SlackLabelsSection: View {
     let project: Project
     @ObservedObject var editor: ProjectEditor
@@ -422,9 +421,15 @@ private struct SlackLabelRow: View {
                 }
             }
             Spacer(minLength: 8)
-            Toggle("Hide from Inbox", isOn: $label.hideFromInbox)
-                .toggleStyle(.checkbox).font(.caption).fixedSize()
-                .help("Messages with this label stay out of the Inbox. Slack triage lists them behind Show hidden.")
+            Picker("Effect", selection: $label.effect) {
+                Text("None").tag(SlackLabelEffect.none)
+                Text("Hide from Inbox").tag(SlackLabelEffect.hide)
+                Text("Close").tag(SlackLabelEffect.close)
+            }
+            .pickerStyle(.menu).labelsHidden().controlSize(.small)
+            .frame(width: 140)
+            .accessibilityLabel("Label effect")
+            .help("Hide keeps messages out of the Inbox. Close dismisses them unless you set a status. Both stay in Slack triage behind Show hidden.")
             Button(action: remove) { PilotSymbol(PilotIcon.remove) }
                 .rowIconButtonStyle(hoverTint: Theme.destructive)
                 .help("Remove this label")

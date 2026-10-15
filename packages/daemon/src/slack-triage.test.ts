@@ -6,7 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { validateTrackingConfig } from "./projects.ts";
 import { parseSlackClassification } from "./slack-classifier.ts";
-import { TrackedItemDisk, type TrackedInput } from "./tracked-items-disk.ts";
+import { type TrackedInput, TrackedItemDisk } from "./tracked-items-disk.ts";
 
 const input: TrackedInput = {
 	externalId: "C1/1.000001",
@@ -86,10 +86,18 @@ test("corrections are bounded, newest first, project-local, and ignore no-op rec
 test("project labels are bounded and validated, and classifier labels must belong to that project", () => {
 	const config = {
 		slackChannels: [],
-		slackLabels: [{ name: " Client ", description: " App support ", hideFromInbox: true }],
+		slackLabels: [
+			{ name: " Client ", description: " App support ", effect: "close" as const },
+			{ name: "Product", description: "", hideFromInbox: true },
+			{ name: "Ops", description: "", hideFromInbox: false },
+			{ name: "Billing", description: "", effect: "none" as const, hideFromInbox: true },
+		],
 	};
 	assert.deepEqual(validateTrackingConfig(config).slackLabels, [
-		{ name: "Client", description: "App support", hideFromInbox: true },
+		{ name: "Client", description: "App support", effect: "close" },
+		{ name: "Product", description: "", effect: "hide" },
+		{ name: "Ops", description: "", effect: "none" },
+		{ name: "Billing", description: "", effect: "none" },
 	]);
 	for (const slackLabels of [
 		null,
@@ -97,6 +105,8 @@ test("project labels are bounded and validated, and classifier labels must belon
 		[{ name: "", description: "" }],
 		[{ name: "x", description: "two\nlines" }],
 		[{ name: "x", description: "", hideFromInbox: "yes" }],
+		[{ name: "x", description: "", effect: "archive" }],
+		[{ name: "x", description: "", effect: true }],
 		[{ name: "x", description: "", extra: 1 }],
 		[
 			{ name: "x", description: "" },

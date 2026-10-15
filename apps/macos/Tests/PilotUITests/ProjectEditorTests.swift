@@ -3,7 +3,7 @@ import Testing
 @testable import Pilot
 
 @Test @MainActor func projectEditorPreservesSlackLabelsWithoutAnEditor() {
-    let labels = [SlackProjectLabel(name: "Client", description: "App support", hideFromInbox: true)]
+    let labels = [SlackProjectLabel(name: "Client", description: "App support", effect: .hide)]
     let editor = ProjectEditor()
     editor.load(Project(id: "p", name: "Example", path: "/example", tracking: .init(slackChannels: ["C1"], slackLabels: labels), createdAt: 0))
     editor.name = "Renamed example"

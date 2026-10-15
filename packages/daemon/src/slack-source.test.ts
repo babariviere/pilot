@@ -5,16 +5,14 @@ import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import type { Project, TrackingJson } from "@pilot/protocol";
 import { ProjectStore } from "./projects.ts";
+import { parseSlackClassification, type SlackClassification, SlackModelUnavailable } from "./slack-classifier.ts";
 import { slackHistoryFixture, slackThreadFixture } from "./slack-fixtures.ts";
 import { SlackFormatChanged } from "./slack-format.ts";
-import { parseSlackClassification, type SlackClassification } from "./slack-classifier.ts";
-import { SlackModelUnavailable } from "./slack-classifier.ts";
-import { createSlackPoller, SLACK_BATCH_SIZE, SLACK_EXCERPT_LINES } from "./slack-source.ts";
-import { slackChannelProgress } from "./slack-source.ts";
+import { createSlackPoller, SLACK_BATCH_SIZE, SLACK_EXCERPT_LINES, slackChannelProgress } from "./slack-source.ts";
 import { SourceSignInRequired, SourceToolError } from "./source-mcp.ts";
-import { SourceRegistry, type SourcePollContext } from "./sources.ts";
-import { SLACK_DAILY_BUDGET } from "./tracked-items-disk.ts";
+import { type SourcePollContext, SourceRegistry } from "./sources.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
+import { SLACK_DAILY_BUDGET } from "./tracked-items-disk.ts";
 
 const now = Date.UTC(2026, 9, 13, 12);
 const bug: SlackClassification = {
@@ -74,7 +72,7 @@ test("poller passes only the project's configured labels and recent corrections 
 	]);
 	const item = (await f.store.list({ projectId: f.project.id })).items[0]!;
 	await f.store.patch(item.id, { slack: { type: "question", label: "Client" } });
-	const labels = [{ name: "Client", description: "App support", hideFromInbox: true }];
+	const labels = [{ name: "Client", description: "App support", effect: "hide" as const }];
 	let preparations = 0;
 	const poll = createSlackPoller(
 		f.store,
