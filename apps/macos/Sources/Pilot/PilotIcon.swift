@@ -53,7 +53,7 @@ enum PilotIcon: String, CaseIterable {
     // MARK: Services and settings
 
     case linearIssue, githubIssue, slackChannel, privateChannel, signInRequired, appearance, notifications, energy,
-        power, updates, activity
+        power, updates, activity, connections
 }
 
 extension PilotIcon {
@@ -170,6 +170,7 @@ extension PilotIcon {
         case .power: "powerplug"
         case .updates: "arrow.down.circle"
         case .activity: "chart.bar"
+        case .connections: "point.3.connected.trianglepath.dotted"
         }
     }
 
@@ -327,6 +328,7 @@ extension PilotIcon {
         case .power: "Power-adapter conditions."
         case .updates: "App updates."
         case .activity: "Activity charts."
+        case .connections: "Connections settings: the pi MCP servers chats use."
         }
     }
 }

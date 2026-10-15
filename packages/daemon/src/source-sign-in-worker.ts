@@ -1,4 +1,4 @@
-/** Browser sign-in to a dedicated tracking server, the way `pi mcp login` does it: same pinned SDK flow,
+/** Browser sign-in to a server in the user's global mcp.json, the way `pi mcp login` does it: same pinned SDK flow,
  * same locked mcp-auth.json and refresh locks. Runs off the daemon event loop. The authorization URL goes to
  * the parent, which opens the browser; tokens never leave pi's credential store.
  */
@@ -102,7 +102,7 @@ parentPort!.on("message", () => {
 let reply: { ok?: true; cancelled?: true; error?: string };
 try {
 	const { kind, again } = workerData as { kind: string; again: boolean; agentDir?: string };
-	if (kind !== "linear" && kind !== "slack") throw new Problem("Unknown tracking source.");
+	if (typeof kind !== "string" || !kind) throw new Problem("Unknown MCP server.");
 	const agentDir = (workerData.agentDir as string | undefined) ?? paths.getAgentDir();
 	// Global user config only, like tracking calls. A repository cannot add a server to sign in to.
 	const loaded = config.loadMcpConfig({ agentDir, cwd: agentDir, projectTrusted: false });

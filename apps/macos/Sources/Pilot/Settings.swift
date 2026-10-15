@@ -125,15 +125,16 @@ extension EnvironmentValues {
 
 /// A page of the settings window. General pages come first in the sidebar, then one page per project.
 enum SettingsTab: Hashable {
-    case appearance, notifications, energy, terminal, updates
+    case appearance, notifications, connections, energy, terminal, updates
     case project(String)
 
-    static let general: [SettingsTab] = [.appearance, .notifications, .energy, .terminal, .updates]
+    static let general: [SettingsTab] = [.appearance, .notifications, .connections, .energy, .terminal, .updates]
 
     var title: String {
         switch self {
         case .appearance: "Appearance"
         case .notifications: "Notifications"
+        case .connections: "Connections"
         case .energy: "Energy"
         case .terminal: "Terminal"
         case .updates: "Updates"
@@ -145,6 +146,7 @@ enum SettingsTab: Hashable {
         switch self {
         case .appearance: PilotIcon.appearance
         case .notifications: PilotIcon.notifications
+        case .connections: PilotIcon.connections
         case .energy: PilotIcon.energy
         case .terminal: PilotIcon.terminal
         case .updates: PilotIcon.updates
@@ -194,6 +196,12 @@ struct SettingsView: View {
             }
         case .notifications:
             SettingsPage("Notifications", subtitle: "Pilot only interrupts you for things that need you.") { NotificationSettings() }
+        case .connections:
+            SettingsPage("Connections", subtitle: "The pi MCP servers your chats use.") {
+                McpCheckButton()
+            } content: {
+                ConnectionSettings()
+            }
         case .energy:
             SettingsPage("Energy", subtitle: "Keep work moving. Let the display rest.") { EnergySettings() }
         case .terminal:
@@ -239,7 +247,11 @@ private struct SettingsSidebar: View {
             List(selection: Binding(get: { selection }, set: { if let next = $0 { selection = next } })) {
                 Section {
                     ForEach(SettingsTab.general, id: \.self) { tab in
-                        Label(tab.title, icon: tab.icon).tag(tab)
+                        if tab == .connections {
+                            ConnectionsTabLabel().tag(tab)
+                        } else {
+                            Label(tab.title, icon: tab.icon).tag(tab)
+                        }
                     }
                 }
                 Section("Projects") {

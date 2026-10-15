@@ -5,41 +5,46 @@ export class SourceSignInCancelled extends Error {}
 /** A sign-in failure whose message is safe to show (no server text, config values or tokens). */
 export class SourceSignInFailed extends Error {}
 
-export type SourceLogin = (kind: TrackedKind, options: { again: boolean; signal: AbortSignal }) => Promise<void>;
+export type SourceLogin<K extends string = TrackedKind> = (
+	kind: K,
+	options: { again: boolean; signal: AbortSignal },
+) => Promise<void>;
+/** A sign-in keyed by tracking kind, or by MCP server name for the Connections settings. */
+export type SignInState<K extends string = TrackedKind> = Omit<SourceSignIn, "kind"> & { kind: K };
 
-type Run = { state: SourceSignIn; controller?: AbortController; settled: Promise<void> };
+type Run<K extends string> = { state: SignInState<K>; controller?: AbortController; settled: Promise<void> };
 
-/** One browser sign-in per dedicated server, bounded by a timeout, cancellable, with the last result kept. */
-export class SourceSignIns {
-	private readonly runs = new Map<TrackedKind, Run>();
+/** One browser sign-in per server, bounded by a timeout, cancellable, with the last result kept. */
+export class SourceSignIns<K extends string = TrackedKind> {
+	private readonly runs = new Map<K, Run<K>>();
 	private stopped = false;
-	private readonly login: SourceLogin;
-	private readonly changed: (state: SourceSignIn) => void;
+	private readonly login: SourceLogin<K>;
+	private readonly changed: (state: SignInState<K>) => void;
 	private readonly timeoutMs: number;
-	constructor(login: SourceLogin, changed: (state: SourceSignIn) => void, timeoutMs = 300_000) {
+	constructor(login: SourceLogin<K>, changed: (state: SignInState<K>) => void, timeoutMs = 300_000) {
 		this.login = login;
 		this.changed = changed;
 		this.timeoutMs = timeoutMs;
 	}
-	get(kind: TrackedKind): SourceSignIn | undefined {
+	get(kind: K): SignInState<K> | undefined {
 		const state = this.runs.get(kind)?.state;
 		return state && { ...state };
 	}
 	/** Returns the running sign-in when one is waiting, so repeated clicks never open a second browser flow. */
-	start(kind: TrackedKind, again = false): SourceSignIn {
+	start(kind: K, again = false): SignInState<K> {
 		if (this.stopped) throw new Error("Sign-in is stopped");
 		const previous = this.runs.get(kind);
 		if (previous?.state.state === "waiting") return { ...previous.state };
 		const startedAt = Date.now();
 		const controller = new AbortController();
-		const state: SourceSignIn = {
+		const state: SignInState<K> = {
 			kind,
 			state: "waiting",
 			...(again ? { again: true } : {}),
 			startedAt,
 			expiresAt: startedAt + this.timeoutMs,
 		};
-		const run: Run = { state, controller, settled: Promise.resolve() };
+		const run: Run<K> = { state, controller, settled: Promise.resolve() };
 		const timer = setTimeout(
 			() => controller.abort(new SourceSignInFailed("Sign-in timed out. Try again.")),
 			this.timeoutMs,
@@ -67,7 +72,7 @@ export class SourceSignIns {
 		return { ...state };
 	}
 	/** Reports cancelled at once; the flow winds down in the background. */
-	cancel(kind: TrackedKind): SourceSignIn | undefined {
+	cancel(kind: K): SignInState<K> | undefined {
 		const run = this.runs.get(kind);
 		if (run?.state.state === "waiting") {
 			const controller = run.controller;
@@ -81,7 +86,7 @@ export class SourceSignIns {
 		for (const kind of [...this.runs.keys()]) this.cancel(kind);
 		await Promise.allSettled([...this.runs.values()].map((run) => run.settled));
 	}
-	private finish(kind: TrackedKind, run: Run, state: SourceSignIn["state"], error?: string): void {
+	private finish(kind: K, run: Run<K>, state: SourceSignIn["state"], error?: string): void {
 		if (run.state.state !== "waiting" || this.runs.get(kind) !== run) return;
 		run.state = { ...run.state, state, finishedAt: Date.now(), ...(error ? { error } : {}) };
 		run.controller = undefined;

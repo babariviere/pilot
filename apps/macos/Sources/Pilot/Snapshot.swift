@@ -152,6 +152,19 @@ enum Snapshot {
         }
 
         if CommandLine.arguments.contains("--settings-only") {
+            let now = Date().timeIntervalSince1970 * 1000
+            model.client.mcp.loadFixture(McpStatus(servers: [
+                McpServerStatus(name: "datadog", transport: .http, state: .needsSignIn, canSignIn: true, checkedAt: now),
+                McpServerStatus(name: "notion", transport: .http, state: .needsSignIn, canSignIn: true, checkedAt: now,
+                                signIn: McpSignInState(state: .waiting, startedAt: now, expiresAt: now + 300_000)),
+                McpServerStatus(name: "local-docs", transport: .stdio, state: .failed,
+                                problem: "Couldn't start the server.", checkedAt: now),
+                McpServerStatus(name: "linear", transport: .http, state: .connected, tools: 42, canSignIn: true,
+                                checkedAt: now),
+                McpServerStatus(name: "slack", transport: .http, state: .connected, tools: 21, canSignIn: true,
+                                checkedAt: now),
+                McpServerStatus(name: "archive", transport: .stdio, state: .disabled),
+            ]))
             let pages: [(String, SettingsTab)] = SettingsTab.general.map { ($0.title.lowercased(), $0) }
                 + [("project", .project(Fixtures.projects[0].id))]
             for (name, tab) in pages {

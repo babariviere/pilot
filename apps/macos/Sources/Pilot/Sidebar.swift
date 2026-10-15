@@ -75,6 +75,7 @@ struct SessionSidebar: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             // Quiet while connected. Working counts live in the rows' corners.
             VStack(spacing: 0) {
+                if client.connected { McpSignInFooter() }
                 if !client.connected {
                     ConnectionFooter()
                         // The list can draw beneath its safe-area inset while scrolling.

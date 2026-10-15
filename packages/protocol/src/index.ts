@@ -1287,6 +1287,7 @@ export type ClientMessage =
 /** Daemon to client, over /api/ws and the dedicated sockets below (see their message types). */
 export type ServerMessage =
 	| { type: "power"; power: import("./power.ts").PowerStatus }
+	| { type: "mcp"; mcp: import("./mcp.ts").McpStatus }
 	| import("./schedules.ts").SchedulesMessage
 	/** Includes both active and archived sessions, so clients can switch views locally. */
 	| { type: "sessions"; sessions: SessionSummary[] }
@@ -1348,6 +1349,7 @@ export type SubagentServerMessage = Extract<ServerMessage, { type: "subagent.eve
 
 export const DEFAULT_PORT = 4319;
 export type * from "./inbox.ts";
+export type * from "./mcp.ts";
 export type * from "./memory.ts";
 export type { PowerSettings, PowerStatus } from "./power.ts";
 export type * from "./schedules.ts";

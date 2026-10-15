@@ -11,6 +11,8 @@ import type {
 	EditQueuedMessageRequest,
 	Inbox,
 	JoinMissionRequest,
+	McpCheckRequest,
+	McpSignInRequest,
 	MemoryNoteRequest,
 	MemoryRange,
 	MissionArtifactLinkWrite,
@@ -49,6 +51,7 @@ import { ChatStreams } from "./chat-streams.ts";
 import type { DaemonConfig } from "./config.ts";
 import { Conflict, ServiceUnavailable } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
+import { type McpStatusService, SignInUnavailable } from "./mcp-status.ts";
 import type { MissionService } from "./mission-service.ts";
 import type { MissionStore } from "./missions.ts";
 import type { ModelCatalog } from "./models.ts";
@@ -223,6 +226,7 @@ export function createDaemonServer(
 	schedules?: ScheduleService,
 	tracking?: SourceRegistry,
 	power?: PowerService,
+	mcp?: McpStatusService,
 ): Server {
 	sessions.setWorkspaceProcessGuard((id) => terminals.isRunning(id));
 	const reviews = new ReviewStore(_config.home);
@@ -261,6 +265,37 @@ export function createDaemonServer(
 			if (req.method === "GET") return json(res, 200, power.status());
 			if (req.method === "PATCH") return json(res, 200, await power.configure(await readJson(req)));
 			throw new HttpError(405, "Method not allowed");
+		}
+		if (parts[1] === "mcp") {
+			if (!mcp) throw new ServiceUnavailable("MCP status is unavailable");
+			if (parts.length === 2 && req.method === "GET") return json(res, 200, mcp.status());
+			if (parts.length === 3 && parts[2] === "check" && req.method === "POST") {
+				const body = await readJson<McpCheckRequest | null>(req);
+				if (body !== null && (typeof body !== "object" || Array.isArray(body)))
+					throw new HttpError(400, "Expected an object");
+				if (body?.server !== undefined && typeof body.server !== "string")
+					throw new HttpError(400, "server must be a string");
+				return json(res, 200, mcp.check(body?.server));
+			}
+			// Browser sign-in through pi's MCP OAuth flow. Progress arrives with the status.
+			if (parts.length === 5 && parts[2] === "servers" && parts[4] === "sign-in") {
+				const name = decodeURIComponent(parts[3]!);
+				try {
+					if (req.method === "POST") {
+						const body = await readJson<McpSignInRequest | null>(req);
+						if (body !== null && (typeof body !== "object" || Array.isArray(body)))
+							throw new HttpError(400, "Expected an object");
+						if (body?.again !== undefined && typeof body.again !== "boolean")
+							throw new HttpError(400, "again must be a boolean");
+						return json(res, 200, mcp.signIn(name, body?.again === true));
+					}
+					if (req.method === "DELETE") return json(res, 200, mcp.cancelSignIn(name) ?? null);
+				} catch (error) {
+					if (error instanceof SignInUnavailable) throw new HttpError(409, error.message);
+					throw error;
+				}
+			}
+			throw new HttpError(404, "Unknown MCP operation");
 		}
 		if (parts[1] === "schedules" && parts.length <= 3) {
 			if (!schedules) throw new ServiceUnavailable("Scheduling is unavailable");
@@ -818,6 +853,8 @@ export function createDaemonServer(
 	};
 	const stopPowerWatch = power?.onChange(() => broadcast({ type: "power", power: power.status() }));
 	server.on("close", () => stopPowerWatch?.());
+	const stopMcpWatch = mcp?.onChange((status) => broadcast({ type: "mcp", mcp: status }));
+	server.on("close", () => stopMcpWatch?.());
 	// Coalesce claim/finalize and CRUD bursts. No serialization when no clients are connected.
 	let schedulesTimer: NodeJS.Timeout | undefined;
 	let schedulesVersion = 0;
@@ -965,6 +1002,7 @@ export function createDaemonServer(
 	wss.on("connection", (ws: WebSocket) => {
 		clients.set(ws, boundedSender(ws));
 		if (power) send(ws, { type: "power", power: power.status() });
+		if (mcp) send(ws, { type: "mcp", mcp: mcp.status() });
 		send(ws, { type: "projects", projects: projects.list() });
 		if (schedules) {
 			const version = schedulesVersion;

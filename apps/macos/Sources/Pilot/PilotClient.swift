@@ -13,6 +13,8 @@ final class PilotClient: ObservableObject {
     @Published private(set) var trackingSources: [TrackingSource] = []
     /// Browser sign-ins per tracking server. A separate object, so only sign-in controls observe it.
     let sourceSignIns = SourceSignInStore()
+    /// pi MCP server status from pilotd. A separate object, so only connection views observe it.
+    let mcp = McpStatusStore()
     /// Invalidation only, per project. Inbox views refresh a bounded page; project pages already get
     /// dashboard updates. Observers register with observeTrackedItems.
     private var trackedObservers: [UUID: (String) -> Void] = [:]
@@ -857,6 +859,50 @@ final class PilotClient: ObservableObject {
         powerStatus = try await call("api/power", method: "PATCH", body: settings)
     }
 
+    // MARK: MCP servers
+
+    /// Recheck every server, or one. Results arrive over the control socket.
+    func checkMcp(server: String? = nil) async {
+        if mcp.fixture { return }
+        do {
+            mcp.record(try await missionRequest(["mcp", "check"], body: McpCheckRequest(server: server)))
+        } catch {
+            mcp.actionError = "Couldn't check MCP servers. \(error.localizedDescription)"
+        }
+    }
+
+    /// pilotd runs pi's MCP OAuth login for the server and opens the browser. Progress arrives with the status.
+    func startMcpSignIn(_ name: String, again: Bool = false) async {
+        let now = Date().timeIntervalSince1970 * 1000
+        if mcp.fixture {
+            return mcp.recordSignIn(name, McpSignInState(state: .waiting, again: again, startedAt: now,
+                                                         expiresAt: now + 300_000))
+        }
+        do {
+            let state: McpSignInState = try await missionRequest(["mcp", "servers", name, "sign-in"],
+                                                                 body: McpSignInRequest(again: again))
+            mcp.recordSignIn(name, state)
+        } catch {
+            mcp.recordSignIn(name, McpSignInState(state: .failed, again: again, startedAt: now, expiresAt: now,
+                                                  finishedAt: now,
+                                                  error: "Couldn't start sign-in. \(error.localizedDescription)"))
+        }
+    }
+
+    func cancelMcpSignIn(_ name: String) async {
+        guard let current = mcp.status?.server(named: name)?.signIn, current.state == .waiting else { return }
+        let cancelled = McpSignInState(state: .cancelled, again: current.again, startedAt: current.startedAt,
+                                       expiresAt: current.expiresAt, finishedAt: Date().timeIntervalSince1970 * 1000)
+        if mcp.fixture { return mcp.recordSignIn(name, cancelled) }
+        do {
+            let state: McpSignInState? = try await missionRequest(["mcp", "servers", name, "sign-in"], method: "DELETE")
+            mcp.recordSignIn(name, state ?? cancelled)
+        } catch {
+            // Already finished or pilotd restarted: either way nothing waits anymore.
+            mcp.recordSignIn(name, cancelled)
+        }
+    }
+
     // MARK: Missions
 
     /// Keeps a project's dashboard live while a view shows it. Balance with `releaseDashboard`.
@@ -1361,6 +1407,8 @@ final class PilotClient: ObservableObject {
         switch message {
         case let .power(status):
             if powerStatus != status { powerStatus = status }
+        case let .mcp(status):
+            if !mcp.fixture { mcp.record(status) }
         case let .schedules(list):
             schedules = list
             onSchedulesChanged?(list)
@@ -1492,4 +1540,38 @@ final class SourceSignInStore: ObservableObject {
     }
 
     func reset() { if !states.isEmpty { states = [:] } }
+}
+
+/// pi MCP server status. Kept apart from PilotClient so status changes redraw only connection views.
+@MainActor
+final class McpStatusStore: ObservableObject {
+    @Published private(set) var status: McpStatus?
+    /// A failed check request, cleared by the next status.
+    @Published var actionError: String?
+    /// Snapshot fixtures: socket updates are ignored. Never set in the live app.
+    private(set) var fixture = false
+
+    var needingUser: [McpServerStatus] { status?.needingUser ?? [] }
+
+    func record(_ next: McpStatus) {
+        if actionError != nil { actionError = nil }
+        if status != next { status = next }
+    }
+
+    /// A sign-in reply, before the next status repeats it. Newest wins.
+    func recordSignIn(_ name: String, _ signIn: McpSignInState) {
+        guard let current = status, let index = current.servers.firstIndex(where: { $0.name == name }) else { return }
+        let server = current.servers[index]
+        if let previous = server.signIn, previous.startedAt > signIn.startedAt { return }
+        var servers = current.servers
+        servers[index] = McpServerStatus(name: server.name, transport: server.transport, state: server.state,
+                                         tools: server.tools, problem: server.problem, canSignIn: server.canSignIn,
+                                         checkedAt: server.checkedAt, signIn: signIn)
+        record(McpStatus(servers: servers, checking: current.checking, configProblems: current.configProblems))
+    }
+
+    func loadFixture(_ status: McpStatus) {
+        fixture = true
+        record(status)
+    }
 }
