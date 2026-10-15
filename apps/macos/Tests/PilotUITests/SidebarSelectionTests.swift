@@ -5,15 +5,15 @@ import Testing
 @testable import Pilot
 
 @MainActor
-private func folderSidebarOutline(in view: NSView) -> NSOutlineView? {
+private func sidebarOutline(in view: NSView) -> NSOutlineView? {
     if let outline = view as? NSOutlineView { return outline }
-    return view.subviews.compactMap { folderSidebarOutline(in: $0) }.first
+    return view.subviews.compactMap { sidebarOutline(in: $0) }.first
 }
 
 @MainActor
-private func clickFolderSidebarRow(_ row: Int, in outline: NSOutlineView, x: CGFloat = 70) throws {
+private func clickSidebarRow(_ row: Int, in outline: NSOutlineView, x: CGFloat = 70) throws {
     let window = try #require(outline.window)
-    // Hit the title area, not the project's chevron or action buttons.
+    // Hit the title area, away from the row's revealed buttons.
     let rowRect = outline.rect(ofRow: row)
     let point = outline.convert(NSPoint(x: x, y: rowRect.midY), to: nil)
     let timestamp = ProcessInfo.processInfo.systemUptime
@@ -34,16 +34,7 @@ private func clickFolderSidebarRow(_ row: Int, in outline: NSOutlineView, x: CGF
 }
 
 @MainActor
-private func clickFolderSidebarDisclosure(_ row: Int, in outline: NSOutlineView) throws {
-    let cell = try #require(outline.view(atColumn: 0, row: row, makeIfNecessary: true))
-    cell.layoutSubtreeIfNeeded()
-    let frame = outline.convert(cell.bounds, from: cell)
-    try #require(frame.width > 24)
-    try clickFolderSidebarRow(row, in: outline, x: frame.maxX - 12)
-}
-
-@MainActor
-private func arrowInFolderSidebar(_ outline: NSOutlineView, up: Bool) throws {
+private func arrowInSidebar(_ outline: NSOutlineView, up: Bool) throws {
     let window = try #require(outline.window)
     #expect(window.makeFirstResponder(outline))
     let characters = up ? "\u{f700}" : "\u{f701}"
@@ -56,7 +47,7 @@ private func arrowInFolderSidebar(_ outline: NSOutlineView, up: Bool) throws {
 }
 
 @MainActor
-private func settleFolderSidebar(_ hosting: NSView) {
+private func settleSidebar(_ hosting: NSView) {
     // Let SwiftUI reconcile the native outline before delivering another event,
     // as the app's event loop would.
     hosting.layoutSubtreeIfNeeded()
@@ -64,28 +55,25 @@ private func settleFolderSidebar(_ hosting: NSView) {
     hosting.layoutSubtreeIfNeeded()
 }
 
-@Test(arguments: [false, true]) @MainActor
-func sidebarProjectNamesToggleWithoutSelectingProjects(grouped: Bool) throws {
+@Test @MainActor
+func sidebarChatsSelectByClickAndArrowKeysSkippingGroupHeaders() throws {
     _ = NSApplication.shared
-    let suite = "SidebarFolderSelectionTests.\(UUID().uuidString)"
+    let suite = "SidebarSelectionTests.\(UUID().uuidString)"
     let defaults = try #require(UserDefaults(suiteName: suite))
     defer { defaults.removePersistentDomain(forName: suite) }
     let model = AppModel(projectFolderDefaults: defaults)
-    // Project headers and folders show when All projects is grouped by project.
-    model.sidebarGroupsByUrgency = false
     let project = Project(id: "project", name: "Repository", path: "/repository", createdAt: 1)
     let first = SessionSummary(id: "first", title: "First session", cwd: project.path, projectId: project.id,
                                createdAt: 1, updatedAt: 3, state: "idle")
     let second = SessionSummary(id: "second", title: "Second session", cwd: project.path, projectId: project.id,
                                 createdAt: 1, updatedAt: 2, state: "idle")
     model.client.loadFixture(projects: [project], sessions: [first, second])
-    if grouped {
-        let created = model.projectFolders.create(name: "Work")
-        let folder = try #require(created)
-        model.projectFolders.move(projectId: project.id, to: folder.id)
-    }
-    let headerRow = grouped ? 1 : 0
-    let expandedRowCount = headerRow + 3
+    // Folders head the project picker and Home, never the sidebar's chat list.
+    let created = model.projectFolders.create(name: "Work")
+    let folder = try #require(created)
+    model.projectFolders.move(projectId: project.id, to: folder.id)
+    // The Recent header, then both chats.
+    let rowCount = 3
 
     let hosting = NSHostingView(rootView: SessionSidebar(model: model, client: model.client)
         .environmentObject(model))
@@ -98,49 +86,25 @@ func sidebarProjectNamesToggleWithoutSelectingProjects(grouped: Bool) throws {
     window.orderFrontRegardless()
     for _ in 0..<20 {
         hosting.layoutSubtreeIfNeeded()
-        if let outline = folderSidebarOutline(in: hosting), outline.numberOfRows == expandedRowCount { break }
+        if let outline = sidebarOutline(in: hosting), outline.numberOfRows == rowCount { break }
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
     }
-    let outline = try #require(folderSidebarOutline(in: hosting))
-    // A project header and two sessions, with an optional folder header.
-    try #require(outline.numberOfRows == expandedRowCount)
+    let outline = try #require(sidebarOutline(in: hosting))
+    try #require(outline.numberOfRows == rowCount)
 
-    // The project name navigates to the project page. Its trailing chevron is the
-    // independent control for folding the project's sessions.
-    // AppKit's row rect includes insets outside the hosted control on some macOS versions.
-    // Use the hosted cell's bounds to click the trailing disclosure control.
-    try clickFolderSidebarDisclosure(headerRow, in: outline)
-    settleFolderSidebar(hosting)
-    #expect(model.collapsedProjects.contains(project.id))
-    #expect(outline.numberOfRows == expandedRowCount - 2)
-    #expect(model.selectedSessionId == nil)
-    try clickFolderSidebarDisclosure(headerRow, in: outline)
-    settleFolderSidebar(hosting)
-    #expect(!model.collapsedProjects.contains(project.id))
-    #expect(outline.numberOfRows == expandedRowCount)
-    #expect(model.selectedSessionId == nil)
-    try clickFolderSidebarRow(headerRow, in: outline)
-    settleFolderSidebar(hosting)
-    #expect(model.selectedProjectId == project.id)
-    #expect(model.selectedSessionId == nil)
-    #expect(!model.collapsedProjects.contains(project.id))
-    try clickFolderSidebarRow(headerRow + 1, in: outline)
-    settleFolderSidebar(hosting)
+    try clickSidebarRow(1, in: outline)
+    settleSidebar(hosting)
     #expect(model.selectedSessionId == first.id)
-
-    // Start keyboard traversal from a session, not the disabled header's focus anchor.
-    try clickFolderSidebarRow(headerRow + 1, in: outline)
-    settleFolderSidebar(hosting)
-    try arrowInFolderSidebar(outline, up: true)
-    settleFolderSidebar(hosting)
-    #expect(model.selectedSessionId == first.id) // Skip non-session headers.
-    try arrowInFolderSidebar(outline, up: false)
-    settleFolderSidebar(hosting)
+    try arrowInSidebar(outline, up: true)
+    settleSidebar(hosting)
+    #expect(model.selectedSessionId == first.id) // Skip the group header.
+    try arrowInSidebar(outline, up: false)
+    settleSidebar(hosting)
     #expect(model.selectedSessionId == second.id)
-    try arrowInFolderSidebar(outline, up: true)
-    settleFolderSidebar(hosting)
+    try arrowInSidebar(outline, up: true)
+    settleSidebar(hosting)
     #expect(model.selectedSessionId == first.id)
-    try clickFolderSidebarRow(headerRow + 2, in: outline)
-    settleFolderSidebar(hosting)
+    try clickSidebarRow(2, in: outline)
+    settleSidebar(hosting)
     #expect(model.selectedSessionId == second.id)
 }

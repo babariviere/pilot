@@ -446,22 +446,6 @@ final class SessionArtifactsState: ObservableObject {
     }
 }
 
-struct ProjectArtifactsButton: View {
-    let project: Project
-    @ObservedObject var client: PilotClient
-    @StateObject private var state = ArtifactViewState()
-
-    var body: some View {
-        Button { state.viewer = true } label: {
-            PilotSymbol(PilotIcon.artifact)
-        }
-        .buttonStyle(.borderless)
-        .help("Browse artifacts in \(project.name)")
-        .accessibilityLabel("Browse artifacts in \(project.name)")
-        .sheet(isPresented: $state.viewer) { ProjectArtifactsBrowser(project: project, client: client) }
-    }
-}
-
 @MainActor
 private final class ProjectArtifactsState: ObservableObject {
     @Published var artifacts: [ArtifactSummary] = []

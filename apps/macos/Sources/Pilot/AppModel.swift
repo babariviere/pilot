@@ -106,11 +106,6 @@ final class AppModel: ObservableObject {
     @Published var sidebarSearchVisible = false
     /// Bumped to move focus into the sidebar search field.
     @Published private(set) var sidebarSearchFocusRequest = 0
-    /// All projects lists chats by urgency (Needs you, Working, Recent) instead of by project and folder.
-    /// A focused project always lists its own chats.
-    @Published var sidebarGroupsByUrgency: Bool {
-        didSet { projectFolderDefaults.set(sidebarGroupsByUrgency, forKey: Self.sidebarGroupingKey) }
-    }
     /// Project preselected in the new-session screen.
     @Published var draftProjectId: String? { didSet { saveDrafts() } }
     /// One-shot prefill consumed by the new-session composer, never submitted automatically.
@@ -119,11 +114,10 @@ final class AppModel: ObservableObject {
     @Published var draftCwd: String? { didSet { saveDrafts() } }
     @Published var draftWorkspace: WorkspaceMode? { didSet { saveDrafts() } }
     @Published private(set) var draftRevision = 0
-    @Published var collapsedProjects: Set<String> = []
-    /// Project session lists showing every chat instead of the first few. Keyed by project id,
-    /// or `SessionSidebar.otherListId` for chats outside any known project.
+    /// Recent lists showing every chat instead of the first few. Keyed by the focused project's id, or
+    /// `SessionSidebar.recentListId` for All projects.
     @Published var expandedSessionLists: Set<String> = []
-    /// Sidebar-only grouping. Repository paths and daemon project records are unchanged.
+    /// Folder headings in the project picker and on Home. Repository paths and daemon project records are unchanged.
     @Published var projectFolders: ProjectFolders {
         didSet { projectFolders.save(defaults: projectFolderDefaults) }
     }
@@ -171,7 +165,8 @@ final class AppModel: ObservableObject {
     /// A nil store keeps fixtures and previews isolated from the user's persisted drafts.
     init(projectFolderDefaults: UserDefaults = .standard, draftStore: DraftStore? = nil) {
         self.projectFolderDefaults = projectFolderDefaults
-        sidebarGroupsByUrgency = projectFolderDefaults.object(forKey: Self.sidebarGroupingKey) as? Bool ?? true
+        // The sidebar always groups chats by urgency now; drop the old choice.
+        projectFolderDefaults.removeObject(forKey: "pilot.sidebarGroupsByUrgency")
         attention = SessionAttention(defaults: projectFolderDefaults)
         self.draftStore = draftStore
         projectFolders = ProjectFolders.load(defaults: projectFolderDefaults)
@@ -576,7 +571,6 @@ final class AppModel: ObservableObject {
     // MARK: Sidebar scope
 
     private static let sidebarScopeKey = "pilot.sidebarScope"
-    private static let sidebarGroupingKey = "pilot.sidebarGroupsByUrgency"
 
     /// Shows the sidebar search field and focuses it.
     func showSidebarSearch() {
@@ -603,13 +597,9 @@ final class AppModel: ObservableObject {
     /// The focused project, once it is known to exist. nil while listing every project.
     var focusedProject: Project? { client.project(sidebarScope) }
 
-    /// Projects in sidebar order (folders first, then ungrouped), which is also the ⌘1…⌘9 order.
+    /// Projects in picker order (by folder, then ungrouped), which is also the ⌘1…⌘9 order.
     var orderedProjects: [Project] {
-        let grouped = projectFolders.folders.flatMap { folder in
-            client.projects.filter { projectFolders.folderId(for: $0.id) == folder.id }
-        }
-        let ids = Set(grouped.map(\.id))
-        return grouped + client.projects.filter { !ids.contains($0.id) }
+        projectFolders.sections(client.projects, projectId: \.id).flatMap(\.items)
     }
 
     /// The current selection, as remembered per scope.

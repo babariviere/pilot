@@ -82,10 +82,10 @@ passes diagonally, fainter and half speed while only background jobs run, and st
 ## Sidebar
 
 The sidebar answers "what needs me" before "where is it". One header row holds the scope switcher, Home (badged with
-what needs the user) and compose; archived chats, search (⌘F) and grouping live in the switcher's menu. All
+what needs the user) and compose; archived chats, search (⌘F) and project folders live in the switcher's menu. All
 projects groups chats by urgency (Pinned, Needs you, Ready to merge, Working, Recent) with each row naming its project; a focused project
-lists its own missions and chats. Rows are a title and one metadata line. Time, pin and mission marks, and project
-header actions, appear under the pointer. Quiet chats fold past the first few, and the footer appears only while
+lists its own missions and chats. Rows are a title and one metadata line. Time, pin and mission marks appear under
+the pointer. Quiet chats fold past the first few, and the footer appears only while
 pilotd is unreachable.
 
 A row's metadata line is a `RowLine`: whole segments in a fixed order (project, Ask or Coordinator, reason, PRs,

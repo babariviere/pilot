@@ -145,3 +145,28 @@ private func createFolder(_ model: inout ProjectFolders, name: String) throws ->
     #expect(model.assignments["project"] == "missing")
     #expect(model.folderId(for: "project") == nil)
 }
+
+@Test func projectFolderSectionsFollowFolderOrderThenUngrouped() throws {
+    var model = ProjectFolders()
+    let work = try createFolder(&model, name: "Work")
+    let empty = try createFolder(&model, name: "Ideas")
+    let personal = try createFolder(&model, name: "Personal")
+    model.move(projectId: "c", to: personal.id)
+    model.move(projectId: "a", to: work.id)
+    model.move(projectId: "d", to: work.id)
+    let items = ["a", "b", "c", "d", "e"]
+
+    let sections = model.sections(items) { $0 }
+    #expect(sections.map(\.folder) == [work, personal, nil])
+    #expect(sections.map(\.items) == [["a", "d"], ["c"], ["b", "e"]])
+    #expect(sections.map(\.id) == [work.id, personal.id, ""])
+
+    let withEmpty = model.sections(items, includingEmpty: true) { $0 }
+    #expect(withEmpty.map(\.folder) == [work, empty, personal, nil])
+    #expect(withEmpty[1].items.isEmpty)
+
+    // Without ungrouped items there is no ungrouped section; without folders, one ungrouped section.
+    #expect(model.sections(["a", "c"]) { $0 }.map(\.folder) == [work, personal])
+    #expect(ProjectFolders().sections(items) { $0 }.map(\.items) == [items])
+    #expect(ProjectFolders().sections([String](), includingEmpty: true) { $0 }.isEmpty)
+}
