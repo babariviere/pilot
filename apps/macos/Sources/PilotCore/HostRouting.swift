@@ -73,8 +73,18 @@ public struct HostConnectionToken: Equatable, Sendable {
     public init(host: HostRef, generation: UUID = UUID()) { self.host = host; self.generation = generation }
 }
 
-public enum HostRoutingError: Error, Equatable {
+public enum HostRoutingError: LocalizedError, Equatable {
     case disconnected, identityChanged, incompatible, staleGeneration, invalidReference, migrationConflict
+    public var errorDescription: String? {
+        switch self {
+        case .disconnected: "Disconnected. Reconnect to use this host."
+        case .identityChanged: "The host identity changed. Repair the connection before continuing."
+        case .incompatible: "This host is not compatible with this client."
+        case .staleGeneration: "The connection changed. Refresh before continuing."
+        case .invalidReference: "Invalid host-qualified resource."
+        case .migrationConflict: "Saved drafts conflict. The original data was kept."
+        }
+    }
 }
 
 /// Separate last-known execution data from availability. Reconnect replaces only its own partition.
