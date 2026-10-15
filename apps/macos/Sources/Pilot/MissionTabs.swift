@@ -1056,7 +1056,7 @@ struct MissionTaskStatusMenuItems: View {
 
     var body: some View {
         ForEach(MissionTaskStatus.allCases, id: \.self) { status in
-            Button { setStatus(status) } label: { PilotMenuLabel(status.label, icon: status.icon) }
+            Button { setStatus(status) } label: { Label(status.label, menuIcon: status.icon) }
                 .disabled(status == selected)
         }
     }
