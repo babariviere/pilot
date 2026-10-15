@@ -39,6 +39,23 @@ private let slack = TrackedItem(
     #expect(TrackedItemText.priority(linear(priority: 0)) == nil)
 }
 
+@Test func linearInReviewUsesTheThreeQuarterMarkButStaysInProgress() {
+    func item(_ status: String, _ type: String = "started") -> TrackedItem {
+        let base = linear(statusType: type)
+        return TrackedItem(id: base.id, projectId: base.projectId, kind: .linear, externalId: base.externalId,
+                           title: base.title, url: base.url, status: status, metadata: base.metadata,
+                           createdAt: base.createdAt, updatedAt: base.updatedAt)
+    }
+    #expect(TrackedItemText.linearIcon(item("In Progress")) == .inProgress)
+    for status in ["In Review", "Code Review", "Ready for review"] {
+        #expect(TrackedItemText.linearIcon(item(status)) == .inReview)
+        #expect(TrackedItemText.linearGroup(item(status)) == .inProgress)
+    }
+    #expect(TrackedItemText.linearIcon(item("Review", "unstarted")) == .todo)
+    #expect(TrackedItemText.linearIcon(item("Done", "completed")) == .complete)
+    #expect(TrackedItemText.linearIcon(item("Canceled", "canceled")) == .cancelled)
+}
+
 @Test func linearRowsLeaveOutWhatTheirGroupAlreadySays() {
     // The group header names the status, and Medium or Low priority would repeat on most rows.
     #expect(TrackedItemText.subtitle(linear(), now: now, group: .inProgress) == "High · 2h ago")

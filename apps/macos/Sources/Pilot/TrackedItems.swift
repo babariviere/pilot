@@ -66,6 +66,17 @@ enum TrackedItemText {
         }
     }
 
+    /// The status ladder icon. Linear's In Review is a "started" state like In Progress, so its name
+    /// ("In Review", "Code Review", "Ready for review") tells them apart; both stay in the In progress group.
+    static func linearIcon(_ item: TrackedItem) -> PilotIcon {
+        switch item.metadata["statusType"]?.string {
+        case "started": item.status.range(of: "review", options: .caseInsensitive) != nil ? .inReview : .inProgress
+        case "completed": .complete
+        case "canceled": .cancelled
+        default: .todo
+        }
+    }
+
     /// Linear priorities: 1 urgent to 4 low; 0 means none.
     static func priority(_ item: TrackedItem) -> String? {
         guard case let .number(value) = item.metadata["priority"] else { return nil }
@@ -682,10 +693,11 @@ struct TrackedItemIcon: View {
         let (symbol, color): (PilotIcon, Color) = switch item.kind {
         case .slack: (type?.icon ?? PilotIcon.message, Theme.mutedForeground)
         case .linear:
-            switch item.metadata["statusType"]?.string {
-            case "started": (PilotIcon.inProgress, Theme.foreground)
-            case "completed": (PilotIcon.complete, Theme.success)
-            case "canceled": (PilotIcon.cancelled, Theme.faintForeground)
+            switch TrackedItemText.linearIcon(item) {
+            case .inProgress: (PilotIcon.inProgress, Theme.foreground)
+            case .inReview: (PilotIcon.inReview, Theme.foreground)
+            case .complete: (PilotIcon.complete, Theme.success)
+            case .cancelled: (PilotIcon.cancelled, Theme.faintForeground)
             default: (PilotIcon.todo, Theme.faintForeground)
             }
         }
