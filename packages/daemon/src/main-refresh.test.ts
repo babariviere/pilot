@@ -1,16 +1,32 @@
 // biome-ignore-all lint/complexity/useLiteralKeys: Exercise scheduler and admission seams without real repositories.
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
+import type { KernelCommand } from "@pilot/kernel";
 import { ProjectStore } from "./projects.ts";
 import { SessionManager } from "./sessions.ts";
 
-async function fixture(t: TestContext) {
+async function fixture(t: TestContext, working = false) {
 	const home = await mkdtemp(join(tmpdir(), "pilot-main-refresh-"));
+	const commands: KernelCommand[] = [];
 	const sessions = new SessionManager(home, new ProjectStore(home), undefined, {
-		worker: () => assert.fail("scheduler fixture must not start a worker"),
+		title: async () => undefined,
+		worker: (_spec, report) => {
+			assert.ok(working, "scheduler fixture must not start a worker");
+			return {
+				ready: Promise.resolve(),
+				state: "working",
+				busy: true,
+				send: (command) => {
+					commands.push(command);
+					if (command.type === "update.pause") report({ type: "update.paused", id: command.id });
+				},
+				request: async () => {},
+				close: async () => {},
+			};
+		},
 	});
 	t.after(async () => {
 		await sessions.shutdown();
@@ -24,8 +40,62 @@ async function fixture(t: TestContext) {
 		now += ms;
 		t.mock.timers.tick(ms);
 	};
-	return { sessions, tick };
+	return { sessions, tick, home, commands };
 }
+
+test("a working agent stays paused through refresh callbacks, update retries and shutdown", async (t) => {
+	const { sessions, tick, home, commands } = await fixture(t, true);
+	await sessions.load();
+	const chat = await sessions.spawn({ cwd: home, message: "unfinished work" });
+	await Promise.all(sessions["starting"].values());
+	const calls: string[] = [];
+	let finish!: () => void;
+	const fetching = new Promise<void>((resolve) => {
+		finish = resolve;
+	});
+	t.mock.method(sessions, "refreshProjectMain", async (id: string) => {
+		calls.push(id);
+		await fetching;
+	});
+	for (const id of ["first", "second", "third"]) sessions.requestMainRefresh(id);
+	tick(250);
+	assert.deepEqual(calls, ["first", "second"]);
+	assert.equal(sessions.pauseForUpdate().ready, false);
+	const pendingFetches = [...sessions["mainRefreshes"].values()];
+	try {
+		// Both the debounce and fetch-finally paths fired in the reported update failure.
+		sessions.requestMainRefresh("fourth");
+		assert.doesNotThrow(() => tick(250));
+		finish();
+		await assert.doesNotReject(Promise.all(pendingFetches));
+		assert.equal(sessions.pauseForUpdate().ready, false, "the worker's recovery marker is still saving");
+		await Promise.all(sessions["saving"].values());
+		assert.equal(sessions.pauseForUpdate().ready, true);
+		for (let i = 0; i < 40; i++) {
+			tick(1_000);
+			assert.equal(sessions.pauseForUpdate().ready, true);
+		}
+		assert.equal(commands.filter((command) => command.type === "update.pause").length, 1);
+		assert.equal(
+			commands.some((command) => command.type === "update.resume"),
+			false,
+		);
+		assert.deepEqual(calls, ["first", "second"], "renewals never restart deferred fetches");
+		assert.deepEqual([...sessions["mainRefreshDue"]], ["third", "fourth"]);
+		const meta = JSON.parse(await readFile(join(home, "sessions", chat.id, "meta.json"), "utf8"));
+		assert.equal(meta.updatePaused, true);
+		await sessions.shutdown();
+		tick(60_000);
+		assert.deepEqual(calls, ["first", "second"]);
+		assert.equal(
+			commands.some((command) => command.type === "update.resume"),
+			false,
+		);
+	} finally {
+		finish();
+		await Promise.allSettled(pendingFetches);
+	}
+});
 
 test("main-refresh finally defers queued projects while a tool-drain update lease is closed", async (t) => {
 	const { sessions, tick } = await fixture(t);
