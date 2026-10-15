@@ -67,7 +67,7 @@ import Testing
     #expect(ReviewQuarterGlyph.image(.row).size == outline?.size)
 }
 
-@Test @MainActor func reviewQuarterLeavesOnlyTheTopLeftQuarterEmpty() throws {
+@Test @MainActor func reviewQuarterLeavesOnlyTheTopRightQuarterEmpty() throws {
     let mark = ReviewQuarterGlyph.draw(pointSize: 64, weight: .regular)
     let tiff = try #require(mark.tiffRepresentation)
     let bitmap = try #require(NSBitmapImageRep(data: tiff))
@@ -76,8 +76,8 @@ import Testing
         // Bitmap rows run top to bottom.
         bitmap.colorAt(x: Int(Double(width) * x), y: Int(Double(height) * y))?.alphaComponent ?? 0
     }
-    #expect(alpha(0.35, 0.35) < 0.1, "top-left quarter is empty")
-    #expect(alpha(0.65, 0.35) > 0.9, "top-right quarter is filled")
+    #expect(alpha(0.35, 0.35) > 0.9, "top-left quarter is filled")
+    #expect(alpha(0.65, 0.35) < 0.1, "top-right quarter is empty")
     #expect(alpha(0.65, 0.65) > 0.9, "bottom-right quarter is filled")
     #expect(alpha(0.35, 0.65) > 0.9, "bottom-left quarter is filled")
 }

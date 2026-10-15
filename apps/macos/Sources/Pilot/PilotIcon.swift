@@ -433,8 +433,8 @@ struct PilotSymbol: View {
     }
 }
 
-/// The in-review step of the status ladder: the `circle` outline filled clockwise from 12 o'clock to 9 o'clock,
-/// leaving the top-left quarter empty. SF Symbols has no three-quarter circle, so this composes `circle` and
+/// The in-review step of the status ladder: the `circle` outline filled counterclockwise from 12 o'clock to 3 o'clock,
+/// leaving the top-right quarter empty. SF Symbols has no three-quarter circle, so this composes `circle` and
 /// `circle.fill` at the context's size and weight, matching `todo` and `inProgress` stroke for stroke.
 /// It is an image rather than a view so it also shows in menus.
 @MainActor enum ReviewQuarterGlyph {
@@ -459,9 +459,9 @@ struct PilotSymbol: View {
         let image = NSImage(size: outline.size, flipped: false) { rect in
             outline.draw(in: rect)
             NSGraphicsContext.saveGraphicsState()
-            // The right half plus the bottom-left quarter: 270° clockwise from 12 o'clock.
-            let pie = NSBezierPath(rect: NSRect(x: rect.midX, y: rect.minY, width: rect.width / 2, height: rect.height))
-            pie.append(NSBezierPath(rect: NSRect(x: rect.minX, y: rect.minY, width: rect.width / 2, height: rect.height / 2)))
+            // The left half plus the bottom-right quarter continues the left-filled in-progress mark.
+            let pie = NSBezierPath(rect: NSRect(x: rect.minX, y: rect.minY, width: rect.width / 2, height: rect.height))
+            pie.append(NSBezierPath(rect: NSRect(x: rect.midX, y: rect.minY, width: rect.width / 2, height: rect.height / 2)))
             pie.addClip()
             disc.draw(in: NSRect(x: rect.midX - disc.size.width / 2, y: rect.midY - disc.size.height / 2,
                                  width: disc.size.width, height: disc.size.height))
