@@ -179,8 +179,12 @@ public struct DashboardPullRequest: Codable, Identifiable, Equatable, Sendable {
 public struct DashboardMission: Codable, Identifiable, Equatable, Sendable {
     public let id: String
     public let title: String
-    /// Tasks done, and tasks overall (dropped tasks excluded).
+    /// Tasks by status, and tasks overall (dropped tasks excluded). To do and delegated tasks are the rest
+    /// (`tasksToDo`). Older daemons send only done and total: the other counts are then zero.
     public let tasksDone: Int
+    public let tasksInReview: Int
+    public let tasksInProgress: Int
+    public let tasksBlocked: Int
     public let tasksTotal: Int
     /// Member chats working now.
     public let working: Int
@@ -188,16 +192,39 @@ public struct DashboardMission: Codable, Identifiable, Equatable, Sendable {
     public let coordinatorSessionId: String?
 
     public init(
-        id: String, title: String, tasksDone: Int = 0, tasksTotal: Int = 0, working: Int = 0, needsYou: Int = 0,
+        id: String, title: String, tasksDone: Int = 0, tasksInReview: Int = 0, tasksInProgress: Int = 0,
+        tasksBlocked: Int = 0, tasksTotal: Int = 0, working: Int = 0, needsYou: Int = 0,
         coordinatorSessionId: String? = nil
     ) {
         self.id = id
         self.title = title
         self.tasksDone = tasksDone
+        self.tasksInReview = tasksInReview
+        self.tasksInProgress = tasksInProgress
+        self.tasksBlocked = tasksBlocked
         self.tasksTotal = tasksTotal
         self.working = working
         self.needsYou = needsYou
         self.coordinatorSessionId = coordinatorSessionId
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        tasksDone = try container.decode(Int.self, forKey: .tasksDone)
+        tasksInReview = try container.decodeIfPresent(Int.self, forKey: .tasksInReview) ?? 0
+        tasksInProgress = try container.decodeIfPresent(Int.self, forKey: .tasksInProgress) ?? 0
+        tasksBlocked = try container.decodeIfPresent(Int.self, forKey: .tasksBlocked) ?? 0
+        tasksTotal = try container.decode(Int.self, forKey: .tasksTotal)
+        working = try container.decode(Int.self, forKey: .working)
+        needsYou = try container.decode(Int.self, forKey: .needsYou)
+        coordinatorSessionId = try container.decodeIfPresent(String.self, forKey: .coordinatorSessionId)
+    }
+
+    /// Tasks neither done, in review, in progress nor blocked: to do and delegated. Never negative.
+    public var tasksToDo: Int {
+        max(0, tasksTotal - max(0, tasksDone) - max(0, tasksInReview) - max(0, tasksInProgress) - max(0, tasksBlocked))
     }
 }
 

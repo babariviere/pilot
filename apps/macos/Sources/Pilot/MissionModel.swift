@@ -184,7 +184,7 @@ extension MissionTaskStatus {
     var color: Color {
         switch self {
         case .todo: Theme.mutedForeground
-        case .inProgress: Theme.info
+        case .inProgress: Theme.working
         case .blocked: Theme.destructive
         case .inReview: Theme.warning
         case .delegated: Theme.mutedForeground
@@ -314,11 +314,18 @@ struct MissionLinkIcon: View {
 }
 
 extension MissionTaskCounts {
-    /// Bar segments in `barOrder`, coloured like the task status icons.
+    /// Bar segments in `barOrder`, coloured like the task status icons and chat rows; to do is the bar's track.
     var segments: [SegmentedProgressBar.Segment] {
         Self.barOrder.map { status in
-            SegmentedProgressBar.Segment(id: status.rawValue, value: self[status],
-                                         color: status == .todo ? Theme.border : status.color)
+            SegmentedProgressBar.Segment(id: status.rawValue, value: self[status], color: status.progressColor)
+        }
+    }
+
+    /// The bar's legend: "9 done · 2 in review · …" with matching dots, zero counts omitted.
+    var legendEntries: [ProgressLegend.Entry] {
+        legend.map { entry in
+            ProgressLegend.Entry(id: entry.status.rawValue, text: "\(entry.count) \(entry.status.label.lowercased())",
+                                 color: entry.status.progressColor)
         }
     }
 
@@ -330,6 +337,11 @@ extension MissionTaskCounts {
         }
         return (["\(done) of \(total) done"] + rest).joined(separator: ", ")
     }
+}
+
+extension MissionTaskStatus {
+    /// Colour in progress bars and their legends: the status icon colour, with to do as the faint track.
+    var progressColor: Color { self == .todo ? Theme.border : color }
 }
 
 /// Authors are chats or, when nil, the user.

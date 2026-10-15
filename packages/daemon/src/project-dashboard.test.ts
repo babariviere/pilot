@@ -376,20 +376,23 @@ test("missions show task progress, working and needs-you counts, most pressing f
 	const dashboard = build({
 		sessions,
 		missions: [quiet, busy, asking, archived],
-		progress: new Map([[busy.id, { done: 2, total: 5 }]]),
+		progress: new Map([[busy.id, { done: 2, inReview: 1, inProgress: 1, blocked: 0, total: 5 }]]),
 	});
 	assert.deepEqual(
 		dashboard.missions.items.map((item) => [
 			item.title,
 			item.tasksDone,
+			item.tasksInReview,
+			item.tasksInProgress,
+			item.tasksBlocked,
 			item.tasksTotal,
 			item.working,
 			item.needsYou,
 		]),
 		[
-			["Asking", 0, 0, 0, 2],
-			["Busy", 2, 5, 2, 1],
-			["Quiet", 0, 0, 0, 0],
+			["Asking", 0, 0, 0, 0, 0, 0, 2],
+			["Busy", 2, 1, 1, 0, 5, 2, 1],
+			["Quiet", 0, 0, 0, 0, 0, 0, 0],
 		],
 	);
 	assert.equal(dashboard.missions.items[0]?.coordinatorSessionId, "coord");

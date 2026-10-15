@@ -142,9 +142,14 @@ button shows ⌘↩.
 
 A project's Overview follows these principles: a single reading column with a one-sentence summary, then sections in
 order of urgency (Up next, Working now, Pull requests, Missions, Scheduled, Current cycle, Slack, Memory, Recent), at
-most five rows each. A mission's Overview has the same shape: its goal, one meta line with a thin progress bar, then
-Needs you (hidden when empty), Working now and Links. Both share the Inbox's rows and words (Needs you rows, Ready to
-merge). Sections added later follow the same rules.
+most five rows each. A mission's Overview has the same shape: its goal, one meta line, the task progress bar with its
+legend, then Needs you (hidden when empty), Working now and Links. Both share the Inbox's rows and words (Needs you
+rows, Ready to merge). Sections added later follow the same rules.
+
+Progress bars (`SegmentedProgressBar`) are one plain 6 pt capsule with no gaps, dither or animation. Task bars use the
+row colours: green done, amber in review, indigo in progress, red blocked, and the faint track for to do. Where there is
+room (a mission's Overview, Tasks and inspector) a legend of counts with matching dots follows (`ProgressLegend`,
+zero counts omitted); compact rows keep the bar plus "9 of 18".
 
 ## UI review checklist
 

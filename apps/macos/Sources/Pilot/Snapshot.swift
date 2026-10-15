@@ -1343,9 +1343,11 @@ enum Snapshot {
                 pr(409, "refactor: split ChatView", chat: "Split ChatView", state: .draft),
             ]),
             missions: DashboardSection(total: 2, items: [
-                DashboardMission(id: "m1", title: "Project Dashboard and Task Scheduling", tasksDone: 3, tasksTotal: 13,
+                DashboardMission(id: "m1", title: "Project Dashboard and Task Scheduling", tasksDone: 3,
+                                 tasksInReview: 2, tasksInProgress: 3, tasksBlocked: 1, tasksTotal: 13,
                                  working: 2, needsYou: 1),
-                DashboardMission(id: "m2", title: "Artifact renderer hardening", tasksDone: 5, tasksTotal: 6, working: 0),
+                DashboardMission(id: "m2", title: "Artifact renderer hardening", tasksDone: 5, tasksInReview: 1,
+                                 tasksTotal: 6, working: 0),
             ]),
             recent: DashboardSection(total: 3, items: [
                 DashboardRecentItem(sessionId: "r1", title: "Theme tokens for motion", outcome: .done,
@@ -1395,7 +1397,9 @@ enum Snapshot {
         let longMissions: [DashboardMission] = (1...5).map { index -> DashboardMission in
             let needsYou = index == 1 ? 4 : 0
             return DashboardMission(id: "lm\(index)", title: "Migrate every service to the new deployment pipeline \(index)",
-                                    tasksDone: index * 2, tasksTotal: 12, working: index % 3, needsYou: needsYou)
+                                    tasksDone: index * 2, tasksInReview: 1, tasksInProgress: index % 3,
+                                    tasksBlocked: needsYou > 0 ? 1 : 0, tasksTotal: 12, working: index % 3,
+                                    needsYou: needsYou)
         }
         let longRecent: [DashboardRecentItem] = (1...5).map { index -> DashboardRecentItem in
             let outcomeAt: Double = now - Double(index) * 3_600_000

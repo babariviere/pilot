@@ -956,9 +956,15 @@ private struct ProjectMissionRow: View {
                             CountBadge(count: mission.needsYou, style: .attention).help("\(mission.needsYou) need you")
                         }
                         SegmentedProgressBar(segments: [
-                            .init(id: "done", value: done, color: Theme.success),
-                            .init(id: "open", value: mission.tasksTotal - done, color: Theme.border),
-                        ], height: 5)
+                            .init(id: "done", value: done, color: MissionTaskStatus.done.progressColor),
+                            .init(id: "review", value: mission.tasksInReview,
+                                  color: MissionTaskStatus.inReview.progressColor),
+                            .init(id: "progress", value: mission.tasksInProgress,
+                                  color: MissionTaskStatus.inProgress.progressColor),
+                            .init(id: "blocked", value: mission.tasksBlocked,
+                                  color: MissionTaskStatus.blocked.progressColor),
+                            .init(id: "todo", value: mission.tasksToDo, color: MissionTaskStatus.todo.progressColor),
+                        ])
                         .frame(width: 120)
                         Text(progress).font(.pilot(.caption)).monospacedDigit().foregroundStyle(Theme.mutedForeground)
                             .frame(width: 56, alignment: .trailing)

@@ -42,6 +42,8 @@ import Testing
     #expect(!dashboard.pullRequests.items[1].isReady)
     #expect(dashboard.pullRequests.items[1].readiness?.reasons == ["failing checks: build"])
     #expect(dashboard.missions.items[0].tasksTotal == 5)
+    #expect(dashboard.missions.items[0].tasksInReview == 0, "older daemons omit per-status counts")
+    #expect(dashboard.missions.items[0].tasksToDo == 3)
     #expect(dashboard.scheduled.items[0].trigger == .onBack)
     #expect(dashboard.tracked.map(\.status) == [.signInRequired, .error])
     #expect(dashboard.tracked[1].total == 9)
@@ -71,6 +73,20 @@ import Testing
     """#.utf8)))
     guard case let .dashboard(dashboard) = update else { Issue.record("expected dashboard"); return }
     #expect(dashboard.projectId == "p1")
+}
+
+@Test func dashboardMissionDecodesTasksByStatus() throws {
+    let mission = try JSONDecoder().decode(DashboardMission.self, from: Data(#"""
+    {"id":"m1","title":"API v2","tasksDone":9,"tasksInReview":2,"tasksInProgress":3,"tasksBlocked":1,"tasksTotal":18,
+     "working":1,"needsYou":0}
+    """#.utf8))
+    #expect(mission.tasksDone == 9)
+    #expect(mission.tasksInReview == 2)
+    #expect(mission.tasksInProgress == 3)
+    #expect(mission.tasksBlocked == 1)
+    #expect(mission.tasksToDo == 3)
+    #expect(try JSONDecoder().decode(DashboardMission.self, from: JSONEncoder().encode(mission)) == mission)
+    #expect(DashboardMission(id: "x", title: "X", tasksDone: 5, tasksBlocked: 2, tasksTotal: 4).tasksToDo == 0)
 }
 
 @Test func reviewRequestRoundTripsMarks() throws {
