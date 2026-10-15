@@ -580,7 +580,7 @@ struct AttachPullRequestForm: View {
                         }
                     }
                 }
-                .buttonStyle(.plain)
+                .rowButtonStyle()
                 .help("\(pr.label): \(pr.title)\nIn “\(suggestion.sessionTitle)”")
                 .accessibilityLabel("Pull request \(pr.number), \(pr.title), in \(suggestion.sessionTitle)")
             }

@@ -515,7 +515,7 @@ private struct NeedsYouRow: View {
                 }
             }
         }
-        .buttonStyle(.plain)
+        .rowButtonStyle()
         .help(subtitle)
         .accessibilityLabel("\(title). \(subtitle)")
         .accessibilityHint(action)

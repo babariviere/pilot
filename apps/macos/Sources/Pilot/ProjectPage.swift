@@ -672,7 +672,7 @@ struct ProjectNeedsYouRow: View {
                 }
             }
         }
-        .buttonStyle(.plain)
+        .rowButtonStyle()
         .disabled(action == nil)
         .help(item.needsYouLabel(now: now))
         .accessibilityLabel("\(item.title). \(detail.accessibilityText)")
@@ -775,7 +775,7 @@ private struct ProjectWorkingRow: View {
                 }
             }
         }
-        .buttonStyle(.plain)
+        .rowButtonStyle()
         .inboxCorner(session.map { $0.signal(unread: model.isUnread($0)) } ?? .working,
                      background: session?.isWaitingOnJobs == true)
         .accessibilityLabel([item.title, session == nil ? ProjectPageText.workingMeta(item) : detail.accessibilityText,
@@ -896,7 +896,7 @@ private struct ProjectPullRequestRow: View {
                 }
             }
         }
-        .buttonStyle(.plain)
+        .rowButtonStyle()
         .inboxCorner(pr.isReady ? .readyToMerge : nil)
         .help(url == nil ? "Open the chat that owns this pull request" : "\(pr.url)\nChat: \(pr.sessionTitle)")
         .accessibilityLabel("\(pr.title). \(detail.accessibilityText). Chat: \(pr.sessionTitle)")
@@ -943,7 +943,7 @@ private struct ProjectMissionRow: View {
                 }
             }
         }
-        .buttonStyle(.plain)
+        .rowButtonStyle()
         .inboxCorner(signal, background: waitingOnJobs)
         .accessibilityLabel([mission.title,
                              mission.working > 0 ? "\(mission.working) working" : nil,
@@ -1005,7 +1005,7 @@ private struct ProjectRecentRow: View {
                 }
             }
         }
-        .buttonStyle(.plain)
+        .rowButtonStyle()
         .inboxCorner(session.map { $0.signal(unread: model.isUnread($0)) } ?? item.signal,
                      background: session?.isWaitingOnJobs == true)
         .accessibilityLabel([item.title, item.outcome.status.rawValue, meta, time].filter { !$0.isEmpty }

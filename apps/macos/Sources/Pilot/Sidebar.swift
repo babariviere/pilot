@@ -412,7 +412,7 @@ struct SidebarDisclosureRow: View {
             .foregroundStyle(Theme.mutedForeground)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .rowButtonStyle(outset: 2)
         .accessibilityLabel(title)
     }
 }
@@ -466,7 +466,7 @@ private struct ProjectHeader: View {
                 }
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .rowButtonStyle(outset: 2)
             .accessibilityLabel("Open \(project.name)")
             .accessibilityAddTraits(selected ? .isSelected : [])
             .help("Open \(project.name) (\(project.path.abbreviatingHome))")
