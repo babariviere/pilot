@@ -391,7 +391,7 @@ private struct MissionMetaLine: View {
     }
 }
 
-/// While a new coordinator drafts the goal, brief and tasks: one line with the working ripple, like a chat's
+/// While a new coordinator drafts the goal, brief and tasks: one line with the shared working dot grid, like a chat's
 /// automatic events, and a quiet link to its chat.
 struct MissionDraftingEvent: View {
     let mission: Mission
@@ -403,7 +403,7 @@ struct MissionDraftingEvent: View {
         let working = coordinator?.isWorking ?? false
         HStack(spacing: 7) {
             if working {
-                DitherRipple(background: coordinator?.isWaitingOnJobs == true, markSize: 12)
+                DotGridSpinner(background: coordinator?.isWaitingOnJobs == true)
             } else {
                 PilotSymbol(PilotIcon.coordinator).foregroundStyle(Theme.faintForeground).accessibilityHidden(true)
             }
@@ -664,4 +664,3 @@ struct MissionAddLinkForm: View {
         }
     }
 }
-
