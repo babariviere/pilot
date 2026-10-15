@@ -93,7 +93,7 @@ test("promotion unbinds PRs, shares main, retains scratch, and demotion restores
 		pullRequest: { number: 42, url, title: "Old", state: "open", checkedAt: 1 },
 	};
 	await manager["save"](meta);
-	assert.throws(() => manager["openWorker"](id), /workspace role is still changing/);
+	await assert.rejects(manager["openWorker"](id), /workspace role is still changing/);
 	manager.missionChanged(id);
 	await manager.commands(id);
 	await manager.refreshCoordinatorWorkspace(id);

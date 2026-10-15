@@ -17,19 +17,27 @@ import { TerminalManager } from "./terminals.ts";
 
 test("Linux capability detection never probes Mac helpers or offers unrestricted isolation", async () => {
 	const unexpected = async () => assert.fail("Linux must not touch Mac helpers/toolchains");
-	assert.deepEqual(await detectPlatformCapabilities("linux", unexpected, unexpected), {
-		powerManagement: false,
-		systemSleepEvents: false,
-		swiftUIArtifacts: false,
-		coordinatorIsolation: false,
-		independentExecution: true,
-	});
+	assert.deepEqual(
+		await detectPlatformCapabilities("linux", unexpected, unexpected, async () => ({ available: false })),
+		{
+			powerManagement: false,
+			systemSleepEvents: false,
+			swiftUIArtifacts: false,
+			coordinatorIsolation: false,
+			independentExecution: true,
+		},
+	);
 	if (process.platform === "linux")
-		assert.throws(
-			() => forkMainViewWorker("/unused", { scratch: "/tmp", protectedPaths: ["/tmp/protected"] }),
+		await assert.rejects(
+			forkMainViewWorker("/unused", { scratch: "/tmp", protectedPaths: ["/tmp/protected"] }),
 			/refusing an unrestricted/,
 		);
 	assert.equal(loadConfig({ PILOT_HOST: "0.0.0.0" }).host, "127.0.0.1");
+	assert.equal(
+		(await detectPlatformCapabilities("linux", unexpected, unexpected, async () => ({ available: true })))
+			.coordinatorIsolation,
+		true,
+	);
 });
 
 test("Darwin capabilities reflect installed helpers and compiler, not just an OS name", async () => {

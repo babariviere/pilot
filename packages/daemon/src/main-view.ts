@@ -3,6 +3,7 @@
 import { type ChildProcess, fork } from "node:child_process";
 import { chmod, lstat, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { forkLinuxCoordinator } from "./linux-coordinator.ts";
 import { type Runner, run } from "./workspaces.ts";
 
 async function permissions(path: string, writable: boolean): Promise<void> {
@@ -94,7 +95,12 @@ export function mainViewSandbox(paths: string[]): string {
 }
 
 /** Fresh process, never a pre-forked unrestricted worker. All subprocesses inherit the sandbox. */
-export function forkMainViewWorker(entry: string, view: { scratch: string; protectedPaths: string[] }): ChildProcess {
+export async function forkMainViewWorker(
+	entry: string,
+	view: { scratch: string; protectedPaths: string[] },
+	state?: { storageDir: string; agentDir: string },
+): Promise<ChildProcess> {
+	if (process.platform === "linux" && state) return forkLinuxCoordinator(entry, view, state);
 	if (process.platform !== "darwin")
 		throw new Error("Coordinator OS isolation is unavailable on this host; refusing an unrestricted source worker");
 	return fork(entry, [], {

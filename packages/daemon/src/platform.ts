@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { access, constants } from "node:fs/promises";
 import { promisify } from "node:util";
 import type { DaemonCapabilities } from "@pilot/protocol";
+import { probeLinuxCoordinatorIsolation } from "./linux-coordinator.ts";
 import { powerHelperPath } from "./power-helper.ts";
 import { systemEventsHelperPath } from "./system-events-helper.ts";
 
@@ -24,15 +25,19 @@ export async function detectPlatformCapabilities(
 			return false;
 		}
 	},
+	linuxIsolation = probeLinuxCoordinatorIsolation,
 ): Promise<DaemonCapabilities> {
-	if (platform !== "darwin")
+	if (platform !== "darwin") {
+		const isolation = platform === "linux" ? await linuxIsolation() : { available: false };
+		if (isolation.detail) console.warn(`pilotd: ${isolation.detail}`);
 		return {
 			powerManagement: false,
 			systemSleepEvents: false,
 			swiftUIArtifacts: false,
-			coordinatorIsolation: false,
+			coordinatorIsolation: isolation.available,
 			independentExecution: true,
 		};
+	}
 	const [powerManagement, systemSleepEvents, coordinatorIsolation] = await Promise.all([
 		check(powerHelperPath()),
 		check(`${systemEventsHelperPath()}/Contents/MacOS/PilotSystemEvents`),
