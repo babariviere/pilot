@@ -1,6 +1,7 @@
 # CPU and memory audit
 
 For the later repository polling and streaming WAL audit, see [I/O amplification audit](io-performance-check.md).
+For daemon event-loop stalls, their log lines and live diagnostics, see [pilotd event-loop stalls](daemon-stalls.md).
 
 ## Scope and observations
 
