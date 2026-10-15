@@ -263,6 +263,7 @@ jobs:
           set -euo pipefail
           node scripts/linux/release-manifest.mjs sign "$PWD/release"
           test "$RELEASE_TAG" = "$(node -p "JSON.parse(require('node:fs').readFileSync('release/runtime-manifest.json')).tag")"
+          test "$(git rev-parse HEAD)" = "$(node -p "JSON.parse(require('node:fs').readFileSync('release/runtime-manifest.json')).commit")"
           test "$(git rev-parse HEAD)" = "$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha)"
           gh release view "$RELEASE_TAG" --json isDraft,isPrerelease > release-state.json
           node --input-type=module -e 'import fs from "node:fs"; const r=JSON.parse(fs.readFileSync("release-state.json")); if (!r.isDraft || r.isPrerelease) throw Error("Only stable drafts may receive runtime assets")'

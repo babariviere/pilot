@@ -26,10 +26,9 @@ jobs:
         run: |
           for script in scripts/linux/*.sh; do bash -n "$script"; done
           node --test scripts/linux/*.test.mjs
+          python3 -B -m unittest discover -s scripts/linux -p 'test_*.py'
       - name: Build private Node and production native dependencies in a bounded ABI toolchain
         # A build toolchain, not a destination distro. Every ELF's actual required symbols are audited.
-        env:
-          SOURCE_COMMIT: ${{ inputs.ref }}
         run: |
           commit="$(git rev-parse HEAD)"
           mkdir -p "$RUNNER_TEMP/linux-package"

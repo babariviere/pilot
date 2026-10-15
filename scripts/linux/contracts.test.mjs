@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { generateKeyPairSync, sign } from "node:crypto";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { authenticateArchive, authenticateManifest, validateManifest } from "./release-manifest.mjs";
 import { packagePlan, probe, serviceUnit } from "./service.mjs";
@@ -74,4 +78,60 @@ test("unit is relocatable, quotes paths, uses the private tools and orderly proc
 	assert.throws(() => serviceUnit("/tmp/\nmalicious", "/home/u"));
 	assert.throws(() => serviceUnit("/tmp/bad:path", "/home/u"));
 	assert.match(serviceUnit("/tmp/$dollar", "/home/u"), /ExecStart="\/tmp\/\$\$dollar/);
+});
+
+test("initial service installation fails closed, never overwrites foreign units and does not start implicitly", {
+	skip: process.platform !== "linux" || process.getuid() === 0,
+}, () => {
+	const dir = mkdtempSync(join(tmpdir(), "pilot-service-contract-"));
+	try {
+		const home = join(dir, "home");
+		const root = join(dir, "runtime with spaces");
+		const tools = join(dir, "tools");
+		const unit = join(home, ".config/systemd/user/pilotd.service");
+		for (const path of [home, root, tools, join(root, "node/bin")]) mkdirSync(path, { recursive: true });
+		copyFileSync(new URL("./service.mjs", import.meta.url), join(root, "service.mjs"));
+		for (const command of ["bash", "git", "dnf"])
+			writeFileSync(join(tools, command), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+		writeFileSync(join(tools, "loginctl"), '#!/bin/sh\nprintf "%s\\n" "$FIXTURE_LINGER"\n', { mode: 0o755 });
+		writeFileSync(
+			join(tools, "systemctl"),
+			'#!/bin/sh\nprintf "%s\\n" "$*" >> "$FIXTURE_LOG"\ncase "$*" in *FragmentPath*) printf "%s" "$FIXTURE_FRAGMENT";; esac\n',
+			{ mode: 0o755 },
+		);
+		const node = join(root, "node/bin/node");
+		writeFileSync(node, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+		const env = {
+			...process.env,
+			HOME: home,
+			PATH: tools,
+			FIXTURE_LOG: join(dir, "commands"),
+			FIXTURE_LINGER: "no",
+			FIXTURE_FRAGMENT: "",
+		};
+		const invoke = (action, overrides = {}) =>
+			spawnSync(process.execPath, [join(root, "service.mjs"), action], {
+				env: { ...env, ...overrides },
+				encoding: "utf8",
+			});
+		assert.notEqual(invoke("install").status, 0);
+		assert.equal(existsSync(unit), false);
+		env.FIXTURE_LINGER = "yes";
+		assert.notEqual(invoke("install", { FIXTURE_FRAGMENT: "/usr/lib/systemd/user/pilotd.service" }).status, 0);
+		assert.equal(existsSync(unit), false);
+		writeFileSync(node, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+		assert.notEqual(invoke("install").status, 0);
+		assert.equal(existsSync(unit), false);
+		writeFileSync(node, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+		const installed = invoke("install");
+		assert.equal(installed.status, 0, installed.stderr);
+		assert.equal(JSON.parse(installed.stdout).started, false);
+		assert.match(readFileSync(unit, "utf8"), /runtime with spaces\/node\/bin\/node/);
+		assert.doesNotMatch(readFileSync(env.FIXTURE_LOG, "utf8"), /--user start/);
+		writeFileSync(unit, "foreign unit\n");
+		for (const action of ["install", "start", "stop"]) assert.notEqual(invoke(action).status, 0);
+		assert.equal(readFileSync(unit, "utf8"), "foreign unit\n");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
