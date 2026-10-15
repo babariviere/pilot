@@ -10,6 +10,9 @@ final class HostClients: ObservableObject {
     @Published private(set) var projects: [Hosted<Project>] = []
     @Published private(set) var missions: [Hosted<Mission>] = []
     @Published private(set) var available: Set<HostRef> = []
+    @Published var selection: HostResourceRef?
+    @Published private(set) var dashboards: [HostResourceRef: ProjectDashboard] = [:]
+    @Published private(set) var missionDetails: [HostResourceRef: MissionDetail] = [:]
     private struct Entry {
         let client: PilotClient
         let token: HostConnectionToken
@@ -17,8 +20,26 @@ final class HostClients: ObservableObject {
     }
     private var entries: [HostRef: Entry] = [:]
     private var tunnels: [HostRef: ManagedSSHTunnel] = [:]
+    private var tunnelWatches: [HostRef: Task<Void, Never>] = [:]
+    private var tunnelURLs: [HostRef: URL] = [:]
+    private final class Subscription {
+        let ref: HostResourceRef
+        let listener: ([JSONValue]) -> Void
+        var client: PilotClient?
+        var token: UUID?
+        init(ref: HostResourceRef, listener: @escaping ([JSONValue]) -> Void) {
+            self.ref = ref; self.listener = listener
+        }
+        func detach() {
+            if let client, let token { client.unsubscribe(ref.localId, token: token) }
+            client = nil; token = nil
+        }
+    }
+    private var subscriptions: [UUID: Subscription] = [:]
+    private var retained: [HostResourceRef: Int] = [:]
 
-    func install(_ client: PilotClient, host: HostRef) {
+    func install(_ client: PilotClient, host: HostRef) throws {
+        try client.bind(host)
         if entries[host]?.client === client { return }
         removeConnection(host)
         let token = HostConnectionToken(host: host)
@@ -29,31 +50,75 @@ final class HostClients: ObservableObject {
         ).sink { [weak self] _ in
             Task { @MainActor in self?.refresh(host, token: token) }
         })
+        entry.observations.append(Publishers.CombineLatest(client.$projectDashboards, client.$missionDetails)
+            .sink { [weak self] _ in
+                Task { @MainActor in self?.refreshDetails(host, token: token) }
+            })
         entries[host] = entry
+        for subscription in subscriptions.values where subscription.ref.host == host { attach(subscription) }
+        for (ref, count) in retained where ref.host == host {
+            for _ in 0..<count { retainOnEndpoint(ref, client: client) }
+        }
         refresh(host, token: token)
+        refreshDetails(host, token: token)
     }
 
     /// Enrollment pins an explicitly confirmed identity. No first-response TOFU during reconnect.
     func connect(host: HostRef, configuration: SSHConnectionConfiguration) async throws {
+        guard host.hostId != "local" else { throw HostRoutingError.invalidReference }
+        await disconnect(host)
         let tunnel = ManagedSSHTunnel(configuration: configuration) { data in
             try host.validate(JSONDecoder().decode(DaemonHello.self, from: data))
         }
         tunnels[host] = tunnel
-        let url = try await tunnel.connect()
-        guard tunnels[host] === tunnel else { await tunnel.disconnect(); throw HostRoutingError.staleGeneration }
+        let states = await tunnel.states()
+        tunnelWatches[host] = Task { [weak self] in
+            for await state in states {
+                guard !Task.isCancelled, let self, self.tunnels[host] === tunnel else { break }
+                switch state {
+                case let .connected(url):
+                    do { try self.installTunnelEndpoint(host, url: url) }
+                    catch { self.removeConnection(host) }
+                default:
+                    self.tunnelURLs[host] = nil
+                    self.removeConnection(host)
+                }
+            }
+        }
+        do {
+            let url = try await tunnel.connect()
+            guard tunnels[host] === tunnel else { throw HostRoutingError.staleGeneration }
+            try installTunnelEndpoint(host, url: url)
+        } catch {
+            if tunnels[host] === tunnel { await disconnect(host) }
+            throw error
+        }
+    }
+
+    private func installTunnelEndpoint(_ host: HostRef, url: URL) throws {
+        if tunnelURLs[host] == url, entries[host] != nil { return }
         let client = PilotClient()
-        install(client, host: host)
+        try install(client, host: host)
+        tunnelURLs[host] = url
         client.connect(to: url)
     }
 
     func disconnect(_ host: HostRef) async {
+        tunnelWatches.removeValue(forKey: host)?.cancel()
+        tunnelURLs[host] = nil
         let tunnel = tunnels.removeValue(forKey: host)
         removeConnection(host)
         await tunnel?.disconnect()
     }
 
+    /// Quit closes only owned local forwards, never remote agents or daemon services.
+    func disconnectAll() async {
+        for host in Array(tunnels.keys) { await disconnect(host) }
+    }
+
     /// Removal keeps last-known summaries. It does not invent an execution outcome.
     private func removeConnection(_ host: HostRef) {
+        for subscription in subscriptions.values where subscription.ref.host == host { subscription.detach() }
         entries.removeValue(forKey: host)?.client.disconnect()
         available.remove(host)
     }
@@ -97,14 +162,67 @@ final class HostClients: ObservableObject {
     }
 
     func subscribe(_ session: HostResourceRef, listener: @escaping ([JSONValue]) -> Void) throws -> () -> Void {
-        let client = try endpoint(session, kind: .session)
-        let token = entries[session.host]!.token
-        let subscription = client.subscribe(session.localId) { [weak self] events in
-            guard let self, self.entries[session.host]?.token == token else { return }
-            listener(events)
+        guard session.kind == .session, subscriptions.count < 256 else { throw HostRoutingError.invalidReference }
+        let id = UUID()
+        let subscription = Subscription(ref: session, listener: listener)
+        subscriptions[id] = subscription
+        attach(subscription)
+        return { [weak self] in self?.subscriptions.removeValue(forKey: id)?.detach() }
+    }
+
+    private func attach(_ subscription: Subscription) {
+        subscription.detach()
+        guard let entry = entries[subscription.ref.host] else { return }
+        let endpointToken = entry.token
+        subscription.client = entry.client
+        subscription.token = entry.client.subscribe(subscription.ref.localId) { [weak self, weak subscription] events in
+            guard let self, let subscription, self.entries[subscription.ref.host]?.token == endpointToken else { return }
+            subscription.listener(events)
         }
-        // Capture the owning client, not a lookup that could unsubscribe a replacement endpoint.
-        return { client.unsubscribe(session.localId, token: subscription) }
+    }
+
+    func retain(_ ref: HostResourceRef) throws -> () -> Void {
+        guard ref.kind == .project || ref.kind == .mission, retained.count < 32 || retained[ref] != nil,
+              retained[ref, default: 0] < 64 else {
+            throw HostRoutingError.invalidReference
+        }
+        retained[ref, default: 0] += 1
+        if let client = entries[ref.host]?.client { retainOnEndpoint(ref, client: client) }
+        var released = false
+        return { [weak self] in
+            guard !released, let self, let count = self.retained[ref] else { return }
+            released = true
+            if count == 1 { self.retained[ref] = nil } else { self.retained[ref] = count - 1 }
+            if let client = self.entries[ref.host]?.client {
+                if ref.kind == .project { client.releaseDashboard(ref.localId) }
+                else { client.releaseMission(ref.localId) }
+            }
+        }
+    }
+
+    private func retainOnEndpoint(_ ref: HostResourceRef, client: PilotClient) {
+        if ref.kind == .project { client.retainDashboard(ref.localId) }
+        else { client.retainMission(ref.localId) }
+    }
+
+    private func refreshDetails(_ host: HostRef, token: HostConnectionToken) {
+        guard let entry = entries[host], entry.token == token else { return }
+        for (id, value) in entry.client.projectDashboards {
+            let key = HostResourceRef(host: host, kind: .project, localId: id)
+            if dashboards[key] == nil, dashboards.count >= 32 {
+                if let victim = dashboards.keys.first(where: { retained[$0] == nil }) { dashboards[victim] = nil }
+                else { continue }
+            }
+            dashboards[key] = value
+        }
+        for (id, value) in entry.client.missionDetails {
+            let key = HostResourceRef(host: host, kind: .mission, localId: id)
+            if missionDetails[key] == nil, missionDetails.count >= 32 {
+                if let victim = missionDetails.keys.first(where: { retained[$0] == nil }) { missionDetails[victim] = nil }
+                else { continue }
+            }
+            missionDetails[key] = value
+        }
     }
 
     func artifact(_ reference: HostedArtifactReference) async throws -> ArtifactRevision {

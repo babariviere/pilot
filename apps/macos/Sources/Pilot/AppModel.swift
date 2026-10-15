@@ -375,7 +375,7 @@ final class AppModel: ObservableObject {
             Task {
                 guard let hello = try? await client.hello(), hello.isProtocolCompatible,
                       let lineage = hello.lineageId else { return }
-                hosts.install(client, host: HostRef(hostId: "local", daemonId: hello.daemonId, lineageId: lineage))
+                try? hosts.install(client, host: HostRef(hostId: "local", daemonId: hello.daemonId, lineageId: lineage))
             }
         }
     }
