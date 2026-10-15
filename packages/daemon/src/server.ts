@@ -28,6 +28,7 @@ import type {
 	MissionTaskWrite,
 	ProjectRequest,
 	RenameSessionRequest,
+	RepositorySelection,
 	ReviewRequest,
 	RewindRequest,
 	SchedulePatch,
@@ -65,6 +66,7 @@ import type { PowerService } from "./power.ts";
 import { type DashboardProviders, ProjectDashboardService } from "./project-dashboard.ts";
 import type { ProjectMemoryService } from "./project-memory.ts";
 import { expandHome, type ProjectStore } from "./projects.ts";
+import { RepositoryBrowser } from "./repository-browser.ts";
 import { ReviewStore } from "./reviews.ts";
 import type { ScheduleService } from "./schedules.ts";
 import { NotFound, type SessionManager } from "./sessions.ts";
@@ -279,6 +281,7 @@ export function createDaemonServer(
 		},
 	});
 	const repositoryChanges = new RepositoryChanges();
+	const repositories = new RepositoryBrowser(projects);
 	const journal = hello?.lineageId
 		? new OperationJournal(join(_config.home, "operations"), {
 				hostId: "daemon",
@@ -323,6 +326,31 @@ export function createDaemonServer(
 		const url = new URL(req.url ?? "/", "http://localhost");
 		const parts = url.pathname.split("/").filter(Boolean);
 		if (parts[0] !== "api") throw new HttpError(404, "Not found");
+		if (parts[1] === "repositories" && parts.length === 3) {
+			if (parts[2] === "directories" && req.method === "GET") {
+				return json(
+					res,
+					200,
+					await repositories.directory(
+						{
+							rootId: url.searchParams.get("rootId") ?? "home",
+							path: url.searchParams.get("path") ?? "",
+						},
+						Number(url.searchParams.get("offset") ?? "0"),
+					),
+				);
+			}
+			if (parts[2] === "projects" && req.method === "POST") {
+				const body = await readJson<{ selection: RepositorySelection; name?: string }>(req);
+				const path = await repositories.selection(body.selection);
+				return json(res, 201, await projects.create({ path, name: body.name }));
+			}
+		}
+		if (parts[1] === "sessions" && parts.length === 4 && parts[3] === "files" && req.method === "GET") {
+			const session = sessions.get(parts[2]!);
+			if (!session) throw new NotFound("Unknown session");
+			return json(res, 200, await repositories.file(session.cwd, url.searchParams.get("path") ?? ""));
+		}
 		if (parts[1] === "operations" && req.method === "POST" && parts.length <= 3) {
 			if (!journal) throw new ServiceUnavailable("Durable operation domain unavailable");
 			const operation = await readJson<DurableOperation>(req);

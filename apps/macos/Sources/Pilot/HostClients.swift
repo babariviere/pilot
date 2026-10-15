@@ -83,6 +83,29 @@ final class HostClients: ObservableObject {
         try await operations.acknowledge(operation, receipt: receipt)
     }
 
+    func repositoryDirectory(host: HostRef, selection: RepositorySelection,
+                             offset: Int = 0) async throws -> RepositoryDirectoryPage {
+        let token = try token(for: host)
+        let value = try await endpoint(host).repositoryDirectory(selection, offset: offset)
+        try validate(token)
+        return value
+    }
+
+    func selectRepository(host: HostRef, selection: RepositorySelection) async throws -> Hosted<Project> {
+        let token = try token(for: host)
+        let project = try await endpoint(host).createRepositoryProject(selection)
+        try validate(token)
+        return Hosted(ref: HostResourceRef(host: host, kind: .project, localId: project.id), value: project)
+    }
+
+    func file(_ session: HostResourceRef, path: String) async throws -> SessionFileContent {
+        try await perform(session, kind: .session) { client, id in try await client.file(id, path: path) }
+    }
+
+    func changes(_ session: HostResourceRef) async throws -> SessionChanges {
+        try await perform(session, kind: .session) { client, id in try await client.changes(id) }
+    }
+
     func install(_ client: PilotClient, host: HostRef) throws {
         try client.bind(host)
         if entries[host]?.client === client { return }
