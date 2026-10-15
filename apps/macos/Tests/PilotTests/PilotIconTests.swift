@@ -9,7 +9,7 @@ import Testing
             #expect(NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil,
                     "Missing symbol for \(icon): \(name)")
         } else {
-            #expect([PilotIcon.working, .branch, .pullRequest].contains(icon))
+            #expect([PilotIcon.working, .branch, .pullRequest, .inReview].contains(icon))
         }
         #expect(!icon.usage.isEmpty)
         if let fill = icon.stateFillName {
@@ -45,8 +45,40 @@ import Testing
     let alwaysFilled = Set(PilotIcon.allCases.filter {
         ($0.systemName?.contains(".fill") ?? false) || ($0.systemName?.contains("filled") ?? false)
     })
-    #expect(alwaysFilled == PilotIcon.alwaysFilledIcons)
+    // The three-quarter review mark is custom-drawn, so it has no symbol name to inspect.
+    #expect(alwaysFilled.union([.inReview]) == PilotIcon.alwaysFilledIcons)
     #expect(stateful.isDisjoint(with: alwaysFilled))
+}
+
+@Test @MainActor func statusLadderEndsWithAThreeQuarterReviewMark() {
+    #expect(PilotIcon.todo.systemName == "circle")
+    #expect(PilotIcon.inProgress.systemName == "circle.lefthalf.filled")
+    #expect(PilotIcon.inReview.systemName == nil)
+    #expect(MissionTaskStatus.inReview.icon == .inReview)
+    for context in PilotIcon.Context.allCases {
+        let mark = ReviewQuarterGlyph.image(context)
+        #expect(mark.isTemplate)
+        #expect(mark.size.width > 0 && mark.size.height > 0)
+        #expect(ReviewQuarterGlyph.image(context) === mark)
+    }
+    // Same frame as the outline it is drawn from, so it lines up with todo and inProgress.
+    let outline = NSImage(systemSymbolName: "circle", accessibilityDescription: nil)?
+        .withSymbolConfiguration(.init(pointSize: Theme.TextRole.label.size, weight: .regular))
+    #expect(ReviewQuarterGlyph.image(.row).size == outline?.size)
+}
+
+@Test @MainActor func reviewQuarterLeavesOnlyTheTopLeftQuarterEmpty() throws {
+    let mark = ReviewQuarterGlyph.draw(pointSize: 64, weight: .regular)
+    let bitmap = try #require(NSBitmapImageRep(data: try #require(mark.tiffRepresentation)))
+    let (width, height) = (bitmap.pixelsWide, bitmap.pixelsHigh)
+    func alpha(_ x: Double, _ y: Double) -> CGFloat {
+        // Bitmap rows run top to bottom.
+        bitmap.colorAt(x: Int(Double(width) * x), y: Int(Double(height) * y))?.alphaComponent ?? 0
+    }
+    #expect(alpha(0.35, 0.35) < 0.1, "top-left quarter is empty")
+    #expect(alpha(0.65, 0.35) > 0.9, "top-right quarter is filled")
+    #expect(alpha(0.65, 0.65) > 0.9, "bottom-right quarter is filled")
+    #expect(alpha(0.35, 0.65) > 0.9, "bottom-left quarter is filled")
 }
 
 @Test func vocabularyContextSizesFollowThemeScale() {

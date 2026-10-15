@@ -13,7 +13,9 @@ import SwiftUI
 /// - Outline by default. Only the cases with a `stateFillName` fill, and only while their state holds
 ///   (selected navigation, a pinned chat, a terminal success, a failure, an open question).
 /// - `alwaysFilledIcons` are the deliberate exceptions whose one symbol is filled (a platform clear button,
-///   the stop glyph on a filled control, a half-filled progress mark).
+///   the stop glyph on a filled control, the half and three-quarter progress marks).
+/// - Status ladder for Linear tickets and mission tasks: `todo` (empty), `inProgress` (half), `inReview`
+///   (three quarters, drawn by `ReviewQuarterGlyph`), then `complete`.
 /// - Each concept has its own symbol. `sharedSymbols` lists the only intended overlaps.
 /// - Brand and Git marks are not SF Symbols; use `PilotMark` so services stay recognisable.
 ///
@@ -113,10 +115,9 @@ extension PilotIcon {
         case .pending: "clock"
         case .todo: "circle"
         case .inProgress: "circle.lefthalf.filled"
-        case .inReview: "eye.circle"
         case .draft: "pencil.circle"
         case .unset: "circle.dotted"
-        case .working, .pullRequest, .branch: nil
+        case .working, .pullRequest, .branch, .inReview: nil
         case .scheduled: "calendar.badge.clock"
         case .scheduleFailed: "calendar.badge.exclamationmark"
         case .chats: "bubble.left.and.bubble.right"
@@ -196,7 +197,7 @@ extension PilotIcon {
     }
 
     /// Icons whose only symbol is filled. See the type notes for why each one is an exception.
-    static let alwaysFilledIcons: Set<PilotIcon> = [.clearField, .stop, .inProgress, .selectedOption]
+    static let alwaysFilledIcons: Set<PilotIcon> = [.clearField, .stop, .inProgress, .inReview, .selectedOption]
 
     /// The only concepts that intentionally share a symbol.
     static let sharedSymbols: [String: [PilotIcon]] = [
@@ -268,7 +269,7 @@ extension PilotIcon {
         case .pending: "Waiting on time: pending checks, durations and timelines."
         case .todo: "Not started yet."
         case .inProgress: "Started work. The half fill is the meaning, not a state toggle."
-        case .inReview: "Waiting on review."
+        case .inReview: "Waiting on review. Three quarters filled, between inProgress and complete; drawn by ReviewQuarterGlyph."
         case .draft: "A draft pull request or a decision proposal."
         case .unset: "No state yet: a running tool, an unknown event, no mission health."
         case .working: "Live work uses the shared DotGridSpinner (4×4 dot grid), never an SF Symbol or a braille spinner."
@@ -361,6 +362,15 @@ extension PilotIcon {
             }
         }
 
+        /// `weight` for AppKit symbol images, such as `ReviewQuarterGlyph`.
+        var nsWeight: NSFont.Weight {
+            switch self {
+            case .toolbar: .medium
+            case .disclosure: .semibold
+            case .row, .inline, .emptyState: .regular
+            }
+        }
+
         var font: Font { .pilot(role, weight: weight) }
 
         /// Fixed column width, so leading row symbols of different shapes align.
@@ -403,9 +413,53 @@ struct PilotSymbol: View {
                 .accessibilityLabel("Working").accessibilityHidden(false)
         } else if icon == .branch || icon == .pullRequest {
             PilotMarkIcon(mark: .gitBranch, context: context)
+        } else if icon == .inReview {
+            Image(nsImage: ReviewQuarterGlyph.image(context))
+                .renderingMode(.template)
+                .accessibilityLabel("In review")
         } else if let name = icon.systemName(filled: filled) {
             Image(systemName: name).font(context.font)
         }
+    }
+}
+
+/// The in-review step of the status ladder: the `circle` outline filled clockwise from 12 o'clock to 9 o'clock,
+/// leaving the top-left quarter empty. SF Symbols has no three-quarter circle, so this composes `circle` and
+/// `circle.fill` at the context's size and weight, matching `todo` and `inProgress` stroke for stroke.
+/// It is an image rather than a view so it also shows in menus.
+@MainActor enum ReviewQuarterGlyph {
+    private static var cache: [PilotIcon.Context: NSImage] = [:]
+
+    static func image(_ context: PilotIcon.Context) -> NSImage {
+        if let image = cache[context] { return image }
+        let image = draw(pointSize: context.role.size, weight: context.nsWeight)
+        cache[context] = image
+        return image
+    }
+
+    /// Nonisolated so the drawing handler, which AppKit may call off the main thread, carries no actor.
+    nonisolated static func draw(pointSize: CGFloat, weight: NSFont.Weight) -> NSImage {
+        let configuration = NSImage.SymbolConfiguration(pointSize: pointSize, weight: weight)
+            .applying(NSImage.SymbolConfiguration(paletteColors: [.black]))
+        guard let outline = NSImage(systemSymbolName: "circle", accessibilityDescription: nil)?
+            .withSymbolConfiguration(configuration),
+            let disc = NSImage(systemSymbolName: "circle.fill", accessibilityDescription: nil)?
+            .withSymbolConfiguration(configuration)
+        else { return NSImage() }
+        let image = NSImage(size: outline.size, flipped: false) { rect in
+            outline.draw(in: rect)
+            NSGraphicsContext.saveGraphicsState()
+            // The right half plus the bottom-left quarter: 270° clockwise from 12 o'clock.
+            let pie = NSBezierPath(rect: NSRect(x: rect.midX, y: rect.minY, width: rect.width / 2, height: rect.height))
+            pie.append(NSBezierPath(rect: NSRect(x: rect.minX, y: rect.minY, width: rect.width / 2, height: rect.height / 2)))
+            pie.addClip()
+            disc.draw(in: NSRect(x: rect.midX - disc.size.width / 2, y: rect.midY - disc.size.height / 2,
+                                 width: disc.size.width, height: disc.size.height))
+            NSGraphicsContext.restoreGraphicsState()
+            return true
+        }
+        image.isTemplate = true
+        return image
     }
 }
 
