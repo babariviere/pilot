@@ -126,6 +126,7 @@ private let askProject = Project(id: "ask-project", name: "Code", path: "/tmp/co
     #expect(!app.inspectorVisible)
     let metadata = SessionRepositoryModel()
     await metadata.load(ask, client: app.client)
+    await metadata.loadBranch(ask, client: app.client)
     #expect(metadata.summary == nil && metadata.error == nil)
     #expect(!InspectorTab.changes.isAvailable(for: ask))
     #expect(!InspectorTab.terminal.isAvailable(for: ask))

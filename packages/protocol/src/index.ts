@@ -1111,6 +1111,11 @@ export interface SessionChanges {
 	truncated: boolean;
 }
 
+/** GET /api/sessions/:id/changes/branch: branch/bookmark only, without scanning changed files. */
+export interface SessionBranch {
+	branch?: string;
+}
+
 /** GET /api/sessions/:id/changes/summary: change metadata without file details or a diff. */
 export interface SessionChangeSummary {
 	base: string;

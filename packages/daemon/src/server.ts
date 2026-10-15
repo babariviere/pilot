@@ -549,10 +549,11 @@ export function createDaemonServer(
 			parts[1] === "sessions" &&
 			parts.length === 5 &&
 			parts[3] === "changes" &&
-			parts[4] === "summary" &&
+			(parts[4] === "summary" || parts[4] === "branch") &&
 			req.method === "GET"
 		) {
 			const { cwd, base, baseBranch } = sessions.changeBase(parts[2]!);
+			if (parts[4] === "branch") return json(res, 200, await repositoryChanges.branch(cwd));
 			return json(res, 200, await repositoryChanges.summary(cwd, base, baseBranch));
 		}
 		if (parts[1] === "sessions" && parts[3] === "artifacts" && req.method === "GET") {

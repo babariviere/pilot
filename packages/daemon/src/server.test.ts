@@ -458,6 +458,9 @@ test("changes summary GET returns only metadata and counts and preserves route g
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/sessions/session-1/changes`;
+	const branch = await fetch(`${url}/branch`);
+	assert.equal(branch.status, 200);
+	assert.deepEqual(await branch.json(), { branch: "main" });
 	const response = await fetch(`${url}/summary`);
 	assert.equal(response.status, 200);
 	assert.match(response.headers.get("content-type") ?? "", /application\/json/);
@@ -473,12 +476,15 @@ test("changes summary GET returns only metadata and counts and preserves route g
 		[`${url}/summary`, { method: "POST" }, 404],
 		[`${url}/summary/extra`, {}, 404],
 		[`${url}/summary`, { headers: { origin: "https://example.com" } }, 403],
+		[`${url}/branch`, { method: "POST" }, 404],
+		[`${url}/branch/extra`, {}, 404],
+		[`${url}/branch`, { headers: { origin: "https://example.com" } }, 403],
 	] as const) {
 		const rejected = await fetch(path, options);
 		assert.equal(rejected.status, status);
 		await rejected.arrayBuffer();
 	}
-	assert.equal(changeBase.mock.callCount(), 2, "method, path and origin guards run before resolving the session");
+	assert.equal(changeBase.mock.callCount(), 3, "method, path and origin guards run before resolving the session");
 	writeFileSync(join(root, "untracked.txt"), "new\nexternal edit\n");
 	updated({ id: "session-1", title: "test", cwd: root, createdAt: 0, updatedAt: 1, state: "idle" });
 	const invalidated = await fetch(`${url}/summary`);
@@ -493,6 +499,10 @@ test("changes summary GET returns only metadata and counts and preserves route g
 	const pending = await fetch(`${url}/summary`);
 	assert.equal(pending.status, 400);
 	assert.deepEqual(await pending.json(), { error: "Session workspace is still preparing" });
+	const pendingBranch = await fetch(`${url}/branch`);
+	assert.equal(pendingBranch.status, 400);
+	const missingBranch = await fetch(`${url.replace("session-1", "missing")}/branch`);
+	assert.equal(missingBranch.status, 404);
 });
 
 test("chat sockets stream one session each, isolate overload and resume only the missed batches", {

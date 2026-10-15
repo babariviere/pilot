@@ -2,6 +2,12 @@ import Foundation
 import Testing
 @testable import PilotCore
 
+@Test func branchMetadataDistinguishesNamedAndDetachedHeads() throws {
+    let named = SessionBranch(branch: "fix/current")
+    #expect(try JSONDecoder().decode(SessionBranch.self, from: JSONEncoder().encode(named)) == named)
+    #expect(try JSONDecoder().decode(SessionBranch.self, from: Data("{}".utf8)).branch == nil)
+}
+
 @Test func changeSummaryDecodesWithAndWithoutBranch() throws {
     let summary = try JSONDecoder().decode(SessionChangeSummary.self, from: Data(
         #"{"base":"origin/main (abcd1234)","branch":"pilot/task","fileCount":5,"additions":13,"deletions":2}"#.utf8

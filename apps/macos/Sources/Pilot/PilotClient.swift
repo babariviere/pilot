@@ -54,6 +54,7 @@ final class PilotClient: ObservableObject {
     private let artifactSession: URLSession
     private let repositoryRequests = RepositoryRequestLimiter(limit: 4)
     private let summaryCache = AsyncReadCache<String, SessionChangeSummary>(ttl: 10)
+    private let branchCache = AsyncReadCache<String, SessionBranch>(ttl: 10)
     private let changesCache = AsyncReadCache<String, SessionChanges>(ttl: 1, limit: 8)
     init(baseURL: URL? = nil, artifactSession: URLSession = .shared) {
         self.baseURL = baseURL
@@ -648,21 +649,30 @@ final class PilotClient: ObservableObject {
     var fixtureChangeSummaries: [String: SessionChangeSummary] = [:]
 
     func refreshRepositoryCaches() {
+        branchCache.clearValues()
         summaryCache.clearValues()
         changesCache.clearValues()
     }
 
-    /// Sidebar metadata only, without computing or transferring full diffs.
-    func changeSummary(_ sessionId: String) async throws -> SessionChangeSummary {
-        if let fixture = fixtureChangeSummaries[sessionId] { return fixture }
-        return try await summaryCache.value(for: sessionId) { [self] in
-            try await fetchChangeSummary(sessionId)
+    /// Regular row refreshes read only the branch; line counts are requested on hover.
+    func repositoryBranch(_ sessionId: String) async throws -> SessionBranch {
+        if let fixture = fixtureChangeSummaries[sessionId] { return SessionBranch(branch: fixture.branch) }
+        return try await branchCache.value(for: sessionId) { [self] in
+            try await fetchRepositoryMetadata(sessionId, kind: "branch")
         }
     }
 
-    private func fetchChangeSummary(_ sessionId: String) async throws -> SessionChangeSummary {
+    /// Tooltip metadata only, without computing or transferring full diffs.
+    func changeSummary(_ sessionId: String) async throws -> SessionChangeSummary {
+        if let fixture = fixtureChangeSummaries[sessionId] { return fixture }
+        return try await summaryCache.value(for: sessionId) { [self] in
+            try await fetchRepositoryMetadata(sessionId, kind: "summary")
+        }
+    }
+
+    private func fetchRepositoryMetadata<Value: Decodable & Sendable>(_ sessionId: String, kind: String) async throws -> Value {
         guard let baseURL else { throw ClientError("pilotd is not connected") }
-        let url = baseURL.appending(path: "api/sessions/\(sessionId)/changes/summary")
+        let url = baseURL.appending(path: "api/sessions/\(sessionId)/changes/\(kind)")
         let (data, response) = try await repositoryRequests.perform {
             try await artifactSession.data(from: url)
         }
@@ -671,7 +681,7 @@ final class PilotClient: ObservableObject {
             throw ClientError((try? JSONDecoder().decode(APIError.self, from: data))?.error ?? "HTTP \(status)")
         }
         return try await Task.detached(priority: .userInitiated) {
-            try JSONDecoder().decode(SessionChangeSummary.self, from: data)
+            try JSONDecoder().decode(Value.self, from: data)
         }.value
     }
 
@@ -1279,6 +1289,7 @@ final class PilotClient: ObservableObject {
     private func update(_ session: SessionSummary) {
         let current = self.session(session.id)
         if current?.updatedAt != session.updatedAt {
+            branchCache.invalidate(session.id)
             summaryCache.invalidate(session.id)
             changesCache.invalidate(session.id)
         }

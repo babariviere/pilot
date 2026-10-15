@@ -7,6 +7,22 @@ import { test } from "node:test";
 import type { SessionPullRequest } from "@pilot/protocol";
 import { MissionStore, parseResourceUrl } from "./missions.ts";
 
+test("owned PR resource projection uses its partial index and excludes reference links", (t) => {
+	const missions = new MissionStore(":memory:");
+	t.after(() => missions.close());
+	const { id } = missions.create({ projectId: "p", title: "M", tasks: [{ title: "Task" }] });
+	const owned = missions.addResource(id, { url: "https://github.com/octo/repo/pull/42", taskId: "1" });
+	missions.addResource(id, { url: "https://github.com/octo/repo/pull/43" });
+	missions.addResource(id, { url: "https://example.com/reference", taskId: "1" });
+	assert.deepEqual(missions.ownedPullRequestResources(id), [{ url: owned.url }]);
+	const plan = missions["db"]
+		.prepare(`EXPLAIN QUERY PLAN SELECT url, pull_request FROM resources
+			WHERE mission_id = ? AND kind = 'github.pr' AND relationship = 'ownership' ORDER BY created_at, id`)
+		.all(id);
+	assert.match(JSON.stringify(plan), /USING INDEX resources_by_owned_pr/);
+	assert.doesNotMatch(JSON.stringify(plan), /TEMP B-TREE/);
+});
+
 test("hot membership reads reflect role and lifecycle changes without full summaries", (t) => {
 	const missions = new MissionStore(":memory:");
 	t.after(() => missions.close());
@@ -137,7 +153,7 @@ test("resource migration preserves existing task PR ownership and reference role
 		const reference = missions.addResource(id, { url: "https://example.com/spec", taskId: "1" });
 		missions.close();
 		const db = new DatabaseSync(file);
-		db.exec("ALTER TABLE resources DROP COLUMN relationship");
+		db.exec("DROP INDEX resources_by_owned_pr; ALTER TABLE resources DROP COLUMN relationship");
 		db.close();
 		missions = new MissionStore(file);
 		assert.equal(missions.detail(id).resources.find((r) => r.id === owned.id)?.relationship, "ownership");

@@ -48,6 +48,26 @@ test("session summaries resolve current membership without attention or task-det
 	assert.equal(f.sessions.get(member.id)?.activeMissionCoordinator, undefined);
 });
 
+test("linked PR polling projects owned resources without mission details or attention aggregates", async (t) => {
+	const f = await fixture(t);
+	const { id } = f.store.create({ projectId: f.project.id, title: "Active", tasks: [{ title: "Task" }] });
+	const owned = "https://github.com/octo/repo/pull/42";
+	f.store.addResource(id, { url: owned, taskId: "1" });
+	f.store.addResource(id, { url: "https://github.com/octo/repo/pull/43" });
+	f.store.addResource(id, { url: "https://example.com/reference", taskId: "1" });
+	const done = f.store.create({ projectId: f.project.id, title: "Done", tasks: [{ title: "Task" }] });
+	f.store.addResource(done.id, { url: "https://github.com/octo/repo/pull/44", taskId: "1" });
+	f.store.update(done.id, { status: "done" });
+	const pr = { number: 42, url: owned, title: "Change", state: "open" as const, checkedAt: 1 };
+	f.store.updatePullRequest(pr);
+	for (const method of ["list", "detail", "tasks", "get"] as const)
+		t.mock.method(f.store, method, () => assert.fail(`PR polling must not call ${method}`));
+	assert.deepEqual(
+		[...f.sessions["missions"]!.linkedPullRequests!()],
+		[{ url: owned, cwd: f.project.path, pullRequest: pr }],
+	);
+});
+
 test("planning title follows creation, promotion and shared renames; demotion keeps the last title", async (t) => {
 	const f = await fixture(t);
 	const lead = await f.spawn();
