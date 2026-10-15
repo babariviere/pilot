@@ -68,8 +68,9 @@ public enum ChatLinks {
     /// Absolute http(s) URLs, optionally including artifact links for inline rendering.
     /// Bare domains are skipped: "README.md" is not a link. The inspector remains web-only.
     public static func mentions(in text: String, includingArtifacts: Bool = false) -> [ChatLinkMention] {
+        let includingArtifacts = includingArtifacts && text.localizedCaseInsensitiveContains("artifact://")
         guard text.localizedCaseInsensitiveContains("http")
-            || (includingArtifacts && text.localizedCaseInsensitiveContains("artifact://")) else { return [] }
+            || includingArtifacts else { return [] }
         var result: [ChatLinkMention] = []
         var searchStart = text.startIndex
         while let match = nextScheme(in: text, from: searchStart, includingArtifacts: includingArtifacts) {
@@ -157,12 +158,18 @@ public enum ChatLinks {
 
     private static func nextScheme(in text: String, from start: String.Index, includingArtifacts: Bool) -> String.Index? {
         var cursor = start
-        let pattern = includingArtifacts ? #"(?:https?|artifact)://"# : #"https?://"#
-        while let range = text.range(of: pattern, options: [.regularExpression, .caseInsensitive], range: cursor..<text.endIndex) {
+        // Keep the existing literal search for web-only prose. A combined search avoids rescanning
+        // the whole suffix for an absent scheme at every link when artifact and web URLs mix.
+        let pattern = includingArtifacts ? #"(?:https?|artifact)://"# : "http"
+        let options: String.CompareOptions = includingArtifacts ? [.regularExpression, .caseInsensitive] : [.caseInsensitive]
+        while let range = text.range(of: pattern, options: options, range: cursor..<text.endIndex) {
+            let rest = text[range.upperBound...]
+            let isScheme = includingArtifacts || rest.hasPrefix("://")
+                || ((rest.first == "s" || rest.first == "S") && rest.dropFirst().hasPrefix("://"))
             // "xhttp://" is not a link; the scheme must start a word.
             let startsWord = range.lowerBound == text.startIndex
                 || !(text[text.index(before: range.lowerBound)].isLetter || text[text.index(before: range.lowerBound)].isNumber)
-            if startsWord { return range.lowerBound }
+            if isScheme, startsWord { return range.lowerBound }
             cursor = range.upperBound
         }
         return nil
