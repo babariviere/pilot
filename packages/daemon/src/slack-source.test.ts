@@ -300,7 +300,12 @@ test("format errors are visible through registry health, retain last data, and n
 	let bad = false,
 		calls = 0;
 	const registry = new SourceRegistry(projects, f.store, {
-		call: async () => (bad ? { messages: "private malformed text", pagination_info: "" } : standalone()),
+		call: async (_kind, tool) =>
+			tool === "reactions"
+				? { present: false }
+				: bad
+					? { messages: "private malformed text", pagination_info: "" }
+					: standalone(),
 	});
 	t.after(() => registry.stop());
 	registry.register(
@@ -493,6 +498,7 @@ test("registry reports per-channel status and hides items of removed channels wi
 	const registry = new SourceRegistry(projects, f.store, {
 		call: async (_kind, tool, args) => {
 			if (args.channel_id === "C2") throw new SourceToolError("MCP tool returned an error");
+			if (tool === "reactions") return { present: false };
 			return tool === "history" ? standalone(String(args.channel_id)) : slackThreadFixture;
 		},
 	});
@@ -614,6 +620,7 @@ test("inspector excerpt is read on demand from a tracked channel, latest selecti
 	let fail: Error | "malformed" | undefined;
 	const registry = new SourceRegistry(projects, f.store, {
 		call: async (_kind, tool, args, signal) => {
+			if (tool === "reactions") return { present: false };
 			if (tool === "history") return standalone("C000000001", 2, "Private body text");
 			calls.push(args);
 			const ts = String(args.message_ts);
