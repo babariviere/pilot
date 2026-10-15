@@ -409,15 +409,17 @@ struct SubscriptionUsageBars: View {
     let now: Date
 
     var body: some View {
-        ResponsiveControlsLayout(horizontalSpacing: 20, verticalSpacing: 6) {
+        let columns = SubscriptionUsage.columns(subscriptions)
+        VStack(alignment: .leading, spacing: 4) {
             ForEach(subscriptions, id: \.provider) { usage in
                 let stale = usage.isStale(now: now)
-                HStack(spacing: 8) {
-                    Text(usage.providerLabel).foregroundStyle(stale ? Theme.mutedForeground : Theme.foreground)
-                    ForEach(Array(usage.limitWindows.enumerated()), id: \.offset) { _, window in
-                        HStack(spacing: 6) {
-                            bar(window)
-                            Text("\(window.shortLabel) \(window.percentLabel)")
+                HStack(spacing: 12) {
+                    widest(subscriptions.map(\.providerLabel), alignment: .leading) {
+                        Text(usage.providerLabel).foregroundStyle(stale ? Theme.mutedForeground : Theme.foreground)
+                    }
+                    HStack(spacing: 20) {
+                        ForEach(columns, id: \.self) { column in
+                            cell(column, window: usage.window(inColumn: column))
                         }
                     }
                 }
@@ -432,12 +434,33 @@ struct SubscriptionUsageBars: View {
         .foregroundStyle(Theme.mutedForeground)
     }
 
-    private func bar(_ window: SubscriptionWindow) -> some View {
-        let fraction = window.gaugeFraction ?? 0
+    /// One window: label, bar, percent. A provider without this window keeps the cell's width, empty, so columns
+    /// line up across rows. Every row shows the same label in a column, so only the percent needs a shared width.
+    private func cell(_ column: String, window: SubscriptionWindow?) -> some View {
+        let percents = ["100%"] + subscriptions.compactMap { $0.window(inColumn: column)?.percentLabel }
+        return HStack(spacing: 6) {
+            Text(column)
+            bar(window)
+            widest(percents, alignment: .trailing) { Text(window?.percentLabel ?? "") }
+        }
+        .opacity(window == nil ? 0 : 1)
+    }
+
+    /// Sizes `content` to the widest of `texts` so a column keeps one width in every row.
+    private func widest(_ texts: [String], alignment: Alignment, @ViewBuilder content: () -> some View) -> some View {
+        ZStack(alignment: alignment) {
+            ForEach(Array(Set(texts)).sorted(), id: \.self) { Text($0).hidden() }
+            content()
+        }
+    }
+
+    private func bar(_ window: SubscriptionWindow?) -> some View {
+        let fraction = window?.gaugeFraction ?? 0
+        let warning = (window?.usedPercent ?? 0) >= SubscriptionUsage.noticePercent
         return ZStack(alignment: .leading) {
             Capsule().fill(Theme.border)
             Capsule()
-                .fill(window.usedPercent >= SubscriptionUsage.noticePercent ? Theme.warning : Theme.faintForeground)
+                .fill(warning ? Theme.warning : Theme.faintForeground)
                 .frame(width: 48 * fraction)
         }
         .frame(width: 48, height: 4)

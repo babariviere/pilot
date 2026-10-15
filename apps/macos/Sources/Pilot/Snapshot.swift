@@ -817,13 +817,17 @@ enum Snapshot {
                     ContextUsageIndicator(usage: SessionUsage(context: ContextUsage(contextWindow: 200_000)))
                 }
                 .padding(.horizontal, 10)
-                SubscriptionUsageBars(subscriptions: [Fixtures.claudeUsage.subscription!, Fixtures.codexUsage.subscription!],
-                                      now: Date(timeIntervalSince1970: Fixtures.now / 1000))
+                // Codex reports only a weekly window here, so its row leaves the 5-hour column empty.
+                SubscriptionUsageBars(subscriptions: [
+                    Fixtures.claudeUsage.subscription!,
+                    SubscriptionUsage(fetchedAt: Fixtures.now - 120_000, provider: .openai,
+                                      windows: [SubscriptionWindow(label: "Week", usedPercent: 29)]),
+                ], now: Date(timeIntervalSince1970: Fixtures.now / 1000))
                     .padding(.horizontal, 10)
             }
             .padding(.vertical, 16)
             .background(Theme.background),
-            size: CGSize(width: 760, height: 200),
+            size: CGSize(width: 760, height: 220),
             to: directory.appending(path: "usage-indicators.png")
         )
         for width in [760, 420] {
