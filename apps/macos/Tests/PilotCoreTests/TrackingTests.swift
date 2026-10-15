@@ -2,6 +2,14 @@ import Foundation
 import Testing
 @testable import PilotCore
 
+@Test func slackDoneReasonsDecodeWithoutBreakingOlderRows() throws {
+    let json = Data(#"{"type":"bug","label":null,"severity":"low","status":"done","overrides":{},"doneReason":"Done · PR #42 merged"}"#.utf8)
+    let triage = try JSONDecoder().decode(SlackTriage.self, from: json)
+    #expect(triage.doneReason == "Done · PR #42 merged")
+    let legacy = Data(#"{"type":"bug","label":null,"severity":"low","status":"open","overrides":{}}"#.utf8)
+    #expect(try JSONDecoder().decode(SlackTriage.self, from: legacy).doneReason == nil)
+}
+
 @Test func slackLabelEffectsMigrateAndLabelCloseReasonRoundTrips() throws {
     let legacy = try JSONDecoder().decode(SlackProjectLabel.self, from: Data(
         #"{"name":"Product","description":"Invented requests","hideFromInbox":true}"#.utf8))

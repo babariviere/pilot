@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import type {
 	InboxHiddenLabel,
 	LinearSourceSummary,
+	SessionPullRequest,
 	SlackCorrection,
 	SlackOverrides,
 	SlackTriage,
@@ -21,6 +22,13 @@ export type SlackReservation = SlackCache | { state: "reserved" } | { state: "bu
 export const SLACK_DAILY_BUDGET = 100;
 
 export type TrackedInput = Pick<TrackedItem, "externalId" | "title" | "url" | "status" | "metadata" | "updatedAt">;
+export interface SlackPullRequestObservation {
+	projectId: string;
+	sessionId: string;
+	prs: SessionPullRequest[];
+	/** Unknown explicitly bound heads must not count as merged. */
+	pending: boolean;
+}
 export interface SourceCheckpoint {
 	configKey: string;
 	lastPolledAt: number;
@@ -45,6 +53,7 @@ type Row = {
 	slack_overrides: string;
 	slack_status: SlackTriage["status"];
 	closed_by_label: string | null;
+	slack_completion: string;
 	created_at: number;
 	updated_at: number;
 };
@@ -153,6 +162,32 @@ export class TrackedItemDisk {
 		// The close label that dismissed a Slack message, while no status of the user's replaced it.
 		if (!columns.some((column) => column.name === "closed_by_label"))
 			this.db.exec("ALTER TABLE tracked_items ADD COLUMN closed_by_label TEXT");
+		if (!columns.some((column) => column.name === "slack_completion"))
+			this.db.exec("ALTER TABLE tracked_items ADD COLUMN slack_completion TEXT NOT NULL DEFAULT '{}'");
+		this.db.exec(`
+			CREATE TABLE IF NOT EXISTS slack_pr_observations (
+			 session_id TEXT NOT NULL, url TEXT NOT NULL, state TEXT NOT NULL, checked_at INTEGER NOT NULL,
+			 merge_seen INTEGER NOT NULL, PRIMARY KEY(session_id, url)
+			);
+			CREATE TABLE IF NOT EXISTS slack_done_events (
+			 item_id TEXT NOT NULL, event TEXT NOT NULL, PRIMARY KEY(item_id, event)
+			);
+		`);
+		if (!this.db.prepare("SELECT 1 FROM sqlite_master WHERE name='tracked_item_links'").get()) {
+			this.db.exec(`
+				CREATE TABLE tracked_item_links (item_id TEXT NOT NULL, kind TEXT NOT NULL, target TEXT NOT NULL,
+				 PRIMARY KEY(kind, target, item_id));
+				CREATE INDEX tracked_links_item ON tracked_item_links(item_id);
+				INSERT OR IGNORE INTO tracked_item_links
+				 SELECT tracked_items.id, 'sessions', value FROM tracked_items, json_each(links, '$.sessions');
+				INSERT OR IGNORE INTO tracked_item_links
+				 SELECT tracked_items.id, 'missions', value FROM tracked_items, json_each(links, '$.missions');
+				INSERT OR IGNORE INTO tracked_item_links
+				 SELECT id, 'sessions', session_id FROM tracked_items WHERE links IS NULL AND session_id IS NOT NULL;
+				INSERT OR IGNORE INTO tracked_item_links
+				 SELECT id, 'missions', mission_id FROM tracked_items WHERE links IS NULL AND mission_id IS NOT NULL;
+			`);
+		}
 		// Legacy global results have no project label. Keep them for lazy, scoped adoption without model calls.
 		this.db.exec(`
 			CREATE TABLE IF NOT EXISTS slack_project_classifications (
@@ -571,6 +606,94 @@ export class TrackedItemDisk {
 		this.emit(item.projectId);
 	}
 
+	/** Fresh observations and the status change share one transaction. Initial terminal observations are silent. */
+	observeSlackPullRequests(observation: SlackPullRequestObservation): void {
+		const { projectId, sessionId, prs, pending } = observation;
+		this.db.exec("BEGIN IMMEDIATE");
+		let changed = false;
+		try {
+			const transitioned: SessionPullRequest[] = [];
+			let stale = false;
+			for (const pr of prs) {
+				const url = pr.url.toLowerCase();
+				const previous = this.db
+					.prepare("SELECT * FROM slack_pr_observations WHERE session_id=? AND url=?")
+					.get(sessionId, url);
+				if (
+					previous &&
+					(Number(previous.checked_at) > pr.checkedAt || (previous.merge_seen === 1 && pr.state !== "merged"))
+				) {
+					stale = true;
+					continue;
+				}
+				const merged = pr.state === "merged";
+				if (merged && previous && previous.state !== "merged" && !previous.merge_seen) transitioned.push(pr);
+				if (!previous || previous.state !== pr.state || Number(previous.checked_at) < pr.checkedAt)
+					this.db
+						.prepare(`INSERT INTO slack_pr_observations VALUES (?, ?, ?, ?, ?)
+						ON CONFLICT(session_id,url) DO UPDATE SET state=excluded.state, checked_at=excluded.checked_at,
+						merge_seen=max(merge_seen,excluded.merge_seen)`)
+						.run(sessionId, url, pr.state, pr.checkedAt, merged ? 1 : 0);
+			}
+			if (!stale && !pending && prs.length && prs.every((pr) => pr.state === "merged") && transitioned.length) {
+				const pr = transitioned.toSorted((a, b) => (b.mergedAt ?? b.checkedAt) - (a.mergedAt ?? a.checkedAt))[0]!;
+				changed = this.finishLinkedSlack(projectId, "sessions", sessionId, `pr:${pr.url.toLowerCase()}`, {
+					reason: `Done · PR #${pr.number} merged`,
+					mergeDone: { pr: pr.url, at: Date.now() },
+				});
+			}
+			this.db.exec("COMMIT");
+		} catch (error) {
+			this.db.exec("ROLLBACK");
+			throw error;
+		}
+		if (changed) this.emit(projectId);
+	}
+
+	completeSlackMission(projectId: string, missionId: string, completedAt: number): void {
+		this.db.exec("BEGIN IMMEDIATE");
+		let changed = false;
+		try {
+			changed = this.finishLinkedSlack(projectId, "missions", missionId, `mission:${missionId}:${completedAt}`, {
+				reason: "Done · Mission completed",
+				missionDone: { id: missionId, at: completedAt },
+			});
+			this.db.exec("COMMIT");
+		} catch (error) {
+			this.db.exec("ROLLBACK");
+			throw error;
+		}
+		if (changed) this.emit(projectId);
+	}
+
+	/** Runs off the event loop, reading only indexed links for this chat or mission. */
+	private finishLinkedSlack(
+		projectId: string,
+		kind: "sessions" | "missions",
+		id: string,
+		event: string,
+		completion: Record<string, TrackingJson>,
+	): boolean {
+		// CROSS JOIN keeps the tiny target-link set outermost; without statistics SQLite otherwise scans a project.
+		const rows = this.db
+			.prepare(`SELECT i.id, i.slack_status, i.dismissed, i.slack_completion
+				FROM tracked_item_links l CROSS JOIN tracked_items i ON i.id=l.item_id
+				WHERE l.kind=? AND l.target=? AND i.project_id=? AND i.kind='slack'`)
+			.iterate(kind, id, projectId) as Iterable<Pick<Row, "id" | "slack_status" | "dismissed" | "slack_completion">>;
+		let changed = false;
+		for (const row of rows) {
+			const admitted = this.db.prepare("INSERT OR IGNORE INTO slack_done_events VALUES (?, ?)").run(row.id, event);
+			if (!admitted.changes || !["open", "in_progress"].includes(row.slack_status) || row.dismissed) continue;
+			this.db
+				.prepare(
+					"UPDATE tracked_items SET slack_status='done', closed_by_label=NULL, slack_completion=? WHERE id=?",
+				)
+				.run(JSON.stringify({ ...JSON.parse(row.slack_completion), ...completion }), row.id);
+			changed = true;
+		}
+		return changed;
+	}
+
 	patch(id: string, patch: TrackedItemPatch): TrackedItem {
 		validatePatch(patch);
 		const item = this.require(id);
@@ -611,6 +734,12 @@ export class TrackedItemDisk {
 			return item;
 		this.db.exec("BEGIN");
 		try {
+			if (userStatus)
+				this.db
+					.prepare(
+						"UPDATE tracked_items SET slack_completion=json_remove(slack_completion, '$.reason') WHERE id=?",
+					)
+					.run(id);
 			this.db
 				.prepare(
 					"UPDATE tracked_items SET dismissed=?, session_id=?, mission_id=?, links=?, slack_overrides=?, slack_status=?, closed_by_label=? WHERE id=?",
@@ -625,6 +754,13 @@ export class TrackedItemDisk {
 					closedByLabel ?? null,
 					id,
 				);
+			this.db.prepare("DELETE FROM tracked_item_links WHERE item_id=?").run(id);
+			for (const [kind, targets] of [
+				["sessions", sessions],
+				["missions", missions],
+			] as const)
+				for (const target of targets)
+					this.db.prepare("INSERT INTO tracked_item_links VALUES (?, ?, ?)").run(id, kind, target);
 			// A label the user picks takes its effect, and leaving a close label reopens what it closed.
 			if (item.kind === "slack") this.reconcile(item.projectId, " AND id = ?", [id]);
 			if (correction) {
@@ -703,6 +839,7 @@ function decode(row: Row): TrackedItem {
 		missionIds = links.missions ?? (row.mission_id ? [row.mission_id] : []);
 	const metadata = JSON.parse(row.metadata);
 	const slackStart = row.slack_start ? JSON.parse(row.slack_start) : undefined;
+	const completion = JSON.parse(row.slack_completion);
 	const overrides: SlackOverrides = JSON.parse(row.slack_overrides);
 	const slack: SlackTriage | undefined =
 		row.kind === "slack"
@@ -714,6 +851,7 @@ function decode(row: Row): TrackedItem {
 					status: row.slack_status,
 					overrides,
 					...(row.closed_by_label ? { closedByLabel: row.closed_by_label } : {}),
+					...(row.slack_status === "done" && completion.reason ? { doneReason: completion.reason } : {}),
 				}
 			: undefined;
 	return {
@@ -727,6 +865,7 @@ function decode(row: Row): TrackedItem {
 		metadata: slack
 			? {
 					...metadata,
+					...completion,
 					type: slack.type,
 					label: slack.label,
 					severity: slack.severity,

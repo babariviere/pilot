@@ -768,6 +768,28 @@ export interface MainMoved {
 }
 
 export class SessionManager {
+	private pullRequestObserver?: (
+		observation: import("./tracked-items-disk.ts").SlackPullRequestObservation,
+	) => Promise<void>;
+
+	/** Receives durable chat PR state, never streaming transcript updates. Install before load. */
+	setPullRequestObserver(observer: NonNullable<SessionManager["pullRequestObserver"]>): void {
+		this.pullRequestObserver = observer;
+	}
+
+	private async observePullRequests(meta: SessionMeta): Promise<void> {
+		if (!meta.projectId || !this.pullRequestObserver) return;
+		const prs = sessionPullRequests(meta);
+		if (!prs.length) return;
+		await this.pullRequestObserver({
+			projectId: meta.projectId,
+			sessionId: meta.id,
+			prs,
+			pending: (meta.boundPullRequests ?? []).some(
+				(url) => !prs.some((pr) => pr.url.toLowerCase() === url.toLowerCase()),
+			),
+		});
+	}
 	private readonly deliveryReports = new Map<string, MessageDelivery | undefined>();
 	private readonly metas = new Map<string, SessionMeta>();
 	private readonly workers = new Map<string, SessionWorker>();
@@ -1012,6 +1034,8 @@ export class SessionManager {
 			for (const url of meta.boundPullRequests ?? [])
 				if (!this.excludedPullRequest(meta, url)) this.boundPullRequestOwners.set(url.toLowerCase(), meta.id);
 		await this.recoverPullRequestBinding();
+		// Seed silent, durable baselines before the first GitHub refresh starts.
+		for (const meta of this.metas.values()) await this.observePullRequests(meta);
 		// Durable work interrupted by a restart continues as soon as its kernel reopens.
 		for (const meta of this.metas.values())
 			if (this.missions && (this.isMissionCoordinator(meta.id) || meta.coordinatorView))
@@ -4846,6 +4870,7 @@ export class SessionManager {
 			);
 		else for (const pr of discovered) this.missions?.pullRequestCreated?.(meta.id, pr.url);
 		for (const pr of [next, ...(result.others ?? [])]) if (pr) this.missions?.pullRequestUpdated?.(pr);
+		if (!result.error && fresh) await this.observePullRequests(meta);
 		// Observers announce terminal PRs only after every discovered head is linked and reconciled.
 		if (fresh || changed) this.emit(meta);
 		// Health was looked up by the sync before this result was applied. Stale lookups are dropped here.

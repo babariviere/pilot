@@ -686,6 +686,48 @@ test("latest user submission is exposed and persists independently of worker and
 	assert.equal(reopened.get(created.id)?.lastUserMessageAt, userAt);
 });
 
+test("PR observers receive persisted full chat heads and startup baselines, never streaming summaries", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager();
+	const created = await sessions.spawn({ cwd: f.source, message: "sample" });
+	await until(() => sessions.get(created.id)?.state === "working");
+	await sessions.stop(created.id);
+	const meta = sessions["metas"].get(created.id)!;
+	meta.projectId = f.project.id;
+	const observed: import("./tracked-items-disk.ts").SlackPullRequestObservation[] = [];
+	sessions.setPullRequestObserver(async (observation) => {
+		assert.equal((await f.stored(created.id)).pullRequest?.state, observation.prs[0]?.state);
+		observed.push(observation);
+	});
+	const pr: SessionPullRequest = {
+		number: 42,
+		url: "https://github.com/example/sample/pull/42",
+		title: "Sample",
+		state: "open",
+		checkedAt: 10,
+	};
+	const earlier: SessionPullRequest = { ...pr, number: 41, url: "https://github.com/example/sample/pull/41" };
+	await sessions["applyPullRequest"](meta, { pullRequest: pr, others: [earlier] });
+	assert.equal(observed.length, 1);
+	assert.equal(observed[0]?.prs.length, 2);
+	for (let i = 0; i < 100; i++) sessions["emit"](meta);
+	assert.equal(observed.length, 1, "streaming/activity updates do not query tracking storage");
+	meta.boundPullRequests = [pr.url, earlier.url, "https://github.com/example/sample/pull/43"];
+	await sessions["applyPullRequest"](meta, { pullRequest: { ...pr, state: "merged", checkedAt: 20 } });
+	assert.equal(observed.at(-1)?.pending, true);
+	assert.equal(observed.at(-1)?.prs.find((head) => head.number === 41)?.state, "open");
+	await sessions.shutdown();
+	const reopened = new SessionManager(f.home, f.projects, undefined, { worker: f.workerFactory() });
+	t.after(() => reopened.shutdown());
+	const recovered: typeof observed = [];
+	reopened.setPullRequestObserver(async (observation) => {
+		recovered.push(observation);
+	});
+	await reopened.load();
+	assert.equal(recovered[0]?.prs.find((head) => head.number === 42)?.state, "merged");
+	assert.equal(recovered[0]?.pending, true);
+});
+
 test("generated title updates and persists without delaying startup", async (t) => {
 	const f = await fixture(t);
 	const gate = deferred();

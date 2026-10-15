@@ -14,6 +14,7 @@ import type {
 	InboxQuery,
 	InboxTracked,
 	SlackCache,
+	SlackPullRequestObservation,
 	SlackReservation,
 	SourceCheckpoint,
 	TrackedInput,
@@ -148,6 +149,12 @@ export class TrackedItemStore {
 	}
 	patch(id: string, patch: TrackedItemPatch): Promise<TrackedItem> {
 		return this.rpc("patch", { id, patch });
+	}
+	observeSlackPullRequests(observation: SlackPullRequestObservation): Promise<void> {
+		return this.rpc("observeSlackPullRequests", observation);
+	}
+	completeSlackMission(projectId: string, missionId: string, completedAt: number): Promise<void> {
+		return this.rpc("completeSlackMission", { projectId, missionId, completedAt });
 	}
 	/** Show only Slack items of configured channels (by ID, or by name in older configs). */
 	retainSlack(projectId: string, channels: string[]): Promise<void> {

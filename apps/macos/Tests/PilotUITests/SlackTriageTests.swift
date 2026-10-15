@@ -7,6 +7,15 @@ private let now = Date(timeIntervalSince1970: 1_791_900_000)
 private let ms = now.timeIntervalSince1970 * 1000
 private let hour = 3_600_000.0
 
+@Test func doneReasonsUseTheExistingQuietStatusPresentation() {
+    let merged = SlackTriage(type: .bug, severity: .low, status: .done, doneReason: "Done · PR #42 merged")
+    #expect(SlackTriageText.statusTitle(merged) == "Done · PR #42 merged")
+    #expect(SlackTriageText.applying(SlackOverrides(label: "Client"), to: merged).doneReason == merged.doneReason)
+    let reopened = SlackTriageText.applying(SlackOverrides(status: .open), to: merged)
+    #expect(reopened.doneReason == nil)
+    #expect(SlackTriageText.statusTitle(reopened) == "Open")
+}
+
 private func message(_ id: String, _ type: SlackMessageType = .bug, _ severity: SlackSeverity = .medium,
                      label: String? = nil, status: SlackLocalStatus = .open, channel: String = "C1",
                      ago: Double = hour, title: String? = nil, replies: Int? = nil,

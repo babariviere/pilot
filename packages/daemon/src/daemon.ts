@@ -74,10 +74,23 @@ const sessions = new SessionManager(
 	},
 );
 sessions.setProjectMemory(memory);
+sessions.setPullRequestObserver((observation) => trackedItems.observeSlackPullRequests(observation));
 // Membership is read while sessions load (auto-archiving, worker specs), so the bridge comes first.
 const missionStore = new MissionStore(join(config.home, "missions.sqlite"));
 const missionLinear = new MissionLinearSource(missionStore, sourceMcp);
 missionLinear.start();
+const completionWrites = new Set<Promise<void>>();
+const stopSlackCompletions = missionStore.onCompleted((projectId, missionId, at) => {
+	const write = trackedItems
+		.completeSlackMission(projectId, missionId, at)
+		.catch((error: unknown) => console.warn(`pilotd: Slack completion failed: ${error}`))
+		.finally(() => completionWrites.delete(write));
+	completionWrites.add(write);
+});
+// Recover a completion committed just before a crash. Per-item events preserve later user reopens.
+for (const mission of missionStore.list())
+	if (mission.status === "done" && mission.completedAt !== undefined)
+		await trackedItems.completeSlackMission(mission.projectId, mission.id, mission.completedAt);
 const missionService = new MissionService(missionStore, sessions, projects);
 const power = new PowerService(config.home, sessions);
 // Recover global sleep overrides before any interrupted agent can reopen.
@@ -132,11 +145,13 @@ async function stop(): Promise<void> {
 	stopMemoryProjects();
 	await missionLinear.stop();
 	await tracking.stop();
-	await trackedItems.close();
 	await memory.stop();
 	await missionService.notices.stop();
 	await missionService.compaction.stop();
 	await Promise.all([terminals.shutdown(), sessions.shutdown()]);
+	stopSlackCompletions();
+	await Promise.all(completionWrites);
+	await trackedItems.close();
 	await power.stop();
 	await untrackedStats.close();
 	missionStore.close();
