@@ -95,7 +95,8 @@ export function mainViewSandbox(paths: string[]): string {
 
 /** Fresh process, never a pre-forked unrestricted worker. All subprocesses inherit the sandbox. */
 export function forkMainViewWorker(entry: string, view: { scratch: string; protectedPaths: string[] }): ChildProcess {
-	if (process.platform !== "darwin") throw new Error("Read-only source workers require the macOS sandbox");
+	if (process.platform !== "darwin")
+		throw new Error("Coordinator OS isolation is unavailable on this host; refusing an unrestricted source worker");
 	return fork(entry, [], {
 		cwd: view.scratch,
 		execPath: "/usr/bin/sandbox-exec",

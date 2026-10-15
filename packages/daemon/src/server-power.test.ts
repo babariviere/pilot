@@ -31,6 +31,7 @@ test("Energy API persists setup, pushes initial/changed state, and keeps HTTP or
 			sleeping: false,
 			fullWake: true,
 			wakeToken: "100:1",
+			sleepGeneration: 0,
 			closedLidActive: false,
 		};
 		sample(state);

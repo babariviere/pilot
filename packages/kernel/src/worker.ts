@@ -341,6 +341,9 @@ export function runKernelWorker(): void {
 				if (command.spec.subscriptionPolicy)
 					process.env.PILOT_SUBSCRIPTION_POLICY = command.spec.subscriptionPolicy;
 				else delete process.env.PILOT_SUBSCRIPTION_POLICY;
+				if (command.spec.connectivityPolicy)
+					process.env.PILOT_CONNECTIVITY_POLICY = command.spec.connectivityPolicy;
+				else delete process.env.PILOT_CONNECTIVITY_POLICY;
 				const opened = await KernelSession.open(command.spec, {
 					onSystemMessageState: (event) => {
 						void send({ type: "systemMessageState", event });

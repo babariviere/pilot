@@ -2,6 +2,7 @@
 import { accessSync, chmodSync, constants, existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
+import { resolveLoginShell } from "@pilot/kernel/runtime-environment";
 import type { IPty } from "node-pty";
 
 const require = createRequire(import.meta.url);
@@ -23,7 +24,7 @@ export interface ShellCommand {
 
 /** The user's login shell. */
 export function loginShell(): ShellCommand {
-	return { file: process.env.SHELL || "/bin/zsh", args: ["-l"] };
+	return { file: resolveLoginShell(), args: ["-l"] };
 }
 
 /** Installs may skip node-pty's install script, which marks the prebuilt spawn helper executable. */

@@ -25,7 +25,7 @@ public enum SessionSignal: String, CaseIterable, Hashable, Sendable {
 extension SessionSummary {
     /// The chat's current PR is open, not a draft, and GitHub reports no blockers.
     public var isReadyToMerge: Bool {
-        guard !isMissionCoordinator, attentionReason?.kind != .prStuck,
+        guard offlinePaused != true, !isMissionCoordinator, attentionReason?.kind != .prStuck,
               let pullRequest, pullRequest.state == .open else { return false }
         return pullRequest.readiness?.state == .ready
     }
@@ -45,7 +45,7 @@ extension SessionSummary {
     /// Finished and reviewed, with no live work, failure, open PR or active coordination. Quiet chats are the
     /// only ones a long sidebar list folds away.
     public var isQuiet: Bool {
-        !isWorking && !isActiveMissionCoordinator && status != .failed && status != .question
+        !isWorking && offlinePaused != true && !isActiveMissionCoordinator && status != .failed && status != .question
             && !linkedPullRequests.contains { !$0.isTerminal }
     }
 }

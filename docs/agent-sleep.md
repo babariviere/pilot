@@ -9,10 +9,10 @@ closed-lid work only when external power **and** a usable Wi-Fi path are present
 either while the lid remains closed pauses agents, restores normal sleep and requests sleep.
 Without that option, ordinary lid sleep still pauses work for the next wake.
 
-While Pilot's closed-lid sleep override is active, closing the lid also immediately locks the Mac.
-This does not stop agents, hold the display awake, or change macOS password/lock-delay settings.
-It locks once per lid closure, so unlocking at a dock does not repeatedly lock you out. Enabling
-the override while the lid is already closed (including helper startup) also requests a lock.
+Pilot does not lock the screen or change macOS password/lock-delay settings. With closed-lid
+keep-awake on, whether the Mac locks depends on macOS and your settings, such as requiring a
+password after the display turns off. Suppressing lid sleep can bypass its normal locking path;
+do not assume closing the lid locks the Mac while this option is on.
 
 Pausing closes kernels without sending Stop/abort. The durable Harness retains its pending work.
 Native commands and background jobs interrupted by teardown are not automatically rerun. Their
@@ -36,21 +36,23 @@ opt out of automatic resume.
 - `PowerService` in `packages/daemon/src/power.ts` serializes and coalesces policy decisions.
 - `SessionManager` commits `power-pause.json` before detaching/closing kernels. Kernel admission,
   mission notices, PR follow-ups and subscription reopening respect this latch. It is cleared only
-  at a qualifying wake, or when the user explicitly disables the policy.
+  at a qualifying wake, or when the user explicitly disables the policy. Every detached chat's recovery
+  marker is saved before sleep preparation completes. OS sleep acknowledgement waits for this durable
+  preparation, not the serial batches of process exits. Wake and update readiness still wait for full
+  teardown, so a suspended old worker cannot race its replacement for storage.
 - `PilotPower` is a pipe-connected native executable, independent of the GUI. IOKit supplies AC/lid
   and sleep notifications. Network.framework supplies Wi-Fi and connectivity booleans, without
   SSIDs, scans, location access or provider requests. It holds only a system-idle assertion, never
-  a display assertion. Requested system sleep gets a bounded 20-second preparation window, not an
-  indefinite veto. A slow/failing teardown cannot prevent macOS from sleeping indefinitely.
+  a display assertion. Requested system sleep gets a five-second fallback on the native notification
+  queue, independent of daemon responsiveness, process teardown and guardian commands. Normally the
+  daemon acknowledges as soon as durable preparation finishes, before releasing activity assertions.
+  Replies carry a sleep generation, so an old reply or timer cannot release a later sleep. The fallback
+  permits OS suspension even if persistence stalls; preparation/recovery continues after wake, with
+  admissions still fenced. This is not a guarantee against power loss during a failed disk write.
 - Closed-lid work uses `pmset disablesleep 1/0`, the same mechanism documented by
   [Vorssaint](https://github.com/vorssaint/vorssaint-utils). This implementation is independent, not
   copied from its GPL source. The setting is **system-wide and persistent**, not a process assertion.
   While enabled it can affect other system-sleep requests too. Keep ventilation clear.
-- Because suppressing lid sleep also bypasses its normal locking path, `PilotPower` explicitly
-  requests a session lock using login.framework's private `SACLockScreenImmediate` entry point,
-  resolved dynamically. No Accessibility or Automation permission is required. If it is unavailable
-  or returns failure, the helper shuts down and the guardian restores normal sleep rather than
-  silently continuing unlocked. Physical lock behavior must be smoke-tested on supported macOS versions.
 - A one-time, explicit administrator dialog installs `/etc/sudoers.d/pilot-power`, granting the
   current numeric uid only `/usr/bin/pmset disablesleep 1` and `0`. Subsequent calls use `sudo -n`.
   Neither Pilot nor its daemon runs as root. No administrator password is retained.
@@ -81,9 +83,8 @@ Physical hardware still needs an opt-in smoke check on a test Mac:
 
 1. Run a faux-provider chat, lock the screen, and allow display sleep. Confirm work continues.
 2. Approve closed-lid mode, connect AC and Wi-Fi, close the lid and confirm progress without a display.
-   Reopen and confirm macOS requires authentication. Repeat with an external display attached;
-   unlock while docked and confirm sensor updates do not repeatedly lock the session. Open and
-   close the lid again and confirm it locks again.
+   Repeat with an external display attached. Confirm Pilot does not initiate a lock or change the
+   user's lock settings; authentication behavior is left to macOS and those settings.
 3. Repeat unplugging AC, then disconnecting Wi-Fi. Confirm pause precedes override restoration and sleep.
 4. Open on a new wake while offline. Confirm no resume until a connection returns. Confirm dark wakes,
    display wake and same-wake daemon restart do not resume work.
@@ -92,3 +93,23 @@ Physical hardware still needs an opt-in smoke check on a test Mac:
 6. Check a docked external display, permission cancellation/revocation, and helper relaunch recovery.
 
 Do not perform these destructive power/lifecycle checks on a Mac running real work.
+
+### Sleep acknowledgement investigation (2026-10-15)
+
+Installed 1.36.1 (953.1) observed will-sleep at 18:01:05 CEST, entered software sleep at
+18:01:25, and woke at 18:04:04. `pmset -g log` attributes a 20,174 ms sleep-notification
+delay to PilotPower. Main `60453b09` still had the release's 20-second native fallback and
+byte-identical daemon power policy. The newer session-lock change did not alter acknowledgement.
+
+The old daemon awaited all worker exits (four at a time, with an eight-second forced-exit
+deadline per batch), then the activity/guardian reply, before acknowledging sleep. Synthetic
+blocked-worker tests reproduce that acknowledgement dependency without sleeping the host. The
+recorded duration is consistent with exhausting the fallback, but the historical evidence does
+not identify which teardown/guardian operation consumed the window. No host sleep, network,
+daemon lifecycle or power-setting changes were performed for this investigation.
+
+Regression tests now hold nine synthetic worker exits indefinitely: all recovery markers become
+durable before acknowledgement is eligible, while wake still waits for every exit. Native policy
+tests cover one-shot acknowledgement, wake cancellation and stale generations. A user-operated
+hardware retest should compare the next sleep's notification delay in `pmset -g log`; the synthetic
+checks do not establish real-device latency or a hard real-time scheduling guarantee.

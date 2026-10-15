@@ -841,6 +841,28 @@ export class SessionManager {
 	/** sessionId -> watchId -> listener */
 	private readonly watchers = new Map<string, Map<string, EventListener>>();
 	private readonly changeListeners = new Set<(session: SessionSummary) => void>();
+	private internetOnline?: boolean;
+
+	/** Display only. The shared admission file gates requests without stopping tools or resubmitting input. */
+	setConnectivity(online: boolean): void {
+		if (this.internetOnline === online) return;
+		this.internetOnline = online;
+		for (const meta of this.metas.values()) {
+			const worker = this.workers.get(meta.id);
+			// Quiet history is unaffected. Do not rebuild/broadcast thousands of idle summaries on each edge.
+			if (
+				meta.archivedAt === undefined &&
+				(meta.working ||
+					meta.initializing ||
+					meta.pending?.length ||
+					worker?.state === "working" ||
+					worker?.state === "starting" ||
+					worker?.awaitingJobFollowUp ||
+					meta.subagents?.some((child) => child.state === "working"))
+			)
+				this.emit(meta, worker);
+		}
+	}
 	private readonly artifactListeners = new Set<(sessionId: string, artifacts: ArtifactSummary[]) => void>();
 	private readonly artifactNotifications = new Map<string, Promise<void>>();
 	/** Serialized, immutable metadata snapshots per session. */
@@ -955,10 +977,15 @@ export class SessionManager {
 
 	private sleepPause?: { since: number; wakeToken?: string };
 	private sleepTransition?: Promise<void>;
+	private sleepPreparing?: Promise<void>;
 	private sleepResuming?: Promise<void>;
 	private sleepRevision = 0;
 	get powerPause() {
 		return this.sleepPause ? { ...this.sleepPause } : undefined;
+	}
+	/** Durable admission latch and per-chat recovery markers, independent of slow process exit. */
+	get sleepPrepared(): Promise<void> {
+		return this.sleepPreparing ?? Promise.resolve();
 	}
 
 	private readonly home: string;
@@ -2322,6 +2349,29 @@ export class SessionManager {
 			if (error instanceof ArtifactNotFound) throw new NotFound(error.message);
 			throw error;
 		}
+	}
+
+	/** Resolve an artifact:// ID across parked and archived owners, only when a link is opened.
+	 * Probe one small latest pointer per owner, with bounded I/O and no transcript/body reads. */
+	async resolveArtifact(artifactId: string): Promise<ArtifactSummary> {
+		if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(artifactId))
+			throw new NotFound("Unknown artifact");
+		const ids = [...this.metas.keys()];
+		for (let offset = 0; offset < ids.length; offset += 4) {
+			const batch = await Promise.all(
+				ids.slice(offset, offset + 4).map(async (id) => {
+					try {
+						return await this.artifactStore(id).summary(artifactId);
+					} catch (error) {
+						if (error instanceof ArtifactNotFound || error instanceof NotFound) return undefined;
+						throw error;
+					}
+				}),
+			);
+			const found = batch.find((item) => item !== undefined);
+			if (found) return found;
+		}
+		throw new NotFound("Unknown artifact");
 	}
 
 	async projectArtifacts(projectId: string): Promise<ArtifactSummary[]> {
@@ -4254,6 +4304,15 @@ export class SessionManager {
 		if (this.sleepResuming) this.sleepPause = latch;
 		else this.sleepPause ??= latch;
 		if (this.sleepTransition) return this.sleepTransition;
+		let resolvePrepared!: () => void;
+		let rejectPrepared!: (error: unknown) => void;
+		const prepared = new Promise<void>((resolve, reject) => {
+			resolvePrepared = resolve;
+			rejectPrepared = reject;
+		});
+		this.sleepPreparing = prepared;
+		// Most callers need the complete transition only. They still receive preparation failures below.
+		void prepared.catch(() => {});
 		const resuming = this.sleepResuming;
 		const pause = async () => {
 			await resuming;
@@ -4274,12 +4333,17 @@ export class SessionManager {
 				this.workers.delete(id);
 				this.lastUse.delete(id);
 			}
-			// Bound concurrent kernel teardown and metadata writes. Admissions remain blocked during preparation.
+			// Persist ALL recovery markers before allowing OS sleep, not one teardown batch at a time.
+			for (let offset = 0; offset < workers.length; offset += 4) {
+				await Promise.all(workers.slice(offset, offset + 4).map(([id]) => this.save(this.require(id))));
+			}
+			await Promise.all([...this.saving.values()]);
+			resolvePrepared();
+			// Teardown remains bounded and owned by sleepTransition. Wake/update must still await every exit.
 			for (let offset = 0; offset < workers.length; offset += 4) {
 				await Promise.all(
 					workers.slice(offset, offset + 4).map(async ([id, worker]) => {
 						const meta = this.require(id);
-						await this.save(meta);
 						const closing = worker.close().finally(() => {
 							if (this.parking.get(id) === closing) this.parking.delete(id);
 						});
@@ -4294,9 +4358,14 @@ export class SessionManager {
 			await this.savePowerPause();
 			for (const meta of this.metas.values()) this.emit(meta);
 		};
-		const transition = pause().finally(() => {
-			if (this.sleepTransition === transition) this.sleepTransition = undefined;
-		});
+		const transition = pause()
+			.catch((error: unknown) => {
+				rejectPrepared(error);
+				throw error;
+			})
+			.finally(() => {
+				if (this.sleepTransition === transition) this.sleepTransition = undefined;
+			});
 		this.sleepTransition = transition;
 		return transition;
 	}
@@ -4672,6 +4741,7 @@ export class SessionManager {
 				...(meta.projectId ? { projectId: meta.projectId } : {}),
 				storageDir: join(this.dir(id), "durable"),
 				subscriptionPolicy: join(this.dir(id), "subscription-policy.json"),
+				...(this.internetOnline !== undefined ? { connectivityPolicy: join(this.home, "connectivity.json") } : {}),
 				cwd: meta.coordinatorView?.scratch ?? meta.cwd,
 				model: meta.model,
 				thinking: meta.thinking,
@@ -5132,7 +5202,15 @@ export class SessionManager {
 				!!meta.working ||
 				!!meta.pending?.length ||
 				!!worker?.awaitingJobFollowUp);
-		const working = !paused && ((!mainQuotaPaused && mainBusy) || runnableChildren || !!worker?.runningJobs?.length);
+		const offlinePaused =
+			this.internetOnline === false &&
+			meta.archivedAt === undefined &&
+			!meta.failure &&
+			(mainBusy || childrenWorking);
+		const working =
+			!paused &&
+			!offlinePaused &&
+			((!mainQuotaPaused && mainBusy) || runnableChildren || !!worker?.runningJobs?.length);
 		const heldAtQuota = quotaPaused && !working && (mainBusy || childrenWorking);
 		const state = heldAtQuota && kernelState !== "failed" ? "working" : kernelState;
 		const longJob = meta.archivedAt === undefined ? longJobAttention(worker?.runningJobs ?? []) : undefined;
@@ -5172,6 +5250,7 @@ export class SessionManager {
 			...(meta.workspaceReclaimedAt !== undefined ? { workspaceReclaimedAt: meta.workspaceReclaimedAt } : {}),
 			...(meta.workspaceCleanupError ? { workspaceCleanupError: meta.workspaceCleanupError } : {}),
 			...(paused ? { sleepPaused: true } : {}),
+			...(offlinePaused ? { offlinePaused: true } : {}),
 			state,
 			working,
 			...(worker?.runningJobs?.length ? { runningJobs: worker.runningJobs } : {}),
@@ -5184,9 +5263,11 @@ export class SessionManager {
 			...(usage ? { usage } : {}),
 			...(subscriptionPause ? { subscriptionPause } : {}),
 			...(meta.subagents?.length ? { subagents: meta.subagents.map(publicSubagent) } : {}),
-			...(!working && !heldAtQuota && meta.outcome ? { outcome: meta.outcome } : {}),
-			...(!working && !heldAtQuota && meta.outcomeAt !== undefined ? { outcomeAt: meta.outcomeAt } : {}),
-			...(!working && !heldAtQuota && meta.outcomeReason !== undefined
+			...(!working && !heldAtQuota && !offlinePaused && meta.outcome ? { outcome: meta.outcome } : {}),
+			...(!working && !heldAtQuota && !offlinePaused && meta.outcomeAt !== undefined
+				? { outcomeAt: meta.outcomeAt }
+				: {}),
+			...(!working && !heldAtQuota && !offlinePaused && meta.outcomeReason !== undefined
 				? { outcomeReason: safeFailureText(meta.outcomeReason) }
 				: {}),
 			...(!coordinator && meta.pullRequest ? { pullRequest: meta.pullRequest } : {}),

@@ -9,14 +9,12 @@ import PilotPowerSupport
 /// Event-driven sensors and a process-scoped idle assertion. No display assertion is held.
 final class PowerRuntime {
     private let work = DispatchQueue(label: "pilot.power.operations", qos: .utility)
-    private let locks = DispatchQueue(label: "pilot.power.lock", qos: .userInitiated)
     private let wifi = NWPathMonitor(requiredInterfaceType: .wifi)
     private let network = NWPathMonitor()
     private var wifiConnected = false
     private var online = false
     private var sleeping = false
     private var closedLidActive = false
-    private var lidLock = LidLockPolicy()
     private var authorized = false
     private var guardian: GuardianConnection?
     private var assertion: IOPMAssertionID = 0
@@ -28,8 +26,7 @@ final class PowerRuntime {
     private var unsafeCutoff: DispatchWorkItem?
     private var root: io_service_t = 0
     private var acSource: CFRunLoopSource?
-    private var sleepArgument: Int?
-    private var sleepGeneration = 0
+    private var sleepAcknowledgement = SleepAcknowledgement()
     private var buffer = Data()
     private var lastReport = Data()
     private var heartbeat = ProcessInfo.processInfo.systemUptime
@@ -45,18 +42,15 @@ final class PowerRuntime {
             if message == 0xe0000270 { IOAllowPowerChange(runtime.connection, Int(bitPattern: argument)) }
             if message == 0xe0000280 {
                 runtime.sleeping = true
-                runtime.sleepArgument = Int(bitPattern: argument)
-                runtime.sleepGeneration += 1
-                let generation = runtime.sleepGeneration
+                let generation = runtime.sleepAcknowledgement.begin(argument: Int(bitPattern: argument))
                 runtime.report()
                 // macOS grants a bounded preparation window. Never veto a requested sleep indefinitely.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak runtime] in
-                    guard let runtime, runtime.sleepGeneration == generation else { return }
-                    runtime.allowSleep()
+                DispatchQueue.main.asyncAfter(deadline: .now() + SleepAcknowledgement.preparationTimeout) { [weak runtime] in
+                    runtime?.allowSleep(generation: generation)
                 }
             } else if message == 0xe0000300 {
                 runtime.sleeping = false
-                runtime.sleepArgument = nil
+                runtime.sleepAcknowledgement.woke()
                 runtime.report()
             }
         }, &notifier)
@@ -141,7 +135,10 @@ final class PowerRuntime {
             }
             guard let id = value["id"] as? Int else { shutdown(); return }
             switch action {
-            case "allowSleep": allowSleep(); emit(["id": id, "ok": true])
+            case "allowSleep":
+                guard let generation = value["generation"] as? Int else { emit(["id": id, "ok": false]); continue }
+                allowSleep(generation: generation)
+                emit(["id": id, "ok": true])
             case "sleep": requestSleep(id: id, attempts: 6)
             case "authorize":
                 work.async { [weak self] in
@@ -190,8 +187,10 @@ final class PowerRuntime {
         }
         return true
     }
-    private func allowSleep() {
-        if let argument = sleepArgument { IOAllowPowerChange(connection, argument); sleepArgument = nil }
+    private func allowSleep(generation: Int? = nil) {
+        if let argument = sleepAcknowledgement.take(generation: generation ?? sleepAcknowledgement.generation) {
+            IOAllowPowerChange(connection, argument)
+        }
     }
     private func property(_ key: String) -> Any? {
         guard root != 0 else { return nil }
@@ -212,19 +211,6 @@ final class PowerRuntime {
         let capabilities = suppliedCapabilities ?? (property("System Capabilities") as? NSNumber)?.uint32Value ?? 0
         let ac = connectedToPower()
         let closed = property("AppleClamshellState") as? Bool
-        if !stopping, lidLock.shouldLock(lidClosed: closed, overrideActive: closedLidActive) {
-            locks.async { [weak self] in
-                // Skip obsolete requests if the lid opened or normal sleep was restored while queued.
-                let needed = DispatchQueue.main.sync {
-                    guard let self else { return false }
-                    return !self.stopping && self.closedLidActive && self.property("AppleClamshellState") as? Bool == true
-                }
-                if needed, !lockSession() {
-                    // Never silently keep the machine awake and unlocked if the native lock API fails.
-                    DispatchQueue.main.async { self?.shutdown() }
-                }
-            }
-        }
         let unsafe = closedLidActive && closed == true && (!ac || !wifiConnected)
         if unsafe, unsafeCutoff == nil {
             // A live heartbeat is not proof that pilotd finished its durable pause. Bound that wait too.
@@ -247,6 +233,7 @@ final class PowerRuntime {
             "online": online, "lidClosed": closed as Any? ?? NSNull(),
             "sleeping": sleeping, "fullWake": !sleeping && displayAwake && capabilities & UInt32(kIOPMSystemCapabilityGraphics) != 0,
             "wakeToken": wakeToken(), "closedLidActive": closedLidActive,
+            "sleepGeneration": sleepAcknowledgement.generation,
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: value, options: .sortedKeys), data != lastReport else { return }
         lastReport = data

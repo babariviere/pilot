@@ -215,6 +215,8 @@ export interface SessionSummary {
 	continuationOf?: string;
 	/** Durable work paused by the Mac sleep policy, awaiting a later full wake with connectivity. */
 	sleepPaused?: boolean;
+	/** Durable model work waiting for confirmed internet connectivity. */
+	offlinePaused?: boolean;
 	/** Omitted by older daemons, meaning Build. */
 	mode?: ChatMode;
 	/** Actual Build workspace policy, including isolated workspaces without a task branch. */
@@ -442,6 +444,7 @@ export interface RemoteBranchList {
 export type ArtifactLibrary = "react" | "react-dom" | "mermaid" | "echarts" | "motion" | "d3" | "three";
 export type ArtifactKind = "html" | "react" | "image" | "swiftui";
 
+/** GET /api/artifacts/:id resolves an unpinned artifact link to its owning session and latest metadata. */
 export interface ArtifactSummary {
 	id: string;
 	sessionId: string;
@@ -1359,6 +1362,8 @@ export type TerminalSocketMessage =
 export type SubagentServerMessage = Extract<ServerMessage, { type: "subagent.events" | "error" }>;
 
 export const DEFAULT_PORT = 4319;
+export type { DaemonCapabilities, DaemonHello } from "./hello.ts";
+export { DAEMON_PROTOCOL_VERSION, MINIMUM_CLIENT_PROTOCOL_VERSION } from "./hello.ts";
 export type * from "./inbox.ts";
 export type * from "./mcp.ts";
 export type * from "./memory.ts";

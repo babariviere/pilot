@@ -1,0 +1,48 @@
+name: Linux x86-64 headless runtime
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-headless-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  runtime:
+    # This runner is a test fixture, not a distribution/release requirement for devboxes.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.21.0
+          cache: pnpm
+      - name: Verify runtime capabilities
+        run: |
+          test "$(uname -m)" = x86_64
+          node --version
+          command -v bash
+          command -v ldd
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - name: Verify selected native dependencies and ABI
+        run: node --test --test-force-exit packages/daemon/src/native-runtime.test.ts
+      - name: Headless daemon, shell environment, handshake and independent kernel execution
+        run: |
+          node --test --test-force-exit --test-concurrency=2 \
+            packages/kernel/src/runtime-environment.test.ts \
+            packages/daemon/src/platform.test.ts \
+            packages/daemon/src/headless.integration.test.ts \
+            packages/daemon/src/terminals.test.ts \
+            packages/kernel/src/bundled-extensions.integration.test.ts \
+            packages/artifacts/src/swiftui.test.ts

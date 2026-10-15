@@ -30,6 +30,21 @@ private func withDefaults(_ test: (UserDefaults) throws -> Void) rethrows {
     }
 }
 
+@Test func offlinePauseIsQuietAndComposesWithSleep() throws {
+    var chat = summary(state: "working", outcome: .failed, reason: "Old result")
+    chat.offlinePaused = true
+    #expect(chat.status == .offlinePaused)
+    #expect(!chat.isWorking)
+    #expect(chat.visibleOutcomeAt == nil)
+    #expect(RowLineSegments.session(chat).contains { $0 == RowLineSegment(.reason("Paused offline")) })
+    let encoded = try JSONEncoder().encode(chat)
+    #expect(try JSONDecoder().decode(SessionSummary.self, from: encoded).offlinePaused == true)
+    chat.sleepPaused = true
+    #expect(chat.status == .paused)
+    chat.offlinePaused = false
+    #expect(chat.status == .paused)
+}
+
 @Test func legacyNeedsInputDecodesAsDoneAndEncodesNormally() throws {
     let outcome = try JSONDecoder().decode(SessionOutcome.self, from: Data(#""needs_input""#.utf8))
     #expect(outcome == .done)

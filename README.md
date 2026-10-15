@@ -28,8 +28,8 @@ See [screenshot notes](docs/screenshots/README.md) to regenerate them.*
   request number), pages, missions and tasks (`#25`), project scopes, Linear and Slack Inbox items, and actions such
   as new chat, pin, archive, stop, retry or opening the pull request on GitHub.
 - **Let the display rest while agents work.** Keep the Mac awake without keeping the display on.
-  Optional closed-lid work locks the Mac on lid closure and requires power and Wi-Fi; otherwise agents pause
-  and resume on the next full wake with connectivity. See [agent-aware sleep](docs/agent-sleep.md) for
+  Optional closed-lid work requires power and Wi-Fi; without both, agents pause and resume on the next
+  full wake with connectivity. Screen locking is left to macOS. See [agent-aware sleep](docs/agent-sleep.md) for
   authorization and interruption limits.
 - **Answer questions quickly.** When an agent needs a decision, its question replaces the message box with
   suggested answers. Pick one with the number keys and Return, or reply in your own words. The chat shows as
@@ -75,6 +75,28 @@ Updates pause agents after active tool calls finish, update the app and daemon, 
 chats and subagents automatically. They do not wait for entire conversations to finish.
 Chats with working subagents stay Working, even when the parent has finished its current reply.
 Pending child work also reopens automatically after a daemon restart or a sleep pause.
+
+### Headless Linux runtime (development)
+
+The daemon and session workers can also run without a Mac app on **Linux x86-64**, using Node 24+
+and a native dependency install on that host (`pnpm install --frozen-lockfile`, then `pnpm start`).
+Compatibility depends on the available runtime, shell and native module ABIs, not a distribution name
+or OS release. Linux CI executes the selected PTY, SQLite and artifact compiler dependencies and a real
+headless daemon/kernel smoke test. Production Linux packaging and persistent service setup are separate
+work; running a daemon in an interactive SSH shell is not a persistent service.
+
+`GET /api/hello` returns a stable data-home `daemonId`, application `daemonVersion`, an independently
+versioned protocol range (`minimumClientProtocolVersion` through `protocolVersion`, currently 1),
+platform/architecture and explicit capabilities. Clients must pin the identity when pairing and verify
+it, protocol compatibility and required capabilities before opening streams or sending mutations.
+Changing the data home creates another identity; damaged identity files fail startup rather than silently
+re-pairing. The unauthenticated API remains bound to `127.0.0.1` only.
+
+Linux omits Mac energy/system-events helpers. Its agents and daemon-owned processes do not depend on a
+client connection, and disconnecting a client does not stop them. HTML, React and image artifact authoring
+remain available; SwiftUI rendering requires macOS. Linux coordinator execution stays unavailable until a
+validated OS-isolation backend is installed, with no unrestricted fallback. This does not add remote app
+routing, credential copying or cross-host context/delegation semantics.
 
 ### Start your first chat
 
@@ -130,6 +152,12 @@ to start one run with them, **Discard** to remove all or an individual held mess
 message to carry them along. Waiting system messages are read-only.
 Stop also works during a sleep pause. Cancellation is saved without waking other chats and drains
 before the paused run can recover at the next eligible wake.
+
+If internet connectivity is lost, chats show **Paused offline** rather than exhausting model retries
+into a failure. The daemon confirms connectivity and resumes automatically, even with the app closed.
+Queued messages and unfinished requests survive restarts. Running native tools finish their current
+round; they are never killed or replayed for an outage. Sleep, update, subscription and manual Stop
+holds remain independent. Authentication, quota and provider errors are not treated as offline.
 
 ### Subscription limits
 
@@ -273,6 +301,8 @@ workspace, but does not rebind those PRs automatically.
 Artifacts open in an isolated, offline WebKit viewer. HTML and React previews can use bundled libraries
 such as Mermaid, ECharts and Motion, with D3 and Three.js available on request. Published revisions are
 retained: a chat card opens the revision sent there, while the sidebar opens the latest version.
+Inline `artifact://<id>` links open the latest revision directly in the artifact popup, with an artifact
+icon beside the label. They work across chats, including archived artifact owners.
 SwiftUI artifacts are static renders, not live app views.
 
 Pilot bundles a pinned subset of [pi-extensions](https://github.com/babariviere/pi-extensions): sandbox,

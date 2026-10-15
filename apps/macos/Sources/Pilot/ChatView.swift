@@ -208,7 +208,13 @@ struct ChatView: View {
                         RowView(row: row, toolExpansions: toolExpansions,
                             messageExpansions: messageExpansions, active: row.id == activeWork).equatable()
                     }
-                    if showsWorkingIndicator(transcript) {
+                    if session.offlinePaused == true {
+                        Label("Paused offline · resumes automatically when connected", icon: .paused)
+                            .font(.pilot(.caption))
+                            .foregroundStyle(Theme.mutedForeground)
+                            .frame(maxWidth: Theme.column, alignment: .leading)
+                            .frame(maxWidth: .infinity)
+                    } else if showsWorkingIndicator(transcript) {
                         WorkingIndicator(retry: transcript.retry, compacting: transcript.compacting,
                                          agentWorking: transcript.working || session.state == "starting",
                                          jobs: runningJobs, showJobs: { showingJobs.toggle() })

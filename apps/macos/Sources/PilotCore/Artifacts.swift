@@ -17,6 +17,7 @@ public enum ArtifactLibrary: String, Codable, CaseIterable, Hashable, Sendable {
     case reactDOM = "react-dom"
 }
 
+/// GET /api/artifacts/:id resolves an unpinned artifact link to its owning session and latest metadata.
 public struct ArtifactSummary: Codable, Identifiable, Equatable, Hashable, Sendable {
     public let id: String
     public let sessionId: String

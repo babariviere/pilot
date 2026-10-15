@@ -35,6 +35,8 @@ export interface KernelSpec {
 	storageDir: string;
 	/** Host-owned admission policy shared with subagents, outside their durable model history. */
 	subscriptionPolicy?: string;
+	/** Daemon-confirmed internet reachability, shared with child workers. */
+	connectivityPolicy?: string;
 	cwd: string;
 	/** Used only when the session is created; later starts reuse the pinned model. */
 	model?: string;

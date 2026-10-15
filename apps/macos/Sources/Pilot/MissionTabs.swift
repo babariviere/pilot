@@ -811,17 +811,20 @@ struct MissionTaskRow: View {
                     if task.sessionId == nil, task.status.canStart {
                         MissionTaskStartButton(status: mission.status) { model.startChat(for: task, missionId: mission.id) }
                     }
-                    if hovered {
-                        Menu { menuItems } label: { PilotSymbol(PilotIcon.more, context: .toolbar) }
-                            .menuStyle(.button)
-                            .rowIconButtonStyle()
-                            .menuIndicator(.hidden)
-                            .fixedSize()
-                            .help("Task actions")
-                            .accessibilityLabel("Actions for task \(task.number)")
-                    } else {
-                        Color.clear.frame(width: 20, height: 20)
-                    }
+                    // The fixed slot sets the layout and baseline; the menu is an overlay so building it on
+                    // hover cannot move the row.
+                    Color.clear.frame(width: 20, height: 20)
+                        .overlay {
+                            if hovered {
+                                Menu { menuItems } label: { PilotSymbol(PilotIcon.more, context: .toolbar) }
+                                    .menuStyle(.button)
+                                    .rowIconButtonStyle()
+                                    .menuIndicator(.hidden)
+                                    .fixedSize()
+                                    .help("Task actions")
+                                    .accessibilityLabel("Actions for task \(task.number)")
+                            }
+                        }
                 }
                 .revealed(hovered)
             }
@@ -974,24 +977,27 @@ struct MissionTaskStatusMenu: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        Group {
-            if interactive {
-                Menu {
-                    ForEach(MissionTaskStatus.allCases, id: \.self) { status in
-                        Button { set(status) } label: { Label(status.label, icon: status.icon) }
-                            .disabled(status == task.status)
+        // The plain icon always sets the size and baseline. The menu, built only when interactive, sits in an
+        // overlay so switching to it on hover does not shift the row.
+        icon
+            .opacity(interactive ? 0 : 1)
+            .overlay {
+                if interactive {
+                    Menu {
+                        ForEach(MissionTaskStatus.allCases, id: \.self) { status in
+                            Button { set(status) } label: { Label(status.label, icon: status.icon) }
+                                .disabled(status == task.status)
+                        }
+                    } label: {
+                        icon
                     }
-                } label: {
-                    icon
+                    .chipMenuStyle()
+                    .fixedSize()
                 }
-                .chipMenuStyle()
-            } else {
-                icon
             }
-        }
-        .fixedSize()
-        .help("Status: \(task.delegationLabel ?? task.status.label)")
-        .accessibilityLabel("Status \(task.delegationLabel ?? task.status.label)")
+            .fixedSize()
+            .help("Status: \(task.delegationLabel ?? task.status.label)")
+            .accessibilityLabel("Status \(task.delegationLabel ?? task.status.label)")
     }
 
     private var icon: some View {

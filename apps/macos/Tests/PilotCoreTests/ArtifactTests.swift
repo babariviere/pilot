@@ -205,6 +205,45 @@ private let artifactJSON = #"{"id":"a","sessionId":"s","title":"Chart","revision
             == CGSize(width: 800, height: 1000))
 }
 
+@Test func detachedArtifactMeasurementsDoNotReplaceTheRetainedSize() {
+    var measurement = ArtifactContentMeasurement()
+    let content = CGSize(width: 760, height: 1400)
+    let measured = measurement.record(content: content, viewport: CGSize(width: 760, height: 720))
+    #expect(measured == content)
+    for viewport in [CGSize.zero, CGSize(width: 760, height: 0), CGSize(width: 0, height: 720)] {
+        let detached = measurement.record(content: CGSize(width: 760, height: 1), viewport: viewport)
+        #expect(detached == content)
+    }
+    let restored = measurement.record(content: content, viewport: CGSize(width: 760, height: 1400))
+    #expect(restored == content)
+}
+
+@Test func recreatedArtifactsRetainTheirHeightWhileTheDOMRestarts() {
+    let saved = CGSize(width: 760, height: 1495)
+    let viewport = CGSize(width: 760, height: 1495)
+    for _ in 0..<3 {
+        var measurement = ArtifactContentMeasurement(retaining: saved)
+        // Mermaid can briefly show its source or an incomplete SVG after a lazy remount.
+        for height: CGFloat in [1, 316, 1495, 1495] {
+            let result = measurement.record(content: CGSize(width: 760, height: height), viewport: viewport)
+            #expect(result == saved)
+        }
+        // This is a startup gate, not a high-water mark: later live content may still shrink.
+        let changed = measurement.record(content: CGSize(width: 760, height: 120), viewport: viewport)
+        #expect(changed == CGSize(width: 760, height: 120))
+    }
+}
+
+@Test func restoredArtifactMeasurementsCanSettleAtANewWidth() {
+    var measurement = ArtifactContentMeasurement(retaining: CGSize(width: 760, height: 1495))
+    let viewport = CGSize(width: 320, height: 1495)
+    let content = CGSize(width: 320, height: 2100)
+    let pending = measurement.record(content: content, viewport: viewport)
+    #expect(pending == CGSize(width: 760, height: 1495))
+    let settled = measurement.record(content: content, viewport: viewport)
+    #expect(settled == content)
+}
+
 @Test func toolArtifactChangesRemainVisibleWithCachedSummaries() {
     let original = ToolItem(id: "call", name: "artifact", arguments: .object(["action": .string("create")]), status: .done, output: "")
     var cached = original

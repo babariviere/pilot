@@ -500,7 +500,9 @@ struct ComposerCorner: Equatable {
     }
 
     init(agentWorking: Bool, session: SessionSummary?) {
-        if agentWorking {
+        if session?.offlinePaused == true {
+            self.init(signal: nil)
+        } else if agentWorking {
             self.init(signal: .working)
         } else if let session, session.isWorking {
             self.init(signal: .working, background: session.isWaitingOnJobs)

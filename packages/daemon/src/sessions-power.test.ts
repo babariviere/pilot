@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -25,6 +25,83 @@ async function until(check: () => boolean): Promise<void> {
 		await delay(1);
 	}
 }
+
+test("sleep preparation persists every recovery marker without waiting for batched worker exits; wake still waits", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "pilot-sleep-prepared-"));
+	let release!: () => void;
+	const closingWait = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const workers: SessionWorker[] = [];
+	let closing = 0;
+	const sessions = new SessionManager(home, new ProjectStore(home), undefined, {
+		title: async () => undefined,
+		worker(_spec, packet, exited) {
+			const worker = {
+				state: "idle" as SessionState,
+				busy: false,
+				ready: Promise.resolve(),
+				send() {},
+				async request() {
+					this.state = "working";
+					this.busy = true;
+					packet({ type: "working", working: true });
+				},
+				async close() {
+					closing++;
+					await closingWait;
+					exited(this, 0);
+				},
+			};
+			workers.push(worker);
+			queueMicrotask(() => packet({ type: "ready", working: false, model: "test/model", usage: {} }));
+			return worker;
+		},
+	});
+	t.after(async () => {
+		release();
+		await sessions.shutdown();
+		await rm(home, { recursive: true, force: true });
+	});
+	await sessions.load();
+	const ids: string[] = [];
+	for (let index = 0; index < 9; index++) {
+		ids.push((await sessions.spawn({ cwd: home, title: `Worker ${index}`, message: "work" })).id);
+	}
+	await until(() => workers.length === 9 && ids.every((id) => sessions.get(id)?.state === "working"));
+	const pausing = sessions.pauseForSleep("100:1");
+	assert.ok(sessions.powerPause, "admission closes synchronously");
+	await sessions.sleepPrepared;
+	assert.equal(closing, 4, "process teardown is still bounded to four workers");
+	for (const id of ids) {
+		const meta = JSON.parse(await readFile(join(home, "sessions", id, "meta.json"), "utf8"));
+		assert.equal(meta.sleepPaused, true, "later teardown batches already have durable recovery markers");
+	}
+	assert.equal(JSON.parse(await readFile(join(home, "power-pause.json"), "utf8")).wakeToken, "100:1");
+	const waking = sessions.resumeAfterSleep();
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.ok(sessions.powerPause);
+	assert.equal(workers.length, 9, "wake cannot open a replacement before the old workers exit");
+	release();
+	await pausing;
+	await waking;
+	await until(() => workers.length === 18);
+});
+
+test("a failed durable latch rejects both sleep preparation and full teardown", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "pilot-sleep-preparation-failure-"));
+	const sessions = new SessionManager(home, new ProjectStore(home));
+	t.after(async () => {
+		await sessions.shutdown();
+		await rm(home, { recursive: true, force: true });
+	});
+	await sessions.load();
+	await mkdir(join(home, "power-pause.json"));
+	const pausing = sessions.pauseForSleep("100:1");
+	await Promise.all([assert.rejects(sessions.sleepPrepared), assert.rejects(pausing)]);
+	assert.ok(sessions.powerPause, "failure never reopens admissions");
+});
+
 test("sleep pause closes workers without abort, persists across restart, and resumes only eligible work", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-sleep-sessions-"));
 	const workers: Array<SessionWorker & { id: string; commands: KernelCommand[]; closed: boolean }> = [];
