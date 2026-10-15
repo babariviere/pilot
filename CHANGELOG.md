@@ -1,5 +1,53 @@
 # Changelog
 
+## [1.37.0](https://github.com/babariviere/pilot/compare/v1.36.1...v1.37.0) (2026-10-15)
+
+
+### Features
+
+* **linear:** save five per-team workflow state mappings ([d67ec37](https://github.com/babariviere/pilot/commit/d67ec379e059a98b4139f9d476028725f2d7a5dd))
+* **macos:** Agents tab as one list with a detail view ([53a8777](https://github.com/babariviere/pilot/commit/53a877743eb427500570e44dba9f75e17388ebf2))
+* **macos:** calmer mission Overview with one Links list ([7ceff50](https://github.com/babariviere/pilot/commit/7ceff50d97ec7867d3b3bc7307f0fd848015c6dc))
+* **macos:** command palette (⌘K) ([60759fd](https://github.com/babariviere/pilot/commit/60759fdc4ca415a2622798fe8db647997c7a899d))
+* **macos:** composer working corner and dot grid spinner ([562e778](https://github.com/babariviere/pilot/commit/562e778bcb3f40ed92db5223bd89916538b55d6f))
+* **macos:** one aligned usage line per provider on Home ([d62d47a](https://github.com/babariviere/pilot/commit/d62d47a1714707a0a434463347672cf1369488e5))
+* **macos:** open coordinator from project page mission rows ([8b01359](https://github.com/babariviere/pilot/commit/8b013596a82e929f8d4c6147307fa4d3d60cc055))
+* **macos:** plain progress bars with status colours and a legend ([a2089e9](https://github.com/babariviere/pilot/commit/a2089e9e2997eb533df09ef2852ea242342091c7))
+* **macos:** project folders head the picker and Home; sidebar always groups by urgency ([612da41](https://github.com/babariviere/pilot/commit/612da41860aac3de93efbc139a15a3d2ed00fad9))
+* **macos:** reading-column archive, urgency menu bar and settings cleanup ([292df40](https://github.com/babariviere/pilot/commit/292df403dcb1c78ad7a72e4f51d5a759b92d82e0))
+* **macos:** restyle settings as a reading column with hairline rows ([adc2d9a](https://github.com/babariviere/pilot/commit/adc2d9ab48ebe2f0ab1ea50c05f0453e1c1eaa95))
+* **macos:** show unsent drafts on chat rows ([85289c0](https://github.com/babariviere/pilot/commit/85289c061d5608f5091efc175b4140c4b6858420))
+* **macos:** three-quarter circle for in-review status ([f17819b](https://github.com/babariviere/pilot/commit/f17819bbb8820c0a936f771150b35e2704b48301))
+* show chats blocked on an MCP server under Needs you ([6717e5c](https://github.com/babariviere/pilot/commit/6717e5c0da174bc02f58ba0f7624bf0440969c09))
+* show pi MCP server status and sign-in in Settings ([c716e1c](https://github.com/babariviere/pilot/commit/c716e1c483292382258ca065aa68aa870507ffb7))
+* **todos:** store per-chat todos in durable session storage ([d255fe4](https://github.com/babariviere/pilot/commit/d255fe4fe38ca85989dc2744179e59c7b7872e6c))
+* **tracking:** sync Slack done reactions ([ce6b8e6](https://github.com/babariviere/pilot/commit/ce6b8e6bcfb22abb397ac40f3ce40a604fead85e))
+* **usage:** pause chats at subscription limits and continue safely ([8454c98](https://github.com/babariviere/pilot/commit/8454c98f49cc93a53f3da4bbc677a033722795b5))
+
+
+### Bug Fixes
+
+* **attention:** prefer ready PRs over unreviewed results ([466d629](https://github.com/babariviere/pilot/commit/466d6298d94deddf1de83be1c5f97c212a34f50c))
+* **daemon:** rebase before failed CI follow-ups ([1c41f7e](https://github.com/babariviere/pilot/commit/1c41f7e723a299b77d4c498e37f2969b05da9a93))
+* **daemon:** title chats after the first completed turn ([c6001c7](https://github.com/babariviere/pilot/commit/c6001c73cc3cebf14c2a9cfe6e9191eb63442c8b))
+* **kernel:** queue input behind idle manual compaction ([143ad1d](https://github.com/babariviere/pilot/commit/143ad1d2277f3cc5c26c01bd3b7c5eb8e9aa2ce0))
+* **linear:** configure per-team start workflow states ([f10df24](https://github.com/babariviere/pilot/commit/f10df24c7b39cc2f36c3991a41cf98f7a8aca34e))
+* **macos:** avoid nested require macros in icon test ([2049877](https://github.com/babariviere/pilot/commit/2049877b81fa656c3fe977e6b6299da47228168c))
+* **macos:** keep pending questions visible after compaction ([ebd2877](https://github.com/babariviere/pilot/commit/ebd2877af373eecd2573f866bb3cdc8b14bf4df3))
+* **macos:** keep sidebar chat selection neutral ([c18e38f](https://github.com/babariviere/pilot/commit/c18e38fafe8373e712d34777b13cfcf489e6a651))
+* **macos:** lock the session during closed-lid work ([776184c](https://github.com/babariviere/pilot/commit/776184c59f0f18fe551727fa7e0de8d8a4e7b728))
+* **macos:** resolve row accessibility from the parent model ([415a72e](https://github.com/babariviere/pilot/commit/415a72e58c69a55c112215ac3dfb57dbb723641d))
+* **macos:** show agent questions while background jobs run ([7eff5a8](https://github.com/babariviere/pilot/commit/7eff5a807d1c2e83053014b579d9993b05f86278))
+* **macos:** supply the model to mission toolbar hosts ([a728d2b](https://github.com/babariviere/pilot/commit/a728d2bf5ad0fce7b668417cf78bc585819367c9))
+* **macos:** use shared spinner for coordinator drafting ([cf2e10d](https://github.com/babariviere/pilot/commit/cf2e10de2275929e04089c1cbc49450534c962dc))
+* **pr:** surface exhausted follow-ups in Needs you ([6f4f84d](https://github.com/babariviere/pilot/commit/6f4f84d5903fff57b77fab7c1f61a0255b0ad7c0))
+* **usage:** preserve startup failures while input remains queued ([1fb6ad5](https://github.com/babariviere/pilot/commit/1fb6ad56d89bce2342573f57e81ffc781f0f44c1))
+
+
+### Performance Improvements
+
+* **metadata:** avoid eager PR details and sidebar diff scans ([856f93a](https://github.com/babariviere/pilot/commit/856f93a48a248fd2ff32d28cb37d01a285827a78))
+
 ## [1.36.1](https://github.com/babariviere/pilot/compare/v1.36.0...v1.36.1) (2026-10-15)
 
 
