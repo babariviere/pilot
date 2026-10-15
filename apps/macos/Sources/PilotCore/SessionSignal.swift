@@ -45,7 +45,7 @@ extension SessionSummary {
     /// Finished and reviewed, with no live work, failure, open PR or active coordination. Quiet chats are the
     /// only ones a long sidebar list folds away.
     public var isQuiet: Bool {
-        !isWorking && !isActiveMissionCoordinator && status != .failed && status != .question
+        !isWorking && offlinePaused != true && !isActiveMissionCoordinator && status != .failed && status != .question
             && !linkedPullRequests.contains { !$0.isTerminal }
     }
 }

@@ -841,6 +841,28 @@ export class SessionManager {
 	/** sessionId -> watchId -> listener */
 	private readonly watchers = new Map<string, Map<string, EventListener>>();
 	private readonly changeListeners = new Set<(session: SessionSummary) => void>();
+	private internetOnline?: boolean;
+
+	/** Display only. The shared admission file gates requests without stopping tools or resubmitting input. */
+	setConnectivity(online: boolean): void {
+		if (this.internetOnline === online) return;
+		this.internetOnline = online;
+		for (const meta of this.metas.values()) {
+			const worker = this.workers.get(meta.id);
+			// Quiet history is unaffected. Do not rebuild/broadcast thousands of idle summaries on each edge.
+			if (
+				meta.archivedAt === undefined &&
+				(meta.working ||
+					meta.initializing ||
+					meta.pending?.length ||
+					worker?.state === "working" ||
+					worker?.state === "starting" ||
+					worker?.awaitingJobFollowUp ||
+					meta.subagents?.some((child) => child.state === "working"))
+			)
+				this.emit(meta, worker);
+		}
+	}
 	private readonly artifactListeners = new Set<(sessionId: string, artifacts: ArtifactSummary[]) => void>();
 	private readonly artifactNotifications = new Map<string, Promise<void>>();
 	/** Serialized, immutable metadata snapshots per session. */
@@ -4672,6 +4694,7 @@ export class SessionManager {
 				...(meta.projectId ? { projectId: meta.projectId } : {}),
 				storageDir: join(this.dir(id), "durable"),
 				subscriptionPolicy: join(this.dir(id), "subscription-policy.json"),
+				...(this.internetOnline !== undefined ? { connectivityPolicy: join(this.home, "connectivity.json") } : {}),
 				cwd: meta.coordinatorView?.scratch ?? meta.cwd,
 				model: meta.model,
 				thinking: meta.thinking,
@@ -5132,7 +5155,15 @@ export class SessionManager {
 				!!meta.working ||
 				!!meta.pending?.length ||
 				!!worker?.awaitingJobFollowUp);
-		const working = !paused && ((!mainQuotaPaused && mainBusy) || runnableChildren || !!worker?.runningJobs?.length);
+		const offlinePaused =
+			this.internetOnline === false &&
+			meta.archivedAt === undefined &&
+			!meta.failure &&
+			(mainBusy || childrenWorking);
+		const working =
+			!paused &&
+			!offlinePaused &&
+			((!mainQuotaPaused && mainBusy) || runnableChildren || !!worker?.runningJobs?.length);
 		const heldAtQuota = quotaPaused && !working && (mainBusy || childrenWorking);
 		const state = heldAtQuota && kernelState !== "failed" ? "working" : kernelState;
 		const longJob = meta.archivedAt === undefined ? longJobAttention(worker?.runningJobs ?? []) : undefined;
@@ -5172,6 +5203,7 @@ export class SessionManager {
 			...(meta.workspaceReclaimedAt !== undefined ? { workspaceReclaimedAt: meta.workspaceReclaimedAt } : {}),
 			...(meta.workspaceCleanupError ? { workspaceCleanupError: meta.workspaceCleanupError } : {}),
 			...(paused ? { sleepPaused: true } : {}),
+			...(offlinePaused ? { offlinePaused: true } : {}),
 			state,
 			working,
 			...(worker?.runningJobs?.length ? { runningJobs: worker.runningJobs } : {}),
@@ -5184,9 +5216,11 @@ export class SessionManager {
 			...(usage ? { usage } : {}),
 			...(subscriptionPause ? { subscriptionPause } : {}),
 			...(meta.subagents?.length ? { subagents: meta.subagents.map(publicSubagent) } : {}),
-			...(!working && !heldAtQuota && meta.outcome ? { outcome: meta.outcome } : {}),
-			...(!working && !heldAtQuota && meta.outcomeAt !== undefined ? { outcomeAt: meta.outcomeAt } : {}),
-			...(!working && !heldAtQuota && meta.outcomeReason !== undefined
+			...(!working && !heldAtQuota && !offlinePaused && meta.outcome ? { outcome: meta.outcome } : {}),
+			...(!working && !heldAtQuota && !offlinePaused && meta.outcomeAt !== undefined
+				? { outcomeAt: meta.outcomeAt }
+				: {}),
+			...(!working && !heldAtQuota && !offlinePaused && meta.outcomeReason !== undefined
 				? { outcomeReason: safeFailureText(meta.outcomeReason) }
 				: {}),
 			...(!coordinator && meta.pullRequest ? { pullRequest: meta.pullRequest } : {}),

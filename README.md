@@ -131,6 +131,12 @@ message to carry them along. Waiting system messages are read-only.
 Stop also works during a sleep pause. Cancellation is saved without waking other chats and drains
 before the paused run can recover at the next eligible wake.
 
+If internet connectivity is lost, chats show **Paused offline** rather than exhausting model retries
+into a failure. The daemon confirms connectivity and resumes automatically, even with the app closed.
+Queued messages and unfinished requests survive restarts. Running native tools finish their current
+round; they are never killed or replayed for an outage. Sleep, update, subscription and manual Stop
+holds remain independent. Authentication, quota and provider errors are not treated as offline.
+
 ### Subscription limits
 
 Chats pause new model requests and tool calls at **95%** of any subscription window. Active tools finish
