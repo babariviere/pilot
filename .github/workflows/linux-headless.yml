@@ -50,7 +50,7 @@ jobs:
           PILOT_REQUIRE_LINUX_ISOLATION: "1"
           PILOT_LINUX_BIND_FIXTURES: "1"
         run: |
-          node --test --test-force-exit packages/daemon/src/credential-broker.test.ts
+          node --test --test-force-exit packages/kernel/src/readonly-settings.test.ts packages/daemon/src/credential-broker.test.ts
           node --test --test-force-exit packages/daemon/src/linux-coordinator.integration.test.ts
           node --test --test-force-exit --test-name-pattern='every cold' packages/daemon/src/coordinator-role.test.ts
       - name: Verify selected native dependencies and ABI

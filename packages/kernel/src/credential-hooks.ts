@@ -1,10 +1,21 @@
 /** Pinned SDK compatibility seam. Public ModelRuntime credential injection also covers immutable child adapters. */
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { credentialClient } from "./credential-client.ts";
+import { readonlySettings } from "./readonly-settings.ts";
 
 let installed: Promise<void> | undefined;
 export function installCredentialBrokerHooks(): Promise<void> {
+	if (process.env.PILOT_REQUIRE_CREDENTIAL_BROKER === "1") {
+		const preload = `--import=${new URL("./credential-preload.ts", import.meta.url).href}`;
+		if (!process.env.NODE_OPTIONS?.split(/\s+/).includes(preload))
+			process.env.NODE_OPTIONS = [process.env.NODE_OPTIONS, preload].filter(Boolean).join(" ");
+	}
 	installed ??= (async () => {
+		const settings = SettingsManager.create;
+		SettingsManager.create = (cwd, agentDir = getAgentDir(), options = {}) =>
+			process.env.PILOT_READ_ONLY_CONFIG === "1"
+				? readonlySettings(cwd, agentDir, options)
+				: settings.call(SettingsManager, cwd, agentDir, options);
 		const create = ModelRuntime.create;
 		ModelRuntime.create = async (options = {}) => {
 			const client = credentialClient();
