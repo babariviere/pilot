@@ -106,6 +106,7 @@ fs.mkdirSync(agent+'/auth.json.lock');fs.rmdirSync(agent+'/auth.json.lock');
 fs.writeFileSync(${JSON.stringify(join(storageDir, "state"))},'durable');
 fs.writeFileSync(${JSON.stringify(join(root, "session", "artifacts", "artifact"))},'artifact');
 const nested=cp.spawnSync('/usr/bin/unshare',['--user','--map-root-user','--mount','true']);
+assert.equal(nested.error,undefined);
 assert.notEqual(nested.status,0,'nested namespaces must not permit remounting');
 const mount=cp.spawnSync('/bin/mount',['-o','remount,rw','/']);assert.notEqual(mount.status,0);
 `;
@@ -143,7 +144,7 @@ const mount=cp.spawnSync('/bin/mount',['-o','remount,rw','/']);assert.notEqual(m
 test("namespace/security-policy denial and missing sandbox tooling remain actionable and fail closed", {
 	skip: process.platform !== "linux",
 	timeout: 30_000,
-}, async (t) => {
+}, async () => {
 	const capability = await probeLinuxCoordinatorIsolation();
 	if (!capability.available) {
 		assert.match(capability.detail!, /bubblewrap|namespace/);

@@ -36,7 +36,15 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - name: Install sandbox tooling (runner fixture only)
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+        run: |
+          sudo apt-get update && sudo apt-get install -y bubblewrap
+          # The runner's default policy restricts unprivileged userns. Grant only the
+          # system bwrap executable this capability, never disable host policy globally.
+          if command -v apparmor_parser >/dev/null && grep -q Y /sys/module/apparmor/parameters/enabled; then
+            printf '%s\n' 'abi <abi/4.0>,' \
+              'profile pilot-ci-bwrap /usr/bin/bwrap flags=(unconfined) {' '  userns,' '}' \
+              | sudo apparmor_parser -r
+          fi
       - name: Verify real coordinator isolation, descendants, aliases and denied capabilities
         env:
           PILOT_REQUIRE_LINUX_ISOLATION: "1"
