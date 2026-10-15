@@ -43,7 +43,7 @@ enum MissionSheet: Identifiable, Hashable {
         case let .add(sessionId): "add-\(sessionId)"
         case let .edit(missionId): "edit-\(missionId)"
         case let .startCoordinator(missionId): "start-coordinator-\(missionId)"
-        case let .fromSource(draft): "source-\(draft.itemId)"
+        case let .fromSource(draft): "source-\(draft.sourceKey)"
         }
     }
 }

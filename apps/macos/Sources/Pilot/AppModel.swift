@@ -86,6 +86,8 @@ final class AppModel: ObservableObject {
     }
     /// The project whose Slack triage view replaces its page. Cleared when another page is selected.
     @Published private(set) var slackTriageProjectId: String?
+    /// The common case Slack triage opens on, from the Overview. Cleared with the triage view.
+    @Published private(set) var slackTriageCaseId: String?
     /// The project whose Memory page replaces its page. Cleared when another page is selected.
     @Published private(set) var memoryProjectId: String?
     /// What the sidebar lists: nil for every project (the default), or one focused project's id.
@@ -621,12 +623,14 @@ final class AppModel: ObservableObject {
         selectedSessionId = nil
         selectedProjectId = id
         slackTriageProjectId = nil
+        slackTriageCaseId = nil
         memoryProjectId = nil
     }
 
-    /// Shows a project's Slack triage view in place of its page.
-    func openSlackTriage(_ projectId: String) {
+    /// Shows a project's Slack triage view in place of its page, optionally on one common case.
+    func openSlackTriage(_ projectId: String, caseId: String? = nil) {
         openProject(projectId)
+        slackTriageCaseId = caseId
         slackTriageProjectId = projectId
     }
 

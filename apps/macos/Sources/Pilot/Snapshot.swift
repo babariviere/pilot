@@ -1197,7 +1197,20 @@ enum Snapshot {
             source: "linear", label: "Linear", status: .ok, total: 7, items: openIssues.map(row),
             done: DashboardSection(total: 2, items: doneIssues.map(row)), linear: linearSource.linear)
         let slackGroup = DashboardTrackedSource(source: "slack", label: "Slack", status: .error, error: slackSource.error,
-                                                total: 9, items: reports.map(row))
+                                                total: 9, items: reports.map(row), commonCases: [
+            SlackCommonCase(id: "k1", name: "Checkout fails for EU card payments",
+                            description: "Card payments return a 500 after the tax service times out.", count: 6,
+                            severityMix: ["critical": 2, "high": 3, "medium": 1], firstSeen: now - 9 * day,
+                            lastSeen: now - 12 * minute, trend: .rising),
+            SlackCommonCase(id: "k2", name: "Invoices show the wrong VAT number",
+                            description: "Invoice PDFs use the company's VAT number instead of the customer's.",
+                            count: 4, severityMix: ["medium": 3, "low": 1], label: "Billing team",
+                            firstSeen: now - 20 * day, lastSeen: now - 2 * day, trend: .steady),
+            SlackCommonCase(id: "k3", name: "Password reset emails arrive after the link expires",
+                            description: "Reset links expire before the email reaches some inboxes.", count: 3,
+                            severityMix: ["high": 2, "medium": 1], firstSeen: now - 26 * day, lastSeen: now - 6 * day,
+                            trend: .fading),
+        ])
         model.client.loadTrackingFixture(TrackingFixture(sources: [linearSource, slackSource], items: items))
         model.client.loadDashboardFixture([pageDashboard("p1", tracked: [cycleGroup, slackGroup])])
         await render(ProjectPage(projectId: "p1"), size: CGSize(width: 900, height: 1180),
