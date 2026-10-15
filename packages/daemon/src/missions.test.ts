@@ -261,10 +261,10 @@ test("bulk milestones publish one committed update, deduplicate aliases and skip
 		assert.equal(grouped.length, 1000);
 		assert.equal(changes, 1);
 		assert.equal(members, 1, "one refresh per affected owner");
-		assert.equal(missions.events(id)[0]!.id, eventId + 1);
+		assert.equal(missions.events(id)[0]!.id, eventId + 2, "phase creation and batch assignment");
 		assert.deepEqual(missions.groupTasks(id, refs, "Next"), grouped);
 		assert.equal(changes, 1);
-		assert.equal(missions.events(id)[0]!.id, eventId + 1);
+		assert.equal(missions.events(id)[0]!.id, eventId + 2);
 		assert.throws(() => missions.groupTasks(id, [refs[0]!, "missing"], "Bad"), /Unknown task/);
 		assert.deepEqual(missions.tasks(id), grouped);
 		assert.equal(changes, 1);

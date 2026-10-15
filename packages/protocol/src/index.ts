@@ -541,6 +541,8 @@ export interface Mission {
 	coordinatorSessionId?: string;
 	/** The coordinator may start chats for unblocked tasks without being asked. */
 	autopilot?: boolean;
+	/** Later phases cannot be claimed or started until earlier phases finish. Defaults to false. */
+	phaseGating?: boolean;
 	/** Latest brief revision; 0 before the first save. */
 	briefRevision: number;
 	/** Blocked tasks plus open, unaddressed agent comments when there is no coordinator.
@@ -621,6 +623,22 @@ export interface MissionComment {
 	resolvedBySessionId?: string;
 }
 
+export interface MissionPhase {
+	id: string;
+	missionId: string;
+	name: string;
+	goal?: string;
+	order: number;
+	completedAt?: number;
+}
+
+/** POST /api/missions/:id/phases; PATCH /api/missions/:id/phases/:phaseId. */
+export interface MissionPhaseWrite {
+	name?: string;
+	goal?: string;
+	order?: number;
+}
+
 export interface MissionTask {
 	id: string;
 	/** Per-mission display number, stable once assigned. */
@@ -633,6 +651,12 @@ export interface MissionTask {
 	/** Sort key within the mission. */
 	order: number;
 	milestone?: string;
+	/** Canonical phase membership. milestone remains a name alias for older clients. */
+	phaseId?: string;
+	/** Earlier incomplete phase IDs. Status is derived as blocked, never persisted. */
+	blockedByPhases?: string[];
+	/** Actual status when phase gating derives a blocked status. */
+	storedStatus?: MissionTaskStatus;
 	/** Task IDs that must be done before this one can start. */
 	dependsOn?: string[];
 	/** Decisions pinned to this task, sent in full to its chat. */
@@ -657,6 +681,10 @@ export interface MissionTaskWrite {
 	status?: MissionTaskStatus;
 	order?: number;
 	milestone?: string;
+	/** Null removes phase membership. */
+	phaseId?: string | null;
+	/** Explicit user-only bypass when assigning a gated task to a chat. */
+	overridePhaseGating?: boolean;
 	dependsOn?: string[];
 	/** Decisions pinned to this task, sent in full to its chat. */
 	decisionIds?: string[];
@@ -770,6 +798,7 @@ export interface MissionDetail {
 	/** Open comments, plus recently resolved ones. */
 	comments: MissionComment[];
 	tasks: MissionTask[];
+	phases: MissionPhase[];
 	artifacts: MissionArtifactLink[];
 	resources: MissionResource[];
 	/** Most recent first, bounded. Older entries: GET /api/missions/:id/events?before=<id>. */
@@ -812,6 +841,7 @@ export interface UpdateMissionRequest {
 	status?: MissionStatus;
 	coordinatorSessionId?: string | null;
 	autopilot?: boolean;
+	phaseGating?: boolean;
 }
 
 /** PUT /api/sessions/:id/mission. The session must belong to the mission's project. */
@@ -823,6 +853,8 @@ export interface JoinMissionRequest {
 
 /** POST /api/missions/:id/tasks/:taskId/start: a new chat in the mission's project that claims the task. */
 export interface StartMissionTaskRequest {
+	/** User-only bypass. Not exposed by the coordinator tool. */
+	overridePhaseGating?: boolean;
 	/** References are saved on the task before the chat starts. */
 	artifacts?: Array<{ artifactId: string; revision?: number }>;
 	links?: Array<{ url: string; title?: string }>;

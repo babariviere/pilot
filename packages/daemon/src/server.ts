@@ -21,6 +21,7 @@ import type {
 	MissionCommentWrite,
 	MissionDecisionWrite,
 	MissionEventWrite,
+	MissionPhaseWrite,
 	MissionResourceWrite,
 	MissionTaskWrite,
 	ProjectRequest,
@@ -1333,6 +1334,18 @@ async function missionRoute(
 		}
 		if (parts.length === 5 && item === "revisions" && method === "GET")
 			return json(res, 200, store.briefRevisions(id)), true;
+		return false;
+	}
+	if (section === "phases") {
+		if (parts.length === 4 && method === "GET") return json(res, 200, store.phases(id)), true;
+		if (parts.length === 4 && method === "POST")
+			return json(res, 201, store.addPhase(id, await readJson<MissionPhaseWrite>(req))), true;
+		if (parts.length === 5 && method === "PATCH")
+			return json(res, 200, store.updatePhase(id, item!, await readJson<MissionPhaseWrite>(req))), true;
+		if (parts.length === 5 && method === "DELETE") {
+			store.removePhase(id, item!);
+			return json(res, 200, { ok: true }), true;
+		}
 		return false;
 	}
 	if (section === "tasks") {

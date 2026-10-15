@@ -257,6 +257,43 @@ private func json(_ value: some Encodable) throws -> [String: Any] {
     guard case let .mission(value)? = detail else { Issue.record("expected mission"); return }
     #expect(value.mission.briefRevision == 2)
     #expect(value.brief == nil)
+    #expect(value.phases == nil)
+    #expect(!value.mission.isPhaseGatingEnabled)
+}
+
+@Test func phasePayloadsDecodeAlongsideLegacyMilestoneNames() throws {
+    let data = Data(#"""
+    {"mission":{"id":"m","projectId":"p","title":"M","goal":"g","status":"active",
+      "briefRevision":0,"createdAt":1,"updatedAt":1,"phaseGating":true},
+     "decisions":[],"comments":[],"artifacts":[],"resources":[],"events":[],
+     "phases":[{"id":"phase","missionId":"m","name":"Build","goal":"Foundation","order":1}],
+     "tasks":[{"id":"t","number":1,"title":"A","status":"blocked","storedStatus":"todo",
+       "order":1,"phaseId":"phase","milestone":"Build","blockedByPhases":["earlier"],"createdAt":1,"updatedAt":1,
+       "preferredModel":"test/preferred","preferredThinking":"high","preferredModelSetBy":"user"}]}
+    """#.utf8)
+    let value = try JSONDecoder().decode(MissionDetail.self, from: data)
+    #expect(value.mission.isPhaseGatingEnabled)
+    #expect(value.phases?.first?.goal == "Foundation")
+    #expect(value.tasks.first?.phaseId == "phase")
+    #expect(value.tasks.first?.milestone == "Build")
+    #expect(value.tasks.first?.storedStatus == .todo)
+    #expect(value.tasks.first?.blockedByPhases == ["earlier"])
+    #expect(value.tasks.first?.preferredModel == "test/preferred")
+    #expect(value.tasks.first?.preferredThinking == "high")
+    #expect(value.tasks.first?.preferredModelSetBy == "user")
+    let legacy = try JSONDecoder().decode(MissionTask.self, from: Data(#"""
+    {"id":"t","number":1,"title":"A","status":"todo","order":1,"milestone":"Legacy","createdAt":1,"updatedAt":1}
+    """#.utf8))
+    #expect(legacy.phaseId == nil)
+    #expect(legacy.milestone == "Legacy")
+    let write = MissionTaskWrite(preferredModel: .set("test/preferred"), preferredThinking: .set("low"), phaseId: .clear)
+    let object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(write)) as? [String: Any]
+    #expect(object?["phaseId"] is NSNull)
+    #expect(object?["preferredModel"] as? String == "test/preferred")
+    #expect(object?["preferredThinking"] as? String == "low")
+    let update = UpdateMissionRequest(phaseGating: true)
+    let patch = try JSONSerialization.jsonObject(with: JSONEncoder().encode(update)) as? [String: Any]
+    #expect(patch?["phaseGating"] as? Bool == true)
 }
 
 private func session(_ id: String, mission: String? = "m1", outcome: SessionOutcome? = .done, state: String = "idle",

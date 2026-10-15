@@ -87,6 +87,8 @@ public struct Mission: Codable, Identifiable, Equatable, Hashable, Sendable {
     /// Nil: the user coordinates.
     public let coordinatorSessionId: String?
     public let autopilot: Bool?
+    public var phaseGating: Bool? = nil
+    public var isPhaseGatingEnabled: Bool { phaseGating ?? false }
     /// Latest brief revision; 0 before the first save.
     public let briefRevision: Int
     /// Blocked tasks and open, unaddressed agent comments when the user coordinates.
@@ -108,7 +110,7 @@ public struct Mission: Codable, Identifiable, Equatable, Hashable, Sendable {
         coordinatorSessionId: String? = nil, autopilot: Bool? = nil, briefRevision: Int = 0, createdAt: Double,
         updatedAt: Double, completedAt: Double? = nil, archivedAt: Double? = nil, needsYouCount: Int? = nil,
         needsYouReason: String? = nil,
-        tasksDone: Int? = nil, tasksTotal: Int? = nil
+        tasksDone: Int? = nil, tasksTotal: Int? = nil, phaseGating: Bool? = nil
     ) {
         self.id = id
         self.projectId = projectId
@@ -117,6 +119,7 @@ public struct Mission: Codable, Identifiable, Equatable, Hashable, Sendable {
         self.status = status
         self.coordinatorSessionId = coordinatorSessionId
         self.autopilot = autopilot
+        self.phaseGating = phaseGating
         self.briefRevision = briefRevision
         self.needsYouCount = needsYouCount
         self.tasksDone = tasksDone
@@ -214,6 +217,25 @@ public struct MissionComment: Codable, Identifiable, Equatable, Hashable, Sendab
     public var isOpen: Bool { resolvedAt == nil }
 }
 
+public struct MissionPhase: Codable, Identifiable, Equatable, Hashable, Sendable {
+    public let id: String
+    public let missionId: String
+    public let name: String
+    public let goal: String?
+    public let order: Double
+    public let completedAt: Double?
+
+    public init(id: String, missionId: String, name: String, goal: String? = nil,
+                order: Double = 0, completedAt: Double? = nil) {
+        self.id = id
+        self.missionId = missionId
+        self.name = name
+        self.goal = goal
+        self.order = order
+        self.completedAt = completedAt
+    }
+}
+
 public struct MissionTask: Codable, Identifiable, Equatable, Hashable, Sendable {
     public let id: String
     public let number: Int
@@ -222,7 +244,11 @@ public struct MissionTask: Codable, Identifiable, Equatable, Hashable, Sendable 
     public let status: MissionTaskStatus
     public let delegatedTo: String?
     public let order: Double
+    /// Legacy daemon field and name alias for the current app grouping.
     public let milestone: String?
+    public var phaseId: String? = nil
+    public var blockedByPhases: [String]? = nil
+    public var storedStatus: MissionTaskStatus? = nil
     public let dependsOn: [String]?
     public let decisionIds: [String]?
     /// Owning chat; at most one.
@@ -248,7 +274,8 @@ public struct MissionTask: Codable, Identifiable, Equatable, Hashable, Sendable 
         id: String, number: Int, title: String, body: String? = nil, status: MissionTaskStatus = .todo,
         order: Double = 0, milestone: String? = nil, dependsOn: [String]? = nil, decisionIds: [String]? = nil, sessionId: String? = nil,
         createdAt: Double = 0, updatedAt: Double = 0, completedAt: Double? = nil, delegatedTo: String? = nil,
-        preferredModel: String? = nil, preferredThinking: String? = nil, preferredModelSetBy: String? = nil
+        preferredModel: String? = nil, preferredThinking: String? = nil, preferredModelSetBy: String? = nil,
+        phaseId: String? = nil, blockedByPhases: [String]? = nil, storedStatus: MissionTaskStatus? = nil
     ) {
         self.id = id
         self.number = number
@@ -258,6 +285,9 @@ public struct MissionTask: Codable, Identifiable, Equatable, Hashable, Sendable 
         self.delegatedTo = delegatedTo
         self.order = order
         self.milestone = milestone
+        self.phaseId = phaseId
+        self.blockedByPhases = blockedByPhases
+        self.storedStatus = storedStatus
         self.dependsOn = dependsOn
         self.decisionIds = decisionIds
         self.sessionId = sessionId
@@ -294,6 +324,8 @@ public struct MissionTaskWrite: Encodable, Sendable {
     public var status: MissionTaskStatus?
     public var order: Double?
     public var milestone: String?
+    public var phaseId: NullableUpdate<String>? = nil
+    public var overridePhaseGating: Bool? = nil
     public var dependsOn: [String]?
     public var decisionIds: [String]?
     public var sessionId: NullableUpdate<String>?
@@ -303,7 +335,8 @@ public struct MissionTaskWrite: Encodable, Sendable {
     public init(
         title: String? = nil, body: String? = nil, status: MissionTaskStatus? = nil, order: Double? = nil,
         milestone: String? = nil, dependsOn: [String]? = nil, decisionIds: [String]? = nil, sessionId: NullableUpdate<String>? = nil,
-        preferredModel: NullableUpdate<String>? = nil, preferredThinking: NullableUpdate<String>? = nil
+        preferredModel: NullableUpdate<String>? = nil, preferredThinking: NullableUpdate<String>? = nil,
+        phaseId: NullableUpdate<String>? = nil, overridePhaseGating: Bool? = nil
     ) {
         self.title = title
         self.body = body
@@ -315,10 +348,13 @@ public struct MissionTaskWrite: Encodable, Sendable {
         self.sessionId = sessionId
         self.preferredModel = preferredModel
         self.preferredThinking = preferredThinking
+        self.phaseId = phaseId
+        self.overridePhaseGating = overridePhaseGating
     }
 
     private enum CodingKeys: String, CodingKey {
-        case title, body, status, order, milestone, dependsOn, decisionIds, sessionId, preferredModel, preferredThinking
+        case title, body, status, order, milestone, dependsOn, decisionIds, sessionId
+        case preferredModel, preferredThinking, phaseId, overridePhaseGating
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -328,6 +364,8 @@ public struct MissionTaskWrite: Encodable, Sendable {
         try container.encodeIfPresent(status, forKey: .status)
         try container.encodeIfPresent(order, forKey: .order)
         try container.encodeIfPresent(milestone, forKey: .milestone)
+        try container.encodeUpdate(phaseId, forKey: .phaseId)
+        try container.encodeIfPresent(overridePhaseGating, forKey: .overridePhaseGating)
         try container.encodeIfPresent(dependsOn, forKey: .dependsOn)
         try container.encodeIfPresent(decisionIds, forKey: .decisionIds)
         try container.encodeUpdate(sessionId, forKey: .sessionId)
@@ -488,6 +526,8 @@ public struct MissionDetail: Codable, Equatable, Sendable {
     public let decisionProposals: [MissionDecisionProposal]?
     public let comments: [MissionComment]
     public let tasks: [MissionTask]
+    /// Nil with older daemons. The legacy milestone name remains readable on tasks.
+    public var phases: [MissionPhase]? = nil
     public let artifacts: [MissionArtifactLink]
     public let resources: [MissionResource]
     public let events: [MissionEvent]
@@ -571,19 +611,21 @@ public struct UpdateMissionRequest: Encodable, Sendable {
     public var status: MissionStatus?
     public var coordinatorSessionId: NullableUpdate<String>?
     public var autopilot: Bool?
+    public var phaseGating: Bool? = nil
 
     public init(
         title: String? = nil, goal: String? = nil, status: MissionStatus? = nil,
-        coordinatorSessionId: NullableUpdate<String>? = nil, autopilot: Bool? = nil
+        coordinatorSessionId: NullableUpdate<String>? = nil, autopilot: Bool? = nil, phaseGating: Bool? = nil
     ) {
         self.title = title
         self.goal = goal
         self.status = status
         self.coordinatorSessionId = coordinatorSessionId
         self.autopilot = autopilot
+        self.phaseGating = phaseGating
     }
 
-    private enum CodingKeys: String, CodingKey { case title, goal, status, coordinatorSessionId, autopilot }
+    private enum CodingKeys: String, CodingKey { case title, goal, status, coordinatorSessionId, autopilot, phaseGating }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
@@ -592,6 +634,7 @@ public struct UpdateMissionRequest: Encodable, Sendable {
         try container.encodeIfPresent(status, forKey: .status)
         try container.encodeUpdate(coordinatorSessionId, forKey: .coordinatorSessionId)
         try container.encodeIfPresent(autopilot, forKey: .autopilot)
+        try container.encodeIfPresent(phaseGating, forKey: .phaseGating)
     }
 }
 

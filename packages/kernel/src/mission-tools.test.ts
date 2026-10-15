@@ -227,6 +227,8 @@ test("the mission tool declares and forwards coordinator actions", async () => {
 	assert.match(tool.description, /cached read-only subscriptionUsage per provider/);
 	for (const params of [
 		{ action: "delete", id: "#3" },
+		{ action: "phase", operation: "create", name: "Build", goal: "Foundation" },
+		{ action: "task", id: "#3", phase: "Build" },
 		{ action: "group", ids: ["1-5", 8], milestone: "Next" },
 		{ action: "task", id: "#3", order: 1.5 },
 		{ action: "start", id: "#3", message: "Focus on tests", model: "test/model", thinking: "high" },
@@ -237,6 +239,8 @@ test("the mission tool declares and forwards coordinator actions", async () => {
 		await tool.execute("call", params as never, undefined, undefined, {} as never);
 	assert.deepEqual(calls, [
 		["delete", { id: "#3" }],
+		["phase", { operation: "create", name: "Build", goal: "Foundation" }],
+		["task", { id: "#3", phase: "Build" }],
 		["group", { ids: ["1-5", 8], milestone: "Next" }],
 		["task", { id: "#3", order: 1.5 }],
 		["start", { id: "#3", message: "Focus on tests", model: "test/model", thinking: "high" }],
@@ -257,7 +261,7 @@ test("ordinary member declarations omit privileged actions and their guidance", 
 	const schema = tool.parameters as {
 		properties: { action: { enum: string[] }; message?: unknown; model?: unknown; thinking?: unknown };
 	};
-	for (const action of ["delete", "group", "start", "send", "status", "bindPr", "unbindPr"]) {
+	for (const action of ["delete", "group", "phase", "start", "send", "status", "bindPr", "unbindPr"]) {
 		assert.ok(!schema.properties.action.enum.includes(action));
 		assert.ok(!tool.description.includes(`- ${action} (`));
 	}
