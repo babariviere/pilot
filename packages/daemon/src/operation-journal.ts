@@ -87,7 +87,11 @@ export class OperationJournal {
 				const record = JSON.parse(await readFile(join(this.directory, file), "utf8")) as StoredOperation;
 				this.validate(record.operation);
 				const op = record.operation;
-				if (op.sequence <= (this.floors[streamKey(op)] ?? 0)) continue;
+				if (op.sequence <= (this.floors[streamKey(op)] ?? 0)) {
+					// A crash can interrupt GC after publishing its floor. Finish that deletion on recovery.
+					await unlink(join(this.directory, file));
+					continue;
+				}
 				this.records.set(op.operationId, record);
 				this.sequences.set(`${streamKey(op)}:${op.sequence}`, op.operationId);
 			}
@@ -224,8 +228,17 @@ export class OperationJournal {
 	}
 	async recover(handler: (op: DurableOperation) => Promise<unknown>): Promise<void> {
 		await this.init();
-		for (const { operation, receipt } of this.records.values())
-			if (receipt.state === "pending") await this.execute(operation, handler);
+		const pending = [...this.records.values()].filter(({ receipt }) => receipt.state === "pending");
+		let cursor = 0;
+		await Promise.all(
+			Array.from({ length: Math.min(4, pending.length) }, async () => {
+				for (;;) {
+					const record = pending[cursor++];
+					if (!record) return;
+					await this.execute(record.operation, handler);
+				}
+			}),
+		);
 	}
 	/** Only a durable peer-acknowledged prefix may retire. Persist rejection floor BEFORE deleting receipts. */
 	async retire(origin: OperationHost, producerId: string, through: number): Promise<void> {
