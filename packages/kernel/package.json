@@ -5,7 +5,8 @@
 	"type": "module",
 	"exports": {
 		".": "./src/index.ts",
-		"./worker": "./src/worker.ts"
+		"./worker": "./src/worker.ts",
+		"./runtime-environment": "./src/runtime-environment.ts"
 	},
 	"dependencies": {
 		"@babariviere/pi-extensions": "git+https://github.com/babariviere/pi-extensions.git#4fe615e0acff0920a16f6749092ab2af308355e3",

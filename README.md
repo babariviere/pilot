@@ -76,6 +76,28 @@ chats and subagents automatically. They do not wait for entire conversations to 
 Chats with working subagents stay Working, even when the parent has finished its current reply.
 Pending child work also reopens automatically after a daemon restart or a sleep pause.
 
+### Headless Linux runtime (development)
+
+The daemon and session workers can also run without a Mac app on **Linux x86-64**, using Node 24+
+and a native dependency install on that host (`pnpm install --frozen-lockfile`, then `pnpm start`).
+Compatibility depends on the available runtime, shell and native module ABIs, not a distribution name
+or OS release. Linux CI executes the selected PTY, SQLite and artifact compiler dependencies and a real
+headless daemon/kernel smoke test. Production Linux packaging and persistent service setup are separate
+work; running a daemon in an interactive SSH shell is not a persistent service.
+
+`GET /api/hello` returns a stable data-home `daemonId`, application `daemonVersion`, an independently
+versioned protocol range (`minimumClientProtocolVersion` through `protocolVersion`, currently 1),
+platform/architecture and explicit capabilities. Clients must pin the identity when pairing and verify
+it, protocol compatibility and required capabilities before opening streams or sending mutations.
+Changing the data home creates another identity; damaged identity files fail startup rather than silently
+re-pairing. The unauthenticated API remains bound to `127.0.0.1` only.
+
+Linux omits Mac energy/system-events helpers. Its agents and daemon-owned processes do not depend on a
+client connection, and disconnecting a client does not stop them. HTML, React and image artifact authoring
+remain available; SwiftUI rendering requires macOS. Linux coordinator execution stays unavailable until a
+validated OS-isolation backend is installed, with no unrestricted fallback. This does not add remote app
+routing, credential copying or cross-host context/delegation semantics.
+
 ### Start your first chat
 
 Chat messages render Linear, Slack and GitHub URLs as compact links with the service mark and a short name.
