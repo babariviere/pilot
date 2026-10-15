@@ -1196,6 +1196,8 @@ test("direct projects and cwd overrides return before worker readiness without c
 		assert.equal(created.cwd, f.source);
 		const meta = await f.stored(created.id);
 		assert.equal(meta.preparing, undefined);
+		// A cold start persists its quota policy before constructing a worker. Spawn must not wait for it.
+		await until(() => f.workers.some((worker) => worker.spec.sessionId === created.id));
 		const worker = f.workers.at(-1)!;
 		assert.equal(worker.requests.length, 0);
 		worker.open();

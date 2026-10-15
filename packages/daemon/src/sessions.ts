@@ -5043,11 +5043,12 @@ export class SessionManager {
 			) ??
 				false);
 		const mainBusy =
-			kernelState === "working" ||
-			kernelState === "starting" ||
-			!!meta.working ||
-			!!meta.pending?.length ||
-			!!worker?.awaitingJobFollowUp;
+			kernelState !== "failed" &&
+			(kernelState === "working" ||
+				kernelState === "starting" ||
+				!!meta.working ||
+				!!meta.pending?.length ||
+				!!worker?.awaitingJobFollowUp);
 		const working = !paused && ((!mainQuotaPaused && mainBusy) || runnableChildren || !!worker?.runningJobs?.length);
 		const heldAtQuota = quotaPaused && !working && (mainBusy || childrenWorking);
 		const state = heldAtQuota && kernelState !== "failed" ? "working" : kernelState;
