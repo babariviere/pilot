@@ -96,6 +96,7 @@ final class AppModel: ObservableObject {
     /// A task the Tasks tab should scroll to and briefly highlight, set by "Show task" on a link.
     @Published var revealedMissionTaskId: String?
     @Published var missionSheet: MissionSheet?
+    @Published var artifactLink: ArtifactLink?
     /// Deletion is confirmed once by the main window, regardless of its entry point.
     @Published var pendingMissionDeletionId: String?
     @Published var showingInactiveMissions = false
