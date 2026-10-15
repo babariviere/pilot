@@ -37,9 +37,9 @@ private final class ReviewHTTPStub: URLProtocol {
 }
 
 @Test @MainActor func reviewCommandPostsProtocolMarksAndLeavesSessionOutcomeUnchanged() async throws {
-    #expect(URLProtocol.registerClass(ReviewHTTPStub.self))
-    defer { URLProtocol.unregisterClass(ReviewHTTPStub.self) }
-    let client = PilotClient(baseURL: URL(string: "http://session-reviews.invalid"))
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [ReviewHTTPStub.self]
+    let client = PilotClient(baseURL: URL(string: "http://session-reviews.invalid"), commandConfiguration: configuration)
     let session = SessionSummary(id: "s", title: "Chat", cwd: "/tmp", createdAt: 1, updatedAt: 200,
                                  state: "idle", outcome: .done, outcomeAt: 123)
     client.loadFixture(projects: [], sessions: [session])

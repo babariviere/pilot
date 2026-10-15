@@ -61,14 +61,18 @@ final class PilotClient: ObservableObject {
     private(set) var connectionGeneration = UUID()
     private var disconnected = false
     private let artifactSession: URLSession
+    /// Explicit per-client transport injection, including URLProtocol fixtures. Never a global override.
+    private let commandConfiguration: URLSessionConfiguration
     private var activeReads = 0
     private let repositoryRequests = RepositoryRequestLimiter(limit: 4)
     private let summaryCache = AsyncReadCache<String, SessionChangeSummary>(ttl: 10)
     private let branchCache = AsyncReadCache<String, SessionBranch>(ttl: 10)
     private let changesCache = AsyncReadCache<String, SessionChanges>(ttl: 1, limit: 8)
-    init(baseURL: URL? = nil, artifactSession: URLSession = .shared) {
+    init(baseURL: URL? = nil, artifactSession: URLSession = .shared,
+         commandConfiguration: URLSessionConfiguration = .ephemeral) {
         self.baseURL = baseURL
         self.artifactSession = artifactSession
+        self.commandConfiguration = commandConfiguration
         // Returning to the app refreshes the PR state of open chats. The daemon skips recently checked ones.
         activationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
@@ -149,7 +153,8 @@ final class PilotClient: ObservableObject {
         request.setValue("image/png", forHTTPHeaderField: "Content-Type")
         request.setValue(String(metadata.bytes), forHTTPHeaderField: "Content-Length")
         request.setValue(try JSONEncoder().encode(metadata).base64EncodedString(), forHTTPHeaderField: "X-Pilot-Attachment")
-        let (data, response) = try await BoundedHTTPData.read(request, maximumBytes: 4096, uploadFile: file)
+        let (data, response) = try await BoundedHTTPData.read(request, maximumBytes: 4096,
+                                                            configuration: commandConfiguration, uploadFile: file)
         guard !disconnected, generation == connectionGeneration else { throw HostRoutingError.staleGeneration }
         guard response.statusCode == 201 else {
             throw ClientError("Attachment upload was not accepted")
@@ -943,7 +948,8 @@ final class PilotClient: ObservableObject {
     private func call<Response: Decodable>(_ request: URLRequest) async throws -> Response {
         guard !disconnected else { throw HostRoutingError.disconnected }
         let generation = connectionGeneration
-        let (data, response) = try await BoundedHTTPData.read(request, maximumBytes: 4 * 1024 * 1024)
+        let (data, response) = try await BoundedHTTPData.read(request, maximumBytes: 4 * 1024 * 1024,
+                                                            configuration: commandConfiguration)
         guard generation == connectionGeneration, !disconnected else { throw HostRoutingError.staleGeneration }
         let status = response.statusCode
         guard (200 ..< 300).contains(status) else {

@@ -27,9 +27,9 @@ private final class PinHTTPStub: URLProtocol {
 }
 
 @Test @MainActor func pinCommandsPostWithoutBodyAndUpdateWorkingSummary() async throws {
-    #expect(URLProtocol.registerClass(PinHTTPStub.self))
-    defer { URLProtocol.unregisterClass(PinHTTPStub.self) }
-    let client = PilotClient(baseURL: URL(string: "http://session-pins.invalid"))
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [PinHTTPStub.self]
+    let client = PilotClient(baseURL: URL(string: "http://session-pins.invalid"), commandConfiguration: configuration)
     let recent = SessionSummary(id: "recent", title: "Recent", cwd: "/tmp", createdAt: 1, updatedAt: 100, state: "working")
     let old = SessionSummary(id: "s", title: "Chat", cwd: "/tmp", createdAt: 1, updatedAt: 2, state: "working")
     client.loadFixture(projects: [], sessions: [old, recent])

@@ -26,10 +26,10 @@ private final class MissionDeletionHTTPStub: URLProtocol {
 }
 
 @Test @MainActor func sharedMissionDeletionClearsOnlyItsSelectionAfterSuccess() async throws {
-    #expect(URLProtocol.registerClass(MissionDeletionHTTPStub.self))
-    defer { URLProtocol.unregisterClass(MissionDeletionHTTPStub.self) }
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [MissionDeletionHTTPStub.self]
     MissionDeletionHTTPStub.requests = []
-    let client = PilotClient(baseURL: URL(string: "http://mission-deletion.invalid"))
+    let client = PilotClient(baseURL: URL(string: "http://mission-deletion.invalid"), commandConfiguration: configuration)
     let app = AppModel()
     app.selectedMissionId = "open"
     let deletedEditor = app.briefEditor(for: "open")
