@@ -1,9 +1,9 @@
 /** Automatic, restart-stable settled-run outcomes. */
 import type { Context } from "@earendil-works/chord";
 import {
-	defineDoc,
 	type Conversation,
 	type Cursor,
+	defineDoc,
 	type EntryId,
 	type Harness,
 	type Storage,
@@ -12,7 +12,7 @@ import {
 } from "@earendil-works/pi-durable";
 import type { SessionCompletion } from "@pilot/protocol";
 import { safeFailureText } from "./failure.ts";
-import { QUESTION_ENTRY } from "./question-tool.ts";
+import { QUESTION_ENTRY } from "./question-entry.ts";
 
 /** A question ends its run, so only the run's last few entries can hold it (codemode adds a result and a reply). */
 const QUESTION_TAIL = 8;

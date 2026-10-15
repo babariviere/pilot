@@ -1,15 +1,15 @@
 /** Presentation metadata only. Compaction and its model summary remain owned by the Harness. */
-import { estimateTokens } from "@earendil-works/pi-coding-agent";
+
+import type { Context } from "@earendil-works/chord";
 import {
 	CompactionTask,
 	defineDoc,
-	hook,
 	type EntryRecord,
 	type Extension,
-	type Session,
 	type Harness,
+	hook,
+	type Session,
 } from "@earendil-works/pi-durable";
-import type { Context } from "@earendil-works/chord";
 import type { AgentEvent } from "@pilot/protocol";
 
 export const CompactionStatsDoc = defineDoc<{
@@ -21,7 +21,10 @@ export const CompactionStatsDoc = defineDoc<{
 	initial: () => ({ items: [] }),
 });
 
-function tokens(entries: readonly EntryRecord[]): number {
+function tokens(
+	entries: readonly EntryRecord[],
+	estimateTokens: typeof import("@earendil-works/pi-coding-agent").estimateTokens,
+): number {
 	return entries.reduce(
 		(sum, entry) => sum + (entry.model ?? []).reduce((sum, message) => sum + estimateTokens(message), 0),
 		0,
@@ -40,12 +43,16 @@ export function compactionEvents(extension: Extension, session: () => Harness | 
 					const conversation = await host.conversation(api.conversationId, context);
 					if (!conversation) return;
 					const view = await conversation.context(context);
-					const kept = tokens(view.entries.filter((entry) => Number(entry.id) >= Number(compaction.firstKept)));
+					const { estimateTokens } = await import("@earendil-works/pi-coding-agent");
+					const kept = tokens(
+						view.entries.filter((entry) => Number(entry.id) >= Number(compaction.firstKept)),
+						estimateTokens,
+					);
 					await host.commit(async (tx) => {
 						const state = await tx.doc(CompactionStatsDoc);
 						state.items.push({
 							firstKept: Number(compaction.firstKept),
-							before: tokens(view.entries),
+							before: tokens(view.entries, estimateTokens),
 							kept,
 							at: Date.now(),
 						});
@@ -64,10 +71,14 @@ export async function chatEventEntries(
 ): Promise<EntryRecord[]> {
 	if (!entries.some((entry) => entry.kind === "pi.compaction")) return [...entries];
 	const stats = await session.snapshot(CompactionStatsDoc, context);
+	if (!stats?.items.length) return [...entries];
+	// Most reads need no estimator. Keep the SDK off the cold startup path, and preserve
+	// its existing estimates when decorating saved compaction statistics.
+	const { estimateTokens } = await import("@earendil-works/pi-coding-agent");
 	return entries.map((entry) => {
 		if (entry.kind !== "pi.compaction") return entry;
 		const timestamp = entry.model?.[0]?.timestamp;
-		const stat = stats?.items.findLast(
+		const stat = stats.items.findLast(
 			(item) => item.firstKept === Number(entry.head) && (timestamp === undefined || item.at <= timestamp),
 		);
 		if (!stat) return entry;
@@ -76,7 +87,7 @@ export async function chatEventEntries(
 			data: {
 				...(typeof entry.data === "object" && entry.data !== null && !Array.isArray(entry.data) ? entry.data : {}),
 				tokensBefore: stat.before,
-				tokensAfter: stat.kept + tokens([entry]),
+				tokensAfter: stat.kept + tokens([entry], estimateTokens),
 				tokensEstimated: true,
 			},
 		};

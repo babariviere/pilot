@@ -8,7 +8,7 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type { AgentEvent } from "@pilot/protocol";
-import { startSubagentWatchWorker, type SubagentWatchUpdate, SubagentWatches } from "./subagent-watches.ts";
+import { SubagentWatches, type SubagentWatchUpdate, startSubagentWatchWorker } from "./subagent-watches.ts";
 
 const snapshot = (ids: number[]): AgentEvent =>
 	({
@@ -74,6 +74,15 @@ test("watches are shared, merge appended entries for late viewers, stop with the
 	assert.equal(watches.size, 1);
 	offOther();
 	assert.equal(watches.size, 0);
+	const offClosing = watches.watch("/runs/a", "8", { events: () => {}, error: () => {} });
+	watches.watch("/runs/b", "1", { events: () => {}, error: () => {} });
+	watches.close();
+	assert.equal(watches.size, 0);
+	assert.ok(
+		started.every((watch) => watch.stopped),
+		"shutdown stops every bounded reader",
+	);
+	offClosing();
 });
 
 test("the reader thread streams a snapshot and then only new entries from a live runs.sqlite", {
@@ -92,8 +101,33 @@ test("the reader thread streams a snapshot and then only new entries from a live
 		}, context);
 	await append("first");
 	const updates: SubagentWatchUpdate[] = [];
-	const stop = startSubagentWatchWorker(child, String(root.id), (update) => updates.push(update));
+	let readyResolve!: () => void;
+	let readyReject!: (error: Error) => void;
+	const ready = new Promise<void>((resolve, reject) => {
+		readyResolve = resolve;
+		readyReject = reject;
+	});
+	let updatesAtReady: number | undefined;
+	// Keep the existing overall test bound. Only the read/delta budget starts at module readiness,
+	// not Worker "online", which fires before cold imports and TypeScript stripping complete.
+	const startupDeadline = setTimeout(() => readyReject(new Error("reader modules did not become ready")), 20_000);
+	t.after(() => clearTimeout(startupDeadline));
+	const stop = startSubagentWatchWorker(
+		child,
+		String(root.id),
+		(update) => {
+			updates.push(update);
+			if ("error" in update) readyReject(new Error(update.error));
+		},
+		() => {
+			updatesAtReady = updates.length;
+			clearTimeout(startupDeadline);
+			readyResolve();
+		},
+	);
 	try {
+		await ready;
+		assert.equal(updatesAtReady, 0, "readiness precedes the first snapshot and is not transcript data");
 		const until = async (check: () => boolean) => {
 			for (let n = 0; n < 200 && !check(); n++) await new Promise((resolve) => setTimeout(resolve, 25));
 			assert.ok(check(), JSON.stringify(updates));
@@ -102,6 +136,10 @@ test("the reader thread streams a snapshot and then only new entries from a live
 		const [initial] = updates;
 		assert.ok(initial && "full" in initial && initial.full);
 		assert.equal(initial.events[0]?.type, "snapshot");
+		assert.deepEqual(
+			initial.events[0].entries.map((entry) => entry.data),
+			[{ text: "first" }],
+		);
 		await new Promise((resolve) => setTimeout(resolve, 600));
 		assert.equal(updates.length, 1, "an unchanged database posts nothing");
 		await append("second");
