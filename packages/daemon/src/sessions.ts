@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import { mkdir, open, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { ArtifactNotFound, ArtifactStore } from "@pilot/artifacts";
 import {
 	type AskContext,
@@ -445,7 +446,7 @@ function publicSubagent({
 
 function forkWorker(spec?: WorkerSpec): ChildProcess {
 	const view = spec?.pilot?.coordinatorView;
-	if (view) return forkMainViewWorker(fileURLToPath(workerEntry), view);
+	if (view) throw new Error("Coordinator workers require a fresh, validated isolated child; refusing warm-pool reuse");
 	return fork(fileURLToPath(workerEntry), [], {
 		execArgv: [],
 		serialization: "advanced",
@@ -4783,7 +4784,7 @@ export class SessionManager {
 	}
 
 	/** Recheck lifecycle and workspace state after waiting for a cold-start slot. */
-	private openWorker(id: string): SessionWorker {
+	private async openWorker(id: string): Promise<SessionWorker> {
 		if (this.sleepPause) throw new ServiceUnavailable("Agents are paused until the next wake with connectivity");
 		const existing = this.workers.get(id);
 		if (existing) return existing;
@@ -4802,9 +4803,28 @@ export class SessionManager {
 		this.workerGenerations.set(id, (this.workerGenerations.get(id) ?? 0) + 1);
 		const createWorker =
 			this.factories.worker ??
-			((spec, onPacket, onExit) => new Worker(spec, onPacket, onExit, this.pool, this.workerOptions));
+			(async (spec, onPacket, onExit) => {
+				const view = spec.pilot?.coordinatorView;
+				const child = view
+					? await forkMainViewWorker(fileURLToPath(workerEntry), view, {
+							storageDir: spec.storageDir,
+							agentDir: spec.agentDir ?? getAgentDir(),
+						})
+					: undefined;
+				if (
+					this.closing ||
+					this.sleepPause ||
+					meta.archivedAt !== undefined ||
+					this.isMissionCoordinator(id) !== !!view ||
+					meta.coordinatorView?.scratch !== view?.scratch
+				) {
+					child?.kill("SIGKILL");
+					throw new Conflict("This chat's lifecycle or workspace role changed while preparing isolation");
+				}
+				return new Worker(spec, onPacket, onExit, this.pool, { ...this.workerOptions, child });
+			});
 		const mission = this.missions?.context(id);
-		const worker = createWorker(
+		const worker = await createWorker(
 			{
 				sessionId: id,
 				...(meta.projectId ? { projectId: meta.projectId } : {}),

@@ -95,8 +95,26 @@ re-pairing. The unauthenticated API remains bound to `127.0.0.1` only.
 
 Linux omits Mac energy/system-events helpers. Its agents and daemon-owned processes do not depend on a
 client connection, and disconnecting a client does not stop them. HTML, React and image artifact authoring
-remain available; SwiftUI rendering requires macOS. Linux coordinator execution stays unavailable until a
-validated OS-isolation backend is installed, with no unrestricted fallback.
+remain available; SwiftUI rendering requires macOS. Linux coordinators require a root-owned, non-setuid
+`bubblewrap` installation (`dnf install bubblewrap`, or the equivalent package-manager command) and working
+unprivileged user, mount, PID and IPC namespaces, including nested-user-namespace disabling. The daemon
+executes real write/chmod and descendant checks before advertising `coordinatorIsolation`; each fresh
+coordinator repeats its boundary checks before loading worker code. Tool presence alone is not support.
+Run `node packages/daemon/src/linux-coordinator-probe.ts` under the actual service user's security policy
+for actionable diagnostics. AppArmor, SELinux, seccomp or service restrictions can prohibit namespaces;
+correct the narrowly scoped policy, not global host security. There is no unrestricted or chmod fallback.
+
+The coordinator sees a read-only host filesystem, including repository aliases and symlink targets, with
+only private session scratch, durable storage, artifacts and auth backing writable. It cannot create
+nested user namespaces, acquire capabilities or see host processes through `/proc`. Pre-existing hardlinks
+or shared writable private-state roots are rejected. Normal network access remains available for model
+providers and integrations; this is process/filesystem isolation, not a network or credential trust boundary.
+Coordinator authentication uses private same-host copies of `auth.json` and `mcp-auth.json`, with canonical
+configuration/resources read-only. Refreshes persist privately, never overwrite global credentials, and
+changed canonical credentials replace the copies on the next worker open. Providers with rotating refresh
+tokens may require separate coordinator reauthentication. Nothing copies credentials between hosts.
+This does not add remote app
+routing, credential copying or cross-host context/delegation semantics.
 
 The source includes [host-qualified client routing](docs/host-routing.md),
 [durable operation receipts](docs/durable-operations.md), [server-side repository/file reads](docs/host-repositories.md)

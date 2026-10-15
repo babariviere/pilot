@@ -139,7 +139,7 @@ export default pi => {
 	assert.equal(hello.capabilities.independentExecution, true);
 	assert.equal(hello.capabilities.powerManagement, false);
 	if (process.platform === "linux") {
-		assert.equal(hello.capabilities.coordinatorIsolation, false);
+		assert.equal(typeof hello.capabilities.coordinatorIsolation, "boolean");
 		assert.equal(hello.capabilities.swiftUIArtifacts, false);
 	}
 	const power = await fetch(`${base}/power`, {
