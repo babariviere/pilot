@@ -409,6 +409,7 @@ struct PilotSymbol: View {
     var body: some View {
         if icon == .working {
             DotGridSpinner()
+                .scaleEffect(context.markSize / DotGrid.side)
                 .frame(width: context.markSize, height: context.markSize)
                 .accessibilityLabel("Working").accessibilityHidden(false)
         } else if icon == .branch || icon == .pullRequest {

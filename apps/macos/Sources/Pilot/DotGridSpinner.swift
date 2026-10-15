@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// The sign of live work inside a view, such as a running tool step or the chat's working line: a fixed 4×4 grid
-/// of round dots (1.6 pt on a 2.5 pt pitch, 10×10 pt). The dots never move. Each blends from a light grey at rest to
+/// of round dots (2.2 pt on a 3.3 pt pitch, 13×13 pt, about the visual size of a row icon, which it often replaces).
+/// The dots never move. Each blends from a light grey at rest to
 /// Theme.workingInk as a wave runs diagonally from the top-left corner to the bottom-right, about 1.5 s a
 /// loop. `background` is fainter and half as fast, for an agent that is idle while its background jobs run (the
 /// same motion language as a background working corner).
@@ -43,9 +44,9 @@ struct DotGridSpinner: View {
 /// Geometry and timing of `DotGridSpinner`, kept apart from the view so it is testable.
 enum DotGrid {
     static let columns = 4
-    static let dot: CGFloat = 1.6
-    static let pitch: CGFloat = 2.5
-    static let side: CGFloat = 10
+    static let dot: CGFloat = 2.2
+    static let pitch: CGFloat = 3.3
+    static let side: CGFloat = 13
     /// One loop at the shared clock's 12 fps: 1.5 s. Both loops divide the clock's count, so they never jump.
     static let frameCount = 18
     /// Half speed while only background jobs run.
@@ -60,7 +61,7 @@ enum DotGrid {
     /// Further opacity of the resting dots while only background jobs run.
     static let backgroundRestOpacity = 0.6
 
-    /// The 16 dots, row by row, centred in the 10×10 frame.
+    /// The 16 dots, row by row, centred in the 13×13 frame.
     static let dotRects: [CGRect] = {
         let inset = (side - pitch * CGFloat(columns - 1) - dot) / 2
         return (0 ..< columns * columns).map { index in

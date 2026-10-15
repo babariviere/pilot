@@ -14,18 +14,18 @@ private func job(_ id: String, startedAt: Double) -> SessionJob {
     #expect(WorkingIndicator(retry: nil, jobs: [job("tests", startedAt: 0)]).label == "Working… · 1 job")
 }
 
-@Test func dotGridHasSixteenFixedRoundDotsInATenPointFrame() {
-    #expect(DotGrid.side == 10)
+@Test func dotGridHasSixteenFixedRoundDotsInAThirteenPointFrame() {
+    #expect(DotGrid.side == 13)
     let rects = DotGrid.dotRects
     #expect(rects.count == 16)
     let frame = CGRect(x: 0, y: 0, width: DotGrid.side, height: DotGrid.side)
     for rect in rects {
-        #expect(rect.width == 1.6 && rect.height == 1.6)
+        #expect(rect.width == 2.2 && rect.height == 2.2)
         #expect(frame.contains(rect))
     }
-    // A 2.5 pt pitch across and down, centred in the frame.
-    #expect(abs(rects[1].minX - rects[0].minX - 2.5) < 0.000_001)
-    #expect(abs(rects[4].minY - rects[0].minY - 2.5) < 0.000_001)
+    // A 3.3 pt pitch across and down, centred in the frame.
+    #expect(abs(rects[1].minX - rects[0].minX - 3.3) < 0.000_001)
+    #expect(abs(rects[4].minY - rects[0].minY - 3.3) < 0.000_001)
     #expect(abs(rects[0].minX - (DotGrid.side - rects[15].maxX)) < 0.000_001)
     #expect(abs(rects[0].minY - (DotGrid.side - rects[15].maxY)) < 0.000_001)
 }
