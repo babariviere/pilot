@@ -955,10 +955,15 @@ export class SessionManager {
 
 	private sleepPause?: { since: number; wakeToken?: string };
 	private sleepTransition?: Promise<void>;
+	private sleepPreparing?: Promise<void>;
 	private sleepResuming?: Promise<void>;
 	private sleepRevision = 0;
 	get powerPause() {
 		return this.sleepPause ? { ...this.sleepPause } : undefined;
+	}
+	/** Durable admission latch and per-chat recovery markers, independent of slow process exit. */
+	get sleepPrepared(): Promise<void> {
+		return this.sleepPreparing ?? Promise.resolve();
 	}
 
 	private readonly home: string;
@@ -4254,6 +4259,15 @@ export class SessionManager {
 		if (this.sleepResuming) this.sleepPause = latch;
 		else this.sleepPause ??= latch;
 		if (this.sleepTransition) return this.sleepTransition;
+		let resolvePrepared!: () => void;
+		let rejectPrepared!: (error: unknown) => void;
+		const prepared = new Promise<void>((resolve, reject) => {
+			resolvePrepared = resolve;
+			rejectPrepared = reject;
+		});
+		this.sleepPreparing = prepared;
+		// Most callers need the complete transition only. They still receive preparation failures below.
+		void prepared.catch(() => {});
 		const resuming = this.sleepResuming;
 		const pause = async () => {
 			await resuming;
@@ -4274,12 +4288,17 @@ export class SessionManager {
 				this.workers.delete(id);
 				this.lastUse.delete(id);
 			}
-			// Bound concurrent kernel teardown and metadata writes. Admissions remain blocked during preparation.
+			// Persist ALL recovery markers before allowing OS sleep, not one teardown batch at a time.
+			for (let offset = 0; offset < workers.length; offset += 4) {
+				await Promise.all(workers.slice(offset, offset + 4).map(([id]) => this.save(this.require(id))));
+			}
+			await Promise.all([...this.saving.values()]);
+			resolvePrepared();
+			// Teardown remains bounded and owned by sleepTransition. Wake/update must still await every exit.
 			for (let offset = 0; offset < workers.length; offset += 4) {
 				await Promise.all(
 					workers.slice(offset, offset + 4).map(async ([id, worker]) => {
 						const meta = this.require(id);
-						await this.save(meta);
 						const closing = worker.close().finally(() => {
 							if (this.parking.get(id) === closing) this.parking.delete(id);
 						});
@@ -4294,9 +4313,14 @@ export class SessionManager {
 			await this.savePowerPause();
 			for (const meta of this.metas.values()) this.emit(meta);
 		};
-		const transition = pause().finally(() => {
-			if (this.sleepTransition === transition) this.sleepTransition = undefined;
-		});
+		const transition = pause()
+			.catch((error: unknown) => {
+				rejectPrepared(error);
+				throw error;
+			})
+			.finally(() => {
+				if (this.sleepTransition === transition) this.sleepTransition = undefined;
+			});
 		this.sleepTransition = transition;
 		return transition;
 	}

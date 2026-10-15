@@ -7,6 +7,7 @@ import { openPowerHelper, type PowerHelper, type PowerHelperFactory, type PowerS
 
 export interface PowerSessions {
 	readonly powerPause: { since: number; wakeToken?: string } | undefined;
+	readonly sleepPrepared: Promise<void>;
 	list(): SessionSummary[];
 	onChange(listener: (session: SessionSummary) => void): () => void;
 	pauseForSleep(wakeToken?: string): Promise<void>;
@@ -170,6 +171,7 @@ export class PowerService {
 		if (!state || !helper) return;
 		const pause = this.sessions.powerPause;
 		if (pause && laterWake(pause, state, this.settings.closedLid)) await this.sessions.resumeAfterSleep();
+		let acknowledged = false;
 		if (
 			this.settings.keepAwake &&
 			!this.sessions.powerPause &&
@@ -177,7 +179,15 @@ export class PowerService {
 		) {
 			// Durable latch and kernel close must finish BEFORE clearing the system-wide override.
 			try {
-				await this.sessions.pauseForSleep(state.wakeToken);
+				const pausing = this.sessions.pauseForSleep(state.wakeToken);
+				// Observe teardown failure even while waiting for the earlier preparation/acknowledgement phase.
+				void pausing.catch(() => {});
+				if (state.sleeping) {
+					await this.sessions.sleepPrepared;
+					await helper.request({ action: "allowSleep", generation: state.sleepGeneration });
+					acknowledged = true;
+				}
+				await pausing;
 			} catch (error) {
 				// A disk/teardown failure must not strand a global sleep override on a departing laptop.
 				try {
@@ -192,6 +202,10 @@ export class PowerService {
 			this.dirty = true;
 			return;
 		}
+		if (state.sleeping && !acknowledged) {
+			await this.sessions.sleepPrepared;
+			await helper.request({ action: "allowSleep", generation: state.sleepGeneration });
+		}
 		const awake = this.settings.keepAwake && !this.sessions.powerPause && this.working.size > 0;
 		const closedLid = awake && this.settings.closedLid && state.authorized && closedLidAllowed(state);
 		const key = JSON.stringify([awake, closedLid]);
@@ -201,8 +215,7 @@ export class PowerService {
 			this.keepingAwake = awake;
 			this.error = undefined;
 		}
-		if (state.sleeping) await helper.request({ action: "allowSleep" });
-		else if (!closedLid && state.lidClosed === true) await helper.request({ action: "sleep" });
+		if (!state.sleeping && !closedLid && state.lidClosed === true) await helper.request({ action: "sleep" });
 	}
 	status(): PowerStatus {
 		return {
