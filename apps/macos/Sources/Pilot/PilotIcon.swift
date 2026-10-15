@@ -506,26 +506,25 @@ extension Label where Title == Text, Icon == PilotSymbol {
 }
 
 extension PilotIcon {
-    /// A concrete, unmodified Image for native menus, which do not reliably unwrap custom icon views.
-    @MainActor var menuImage: Image {
-        if let name = systemName {
-            return Image(systemName: name)
-        }
+    /// All menu icons use native template images, just like the custom task pies.
+    @MainActor var menuImage: NSImage {
         if let fill = taskProgressFill {
-            return Image(nsImage: TaskProgressGlyph.image(fill, context: .row))
+            return TaskProgressGlyph.image(fill, context: .row)
         }
-        switch self {
-        case .branch, .pullRequest: return Image(nsImage: GitBranchGlyph.image)
+        if self == .branch || self == .pullRequest { return GitBranchGlyph.image }
         // Menus are static, unlike the live working spinner in rows.
-        default: return Image(systemName: "ellipsis")
-        }
+        let configuration = NSImage.SymbolConfiguration(pointSize: Context.row.role.size, weight: Context.row.nsWeight)
+        let image = NSImage(systemSymbolName: systemName ?? "ellipsis", accessibilityDescription: nil)?
+            .withSymbolConfiguration(configuration) ?? NSImage()
+        image.isTemplate = true
+        return image
     }
 }
 
 extension Label where Title == Text, Icon == Image {
-    /// Keep both Label and Image concrete at the menu boundary. Even a wrapper around Label can lose its image.
+    /// Keep Label and Image concrete at the menu boundary for native image extraction.
     @MainActor init<S: StringProtocol>(_ title: S, menuIcon: PilotIcon) {
-        self.init { Text(String(title)) } icon: { menuIcon.menuImage }
+        self.init { Text(String(title)) } icon: { Image(nsImage: menuIcon.menuImage) }
     }
 }
 
