@@ -55,13 +55,14 @@ final class ArtifactRenderState: ObservableObject {
 /// The HTML is not loaded until WebKit has installed the fail-closed request blocker.
 struct ArtifactWebView: NSViewRepresentable {
     let revision: ArtifactRevision
+    let client: PilotClient
     var inline = false
     @ObservedObject var state: ArtifactRenderState
 
     func makeCoordinator() -> Coordinator { Coordinator(state: state) }
 
     func makeNSView(context: Context) -> WKWebView {
-        let libraries = ArtifactLibraryHandler(libraries: Set(revision.libraries), client: AppModel.shared.client)
+        let libraries = ArtifactLibraryHandler(libraries: Set(revision.libraries), client: client)
         let view = Self.makeSandboxView(coordinator: context.coordinator, libraries: libraries, inline: inline)
         context.coordinator.measurementKind = revision.kind
         context.coordinator.awaitingMermaid = revision.libraries.contains(.mermaid)
@@ -365,39 +366,47 @@ final class ArtifactLibraryCache {
         let validated: Date
     }
 
-    private var entries: [URL: Entry] = [:]
-    private var inflight: [URL: Task<Data, Error>] = [:]
+    private struct Key: Hashable { let owner: HostRef?; let endpoint: URL }
+    private var entries: [Key: Entry] = [:]
+    private var inflight: [Key: Task<Data, Error>] = [:]
     private let redirects = RejectArtifactRedirects()
     private lazy var session = URLSession(configuration: .ephemeral, delegate: redirects, delegateQueue: nil)
 
-    func data(for endpoint: URL) async throws -> Data {
-        if let entry = entries[endpoint], Date().timeIntervalSince(entry.validated) < Self.freshness { return entry.data }
-        if let task = inflight[endpoint] { return try await task.value }
-        let cached = entries[endpoint]
+    func data(for endpoint: URL, owner: HostRef? = nil) async throws -> Data {
+        let key = Key(owner: owner, endpoint: endpoint)
+        if let entry = entries[key], Date().timeIntervalSince(entry.validated) < Self.freshness { return entry.data }
+        if let task = inflight[key] { return try await task.value }
+        guard inflight.count < 4 else { throw ClientError("Artifact library reads are busy") }
+        let cached = entries[key]
         let session = session
         let task = Task<Data, Error> { @MainActor in
-            defer { self.inflight[endpoint] = nil }
+            defer { self.inflight[key] = nil }
             var request = URLRequest(url: endpoint)
             request.timeoutInterval = 20
             if let etag = cached?.etag { request.setValue(etag, forHTTPHeaderField: "If-None-Match") }
             do {
-                let (data, response) = try await session.data(for: request)
-                guard let http = response as? HTTPURLResponse, response.url == endpoint else {
+                let (data, response) = try await BoundedHTTPData.read(request, maximumBytes: Self.maxBytes, configuration: session.configuration)
+                let http = response
+                guard response.url == endpoint else {
                     throw ClientError("Artifact library unavailable")
                 }
                 if http.statusCode == 304, let cached {
-                    self.entries[endpoint] = Entry(data: cached.data, etag: cached.etag, validated: Date())
+                    self.entries[key] = Entry(data: cached.data, etag: cached.etag, validated: Date())
                     return cached.data
                 }
                 guard http.statusCode == 200, data.count <= Self.maxBytes else { throw ClientError("Artifact library unavailable") }
-                self.entries[endpoint] = Entry(data: data, etag: http.value(forHTTPHeaderField: "ETag"), validated: Date())
+                self.entries[key] = Entry(data: data, etag: http.value(forHTTPHeaderField: "ETag"), validated: Date())
+                while self.entries.count > 16 || self.entries.values.reduce(0, { $0 + $1.data.count }) > 48 * 1024 * 1024 {
+                    guard let evicted = self.entries.keys.first else { break }
+                    self.entries[evicted] = nil
+                }
                 return data
             } catch {
                 if let cached { return cached.data }
                 throw error
             }
         }
-        inflight[endpoint] = task
+        inflight[key] = task
         return try await task.value
     }
 }
@@ -427,7 +436,7 @@ final class ArtifactLibraryHandler: NSObject, WKURLSchemeHandler {
             guard let self else { return }
             do {
                 let endpoint = try self.client.artifactLibraryURL(library)
-                let data = try await ArtifactLibraryCache.shared.data(for: endpoint)
+                let data = try await ArtifactLibraryCache.shared.data(for: endpoint, owner: self.client.hostIdentity)
                 guard !Task.isCancelled, self.pending[key] != nil else { return }
                 urlSchemeTask.didReceive(URLResponse(url: url, mimeType: "application/javascript", expectedContentLength: data.count,
                                                     textEncodingName: "utf-8"))

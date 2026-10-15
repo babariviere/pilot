@@ -55,6 +55,22 @@ final class HostClients: ObservableObject {
             else { self.refresh(host, token: entry.token) }
         }
     }
+    private var activeUploads = 0
+
+    func upload(_ image: PastedImage, host: HostRef, origin: HostRef) async throws -> HostedAttachment {
+        let client = try endpoint(host)
+        let fence = try token(for: host)
+        guard activeUploads < 2 else { throw ClientError("Image uploads are busy") }
+        activeUploads += 1
+        defer { activeUploads -= 1 }
+        // Keep the local copy through unknown operation delivery and durable-history ownership.
+        try image.retainForHistory()
+        let metadata = try await AttachmentTransfer.prepare(file: image.url, ownedDirectory: ImageAttachments.directory,
+                                                            uploadId: image.id.uuidString, origin: origin)
+        let attachment = try await client.upload(metadata, file: image.url)
+        try validate(fence)
+        return HostedAttachment(host: host, attachment: attachment)
+    }
     private let operations = OperationOutbox(directory: FileManager.default.urls(
         for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Pilot/Operations"))
 
@@ -81,6 +97,16 @@ final class HostClients: ObservableObject {
 
     func acknowledge(_ operation: DurableOperation, receipt: OperationReceipt) async throws {
         try await operations.acknowledge(operation, receipt: receipt)
+    }
+
+    func deliverAttached<Request: Codable & Sendable>(host: HostRef, kind: String, targetId: String?,
+        request: Request, attachments: [HostedAttachment], origin: HostRef) async throws -> (DurableOperation, OperationDelivery) {
+        guard attachments.count <= 8, attachments.allSatisfy({ $0.host == host }),
+              kind == "chat-create-attached" || kind == "chat-send-attached" else {
+            throw HostRoutingError.invalidReference
+        }
+        return try await deliver(host: host, kind: kind, targetId: targetId,
+            payload: AttachmentChatPayload(request: request, attachments: attachments.map(\.attachment)), origin: origin)
     }
 
     func repositoryDirectory(host: HostRef, selection: RepositorySelection,

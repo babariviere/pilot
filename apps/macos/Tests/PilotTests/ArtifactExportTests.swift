@@ -62,6 +62,18 @@ private func exportRevision(kind: ArtifactKind, source: String, revision: Int = 
     } catch { #expect(error.localizedDescription == "Preview is not ready") }
 }
 
+@Test func artifactExportsDoNotAliasIdenticalIDsAcrossHosts() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let local = HostRef(hostId: "local", daemonId: "same", lineageId: "history")
+    let remote = HostRef(hostId: "box", daemonId: "same", lineageId: "history")
+    let first = try ArtifactExport.materialize(exportRevision(kind: .html, source: "local"), host: local, directory: root)
+    let other = try ArtifactExport.materialize(exportRevision(kind: .html, source: "remote"), host: remote, directory: root)
+    #expect(first != other)
+    #expect(try String(contentsOf: first, encoding: .utf8) == "local")
+    #expect(try String(contentsOf: other, encoding: .utf8) == "remote")
+}
+
 @Test @MainActor func artifactHeaderUsesTheLoadedRevisionWithoutASecondBadge() throws {
     let state = ArtifactViewState()
     let render = ArtifactRenderState()
