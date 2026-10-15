@@ -550,12 +550,12 @@ private struct ProjectHeader: View {
     }
 }
 
-/// One chat: its title, then its project (when the list is not grouped by project), its mission and its
-/// repository metadata. An active coordinator's second line says "Coordinator" and its state instead. The
-/// dithered corner carries the chat's state, so the row needs no status column. Time and pin marks show under
-/// the pointer, in space the row always reserves, so hovering never reflows the title, and the corner clears
-/// behind them while they show. The mission label opens its mission. Diff counts stay out of the row and
-/// appear in its tooltip.
+/// One chat: its title, then one `RowLine` with its project (when the list is not grouped by project), what kind
+/// of chat it is, its reason, PRs, mission and branch. An active coordinator's second line says "Coordinator" and
+/// its state instead. The dithered corner carries the chat's state, so the row needs no status column. Time and
+/// pin marks show under the pointer, in space the row always reserves, so hovering never reflows the title; the
+/// corner recedes to make room for them. The mission label opens its mission. Diff counts stay out of the row and
+/// appear in its tooltip, with every PR and the full second line.
 struct SessionRow: View {
     let session: SessionSummary
     /// Shown before the repository metadata in lists that mix projects.
@@ -576,6 +576,12 @@ struct SessionRow: View {
         let signal = session.signal(unread: needsAttention)
         let reason = session.needsYouReason(unread: needsAttention)?.label(at: session.outcomeAt ?? session.updatedAt, now: now)
         let missionTitle = session.missionId.flatMap { model.client.mission($0)?.title }
+        let coordinatorDetail = session.isMissionCoordinator
+            ? MissionCoordinatorStatus.detail(session, unread: needsAttention) : nil
+        // Branch-free segments for the label and tooltip; the line itself adds the loaded branch.
+        let described = RowLineSegments.session(session, projectName: projectName, missionId: session.missionId,
+                                                missionTitle: missionTitle, reason: reason,
+                                                coordinatorDetail: coordinatorDetail)
         VStack(alignment: .leading, spacing: 3) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(session.title)
@@ -597,37 +603,15 @@ struct SessionRow: View {
                             .fixedSize()
                     }
                 }
-                .ditherCornerClearance(hovered)
                 .revealed(hovered)
             }
-            HStack(spacing: 4) {
-                if let projectName {
-                    Text(projectName)
-                        .font(.pilot(.small, weight: .medium))
-                        .foregroundStyle(Theme.mutedForeground)
-                        .lineLimit(1)
-                        .layoutPriority(1)
-                    Text("·").font(.pilot(.small)).foregroundStyle(Theme.faintForeground)
-                }
-                if session.isMissionCoordinator {
-                    SessionCoordinatorLine(session: session, unread: needsAttention)
-                } else {
-                    if let missionId = session.missionId, let missionTitle {
-                        SessionMissionLabel(title: missionTitle) { model.openMission(missionId) }
-                        Text("·").font(.pilot(.small)).foregroundStyle(Theme.faintForeground)
-                    }
-                    SessionRepositoryMetadata(session: session)
-                    if let reason {
-                        if session.isAsk || session.branch != nil || !session.linkedPullRequests.isEmpty {
-                            Text("·").font(.pilot(.small)).foregroundStyle(Theme.faintForeground)
-                        }
-                        Text(reason).font(.pilot(.small)).foregroundStyle(Theme.mutedForeground)
-                            .lineLimit(1).layoutPriority(1)
-                    }
-                }
+            SessionRepositoryMetadata(session: session) { branch in
+                RowLine(segments: RowLineSegments.session(
+                    session, projectName: projectName, missionId: session.missionId, missionTitle: missionTitle,
+                    reason: reason, branch: branch, coordinatorDetail: coordinatorDetail)) { model.openMission($0) }
             }
-            // Stop short of the corner's densest cells.
-            .padding(.trailing, 20)
+            // Fade out before the corner's dense cells.
+            .padding(.trailing, RowLine.cornerGutter)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 2)
@@ -636,12 +620,10 @@ struct SessionRow: View {
         .onPreferenceChange(SessionRepositoryHelpKey.self) { repositoryHelp = $0 }
         .animation(Theme.Motion.quick, value: hovered)
         .help([[reason ?? signal?.label, missionTitle.map { "Mission: \($0)" }, session.cwd.abbreviatingHome]
-                .compactMap { $0 }.joined(separator: " · "), repositoryHelp]
+                .compactMap { $0 }.joined(separator: " · "), RowLineSegments.pullRequestSummary(session), repositoryHelp]
             .compactMap { $0 }.joined(separator: "\n"))
         .accessibilityElement(children: .contain)
-        .accessibilityLabel([session.title, projectName, missionTitle,
-                             session.isMissionCoordinator ? "Coordinator" : nil, reason ?? signal?.label]
-            .compactMap { $0 }.joined(separator: ". "))
+        .accessibilityLabel(accessibilityLabel(described, state: reason == nil && coordinatorDetail == nil ? signal?.label : nil))
         .contextMenu {
             SessionRenameAction(session: session)
             Button {
@@ -666,6 +648,14 @@ struct SessionRow: View {
                 }
             }
         }
+    }
+
+    /// The title, then the whole second line in words (every PR included), then the state when nothing else says it.
+    private func accessibilityLabel(_ segments: [RowLineSegment], state: String?) -> String {
+        var parts = [session.title]
+        if !segments.isEmpty { parts.append(segments.accessibilityText) }
+        if let state { parts.append(state) }
+        return parts.joined(separator: ". ")
     }
 }
 

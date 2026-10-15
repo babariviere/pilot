@@ -62,11 +62,13 @@ struct PageSectionLinkChoice: Identifiable {
 
 /// A list row with a soft fill under the pointer. The content closure receives the hover state so rows
 /// can reveal secondary controls with `revealed(_:)`. Put every revealed action in a context menu too,
-/// so it stays reachable from the keyboard and VoiceOver.
+/// so it stays reachable from the keyboard and VoiceOver. Inside a `ditherCorner` the row draws no fill: its
+/// corner recedes under the pointer instead, and selection stays the only row fill.
 struct HoverRow<Content: View>: View {
     var horizontalPadding: CGFloat = 8
     var verticalPadding: CGFloat = 6
     @ViewBuilder let content: (Bool) -> Content
+    @Environment(\.rowHasDitherCorner) private var hasCorner
     @State private var hovered = false
 
     var body: some View {
@@ -74,7 +76,7 @@ struct HoverRow<Content: View>: View {
             .padding(.horizontal, horizontalPadding)
             .padding(.vertical, verticalPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: Theme.Radius.row).fill(hovered ? Theme.muted : .clear))
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.row).fill(hovered && !hasCorner ? Theme.muted : .clear))
             .contentShape(Rectangle())
             .onHover { hovered = $0 }
             .animation(Theme.Motion.quick, value: hovered)

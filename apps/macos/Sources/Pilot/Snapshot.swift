@@ -472,6 +472,7 @@ enum Snapshot {
 
         // Dense repository metadata must not push titles or timestamps out of narrow rows.
         model.client.loadFixture(projects: Fixtures.projects, sessions: Fixtures.sidebarLayoutSessions)
+        model.client.handle(.missions([Fixtures.sidebarLayoutMission]))
         model.client.fixtureChangeSummaries = Dictionary(uniqueKeysWithValues: Fixtures.sidebarLayoutSessions
             .filter { $0.id != "layout-working" && $0.id != "layout-branch" }.map {
                 ($0.id, SessionChangeSummary(base: "origin/main", branch: $0.branch, fileCount: 31,
@@ -484,6 +485,7 @@ enum Snapshot {
                          size: CGSize(width: width, height: 560),
                          to: directory.appending(path: "sidebar-layout-\(width).png"))
         }
+        model.client.handle(.missions([]))
         if CommandLine.arguments.contains("--sidebar-layout-only") {
             NSApp.terminate(nil)
             return
@@ -1876,7 +1878,27 @@ enum Fixtures {
         SessionSummary(id: "layout-branch", title: "Branch without repository summary", cwd: projects[0].path, projectId: "p1",
                        branch: "fix/a-very-long-branch-name-without-pull-request-metadata", createdAt: now,
                        updatedAt: now - 16 * 3_600_000, state: "starting"),
+        // Second-line layout: several PRs and a long mission fade before the corner, Ask reads "Ask · source" and a
+        // coordinator stays distinct.
+        SessionSummary(id: "layout-prs", title: "Designing the /v2/scenario API rollout", cwd: projects[0].path,
+                       projectId: "p1", branch: "feat/scenario-v2-rollout", createdAt: now, updatedAt: now - 17 * 3_600_000,
+                       state: "idle", outcome: .done, outcomeAt: now - 17 * 3_600_000,
+                       pullRequests: [6555, 6554, 6553].map {
+                           SessionPullRequest(number: $0, url: "https://github.com/babariviere/pilot/pull/\($0)",
+                                              title: "Scenario part", state: .open, checkedAt: now)
+                       }, missionId: "layout-mission"),
+        SessionSummary(id: "layout-ask", title: "Where does the scheduler wake agents?", cwd: projects[0].path,
+                       projectId: "p1", createdAt: now, updatedAt: now - 18 * 3_600_000, state: "idle",
+                       outcome: .question, outcomeAt: now - 18 * 3_600_000,
+                       outcomeReason: "Should I include the power-pause path too?", mode: .ask, sourceBranch: "main"),
+        SessionSummary(id: "layout-coordinator", title: "Coordinate the scenario rollout", cwd: projects[0].path,
+                       projectId: "p1", createdAt: now, updatedAt: now, state: "working", missionId: "layout-mission",
+                       activeMissionCoordinator: true),
     ]
+
+    static let sidebarLayoutMission = Mission(id: "layout-mission", projectId: "p1", title: "New /v2/scenario rollout",
+                                              goal: "", coordinatorSessionId: "layout-coordinator", createdAt: now,
+                                              updatedAt: now)
 
     static let sessions = [
         SessionSummary(id: "s1", title: "Fix flaky reopen test in kernel session", cwd: projects[0].path, projectId: "p1",

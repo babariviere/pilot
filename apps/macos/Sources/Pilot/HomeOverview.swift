@@ -254,22 +254,14 @@ struct HomeOverview: View {
                     VStack(alignment: .leading, spacing: 1) {
                         Text(row.project.name).font(.pilot(.body, weight: .medium)).foregroundStyle(Theme.foreground)
                             .lineLimit(1)
-                        HStack(spacing: 5) {
-                            Text(row.countsLine).lineLimit(1)
-                            if let mission = row.missionLine {
-                                Text("·")
-                                PilotSymbol(PilotIcon.mission)
-                                Text(mission).lineLimit(1).truncationMode(.tail)
-                            }
-                        }
-                        .font(.pilot(.caption))
-                        .foregroundStyle(Theme.mutedForeground)
+                        RowLine(segments: [RowLineSegment(.text(row.countsLine))]
+                            + (row.missionLine.map { [RowLineSegment(.mission(id: nil, title: $0))] } ?? []),
+                            maxLines: 2, font: .pilot(.caption))
                     }
                     Spacer(minLength: 8)
                     if let activity {
                         Text(activity).font(.pilot(.caption)).monospacedDigit().foregroundStyle(Theme.faintForeground)
                             .fixedSize()
-                            .ditherCornerClearance()
                             .help("Last activity")
                     }
                 }
@@ -294,26 +286,16 @@ struct HomeOverview: View {
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 1) {
                         Text(session.title).font(.pilot(.body)).foregroundStyle(Theme.foreground).lineLimit(1)
-                        HStack(spacing: 5) {
-                            Text(project).lineLimit(1)
-                            if let mission {
-                                Text("·")
-                                PilotSymbol(PilotIcon.mission)
-                                Text(mission).lineLimit(1)
-                            }
-                        }
-                        .font(.pilot(.caption))
-                        .foregroundStyle(Theme.mutedForeground)
+                        RowLine(segments: RowLineSegments.session(nil, projectName: project, missionTitle: mission),
+                                maxLines: 2, font: .pilot(.caption))
                     }
                     Spacer(minLength: 8)
-                    // One clearance per corner: the PR badge and time clear it together.
                     HStack(spacing: 10) {
                         PullRequestBadge(session: session)
                         Text(elapsed).font(.pilot(.caption)).monospacedDigit().foregroundStyle(Theme.faintForeground)
                             .fixedSize()
                             .help("Last update")
                     }
-                    .ditherCornerClearance()
                 }
             }
             .homeCorner(.working)
@@ -369,7 +351,6 @@ struct HomeOverview: View {
                         .accessibilityLabel("Open coordinator for \(mission.title)")
                     }
                 }
-                .ditherCornerClearance(count > 0 || coordinator != nil)
             }
         }
         .homeCorner(signal)

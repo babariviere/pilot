@@ -28,9 +28,13 @@ final class SessionRepositoryModel: ObservableObject {
     }
 }
 
-/// Keep the PR link distinct from local repository metadata and run status.
-struct SessionRepositoryMetadata: View {
+/// Loads a chat's repository summary while its row is on screen and hands the current branch to `content`, which
+/// lays out the row's second line (`RowLine`). Ask chats and coordinators have no workspace of their own, so
+/// nothing loads and the branch is nil. The changes, branch and lookup errors go to the row's tooltip through
+/// `SessionRepositoryHelpKey`.
+struct SessionRepositoryMetadata<Content: View>: View {
     let session: SessionSummary
+    @ViewBuilder let content: (String?) -> Content
     @EnvironmentObject private var app: AppModel
     @Environment(\.repositoryPollingVisible) private var windowVisible
     @StateObject private var model = SessionRepositoryModel()
@@ -40,27 +44,23 @@ struct SessionRepositoryMetadata: View {
     }
 
     var body: some View {
-        if session.isAsk {
-            Label("Ask · \(session.sourceLabel)", icon: PilotIcon.askMode)
-                .font(.pilot(.small, weight: .medium))
-                .foregroundStyle(Theme.mutedForeground).lineLimit(1)
-                .help("Read-only · no isolated workspace" + (session.sourceCommit.map { "\nSource commit: \($0)" } ?? ""))
-        } else if !session.isMissionCoordinator {
-            SessionRepositoryMetadataContent(session: session, summary: model.summary,
-                                             branch: model.branch(for: session), error: model.error)
-            .preference(key: SessionRepositoryHelpKey.self,
-                        value: SessionRepositoryHelp.text(summary: model.summary, branch: model.branch(for: session),
-                                                          error: model.error))
-            .task(id: pollingKey) {
-                guard pollingKey.enabled else { return }
-                // Refresh on return/activity, but back off idle workspaces. External editor changes
-                // still arrive on the bounded periodic fallback, without polling hidden windows.
-                while !Task.isCancelled {
-                    await model.load(session, client: app.client)
-                    do { try await Task.sleep(for: .seconds(RepositoryPolling.interval(working: session.isWorking, fullDiff: false))) }
-                    catch { return }
+        if session.isAsk || session.isMissionCoordinator {
+            content(nil)
+        } else {
+            content(model.branch(for: session))
+                .preference(key: SessionRepositoryHelpKey.self,
+                            value: SessionRepositoryHelp.text(summary: model.summary, branch: model.branch(for: session),
+                                                              error: model.error))
+                .task(id: pollingKey) {
+                    guard pollingKey.enabled else { return }
+                    // Refresh on return/activity, but back off idle workspaces. External editor changes
+                    // still arrive on the bounded periodic fallback, without polling hidden windows.
+                    while !Task.isCancelled {
+                        await model.load(session, client: app.client)
+                        do { try await Task.sleep(for: .seconds(RepositoryPolling.interval(working: session.isWorking, fullDiff: false))) }
+                        catch { return }
+                    }
                 }
-            }
         }
     }
 }
@@ -70,35 +70,4 @@ struct SessionRepositoryMetadata: View {
 struct SessionRepositoryHelpKey: PreferenceKey {
     static let defaultValue: String? = nil
     static func reduce(value: inout String?, nextValue: () -> String?) { value = value ?? nextValue() }
-}
-
-/// A row's PR badge and branch. Lists show no file or line counts (those live in the Changes pane and the
-/// row tooltip, via SessionRepositoryHelpKey). The branch truncates first, so the metadata never sets the
-/// row's minimum width.
-struct SessionRepositoryMetadataContent: View {
-    let session: SessionSummary
-    let summary: SessionChangeSummary?
-    let branch: String?
-    let error: String?
-
-    var body: some View {
-        if !session.isMissionCoordinator {
-            HStack(spacing: 6) {
-                PullRequestBadge(session: session)
-                if let branch, !branch.isEmpty {
-                    if !session.linkedPullRequests.isEmpty || session.pullRequestError != nil {
-                        Text("·").accessibilityHidden(true)
-                    }
-                    Text(branch)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .layoutPriority(-1)
-                        .accessibilityLabel("Branch \(branch)")
-                }
-            }
-            .lineLimit(1)
-            .font(.pilot(.small, weight: .medium))
-            .foregroundStyle(Theme.mutedForeground)
-        }
-    }
 }

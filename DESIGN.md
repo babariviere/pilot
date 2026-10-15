@@ -69,7 +69,9 @@ In the sidebar, a chat's state is its dithered corner (`DitherCorner`), not an i
 growing from the row's bottom-right corner in the state's tint. Working is a soft indigo ripple, needs you an amber
 breath, failed a steady dense red, ready to merge a steady light green. Done and other quiet chats draw nothing.
 Density and motion differ per state, so color is never the only signal, and VoiceOver reads the state. Changes
-dissolve cell by cell, the corner leans toward the pointer, and Reduce Motion keeps it still.
+dissolve cell by cell. Under the pointer the corner recedes toward the trailing edge (fewer cells, same pixels) and
+the row's revealed buttons use the space it frees: rows with a corner draw no hover fill and nothing cuts holes in
+the corner. Reduce Motion keeps it still and recedes it without animating.
 An agent that is idle while its background jobs run is still Working, drawn with a fainter, half-speed ripple so it
 reads as work in the background. Live work inside a view, such as a chat's working line, uses the same ripple as a
 small strip (`DitherRipple`) instead of a spinner or shimmer.
@@ -82,6 +84,11 @@ projects groups chats by urgency (Pinned, Needs you, Ready to merge, Working, Re
 lists its own missions and chats. Rows are a title and one metadata line. Time, pin and mission marks, and project
 header actions, appear under the pointer. Quiet chats fold past the first few, and the footer appears only while
 pilotd is unreachable.
+
+A row's metadata line is a `RowLine`: whole segments in a fixed order (project, Ask or Coordinator, reason, PRs,
+mission, branch) with a dot only between shown segments. When they do not fit, the line fades out before the
+corner instead of truncating each segment or widening the row; the tooltip and VoiceOver keep every segment.
+Home, Inbox and Overview rows use the same line and may wrap it once.
 
 ## Consistency
 
