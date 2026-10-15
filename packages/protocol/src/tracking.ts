@@ -54,6 +54,14 @@ export interface ProjectTrackingConfig {
 	linearTeam?: string;
 	/** Display name of the attached team. */
 	linearTeamName?: string;
+	/** Start targets keyed by the issue's actual team (including sub-teams). Missing entries use In progress. */
+	linearStartStates?: Record<string, LinearWorkflowState>;
+}
+
+/** A started-category workflow state, from the team's live Linear workflow. */
+export interface LinearWorkflowState {
+	id: string;
+	name: string;
 }
 export interface TrackedItem {
 	id: string;
@@ -197,7 +205,8 @@ export interface SlackChannelOption {
 	name: string;
 	private: boolean;
 }
-/** GET /api/tracking/linear/teams?query=... and GET /api/tracking/slack/channels?query=...
+/** GET /api/tracking/linear/teams?query=..., /api/tracking/linear/states?team=...
+ * and /api/tracking/slack/channels?query=...
  * Read-only lookups for project settings. A missing query lists my channels (Slack) or all teams (Linear). */
 export interface TrackingLookup<T> {
 	status: "ok" | "sign_in_required" | "error";

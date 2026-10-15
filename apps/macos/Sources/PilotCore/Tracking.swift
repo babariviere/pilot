@@ -155,11 +155,21 @@ public struct ProjectTrackingConfig: Codable, Equatable, Hashable, Sendable {
     /// Team ID from list_teams. An empty string in a request clears the team.
     public var linearTeam: String?
     public var linearTeamName: String?
+    /// Start target by actual issue team, including sub-teams. Missing entries use In progress.
+    public var linearStartStates: [String: LinearWorkflowState]?
     public init(slackChannels: [String] = [], slackChannelNames: [String: String]? = nil,
-                linearTeam: String? = nil, linearTeamName: String? = nil, slackLabels: [SlackProjectLabel]? = nil) {
+                linearTeam: String? = nil, linearTeamName: String? = nil, slackLabels: [SlackProjectLabel]? = nil,
+                linearStartStates: [String: LinearWorkflowState]? = nil) {
         self.slackChannels = slackChannels; self.slackChannelNames = slackChannelNames
         self.linearTeam = linearTeam; self.linearTeamName = linearTeamName; self.slackLabels = slackLabels
+        self.linearStartStates = linearStartStates
     }
+}
+
+public struct LinearWorkflowState: Codable, Identifiable, Equatable, Hashable, Sendable {
+    public let id: String
+    public let name: String
+    public init(id: String, name: String) { self.id = id; self.name = name }
 }
 public struct TrackedItem: Codable, Identifiable, Equatable, Sendable {
     public let id: String

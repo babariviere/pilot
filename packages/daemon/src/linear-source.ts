@@ -1,6 +1,7 @@
 /** Dedicated Linear adapter. Lists are mine/team scoped; only confirmed starts may update state. */
 import type { LinearCycleSummary, TrackedItem, TrackedItemPrefill, TrackingJson } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
+import { startedWorkflowStates } from "./linear-workflow.ts";
 import type { MissionStore } from "./missions.ts";
 import { type SourceMcpClient, SourceRateLimited, SourceSignInRequired } from "./source-mcp.ts";
 import type { SourcePollContext, SourcePollResult } from "./sources.ts";
@@ -332,22 +333,26 @@ export async function linearPrefill(context: SourcePollContext, item: TrackedIte
 	};
 }
 
-/** Re-check live ownership/scope and state, never trust the cached row or a state name.
- * State lists are in workflow order; use position when the server supplies it. */
+/** Re-check live ownership/scope and the configured team's target. Never guess from workflow order. */
 export async function linearStart(context: SourcePollContext, item: TrackedItem): Promise<"moved" | "skipped"> {
 	const me = string(object(await context.call("me", { query: "me" })).id, 200);
 	const membership = await listEligible(context, undefined, ["id", "uuid", "teamId"]);
 	const member = membership.find((issue) => issueId(issue) === item.externalId);
 	if (!member) return "skipped";
 	const team = string(member.teamId, 200);
-	const response = await context.call("states", { team });
-	const states = Array.isArray(response) ? response : object(response).statuses;
-	if (!Array.isArray(states) || states.length > 500) throw new Error("Invalid workflow states");
-	const started = states.map(object).filter((state) => state.type === "started");
-	if (started.every((state) => typeof state.position === "number" && Number.isFinite(state.position)))
-		started.sort((a, b) => Number(a.position) - Number(b.position));
-	const target = started[0];
-	if (!target) throw new Error("No started workflow state");
+	const started = startedWorkflowStates(await context.call("states", { team }));
+	const configured = context.config.linearStartStates?.[team];
+	const candidates = configured
+		? started.filter((state) => state.id === configured.id)
+		: started.filter(
+				(state) =>
+					state.name
+						.trim()
+						.toLowerCase()
+						.replace(/[-_\s]+/g, " ") === "in progress",
+			);
+	if (candidates.length !== 1) throw new Error("Choose a start state in Project settings");
+	const target = candidates[0]!;
 	const state = string(target.id, 200);
 	// Last read immediately before the write. Linear offers no conditional update operation.
 	const issue = object(

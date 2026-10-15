@@ -63,3 +63,24 @@ import Testing
     #expect(editor.request.tracking?.slackChannels == [])
     #expect(editor.request.tracking?.slackChannelNames == nil)
 }
+
+@Test @MainActor func projectEditorTracksAndPreservesPerTeamStartStates() {
+    let states = ["team-child": LinearWorkflowState(id: "active", name: "Building")]
+    let editor = ProjectEditor()
+    let project = Project(id: "p", name: "Repo", path: "/repo",
+                          tracking: .init(linearTeam: "team-root", linearStartStates: states), createdAt: 1)
+    editor.load(project)
+    #expect(!editor.hasChanges)
+    #expect(editor.linearStartStates == states)
+    editor.name = "Renamed"
+    #expect(editor.request.tracking?.linearStartStates == states)
+    editor.load(project)
+    editor.linearStartStates["team-root"] = LinearWorkflowState(id: "started", name: "In progress")
+    #expect(editor.hasChanges)
+    #expect(editor.request.tracking?.linearStartStates?.count == 2)
+    editor.linearTeam = nil
+    #expect(editor.request.tracking?.linearStartStates == nil)
+    editor.load(Project(id: "q", name: "Other", path: "/other", createdAt: 1))
+    #expect(editor.linearStartStates.isEmpty)
+    #expect(!editor.hasChanges)
+}

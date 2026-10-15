@@ -69,6 +69,19 @@ import Testing
     #expect(try JSONValue.decode(JSONEncoder().encode(legacy))["tracking"]?["mcp"] == nil)
 }
 
+@Test func trackingRoundTripsLinearStartStateChoices() throws {
+    let json = Data(#"""
+    {"slackChannels":[],"linearTeam":"root","linearStartStates":{"child":{"id":"active","name":"Building"}}}
+    """#.utf8)
+    let config = try JSONDecoder().decode(ProjectTrackingConfig.self, from: json)
+    #expect(config.linearStartStates == ["child": LinearWorkflowState(id: "active", name: "Building")])
+    let roundTrip = try JSONDecoder().decode(ProjectTrackingConfig.self, from: JSONEncoder().encode(config))
+    #expect(roundTrip == config)
+    let states = try JSONDecoder().decode(TrackingLookup<LinearWorkflowState>.self,
+        from: Data(#"{"status":"ok","items":[{"id":"active","name":"In progress"}]}"#.utf8))
+    #expect(states.items.first?.id == "active")
+}
+
 @Test func trackingDecodesItemsStatusAndWebSocketChanges() throws {
     let json = Data(#"""
     {"items":[{"id":"i","projectId":"p","kind":"linear","externalId":"ENG-1","title":"Bug","url":"https://example.com",
