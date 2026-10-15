@@ -1978,21 +1978,33 @@ export class SessionManager {
 	requestMainRefresh(projectId: string): void {
 		if (this.closing) return;
 		this.mainRefreshDue.add(projectId);
+		this.scheduleMainRefresh(250);
+	}
+
+	private scheduleMainRefresh(delay: number): void {
 		if (this.mainRefreshTimer) return;
 		this.mainRefreshTimer = setTimeout(() => {
 			this.mainRefreshTimer = undefined;
 			this.pumpMainRefreshes();
-		}, 250);
+		}, delay);
 		this.mainRefreshTimer.unref();
 	}
 
 	private pumpMainRefreshes(): void {
+		clearTimeout(this.mainRefreshTimer);
+		this.mainRefreshTimer = undefined;
 		if (this.closing) return;
 		for (const id of this.mainRefreshDue) {
 			if (this.mainRefreshes.size >= 2) break;
 			if (this.mainRefreshes.has(id)) continue;
-			this.mainRefreshDue.delete(id);
+			// A finishing fetch can retry from finally after update preparation closed admission.
+			// Keep the project queued; retry on lease expiry (or immediately on explicit release).
+			if (this.updateGate.paused) {
+				this.scheduleMainRefresh(30_000);
+				return;
+			}
 			const end = this.updateGate.begin();
+			this.mainRefreshDue.delete(id);
 			const task = this.refreshProjectMain(id)
 				.catch((error: unknown) => console.warn(`pilotd: main refresh failed: ${error}`))
 				.finally(() => {
@@ -2623,6 +2635,7 @@ export class SessionManager {
 				if (this.updatePausing.has(worker)) worker.send({ type: "update.resume" });
 		this.updatePausing.clear();
 		this.updateGate.release();
+		this.pumpMainRefreshes();
 		if (this.sleepPause) return;
 		for (const meta of this.metas.values()) {
 			if (!meta.updatePaused) continue;
