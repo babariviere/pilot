@@ -113,8 +113,9 @@ struct HairlineDivider: View {
     }
 }
 
-/// A capsule bar split into coloured segments, such as tasks by status. Zero segments are skipped;
-/// an empty bar shows the track. Describe the values in text next to it: the bar is hidden from VoiceOver.
+/// One plain capsule bar split into coloured segments, such as tasks by status: no gaps between segments, no dither
+/// and no animation. Zero segments are skipped; an empty bar shows the faint track (`Theme.border`), which is also the
+/// colour for work not started. Describe the values in text next to it: the bar is hidden from VoiceOver.
 struct SegmentedProgressBar: View {
     struct Segment: Identifiable {
         let id: String
@@ -129,20 +130,62 @@ struct SegmentedProgressBar: View {
         let visible = segments.filter { $0.value > 0 }
         let total = visible.reduce(0) { $0 + $1.value }
         GeometryReader { geometry in
-            let gaps = CGFloat(max(0, visible.count - 1)) * 2
-            HStack(spacing: 2) {
+            HStack(spacing: 0) {
                 if total == 0 {
-                    Capsule().fill(Theme.border)
+                    Rectangle().fill(Theme.border)
                 } else {
                     ForEach(visible) { segment in
-                        Capsule().fill(segment.color)
-                            .frame(width: max(0, (geometry.size.width - gaps) * CGFloat(segment.value) / CGFloat(total)))
+                        Rectangle().fill(segment.color)
+                            .frame(width: max(0, geometry.size.width * CGFloat(segment.value) / CGFloat(total)))
                     }
                 }
             }
         }
         .frame(height: height)
+        .clipShape(Capsule())
         .accessibilityHidden(true)
+    }
+}
+
+/// The legend under a `SegmentedProgressBar`: each count with a 7 pt dot in its segment's colour, in a muted caption
+/// with monospaced digits. Pass only non-zero entries. Wraps onto a second line when the row is too narrow.
+/// Hidden from VoiceOver like the bar: the parent states the same counts in words.
+struct ProgressLegend: View {
+    struct Entry: Identifiable {
+        let id: String
+        let text: String
+        let color: Color
+    }
+
+    let entries: [Entry]
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            row(entries)
+            VStack(alignment: .leading, spacing: 4) {
+                let split = (entries.count + 1) / 2
+                row(Array(entries.prefix(split)))
+                row(Array(entries.dropFirst(split)))
+            }
+        }
+        .font(.pilot(.caption))
+        .monospacedDigit()
+        .foregroundStyle(Theme.mutedForeground)
+        .accessibilityHidden(true)
+    }
+
+    private func row(_ entries: [Entry]) -> some View {
+        HStack(spacing: 12) {
+            ForEach(entries) { entry in
+                HStack(spacing: 5) {
+                    // The hairline keeps the track-coloured "to do" dot visible on white.
+                    Circle().fill(entry.color).overlay(Circle().strokeBorder(Theme.border, lineWidth: 1))
+                        .frame(width: 7, height: 7)
+                    Text(entry.text).lineLimit(1)
+                }
+                .fixedSize()
+            }
+        }
     }
 }
 

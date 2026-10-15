@@ -573,9 +573,9 @@ struct MissionTasksTab: View {
         let members = model.members(of: mission).filter { !$0.isArchived }
         LazyVStack(alignment: .leading, spacing: 0) {
             if counts.total > 0 || phases.dropped > 0 {
-                HStack(alignment: .center, spacing: 12) {
+                HStack(alignment: .top, spacing: 12) {
                     if counts.total > 0 {
-                        MissionTaskProgress(counts: counts)
+                        MissionTaskProgress(counts: counts, barWidth: 360)
                     }
                     Spacer(minLength: 0)
                     if phases.dropped > 0 { droppedToggle(phases.dropped) }

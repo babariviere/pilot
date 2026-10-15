@@ -282,6 +282,15 @@ CREATE INDEX IF NOT EXISTS needs_you_comments_attention_order ON comments (missi
 	WHERE resolved_at IS NULL AND target_session_id IS NULL AND author_session_id IS NOT NULL;
 `;
 
+/** Task counts of one mission by status, dropped tasks excluded. To do and delegated are the rest of `total`. */
+export interface MissionTaskProgress {
+	done: number;
+	inReview: number;
+	inProgress: number;
+	blocked: number;
+	total: number;
+}
+
 export interface MissionNotice {
 	requestId: string;
 	missionId: string;
@@ -1084,15 +1093,27 @@ export class MissionStore {
 	}
 
 	/** Task counts per mission (dropped tasks excluded), for summaries that do not load task bodies. */
-	taskProgress(projectId?: string): Map<string, { done: number; total: number }> {
+	taskProgress(projectId?: string): Map<string, MissionTaskProgress> {
 		const rows = this.all(
-			`SELECT t.mission_id AS id, SUM(t.status = 'done') AS done, COUNT(*) AS total
+			`SELECT t.mission_id AS id, SUM(t.status = 'done') AS done, SUM(t.status = 'in_review') AS in_review,
+				SUM(t.status = 'in_progress') AS in_progress, SUM(t.status = 'blocked') AS blocked, COUNT(*) AS total
 				FROM tasks t JOIN missions m ON m.id = t.mission_id
 				WHERE t.status != 'dropped'${projectId ? " AND m.project_id = ?" : ""}
 				GROUP BY t.mission_id`,
 			...(projectId ? [projectId] : []),
 		);
-		return new Map(rows.map((row) => [str(row.id!), { done: num(row.done!), total: num(row.total!) }]));
+		return new Map(
+			rows.map((row) => [
+				str(row.id!),
+				{
+					done: num(row.done!),
+					inReview: num(row.in_review!),
+					inProgress: num(row.in_progress!),
+					blocked: num(row.blocked!),
+					total: num(row.total!),
+				},
+			]),
+		);
 	}
 
 	require(id: string): Mission {

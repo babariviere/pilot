@@ -21,7 +21,7 @@ import {
 	type SessionPullRequest,
 	type SessionSummary,
 } from "@pilot/protocol";
-import type { MissionStore } from "./missions.ts";
+import type { MissionStore, MissionTaskProgress } from "./missions.ts";
 import { reasonLine, sessionNeedsYouReason } from "./needs-you-reason.ts";
 import type { ProjectStore } from "./projects.ts";
 import { readinessReasonLabel } from "./pull-request-readiness.ts";
@@ -48,7 +48,7 @@ export interface DashboardInput {
 	/** The project's missions, any status. */
 	missions: Mission[];
 	/** Task counts per mission. */
-	progress: Map<string, { done: number; total: number }>;
+	progress: Map<string, MissionTaskProgress>;
 	isUnread: (sessionId: string, outcomeAt: number) => boolean;
 	scheduled?: DashboardScheduledItem[];
 	tracked?: DashboardTrackedSource[];
@@ -222,6 +222,9 @@ export function buildProjectDashboard(input: DashboardInput, limit = DASHBOARD_S
 			id: mission.id,
 			title: mission.title,
 			tasksDone: tasks?.done ?? 0,
+			tasksInReview: tasks?.inReview ?? 0,
+			tasksInProgress: tasks?.inProgress ?? 0,
+			tasksBlocked: tasks?.blocked ?? 0,
 			tasksTotal: tasks?.total ?? 0,
 			working: workingByMission.get(mission.id) ?? 0,
 			needsYou: (mission.needsYouCount > 0 ? mission.needsYouCount : 0) + (needsYouByMission.get(mission.id) ?? 0),
@@ -410,7 +413,7 @@ export class ProjectDashboardService {
 		projectId: string,
 		sessions: SessionSummary[],
 		missions: Mission[],
-		progress: Map<string, { done: number; total: number }>,
+		progress: Map<string, MissionTaskProgress>,
 		limit = DASHBOARD_SECTION_LIMIT,
 	): ProjectDashboard {
 		const { reviews, providers } = this.deps;

@@ -443,6 +443,10 @@ private func detail(_ mission: Mission, tasks: [MissionTask] = [], comments: [Mi
     #expect(MissionTaskCounts(tasks).progressLine(working: working.count) == "1 of 5 done · 3 working now")
     #expect(MissionTaskCounts(tasks).progressLine() == "1 of 5 done")
     #expect(MissionTaskCounts([]).progressLine(working: 2) == "No tasks yet")
+    #expect(MissionTaskCounts(tasks).legendLine == "1 done · 1 in review · 1 in progress · 1 blocked · 1 to do")
+    #expect(MissionTaskCounts(tasks.filter { $0.status != .blocked && $0.status != .inReview }).legendLine
+        == "1 done · 1 in progress · 1 to do", "zero counts are omitted")
+    #expect(MissionTaskCounts([]).legend.isEmpty)
 }
 
 @Test func decisionNumbersAndProposalsRoundTripAndNeedAttention() throws {

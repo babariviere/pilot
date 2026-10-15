@@ -84,19 +84,23 @@ struct MissionInspectorPane: View {
         }
     }
 
-    /// "12 of 18 done · 3 working now · 2 need you", opening the mission's Overview.
+    /// "12 of 18 done · 3 working now · 2 need you" over the tasks bar and its legend, opening the mission's Overview.
     private func summary(_ mission: Mission, detail: MissionDetail) -> some View {
         let needs = model.needsYouCount(mission)
         let counts = MissionTaskCounts(detail.tasks)
         return Button { model.openMission(mission.id, tab: .overview) } label: {
-            HStack(spacing: 5) {
-                MissionTaskProgress(counts: counts, working: MissionTaskOrdering.inFlight(detail.tasks).count)
-                if needs > 0 {
-                    Text("·")
-                    Text(SidebarScopeCounts.needsYou(needs)).lineLimit(1).fixedSize()
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 5) {
+                    Text(counts.progressLine(working: MissionTaskOrdering.inFlight(detail.tasks).count))
+                        .monospacedDigit().lineLimit(1).fixedSize()
+                    if needs > 0 {
+                        Text("·")
+                        Text(SidebarScopeCounts.needsYou(needs)).lineLimit(1).fixedSize()
+                    }
+                    PilotSymbol(PilotIcon.disclosure).foregroundStyle(Theme.faintForeground)
+                    Spacer(minLength: 0)
                 }
-                PilotSymbol(PilotIcon.disclosure).foregroundStyle(Theme.faintForeground)
-                Spacer(minLength: 0)
+                if counts.total > 0 { MissionTaskProgress(counts: counts) }
             }
             .font(.pilot(.caption))
             .foregroundStyle(Theme.mutedForeground)

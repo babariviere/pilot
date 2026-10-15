@@ -930,8 +930,11 @@ export interface DashboardPullRequest {
 export interface DashboardMission {
 	id: string;
 	title: string;
-	/** Tasks done, and tasks overall (dropped tasks excluded). */
+	/** Tasks by status, and tasks overall (dropped tasks excluded). To do and delegated tasks are the rest. */
 	tasksDone: number;
+	tasksInReview: number;
+	tasksInProgress: number;
+	tasksBlocked: number;
 	tasksTotal: number;
 	/** Member chats working now. */
 	working: number;

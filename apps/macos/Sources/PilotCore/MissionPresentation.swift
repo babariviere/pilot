@@ -222,6 +222,16 @@ public struct MissionTaskCounts: Equatable, Sendable {
 
     /// Progress bar order: finished work first, then review, active, blocked and waiting work.
     public static let barOrder: [MissionTaskStatus] = [.done, .inReview, .inProgress, .blocked, .todo, .delegated]
+
+    /// Legend entries in `barOrder`, zero counts omitted.
+    public var legend: [(status: MissionTaskStatus, count: Int)] {
+        Self.barOrder.compactMap { status in self[status] > 0 ? (status, self[status]) : nil }
+    }
+
+    /// The legend in words: "9 done · 2 in review · 3 in progress · 1 blocked · 3 to do".
+    public var legendLine: String {
+        legend.map { "\($0.count) \($0.status.label.lowercased())" }.joined(separator: " · ")
+    }
 }
 
 /// Progress of one milestone (a phase, until phases are first-class).

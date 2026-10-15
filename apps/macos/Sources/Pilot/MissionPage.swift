@@ -233,21 +233,20 @@ struct MissionStatusChip: View {
     }
 }
 
-/// Tasks by status as a thin split bar beside the progress in words: "12 of 18 done", or with `working`,
-/// "12 of 18 done · 3 working now" (the Overview's meta line).
+/// Tasks by status as one plain bar with a legend of counts under it ("9 done · 2 in review · 3 in progress ·
+/// 1 blocked · 3 to do", zero counts omitted). VoiceOver reads `counts.summary`. Show it only when there are tasks.
 struct MissionTaskProgress: View {
     let counts: MissionTaskCounts
-    var working = 0
+    /// Widest the bar grows; nil fills the available width.
+    var barWidth: CGFloat? = nil
 
     var body: some View {
-        HStack(spacing: 8) {
-            if counts.total > 0 {
-                SegmentedProgressBar(segments: counts.segments, height: 4).frame(width: 96)
-            }
-            Text(counts.progressLine(working: working))
-                .font(.pilot(.caption)).monospacedDigit().foregroundStyle(Theme.mutedForeground)
-                .lineLimit(1).fixedSize()
+        VStack(alignment: .leading, spacing: 7) {
+            SegmentedProgressBar(segments: counts.segments)
+                .frame(maxWidth: barWidth ?? .infinity)
+            ProgressLegend(entries: counts.legendEntries)
         }
+        .frame(maxWidth: barWidth ?? .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(counts.summary)
     }
@@ -340,6 +339,14 @@ struct MissionOverviewTab: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             MissionMetaLine(mission: mission, detail: detail, counts: counts, working: working)
+            if counts.total > 0 {
+                Button { model.missionTab = .tasks } label: {
+                    MissionTaskProgress(counts: counts, barWidth: 360).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Open Tasks")
+                .padding(.top, 4)
+            }
             if counts.total > 0, counts.done == counts.total, mission.status == .active {
                 HStack(spacing: 8) {
                     Text("Every task is done.").font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
@@ -355,7 +362,8 @@ struct MissionOverviewTab: View {
     }
 }
 
-/// One line under the goal: task progress with its thin bar, who coordinates and the brief revision.
+/// One line under the goal: task progress in words, who coordinates and the brief revision. The bar and its legend
+/// follow on their own lines.
 private struct MissionMetaLine: View {
     let mission: Mission
     let detail: MissionDetail
@@ -366,8 +374,11 @@ private struct MissionMetaLine: View {
 
     var body: some View {
         HStack(spacing: 5) {
-            Button { model.missionTab = .tasks } label: { MissionTaskProgress(counts: counts, working: working) }
+            Button(counts.progressLine(working: working)) { model.missionTab = .tasks }
                 .buttonStyle(.plain)
+                .monospacedDigit()
+                .lineLimit(1)
+                .fixedSize()
                 .help("Open Tasks")
             Text("·")
             if let coordinator = mission.coordinatorSessionId {

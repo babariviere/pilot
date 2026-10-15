@@ -471,8 +471,20 @@ test("summary attention counts track task and comment changes without loading de
 				[status === "done" ? 1 : 0, status === "dropped" ? 1 : 2],
 				`progress with task ${status}`,
 			);
+			assert.deepEqual(
+				missions.taskProgress("p").get(id),
+				{
+					done: status === "done" ? 1 : 0,
+					inReview: status === "in_review" ? 1 : 0,
+					inProgress: status === "in_progress" ? 1 : 0,
+					blocked: 0,
+					total: status === "dropped" ? 1 : 2,
+				},
+				`task progress by status with task ${status}`,
+			);
 		}
 		missions.updateTask(id, task.id, { status: "blocked" });
+		assert.equal(missions.taskProgress().get(id)?.blocked, 1);
 		missions.removeTask(id, task.id);
 		assert.equal(counts(), 0);
 		assert.equal(missions.require(other.id).needsYouCount, 2);
