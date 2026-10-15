@@ -54,7 +54,7 @@ struct EnergySettingsContent: View {
             ))
             .disabled(busy || (!status.available && !status.settings.keepAwake))
             SettingsToggle("Keep going with the lid closed",
-                           detail: "Locks this Mac when you close the lid. Requires power and Wi-Fi; if either disconnects, Pilot pauses agents and lets this Mac sleep.",
+                           detail: "Requires power and Wi-Fi; if either disconnects, Pilot pauses agents and lets this Mac sleep. Pilot does not lock the screen; macOS settings control locking.",
                            isOn: Binding(
                 get: { status.settings.closedLid },
                 set: { update(PowerSettings(keepAwake: status.settings.keepAwake, closedLid: $0)) }
