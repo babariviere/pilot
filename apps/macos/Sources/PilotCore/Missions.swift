@@ -89,6 +89,8 @@ public struct Mission: Codable, Identifiable, Equatable, Hashable, Sendable {
     public let autopilot: Bool?
     public var phaseGating: Bool? = nil
     public var isPhaseGatingEnabled: Bool { phaseGating ?? false }
+    /// The first unfinished phase with its progress, for the sidebar. Nil without one, or from an older daemon.
+    public var currentPhase: MissionCurrentPhase? = nil
     /// Latest brief revision; 0 before the first save.
     public let briefRevision: Int
     /// Blocked tasks and open, unaddressed agent comments when the user coordinates.
@@ -110,7 +112,7 @@ public struct Mission: Codable, Identifiable, Equatable, Hashable, Sendable {
         coordinatorSessionId: String? = nil, autopilot: Bool? = nil, briefRevision: Int = 0, createdAt: Double,
         updatedAt: Double, completedAt: Double? = nil, archivedAt: Double? = nil, needsYouCount: Int? = nil,
         needsYouReason: String? = nil,
-        tasksDone: Int? = nil, tasksTotal: Int? = nil, phaseGating: Bool? = nil
+        tasksDone: Int? = nil, tasksTotal: Int? = nil, phaseGating: Bool? = nil, currentPhase: MissionCurrentPhase? = nil
     ) {
         self.id = id
         self.projectId = projectId
@@ -120,6 +122,7 @@ public struct Mission: Codable, Identifiable, Equatable, Hashable, Sendable {
         self.coordinatorSessionId = coordinatorSessionId
         self.autopilot = autopilot
         self.phaseGating = phaseGating
+        self.currentPhase = currentPhase
         self.briefRevision = briefRevision
         self.needsYouCount = needsYouCount
         self.tasksDone = tasksDone
@@ -236,6 +239,35 @@ public struct MissionPhase: Codable, Identifiable, Equatable, Hashable, Sendable
     }
 }
 
+/// A mission summary's current phase: the first unfinished one in order. Dropped tasks are excluded from both counts.
+public struct MissionCurrentPhase: Codable, Equatable, Hashable, Sendable {
+    public let id: String
+    public let name: String
+    public let done: Int
+    public let total: Int
+
+    public init(id: String, name: String, done: Int, total: Int) {
+        self.id = id
+        self.name = name
+        self.done = done
+        self.total = total
+    }
+}
+
+/// POST /api/missions/:id/phases creates (name required); PATCH /api/missions/:id/phases/:phaseId sends only changes.
+/// An empty goal clears it.
+public struct MissionPhaseWrite: Codable, Sendable {
+    public var name: String?
+    public var goal: String?
+    public var order: Double?
+
+    public init(name: String? = nil, goal: String? = nil, order: Double? = nil) {
+        self.name = name
+        self.goal = goal
+        self.order = order
+    }
+}
+
 public struct MissionTask: Codable, Identifiable, Equatable, Hashable, Sendable {
     public let id: String
     public let number: Int
@@ -269,6 +301,13 @@ public struct MissionTask: Codable, Identifiable, Equatable, Hashable, Sendable 
         let name = delegatedTo?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return name.isEmpty ? "Delegated" : "Delegated to \(name)"
     }
+
+    /// Phase gating holds the task until earlier phases finish. The daemon then reports it as blocked.
+    public var isPhaseGated: Bool { !(blockedByPhases ?? []).isEmpty }
+
+    /// The task's own status, without the blocked state phase gating derives. Views group, count and offer
+    /// status changes by it, and show gating separately, like unfinished dependencies.
+    public var workStatus: MissionTaskStatus { isPhaseGated ? storedStatus ?? status : status }
 
     public init(
         id: String, number: Int, title: String, body: String? = nil, status: MissionTaskStatus = .todo,
@@ -668,10 +707,12 @@ public struct StartMissionTaskRequest: Codable, Sendable {
     public var thinking: String?
     public var mode: ChatMode?
     public var baseBranch: String?
+    /// The user starts a task that phase gating holds anyway.
+    public var overridePhaseGating: Bool? = nil
 
     public init(message: String? = nil, model: String? = nil, thinking: String? = nil, mode: ChatMode? = nil,
                 baseBranch: String? = nil, artifacts: [MissionArtifactReference]? = nil,
-                links: [MissionLinkReference]? = nil) {
+                links: [MissionLinkReference]? = nil, overridePhaseGating: Bool? = nil) {
         self.artifacts = artifacts
         self.links = links
         self.message = message
@@ -679,6 +720,7 @@ public struct StartMissionTaskRequest: Codable, Sendable {
         self.thinking = thinking
         self.mode = mode
         self.baseBranch = baseBranch
+        self.overridePhaseGating = overridePhaseGating
     }
 }
 

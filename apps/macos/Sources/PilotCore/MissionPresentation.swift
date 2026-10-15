@@ -49,7 +49,8 @@ public enum MissionNeedsYou {
         var items: [MissionNeedsYouItem] = unreadChats(mission: mission, members: members, isUnread: isUnread)
             .map { .chat($0) }
         guard let detail else { return items }
-        items += MissionTaskOrdering.sorted(detail.tasks).filter { $0.status == .blocked }.map { .blockedTask($0) }
+        // Phase gating is shown on the task itself; it is planned waiting, not something for the user.
+        items += MissionTaskOrdering.sorted(detail.tasks).filter { $0.workStatus == .blocked }.map { .blockedTask($0) }
         if mission.coordinatorSessionId == nil {
             // The user's own comments are not waiting on the user.
             items += detail.comments
@@ -78,11 +79,11 @@ public enum MissionTaskOrdering {
         tasks.sorted { ($0.order, $0.number) < ($1.order, $1.number) }
     }
 
-    /// Non-empty status groups, each in task order.
+    /// Non-empty status groups, each in task order. Gated tasks keep their own status.
     public static func groups(_ tasks: [MissionTask]) -> [MissionTaskGroup] {
         let ordered = sorted(tasks)
         return groupOrder.compactMap { status in
-            let matching = ordered.filter { $0.status == status }
+            let matching = ordered.filter { $0.workStatus == status }
             return matching.isEmpty ? nil : MissionTaskGroup(status: status, tasks: matching)
         }
     }
@@ -104,12 +105,42 @@ public enum MissionTaskOrdering {
     /// Order updates that move `taskId` by `offset` positions within `tasks` (a displayed list, any order).
     /// Usually one update between the new neighbours; renumbers the list when their keys leave no room.
     public static func move(_ taskId: String, by offset: Int, in tasks: [MissionTask]) -> [Update] {
-        var list = sorted(tasks)
-        guard let from = list.firstIndex(where: { $0.id == taskId }) else { return [] }
-        let to = min(max(from + offset, 0), list.count - 1)
+        MissionOrderKeys.move(taskId, by: offset, in: sorted(tasks).map { .init(id: $0.id, order: $0.order) })
+            .map { Update(taskId: $0.id, order: $0.order) }
+    }
+
+    /// Order key for a task appended after every existing one.
+    public static func nextOrder(after tasks: [MissionTask]) -> Double {
+        (tasks.map(\.order).max() ?? 0) + 1
+    }
+}
+
+/// Fractional sort keys shared by tasks and phases: a move writes one key between the new neighbours, and
+/// renumbers the list only when their keys leave no room.
+public enum MissionOrderKeys {
+    public struct Key: Equatable, Sendable {
+        public let id: String
+        public let order: Double
+        public init(id: String, order: Double) {
+            self.id = id
+            self.order = order
+        }
+    }
+
+    /// Moves `id` by `offset` positions within `keys`, which are in display order.
+    public static func move(_ id: String, by offset: Int, in keys: [Key]) -> [Key] {
+        guard let from = keys.firstIndex(where: { $0.id == id }) else { return [] }
+        return place(id, at: min(max(from + offset, 0), keys.count - 1), in: keys)
+    }
+
+    /// Moves `id` so it ends up at `destination` in `keys` (display order), counted after its removal.
+    public static func place(_ id: String, at destination: Int, in keys: [Key]) -> [Key] {
+        var list = keys
+        guard let from = list.firstIndex(where: { $0.id == id }) else { return [] }
+        let item = list.remove(at: from)
+        let to = min(max(destination, 0), list.count)
         guard to != from else { return [] }
-        let task = list.remove(at: from)
-        list.insert(task, at: to)
+        list.insert(item, at: to)
         let previous = to > 0 ? list[to - 1].order : nil
         let next = to + 1 < list.count ? list[to + 1].order : nil
         let candidate: Double
@@ -120,17 +151,12 @@ public enum MissionTaskOrdering {
         case (nil, nil): return []
         }
         let fits = (previous.map { candidate > $0 } ?? true) && (next.map { candidate < $0 } ?? true)
-        if fits { return [Update(taskId: taskId, order: candidate)] }
+        if fits { return [Key(id: id, order: candidate)] }
         let base = min(list.map(\.order).min() ?? 0, 0)
-        return list.enumerated().compactMap { index, task in
+        return list.enumerated().compactMap { index, key in
             let order = base + Double(index + 1)
-            return task.order == order ? nil : Update(taskId: task.id, order: order)
+            return key.order == order ? nil : Key(id: key.id, order: order)
         }
-    }
-
-    /// Order key for a task appended after every existing one.
-    public static func nextOrder(after tasks: [MissionTask]) -> Double {
-        (tasks.map(\.order).max() ?? 0) + 1
     }
 }
 
@@ -142,20 +168,43 @@ public extension Collection where Element == Mission {
 /// A mission's sidebar row: a progress line and the most urgent state of its chats. Missions are not chats,
 /// so the row summarises its members instead of listing them.
 public enum MissionSidebarSummary {
-    /// "3 of 12 tasks · 2 working". Nil when there is nothing to say (no task counts from an older daemon,
-    /// and no working chat).
-    public static func progress(mission: Mission, working: Int) -> String? {
+    /// The row's second line: the current phase, when there is one, then its progress (or the mission's) and
+    /// working chats.
+    public struct Line: Equatable, Sendable {
+        /// The current phase's name. The row truncates it before the counts.
+        public let phase: String?
+        /// "3 of 8 tasks · 2 working".
+        public let detail: String?
+
+        public var text: String { [phase, detail].compactMap { $0 }.joined(separator: " · ") }
+    }
+
+    /// "Build · 3 of 8 tasks · 2 working" in the current phase, else "3 of 12 tasks · 2 working". Nil when there is
+    /// nothing to say (no task counts from an older daemon, and no working chat).
+    public static func line(mission: Mission, working: Int) -> Line? {
         var parts: [String] = []
-        if let total = mission.tasksTotal {
+        let phase = mission.currentPhase.flatMap { $0.total > 0 ? $0 : nil }
+        if let phase {
+            parts.append(tasks(done: phase.done, total: phase.total))
+        } else if let total = mission.tasksTotal {
             if total == 0 {
                 parts.append("No tasks")
             } else {
-                let done = min(max(mission.tasksDone ?? 0, 0), total)
-                parts.append("\(done) of \(total) \(total == 1 ? "task" : "tasks")")
+                parts.append(tasks(done: mission.tasksDone ?? 0, total: total))
             }
         }
         if working > 0 { parts.append("\(working) working") }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        guard phase != nil || !parts.isEmpty else { return nil }
+        return Line(phase: phase?.name, detail: parts.isEmpty ? nil : parts.joined(separator: " · "))
+    }
+
+    /// The line as one string, for accessibility.
+    public static func progress(mission: Mission, working: Int) -> String? {
+        line(mission: mission, working: working)?.text
+    }
+
+    private static func tasks(done: Int, total: Int) -> String {
+        "\(min(max(done, 0), total)) of \(total) \(total == 1 ? "task" : "tasks")"
     }
 
     /// Sidebar urgency order: failed, then needs you, ready to merge and working. A blocked task or an open
@@ -209,7 +258,8 @@ public struct MissionTaskCounts: Equatable, Sendable {
 
     public init(_ tasks: [MissionTask]) {
         var counts: [MissionTaskStatus: Int] = [:]
-        for task in tasks where task.status != .dropped { counts[task.status, default: 0] += 1 }
+        // Gated tasks count by their own status: gating is planned waiting, not blocked work.
+        for task in tasks where task.workStatus != .dropped { counts[task.workStatus, default: 0] += 1 }
         byStatus = counts
     }
 
@@ -238,98 +288,166 @@ public struct MissionTaskCounts: Equatable, Sendable {
     }
 }
 
-/// Progress of one milestone (a phase, until phases are first-class).
-public struct MissionMilestoneProgress: Identifiable, Equatable, Sendable {
-    /// Nil groups tasks without a milestone.
-    public let name: String?
-    public let counts: MissionTaskCounts
-    public var id: String { name ?? "" }
-}
-
 public enum MissionMilestones {
     /// A task's milestone, or nil when it names none (blank counts as none).
     public static func name(of task: MissionTask) -> String? {
         task.milestone.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
     }
+}
 
-    /// Milestones in the order their first task appears. Empty unless at least one task names a milestone;
-    /// tasks without one are then grouped last. Milestones whose tasks are all dropped are omitted.
-    public static func progress(_ tasks: [MissionTask]) -> [MissionMilestoneProgress] {
-        let ordered = MissionTaskOrdering.sorted(tasks)
-        var names: [String] = []
-        for task in ordered { if let name = name(of: task), !names.contains(name) { names.append(name) } }
-        guard !names.isEmpty else { return [] }
-        let named = names.map { milestone in
-            MissionMilestoneProgress(name: milestone, counts: MissionTaskCounts(ordered.filter { name(of: $0) == milestone }))
+/// A mission's phases in order, and the phase each task belongs to. Without phases from the daemon (an older
+/// pilotd), task milestones stand in for phases in the order their first task appears, with the name as id;
+/// those cannot be edited.
+public struct MissionPhaseIndex: Equatable, Sendable {
+    public let phases: [MissionPhase]
+    /// First-class phases, which the user can add, rename, reorder and delete, and move tasks between.
+    public let isEditable: Bool
+    private let positions: [String: Int]
+
+    public init(phases: [MissionPhase]?, tasks: [MissionTask]) {
+        if let phases {
+            self.phases = phases.sorted { ($0.order, $0.id) < ($1.order, $1.id) }
+            isEditable = true
+        } else {
+            var names: [String] = []
+            var seen = Set<String>()
+            for task in MissionTaskOrdering.sorted(tasks) {
+                if let name = MissionMilestones.name(of: task), seen.insert(name).inserted { names.append(name) }
+            }
+            self.phases = names.enumerated().map { index, name in
+                MissionPhase(id: name, missionId: "", name: name, order: Double(index))
+            }
+            isEditable = false
         }
-        let rest = MissionMilestoneProgress(name: nil, counts: MissionTaskCounts(ordered.filter { name(of: $0) == nil }))
-        return (named + [rest]).filter { $0.counts.total > 0 }
+        positions = Dictionary(self.phases.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    public init(_ detail: MissionDetail) {
+        self.init(phases: detail.phases, tasks: detail.tasks)
+    }
+
+    /// The phase a task belongs to. Nil for no phase, including a phase that no longer exists.
+    public func phaseId(of task: MissionTask) -> String? {
+        guard isEditable else { return MissionMilestones.name(of: task) }
+        return task.phaseId.flatMap { positions[$0] == nil ? nil : $0 }
+    }
+
+    public func phase(id: String) -> MissionPhase? { positions[id].map { phases[$0] } }
+
+    public func phase(of task: MissionTask) -> MissionPhase? { phaseId(of: task).flatMap(phase(id:)) }
+
+    /// The unfinished earlier phases holding a gated task, in phase order. Unknown ids are skipped.
+    public func gatingPhases(of task: MissionTask) -> [MissionPhase] {
+        guard task.isPhaseGated else { return [] }
+        return (task.blockedByPhases ?? []).compactMap(phase(id:)).sorted { (positions[$0.id] ?? 0) < (positions[$1.id] ?? 0) }
+    }
+
+    /// Order key for a phase added after every existing one.
+    public var nextOrder: Double { (phases.map(\.order).max() ?? 0) + 1 }
+
+    /// Order updates that move a phase by `offset` positions.
+    public func move(_ phaseId: String, by offset: Int) -> [MissionOrderKeys.Key] {
+        MissionOrderKeys.move(phaseId, by: offset, in: phases.map { .init(id: $0.id, order: $0.order) })
+    }
+
+    public func position(of phaseId: String) -> Int? { positions[phaseId] }
+}
+
+/// "Waits for phase Build" or "Waits for phases Build, Polish": why phase gating holds a task. Names that already
+/// say "Phase" ("Phase 1") skip the word. Nil when gating does not hold the task.
+public enum MissionPhaseGating {
+    public static func text(_ phases: [MissionPhase]) -> String? {
+        guard !phases.isEmpty else { return nil }
+        let names = phases.map(\.name).joined(separator: ", ")
+        if phases.allSatisfy({ $0.name.lowercased().hasPrefix("phase") }) { return "Waits for \(names)" }
+        return "Waits for \(phases.count == 1 ? "phase" : "phases") \(names)"
     }
 }
 
-/// One phase of the Tasks tab. Until phases are first-class, a phase is a milestone.
+/// One phase of the Tasks tab, or the tasks without a phase.
 public struct MissionPhaseGroup: Identifiable, Equatable, Sendable {
-    /// The milestone; nil for tasks without one, and for the flat list of a mission without milestones.
-    public let name: String?
+    /// Nil for tasks without a phase, and for the flat list of a mission without phases.
+    public let phase: MissionPhase?
     /// Shown tasks: active work, delegated work, done, then dropped when shown, in task order within each status.
     public let tasks: [MissionTask]
     /// Progress of the phase; dropped tasks are excluded, as everywhere else.
     public let counts: MissionTaskCounts
     /// The phase's dropped tasks, shown or not.
     public let dropped: Int
+    /// The first phase, in order, with unfinished tasks: where the work is now.
+    public let isCurrent: Bool
 
-    public var id: String { Self.id(name) }
+    public var name: String? { phase?.name }
+    public var id: String { Self.id(phase?.id) }
     public var title: String { name ?? "No phase" }
-    /// Every task is done or dropped, so the phase starts folded.
-    public var isFinished: Bool { counts.done == counts.total }
-    /// "12/18 done", or "2 dropped" for a phase whose every task was dropped.
-    public var progress: String { counts.total > 0 ? "\(counts.done)/\(counts.total) done" : "\(dropped) dropped" }
+    /// It has tasks and every one is done or dropped, so the phase starts folded.
+    public var isFinished: Bool { counts.total + dropped > 0 && counts.done == counts.total }
+    /// "12/18 done", "2 dropped" for a phase whose every task was dropped, or "No tasks".
+    public var progress: String {
+        if counts.total > 0 { return "\(counts.done)/\(counts.total) done" }
+        return dropped > 0 ? "\(dropped) dropped" : "No tasks"
+    }
 
-    static func id(_ name: String?) -> String { "phase-" + (name ?? "") }
-    /// The id of the phase a task belongs to, for "Show task".
-    public static func id(of task: MissionTask) -> String { id(MissionMilestones.name(of: task)) }
+    /// The group id of a phase id; nil is "No phase".
+    public static func id(_ phaseId: String?) -> String { "phase-" + (phaseId ?? "") }
 }
 
-/// The Tasks tab's phases, in the order of `MissionMilestones.progress`: first appearance in task order, then
-/// tasks without a milestone last under "No phase". A mission without milestones is one flat list.
+/// The Tasks tab's phases in phase order, then tasks without a phase last under "No phase". A mission without
+/// phases is one flat list. Every first-class phase keeps its header, even when empty, so it can be filled or
+/// deleted; milestone stand-ins appear only with tasks to show.
 public struct MissionTaskPhases: Equatable, Sendable {
     public let groups: [MissionPhaseGroup]
-    /// No task names a milestone, so the list has no phase headers.
+    /// No phase to show, so the list has no phase headers.
     public let isFlat: Bool
     /// Dropped tasks across the mission, shown or not.
     public let dropped: Int
+    public let index: MissionPhaseIndex
 
     /// Within a phase: in progress, in review, blocked and to do, delegated, done, then dropped.
     private static let statusOrder: [MissionTaskStatus: Int] = Dictionary(
         uniqueKeysWithValues: MissionTaskOrdering.groupOrder.enumerated().map { ($1, $0) })
 
-    public init(_ tasks: [MissionTask], showDropped: Bool) {
+    /// Without `phases`, task milestones stand in for phases.
+    public init(_ tasks: [MissionTask], phases: MissionPhaseIndex? = nil, showDropped: Bool) {
+        let index = phases ?? MissionPhaseIndex(phases: nil, tasks: tasks)
         let ordered = MissionTaskOrdering.sorted(tasks)
-        var names: [String?] = []
-        var byPhase: [String?: [MissionTask]] = [:]
+        var byPhase: [String: [MissionTask]] = [:]
+        var unphased: [MissionTask] = []
         for task in ordered {
-            let name = MissionMilestones.name(of: task)
-            if byPhase[name] == nil, name != nil { names.append(name) }
-            byPhase[name, default: []].append(task)
+            if let id = index.phaseId(of: task) { byPhase[id, default: []].append(task) } else { unphased.append(task) }
         }
-        names.append(nil)
         let rank = Self.statusOrder
         var groups: [MissionPhaseGroup] = []
-        for name in names {
-            guard let all = byPhase[name] else { continue }
+        var foundCurrent = false
+        for phase in index.phases.map(Optional.some) + [nil] {
+            let all = phase.map { byPhase[$0.id] ?? [] } ?? unphased
             // A stable sort keeps task order within each status.
-            let shown = all.filter { showDropped || $0.status != .dropped }
+            let shown = all.filter { showDropped || $0.workStatus != .dropped }
                 .enumerated()
-                .sorted { (rank[$0.element.status] ?? 0, $0.offset) < (rank[$1.element.status] ?? 0, $1.offset) }
+                .sorted { (rank[$0.element.workStatus] ?? 0, $0.offset) < (rank[$1.element.workStatus] ?? 0, $1.offset) }
                 .map(\.element)
-            guard !shown.isEmpty else { continue }
-            groups.append(MissionPhaseGroup(name: name, tasks: shown, counts: MissionTaskCounts(all),
-                                            dropped: all.count(where: { $0.status == .dropped })))
+            let counts = MissionTaskCounts(all)
+            let current = !foundCurrent && phase != nil && counts.done < counts.total
+            if current { foundCurrent = true }
+            guard !shown.isEmpty || (phase != nil && index.isEditable) else { continue }
+            groups.append(MissionPhaseGroup(phase: phase, tasks: shown, counts: counts,
+                                            dropped: all.count(where: { $0.workStatus == .dropped }), isCurrent: current))
         }
-        isFlat = groups.allSatisfy { $0.name == nil }
+        isFlat = groups.allSatisfy { $0.phase == nil }
         self.groups = groups
-        dropped = tasks.count(where: { $0.status == .dropped })
+        dropped = tasks.count(where: { $0.workStatus == .dropped })
+        self.index = index
     }
+
+    /// The group a task appears in, for "Show task".
+    public func groupId(of task: MissionTask) -> String { MissionPhaseGroup.id(index.phaseId(of: task)) }
+
+    /// The Overview's progress rows: phases with tasks that count, in order, and "No phase" last. Empty for a
+    /// mission without phases, which shows one overall bar instead.
+    public var progressRows: [MissionPhaseGroup] { isFlat ? [] : groups.filter { $0.counts.total > 0 } }
+
+    /// The first phase with unfinished tasks.
+    public var current: MissionPhaseGroup? { groups.first(where: \.isCurrent) }
 }
 
 /// Which phases are folded. Finished phases start folded; the user's choices then hold across refreshes.

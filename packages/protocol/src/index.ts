@@ -543,6 +543,8 @@ export interface Mission {
 	autopilot?: boolean;
 	/** Later phases cannot be claimed or started until earlier phases finish. Defaults to false. */
 	phaseGating?: boolean;
+	/** First unfinished phase in order, with its progress, for summaries. Omitted when no phase is unfinished. */
+	currentPhase?: MissionCurrentPhase;
 	/** Latest brief revision; 0 before the first save. */
 	briefRevision: number;
 	/** Blocked tasks plus open, unaddressed agent comments when there is no coordinator.
@@ -630,6 +632,14 @@ export interface MissionPhase {
 	goal?: string;
 	order: number;
 	completedAt?: number;
+}
+
+/** A summary's current phase. Dropped tasks are excluded from both counts. */
+export interface MissionCurrentPhase {
+	id: string;
+	name: string;
+	done: number;
+	total: number;
 }
 
 /** POST /api/missions/:id/phases; PATCH /api/missions/:id/phases/:phaseId. */

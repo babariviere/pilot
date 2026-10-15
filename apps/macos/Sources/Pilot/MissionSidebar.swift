@@ -19,7 +19,8 @@ struct MissionSidebarRow: View {
     @State private var hovered = false
 
     var body: some View {
-        let progress = MissionSidebarSummary.progress(mission: mission, working: working)
+        let line = MissionSidebarSummary.line(mission: mission, working: working)
+        let progress = line?.text
         let active = mission.status == .active
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Button { model.openMission(mission.id) } label: {
@@ -34,13 +35,21 @@ struct MissionSidebarRow: View {
                             .lineLimit(1)
                         Spacer(minLength: 0)
                     }
-                    if let progress {
-                        Text(progress)
-                            .font(.pilot(.small, weight: .medium))
-                            .foregroundStyle(Theme.mutedForeground)
-                            .monospacedDigit()
-                            .lineLimit(1)
-                            .padding(.leading, 22)
+                    if let line {
+                        // The current phase's name truncates first, so its counts stay readable.
+                        HStack(spacing: 0) {
+                            if let phase = line.phase {
+                                Text(phase).truncationMode(.tail)
+                            }
+                            if let detail = line.detail {
+                                Text(line.phase == nil ? detail : " · \(detail)").layoutPriority(1)
+                            }
+                        }
+                        .font(.pilot(.small, weight: .medium))
+                        .foregroundStyle(Theme.mutedForeground)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .padding(.leading, 22)
                     }
                 }
                 .contentShape(Rectangle())

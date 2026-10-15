@@ -56,6 +56,11 @@ struct MissionTaskStartSheet: View {
                       primary: SheetPrimaryAction(title: starting ? "Starting…" : "Start Chat", key: .commandReturn,
                                                   enabled: canStart, action: start),
                       width: 560) {
+            if let gating = gatingNote {
+                Label(gating, icon: PilotIcon.privateChannel)
+                    .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             ComposerTray {
                 MissionTextArea(prompt: "Optional instructions, added after the task description…", text: $form.message,
                                 minLines: 3, maxLines: 8, label: "Opening message") { if canStart { start() } }
@@ -77,6 +82,14 @@ struct MissionTaskStartSheet: View {
 
     private var canStart: Bool {
         !starting && !options.loading && mission.status == .active && task.sessionId == nil && task.status.canStart
+    }
+
+    /// Phase gating holds the task: starting it is the user's explicit override.
+    private var gatingNote: String? {
+        guard task.isPhaseGated else { return nil }
+        let phases = client.missionDetails[mission.id].map { MissionPhaseIndex($0).gatingPhases(of: task) } ?? []
+        let reason = MissionPhaseGating.text(phases) ?? "Waits for earlier phases"
+        return "\(reason). Starting it now overrides phase gating."
     }
 
     private var modeMenu: some View {
@@ -186,7 +199,8 @@ struct MissionTaskStartSheet: View {
         guard canStart else { return }
         starting = true
         error = nil
-        let request = form.request(baseBranch: branchScope.flatMap { branches.selection(for: $0) })
+        var request = form.request(baseBranch: branchScope.flatMap { branches.selection(for: $0) })
+        if task.isPhaseGated { request.overridePhaseGating = true }
         Task {
             defer { starting = false }
             do {

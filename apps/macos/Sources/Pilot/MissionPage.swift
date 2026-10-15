@@ -254,8 +254,8 @@ struct MissionTaskProgress: View {
 
 // MARK: Overview
 
-/// The goal, one meta line, then what needs the user, the tasks being worked on and the links. Phases live in Tasks
-/// and history in Activity.
+/// The goal, one meta line and per-phase progress (one overall bar without phases), then what needs the user, the
+/// tasks being worked on and the links. Phase task lists live in Tasks and history in Activity.
 struct MissionOverviewTab: View {
     let mission: Mission
     let detail: MissionDetail
@@ -324,6 +324,7 @@ struct MissionOverviewTab: View {
 
     @ViewBuilder
     private func summary(_ counts: MissionTaskCounts, working: Int) -> some View {
+        let phases = MissionTaskPhases(detail.tasks, phases: MissionPhaseIndex(detail), showDropped: false).progressRows
         VStack(alignment: .leading, spacing: 10) {
             if mission.goal.isEmpty {
                 Button("Add a goal…") { model.missionSheet = .edit(missionId: mission.id) }
@@ -339,7 +340,10 @@ struct MissionOverviewTab: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             MissionMetaLine(mission: mission, detail: detail, counts: counts, working: working)
-            if counts.total > 0 {
+            if !phases.isEmpty {
+                MissionPhaseProgressList(rows: phases) { model.missionTab = .tasks }
+                    .padding(.top, 4)
+            } else if counts.total > 0 {
                 Button { model.missionTab = .tasks } label: {
                     MissionTaskProgress(counts: counts, barWidth: 360).contentShape(Rectangle())
                 }
@@ -503,9 +507,10 @@ struct CompactTaskRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            PilotSymbol(task.status.icon).foregroundStyle(task.status.color).frame(width: 16)
-                .help(task.delegationLabel ?? task.status.label)
-                .accessibilityLabel(task.delegationLabel ?? task.status.label)
+            PilotSymbol(task.workStatus.icon).foregroundStyle(task.isPhaseGated ? Theme.faintForeground : task.workStatus.color)
+                .frame(width: 16)
+                .help(task.delegationLabel ?? task.workStatus.label)
+                .accessibilityLabel(task.delegationLabel ?? task.workStatus.label)
             Text("#\(task.number)").font(.pilot(.caption)).monospacedDigit().foregroundStyle(Theme.faintForeground)
                 .frame(minWidth: 20, alignment: .leading)
             VStack(alignment: .leading, spacing: 3) {

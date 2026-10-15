@@ -9,6 +9,7 @@ struct MissionForm {
     var draft = true
     var missionId: String?
     var taskId: String?
+    var phaseGating = false
     var saving = false
     var error: String?
     var prepared = false
@@ -260,6 +261,9 @@ struct EditMissionSheet: View {
                 MissionTextArea(prompt: "Goal", text: $form.goal, minLines: 3, maxLines: 8, label: "Goal") {
                     if canSave { save() }
                 }
+                MissionToggleRow(title: "Later phases wait for earlier ones",
+                                 detail: "Tasks in a phase cannot be claimed or started until every earlier phase is done.",
+                                 isOn: $form.phaseGating)
             }
             .formStyle(.grouped)
         }
@@ -268,6 +272,7 @@ struct EditMissionSheet: View {
             form.prepared = true
             form.title = mission.title
             form.goal = mission.goal
+            form.phaseGating = mission.isPhaseGatingEnabled
         }
     }
 
@@ -276,12 +281,13 @@ struct EditMissionSheet: View {
     private func save() {
         form.saving = true
         form.error = nil
+        let gating = client.mission(missionId)?.isPhaseGatingEnabled == form.phaseGating ? nil : form.phaseGating
         Task {
             defer { form.saving = false }
             do {
                 try await client.updateMission(missionId, UpdateMissionRequest(
                     title: form.title.trimmingCharacters(in: .whitespacesAndNewlines),
-                    goal: form.goal.trimmingCharacters(in: .whitespacesAndNewlines)))
+                    goal: form.goal.trimmingCharacters(in: .whitespacesAndNewlines), phaseGating: gating))
                 dismiss()
             } catch {
                 form.error = error.localizedDescription

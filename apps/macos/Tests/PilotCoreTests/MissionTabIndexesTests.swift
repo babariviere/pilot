@@ -40,8 +40,9 @@ private func artifact(_ id: String, task: String?) -> MissionArtifactLink {
     #expect(phases.groups.map(\.name) == ["Foundations", "Endpoints", nil], "task order decides, blank is no phase")
     #expect(phases.groups.map(\.title) == ["Foundations", "Endpoints", "No phase"])
     #expect(phases.groups[2].tasks.map(\.number) == [1, 5])
-    #expect(MissionPhaseGroup.id(of: task(5, phase: " ", order: 5)) == phases.groups[2].id)
-    #expect(MissionPhaseGroup.id(of: task(2, phase: "Endpoints", order: 2)) == phases.groups[1].id)
+    #expect(phases.groupId(of: task(5, phase: " ", order: 5)) == phases.groups[2].id)
+    #expect(phases.groupId(of: task(2, phase: "Endpoints", order: 2)) == phases.groups[1].id)
+    #expect(!phases.index.isEditable, "milestone stand-ins cannot be edited")
 }
 
 @Test func phasesListActiveWorkThenDoneInTaskOrder() {
@@ -108,7 +109,7 @@ private func artifact(_ id: String, task: String?) -> MissionArtifactLink {
     #expect(MissionTaskListItem.items(refreshed, folds: folds).map(\.id) == ["phase-Done", "t1", "phase-Open", "phase-", "t4"])
 
     // "Show task" opens a phase by a task's id.
-    folds.unfold(MissionPhaseGroup.id(of: task(3, phase: "Open", order: 3)))
+    folds.unfold(refreshed.groupId(of: task(3, phase: "Open", order: 3)))
     #expect(!folds.isFolded(refreshed.groups[1]))
 }
 

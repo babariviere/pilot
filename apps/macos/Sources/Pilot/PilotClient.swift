@@ -1222,6 +1222,21 @@ final class PilotClient: ObservableObject {
         let _: Ack = try await missionRequest(["missions", id, "tasks", taskId], method: "DELETE")
     }
 
+    @discardableResult
+    func createMissionPhase(_ id: String, _ write: MissionPhaseWrite) async throws -> MissionPhase {
+        try await missionRequest(["missions", id, "phases"], body: write)
+    }
+
+    @discardableResult
+    func updateMissionPhase(_ id: String, phaseId: String, _ write: MissionPhaseWrite) async throws -> MissionPhase {
+        try await missionRequest(["missions", id, "phases", phaseId], method: "PATCH", body: write)
+    }
+
+    /// The phase's tasks move to no phase.
+    func deleteMissionPhase(_ id: String, phaseId: String) async throws {
+        let _: Ack = try await missionRequest(["missions", id, "phases", phaseId], method: "DELETE")
+    }
+
     func startMissionCoordinator(_ id: String, _ request: StartMissionCoordinatorRequest) async throws -> SessionSummary {
         let session: SessionSummary = try await missionRequest(["missions", id, "coordinator", "start"], body: request)
         awaitingList[session.id] = session
