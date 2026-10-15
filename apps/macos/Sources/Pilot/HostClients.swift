@@ -22,7 +22,7 @@ final class HostClients: ObservableObject {
     private var tunnels: [HostRef: ManagedSSHTunnel] = [:]
     private var tunnelWatches: [HostRef: Task<Void, Never>] = [:]
     private var tunnelURLs: [HostRef: URL] = [:]
-    private final class Subscription {
+    @MainActor private final class Subscription {
         let ref: HostResourceRef
         let listener: ([JSONValue]) -> Void
         var client: PilotClient?
@@ -37,6 +37,24 @@ final class HostClients: ObservableObject {
     }
     private var subscriptions: [UUID: Subscription] = [:]
     private var retained: [HostResourceRef: Int] = [:]
+    private var pendingRefresh: Set<HostRef> = []
+    private var pendingDetails: Set<HostRef> = []
+    var hasPendingUpdates: Bool { !pendingRefresh.isEmpty || !pendingDetails.isEmpty }
+
+    private func enqueueRefresh(_ host: HostRef, details: Bool = false) {
+        if details {
+            guard pendingDetails.insert(host).inserted else { return }
+        } else {
+            guard pendingRefresh.insert(host).inserted else { return }
+        }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if details { self.pendingDetails.remove(host) } else { self.pendingRefresh.remove(host) }
+            guard let entry = self.entries[host] else { return }
+            if details { self.refreshDetails(host, token: entry.token) }
+            else { self.refresh(host, token: entry.token) }
+        }
+    }
 
     func install(_ client: PilotClient, host: HostRef) throws {
         try client.bind(host)
@@ -48,11 +66,11 @@ final class HostClients: ObservableObject {
         entry.observations.append(Publishers.CombineLatest4(
             client.$sessions, client.$projects, client.$missions, client.$connected
         ).sink { [weak self] _ in
-            Task { @MainActor in self?.refresh(host, token: token) }
+            self?.enqueueRefresh(host)
         })
         entry.observations.append(Publishers.CombineLatest(client.$projectDashboards, client.$missionDetails)
             .sink { [weak self] _ in
-                Task { @MainActor in self?.refreshDetails(host, token: token) }
+                self?.enqueueRefresh(host, details: true)
             })
         entries[host] = entry
         for subscription in subscriptions.values where subscription.ref.host == host { attach(subscription) }

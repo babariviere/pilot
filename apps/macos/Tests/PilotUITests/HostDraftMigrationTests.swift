@@ -44,7 +44,7 @@ import Testing
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-    let original = Data(#"{"version":1,"chats":{"hostref1:broken":{"text":"keep","attachments":[],"queueEditing":{}}},"newTask":{}}"#.utf8)
+    let original = try JSONEncoder().encode(StoredDrafts(chats: ["hostref1:broken": StoredChatDraft(text: "keep")]))
     let file = root.appendingPathComponent("drafts.json")
     try original.write(to: file)
     let store = DraftStore(directory: root)
@@ -52,4 +52,3 @@ import Testing
     #expect(throws: (any Error).self) { try store.save(StoredDrafts()) }
     #expect(try Data(contentsOf: file) == original)
 }
-
