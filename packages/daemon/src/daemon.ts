@@ -1,8 +1,13 @@
 /** pilotd: background pi agents on durable sessions. */
+
+import { mkdir, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { credentialEnvironment } from "@pilot/kernel/credential-client";
+import { installCredentialBrokerHooks } from "@pilot/kernel/credential-hooks";
 import { loadConfig } from "./config.ts";
 import { ConnectivityService } from "./connectivity.ts";
+import { CredentialBroker } from "./credential-broker.ts";
 import { EventLoopWatchdog } from "./event-loop-watchdog.ts";
 import { daemonHello } from "./hello.ts";
 import { MissionLinearSource } from "./linear-source.ts";
@@ -30,6 +35,11 @@ import { untrackedStats } from "./untracked-stats.ts";
 import { TriageGroomer, workerTriage } from "./triage-grooming.ts";
 
 const config = loadConfig();
+await mkdir(config.agentDir ?? getAgentDir(), { recursive: true, mode: 0o700 });
+const credentials = new CredentialBroker(await realpath(config.agentDir ?? getAgentDir()));
+await credentials.start();
+Object.assign(process.env, credentialEnvironment(credentials.grant(true)));
+await installCredentialBrokerHooks();
 const capabilities = await detectPlatformCapabilities();
 const hello = await daemonHello(config.home, capabilities);
 // Log long timer delays with context, without assuming sleep or descheduling is synchronous CPU work.
@@ -90,6 +100,7 @@ const sessions = new SessionManager(
 		idleParkMs: config.idleParkMs,
 		workspaceRetentionMs: config.workspaceRetentionMs,
 		models,
+		credentials,
 	},
 );
 sessions.setProjectMemory(memory);
@@ -179,6 +190,7 @@ async function stop(): Promise<void> {
 	await missionService.notices.stop();
 	await missionService.compaction.stop();
 	await Promise.all([terminals.shutdown(), sessions.shutdown()]);
+	await credentials.close();
 	stopSlackCompletions();
 	await Promise.all(completionWrites);
 	await trackedItems.close();

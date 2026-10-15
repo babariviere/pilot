@@ -9,6 +9,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { type KernelSpec, workerEntry } from "@pilot/kernel";
+import { CredentialBroker } from "./credential-broker.ts";
 import {
 	forkLinuxCoordinator,
 	probeLinuxCoordinatorIsolation,
@@ -78,7 +79,11 @@ test("real Linux boundary protects alternate paths and descendants while preserv
 		return;
 	}
 	const root = await realpath(await mkdtemp(join(tmpdir(), "pilot-linux-boundary-")));
-	t.after(() => rm(root, { recursive: true, force: true }));
+	let broker: CredentialBroker;
+	t.after(async () => {
+		await broker?.close();
+		await rm(root, { recursive: true, force: true });
+	});
 	const source = join(root, "source with spaces");
 	const scratch = join(root, "session", "scratch");
 	const storageDir = join(root, "session", "durable");
@@ -87,7 +92,17 @@ test("real Linux boundary protects alternate paths and descendants while preserv
 	const file = join(source, "file");
 	await writeFile(file, "protected", { mode: 0o600 });
 	await writeFile(join(agentDir, "settings.json"), "{}", { mode: 0o600 });
-	await writeFile(join(agentDir, "auth.json"), '{"credential":"fixture"}', { mode: 0o600 });
+	await writeFile(
+		join(agentDir, "auth.json"),
+		JSON.stringify({ fixture: { type: "oauth", access: "0", refresh: "r0", expires: 0 } }),
+		{ mode: 0o600 },
+	);
+	broker = new CredentialBroker(agentDir);
+	await broker.start();
+	const credentials = broker.grant();
+	const state = { storageDir, agentDir, credentials };
+	const capabilityFile = join(root, "fixture-capability.json");
+	await writeFile(capabilityFile, JSON.stringify(credentials), { mode: 0o600 });
 	const outside = join(root, "outside");
 	await writeFile(outside, "host");
 	const alias = join(root, "source-alias");
@@ -109,8 +124,8 @@ denied(()=>fs.linkSync(file,scratch+'/hardlink'));
 denied(()=>fs.writeFileSync(${JSON.stringify(outside)},'escape'));
 denied(()=>fs.writeFileSync(agent+'/settings.json','escape'));
 fs.writeFileSync(scratch+'/scratch-ok','ok');
-fs.writeFileSync(agent+'/auth.json','{"credential":"refreshed"}');
-fs.mkdirSync(agent+'/auth.json.lock');fs.rmdirSync(agent+'/auth.json.lock');
+denied(()=>fs.writeFileSync(agent+'/auth.json','forbidden'));
+denied(()=>fs.mkdirSync(agent+'/auth.json.lock'));
 fs.writeFileSync(${JSON.stringify(join(storageDir, "state"))},'durable');
 fs.writeFileSync(${JSON.stringify(join(root, "session", "artifacts", "artifact"))},'artifact');
 const nested=cp.spawnSync('/usr/bin/unshare',['--user','--map-root-user','--mount','true']);
@@ -118,13 +133,15 @@ assert.equal(nested.error,undefined);
 assert.notEqual(nested.status,0,'nested namespaces must not permit remounting');
 const mount=cp.spawnSync('/bin/mount',['-o','remount,rw','/']);assert.notEqual(mount.status,0);
 `;
+	const brokerCheck = `(async()=>{const {credentialClient}=await import(${JSON.stringify(import.meta.resolve("@pilot/kernel/credential-client"))}); const client=credentialClient(); await client.pi.modify('fixture',async current=>{const n=Number(current.access)+1;return {...current,access:String(n),refresh:'r'+n};}); await client.close();})().catch(()=>{process.exitCode=1;});`;
 	await writeFile(
 		entry,
-		`${checks}\ncp.execFileSync(process.execPath,['-e',${JSON.stringify(`${checks}\ncp.execFileSync(process.execPath,['-e',${JSON.stringify(checks)}]);`)}]);process.send({verified:true});process.disconnect();`,
+		`${checks}\ncp.execFileSync(process.execPath,['-e',${JSON.stringify(`${checks}\ncp.execFileSync(process.execPath,['-e',${JSON.stringify(checks + "\n" + brokerCheck)}]);\n${brokerCheck}`)}]);(async()=>{const {credentialClient}=await import(${JSON.stringify(import.meta.resolve("@pilot/kernel/credential-client"))});const client=credentialClient();await client.pi.modify('fixture',async current=>({...current,access:String(Number(current.access)+1)}));await client.close();process.send({verified:true});process.disconnect();})().catch(()=>{process.exitCode=1;process.disconnect();});`,
 	);
+
 	const view = { scratch, protectedPaths: [source] };
 	// Exercise the public launcher, not a hand-assembled sandbox command.
-	const child = await forkMainViewWorker(entry, view, { storageDir, agentDir });
+	const child = await forkMainViewWorker(entry, view, state);
 	t.after(() => {
 		child.kill("SIGKILL");
 	});
@@ -139,11 +156,8 @@ const mount=cp.spawnSync('/bin/mount',['-o','remount,rw','/']);assert.notEqual(m
 	assert.equal((await exit)[0], 0);
 	assert.equal(await readFile(file, "utf8"), "protected");
 	assert.equal(await readFile(outside, "utf8"), "host");
-	assert.equal(await readFile(join(agentDir, "auth.json"), "utf8"), '{"credential":"fixture"}');
-	assert.equal(
-		await readFile(join(root, "session", "coordinator-auth", "auth.json"), "utf8"),
-		'{"credential":"refreshed"}',
-	);
+	assert.equal(JSON.parse(await readFile(join(agentDir, "auth.json"), "utf8")).fixture.access, "3");
+	await assert.rejects(readFile(join(root, "session", "coordinator-auth", "auth.json")), { code: "ENOENT" });
 	assert.equal(await readFile(join(storageDir, "state"), "utf8"), "durable");
 	// A second host bind-mount path to the source must also be readonly, not just a symlink alias.
 	const mounted = join(root, "mounted-source");
@@ -158,8 +172,9 @@ process.send('bind-verified');process.disconnect();`,
 	);
 	const module = new URL("./linux-coordinator.ts", import.meta.url).href;
 	const driver = `import {forkLinuxCoordinator} from ${JSON.stringify(module)};
-import {once} from 'node:events';import assert from 'node:assert/strict';
-const child=await forkLinuxCoordinator(${JSON.stringify(bindEntry)},${JSON.stringify(view)},${JSON.stringify({ storageDir, agentDir })});
+import {once} from 'node:events';import assert from 'node:assert/strict';import {readFile} from 'node:fs/promises';
+const credentials=JSON.parse(await readFile(${JSON.stringify(capabilityFile)},'utf8'));
+const child=await forkLinuxCoordinator(${JSON.stringify(bindEntry)},${JSON.stringify(view)},{...${JSON.stringify({ storageDir, agentDir })},credentials});
 const exit=once(child,'exit');const message=await Promise.race([once(child,'message'),exit.then(()=>{throw Error('guard rejected bind alias')})]);
 assert.equal(message[0],'bind-verified');assert.equal((await exit)[0],0);`;
 	// The privileged fixture only creates a bind mount in a disposable, non-propagating CI
@@ -203,7 +218,7 @@ await assert.rejects(validateCoordinatorWrites([${JSON.stringify(scratch)}],[${J
 `,
 		);
 	await link(file, join(scratch, "preexisting-hardlink"));
-	await assert.rejects(forkLinuxCoordinator(entry, view, { storageDir, agentDir }), /hardlink/);
+	await assert.rejects(forkLinuxCoordinator(entry, view, state), /hardlink/);
 });
 
 test("namespace/security-policy denial and missing sandbox tooling remain actionable and fail closed", {
@@ -303,7 +318,11 @@ export default pi => { const faux=fauxProvider(); faux.setResponses([fauxAssista
 			defaultModel: "faux-1",
 		}),
 	);
+	const broker = new CredentialBroker(agentDir);
+	await broker.start();
+	const credentials = broker.grant();
 	const spec: KernelSpec = {
+		credentials,
 		sessionId: randomUUID(),
 		storageDir: join(root, "session", "durable"),
 		cwd: scratch,
@@ -318,6 +337,7 @@ export default pi => { const faux=fauxProvider(); faux.setResponses([fauxAssista
 		const child = await forkMainViewWorker(fileURLToPath(workerEntry), spec.pilot!.coordinatorView!, {
 			storageDir: spec.storageDir,
 			agentDir,
+			credentials,
 		});
 		worker = new Worker(
 			spec,
@@ -334,6 +354,7 @@ export default pi => { const faux=fauxProvider(); faux.setResponses([fauxAssista
 		if (offline === undefined) delete process.env.PI_OFFLINE;
 		else process.env.PI_OFFLINE = offline;
 		await worker?.close();
+		await broker.close();
 		await rm(root, { recursive: true, force: true });
 	}
 });

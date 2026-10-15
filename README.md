@@ -105,16 +105,21 @@ for actionable diagnostics. AppArmor, SELinux, seccomp or service restrictions c
 correct the narrowly scoped policy, not global host security. There is no unrestricted or chmod fallback.
 
 The coordinator sees a read-only host filesystem, including repository aliases and symlink targets, with
-only private session scratch, durable storage, artifacts and auth backing writable. It cannot create
+only private session scratch, durable storage and artifacts writable. It cannot create
 nested user namespaces, acquire capabilities or see host processes through `/proc`. Pre-existing hardlinks
 or shared writable private-state roots, including pre-existing nested bind mounts, are rejected. Normal network access remains available for model
 providers and integrations; this is process/filesystem isolation, not a network or credential trust boundary.
-Coordinator authentication uses private same-host copies of `auth.json` and `mcp-auth.json`, with canonical
-configuration/resources read-only. Refreshes persist privately, never overwrite global credentials, and
-changed canonical credentials replace the copies on the next worker open. Providers with rotating refresh
-tokens may require separate coordinator reauthentication. Nothing copies credentials between hosts.
-This does not add remote app
-routing, credential copying or cross-host context/delegation semantics.
+Authentication uses a same-host canonical credential broker, not per-session copies. Each live worker and
+its descendants receive a revocable capability for a private Unix socket. Operations are bounded, fixed
+Pi/MCP auth reads and serialized transactions, never arbitrary paths, executable configuration writes or
+an HTTP proxy. SDK OAuth exchanges remain in the caller process and sandbox; current canonical credentials
+are read under the shared auth lock and updates are atomically persisted. Login/logout generations fence
+stale results. A durable uncertainty marker blocks replay after a failed exchange, lost worker or broker
+restart until an explicit new sign-in or changed canonical credential resolves it. Unavailable brokerage
+fails closed. Native parents, subagents, Ask, model catalogs, MCP status/tracking and connection sign-in
+helpers use the same authority. Existing Pi file/refresh locks are honored; unrelated external programs
+are not retrofitted with the broker's crash journal. Nothing copies credentials between hosts.
+This does not add remote app routing or cross-host context/delegation semantics.
 
 The source includes [host-qualified client routing](docs/host-routing.md),
 [durable operation receipts](docs/durable-operations.md), [server-side repository/file reads](docs/host-repositories.md)

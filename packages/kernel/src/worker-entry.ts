@@ -7,6 +7,8 @@ import { runtimeEnvironment } from "./runtime-environment.ts";
 
 enableCompileCache();
 Object.assign(process.env, runtimeEnvironment());
+const { installCredentialBrokerHooks } = await import("./credential-hooks.ts");
+await installCredentialBrokerHooks();
 const { configureBundledChildren } = await import("./bundled-extensions.ts");
 configureBundledChildren();
 const { runKernelWorker } = await import("./worker.ts");

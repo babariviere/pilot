@@ -25,6 +25,7 @@ import {
 	type WorkspaceReset,
 	workerEntry,
 } from "@pilot/kernel";
+import { credentialEnvironment } from "@pilot/kernel/credential-client";
 import type {
 	AgentEvent,
 	ArtifactRevision,
@@ -52,6 +53,7 @@ import type {
 import { prepareAskSnapshot } from "./ask-snapshots.ts";
 import { chatTitleContext } from "./chat-title.ts";
 import { ColdViewReader } from "./cold-view-reader.ts";
+import type { CredentialBroker } from "./credential-broker.ts";
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
 import { githubRepository, linkedPullRequest, type PullRequestProblems } from "./github.ts";
@@ -215,6 +217,7 @@ export interface SessionWorker {
 }
 
 export interface SessionManagerOptions {
+	credentials?: CredentialBroker;
 	/** Delay after an automatic PR follow-up finishes. Defaults to five minutes. */
 	prFollowUpCooldownMs?: number;
 	/** Close idle, unwatched kernels after this long. Their sessions reopen on demand. Defaults to 10 minutes. */
@@ -448,6 +451,7 @@ function forkWorker(spec?: WorkerSpec): ChildProcess {
 	const view = spec?.pilot?.coordinatorView;
 	if (view) throw new Error("Coordinator workers require a fresh, validated isolated child; refusing warm-pool reuse");
 	return fork(fileURLToPath(workerEntry), [], {
+		env: { ...process.env, ...credentialEnvironment(spec?.credentials) },
 		execArgv: [],
 		serialization: "advanced",
 		stdio: ["ignore", "inherit", "inherit", "ipc"],
@@ -927,6 +931,7 @@ export class SessionManager {
 	private readonly idleParkMs: number;
 	private readonly prFollowUpCooldownMs: number;
 	private readonly workerOptions: WorkerOptions;
+	private readonly credentials?: CredentialBroker;
 	private readonly workspaceRetentionMs: number;
 	private readonly sharedWorkspaces: SharedWorkspaceStore;
 	private readonly mainViews: MainViewStore;
@@ -1017,6 +1022,7 @@ export class SessionManager {
 		this.prFollowUpCooldownMs = options.prFollowUpCooldownMs ?? 5 * 60_000;
 		this.kernelRestartBackoffMs = options.kernelRestartBackoffMs ?? 15_000;
 		this.workerOptions = { startupTimeoutMs: options.startupTimeoutMs, commandTimeoutMs: options.commandTimeoutMs };
+		this.credentials = options.credentials;
 		this.workspaceRetentionMs = options.workspaceRetentionMs ?? DAY_MS;
 		this.sharedWorkspaces = new SharedWorkspaceStore(home);
 		this.mainViews = new MainViewStore(home);
@@ -4804,29 +4810,49 @@ export class SessionManager {
 		const createWorker =
 			this.factories.worker ??
 			(async (spec, onPacket, onExit) => {
+				spec.credentials = this.credentials?.grant();
 				const view = spec.pilot?.coordinatorView;
-				const child = view
-					? await forkMainViewWorker(fileURLToPath(workerEntry), view, {
-							storageDir: spec.storageDir,
-							agentDir: spec.agentDir ?? getAgentDir(),
-						})
-					: undefined;
-				if (
-					this.closing ||
-					this.sleepPause ||
-					meta.archivedAt !== undefined ||
-					this.isMissionCoordinator(id) !== !!view ||
-					meta.coordinatorView?.scratch !== view?.scratch
-				) {
-					child?.once("error", () => {});
-					child?.kill("SIGKILL");
-					throw new Conflict("This chat's lifecycle or workspace role changed while preparing isolation");
+				try {
+					const child = view
+						? await forkMainViewWorker(fileURLToPath(workerEntry), view, {
+								storageDir: spec.storageDir,
+								agentDir: spec.agentDir ?? getAgentDir(),
+								credentials: spec.credentials,
+							})
+						: undefined;
+					if (
+						this.closing ||
+						this.sleepPause ||
+						meta.archivedAt !== undefined ||
+						this.isMissionCoordinator(id) !== !!view ||
+						meta.coordinatorView?.scratch !== view?.scratch
+					) {
+						child?.once("error", () => {});
+						child?.kill("SIGKILL");
+						throw new Conflict("This chat's lifecycle or workspace role changed while preparing isolation");
+					}
+					if (meta.pending?.[0]?.type === "abort") spec.stopOnOpen = true;
+					const worker = new Worker(
+						spec,
+						onPacket,
+						(worker, code, signal) => {
+							if (spec.credentials) this.credentials?.revoke(spec.credentials);
+							onExit(worker, code, signal);
+						},
+						this.pool,
+						{ ...this.workerOptions, child },
+					);
+					return worker;
+				} catch (error) {
+					if (spec.credentials) this.credentials?.revoke(spec.credentials);
+					throw error;
 				}
-				if (meta.pending?.[0]?.type === "abort") spec.stopOnOpen = true;
-				return new Worker(spec, onPacket, onExit, this.pool, { ...this.workerOptions, child });
 			});
 		const mission = this.missions?.context(id);
-		const worker = await createWorker(
+		let published: SessionWorker | undefined;
+		const earlyPackets: KernelPacket[] = [];
+		let overflow = false;
+		const opening = createWorker(
 			{
 				sessionId: id,
 				...(meta.projectId ? { projectId: meta.projectId } : {}),
@@ -4864,10 +4890,23 @@ export class SessionManager {
 				},
 				...(mission ? { mission } : {}),
 			},
-			(packet) => this.onPacket(meta, worker, packet),
+			(packet) => {
+				if (published) this.onPacket(meta, published, packet);
+				else if (earlyPackets.length < 64) earlyPackets.push(packet);
+				else overflow = true;
+			},
 			(exited, code, signal) => this.onExit(meta, exited, code, signal),
 		);
+		// Preserve synchronous fixture factories, and publish before replaying callbacks from an
+		// asynchronously prepared isolated process. No callback may observe an uninitialized owner.
+		const worker = opening instanceof Promise ? await opening : opening;
+		if (overflow) {
+			await worker.close();
+			throw new Error("Kernel startup packet limit exceeded");
+		}
+		published = worker;
 		this.workers.set(id, worker);
+		for (const packet of earlyPackets) this.onPacket(meta, worker, packet);
 		this.lastUse.set(id, Date.now());
 		// Reattach existing subscribers, for example after a kernel restart.
 		for (const watchId of this.watchers.get(id)?.keys() ?? []) worker.send({ type: "watch", watchId });

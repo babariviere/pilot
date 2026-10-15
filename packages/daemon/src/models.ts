@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import { getAgentDir, ModelRuntime, resolveModelScopeWithDiagnostics } from "@earendil-works/pi-coding-agent";
 import { installBundledAnthropicAuth } from "@pilot/kernel";
+import { installCredentialBrokerHooks } from "@pilot/kernel/credential-hooks";
 import type { ModelList, ModelOption } from "@pilot/protocol";
 import { TITLE_CONTEXT_LIMIT } from "./chat-title.ts";
 import { ServiceUnavailable } from "./errors.ts";
@@ -288,10 +289,12 @@ export class ModelCatalog {
 	}
 
 	private getRuntime(): Promise<ModelRuntime> {
+		// Also covers read-only model catalogs and tool-free daemon completions.
 		if (this.runtime) return this.runtime;
 		const runtime = (async () => {
 			// Taken before loading, so a concurrent edit is seen as a change and reloaded.
 			const definitions = await this.definitionsSignature();
+			await installCredentialBrokerHooks();
 			const created = await ModelRuntime.create({
 				authPath: join(this.agentDir, "auth.json"),
 				modelsPath: join(this.agentDir, "models.json"),

@@ -5,6 +5,7 @@
 import { join } from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
 import type { LoadedMcpConfig, McpServerEntry, McpTransportFactory } from "@earendil-works/pi-coding-agent";
+import { installCredentialBrokerHooks } from "@pilot/kernel/credential-hooks";
 import type { McpProbeResult, McpProbeServer } from "./mcp-status.ts";
 
 interface Connection {
@@ -14,6 +15,7 @@ interface Connection {
 	getClient(): Promise<unknown>;
 	close(): Promise<void>;
 }
+await installCredentialBrokerHooks();
 const sdk = import.meta.resolve("@earendil-works/pi-coding-agent");
 const paths = (await import(new URL("./config.js", sdk).href)) as { getAgentDir(): string };
 const config = (await import(new URL("./extensions/mcp/config.js", sdk).href)) as {

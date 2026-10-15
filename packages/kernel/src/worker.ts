@@ -337,6 +337,11 @@ export function runKernelWorker(): void {
 		if (command.type === "start") {
 			if (initialization) return;
 			initialization = (async () => {
+				const { credentialEnvironment } = await import("./credential-client.ts");
+				for (const [key, value] of Object.entries(credentialEnvironment(command.spec.credentials))) {
+					if (value === undefined) delete process.env[key];
+					else process.env[key] = value;
+				}
 				// Extensions resolve pi's agent directory from the environment, e.g. for the shared usage cache.
 				if (command.spec.agentDir) process.env.PI_CODING_AGENT_DIR = command.spec.agentDir;
 				if (command.spec.subscriptionPolicy)
