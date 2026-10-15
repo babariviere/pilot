@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { link, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,6 +8,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { type KernelSpec, workerEntry } from "@pilot/kernel";
 import {
 	forkLinuxCoordinator,
 	probeLinuxCoordinatorIsolation,
@@ -195,4 +197,69 @@ const result=await probeLinuxCoordinatorIsolation(); console.log(JSON.stringify(
 	);
 	assert.equal(JSON.parse(result).available, false);
 	assert.match(JSON.parse(result).detail, /bubblewrap executable is required/);
+});
+
+test("real Linux kernel opens durable storage and native resources only after boundary validation", {
+	skip: process.platform !== "linux",
+	timeout: 60_000,
+}, async (t) => {
+	const capability = await probeLinuxCoordinatorIsolation();
+	if (!capability.available) {
+		assert.notEqual(process.env.PILOT_REQUIRE_LINUX_ISOLATION, "1", capability.detail);
+		t.skip(capability.detail);
+		return;
+	}
+	const root = await realpath(await mkdtemp(join(tmpdir(), "pilot-linux-kernel-")));
+	const scratch = join(root, "session", "scratch");
+	const source = join(root, "source");
+	const agentDir = join(root, "agent");
+	for (const path of [scratch, source, agentDir]) await mkdir(path, { recursive: true, mode: 0o700 });
+	await writeFile(
+		join(agentDir, "fixture.ts"),
+		`
+import { fauxProvider, fauxAssistantMessage } from ${JSON.stringify(import.meta.resolve("@earendil-works/pi-ai/providers/faux"))};
+export default pi => { const faux=fauxProvider(); faux.setResponses([fauxAssistantMessage('isolated kernel')]); pi.registerProvider(faux.provider); };
+`,
+	);
+	await writeFile(
+		join(agentDir, "settings.json"),
+		JSON.stringify({
+			extensions: [join(agentDir, "fixture.ts")],
+			defaultProvider: "faux",
+			defaultModel: "faux-1",
+		}),
+	);
+	const spec: KernelSpec = {
+		sessionId: randomUUID(),
+		storageDir: join(root, "session", "durable"),
+		cwd: scratch,
+		agentDir,
+		model: "faux/faux-1",
+		pilot: { coordinatorView: { path: source, scratch, protectedPaths: [source] } },
+	};
+	const offline = process.env.PI_OFFLINE;
+	process.env.PI_OFFLINE = "1";
+	let worker: Worker | undefined;
+	try {
+		const child = await forkMainViewWorker(fileURLToPath(workerEntry), spec.pilot!.coordinatorView!, {
+			storageDir: spec.storageDir,
+			agentDir,
+		});
+		worker = new Worker(
+			spec,
+			() => {},
+			() => {},
+			undefined,
+			{ child },
+		);
+		await worker.ready;
+		assert.equal(worker.state, "idle");
+		await worker.request({ type: "activity", requestId: randomUUID(), text: "Sandbox opened" });
+		assert.ok((await readFile(join(spec.storageDir, "harness.sqlite"))).length > 0);
+	} finally {
+		if (offline === undefined) delete process.env.PI_OFFLINE;
+		else process.env.PI_OFFLINE = offline;
+		await worker?.close();
+		await rm(root, { recursive: true, force: true });
+	}
 });

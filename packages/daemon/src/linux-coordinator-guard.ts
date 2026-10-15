@@ -1,7 +1,7 @@
 /** Runs inside bubblewrap, before importing any worker/package/extension code. Builtins only. */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, readFileSync, readlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, openSync, readFileSync, readlinkSync, writeFileSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -31,17 +31,36 @@ const mounts = readFileSync("/proc/self/mountinfo", "utf8")
 	.split("\n")
 	.map((line) => {
 		const fields = line.split(" ");
-		return { path: decode(fields[4]!), readonly: fields[5]!.split(",").includes("ro") };
+		return { id: fields[0]!, path: decode(fields[4]!), readonly: fields[5]!.split(",").includes("ro") };
 	});
+// mountinfo also lists lower mounts covered by our new /proc and /dev. Resolve the actual
+// accessible mount ID with O_PATH (Linux ABI), without opening devices or reading file contents.
+function mountId(path: string): string | undefined {
+	let fd: number | undefined;
+	try {
+		fd = openSync(path, 0x200000); // O_PATH, not exposed by Node's fs.constants.
+		const id = /^mnt_id:\s+(\d+)$/m.exec(readFileSync(`/proc/self/fdinfo/${fd}`, "utf8"))?.[1];
+		assert.ok(id, `No mount ID for ${path}`);
+		return id;
+	} catch (error) {
+		if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return undefined;
+		throw error;
+	} finally {
+		if (fd !== undefined) closeSync(fd);
+	}
+}
 // Every host-backed mount, including alternate aliases and nested submounts, must be read-only.
 // /dev is a new private filesystem. /proc is a fresh PID-scoped, read-only procfs.
-for (const mount of mounts)
+for (const mount of mounts) {
+	if (!mount.readonly && mountId(mount.path) !== mount.id) continue;
 	assert.ok(
 		mount.readonly || within(mount.path, "/dev") || config.writable.some((path) => within(mount.path, path)),
 		`Unexpected writable mount: ${mount.path}`,
 	);
+}
 for (const path of config.protectedPaths) {
-	const mount = mounts.filter((mount) => within(path, mount.path)).sort((a, b) => b.path.length - a.path.length)[0];
+	const id = mountId(path);
+	const mount = mounts.find((mount) => mount.id === id);
 	assert.ok(mount?.readonly, `Source is not read-only: ${path}`);
 }
 
