@@ -16,8 +16,8 @@ import Testing
     localClient.loadFixture(projects: [project], sessions: [localSession])
     remoteClient.loadFixture(projects: [project], sessions: [remoteSession])
     let hosts = HostClients()
-    hosts.install(localClient, host: local)
-    hosts.install(remoteClient, host: remote)
+    try hosts.install(localClient, host: local)
+    try hosts.install(remoteClient, host: remote)
     #expect(hosts.sessions.count == 2)
     #expect(Set(hosts.sessions.map(\.ref)).count == 2)
     #expect(hosts.projects.count == 2)
@@ -34,4 +34,3 @@ import Testing
     #expect(!invoked)
     #expect(localClient.connected)
 }
-
