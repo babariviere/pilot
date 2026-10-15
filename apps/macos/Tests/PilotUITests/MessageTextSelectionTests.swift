@@ -80,6 +80,64 @@ struct MessageTextSelectionTests {
         #expect(board.string(forType: .string) == "let answer = 42\n\nLast 🧑‍💻 paragraph")
     }
 
+    @Test func nativeCopyLinkExportsTheClickedURLInsteadOfTheSharedSelection() throws {
+        let owner = MessageTextSelection()
+        let previous = region("Another paragraph", block: 0, owner: owner)
+        let message = region("🛫 First link and second link", block: 1, owner: owner)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 200),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        previous.frame.origin.y = 100
+        window.contentView?.addSubview(previous)
+        window.contentView?.addSubview(message)
+        #expect(window.makeFirstResponder(message))
+        let storage = try #require(message.textStorage)
+        let links = [
+            ("First link", URL(string: "https://example.com/first?q=one%20two#section")!),
+            ("second link", URL(string: "https://example.com/second")!),
+        ]
+        for (label, url) in links {
+            storage.addAttribute(.link, value: url, range: (message.string as NSString).range(of: label))
+        }
+        let board = NSPasteboard.general
+        let saved = (board.pasteboardItems ?? []).map { item in
+            let copy = NSPasteboardItem()
+            for type in item.types {
+                if let data = item.data(forType: type) { copy.setData(data, forType: type) }
+            }
+            return copy
+        }
+        defer { board.clearContents(); if !saved.isEmpty { board.writeObjects(saved) } }
+        let layout = try #require(message.layoutManager)
+        let container = try #require(message.textContainer)
+        for (index, link) in links.enumerated() {
+            // Cover both no message selection and a selection owned by another region.
+            owner.clear()
+            if index > 0 {
+                owner.select(from: .init(key: previous.selectionKey, offset: 0),
+                             to: .init(key: previous.selectionKey, offset: previous.string.utf16.count))
+            }
+            let range = (message.string as NSString).range(of: link.0)
+            let glyphs = layout.glyphRange(forCharacterRange: NSRange(location: range.location, length: 1),
+                                          actualCharacterRange: nil)
+            let rect = layout.boundingRect(forGlyphRange: glyphs, in: container)
+            let point = NSPoint(x: rect.midX + message.textContainerOrigin.x,
+                                y: rect.midY + message.textContainerOrigin.y)
+            let event = try #require(NSEvent.mouseEvent(with: .rightMouseDown,
+                location: message.convert(point, to: nil), modifierFlags: [], timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+            let menu = try #require(message.menu(for: event))
+            let copyLink = try #require(menu.items.first { $0.action == NSSelectorFromString("copyLink:") })
+            let action = try #require(copyLink.action)
+            board.clearContents()
+            board.setString("sentinel", forType: .string)
+            #expect(NSApp.sendAction(action, to: message, from: copyLink))
+            #expect(board.string(forType: .string) == link.1.absoluteString)
+            #expect(board.string(forType: .URL) == link.1.absoluteString)
+            #expect(board.string(forType: .init("public.url-name")) == link.0)
+        }
+    }
+
     @Test func commandCCopiesAcrossBlocksAndLeavesTheComposerAlone() throws {
         let owner = MessageTextSelection()
         owner.source = "**First paragraph**\n\n```swift\nlet answer = 42\n```"
