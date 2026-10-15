@@ -363,8 +363,11 @@ export default pi=>{const faux=fauxProvider();pi.registerProvider({...faux.provi
 	for (const key of Object.keys(old)) old[key] = process.env[key];
 	old.PI_CODING_AGENT_DIR = process.env.PI_CODING_AGENT_DIR;
 	old.PI_OFFLINE = process.env.PI_OFFLINE;
+	old.NODE_OPTIONS = process.env.NODE_OPTIONS;
+	old.PILOT_READ_ONLY_CONFIG = process.env.PILOT_READ_ONLY_CONFIG;
 	process.env.PI_CODING_AGENT_DIR = dir;
 	process.env.PI_OFFLINE = "1";
+	process.env.PILOT_READ_ONLY_CONFIG = "1";
 	Object.assign(process.env, credentialEnvironment(broker.grant()));
 	let adapter: NativeAdapter | undefined;
 	try {

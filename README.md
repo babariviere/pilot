@@ -119,6 +119,11 @@ restart until an explicit new sign-in or changed canonical credential resolves i
 fails closed. Native parents, subagents, Ask, model catalogs, MCP status/tracking and connection sign-in
 helpers use the same authority. Existing Pi file/refresh locks are honored; unrelated external programs
 are not retrofitted with the broker's crash journal. Nothing copies credentials between hosts.
+
+Read-only workers use the SDK settings-storage seam to read existing canonical configuration without
+creating adjacent lock directories. Live writer locks, malformed, oversized or changing files fail closed;
+configuration writes remain denied. Fixed trusted preloads install the same adapters before immutable
+child SDK runtimes are constructed, after the Linux boundary has been validated.
 This does not add remote app routing or cross-host context/delegation semantics.
 
 The source includes [host-qualified client routing](docs/host-routing.md),

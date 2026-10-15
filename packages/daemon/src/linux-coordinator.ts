@@ -200,6 +200,8 @@ export async function forkLinuxCoordinator(
 				...process.env,
 				...credentialEnvironment(state.credentials),
 				NODE_OPTIONS: "",
+				PILOT_READ_ONLY_CONFIG: "1",
+				PI_CODING_AGENT_DIR: state.agentDir,
 				NODE_COMPILE_CACHE: join(view.scratch, "node-cache"),
 				TMPDIR: view.scratch,
 				TMP: view.scratch,

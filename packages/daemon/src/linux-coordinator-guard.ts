@@ -91,4 +91,9 @@ assert.throws(() => chmodSync(config.sentinel, 0o777), { code: "EROFS" });
 execFileSync(process.execPath, ["-e", check], { stdio: "pipe", timeout: 5000 });
 
 if (process.argv[3] === "--probe") process.stdout.write("pilot-linux-isolation-v1\n");
-else await import(pathToFileURL(process.argv[3]!).href);
+else {
+	// Trusted adapters load only after all boundary checks, but before any worker/SDK entry.
+	const { installCredentialBrokerHooks } = await import("@pilot/kernel/credential-hooks");
+	await installCredentialBrokerHooks();
+	await import(pathToFileURL(process.argv[3]!).href);
+}
