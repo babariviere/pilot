@@ -254,6 +254,7 @@ interface SessionMeta extends OutcomeMeta {
 	workspaceCheckedAt?: number;
 	workspaceUpdatedAt?: number;
 	workspaceRefreshDue?: boolean;
+	/** Legacy eager-refresh hints, discarded on load. */
 	workspaceMainDue?: string;
 	workspaceMainAttempted?: string;
 	workspaceMainDeferred?: string;
@@ -913,7 +914,6 @@ export class SessionManager {
 		this.sharedWorkspaces = new SharedWorkspaceStore(home);
 		this.mainViews = new MainViewStore(home);
 		this.onMainMoved((event) => this.refreshMainViews(event));
-		this.onMainMoved((event) => this.refreshMainMembers(event));
 		if (!factories.worker) this.pool = new WorkerPool();
 		const onUsage = (provider: SubscriptionProvider) => this.subscriptionUsageChanged(provider);
 		this.subscriptionUsage =
@@ -983,8 +983,20 @@ export class SessionManager {
 				const meta = JSON.parse(await readFile(join(this.sessionsDir, id, "meta.json"), "utf8")) as SessionMeta;
 				if (meta.id !== id) throw new Error("Session metadata ID does not match its directory");
 				normalizeLegacyOutcome(meta);
+				const legacyRefresh =
+					meta.workspaceMainDue ||
+					meta.workspaceMainAttempted ||
+					meta.workspaceMainDeferred ||
+					meta.prActivities?.some((activity) => activity.requestId.startsWith("main-workspace:"));
+				delete meta.workspaceMainDue;
+				delete meta.workspaceMainAttempted;
+				delete meta.workspaceMainDeferred;
+				meta.prActivities = meta.prActivities?.filter(
+					(activity) => !activity.requestId.startsWith("main-workspace:"),
+				);
 				if (this.sleepPause && (meta.working || meta.initializing || meta.pending?.length)) meta.sleepPaused = true;
 				this.metas.set(meta.id, meta);
+				if (legacyRefresh) await this.save(meta);
 			} catch (error) {
 				console.warn(`pilotd: skipping unreadable session ${id}: ${error}`);
 			}
@@ -1959,9 +1971,6 @@ export class SessionManager {
 
 	/** PR sync owns the cadence. Debounce bursts, with at most two project fetches at once. */
 	refreshMainWorkspaces(): void {
-		for (const meta of this.metas.values()) {
-			if (meta.workspaceMainDue) this.retryMainWorkspace(meta.id);
-		}
 		for (const project of this.mainProjects()) this.requestMainRefresh(project.id);
 	}
 
@@ -2043,151 +2052,94 @@ export class SessionManager {
 		if (failed) this.mainHeads.delete(projectId);
 	}
 
-	/** The member consumer of the project event, with no timer or main fetch of its own. */
-	private async refreshMainMembers({ projectId, head: target }: MainMoved): Promise<void> {
-		const candidates = [...this.metas.values()].filter(
-			(meta) => meta.projectId === projectId && meta.workspace?.shared && meta.archivedAt === undefined,
-		);
-		for (const meta of candidates) {
-			if (meta.workspaceMainAttempted === target || meta.workspace?.base === target) continue;
-			if (!this.missions?.membership(meta.id)?.active || this.isActiveMissionCoordinator(meta.id)) continue;
-			meta.workspaceMainDue = target;
-			await this.save(meta);
-			await this.refreshMainWorkspace(meta.id);
-		}
-	}
-
-	private retryMainWorkspace(id: string): void {
-		void this.refreshMainWorkspace(id).catch((error: unknown) =>
-			console.warn(`pilotd: main workspace update failed: ${error}`),
-		);
-	}
-
-	async refreshMainWorkspace(id: string): Promise<void> {
+	/** Refresh only for a new input, while its outbox drain owns admission and the kernel is idle. */
+	private async refreshMainWorkspace(id: string): Promise<void> {
 		const previous = this.workspaceRefreshes.get(id);
 		if (previous) return previous;
-		const meta = this.metas.get(id);
-		const target = meta?.workspaceMainDue;
-		if (!meta || !target || this.closing) return;
-		// Persisted pending heads are hints, not permission to use an unfetched/stale base after restart.
-		if (!meta.projectId || this.mainHeads.get(meta.projectId) !== target) {
-			if (meta.projectId) this.requestMainRefresh(meta.projectId);
+		const meta = this.require(id);
+		const workspace = meta.workspace;
+		const membership = this.missions?.membership(id);
+		if (
+			!meta.projectId ||
+			!workspace?.shared ||
+			(workspace.baseBranch && workspace.baseBranch !== "main") ||
+			!membership?.active ||
+			membership.coordinator ||
+			this.workspaceMaintenance.has(id)
+		)
 			return;
-		}
 		const worker = this.workers.get(id);
-		const activity = (text: string, suffix = "result") => {
-			meta.prActivities ??= [];
-			meta.prActivities.push({ type: "activity", requestId: `main-workspace:${target}:${id}:${suffix}`, text });
-		};
-		const busy =
+		const bindingOperation = meta.prBindingOperation;
+		const blocked = () =>
+			this.closing ||
+			this.sleepPause ||
+			this.updateGate.paused ||
 			meta.sleepPaused ||
 			meta.working ||
 			meta.kernelRestartPending ||
-			meta.initializing ||
 			meta.preparing ||
-			meta.pending?.length ||
-			this.starting.has(id) ||
-			this.sending.has(id) ||
+			meta.workspaceRecovery ||
+			meta.archivedAt !== undefined ||
 			this.parking.has(id) ||
 			this.changingModels.has(id) ||
 			this.archiveTransitions.has(id) ||
-			this.workspaceMaintenance.has(id) ||
 			this.hasWorkspaceProcess(id) ||
 			meta.subagents?.some((child) => child.state === "working") ||
 			worker?.busy ||
 			worker?.awaitingJobFollowUp ||
-			(worker && worker.state !== "idle");
-		const defer = async (reason: string) => {
-			if (meta.workspaceMainDeferred === target) return;
-			meta.workspaceMainDeferred = target;
-			meta.prActivities = meta.prActivities?.filter(
-				(item) => !item.requestId.startsWith("main-workspace:") || !item.requestId.endsWith(":deferred"),
+			worker?.runningJobs?.length ||
+			(worker && worker.state !== "idle") ||
+			this.workers.get(id) !== worker ||
+			meta.workspace !== workspace ||
+			(workspace.baseBranch && workspace.baseBranch !== "main") ||
+			meta.prBindingOperation !== bindingOperation ||
+			!this.missions?.membership(id)?.active ||
+			this.isMissionCoordinator(id) ||
+			hasActivePullRequest(meta) ||
+			(meta.boundPullRequests ?? []).some(
+				(url) => !sessionPullRequests(meta).some((pr) => pr.url.toLowerCase() === url.toLowerCase()),
 			);
-			activity(`Workspace update to main (${target.slice(0, 8)}) deferred: ${reason}`, "deferred");
-			await this.save(meta);
-		};
-		if (busy) {
-			await defer("chat is working or its workspace is in use.");
-			return;
-		}
+		if (blocked()) return;
 		const end = this.updateGate.begin();
 		const release = this.holdWorkspace(id);
-		let consumed = false;
 		const task = Promise.resolve()
 			.then(async () => {
-				if (await worker?.hasChildren?.()) {
-					await defer("background work is running.");
-					return;
-				}
-				if (meta.workspaceMainDue !== target) return;
-				meta.workspaceMainAttempted = target;
-				delete meta.workspaceMainDue;
-				consumed = true;
-				await this.save(meta);
-				let reason: string | undefined;
-				const workspace = meta.workspace;
-				if (this.isMissionCoordinator(meta.id)) return;
-				const bindingOperation = meta.prBindingOperation;
-				const prs = sessionPullRequests(meta);
-				if (!this.missions?.membership(id)?.active || this.isActiveMissionCoordinator(id))
-					reason = "not an eligible member chat";
-				else if (!workspace?.shared || meta.workspaceRecovery || meta.archivedAt !== undefined)
-					reason = "no available shared workspace";
-				else if (
-					hasActivePullRequest(meta) ||
-					(meta.boundPullRequests ?? []).some(
-						(url) => !prs.some((pr) => pr.url.toLowerCase() === url.toLowerCase()),
-					)
-				)
-					reason = "chat has an open or unverified PR; its branch was left for automatic rebase";
+				if (await worker?.hasChildren?.()) return;
+				if (blocked()) return;
+				// Fetch once at admission, not once per idle chat on every observed merge.
+				// Project consumers still share the same in-flight fetch and read-only main view.
+				await this.refreshProjectMain(meta.projectId!);
+				if (blocked()) return;
+				const target = this.mainHeads.get(meta.projectId!);
+				if (!target || workspace.base === target) return;
+				const result = await this.sharedWorkspaces.refreshBase(
+					meta.cwd,
+					workspace.shared!,
+					workspace.source,
+					workspace.base,
+					undefined,
+					{
+						target,
+						mergedPrs: sessionPullRequests(meta).filter((pr) => pr.state === "merged"),
+						allowed: () =>
+							blocked() || this.mainHeads.get(meta.projectId!) !== target
+								? "Chat, PR ownership or main changed during the update."
+								: undefined,
+					},
+				);
+				if ("behind" in result) meta.workspaceBehind = result.behind;
 				else {
-					try {
-						const result = await this.sharedWorkspaces.refreshBase(
-							meta.cwd,
-							workspace.shared,
-							workspace.source,
-							workspace.base,
-							undefined,
-							{
-								target,
-								mergedPrs: prs.filter((pr) => pr.state === "merged"),
-								allowed: () =>
-									this.closing ||
-									meta.sleepPaused ||
-									meta.working ||
-									meta.kernelRestartPending ||
-									worker?.busy ||
-									worker?.awaitingJobFollowUp ||
-									worker?.runningJobs?.length ||
-									this.hasWorkspaceProcess(id) ||
-									meta.subagents?.some((child) => child.state === "working") ||
-									meta.workspace !== workspace ||
-									meta.archivedAt !== undefined ||
-									meta.workspaceRecovery ||
-									!this.missions?.membership(id)?.active ||
-									this.isActiveMissionCoordinator(id) ||
-									hasActivePullRequest(meta) ||
-									meta.prBindingOperation !== bindingOperation ||
-									this.mainHeads.get(meta.projectId!) !== target ||
-									(meta.workspaceMainDue && meta.workspaceMainDue !== target)
-										? "Chat, PR ownership or main changed during the update."
-										: undefined,
-							},
-						);
-						if ("behind" in result) reason = result.behind;
-						else {
-							workspace.base = result.base;
-							delete workspace.branch;
-							delete workspace.baseBranch;
-							meta.workspaceUpdatedAt = Date.now();
-							delete meta.workspaceBehind;
-							activity(`Moved workspace to a fresh empty change on updated main (${result.base.slice(0, 8)}).`);
-						}
-					} catch (error) {
-						reason = error instanceof Error ? error.message : String(error);
-					}
+					workspace.base = result.base;
+					delete workspace.branch;
+					delete workspace.baseBranch;
+					meta.workspaceUpdatedAt = Date.now();
+					delete meta.workspaceBehind;
 				}
-				if (reason) activity(`Workspace update to main (${target.slice(0, 8)}) skipped: ${reason}`);
+				await this.save(meta);
+				this.emit(meta);
+			})
+			.catch(async (error: unknown) => {
+				meta.workspaceBehind = formatFailure(error, "Workspace update");
 				await this.save(meta);
 				this.emit(meta);
 			})
@@ -2195,12 +2147,6 @@ export class SessionManager {
 				this.workspaceRefreshes.delete(id);
 				release();
 				end();
-				if (consumed && meta.prActivities?.length && !this.closing)
-					void this.start(id, true).catch((error: unknown) =>
-						console.warn(`pilotd: could not record workspace activity: ${error}`),
-					);
-				if ((consumed || meta.workspaceMainDue !== target) && meta.workspaceMainDue && !this.closing)
-					this.retryMainWorkspace(id);
 			});
 		this.workspaceRefreshes.set(id, task);
 		return task;
@@ -4087,6 +4033,9 @@ export class SessionManager {
 				while (!this.closing && !this.sleepPause) {
 					while (!this.closing && !this.sleepPause && meta.pending?.length) {
 						const command = meta.pending[0];
+						// Only real input resumes workspace maintenance. Recheck the outbox after I/O,
+						// so Stop and superseded automatic notices cannot deliver stale commands.
+						if (command.type === "input") await this.refreshMainWorkspace(id);
 						await this.save(meta);
 						if (this.closing || this.sleepPause) return;
 						// Stop can replace the queue while this write is in flight.
@@ -4184,10 +4133,6 @@ export class SessionManager {
 			.then(() => rejected)
 			.finally(() => {
 				this.starting.delete(id);
-				if (this.metas.get(id)?.workspaceMainDue && !this.closing)
-					void this.refreshMainWorkspace(id).catch((error: unknown) =>
-						console.warn(`pilotd: merged workspace update failed: ${error}`),
-					);
 			});
 		this.starting.set(id, task);
 		task.catch((error) => console.error(`pilotd: session ${id} startup failed: ${error}`));
@@ -4463,8 +4408,7 @@ export class SessionManager {
 			if (this.workers.get(meta.id) !== worker) return;
 			const prepare = async () => {
 				await this.refreshCoordinatorWorkspace(meta.id, true);
-				// A merge received during an idle refresh can start a second pass in its finalizer.
-				// Keep the first-request barrier until every such pass has finished.
+				// Policy sections must see the base from any admitted workspace update.
 				while (this.workspaceRefreshes.has(meta.id)) await this.workspaceRefreshes.get(meta.id);
 			};
 			void prepare()
@@ -4540,10 +4484,6 @@ export class SessionManager {
 				worker.awaitingJobFollowUp = true;
 				if (applyActivity(meta, Boolean(meta.working), undefined, true)) void this.save(meta);
 			}
-			if (!packet.jobs.length && meta.workspaceMainDue)
-				void this.refreshMainWorkspace(meta.id).catch((error: unknown) =>
-					console.warn(`pilotd: merged workspace update failed: ${error}`),
-				);
 			this.emit(meta, worker);
 			return;
 		}
@@ -4552,10 +4492,6 @@ export class SessionManager {
 			if (JSON.stringify(packet.subagents) === JSON.stringify(meta.subagents ?? [])) return;
 			if (packet.subagents.length) meta.subagents = packet.subagents;
 			else delete meta.subagents;
-			if (!meta.subagents?.some((child) => child.state === "working") && meta.workspaceMainDue)
-				void this.refreshMainWorkspace(meta.id).catch((error: unknown) =>
-					console.warn(`pilotd: merged workspace update failed: ${error}`),
-				);
 			void this.save(meta);
 			this.emit(meta, worker);
 			for (const attach of [...(this.subagentAttachers.get(meta.id) ?? [])]) attach();
@@ -4603,10 +4539,6 @@ export class SessionManager {
 				void this.save(meta);
 			}
 			if (!packet.working && (wasWorking || (changed && packet.completion))) void this.pullRequests.refresh(meta);
-			if (!packet.working && meta.workspaceMainDue)
-				void this.refreshMainWorkspace(meta.id).catch((error: unknown) =>
-					console.warn(`pilotd: merged workspace update failed: ${error}`),
-				);
 			if (!packet.working && (this.isMissionCoordinator(meta.id) || meta.coordinatorView))
 				void this.prepareCoordinatorRole(meta.id)
 					.then(() => this.resumeRoleWork(meta.id))

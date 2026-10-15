@@ -172,12 +172,12 @@ a crash are marked `interrupted`, never automatically rerun; subprocesses may re
 Merges and unmerged closures of owned chat PRs also queue updates, even after the chat finishes.
 Merge updates include completed tasks, newly unblocked dependents and known open stacked PRs.
 Reference-only PR links do not trigger these updates, and refreshes or restarts do not repeat them.
-When a repository refresh finds new main commits, eligible idle member chats move to fresh empty changes
-on updated main. One project watcher reuses the existing PR-refresh scheduler (including projects with
-only settled PRs), coalesces refresh bursts, and stops when no active chats remain. Base consumers share
-the same main-moved event and fetch, rather than polling per chat.
-Busy chats wait; dirty workspaces, open PRs and unpushed bookmarks stay in place.
-Moves and skip reasons are passive chat activity, without a model turn. The coordinator is excluded.
+Eligible member chats refresh to a fresh empty change on current main just before their next idle input,
+not after every merge while idle. One project watcher reuses the existing PR-refresh scheduler (including
+projects with only settled PRs), coalesces refresh bursts, and stops when no active chats remain. Base
+consumers share the same main-moved event and fetch, rather than polling per chat.
+Busy chats, dirty workspaces, open PRs, selected non-main bases and unpushed bookmarks stay in place.
+Routine refreshes do not add timeline messages or wake idle chats. The coordinator is excluded.
 
 Coordinating chats read one shared, read-only main checkout per project, updated by that same watcher.
 They have no task bookmark, PR ownership or Changes pane, and delegate code changes and verification
