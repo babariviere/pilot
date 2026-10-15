@@ -124,7 +124,7 @@ import Testing
         #expect(!source.contains("systemSymbolName:"), "Keep SF name resolution in PilotIcon.swift: \(file.lastPathComponent)")
         #expect(!source.contains("MissionSymbol"))
         #expect(!source.contains("ArtifactSymbol"))
-        #expect(!source.contains("WorkingRipple"), "Use the shared DotGridSpinner: \(file.lastPathComponent)")
-        #expect(!source.contains("DitherRipple"), "Use the shared DotGridSpinner: \(file.lastPathComponent)")
+        #expect(!source.contains("WorkingRipple"), "Use the shared EllipsisSpinner: \(file.lastPathComponent)")
+        #expect(!source.contains("DitherRipple"), "Use the shared EllipsisSpinner: \(file.lastPathComponent)")
     }
 }

@@ -406,7 +406,7 @@ private struct MissionMetaLine: View {
     }
 }
 
-/// While a new coordinator drafts the goal, brief and tasks: one line with the shared working dot grid, like a chat's
+/// While a new coordinator drafts the goal, brief and tasks: one line with the shared working ellipsis, like a chat's
 /// automatic events, and a quiet link to its chat.
 struct MissionDraftingEvent: View {
     let mission: Mission
@@ -418,7 +418,7 @@ struct MissionDraftingEvent: View {
         let working = coordinator?.isWorking ?? false
         HStack(spacing: 7) {
             if working {
-                DotGridSpinner(background: coordinator?.isWaitingOnJobs == true)
+                EllipsisSpinner(background: coordinator?.isWaitingOnJobs == true)
             } else {
                 PilotSymbol(PilotIcon.coordinator).foregroundStyle(Theme.faintForeground).accessibilityHidden(true)
             }
