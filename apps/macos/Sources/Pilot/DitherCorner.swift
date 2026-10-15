@@ -19,13 +19,17 @@ import SwiftUI
 /// sidebar's size.
 /// A working chat whose agent is idle while only its background jobs run passes `background: true`: the ripple
 /// is fainter and half as fast, so it still reads as working, in the background.
+/// The command palette passes `monochrome: true`: only states that need the user keep their colour, and working or
+/// ready-to-merge corners turn grey, so the palette's one colour is the amber of Needs you.
 extension View {
     /// The defaults fit sidebar rows: they reach the edges of the native selection highlight.
     func ditherCorner(_ signal: SessionSignal?, background: Bool = false,
                       outset: EdgeInsets = EdgeInsets(top: -3, leading: 0, bottom: -3, trailing: -6),
-                      cornerRadius: CGFloat = Theme.Radius.row, extent: Double = 1, recedes: Bool = true) -> some View {
+                      cornerRadius: CGFloat = Theme.Radius.row, extent: Double = 1, recedes: Bool = true,
+                      monochrome: Bool = false) -> some View {
         modifier(DitherCornerModifier(signal: signal, background: background && signal == .working, outset: outset,
-                                      cornerRadius: cornerRadius, extent: extent, recedes: recedes))
+                                      cornerRadius: cornerRadius, extent: extent, recedes: recedes,
+                                      monochrome: monochrome))
     }
 }
 
@@ -97,6 +101,7 @@ private struct DitherCornerModifier: ViewModifier {
     let cornerRadius: CGFloat
     let extent: Double
     let recedes: Bool
+    let monochrome: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// The drawn state lags `signal` by one update, so a change starts its dissolve from the old state.
     @State private var shown: SessionSignal?
@@ -105,13 +110,14 @@ private struct DitherCornerModifier: ViewModifier {
     @State private var hovered = false
 
     init(signal: SessionSignal?, background: Bool, outset: EdgeInsets, cornerRadius: CGFloat, extent: Double,
-         recedes: Bool) {
+         recedes: Bool, monochrome: Bool) {
         self.signal = signal
         self.background = background
         self.outset = outset
         self.cornerRadius = cornerRadius
         self.extent = extent
         self.recedes = recedes
+        self.monochrome = monochrome
         _shown = State(initialValue: signal)
     }
 
@@ -122,7 +128,7 @@ private struct DitherCornerModifier: ViewModifier {
                 if shown != nil || (previous != nil && mix < 1) {
                     DitherCornerClocked(signal: shown, background: background && shown == .working,
                                         previous: previous, mix: mix, recede: recedes && hovered ? 1 : 0,
-                                        still: reduceMotion, extent: extent)
+                                        still: reduceMotion, extent: extent, monochrome: monochrome)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                         .padding(outset)
                         .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
@@ -161,6 +167,7 @@ private struct DitherCornerClocked: View {
     let recede: Double
     let still: Bool
     let extent: Double
+    let monochrome: Bool
 
     var body: some View {
         let moving = !still && (DitherCorner.animates(signal) || (mix < 1 && DitherCorner.animates(previous)))
@@ -173,7 +180,7 @@ private struct DitherCornerClocked: View {
 
     private func layer(frame: Int) -> some View {
         DitherCornerLayer(signal: signal, background: background, previous: previous, frame: frame, mix: mix,
-                          recede: recede, extent: extent)
+                          recede: recede, extent: extent, monochrome: monochrome)
             .animation(still ? nil : DitherCorner.recedeAnimation, value: recede)
     }
 }
@@ -200,6 +207,7 @@ private struct DitherCornerLayer: View, Animatable {
     var mix: Double
     var recede: Double
     let extent: Double
+    let monochrome: Bool
 
     var animatableData: AnimatablePair<Double, Double> {
         get { AnimatablePair(mix, recede) }
@@ -213,7 +221,7 @@ private struct DitherCornerLayer: View, Animatable {
         let request = DitherCornerRequest(signal: signal, previous: mix < 1 ? previous : nil,
                                           frame: DitherCorner.loopFrame(frame, background: background),
                                           mix: min(1, max(0, mix)), recede: min(1, max(0, recede)), extent: extent,
-                                          background: background)
+                                          background: background, monochrome: monochrome)
         if let image = DitherCornerRenderer.image(for: request) {
             let grid = DitherCorner.grid(extent: extent)
             Image(decorative: image, scale: 1)
@@ -237,6 +245,8 @@ struct DitherCornerRequest: Hashable {
     var extent: Double = 1
     /// A working corner whose agent waits on background jobs: fainter and half as fast.
     var background = false
+    /// Grey for states that do not need the user, as in the command palette.
+    var monochrome = false
 
     /// Resting and fully receded corners repeat across rows and frames. Dissolving and mid-recession ones are
     /// one-offs.
@@ -277,6 +287,12 @@ enum DitherCornerRenderer {
         return tints
     }()
 
+    /// The monochrome tint of states that do not need the user.
+    private static let quietTint: (Double, Double, Double) = {
+        let color = NSColor(Theme.faintForeground).usingColorSpace(.sRGB) ?? .gray
+        return (Double(color.redComponent), Double(color.greenComponent), Double(color.blueComponent))
+    }()
+
     /// Coverage in 0...1 of one cell. `u` and `v` are the cell's distance in cells from the right and bottom.
     nonisolated static func coverage(_ signal: SessionSignal?, u: Double, v: Double, frame: Int, recede: Double = 0,
                                      extent: Double = 1, background: Bool = false) -> Double {
@@ -315,7 +331,8 @@ enum DitherCornerRenderer {
                 let signal = request.previous != nil && threshold > request.mix ? request.previous : request.signal
                 let amount = coverage(signal, u: u, v: v, frame: request.frame, recede: request.recede,
                                       extent: request.extent, background: request.background && signal == request.signal)
-                guard let signal, threshold < amount, let tint = tints[signal] else { continue }
+                guard let signal, threshold < amount,
+                      let tint = request.monochrome && !signal.needsUser ? quietTint : tints[signal] else { continue }
                 let alpha = 0.62 * (0.55 + 0.45 * amount)
                 let index = (y * width + x) * 4
                 pixels[index] = UInt8(clamping: Int(tint.0 * alpha * 255))

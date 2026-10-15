@@ -95,6 +95,11 @@ Home, Inbox and Overview rows use the same line and may wrap it once.
 An unsent composer draft replaces the segments after the project with a pencil and the draft's first line, in
 muted text. It is the user's own work, so it never colours, badges or regroups the row.
 
+The ⌘K command palette is one search field over one list grouped by kind, with the top match selected and arrow
+keys, Return and Escape throughout. Rows are hairline-divided, show their menu shortcut as a key cap, and chat rows
+keep their sidebar line and corner. The palette's only colour is the amber of Needs you: working and ready-to-merge
+corners turn grey there (`ditherCorner(_:monochrome:)`).
+
 The menu bar follows the same urgency order (Needs you, Ready to merge, Working, Recent) under a one-line heading such
 as "1 needs you · 2 working". pilotd's controls sit in their own submenu.
 

@@ -17,6 +17,16 @@ enum InspectorTab: Hashable {
     }
 }
 
+/// A retry asked for outside the chat. Honoured only briefly, so a later failure never retries on its own.
+struct RetryRequest: Equatable {
+    let sessionId: String
+    let requestedAt: Date
+
+    func isCurrent(for sessionId: String, now: Date = Date()) -> Bool {
+        self.sessionId == sessionId && now.timeIntervalSince(requestedAt) < 15
+    }
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     static let shared = AppModel()
@@ -131,6 +141,10 @@ final class AppModel: ObservableObject {
     @Published var pendingSessionActions: Set<String> = []
     /// The chat whose rename sheet is open.
     @Published var renamingSession: SessionRenameTarget?
+    /// The ⌘K command palette sheet.
+    @Published var showingCommandPalette = false
+    /// A retry the command palette asked for, run by the chat's transcript once it shows the failed turn's Retry.
+    @Published var pendingRetry: RetryRequest?
     /// Subagent shown in the Agents tab, per session.
     @Published var selectedSubagents: [String: String] = [:]
     /// Subagent answers the user has opened. Persisted, so restarts do not resurface old answers.
@@ -576,6 +590,16 @@ final class AppModel: ObservableObject {
         sidebarSearchVisible = false
     }
 
+    /// Opens the ⌘K command palette, or closes it when it is open. Never over another sheet.
+    func showCommandPalette() {
+        if showingCommandPalette {
+            showingCommandPalette = false
+            return
+        }
+        guard missionSheet == nil, renamingSession == nil else { return }
+        showingCommandPalette = true
+    }
+
     /// The focused project, once it is known to exist. nil while listing every project.
     var focusedProject: Project? { client.project(sidebarScope) }
 
@@ -724,6 +748,28 @@ final class AppModel: ObservableObject {
                 }
             } catch { sessionActionError = error.localizedDescription }
         }
+    }
+
+    /// Retries a failed chat: its startup when that failed, otherwise its last failed turn, which the chat's
+    /// transcript runs once it is open and shows Retry.
+    func retry(_ session: SessionSummary) {
+        guard session.status == .failed, !session.isArchived else { return }
+        if session.canRetryStartup == true {
+            Task {
+                do { try await client.retryStartup(session.id) }
+                catch { sessionActionError = error.localizedDescription }
+            }
+            return
+        }
+        reveal(session: session.id)
+        pendingRetry = RetryRequest(sessionId: session.id, requestedAt: Date())
+    }
+
+    /// The open chat's subagents, in the inspector's Agents tab.
+    func showAgents() {
+        guard let session = selectedSession, InspectorTab.agents.isAvailable(for: session) else { return }
+        inspectorTab = .agents
+        inspectorVisible = true
     }
 
     // MARK: Subagents

@@ -78,6 +78,9 @@ struct MainWindow: View {
         .sheet(item: $model.renamingSession) { target in
             SessionRenameSheet(target: target).environmentObject(model)
         }
+        .sheet(isPresented: $model.showingCommandPalette) {
+            CommandPaletteView().environmentObject(model)
+        }
         .onAppear {
             model.openWindowAction = { openWindow(id: MainWindow.id) }
             NSApp.setActivationPolicy(.regular)

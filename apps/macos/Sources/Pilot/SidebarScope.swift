@@ -420,6 +420,8 @@ struct SidebarScopeCommands: Commands {
     var body: some Commands {
         CommandGroup(after: .sidebar) {
             Divider()
+            Button("Command Palette…") { model.showCommandPalette() }
+                .keyboardShortcut("k", modifiers: .command)
             Button("Search Chats") { model.showSidebarSearch() }
                 .keyboardShortcut("f", modifiers: .command)
             // A focused project always groups its chats by urgency; the choice applies to All projects.
