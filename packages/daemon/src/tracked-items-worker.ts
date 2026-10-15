@@ -11,6 +11,14 @@ parentPort!.on("message", ({ id, method, args }) => {
 		changed = false;
 		let value: unknown, projectId: string | undefined, projectIds: string[] | undefined;
 		switch (method) {
+			case "triageInput":
+				value = disk.triage.input(args.projectId, args.kind);
+				break;
+			case "saveGuide":
+				disk.triage.save(args.projectId, args.kind, args.text, args.throughSeq, args.expectedSeq, args.now);
+				changed = true;
+				projectId = args.projectId;
+				break;
 			case "load": {
 				value = args.projectIds.flatMap((projectId: string) =>
 					(["linear", "slack"] as const).map((kind) => ({

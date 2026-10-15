@@ -3,6 +3,7 @@ import type { SlackMessageType, SlackProjectLabel, SlackCorrection } from "@pilo
 export interface SlackClassifierContext {
 	labels: SlackProjectLabel[];
 	corrections: SlackCorrection[];
+	guide?: string;
 }
 
 /** External Slack content never supplies instructions, tools, project scope, or URLs. */

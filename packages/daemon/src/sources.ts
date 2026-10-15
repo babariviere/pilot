@@ -32,6 +32,7 @@ import { type SourceMcpClient, SourceRateLimited, SourceSignInRequired } from ".
 import { SourceSignIns } from "./source-sign-in.ts";
 import type { SourceCheckpoint, TrackedInput, TrackedItemStore, TrackedQuery } from "./tracked-items.ts";
 import { lookupLinearTeams, lookupSlackChannels } from "./tracking-lookup.ts";
+import type { TriageGroomer } from "./triage-grooming.ts";
 
 export interface SourcePollContext {
 	project: Project;
@@ -63,6 +64,7 @@ type Health = {
 
 /** Bounded manual and background polling. Only explicitly registered sources do work. */
 export class SourceRegistry {
+	triage?: TriageGroomer;
 	private readonly pollers = new Map<TrackedKind, SourcePoller>();
 	private readonly running = new Map<string, Run>();
 	private readonly health = new Map<string, Health>();

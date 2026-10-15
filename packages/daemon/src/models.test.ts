@@ -30,6 +30,42 @@ const model = (id: string, input: number, output: number): Model => ({
 const expensive = model("large", 3, 15);
 const cheap = model("small", 0.1, 0.4);
 
+test("generic triage completions use cheapest scoped model without thinking, tools or retries", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "triage-model-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	t.mock.method(
+		ModelRuntime,
+		"create",
+		async () =>
+			({
+				...requiredAuthRegistration,
+				getAvailable: async () => [expensive, cheap],
+				completeSimple: async (
+					chosen: Model,
+					context: Parameters<ModelRuntime["completeSimple"]>[1],
+					options: Parameters<ModelRuntime["completeSimple"]>[2],
+				) => {
+					assert.equal(chosen, cheap);
+					assert.equal(context.tools, undefined);
+					assert.equal(options?.reasoning, undefined);
+					assert.equal(options?.maxRetries, 0);
+					const payload = (await options?.onPayload?.({}, cheap)) as { text: { format: { strict: boolean } } };
+					assert.equal(payload.text.format.strict, true);
+					return answer('{"rules":[]}');
+				},
+			}) as unknown as ModelRuntime,
+	);
+	assert.equal(
+		await new ModelCatalog(root).completeTriage(
+			root,
+			"invented correction",
+			{ type: "object" },
+			new AbortController().signal,
+		),
+		'{"rules":[]}',
+	);
+});
+
 test("Slack classification uses scoped Luna, strict JSON, no tools or thinking, with bounded input and no retry", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "slack-model-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
@@ -66,7 +102,7 @@ test("Slack classification uses scoped Luna, strict JSON, no tools or thinking, 
 					assert.equal(JSON.parse(String(context.messages[0]!.content)).untrustedSlackThread.length, 12_000);
 					const quoted = JSON.parse(String(context.messages[0]!.content));
 					assert.deepEqual(quoted.projectLabels, [{ name: "Client", description: "Questions about the app" }]);
-					assert.deepEqual(quoted.quotedCorrectionExamples, classifierContext.corrections.slice(0, 20));
+					assert.deepEqual(quoted.quotedCorrectionExamples, classifierContext.corrections.slice(0, 5));
 					assert.equal(options?.reasoning, undefined);
 					assert.equal(options?.maxTokens, 256);
 					assert.equal(options?.maxRetries, 0);

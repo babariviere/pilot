@@ -16,6 +16,7 @@ import type {
 } from "@pilot/protocol";
 import { NotFound } from "./errors.ts";
 import { parseSlackClassification, type SlackClassification } from "./slack-classifier.ts";
+import { TriageGuideDisk } from "./triage-guide-disk.ts";
 
 export type SlackCache = { state: "pending" | "error" } | { state: "done"; result: SlackClassification };
 export type SlackReservation = SlackCache | { state: "reserved" } | { state: "budget" };
@@ -107,6 +108,7 @@ const SLACK_LABEL_IN = `coalesce(${SLACK_LABEL}, '') IN (SELECT value FROM json_
 
 export class TrackedItemDisk {
 	private readonly db: DatabaseSync;
+	readonly triage: TriageGuideDisk;
 	private readonly listeners = new Set<(projectId: string) => void>();
 	/** Each project's close labels, as last set by the daemon. A project without an entry is never reconciled. */
 	private readonly closeLabels = new Map<string, string>();
@@ -227,6 +229,7 @@ export class TrackedItemDisk {
 			);
 			CREATE INDEX IF NOT EXISTS slack_corrections_project ON slack_corrections(project_id, seq DESC);
 		`);
+		this.triage = new TriageGuideDisk(this.db);
 		if (Number(this.db.prepare("PRAGMA user_version").get()!.user_version) < 1)
 			this.db.exec(`
 			UPDATE slack_classifications SET result=json_object(
@@ -323,10 +326,7 @@ export class TrackedItemDisk {
 			.run(value ? "done" : "error", value, projectId, channel, ts);
 	}
 	corrections(projectId: string): SlackCorrection[] {
-		return this.db
-			.prepare("SELECT value FROM slack_corrections WHERE project_id=? ORDER BY seq DESC LIMIT 20")
-			.all(projectId)
-			.map((row) => JSON.parse(String(row.value)) as SlackCorrection);
+		return this.triage.corrections(projectId, "slack") as SlackCorrection[];
 	}
 	/**
 	 * Sets a project's close labels and applies them to every stored Slack message. Returns whether a row changed.
@@ -931,14 +931,7 @@ export class TrackedItemDisk {
 						status: after.status,
 					},
 				};
-				this.db
-					.prepare("INSERT INTO slack_corrections(project_id, value) VALUES (?, ?)")
-					.run(item.projectId, JSON.stringify(value));
-				this.db
-					.prepare(
-						"DELETE FROM slack_corrections WHERE project_id=? AND seq NOT IN (SELECT seq FROM slack_corrections WHERE project_id=? ORDER BY seq DESC LIMIT 20)",
-					)
-					.run(item.projectId, item.projectId);
+				this.triage.append(item.projectId, "slack", { ...value, values: { ...value.values } });
 			}
 			this.db.exec("COMMIT");
 		} catch (error) {

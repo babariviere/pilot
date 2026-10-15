@@ -7,6 +7,8 @@ import type {
 	TrackedItemList,
 	TrackedItemPatch,
 	TrackedKind,
+	TriageGuide,
+	TriageCorrection,
 } from "@pilot/protocol";
 import { NotFound, ServiceUnavailable } from "./errors.ts";
 import type { SlackClassification } from "./slack-classifier.ts";
@@ -124,6 +126,22 @@ export class TrackedItemStore {
 	}
 	corrections(projectId: string): Promise<SlackCorrection[]> {
 		return this.rpc("corrections", { projectId });
+	}
+	triageInput(
+		projectId: string,
+		kind: TrackedKind,
+	): Promise<{ guide: TriageGuide; corrections: TriageCorrection[]; throughSeq: number }> {
+		return this.rpc("triageInput", { projectId, kind });
+	}
+	saveGuide(
+		projectId: string,
+		kind: TrackedKind,
+		text: string,
+		throughSeq: number,
+		expectedSeq: number,
+		now: number,
+	): Promise<void> {
+		return this.rpc("saveGuide", { projectId, kind, text, throughSeq, expectedSeq, now });
 	}
 	/** Sets each project's close labels and applies them to its stored Slack messages: label-closed ones reopen when
 	 * their label no longer closes, open ones without a user status close. Snapshots and listeners follow. */

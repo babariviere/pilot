@@ -2,6 +2,13 @@ import Foundation
 
 // Mirrors packages/protocol/src/tracking.ts.
 public enum TrackedKind: String, Codable, Hashable, Sendable { case linear, slack }
+/// Read-only, untrusted rules rebuilt from corrections. Mirrors TriageGuide.
+public struct TriageGuide: Codable, Equatable, Sendable {
+    public let kind: TrackedKind
+    public let text: String
+    public let updatedAt: Double
+    public let throughSeq: Int
+}
 public struct LinearCycleSummary: Codable, Equatable, Sendable {
     public let id: String
     public let name: String?
