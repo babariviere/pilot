@@ -11,9 +11,11 @@ struct EnergySettings: View {
             if let status = client.powerStatus {
                 EnergySettingsContent(status: status, busy: busy, error: error, update: update)
             } else {
-                Section {
-                    if let error { InlineProblem(error) { Task { await load() } } }
-                    else { ProgressView("Loading energy settings…") }
+                SettingsSection {
+                    SettingsRow {
+                        if let error { InlineProblem(error) { Task { await load() } } }
+                        else { ProgressView("Loading energy settings…").controlSize(.small) }
+                    }
                 }
             }
         }
@@ -45,35 +47,32 @@ struct EnergySettingsContent: View {
     var update: (PowerSettings) -> Void = { _ in }
 
     var body: some View {
-        Section {
-            Toggle("Keep this Mac awake while agents work", isOn: Binding(
+        SettingsSection("While agents work", explanation: "The display can sleep and the screen can lock. Closing Pilot’s window or quitting the app does not stop agents. Paused work resumes after the next wake with a connection; interrupted commands and background jobs are not rerun. Closed-lid work needs a one-time administrator approval for two sleep commands, uses no Wi-Fi names or Location Services, and needs clear ventilation.") {
+            SettingsToggle("Keep this Mac awake while agents work", isOn: Binding(
                 get: { status.settings.keepAwake },
                 set: { update(PowerSettings(keepAwake: $0, closedLid: status.settings.closedLid)) }
             ))
             .disabled(busy || (!status.available && !status.settings.keepAwake))
-            Toggle(isOn: Binding(
+            SettingsToggle("Keep going with the lid closed",
+                           detail: "Locks this Mac when you close the lid. Requires power and Wi-Fi; if either disconnects, Pilot pauses agents and lets this Mac sleep.",
+                           isOn: Binding(
                 get: { status.settings.closedLid },
                 set: { update(PowerSettings(keepAwake: status.settings.keepAwake, closedLid: $0)) }
-            )) {
-                Text("Keep going with the lid closed")
-                Text("Locks this Mac when you close the lid. Requires power and Wi-Fi; if either disconnects, Pilot pauses agents and lets this Mac sleep.")
-            }
+            ))
             .disabled(busy || (!status.available && !status.settings.closedLid) || !status.settings.keepAwake)
-        } header: {
-            Text("While agents work")
-        } footer: {
-            SettingsFooter("The display can sleep and the screen can lock. Closing Pilot’s window or quitting the app does not stop agents. Paused work resumes after the next wake with a connection; interrupted commands and background jobs are not rerun. Closed-lid work needs a one-time administrator approval for two sleep commands, uses no Wi-Fi names or Location Services, and needs clear ventilation.")
         }
-        Section {
-            HStack(alignment: .top, spacing: 8) {
-                if busy { ProgressView().controlSize(.small) }
-                else { PilotSymbol(status.paused ? PilotIcon.idle : PilotIcon.energy).foregroundStyle(Theme.mutedForeground) }
-                Text(busy ? "Updating energy settings…" : status.summary)
-                    .font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
-                    .fixedSize(horizontal: false, vertical: true)
+        SettingsSection {
+            SettingsRow {
+                HStack(alignment: .top, spacing: 8) {
+                    if busy { ProgressView().controlSize(.small) }
+                    else { PilotSymbol(status.paused ? PilotIcon.idle : PilotIcon.energy).foregroundStyle(Theme.mutedForeground) }
+                    Text(busy ? "Updating energy settings…" : status.summary)
+                        .font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             if let message = error ?? status.error {
-                InlineProblem(message)
+                SettingsRow { InlineProblem(message) }
             }
         }
     }

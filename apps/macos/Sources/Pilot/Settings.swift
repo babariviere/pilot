@@ -167,7 +167,7 @@ struct SettingsView: View {
                 Task { await addProject() }
             }
             .frame(width: 210)
-            Divider()
+            Rectangle().fill(Theme.border).frame(width: 1)
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -237,6 +237,8 @@ struct SettingsView: View {
     }
 }
 
+/// The settings sidebar in the main window's style: the sidebar colour, grey line icons and the soft selection fill,
+/// with the general pages, then the projects and Add Project at the bottom.
 private struct SettingsSidebar: View {
     @Binding var selection: SettingsTab
     let projects: [Project]
@@ -244,104 +246,218 @@ private struct SettingsSidebar: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            List(selection: Binding(get: { selection }, set: { if let next = $0 { selection = next } })) {
-                Section {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 1) {
                     ForEach(SettingsTab.general, id: \.self) { tab in
-                        if tab == .connections {
-                            ConnectionsTabLabel().tag(tab)
-                        } else {
-                            Label(tab.title, icon: tab.icon).tag(tab)
-                        }
+                        row(tab.title, icon: tab.icon, tab: tab)
                     }
-                }
-                Section("Projects") {
+                    SectionLabel(title: "Projects")
+                        .padding(.horizontal, 8)
+                        .padding(.top, 14)
+                        .padding(.bottom, 4)
                     ForEach(projects) { project in
-                        Label(project.name, icon: PilotIcon.project)
-                            .lineLimit(1)
-                            .help(project.path.abbreviatingHome)
-                            .tag(SettingsTab.project(project.id))
+                        row(project.name, icon: PilotIcon.project, tab: .project(project.id),
+                            help: project.path.abbreviatingHome)
                     }
                     if projects.isEmpty {
                         Text("Add a project to group chats by repository.")
                             .font(.pilot(.caption))
                             .foregroundStyle(Theme.mutedForeground)
                             .fixedSize(horizontal: false, vertical: true)
-                            .selectionDisabled()
+                            .padding(.horizontal, 8)
                     }
                 }
+                .padding(10)
             }
-            .listStyle(.sidebar)
-            Divider()
+            HairlineDivider()
             Button(action: addProject) {
                 Label("Add Project…", icon: PilotIcon.newProject)
                     .font(.pilot(.label))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(.borderless)
+            .rowButtonStyle()
             .foregroundStyle(Theme.mutedForeground)
-            .padding(.horizontal, 14)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 9)
+        }
+        .background(Theme.sidebar)
+    }
+
+    private func row(_ title: String, icon: PilotIcon, tab: SettingsTab, help: String? = nil) -> some View {
+        SidebarNavRow(title: title, icon: icon, selected: selection == tab, help: help, action: { selection = tab }) {
+            if tab == .connections { ConnectionsTabBadge() }
+        }
+    }
+}
+
+/// One settings page: a title and a one-line summary, then sections, in one white reading column
+/// (Theme.settingsColumn, centered in wide windows) that scrolls with its header. A page with unsaved edits adds its
+/// own Save bar with `safeAreaInset(edge: .bottom)`.
+struct SettingsPage<Accessory: View, Content: View>: View {
+    let title: String
+    let subtitle: String
+    let accessory: Accessory
+    let content: Content
+
+    init(_ title: String, subtitle: String, @ViewBuilder accessory: () -> Accessory, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.subtitle = subtitle
+        self.accessory = accessory()
+        self.content = content()
+    }
+
+    var body: some View {
+        SettingsColumn {
+            PageHeader(title, subtitle: subtitle) { accessory }
+            content
+        }
+    }
+}
+
+extension SettingsPage where Accessory == EmptyView {
+    init(_ title: String, subtitle: String, @ViewBuilder content: () -> Content) {
+        self.init(title, subtitle: subtitle, accessory: { EmptyView() }, content: content)
+    }
+}
+
+/// The scrolling reading column of a settings page, also used on its own by snapshots of single sections.
+struct SettingsColumn<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 28) { content }
+                .padding(.horizontal, 20)
+                .padding(.top, 20)
+                .padding(.bottom, 28)
+                .frame(maxWidth: Theme.settingsColumn, alignment: .leading)
+                .frame(maxWidth: .infinity)
+        }
+        .background(Theme.background)
+    }
+}
+
+/// A section of a settings page: a semibold heading, its explanation as a muted caption above the rows, then hairline
+/// rows (`SettingsRow`, `SettingsToggle`) aligned to the heading. Both heading and explanation are optional.
+struct SettingsSection<Content: View>: View {
+    let title: String?
+    let explanation: String?
+    let content: Content
+
+    init(_ title: String? = nil, explanation: String? = nil, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.explanation = explanation
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if title != nil || explanation != nil {
+                VStack(alignment: .leading, spacing: 3) {
+                    if let title {
+                        Text(title)
+                            .font(.pilot(.body, weight: .semibold))
+                            .foregroundStyle(Theme.foreground)
+                            .accessibilityAddTraits(.isHeader)
+                    }
+                    if let explanation { SettingsNote(explanation) }
+                }
+                .padding(.bottom, 8)
+            }
+            content
+            HairlineDivider()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// One hairline row of a settings section: leading text and a trailing control, vertically centred. Pass only content
+/// for a full-width row, such as a status line, an inline problem or a quiet button.
+struct SettingsRow<Leading: View, Control: View>: View {
+    let leading: Leading
+    let control: Control
+
+    init(@ViewBuilder label: () -> Leading, @ViewBuilder control: () -> Control) {
+        leading = label()
+        self.control = control()
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HairlineDivider()
+            HStack(alignment: .center, spacing: 16) {
+                leading.frame(maxWidth: .infinity, alignment: .leading)
+                control
+            }
             .padding(.vertical, 9)
         }
     }
 }
 
-/// One settings page: a title and a one-line summary over a grouped form, with an optional trailing
-/// accessory in the header and a pinned footer for actions such as Save. Content stays within
-/// Theme.settingsColumn and centers in wide windows.
-struct SettingsPage<Accessory: View, Content: View, Footer: View>: View {
-    let title: String
-    let subtitle: String
-    let accessory: Accessory
-    let content: Content
-    let footer: Footer
-
-    init(_ title: String, subtitle: String, @ViewBuilder accessory: () -> Accessory,
-         @ViewBuilder content: () -> Content, @ViewBuilder footer: () -> Footer) {
-        self.title = title
-        self.subtitle = subtitle
-        self.accessory = accessory()
-        self.content = content()
-        self.footer = footer()
+extension SettingsRow where Leading == SettingsRowLabel {
+    init(_ title: String, detail: String? = nil, @ViewBuilder control: () -> Control) {
+        self.init(label: { SettingsRowLabel(title: title, detail: detail) }, control: control)
     }
+}
+
+extension SettingsRow where Control == EmptyView {
+    init(@ViewBuilder content: () -> Leading) {
+        self.init(label: content, control: { EmptyView() })
+    }
+}
+
+/// A settings row's title and optional muted detail, which wraps. Fades with the row when disabled.
+struct SettingsRowLabel: View {
+    let title: String
+    var detail: String?
+    @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {
-        GeometryReader { proxy in
-            let inset = max(0, (proxy.size.width - Theme.settingsColumn) / 2)
-            VStack(spacing: 0) {
-                PageHeader(title, subtitle: subtitle) { accessory }
-                    .padding(.horizontal, 20 + inset)
-                    .padding(.top, 20)
-                Form { content }
-                    .formStyle(.grouped)
-                    .scrollContentBackground(.hidden)
-                    .contentMargins(.horizontal, inset, for: .scrollContent)
-                if Footer.self != EmptyView.self {
-                    Divider()
-                    footer
-                        .padding(.horizontal, 20 + inset)
-                        .padding(.vertical, 12)
-                }
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.pilot(.body))
+                .foregroundStyle(isEnabled ? Theme.foreground : Theme.faintForeground)
+                .fixedSize(horizontal: false, vertical: true)
+            if let detail, !detail.isEmpty {
+                Text(detail)
+                    .font(.pilot(.caption))
+                    .foregroundStyle(Theme.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .background(Theme.background)
         }
     }
 }
 
-extension SettingsPage where Accessory == EmptyView, Footer == EmptyView {
-    init(_ title: String, subtitle: String, @ViewBuilder content: () -> Content) {
-        self.init(title, subtitle: subtitle, accessory: { EmptyView() }, content: content, footer: { EmptyView() })
+/// A settings row with a trailing switch.
+struct SettingsToggle: View {
+    let title: String
+    var detail: String?
+    @Binding var isOn: Bool
+
+    init(_ title: String, detail: String? = nil, isOn: Binding<Bool>) {
+        self.title = title
+        self.detail = detail
+        _isOn = isOn
+    }
+
+    var body: some View {
+        SettingsRow(title, detail: detail) {
+            Toggle(title, isOn: $isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .accessibilityHint(detail ?? "")
+        }
     }
 }
 
-extension SettingsPage where Footer == EmptyView {
-    init(_ title: String, subtitle: String, @ViewBuilder accessory: () -> Accessory, @ViewBuilder content: () -> Content) {
-        self.init(title, subtitle: subtitle, accessory: accessory, content: content, footer: { EmptyView() })
-    }
-}
-
-/// Explanatory text under a settings section, leading-aligned like the rows above it.
-struct SettingsFooter: View {
+/// Explanatory muted caption in settings, such as a section's explanation or a note under its rows.
+struct SettingsNote: View {
     let text: String
 
     init(_ text: String) { self.text = text }
@@ -352,7 +468,6 @@ struct SettingsFooter: View {
             .foregroundStyle(Theme.mutedForeground)
             .multilineTextAlignment(.leading)
             .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -373,18 +488,21 @@ private struct AppearanceSettings: View {
     @ObservedObject private var settings = AppSettings.shared
 
     var body: some View {
-        Section("Preview") {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("The flaky test was a race in the chat reopen path.").font(settings.fonts.body)
-                Text("npm test -- --grep reopen").font(settings.fonts.mono)
+        SettingsSection("Preview") {
+            SettingsRow {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("The flaky test was a race in the chat reopen path.").font(settings.fonts.body)
+                    Text("npm test -- --grep reopen").font(settings.fonts.mono)
+                }
+                .foregroundStyle(Theme.foreground)
+                .padding(.vertical, 4)
             }
-            .padding(.vertical, 4)
         }
-        Section("Chat") {
+        SettingsSection("Chat") {
             FontFamilyPicker(title: "Font", selection: $settings.chatFontFamily, system: AppSettings.systemFont, families: AppSettings.fontFamilies)
             SizeStepper(title: "Size", value: $settings.chatFontSize, range: 11 ... 22)
         }
-        Section("Code and tool output") {
+        SettingsSection("Code and tool output") {
             FontFamilyPicker(title: "Font", selection: $settings.codeFontFamily, system: AppSettings.systemMono, families: AppSettings.monospacedFamilies)
             SizeStepper(title: "Size", value: $settings.codeFontSize, range: 9 ... 20)
         }
@@ -395,13 +513,10 @@ private struct NotificationSettings: View {
     @ObservedObject private var settings = AppSettings.shared
 
     var body: some View {
-        Section {
-            Toggle(isOn: $settings.notifyWhenPRReady) {
-                Text("Pull request ready to merge")
-                Text("Notify when an open pull request has no blockers left. Pilot never merges.")
-            }
-        } footer: {
-            SettingsFooter("Failed chats, unreviewed results and mission questions always show under Needs you, in the sidebar, Inbox and menu bar.")
+        SettingsSection(explanation: "Failed chats, unreviewed results and mission questions always show under Needs you, in the sidebar, Inbox and menu bar.") {
+            SettingsToggle("Pull request ready to merge",
+                           detail: "Notify when an open pull request has no blockers left. Pilot never merges.",
+                           isOn: $settings.notifyWhenPRReady)
         }
     }
 }
@@ -410,19 +525,22 @@ private struct TerminalSettings: View {
     @ObservedObject private var settings = AppSettings.shared
 
     var body: some View {
-        Section {
-            Toggle(isOn: $settings.useGhosttyConfig) {
-                Text("Use Ghostty config")
-                Text("Theme, keybindings and other options come from ~/.config/ghostty/config. The font settings below override it.")
-            }
+        SettingsSection {
+            SettingsToggle("Use Ghostty config",
+                           detail: "Theme, keybindings and other options come from ~/.config/ghostty/config. The font settings below override it.",
+                           isOn: $settings.useGhosttyConfig)
         }
-        Section("Font") {
-            Picker("Family", selection: $settings.terminalFontFamily) {
-                Text("From Ghostty config").tag("")
-                Divider()
-                ForEach(AppSettings.monospacedFamilies, id: \.self) { Text($0).tag($0) }
+        SettingsSection("Font") {
+            SettingsRow("Family") {
+                Picker("Family", selection: $settings.terminalFontFamily) {
+                    Text("From Ghostty config").tag("")
+                    Divider()
+                    ForEach(AppSettings.monospacedFamilies, id: \.self) { Text($0).tag($0) }
+                }
+                .labelsHidden()
+                .fixedSize()
             }
-            Toggle("Custom size", isOn: Binding(
+            SettingsToggle("Custom size", isOn: Binding(
                 get: { settings.terminalFontSize > 0 },
                 set: { settings.terminalFontSize = $0 ? 13 : 0 }
             ))
@@ -440,10 +558,14 @@ private struct FontFamilyPicker: View {
     let families: [String]
 
     var body: some View {
-        Picker(title, selection: $selection) {
-            Text(system).tag(system)
-            Divider()
-            ForEach(families, id: \.self) { Text($0).tag($0) }
+        SettingsRow(title) {
+            Picker(title, selection: $selection) {
+                Text(system).tag(system)
+                Divider()
+                ForEach(families, id: \.self) { Text($0).tag($0) }
+            }
+            .labelsHidden()
+            .fixedSize()
         }
     }
 }
@@ -455,13 +577,14 @@ private struct SizeStepper: View {
     var step: Double = 0.5
 
     var body: some View {
-        Stepper(value: $value, in: range, step: step) {
-            HStack {
-                Text(title)
-                Spacer()
+        SettingsRow(title) {
+            HStack(spacing: 6) {
                 Text("\(value, specifier: value.rounded() == value ? "%.0f" : "%.1f") pt")
+                    .font(.pilot(.body))
                     .monospacedDigit()
                     .foregroundStyle(Theme.mutedForeground)
+                Stepper(title, value: $value, in: range, step: step)
+                    .labelsHidden()
             }
         }
     }
@@ -554,13 +677,16 @@ final class ProjectEditor: ObservableObject {
     }
 }
 
-/// One project's settings. Edits stay local until Save; Remove keeps the sessions and the folder.
+/// One project's settings. Edits stay local until Save, whose bar appears only while something changed. Remove, at
+/// the end of the page, keeps the chats and the folder.
 private struct ProjectSettings: View {
     let project: Project
     @ObservedObject private var client = AppModel.shared.client
     @StateObject private var editor = ProjectEditor()
     @State private var saving = false
     @State private var confirmingRemoval = false
+    @State private var removeError: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         SettingsPage(project.name, subtitle: project.path.abbreviatingHome) {
@@ -569,38 +695,39 @@ private struct ProjectSettings: View {
             }
             .controlSize(.small)
         } content: {
-            Section("General") {
-                TextField("Name", text: $editor.name)
-                TextField("Default model", text: $editor.model, prompt: Text("pi default"))
+            SettingsSection("General") {
+                SettingsRow("Name") {
+                    TextField("Name", text: $editor.name)
+                        .labelsHidden()
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 240)
+                }
+                SettingsRow("Default model") {
+                    TextField("Default model", text: $editor.model, prompt: Text("pi default"))
+                        .labelsHidden()
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 240)
+                }
             }
-            Section("Workspace") {
-                Toggle(isOn: $editor.privateClones) {
-                    Text("Isolated workspace per chat")
-                    Text("Chats get their own working copy, so they never touch your checkout. Turn off to run in the folder itself.")
-                }
-                Toggle(isOn: $editor.requirePullRequest) {
-                    Text("Require a pull request")
-                    Text("Publish changes through a pull request. Turning this off allows direct pushes to the default branch. Applies when a chat next starts working.")
-                }
+            SettingsSection("Workspace") {
+                SettingsToggle("Isolated workspace per chat",
+                               detail: "Chats get their own working copy, so they never touch your checkout. Turn off to run in the folder itself.",
+                               isOn: $editor.privateClones)
+                SettingsToggle("Require a pull request",
+                               detail: "Publish changes through a pull request. Turning this off allows direct pushes to the default branch. Applies when a chat next starts working.",
+                               isOn: $editor.requirePullRequest)
             }
             TrackingSettingsSection(project: project, editor: editor)
-        } footer: {
-            HStack(spacing: 12) {
-                Button("Remove Project…", role: .destructive) { confirmingRemoval = true }
-                if let error = editor.error {
-                    InlineProblem(error)
-                        .lineLimit(2)
-                        .help(error)
-                }
-                Spacer(minLength: 8)
-                if editor.hasChanges {
-                    Button("Revert") { editor.load(project) }
-                }
-                Button("Save") { Task { await save() } }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!editor.hasChanges || saving)
+            ProjectRemoval(error: removeError) { confirmingRemoval = true }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if editor.hasChanges {
+                SettingsSaveBar(error: editor.error, saving: saving,
+                                revert: { editor.load(project) }, save: { Task { await save() } })
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
+        .animation(Theme.Motion.standard(reduceMotion: reduceMotion), value: editor.hasChanges)
         .onAppear { editor.load(project) }
         .onChange(of: project) { _, updated in editor.load(updated) }
         .confirmationDialog("Remove \(project.name)?", isPresented: $confirmingRemoval) {
@@ -624,8 +751,70 @@ private struct ProjectSettings: View {
     private func remove() async {
         do {
             try await client.deleteProject(project.id)
+            removeError = nil
         } catch {
-            editor.error = error.localizedDescription
+            removeError = error.localizedDescription
+        }
+    }
+}
+
+/// Pinned below a project page while it has unsaved edits: a save error if any, then Revert and Save.
+private struct SettingsSaveBar: View {
+    let error: String?
+    let saving: Bool
+    let revert: () -> Void
+    let save: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HairlineDivider()
+            HStack(spacing: 12) {
+                if let error {
+                    InlineProblem(error)
+                        .lineLimit(2)
+                        .help(error)
+                } else {
+                    Text("Unsaved changes")
+                        .font(.pilot(.label))
+                        .foregroundStyle(Theme.mutedForeground)
+                }
+                Spacer(minLength: 8)
+                if saving { ProgressView().controlSize(.small) }
+                Button("Revert", action: revert)
+                    .disabled(saving)
+                Button("Save", action: save)
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(saving)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
+            .frame(maxWidth: Theme.settingsColumn)
+            .frame(maxWidth: .infinity)
+        }
+        .background(Theme.background)
+    }
+}
+
+/// The end of a project page: one line saying what removing does and a red outline button that asks to confirm.
+private struct ProjectRemoval: View {
+    let error: String?
+    let remove: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 16) {
+                Text("\(Text("Remove project").foregroundStyle(Theme.foreground)) · Pilot forgets this project and its settings. Files on disk stay.")
+                    .foregroundStyle(Theme.mutedForeground)
+                    .font(.pilot(.label))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Button("Remove Project…", action: remove)
+                    .destructiveOutlineButtonStyle()
+            }
+            if let error {
+                InlineProblem(error)
+            }
         }
     }
 }

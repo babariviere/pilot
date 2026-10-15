@@ -25,8 +25,12 @@ struct LinearStateMappingSettings: View {
 
     var body: some View {
         if scopedTeams.count > 1 {
-            Picker("Workflow team", selection: Binding(get: { team }, set: { selectedTeam = $0 })) {
-                ForEach(scopedTeams, id: \.id) { team in Text(team.name ?? team.id).tag(team.id) }
+            SettingsRow("Workflow team") {
+                Picker("Workflow team", selection: Binding(get: { team }, set: { selectedTeam = $0 })) {
+                    ForEach(scopedTeams, id: \.id) { team in Text(team.name ?? team.id).tag(team.id) }
+                }
+                .labelsHidden()
+                .fixedSize()
             }
             .help("Each sub-team has its own Linear workflow and state mappings.")
         }
@@ -44,7 +48,7 @@ private struct LinearStateMappingPickers: View {
 
     var body: some View {
         ForEach(LinearWorkflowStage.allCases) { stage in
-            LabeledContent {
+            SettingsRow(stage.title) {
                 HStack(spacing: 6) {
                     if loading && stage == .todo { ProgressView().controlSize(.small) }
                     Picker(stage.title, selection: binding(stage)) {
@@ -57,20 +61,19 @@ private struct LinearStateMappingPickers: View {
                     .labelsHidden()
                     .frame(maxWidth: 280, alignment: .trailing)
                 }
-            } label: {
-                Text(stage.title)
             }
         }
         .task { await load() }
-        Text("Only In progress is applied when work starts. Todo, In review, Merged and Deployed are saved for future use.")
-            .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
-        Text("In progress uses a started state. Automatic looks for In progress, never workflow order.")
-            .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
-        if let problem {
-            InlineProblem(problem) { Task { await load() } }
-        } else if lookup?.status == .ok && lookup?.items.isEmpty == true {
-            Text("This team has no workflow states. Starting work will leave the ticket unchanged.")
-                .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+        SettingsRow {
+            VStack(alignment: .leading, spacing: 4) {
+                SettingsNote("Only In progress is applied when work starts. Todo, In review, Merged and Deployed are saved for future use.")
+                SettingsNote("In progress uses a started state. Automatic looks for In progress, never workflow order.")
+                if let problem {
+                    InlineProblem(problem) { Task { await load() } }
+                } else if lookup?.status == .ok && lookup?.items.isEmpty == true {
+                    SettingsNote("This team has no workflow states. Starting work will leave the ticket unchanged.")
+                }
+            }
         }
     }
 

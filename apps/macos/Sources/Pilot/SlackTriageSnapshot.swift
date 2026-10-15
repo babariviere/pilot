@@ -110,7 +110,7 @@ extension Snapshot {
                      to: directory.appending(path: "slack-triage-not-configured.png"))
         let editor = ProjectEditor()
         editor.load(projects[0])
-        await render(Form { SlackLabelsSection(project: projects[0], editor: editor) }.formStyle(.grouped),
+        await render(SettingsColumn { SlackLabelsSection(project: projects[0], editor: editor) },
                      size: CGSize(width: 600, height: 480), to: directory.appending(path: "slack-labels-settings.png"))
         print("snapshots written to \(directory.path)")
     }
