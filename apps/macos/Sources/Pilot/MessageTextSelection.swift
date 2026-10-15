@@ -399,8 +399,17 @@ final class MessageSelectionTextView: NSTextView {
         selectionOwner == nil ? super.writablePasteboardTypes : [.string]
     }
 
+    // AppKit's Copy Link requests these directly, independently of writablePasteboardTypes.
+    // Keep its URL and title representations, including the legacy format that supplies plain
+    // text to other apps. Ordinary Copy still exports only the shared message selection.
+    private static let linkPasteboardTypes: Set<NSPasteboard.PasteboardType> = [
+        .URL, .init("public.url-name"), .init("WebURLsWithTitlesPboardType"),
+        .init("Apple URL pasteboard type"), .init("NSLinkStringPboardType"),
+    ]
+
     override func writeSelection(to pasteboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
         guard let selectionOwner else { return super.writeSelection(to: pasteboard, type: type) }
+        if Self.linkPasteboardTypes.contains(type) { return super.writeSelection(to: pasteboard, type: type) }
         guard type == .string else { return false }
         let selected = selectionOwner.selectedText
         guard !selected.isEmpty else { return false }
