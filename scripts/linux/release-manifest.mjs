@@ -34,7 +34,8 @@ export function validateManifest(value) {
 	if (
 		!/^24\.\d+\.\d+$/.test(value.node.version) ||
 		!/^\d+$/.test(value.node.modules) ||
-		!/^2\.\d+$/.test(value.minimumGlibc)
+		!/^2\.\d+$/.test(value.minimumGlibc) ||
+		!/^(?:3\.4\.\d+|0\.0\.0)$/.test(value.minimumGlibcxx)
 	)
 		throw new Error("Invalid Linux runtime ABI");
 	return value;

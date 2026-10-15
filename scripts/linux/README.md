@@ -32,7 +32,8 @@ key. The signing script requires a matching pair. The Mac bundle pins the variab
 `PilotLinuxRuntimePublicKey`. Key rotation requires a trusted new Mac bundle, not an asset-supplied key.
 
 `PilotCore.LinuxRuntimeManifest.verified` verifies the signature, expected app version/release tag and
-protocol before accepting metadata; `verifyArchive` checks exact size/SHA256 before extraction.
+protocol before accepting metadata; `verifyArchive(at:)` checks exact size/SHA256 before extraction
+with bounded memory, off the UI actor.
 Select only the three named, uploaded assets from the authenticated GitHub release via
 `UpdateRelease.linuxRuntimeAssets()`, download using `UpdateRepository.assetURL(id:)`, and reuse the
 existing credential/redirect policy. Do not pass GitHub credentials over SSH or trust download URLs

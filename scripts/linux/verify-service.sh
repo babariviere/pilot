@@ -7,9 +7,18 @@ work="$(mktemp -d)"
 user="pilotci${GITHUB_RUN_ATTEMPT:-0}"
 port=22222
 sshd_pid=''
+created_user=0
 cleanup() {
+	code=$?
+	set +e
+	if [ "$code" != 0 ]; then
+		sudo cat "$work/sshd.log" 2>/dev/null
+		if [ -n "${uid:-}" ]; then
+			sudo journalctl "_UID=$uid" --no-pager -n 150
+		fi
+	fi
 	if [ -n "$sshd_pid" ]; then sudo kill "$sshd_pid" 2>/dev/null || true; fi
-	if id "$user" >/dev/null 2>&1; then
+	if [ "$created_user" = 1 ]; then
 		sudo loginctl terminate-user "$user" || true
 		sudo loginctl disable-linger "$user" || true
 		sudo userdel -r "$user" || true
@@ -18,6 +27,7 @@ cleanup() {
 }
 trap cleanup EXIT
 sudo useradd -m -s /bin/bash "$user"
+created_user=1
 sudo passwd -d "$user"
 uid="$(id -u "$user")"
 home="$(getent passwd "$user" | cut -d: -f6)"

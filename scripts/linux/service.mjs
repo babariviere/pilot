@@ -1,6 +1,6 @@
 /** Managed user service. No sudo, package installation, global tools or implicit restart. */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -70,13 +70,29 @@ export function serviceUnit(root, home) {
 	if (root.includes(":") || home.includes(":")) throw new Error("Service paths cannot contain PATH separators");
 	const quote = (value) => `"${safe(value)}"`;
 	const execQuote = (value) => quote(value.replaceAll("$", () => "$$"));
-	return `${marker}\n[Unit]\nDescription=Pilot background agents\nAfter=network.target\n\n[Service]\nType=simple\nWorkingDirectory=${quote(home)}\nExecStart=${execQuote(join(root, "node/bin/node"))} ${execQuote(join(root, "packages/daemon/src/main.ts"))}\nEnvironment=${quote(`HOME=${home}`)}\nEnvironment=${quote(`PILOT_HOME=${join(home, ".local/share/pilot")}`)}\nEnvironment=${quote(`PATH=${join(root, "bin")}:${join(root, "node/bin")}:${join(home, ".local/bin")}:/usr/local/bin:/usr/bin:/bin`)}\nUMask=0077\nRestart=on-failure\nRestartSec=5\nKillSignal=SIGTERM\nKillMode=mixed\nTimeoutStopSec=120\nStandardOutput=journal\nStandardError=journal\n\n[Install]\nWantedBy=default.target\n`;
+	return `${marker}\n[Unit]\nDescription=Pilot background agents\nAfter=network.target\n\n[Service]\nType=simple\nWorkingDirectory=%h\nExecStart=${execQuote(join(root, "node/bin/node"))} ${execQuote(join(root, "packages/daemon/src/main.ts"))}\nEnvironment=${quote(`HOME=${home}`)}\nEnvironment=${quote(`PILOT_HOME=${join(home, ".local/share/pilot")}`)}\nEnvironment=${quote(`PATH=${join(root, "bin")}:${join(root, "node/bin")}:${join(home, ".local/bin")}:/usr/local/bin:/usr/bin:/bin`)}\nUMask=0077\nRestart=on-failure\nRestartSec=5\nKillSignal=SIGTERM\nKillMode=mixed\nTimeoutStopSec=120\nStandardOutput=journal\nStandardError=journal\n\n[Install]\nWantedBy=default.target\n`;
 }
 
 function requireCommand(command, args, timeout) {
 	const result = run(command, args, timeout);
 	if (!result.ok) throw new Error(`${command} failed: ${result.error || result.output}`);
 	return result.output;
+}
+
+export function publishUnit(file, expected) {
+	mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+	const temp = `${file}.${process.pid}.tmp`;
+	writeFileSync(temp, expected, { mode: 0o600, flag: "wx" });
+	try {
+		try {
+			// Atomic create, never a rename-overwrite. Concurrent different-runtime setup must lose.
+			linkSync(temp, file);
+		} catch (error) {
+			if (error.code !== "EEXIST" || readFileSync(file, "utf8") !== expected) throw error;
+		}
+	} finally {
+		unlinkSync(temp);
+	}
 }
 
 export async function main(action) {
@@ -103,10 +119,7 @@ export async function main(action) {
 		const loaded = run("systemctl", ["--user", "show", unitName, "--property=FragmentPath", "--value"]).output;
 		if (loaded && loaded !== file) throw new Error("pilotd.service is owned elsewhere; refusing to shadow it");
 		requireCommand(join(root, "node/bin/node"), [join(root, "check-runtime.mjs")], 60000);
-		mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-		const temp = `${file}.${process.pid}.tmp`;
-		writeFileSync(temp, expected, { mode: 0o600, flag: "wx" });
-		renameSync(temp, file);
+		publishUnit(file, expected);
 		requireCommand("systemctl", ["--user", "daemon-reload"]);
 		requireCommand("systemctl", ["--user", "enable", unitName]);
 		console.log(JSON.stringify({ installed: true, started: false, unit: file }));
@@ -114,6 +127,8 @@ export async function main(action) {
 	}
 	if (!existsSync(file) || readFileSync(file, "utf8") !== expected)
 		throw new Error("This runtime does not own the installed pilotd.service");
+	if (requireCommand("systemctl", ["--user", "show", unitName, "--property=FragmentPath", "--value"]) !== file)
+		throw new Error("The user manager loaded a different pilotd.service; refusing to control it");
 	if (action === "start") {
 		if (!probe().ok) throw new Error("Persistent-service prerequisites no longer met; run probe");
 		requireCommand("systemctl", ["--user", "start", unitName]);

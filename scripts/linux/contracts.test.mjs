@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { generateKeyPairSync, sign } from "node:crypto";
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { authenticateArchive, authenticateManifest, validateManifest } from "./release-manifest.mjs";
-import { packagePlan, probe, serviceUnit } from "./service.mjs";
+import { packagePlan, probe, publishUnit, serviceUnit } from "./service.mjs";
 
 const good = {
 	schemaVersion: 1,
@@ -18,6 +18,7 @@ const good = {
 	protocolVersion: 1,
 	minimumClientProtocolVersion: 1,
 	minimumGlibc: "2.28",
+	minimumGlibcxx: "3.4.21",
 	node: { version: "24.21.0", modules: "137" },
 	archive: { name: "Pilot-linux-x64.tar.gz", size: 1, sha256: "a".repeat(64) },
 };
@@ -41,6 +42,49 @@ test("signed manifests reject tampering, wrong keys, unsupported schema/platform
 	])
 		assert.throws(() => validateManifest({ ...good, ...override }));
 	assert.throws(() => authenticateArchive(good, Buffer.from("x")));
+	const archive = Buffer.from("archive");
+	authenticateArchive(
+		{
+			...good,
+			archive: { ...good.archive, size: archive.length, sha256: createHash("sha256").update(archive).digest("hex") },
+		},
+		archive,
+	);
+});
+
+test("release signing CLI requires the pinned key pair and rechecks the actual archive", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pilot-signature-contract-"));
+	try {
+		const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+		const archive = Buffer.from("production archive");
+		const manifest = {
+			...good,
+			archive: { ...good.archive, size: archive.length, sha256: createHash("sha256").update(archive).digest("hex") },
+		};
+		const data = Buffer.from(`${JSON.stringify(manifest)}\n`);
+		writeFileSync(join(dir, "runtime-manifest.json"), data);
+		writeFileSync(join(dir, "Pilot-linux-x64.tar.gz"), archive);
+		const env = {
+			...process.env,
+			LINUX_RUNTIME_PRIVATE_KEY: privateKey.export({ format: "pem", type: "pkcs8" }),
+			LINUX_RUNTIME_PUBLIC_KEY: publicKey.export({ format: "der", type: "spki" }).subarray(-32).toString("base64"),
+		};
+		const invoke = (overrides) =>
+			spawnSync(process.execPath, [new URL("./release-manifest.mjs", import.meta.url).pathname, "sign", dir], {
+				env: { ...env, ...overrides },
+				encoding: "utf8",
+			});
+		const signed = invoke({});
+		assert.equal(signed.status, 0, signed.stderr);
+		const signature = Buffer.from(readFileSync(join(dir, "runtime-manifest.json.sig"), "utf8").trim(), "base64");
+		assert.deepEqual(authenticateManifest(data, signature, publicKey), manifest);
+		assert.notEqual(invoke({ LINUX_RUNTIME_PUBLIC_KEY: Buffer.alloc(32).toString("base64") }).status, 0);
+		assert.notEqual(invoke({ LINUX_RUNTIME_PRIVATE_KEY: "" }).status, 0);
+		writeFileSync(join(dir, "Pilot-linux-x64.tar.gz"), "bad");
+		assert.notEqual(invoke({}).status, 0);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
 
 test("capability failures are explicit and dnf plans never request a global Node/pnpm/jj install", () => {
@@ -72,12 +116,26 @@ test("unit is relocatable, quotes paths, uses the private tools and orderly proc
 	assert.match(unit, /KillMode=mixed/);
 	assert.match(unit, /TimeoutStopSec=120/);
 	assert.match(unit, /WantedBy=default.target/);
+	assert.match(unit, /WorkingDirectory=%h\n/);
 	assert.match(unit, /UMask=0077/);
 	assert.match(unit, /runtime %%/);
 	assert.doesNotMatch(unit, /pnpm|nohup|sudo|enable-linger/);
 	assert.throws(() => serviceUnit("/tmp/\nmalicious", "/home/u"));
 	assert.throws(() => serviceUnit("/tmp/bad:path", "/home/u"));
 	assert.match(serviceUnit("/tmp/$dollar", "/home/u"), /ExecStart="\/tmp\/\$\$dollar/);
+});
+
+test("atomic unit publication is idempotent but never replaces a different concurrent installer", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pilot-unit-publish-"));
+	try {
+		const file = join(dir, "user/pilotd.service");
+		publishUnit(file, "first runtime");
+		publishUnit(file, "first runtime");
+		assert.throws(() => publishUnit(file, "different runtime"));
+		assert.equal(readFileSync(file, "utf8"), "first runtime");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
 
 test("initial service installation fails closed, never overwrites foreign units and does not start implicitly", {
