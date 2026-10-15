@@ -359,6 +359,19 @@ function optional<T>(value: SQLInputValue | undefined, map: (value: SQLInputValu
 	return value === null || value === undefined ? undefined : map(value);
 }
 
+/** Shape-only checks; scope and price-cap validation is asynchronous and belongs to the caller. */
+function preference(write: MissionTaskWrite): { model?: string | null; thinking?: string | null } | undefined {
+	if (write.preferredModel === undefined && write.preferredThinking === undefined) return undefined;
+	const value = (input: unknown, name: string, max: number) =>
+		input === undefined || input === null ? input : text(input, name, max) || null;
+	return {
+		...(write.preferredModel !== undefined ? { model: value(write.preferredModel, "preferredModel", 256) } : {}),
+		...(write.preferredThinking !== undefined
+			? { thinking: value(write.preferredThinking, "preferredThinking", 32) }
+			: {}),
+	};
+}
+
 const str = (value: SQLInputValue) => String(value);
 const num = (value: SQLInputValue) => Number(value);
 
@@ -463,6 +476,9 @@ export class MissionStore {
 		if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === "decision_ids"))
 			this.db.exec("ALTER TABLE tasks ADD COLUMN decision_ids TEXT");
 		for (const column of ["delegated_to", "delegated_from_status", "delegated_resource_id"])
+			if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === column))
+				this.db.exec(`ALTER TABLE tasks ADD COLUMN ${column} TEXT`);
+		for (const column of ["preferred_model", "preferred_thinking", "preferred_model_by"])
 			if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === column))
 				this.db.exec(`ALTER TABLE tasks ADD COLUMN ${column} TEXT`);
 		this.db.exec(`CREATE TABLE IF NOT EXISTS linear_task_assignees (
@@ -1546,6 +1562,7 @@ export class MissionStore {
 		});
 		if (fields.decisionIds !== undefined)
 			this.run("UPDATE tasks SET decision_ids = ? WHERE id = ?", JSON.stringify(fields.decisionIds), taskId);
+		if (fields.preference) this.writePreference(id, this.task(id, taskId), fields.preference, actor, now);
 		return this.task(id, taskId);
 	}
 
@@ -1570,7 +1587,53 @@ export class MissionStore {
 				throw new Error("decisionIds must be an array of at most 1000 decision IDs");
 			decisionIds = [...new Set(write.decisionIds.map((ref) => this.decision(id, ref).id))];
 		}
-		return { body, status: write.status, order: write.order, milestone, dependsOn, decisionIds };
+		return {
+			body,
+			status: write.status,
+			order: write.order,
+			milestone,
+			dependsOn,
+			decisionIds,
+			preference: preference(write),
+		};
+	}
+
+	/**
+	 * Saves a preference already validated against the model scope by the caller. Setting the model replaces the
+	 * thinking level; a thinking-only write keeps the model. Chats never change a user-set preference.
+	 */
+	private writePreference(
+		id: string,
+		task: MissionTask,
+		write: { model?: string | null; thinking?: string | null },
+		actor: MissionActor,
+		now: number,
+	): void {
+		if (actor.sessionId && task.preferredModelSetBy === "user")
+			throw new Conflict(
+				`Task #${task.number} has a user-set preferred model (${task.preferredModel}); only the user can change it`,
+			);
+		const model = write.model === undefined ? (task.preferredModel ?? null) : write.model;
+		const thinking = write.thinking ?? null;
+		if (!model && thinking) throw new Error("preferredThinking requires a preferred model");
+		if (model === (task.preferredModel ?? null) && thinking === (task.preferredThinking ?? null)) return;
+		this.run(
+			"UPDATE tasks SET preferred_model = ?, preferred_thinking = ?, preferred_model_by = ?, updated_at = ? WHERE id = ?",
+			model,
+			model ? thinking : null,
+			model ? (actor.sessionId ? "coordinator" : "user") : null,
+			now,
+			task.id,
+		);
+		this.event(
+			id,
+			"task",
+			model
+				? `Task #${task.number} preferred model ${model}${thinking ? `, thinking ${thinking}` : ""}: ${task.title}`
+				: `Task #${task.number} preferred model cleared: ${task.title}`,
+			actor,
+			{ taskId: task.id, at: now },
+		);
 	}
 
 	updateTask(id: string, taskId: string, write: MissionTaskWrite, actor: MissionActor = USER): MissionTask {
@@ -1590,6 +1653,7 @@ export class MissionStore {
 		this.transaction(() => {
 			if (fields.decisionIds !== undefined)
 				this.run("UPDATE tasks SET decision_ids = ? WHERE id = ?", JSON.stringify(fields.decisionIds), before.id);
+			if (fields.preference) this.writePreference(id, { ...before, title }, fields.preference, actor, now);
 			// An explicit status, including the same one, opts out until the next assignment change.
 			if (fields.status !== undefined)
 				this.run(
@@ -3106,6 +3170,15 @@ function taskFrom(row: Row): MissionTask {
 		...(dependsOn?.length ? { dependsOn } : {}),
 		...(row.decision_ids ? { decisionIds: JSON.parse(str(row.decision_ids)) as string[] } : {}),
 		...(row.session_id ? { sessionId: str(row.session_id) } : {}),
+		...(row.preferred_model
+			? {
+					preferredModel: str(row.preferred_model),
+					...(row.preferred_thinking ? { preferredThinking: str(row.preferred_thinking) } : {}),
+					...(row.preferred_model_by
+						? { preferredModelSetBy: str(row.preferred_model_by) as "user" | "coordinator" }
+						: {}),
+				}
+			: {}),
 		createdAt: num(row.created_at!),
 		updatedAt: num(row.updated_at!),
 		...(optional(row.completed_at, num) !== undefined ? { completedAt: num(row.completed_at!) } : {}),

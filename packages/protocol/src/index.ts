@@ -639,6 +639,12 @@ export interface MissionTask {
 	decisionIds?: string[];
 	/** Owning chat. At most one; claiming another chat's task is rejected with 409. */
 	sessionId?: string;
+	/** Model for new chats on this task unless a start picks another: a scoped provider/modelId within the task-start price cap. */
+	preferredModel?: string;
+	/** Thinking level for the preferred model. Omitted: the model's configured default. */
+	preferredThinking?: string;
+	/** Who set the preference. The coordinator never changes or overrides a user-set preference. */
+	preferredModelSetBy?: "user" | "coordinator";
 	createdAt: number;
 	updatedAt: number;
 	completedAt?: number;
@@ -656,6 +662,13 @@ export interface MissionTaskWrite {
 	decisionIds?: string[];
 	/** User assignment: a member chat ID, or null to release. Agents claim through the mission tool instead. */
 	sessionId?: string | null;
+	/**
+	 * Preferred model for new chats, validated against the task-start scope and price cap; null clears it.
+	 * Setting the model replaces the thinking level too (preferredThinking or the model's default).
+	 */
+	preferredModel?: string | null;
+	/** Thinking level for the preferred model; null clears. Requires a preferred model. */
+	preferredThinking?: string | null;
 }
 
 /** An artifact linked to a mission. It stays owned by its session. */
@@ -814,6 +827,7 @@ export interface StartMissionTaskRequest {
 	artifacts?: Array<{ artifactId: string; revision?: number }>;
 	links?: Array<{ url: string; title?: string }>;
 	message?: string;
+	/** Omitted: the task's preferred model (with its thinking), else the project's default. */
 	model?: string;
 	thinking?: string;
 	mode?: ChatMode;

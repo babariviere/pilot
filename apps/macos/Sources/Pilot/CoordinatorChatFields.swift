@@ -41,7 +41,8 @@ struct CoordinatorChatFields: View {
             } controls: {
                 ModelMenu(model: $form.model, projectDefault: projectId.flatMap { client.project($0)?.model }, list: form.models)
                     .disabled(form.loading)
-                thinkingMenu
+                ThinkingMenu(thinking: $form.thinking, levels: option?.thinkingLevels ?? ["off"],
+                             help: "Thinking level for the coordinator")
                     .disabled(form.loading)
                 if form.loading {
                     ProgressView().controlSize(.mini)
@@ -68,30 +69,6 @@ struct CoordinatorChatFields: View {
         }
         .onChange(of: form.model) { _, _ in form.thinking = "" }
     }
-
-    private var thinkingMenu: some View {
-        let levels = option?.thinkingLevels ?? ["off"]
-        return Menu {
-            Button { form.thinking = "" } label: {
-                if form.thinking.isEmpty { Label("Default", icon: PilotIcon.selectedOption) } else { Text("Default") }
-            }
-            ForEach(levels, id: \.self) { level in
-                Button { form.thinking = level } label: {
-                    if form.thinking == level { Label(thinkingLabel(level), icon: PilotIcon.selectedOption) }
-                    else { Text(thinkingLabel(level)) }
-                }
-            }
-        } label: {
-            ChipLabel(title: form.thinking.isEmpty ? "Thinking: default" : "Thinking: \(thinkingLabel(form.thinking))",
-                      icon: PilotIcon.thinking)
-        }
-        .chipMenuStyle()
-        .fixedSize()
-        .help("Thinking level for the coordinator")
-        .accessibilityLabel("Thinking: \(form.thinking.isEmpty ? "default" : thinkingLabel(form.thinking))")
-    }
-
-    private func thinkingLabel(_ level: String) -> String { level == "xhigh" ? "XHigh" : level.capitalized }
 
     private func load() async {
         form.loading = true

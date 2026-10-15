@@ -72,7 +72,8 @@ Actions:
 - delete (coordinator only): permanently remove a task by id or number. Removes dependency references and keeps its links at mission level. Prefer status "dropped" when history should remain.
 - group (coordinator only): set milestone on every task selected by ids (IDs, numbers or ranges such as ["1-5", "#8"]). Use milestone "" to clear the group. All references must exist; the batch is atomic.
 - task order (coordinator only): set order when creating or updating a task to reorder it. Read tasks for current sort keys. Lower numbers sort first; fractional keys are allowed; ties sort by task number. Numbers and dependencies do not change.
-- start (coordinator only): start one chat for id or ids (IDs/numbers/ranges, like claim), optional message/model/thinking/artifacts/links. All tasks must be unclaimed and unfinished; admission is all-or-none. Runs in dependency order, then given order; outside dependencies must be done. One PR per task, stacked in that order. Supplied references attach to every task; artifacts must be linked or member-owned. The whole opening prompt (bodies, guidance, references) must fit 4000 characters or start rejects with its size. Durable context belongs in the brief, decisions or task links. Model defaults to project; validation errors list allowed model IDs, prices and supported thinking levels. Pick cheaper models for small tasks, strongest allowed model for hard ones. Start only when asked.
+- task model/thinking (coordinator only): set the task's preferred model and thinking for new chats, validated like start; model "" clears. User-set preferences cannot be changed.
+- start (coordinator only): start one chat for id or ids (IDs/numbers/ranges, like claim), optional message/model/thinking/artifacts/links. All tasks must be unclaimed and unfinished; admission is all-or-none. Runs in dependency order, then given order; outside dependencies must be done. One PR per task, stacked in that order. Supplied references attach to every task; artifacts must be linked or member-owned. The whole opening prompt (bodies, guidance, references) must fit 4000 characters or start rejects with its size. Durable context belongs in the brief, decisions or task links. Model defaults to the task's preferred model, then the project's (a user-set preference cannot be overridden); validation errors list allowed model IDs, prices and supported thinking levels. Pick cheaper models for small tasks, strongest allowed model for hard ones. Start only when asked.
 - send (coordinator only): send message to member targetSessionId; wakes idle/paused chats, optional mode steer for corrections that change current work, followUp (default) for anything that can wait. Steer joins a running turn at its next step; either mode starts an idle chat. Returns delivery delivered/queued/rejected, mode and reason; restore archived chats first.
 - status (coordinator only): summarize members: state, outcome, branch, compact PR states, tasks and finishedWithoutPR (idle claimed work lacking open/draft/merged PR). targetSessionId returns one member plus lastAssistantReply (1500 chars). Never starts workers. Status/start include cached read-only subscriptionUsage per provider (window percent/reset; stale or unknown labelled).
 - bindPr (coordinator only): bind url to targetSessionId, optional taskId to disambiguate. Transfers sole PR-head ownership and unfinished ownership links. Returns {changed, previousOwner, taskLinkRemoved}; references never grant ownership.
@@ -150,14 +151,14 @@ Actions:
 							Type.String({
 								maxLength: 256,
 								description:
-									"For start: scoped provider/modelId within the price cap. Omit for the project's default. Errors list allowed models.",
+									"For start or task (preferred model): scoped provider/modelId within the price cap. Omit for the task's preference or project default. Errors list allowed models.",
 							}),
 						),
 						thinking: Type.Optional(
 							Type.String({
 								maxLength: 32,
 								description:
-									"For start: a thinking level supported by the chosen model. Omit for its configured default.",
+									"For start or task: a thinking level supported by the chosen model. Omit for its configured default.",
 							}),
 						),
 						artifacts: Type.Optional(

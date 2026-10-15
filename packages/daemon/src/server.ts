@@ -1314,9 +1314,9 @@ async function missionRoute(
 	}
 	if (section === "tasks") {
 		if (parts.length === 4 && method === "POST")
-			return json(res, 201, store.addTask(id, await readJson<MissionTaskWrite>(req))), true;
+			return json(res, 201, await service.addTask(id, await readJson<MissionTaskWrite>(req))), true;
 		if (parts.length === 5 && method === "PATCH")
-			return json(res, 200, store.updateTask(id, item!, await readJson<MissionTaskWrite>(req))), true;
+			return json(res, 200, await service.updateTask(id, item!, await readJson<MissionTaskWrite>(req))), true;
 		if (parts.length === 5 && method === "DELETE") {
 			store.removeTask(id, item!);
 			return json(res, 200, { ok: true }), true;

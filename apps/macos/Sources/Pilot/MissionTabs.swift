@@ -735,6 +735,7 @@ struct MissionTaskRow: View {
     @ObservedObject private var client = AppModel.shared.client
     @StateObject private var title: TaskTitleState
     @State private var addingLink = false
+    @State private var choosingModel = false
     @StateObject private var artifacts = MissionArtifactsState()
     /// Rows built, so the tab-switch check can confirm the list stays lazy.
     static var bodyEvaluations = 0
@@ -775,6 +776,7 @@ struct MissionTaskRow: View {
                         .accessibilityLabel("Task \(task.number) title")
                     if dependencies.isWaiting { waitingLine }
                     MissionTaskDelegationLabel(task: task, resources: resources)
+                    if let preferred = task.preferredModel { modelLine(preferred) }
                     MissionTaskDescription(task: task, collapsedLineLimit: 2)
                     if !resources.isEmpty || !artifactLinks.isEmpty {
                         ResponsiveControlsLayout(horizontalSpacing: 10, verticalSpacing: 4) {
@@ -840,9 +842,25 @@ struct MissionTaskRow: View {
                 addingLink = false
             }
         }
+        .sheet(isPresented: $choosingModel) { MissionTaskModelSheet(task: task, mission: mission) }
         .sheet(item: $artifacts.selected) { selection in
             ArtifactViewer(reference: selection.reference, latest: selection.latest)
         }
+    }
+
+    /// Quiet preferred-model metadata; clicking it edits the preference.
+    private func modelLine(_ preferred: String) -> some View {
+        let text = TaskModelLabel.text(model: preferred, thinking: task.preferredThinking,
+                                       list: client.cachedModels(projectId: mission.projectId, cwd: nil))
+        return Button { choosingModel = true } label: {
+            Label(text, icon: PilotIcon.model)
+                .lineLimit(1)
+                .font(.pilot(.caption))
+                .foregroundStyle(Theme.mutedForeground)
+        }
+        .buttonStyle(.plain)
+        .help(TaskModelLabel.help(task))
+        .accessibilityLabel("Preferred model: \(text)")
     }
 
     /// "Waiting on #12, #14": each number scrolls to that task.
@@ -895,6 +913,7 @@ struct MissionTaskRow: View {
                     .disabled(status == task.status)
             }
         }
+        Button(task.preferredModel == nil ? "Set Preferred Model…" : "Change Preferred Model…") { choosingModel = true }
         Divider()
         Button("Add Link…") { addingLink = true }
         if let needed = dependencies.neededByText {

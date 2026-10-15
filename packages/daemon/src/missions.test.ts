@@ -1764,3 +1764,62 @@ test("existing stores gain ordered attention indexes so reason selection does no
 		rmSync(home, { recursive: true, force: true });
 	}
 });
+
+test("preferred task models keep their setter and protect user choices from chats", (t) => {
+	const missions = new MissionStore(":memory:");
+	t.after(() => missions.close());
+	const { id } = missions.create({ projectId: "p", title: "M", tasks: [{ title: "Task" }] });
+	const coordinator = { sessionId: "lead" };
+	const added = missions.addTask(id, { title: "Added", preferredModel: "test/small" }, coordinator);
+	assert.equal(added.preferredModel, "test/small");
+	assert.equal(added.preferredModelSetBy, "coordinator");
+	let task = missions.updateTask(id, "1", { preferredModel: "test/big", preferredThinking: "high" }, coordinator);
+	assert.deepEqual(
+		[task.preferredModel, task.preferredThinking, task.preferredModelSetBy],
+		["test/big", "high", "coordinator"],
+	);
+	// A model write replaces the thinking level; a thinking-only write keeps the model.
+	task = missions.updateTask(id, "1", { preferredModel: "test/other" });
+	assert.deepEqual(
+		[task.preferredModel, task.preferredThinking, task.preferredModelSetBy],
+		["test/other", undefined, "user"],
+	);
+	task = missions.updateTask(id, "1", { preferredThinking: "low" });
+	assert.deepEqual([task.preferredModel, task.preferredThinking], ["test/other", "low"]);
+	assert.throws(
+		() => missions.updateTask(id, "1", { preferredModel: "test/small" }, coordinator),
+		/user-set preferred model \(test\/other\)/,
+	);
+	assert.throws(
+		() => missions.updateTask(id, "1", { preferredModel: null, title: "Renamed" }, coordinator),
+		/user-set/,
+	);
+	assert.equal(missions.task(id, task.id).title, "Task", "a rejected preference write saves nothing");
+	assert.throws(
+		() => missions.updateTask(id, added.id, { preferredModel: null, preferredThinking: "high" }),
+		/requires a preferred model/,
+	);
+	assert.throws(
+		() => missions.addTask(id, { title: "No model", preferredThinking: "high" }),
+		/requires a preferred model/,
+	);
+	task = missions.updateTask(id, "1", { preferredModel: null });
+	assert.deepEqual(
+		[task.preferredModel, task.preferredThinking, task.preferredModelSetBy],
+		[undefined, undefined, undefined],
+	);
+	assert.deepEqual(
+		missions
+			.events(id)
+			.filter((event) => event.text.includes("preferred model"))
+			.map((event) => event.text)
+			.reverse(),
+		[
+			"Task #2 preferred model test/small: Added",
+			"Task #1 preferred model test/big, thinking high: Task",
+			"Task #1 preferred model test/other: Task",
+			"Task #1 preferred model test/other, thinking low: Task",
+			"Task #1 preferred model cleared: Task",
+		],
+	);
+});
