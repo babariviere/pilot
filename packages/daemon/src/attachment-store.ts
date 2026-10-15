@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { mkdir, open, readdir, readFile, rename, stat, unlink } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, mkdir, open, readdir, readFile, rename, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { AttachmentUpload, DurableOperation, StagedAttachmentRef } from "@pilot/protocol";
 import { canonicalJSON, durableJSON, OperationRejected } from "./operation-journal.ts";
@@ -23,6 +24,7 @@ export class AttachmentStore {
 	private loaded?: Promise<void>;
 	private queue: Promise<unknown> = Promise.resolve();
 	private queued = 0;
+	private fault?: unknown;
 	private readonly uploads = new Set<string>();
 	constructor(home: string) {
 		this.root = join(home, "attachments");
@@ -69,12 +71,23 @@ export class AttachmentStore {
 		this.queued++;
 		const next = this.queue
 			.catch(() => {})
-			.then(action)
+			.then(() => {
+				if (this.fault) throw new Error("Attachment storage requires recovery", { cause: this.fault });
+				return action();
+			})
 			.finally(() => {
 				this.queued--;
 			});
 		this.queue = next;
 		return next;
+	}
+	private async persist(file: string, value: unknown): Promise<void> {
+		try {
+			await durableJSON(file, value);
+		} catch (error) {
+			this.fault = error;
+			throw error;
+		}
 	}
 	async stage(metadata: AttachmentUpload, body: AsyncIterable<Uint8Array>): Promise<StagedAttachmentRef> {
 		this.validate(metadata);
@@ -94,13 +107,17 @@ export class AttachmentStore {
 				if (this.records.size >= MAX_RECORDS || bytes + metadata.bytes > MAX_DISK)
 					throw new Error("Attachment storage is full");
 				const created = { ...metadata, ready: false };
-				await durableJSON(join(this.root, `${metadata.uploadId}.json`), created);
+				await this.persist(join(this.root, `${metadata.uploadId}.json`), created);
 				this.records.set(metadata.uploadId, created);
 				return created;
 			});
 			if (record.ready) return { uploadId: record.uploadId, sha256: record.sha256, bytes: record.bytes };
 			const temp = join(this.root, `${metadata.uploadId}.part`);
-			const file = await open(temp, "w", 0o600);
+			const file = await open(
+				temp,
+				constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW,
+				0o600,
+			);
 			let bytes = 0;
 			const digest = createHash("sha256");
 			let header = Buffer.alloc(0);
@@ -130,7 +147,7 @@ export class AttachmentStore {
 			await this.serial(async () => {
 				await rename(temp, join(this.root, `${metadata.uploadId}.png`));
 				const next = { ...record, ready: true };
-				await durableJSON(join(this.root, `${metadata.uploadId}.json`), next);
+				await this.persist(join(this.root, `${metadata.uploadId}.json`), next);
 				this.records.set(metadata.uploadId, next);
 			});
 			return { uploadId: metadata.uploadId, sha256: metadata.sha256, bytes: metadata.bytes };
@@ -162,9 +179,12 @@ export class AttachmentStore {
 				return record;
 			});
 			for (const record of records) {
+				const data = await lstat(join(this.root, `${record.uploadId}.png`)).catch(() => undefined);
+				if (!data?.isFile() || data.size !== record.bytes)
+					throw new OperationRejected("Attachment data is unavailable");
 				if (record.owner) continue;
 				const updated = { ...record, owner: { operationId: operation.operationId, targetId: operation.targetId } };
-				await durableJSON(join(this.root, `${record.uploadId}.json`), updated);
+				await this.persist(join(this.root, `${record.uploadId}.json`), updated);
 				this.records.set(record.uploadId, updated);
 			}
 			return records.map((record) => join(this.root, `${record.uploadId}.png`));
