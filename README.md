@@ -159,6 +159,9 @@ message to carry them along. Waiting system messages are read-only.
 Stop also works during a sleep pause. Cancellation is saved without waking other chats and drains
 before the paused run can recover at the next eligible wake.
 
+Paused chats show a quiet line inside the conversation explaining the hold: sleep, lost connectivity
+or a usage limit. The line replaces the working indicator and clears when work resumes.
+
 If internet connectivity is lost, chats show **Paused offline** rather than exhausting model retries
 into a failure. The daemon confirms connectivity and resumes automatically, even with the app closed.
 Queued messages and unfinished requests survive restarts. Running native tools finish their current

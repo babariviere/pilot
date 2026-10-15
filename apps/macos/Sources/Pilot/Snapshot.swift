@@ -843,6 +843,29 @@ enum Snapshot {
                 to: directory.appending(path: width == 760 ? "usage-composer.png" : "usage-composer-narrow.png")
             )
         }
+        for status in [SessionStatus.paused, .usagePaused, .offlinePaused] {
+            var paused = SessionSummary(id: "pause-\(status.rawValue)", title: "Finish the kernel checks", cwd: session.cwd,
+                                       createdAt: Fixtures.now, updatedAt: Fixtures.now, state: "working", working: false)
+            switch status {
+            case .paused: paused.sleepPaused = true
+            case .offlinePaused: paused.offlinePaused = true
+            case .usagePaused:
+                paused.subscriptionPause = SubscriptionPause(windows: [
+                    SubscriptionPauseWindow(provider: .openai, label: "5h", usedPercent: 97),
+                ])
+            default: break
+            }
+            let name = status == .paused ? "sleep" : status == .usagePaused ? "usage" : "offline"
+            for width in [760, 420] {
+                await render(
+                    Frame(title: paused.title, subtitle: "pilot", status: paused.status, session: paused) {
+                        ChatView(session: paused, feed: SessionFeed(sessionId: paused.id, transcript: Fixtures.transcript))
+                    },
+                    size: CGSize(width: width, height: 660),
+                    to: directory.appending(path: "chat-paused-\(name)-\(width).png")
+                )
+            }
+        }
         do {
             let image = PlaneImage.menuBar
             let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 72, pixelsHigh: 72, bitsPerSample: 8,
