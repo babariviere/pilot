@@ -36,7 +36,7 @@ function fixture() {
 const other = { id: "other", name: "Alex" };
 const me = { id: "me", name: "You" };
 
-test("all open statuses delegate and restore, unassignment is ignored, notices occur once per change", () => {
+test("all open statuses delegate and restore, unassignment is ignored, notices occur once per change", async () => {
 	const f = fixture();
 	try {
 		f.store.join("worker", f.id);
@@ -59,6 +59,8 @@ test("all open statuses delegate and restore, unassignment is ignored, notices o
 			assert.equal(events.filter((event) => event.text.startsWith("Returned to you in Linear")).length, 1);
 			if (status === "in_progress") assert.equal(f.store.task(f.id, task.id).sessionId, "worker");
 		}
+		// The store saves to its file in the background.
+		await f.store.durable();
 		const db = new DatabaseSync(f.file);
 		try {
 			assert.equal(
