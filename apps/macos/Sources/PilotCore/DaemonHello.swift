@@ -3,6 +3,7 @@ import Foundation
 /// GET /api/hello. Pin daemonId on pairing and negotiate before streams or mutations.
 public struct DaemonHello: Codable, Equatable, Sendable {
     public let daemonId: String
+    public let lineageId: String?
     public let daemonVersion: String
     public let protocolVersion: Int
     public let minimumClientProtocolVersion: Int

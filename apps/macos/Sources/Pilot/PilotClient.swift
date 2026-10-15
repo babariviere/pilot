@@ -53,6 +53,8 @@ final class PilotClient: ObservableObject {
     var workingCount: Int { activeSessions.filter(\.isWorking).count }
 
     private var baseURL: URL?
+    private(set) var connectionGeneration = UUID()
+    private var disconnected = false
     private let artifactSession: URLSession
     private let repositoryRequests = RepositoryRequestLimiter(limit: 4)
     private let summaryCache = AsyncReadCache<String, SessionChangeSummary>(ttl: 10)
@@ -98,12 +100,31 @@ final class PilotClient: ObservableObject {
     }
 
     func connect(to baseURL: URL) {
+        // Endpoint clients are installation-scoped. A new tunnel port needs a new client.
+        guard self.baseURL == nil || self.baseURL == baseURL else { return }
+        disconnected = false
+        connectionGeneration = UUID()
         fixtureSessions = false
         self.baseURL = baseURL
         open()
         for chat in chats.values { chat.socket?.connect() }
         for socket in terminalSockets.values { socket.connect() }
         for socket in subagentSockets.values { socket.connect() }
+    }
+
+    func disconnect() {
+        disconnected = true
+        connectionGeneration = UUID()
+        connected = false
+        control?.cancel()
+        control = nil
+        for chat in chats.values { chat.socket?.close() }
+        for socket in terminalSockets.values { socket.close() }
+        for socket in subagentSockets.values { socket.close() }
+    }
+
+    func hello() async throws -> DaemonHello {
+        try await call("api/hello", method: "GET")
     }
 
     func session(_ id: String) -> SessionSummary? {
@@ -803,7 +824,10 @@ final class PilotClient: ObservableObject {
     }
 
     private func get<Response: Decodable & Sendable>(_ url: URL) async throws -> Response {
+        guard !disconnected else { throw HostRoutingError.disconnected }
+        let generation = connectionGeneration
         let (data, response) = try await artifactSession.data(from: url)
+        guard generation == connectionGeneration, !disconnected else { throw HostRoutingError.staleGeneration }
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200 ..< 300).contains(status) else {
             let error = (try? JSONDecoder().decode(APIError.self, from: data))?.error
@@ -851,7 +875,10 @@ final class PilotClient: ObservableObject {
     }
 
     private func call<Response: Decodable>(_ request: URLRequest) async throws -> Response {
+        guard !disconnected else { throw HostRoutingError.disconnected }
+        let generation = connectionGeneration
         let (data, response) = try await URLSession.shared.data(for: request)
+        guard generation == connectionGeneration, !disconnected else { throw HostRoutingError.staleGeneration }
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200 ..< 300).contains(status) else {
             throw ClientError((try? JSONDecoder().decode(APIError.self, from: data))?.error ?? "HTTP \(status)", status: status)
@@ -1343,6 +1370,8 @@ final class PilotClient: ObservableObject {
     }
 
     private func open() {
+        guard !disconnected else { return }
+        connectionGeneration = UUID()
         control?.cancel()
         control = nil
         guard let url = socketURL("/api/ws") else { return }
@@ -1376,13 +1405,14 @@ final class PilotClient: ObservableObject {
     }
 
     private func scheduleReconnect() {
+        let generation = connectionGeneration
         control?.cancel()
         control = nil
         let delay = min(10.0, 0.5 * pow(2.0, Double(retry)))
         retry += 1
         Task {
             try? await Task.sleep(for: .seconds(delay))
-            if self.control == nil { self.open() }
+            if self.control == nil, !self.disconnected, self.connectionGeneration == generation { self.open() }
         }
     }
 

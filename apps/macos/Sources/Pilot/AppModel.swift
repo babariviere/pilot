@@ -33,6 +33,8 @@ final class AppModel: ObservableObject {
 
     let daemon = DaemonController()
     let client = PilotClient()
+    /// Host-qualified facade for remote surfaces. The existing client remains Local only.
+    let hosts = HostClients()
     let feeds = SessionFeedCache()
     let subagentFeeds = SubagentFeeds()
     let settings = AppSettings.shared
@@ -373,6 +375,11 @@ final class AppModel: ObservableObject {
         Task {
             await daemon.ensureRunning()
             client.connect(to: daemon.baseURL)
+            Task {
+                guard let hello = try? await client.hello(), hello.isProtocolCompatible,
+                      let lineage = hello.lineageId else { return }
+                hosts.install(client, host: HostRef(hostId: "local", daemonId: hello.daemonId, lineageId: lineage))
+            }
         }
     }
 
