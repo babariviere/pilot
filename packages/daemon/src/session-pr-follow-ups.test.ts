@@ -173,6 +173,9 @@ async function setup(cooldownMs?: number) {
 	const controls = {
 		checks: true,
 		reviews: true,
+		reviewId: "thread-1",
+		reviewCommentId: "comment-1",
+		reviewUpdatedAt: "2026-01-01T00:00:00Z",
 		conflicts: true,
 		draft: false,
 		state: "OPEN",
@@ -275,7 +278,17 @@ async function setup(cooldownMs?: number) {
 						pullRequest: {
 							reviewThreads: {
 								nodes: controls.reviews
-									? [{ id: "thread-1", isResolved: false, isOutdated: false, comments: { totalCount: 1 } }]
+									? [
+											{
+												id: controls.reviewId,
+												isResolved: false,
+												isOutdated: false,
+												comments: {
+													totalCount: 1,
+													nodes: [{ id: controls.reviewCommentId, updatedAt: controls.reviewUpdatedAt }],
+												},
+											},
+										]
 									: [],
 								pageInfo: { hasNextPage: false, endCursor: null },
 							},
@@ -375,6 +388,106 @@ async function setup(cooldownMs?: number) {
 		},
 	};
 }
+
+test("unchanged review feedback is reported once across cooldowns, restarts and user budget resets", async () => {
+	await fixture(async (f) => {
+		f.controls.checks = false;
+		f.controls.conflicts = false;
+		await f.refresh();
+		assert.equal(f.inputs.length, 1);
+		assert.match(f.inputs[0]!.content, /New or updated review thread IDs: \["thread-1"\]/);
+		assert.equal(Object.keys((await f.saved()).prReportedReviewThreads ?? {}).length, 1);
+		f.meta.prFollowUp!.nextAttemptAt = 0;
+		await f.refresh();
+		assert.equal(f.inputs.length, 1, "leaving a declined thread unresolved is not new work");
+		assert.equal(f.meta.prFollowUp!.attempts, 1, "duplicates do not spend attempts");
+		assert.ok(f.meta.pullRequest?.readiness?.reasons.some((reason) => reason.code === "unresolved_comments"));
+		await f.restart();
+		f.meta.prFollowUp!.nextAttemptAt = 0;
+		await f.refresh();
+		assert.equal(f.inputs.length, 1);
+		await f.manager.send(f.id, "Continue other work", "followUp", "review-budget-reset");
+		await f.refresh();
+		assert.equal(f.inputs.length, 2, "only the user's input is delivered after resetting the budget");
+		assert.equal(f.meta.prFollowUp!.attempts, 0);
+		f.controls.reviewUpdatedAt = "2026-01-02T00:00:00Z";
+		await f.refresh();
+		assert.equal(f.inputs.length, 3, "a new reply or latest-comment edit is fresh feedback");
+		f.meta.prFollowUp!.nextAttemptAt = 0;
+		await f.refresh();
+		assert.equal(f.inputs.length, 3);
+		f.controls.reviewId = "thread-2";
+		await f.refresh();
+		assert.equal(f.inputs.length, 4, "a different thread is fresh even when the unresolved count is unchanged");
+	});
+});
+
+test("resolved then reopened feedback stays reported, but a new reply at the same timestamp is fresh", async () => {
+	await fixture(async (f) => {
+		f.controls.checks = false;
+		f.controls.conflicts = false;
+		await f.refresh();
+		assert.equal(f.inputs.length, 1);
+		f.meta.prFollowUp!.nextAttemptAt = 0;
+		f.controls.reviews = false;
+		await f.refresh();
+		f.controls.reviews = true;
+		await f.refresh();
+		assert.equal(f.inputs.length, 1, "a temporary healthy result does not forget already-reported feedback");
+		f.controls.reviewCommentId = "new-reply";
+		await f.refresh();
+		assert.equal(f.inputs.length, 2, "comment identity distinguishes replies within the same timestamp");
+		f.meta.prFollowUp!.nextAttemptAt = 0;
+		f.controls.reviewCommentId = "comment-1";
+		await f.refresh();
+		assert.equal(f.inputs.length, 2, "deleting a reply cannot re-report an earlier comment");
+	});
+});
+
+test("CI retries do not repeat already-reported review threads", async () => {
+	await fixture(async (f) => {
+		await f.refresh();
+		f.meta.prFollowUp!.nextAttemptAt = 0;
+		await f.refresh();
+		assert.equal(f.inputs.length, 2);
+		assert.match(f.inputs[1]!.content, /Failed CI checks/);
+		assert.doesNotMatch(f.inputs[1]!.content, /unresolved, non-outdated|New or updated review thread IDs/);
+	});
+});
+
+test("rejected review delivery does not consume the feedback version", async () => {
+	await fixture(async (f) => {
+		f.controls.checks = false;
+		f.controls.conflicts = false;
+		f.controls.request = async () => {
+			throw new CommandRejected("busy", "busy");
+		};
+		await f.refresh();
+		assert.equal(f.inputs.length, 1);
+		assert.equal(f.meta.prReportedReviewThreads, undefined);
+		assert.equal(f.meta.prFollowUp!.attempts, 0);
+		f.controls.request = undefined;
+		f.meta.prFollowUp!.nextAttemptAt = 0;
+		await f.refresh();
+		assert.equal(f.inputs.length, 2);
+		assert.equal(Object.keys((await f.saved()).prReportedReviewThreads ?? {}).length, 1);
+	});
+});
+
+test("full review history suppresses new thread admissions without forgetting old feedback or blocking CI", async () => {
+	await fixture(async (f) => {
+		f.meta.prReportedReviewThreads = Object.fromEntries(Array.from({ length: 4096 }, (_, i) => [`key${i}`, 1]));
+		f.controls.checks = false;
+		f.controls.conflicts = false;
+		await f.refresh();
+		assert.equal(f.inputs.length, 0);
+		f.controls.checks = true;
+		await f.refresh();
+		assert.equal(f.inputs.length, 1);
+		assert.doesNotMatch(f.inputs[0]!.content, /New or updated review thread IDs/);
+		assert.equal(Object.keys(f.meta.prReportedReviewThreads).length, 4096);
+	});
+});
 
 test("owned open and draft PRs reopen parked workers with one durable idle-only follow-up and no user activity", async () => {
 	for (const draft of [false, true]) {

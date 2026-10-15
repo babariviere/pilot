@@ -155,7 +155,11 @@ Pilot monitors agent-owned PRs from isolated Build sessions for failed CI, unres
 merge conflicts, including earlier PRs in a stack. It sends follow-up work only when the agent is idle
 and no user messages are queued. Before a failed-CI follow-up, eligible jj workspaces try a safe,
 conflict-free rebase onto the PR's current base, once per PR/base commit. A successful rebase waits for
-fresh CI without spending a follow-up attempt; unresolved review feedback still goes to the agent.
+fresh CI without spending a follow-up attempt; new review feedback still goes to the agent.
+An unresolved thread is reported only once per latest-comment version, even across restarts and user
+messages. Declined or already-addressed feedback need not be resolved on GitHub to stop repeat prompts.
+New threads, replies or edits to the latest comment can trigger another follow-up; CI and conflict
+retries remain independent. Pilot does not resolve review threads automatically.
 Unsafe or conflicting rebases go to the agent instead. Automatic follow-ups are limited to three per
 session, with a five-minute cooldown; sending a user message resets the limit. Results and blockers come back to Pilot,
 not GitHub comments or reviews. Ask and direct-checkout sessions do not receive automatic PR follow-ups.

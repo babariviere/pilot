@@ -292,7 +292,12 @@ test("health reports failed checks, live review threads and conflicts, and flags
 				},
 				reviewThreads: {
 					nodes: [
-						{ id: "t1", isResolved: false, isOutdated: false, comments: { totalCount: 2 } },
+						{
+							id: "t1",
+							isResolved: false,
+							isOutdated: false,
+							comments: { totalCount: 2, nodes: [{ id: "comment-1", updatedAt: "2026-01-01T00:00:00Z" }] },
+						},
 						{ id: "t2", isResolved: true, isOutdated: false, comments: { totalCount: 1 } },
 						{ id: "t3", isResolved: false, isOutdated: true, comments: { totalCount: 1 } },
 					],
@@ -313,6 +318,7 @@ test("health reports failed checks, live review threads and conflicts, and flags
 	assert.deepEqual((results.get(1) as { problems: unknown }).problems, {
 		failedChecks: ["tests", "ci/legacy"],
 		reviewComments: 1,
+		reviewThreads: [{ id: "t1", commentId: "comment-1", updatedAt: Date.parse("2026-01-01T00:00:00Z") }],
 		mergeConflicts: true,
 	});
 	assert.deepEqual(results.get(2), { overflow: true });
