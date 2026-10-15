@@ -152,6 +152,7 @@ struct MissionInspectorPane: View {
                 }
                 MissionTaskDescription(task: task, collapsedLineLimit: 4)
                 let resources = detail.resources.filter { $0.taskId == task.id }
+                MissionTaskDelegationLabel(task: task, resources: resources)
                 if !resources.isEmpty {
                     ResponsiveControlsLayout(horizontalSpacing: 10, verticalSpacing: 4) {
                         ForEach(resources) { MissionLinkChip(resource: $0, missionId: mission.id, compact: true) }

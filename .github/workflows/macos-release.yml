@@ -151,6 +151,16 @@ jobs:
           key: swift-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.resolved', 'apps/macos/Package.swift', 'apps/macos/scripts/vendor-ghostty.sh', 'apps/macos/scripts/patch-ghostty-resources.py') }}
       # Build, sign and smoke-test the relocated app, not just the Swift executable.
       - run: apps/macos/scripts/bundle.sh
+      - name: Render delegated task fixtures
+        run: |
+          fixture_home="$(mktemp -d "$RUNNER_TEMP/delegated-home.XXXXXX")"
+          HOME="$fixture_home" CFFIXED_USER_HOME="$fixture_home" apps/macos/build/Pilot.app/Contents/MacOS/Pilot --snapshot "$RUNNER_TEMP/delegated-screenshots" --delegated-tasks-only
+      - name: Upload delegated task screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: delegated-task-screenshots
+          path: ${{ runner.temp }}/delegated-screenshots/*.png
+          if-no-files-found: error
 
   release-please:
     needs: [node, swift-test, app-bundle]
