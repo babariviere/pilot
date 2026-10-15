@@ -8,6 +8,9 @@ struct StoredDrafts: Codable {
     var version: Int = 1
     var chats: [String: StoredChatDraft] = [:]
     var newTask: StoredTaskDraft = StoredTaskDraft()
+    /// Pins legacy bare-key migration to Local, including while the daemon is unavailable on relaunch.
+    var localHost: HostRef? = nil
+    var selection: HostResourceRef? = nil
 }
 
 struct StoredChatDraft: Codable {
@@ -97,6 +100,10 @@ final class DraftStore {
             let drafts = try JSONDecoder().decode(StoredDrafts.self, from: data)
             guard drafts.version == 1 else {
                 throw StoreError.unsupportedVersion(drafts.version)
+            }
+            for key in drafts.chats.keys where key.hasPrefix("hostref1:") {
+                let ref = try HostResourceRef.decodeKey(key)
+                guard ref.kind == .session else { throw HostRoutingError.invalidReference }
             }
             didLoad = true
             return drafts
