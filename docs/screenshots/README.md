@@ -30,6 +30,17 @@ containing private projects, conversations or credentials.
 
 ## Mission task phases
 
+Delegated task captures use their own synthetic fixture, without changing the existing phase demos:
+
+```sh
+apps/macos/build/Pilot.app/Contents/MacOS/Pilot --snapshot /tmp/delegated-tasks --delegated-tasks-only
+```
+
+`delegated-{tasks,overview}-{1000,620}.png` covers named and manual delegation, long assignee names,
+an existing running chat, and a phase containing only done, dropped and delegated tasks that stays open.
+The app-bundle CI job renders and uploads these captures as `delegated-task-screenshots`, so screenshots
+can be reviewed and updated without a local Swift build.
+
 The mission Tasks tab groups tasks by phase (a task's milestone), from synthetic fixtures:
 
 - `mission-tasks-phases.png`: a finished phase folded, active work before done work in each phase, tasks

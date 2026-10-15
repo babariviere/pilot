@@ -279,7 +279,7 @@ extension PilotIcon {
         case .resolvedComment: "A resolved comment."
         case .quote: "Quote or comment on a passage."
         case .recipient: "Who a comment or message goes to."
-        case .handoff: "A handoff note."
+        case .handoff: "A handoff note or delegated work."
         case .proposal: "A proposed change in a decision."
         case .steer: "A steering message, or an item that moves to another place."
         case .queued: "A queued follow-up."

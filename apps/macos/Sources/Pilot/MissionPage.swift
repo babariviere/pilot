@@ -285,6 +285,8 @@ struct MissionOverviewTab: View {
             .filter { [.inProgress, .inReview, .blocked].contains($0.status) }
             .flatMap(\.tasks)
         let waiting = detail.tasks.filter { $0.status == .todo }.count
+        let delegated = MissionTaskOrdering.sorted(detail.tasks).filter { $0.status == .delegated }
+        let taskLinks = MissionTaskLinkIndex(detail)
         VStack(alignment: .leading, spacing: 28) {
             summary(counts)
             if drafting {
@@ -323,7 +325,7 @@ struct MissionOverviewTab: View {
                     }
                     ForEach(Array(inFlight.prefix(8).enumerated()), id: \.element.id) { index, task in
                         if index > 0 { HairlineDivider(leading: 34) }
-                        CompactTaskRow(task: task)
+                        CompactTaskRow(task: task, resources: taskLinks.resources(of: task.id))
                     }
                     if waiting > 0 || inFlight.count > 8 {
                         Button(waitingText(waiting: waiting, hidden: max(0, inFlight.count - 8))) {
@@ -332,6 +334,23 @@ struct MissionOverviewTab: View {
                         .buttonStyle(.plain)
                         .font(.pilot(.caption)).foregroundStyle(Theme.faintForeground)
                         .padding(.leading, 34)
+                    }
+                }
+            }
+            if !delegated.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    PageSectionHeader(title: "Delegated", count: delegated.count, linkTitle: "All tasks") {
+                        model.missionTab = .tasks
+                    }
+                    ForEach(Array(delegated.prefix(5).enumerated()), id: \.element.id) { index, task in
+                        if index > 0 { HairlineDivider(leading: 34) }
+                        CompactTaskRow(task: task, resources: taskLinks.resources(of: task.id))
+                    }
+                    if delegated.count > 5 {
+                        Button("\(delegated.count - 5) more delegated") { model.missionTab = .tasks }
+                            .buttonStyle(.plain)
+                            .font(.pilot(.caption)).foregroundStyle(Theme.faintForeground)
+                            .padding(.leading, 34)
                     }
                 }
             }
@@ -567,18 +586,22 @@ private struct NeedsYouRow: View {
 struct CompactTaskRow: View {
     let task: MissionTask
     var showsOwner = true
+    var resources: [MissionResource] = []
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
 
     var body: some View {
         HStack(spacing: 8) {
             PilotSymbol(task.status.icon).foregroundStyle(task.status.color).frame(width: 16)
-                .help(task.status.label)
-                .accessibilityLabel(task.status.label)
+                .help(task.delegationLabel ?? task.status.label)
+                .accessibilityLabel(task.delegationLabel ?? task.status.label)
             Text("#\(task.number)").font(.pilot(.caption)).monospacedDigit().foregroundStyle(Theme.faintForeground)
                 .frame(minWidth: 20, alignment: .leading)
-            Text(task.title).font(.pilot(.body)).lineLimit(1).strikethrough(task.status.isClosed)
-                .foregroundStyle(task.status.isClosed ? Theme.mutedForeground : Theme.foreground)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(task.title).font(.pilot(.body)).lineLimit(1).strikethrough(task.status.isClosed)
+                    .foregroundStyle(task.status.isClosed ? Theme.mutedForeground : Theme.foreground)
+                MissionTaskDelegationLabel(task: task, resources: resources)
+            }
             Spacer(minLength: 8)
             if showsOwner, let sessionId = task.sessionId {
                 let title = client.session(sessionId)?.title

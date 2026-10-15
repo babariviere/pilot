@@ -45,6 +45,9 @@ public enum MissionTaskStatus: String, LenientStringEnum, CaseIterable {
 
     /// Done and dropped tasks no longer count as remaining work.
     public var isClosed: Bool { self == .done || self == .dropped }
+
+    /// Delegation is unfinished work, but another person owns its next step.
+    public var canStart: Bool { !isClosed && self != .delegated }
 }
 
 public enum MissionHealth: String, LenientStringEnum {
@@ -227,6 +230,13 @@ public struct MissionTask: Codable, Identifiable, Equatable, Hashable, Sendable 
     public let createdAt: Double
     public let updatedAt: Double
     public let completedAt: Double?
+
+    /// A quiet row label; manual delegation has no Linear assignee.
+    public var delegationLabel: String? {
+        guard status == .delegated else { return nil }
+        let name = delegatedTo?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return name.isEmpty ? "Delegated" : "Delegated to \(name)"
+    }
 
     public init(
         id: String, number: Int, title: String, body: String? = nil, status: MissionTaskStatus = .todo,

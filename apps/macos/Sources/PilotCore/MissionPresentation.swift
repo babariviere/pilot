@@ -68,7 +68,7 @@ public struct MissionTaskGroup: Identifiable, Equatable, Sendable {
 
 public enum MissionTaskOrdering {
     /// Display order of status groups: active work first, closed work last.
-    public static let groupOrder: [MissionTaskStatus] = [.inProgress, .inReview, .blocked, .todo, .done, .dropped]
+    public static let groupOrder: [MissionTaskStatus] = [.inProgress, .inReview, .blocked, .todo, .delegated, .done, .dropped]
 
     public static func sorted(_ tasks: [MissionTask]) -> [MissionTask] {
         tasks.sorted { ($0.order, $0.number) < ($1.order, $1.number) }
@@ -209,7 +209,7 @@ public struct MissionTaskCounts: Equatable, Sendable {
     public subscript(status: MissionTaskStatus) -> Int { byStatus[status] ?? 0 }
 
     /// Progress bar order: finished work first, then review, active, blocked and waiting work.
-    public static let barOrder: [MissionTaskStatus] = [.done, .inReview, .inProgress, .blocked, .todo]
+    public static let barOrder: [MissionTaskStatus] = [.done, .inReview, .inProgress, .blocked, .todo, .delegated]
 }
 
 /// Progress of one milestone (a phase, until phases are first-class).
@@ -245,7 +245,7 @@ public enum MissionMilestones {
 public struct MissionPhaseGroup: Identifiable, Equatable, Sendable {
     /// The milestone; nil for tasks without one, and for the flat list of a mission without milestones.
     public let name: String?
-    /// Shown tasks: active work, then done, then dropped when shown, in task order within each status.
+    /// Shown tasks: active work, delegated work, done, then dropped when shown, in task order within each status.
     public let tasks: [MissionTask]
     /// Progress of the phase; dropped tasks are excluded, as everywhere else.
     public let counts: MissionTaskCounts
@@ -273,7 +273,7 @@ public struct MissionTaskPhases: Equatable, Sendable {
     /// Dropped tasks across the mission, shown or not.
     public let dropped: Int
 
-    /// Within a phase: in progress, in review, blocked and to do, then done, then dropped.
+    /// Within a phase: in progress, in review, blocked and to do, delegated, done, then dropped.
     private static let statusOrder: [MissionTaskStatus: Int] = Dictionary(
         uniqueKeysWithValues: MissionTaskOrdering.groupOrder.enumerated().map { ($1, $0) })
 

@@ -197,7 +197,7 @@ struct AddToMissionSheet: View {
 
     private var openTasks: [MissionTask] {
         guard let id = form.missionId, let detail = client.missionDetails[id] else { return [] }
-        return MissionTaskOrdering.sorted(detail.tasks).filter { !$0.status.isClosed && $0.sessionId == nil }
+        return MissionTaskOrdering.sorted(detail.tasks).filter { $0.status.canStart && $0.sessionId == nil }
     }
 
     var body: some View {

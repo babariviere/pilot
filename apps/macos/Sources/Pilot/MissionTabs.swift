@@ -789,6 +789,7 @@ struct MissionTaskRow: View {
                         .onSubmit(saveTitle)
                         .accessibilityLabel("Task \(task.number) title")
                     if dependencies.isWaiting { waitingLine }
+                    MissionTaskDelegationLabel(task: task, resources: resources)
                     MissionTaskDescription(task: task, collapsedLineLimit: 2)
                     if !resources.isEmpty || !artifactLinks.isEmpty {
                         ResponsiveControlsLayout(horizontalSpacing: 10, verticalSpacing: 4) {
@@ -822,7 +823,7 @@ struct MissionTaskRow: View {
                     .help(MissionTaskOwnerLabel.help(chatTitle: chat))
                 }
                 HStack(spacing: 4) {
-                    if task.sessionId == nil, !task.status.isClosed {
+                    if task.sessionId == nil, task.status.canStart {
                         MissionTaskStartButton(status: mission.status) { model.startChat(for: task, missionId: mission.id) }
                     }
                     if hovered {
@@ -878,7 +879,7 @@ struct MissionTaskRow: View {
     }
 
     private var accessibilitySummary: String {
-        var parts = ["Task \(task.number)", title.title, task.status.label]
+        var parts = ["Task \(task.number)", title.title, task.delegationLabel ?? task.status.label]
         if let waiting = dependencies.accessibilityText { parts.append(waiting) }
         return parts.joined(separator: ", ")
     }
@@ -887,7 +888,7 @@ struct MissionTaskRow: View {
         let index = siblings.firstIndex { $0.id == task.id } ?? 0
         if let sessionId = task.sessionId {
             Button("Open Chat") { model.selectedSessionId = sessionId }
-        } else if !task.status.isClosed {
+        } else if task.status.canStart {
             Button("Start Chat") { model.startChat(for: task, missionId: mission.id) }
                 .disabled(mission.status != .active)
         }
@@ -1004,8 +1005,8 @@ struct MissionTaskStatusMenu: View {
             }
         }
         .fixedSize()
-        .help("Status: \(task.status.label)")
-        .accessibilityLabel("Status \(task.status.label)")
+        .help("Status: \(task.delegationLabel ?? task.status.label)")
+        .accessibilityLabel("Status \(task.delegationLabel ?? task.status.label)")
     }
 
     private var icon: some View {

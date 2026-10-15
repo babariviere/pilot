@@ -73,6 +73,12 @@ enum Snapshot {
         model.daemon.markRunningForSnapshot()
         let size = CGSize(width: 1360, height: 860)
 
+        if CommandLine.arguments.contains("--delegated-tasks-only") {
+            await renderDelegatedTasks(model: model, to: directory)
+            print("snapshots written to \(directory.path)")
+            exit(0)
+        }
+
         if CommandLine.arguments.contains("--home-overview-only") {
             let now = Fixtures.now
             let sessions = [
