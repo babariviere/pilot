@@ -1581,7 +1581,7 @@ enum Snapshot {
         exit(0)
     }
 
-    /// The subagent strip above the composer, its popover, the Agents tab and an answer card.
+    /// The subagent strip above the composer and the Agents tab: its list and one subagent's detail view.
     private static func renderSubagents(model: AppModel, to directory: URL) async {
         let session = Fixtures.subagentSession
         model.client.loadFixture(projects: Fixtures.projects, sessions: [session] + Fixtures.sessions)
@@ -1592,7 +1592,7 @@ enum Snapshot {
         let subagents = session.subagents ?? []
         if let read = subagents.first(where: { $0.name == "docs-check" }) { model.markSubagentRead(read, in: session.id) }
         model.selectedSessionId = session.id
-        model.selectedSubagents[session.id] = "protocol-audit"
+        model.selectedSubagents[session.id] = nil
         model.inspectorTab = .agents
         model.inspectorVisible = true
         let feed = SessionFeed(sessionId: session.id, transcript: Fixtures.subagentParentTranscript)
@@ -1607,6 +1607,19 @@ enum Snapshot {
             size: CGSize(width: 1560, height: 860),
             to: directory.appending(path: "subagents.png")
         )
+        model.selectedSubagents[session.id] = "protocol-audit"
+        await render(
+            Frame(title: session.title, subtitle: "pilot · \(session.model ?? "")", session: session) {
+                HStack(spacing: 0) {
+                    ChatView(session: session, feed: feed)
+                    Rectangle().fill(Theme.border).frame(width: 1)
+                    Inspector(session: session).frame(width: 560)
+                }
+            },
+            size: CGSize(width: 1560, height: 860),
+            to: directory.appending(path: "subagent-detail.png")
+        )
+        model.selectedSubagents[session.id] = nil
         await render(
             Frame(title: session.title, subtitle: "pilot · \(session.model ?? "")", session: session) {
                 ChatView(session: session, feed: SessionFeed(sessionId: session.id, transcript: Fixtures.subagentParentTranscript))
@@ -1622,14 +1635,6 @@ enum Snapshot {
             to: directory.appending(path: "subagents-scrolled.png"),
             scrollTranscriptUp: true
         )
-        for subagent in subagents.prefix(3) {
-            await render(
-                SubagentPopover(session: session, subagent: subagent, dismiss: {})
-                    .background(Theme.background),
-                size: CGSize(width: 380, height: 300),
-                to: directory.appending(path: "subagent-popover-\(subagent.name).png")
-            )
-        }
     }
 
     /// Against a running pilotd (PILOT_PORT) and an existing session (PILOT_TEST_SESSION): opens a real window

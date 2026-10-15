@@ -2,7 +2,7 @@ import PilotCore
 import SwiftUI
 
 /// One subagent's live, read-only transcript, streamed from pilotd. Shared by every view of that
-/// subagent, so the popover and the Agents tab never open two streams.
+/// subagent, so reopening its detail view never opens a second stream.
 @MainActor
 final class SubagentFeed: ObservableObject {
     @Published private(set) var presentation = TranscriptPresentation()
@@ -28,7 +28,7 @@ final class SubagentFeed: ObservableObject {
 
     var isActive: Bool { users > 0 || linger != nil }
 
-    /// Views retain the feed while visible. The stream outlives a brief gap, such as popover to tab.
+    /// Views retain the feed while visible. The stream outlives a brief gap, such as list to detail and back.
     func retain() {
         users += 1
         linger?.cancel()
@@ -99,16 +99,6 @@ final class SubagentFeed: ObservableObject {
             if let self, self.generation == generation { self.processing = nil }
         }
     }
-
-    /// The latest tool calls and text, for compact previews.
-    var recentActivity: [ChatRow] {
-        Array(presentation.rows.flatMap(\.unfolded).filter {
-            switch $0 {
-            case .tools, .text, .error: true
-            default: false
-            }
-        }.suffix(3))
-    }
 }
 
 /// Live subagent feeds by session and name, dropped shortly after their last view disappears.
@@ -130,44 +120,10 @@ final class SubagentFeeds {
     var count: Int { feeds.count }
 }
 
-// MARK: - Status
-
-struct SubagentStatusGlyph: View {
-    let state: SubagentDisplayState
-
-    var body: some View {
-        Group {
-            switch state {
-            case .working:
-                PilotSymbol(PilotIcon.working, context: .row)
-            case .newAnswer:
-                Circle().fill(Theme.success).frame(width: 7, height: 7)
-            case .failed:
-                Circle().fill(Theme.destructive).frame(width: 7, height: 7)
-            case .idle:
-                Circle().strokeBorder(Theme.mutedForeground.opacity(0.6), lineWidth: 1.2).frame(width: 7, height: 7)
-            }
-        }
-        .frame(width: 12, height: 12)
-        .accessibilityLabel(state.label)
-    }
-}
-
-extension SubagentDisplayState {
-    var color: Color {
-        switch self {
-        case .working: Theme.info
-        case .newAnswer: Theme.success
-        case .failed: Theme.destructive
-        case .idle: Theme.mutedForeground
-        }
-    }
-}
-
 // MARK: - Strip above the composer
 
-/// Subagents as one line at the top of the composer tray, shaped like `SystemMessagesStrip`: "2 subagents · 1 working".
-/// Click it to open the Agents tab, which lists each one with its transcript and Stop.
+/// Subagents as one line at the top of the composer tray, shaped like `SystemMessagesStrip`: "3 subagents", with the
+/// working spinner while any of them works and failures in red. Click it to open the Agents tab's list.
 struct SubagentsStrip: View {
     let session: SessionSummary
     @EnvironmentObject private var model: AppModel
@@ -175,30 +131,29 @@ struct SubagentsStrip: View {
     var body: some View {
         let subagents = session.subagents ?? []
         let failed = subagents.filter(\.isFailed).count
+        let working = subagents.contains(where: \.isWorking)
+        let title = subagents.count == 1 ? "1 subagent" : "\(subagents.count) subagents"
         Button {
+            model.selectedSubagents[session.id] = nil
             model.inspectorTab = .agents
             model.inspectorVisible = true
         } label: {
             HStack(spacing: 8) {
-                if subagents.contains(where: \.isWorking) {
-                    PilotSymbol(PilotIcon.working).frame(width: 14)
-                } else {
-                    PilotSymbol(PilotIcon.subagents).foregroundStyle(Theme.faintForeground).frame(width: 14)
+                Group {
+                    if working {
+                        DotGridSpinner()
+                    } else {
+                        PilotSymbol(PilotIcon.subagents).foregroundStyle(Theme.faintForeground)
+                    }
                 }
-                Text(subagents.count == 1 ? "1 subagent" : "\(subagents.count) subagents")
+                .frame(width: 14)
+                Text(title)
                     .font(.pilot(.label))
                     .foregroundStyle(Theme.mutedForeground)
                     .lineLimit(1)
                     .fixedSize()
-                let detail = summary(subagents)
-                if !detail.isEmpty {
-                    Text(detail)
-                        .font(.pilot(.label))
-                        .foregroundStyle(Theme.faintForeground)
-                        .lineLimit(1)
-                }
                 if failed > 0 {
-                    // Failure is the one state here that needs the user.
+                    // Failure is the one subagent state that needs the user.
                     Text("· \(failed) failed")
                         .font(.pilot(.label))
                         .foregroundStyle(Theme.destructive)
@@ -216,142 +171,26 @@ struct SubagentsStrip: View {
         }
         .buttonStyle(.plain)
         .help("Open the Agents tab")
-        .accessibilityLabel(([subagents.count == 1 ? "1 subagent" : "\(subagents.count) subagents", summary(subagents)]
-            + (failed > 0 ? ["\(failed) failed"] : [])).filter { !$0.isEmpty }.joined(separator: ", "))
+        .accessibilityLabel(([title] + (working ? ["working"] : []) + (failed > 0 ? ["\(failed) failed"] : []))
+            .joined(separator: ", "))
         .accessibilityHint("Opens the Agents tab")
-    }
-
-    /// Working and new counts after the total, each after a dot. Failures are shown on their own, in red.
-    private func summary(_ subagents: [SessionSubagent]) -> String {
-        let working = subagents.filter(\.isWorking).count
-        let unread = model.unreadSubagents(in: session)
-        return [
-            working > 0 ? "\(working) working" : nil,
-            unread > 0 ? "\(unread) new" : nil,
-        ].compactMap { $0 }.map { "· " + $0 }.joined(separator: " ")
-    }
-}
-
-/// Live activity for one subagent, with shortcuts to its transcript and Stop.
-struct SubagentPopover: View {
-    let session: SessionSummary
-    let subagent: SessionSubagent
-    let dismiss: () -> Void
-    @EnvironmentObject private var model: AppModel
-    @ObservedObject private var feed: SubagentFeed
-
-    init(session: SessionSummary, subagent: SessionSubagent, dismiss: @escaping () -> Void) {
-        self.session = session
-        self.subagent = subagent
-        self.dismiss = dismiss
-        feed = AppModel.shared.subagentFeed(session.id, subagent.name)
-    }
-
-    var body: some View {
-        let display = SubagentDisplayState(subagent, unread: model.isUnread(subagent, in: session.id))
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
-                SubagentStatusGlyph(state: display)
-                Text(subagent.name).font(.pilot(.body, weight: .semibold)).lineLimit(1)
-                Text(display.label).font(.pilot(.caption, weight: .medium)).foregroundStyle(display.color)
-                Spacer(minLength: 12)
-                if subagent.isWorking {
-                    Text(Date(timeIntervalSince1970: subagent.createdAt / 1000), style: .relative)
-                        .font(.pilot(.caption).monospacedDigit())
-                        .foregroundStyle(Theme.faintForeground)
-                }
-            }
-            Text(subagent.task)
-                .font(.pilot(.label))
-                .foregroundStyle(Theme.mutedForeground)
-                .lineLimit(3)
-                .textSelection(.enabled)
-            if let error = subagent.error {
-                Text(error).font(.pilot(.caption)).foregroundStyle(Theme.destructive).lineLimit(3)
-            }
-            Divider()
-            VStack(alignment: .leading, spacing: 6) {
-                if feed.loading {
-                    ProgressView().controlSize(.small).frame(maxWidth: .infinity)
-                } else if let error = feed.error {
-                    Text(error).font(.pilot(.caption)).foregroundStyle(Theme.destructive)
-                } else if activity.isEmpty {
-                    Text(subagent.isWorking ? "Starting…" : "No activity yet")
-                        .font(.pilot(.caption)).foregroundStyle(Theme.faintForeground)
-                } else {
-                    ForEach(activity) { row in SubagentActivityLine(row: row) }
-                }
-                if subagent.isWorking && !feed.loading {
-                    WorkingIndicator(retry: nil)
-                }
-            }
-            HStack {
-                Button("Open transcript") {
-                    model.openSubagent(subagent.name, in: session.id)
-                    dismiss()
-                }
-                .keyboardShortcut(.defaultAction)
-                Spacer()
-                if subagent.isWorking {
-                    Button("Stop", role: .destructive) { model.stopSubagent(subagent.name, in: session.id) }
-                        .disabled(model.pendingSessionActions.contains("\(session.id)/subagent/\(subagent.name)"))
-                }
-            }
-            .controlSize(.small)
-        }
-        .padding(14)
-        .frame(width: 380)
-        .onAppear { feed.retain() }
-        .onDisappear { feed.release() }
-    }
-
-    /// Recent rows, without repeating the failure already shown above.
-    private var activity: [ChatRow] {
-        feed.recentActivity.filter {
-            if case let .error(_, text) = $0 { return text != subagent.error }
-            return true
-        }
-    }
-}
-
-/// One compact line of recent activity: a tool call or the start of a reply.
-private struct SubagentActivityLine: View {
-    let row: ChatRow
-
-    var body: some View {
-        switch row {
-        case let .tools(_, items):
-            ForEach(items.suffix(3)) { item in
-                let summary = item.summary
-                HStack(spacing: 6) {
-                    PilotSymbol(summary.icon.pilotIcon).frame(width: 12)
-                    Text(summary.title).font(.pilot(.caption, weight: .medium))
-                    if let detail = summary.detail {
-                        Text(detail).font(.pilot(.caption, design: .monospaced)).foregroundStyle(Theme.faintForeground)
-                    }
-                }
-                .foregroundStyle(item.status == .error ? Theme.destructive : Theme.mutedForeground)
-                .lineLimit(1)
-            }
-        case let .text(_, text, _):
-            Text(Self.inline(text)).font(.pilot(.label)).foregroundStyle(Theme.foreground).lineLimit(3)
-        case let .error(_, text):
-            Text(text).font(.pilot(.caption)).foregroundStyle(Theme.destructive).lineLimit(2)
-        default:
-            EmptyView()
-        }
-    }
-
-    /// Inline emphasis and code only; block Markdown belongs in the full transcript.
-    private static func inline(_ text: String) -> AttributedString {
-        (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-            ?? AttributedString(text)
     }
 }
 
 // MARK: - Agents inspector tab
 
-/// Every subagent of a session, with the selected one's full transcript and controls.
+extension SessionSubagent {
+    /// The sidebar's corner vocabulary for a subagent row: the working ripple or failed red. An unread answer is not
+    /// something the user must act on, so idle subagents draw no corner.
+    var cornerSignal: SessionSignal? {
+        if isWorking { return .working }
+        if isFailed { return .failed }
+        return nil
+    }
+}
+
+/// Every subagent of a session as one list. Clicking a row opens its detail view (transcript and composer) in place,
+/// with a back button to the list. `AppModel.selectedSubagents` holds the open subagent per chat; nil shows the list.
 struct SubagentsPane: View {
     let session: SessionSummary
     @EnvironmentObject private var model: AppModel
@@ -363,107 +202,94 @@ struct SubagentsPane: View {
                            message: "Subagents this chat starts appear here, with their transcripts.")
                 .padding(.horizontal, 16)
                 .frame(maxHeight: .infinity)
+        } else if let name = model.selectedSubagents[session.id],
+                  let selected = subagents.first(where: { $0.name == name }) {
+            SubagentDetail(session: session, subagent: selected) { model.selectedSubagents[session.id] = nil }
+                .id(selected.name)
         } else {
-            let selected = subagents.first { $0.name == model.selectedSubagents[session.id] } ?? subagents[0]
             VStack(spacing: 0) {
                 InspectorPaneHeader("\(subagents.count) subagent\(subagents.count == 1 ? "" : "s")")
-                HStack(spacing: 0) {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 2) {
-                            ForEach(subagents) { subagent in row(subagent, selected: subagent.name == selected.name) }
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(subagents.enumerated()), id: \.element.id) { index, subagent in
+                            if index > 0 { HairlineDivider(leading: InboxRowLayout.dividerInset) }
+                            SubagentRow(subagent: subagent) { model.openSubagent(subagent.name, in: session.id) }
+                                .inboxCorner(subagent.cornerSignal)
                         }
-                        .padding(6)
                     }
-                    .frame(width: 170)
-                    .background(Theme.sidebar)
-                    Rectangle().fill(Theme.border).frame(width: 1)
-                    SubagentDetail(session: session, subagent: selected)
-                        .id(selected.name)
+                    .padding(8)
                 }
+                .frame(maxHeight: .infinity)
             }
         }
     }
+}
 
-    private func row(_ subagent: SessionSubagent, selected: Bool) -> some View {
-        let display = SubagentDisplayState(subagent, unread: model.isUnread(subagent, in: session.id))
-        return Button { model.selectedSubagents[session.id] = subagent.name } label: {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    SubagentStatusGlyph(state: display)
-                    Text(subagent.name)
-                        .font(.pilot(.label, weight: display == .newAnswer ? .semibold : .medium))
-                        .foregroundStyle(Theme.foreground)
+/// One subagent in the Agents list: its name and task. The row's dithered corner carries its state.
+private struct SubagentRow: View {
+    let subagent: SessionSubagent
+    let open: () -> Void
+
+    var body: some View {
+        Button(action: open) {
+            HoverRow(verticalPadding: 7) { _ in
+                InboxRowLabel(title: subagent.name) {
+                    Text(subagent.task)
+                        .font(.pilot(.caption))
+                        .foregroundStyle(Theme.mutedForeground)
                         .lineLimit(1)
+                } trailing: {
+                    EmptyView()
                 }
-                Text(subagent.task)
-                    .font(.pilot(.caption))
-                    .foregroundStyle(Theme.faintForeground)
-                    .lineLimit(1)
-                    .padding(.leading, 14)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: Theme.Radius.row).fill(selected ? Theme.selected : .clear))
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("\(subagent.name), \(display.label)")
+        .rowButtonStyle()
+        .help(subagent.task)
+        .accessibilityLabel("\(subagent.name), \(SubagentDisplayState(subagent, unread: false).label). \(subagent.task)")
+        .accessibilityHint("Opens its transcript")
     }
 }
 
 private struct SubagentDraft {
     var text = ""
+    var height: CGFloat = 18
     var sending = false
     var error: String?
 }
 
+/// One subagent's transcript and composer, pushed over the Agents list. Stop, its model and working directory sit
+/// in the header's ⋯ menu.
 private struct SubagentDetail: View {
     let session: SessionSummary
     let subagent: SessionSubagent
+    let back: () -> Void
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var feed: SubagentFeed
     @State private var draft = SubagentDraft()
+    @Environment(\.pilotFonts) private var fonts
 
-    init(session: SessionSummary, subagent: SessionSubagent) {
+    init(session: SessionSummary, subagent: SessionSubagent, back: @escaping () -> Void) {
         self.session = session
         self.subagent = subagent
+        self.back = back
         feed = AppModel.shared.subagentFeed(session.id, subagent.name)
     }
 
     var body: some View {
-        let display = SubagentDisplayState(subagent, unread: false)
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 6) {
-                    Text(subagent.name).font(.pilot(.body, weight: .semibold)).lineLimit(1)
-                    Text(display.label).font(.pilot(.caption, weight: .medium)).foregroundStyle(display.color)
-                    Spacer()
-                    if subagent.isWorking {
-                        Button("Stop", role: .destructive) { model.stopSubagent(subagent.name, in: session.id) }
-                            .controlSize(.small)
-                            .disabled(model.pendingSessionActions.contains("\(session.id)/subagent/\(subagent.name)"))
-                    }
-                }
-                HStack(spacing: 10) {
-                    if let modelName = subagent.model { meta(PilotIcon.model, modelName) }
-                    meta(PilotIcon.project, URL(filePath: subagent.cwd).lastPathComponent)
-                        .help(subagent.cwd.abbreviatingHome)
-                    HStack(spacing: 3) {
-                        PilotSymbol(PilotIcon.pending)
-                        Text(Date(timeIntervalSince1970: subagent.createdAt / 1000), style: .relative)
-                    }
-                    .font(.pilot(.small))
-                    .foregroundStyle(Theme.mutedForeground)
-                }
-                if let error = subagent.error {
-                    Text(error).font(.pilot(.caption)).foregroundStyle(Theme.destructive).textSelection(.enabled)
-                }
+        VStack(spacing: 0) {
+            header
+            if let error = subagent.error {
+                Text(error)
+                    .font(.pilot(.caption))
+                    .foregroundStyle(Theme.error)
+                    .textSelection(.enabled)
+                    .lineLimit(4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                HairlineDivider()
             }
-            .padding(12)
-            Rectangle().fill(Theme.border).frame(height: 1)
             transcript
-            Rectangle().fill(Theme.border).frame(height: 1)
             composer
         }
         .onAppear {
@@ -476,14 +302,94 @@ private struct SubagentDetail: View {
         .onDisappear { feed.release() }
     }
 
+    private var header: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Button(action: back) { PilotSymbol(PilotIcon.back) }
+                    .buttonStyle(QuietIconButtonStyle())
+                    .help("All subagents")
+                    .accessibilityLabel("Back to all subagents")
+                Text(subagent.name)
+                    .font(.pilot(.label, weight: .medium))
+                    .foregroundStyle(Theme.foreground)
+                    .lineLimit(1)
+                    .accessibilityAddTraits(.isHeader)
+                state
+                Spacer(minLength: 8)
+                actions
+            }
+            .padding(.leading, 6)
+            .padding(.trailing, 8)
+            .frame(minHeight: 32)
+            HairlineDivider()
+        }
+    }
+
+    @ViewBuilder
+    private var state: some View {
+        if subagent.isWorking {
+            HStack(spacing: 0) {
+                Text("Working · ")
+                Text(Date(timeIntervalSince1970: subagent.createdAt / 1000), style: .relative)
+            }
+            .font(.pilot(.caption).monospacedDigit())
+            .foregroundStyle(Theme.mutedForeground)
+            .lineLimit(1)
+            .accessibilityElement(children: .combine)
+        } else if subagent.isFailed {
+            Text("Failed").font(.pilot(.caption)).foregroundStyle(Theme.error)
+        } else if subagent.retired == true {
+            Text("Retired").font(.pilot(.caption)).foregroundStyle(Theme.faintForeground)
+        }
+    }
+
+    private var actions: some View {
+        Menu {
+            if subagent.isWorking {
+                Button(role: .destructive) { model.stopSubagent(subagent.name, in: session.id) } label: {
+                    Label("Stop", icon: PilotIcon.stop)
+                }
+                .disabled(model.pendingSessionActions.contains("\(session.id)/subagent/\(subagent.name)"))
+                Divider()
+            }
+            if let modelName = subagent.model {
+                Section("Model") {
+                    Text(modelName)
+                }
+            }
+            Section("Working directory") {
+                Text(subagent.cwd.abbreviatingHome)
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(subagent.cwd, forType: .string)
+                } label: {
+                    Label("Copy Path", icon: PilotIcon.copy)
+                }
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting([URL(filePath: subagent.cwd)])
+                } label: {
+                    Label("Show in Finder", icon: PilotIcon.project)
+                }
+            }
+        } label: {
+            PilotSymbol(PilotIcon.more)
+        }
+        .menuStyle(.button)
+        .buttonStyle(QuietIconButtonStyle())
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Subagent actions")
+        .accessibilityLabel("Actions for \(subagent.name)")
+    }
+
     private var transcript: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
-                    if feed.loading {
-                        ProgressView("Loading transcript…").controlSize(.small).frame(maxWidth: .infinity)
-                    } else if let error = feed.error {
-                        Text(error).font(.pilot(.label)).foregroundStyle(Theme.destructive)
+                    if let error = feed.error {
+                        Text(error).font(.pilot(.label)).foregroundStyle(Theme.error)
+                    } else if feed.loading {
+                        Text("Loading transcript…").font(.pilot(.label)).foregroundStyle(Theme.faintForeground)
                     } else if feed.presentation.rows.isEmpty {
                         Text(subagent.isWorking ? "Starting…" : "No messages yet.")
                             .font(.pilot(.label)).foregroundStyle(Theme.faintForeground)
@@ -502,40 +408,55 @@ private struct SubagentDetail: View {
             .onChange(of: feed.presentation.rows.count) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
             .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
         }
+        .frame(maxHeight: .infinity)
     }
 
     private var composer: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if let error = draft.error {
-                Text(error).font(.pilot(.caption)).foregroundStyle(Theme.destructive)
-            }
-            HStack(alignment: .bottom, spacing: 8) {
-                TextField(
-                    subagent.acceptsMessages ? "Message \(subagent.name)…" : "This subagent is retired",
-                    text: $draft.text,
-                    axis: .vertical
-                )
-                .textFieldStyle(.plain)
-                .font(.pilot(.label))
-                .lineLimit(1 ... 6)
-                .onSubmit { send(subagent.isWorking ? .steer : .followUp) }
-                .disabled(!canMessage)
-                if subagent.isWorking {
-                    Button("Queue") { send(.followUp) }
-                        .help("Deliver after the current work finishes")
-                        .disabled(!canSend)
+        ComposerTray {
+            VStack(alignment: .leading, spacing: 10) {
+                ZStack(alignment: .topLeading) {
+                    if draft.text.isEmpty {
+                        Text(placeholder)
+                            .font(fonts.body)
+                            .foregroundStyle(Theme.faintForeground)
+                            .allowsHitTesting(false)
+                    }
+                    ChatTextEditor(text: $draft.text, height: $draft.height, font: fonts.nsBody, maxLines: 8,
+                                   focusOnAppear: false, isEditable: canMessage, completionDirectory: subagent.cwd) { flags in
+                        send(subagent.isWorking && !flags.contains(.option) ? .steer : .followUp)
+                    }
+                    .frame(height: draft.height)
+                    .accessibilityLabel("Message \(subagent.name)")
                 }
-                Button(subagent.isWorking ? "Steer" : "Send") { send(subagent.isWorking ? .steer : .followUp) }
-                    .buttonStyle(.borderedProminent)
-                    .help(subagent.isWorking ? "Redirect the current work now" : "Resume this subagent with a new message")
-                    .disabled(!canSend)
+                KeyHints(working: subagent.isWorking)
             }
-            .controlSize(.small)
-            Text("Messages go to the subagent only. Its answer is delivered to this chat.")
-                .font(.pilot(.small))
-                .foregroundStyle(Theme.faintForeground)
+        } controls: {
+            Group {
+                if let error = draft.error {
+                    Text(error).foregroundStyle(Theme.error).lineLimit(2)
+                } else {
+                    Text("Messages go to \(subagent.name) only. Its answer comes back to this chat.")
+                        .foregroundStyle(Theme.faintForeground)
+                        .lineLimit(2)
+                }
+            }
+            .font(.pilot(.caption))
+            .padding(.leading, 4)
+            Spacer(minLength: 8)
+            Button { send(subagent.isWorking ? .steer : .followUp) } label: {
+                PilotSymbol(PilotIcon.send, context: .toolbar)
+            }
+            .buttonStyle(CircleIconButtonStyle())
+            .disabled(!canSend)
+            .help(subagent.isWorking ? "Steer (↩)" : "Send (↩)")
+            .accessibilityLabel(subagent.isWorking ? "Steer" : "Send")
         }
         .padding(10)
+    }
+
+    private var placeholder: String {
+        if !subagent.acceptsMessages { return "This subagent is retired" }
+        return subagent.isWorking ? "Steer \(subagent.name)…" : "Message \(subagent.name)…"
     }
 
     private var canMessage: Bool { subagent.acceptsMessages && !session.isReadOnlyHistory && !draft.sending }
@@ -555,15 +476,6 @@ private struct SubagentDetail: View {
                 draft.error = error.localizedDescription
             }
         }
-    }
-
-    private func meta(_ icon: PilotIcon, _ text: String) -> some View {
-        HStack(spacing: 3) {
-            PilotSymbol(icon)
-            Text(text).lineLimit(1)
-        }
-        .font(.pilot(.small))
-        .foregroundStyle(Theme.mutedForeground)
     }
 }
 

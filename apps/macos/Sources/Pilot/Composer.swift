@@ -469,7 +469,8 @@ private struct ComposerSendLater: View {
     }
 }
 
-private struct KeyHints: View {
+/// The composer's key hints. The subagent composer in the Agents tab reuses them, so both read the same.
+struct KeyHints: View {
     let working: Bool
     var queued = false
 
