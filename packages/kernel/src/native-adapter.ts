@@ -363,7 +363,7 @@ export class NativeAdapter {
 	}
 
 	static async open(options: NativeAdapterOptions): Promise<NativeAdapter> {
-		await installCredentialBrokerHooks();
+		await installCredentialBrokerHooks({ descendants: true });
 		const cwd = options.cwd;
 		const hasArtifacts = options.ask
 			? !!options.askArtifacts
