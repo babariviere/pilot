@@ -32,7 +32,7 @@ enum MessageServiceLinks {
             case .github: image = PilotMark.github.image
             case .linear: image = PilotMark.linear.image
             case .slack: image = PilotMark.slack.image
-            case .artifact: image = PilotIcon.artifact.systemName.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: "Artifact") }
+            case .artifact: image = PilotIcon.artifact.symbolImage()
             }
             let attachment = NSTextAttachment()
             attachment.image = image
