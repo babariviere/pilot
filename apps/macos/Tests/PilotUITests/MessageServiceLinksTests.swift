@@ -66,7 +66,15 @@ struct MessageServiceLinksTests {
 
     @Test func manyLinksWrapAndShortUserBubblesKeepTheirNaturalWidth() {
         let repeated = String(repeating: "https://github.com/acme/api/pull/42 and ", count: 500)
-        let rich = SelectableMessageText.attributed(ServiceLinks.detecting(in: AttributedString(repeated)), style: style)
+        let clock = ContinuousClock()
+        let baseline = clock.measure {
+            _ = SelectableMessageText.attributed(AttributedString(repeated), style: style)
+        }
+        var rich = NSAttributedString(string: "")
+        let linked = clock.measure {
+            rich = SelectableMessageText.attributed(ServiceLinks.detecting(in: AttributedString(repeated)), style: style)
+        }
+        print("Service links, 500 URLs: plain conversion \(baseline), detection and branded conversion \(linked)")
         #expect(MessageServiceLinks.copiedText(rich, range: NSRange(location: 0, length: rich.length)) == repeated)
         let view = MessageSelectionTextView.make()
         view.textStorage?.setAttributedString(rich)
