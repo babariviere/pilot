@@ -210,7 +210,7 @@ struct ChatView: View {
                     }
                     if session.offlinePaused == true {
                         Label("Paused offline · resumes automatically when connected", icon: .paused)
-                            .pilot(.caption)
+                            .font(.pilot(.caption))
                             .foregroundStyle(Theme.mutedForeground)
                             .frame(maxWidth: Theme.column, alignment: .leading)
                             .frame(maxWidth: .infinity)
