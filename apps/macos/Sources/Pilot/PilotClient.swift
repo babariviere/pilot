@@ -711,10 +711,27 @@ final class PilotClient: ObservableObject {
         try await missionRequest(["tracked-items", id, "excerpt"])
     }
 
-    /// The project's latest Slack triage corrections, newest first (at most 20). The classifier learns from them.
+    /// The project's Slack triage corrections, newest first (pilotd keeps the latest 500). The triage guide is built
+    /// from them, and the classifier also reads the newest five as examples.
     func slackCorrections(projectId: String) async throws -> [SlackCorrection] {
         if let fixture = fixtureTracking { return fixture.corrections }
         return try await missionRequest(["tracking", "slack", "corrections"],
+                                        query: [URLQueryItem(name: "projectId", value: projectId)])
+    }
+
+    /// A source's triage guide for the project: short rules pilotd's grooming model writes from the corrections.
+    /// Untrusted text, shown read-only. An empty text with updatedAt 0 means no guide yet.
+    func triageGuide(projectId: String, kind: TrackedKind) async throws -> TriageGuide {
+        if let fixture = fixtureTracking { return fixture.guide(kind) }
+        return try await missionRequest(["tracking", kind.rawValue, "guide"],
+                                        query: [URLQueryItem(name: "projectId", value: projectId)])
+    }
+
+    /// Queues a rebuild (202) and returns the guide as it was. Saving the rebuilt guide sends tracked.changed for the
+    /// project, so callers reload then instead of polling.
+    func rebuildTriageGuide(projectId: String, kind: TrackedKind) async throws -> TriageGuide {
+        if let fixture = fixtureTracking { return fixture.guide(kind) }
+        return try await missionRequest(["tracking", kind.rawValue, "guide"], method: "POST",
                                         query: [URLQueryItem(name: "projectId", value: projectId)])
     }
 

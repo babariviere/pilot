@@ -14,6 +14,11 @@ struct TrackingFixture {
     var myChannels = TrackingLookup<SlackChannelOption>(status: .ok)
     var searchChannels = TrackingLookup<SlackChannelOption>(status: .ok)
     var corrections: [SlackCorrection] = []
+    var guides: [TrackedKind: TriageGuide] = [:]
+
+    func guide(_ kind: TrackedKind) -> TriageGuide {
+        guides[kind] ?? TriageGuide(kind: kind, text: "", updatedAt: 0, throughSeq: 0)
+    }
 }
 
 /// Binds a new chat to the tracked item it was started from. Shown as a chip in the composer.

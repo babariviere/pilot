@@ -39,6 +39,9 @@ public struct TriageGuide: Codable, Equatable, Sendable {
     public let text: String
     public let updatedAt: Double
     public let throughSeq: Int
+    public init(kind: TrackedKind, text: String, updatedAt: Double, throughSeq: Int) {
+        self.kind = kind; self.text = text; self.updatedAt = updatedAt; self.throughSeq = throughSeq
+    }
 }
 public struct TriageCorrection: Codable, Equatable, Sendable {
     public let itemId: String
