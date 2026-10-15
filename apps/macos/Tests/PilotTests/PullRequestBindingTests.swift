@@ -54,10 +54,10 @@ private final class BindingHTTPStub: URLProtocol {
 }
 
 @Test @MainActor func bindAndUnbindCallThePullRequestRouteAndUpdateTheChat() async throws {
-    #expect(URLProtocol.registerClass(BindingHTTPStub.self))
-    defer { URLProtocol.unregisterClass(BindingHTTPStub.self) }
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [BindingHTTPStub.self]
     BindingHTTPStub.requests = []
-    let client = PilotClient(baseURL: URL(string: "http://pull-request-bindings.invalid"))
+    let client = PilotClient(baseURL: URL(string: "http://pull-request-bindings.invalid"), commandConfiguration: configuration)
     let session = SessionSummary(id: "s", title: "Chat", cwd: "/tmp", projectId: "p", createdAt: 1, updatedAt: 2, state: "idle")
     client.loadFixture(projects: [], sessions: [session])
 
