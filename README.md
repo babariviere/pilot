@@ -140,6 +140,12 @@ Use a mission when one goal needs several chats. Its shared brief and decisions 
 starting point, while tasks record ownership, dependencies and progress. You can coordinate the work
 yourself or use a coordinator chat, and review linked pull requests and artifacts in one place.
 
+Open tasks linked to a Linear issue become **Delegated** when someone else
+is assigned in Linear. Returning the issue to you restores the previous status; unassignment changes
+nothing. A manual status change wins until the assignment changes again. Delegated work is not done
+and cannot start or satisfy dependencies. Existing chats keep running, and the coordinator is notified.
+This uses read-only linked-issue checks on the Linear polling cadence, not writes to Linear.
+
 The coordinator can start one chat on several tasks with `start` and `ids` (IDs, numbers or ranges).
 Admission claims all tasks or none, ordering dependencies first and preserving the given order for ties.
 Dependencies outside the selection must be done. Each task gets its own PR, based on the preceding PR's

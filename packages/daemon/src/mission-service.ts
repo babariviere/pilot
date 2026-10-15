@@ -1093,6 +1093,7 @@ class MissionAgentView {
 			number: task.number,
 			title: task.title,
 			status: task.status,
+			...(task.delegatedTo ? { delegatedTo: task.delegatedTo } : {}),
 			...(full && task.body ? { body: task.body } : {}),
 			...(full ? { order: task.order } : {}),
 			...(task.sessionId

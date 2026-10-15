@@ -42,7 +42,7 @@ export type MissionAction = (typeof MISSION_ACTIONS)[number];
 /** Sends one call to pilotd and resolves with its JSON result. */
 export type MissionCall = (action: MissionAction, args: Record<string, JsonValue>) => Promise<JsonValue>;
 
-const taskStatus = StringEnum(["todo", "in_progress", "blocked", "in_review", "done", "dropped"] as const);
+const taskStatus = StringEnum(["todo", "in_progress", "blocked", "in_review", "delegated", "done", "dropped"] as const);
 
 export function createMissionTool(call: MissionCall, coordinator = false): ToolDefinition {
 	return defineTool({
@@ -57,7 +57,7 @@ Actions:
 - activity: newest first; filter taskId, kind, since (ISO timestamp with timezone or numeric event ID, exclusive), limit (default 15, max 100). Returns recentActivity with event IDs and cursor (null at end); pass cursor with the same filters for older events. Unfiltered first-page reads also include an independent recentUserNotes window.
 - brief: read a revision, or replace with markdown and expectedRevision (stale writes fail).
 - update: change the mission title or goal.
-- tasks: list tasks, filter open (default), done or all, mine and milestone. Prefer filtered lists or get with id for detail. task: id alone aliases get with id; title creates one, other fields update it (body, status, milestone, dependsOn, decisionIds to pin decisions). Tasks are referenced by ID or number (#3). Use status "dropped" to retire work while keeping its history.
+- tasks: list tasks, filter open (default), done or all, mine and milestone. Prefer filtered lists or get with id for detail. task: id alone aliases get with id; title creates one, other fields update it (body, status, milestone, dependsOn, decisionIds to pin decisions). Tasks are referenced by ID or number (#3). Use status "delegated" for work owned by someone else (not finished or startable). Use status "dropped" to retire work while keeping its history.
 - claim: take id or ids (IDs, numbers or ranges such as ["1-5","#8"]). Returns claimed tasks and skipped tasks with reasons; never takes another chat's task.
 - release: clear claims using the same selectors. Members release their own, coordinator any. Resets active/blocked to todo, preserves other states and links.
 - decide: record a decision, audience all, coordinator or reference (default). Decisions override the brief; only the user changes them later.
