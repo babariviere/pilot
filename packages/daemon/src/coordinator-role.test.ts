@@ -169,13 +169,15 @@ test("promotion unbinds PRs, shares main, retains scratch, and demotion restores
 	assert.equal(meta.cwd, path, "demotion waits for an admitted turn or job");
 	await manager.send(id, "continue after demotion");
 	assert.equal(specs.length, 0, "new input cannot start a worker in the wrong role");
+	assert.equal(meta.workspace!.branch, "fix/old", "waiting for demotion does not move the isolated workspace");
 	busy = false;
 	manager.missionChanged(id);
 	await manager.refreshCoordinatorWorkspace(id);
 	await manager["starting"].get(id);
 	assert.equal(meta.cwd, workspace.path);
 	assert.equal(meta.coordinatorView, undefined);
-	assert.equal(manager.get(id)!.branch, "fix/old");
+	assert.equal(manager.get(id)!.branch, undefined, "the resumed input refreshes the empty workspace to current main");
+	assert.equal(await readFile(join(meta.cwd, "file.txt"), "utf8"), "new main\n");
 	assert.doesNotThrow(() => manager.changeBase(id));
 	await writeFile(join(meta.cwd, "new.txt"), "normal writes return");
 	await manager.send(id, "continue coding");

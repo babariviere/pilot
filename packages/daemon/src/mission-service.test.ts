@@ -1002,8 +1002,18 @@ test("activity keeps recent user notes visible beyond the event window for every
 	await assert.rejects(get(outsider.id), /not part of a mission/);
 });
 
-for (const scenario of ["working", "jobs", "follow-up", "dirty", "open", "binding"] as const) {
-	test(`main workspace activity is passive and safe: ${scenario}`, async (t) => {
+for (const scenario of [
+	"idle",
+	"working",
+	"jobs",
+	"follow-up",
+	"dirty",
+	"open",
+	"unverified",
+	"binding",
+	"selected-base",
+] as const) {
+	test(`member workspaces refresh only at safe input admission: ${scenario}`, async (t) => {
 		const f = await fixture(t);
 		const member = await f.spawn();
 		const { mission } = await f.service.create({ projectId: f.project.id, title: "M" });
@@ -1016,7 +1026,7 @@ for (const scenario of ["working", "jobs", "follow-up", "dirty", "open", "bindin
 			branch: "fix/change",
 			shared: { repository: "/owned", name: "member" },
 		};
-		t.mock.method(f.sessions["sharedWorkspaces"], "fetchMain", async () => "b".repeat(40));
+		const fetch = t.mock.method(f.sessions["sharedWorkspaces"], "fetchMain", async () => "b".repeat(40));
 		const worker = f.workers.get(member.id)!;
 		let jobs = scenario === "jobs";
 		Object.assign(worker, { hasChildren: async () => jobs, awaitingJobFollowUp: scenario === "follow-up" });
@@ -1037,57 +1047,98 @@ for (const scenario of ["working", "jobs", "follow-up", "dirty", "open", "bindin
 				state: "open",
 				branch: "fix/change",
 				checkedAt: Date.now(),
-				stack: { number: 1, position: 2, size: 2, baseBranch: "fix/lower" },
 			};
+		if (scenario === "unverified") meta.boundPullRequests = ["https://github.com/o/r/pull/2"];
+		if (scenario === "selected-base") meta.workspace.baseBranch = "release";
 		if (scenario === "working") {
 			worker.busy = true;
 			worker.state = "working";
 			worker.onPacket({ type: "working", working: true });
 		}
-		const inputs = worker.requests.filter((cmd) => cmd.type === "input").length;
+		const activities = () => worker.requests.filter((cmd) => cmd.type === "activity").length;
+		const before = activities();
 		await f.sessions.refreshProjectMain(f.project.id);
-		if (scenario === "working" || scenario === "jobs" || scenario === "follow-up") {
-			assert.equal(refresh.mock.calls.length, 0);
-			assert.equal(meta.workspaceMainDue, "b".repeat(40));
-			assert.ok(meta.prActivities?.some((a) => /deferred/.test(a.text)));
+		await f.sessions.commands(member.id);
+		assert.equal(refresh.mock.calls.length, 0, "polling and opening a chat never move its workspace");
+		await f.sessions.send(member.id, "next task");
+		const unsafe = ["working", "jobs", "follow-up", "open", "unverified", "selected-base"].includes(scenario);
+		assert.equal(refresh.mock.calls.length, unsafe ? 0 : 1);
+		assert.equal(fetch.mock.calls.length, unsafe ? 1 : 2, "unsafe input does not fetch main");
+		assert.equal(activities(), before, "routine workspace maintenance adds no timeline activity");
+		assert.equal(meta.workspace.base, (unsafe || ["dirty", "binding"].includes(scenario) ? "a" : "b").repeat(40));
+		if (scenario === "dirty") assert.match(meta.workspaceBehind!, /unpublished/);
+		if (scenario === "binding") assert.match(meta.workspaceBehind!, /ownership/);
+		if (["working", "jobs", "follow-up"].includes(scenario)) {
 			jobs = false;
 			worker.busy = false;
 			worker.state = "idle";
-			if (scenario === "jobs") worker.onPacket({ type: "jobs.changed", jobs: [] });
-			else if (scenario === "follow-up")
-				worker.onPacket({
-					type: "working",
-					working: false,
-					completion: { outcome: "done", outcomeAt: Date.now() + 1 },
-				});
-			else worker.onPacket({ type: "working", working: false });
-			await f.sessions.refreshMainWorkspace(member.id);
+			worker.onPacket({ type: "jobs.changed", jobs: [] });
+			worker.onPacket({
+				type: "working",
+				working: false,
+				completion: { outcome: "done", outcomeAt: Date.now() + 1 },
+			});
+			await until(() => !f.sessions["starting"].size);
+			assert.equal(refresh.mock.calls.length, 0, "finishing work does not move files");
+			await f.sessions.send(member.id, "another task");
+			assert.equal(refresh.mock.calls.length, 1, "only the next idle input refreshes");
+			assert.equal(meta.workspace.base, "b".repeat(40));
 		}
-		await until(() => !f.sessions["workspaceRefreshes"].size && !f.sessions["starting"].size);
-		assert.equal(refresh.mock.calls.length, scenario === "open" ? 0 : 1);
-		const activities = worker.requests.filter(
-			(cmd): cmd is Extract<KernelCommand, { type: "activity" }> => cmd.type === "activity",
-		);
-		assert.ok(
-			activities.some((a) =>
-				scenario === "dirty"
-					? /skipped.*unpublished/.test(a.text)
-					: scenario === "open"
-						? /skipped.*automatic rebase/.test(a.text)
-						: scenario === "binding"
-							? /skipped.*ownership/.test(a.text)
-							: /fresh empty change/.test(a.text),
-			),
-		);
-		assert.equal(worker.requests.filter((cmd) => cmd.type === "input").length, inputs);
-		assert.equal(meta.workspace.base, (["dirty", "open", "binding"].includes(scenario) ? "a" : "b").repeat(40));
-		await f.sessions.load();
-		await f.sessions.refreshProjectMain(f.project.id);
-		assert.equal(refresh.mock.calls.length, scenario === "open" ? 0 : 1, "restart does not repeat this main head");
 	});
 }
 
-test("main updates preserve sleep-paused job result workspaces until wake", async (t) => {
+test("main bursts leave idle members alone; only the next working chat moves to latest main", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const first = await f.spawn();
+	const second = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	for (const member of [first, second]) f.service.join(member.id, { missionId: mission.id });
+	for (const chat of [lead, first, second])
+		f.sessions["require"](chat.id).workspace = {
+			source: f.project.path,
+			base: "a".repeat(40),
+			jj: true,
+			shared: { repository: "/owned", name: chat.id },
+		};
+	let target = "b".repeat(40);
+	const mainEvents: string[] = [];
+	t.after(f.sessions.onMainMoved((event) => mainEvents.push(event.head)));
+	t.mock.method(f.sessions["sharedWorkspaces"], "fetchMain", async () => target);
+	const refresh = t.mock.method(
+		f.sessions["sharedWorkspaces"],
+		"refreshBase",
+		async (...args: Parameters<(typeof f.sessions)["sharedWorkspaces"]["refreshBase"]>) => ({
+			base: args[5]!.target!,
+		}),
+	);
+	await f.sessions.refreshProjectMain(f.project.id);
+	target = "c".repeat(40);
+	await f.sessions.refreshProjectMain(f.project.id);
+	assert.equal(refresh.mock.calls.length, 0);
+	for (const chat of [first, second]) {
+		assert.equal(f.sessions["require"](chat.id).workspace!.base, "a".repeat(40));
+		assert.equal(f.workers.get(chat.id)!.requests.filter((cmd) => cmd.type === "activity").length, 0);
+	}
+	// Main can advance again before the scheduled watcher runs. Admission fetches current main.
+	target = "d".repeat(40);
+	await f.sessions.send(first.id, "next task");
+	assert.equal(refresh.mock.calls.length, 1);
+	assert.equal(refresh.mock.calls[0]!.arguments[5]!.target, target);
+	assert.equal(f.sessions["require"](first.id).workspace!.base, target);
+	assert.equal(f.sessions["require"](second.id).workspace!.base, "a".repeat(40));
+	assert.equal(f.sessions["require"](lead.id).workspace!.base, "a".repeat(40));
+	await f.sessions.send(first.id, "continue");
+	assert.equal(refresh.mock.calls.length, 1, "unchanged main creates no additional jj change");
+	assert.deepEqual(mainEvents, ["b".repeat(40), "c".repeat(40), "d".repeat(40)]);
+});
+
+test("sleep and wake do not refresh idle workspaces", async (t) => {
 	const f = await fixture(t);
 	const member = await f.spawn();
 	const { mission } = await f.service.create({ projectId: f.project.id, title: "M" });
@@ -1110,66 +1161,90 @@ test("main updates preserve sleep-paused job result workspaces until wake", asyn
 	await f.sessions.pauseForSleep("100:1");
 	assert.equal(meta.sleepPaused, true);
 	await f.sessions.refreshProjectMain(f.project.id);
-	assert.equal(refresh.mock.calls.length, 0, "a closed worker still owns unfinished durable work");
-	assert.equal(meta.workspace.base, "a".repeat(40));
-	assert.equal(meta.workspaceMainDue, "b".repeat(40));
+	assert.equal(refresh.mock.calls.length, 0);
 	await f.sessions.resumeAfterSleep();
-	await until(() => f.workers.get(member.id) !== worker);
-	await f.sessions.refreshMainWorkspace(member.id);
-	await until(() => !f.sessions["workspaceRefreshes"].size && !f.sessions["starting"].size);
-	assert.equal(refresh.mock.calls.length, 1, "wake retries the deferred main head");
-	assert.equal(meta.workspace.base, "b".repeat(40));
+	await until(() => !f.sessions["starting"].size);
+	assert.equal(refresh.mock.calls.length, 0, "wake retains the old workspace, including pending job results");
+	assert.equal(meta.workspace.base, "a".repeat(40));
 });
 
-test("main updates fan out to idle members without a PR; busy bursts keep only latest main", async (t) => {
-	const f = await fixture(t);
-	const lead = await f.spawn();
-	const first = await f.spawn();
-	const second = await f.spawn();
-	const { mission } = await f.service.create({
-		projectId: f.project.id,
-		title: "M",
-		fromSessionId: lead.id,
-		draft: false,
-	});
-	for (const member of [first, second]) f.service.join(member.id, { missionId: mission.id });
-	for (const chat of [lead, first, second])
-		f.sessions["require"](chat.id).workspace = {
+for (const race of ["work", "PR", "main", "offline", "update"] as const) {
+	test(`input refresh fails closed without losing input when ${race} changes`, async (t) => {
+		const f = await fixture(t);
+		const member = await f.spawn();
+		const { mission } = await f.service.create({ projectId: f.project.id, title: "M" });
+		f.service.join(member.id, { missionId: mission.id });
+		const meta = f.sessions["require"](member.id);
+		meta.workspace = {
 			source: f.project.path,
 			base: "a".repeat(40),
 			jj: true,
-			shared: { repository: "/owned", name: chat.id },
+			shared: { repository: "/owned", name: member.id },
 		};
-	let target = "b".repeat(40);
-	const mainEvents: string[] = [];
-	const unsubscribe = f.sessions.onMainMoved((event) => mainEvents.push(event.head));
-	t.after(unsubscribe);
-	t.mock.method(f.sessions["sharedWorkspaces"], "fetchMain", async () => target);
-	const refresh = t.mock.method(
-		f.sessions["sharedWorkspaces"],
-		"refreshBase",
-		async (...args: Parameters<(typeof f.sessions)["sharedWorkspaces"]["refreshBase"]>) => ({
-			base: args[5]!.target!,
-		}),
+		const worker = f.workers.get(member.id)!;
+		t.mock.method(f.sessions["sharedWorkspaces"], "fetchMain", async () => {
+			if (race === "work") worker.busy = true;
+			if (race === "update") f.sessions["updateGate"].pause();
+			if (race === "offline") throw new Error("fetch unavailable");
+			return "b".repeat(40);
+		});
+		t.after(() => f.sessions["updateGate"].release());
+		const refresh = t.mock.method(
+			f.sessions["sharedWorkspaces"],
+			"refreshBase",
+			async (...args: Parameters<(typeof f.sessions)["sharedWorkspaces"]["refreshBase"]>) => {
+				if (race === "PR") meta.boundPullRequests = ["https://github.com/o/r/pull/2"];
+				if (race === "main") f.sessions["mainHeads"].set(f.project.id, "c".repeat(40));
+				const behind = args[5]!.allowed!();
+				assert.ok(behind, "the transaction rechecks late changes before touching files");
+				return { base: meta.workspace!.base, target: "b".repeat(40), behind };
+			},
+		);
+		const before = worker.requests.filter((cmd) => cmd.type === "input").length;
+		await f.sessions.send(member.id, "continue safely");
+		assert.equal(meta.workspace.base, "a".repeat(40));
+		assert.equal(refresh.mock.calls.length, ["PR", "main"].includes(race) ? 1 : 0);
+		assert.equal(worker.requests.filter((cmd) => cmd.type === "input").length, before + 1);
+		assert.equal(meta.failure, undefined);
+		if (race === "offline") assert.match(meta.workspaceBehind!, /fetch unavailable/);
+	});
+}
+
+test("main refresh has no per-member write or workspace fan-out with 10000 chats", async (t) => {
+	const f = await fixture(t);
+	const member = await f.spawn();
+	const meta = f.sessions["require"](member.id);
+	const ids: string[] = [];
+	t.mock.method(f.sessions["missions"]!, "membership", () => ({ missionId: "m", active: true }));
+	t.mock.method(f.sessions["sharedWorkspaces"], "fetchMain", async () => "b".repeat(40));
+	const refresh = t.mock.method(f.sessions["sharedWorkspaces"], "refreshBase", async () =>
+		assert.fail("no idle moves"),
 	);
-	const worker = f.workers.get(second.id)!;
-	worker.busy = true;
-	worker.state = "working";
-	worker.onPacket({ type: "working", working: true });
-	await f.sessions.refreshProjectMain(f.project.id);
-	assert.equal(refresh.mock.calls.length, 1);
-	target = "c".repeat(40);
-	await f.sessions.refreshProjectMain(f.project.id);
-	assert.equal(f.sessions["require"](second.id).workspaceMainDue, target);
-	worker.busy = false;
-	worker.state = "idle";
-	worker.onPacket({ type: "working", working: false });
-	await f.sessions.refreshMainWorkspace(second.id);
-	assert.equal(refresh.mock.calls.filter((call) => call.arguments[1].name === second.id).length, 1);
-	assert.equal(f.sessions["require"](second.id).workspace!.base, target);
-	assert.equal(f.sessions["require"](lead.id).workspace!.base, "a".repeat(40));
-	await f.sessions.refreshProjectMain(f.project.id);
-	assert.deepEqual(mainEvents, ["b".repeat(40), "c".repeat(40)], "one event per observed main head");
+	const save = t.mock.method(f.sessions as unknown as { save(): Promise<void> }, "save", async () => {});
+	try {
+		for (let i = 0; i < 10000; i++) {
+			const id = `idle-${i}`;
+			ids.push(id);
+			f.sessions["metas"].set(id, {
+				...meta,
+				id,
+				workspace: {
+					source: f.project.path,
+					base: "a".repeat(40),
+					jj: true,
+					shared: { repository: "/owned", name: id },
+				},
+			});
+		}
+		const start = performance.now();
+		await f.sessions.refreshProjectMain(f.project.id);
+		t.diagnostic(`10000 idle chats: main refresh ${(performance.now() - start).toFixed(1)}ms, no per-chat I/O`);
+		assert.equal(save.mock.calls.length, 0);
+		assert.equal(refresh.mock.calls.length, 0);
+	} finally {
+		for (const id of ids) f.sessions["metas"].delete(id);
+		save.mock.restore();
+	}
 });
 
 test("repository refresh bursts share a two-slot project fetch pool", async (t) => {
@@ -1223,11 +1298,15 @@ test("project watcher discovery deduplicates membership I/O on large projects", 
 	}
 });
 
-test("persisted pending heads are fetched again before a restart resumes a move", async (t) => {
+test("restart discards eager refresh hints and queued maintenance; next input fetches current main", async (t) => {
 	const f = await fixture(t);
 	const member = await f.spawn();
 	const { mission } = await f.service.create({ projectId: f.project.id, title: "M" });
 	f.service.join(member.id, { missionId: mission.id });
+	await f.sessions["pullRequests"].stop();
+	await until(() => !f.sessions["starting"].size);
+	await Promise.all(f.sessions["saving"].values());
+	f.sessions["workers"].delete(member.id);
 	const meta = f.sessions["require"](member.id);
 	meta.workspace = {
 		source: f.project.path,
@@ -1236,52 +1315,75 @@ test("persisted pending heads are fetched again before a restart resumes a move"
 		shared: { repository: "/owned", name: member.id },
 	};
 	meta.workspaceMainDue = "b".repeat(40);
+	meta.workspaceMainAttempted = "a".repeat(40);
+	meta.workspaceMainDeferred = "b".repeat(40);
+	meta.prActivities = [
+		{ type: "activity", requestId: "main-workspace:old", text: "Old maintenance" },
+		{ type: "activity", requestId: "other", text: "Keep this activity" },
+	];
 	await f.sessions["save"](meta);
 	t.mock.method(f.sessions["sharedWorkspaces"], "fetchMain", async () => "c".repeat(40));
 	const refresh = t.mock.method(f.sessions["sharedWorkspaces"], "refreshBase", async () => ({ base: "c".repeat(40) }));
-	await f.sessions.refreshMainWorkspace(member.id);
-	assert.equal(refresh.mock.calls.length, 0, "restart cannot use a stale persisted target without fetching");
+	await f.sessions.load();
 	await f.sessions.refreshProjectMain(f.project.id);
+	const loaded = f.sessions["require"](member.id);
+	assert.equal(refresh.mock.calls.length, 0, "restart and polling do not resume old eager maintenance");
+	assert.equal(loaded.workspaceMainDue, undefined);
+	assert.equal(loaded.workspaceMainAttempted, undefined);
+	assert.equal(loaded.workspaceMainDeferred, undefined);
+	assert.deepEqual(
+		loaded.prActivities?.map((activity) => activity.requestId),
+		["other"],
+	);
+	const persisted = JSON.parse(await readFile(join(f.home, "data", "sessions", member.id, "meta.json"), "utf8"));
+	assert.equal(persisted.workspaceMainDue, undefined);
+	await f.sessions.send(member.id, "next task");
 	assert.equal(refresh.mock.calls.length, 1);
 	assert.equal(refresh.mock.calls[0]!.arguments[5]!.target, "c".repeat(40));
-	assert.equal(meta.workspace.base, "c".repeat(40));
+	assert.equal(loaded.workspace!.base, "c".repeat(40));
+	const activityIds = f.workers
+		.get(member.id)!
+		.requests.filter((cmd) => cmd.type === "activity")
+		.map((cmd) => cmd.requestId);
+	assert.deepEqual(activityIds, ["other"]);
 });
 
-test("a live worker's next input waits for the passive main move", async (t) => {
-	const f = await fixture(t);
-	const member = await f.spawn();
-	const { mission } = await f.service.create({ projectId: f.project.id, title: "M" });
-	f.service.join(member.id, { missionId: mission.id });
-	const meta = f.sessions["require"](member.id);
-	meta.workspace = {
-		source: f.project.path,
-		base: "a".repeat(40),
-		jj: true,
-		shared: { repository: "/owned", name: "member" },
-	};
-	t.mock.method(f.sessions["sharedWorkspaces"], "fetchMain", async () => "b".repeat(40));
-	let release!: () => void;
-	const gate = new Promise<void>((resolve) => {
-		release = resolve;
+for (const stop of [false, true]) {
+	test(`next input waits for its main refresh; stop racing maintenance: ${stop}`, async (t) => {
+		const f = await fixture(t);
+		const member = await f.spawn();
+		const { mission } = await f.service.create({ projectId: f.project.id, title: "M" });
+		f.service.join(member.id, { missionId: mission.id });
+		const meta = f.sessions["require"](member.id);
+		meta.workspace = {
+			source: f.project.path,
+			base: "a".repeat(40),
+			jj: true,
+			shared: { repository: "/owned", name: "member" },
+		};
+		t.mock.method(f.sessions["sharedWorkspaces"], "fetchMain", async () => "b".repeat(40));
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		t.after(release);
+		const refresh = t.mock.method(f.sessions["sharedWorkspaces"], "refreshBase", async () => {
+			await gate;
+			return { base: "b".repeat(40) };
+		});
+		const worker = f.workers.get(member.id)!;
+		const before = worker.requests.filter((cmd) => cmd.type === "input").length;
+		const send = f.sessions.send(member.id, "next task");
+		await until(() => refresh.mock.calls.length === 1);
+		assert.equal(worker.requests.filter((cmd) => cmd.type === "input").length, before);
+		const stopped = stop ? f.sessions.stop(member.id) : Promise.resolve();
+		if (stop) await until(() => meta.pending?.some((cmd) => cmd.type === "abort"));
+		release();
+		await Promise.all([send, stopped]);
+		assert.equal(meta.workspace.base, "b".repeat(40));
+		assert.equal(worker.requests.filter((cmd) => cmd.type === "input").length, before + (stop ? 0 : 1));
 	});
-	t.after(release);
-	const refresh = t.mock.method(f.sessions["sharedWorkspaces"], "refreshBase", async () => {
-		await gate;
-		return { base: "b".repeat(40) };
-	});
-	const move = f.sessions.refreshProjectMain(f.project.id);
-	await until(() => refresh.mock.calls.length === 1);
-	const worker = f.workers.get(member.id)!;
-	const before = worker.requests.filter((cmd) => cmd.type === "input").length;
-	const send = f.sessions.send(member.id, "next task");
-	await until(() => f.sessions["starting"].has(member.id));
-	assert.equal(worker.requests.filter((cmd) => cmd.type === "input").length, before);
-	release();
-	await move;
-	await send;
-	assert.equal(meta.workspace.base, "b".repeat(40));
-	assert.equal(worker.requests.filter((cmd) => cmd.type === "input").length, before + 1);
-});
+}
 
 test("hand-linked PRs poll without a worker, finish after all settle, and respect a racing manual reset", async (t) => {
 	const states = new Map([
