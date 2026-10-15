@@ -2,18 +2,22 @@ import Foundation
 
 /// Local, deterministic link labels. Never fetches private pages or guesses what a bare #number means.
 public struct ServiceLink: Equatable, Sendable {
-    public enum Service: Equatable, Sendable { case github, linear, slack }
+    public enum Service: Equatable, Sendable { case github, linear, slack, artifact }
     public let service: Service
     public let title: String
 
     public init?(url: URL, label: String? = nil) {
         guard let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              ["https", "http"].contains(parts.scheme?.lowercased()),
               parts.user == nil, parts.password == nil, parts.port == nil,
               let host = parts.host?.lowercased() else { return nil }
         let path = parts.path.split(separator: "/").map(String.init)
         let fallback: String
-        if host == "github.com", path.count >= 2 {
+        if let artifact = ArtifactLink(url: url) {
+            service = .artifact
+            fallback = "Artifact · \(artifact.id.prefix(8))"
+        } else if !["https", "http"].contains(parts.scheme?.lowercased()) {
+            return nil
+        } else if host == "github.com", path.count >= 2 {
             service = .github
             let repository = "\(path[0])/\(path[1])"
             if path.count >= 4, ["pull", "issues", "discussions"].contains(path[2]),
@@ -44,7 +48,9 @@ public struct ServiceLink: Equatable, Sendable {
             return nil
         }
         let label = label?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let isURL = label.map { $0.lowercased().hasPrefix("https://") || $0.lowercased().hasPrefix("http://") } ?? false
+        let isURL = label.map { value in
+            ["https://", "http://", "artifact://"].contains { value.lowercased().hasPrefix($0) }
+        } ?? false
         let title = label.flatMap { $0.isEmpty || isURL ? nil : $0 } ?? fallback
         let singleLine = title.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         self.title = singleLine.count > 80 ? String(singleLine.prefix(79)) + "…" : singleLine
@@ -57,7 +63,7 @@ public struct ServiceLink: Equatable, Sendable {
 }
 
 public enum ServiceLinks {
-    /// Detects web URLs in literal user text and parsed Markdown, off the UI actor.
+    /// Detects web and artifact URLs in literal user text and parsed Markdown, off the UI actor.
     /// Explicit destinations and inline code win; only recognized services get branded later.
     public static func detecting(in text: AttributedString) -> AttributedString {
         var result = AttributedString()
@@ -69,7 +75,7 @@ public enum ServiceLinks {
             }
             let source = String(part.characters)
             var cursor = source.startIndex
-            for mention in ChatLinks.mentions(in: source) {
+            for mention in ChatLinks.mentions(in: source, includingArtifacts: true) {
                 guard let range = source.range(of: mention.url, range: cursor..<source.endIndex) else { continue }
                 result.append(AttributedString(String(source[cursor..<range.lowerBound]), attributes: run.attributes))
                 var link = AttributedString(mention.url, attributes: run.attributes)

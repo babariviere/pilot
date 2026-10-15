@@ -440,6 +440,8 @@ export function createDaemonServer(
 			return json(res, 200, sessions.pauseForUpdate());
 		if (parts[1] === "update" && parts[2] === "prepare" && parts.length === 3 && req.method === "POST")
 			return json(res, 200, sessions.prepareUpdate());
+		if (parts[1] === "artifacts" && parts.length === 3 && req.method === "GET")
+			return json(res, 200, await sessions.resolveArtifact(parts[2]!));
 		if (parts[1] === "artifact-libraries" && parts.length === 3 && req.method === "GET") {
 			const name = parts[2]!;
 			if (!isArtifactLibrary(name)) throw new HttpError(404, "Unknown artifact library");

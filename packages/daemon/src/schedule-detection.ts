@@ -1,7 +1,10 @@
 /** Event-driven helper detection, with a bounded kernel/display fallback when unavailable. */
+import { type ConnectivityState, probeReachability } from "@pilot/kernel";
 import type { ScheduleClock, ScheduleTriggerEvent, ScheduleTriggerSource } from "./schedules.ts";
-import type { SystemPowerSource, SystemPowerState } from "./system-power.ts";
 import { execFileOffThread, SubprocessPool } from "./subprocess.ts";
+import type { SystemPowerSource, SystemPowerState } from "./system-power.ts";
+
+export { probeReachability } from "@pilot/kernel";
 
 export const WAKE_SAMPLE_MS = 30_000;
 export const ONLINE_SAMPLE_MS = 30_000;
@@ -70,26 +73,6 @@ export async function sampleSystemWake(signal: AbortSignal, pool?: SubprocessPoo
 	return sample;
 }
 
-/** No credentials or user data, no redirects/captive-portal success, no agent-provider request. */
-export async function probeReachability(
-	signal: AbortSignal,
-	url = "https://www.gstatic.com/generate_204",
-): Promise<boolean> {
-	try {
-		const response = await fetch(url, {
-			method: "HEAD",
-			redirect: "manual",
-			cache: "no-store",
-			headers: { Connection: "close" },
-			signal: AbortSignal.any([signal, AbortSignal.timeout(PROBE_TIMEOUT_MS)]),
-		});
-		await response.body?.cancel();
-		return response.status === 204;
-	} catch {
-		return false;
-	}
-}
-
 export interface ScheduleDetectionOptions {
 	power?: SystemPowerSource;
 	clock?: ScheduleClock;
@@ -110,6 +93,9 @@ const clock: ScheduleClock = {
 export class ScheduleDetection implements ScheduleTriggerSource {
 	online = false;
 	private active = false;
+	private scheduleActive = false;
+	private agentsActive = false;
+	private wakeActive = false;
 	private generation = 0;
 	private sampleGeneration = 0;
 	private probeGeneration = 0;
@@ -129,6 +115,7 @@ export class ScheduleDetection implements ScheduleTriggerSource {
 	private probeAbort?: AbortController;
 	private probing?: Promise<boolean>;
 	private readonly listeners = new Set<(event: ScheduleTriggerEvent) => void>();
+	private readonly connectivityListeners = new Set<(state: ConnectivityState) => void>();
 	// Keep the sampler thread across coarse ticks, and release it immediately when detection stops.
 	private readonly wakeProcesses = new SubprocessPool({ maxThreads: 1, idleMs: 60_000 });
 	private readonly time: ScheduleClock;
@@ -147,11 +134,31 @@ export class ScheduleDetection implements ScheduleTriggerSource {
 		this.listeners.add(listener);
 		return () => this.listeners.delete(listener);
 	}
+	subscribeConnectivity(listener: (state: ConnectivityState) => void): () => void {
+		this.connectivityListeners.add(listener);
+		return () => this.connectivityListeners.delete(listener);
+	}
+	private publishConnectivity(online: boolean, checkedAt = 0): void {
+		for (const listener of this.connectivityListeners) listener({ version: 1, online, checkedAt });
+	}
 	private emit(event: ScheduleTriggerEvent): void {
 		for (const listener of this.listeners) listener(event);
 	}
 	setActive(active: boolean): void {
-		if (active === this.active) return;
+		this.scheduleActive = active;
+		this.updateActive();
+	}
+	/** Independent ownership: an empty schedule store must not disable agent recovery. */
+	setAgentsActive(active: boolean): void {
+		this.agentsActive = active;
+		this.updateActive();
+	}
+	private updateActive(): void {
+		const active = this.scheduleActive || this.agentsActive;
+		if (active === this.active) {
+			this.updateWakeActivity();
+			return;
+		}
 		this.active = active;
 		this.generation++;
 		this.sampleGeneration++;
@@ -168,24 +175,40 @@ export class ScheduleDetection implements ScheduleTriggerSource {
 		this.lastWake = -Infinity;
 		this.lastSleep = this.fullSleep = undefined;
 		this.helperAvailable = false;
-		this.disposePower?.();
-		this.disposePower = undefined;
 		this.failures = 0;
-		if (!active) {
-			this.power?.setPowerActive(false);
-			void this.wakeProcesses.close();
-		}
+		this.updateWakeActivity();
 		if (active) {
 			// A resumed detector must not invent an offline→online transition.
 			this.emit({ type: "online", online: false, initial: true });
-			this.disposePower = this.power?.subscribePower((state) => this.acceptPower(state));
-			this.power?.setPowerActive(true);
-			void this.checkWake();
+			this.publishConnectivity(false);
 			void this.refreshOnline();
 		}
 	}
+	/** Agent recovery needs reachability, not idle wake/display subprocess sampling. */
+	private updateWakeActivity(): void {
+		const active = this.active && this.scheduleActive;
+		if (active === this.wakeActive) return;
+		this.wakeActive = active;
+		this.sampleGeneration++;
+		this.cancelWakeTimer?.();
+		this.cancelWakeTimer = undefined;
+		this.wakeAbort?.abort();
+		this.previous = undefined;
+		this.helperAvailable = false;
+		this.lastSleep = this.fullSleep = undefined;
+		this.disposePower?.();
+		this.disposePower = undefined;
+		if (active) {
+			this.disposePower = this.power?.subscribePower((state) => this.acceptPower(state));
+			this.power?.setPowerActive(true);
+			void this.checkWake();
+		} else {
+			this.power?.setPowerActive(false);
+			void this.wakeProcesses.close();
+		}
+	}
 	private acceptPower(state: SystemPowerState): void {
-		if (!this.active) return;
+		if (!this.wakeActive) return;
 		const wasAvailable = this.helperAvailable;
 		this.helperAvailable = state.available;
 		if (state.available) {
@@ -220,10 +243,11 @@ export class ScheduleDetection implements ScheduleTriggerSource {
 		this.cancelProbeTimer = undefined;
 		this.online = false;
 		this.emit({ type: "online", online: false, initial: true });
+		this.publishConnectivity(false);
 		this.failures = 0;
 	}
 	private async checkWake(): Promise<void> {
-		if (this.helperAvailable) return;
+		if (!this.wakeActive || this.helperAvailable) return;
 		const generation = this.generation;
 		const sampleGeneration = ++this.sampleGeneration;
 		const abort = new AbortController();
@@ -231,7 +255,7 @@ export class ScheduleDetection implements ScheduleTriggerSource {
 		try {
 			const sample = await this.sampleWake(abort.signal);
 			if (
-				!this.active ||
+				!this.wakeActive ||
 				generation !== this.generation ||
 				sampleGeneration !== this.sampleGeneration ||
 				this.helperAvailable
@@ -250,7 +274,7 @@ export class ScheduleDetection implements ScheduleTriggerSource {
 			this.observePower(sample.sleepAt, sample.fullWake === true);
 		} catch (error) {
 			if (
-				this.active &&
+				this.wakeActive &&
 				generation === this.generation &&
 				sampleGeneration === this.sampleGeneration &&
 				!this.helperAvailable &&
@@ -261,7 +285,7 @@ export class ScheduleDetection implements ScheduleTriggerSource {
 			}
 		} finally {
 			if (
-				this.active &&
+				this.wakeActive &&
 				generation === this.generation &&
 				sampleGeneration === this.sampleGeneration &&
 				!this.helperAvailable
@@ -293,7 +317,9 @@ export class ScheduleDetection implements ScheduleTriggerSource {
 			this.knownOnline = reachable;
 			this.online = reachable;
 			this.failures = reachable ? 0 : Math.min(this.failures + 1, OFFLINE_BACKOFF_MS.length);
+			// Every completed probe is a fresh confirmation for interrupted model requests.
 			if (changed) this.emit({ type: "online", online: reachable, initial });
+			this.publishConnectivity(reachable, this.time.now());
 			if (this.active && generation === this.generation) {
 				this.probing = undefined;
 				const delay = reachable ? ONLINE_SAMPLE_MS : OFFLINE_BACKOFF_MS[this.failures - 1];

@@ -159,6 +159,7 @@ public enum RowLineSegments {
         let isAsk = session?.isAsk == true
         if let session, isAsk { segments.append(RowLineSegment(.ask(source: session.sourceLabel))) }
         if let reason, !reason.isEmpty { segments.append(RowLineSegment(.reason(reason))) }
+        else if session?.offlinePaused == true { segments.append(RowLineSegment(.reason("Paused offline"))) }
         var shownBranch = branch
         if let pullRequest {
             segments.append(RowLineSegment(.dashboardPullRequest(pullRequest)))

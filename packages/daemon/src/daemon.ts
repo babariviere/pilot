@@ -2,6 +2,7 @@
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { loadConfig } from "./config.ts";
+import { ConnectivityService } from "./connectivity.ts";
 import { EventLoopWatchdog } from "./event-loop-watchdog.ts";
 import { MissionLinearSource, pollLinear } from "./linear-source.ts";
 import { McpStatusService, workerProbe } from "./mcp-status.ts";
@@ -105,6 +106,13 @@ for (const mission of missionStore.list())
 		await trackedItems.completeSlackMission(mission.projectId, mission.id, mission.completedAt);
 const missionService = new MissionService(missionStore, sessions, projects);
 const power = new PowerService(config.home, sessions);
+const systemEventsDetection = new SystemEventsDetection();
+const scheduleDetection = new ScheduleDetection({ power: systemEventsDetection });
+const connectivity = new ConnectivityService(join(config.home, "connectivity.json"), scheduleDetection, (online) =>
+	sessions.setConnectivity(online),
+);
+// Persist unknown/offline before interrupted work can reopen, even with no app or pending schedule.
+await connectivity.start();
 // Recover global sleep overrides before any interrupted agent can reopen.
 await power.start();
 await sessions.load();
@@ -113,8 +121,6 @@ missionService.notices.start();
 missionService.compaction.start();
 const terminals = new TerminalManager();
 const scheduleStore = new ScheduleStore(join(config.home, "schedules.sqlite"));
-const systemEventsDetection = new SystemEventsDetection();
-const scheduleDetection = new ScheduleDetection({ power: systemEventsDetection });
 const schedules = new ScheduleService(scheduleStore, {
 	sessions,
 	projects,
@@ -153,6 +159,7 @@ async function stop(): Promise<void> {
 	watchdog.stop();
 	server.close();
 	await schedules.stop();
+	await connectivity.stop();
 	systemEventsDetection.stop();
 	await scheduleStore.close();
 	stopMemoryProjects();

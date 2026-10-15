@@ -215,6 +215,8 @@ export interface SessionSummary {
 	continuationOf?: string;
 	/** Durable work paused by the Mac sleep policy, awaiting a later full wake with connectivity. */
 	sleepPaused?: boolean;
+	/** Durable model work waiting for confirmed internet connectivity. */
+	offlinePaused?: boolean;
 	/** Omitted by older daemons, meaning Build. */
 	mode?: ChatMode;
 	/** Actual Build workspace policy, including isolated workspaces without a task branch. */
@@ -442,6 +444,7 @@ export interface RemoteBranchList {
 export type ArtifactLibrary = "react" | "react-dom" | "mermaid" | "echarts" | "motion" | "d3" | "three";
 export type ArtifactKind = "html" | "react" | "image" | "swiftui";
 
+/** GET /api/artifacts/:id resolves an unpinned artifact link to its owning session and latest metadata. */
 export interface ArtifactSummary {
 	id: string;
 	sessionId: string;

@@ -1,6 +1,23 @@
 import Foundation
+import PilotCore
 import Testing
 @testable import Pilot
+
+@Test @MainActor func artifactLinksOpenInternallyAndNeverReachDesktopOrBrowser() throws {
+    var opened: [ArtifactLink] = []
+    let opener = BrowserLinkOpener(canLookup: { _ in
+        Issue.record("Artifact links must not query the browser")
+        return false
+    }, openNormally: { _ in Issue.record("Artifact links must not open externally") },
+       openDesktop: { _ in Issue.record("Artifact links must not use a desktop scheme handler"); return false },
+       openArtifact: { opened.append($0) })
+    for value in ["artifact://abee494b-d1a8-484c-a57b-669148815d37", "artifact://invalid"] {
+        let url = try #require(URL(string: value))
+        #expect(BrowserLinkOpener.handles(url))
+        opener.open(url)
+    }
+    #expect(opened.map(\.id) == ["abee494b-d1a8-484c-a57b-669148815d37"])
+}
 
 @Test func heliumPRKeysIncludeSubpagesButNotOtherPRsOrHosts() throws {
     let variants = [

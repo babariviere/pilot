@@ -1,6 +1,6 @@
 /** Immutable revisions plus an atomic latest pointer. The session worker is the sole writer. */
 import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, readdir, rename } from "node:fs/promises";
+import { mkdir, open, readdir, readFile, rename } from "node:fs/promises";
 import { join } from "node:path";
 import type { ArtifactRevision, ArtifactSummary, ArtifactWrite } from "@pilot/protocol";
 import { libraryVersions, prepareArtifact, validateArtifact } from "./render.ts";
@@ -79,14 +79,26 @@ export class ArtifactStore {
 			.sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id));
 	}
 
+	/** Read only the committed pointer, without loading or rendering the artifact body. */
+	async summary(id: string): Promise<ArtifactSummary> {
+		if (!ID.test(id)) throw new ArtifactNotFound("Unknown artifact");
+		try {
+			const latest = JSON.parse(await readFile(join(this.directory, id, "latest.json"), "utf8")) as ArtifactSummary;
+			if (latest.sessionId !== this.identity.sessionId || latest.id !== id)
+				throw new ArtifactNotFound("Unknown artifact");
+			return latest;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new ArtifactNotFound("Unknown artifact");
+			throw error;
+		}
+	}
+
 	async get(id: string, revision?: number): Promise<ArtifactRevision> {
 		if (!ID.test(id)) throw new ArtifactNotFound("Unknown artifact");
 		if (revision !== undefined && (!Number.isSafeInteger(revision) || revision < 1))
 			throw new Error("Invalid artifact revision");
 		try {
-			const latest = JSON.parse(await readFile(join(this.directory, id, "latest.json"), "utf8")) as ArtifactSummary;
-			if (latest.sessionId !== this.identity.sessionId || latest.id !== id)
-				throw new ArtifactNotFound("Unknown artifact");
+			const latest = await this.summary(id);
 			if (revision !== undefined && revision > latest.revision)
 				throw new ArtifactNotFound("Unknown artifact revision");
 			const value = JSON.parse(

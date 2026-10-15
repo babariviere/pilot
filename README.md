@@ -131,6 +131,12 @@ message to carry them along. Waiting system messages are read-only.
 Stop also works during a sleep pause. Cancellation is saved without waking other chats and drains
 before the paused run can recover at the next eligible wake.
 
+If internet connectivity is lost, chats show **Paused offline** rather than exhausting model retries
+into a failure. The daemon confirms connectivity and resumes automatically, even with the app closed.
+Queued messages and unfinished requests survive restarts. Running native tools finish their current
+round; they are never killed or replayed for an outage. Sleep, update, subscription and manual Stop
+holds remain independent. Authentication, quota and provider errors are not treated as offline.
+
 ### Subscription limits
 
 Chats pause new model requests and tool calls at **95%** of any subscription window. Active tools finish
@@ -273,6 +279,8 @@ workspace, but does not rebind those PRs automatically.
 Artifacts open in an isolated, offline WebKit viewer. HTML and React previews can use bundled libraries
 such as Mermaid, ECharts and Motion, with D3 and Three.js available on request. Published revisions are
 retained: a chat card opens the revision sent there, while the sidebar opens the latest version.
+Inline `artifact://<id>` links open the latest revision directly in the artifact popup, with an artifact
+icon beside the label. They work across chats, including archived artifact owners.
 SwiftUI artifacts are static renders, not live app views.
 
 Pilot bundles a pinned subset of [pi-extensions](https://github.com/babariviere/pi-extensions): sandbox,

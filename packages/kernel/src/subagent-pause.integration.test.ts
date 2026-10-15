@@ -43,11 +43,14 @@ export default pi => {
 		const results = request.messages.filter(message => message.role === "toolResult");
 		if (results.length === 0) return fauxAssistantMessage(
 			mode === "update" ? [call(1), call(2)] : [call(1)], {stopReason: "toolUse"});
-		if (results.length === 1 && mode === "sleep") {
+		if (results.length === 1 && (mode === "sleep" || mode === "offline")) {
 			if (!existsSync(join(root, "model-blocked"))) {
 				writeFileSync(join(root, "model-blocked"), "ready");
 				await new Promise((_, reject) => {
-					const abort = () => reject(new Error("Paused generation"));
+					const abort = () => {
+						if (mode === "offline") writeFileSync(join(root, "model-cancelled"), "ready");
+						reject(new Error("Paused generation"));
+					};
 					if (options.signal.aborted) abort();
 					else options.signal.addEventListener("abort", abort, {once: true});
 				});
@@ -81,7 +84,7 @@ export default pi => {
 };`;
 }
 
-for (const mode of ["update", "sleep"] as const) {
+for (const mode of ["update", "sleep", "offline"] as const) {
 	test(`real child survives ${mode} replacement and its answer reaches an idle parent exactly once`, {
 		timeout: 60_000,
 	}, async (t) => {
@@ -93,10 +96,18 @@ for (const mode of ["update", "sleep"] as const) {
 			"PI_OFFLINE",
 			"PILOT_PI_EXTENSIONS_PROFILE",
 			"PILOT_ANTHROPIC_AUTH_EXTENSION",
+			"PILOT_CONNECTIVITY_POLICY",
 		];
 		const before = names.map((name) => process.env[name]);
 		process.env.PI_CODING_AGENT_DIR = agentDir;
 		process.env.PI_OFFLINE = "1";
+		const connectivityPolicy = join(root, "connectivity.json");
+		const online = (online: boolean) =>
+			writeFile(connectivityPolicy, JSON.stringify({ version: 1, online, checkedAt: Date.now() }));
+		if (mode === "offline") {
+			await online(true);
+			process.env.PILOT_CONNECTIVITY_POLICY = connectivityPolicy;
+		} else delete process.env.PILOT_CONNECTIVITY_POLICY;
 		configureBundledChildren();
 		let session: KernelSession | undefined;
 		t.after(async () => {
@@ -175,7 +186,13 @@ for (const mode of ["update", "sleep"] as const) {
 				},
 			}),
 		);
-		const spec = { sessionId: "parent", cwd: root, storageDir: join(root, "durable"), agentDir };
+		const spec = {
+			sessionId: "parent",
+			cwd: root,
+			storageDir: join(root, "durable"),
+			agentDir,
+			...(mode === "offline" ? { connectivityPolicy } : {}),
+		};
 		const open = () => KernelSession.open(spec, { onWorking() {} });
 		session = await open();
 		await session.submit("start", "Delegate implementation", "followUp");
@@ -198,9 +215,24 @@ for (const mode of ["update", "sleep"] as const) {
 			await paused;
 			assert.equal(await readFile(join(root, "effects"), "utf8"), "1", "the drain freezes the queued child tool");
 		}
+		if (mode === "offline") {
+			await online(false);
+			await until(() => existsSync(join(root, "model-cancelled")));
+			assert.equal(await readFile(join(root, "effects"), "utf8"), "1");
+		}
 		await session.close();
 		assert.equal(await readFile(join(root, "effects"), "utf8"), "1");
 		session = await open();
+		if (mode === "offline") {
+			await delay(50);
+			assert.equal(
+				await readFile(join(root, "effects"), "utf8"),
+				"1",
+				"child recovery waits for confirmed internet",
+			);
+			assert.equal(faux.state.callCount, 2);
+			await online(true);
+		}
 		await until(() => faux.state.callCount === 3);
 		await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
 		await until(() => session!.subagentList[0]?.state === "idle");

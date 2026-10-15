@@ -35,6 +35,7 @@ public enum SessionStatus: String, Sendable {
     case stopped = "Stopped"
     case idle = "Idle"
     case paused = "Paused until wake"
+    case offlinePaused = "Paused offline"
     /// Work is held at a subscription usage limit until it resets.
     case usagePaused = "Paused at usage limit"
 }
@@ -43,6 +44,7 @@ extension SessionSummary {
     /// Outcomes survive lifecycle changes. A completed turn does not finish active coordination.
     public var status: SessionStatus {
         if sleepPaused == true { return .paused }
+        if offlinePaused == true { return .offlinePaused }
         if isHeldAtUsageLimit { return .usagePaused }
         if isWorking { return .working }
         switch outcome {
@@ -55,7 +57,7 @@ extension SessionSummary {
     }
 
     public var visibleOutcomeAt: Double? {
-        guard sleepPaused != true, !isHeldAtUsageLimit, !isWorking, outcome != nil, let outcomeAt, outcomeAt.isFinite
+        guard sleepPaused != true, offlinePaused != true, !isHeldAtUsageLimit, !isWorking, outcome != nil, let outcomeAt, outcomeAt.isFinite
         else { return nil }
         return outcomeAt
     }

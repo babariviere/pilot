@@ -27,14 +27,15 @@ enum MessageServiceLinks {
                 result.append(plain)
                 continue
             }
-            let mark: PilotMark
+            let image: NSImage?
             switch link.service {
-            case .github: mark = .github
-            case .linear: mark = .linear
-            case .slack: mark = .slack
+            case .github: image = PilotMark.github.image
+            case .linear: image = PilotMark.linear.image
+            case .slack: image = PilotMark.slack.image
+            case .artifact: image = PilotIcon.artifact.symbolImage()
             }
             let attachment = NSTextAttachment()
-            attachment.image = mark.image
+            attachment.image = image
             let size = max(font.capHeight, PilotIcon.Context.inline.markSize)
             attachment.bounds = NSRect(x: 0, y: (font.capHeight - size) / 2, width: size, height: size)
             let replacement = NSMutableAttributedString(attributedString: NSAttributedString(attachment: attachment))

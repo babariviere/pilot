@@ -767,6 +767,14 @@ final class PilotClient: ObservableObject {
         try await get(artifactURL(["projects", projectId, "artifacts"]))
     }
 
+    func resolveArtifact(_ link: ArtifactLink) async throws -> ArtifactReference {
+        let result: ArtifactSummary = try await get(artifactURL(["artifacts", link.id]))
+        guard result.id == link.id, !result.sessionId.isEmpty, result.revision > 0 else {
+            throw ClientError("Invalid artifact reference")
+        }
+        return result.reference
+    }
+
     func artifact(_ reference: ArtifactReference, latest: Bool = false) async throws -> ArtifactRevision {
         var components = URLComponents(url: try artifactURL(["sessions", reference.sessionId, "artifacts", reference.id]),
                                        resolvingAgainstBaseURL: false)!

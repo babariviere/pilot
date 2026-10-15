@@ -211,6 +211,13 @@ extension PilotIcon {
         filled ? stateFillName ?? systemName : systemName
     }
 
+    /// Native SF symbol for TextKit attachments. Live and custom concepts use their own renderers.
+    @MainActor func symbolImage(context: Context = .inline) -> NSImage? {
+        guard let name = systemName else { return nil }
+        return NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: context.role.size, weight: context.nsWeight))
+    }
+
     /// Where the concept is meant to appear.
     var usage: String {
         switch self {

@@ -75,6 +75,9 @@ struct MainWindow: View {
         .sheet(item: $model.missionSheet) { sheet in
             MissionSheetView(sheet: sheet).environmentObject(model)
         }
+        .sheet(item: $model.artifactLink) { link in
+            ArtifactLinkView(link: link).id(link.id)
+        }
         .sheet(item: $model.renamingSession) { target in
             SessionRenameSheet(target: target).environmentObject(model)
         }
