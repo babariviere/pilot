@@ -991,9 +991,10 @@ export class SessionManager {
 				delete meta.workspaceMainDue;
 				delete meta.workspaceMainAttempted;
 				delete meta.workspaceMainDeferred;
-				meta.prActivities = meta.prActivities?.filter(
-					(activity) => !activity.requestId.startsWith("main-workspace:"),
-				);
+				if (meta.prActivities)
+					meta.prActivities = meta.prActivities.filter(
+						(activity) => !activity.requestId.startsWith("main-workspace:"),
+					);
 				if (this.sleepPause && (meta.working || meta.initializing || meta.pending?.length)) meta.sleepPaused = true;
 				this.metas.set(meta.id, meta);
 				if (legacyRefresh) await this.save(meta);
