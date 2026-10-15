@@ -64,6 +64,8 @@ release source before using **System Settings → Privacy & Security → Open An
 [Release and update setup](apps/macos/UPDATES.md) explains signing, packaging and automatic updates.
 Updates pause agents after active tool calls finish, update the app and daemon, then resume unfinished
 chats and subagents automatically. They do not wait for entire conversations to finish.
+Chats with working subagents stay Working, even when the parent has finished its current reply.
+Pending child work also reopens automatically after a daemon restart or a sleep pause.
 
 ### Start your first chat
 

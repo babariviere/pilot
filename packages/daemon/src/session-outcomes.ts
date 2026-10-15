@@ -1,5 +1,5 @@
-import type { SessionCompletion, SessionOutcome } from "@pilot/protocol";
 import { safeFailureText } from "@pilot/kernel";
+import type { SessionCompletion, SessionOutcome } from "@pilot/protocol";
 
 export interface OutcomeMeta {
 	/** Last known activity, so interrupted work can resume after a restart. */
@@ -40,8 +40,8 @@ export function applyActivity(
 		delete meta.outcome;
 		delete meta.outcomeAt;
 		delete meta.outcomeReason;
-		// A turn that leaves jobs running is not a result. Consume its source version so an idle
-		// replay after the last job ends (or a restart) cannot publish it before the follow-up ends.
+		// A turn that leaves jobs or subagents running is not a result. Consume its source version
+		// so an idle replay after background work ends cannot publish it before the follow-up ends.
 		if (backgroundWorking && completion && completion.outcomeAt > lastCompletion) {
 			meta.lastCompletionAt = completion.outcomeAt;
 			changed = true;

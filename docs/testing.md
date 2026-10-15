@@ -195,6 +195,20 @@ responsiveness. It does not claim a fixed speedup under arbitrary machine load.
 
 ## Worker recovery admission
 
+`subagent-activity.test.ts` covers idle-parent activity and completion replay, update/sleep recovery,
+daemon restart and confirmed kernel exit with pending child work. `subagent-pause.integration.test.ts`
+uses faux models through the bundled subagent supervisor and a real child process. It pauses during an
+in-flight child tool (update) or generation (sleep), replaces the kernel, checks that committed effects
+are not replayed, and verifies exactly one child-result follow-up reaches the idle parent. No live
+accounts or workspaces are opened.
+
+A synthetic summary probe on 2026-10-15 compared the prior background-work predicate with the
+child-aware predicate, alternating five pairs of 10,000 summary reads over 1,000 metadata records.
+Each record held 100 children with the working child last. Median wall time was 101.2ms before and
+102.1ms after. This isolates the in-memory summary projection under a worst-position scan, not real
+provider streaming, GUI rendering or cold database recovery. No polling, history reads or child
+process inspection were added to the activity path.
+
 `packages/daemon/src/worker-starts.test.ts` and `sessions.test.ts` cover a 150-session recovery burst,
 two concurrent cold starts, FIFO admission, per-session coalescing, failure release, queued Stop,
 role changes, archival, sleep and shutdown. The limit lasts through worker readiness, not the agent's
