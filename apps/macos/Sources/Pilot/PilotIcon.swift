@@ -505,25 +505,27 @@ extension Label where Title == Text, Icon == PilotSymbol {
     }
 }
 
-/// Native menus extract images from their labels rather than rendering arbitrary SwiftUI icon views.
-/// Keep SF Symbols and task pies as direct images, without the row-specific styling in PilotSymbol.
-struct PilotMenuLabel: View {
-    let title: String
-    let icon: PilotIcon
-
-    init(_ title: String, icon: PilotIcon) {
-        self.title = title
-        self.icon = icon
-    }
-
-    var body: some View {
-        if let name = icon.systemName {
-            Label(title, systemImage: name)
-        } else if let fill = icon.taskProgressFill {
-            Label { Text(title) } icon: { Image(nsImage: TaskProgressGlyph.image(fill, context: .row)) }
-        } else {
-            Label(title, icon: icon)
+extension PilotIcon {
+    /// A concrete, unmodified Image for native menus, which do not reliably unwrap custom icon views.
+    @MainActor var menuImage: Image {
+        if let name = systemName {
+            return Image(systemName: name)
         }
+        if let fill = taskProgressFill {
+            return Image(nsImage: TaskProgressGlyph.image(fill, context: .row))
+        }
+        switch self {
+        case .branch, .pullRequest: return Image(nsImage: GitBranchGlyph.image)
+        // Menus are static, unlike the live working spinner in rows.
+        default: return Image(systemName: "ellipsis")
+        }
+    }
+}
+
+extension Label where Title == Text, Icon == Image {
+    /// Keep both Label and Image concrete at the menu boundary. Even a wrapper around Label can lose its image.
+    @MainActor init<S: StringProtocol>(_ title: S, menuIcon: PilotIcon) {
+        self.init { Text(String(title)) } icon: { menuIcon.menuImage }
     }
 }
 
