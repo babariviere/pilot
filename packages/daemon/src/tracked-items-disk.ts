@@ -598,7 +598,9 @@ export class TrackedItemDisk {
 		const result = {
 			outcome,
 			attemptedAt: Date.now(),
-			...(outcome === "error" ? { error: "Couldn't move ticket to In progress." } : {}),
+			...(outcome === "error"
+				? { error: "Couldn't update ticket state. Check Linear and the start state in Project settings." }
+				: {}),
 		};
 		this.db.prepare("UPDATE tracked_items SET linear_start=? WHERE id=?").run(JSON.stringify(result), id);
 		this.emit(item.projectId);

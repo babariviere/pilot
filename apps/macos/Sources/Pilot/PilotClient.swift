@@ -551,6 +551,14 @@ final class PilotClient: ObservableObject {
                                         query: query.map { [URLQueryItem(name: "query", value: $0)] } ?? [])
     }
 
+    func linearStates(team: String) async throws -> TrackingLookup<LinearWorkflowState> {
+        if fixtureTracking != nil {
+            return TrackingLookup(status: .ok, items: [LinearWorkflowState(id: "in-progress", name: "In progress")])
+        }
+        return try await missionRequest(["tracking", "linear", "states"],
+                                        query: [URLQueryItem(name: "team", value: team)])
+    }
+
     /// Slack channels matching a query, or the channels I'm in when the query is nil.
     func slackChannelOptions(query: String? = nil) async throws -> TrackingLookup<SlackChannelOption> {
         if let fixture = fixtureTracking {

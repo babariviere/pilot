@@ -5,14 +5,14 @@ import type {
 	ArtifactLibrary,
 	BindPullRequestRequest,
 	ChangeModelRequest,
-	SubscriptionForceRequest,
-	RenameSessionRequest,
 	ClientMessage,
 	CompactRequest,
 	CreateMissionRequest,
 	EditQueuedMessageRequest,
 	Inbox,
 	JoinMissionRequest,
+	MemoryNoteRequest,
+	MemoryRange,
 	MissionArtifactLinkWrite,
 	MissionBriefWrite,
 	MissionCommentWrite,
@@ -20,27 +20,27 @@ import type {
 	MissionEventWrite,
 	MissionResourceWrite,
 	MissionTaskWrite,
-	MemoryNoteRequest,
-	MemoryRange,
 	ProjectRequest,
+	RenameSessionRequest,
 	ReviewRequest,
 	RewindRequest,
-	SendRequest,
-	ScheduleRequest,
 	SchedulePatch,
+	ScheduleRequest,
+	SendRequest,
 	ServerMessage,
 	SessionCommandsResponse,
-	SessionJobsResponse,
 	SessionHistoryPage,
+	SessionJobsResponse,
 	SessionSummary,
 	SourceSignInRequest,
 	SpawnRequest,
-	StartMissionTaskRequest,
 	StartMissionCoordinatorRequest,
+	StartMissionTaskRequest,
 	SubagentMessageRequest,
+	SubscriptionForceRequest,
 	TerminalSocketMessage,
-	UpdateMissionRequest,
 	UnbindPullRequestRequest,
+	UpdateMissionRequest,
 } from "@pilot/protocol";
 import { type WebSocket, WebSocketServer } from "ws";
 import { boundedSender } from "./backpressure.ts";
@@ -48,20 +48,20 @@ import { RepositoryChanges } from "./changes.ts";
 import { ChatStreams } from "./chat-streams.ts";
 import type { DaemonConfig } from "./config.ts";
 import { Conflict, ServiceUnavailable } from "./errors.ts";
-import type { ModelCatalog } from "./models.ts";
-import { isAllowedOrigin } from "./origin.ts";
+import { operations } from "./event-loop-watchdog.ts";
 import type { MissionService } from "./mission-service.ts";
 import type { MissionStore } from "./missions.ts";
-import { operations } from "./event-loop-watchdog.ts";
-import { expandHome, type ProjectStore } from "./projects.ts";
-import { type DashboardProviders, ProjectDashboardService } from "./project-dashboard.ts";
-import { ReviewStore } from "./reviews.ts";
-import { NotFound, type SessionManager } from "./sessions.ts";
-import type { TerminalManager } from "./terminals.ts";
-import type { ProjectMemoryService } from "./project-memory.ts";
-import type { ScheduleService } from "./schedules.ts";
-import type { SourceRegistry } from "./sources.ts";
+import type { ModelCatalog } from "./models.ts";
+import { isAllowedOrigin } from "./origin.ts";
 import type { PowerService } from "./power.ts";
+import { type DashboardProviders, ProjectDashboardService } from "./project-dashboard.ts";
+import type { ProjectMemoryService } from "./project-memory.ts";
+import { expandHome, type ProjectStore } from "./projects.ts";
+import { ReviewStore } from "./reviews.ts";
+import type { ScheduleService } from "./schedules.ts";
+import { NotFound, type SessionManager } from "./sessions.ts";
+import type { SourceRegistry } from "./sources.ts";
+import type { TerminalManager } from "./terminals.ts";
 import { validatePatch } from "./tracked-items.ts";
 
 const MAX_BODY = 1024 * 1024;
@@ -289,6 +289,11 @@ export function createDaemonServer(
 				}
 				// Read-only pickers for project settings. Nothing is stored until the project is saved.
 				const query = url.searchParams.get("query")?.trim().slice(0, 100) || undefined;
+				if (parts.length === 4 && parts[2] === "linear" && parts[3] === "states" && req.method === "GET") {
+					const team = url.searchParams.get("team")?.trim();
+					if (!team || team.length > 200) throw new HttpError(400, "team is required (at most 200 characters)");
+					return json(res, 200, await tracking.linearStates(team));
+				}
 				if (parts.length === 4 && parts[2] === "linear" && parts[3] === "teams" && req.method === "GET")
 					return json(res, 200, await tracking.linearTeams(query));
 				if (parts.length === 4 && parts[2] === "slack" && parts[3] === "channels" && req.method === "GET")

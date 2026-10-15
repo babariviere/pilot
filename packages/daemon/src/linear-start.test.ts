@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test, type TestContext } from "node:test";
+import { type TestContext, test } from "node:test";
 import type { Project, TrackedItem, TrackingJson } from "@pilot/protocol";
 import { linearStart, pollLinear } from "./linear-source.ts";
-import { ProjectStore } from "./projects.ts";
-import { SourceRegistry, type SourcePollContext } from "./sources.ts";
+import { startedWorkflowStates } from "./linear-workflow.ts";
+import { ProjectStore, validateTrackingConfig } from "./projects.ts";
+import { type SourcePollContext, SourceRegistry } from "./sources.ts";
 import { TrackedItemStore, validatePatch } from "./tracked-items.ts";
 
 function fake() {
@@ -35,7 +36,11 @@ function fake() {
 	let failure: Error | undefined;
 	const ctx: SourcePollContext = {
 		project: { id: "p" } as Project,
-		config: { linearTeam: "team-root", slackChannels: [] },
+		config: {
+			linearTeam: "team-root",
+			slackChannels: [],
+			linearStartStates: { "team-child": { id: "active", name: "Building" } },
+		},
 		signal: new AbortController().signal,
 		async call(tool, args) {
 			calls.push({ tool, args });
@@ -96,7 +101,7 @@ function fake() {
 	};
 }
 
-test("only my unstarted/backlog/triage ticket moves to its actual team's first started state", async () => {
+test("only my unstarted/backlog/triage ticket moves to its actual team's configured started state", async () => {
 	for (const type of ["unstarted", "backlog", "triage"]) {
 		const f = fake();
 		f.issue.statusType = type;
@@ -106,10 +111,94 @@ test("only my unstarted/backlog/triage ticket moves to its actual team's first s
 	}
 	const ordered = fake();
 	ordered.setStates([
-		{ id: "active", type: "started" },
-		{ id: "review", type: "started" },
+		{ id: "review", type: "started", name: "Review" },
+		{ id: "active", type: "started", name: "Building" },
 	]);
-	assert.equal(await linearStart(ordered.ctx, ordered.item), "moved", "preserves server order without positions");
+	assert.equal(await linearStart(ordered.ctx, ordered.item), "moved", "configuration wins over server order");
+});
+
+test("automatic finds In progress, never Merged or Review regardless of position or response order", async () => {
+	for (const name of ["In progress", "In Progress", " in-progress "]) {
+		const f = fake();
+		delete f.ctx.config.linearStartStates;
+		f.setStates([
+			{ id: "merged", type: "started", name: "Merged", position: -100 },
+			{ id: "review", type: "started", name: "Review", position: 0 },
+			{ id: "active", type: "started", name, position: 100 },
+		]);
+		assert.equal(await linearStart(f.ctx, f.item), "moved");
+	}
+});
+
+test("missing, ambiguous, foreign-team or recategorized targets fail without falling back", async () => {
+	for (const states of [
+		[{ id: "merged", type: "started", name: "Merged" }],
+		[{ id: "active", type: "completed", name: "Building" }],
+	]) {
+		const f = fake();
+		f.setStates(states);
+		await assert.rejects(linearStart(f.ctx, f.item), /Choose a start state/);
+		assert.ok(!f.calls.some((call) => call.tool === "startIssue"));
+	}
+	for (const states of [
+		[{ id: "merged", type: "started", name: "Merged" }],
+		[
+			{ id: "active", type: "started", name: "In progress" },
+			{ id: "another", type: "started", name: "In Progress" },
+		],
+	]) {
+		const f = fake();
+		f.ctx.config.linearStartStates = { "team-root": { id: "merged", name: "Merged" } };
+		f.setStates(states);
+		await assert.rejects(linearStart(f.ctx, f.item), /Choose a start state/);
+		assert.ok(!f.calls.some((call) => call.tool === "startIssue"));
+	}
+});
+
+test("workflow lookup accepts both MCP shapes and returns only valid started choices", () => {
+	const states = [
+		{ id: "review", type: "started", name: "Review" },
+		{ id: "done", type: "completed", name: "Done" },
+		{ id: "active", type: "started", name: "In progress" },
+	];
+	const expected = [
+		{ id: "active", name: "In progress" },
+		{ id: "review", name: "Review" },
+	];
+	assert.deepEqual(startedWorkflowStates(states), expected);
+	assert.deepEqual(startedWorkflowStates({ statuses: states }), expected);
+	for (const response of [
+		null,
+		{},
+		[null],
+		[{ type: "started", id: "a" }],
+		Array(501).fill(states[0]),
+		[states[0], states[0]],
+	])
+		assert.throws(() => startedWorkflowStates(response));
+});
+
+test("start state config is strictly bounded, normalized and cleared with the attached team", () => {
+	const base = { slackChannels: [], linearTeam: "root" };
+	const states = { child: { id: " active ", name: " Building " } };
+	assert.deepEqual(validateTrackingConfig({ ...base, linearStartStates: states }).linearStartStates, {
+		child: { id: "active", name: "Building" },
+	});
+	assert.equal(
+		validateTrackingConfig({ ...base, linearTeam: "", linearStartStates: states }).linearStartStates,
+		undefined,
+	);
+	for (const invalid of [
+		null,
+		[],
+		"active",
+		{ child: null },
+		{ child: { id: "", name: "Building" } },
+		{ child: { id: "a", name: "b", type: "started" } },
+		{ " ": { id: "a", name: "b" } },
+		Object.fromEntries(Array.from({ length: 251 }, (_, i) => [`team-${i}`, { id: "a", name: "b" }])),
+	])
+		assert.throws(() => validateTrackingConfig({ ...base, linearStartStates: invalid }), /linearStartStates/);
 });
 
 test("reassigned, out-of-scope, already started and terminal tickets never write", async () => {
@@ -156,7 +245,14 @@ async function registry(t: TestContext) {
 	const home = await mkdtemp(join(tmpdir(), "pilot-linear-start-"));
 	const projects = new ProjectStore(home);
 	await projects.load();
-	const project = await projects.create({ path: home, tracking: { linearTeam: "team-root", slackChannels: [] } });
+	const project = await projects.create({
+		path: home,
+		tracking: {
+			linearTeam: "team-root",
+			slackChannels: [],
+			linearStartStates: { "team-child": { id: "active", name: "Building" } },
+		},
+	});
 	const path = join(home, "tracked.sqlite");
 	const items = new TrackedItemStore(path);
 	await items.load([project.id]);
@@ -218,7 +314,7 @@ test("remote failure is quiet, durable, visible on dashboard and preserved throu
 	assert.deepEqual(failed.metadata.linearStart, {
 		outcome: "error",
 		attemptedAt: (failed.metadata.linearStart as Record<string, TrackingJson>).attemptedAt,
-		error: "Couldn't move ticket to In progress.",
+		error: "Couldn't update ticket state. Check Linear and the start state in Project settings.",
 	});
 	assert.ok(!JSON.stringify(failed).includes("secret"));
 	assert.deepEqual(
@@ -287,6 +383,38 @@ test("configuration change cancels obsolete start before any write", async (t) =
 		((await f.items.require(f.item.id)).metadata.linearStart as Record<string, TrackingJson>).outcome,
 		"error",
 	);
+});
+
+test("editing only the start target fences an in-flight write without invalidating the poll scope", async (t) => {
+	const f = await registry(t);
+	let release!: () => void;
+	let entered!: () => void;
+	const gate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const reading = new Promise<void>((resolve) => {
+		entered = resolve;
+	});
+	f.beforeDetail(async () => {
+		entered();
+		await gate;
+	});
+	t.after(release);
+	const checkpoint = f.items.checkpoint(`${f.project.id}:linear`);
+	const pending = f.tracking.startLinear(f.item);
+	await reading;
+	await f.projects.update(f.project.id, {
+		tracking: { ...f.project.tracking!, linearStartStates: { "team-child": { id: "review", name: "Review" } } },
+	});
+	release();
+	await pending;
+	assert.ok(!f.calls.some((call) => call.tool === "startIssue"));
+	assert.deepEqual(f.items.checkpoint(`${f.project.id}:linear`), checkpoint);
+	const reopened = new ProjectStore(f.project.path);
+	await reopened.load();
+	assert.deepEqual(reopened.require(f.project.id).tracking?.linearStartStates, {
+		"team-child": { id: "review", name: "Review" },
+	});
 });
 
 test("start admission is bounded and shutdown cancels work without retrying", async (t) => {

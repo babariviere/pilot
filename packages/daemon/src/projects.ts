@@ -178,10 +178,17 @@ function validatePullRequestSetting(request: Partial<ProjectRequest>): void {
 export function validateTrackingConfig(value: unknown): ProjectTrackingConfig {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("tracking must be an object");
 	const config = value as ProjectTrackingConfig;
-	const keys = ["slackChannels", "slackChannelNames", "slackLabels", "linearTeam", "linearTeamName"];
+	const keys = [
+		"slackChannels",
+		"slackChannelNames",
+		"slackLabels",
+		"linearTeam",
+		"linearTeamName",
+		"linearStartStates",
+	];
 	if (Object.keys(config).some((key) => !keys.includes(key)))
 		throw new Error(
-			"Tracking supports only slackChannels, slackChannelNames, slackLabels, linearTeam and linearTeamName",
+			"Tracking supports only slackChannels, slackChannelNames, slackLabels, linearTeam, linearTeamName and linearStartStates",
 		);
 	if (
 		!Array.isArray(config.slackChannels) ||
@@ -197,6 +204,26 @@ export function validateTrackingConfig(value: unknown): ProjectTrackingConfig {
 	)
 		throw new Error("linearTeamName must be a string of at most 200 characters");
 	const labels = config.slackLabels;
+	const startStates = config.linearStartStates;
+	if (
+		startStates !== undefined &&
+		(!startStates ||
+			typeof startStates !== "object" ||
+			Array.isArray(startStates) ||
+			Object.entries(startStates).length > 250 ||
+			Object.entries(startStates).some(
+				([team, state]) =>
+					!team.trim() ||
+					team !== team.trim() ||
+					team.length > 200 ||
+					!state ||
+					typeof state !== "object" ||
+					Array.isArray(state) ||
+					Object.keys(state).some((key) => !["id", "name"].includes(key)) ||
+					[state.id, state.name].some((value) => typeof value !== "string" || !value.trim() || value.length > 200),
+			))
+	)
+		throw new Error("linearStartStates must map at most 250 team IDs to workflow state IDs and names");
 	if (
 		labels !== undefined &&
 		(!Array.isArray(labels) ||
@@ -253,6 +280,16 @@ export function validateTrackingConfig(value: unknown): ProjectTrackingConfig {
 		...(Object.keys(slackChannelNames).length ? { slackChannelNames } : {}),
 		...(linearTeam ? { linearTeam } : {}),
 		...(linearTeam && config.linearTeamName?.trim() ? { linearTeamName: config.linearTeamName.trim() } : {}),
+		...(linearTeam && startStates && Object.keys(startStates).length
+			? {
+					linearStartStates: Object.fromEntries(
+						Object.entries(startStates).map(([team, state]) => [
+							team,
+							{ id: state.id.trim(), name: state.name.trim() },
+						]),
+					),
+				}
+			: {}),
 	};
 	return result;
 }

@@ -106,6 +106,9 @@ test("tracking HTTP, WS invalidation and DashboardProviders.tracked share projec
 	assert.equal(auth.status, "sign_in_required");
 	assert.equal(auth.signInCommand, "pi mcp login linear");
 	const teams = await (await api("/tracking/linear/teams")).json();
+	assert.equal((await api("/tracking/linear/states")).status, 400);
+	assert.equal((await api(`/tracking/linear/states?team=${"a".repeat(201)}`)).status, 400);
+	assert.equal((await (await api("/tracking/linear/states?team=ENG")).json()).status, "sign_in_required");
 	assert.deepEqual(teams, {
 		status: "sign_in_required",
 		items: [],
@@ -271,6 +274,15 @@ test("Linear cycle/fallback and transient prefill are exposed through the tracki
 				throw new Error("external secret");
 			}
 			if (tool === "cycles") return fallback ? [] : recording.cycles;
+			if (tool === "states") {
+				assert.deepEqual(args, { team: "team-child" });
+				return {
+					statuses: [
+						{ id: "active", name: "In progress", type: "started" },
+						{ id: "done", name: "Done", type: "completed" },
+					],
+				};
+			}
 			if (tool === "issue") return recording.issue;
 			assert.equal(tool, "issues");
 			assert.equal(args.assignee, "me");
@@ -316,6 +328,9 @@ test("Linear cycle/fallback and transient prefill are exposed through the tracki
 	});
 	const root = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
 	const poll = await fetch(`${root}/sources/${project.id}:linear/poll`, { method: "POST" });
+	const states = await fetch(`${root}/tracking/linear/states?team=team-child`);
+	assert.equal(states.status, 200);
+	assert.deepEqual(await states.json(), { status: "ok", items: [{ id: "active", name: "In progress" }] });
 	assert.equal(poll.status, 200);
 	assert.equal((await poll.json()).linear.currentCycle.progress, 0.5);
 	const dashboard = await (await fetch(`${root}/projects/${project.id}/dashboard`)).json();

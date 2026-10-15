@@ -270,7 +270,11 @@ child workers and daemon model calls, without modifying personal settings.
 Linear and Slack tracking use the configured
 pi MCP servers named `linear` and `slack` and their existing OAuth sign-in, not separate Pilot API tokens.
 Configure sources in project settings. Tracking is not a blanket promise of autonomous fixes or replies.
-Confirming Start chat or Start mission moves an eligible Linear ticket to In progress, or adds an `eyes`
+In Project settings, “When work starts” chooses a Linear started state separately for the attached team
+and its sub-teams. Automatic selects the state named In progress, never the first state in workflow order.
+If a target is missing, ambiguous or no longer a started state, Pilot leaves the ticket unchanged and shows
+a quiet error. Starting work still proceeds. Saved choices are rechecked against the issue's actual team.
+Confirming Start chat or Start mission moves an eligible Linear ticket to that state, or adds an `eyes`
 reaction to a Slack thread's parent message as you. The Slack reaction is attempted once per item,
 counts an existing reaction as success, and is never removed automatically. Failures never block the
 work and appear quietly on the item. These are the only tracking writes, never Slack messages or replies.
