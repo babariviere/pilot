@@ -23,6 +23,27 @@ private func project(_ id: String, _ name: String? = nil) -> Project {
     Project(id: id, name: name ?? id, path: "/tmp/\(id)", createdAt: 1)
 }
 
+@Test func homeProjectRowsGroupUnderFoldersKeepingUrgencyOrderAndLimit() throws {
+    var folders = ProjectFolders()
+    // Swift Testing's macros cannot take a mutating call; create the folder first.
+    let created = folders.create(name: "Work")
+    let work = try #require(created)
+    _ = folders.create(name: "Empty")
+    folders.move(projectId: "quiet", to: work.id)
+    folders.move(projectId: "busy", to: work.id)
+    let rows = HomeStatus.projects(
+        [project("quiet"), project("busy"), project("loose"), project("other")],
+        counts: ["busy": ProjectDashboardCount(working: 1), "loose": ProjectDashboardCount(needsYou: 1)],
+        sessions: [], missions: [])
+    let sections = HomeStatus.folderSections(rows, folders: folders)
+    // Folder order first (empty folders left out), urgency order within each, ungrouped projects last.
+    #expect(sections.map { $0.folder?.name } == ["Work", nil])
+    #expect(sections.map { $0.items.map(\.id) } == [["busy", "quiet"], ["loose", "other"]])
+    let limited = HomeStatus.folderSections(rows, folders: folders, limit: 3)
+    #expect(limited.map { $0.items.map(\.id) } == [["busy", "quiet"], ["loose"]])
+    #expect(HomeStatus.folderSections(rows, folders: folders, limit: 2).map { $0.items.map(\.id) } == [["busy", "quiet"]])
+}
+
 @Test func homeProjectRowsCombineCountsReadyPullRequestsMissionsAndActivity() {
     let rows = HomeStatus.projects(
         [project("p"), project("q")],

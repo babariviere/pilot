@@ -136,8 +136,7 @@ swift run Pilot              # unbundled dev run (no notifications)
                              # also session-queued.png, session-long-queue.png and queued-message-editor.png
                              # and menubar.png: the menu bar plane glyph
                              # also pr-open.png, pr-merged.png, pr-stale.png and pr-dashboard.png
-                             # also sidebar-folders.png, sidebar-folders-collapsed.png and sidebar-folders-search.png
-                             # add --sidebar-folders-only to stop after the folder previews
+                             # also scope-switcher-folders.png and home-folders.png: project folder headings
                              # add --session-ordering-only for completion ages and closed/merged PR ordering
                              # add --inspector-toggles-only for native toolbar selection in light and dark appearances
 PILOT_PORT=… PILOT_TEST_SESSION=<id> .build/debug/Pilot --terminal-exit-test /tmp/out

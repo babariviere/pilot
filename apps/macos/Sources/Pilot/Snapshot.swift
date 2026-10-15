@@ -655,27 +655,6 @@ enum Snapshot {
             )
         }
 
-        // Exercise grouped, ungrouped and empty folders, then search through saved collapse state.
-        let savedFolders = model.projectFolders
-        model.projectFolders = ProjectFolders()
-        let work = model.projectFolders.create(name: "Work")!
-        model.projectFolders.move(projectId: "p1", to: work.id)
-        _ = model.projectFolders.create(name: "Ideas")
-        await render(Frame(title: "Pilot", subtitle: nil) { HomeView() }, size: size,
-                     to: directory.appending(path: "sidebar-folders.png"))
-        model.projectFolders.setExpanded(false, folderId: work.id)
-        await render(Frame(title: "Pilot", subtitle: nil) { HomeView() }, size: size,
-                     to: directory.appending(path: "sidebar-folders-collapsed.png"))
-        model.sidebarQuery = "flaky"
-        await render(Frame(title: "Pilot", subtitle: nil) { HomeView() }, size: size,
-                     to: directory.appending(path: "sidebar-folders-search.png"))
-        model.sidebarQuery = ""
-        model.projectFolders = savedFolders
-        if CommandLine.arguments.contains("--sidebar-folders-only") {
-            NSApp.terminate(nil)
-            return
-        }
-
         await render(
             VStack(spacing: 16) {
                 Text("What should Pilot work on?")
@@ -1559,14 +1538,32 @@ enum Snapshot {
             "p1": ProjectDashboardCount(working: 3, needsYou: 3),
             "p4": ProjectDashboardCount(working: 1, needsYou: 2),
         ]))
-        model.collapsedProjects = ["p2", "p3"]
 
         let counts = model.client.projectCounts.projects
-        await render(SidebarScopeList(projects: model.orderedProjects, scope: nil, counts: counts,
-                                      archivedCount: 12, groupsByUrgency: true, choose: { _ in }, showArchive: {},
-                                      search: {}, toggleGrouping: {}, addProject: {}, newFolder: {})
-                        .background(Theme.background),
-                     size: CGSize(width: 300, height: 320), to: directory.appending(path: "scope-switcher.png"))
+        let scopeList = {
+            AnyView(SidebarScopeList(projects: model.orderedProjects, folders: model.projectFolders, scope: nil,
+                                     counts: counts, archivedCount: 12, choose: { _ in }, showArchive: {}, search: {},
+                                     addProject: {}, newFolder: { _ in }, renameFolder: { _ in },
+                                     deleteFolder: { _ in }, move: { _, _ in })
+                .background(Theme.background))
+        }
+        await render(scopeList(), size: CGSize(width: 300, height: 320),
+                     to: directory.appending(path: "scope-switcher.png"))
+
+        // Folders head the picker and Home's project list: a folder with projects, an empty one (still listed in
+        // the picker) and the ungrouped rest under "Other projects".
+        let savedFolders = model.projectFolders
+        model.projectFolders = ProjectFolders()
+        if let work = model.projectFolders.create(name: "Work") {
+            model.projectFolders.move(projectId: "p1", to: work.id)
+            model.projectFolders.move(projectId: "p4", to: work.id)
+        }
+        _ = model.projectFolders.create(name: "Ideas")
+        await render(scopeList(), size: CGSize(width: 300, height: 420),
+                     to: directory.appending(path: "scope-switcher-folders.png"))
+        await render(Frame(title: "Pilot", subtitle: nil) { HomeView() }, size: CGSize(width: 1360, height: 860),
+                     to: directory.appending(path: "home-folders.png"))
+        model.projectFolders = savedFolders
 
         model.selectedSessionId = nil
         model.focus(on: "p1")

@@ -139,7 +139,7 @@ struct NeedsYouReasons: Equatable {
 
 /// The top of the sidebar: Home (with compose) and the Inbox, which always cover every project, then the project
 /// selector ("All projects" or one focused project) heading everything scoped to it, and the focused project's
-/// Overview as its first row. Archived chats, search and grouping live in the selector's menu.
+/// Overview as its first row. Archived chats, search and project folders live in the selector's menu.
 struct SidebarHeader: View {
     @ObservedObject var model: AppModel
     @ObservedObject var client: PilotClient
@@ -152,7 +152,8 @@ struct SidebarHeader: View {
     /// The badge's tooltip and VoiceOver detail, summing the reasons when known.
     let needsYouHelp: String?
     let archivedCount: Int
-    let onNewFolder: () -> Void
+    /// The sidebar's folder sheet, opened from the selector's menu.
+    let folderEditor: ProjectFolderEditorState
 
     var body: some View {
         let project = model.focusedProject
@@ -173,7 +174,7 @@ struct SidebarHeader: View {
             }
             .animation(Theme.Motion.quick, value: needsYou > 0)
             SidebarProjectSelector(model: model, counts: counts, archivedCount: archivedCount,
-                                   onNewFolder: onNewFolder)
+                                   folderEditor: folderEditor)
                 .padding(.top, 8)
             if let project {
                 SidebarNavRow(title: "Overview", icon: PilotIcon.overview, selected: overviewSelected,
@@ -247,13 +248,13 @@ struct SidebarNavRow<Accessory: View>: View {
     }
 }
 
-/// The project selector: "All projects" or the focused project, opening the list of projects and the sidebar's
-/// secondary actions. ⌘0 to ⌘9 switch from anywhere (`SidebarScopeCommands`).
+/// The project selector: "All projects" or the focused project, opening the list of projects under their folders
+/// and the sidebar's secondary actions. ⌘0 to ⌘9 switch from anywhere (`SidebarScopeCommands`).
 struct SidebarProjectSelector: View {
     @ObservedObject var model: AppModel
     let counts: [String: ProjectDashboardCount]
     let archivedCount: Int
-    let onNewFolder: () -> Void
+    let folderEditor: ProjectFolderEditorState
     @State private var showingList = false
     @State private var hovered = false
 
@@ -284,8 +285,8 @@ struct SidebarProjectSelector: View {
         .accessibilityHint("Choose which projects the sidebar lists")
         .help("Switch projects: ⌘0 for all projects, ⌘1 to ⌘9 for one")
         .popover(isPresented: $showingList, arrowEdge: .bottom) {
-            SidebarScopeList(projects: model.orderedProjects, scope: project?.id, counts: counts,
-                             archivedCount: archivedCount, groupsByUrgency: model.sidebarGroupsByUrgency,
+            SidebarScopeList(projects: model.orderedProjects, folders: model.projectFolders, scope: project?.id,
+                             counts: counts, archivedCount: archivedCount,
                              choose: { id in
                                  showingList = false
                                  model.focus(on: id)
@@ -298,70 +299,170 @@ struct SidebarProjectSelector: View {
                                  showingList = false
                                  model.showSidebarSearch()
                              },
-                             toggleGrouping: { model.sidebarGroupsByUrgency.toggle() },
                              addProject: {
                                  showingList = false
                                  model.addProject()
                              },
-                             newFolder: {
+                             newFolder: { projectId in
                                  showingList = false
-                                 onNewFolder()
-                             })
+                                 folderEditor.begin(projectId: projectId)
+                             },
+                             renameFolder: { folder in
+                                 showingList = false
+                                 folderEditor.begin(folder)
+                             },
+                             deleteFolder: { model.projectFolders.remove($0) },
+                             move: { model.projectFolders.move(projectId: $0, to: $1) })
         }
     }
 }
 
-/// The open switcher: All projects, then each project in sidebar order with its counts and shortcut, then the
-/// sidebar's secondary actions (archived chats, search, grouping) and project management.
+/// The open switcher: All projects, then each project with its counts and shortcut under its folder heading (in
+/// folder order, ungrouped projects last), then the sidebar's secondary actions (archived chats, search) and project
+/// management. Folders are managed here: a project's context menu moves it, a heading's renames or deletes it.
 struct SidebarScopeList: View {
+    /// In picker order (`AppModel.orderedProjects`), which numbers the ⌘1…⌘9 shortcuts.
     let projects: [Project]
+    let folders: ProjectFolders
     let scope: String?
     let counts: [String: ProjectDashboardCount]
     let archivedCount: Int
-    let groupsByUrgency: Bool
     let choose: (String?) -> Void
     let showArchive: () -> Void
     let search: () -> Void
-    let toggleGrouping: () -> Void
     let addProject: () -> Void
-    let newFolder: () -> Void
+    /// Opens the folder sheet, moving the given project into the new folder once created.
+    let newFolder: (String?) -> Void
+    let renameFolder: (ProjectFolder) -> Void
+    /// Deletes a folder; its projects become ungrouped.
+    let deleteFolder: (String) -> Void
+    let move: (_ projectId: String, _ folderId: String?) -> Void
 
     private static let rowHeight: CGFloat = 26
+    fileprivate static let headingHeight: CGFloat = 22
 
     var body: some View {
+        let sections = folders.sections(projects, includingEmpty: true, projectId: \.id)
+        let shortcuts = Dictionary(projects.prefix(9).enumerated().map { ($0.element.id, "⌘\($0.offset + 1)") },
+                                   uniquingKeysWith: { first, _ in first })
         VStack(alignment: .leading, spacing: 0) {
             SidebarScopeRow(title: "All projects", icon: PilotIcon.allProjects, checked: scope == nil,
                             count: SidebarScopeCounts.total(counts), shortcut: "⌘0") { choose(nil) }
-            if !projects.isEmpty {
+            if !sections.isEmpty {
                 HairlineDivider().padding(.vertical, 4)
                 ScrollView {
                     VStack(spacing: 0) {
-                        ForEach(Array(projects.enumerated()), id: \.element.id) { index, project in
-                            SidebarScopeRow(title: project.name, icon: PilotIcon.project, checked: scope == project.id,
-                                            count: counts[project.id] ?? ProjectDashboardCount(),
-                                            shortcut: index < 9 ? "⌘\(index + 1)" : nil,
-                                            help: project.path.abbreviatingHome) { choose(project.id) }
+                        ForEach(sections, id: \.id) { section in
+                            if let folder = section.folder {
+                                SidebarScopeHeading(title: folder.name, folder: folder,
+                                                    rename: { renameFolder(folder) },
+                                                    delete: { deleteFolder(folder.id) })
+                            } else if sections.count > 1 {
+                                SidebarScopeHeading(title: "Other projects")
+                            }
+                            ForEach(section.items) { project in
+                                SidebarScopeRow(title: project.name, icon: PilotIcon.project,
+                                                checked: scope == project.id,
+                                                count: counts[project.id] ?? ProjectDashboardCount(),
+                                                shortcut: shortcuts[project.id],
+                                                help: project.path.abbreviatingHome) { choose(project.id) }
+                                    .contextMenu { moveMenu(project) }
+                            }
+                            if section.items.isEmpty {
+                                // Keeps an empty folder findable, so projects can be moved into it.
+                                Text("No projects")
+                                    .font(.pilot(.caption))
+                                    .foregroundStyle(Theme.faintForeground)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.leading, Self.titleInset)
+                                    .frame(height: Self.headingHeight)
+                            }
                         }
                     }
                 }
                 // Long lists scroll; a half row hints there is more.
-                .frame(height: min(CGFloat(projects.count), 12.5) * Self.rowHeight)
+                .frame(height: min(Self.height(of: sections), 12.5 * Self.rowHeight))
                 .scrollBounceBehavior(.basedOnSize)
             }
             HairlineDivider().padding(.vertical, 4)
             SidebarScopeRow(title: "Archived chats (\(archivedCount))", icon: PilotIcon.archive, action: showArchive)
             SidebarScopeRow(title: "Search chats", icon: PilotIcon.search, shortcut: "⌘F", action: search)
-            if scope == nil {
-                SidebarScopeRow(title: "Group chats by urgency", icon: PilotIcon.groupByUrgency, checked: groupsByUrgency,
-                                help: "List Needs you, Ready to merge, Working and Recent instead of projects and folders",
-                                action: toggleGrouping)
-            }
             HairlineDivider().padding(.vertical, 4)
             SidebarScopeRow(title: "Add Project…", icon: PilotIcon.newProject, action: addProject)
-            SidebarScopeRow(title: "New Folder…", icon: PilotIcon.chatFolder, action: newFolder)
+            SidebarScopeRow(title: "New Folder…", icon: PilotIcon.chatFolder,
+                            help: "Group projects under a heading here and on Home") { newFolder(nil) }
         }
         .padding(5)
         .frame(width: 300)
+    }
+
+    /// Where row titles start: past the check mark and the project symbol.
+    fileprivate static let titleInset: CGFloat = 8 + 12 + 7 + 16 + 7
+
+    /// The project list's natural height: rows, folder headings and "No projects" lines.
+    private static func height(of sections: [ProjectFolderSection<Project>]) -> CGFloat {
+        sections.reduce(CGFloat(0)) { total, section in
+            let heading = section.folder != nil || sections.count > 1 ? headingHeight : 0
+            let rows = section.items.isEmpty ? headingHeight : CGFloat(section.items.count) * rowHeight
+            return total + heading + rows
+        }
+    }
+
+    @ViewBuilder
+    private func moveMenu(_ project: Project) -> some View {
+        let current = folders.folderId(for: project.id)
+        Menu("Move to Folder") {
+            ForEach(folders.folders) { folder in
+                Button { move(project.id, folder.id) } label: {
+                    if current == folder.id {
+                        Label(folder.name, icon: PilotIcon.selectedOption)
+                    } else {
+                        Text(folder.name)
+                    }
+                }
+            }
+            if !folders.folders.isEmpty { Divider() }
+            Button("New Folder…") { newFolder(project.id) }
+            if current != nil {
+                Button("Remove from Folder") { move(project.id, nil) }
+            }
+        }
+    }
+}
+
+/// A folder's heading in the project picker: a small faint label, not collapsible. A folder's heading renames or
+/// deletes it from its context menu; "Other projects" has none.
+private struct SidebarScopeHeading: View {
+    let title: String
+    var folder: ProjectFolder?
+    var rename: () -> Void = {}
+    var delete: () -> Void = {}
+
+    var body: some View {
+        let label = Text(title)
+            .font(.pilot(.caption, weight: .semibold))
+            .foregroundStyle(Theme.faintForeground)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .frame(maxWidth: .infinity, alignment: .bottomLeading)
+            .padding(.horizontal, 8)
+            .padding(.bottom, 3)
+            .frame(height: SidebarScopeList.headingHeight, alignment: .bottom)
+            .contentShape(Rectangle())
+            .accessibilityAddTraits(.isHeader)
+        if folder != nil {
+            label
+                .contextMenu {
+                    Button("Rename Folder…", action: rename)
+                    Button("Delete Folder", role: .destructive, action: delete)
+                }
+                .help("Folder. Control-click to rename it, or delete it and keep its projects.")
+                .accessibilityLabel("Folder \(title)")
+                .accessibilityAction(named: "Rename Folder", rename)
+                .accessibilityAction(named: "Delete Folder", delete)
+        } else {
+            label
+        }
     }
 }
 
@@ -428,9 +529,6 @@ struct SidebarScopeCommands: Commands {
                 .keyboardShortcut("k", modifiers: .command)
             Button("Search Chats") { model.showSidebarSearch() }
                 .keyboardShortcut("f", modifiers: .command)
-            // A focused project always groups its chats by urgency; the choice applies to All projects.
-            Toggle("Group Chats by Urgency", isOn: $model.sidebarGroupsByUrgency)
-                .disabled(model.focusedProject != nil)
             Divider()
             Toggle("All Projects", isOn: binding(nil))
                 .keyboardShortcut("0", modifiers: .command)

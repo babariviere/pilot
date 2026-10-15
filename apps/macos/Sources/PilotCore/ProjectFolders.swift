@@ -10,7 +10,20 @@ public struct ProjectFolder: Identifiable, Codable, Equatable, Sendable {
     }
 }
 
-/// Local sidebar organization, independent of the daemon's project model.
+/// One folder heading and its items, or the ungrouped items (`folder` nil), from `ProjectFolders.sections`.
+public struct ProjectFolderSection<Item> {
+    public let folder: ProjectFolder?
+    public let items: [Item]
+
+    public init(folder: ProjectFolder?, items: [Item]) {
+        self.folder = folder
+        self.items = items
+    }
+
+    public var id: String { folder?.id ?? "" }
+}
+
+/// Local project organization for the project picker and Home, independent of the daemon's project model.
 public struct ProjectFolders: Codable, Equatable, Sendable {
     public private(set) var folders: [ProjectFolder]
     public private(set) var assignments: [String: String]
@@ -61,6 +74,28 @@ public struct ProjectFolders: Codable, Equatable, Sendable {
     public func folderId(for projectId: String) -> String? {
         guard let id = assignments[projectId], folders.contains(where: { $0.id == id }) else { return nil }
         return id
+    }
+
+    /// `items` under their folders in folder order, then the ungrouped ones, each keeping its input order. Empty
+    /// folders are kept only with `includingEmpty`; an empty ungrouped section is always left out.
+    public func sections<Item>(_ items: [Item], includingEmpty: Bool = false,
+                               projectId: (Item) -> String) -> [ProjectFolderSection<Item>] {
+        var byFolder: [String: [Item]] = [:]
+        var ungrouped: [Item] = []
+        for item in items {
+            if let id = folderId(for: projectId(item)) {
+                byFolder[id, default: []].append(item)
+            } else {
+                ungrouped.append(item)
+            }
+        }
+        var sections = folders.compactMap { folder -> ProjectFolderSection<Item>? in
+            let items = byFolder[folder.id] ?? []
+            guard includingEmpty || !items.isEmpty else { return nil }
+            return ProjectFolderSection(folder: folder, items: items)
+        }
+        if !ungrouped.isEmpty { sections.append(ProjectFolderSection(folder: nil, items: ungrouped)) }
+        return sections
     }
 
     public mutating func move(projectId: String, to folderId: String?) {

@@ -50,8 +50,8 @@ extension SessionSummary {
     }
 }
 
-/// The sidebar's chat groups by urgency: always for a focused project, and for All projects unless the user groups
-/// by project and folder instead. Pinned chats lead in their own group, above Needs you.
+/// The sidebar's chat groups by urgency, for All projects and a focused project alike. Pinned chats lead in their own
+/// group, above Needs you.
 public enum SidebarUrgency {
     public struct Groups: Equatable, Sendable {
         /// Pinned chats in list order, whatever their state. A pinned chat is listed only here; its corner still

@@ -24,7 +24,7 @@ enum PilotIcon: String, CaseIterable {
     // MARK: Places and navigation
 
     case home, inbox, overview, allProjects, project, chatFolder, mission, coordinator, artifact, image, settings,
-        archive, restore, search, filter, groupByUrgency, back, focusProject, inspector
+        archive, restore, search, filter, back, focusProject, inspector
 
     // MARK: Actions
 
@@ -75,7 +75,6 @@ extension PilotIcon {
         case .restore: "arrow.uturn.backward"
         case .search: "magnifyingglass"
         case .filter: "line.3.horizontal.decrease.circle"
-        case .groupByUrgency: "list.bullet.indent"
         case .back: "chevron.left"
         case .focusProject: "sidebar.left"
         case .inspector: "sidebar.right"
@@ -220,7 +219,7 @@ extension PilotIcon {
         case .overview: "A project's Overview. Fills while selected."
         case .allProjects: "The All projects scope, and Show All Projects."
         case .project: "A project, a working directory or a direct checkout."
-        case .chatFolder: "A user folder that groups chats in the sidebar, and New Folder. Shares the project folder mark for OS compatibility."
+        case .chatFolder: "A user folder that groups projects in the project picker and on Home, and New Folder. Shares the project folder mark for OS compatibility."
         case .mission: "A mission, everywhere one appears."
         case .coordinator: "A mission's coordinator chat."
         case .artifact: "An artifact; image artifacts use image."
@@ -230,7 +229,6 @@ extension PilotIcon {
         case .restore: "Undo a state: unarchive, reopen or rewind."
         case .search: "Search a list or field."
         case .filter: "A filter, or a list emptied by its filters."
-        case .groupByUrgency: "Group chats into Needs you, Working and Recent."
         case .back: "Go back to the parent page."
         case .focusProject: "Focus the sidebar on one project."
         case .inspector: "Show or hide the inspector."

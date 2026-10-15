@@ -87,6 +87,19 @@ enum HomeStatus {
         }
     }
 
+    /// Project rows under their folder headings (folder order, ungrouped last), most urgent first within each, cut to
+    /// the first `limit` rows in that order. Empty folders are left out.
+    static func folderSections(_ rows: [HomeProjectStatus], folders: ProjectFolders,
+                               limit: Int? = nil) -> [ProjectFolderSection<HomeProjectStatus>] {
+        var remaining = limit ?? .max
+        return folders.sections(rows, projectId: \.project.id).compactMap { section -> ProjectFolderSection<HomeProjectStatus>? in
+            guard remaining > 0 else { return nil }
+            let items = Array(section.items.prefix(remaining))
+            remaining -= items.count
+            return ProjectFolderSection(folder: section.folder, items: items)
+        }
+    }
+
     /// What the Inbox lists: Needs you, Ready to merge, Linear and Slack, across projects.
     static func inboxCount(_ rows: [HomeProjectStatus]) -> Int {
         rows.reduce(0) { $0 + $1.counts.needsYou + $1.readyToMerge + $1.counts.tracked }
@@ -157,9 +170,9 @@ enum HomeStatus {
     }
 }
 
-/// Home below the composer: one reading column that watches every project. A summary sentence, then Projects,
-/// Activity, Working now and Missions. What needs the user lives in the Inbox, so Home lists no Needs you or
-/// Ready to merge rows and no diff counts.
+/// Home below the composer: one reading column that watches every project. A summary sentence, then Projects (under
+/// the user's folder headings, as in the project picker), Activity, Working now and Missions. What needs the user
+/// lives in the Inbox, so Home lists no Needs you or Ready to merge rows and no diff counts.
 struct HomeOverview: View {
     @EnvironmentObject private var app: AppModel
     @ObservedObject private var client = AppModel.shared.client
@@ -201,10 +214,18 @@ struct HomeOverview: View {
                 if rows.isEmpty {
                     quietLine(client.hasProjectSnapshot ? "Add a project to see how it’s doing." : "Loading projects…")
                 }
-                let shown = allProjects ? rows : Array(rows.prefix(HomeStatus.projectLimit))
-                ForEach(Array(shown.enumerated()), id: \.element.id) { index, row in
-                    if index > 0 { HairlineDivider(leading: 8) }
-                    projectRow(row, now: now)
+                let sections = HomeStatus.folderSections(rows, folders: app.projectFolders,
+                                                         limit: allProjects ? nil : HomeStatus.projectLimit)
+                // Headings only once the user has folders; "Other projects" then names the ungrouped rest.
+                let headed = sections.contains { $0.folder != nil }
+                ForEach(Array(sections.enumerated()), id: \.element.id) { index, section in
+                    if headed {
+                        folderHeading(section.folder?.name ?? "Other projects", first: index == 0)
+                    }
+                    ForEach(Array(section.items.enumerated()), id: \.element.id) { index, row in
+                        if index > 0 { HairlineDivider(leading: 8) }
+                        projectRow(row, now: now)
+                    }
                 }
                 if rows.count > HomeStatus.projectLimit { listToggle(count: rows.count, expanded: $allProjects) }
             }
@@ -242,6 +263,17 @@ struct HomeOverview: View {
 
     private func section<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 6, content: content)
+    }
+
+    /// A project folder's heading, styled like the project picker's: a small faint label, not collapsible.
+    private func folderHeading(_ title: String, first: Bool) -> some View {
+        Text(title)
+            .font(.pilot(.caption, weight: .semibold))
+            .foregroundStyle(Theme.faintForeground)
+            .lineLimit(1)
+            .padding(.horizontal, 8)
+            .padding(.top, first ? 2 : 10)
+            .accessibilityAddTraits(.isHeader)
     }
 
     private func projectRow(_ row: HomeProjectStatus, now: Date) -> some View {
