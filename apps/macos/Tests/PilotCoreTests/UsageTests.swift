@@ -184,13 +184,27 @@ private let usageNow = Date(timeIntervalSince1970: 1_781_524_800)
 
 @Test func windowLabelsForSentencesAndBars() {
     #expect(SubscriptionWindow(label: "5h", usedPercent: 1).limitName == "5-hour")
-    #expect(SubscriptionWindow(label: "5h", usedPercent: 1).shortLabel == "5 h")
+    #expect(SubscriptionWindow(label: "5h", usedPercent: 1).columnLabel == "5-hour")
     #expect(SubscriptionWindow(label: "Week", usedPercent: 1).limitName == "weekly")
-    #expect(SubscriptionWindow(label: "Week", usedPercent: 1).shortLabel == "week")
+    #expect(SubscriptionWindow(label: "Week", usedPercent: 1).columnLabel == "Weekly")
     #expect(SubscriptionWindow(label: "Session", usedPercent: 1).limitName == "session")
     let usage = SubscriptionUsage(fetchedAt: 1, windows: [SubscriptionWindow(label: "5h", usedPercent: 1),
                                                           SubscriptionWindow(label: "Extra [on] 1.00/200.00", usedPercent: 1)])
     #expect(usage.limitWindows.map(\.label) == ["5h"])
+}
+
+@Test func homeUsageColumnsLineUpWindowKindsAcrossProviders() {
+    let codex = SubscriptionUsage(fetchedAt: 1, provider: .openai, windows: [SubscriptionWindow(label: "Week", usedPercent: 29),
+                                                                             SubscriptionWindow(label: "Session", usedPercent: 3)])
+    let claude = SubscriptionUsage(fetchedAt: 1, provider: .anthropic, windows: [
+        SubscriptionWindow(label: "Week", usedPercent: 17), SubscriptionWindow(label: "5h", usedPercent: 62),
+        SubscriptionWindow(label: "Extra [on] 1.00/200.00", usedPercent: 1),
+    ])
+    #expect(SubscriptionUsage.columns([codex, claude]) == ["5-hour", "Weekly", "Session"])
+    #expect(codex.window(inColumn: "5-hour") == nil)
+    #expect(codex.window(inColumn: "Weekly")?.usedPercent == 29)
+    #expect(claude.window(inColumn: "5-hour")?.usedPercent == 62)
+    #expect(SubscriptionUsage.columns([]).isEmpty)
 }
 
 @Test func chatModelNamesUseTheCatalogAndFallbackToTheId() throws {

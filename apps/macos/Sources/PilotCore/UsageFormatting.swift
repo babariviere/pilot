@@ -140,6 +140,25 @@ extension SubscriptionUsage {
     /// The windows Home draws as bars: the 5-hour and weekly limits, not extra-usage spend.
     public var limitWindows: [SubscriptionWindow] { windows.filter { !$0.isExtra && $0.usedPercent.isFinite } }
 
+    /// Home's usage columns across providers, one per window kind: hour limits (shortest first), then weekly,
+    /// then any others in the order they first appear. Values are `SubscriptionWindow.columnLabel`s.
+    public static func columns(_ usages: [SubscriptionUsage]) -> [String] {
+        var ranks: [String: Int] = [:]
+        var order: [String] = []
+        for window in usages.flatMap(\.limitWindows) where ranks[window.columnLabel] == nil {
+            ranks[window.columnLabel] = window.columnRank
+            order.append(window.columnLabel)
+        }
+        return order.enumerated()
+            .sorted { (ranks[$0.element]!, $0.offset) < (ranks[$1.element]!, $1.offset) }
+            .map(\.element)
+    }
+
+    /// This provider's window in a Home column, or nil when it has no window of that kind.
+    public func window(inColumn column: String) -> SubscriptionWindow? {
+        limitWindows.first { $0.columnLabel == column }
+    }
+
     public var providerLabel: String {
         provider?.displayName ?? "Subscription"
     }
@@ -188,11 +207,17 @@ extension SubscriptionWindow {
         return label.lowercased()
     }
 
-    /// Short label beside a bar: "5 h", "week".
-    public var shortLabel: String {
-        if let hours = hours { return "\(hours) h" }
-        if isWeek { return "week" }
+    /// Label before a bar on Home: "5-hour", "Weekly".
+    public var columnLabel: String {
+        if let hours = hours { return "\(hours)-hour" }
+        if isWeek { return "Weekly" }
         return label
+    }
+
+    /// Column order on Home: hour limits by length, then weekly, then the rest.
+    var columnRank: Int {
+        if let hours = hours { return hours }
+        return isWeek ? 10_000 : 20_000
     }
 
     private var hours: Int? {
