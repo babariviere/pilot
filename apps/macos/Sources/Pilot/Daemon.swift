@@ -206,6 +206,9 @@ final class DaemonController: ObservableObject {
             "RunAtLoad": true,
             "KeepAlive": true,
             "ThrottleInterval": 10,
+            // Without a ProcessType, launchd runs agents at Utility QoS with throttled CPU and I/O, and the app's
+            // requests wait behind every busy build. Kernels and their tools inherit this class.
+            "ProcessType": "Interactive",
             "StandardOutPath": logURL.path,
             "StandardErrorPath": logURL.path,
         ]
