@@ -180,6 +180,8 @@ export function validateTrackingConfig(value: unknown): ProjectTrackingConfig {
 	const config = value as ProjectTrackingConfig;
 	const keys = [
 		"slackChannels",
+		"slackMentionOnlyChannels",
+		"slackGroupHandles",
 		"slackChannelNames",
 		"slackLabels",
 		"linearTeam",
@@ -188,7 +190,7 @@ export function validateTrackingConfig(value: unknown): ProjectTrackingConfig {
 	];
 	if (Object.keys(config).some((key) => !keys.includes(key)))
 		throw new Error(
-			"Tracking supports only slackChannels, slackChannelNames, slackLabels, linearTeam, linearTeamName and linearStateMappings",
+			"Tracking supports only slackChannels, slackMentionOnlyChannels, slackGroupHandles, slackChannelNames, slackLabels, linearTeam, linearTeamName and linearStateMappings",
 		);
 	if (
 		!Array.isArray(config.slackChannels) ||
@@ -269,6 +271,27 @@ export function validateTrackingConfig(value: unknown): ProjectTrackingConfig {
 	)
 		throw new Error("slackChannelNames must map channel IDs to names of at most 200 characters");
 	const slackChannels = [...new Set(config.slackChannels.map((channel) => channel.trim()))];
+	const mentionOnly = config.slackMentionOnlyChannels;
+	if (
+		mentionOnly !== undefined &&
+		(!Array.isArray(mentionOnly) ||
+			mentionOnly.length > 100 ||
+			mentionOnly.some((channel) => typeof channel !== "string" || !slackChannels.includes(channel.trim())))
+	)
+		throw new Error("slackMentionOnlyChannels must contain configured Slack channels only");
+	const groups = config.slackGroupHandles;
+	if (
+		groups !== undefined &&
+		(!Array.isArray(groups) ||
+			groups.length > 30 ||
+			groups.some(
+				(handle) =>
+					typeof handle !== "string" ||
+					!/^@?[a-z0-9][a-z0-9._-]{0,79}$/i.test(handle.trim()) ||
+					/^(here|channel|everyone)$/i.test(handle.trim().replace(/^@/, "")),
+			))
+	)
+		throw new Error("slackGroupHandles must contain at most 30 user-group handles, not broadcast mentions");
 	// Names are display-only: keep those of configured channels.
 	const slackChannelNames = Object.fromEntries(
 		slackChannels.flatMap((channel) => {
@@ -279,6 +302,12 @@ export function validateTrackingConfig(value: unknown): ProjectTrackingConfig {
 	const linearTeam = config.linearTeam?.trim();
 	const result: ProjectTrackingConfig = {
 		slackChannels,
+		...(mentionOnly?.length
+			? { slackMentionOnlyChannels: [...new Set(mentionOnly.map((channel) => channel.trim()))] }
+			: {}),
+		...(groups?.length
+			? { slackGroupHandles: [...new Set(groups.map((handle) => handle.trim().replace(/^@/, "").toLowerCase()))] }
+			: {}),
 		...(labels
 			? {
 					slackLabels: labels.map((label) => ({

@@ -188,8 +188,35 @@ struct SlackChannelsEditor: View {
         }
         ForEach(editor.slackChannels) { channel in
             SettingsRow {
-                SlackChannelRow(channel: channel, status: source?.channels?.first { $0.id == channel.id },
-                                saved: saved.contains(channel.id)) { editor.removeChannel(channel.id) }
+                VStack(alignment: .leading, spacing: 8) {
+                    SlackChannelRow(channel: channel, status: source?.channels?.first { $0.id == channel.id },
+                                    saved: saved.contains(channel.id)) { editor.removeChannel(channel.id) }
+                    Toggle("Only messages that mention me", isOn: Binding(
+                        get: { editor.slackMentionOnlyChannels.contains(channel.id) },
+                        set: { if $0 { editor.slackMentionOnlyChannels.insert(channel.id) }
+                               else { editor.slackMentionOnlyChannels.remove(channel.id) } }
+                    ))
+                    .font(.pilot(.caption))
+                    .help("A personal or group mention anywhere in a thread qualifies it. Searches only this channel, public or private. Existing items stay unchanged.")
+                    .accessibilityLabel("Only messages that mention me in \(channel.display)")
+                }
+            }
+        }
+        if !editor.slackChannels.isEmpty {
+            SettingsRow {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("My Slack groups").font(.pilot(.body))
+                        Spacer()
+                        TextField("@support, @oncall", text: $editor.slackGroupHandles)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 220)
+                            .accessibilityLabel("My Slack group handles, separated by commas")
+                    }
+                    Text("Add the group handles you belong to, separated by commas. Slack cannot provide your memberships here. Personal mentions always count; @here, @channel and @everyone do not. Filters use channel-scoped public and private search and leave existing items unchanged.")
+                        .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
         SettingsRow {

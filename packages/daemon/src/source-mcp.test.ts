@@ -259,6 +259,9 @@ test("pinned SDK wrapper calls fixed dedicated tools, reuses OAuth and detects r
 					"get_user",
 					"save_issue",
 					"slack_read_channel",
+					"slack_read_user_profile",
+					"slack_search_public",
+					"slack_search_public_and_private",
 					"slack_read_thread",
 					"slack_get_reactions",
 					"slack_add_reaction",
@@ -326,12 +329,26 @@ test("pinned SDK wrapper calls fixed dedicated tools, reuses OAuth and detects r
 		});
 		await client.call("slack", "history", { channel_id: "C1" }, signal);
 		await client.call("slack", "thread", { channel_id: "C1", message_ts: "1.2" }, signal);
+		await client.call("slack", "profile", { response_format: "detailed" }, signal);
+		await client.call("slack", "mentions", { filters: "in:<#C1>", keywords: ["<@U1>"] }, signal);
+		await client.call(
+			"slack",
+			"mentionsPrivate",
+			{ filters: "in:<#C1>", keywords: ["<@U1>"], channel_types: "public_channel,private_channel" },
+			signal,
+		);
 		assert.deepEqual(
 			seen.filter((request) => request.method === "tools/call").map((request) => request.params),
 			[
 				{ name: "list_issues", arguments: { team: "ENG" } },
 				{ name: "slack_read_channel", arguments: { channel_id: "C1" } },
 				{ name: "slack_read_thread", arguments: { channel_id: "C1", message_ts: "1.2" } },
+				{ name: "slack_read_user_profile", arguments: { response_format: "detailed" } },
+				{ name: "slack_search_public", arguments: { filters: "in:<#C1>", keywords: ["<@U1>"] } },
+				{
+					name: "slack_search_public_and_private",
+					arguments: { filters: "in:<#C1>", keywords: ["<@U1>"], channel_types: "public_channel,private_channel" },
+				},
 			],
 		);
 		await client.call("linear", "cycles", { teamId: "ENG", type: "current" }, signal);

@@ -269,6 +269,18 @@ export class TrackedItemDisk {
 			? { state: "done", result: parseSlackClassification(String(row.result)) }
 			: { state: row.state === "error" ? "error" : "pending" };
 	}
+	/** Atomic admission for discovery reads against the shared daily Slack budget. */
+	reserveSlackRead(now: number): boolean {
+		const day = new Date(now).toISOString().slice(0, 10);
+		const result = this.db
+			.prepare(`INSERT INTO slack_budget VALUES (?, 1)
+			ON CONFLICT(day) DO UPDATE SET used=used+1 WHERE used < ?`)
+			.run(day, SLACK_DAILY_BUDGET);
+		this.db
+			.prepare("DELETE FROM slack_budget WHERE day < ?")
+			.run(new Date(now - 7 * 86_400_000).toISOString().slice(0, 10));
+		return Number(result.changes) === 1;
+	}
 	/** Crash-safe admission before any model call. One attempt per project/thread, across restarts. */
 	reserveSlack(channel: string, ts: string, now: number, projectId: string): SlackReservation {
 		validateSlackKey(channel, ts, projectId);

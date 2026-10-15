@@ -35,6 +35,9 @@ parentPort!.on("message", ({ id, method, args }) => {
 			case "reserveSlack":
 				value = disk.reserveSlack(args.channel, args.ts, args.now, args.projectId);
 				break;
+			case "reserveSlackRead":
+				value = disk.reserveSlackRead(args.now);
+				break;
 			case "finishSlack":
 				disk.finishSlack(args.channel, args.ts, args.result, args.projectId);
 				break;

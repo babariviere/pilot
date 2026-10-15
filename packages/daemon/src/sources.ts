@@ -266,8 +266,7 @@ export class SourceRegistry {
 				? {
 						allowed: () =>
 							this.knownProjects.has(project.id) &&
-							JSON.stringify(this.projects.require(project.id).tracking?.slackChannels ?? []) ===
-								JSON.stringify(project.tracking?.slackChannels ?? []),
+							slackPollScope(this.projects.require(project.id)) === slackPollScope(project),
 					}
 				: {}),
 		};
@@ -283,7 +282,7 @@ export class SourceRegistry {
 		);
 		run.promise = abortable(work, controller.signal)
 			.then(async (result) => {
-				if (controller.signal.aborted || this.currentKey(id) !== key) return;
+				if (controller.signal.aborted || this.currentKey(id) !== key || run.allowed?.() === false) return;
 				const checkpoint: SourceCheckpoint = {
 					configKey: key,
 					lastPolledAt: Date.now(),
@@ -319,7 +318,7 @@ export class SourceRegistry {
 						? {
 								error:
 									result.issue === "slack_budget"
-										? "Slack daily budget reached. Remaining threads and reaction checks resume tomorrow."
+										? "Slack daily budget reached. Searches, remaining threads and reaction checks resume tomorrow."
 										: result.issue === "slack_channel"
 											? "A Slack channel could not be read. Check its access in project settings."
 											: "Some Slack threads could not be classified. Failed or interrupted attempts are cached and never retried.",
@@ -970,6 +969,15 @@ function configKey(project: Project, kind: TrackedKind): string {
 			]),
 		)
 		.digest("hex");
+}
+
+/** Admission changes cancel in-flight discovery without invalidating existing rows/checkpoints. */
+function slackPollScope(project: Project): string {
+	return JSON.stringify([
+		project.tracking?.slackChannels ?? [],
+		project.tracking?.slackMentionOnlyChannels ?? [],
+		project.tracking?.slackGroupHandles ?? [],
+	]);
 }
 
 /** Project labels whose Slack messages stay out of the Inbox. */

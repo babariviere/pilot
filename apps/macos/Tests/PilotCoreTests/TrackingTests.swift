@@ -2,6 +2,17 @@ import Foundation
 import Testing
 @testable import PilotCore
 
+@Test func slackMentionSettingsDecodeLegacyAndRoundTrip() throws {
+    let legacy = try JSONDecoder().decode(ProjectTrackingConfig.self, from: Data(#"{"slackChannels":["C1"]}"#.utf8))
+    #expect(legacy.slackMentionOnlyChannels == nil)
+    #expect(legacy.slackGroupHandles == nil)
+    let config = ProjectTrackingConfig(slackChannels: ["C1", "C2"],
+                                       slackMentionOnlyChannels: ["C2"], slackGroupHandles: ["oncall"])
+    let encoded = try JSONEncoder().encode(config)
+    let decoded = try JSONDecoder().decode(ProjectTrackingConfig.self, from: encoded)
+    #expect(decoded == config)
+}
+
 @Test func slackDoneReasonsDecodeWithoutBreakingOlderRows() throws {
     let json = Data(#"{"type":"bug","label":null,"severity":"low","status":"done","overrides":{},"doneReason":"Done · PR #42 merged"}"#.utf8)
     let triage = try JSONDecoder().decode(SlackTriage.self, from: json)
