@@ -995,9 +995,15 @@ export class SessionManager {
 					meta.prActivities = meta.prActivities.filter(
 						(activity) => !activity.requestId.startsWith("main-workspace:"),
 					);
-				if (this.sleepPause && (meta.working || meta.initializing || meta.pending?.length)) meta.sleepPaused = true;
+				if (
+					this.sleepPause &&
+					(meta.working || meta.initializing || meta.pending?.length || this.backgroundWorking(meta))
+				)
+					meta.sleepPaused = true;
+				const childWork = this.backgroundWorking(meta);
+				if (childWork) applyActivity(meta, Boolean(meta.working), undefined, true);
 				this.metas.set(meta.id, meta);
-				if (legacyRefresh) await this.save(meta);
+				if (legacyRefresh || childWork) await this.save(meta);
 			} catch (error) {
 				console.warn(`pilotd: skipping unreadable session ${id}: ${error}`);
 			}
@@ -1018,6 +1024,7 @@ export class SessionManager {
 				(meta.initializing ||
 					meta.pending?.length ||
 					meta.working ||
+					this.backgroundWorking(meta) ||
 					meta.sleepPaused ||
 					meta.updatePaused ||
 					meta.kernelRestartPending)
@@ -1047,13 +1054,21 @@ export class SessionManager {
 		this.parkTimer.unref();
 	}
 
+	/** Child admissions are durable even when the parent has already ended its own run. */
+	private backgroundWorking(meta: SessionMeta, worker = this.workers.get(meta.id)): boolean {
+		return !!(
+			(meta.archivedAt === undefined && meta.subagents?.some((child) => child.state === "working")) ||
+			worker?.runningJobs?.length ||
+			worker?.awaitingJobFollowUp
+		);
+	}
+
 	private parkable(meta: SessionMeta, worker: SessionWorker): boolean {
 		const id = meta.id;
 		return (
 			this.workers.get(id) === worker &&
 			worker.state === "idle" &&
-			!worker.runningJobs?.length &&
-			!worker.awaitingJobFollowUp &&
+			!this.backgroundWorking(meta, worker) &&
 			!(worker.busy ?? true) &&
 			!this.watchers.get(id)?.size &&
 			!this.starting.has(id) &&
@@ -1827,7 +1842,7 @@ export class SessionManager {
 			this.updateGate.paused ||
 			worker?.busy ||
 			worker?.state === "working" ||
-			worker?.awaitingJobFollowUp ||
+			this.backgroundWorking(meta, worker) ||
 			this.hasWorkspaceProcess(id)
 		)
 			return;
@@ -2085,10 +2100,8 @@ export class SessionManager {
 			this.changingModels.has(id) ||
 			this.archiveTransitions.has(id) ||
 			this.hasWorkspaceProcess(id) ||
-			meta.subagents?.some((child) => child.state === "working") ||
 			worker?.busy ||
-			worker?.awaitingJobFollowUp ||
-			worker?.runningJobs?.length ||
+			this.backgroundWorking(meta, worker) ||
 			(worker && worker.state !== "idle") ||
 			this.workers.get(id) !== worker ||
 			meta.workspace !== workspace ||
@@ -2564,6 +2577,7 @@ export class SessionManager {
 			[...this.metas.values()].some(
 				(meta) =>
 					meta.working ||
+					this.backgroundWorking(meta) ||
 					// Terminal initialization failure cannot replay these commands. Uncertain admission
 					// uses inputError instead, so its durable outbox continues to block an update.
 					(!meta.failure &&
@@ -3692,7 +3706,12 @@ export class SessionManager {
 					listener(structuredClone(view.events));
 					// Recover a committed attention version without treating viewing as activity,
 					// writing durable state, or fabricating a new completion timestamp.
-					if (!this.sleepPause && view.completion && applyActivity(meta, false, view.completion)) this.emit(meta);
+					if (
+						!this.sleepPause &&
+						view.completion &&
+						applyActivity(meta, false, view.completion, this.backgroundWorking(meta))
+					)
+						this.emit(meta);
 				})
 				.catch((error: unknown) => {
 					if (error instanceof Error && error.name === "AbortError") return;
@@ -3793,9 +3812,7 @@ export class SessionManager {
 					meta.initializing ||
 					meta.pending?.length ||
 					worker.busy ||
-					worker.runningJobs?.length ||
-					worker.awaitingJobFollowUp ||
-					meta.subagents?.some((agent) => agent.state === "working")
+					this.backgroundWorking(meta, worker)
 				)
 					meta.sleepPaused = true;
 				this.parked.add(worker);
@@ -4238,7 +4255,7 @@ export class SessionManager {
 			if (
 				owned &&
 				(exited.state === "failed" || code !== 0 || signal !== null) &&
-				(meta.working || meta.initializing || meta.pending?.length || exited.awaitingJobFollowUp)
+				(meta.working || meta.initializing || meta.pending?.length || this.backgroundWorking(meta, exited))
 			) {
 				meta.kernelRestartPending = true;
 				void this.save(meta);
@@ -4320,7 +4337,7 @@ export class SessionManager {
 			worker.transportUnavailable &&
 			this.workers.get(meta.id) === worker
 		) {
-			if (meta.working || meta.initializing || meta.pending?.length || worker.awaitingJobFollowUp)
+			if (meta.working || meta.initializing || meta.pending?.length || this.backgroundWorking(meta, worker))
 				meta.kernelRestartPending = true;
 			this.retiring.add(worker);
 			// A disconnected writer must exit before a demand can reopen its storage. This is recovery,
@@ -4493,6 +4510,8 @@ export class SessionManager {
 			if (JSON.stringify(packet.subagents) === JSON.stringify(meta.subagents ?? [])) return;
 			if (packet.subagents.length) meta.subagents = packet.subagents;
 			else delete meta.subagents;
+			// A parent's final answer while a child is running is not the result of the delegated work.
+			if (this.backgroundWorking(meta, worker)) applyActivity(meta, Boolean(meta.working), undefined, true);
 			void this.save(meta);
 			this.emit(meta, worker);
 			for (const attach of [...(this.subagentAttachers.get(meta.id) ?? [])]) attach();
@@ -4517,7 +4536,7 @@ export class SessionManager {
 				packet.completion.outcomeAt > (meta.lastCompletionAt ?? meta.outcomeAt ?? -1)
 			)
 				worker.awaitingJobFollowUp = false;
-			const changed = applyActivity(meta, packet.working, packet.completion, worker.awaitingJobFollowUp);
+			const changed = applyActivity(meta, packet.working, packet.completion, this.backgroundWorking(meta, worker));
 			if (packet.type === "ready") {
 				if (this.workers.get(meta.id) === worker) delete meta.kernelRestartPending;
 				// Opening a transcript or restarting its worker is not new chat activity.
@@ -4563,7 +4582,14 @@ export class SessionManager {
 			!!this.sleepPause &&
 			meta.archivedAt === undefined &&
 			!meta.failure &&
-			!!(meta.sleepPaused || meta.working || meta.initializing || meta.pending?.length || meta.kernelRestartPending);
+			!!(
+				meta.sleepPaused ||
+				meta.working ||
+				meta.initializing ||
+				meta.pending?.length ||
+				meta.kernelRestartPending ||
+				this.backgroundWorking(meta, worker)
+			);
 		const usage = this.usage(meta, worker);
 		const state = paused
 			? "parked"
@@ -4574,12 +4600,7 @@ export class SessionManager {
 					: meta.inputError && (!meta.working || !worker)
 						? "failed"
 						: (worker?.state ?? "parked");
-		const working =
-			!paused &&
-			(state === "working" ||
-				state === "starting" ||
-				!!worker?.runningJobs?.length ||
-				!!worker?.awaitingJobFollowUp);
+		const working = !paused && (state === "working" || state === "starting" || this.backgroundWorking(meta, worker));
 		const sourceBranch =
 			meta.mode === "ask"
 				? meta.ask?.branch
