@@ -267,6 +267,13 @@ available. Ask loads only its restricted tools and bundled web, never personal/p
 factories. [pi-anthropic-auth](https://github.com/gotgenes/pi-anthropic-auth) is required in Build, Ask,
 child workers and daemon model calls, without modifying personal settings.
 
+**Settings → Connections** lists the MCP servers in your global `~/.pi/agent/mcp.json` and whether each
+is connected, needs sign-in or fails to start. pilotd checks them when it starts and whenever pi's MCP
+files change (including `pi mcp login` in a terminal), never on a timer. Servers that use OAuth get a
+**Sign in** button that runs pi's browser sign-in; chats pick up the new sign-in on their next turn. The
+sidebar shows a quiet footer while a server waits for sign-in. Errors stay short; run `pi mcp list` for
+the full message.
+
 Linear and Slack tracking use the configured
 pi MCP servers named `linear` and `slack` and their existing OAuth sign-in, not separate Pilot API tokens.
 Configure sources in project settings. Tracking is not a blanket promise of autonomous fixes or replies.

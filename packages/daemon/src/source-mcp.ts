@@ -124,12 +124,17 @@ export class PiSourceMcpClient implements SourceMcpClient {
 		this.openUrl = options.openUrl ?? openBrowser;
 	}
 	signIn(kind: TrackedKind, options: { again: boolean; signal: AbortSignal }): Promise<void> {
+		if (kind !== "linear" && kind !== "slack") return Promise.reject(new SourceSignInFailed("Unknown source."));
+		return this.signInServer(kind, options);
+	}
+	/** Browser sign-in to any server in the user's global mcp.json, for the Connections settings. */
+	signInServer(name: string, options: { again: boolean; signal: AbortSignal }): Promise<void> {
 		const { signal } = options;
 		if (this.stopped) return Promise.reject(new Error("MCP client stopped"));
 		if (signal.aborted) return Promise.reject(signal.reason);
-		if (kind !== "linear" && kind !== "slack") return Promise.reject(new SourceSignInFailed("Unknown source."));
+		if (!name || name.length > 200) return Promise.reject(new SourceSignInFailed("Unknown MCP server."));
 		const worker = new Worker(new URL("./source-sign-in-worker.ts", import.meta.url), {
-			workerData: { agentDir: this.agentDir, kind, again: options.again },
+			workerData: { agentDir: this.agentDir, kind: name, again: options.again },
 		});
 		this.signIns.add(worker);
 		return new Promise((resolve, reject) => {

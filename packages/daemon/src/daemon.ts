@@ -1,8 +1,10 @@
 /** pilotd: background pi agents on durable sessions. */
 import { join } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { loadConfig } from "./config.ts";
 import { EventLoopWatchdog } from "./event-loop-watchdog.ts";
 import { MissionLinearSource, pollLinear } from "./linear-source.ts";
+import { McpStatusService, workerProbe } from "./mcp-status.ts";
 import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
@@ -32,6 +34,13 @@ const trackedItems = new TrackedItemStore(join(config.home, "tracked-items.sqlit
 await trackedItems.load(projects.list().map((project) => project.id));
 const sourceMcp = new PiSourceMcpClient(config.agentDir);
 const tracking = new SourceRegistry(projects, trackedItems, sourceMcp);
+// Shared MCP status for Settings and Needs you. Checks once now, then only when pi's MCP files change.
+const mcpStatus = new McpStatusService({
+	probe: workerProbe(config.agentDir),
+	login: (server, options) => sourceMcp.signInServer(server, options),
+	watchDir: config.agentDir ?? getAgentDir(),
+});
+mcpStatus.start();
 tracking.register("linear", pollLinear);
 tracking.startPolling("linear");
 const models = new ModelCatalog(config.agentDir);
@@ -127,6 +136,7 @@ const server = createDaemonServer(
 	schedules,
 	tracking,
 	power,
+	mcpStatus,
 );
 server.listen(config.port, config.host, () => {
 	console.log(`pilotd listening on http://${config.host}:${config.port} (data: ${config.home})`);
@@ -143,6 +153,7 @@ async function stop(): Promise<void> {
 	systemEventsDetection.stop();
 	await scheduleStore.close();
 	stopMemoryProjects();
+	await mcpStatus.close();
 	await missionLinear.stop();
 	await tracking.stop();
 	await memory.stop();
