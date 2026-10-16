@@ -118,20 +118,20 @@ private func ids(_ sections: [CommandPaletteSection]) -> [[String]] {
 }
 
 @Test func matchingIgnoresCaseAndAccents() {
-    let items = [chat("a", "Résumé export", project: "Stoïk")]
+    let items = [chat("a", "Résumé export", project: "Café")]
     #expect(ids(CommandPalette.results(for: "RESUME", items: items)) == [["a"]])
-    #expect(ids(CommandPalette.results(for: "stoik", items: items)) == [["a"]])
+    #expect(ids(CommandPalette.results(for: "cafe", items: items)) == [["a"]])
 }
 
 @Test func groupsFollowTheirBestMatch() {
     let items = [
-        chat("chat", "Claims export retry", project: "stoik-api"),
-        CommandPaletteItem(id: "switch", kind: .project, title: "Switch to stoik-api", keywords: ["stoik-api"]),
-        CommandPaletteItem(id: "overview", kind: .page, title: "Overview", keywords: ["stoik-api"]),
-        CommandPaletteItem(id: "linear", kind: .linear, title: "Broker export times out",
-                           keywords: ["ENG-1412", "stoik-api"]),
+        chat("chat", "Invoice export retry", project: "acme-api"),
+        CommandPaletteItem(id: "switch", kind: .project, title: "Switch to acme-api", keywords: ["acme-api"]),
+        CommandPaletteItem(id: "overview", kind: .page, title: "Overview", keywords: ["acme-api"]),
+        CommandPaletteItem(id: "linear", kind: .linear, title: "Report export times out",
+                           keywords: ["ENG-1412", "acme-api"]),
     ]
-    let sections = CommandPalette.results(for: "stoik", items: items)
+    let sections = CommandPalette.results(for: "acme", items: items)
     // The project's title holds the word; the others match it only as a keyword, then tie in group order.
     #expect(sections.map(\.title) == ["Projects", "Chats", "Pages", "Linear"])
     #expect(ids(CommandPalette.results(for: "eng-1412", items: items)) == [["linear"]])
