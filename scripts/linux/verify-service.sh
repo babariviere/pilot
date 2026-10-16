@@ -144,6 +144,9 @@ import json, sys
 assert json.load(open(sys.argv[1]))['daemonId'] == json.load(open(sys.argv[2]))['daemonId']
 PY
 "${ssh_cmd[@]}" "'$runtime/bin/pilot-runtime' stop"
+# Disposable saved workspace with no model/provider requirement, loaded on the following manager restart.
+update_session="$(node -e 'console.log(crypto.randomUUID())')"
+"${ssh_cmd[@]}" "mkdir -p '$home/.local/share/pilot/sessions/$update_session'; printf '%s' '{\"id\":\"$update_session\",\"cwd\":\"$home\",\"title\":\"Update fixture\",\"createdAt\":1,\"updatedAt\":1,\"working\":false}' > '$home/.local/share/pilot/sessions/$update_session/meta.json'"
 sudo systemctl stop "user@$uid.service"
 sudo systemctl start "user@$uid.service"
 for attempt in $(seq 1 60); do
@@ -154,6 +157,21 @@ userctl is-active pilotd.service
 python3 - "$work/hello.json" "$work/hello-manager-restarted.json" <<'PY'
 import json, sys
 assert json.load(open(sys.argv[1]))['daemonId'] == json.load(open(sys.argv[2]))['daemonId']
+PY
+node "$repo/scripts/linux/verify-update.mjs" "$home" "$archive" "$update_session" "$bootstrap_source" "${ssh_cmd[@]:1}" > "$work/update.json"
+runtime="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["runtime"])' "$work/update.json")"
+userctl is-active pilotd.service
+"${ssh_cmd[@]}" "'$runtime/bin/pilot-runtime' stop"
+sudo systemctl stop "user@$uid.service"
+sudo systemctl start "user@$uid.service"
+for attempt in $(seq 1 60); do
+	if curl -fsS http://127.0.0.1:4319/api/runtime-update > "$work/update-restarted.json"; then break; fi
+	sleep 1
+done
+python3 - "$work/update.json" "$work/update-restarted.json" <<'PY'
+import json, sys
+before, after = [json.load(open(x)) for x in sys.argv[1:]]
+assert before['id'] == after['id'] and after['phase'] == 'completed'
 PY
 "${ssh_cmd[@]}" "'$runtime/bin/pilot-runtime' stop"
 echo 'Relocated production service: SSH logout survival, reconnect, orderly stop, durable identity restart passed.'

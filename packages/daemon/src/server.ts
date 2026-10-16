@@ -73,7 +73,8 @@ import { expandHome, type ProjectStore } from "./projects.ts";
 import { PTY_INPUT_CHUNK } from "./pty-input.ts";
 import { RepositoryBrowser } from "./repository-browser.ts";
 import { ReviewStore } from "./reviews.ts";
-import { RuntimeResources } from "./runtime-admission.ts";
+import { RuntimeAdmission, RuntimeResources } from "./runtime-admission.ts";
+import type { RuntimeMaintenance } from "./runtime-maintenance.ts";
 import type { ScheduleService } from "./schedules.ts";
 import { NotFound, type SessionManager } from "./sessions.ts";
 import { SetupError, type SetupService } from "./setup.ts";
@@ -275,6 +276,7 @@ export function createDaemonServer(
 	hello?: DaemonHello,
 	setup?: SetupService,
 	sharing?: import("./shared-context.ts").SharedContextService,
+	maintenance?: RuntimeMaintenance,
 ): Server & { runtimeResources: RuntimeResources } {
 	sessions.setWorkspaceProcessGuard((id) => terminals.isRunning(id));
 	const reviews = new ReviewStore(_config.home);
@@ -305,6 +307,17 @@ export function createDaemonServer(
 	const repositoryChanges = new RepositoryChanges();
 	const repositories = new RepositoryBrowser(projects);
 	const attachments = new AttachmentStore(_config.home);
+	const transfers = new RuntimeAdmission();
+	const mutations = new RuntimeAdmission();
+	const runtimeResources = new RuntimeResources([
+		terminals,
+		attachments,
+		sessions,
+		transfers,
+		mutations,
+		...(setup ? [setup] : []),
+	]);
+	maintenance?.bind(runtimeResources);
 	const journal = hello?.lineageId
 		? new OperationJournal(join(_config.home, "operations"), {
 				hostId: "daemon",
@@ -313,6 +326,14 @@ export function createDaemonServer(
 			})
 		: undefined;
 	const admitOperation = async (op: DurableOperation): Promise<unknown> => {
+		const end = mutations.begin({ kind: "operation", id: op.operationId });
+		try {
+			return await admitOperationHeld(op);
+		} finally {
+			end();
+		}
+	};
+	const admitOperationHeld = async (op: DurableOperation): Promise<unknown> => {
 		if (op.kind.startsWith("share-")) {
 			if (!sharing) throw new OperationRejected("Shared context unavailable");
 			return sharing.handle(op);
@@ -358,13 +379,31 @@ export function createDaemonServer(
 		throw new OperationRejected("Unsupported operation kind");
 	};
 	// Only registered idempotent handlers resume. An interrupted handler always retains the same target.
-	if (journal)
-		void journal.recover(admitOperation).catch((error) => console.warn("pilotd: operation recovery", error));
+	const recoverOperations = () => {
+		if (journal && !maintenance?.frozen)
+			void journal.recover(admitOperation).catch((error) => console.warn("pilotd: operation recovery", error));
+	};
+	recoverOperations();
+	const stopRecoveryWatch = maintenance?.onOpen(recoverOperations);
 	const route = async (req: IncomingMessage, res: ServerResponse) => {
 		if (!isAllowedOrigin(req.headers.origin)) throw new HttpError(403, "Browser requests are not allowed");
 		const url = new URL(req.url ?? "/", "http://localhost");
 		const parts = url.pathname.split("/").filter(Boolean);
 		if (parts[0] !== "api") throw new HttpError(404, "Not found");
+		if (parts[1] === "runtime-update" && maintenance) {
+			res.setHeader("cache-control", "no-store");
+			if (parts.length === 2 && req.method === "GET")
+				return json(res, 200, await maintenance.status(url.searchParams.get("id") ?? undefined));
+			if (parts.length === 3 && parts[2] === "cancel" && req.method === "POST") {
+				const body = await readJson<{ id: string }>(req);
+				return json(res, 202, await maintenance.cancel(body.id));
+			}
+			if (parts.length === 3 && req.method === "POST" && ["drain", "commit"].includes(parts[2]!)) {
+				const body = await readJson<{ id: string }>(req);
+				return json(res, 200, await maintenance.inspect(body.id, parts[2] === "commit"));
+			}
+			throw new HttpError(404, "Unknown update action");
+		}
 		if (parts[1] === "shared-contexts") {
 			if (!sharing) throw new ServiceUnavailable("Shared context unavailable");
 			if (parts.length === 2 && req.method === "GET") return json(res, 200, await sharing.summaries());
@@ -1135,7 +1174,34 @@ export function createDaemonServer(
 		const done = operations.begin(`${req.method} ${(req.url ?? "/").split("?")[0]}`);
 		res.once("close", done);
 		if (missions && req.method !== "GET" && req.method !== "HEAD") acknowledgeWhenDurable(res, missions.store);
-		route(req, res).catch((error: unknown) => {
+		let release: (() => void) | undefined;
+		const run = async () => {
+			const path = new URL(req.url ?? "/", "http://localhost").pathname;
+			const update = path.startsWith("/api/runtime-update");
+			const control =
+				/\/(stop|cancel|seal)$/.test(path) || (req.method === "DELETE" && path.startsWith("/api/setup/runs/"));
+			if (!update && req.method !== "GET" && req.method !== "HEAD" && !control)
+				release = mutations.begin({ kind: "request", id: path.slice(0, 180) });
+			else if (
+				(req.method === "GET" || req.method === "HEAD") &&
+				/\/(artifacts|artifact-libraries|files)(\/|$)/.test(path)
+			)
+				release = transfers.begin({ kind: "download", id: path.slice(0, 180) });
+			let routeDone = false;
+			const settled = () => {
+				if (routeDone) release?.();
+			};
+			res.once("finish", settled);
+			res.once("close", settled);
+			try {
+				await route(req, res);
+			} finally {
+				routeDone = true;
+				// A closed socket is not proof that queued filesystem/metadata work has settled.
+				if (res.destroyed || res.writableFinished) release?.();
+			}
+		};
+		run().catch((error: unknown) => {
 			const status =
 				error instanceof HttpError || error instanceof SetupError
 					? error.status
@@ -1164,6 +1230,7 @@ export function createDaemonServer(
 	const streamWss = new WebSocketServer({ noServer: true, maxPayload: 4 * 1024 * 1024 });
 	const terminalWss = new WebSocketServer({ noServer: true, maxPayload: 128 * 1024 });
 	server.on("close", () => {
+		stopRecoveryWatch?.();
 		for (const ws of terminalWss.clients) ws.terminate();
 		terminalWss.close();
 	});
@@ -1671,7 +1738,7 @@ export function createDaemonServer(
 	}
 
 	return Object.assign(server, {
-		runtimeResources: new RuntimeResources([terminals, attachments, sessions, ...(setup ? [setup] : [])]),
+		runtimeResources,
 	});
 }
 /** Mission routes under /api/missions and /api/sessions/:id/mission. Returns false when nothing matched. */

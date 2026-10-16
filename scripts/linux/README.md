@@ -76,3 +76,8 @@ Live jobs and PTYs do **not** survive a stop. Planned updates must separately ga
 drain, not call this initial installer to overwrite a running service. An SSH disconnect performs no
 service operation. Logout/reboot persistence requires verified linger plus the enabled default target;
 boot survival is configured here, while CI directly exercises logout and service-manager restart.
+
+The separate [safe update flow](../../docs/safe-remote-updates.md) stages another signed runtime,
+uses an independent `pilot-update.service`, fences daemon startup and admissions, and waits for
+actual terminal/job/transfer clearance before changing the owned unit. Production-package CI
+exercises its SSH delivery, real resource blockers, updater crash recovery and retained receipt.

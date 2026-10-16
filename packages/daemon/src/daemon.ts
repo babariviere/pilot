@@ -20,6 +20,7 @@ import { detectPlatformCapabilities } from "./platform.ts";
 import { PowerService } from "./power.ts";
 import { ProjectMemoryService } from "./project-memory.ts";
 import { ProjectStore } from "./projects.ts";
+import { RuntimeMaintenance } from "./runtime-maintenance.ts";
 import { ScheduleDetection } from "./schedule-detection.ts";
 import { ScheduleStore } from "./schedule-store.ts";
 import { ScheduleService } from "./schedules.ts";
@@ -110,6 +111,8 @@ const sessions = new SessionManager(
 		credentials,
 	},
 );
+const maintenance = process.platform === "linux" ? new RuntimeMaintenance(config.home, hello, sessions) : undefined;
+await maintenance?.load();
 sessions.setProjectMemory(memory);
 sessions.setMcpStatus(mcpStatus);
 sessions.setPullRequestObserver((observation) => trackedItems.observeSlackPullRequests(observation));
@@ -150,11 +153,13 @@ const connectivity = new ConnectivityService(join(config.home, "connectivity.jso
 await connectivity.start();
 // Recover global sleep overrides before any interrupted agent can reopen.
 await power?.start();
-await sessions.load();
-await sharing.recover();
+await sessions.load(maintenance?.frozen);
+if (!maintenance?.frozen) await sharing.recover();
 power?.refresh();
-missionService.notices.start();
-missionService.compaction.start();
+if (!maintenance?.frozen) {
+	missionService.notices.start();
+	missionService.compaction.start();
+}
 const terminals = new TerminalManager();
 const setup = new SetupService(credentials, { mcp: () => mcpStatus.status() });
 const scheduleStore = new ScheduleStore(join(config.home, "schedules.sqlite"));
@@ -166,7 +171,13 @@ const schedules = new ScheduleService(scheduleStore, {
 	triggers: scheduleDetection,
 });
 await schedules.load();
-schedules.start();
+if (!maintenance?.frozen) schedules.start();
+maintenance?.onOpen(() => {
+	void sharing.recover().catch((error) => console.warn("pilotd: sharing recovery", error));
+	missionService.notices.start();
+	missionService.compaction.start();
+	schedules.start();
+});
 const server = createDaemonServer(
 	config,
 	sessions,
@@ -186,6 +197,7 @@ const server = createDaemonServer(
 	hello,
 	setup,
 	sharing,
+	maintenance,
 );
 server.listen(config.port, config.host, () => {
 	console.log(`pilotd listening on http://${config.host}:${config.port} (data: ${config.home})`);
@@ -197,6 +209,7 @@ async function stop(): Promise<void> {
 	stopping = true;
 	console.log("pilotd: pausing sessions");
 	watchdog.stop();
+	maintenance?.close();
 	server.close();
 	await sharing.stop();
 	await schedules.stop();

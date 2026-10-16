@@ -27,4 +27,5 @@ public struct DaemonCapabilities: Codable, Equatable, Sendable {
     public let coordinatorIsolation: Bool
     public let independentExecution: Bool
     public let workspaceTerminalProtocol: Int?
+    public let runtimeUpdates: Int?
 }

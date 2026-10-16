@@ -572,6 +572,20 @@ final class HostClients: ObservableObject {
     }
 
     /// Setup belongs to a verified host, not a project/chat or the global Local client.
+    func runtimeUpdate(_ id: String? = nil, on host: HostRef) async throws -> RuntimeUpdateStatus? {
+        let client = try endpoint(host), token = try token(for: host)
+        let value = try await client.runtimeUpdate(id)
+        try validate(token)
+        return value
+    }
+
+    func cancelRuntimeUpdate(_ id: String, on host: HostRef) async throws -> RuntimeUpdateCancellation {
+        let client = try endpoint(host), token = try token(for: host)
+        let value = try await client.cancelRuntimeUpdate(id)
+        try validate(token)
+        return value
+    }
+
     func setupReadiness(on host: HostRef) async throws -> SetupReadiness {
         let client = try endpoint(host), token = try token(for: host)
         let value = try await client.setupReadiness()
