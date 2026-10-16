@@ -24,10 +24,11 @@ done
 # failures, not just SwiftPM's aggregate exit status. pipefail also preserves
 # build failures, crashes and other nonzero driver exits.
 # Bash 3.2 (macOS /bin/bash) treats an empty array as unset under nounset.
-# This WebKit matrix must not compete with hundreds of unrelated MainActor tests
-# and their nested AppKit run loops. Keep all its assertions and its 60s limit,
-# but run it in its own process after the normal suite, reusing the same build.
+# Native sheet interaction and this WebKit matrix must not compete with hundreds
+# of unrelated MainActor tests and their nested AppKit run loops. Keep their
+# assertions and time limits, running each in its own process with the same build.
 isolated=artifactHeightRespectsNestedClippingWhileKeepingVisibleOverflow
+devbox=addDevboxPresentsSetupSheetAfterCancelAndReopen
 partition=1
 reuse=(--skip-build)
 for argument in "$@"; do
@@ -46,8 +47,9 @@ run_tests() {
 		| python3 "$here/scripts/check-test-output.py" ${guards[@]+"${guards[@]}"}
 }
 if [ "$partition" = 1 ]; then
-	run_tests "" "$@" --skip "$isolated"
+	run_tests "" "$@" --skip "$isolated|$devbox"
 	run_tests "$isolated" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$isolated"
+	run_tests "$devbox" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$devbox"
 else
 	# Explicit selection/listing is the caller's scope. Do not append another filter.
 	run_tests "" "$@"
