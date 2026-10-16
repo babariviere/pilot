@@ -191,6 +191,21 @@ private let usageNow = Date(timeIntervalSince1970: 1_781_524_800)
     let usage = SubscriptionUsage(fetchedAt: 1, windows: [SubscriptionWindow(label: "5h", usedPercent: 1),
                                                           SubscriptionWindow(label: "Extra [on] 1.00/200.00", usedPercent: 1)])
     #expect(usage.limitWindows.map(\.label) == ["5h"])
+    #expect(usage.homeWindows.map(\.columnLabel) == ["5-hour", "Extra"])
+}
+
+@Test func extraUsageShowsSpendAgainstItsCap() throws {
+    let capped = SubscriptionWindow(label: "Extra [on] 46.17/200.00", usedPercent: 23.085)
+    let extra = try #require(capped.extraUsage)
+    #expect(extra == SubscriptionWindow.ExtraUsage(spent: "46.17", cap: "200.00", active: false))
+    #expect(capped.valueLabel == "46.17/200")
+    #expect(capped.helpText == "Extra usage: 46.17 of 200.00 spent (23%)")
+    let active = SubscriptionWindow(label: "Extra [active] 12.00", usedPercent: 0)
+    #expect(active.extraUsage == SubscriptionWindow.ExtraUsage(spent: "12.00", cap: nil, active: true))
+    #expect(active.valueLabel == "12")
+    #expect(active.helpText.hasSuffix("In use now."))
+    #expect(SubscriptionWindow(label: "5h", usedPercent: 5).extraUsage == nil)
+    #expect(SubscriptionWindow(label: "5h", usedPercent: 5).valueLabel == "5%")
 }
 
 @Test func homeUsageColumnsLineUpWindowKindsAcrossProviders() {
@@ -200,8 +215,10 @@ private let usageNow = Date(timeIntervalSince1970: 1_781_524_800)
         SubscriptionWindow(label: "Week", usedPercent: 17), SubscriptionWindow(label: "5h", usedPercent: 62),
         SubscriptionWindow(label: "Extra [on] 1.00/200.00", usedPercent: 1),
     ])
-    #expect(SubscriptionUsage.columns([codex, claude]) == ["5-hour", "Weekly", "Session"])
+    #expect(SubscriptionUsage.columns([codex, claude]) == ["5-hour", "Weekly", "Session", "Extra"])
     #expect(codex.window(inColumn: "5-hour") == nil)
+    #expect(codex.window(inColumn: "Extra") == nil)
+    #expect(claude.window(inColumn: "Extra")?.valueLabel == "1/200")
     #expect(codex.window(inColumn: "Weekly")?.usedPercent == 29)
     #expect(claude.window(inColumn: "5-hour")?.usedPercent == 62)
     #expect(SubscriptionUsage.columns([]).isEmpty)

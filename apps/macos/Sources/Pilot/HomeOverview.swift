@@ -140,7 +140,7 @@ enum HomeStatus {
         var newest: [SubscriptionProvider: SubscriptionUsage] = [:]
         for session in sessions {
             guard let usage = session.usage?.subscription, let provider = usage.provider,
-                  !usage.limitWindows.isEmpty, usage.fetchedAt > (newest[provider]?.fetchedAt ?? -.infinity)
+                  !usage.homeWindows.isEmpty, usage.fetchedAt > (newest[provider]?.fetchedAt ?? -.infinity)
             else { continue }
             newest[provider] = usage
         }
@@ -435,7 +435,8 @@ private struct ActivityStrip: View {
 }
 
 /// Subscription usage, shown once on Home under the summary: quiet bars per provider for its 5-hour and weekly
-/// limits. A window past 80% turns its bar amber; chats then also show one line above their composer.
+/// limits, then extra-usage spend against its monthly cap when the provider reports it. A window past 80% turns its
+/// bar amber; for limits, chats then also show one line above their composer.
 struct SubscriptionUsageBars: View {
     let subscriptions: [SubscriptionUsage]
     let now: Date
@@ -466,14 +467,15 @@ struct SubscriptionUsageBars: View {
         .foregroundStyle(Theme.mutedForeground)
     }
 
-    /// One window: label, bar, percent. A provider without this window keeps the cell's width, empty, so columns
-    /// line up across rows. Every row shows the same label in a column, so only the percent needs a shared width.
+    /// One window: label, bar, value (percent, or spend for extra usage). A provider without this window keeps the
+    /// cell's width, empty, so columns line up across rows. Every row shows the same label in a column, so only the
+    /// value needs a shared width.
     private func cell(_ column: String, window: SubscriptionWindow?) -> some View {
-        let percents = ["100%"] + subscriptions.compactMap { $0.window(inColumn: column)?.percentLabel }
+        let values = ["100%"] + subscriptions.compactMap { $0.window(inColumn: column)?.valueLabel }
         return HStack(spacing: 6) {
             Text(column)
             bar(window)
-            widest(percents, alignment: .trailing) { Text(window?.percentLabel ?? "") }
+            widest(values, alignment: .trailing) { Text(window?.valueLabel ?? "") }
         }
         .opacity(window == nil ? 0 : 1)
     }
@@ -499,7 +501,10 @@ struct SubscriptionUsageBars: View {
     }
 
     private func accessibilityLabel(_ usage: SubscriptionUsage, stale: Bool) -> String {
-        let windows = usage.limitWindows.map { "\($0.limitName) limit \($0.percentLabel) used" }
+        let windows = usage.homeWindows.map { window in
+            guard let extra = window.extraUsage else { return "\(window.limitName) limit \(window.percentLabel) used" }
+            return "extra usage " + (extra.cap.map { "\(extra.spent) of \($0)" } ?? extra.spent) + " spent"
+        }
         return "\(usage.providerLabel) subscription: " + windows.joined(separator: ", ") + (stale ? ", not recent" : "")
     }
 }
