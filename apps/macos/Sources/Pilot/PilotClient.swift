@@ -43,12 +43,16 @@ final class PilotClient: ObservableObject {
     private var fixtureDashboards = false
     private var fixtureMissions = false
     private var fixtureSessions = false
+    /// Static previews/test snapshots do not start background network reconciliation.
+    var sharedContextTransportEnabled: Bool { !fixtureSessions }
     @Published private(set) var connected = false
     private(set) var connectionError: HostRoutingError?
 
     /// Includes full snapshots on initial connection and reconnect, not just deltas.
     var onSessionsChanged: (([SessionSummary], Bool) -> Void)?
     var onSchedulesChanged: (([ScheduledItem]) -> Void)?
+    /// Invalidation only. The courier fetches bounded daemon-owned exchange pages.
+    var onSharedContextsChanged: (() -> Void)?
 
     // The WebSocket includes ALL sessions, including archives, for readable subscriptions.
     var activeSessions: [SessionSummary] { sessions.unarchivedSessions }
@@ -159,6 +163,60 @@ final class PilotClient: ObservableObject {
         let receipt = try response.decode(OperationReceipt.self)
         try receipt.validate(operation)
         return .receipt(receipt)
+    }
+
+    // MARK: Shared context. No app outbox or new operation IDs are created here.
+
+    func sharedContexts() async throws -> [SharedContextSummary] {
+        let values: [SharedContextSummary] = try await sharedContextRequest([])
+        guard values.count <= SharedContextCourier.bindingBudget else { throw HostRoutingError.invalidReference }
+        return values
+    }
+
+    /// Explicit user-confirmed enrollment, never inferred from names, paths or repository URLs.
+    func enrollSharedContext(_ binding: SharedContextBinding) async throws {
+        let _: Ack = try await sharedContextRequest([], method: "POST",
+            body: JSONEncoder().encode(binding))
+        onSharedContextsChanged?()
+    }
+
+    func sharedContextExchange(_ bindingId: String, peer: OperationHost) async throws -> SharedExchangeBatch {
+        struct Request: Encodable { let peer: OperationHost }
+        let batch: SharedExchangeBatch = try await sharedContextRequest([bindingId, "exchange"], method: "POST",
+            body: JSONEncoder().encode(Request(peer: peer)))
+        guard batch.bindingId == bindingId, batch.operations.count <= 16 else { throw HostRoutingError.invalidReference }
+        return batch
+    }
+
+    func acknowledgeSharedContext(_ bindingId: String, _ acknowledgment: SharedExchangeAcknowledgment) async throws {
+        try acknowledgment.receipt.validate(acknowledgment.operation)
+        guard acknowledgment.operation.bindingId == bindingId, acknowledgment.receipt.state != .pending else {
+            throw HostRoutingError.invalidReference
+        }
+        let _: Ack = try await sharedContextRequest([bindingId, "ack"], method: "POST",
+            body: JSONEncoder().encode(acknowledgment))
+    }
+
+    private func sharedContextRequest<Response: Decodable & Sendable>(
+        _ path: [String], method: String = "GET", body: Data? = nil
+    ) async throws -> Response {
+        guard connected, !disconnected else { throw HostRoutingError.disconnected }
+        guard (body?.count ?? 0) <= 128 * 1024 else { throw HostRoutingError.invalidReference }
+        let generation = connectionGeneration
+        var request = URLRequest(url: try missionURL(["shared-contexts"] + path))
+        request.httpMethod = method; request.httpBody = body
+        if body != nil { request.setValue("application/json", forHTTPHeaderField: "content-type") }
+        let (data, response) = try await BoundedHTTPData.read(request, maximumBytes: 2 * 1024 * 1024,
+                                                            configuration: commandConfiguration)
+        guard connected, !disconnected, generation == connectionGeneration else { throw HostRoutingError.staleGeneration }
+        guard (200 ..< 300).contains(response.statusCode) else {
+            // Do not include exported prose or raw daemon diagnostics in UI errors.
+            throw ClientError("Shared context reconciliation is unavailable.", status: response.statusCode)
+        }
+        let value = try await Task.detached(priority: .utility) { try JSONDecoder().decode(Response.self, from: data) }.value
+        guard connected, !disconnected, generation == connectionGeneration else { throw HostRoutingError.staleGeneration }
+        try Task.checkCancellation()
+        return value
     }
 
     func upload(_ metadata: AttachmentUpload, file: URL) async throws -> StagedAttachmentRef {
@@ -1006,7 +1064,7 @@ final class PilotClient: ObservableObject {
         return value
     }
 
-    private struct Ack: Decodable {}
+    private struct Ack: Decodable, Sendable {}
     private struct APIError: Decodable { let error: String }
 
     private func call<Response: Decodable>(_ path: String, method: String = "POST") async throws -> Response {
@@ -1797,6 +1855,8 @@ final class PilotClient: ObservableObject {
             }
         case let .trackedChanged(projectId):
             for observer in trackedObservers.values { observer(projectId) }
+        case .sharedContextsChanged:
+            onSharedContextsChanged?()
         case let .projects(list):
             projects = list
             hasProjectSnapshot = true

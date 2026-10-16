@@ -40,6 +40,20 @@ final class HostClients: ObservableObject {
         var observations: [AnyCancellable]
     }
     private var entries: [HostRef: Entry] = [:]
+    let sharedContextCourier = SharedContextCourier()
+    private var sharedContextGenerations: [HostRef: UUID] = [:]
+
+    /// Explicit UI enrollment/edit reconciliation. Never queues an arbitrary chat mutation.
+    func reconcileSharedContexts() { sharedContextCourier.trigger() }
+
+    private func refreshSharedContextEndpoints() {
+        guard !shuttingDown else { return }
+        sharedContextCourier.update(entries.filter {
+            $0.value.client.connected && $0.value.client.sharedContextTransportEnabled
+        }.mapValues {
+            SharedContextCourier.Endpoint(client: $0.client, host: $0.token.host)
+        })
+    }
     @MainActor private final class TerminalRegistration {
         let ref: HostResourceRef
         let intent: WorkspaceTerminalIntent
@@ -410,6 +424,11 @@ final class HostClients: ObservableObject {
             client.$hasProjectSnapshot, client.$hasSessionSnapshot, client.$hasMissionSnapshot
         ).sink { [weak self] _ in self?.enqueueRefresh(host) })
         entries[host] = entry
+        client.onSharedContextsChanged = { [weak self, weak client] in
+            guard let self, let client, self.entries[host]?.token == token, client.connected,
+                  self.entries[host]?.client === client, !self.shuttingDown else { return }
+            self.reconcileSharedContexts()
+        }
         for registration in terminalRegistrations.values where registration.ref.host == host {
             attachTerminalRegistration(registration)
         }
@@ -510,6 +529,8 @@ final class HostClients: ObservableObject {
         // Fence startup/reconnect completions before the first suspension. Keep Local installed;
         // no daemon stop, power command, remote service management or agent mutation is reachable.
         shuttingDown = true
+        sharedContextCourier.stop()
+        sharedContextGenerations.removeAll()
         connectionAttempts.removeAll()
         for host in tunnels.keys {
             if let entry = entries[host] { refresh(host, token: entry.token) }
@@ -527,7 +548,11 @@ final class HostClients: ObservableObject {
         reconciliationTasks.removeValue(forKey: host)?.cancel()
         reconciliationGenerations[host] = nil
         for subscription in subscriptions.values where subscription.ref.host == host { subscription.detach() }
-        entries.removeValue(forKey: host)?.client.disconnect()
+        let removed = entries.removeValue(forKey: host)
+        removed?.client.onSharedContextsChanged = nil
+        removed?.client.disconnect()
+        sharedContextGenerations[host] = nil
+        refreshSharedContextEndpoints()
         available.remove(host)
     }
 
@@ -691,6 +716,11 @@ final class HostClients: ObservableObject {
 
     private func refresh(_ host: HostRef, token: HostConnectionToken) {
         guard let entry = entries[host], entry.token == token else { return }
+        let sharedGeneration = entry.client.connected ? entry.client.connectionGeneration : nil
+        if sharedContextGenerations[host] != sharedGeneration {
+            sharedContextGenerations[host] = sharedGeneration
+            refreshSharedContextEndpoints()
+        }
         if entry.client.connected {
             available.insert(host)
             let generation = entry.client.connectionGeneration

@@ -8,6 +8,7 @@ public enum ServerUpdate: Sendable {
     case projects([Project])
     case sources([TrackingSource])
     case trackedChanged(projectId: String)
+    case sharedContextsChanged
     case sessions([SessionSummary])
     case session(SessionSummary)
     /// `seq` numbers a chat socket's batches, for resuming; absent on the shared socket.
@@ -49,6 +50,8 @@ public enum ServerUpdate: Sendable {
         case "tracked.changed":
             guard let id = json["projectId"]?.string else { return nil }
             return .trackedChanged(projectId: id)
+        case "shared-contexts.changed":
+            return .sharedContextsChanged
         case "projects":
             guard let list = json["projects"] else { return nil }
             return .projects(try list.decode([Project].self).sorted {
