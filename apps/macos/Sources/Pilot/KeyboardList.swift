@@ -47,12 +47,38 @@ final class KeyboardListState: ObservableObject {
     @Published var highlighted: String?
     private(set) var items: [KeyboardListItem] = []
     private var highlightedIndex: Int?
+    /// A highlight saved for this page, applied once its row arrives.
+    private var pendingRestore: String?
+    /// Set when a restored highlight should scroll into view without the list having focus.
+    private(set) var scrollsToRestored = false
+
+    /// Highlights `id` once a refresh lists it, as when Back returns to this page.
+    func restore(_ id: String) {
+        pendingRestore = id
+        if items.contains(where: { $0.id == id }) { apply(restored: id) }
+    }
+
+    private func apply(restored id: String) {
+        pendingRestore = nil
+        highlightedIndex = items.firstIndex { $0.id == id }
+        scrollsToRestored = true
+        highlighted = id
+    }
+
+    func consumeRestoredScroll() -> Bool {
+        defer { scrollsToRestored = false }
+        return scrollsToRestored
+    }
 
     /// New rows from a refresh. The highlight follows its row by id; when the row is gone, the nearest surviving
     /// row takes it, without running anything.
     func update(_ rows: [KeyboardListItem]) {
         var seen = Set<String>()
         items = rows.filter { seen.insert($0.id).inserted }
+        if let pendingRestore, items.contains(where: { $0.id == pendingRestore }) {
+            apply(restored: pendingRestore)
+            return
+        }
         guard let highlighted else { return }
         if let index = items.firstIndex(where: { $0.id == highlighted }) {
             highlightedIndex = index
@@ -156,6 +182,8 @@ private struct KeyboardListBody<Content: View>: View {
     let region: KeyboardRegion
     let native: Bool
     var focused: FocusState<Bool>.Binding
+    /// The page this list belongs to, for restoring its highlight after Back.
+    @State private var routeKey: String?
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -190,8 +218,18 @@ private struct KeyboardListBody<Content: View>: View {
                 }
                 .onChange(of: list.highlighted) { _, id in
                     if focused.wrappedValue { AppModel.shared.keyboardTarget = list.highlightedItem?.target }
-                    // Moving, or a refresh that removed the row, keeps the highlight on screen while the list has focus.
-                    if let id, focused.wrappedValue { proxy.scrollTo(id) }
+                    if let id, let routeKey {
+                        // Bounded: one short id per visited page.
+                        if AppModel.shared.keyboardListHighlights.count > 200 { AppModel.shared.keyboardListHighlights.removeAll() }
+                        AppModel.shared.keyboardListHighlights[routeKey] = id
+                    }
+                    // Moving, or a refresh that removed the row, keeps the highlight on screen while the list has
+                    // focus. A highlight restored by Back scrolls back into view too.
+                    if let id, list.consumeRestoredScroll() || focused.wrappedValue { proxy.scrollTo(id, anchor: .center) }
+                }
+                .onAppear {
+                    routeKey = AppModel.shared.currentRoute.key
+                    if let routeKey, let saved = AppModel.shared.keyboardListHighlights[routeKey] { list.restore(saved) }
                 }
                 .keyboardFocusHandler(region) {
                     focused.wrappedValue = true
