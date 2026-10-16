@@ -36,7 +36,7 @@ Calm is not plain. The app should look sleek and feel pleasant to the eye, like 
   (`Color(light:dark:)`); never use literal, system or `.secondary`-style colours in views, and add a missing token
   centrally. Dark keeps the light hierarchy: a darker sidebar beside the page, lifted cards and trays, light primary
   buttons with `onPrimary` text, text-weight colours lightened for contrast. Dithered scenes dim to dusk; status
-  corners keep one translucent tint set. Home instead uses separate daytime and moonlit ocean pictures, preserving
+  corners keep one translucent tint set. Home instead uses separate daytime clouds and evening sea pictures, preserving
   their own colours. Artifacts are light documents and keep a light page in both.
 - **Typography carries the page.** Weight and size separate headline, section and row. Use secondary and
   tertiary text colors for meta information, and keep line lengths comfortable.

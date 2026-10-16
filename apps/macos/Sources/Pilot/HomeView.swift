@@ -151,8 +151,8 @@ struct HomeView: View {
     var body: some View {
         ScrollView {
             ZStack(alignment: .top) {
-                // Day/night ocean photos; DitherScene falls back to the procedural sky without them.
-                DitherScene(source: .homeSky, cell: 2, fade: 0.45)
+                // Daytime clouds / evening sea; DitherScene falls back to the procedural sky without them.
+                DitherScene(source: .homeSky, cell: 2.5, fade: 0.45)
                     .frame(height: 440)
                 VStack(spacing: 0) {
                     Text("What’s on your mind?")
