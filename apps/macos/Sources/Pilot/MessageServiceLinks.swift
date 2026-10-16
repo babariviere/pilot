@@ -79,31 +79,3 @@ enum MessageServiceLinks {
         return result
     }
 }
-
-/// User messages stay literal, rather than interpreting their Markdown as agent prose.
-struct LinkedMessageText: View {
-    let text: String
-    @Environment(\.pilotFonts) private var fonts
-    @StateObject private var state = LinkedMessageTextState()
-
-    var body: some View {
-        SelectableMessageText(text: state.source == text ? state.text : AttributedString(text),
-                              font: fonts.nsBody, monoFont: fonts.nsMono, hugsContent: true)
-            .environment(\.messageTextSelection, state.selection)
-            .task(id: text) {
-                guard state.source != text else { return }
-                state.selection.source = text
-                let prepared = await MarkdownRenderer.shared.preparePlainText(text)
-                guard !Task.isCancelled else { return }
-                state.text = prepared
-                state.source = text
-            }
-    }
-}
-
-@MainActor
-private final class LinkedMessageTextState: ObservableObject {
-    let selection = MessageTextSelection()
-    @Published var text = AttributedString()
-    @Published var source: String?
-}

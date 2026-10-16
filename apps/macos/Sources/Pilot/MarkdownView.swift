@@ -2,7 +2,7 @@ import AppKit
 import PilotCore
 import SwiftUI
 
-/// Renders agent Markdown with native text: block structure from `Markdown.parse`, inline styling
+/// Renders agent and user Markdown with native text: block structure from `Markdown.parse`, inline styling
 /// from `AttributedString`.
 struct MarkdownView: View {
     let text: String
@@ -10,14 +10,18 @@ struct MarkdownView: View {
     /// Creates blocks only as they scroll into view, for long documents such as a mission brief inside a
     /// scroll view. Shows a small spinner, not the raw text, until the blocks are prepared.
     let lazy: Bool
+    /// Sizes text blocks to their longest line instead of the offered width, so user bubbles stay
+    /// narrow for short messages. Code blocks, tables and rules still take the full width.
+    let hugsContent: Bool
     @StateObject private var state: MarkdownRenderState
     @Environment(\.transcriptContentPrepared) private var contentPrepared
     @Environment(\.pilotFonts) private var fonts
 
-    init(text: String, textColor: NSColor = .labelColor, lazy: Bool = false) {
+    init(text: String, textColor: NSColor = .labelColor, lazy: Bool = false, hugsContent: Bool = false) {
         self.text = text
         self.textColor = textColor
         self.lazy = lazy
+        self.hugsContent = hugsContent
         _state = StateObject(wrappedValue: MarkdownRenderState(markdown: text))
     }
 
@@ -31,7 +35,7 @@ struct MarkdownView: View {
         }
         .environment(\.messageTextSelection, state.selection)
         .environment(\.messageSelectionColor, textColor)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: hugsContent ? nil : .infinity, alignment: .leading)
         .task(id: text) {
             state.selection.source = text
             guard state.source != text else { return }
@@ -53,11 +57,12 @@ struct MarkdownView: View {
             } else {
                 // Not prepared yet: plain text keeps the row near its final height, so the
                 // lazy transcript does not jump when the formatted blocks arrive.
-                SelectableMessageText(text: AttributedString(text), font: fonts.nsBody, monoFont: fonts.nsMono)
+                SelectableMessageText(text: AttributedString(text), font: fonts.nsBody, monoFont: fonts.nsMono,
+                                      hugsContent: hugsContent)
             }
         } else {
             ForEach(Array(state.blocks.enumerated()), id: \.offset) { index, block in
-                BlockView(block: block)
+                BlockView(block: block, hugsContent: hugsContent)
                     .environment(\.messageSelectionBlock, index)
             }
         }
@@ -75,16 +80,18 @@ struct MarkdownView: View {
 private struct BlockView: View {
     @Environment(\.pilotFonts) private var fonts
     let block: PreparedMarkdownBlock
+    let hugsContent: Bool
 
     var body: some View {
         switch block.block {
         case let .heading(level, text):
             SelectableMessageText(text: block.inline ?? AttributedString(text),
                 font: fonts.nsChat(fonts.chatSize + (level == 1 ? 6 : level == 2 ? 3 : 1), weight: .semibold),
-                monoFont: fonts.nsMono, lineSpacing: 0)
+                monoFont: fonts.nsMono, lineSpacing: 0, hugsContent: hugsContent)
                 .padding(.top, 4)
         case let .paragraph(text):
-            SelectableMessageText(text: block.inline ?? AttributedString(text), font: fonts.nsBody, monoFont: fonts.nsMono)
+            SelectableMessageText(text: block.inline ?? AttributedString(text), font: fonts.nsBody, monoFont: fonts.nsMono,
+                                  hugsContent: hugsContent)
         case let .list(ordered, start, items):
             VStack(alignment: .leading, spacing: 5) {
                 ForEach(Array(items.enumerated()), id: \.offset) { index, _ in
@@ -94,7 +101,7 @@ private struct BlockView: View {
                             .foregroundStyle(.secondary)
                             .frame(minWidth: 14, alignment: .trailing)
                         SelectableMessageText(text: block.items[index], font: fonts.nsBody, monoFont: fonts.nsMono, item: index,
-                                              copyPrefix: ordered ? "\(start + index). " : "• ")
+                                              hugsContent: hugsContent, copyPrefix: ordered ? "\(start + index). " : "• ")
                             .alignmentGuide(.firstTextBaseline) { _ in fonts.nsBody.ascender }
                     }
                 }
@@ -107,7 +114,8 @@ private struct BlockView: View {
             HStack(alignment: .top, spacing: 10) {
                 RoundedRectangle(cornerRadius: 1).fill(.tertiary).frame(width: 3)
                 SelectableMessageText(text: block.inline ?? AttributedString(text), font: fonts.nsBody,
-                                      monoFont: fonts.nsMono, color: .secondaryLabelColor, lineSpacing: 0)
+                                      monoFont: fonts.nsMono, color: .secondaryLabelColor, lineSpacing: 0,
+                                      hugsContent: hugsContent)
             }
         case let .table(rows):
             SelectableMessageText(text: AttributedString(rows.joined(separator: "\n")),

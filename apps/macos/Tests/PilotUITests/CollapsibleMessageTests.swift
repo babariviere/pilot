@@ -134,6 +134,27 @@ import Testing
     #expect(long.height > short.height * 2)
 }
 
+@Test @MainActor func userBubblesRenderMarkdownAndStillHug() async throws {
+    _ = NSApplication.shared
+    let width = 600.0
+    let source = "Use **bold** and `code`\n\n- first item\n- second item"
+    // Seed the shared cache so the view shows prepared blocks on its first layout.
+    await MarkdownView.prewarm(source)
+    let host = NSHostingView(rootView: UserMessage(text: source)
+        .fixedSize(horizontal: false, vertical: true).frame(width: width))
+    host.frame = NSRect(x: 0, y: 0, width: width, height: 400)
+    host.layoutSubtreeIfNeeded()
+    func find(_ view: NSView) -> [MessageSelectionTextView] {
+        ((view as? MessageSelectionTextView).map { [$0] } ?? []) + view.subviews.flatMap(find)
+    }
+    let views = find(host)
+    let strings = views.map { $0.textStorage?.string ?? "" }
+    #expect(strings.contains("Use bold and code"))
+    #expect(strings.contains("first item"))
+    #expect(!strings.contains { $0.contains("**") || $0.contains("- first") })
+    for view in views { #expect(view.frame.width < (width - 72 - 28) / 2) }
+}
+
 @Test @MainActor func historicalMessageRetainsExpansionAfterRecreation() {
     _ = NSApplication.shared
     let source = String(repeating: "Report details\n", count: 40)

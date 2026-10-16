@@ -599,7 +599,7 @@ struct UserMessage: View {
             HStack {
                 Spacer(minLength: 72)
                 CollapsibleMessage(text: text, userBubble: true, expansion: expansion) {
-                    LinkedMessageText(text: text)
+                    MarkdownView(text: text, hugsContent: true)
                 }
             }
         }

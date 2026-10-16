@@ -185,6 +185,8 @@ A chat reads as a conversation, not a log.
   coordinator messages, PR follow-ups and answered questions. They are written for the user, expand to the full text
   on Show, and only real failures get a red mark. No cards, separators or ISO times.
 - **User bubbles** use `Theme.muted` with no border, hold their attachments, and show time, copy and rewind on hover.
+  They render Markdown like agent replies and hug short text; code blocks and tables widen the bubble. Folded long
+  messages preview the raw text.
   Scheduled messages wait at the end as dashed outline bubbles saying when they send; queued follow-ups stay in the
   composer tray.
 - **The working line** ("Working… · 2 jobs", "Waiting on 2 jobs…") carries live work and opens the jobs panel when
