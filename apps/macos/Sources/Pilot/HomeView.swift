@@ -157,16 +157,10 @@ struct HomeView: View {
                 DitherScene(source: .homeSky, cell: 2.5, fade: 0.45)
                     .frame(height: 440)
                 VStack(spacing: 0) {
-                    Text("What’s on your mind?")
-                        .font(.system(size: 24, weight: .semibold))
-                        .tracking(-0.3)
-                        .foregroundStyle(Theme.foreground)
-                        .shadow(color: Theme.halo, radius: 6)
-                        .shadow(color: Theme.halo, radius: 16)
-                        .padding(.top, 290)
-                        .padding(.bottom, 16)
+                    // No heading: the composer sits where it did below the old 24 pt title (290 + ~29 + 16).
                     TaskComposer(form: app.newSessionForm, client: app.client)
                         .frame(maxWidth: 640)
+                        .padding(.top, 335)
                     HomeOverview()
                         .frame(maxWidth: Theme.column)
                         .padding(.top, 48)
