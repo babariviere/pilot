@@ -2,6 +2,7 @@ import { closeSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
 import type { MemoryEntry, MemoryRecall } from "@pilot/protocol";
+import { ControlMemoryDisk } from "./control-memory-disk.ts";
 import { DuplicateNote, decode, deviceIdentity, MemoryDisk, RECORD_BYTES } from "./memory-disk.ts";
 import { checkBindingKey } from "./shared-memory-common.ts";
 import { recallReplica, SharedMemoryReplica } from "./shared-memory-replica.ts";
@@ -61,10 +62,54 @@ if (workerData.replicaRecall) {
 	}
 } else {
 	const stores = new Map<string, MemoryDisk>();
+	let control: ControlMemoryDisk | undefined;
 	const replicas = new Map<string, SharedMemoryReplica>();
 	let deviceId: string | undefined;
 	parentPort!.on("message", ({ id, projectId, method, args }) => {
 		try {
+			if (method.startsWith("control.")) {
+				if (method === "control.close") {
+					control?.close();
+					control = undefined;
+					parentPort!.postMessage({ id });
+					return;
+				}
+				control ??= new ControlMemoryDisk(join(workerData.root, "control-chat"));
+				let value: unknown;
+				switch (method) {
+					case "control.state":
+						value = control.state();
+						break;
+					case "control.append":
+						value = control.append(args.message);
+						break;
+					case "control.view":
+						value = control.view();
+						break;
+					case "control.next":
+						value = control.next();
+						break;
+					case "control.put":
+						value = control.put(args.id, args.n, args.text);
+						break;
+					case "control.fail":
+						value = control.fail(args.id, args.n);
+						break;
+					case "control.message":
+						value = control.message(args.id, args.offset);
+						break;
+					case "control.children":
+						value = control.children(args.id, args.n);
+						break;
+					case "control.date":
+						value = control.date(args.id);
+						break;
+					default:
+						throw new Error("Unknown control memory operation");
+				}
+				parentPort!.postMessage({ id, value });
+				return;
+			}
 			if (method.startsWith("replica.")) {
 				checkBindingKey(projectId);
 				let replica = replicas.get(projectId);
