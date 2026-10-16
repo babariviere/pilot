@@ -46,6 +46,9 @@ struct InlineDiagramBlock: View {
 final class InlineDiagramLayout: ObservableObject {
     @Published var height: CGFloat = 180
     private let key: String?
+    /// The drawing's intrinsic size, once rendered. With it, width changes resize the row in Swift.
+    private(set) var natural: CGSize?
+    private(set) var width: CGFloat = 0
     private static var heights: [String: CGFloat] = [:]
     private static let limit = 512
 
@@ -60,9 +63,29 @@ final class InlineDiagramLayout: ObservableObject {
 
     private static func key(kind: MarkdownDiagramKind, source: String) -> String { kind.rawValue + ":" + source }
 
+    /// A page measurement, used when the drawing has no usable natural size.
     func update(_ value: Double) {
-        guard value.isFinite else { return }
-        let height = min(480, max(60, ceil(value)))
+        guard let height = DiagramLayout.inlineHeight(measured: CGFloat(value)) else { return }
+        apply(height)
+    }
+
+    /// Size the block from the drawing's natural size: shrink to the column and the inline
+    /// ceiling, keeping its aspect ratio, never enlarge (the page applies the same rule).
+    func update(natural: CGSize, width: CGFloat) {
+        self.natural = natural
+        resize(width: width)
+    }
+
+    /// Returns false when only a page measurement can size this block.
+    @discardableResult
+    func resize(width: CGFloat) -> Bool {
+        if width.isFinite, width > 0 { self.width = width }
+        guard let natural, let height = DiagramLayout.inlineHeight(natural: natural, availableWidth: self.width) else { return false }
+        apply(height)
+        return true
+    }
+
+    private func apply(_ height: CGFloat) {
         if abs(self.height - height) > 1 { self.height = height }
         if let key {
             if Self.heights.count >= Self.limit, Self.heights[key] == nil { Self.heights.removeAll(keepingCapacity: true) }
@@ -165,6 +188,8 @@ struct InlineDiagramWebView: NSViewRepresentable {
                          client: PilotClient, expanded: Bool = false) -> WKWebView {
         let libraries = ArtifactLibraryHandler(libraries: kind == .mermaid ? [.mermaid] : [], client: client)
         let view = ArtifactWebView.makeSandboxView(coordinator: coordinator.sandbox, libraries: libraries)
+        // The drawing opens fitted to the viewer; pinch to enlarge it there, never inline.
+        view.allowsMagnification = expanded
         coordinator.sandbox.onLoad = { [weak coordinator] view in coordinator?.render(view) }
         coordinator.sandbox.install(in: view, document: InlineDiagramDocument.document(kind: kind, source: source, expanded: expanded))
         return view
@@ -211,10 +236,16 @@ struct InlineDiagramWebView: NSViewRepresentable {
                     guard self.sandbox.active, !Task.isCancelled else { return }
                     if let error = result?["error"] as? String {
                         self.sandbox.state.error = error
-                    } else if let height = result?["height"] as? Double {
-                        self.layout.update(height)
                     } else {
-                        self.sandbox.state.error = "Renderer returned no diagram"
+                        let natural = (result?["natural"] as? [Double]).flatMap(Self.size)
+                        let height = result?["height"] as? Double
+                        if let natural { self.layout.update(natural: natural, width: self.width) }
+                        // Before the first layout pass, or without a natural size, use the page's measurement.
+                        if natural == nil || self.layout.width == 0, let height {
+                            self.layout.update(height)
+                        } else if natural == nil {
+                            self.sandbox.state.error = "Renderer returned no diagram"
+                        }
                     }
                     self.sandbox.state.loading = false
                 } catch { self.fail(error) }
@@ -224,6 +255,8 @@ struct InlineDiagramWebView: NSViewRepresentable {
         func resize(_ view: WKWebView, width: CGFloat) {
             guard abs(self.width - width) > 1 else { return }
             self.width = width
+            // Known natural size: compute the new height directly, no page round trip.
+            if layout.resize(width: width) { return }
             guard !sandbox.state.loading, sandbox.state.error == nil else { return }
             resizeTask?.cancel()
             resizeTask = Task { [weak self, weak view] in
@@ -237,6 +270,11 @@ struct InlineDiagramWebView: NSViewRepresentable {
                     self.layout.update(height)
                 } catch { self.fail(error) }
             }
+        }
+
+        private static func size(_ values: [Double]) -> CGSize? {
+            guard values.count == 2, values.allSatisfy({ $0.isFinite && $0 > 0 }) else { return nil }
+            return CGSize(width: values[0], height: values[1])
         }
 
         private func fail(_ error: Error) {

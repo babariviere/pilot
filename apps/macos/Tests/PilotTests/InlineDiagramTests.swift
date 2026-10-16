@@ -22,3 +22,18 @@ import Testing
     layout.update(.nan)
     #expect(layout.height == 60)
 }
+
+@Test @MainActor func inlineDiagramFitsTallDrawingsAndResizesFromTheirNaturalSize() {
+    let layout = InlineDiagramLayout()
+    // Not laid out yet: the natural size waits for a width.
+    layout.update(natural: CGSize(width: 640, height: 320), width: 0)
+    #expect(layout.height == 180)
+    #expect(layout.resize(width: 760))
+    #expect(layout.height == 344)
+    #expect(layout.resize(width: 320))
+    #expect(layout.height == 172)
+    // A tall drawing scales into the 480 pt block rather than being cut off.
+    layout.update(natural: CGSize(width: 400, height: 3000), width: 760)
+    #expect(layout.height == 480)
+    #expect(!InlineDiagramLayout().resize(width: 760))
+}
