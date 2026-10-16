@@ -8,6 +8,13 @@ import { parentPort, workerData } from "node:worker_threads";
 /** [0]: last saved sequence number; [1]: 1 once the connection is closed. */
 const { file, applied } = workerData as { file: string; applied: Int32Array };
 const db = new DatabaseSync(file);
+// Changesets already contain the primary's trigger effects. SQLite applyChangeset also runs
+// destination triggers, so retaining these would double revisions/changefeed entries. Startup
+// migration reinstalls them before loading the next in-memory primary; only the disk mirror
+// drops them. This worker is never a canonical writer.
+for (const row of db.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'shared_%'").all()) {
+	db.exec(`DROP TRIGGER "${String(row.name).replaceAll('"', '""')}"`);
+}
 // pilotd's in-memory primary already enforced foreign keys; its changesets include cascaded changes.
 db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = OFF;");
 

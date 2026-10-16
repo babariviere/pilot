@@ -121,6 +121,11 @@ function taskModelChoice(
 }
 
 export class MissionService {
+	private sharing?: import("./shared-context.ts").SharedContextService;
+	setSharedContext(sharing: import("./shared-context.ts").SharedContextService): void {
+		this.sharing = sharing;
+		this.notices.setRemoteOccupied((missionId) => sharing.remoteOccupied(missionId));
+	}
 	readonly notices: MissionNotices;
 	readonly compaction: CoordinatorCompaction;
 	private readonly store: MissionStore;
@@ -166,7 +171,16 @@ export class MissionService {
 				}
 				if (coordinator) store.update(missionId, { coordinatorSessionId: sessionId });
 			},
-			membership: (sessionId) => store.membership(sessionId),
+			membership: (sessionId) => {
+				const shared = this.sharing?.membership(sessionId);
+				return shared
+					? {
+							missionId: shared.grant.task.mission.missionId,
+							active: shared.state === "accepted",
+							coordinator: false,
+						}
+					: store.membership(sessionId);
+			},
 			leaveSpawn: (sessionId) => store.leave(sessionId),
 			context: (sessionId) => this.context(sessionId),
 			renameCoordinator: (sessionId, title) => {
@@ -295,6 +309,7 @@ export class MissionService {
 	}
 
 	context(sessionId: string): MissionContext | undefined {
+		if (this.sharing?.membership(sessionId)) return this.sharing.context(sessionId);
 		const missionId = this.store.missionOf(sessionId);
 		const mission = missionId ? this.store.get(missionId) : undefined;
 		if (!mission) return undefined;
@@ -343,6 +358,8 @@ export class MissionService {
 	}
 
 	private assertSameProject(sessionId: string, missionId: string): void {
+		if (this.sharing?.membership(sessionId))
+			throw new Conflict("Seal/release the delegated execution before changing its mission membership");
 		const mission = this.store.require(missionId);
 		const session = this.session(sessionId);
 		if (session.projectId !== mission.projectId)
@@ -637,6 +654,7 @@ export class MissionService {
 
 	/** One `mission` tool call from a member chat. Results are compact JSON for the model. */
 	async call(sessionId: string, action: MissionAction, args: Record<string, unknown>): Promise<unknown> {
+		if (this.sharing?.membership(sessionId)) return this.sharing.missionCall(sessionId, action, args);
 		const missionId = this.store.missionOf(sessionId);
 		if (!missionId) throw new Error("This chat is not part of a mission. Ask the user to add it to one.");
 		const mission = this.store.require(missionId);
@@ -829,6 +847,7 @@ export class MissionService {
 				}
 				return {
 					mission: { title: mission.title, goal: mission.goal, status: mission.status },
+					...(this.sharing ? { remoteAllocations: this.sharing.missionAllocations(missionId) } : {}),
 					phaseGating: mission.phaseGating ?? false,
 					phases: [
 						...detail.phases.map(({ missionId: _, ...phase }) => phase),

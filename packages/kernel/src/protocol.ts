@@ -18,6 +18,13 @@ import type { MissionContext, PilotContext, WorkspaceContext } from "./policy.ts
 import type { KernelUsage } from "./usage.ts";
 
 export type { KernelUsage } from "./usage.ts";
+/** Durable Harness identities, never inferred from wall-clock outcome timestamps. */
+export interface ExecutionEvidence {
+	attemptId: string;
+	inputSubmissionId?: number;
+	inputOperationId?: string;
+	completionEntry?: number;
+}
 
 /** A subagent as reported by the kernel, including where its read-only transcript lives. */
 export interface KernelSubagent extends SessionSubagent {
@@ -117,6 +124,7 @@ export type KernelPacket =
 	| { type: "systemMessageState"; event: import("./held-inputs.ts").SystemMessageStateEvent }
 	| {
 			type: "ready";
+			execution?: ExecutionEvidence;
 			model: string;
 			thinking?: string;
 			working: boolean;
@@ -166,6 +174,6 @@ export type KernelPacket =
 	 */
 	| { type: "rewound"; requestId: string; switched: boolean; content?: string; attempts?: SessionAttempt[] }
 	| { type: "modelChanged"; requestId: string; model: string; thinking: string; usage: KernelUsage }
-	| { type: "working"; working: boolean; completion?: SessionCompletion }
+	| { type: "working"; working: boolean; completion?: SessionCompletion; execution?: ExecutionEvidence }
 	| { type: "events"; watchId: string; events: AgentEvent[] }
 	| { type: "error"; requestId?: string; message: string; code?: "busy" };
