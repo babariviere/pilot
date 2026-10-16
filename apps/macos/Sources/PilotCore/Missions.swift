@@ -473,6 +473,7 @@ public struct MissionResource: Codable, Identifiable, Equatable, Hashable, Senda
     public var owner: MissionResourceOwner? = nil
     /// Nil from older daemons means read-only reference.
     public var linearRole: MissionLinearRole? = nil
+    /// Canonical workspace/issue identifier, at most 256 ASCII characters.
     public var linearKey: String? = nil
 
     public var displayTitle: String { title ?? externalId ?? url }
