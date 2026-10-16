@@ -115,6 +115,7 @@ test("frozen retry survives restart and retains later events", async () => {
 		await s.flush(at + 93000);
 		assert.equal(sent.length, 2);
 		assert.notEqual(sent[1]!.requestId, first.requestId);
+		assert.equal(sent[1]!.items[0]!.count, 1, "later batch excludes the frozen batch's consumed events");
 		await s.flush(at + 120000);
 		assert.equal(sent.length, 2);
 	} finally {
