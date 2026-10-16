@@ -33,14 +33,18 @@ func chatProjectMenuOpensOverviewWithoutChangingScope(archived: Bool) throws {
 }
 
 @Test(arguments: [nil, "removed-project"] as [String?]) @MainActor
-func chatProjectMenuIsAbsentWithoutAnAvailableProject(projectId: String?) {
+func chatProjectMenuIsAbsentWithoutAnAvailableProject(projectId: String?) throws {
     guard #available(macOS 14.4, *) else { return }
     _ = NSApplication.shared
     let model = AppModel()
     model.client.loadFixture(projects: [], sessions: [])
+    let local = HostRef(hostId: "local", daemonId: "fixture-daemon", lineageId: "fixture-history")
+    try model.registerLocal(local)
+    try model.hosts.install(model.client, host: local)
     let chat = SessionSummary(id: "chat", title: "Chat", cwd: "/repository",
                               projectId: projectId, createdAt: 1, updatedAt: 1, state: "idle")
-    let menu = NSHostingMenu(rootView: SessionProjectAction(session: chat).environmentObject(model))
+    let menu = NSHostingMenu(rootView: SessionProjectAction(session: chat).environmentObject(model)
+        .environment(\.hostViewContext, HostViewContext(host: local, hosts: model.hosts)))
     menu.update()
     #expect(menu.items.isEmpty)
 }

@@ -37,6 +37,38 @@ import Testing
     #expect(app.resourceRef("same", kind: .session, context: HostViewContext(host: remote, hosts: app.hosts)) == remoteRef)
 }
 
+@Test @MainActor func localProjectOverviewNormalizesQualifiedKeysWithoutChangingRemoteDestinations() throws {
+    let app = AppModel()
+    let local = HostRef(hostId: "local", daemonId: "a", lineageId: "1")
+    let remote = HostRef(hostId: "box", daemonId: "b", lineageId: "2")
+    try app.registerLocal(local)
+    let project = Project(id: "same", name: "Repository", path: "/repo", createdAt: 1)
+    app.client.loadFixture(projects: [project], sessions: [])
+    let localRef = HostResourceRef(host: local, kind: .project, localId: project.id)
+    let remoteRef = HostResourceRef(host: remote, kind: .project, localId: project.id)
+    app.openProject(localRef.storageKey)
+    #expect(app.selectedProjectId == project.id)
+    app.openProject(remoteRef.storageKey)
+    #expect(app.selectedProjectId == remoteRef.storageKey)
+    #expect(app.hosts.selection == remoteRef)
+    app.focus(on: project.id)
+    app.openHome()
+    app.openOverview()
+    #expect(app.selectedProjectId == project.id)
+    #expect(app.currentSelection == .project(project.id))
+    #expect(app.hosts.selection == nil)
+}
+
+@Test @MainActor func unqualifiedNavigationStillRequiresTheLocalIdentity() {
+    let app = AppModel()
+    app.navigate(.session, id: "same")
+    #expect(app.selectedSessionId == nil)
+    #expect(app.hosts.selection == nil)
+    app.navigate(.project, id: "hostref1:invalid")
+    #expect(app.selectedProjectId == nil)
+    #expect(app.hosts.selection == nil)
+}
+
 @Test @MainActor func remoteProjectScopeNavigationAndUnsentDraftNeverChangeHost() async throws {
     let app = AppModel()
     let local = HostRef(hostId: "local", daemonId: "a", lineageId: "1")
