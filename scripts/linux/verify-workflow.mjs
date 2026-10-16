@@ -122,6 +122,13 @@ try {
 	assert.deepEqual(recovered, receipt);
 	assert.deepEqual(await api(reconnected.base, "operations", { method: "POST", body: op }), receipt);
 	assert.equal((await api(reconnected.base, "sessions")).filter((value) => value.id === sessionId).length, 1);
+	await assert.rejects(
+		api(reconnected.base, "operations", {
+			method: "POST",
+			body: { ...op, destination: { ...op.destination, lineageId: "untrusted-clone" } },
+		}),
+		/HTTP 409/,
+	);
 	const file = await api(reconnected.base, `sessions/${sessionId}/files?path=tracked.txt`);
 	assert.match(JSON.stringify(file), /remote-workflow-ok/);
 	const changes = await api(reconnected.base, `sessions/${sessionId}/changes`);

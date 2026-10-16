@@ -26,6 +26,7 @@ See [screenshot notes](docs/screenshots/README.md) to regenerate them.*
   Known remote chats stay visible as Disconnected through network loss, Mac sleep and app quit;
   remote work continues independently. Project sharing explicitly selects notes and missions,
   keeps pending contributions and conflicting edits separate, and never copies files or sign-ins.
+  See [devbox setup and troubleshooting](docs/devboxes.md).
 - **See what needs you first.** Home shows how every project is doing. The Inbox is the one place to act: chats
   that need you (each with a short reason), pull requests ready to merge, and Linear and Slack items, across
   projects or filtered to one. Each project has an Overview that starts with what is next for it.
