@@ -102,6 +102,15 @@ class TestOutputTests(unittest.TestCase):
             self.assertFalse(continued)
             self.assertIn("required native test did not start", result.stderr)
 
+    def test_isolated_geometry_start_without_terminal_summary_stops_chain(self):
+        output = STARTED + f"◇ Test {ISOLATED}(kind:inline:) started.\n"
+        result, continued, calls = self.run_wrapper(PASSED, second_output=output, all_calls=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(continued)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("started without a terminal summary", result.stderr)
+        self.assertNotIn("required native test did not start", result.stderr)
+
     def test_isolated_geometry_accepts_parameterized_parent_start(self):
         output = STARTED + f"◇ Test {ISOLATED}(kind:inline:) started.\n" + PASSED
         result, continued, _ = self.run_wrapper(PASSED, second_output=output)
