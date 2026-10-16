@@ -1,5 +1,36 @@
 # Changelog
 
+## [1.41.0](https://github.com/babariviere/pilot/compare/v1.40.0...v1.41.0) (2026-10-16)
+
+
+### Features
+
+* **auth:** add independent pre-chat credential setup ([7954722](https://github.com/babariviere/pilot/commit/795472248fed87024dd77adc13c571374adfa78f))
+* **macos:** add dark mode with appearance-aware theme tokens ([ca2cf74](https://github.com/babariviere/pilot/commit/ca2cf74762643b0d3e4e3a743b043b39ac0b934d))
+* **macos:** find archived chats from search and the command palette ([30e5c80](https://github.com/babariviere/pilot/commit/30e5c804bcd655206cf4c3a71d0e684c9e49b9f5))
+* **macos:** keep shared notes and tasks in sync ([75ca24c](https://github.com/babariviere/pilot/commit/75ca24c86f20cfccf5869797a444f8733cc0f19d))
+* **macos:** list tasks and subagents with their state in the composer tray ([a3eb5fe](https://github.com/babariviere/pilot/commit/a3eb5feefde069ca883b8466c46436a384f04f4e))
+* **macos:** open project repositories on GitHub ([8ca66d6](https://github.com/babariviere/pilot/commit/8ca66d6f9370bd3b1edfb6ecc63dc19955b8ff68))
+* **macos:** preserve independent remote lifecycle and offline summaries ([81c8c0e](https://github.com/babariviere/pilot/commit/81c8c0e01843138014a612b80ca6236bdd6f2e53))
+* **macos:** show more of the Home sky ([48e7a1f](https://github.com/babariviere/pilot/commit/48e7a1f46be6c826e1f208d8e137a398fe690cbd))
+* **macos:** show subagent model and thinking in the header ([f43c08a](https://github.com/babariviere/pilot/commit/f43c08a9c6ece9919ddfdba7ce52ea0ea4934762))
+* **macos:** use day and night ocean scenes on Home ([b66524a](https://github.com/babariviere/pilot/commit/b66524aff87e4b0a4688217b56507e54db82608f))
+* **memory:** share saved project notes safely ([6a794eb](https://github.com/babariviere/pilot/commit/6a794ebd72c0bfc248bcc97b521e439c9544ba93))
+* **palette:** add confirmed pull request merges ([8521e03](https://github.com/babariviere/pilot/commit/8521e0347eb01b360048afcb0abd2a1ddf8d48bb))
+* **palette:** bind merge confirmation to Cmd-Shift-M ([b832b68](https://github.com/babariviere/pilot/commit/b832b683e47883d8bd6a1926f37a3a361550e41b))
+* **tasks:** let work continue on another computer ([9fc0c65](https://github.com/babariviere/pilot/commit/9fc0c65f011d712f1d656838cd49e04307a10b9e))
+* **terminal:** route bounded workspace shells by host ([2802ee4](https://github.com/babariviere/pilot/commit/2802ee480108b13059d9bb79f6cced6022f02689))
+
+
+### Bug Fixes
+
+* **ci:** keep Sparkle build versions above the pre-rename release ([26f9b88](https://github.com/babariviere/pilot/commit/26f9b8890efe00d7176c6c233a623e947a72f0c2))
+* **kernel:** recover chats after image tools fail ([0cd30b9](https://github.com/babariviere/pilot/commit/0cd30b9ddf86bfd913efec656d600f8e947a2b87))
+* **macos:** clip status corners to their surface bounds ([ec5dd70](https://github.com/babariviere/pilot/commit/ec5dd702f09ac795ad5b7cf802d70b6de5503511))
+* **macos:** integrate mission navigation into the chat toolbar ([5d04f23](https://github.com/babariviere/pilot/commit/5d04f23e490e46d7891cb506ca4f58bfef6bfc62))
+* **macos:** keep chat inspectors compact by default ([b8effd0](https://github.com/babariviere/pilot/commit/b8effd031d2bcc39690c1b4ebfbd74e18669c9f2))
+* **macos:** send scheduled times as whole milliseconds ([781f7de](https://github.com/babariviere/pilot/commit/781f7dea9d0fb02ba6f238975b8983598cc1b2e6))
+
 ## [1.40.0](https://github.com/babariviere/pilot/compare/v1.39.0...v1.40.0) (2026-10-16)
 
 
