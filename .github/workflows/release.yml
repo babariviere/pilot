@@ -168,7 +168,8 @@ jobs:
             ~/Library/Caches/org.swift.swiftpm/repositories
             ~/Library/Caches/org.swift.swiftpm/artifacts
             apps/macos/Vendor/libghostty-spm
-          key: swift-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.resolved', 'apps/macos/Package.swift', 'apps/macos/scripts/vendor-ghostty.sh', 'apps/macos/scripts/patch-ghostty-resources.py', 'apps/macos/scripts/patch-ghostty-layout.py') }}
+            apps/macos/Vendor/MermaidKit
+          key: swift-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.resolved', 'apps/macos/Package.swift', 'apps/macos/scripts/vendor-ghostty.sh', 'apps/macos/scripts/patch-ghostty-resources.py', 'apps/macos/scripts/patch-ghostty-layout.py', 'apps/macos/scripts/vendor-mermaidkit.sh', 'apps/macos/scripts/patches/**') }}
       # PRs start from main's newest debug build and recompile only inputs whose contents changed. Main always builds from scratch, so its tests, app-bundle and releases never use
       # cached build products.
       - name: Restore the Swift test build
@@ -183,6 +184,7 @@ jobs:
         if: ${{ !cancelled() && steps.swift-toolchain.outcome == 'success' }}
         run: |
           apps/macos/scripts/vendor-ghostty.sh
+          apps/macos/scripts/vendor-mermaidkit.sh
           python3 apps/macos/scripts/stable-mtimes.py apps/macos
       - name: Swift tests
         id: swift-test
@@ -272,7 +274,8 @@ jobs:
             ~/Library/Caches/org.swift.swiftpm/repositories
             ~/Library/Caches/org.swift.swiftpm/artifacts
             apps/macos/Vendor/libghostty-spm
-          key: swift-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.resolved', 'apps/macos/Package.swift', 'apps/macos/scripts/vendor-ghostty.sh', 'apps/macos/scripts/patch-ghostty-resources.py', 'apps/macos/scripts/patch-ghostty-layout.py') }}
+            apps/macos/Vendor/MermaidKit
+          key: swift-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.resolved', 'apps/macos/Package.swift', 'apps/macos/scripts/vendor-ghostty.sh', 'apps/macos/scripts/patch-ghostty-resources.py', 'apps/macos/scripts/patch-ghostty-layout.py', 'apps/macos/scripts/vendor-mermaidkit.sh', 'apps/macos/scripts/patches/**') }}
       - name: Load current release packaging tools
         if: inputs.release_tag != ''
         uses: actions/checkout@v4

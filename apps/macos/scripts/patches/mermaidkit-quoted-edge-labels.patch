@@ -1,0 +1,27 @@
+diff --git a/Sources/MermaidLayout/MermaidParser.swift b/Sources/MermaidLayout/MermaidParser.swift
+index f3bbf45..14487ba 100644
+--- a/Sources/MermaidLayout/MermaidParser.swift
++++ b/Sources/MermaidLayout/MermaidParser.swift
+@@ -545,7 +545,7 @@ public enum MermaidParser {
+             var link = found.link
+             var after = rest[found.range.upperBound...].drop(while: { $0 == " " })
+             if after.hasPrefix("|"), let close = after.dropFirst().firstIndex(of: "|") {
+-                link.label = String(after[after.index(after: after.startIndex)..<close])
++                link.label = unquotedLabel(after[after.index(after: after.startIndex)..<close])
+                 after = after[after.index(after: close)...]
+             }
+             joins.append(link)
+@@ -573,6 +573,13 @@ public enum MermaidParser {
+         return out
+     }
+ 
++    /// Mermaid draws quoted link labels (`-->|"text"|`, `-- "text" -->`) without their quotes.
++    static func unquotedLabel(_ raw: Substring) -> String {
++        let label = raw.trimmingCharacters(in: .whitespaces)
++        guard label.count >= 2, label.hasPrefix("\""), label.hasSuffix("\"") else { return String(raw) }
++        return String(label.dropFirst().dropLast())
++    }
++
+     /// Parses `id`, `id[Label]`, `id(Label)`, `id([Label])`, `id{Label}`,
+     /// `id((Label))`, `id(((Label)))`, `id[(Label)]`, `id[[Label]]`,
+     /// `id{{Label}}`, the slanted `id[/Label/]`, `id[\Label\]`, `id[/Label\]`

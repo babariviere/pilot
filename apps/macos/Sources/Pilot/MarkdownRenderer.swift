@@ -9,6 +9,8 @@ struct PreparedMarkdownBlock: Sendable {
     let inline: AttributedString?
     let items: [AttributedString]
     let code: AttributedString?
+    /// Mermaid blocks the native renderer accepted, laid out here so their height is known before drawing.
+    var diagram: NativeMermaidLayout? = nil
 }
 
 /// Parsing, inline Markdown and lexical highlighting never run from a view body.
@@ -117,6 +119,7 @@ actor MarkdownRenderer {
         let attributed: AttributedString?
         var items: [AttributedString] = []
         var highlighted: AttributedString?
+        var diagram: NativeMermaidLayout?
         switch block {
         case let .heading(_, text), let .paragraph(text), let .quote(text): attributed = inline(text)
         case let .list(_, _, values):
@@ -125,10 +128,14 @@ actor MarkdownRenderer {
         case let .code(language, text):
             attributed = nil
             highlighted = try prepareCode(text, language: language)
+        case let .diagram(.mermaid, text):
+            attributed = nil
+            diagram = NativeMermaid.layout(text)
         default: attributed = nil
         }
         nextBlockID += 1
-        return PreparedMarkdownBlock(id: nextBlockID, block: block, inline: attributed, items: items, code: highlighted)
+        return PreparedMarkdownBlock(
+            id: nextBlockID, block: block, inline: attributed, items: items, code: highlighted, diagram: diagram)
     }
 
     func prepareCode(_ text: String, language: String?) throws -> AttributedString {

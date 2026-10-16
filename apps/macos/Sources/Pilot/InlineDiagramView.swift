@@ -1,4 +1,5 @@
 import AppKit
+import MermaidRender
 import PilotCore
 import SwiftUI
 import WebKit
@@ -8,18 +9,27 @@ final class InlineDiagramViewState: ObservableObject {
     @Published var source = false
     @Published var visible = false
     @Published var viewer = false
+    /// The native renderer could not draw this diagram; use the web renderer instead.
+    @Published var nativeFailed = false
 }
 
-/// Like artifact cards, offscreen chat blocks release their WebKit process and library tasks.
+/// Mermaid the native renderer accepted draws natively; other diagrams use an isolated WebKit page.
+/// Like artifact cards, offscreen chat blocks release their bitmaps, WebKit process and library tasks.
 struct InlineDiagramBlock: View {
     let kind: MarkdownDiagramKind
     let text: String
+    var native: NativeMermaidLayout? = nil
     @StateObject private var state = InlineDiagramViewState()
+
+    private var nativeLayout: NativeMermaidLayout? { state.nativeFailed ? nil : native }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if state.source {
                 CodeBlock(language: kind.rawValue, text: text)
+            } else if let nativeLayout {
+                NativeDiagramPreview(layout: nativeLayout, source: text, visible: state.visible,
+                                     failed: { state.nativeFailed = true }, onOpen: { state.viewer = true })
             } else if state.visible {
                 InlineDiagramPreview(kind: kind, text: text, onOpen: { state.viewer = true })
             } else {
@@ -38,7 +48,197 @@ struct InlineDiagramBlock: View {
         }
         .onAppear { state.visible = true }
         .onDisappear { state.visible = false }
-        .sheet(isPresented: $state.viewer) { InlineDiagramViewer(kind: kind, text: text) }
+        .sheet(isPresented: $state.viewer) {
+            if let nativeLayout {
+                NativeDiagramViewer(kind: kind, text: text, layout: nativeLayout)
+            } else {
+                InlineDiagramViewer(kind: kind, text: text)
+            }
+        }
+    }
+}
+
+/// Sizes a native diagram block from the drawing's natural size before anything is drawn: the column
+/// width, the height from `DiagramLayout`, and the drawing centered at its fitted (shrink-only) size.
+struct NativeDiagramFrame: Layout {
+    let natural: CGSize
+
+    private func width(_ proposal: ProposedViewSize) -> CGFloat {
+        guard let width = proposal.width, width.isFinite else { return Theme.column }
+        return max(0, width)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = width(proposal)
+        return CGSize(width: width, height: DiagramLayout.inlineHeight(natural: natural, availableWidth: width)
+            ?? DiagramLayout.inlineMinHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let drawing = DiagramLayout.inlineDrawingSize(natural: natural, availableWidth: bounds.width) ?? .zero
+        for subview in subviews {
+            subview.place(at: CGPoint(x: bounds.midX, y: bounds.midY), anchor: .center, proposal: ProposedViewSize(drawing))
+        }
+    }
+}
+
+/// A bitmap drawn off the main actor at the block's pixel size. While the window resizes, the previous
+/// bitmap scales with the block and one new one is drawn after the size settles.
+private struct NativeDiagramPreview: View {
+    let layout: NativeMermaidLayout
+    let source: String
+    let visible: Bool
+    let failed: () -> Void
+    let onOpen: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.displayScale) private var displayScale
+    @State private var image: CGImage?
+
+    var body: some View {
+        NativeDiagramFrame(natural: layout.natural) {
+            GeometryReader { geometry in
+                let key = imageKey(geometry.size)
+                Group {
+                    if let shown = image ?? key.flatMap(NativeMermaid.cachedImage) {
+                        Image(decorative: shown, scale: displayScale).resizable().interpolation(.high)
+                    } else {
+                        Color.clear
+                    }
+                }
+                .task(id: visible ? key : nil) { await draw(key) }
+            }
+            .accessibilityElement()
+            .accessibilityLabel(layout.altText)
+            .accessibilityAddTraits(.isImage)
+        }
+        .overlay {
+            EmbeddedPreviewButton(title: "Expand mermaid diagram", help: "Click to expand diagram", open: onOpen)
+        }
+        .onChange(of: visible) { _, visible in
+            if !visible { image = nil }
+        }
+    }
+
+    private func imageKey(_ size: CGSize) -> NativeMermaid.ImageKey? {
+        let width = Int((size.width * displayScale).rounded()), height = Int((size.height * displayScale).rounded())
+        guard width > 0, height > 0 else { return nil }
+        return NativeMermaid.ImageKey(source: source, dark: colorScheme == .dark, width: width, height: height)
+    }
+
+    private func draw(_ key: NativeMermaid.ImageKey?) async {
+        guard visible, let key else { return }
+        if let cached = NativeMermaid.cachedImage(key) {
+            image = cached
+            return
+        }
+        if image != nil { try? await Task.sleep(for: .milliseconds(150)) }
+        guard !Task.isCancelled else { return }
+        let drawn = await NativeMermaid.image(layout, key: key)
+        guard !Task.isCancelled else { return }
+        if let drawn { image = drawn } else { failed() }
+    }
+}
+
+/// The expanded viewer opens the vector drawing at its natural size, shrunk to fit and centered;
+/// pinch or scroll-zoom to enlarge it.
+private struct NativeDiagramViewer: View {
+    let kind: MarkdownDiagramKind
+    let text: String
+    let layout: NativeMermaidLayout
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
+    @StateObject private var state = InlineDiagramViewState()
+
+    var body: some View {
+        let size = ArtifactViewerLayout.size(available: NSApp.keyWindow?.screen?.visibleFrame.size
+            ?? NSScreen.main?.visibleFrame.size ?? CGSize(width: 1440, height: 900), contentSize: layout.natural)
+        VStack(spacing: 0) {
+            HStack {
+                Text("\(kind.rawValue.uppercased()) diagram").font(.pilot(.headline, weight: .semibold))
+                Spacer()
+                Button(state.source ? "Preview" : "Source") { state.source.toggle() }
+                CopyButton(text: text)
+                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+            .padding(14)
+            Divider()
+            if state.source {
+                ScrollView { CodeBlock(language: kind.rawValue, text: text) }
+            } else {
+                ZoomableDiagramView(layout: layout, dark: colorScheme == .dark)
+            }
+        }
+        .frame(width: size.width, height: size.height)
+        .background(Theme.background)
+    }
+}
+
+private struct ZoomableDiagramView: NSViewRepresentable {
+    let layout: NativeMermaidLayout
+    let dark: Bool
+
+    final class Coordinator { var dark: Bool? }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> FittingDiagramScrollView {
+        let scroll = FittingDiagramScrollView(natural: layout.natural)
+        let imageView = NSImageView(frame: CGRect(origin: .zero, size: layout.natural))
+        imageView.imageScaling = .scaleAxesIndependently
+        imageView.setAccessibilityLabel(layout.altText)
+        scroll.documentView = imageView
+        return scroll
+    }
+
+    func updateNSView(_ scroll: FittingDiagramScrollView, context: Context) {
+        guard context.coordinator.dark != dark else { return }
+        context.coordinator.dark = dark
+        (scroll.documentView as? NSImageView)?.image = MermaidRenderer.image(diagram: layout.diagram,
+                                                                            theme: NativeMermaid.theme(dark: dark))
+    }
+}
+
+/// Magnifies a natural-size drawing: fits it once on first layout (never above 100%), keeps it
+/// centered when smaller than the view, and allows pinch zoom up to 8×.
+final class FittingDiagramScrollView: NSScrollView {
+    private let natural: CGSize
+    private var fitted = false
+
+    init(natural: CGSize) {
+        self.natural = natural
+        super.init(frame: .zero)
+        contentView = CenteringClipView()
+        drawsBackground = false
+        hasVerticalScroller = true
+        hasHorizontalScroller = true
+        autohidesScrollers = true
+        allowsMagnification = true
+        minMagnification = 0.1
+        maxMagnification = 8
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func layout() {
+        super.layout()
+        guard !fitted, bounds.width > 0, bounds.height > 0,
+              let fit = DiagramLayout.fit(natural, within: CGSize(width: bounds.width - 2 * DiagramLayout.padding,
+                                                                  height: bounds.height - 2 * DiagramLayout.padding))
+        else { return }
+        fitted = true
+        magnification = max(minMagnification, fit.width / natural.width)
+    }
+}
+
+/// Centers a document smaller than the visible area instead of pinning it to the corner.
+final class CenteringClipView: NSClipView {
+    override func constrainBoundsRect(_ proposedBounds: NSRect) -> NSRect {
+        var rect = super.constrainBoundsRect(proposedBounds)
+        guard let document = documentView else { return rect }
+        if rect.width > document.frame.width { rect.origin.x = (document.frame.width - rect.width) / 2 }
+        if rect.height > document.frame.height { rect.origin.y = (document.frame.height - rect.height) / 2 }
+        return rect
     }
 }
 
