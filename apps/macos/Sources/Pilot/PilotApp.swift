@@ -48,7 +48,14 @@ struct PilotApp: App {
                     .disabled(model.latestPullRequestMergeTarget == nil)
             }
             SidebarScopeCommands(model: model, client: model.client)
+            KeyboardShortcutsCommands()
         }
+
+        Window("Keyboard Shortcuts", id: KeyboardShortcuts.windowID) {
+            KeyboardShortcutsView()
+                .environment(\.pilotFonts, settings.fonts)
+        }
+        .windowResizability(.contentSize)
 
         Settings {
             SettingsView()

@@ -6,7 +6,7 @@ import Testing
 @Test @MainActor func paletteMergeActionsOnlyOfferOpenProjectPRsAndOpenConfirmation() throws {
     let defaults = UserDefaults(suiteName: "palette-merge-\(UUID().uuidString)")!
     let model = AppModel(projectFolderDefaults: defaults)
-    let catalog = CommandPaletteCatalog(model: model, openSettings: {})
+    let catalog = CommandPaletteCatalog(model: model, openSettings: {}, openKeyboardShortcuts: {})
     let prs = [PullRequestState.open, .draft, .closed, .merged].enumerated().map { index, state in
         SessionPullRequest(number: index + 1, url: "https://github.com/o/r/pull/\(index + 1)", title: "PR",
                            state: state, checkedAt: 1)

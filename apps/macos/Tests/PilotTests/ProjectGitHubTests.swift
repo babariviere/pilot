@@ -38,7 +38,7 @@ private final class ProjectGitHubHTTPStub: URLProtocol {
                     Project(id: "two", name: "Other", path: "/two", createdAt: 2)]
     app.client.loadFixture(projects: projects, sessions: [])
     app.openProject("two")
-    let catalog = CommandPaletteCatalog(model: app, openSettings: {})
+    let catalog = CommandPaletteCatalog(model: app, openSettings: {}, openKeyboardShortcuts: {})
     let entries = catalog.entries().filter { $0.item.id.hasPrefix("github:") }
     #expect(Set(entries.map(\.item.id)) == ["github:one", "github:two"])
     #expect(entries.allSatisfy { $0.item.title == "Open on GitHub" })
