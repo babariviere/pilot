@@ -6107,6 +6107,7 @@ export class SessionManager {
 			...(rebaseSkipped ? [`Automatic rebase skipped: ${rebaseSkipped}.`] : []),
 		]);
 		const content = [
+			// macOS PullRequestFollowUpSummary parses "(attempt/limit)" and the report lines below; keep them in sync.
 			`Pilot automatic PR follow-up (${attempt}/3) for ${issues.map(({ pr }) => pr.url).join(", ")}.`,
 			"Fresh GitHub status reports:",
 			...reports,
