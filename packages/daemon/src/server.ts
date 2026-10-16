@@ -70,13 +70,16 @@ import type { PowerService } from "./power.ts";
 import { type DashboardProviders, ProjectDashboardService } from "./project-dashboard.ts";
 import type { ProjectMemoryService } from "./project-memory.ts";
 import { expandHome, type ProjectStore } from "./projects.ts";
+import { PTY_INPUT_CHUNK } from "./pty-input.ts";
 import { RepositoryBrowser } from "./repository-browser.ts";
 import { ReviewStore } from "./reviews.ts";
+import { RuntimeResources } from "./runtime-admission.ts";
 import type { ScheduleService } from "./schedules.ts";
 import { NotFound, type SessionManager } from "./sessions.ts";
 import { SetupError, type SetupService } from "./setup.ts";
 import { parseSlackMessageLink } from "./slack-format.ts";
 import type { SourceRegistry } from "./sources.ts";
+import { terminalSender } from "./terminal-output.ts";
 import type { TerminalManager } from "./terminals.ts";
 import { validatePatch } from "./tracked-items.ts";
 
@@ -229,7 +232,18 @@ function terminalSize(value: string | null): number | undefined {
 function isTerminalSocketMessage(value: unknown): value is TerminalSocketMessage {
 	if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
 	const message = value as Record<string, unknown>;
-	if (message.type === "terminal.input") return typeof message.data === "string";
+	const id = (value: unknown) => typeof value === "string" && /^[a-f0-9-]{36}$/i.test(value);
+	if (message.type === "terminal.open")
+		return (
+			id(message.bootId) &&
+			id(message.requestId) &&
+			(message.terminalId === undefined || id(message.terminalId)) &&
+			(message.restart === undefined || typeof message.restart === "boolean")
+		);
+	if (!id(message.terminalId)) return false;
+	if (message.type === "terminal.close") return true;
+	if (message.type === "terminal.input")
+		return typeof message.data === "string" && Buffer.byteLength(message.data) <= PTY_INPUT_CHUNK;
 	return (
 		message.type === "terminal.resize" &&
 		[message.cols, message.rows].every(
@@ -260,7 +274,7 @@ export function createDaemonServer(
 	mcp?: McpStatusService,
 	hello?: DaemonHello,
 	setup?: SetupService,
-): Server {
+): Server & { runtimeResources: RuntimeResources } {
 	sessions.setWorkspaceProcessGuard((id) => terminals.isRunning(id));
 	const reviews = new ReviewStore(_config.home);
 	const dashboards = new ProjectDashboardService({
@@ -1094,6 +1108,11 @@ export function createDaemonServer(
 	// Dedicated chat, terminal and subagent sockets. Each has its own send queue, so one stream's large snapshot,
 	// output burst or slow reader never delays another stream or the sidebar, and overload resets only that stream.
 	const streamWss = new WebSocketServer({ noServer: true, maxPayload: 4 * 1024 * 1024 });
+	const terminalWss = new WebSocketServer({ noServer: true, maxPayload: 128 * 1024 });
+	server.on("close", () => {
+		for (const ws of terminalWss.clients) ws.terminate();
+		terminalWss.close();
+	});
 	const setupWss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 });
 	server.on("close", () => {
 		for (const ws of setupWss.clients) ws.terminate();
@@ -1154,7 +1173,11 @@ export function createDaemonServer(
 			socket.destroy();
 			return;
 		}
-		streamWss.handleUpgrade(req, socket, head, (ws) => {
+		if (route.kind === "terminal" && terminalWss.clients.size >= 64) {
+			socket.destroy();
+			return;
+		}
+		(route.kind === "terminal" ? terminalWss : streamWss).handleUpgrade(req, socket, head, (ws) => {
 			if (route.kind === "chat") openChat(ws, route.sessionId, url.searchParams);
 			else if (route.kind === "terminal") openTerminal(ws, route.sessionId, url.searchParams);
 			else openSubagent(ws, route.sessionId, route.name);
@@ -1463,11 +1486,17 @@ export function createDaemonServer(
 
 	/** Attach to the session's shell for the socket's lifetime. Input and resizes arrive on the same socket. */
 	function openTerminal(ws: WebSocket, sessionId: string, params: URLSearchParams): void {
-		const sendData = boundedSender(ws);
-		const send = (message: ServerMessage) => sendData(JSON.stringify(message));
+		const sender = terminalSender(ws, sessionId);
+		const send = (message: ServerMessage) => sender.message(message);
 		const report = (message: string) => send({ type: "error", sessionId, message });
 		let detach: (() => void) | undefined;
-		ws.on("close", () => detach?.());
+		let terminalId: string | undefined;
+		const opening = setTimeout(() => ws.close(SOCKET_REFUSED, "Terminal open timed out"), 10_000);
+		opening.unref();
+		ws.on("close", () => {
+			clearTimeout(opening);
+			detach?.();
+		});
 		const cols = terminalSize(params.get("cols"));
 		const rows = terminalSize(params.get("rows"));
 		if (cols === undefined || rows === undefined) {
@@ -1479,17 +1508,18 @@ export function createDaemonServer(
 			sessions.assertWritable(sessionId);
 			// A terminal must not start before the private clone is ready.
 			const { cwd } = sessions.changeBase(sessionId);
-			detach = terminals.attach(
+			void cwd;
+			if (params.get("protocol") !== "2") {
+				report("Workspace terminal protocol 2 is required; update the app");
+				ws.close(SOCKET_REFUSED, "Workspace terminal protocol unsupported");
+				return;
+			}
+			send({
+				type: "terminal.hello",
 				sessionId,
-				cwd,
-				cols,
-				rows,
-				{
-					data: (data) => send({ type: "terminal.data", sessionId, data }),
-					exit: (code) => send({ type: "terminal.exit", sessionId, code }),
-				},
-				params.get("restart") === "1",
-			);
+				bootId: terminals.bootId,
+				terminalId: terminals.currentId(sessionId),
+			});
 		} catch (error) {
 			refuse(ws, report, error);
 			return;
@@ -1503,12 +1533,38 @@ export function createDaemonServer(
 			}
 			if (!isTerminalSocketMessage(message)) return report("Invalid terminal message");
 			try {
-				if (message.type === "terminal.input") {
+				if (message.type === "terminal.open") {
+					if (detach) throw new Conflict("Terminal socket is already attached");
 					sessions.assertWritable(sessionId);
-					terminals.write(sessionId, message.data);
-				} else terminals.resize(sessionId, message.cols, message.rows);
+					const { cwd } = sessions.changeBase(sessionId);
+					detach = terminals.attach(
+						sessionId,
+						cwd,
+						cols,
+						rows,
+						{
+							ready: (id) => {
+								terminalId = id;
+								send({ type: "terminal.ready", sessionId, terminalId: id });
+							},
+							data: (data) => sender.data(data),
+							exit: (code) => send({ type: "terminal.exit", sessionId, code }),
+						},
+						message.restart === true,
+						message,
+					);
+					clearTimeout(opening);
+				} else if (!terminalId || message.terminalId !== terminalId)
+					throw new Conflict("Terminal instance does not match");
+				else if (message.type === "terminal.input") {
+					sessions.assertWritable(sessionId);
+					terminals.write(sessionId, message.data, terminalId);
+				} else if (message.type === "terminal.close") terminals.close(sessionId, terminalId);
+				else terminals.resize(sessionId, message.cols, message.rows, terminalId);
 			} catch (error) {
 				report(error instanceof Error ? error.message : String(error));
+				if (message.type === "terminal.open")
+					ws.close(error instanceof ServiceUnavailable ? 1013 : SOCKET_REFUSED, "Terminal attach refused");
 			}
 		});
 	}
@@ -1531,7 +1587,9 @@ export function createDaemonServer(
 		}
 	}
 
-	return server;
+	return Object.assign(server, {
+		runtimeResources: new RuntimeResources([terminals, attachments, sessions, ...(setup ? [setup] : [])]),
+	});
 }
 /** Mission routes under /api/missions and /api/sessions/:id/mission. Returns false when nothing matched. */
 async function missionRoute(

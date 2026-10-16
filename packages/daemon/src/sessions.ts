@@ -891,6 +891,7 @@ export class SessionManager {
 	private readonly titleGenerating = new Set<string>();
 	private readonly shutdownSignal = new AbortController();
 	private readonly updateGate = new UpdateGate();
+	private runtimeInspecting?: Promise<import("./runtime-admission.ts").RuntimeBlocker[]>;
 	private updatePauseTimer?: ReturnType<typeof setTimeout>;
 	private readonly updatePausing = new Map<SessionWorker, { id: string; ready: boolean; error?: string }>();
 	/** Admissions waiting for acknowledgement must not race archiving. */
@@ -3130,6 +3131,82 @@ export class SessionManager {
 		this.missions.joinSpawn(meta.id, meta.createMissionId);
 	}
 
+	/** Maintenance-owned freeze has no implicit timeout. The caller owns release/recovery. */
+	freezeAdmissions(): () => void {
+		return this.updateGate.freezeAdmissions();
+	}
+
+	/** Safety inspection, unlike the display jobs() API: missing/failed inspection is never an empty list.
+	 * Tool drain must already be acknowledged. Exact non-MCP descendant inspection conservatively blocks
+	 * live child agents too, since their independently owned jobs cannot be proven absent from summaries.
+	 */
+	blockers(): Promise<import("./runtime-admission.ts").RuntimeBlocker[]> {
+		this.runtimeInspecting ??= this.inspectRuntimeBlockers().finally(() => {
+			this.runtimeInspecting = undefined;
+		});
+		return this.runtimeInspecting;
+	}
+	private async inspectRuntimeBlockers(): Promise<import("./runtime-admission.ts").RuntimeBlocker[]> {
+		const blockers: import("./runtime-admission.ts").RuntimeBlocker[] = [];
+		if (
+			!this.updateGate.paused ||
+			this.updateGate.admissions ||
+			this.starting.size ||
+			this.preparations.size ||
+			this.parking.size ||
+			this.sleepTransition ||
+			this.sleepResuming ||
+			this.closing
+		)
+			blockers.push({ kind: "admission", id: "sessions" });
+		const workers: [string, SessionWorker][] = [];
+		for (const entry of this.workers) {
+			if (workers.length === 128) break;
+			workers.push(entry);
+		}
+		if (this.workers.size > workers.length)
+			blockers.push({ kind: "unknown-process", id: "worker-inspection-overflow" });
+		for (let offset = 0; offset < workers.length; offset += 4)
+			await Promise.all(
+				workers.slice(offset, offset + 4).map(async ([sessionId, worker]) => {
+					const pause = this.updatePausing.get(worker);
+					if (!pause?.ready || pause.error || !worker.jobs || !worker.hasChildren) {
+						blockers.push({ kind: "unknown-process", id: sessionId, sessionId });
+						return;
+					}
+					try {
+						const [jobs, children] = await Promise.all([worker.jobs(), worker.hasChildren()]);
+						if (
+							this.workers.get(sessionId) !== worker ||
+							this.updatePausing.get(worker) !== pause ||
+							!pause.ready ||
+							!this.updateGate.paused
+						)
+							throw new Error("Runtime inspection generation changed");
+						if (jobs.length > 256) throw new Error("Job inspection overflow");
+						for (const job of jobs) {
+							if (blockers.length >= 1023) break;
+							blockers.push({ kind: "job", id: job.id, sessionId });
+						}
+						if (children) blockers.push({ kind: "child-process", id: sessionId, sessionId });
+					} catch {
+						blockers.push({ kind: "unknown-process", id: sessionId, sessionId });
+					}
+				}),
+			);
+		if (
+			!this.updateGate.paused ||
+			workers.length !== this.workers.size ||
+			workers.some(([id, worker]) => this.workers.get(id) !== worker) ||
+			this.updateGate.admissions ||
+			this.saving.size
+		)
+			blockers.push({ kind: "admission", id: "sessions-changing" });
+		if (blockers.length >= 1023)
+			return [...blockers.slice(0, 1023), { kind: "unknown-process", id: "blocker-overflow" }];
+		return blockers;
+	}
+
 	/** Acquire a bounded update lease only after every durable and in-memory admission settles. */
 	prepareUpdate(): UpdatePreparation {
 		const busy =
@@ -3195,6 +3272,12 @@ export class SessionManager {
 
 	private resumeAfterUpdate(): void {
 		clearTimeout(this.updatePauseTimer);
+		// A maintenance owner, unlike the legacy app lease, explicitly owns this freeze.
+		if (this.updateGate.frozen) {
+			this.updatePauseTimer = setTimeout(() => this.resumeAfterUpdate(), 30_000);
+			this.updatePauseTimer.unref();
+			return;
+		}
 		if (!this.sleepPause)
 			for (const worker of this.workers.values())
 				if (this.updatePausing.has(worker)) worker.send({ type: "update.resume" });

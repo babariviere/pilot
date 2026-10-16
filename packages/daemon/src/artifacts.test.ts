@@ -549,11 +549,30 @@ test("terminal sockets validate their messages and dispatch every valid one", as
 	t.mock.method(sessions, "assertWritable", () => {});
 	t.mock.method(sessions, "changeBase", () => ({ cwd: "/tmp" }));
 	const detach = t.mock.fn(() => {});
-	const attach = t.mock.method(terminals, "attach", () => detach);
+	const terminalId = randomUUID();
+	const attach = t.mock.method(
+		terminals,
+		"attach",
+		(
+			_id: string,
+			_cwd: string,
+			_cols: number,
+			_rows: number,
+			listener: import("./terminals.ts").TerminalListener,
+		) => {
+			listener.ready?.(terminalId);
+			return detach;
+		},
+	);
 	const resize = t.mock.method(terminals, "resize", () => {});
 	const write = t.mock.method(terminals, "write", () => {});
-	const connection = client(t, server, `/api/sessions/${sessionId}/terminal/ws?cols=80&rows=24&restart=1`);
+	const connection = client(t, server, `/api/sessions/${sessionId}/terminal/ws?protocol=2&cols=80&rows=24`);
 	await once(connection.ws, "open");
+	await connection.next("terminal.hello");
+	connection.ws.send(
+		JSON.stringify({ type: "terminal.open", bootId: terminals.bootId, requestId: randomUUID(), restart: true }),
+	);
+	await connection.next("terminal.ready");
 	for (const value of [
 		null,
 		{},
@@ -576,16 +595,16 @@ test("terminal sockets validate their messages and dispatch every valid one", as
 	connection.ws.send('{"type":"terminal.resize","cols":1e400,"rows":24}');
 	assert.deepEqual(await connection.next("error"), { type: "error", sessionId, message: "Invalid terminal message" });
 	assert.equal(write.mock.callCount() + resize.mock.callCount(), 0);
-	connection.ws.send(JSON.stringify({ type: "terminal.input", data: "echo hello\n" }));
-	connection.ws.send(JSON.stringify({ type: "terminal.resize", cols: 100, rows: 30 }));
+	connection.ws.send(JSON.stringify({ type: "terminal.input", terminalId, data: "echo hello\n" }));
+	connection.ws.send(JSON.stringify({ type: "terminal.resize", terminalId, cols: 100, rows: 30 }));
 	const pong = once(connection.ws, "pong");
 	connection.ws.ping();
 	await pong;
 	assert.equal(attach.mock.callCount(), 1);
 	assert.deepEqual(attach.mock.calls[0]?.arguments.slice(0, 4), [sessionId, "/tmp", 80, 24]);
 	assert.equal(attach.mock.calls[0]?.arguments[5], true);
-	assert.deepEqual(write.mock.calls[0]?.arguments, [sessionId, "echo hello\n"]);
-	assert.deepEqual(resize.mock.calls[0]?.arguments, [sessionId, 100, 30]);
+	assert.deepEqual(write.mock.calls[0]?.arguments, [sessionId, "echo hello\n", terminalId]);
+	assert.deepEqual(resize.mock.calls[0]?.arguments, [sessionId, 100, 30, terminalId]);
 	assert.equal(connection.ws.readyState, WebSocket.OPEN);
 	connection.ws.close();
 	await once(connection.ws, "close");

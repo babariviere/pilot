@@ -1416,6 +1416,8 @@ export type ServerMessage =
 	| { type: "chat.stream"; sessionId: string; streamId: string; resumed: boolean }
 	| { type: "terminal.data"; sessionId: string; data: string }
 	| { type: "terminal.exit"; sessionId: string; code: number }
+	| { type: "terminal.hello"; sessionId: string; bootId: string; terminalId?: string }
+	| { type: "terminal.ready"; sessionId: string; terminalId: string }
 	/** Replaces the transcript when it contains a snapshot (or is empty); otherwise appends entries. */
 	| { type: "subagent.events"; sessionId: string; name: string; events: AgentEvent[] }
 	| { type: "error"; sessionId?: string; name?: string; message: string };
@@ -1434,14 +1436,21 @@ export type ServerMessage =
 export type ChatServerMessage = Extract<ServerMessage, { type: "chat.stream" | "events" | "artifacts" | "error" }>;
 
 /**
- * Terminal socket, /api/sessions/:id/terminal/ws?cols=<n>&rows=<n>[&restart=1]. Connecting attaches to the session's
- * daemon-owned shell (starting it, or replacing it with `restart`); the daemon replies with the retained scrollback,
- * then live output. Closing detaches; the shell keeps running.
+ * Terminal socket, /api/sessions/:id/terminal/ws?protocol=2&cols=<n>&rows=<n>.
+ * Requires hello.capabilities.workspaceTerminalProtocol === 2. Receive terminal.hello, then send terminal.open
+ * with its boot identity and a stable requestId (reuse after a lost reply). Existing terminalId fences reattach;
+ * restart is an explicit open mutation. terminal.ready precedes bounded scrollback and live output.
+ * Socket closure only detaches. terminal.close signals the matched shell; terminal.exit proves actual exit.
  */
-export type TerminalServerMessage = Extract<ServerMessage, { type: "terminal.data" | "terminal.exit" | "error" }>;
+export type TerminalServerMessage = Extract<
+	ServerMessage,
+	{ type: "terminal.data" | "terminal.exit" | "terminal.hello" | "terminal.ready" | "error" }
+>;
 export type TerminalSocketMessage =
-	| { type: "terminal.input"; data: string }
-	| { type: "terminal.resize"; cols: number; rows: number };
+	| { type: "terminal.open"; bootId: string; requestId: string; terminalId?: string; restart?: boolean }
+	| { type: "terminal.input"; terminalId: string; data: string }
+	| { type: "terminal.resize"; terminalId: string; cols: number; rows: number }
+	| { type: "terminal.close"; terminalId: string };
 
 /**
  * Subagent socket, /api/sessions/:id/subagents/:name/ws. Streams one subagent's transcript: a snapshot first (also

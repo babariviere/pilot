@@ -25,4 +25,6 @@ export interface DaemonCapabilities {
 	coordinatorIsolation: boolean;
 	/** Agents and daemon-owned processes do not depend on a client connection. */
 	independentExecution: boolean;
+	/** Instance/boot-fenced workspace terminal handshake. Absent on older runtimes. */
+	workspaceTerminalProtocol?: 2;
 }

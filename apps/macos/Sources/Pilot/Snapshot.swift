@@ -1749,7 +1749,23 @@ enum Snapshot {
               let session = model.client.session(sessionId)
         else { fail("connect") }
 
-        model.selectedSessionId = session.id
+        let generation = model.client.connectionGeneration
+        guard let hello = try? await model.client.hello(),
+              model.client.connectionGeneration == generation,
+              hello.isProtocolCompatible, hello.capabilities.workspaceTerminalProtocol == 2,
+              let lineage = hello.lineageId
+        else { fail("hello") }
+        let host = HostRef(hostId: "local", daemonId: hello.daemonId, lineageId: lineage)
+        let ref = HostResourceRef(host: host, kind: .session, localId: session.id)
+        let key = ref.storageKey
+        do {
+            try host.validate(hello)
+            try model.registerLocal(host)
+            try model.hosts.install(model.client, host: host)
+            try model.selectSession(ref)
+        } catch { fail("local-host") }
+        guard await wait(5, until: { model.hosts.available.contains(host) }) else { fail("local-host-ready") }
+
         model.inspectorVisible = true
         model.inspectorTab = .terminal
         let size = CGSize(width: 1200, height: 700)
@@ -1764,16 +1780,16 @@ enum Snapshot {
         window.orderFrontRegardless()
 
         let store = model.terminals
-        func screen() -> String { store.memories[session.id]?.readViewportText() ?? "" }
+        func screen() -> String { store.memories[key]?.readViewportText() ?? "" }
         func type(_ text: String) {
-            guard let state = store.states[session.id] else { return }
+            guard let state = store.states[key] else { return }
             for character in text {
                 if let press = TerminalKeyPress(typing: character) { state.sendKey(press) }
             }
             state.sendKey(.enter)
         }
 
-        guard await wait(5, until: { store.states[session.id] != nil }) else { fail("attach") }
+        guard await wait(5, until: { store.states[key] != nil && store.connections[key] == .connected }) else { fail("attach") }
         guard await wait(10, until: { !screen().trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else { fail("prompt") }
         type("echo pilot-roundtrip")
         // The command's own output line, not just the echoed input.
@@ -1781,21 +1797,21 @@ enum Snapshot {
         guard await wait(10, until: printed) else { fail("roundtrip") }
 
         // Drop the surface and attach again, as a relaunched app would: the daemon replays scrollback.
-        store.remove(session.id)
-        store.ensure(session)
+        store.remove(key)
+        store.ensure(session, ref: ref)
         guard await wait(10, until: printed) else { fail("replay") }
         try? await Task.sleep(for: .seconds(1))
 
         type("exit")
-        if !(await wait(4, until: { store.exited.contains(session.id) })) { type("exit") }
-        guard await wait(5, until: { store.exited.contains(session.id) && store.states[session.id] == nil }) else {
+        if !(await wait(4, until: { store.exited.contains(key) })) { type("exit") }
+        guard await wait(5, until: { store.exited.contains(key) && store.states[key] == nil }) else {
             print("screen: \(screen().split(separator: "\n").filter { !$0.isEmpty }.suffix(4))")
             fail("exit")
         }
         try? await Task.sleep(for: .milliseconds(400))
         snapshot(hosting, to: directory.appending(path: "terminal-exited.png"))
 
-        store.restart(session)
+        store.restart(session, ref: ref)
         guard await wait(10, until: { !screen().trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else { fail("restart") }
         guard !printed() else { fail("restart-fresh") }
         print("terminal-test passed: roundtrip, replay, exit, restart")

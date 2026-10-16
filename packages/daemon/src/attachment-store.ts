@@ -4,6 +4,7 @@ import { lstat, mkdir, open, readdir, readFile, rename, stat, unlink } from "nod
 import { join } from "node:path";
 import type { AttachmentUpload, DurableOperation, StagedAttachmentRef } from "@pilot/protocol";
 import { canonicalJSON, durableJSON, OperationRejected } from "./operation-journal.ts";
+import { RuntimeAdmission } from "./runtime-admission.ts";
 
 const MAX_IMAGE = 100 * 1024 * 1024; // 24MP RGBA normalized PNG, including compression overhead.
 const MAX_DISK = 2 * 1024 * 1024 * 1024;
@@ -19,6 +20,16 @@ interface UploadRecord extends AttachmentUpload {
  * remain available to durable history. Quotas backpressure instead of evicting uncertain/accepted work.
  */
 export class AttachmentStore {
+	private readonly admission = new RuntimeAdmission();
+	freezeAdmissions(): () => void {
+		return this.admission.freezeAdmissions();
+	}
+	blockers() {
+		return this.admission.blockers();
+	}
+	onChange(listener: () => void): () => void {
+		return this.admission.onChange(listener);
+	}
 	private readonly root: string;
 	private records = new Map<string, UploadRecord>();
 	private loaded?: Promise<void>;
@@ -92,6 +103,7 @@ export class AttachmentStore {
 	async stage(metadata: AttachmentUpload, body: AsyncIterable<Uint8Array>): Promise<StagedAttachmentRef> {
 		this.validate(metadata);
 		if (this.uploads.size >= 2 || this.uploads.has(metadata.uploadId)) throw new Error("Image uploads are busy");
+		const end = this.admission.begin({ kind: "transfer", id: metadata.uploadId });
 		this.uploads.add(metadata.uploadId);
 		try {
 			const record = await this.serial(async () => {
@@ -152,12 +164,17 @@ export class AttachmentStore {
 			});
 			return { uploadId: metadata.uploadId, sha256: metadata.sha256, bytes: metadata.bytes };
 		} finally {
-			this.uploads.delete(metadata.uploadId);
-			await unlink(join(this.root, `${metadata.uploadId}.part`)).catch(() => {});
+			try {
+				await unlink(join(this.root, `${metadata.uploadId}.part`)).catch(() => {});
+			} finally {
+				this.uploads.delete(metadata.uploadId);
+				end();
+			}
 		}
 	}
 	/** Must follow journal reservation and precede prompt/kernel admission. Replays use the same owner. */
 	async adopt(operation: DurableOperation, refs: StagedAttachmentRef[]): Promise<string[]> {
+		const end = this.admission.begin({ kind: "transfer-metadata", id: operation.operationId });
 		return this.serial(async () => {
 			await this.init();
 			if (!Array.isArray(refs) || refs.length > 8 || new Set(refs.map((ref) => ref.uploadId)).size !== refs.length)
@@ -188,9 +205,10 @@ export class AttachmentStore {
 				this.records.set(record.uploadId, updated);
 			}
 			return records.map((record) => join(this.root, `${record.uploadId}.png`));
-		});
+		}).finally(end);
 	}
 	async discard(uploadId: string): Promise<void> {
+		const end = this.admission.begin({ kind: "transfer-metadata", id: uploadId });
 		await this.serial(async () => {
 			await this.init();
 			const record = this.records.get(uploadId);
@@ -203,11 +221,12 @@ export class AttachmentStore {
 			});
 			await unlink(join(this.root, `${uploadId}.json`));
 			this.records.delete(uploadId);
-		});
+		}).finally(end);
 	}
 
 	/** Caller must have looked up a conclusive rejected receipt in the same intact journal domain. */
 	async releaseRejected(operation: DurableOperation, refs: StagedAttachmentRef[]): Promise<void> {
+		const end = this.admission.begin({ kind: "transfer-metadata", id: operation.operationId });
 		await this.serial(async () => {
 			await this.init();
 			if (!Array.isArray(refs) || refs.length > 8) throw new Error("Invalid attachment list");
@@ -231,6 +250,6 @@ export class AttachmentStore {
 				await unlink(join(this.root, `${record.uploadId}.json`));
 				this.records.delete(record.uploadId);
 			}
-		});
+		}).finally(end);
 	}
 }

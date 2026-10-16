@@ -8,48 +8,59 @@ struct MainWindow: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var daemon = AppModel.shared.daemon
     @ObservedObject private var client = AppModel.shared.client
+    @ObservedObject private var hosts = AppModel.shared.hosts
     @Environment(\.openWindow) private var openWindow
     @State private var repositoryPollingVisible = false
+
+    @ViewBuilder private var localDetail: some View {
+        switch daemon.status {
+        case .running:
+            if let session = model.selectedSession {
+                SessionDetail(session: session)
+                    .id(session.id)
+            } else if let missionId = model.selectedMissionId {
+                MissionPage(missionId: missionId)
+                    .id(missionId)
+            } else if let projectId = model.selectedProjectId {
+                if model.slackTriageProjectId == projectId {
+                    SlackTriagePage(projectId: projectId, openCase: model.slackTriageCaseId)
+                        .id("slack-triage-\(projectId)-\(model.slackTriageCaseId ?? "")")
+                } else if model.memoryProjectId == projectId {
+                    MemoryPage(projectId: projectId)
+                        .id("memory-\(projectId)")
+                } else {
+                    ProjectPage(projectId: projectId)
+                        .id(projectId)
+                }
+            } else if model.showingInbox {
+                InboxPage()
+            } else if model.showingArchive {
+                ArchiveView()
+            } else {
+                HomeView()
+                    .navigationTitle("Pilot")
+            }
+        case let .failed(message):
+            DaemonProblem(message: message)
+        case .stopped:
+            DaemonProblem(message: "pilotd is stopped.")
+        case .unknown, .starting:
+            ProgressView("Starting pilotd…")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
 
     var body: some View {
         NavigationSplitView {
             SessionSidebar(model: model, client: client)
                 .navigationSplitViewColumnWidth(min: 230, ideal: 280, max: 400)
         } detail: {
-            switch daemon.status {
-            case .running:
-                if let session = model.selectedSession {
-                    SessionDetail(session: session)
-                        .id(session.id)
-                } else if let missionId = model.selectedMissionId {
-                    MissionPage(missionId: missionId)
-                        .id(missionId)
-                } else if let projectId = model.selectedProjectId {
-                    if model.slackTriageProjectId == projectId {
-                        SlackTriagePage(projectId: projectId, openCase: model.slackTriageCaseId)
-                            .id("slack-triage-\(projectId)-\(model.slackTriageCaseId ?? "")")
-                    } else if model.memoryProjectId == projectId {
-                        MemoryPage(projectId: projectId)
-                            .id("memory-\(projectId)")
-                    } else {
-                        ProjectPage(projectId: projectId)
-                            .id(projectId)
-                    }
-                } else if model.showingInbox {
-                    InboxPage()
-                } else if model.showingArchive {
-                    ArchiveView()
-                } else {
-                    HomeView()
-                        .navigationTitle("Pilot")
-                }
-            case let .failed(message):
-                DaemonProblem(message: message)
-            case .stopped:
-                DaemonProblem(message: "pilotd is stopped.")
-            case .unknown, .starting:
-                ProgressView("Starting pilotd…")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if let ref = hosts.selection, ref.host != model.localHost, ref.kind == .session,
+               let hosted = hosts.sessions.first(where: { $0.ref == ref }) {
+                HostedWorkspaceTerminal(session: hosted, store: model.terminals, hosts: hosts)
+                    .id(ref.storageKey)
+            } else {
+                localDetail
             }
         }
         .environment(\.repositoryPollingVisible, repositoryPollingVisible)
@@ -123,6 +134,7 @@ struct SessionDetail: View {
     var feed: SessionFeed?
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
+
 
     var body: some View {
         HSplitView {
@@ -312,8 +324,11 @@ struct Inspector: View {
                     .accessibilityHidden(model.inspectorTab != .changes)
             }
             // Mounted once opened, so browsing other tabs never starts a shell.
-            if session.supportsChanges && (model.inspectorTab == .terminal || model.terminals.order.contains(session.id)) {
-                TerminalPane(store: model.terminals, session: session, isVisible: model.inspectorTab == .terminal)
+            if let host = model.localHost, session.supportsChanges,
+               model.inspectorTab == .terminal || model.terminals.order.contains(HostResourceRef(host: host, kind: .session, localId: session.id).storageKey) {
+                TerminalPane(store: model.terminals, session: session,
+                             ref: HostResourceRef(host: host, kind: .session, localId: session.id),
+                             hosts: model.hosts, isVisible: model.inspectorTab == .terminal)
                     .opacity(model.inspectorTab == .terminal ? 1 : 0)
                     .allowsHitTesting(model.inspectorTab == .terminal)
                     .accessibilityHidden(model.inspectorTab != .terminal)

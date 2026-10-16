@@ -106,8 +106,12 @@ Changing the data home creates another identity; damaged identity files fail sta
 re-pairing. The unauthenticated API remains bound to `127.0.0.1` only.
 
 Linux omits Mac energy/system-events helpers. Its agents and daemon-owned processes do not depend on a
-client connection, and disconnecting a client does not stop them. HTML, React and image artifact authoring
-remain available; SwiftUI rendering requires macOS. Linux coordinators require a root-owned, non-setuid
+client connection, and disconnecting a client does not stop them.
+[Host-qualified workspace terminals](docs/workspace-terminals.md) use the same SSH
+forward, retain remote shells through disconnect and expose terminal/job/transfer admission blockers
+for safe maintenance. A lost terminal-open reply reattaches by instance instead of restarting a shell.
+HTML, React and image artifact authoring remain available; SwiftUI rendering requires macOS.
+Linux coordinators require a root-owned, non-setuid
 `bubblewrap` installation (`dnf install bubblewrap`, or the equivalent package-manager command) and working
 unprivileged user, mount, PID and IPC namespaces, including nested-user-namespace disabling. The daemon
 executes real write/chmod and descendant checks before advertising `coordinatorIsolation`; each fresh

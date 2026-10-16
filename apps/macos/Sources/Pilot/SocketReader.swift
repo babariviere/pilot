@@ -11,15 +11,20 @@ final class SocketReader: @unchecked Sendable {
     private var batcher: MainBatcher<ServerUpdate?>!
     private let lock = NSLock()
     private var cancelled = false
+    private var readsPaused = false
+    private var receiveWaiting = false
+    private let boundedDelivery: Bool
 
     /// `deliver` receives `nil` for frames that did not decode, which still prove the socket is live.
     /// `failed` runs after every update received before the failure has been delivered.
     init(
         task: URLSessionWebSocketTask, label: String,
+        boundedDelivery: Bool = false,
         deliver: @escaping @MainActor (SocketReader, [ServerUpdate?]) -> Void,
         failed: @escaping @MainActor (SocketReader) -> Void
     ) {
         self.task = task
+        self.boundedDelivery = boundedDelivery
         queue = DispatchQueue(label: label, qos: .userInitiated)
         self.failed = failed
         batcher = MainBatcher { [weak self] updates in
@@ -41,7 +46,24 @@ final class SocketReader: @unchecked Sendable {
 
     private var isCancelled: Bool { lock.withLock { cancelled } }
 
+    func setReadPaused(_ paused: Bool) {
+        let resume = lock.withLock {
+            readsPaused = paused
+            guard !paused, receiveWaiting, !cancelled else { return false }
+            receiveWaiting = false
+            return true
+        }
+        if resume { receive() }
+    }
+
     private func receive() {
+        let allowed = lock.withLock {
+            guard !cancelled else { return false }
+            if readsPaused { receiveWaiting = true; return false }
+            receiveWaiting = false
+            return true
+        }
+        guard allowed else { return }
         task.receive { [self] result in
             // URLSession calls back on its shared delegate queue. Decode on this socket's queue instead.
             queue.async { [self] in
@@ -55,7 +77,12 @@ final class SocketReader: @unchecked Sendable {
                     @unknown default: data = Data()
                     }
                     batcher.append(try? ServerUpdate.decode(data))
-                    receive()
+                    if boundedDelivery {
+                        batcher.after { [weak self] in
+                            guard let self, !self.isCancelled else { return }
+                            self.receive()
+                        }
+                    } else { receive() }
                 case .failure:
                     batcher.after { [self] in
                         if !isCancelled { failed(self) }
