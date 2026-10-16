@@ -357,6 +357,9 @@ struct ChatView: View {
             // The transcript scrolls behind this inset, including the gaps around its controls.
             .background(Theme.background)
         }
+        // Opaque page behind the transcript. Without it the window background shows through, which macOS tints
+        // with the wallpaper in dark appearance (an orange or olive cast instead of neutral grey).
+        .background(Theme.background)
         .onAppear {
             feed.onEventsApplied = { [messageExpansions] in messageExpansions.applyMessageEvents($0) }
             feed.start()
