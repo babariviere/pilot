@@ -13,6 +13,7 @@ import {
 	type CredentialStatus,
 } from "@pilot/kernel/credential-rpc";
 import lockfile from "proper-lockfile";
+import { SharedCatalogService } from "./shared-model-catalog.ts";
 
 type ObjectValue = Record<string, unknown>;
 type Fence = { generation: number; fingerprint: string; pending?: string; revoked?: boolean; revoking?: boolean };
@@ -149,10 +150,26 @@ export class CredentialBroker {
 	private readonly paths: Record<CredentialNamespace, string>;
 	private readonly journal: string;
 	readonly agentDir: string;
+	readonly catalog: SharedCatalogService;
+	private catalogClient?: import("@pilot/kernel/credential-client").CredentialClient;
 	constructor(agentDir: string) {
 		this.agentDir = agentDir;
 		this.paths = { pi: join(agentDir, "auth.json"), mcp: join(agentDir, "mcp-auth.json") };
 		this.journal = join(agentDir, ".pilot-credential-journal.json");
+		this.catalog = new SharedCatalogService(agentDir, async () => {
+			const { CredentialClient } = await import("@pilot/kernel/credential-client");
+			const { createDiscoveryRuntime, installCredentialBrokerHooks } = await import(
+				"@pilot/kernel/credential-hooks"
+			);
+			await installCredentialBrokerHooks();
+			this.catalogClient ??= new CredentialClient(this.grant());
+			const client = this.catalogClient;
+			return createDiscoveryRuntime({
+				credentials: client.pi,
+				modelsPath: join(agentDir, "models.json"),
+				refreshOnCreate: false,
+			});
+		});
 	}
 	async start(): Promise<void> {
 		await mkdir(this.agentDir, { recursive: true, mode: 0o700 });
@@ -183,7 +200,7 @@ export class CredentialBroker {
 		if (this.actors.size >= 4096) throw new Error("Credential broker capacity reached");
 		const token = randomBytes(32).toString("hex");
 		this.actors.set(token, { admin, ...(scope ? { scope: { ...scope } } : {}), sockets: new Set() });
-		return { socket: this.socket, token };
+		return { socket: this.socket, token, ...(!scope ? { catalogAgentDir: this.agentDir } : {}) };
 	}
 	revoke(endpoint: CredentialEndpoint): void {
 		const actor = this.actors.get(endpoint.token);
@@ -482,6 +499,25 @@ export class CredentialBroker {
 						!["pi", "mcp"].includes(req.namespace)
 					)
 						throw new Rejected("invalid");
+					if (req.op === "catalog" && req.namespace === "pi" && !held && !actor.scope) {
+						if (
+							(req.key !== undefined && (typeof req.key !== "string" || !/^[a-f0-9-]{36}$/.test(req.key))) ||
+							req.mode !== undefined ||
+							req.changed !== undefined ||
+							!object(req.value) ||
+							!Object.keys(req.value).every((key) => ["allowNetwork", "force", "providers"].includes(key)) ||
+							(req.value.allowNetwork !== undefined && typeof req.value.allowNetwork !== "boolean") ||
+							(req.value.force !== undefined && typeof req.value.force !== "boolean") ||
+							(req.value.providers !== undefined &&
+								(!Array.isArray(req.value.providers) ||
+									req.value.providers.length > 256 ||
+									!req.value.providers.every((id) => validKey("pi", id))))
+						)
+							throw new Rejected("invalid");
+						const frame = await this.catalog.reply(req.value, req.key);
+						if (!socket.destroyed && this.actors.has(token)) socket.write(frame);
+						return;
+					}
 					if (req.op === "list" && req.namespace === "pi" && !held) {
 						const values = await readObject(this.paths.pi);
 						return send(
@@ -593,6 +629,8 @@ export class CredentialBroker {
 		for (const socket of this.active) socket.destroy();
 		await new Promise<void>((resolve) => (this.server ? this.server.close(() => resolve()) : resolve()));
 		await Promise.allSettled([...this.locks]);
+		await this.catalog.close();
+		await this.catalogClient?.close();
 		this.actors.clear();
 		this.socket = undefined;
 		if (this.root) await rm(this.root, { recursive: true, force: true });

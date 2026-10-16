@@ -682,6 +682,13 @@ Kernel worker
 The Harness owns history and the model loop. The native SDK supplies tools and extensions, not a second
 model loop. Keep protocol changes in sync with `apps/macos/Sources/PilotCore`.
 
+The daemon owns shared model discovery for its host and agent directory. Concurrent worker startups
+reuse one catalog pass, and later reads revalidate model definitions, cached catalogs, credentials and
+revocation fences. Project scopes, extension providers, virtual routing and request authentication stay
+in each worker. Catalog snapshots contain metadata and configuration checks, not credentials or proof
+of successful provider authentication. Unchanged models are reused in place; endpoints, request headers
+and other transport settings stay local. See [catalog tests and measurements](docs/testing.md#shared-model-discovery).
+
 ### Configuration and boundaries
 
 | Variable | Default | Purpose |

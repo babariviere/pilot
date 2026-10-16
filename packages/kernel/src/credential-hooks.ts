@@ -1,8 +1,22 @@
 /** Pinned SDK compatibility seam. Public ModelRuntime credential injection also covers immutable child adapters. */
-import { getAgentDir, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { join, resolve } from "node:path";
+import {
+	type CreateModelRuntimeOptions,
+	getAgentDir,
+	ModelRuntime,
+	SettingsManager,
+} from "@earendil-works/pi-coding-agent";
 import { credentialClient } from "./credential-client.ts";
 import { ownModelCatalog } from "./model-catalog-owner.ts";
 import { readonlySettings } from "./readonly-settings.ts";
+import { useSharedModelCatalog } from "./shared-catalog-runtime.ts";
+
+const discoveryOwner = new AsyncLocalStorage<boolean>();
+/** Trusted daemon factory. Avoid a recursive request to its own discovery service. */
+export function createDiscoveryRuntime(options: CreateModelRuntimeOptions): Promise<ModelRuntime> {
+	return discoveryOwner.run(true, () => ModelRuntime.create(options));
+}
 
 // Jiti child profiles and native ESM share this SDK class, but not module-local state.
 const key = Symbol.for("pilot.credential-broker.hooks.v1");
@@ -22,11 +36,37 @@ export function installCredentialBrokerHooks(options: { descendants?: boolean } 
 		const create = ModelRuntime.create;
 		ModelRuntime.create = async (options = {}) => {
 			const client = credentialClient();
-			if (client) await client.pi.list(); // No best-effort SDK fallback when the authority is unavailable.
-			if (client && options.credentials && options.credentials !== client.pi)
+			const owner = discoveryOwner.getStore();
+			if (client && !owner) await client.pi.list(); // No best-effort SDK fallback when the authority is unavailable.
+			if (!owner && client && options.credentials && options.credentials !== client.pi)
 				throw new Error("Credential broker requires the canonical credential store");
-			const runtime = await create.call(ModelRuntime, client ? { ...options, credentials: client.pi } : options);
+			const shared =
+				!owner &&
+				client &&
+				process.env.PILOT_SHARED_CATALOG_DIR &&
+				!options.modelsStore &&
+				!options.modelsStorePath &&
+				options.catalogBaseUrl === undefined &&
+				options.modelsPath !== null &&
+				resolve(options.modelsPath ?? join(getAgentDir(), "models.json")) ===
+					join(process.env.PILOT_SHARED_CATALOG_DIR, "models.json");
+			const runtime = await create.call(ModelRuntime, {
+				...options,
+				...(client && !owner ? { credentials: client.pi } : {}),
+				...(shared ? { refreshOnCreate: false } : {}),
+			});
+			if (shared) useSharedModelCatalog(runtime, client);
 			ownModelCatalog(runtime);
+			if (shared && options.refreshOnCreate !== false) {
+				const timed =
+					options.allowModelNetwork === true && options.modelRefreshTimeoutMs !== undefined
+						? AbortSignal.timeout(options.modelRefreshTimeoutMs)
+						: undefined;
+				await runtime.refresh({
+					allowNetwork: process.env.PI_OFFLINE === undefined && options.allowModelNetwork === true,
+					signal: timed ? (options.signal ? AbortSignal.any([options.signal, timed]) : timed) : options.signal,
+				});
+			}
 			if (!client) return runtime;
 			const login = runtime.login.bind(runtime);
 			runtime.login = (provider, type, interaction, options) =>
