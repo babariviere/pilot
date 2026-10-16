@@ -128,9 +128,7 @@ extension AppModel {
         guard let ref = resourceRef(id, kind: kind, context: context) else { return }
         showingArchive = false
         showingInbox = false
-        memoryProjectId = nil
-        slackTriageProjectId = nil
-        slackTriageCaseId = nil
+        clearProjectSubpage()
         let key = ref.host == localHost ? ref.localId : ref.storageKey
         switch kind {
         case .session: try? selectSession(ref)
