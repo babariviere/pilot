@@ -14,6 +14,7 @@ import { createLinearSizePoller } from "./linear-size.ts";
 import { MissionLinearSource } from "./linear-source.ts";
 import { McpStatusService, workerProbe } from "./mcp-status.ts";
 import { MissionLinearPrChecks } from "./mission-linear-prs.ts";
+import { MissionLinearSyncService } from "./mission-linear-sync.ts";
 import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
@@ -121,6 +122,8 @@ sessions.setPullRequestObserver((observation) => trackedItems.observeSlackPullRe
 const missionStore = new MissionStore(join(config.home, "missions.sqlite"));
 const missionLinear = new MissionLinearSource(missionStore, sourceMcp);
 missionLinear.start();
+const linearSync = new MissionLinearSyncService(missionStore, projects, sourceMcp);
+linearSync.start();
 const completionWrites = new Set<Promise<void>>();
 const stopSlackCompletions = missionStore.onCompleted((projectId, missionId, at) => {
 	const write = trackedItems
@@ -134,6 +137,7 @@ for (const mission of missionStore.list())
 	if (mission.status === "done" && mission.completedAt !== undefined)
 		await trackedItems.completeSlackMission(mission.projectId, mission.id, mission.completedAt);
 const missionService = new MissionService(missionStore, sessions, projects);
+missionService.setLinearClosingGuard((missionId, resourceId) => linearSync.closingEligibility(missionId, resourceId));
 missionService.setLinearReader(sourceMcp);
 const linearPrChecks = new MissionLinearPrChecks(
 	missionStore,
@@ -230,6 +234,7 @@ async function stop(): Promise<void> {
 	await mcpStatus.close();
 	await missionLinear.stop();
 	await linearPrChecks.stop();
+	await linearSync.stop();
 	await tracking.stop();
 	await tracking.triage?.stop();
 	await memory.stop();

@@ -40,6 +40,12 @@ import type {
 } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
+import {
+	type LinearContributor,
+	type LinearSyncRecord,
+	linearTarget,
+	reconcileLinearRecord,
+} from "./mission-linear-state.ts";
 import { MissionReplica } from "./mission-replica.ts";
 import { reasonLine } from "./needs-you-reason.ts";
 import type { PullRequestBinding } from "./sessions.ts";
@@ -450,6 +456,8 @@ export function parseResourceUrl(raw: string): { url: string; kind: MissionResou
 export class MissionStore {
 	private db: DatabaseSync;
 	private readonly listeners = new Set<(missionId: string) => void>();
+	private readonly linearSyncListeners = new Set<() => void>();
+	private readonly linearSyncChanged = new Set<string>();
 	private readonly completionListeners = new Set<(projectId: string, missionId: string, at: number) => void>();
 	private readonly memberListeners = new Set<(sessionId: string) => void>();
 	private writing = false;
@@ -653,6 +661,45 @@ export class MissionStore {
 		});
 		if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === "pr_sync_disabled"))
 			this.db.exec("ALTER TABLE tasks ADD COLUMN pr_sync_disabled INTEGER NOT NULL DEFAULT 0");
+		if (!this.all("PRAGMA table_info(resources)").some((row) => row.name === "linear_sync"))
+			this.db.exec("ALTER TABLE resources ADD COLUMN linear_sync TEXT");
+		this.db.exec(`CREATE TABLE IF NOT EXISTS linear_sync_dirty (
+			resource_id TEXT PRIMARY KEY, structural INTEGER NOT NULL DEFAULT 0, reopened INTEGER NOT NULL DEFAULT 0);
+			CREATE INDEX IF NOT EXISTS resources_by_managed_linear ON resources(id) WHERE linear_role = 'managed';
+			CREATE UNIQUE INDEX IF NOT EXISTS resources_by_linear_uuid ON resources(json_extract(linear_sync,'$.status.issueId')) WHERE linear_role='managed';
+			CREATE INDEX IF NOT EXISTS resources_by_contributing_task ON resources(task_id,linear_key,mission_id) WHERE linear_role='contribution';
+			CREATE TRIGGER IF NOT EXISTS shared_linear_sync_task AFTER UPDATE OF status ON tasks
+			WHEN OLD.status <> NEW.status BEGIN
+				INSERT OR IGNORE INTO linear_sync_dirty(resource_id) SELECT m.id FROM resources c JOIN resources m
+				ON m.mission_id=c.mission_id AND m.linear_key=c.linear_key AND m.linear_role='managed'
+				WHERE c.task_id=NEW.id AND c.linear_role='contribution';
+				UPDATE linear_sync_dirty SET reopened=1 WHERE OLD.status IN ('done','dropped')
+				AND NEW.status NOT IN ('done','dropped') AND resource_id IN (SELECT m.id FROM resources c JOIN resources m
+				ON m.mission_id=c.mission_id AND m.linear_key=c.linear_key AND m.linear_role='managed'
+				WHERE c.task_id=NEW.id AND c.linear_role='contribution'); END;
+			CREATE TRIGGER IF NOT EXISTS shared_linear_sync_task_delete BEFORE DELETE ON tasks BEGIN
+				INSERT OR REPLACE INTO linear_sync_dirty(resource_id,structural) SELECT m.id,1 FROM resources c JOIN resources m
+				ON m.mission_id=c.mission_id AND m.linear_key=c.linear_key AND m.linear_role='managed'
+				WHERE c.task_id=OLD.id AND c.linear_role='contribution'; END;
+			CREATE TRIGGER IF NOT EXISTS shared_linear_sync_insert AFTER INSERT ON resources
+			WHEN NEW.linear_role IN ('managed','contribution') BEGIN
+				INSERT OR REPLACE INTO linear_sync_dirty(resource_id,structural) SELECT id,1 FROM resources
+				WHERE mission_id=NEW.mission_id AND linear_key=NEW.linear_key AND linear_role='managed'; END;
+			CREATE TRIGGER IF NOT EXISTS shared_linear_sync_delete AFTER DELETE ON resources
+			WHEN OLD.linear_role IN ('managed','contribution') BEGIN
+				INSERT OR REPLACE INTO linear_sync_dirty(resource_id,structural) SELECT id,1 FROM resources
+				WHERE mission_id=OLD.mission_id AND linear_key=OLD.linear_key AND linear_role='managed'; END;
+			CREATE TRIGGER IF NOT EXISTS shared_linear_sync_role AFTER UPDATE OF linear_role,task_id,linear_key ON resources BEGIN
+				INSERT OR REPLACE INTO linear_sync_dirty(resource_id,structural) VALUES(NEW.id,1);
+				INSERT OR REPLACE INTO linear_sync_dirty(resource_id,structural) SELECT id,1 FROM resources WHERE mission_id=NEW.mission_id
+				AND linear_key IN (OLD.linear_key,NEW.linear_key) AND linear_role='managed'; END;`);
+		// Existing managed links start with a baseline, never an inferred completion.
+		this.transaction(() => {
+			this.run(
+				"INSERT OR IGNORE INTO linear_sync_dirty(resource_id) SELECT id FROM resources WHERE linear_role='managed' AND linear_sync IS NULL",
+			);
+			this.reconcileLinearSync();
+		});
 		this.db.exec(`CREATE INDEX IF NOT EXISTS resources_by_owned_pr ON resources(mission_id, created_at, id)
 			WHERE kind = 'github.pr' AND relationship = 'ownership'`);
 		if (!this.all("PRAGMA table_info(events)").some((row) => row.name === "is_user_note"))
@@ -1130,6 +1177,11 @@ export class MissionStore {
 		this.listeners.add(listener);
 		return () => this.listeners.delete(listener);
 	}
+	/** Only lifecycle intent changes, never chat activity, streaming or remote observation refreshes. */
+	onLinearSyncChange(listener: () => void): () => void {
+		this.linearSyncListeners.add(listener);
+		return () => this.linearSyncListeners.delete(listener);
+	}
 	/** Only committed transitions to Done, not general activity or startup snapshots. */
 	onCompleted(listener: (projectId: string, missionId: string, at: number) => void): () => void {
 		this.completionListeners.add(listener);
@@ -1150,6 +1202,7 @@ export class MissionStore {
 			return;
 		}
 		if (this.referenceBatch === missionId) return;
+		if (this.linearSyncChanged.delete(missionId)) for (const listener of this.linearSyncListeners) listener();
 		for (const listener of this.listeners) listener(missionId);
 		for (const sessionId of sessions) for (const listener of this.memberListeners) listener(sessionId);
 	}
@@ -1187,6 +1240,7 @@ export class MissionStore {
 			try {
 				const result = work();
 				if (!this.initializing) for (const id of this.phaseReconciliations) this.reconcilePhases(id);
+				if (!this.initializing) this.reconcileLinearSync();
 				this.db.exec("COMMIT");
 				return result;
 			} catch (error) {
@@ -1957,6 +2011,194 @@ export class MissionStore {
 	}
 
 	// Tasks
+
+	/** Small indexed batches. Network callers must revalidate version after every await. */
+	linearSyncBatch(
+		after = "",
+		limit = 25,
+	): Array<{ missionId: string; projectId: string; resource: MissionResource; record: LinearSyncRecord }> {
+		return this.all(
+			`SELECT r.*, m.project_id FROM resources r JOIN missions m ON m.id=r.mission_id
+			WHERE r.linear_role='managed' AND r.id > ? AND m.status <> 'archived' ORDER BY r.id LIMIT ?`,
+			after,
+			Math.min(25, limit),
+		).map((row) => ({
+			missionId: str(row.mission_id!),
+			projectId: str(row.project_id!),
+			resource: resourceFrom(row),
+			record: JSON.parse(str(row.linear_sync!)) as LinearSyncRecord,
+		}));
+	}
+
+	linearSyncRecord(resourceId: string): LinearSyncRecord | undefined {
+		const row = this.one("SELECT linear_sync FROM resources WHERE id=? AND linear_role='managed'", resourceId);
+		return row?.linear_sync ? (JSON.parse(str(row.linear_sync)) as LinearSyncRecord) : undefined;
+	}
+
+	/** CAS fences task/status edits, detach/re-attach, user pause and concurrent sync work. */
+	saveLinearSync(resourceId: string, version: string, record: LinearSyncRecord): boolean {
+		const row = this.one(
+			"SELECT mission_id FROM resources WHERE id=? AND linear_role='managed' AND json_extract(linear_sync,'$.version')=?",
+			resourceId,
+			version,
+		);
+		if (!row) return false;
+		// A UUID resolved through another workspace alias must never acquire a second writer.
+		if (
+			record.status.issueId &&
+			this.one(
+				`SELECT id FROM resources WHERE linear_role='managed' AND id<>?
+			AND json_extract(linear_sync,'$.status.issueId')=?`,
+				resourceId,
+				record.status.issueId,
+			)
+		)
+			throw new Conflict("This Linear issue already has a verified managing link. Remove the duplicate manager.");
+		this.transaction(() =>
+			this.run("UPDATE resources SET linear_sync=? WHERE id=?", JSON.stringify(record), resourceId),
+		);
+		this.changed(str(row.mission_id!));
+		return true;
+	}
+
+	controlLinearSync(id: string, resourceId: string, action: "pause" | "resume"): MissionResource {
+		this.require(id);
+		if (action !== "pause" && action !== "resume") throw new Error("action must be pause or resume");
+		const row = this.one(
+			"SELECT * FROM resources WHERE mission_id=? AND id=? AND linear_role='managed'",
+			id,
+			resourceId,
+		);
+		if (!row) throw new NotFound("Unknown managed Linear ticket");
+		const record = this.linearSyncRecord(resourceId)!;
+		const version = record.version;
+		record.version = randomUUID();
+		record.attempts = 0;
+		delete record.intent;
+		delete record.status.error;
+		delete record.status.retryAt;
+		delete record.status.target;
+		record.status.updatedAt = Date.now();
+		if (action === "pause") {
+			record.status.state = "paused";
+			record.status.reason = "Synchronization paused by you. Review the ticket, then resume when ready.";
+			record.paused = record.status.reason;
+			delete record.acceptBaseline;
+		} else {
+			delete record.paused;
+			record.acceptBaseline = true;
+			delete record.status.reason;
+			const target = linearTarget(record.contributors);
+			record.status.state = target ? "pending" : "idle";
+			if (target) {
+				record.intent = { target };
+				record.status.target = target;
+			}
+		}
+		this.saveLinearSync(resourceId, version, record);
+		for (const listener of this.linearSyncListeners) listener();
+		this.log(id, { text: `Linear synchronization ${action === "pause" ? "paused" : "resumed"}: ${row.external_id}` });
+		return resourceFrom(this.one("SELECT * FROM resources WHERE id=?", resourceId)!);
+	}
+
+	/** Other managers which could still need any of this ticket's unfinished tasks. Bounded by caller. */
+	linearCancellationPeers(resourceId: string): string[] {
+		return this.all(
+			`SELECT DISTINCT p.id FROM resources m JOIN resources c
+			ON c.mission_id=m.mission_id AND c.linear_key=m.linear_key AND c.linear_role='contribution'
+			JOIN tasks t ON t.id=c.task_id AND t.status NOT IN ('done','dropped')
+			JOIN resources other ON other.task_id=t.id AND other.linear_role='contribution'
+			JOIN resources p ON p.mission_id=other.mission_id AND p.linear_key=other.linear_key AND p.linear_role='managed'
+			WHERE m.id=? AND p.id<>m.id ORDER BY p.id LIMIT 26`,
+			resourceId,
+		).map((r) => str(r.id!));
+	}
+
+	linearSyncResource(
+		resourceId: string,
+	): { resource: MissionResource; missionId: string; projectId: string; record: LinearSyncRecord } | undefined {
+		const row = this.one(
+			`SELECT r.*,m.project_id FROM resources r JOIN missions m ON m.id=r.mission_id
+			WHERE r.id=? AND r.linear_role='managed' AND m.status<>'archived'`,
+			resourceId,
+		);
+		return row
+			? {
+					resource: resourceFrom(row),
+					missionId: str(row.mission_id!),
+					projectId: str(row.project_id!),
+					record: JSON.parse(str(row.linear_sync!)) as LinearSyncRecord,
+				}
+			: undefined;
+	}
+
+	/** Called only with fresh remote terminal observations for every peer. Unknown peers protect work. */
+	dropCanceledLinearTasks(
+		resourceId: string,
+		version: string,
+		peers: Map<string, { version: string; inactive: boolean }>,
+	): boolean {
+		const managed = this.linearSyncResource(resourceId);
+		if (
+			!managed ||
+			managed.record.version !== version ||
+			managed.record.status.state !== "terminal" ||
+			!["canceled", "duplicated"].includes(managed.record.status.reason ?? "")
+		)
+			return false;
+		const currentPeers = this.linearCancellationPeers(resourceId);
+		if (currentPeers.some((id) => !peers.has(id) || this.linearSyncRecord(id)?.version !== peers.get(id)!.version))
+			return false;
+		const protectedTasks = new Set<string>();
+		for (const id of currentPeers)
+			if (!peers.get(id)!.inactive)
+				for (const task of this.linearSyncRecord(id)!.contributors) protectedTasks.add(task.taskId);
+		let changed = false;
+		this.transaction(() => {
+			for (const task of managed.record.contributors) {
+				if (task.status === "done" || task.status === "dropped" || protectedTasks.has(task.taskId)) continue;
+				this.run(
+					"UPDATE tasks SET status='dropped',updated_at=?,delegated_to=NULL,delegated_from_status=NULL,delegated_resource_id=NULL WHERE id=? AND status NOT IN ('done','dropped')",
+					Date.now(),
+					task.taskId,
+				);
+				this.event(
+					managed.missionId,
+					"task",
+					`Task dropped because its Linear ticket was ${managed.record.status.reason}`,
+					USER,
+					{ taskId: task.taskId },
+				);
+				changed = true;
+			}
+		});
+		if (changed) this.changed(managed.missionId);
+		return true;
+	}
+
+	private reconcileLinearSync(): void {
+		for (const dirty of this.all("SELECT * FROM linear_sync_dirty")) {
+			const row = this.one("SELECT * FROM resources WHERE id=?", dirty.resource_id!);
+			if (!row) continue;
+			if (row.linear_role !== "managed") {
+				if (row.linear_sync) this.run("UPDATE resources SET linear_sync=NULL WHERE id=?", row.id!);
+				continue;
+			}
+			const contributors = this.all(
+				`SELECT c.id AS linkId,c.task_id AS taskId,t.status FROM resources c
+				JOIN tasks t ON t.id=c.task_id WHERE c.mission_id=? AND c.linear_key=? AND c.linear_role='contribution' ORDER BY c.id LIMIT 1001`,
+				row.mission_id!,
+				row.linear_key!,
+			) as unknown as LinearContributor[];
+			const previous = row.linear_sync ? (JSON.parse(str(row.linear_sync)) as LinearSyncRecord) : undefined;
+			const next = reconcileLinearRecord(previous, contributors, dirty.structural === 1, dirty.reopened === 1);
+			if (previous !== next) {
+				this.run("UPDATE resources SET linear_sync=? WHERE id=?", JSON.stringify(next), row.id!);
+				this.linearSyncChanged.add(str(row.mission_id!));
+			}
+		}
+		this.run("DELETE FROM linear_sync_dirty");
+	}
 
 	/** Lightweight, bounded linked-issue reads, including automatic delegations awaiting return. */
 	linearTaskLinks(
@@ -3198,7 +3440,7 @@ export class MissionStore {
 			}
 		});
 		this.changed(id);
-		return resource;
+		return resourceFrom(this.one("SELECT * FROM resources WHERE id=?", resource.id)!);
 	}
 
 	private validateLinearRole(
@@ -3279,7 +3521,7 @@ export class MissionStore {
 			});
 		});
 		this.changed(id);
-		return { ...resource, linearRole: write.linearRole };
+		return resourceFrom(this.one("SELECT * FROM resources WHERE id=?", resourceId)!);
 	}
 
 	removeResource(id: string, resourceId: string, actor: MissionActor = USER): void {
@@ -4184,6 +4426,9 @@ function artifactFrom(row: Row): MissionArtifactLink {
 
 function resourceFrom(row: Row): MissionResource {
 	return {
+		...(row.linear_role === "managed" && row.linear_sync
+			? { linearSync: (JSON.parse(str(row.linear_sync)) as LinearSyncRecord).status }
+			: {}),
 		...(row.kind === "linear.issue" ? { linearRole: (row.linear_role ?? "reference") as MissionLinearRole } : {}),
 		...(row.linear_key ? { linearKey: str(row.linear_key) } : {}),
 		id: str(row.id!),

@@ -2,7 +2,7 @@ import { Worker } from "node:worker_threads";
 import type { TrackedKind, TrackingJson } from "@pilot/protocol";
 import { SourceSignInCancelled, SourceSignInFailed } from "./source-sign-in.ts";
 
-/** Fixed dedicated tools. Writes are Linear start state and Slack start/done reactions only. */
+/** Fixed dedicated tools. Linear start/synchronization writes change state only; Slack writes are reactions. */
 export function dedicatedSourceTool(kind: TrackedKind, tool: string): string | undefined {
 	if (kind === "linear" && tool === "issues") return "list_issues";
 	if (kind === "linear" && tool === "cycles") return "list_cycles";

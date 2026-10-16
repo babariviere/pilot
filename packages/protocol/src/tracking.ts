@@ -100,7 +100,7 @@ export interface ProjectTrackingConfig {
 	linearTeam?: string;
 	/** Display name of the attached team. */
 	linearTeamName?: string;
-	/** Workflow mappings keyed by actual issue team, including sub-teams. Only inProgress is automated today. */
+	/** Workflow mappings keyed by actual issue team, including sub-teams. Terminal mappings are guards, not outbound actions. */
 	linearStateMappings?: Record<string, LinearStateMapping>;
 }
 

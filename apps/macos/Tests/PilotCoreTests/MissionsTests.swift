@@ -2,6 +2,19 @@ import Foundation
 import Testing
 @testable import PilotCore
 
+@Test func linearSynchronizationStatusRoundTripsAndLegacyLinksStayCompatible() throws {
+    let data = Data(#"{"id":"r","url":"https://linear.app/acme/issue/ENG-1","kind":"linear.issue","createdAt":1,"linearRole":"managed","linearSync":{"state":"paused","target":"merged","reason":"Review changed work","error":"Choose a valid Merged state","issueId":"uuid","teamId":"team","observedStateId":"active","observedStateName":"In progress","updatedAt":2,"retryAt":3}}"#.utf8)
+    let resource = try JSONDecoder().decode(MissionResource.self, from: data)
+    let sync = try #require(resource.linearSync)
+    #expect(sync.state == .paused)
+    #expect(sync.target == .merged)
+    #expect(sync.observedStateName == "In progress")
+    #expect(sync.retryAt == 3)
+    #expect(try JSONDecoder().decode(MissionResource.self, from: JSONEncoder().encode(resource)) == resource)
+    let write = MissionLinearSyncWrite(action: "resume")
+    #expect(try JSONDecoder().decode(MissionLinearSyncWrite.self, from: JSONEncoder().encode(write)).action == "resume")
+}
+
 @Test func linearResourceRolesDecodeSafelyAndWritesRemainExplicit() throws {
     let raw = #"{"id":"r","url":"https://linear.app/acme/issue/ENG-1","kind":"linear.issue","createdAt":1}"#
     let legacy = try JSONDecoder().decode(MissionResource.self, from: Data(raw.utf8))

@@ -382,8 +382,21 @@ than duplicate work. No Linear sub-issues are created. Attached tickets notify t
 receive bounded ticket links and can read up to 8,000 description characters on demand with `ticket`;
 external ticket text is untrusted context, not instructions or authorization.
 References never change task or Linear status, and
-migration preserves tasks already marked Delegated. This is the storage/API foundation, not automatic
-ticket completion or cancellation synchronization.
+migration preserves tasks already marked Delegated.
+
+The daemon synchronizes managed tickets from their contributing tasks: started work targets the team's
+In progress mapping, all unfinished contributors in review targets In review, and all contributors Done
+targets Merged, never Deployed. Empty sets, references and link removal alone never complete a ticket.
+Dropped contributors block completion until explicitly excluded. Deployed, Canceled and Duplicated
+tickets are preserved. Observed cancellation or duplication drops unfinished contributing tasks, except
+tasks still needed by another active managed ticket; Done tasks and reference links stay unchanged.
+Manual Linear changes, reopened tasks and edits to an observed contribution set pause synchronization
+for review. Managed resources expose `linearSync` status and actionable errors; the user can pause or
+resume with `POST /api/missions/:id/resources/:resourceId/linear-sync` and `{action:"pause"|"resume"}`.
+Resume accepts the reviewed task scope and fresh remote baseline, and retries failed synchronization.
+Writes use verified immutable issue IDs and actual-team mappings, durable fenced intents, bounded
+retries and fresh reads before updates. Linear has no conditional status update, so a simultaneous
+external edit between the final read and write remains an unavoidable remote race.
 
 For linked task PRs, `prGuidance` gives current ticket-specific wording: earlier contributors use
 `Related to`, while the final contributor uses `Closes` only after every other contributor is Done
@@ -515,8 +528,8 @@ Public search is preferred; a private-capable search, still restricted to that c
 also finds mentions in private-channel replies without re-reading unchanged threads.
 
 Project settings provides per-team Linear state mappings for Todo, In progress, In review, Merged,
-Deployed, Canceled and Duplicated, including separate choices for sub-teams. Only In progress is applied
-when work starts; the other mappings are saved only and do not trigger automatic transitions.
+Deployed, Canceled and Duplicated, including separate choices for sub-teams. Managed ticket contributions
+also use In review and Merged; Deployed/Canceled/Duplicated guard terminal states, not outbound actions.
 In progress must map to a started-category state. Its Automatic option selects the state named
 In progress, never the first state in workflow order. Other mappings may use any workflow state.
 If a target is missing, ambiguous or no longer a started state, Pilot leaves the ticket unchanged and shows
@@ -524,7 +537,8 @@ a quiet error. Starting work still proceeds. Saved choices are rechecked against
 Confirming Start chat or Start mission moves an eligible Linear ticket to that state, or adds an `eyes`
 reaction to a Slack thread's parent message as you. The Slack reaction is attempted once per item,
 counts an existing reaction as success, and can be removed on Done through the opt-in route below. Failures never
-block the work and appear quietly on the item. These are the only tracking writes, never Slack messages or replies.
+block the work and appear quietly on the item. Managed ticket status synchronization is described above.
+Tracking never sends Slack messages or replies.
 Linear size classification suggests Quick fix, Needs planning or Unknown from a bounded title and description.
 It runs once per issue update, at most eight attempts per poll and 200 per UTC day across projects, with the
 cheapest scoped model and no tools or thinking. Descriptions are transient; failed attempts remain Unknown
