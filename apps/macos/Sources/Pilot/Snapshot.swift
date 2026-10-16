@@ -1176,18 +1176,28 @@ enum Snapshot {
         await render(TrackedInboxSheet(project: projects[1], openSettings: {}) { _ in },
                      size: CGSize(width: 680, height: 420), to: directory.appending(path: "tracked-inbox-empty.png"))
 
-        // Settings: team picker, channels with per-channel status (one added but not saved yet).
+        // Settings: team picker, Linear sizes, channels with per-channel status (one added but not saved yet).
         model.client.loadTrackingFixture(TrackingFixture(
             sources: [linearSource, slackSource], items: items,
             teams: TrackingLookup(status: .ok, items: [
                 LinearTeamOption(id: "team-platform", name: "Platform", key: "PLT"),
             ]),
-            myChannels: channels, searchChannels: channels))
+            myChannels: channels, searchChannels: channels,
+            linearCorrections: [
+                LinearSizeCorrection(itemId: "l2", summary: "Migrate billing exports to the new storage bucket",
+                                     correctedAt: now - 2 * 60 * minute, size: .needsPlanning),
+                LinearSizeCorrection(itemId: "l4", summary: "Fix the misaligned avatar in the account menu",
+                                     correctedAt: now - day, size: .quickFix),
+            ],
+            guides: [.linear: TriageGuide(kind: .linear, text: """
+                Schema migrations and storage moves need planning.
+                Copy, alignment and single-screen style fixes are quick fixes.
+                """, updatedAt: now - 5 * 60 * minute, throughSeq: 2)]))
         let editor = ProjectEditor()
         editor.load(projects[0])
         editor.addChannel(SlackChannelOption(id: "G0INCIDNT1", name: "incidents", isPrivate: true))
         await render(SettingsColumn { TrackingSettingsSection(project: projects[0], editor: editor) },
-                     size: CGSize(width: 560, height: 520), to: directory.appending(path: "tracking-settings.png"))
+                     size: CGSize(width: 560, height: 900), to: directory.appending(path: "tracking-settings.png"))
         await render(SettingsColumn { TrackingSettingsSection(project: projects[0], editor: editor, channelQuery: "re") },
                      size: CGSize(width: 560, height: 640), to: directory.appending(path: "tracking-settings-search.png"))
 
@@ -1205,7 +1215,7 @@ enum Snapshot {
             teams: TrackingLookup(status: .signInRequired, error: "Sign in required", signInCommand: "pi mcp login linear"),
             myChannels: channels, searchChannels: channels))
         await render(SettingsColumn { TrackingSettingsSection(project: projects[0], editor: editor) },
-                     size: CGSize(width: 560, height: 560), to: directory.appending(path: "tracking-settings-signin.png"))
+                     size: CGSize(width: 560, height: 820), to: directory.appending(path: "tracking-settings-signin.png"))
 
         // The project page's Current cycle and Tracked sections: live rows, no cycle, sign-in and nothing attached.
         func row(_ item: TrackedItem) -> DashboardTrackedItem {

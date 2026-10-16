@@ -719,6 +719,14 @@ final class PilotClient: ObservableObject {
                                         query: [URLQueryItem(name: "projectId", value: projectId)])
     }
 
+    /// The project's Linear size corrections, newest first (pilotd keeps the latest 500). They build the Linear
+    /// triage guide, and the size estimator also reads the newest five.
+    func linearSizeCorrections(projectId: String) async throws -> [LinearSizeCorrection] {
+        if let fixture = fixtureTracking { return fixture.linearCorrections }
+        return try await missionRequest(["tracking", "linear", "corrections"],
+                                        query: [URLQueryItem(name: "projectId", value: projectId)])
+    }
+
     /// A source's triage guide for the project: short rules pilotd's grooming model writes from the corrections.
     /// Untrusted text, shown read-only. An empty text with updatedAt 0 means no guide yet.
     func triageGuide(projectId: String, kind: TrackedKind) async throws -> TriageGuide {

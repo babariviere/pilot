@@ -222,6 +222,20 @@ public struct SlackCorrection: Codable, Equatable, Sendable {
         self.itemId = itemId; self.summary = summary; self.correctedAt = correctedAt; self.values = values
     }
 }
+/// A Linear size the user corrected. The summary is the issue title. Mirrors LinearSizeCorrection.
+public struct LinearSizeCorrection: Codable, Equatable, Sendable {
+    public struct Values: Codable, Equatable, Sendable {
+        public let size: LinearSize
+        public init(size: LinearSize) { self.size = size }
+    }
+    public let itemId: String
+    public let summary: String
+    public let correctedAt: Double
+    public let values: Values
+    public init(itemId: String, summary: String, correctedAt: Double, size: LinearSize) {
+        self.itemId = itemId; self.summary = summary; self.correctedAt = correctedAt; self.values = Values(size: size)
+    }
+}
 
 public struct ProjectTrackingConfig: Codable, Equatable, Hashable, Sendable {
     /// Channel IDs from the picker. Older configs may hold names.

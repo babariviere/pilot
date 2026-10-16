@@ -58,6 +58,10 @@ import Testing
     {"itemId":"item","summary":"Export help","correctedAt":123,"values":{"type":"question","label":null}}
     """#.utf8))
     #expect(correction.values.clearLabel)
+    let size = try JSONDecoder().decode(LinearSizeCorrection.self, from: Data(#"""
+    {"itemId":"item","summary":"Export crashes","correctedAt":123,"values":{"size":"needs_planning"}}
+    """#.utf8))
+    #expect(size == LinearSizeCorrection(itemId: "item", summary: "Export crashes", correctedAt: 123, size: .needsPlanning))
     let row = DashboardTrackedItem(id: "item", title: "Export help", slack: triage)
     let decodedRow = try JSONDecoder().decode(DashboardTrackedItem.self, from: JSONEncoder().encode(row))
     #expect(TrackedItem(dashboard: decodedRow, projectId: "p", kind: .slack).slack == triage)

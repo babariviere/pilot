@@ -487,11 +487,20 @@ export function createDaemonServer(
 					if (req.method === "POST" && tracking.triage)
 						return json(res, 202, await tracking.triage.rebuild(projectId, parts[2]));
 				}
-				if (parts.length === 4 && parts[2] === "slack" && parts[3] === "corrections" && req.method === "GET") {
+				if (
+					parts.length === 4 &&
+					(parts[2] === "slack" || parts[2] === "linear") &&
+					parts[3] === "corrections" &&
+					req.method === "GET"
+				) {
 					const projectId = url.searchParams.get("projectId");
 					if (!projectId) throw new HttpError(400, "projectId is required");
 					projects.require(projectId);
-					return json(res, 200, await tracking.items.corrections(projectId));
+					const corrections =
+						parts[2] === "linear"
+							? await tracking.items.linearSizeCorrections(projectId)
+							: await tracking.items.corrections(projectId);
+					return json(res, 200, corrections);
 				}
 				// Read-only pickers for project settings. Nothing is stored until the project is saved.
 				const query = url.searchParams.get("query")?.trim().slice(0, 100) || undefined;

@@ -216,6 +216,19 @@ test("tracking HTTP, WS invalidation and DashboardProviders.tracked share projec
 	assert.deepEqual(await (await api(`/tracking/slack/corrections?projectId=${other.id}`)).json(), []);
 	assert.equal((await api("/tracking/slack/corrections")).status, 400);
 	assert.equal((await api("/tracking/slack/corrections?projectId=missing")).status, 404);
+	const sized = page.items[1].id;
+	assert.equal((await api(`/tracked-items/${sized}`, { linearSize: "needs_planning" }, "PATCH")).status, 200);
+	const sizes = await (await api(`/tracking/linear/corrections?projectId=${project.id}`)).json();
+	assert.deepEqual(
+		sizes.map((c: { itemId: string; values: unknown }) => [c.itemId, c.values]),
+		[[sized, { size: "needs_planning" }]],
+	);
+	assert.equal(
+		(await (await api(`/tracking/slack/corrections?projectId=${project.id}`)).json()).length,
+		2,
+		"kinds stay apart",
+	);
+	assert.equal((await api(`/tracking/bogus/corrections?projectId=${project.id}`)).status, 404);
 	await items.saveGuide(project.id, "slack", "Export failures are bugs.", 0, 0, Date.now());
 	assert.equal(
 		(await (await api(`/tracking/slack/guide?projectId=${project.id}`)).json()).text,

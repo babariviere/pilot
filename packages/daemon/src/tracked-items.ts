@@ -3,6 +3,7 @@ import { Worker } from "node:worker_threads";
 import type {
 	DashboardTrackedSource,
 	SlackCorrection,
+	LinearSizeCorrection,
 	TrackedItem,
 	TrackedItemList,
 	TrackedItemPatch,
@@ -128,6 +129,10 @@ export class TrackedItemStore {
 	}
 	corrections(projectId: string): Promise<SlackCorrection[]> {
 		return this.rpc("corrections", { projectId });
+	}
+	/** The project's Linear size corrections, newest first (at most 500). */
+	linearSizeCorrections(projectId: string): Promise<LinearSizeCorrection[]> {
+		return this.rpc("corrections", { projectId, kind: "linear" });
 	}
 	triageContext(
 		projectId: string,

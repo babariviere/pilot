@@ -79,7 +79,10 @@ parentPort!.on("message", ({ id, method, args }) => {
 				disk.finishSlack(args.channel, args.ts, args.result, args.projectId);
 				break;
 			case "corrections":
-				value = disk.corrections(args.projectId);
+				value =
+					args.kind === "linear"
+						? disk.triage.corrections(args.projectId, "linear")
+						: disk.corrections(args.projectId);
 				break;
 			case "require":
 				value = disk.require(args.id);

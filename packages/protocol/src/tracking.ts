@@ -79,6 +79,13 @@ export interface SlackCorrection {
 	correctedAt: number;
 	values: SlackOverrides;
 }
+/** GET /api/tracking/linear/corrections?projectId=... (newest first, at most 500). Summary is the issue title. */
+export interface LinearSizeCorrection {
+	itemId: string;
+	summary: string;
+	correctedAt: number;
+	values: { size: LinearSize };
+}
 export interface ProjectTrackingConfig {
 	slackLabels?: SlackProjectLabel[];
 	/** Slack channel IDs from the channel picker. Older configs may hold names. */
