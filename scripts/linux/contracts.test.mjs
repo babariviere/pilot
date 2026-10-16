@@ -117,6 +117,7 @@ test("unit is relocatable, quotes paths, uses the private tools and orderly proc
 	assert.match(unit, /TimeoutStopSec=120/);
 	assert.match(unit, /WantedBy=default.target/);
 	assert.match(unit, /WorkingDirectory=%h\n/);
+	assert.match(unit, /ExecStartPre=-.*linux-coordinator-probe.ts.*--output.*coordinator-preflight.json/);
 	assert.match(unit, /UMask=0077/);
 	assert.match(unit, /runtime %%/);
 	assert.doesNotMatch(unit, /pnpm|nohup|sudo|enable-linger/);

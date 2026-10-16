@@ -85,8 +85,11 @@ Compatibility depends on the available runtime, shell and native module ABIs, no
 or OS release. Linux CI executes the selected PTY, SQLite and artifact compiler dependencies and a real
 headless daemon/kernel smoke test. [Production Linux packaging](scripts/linux/README.md) provides a
 signed manifest, private Node/jj runtime and an explicitly provisioned persistent systemd user service.
-CI verifies extracted production assets and real SSH logout survival. Automatic SSH delivery and app
-setup are separate work; running a daemon in an interactive SSH shell is not a persistent service.
+CI verifies extracted production assets and real SSH logout survival. `PilotCore.LinuxSSHBootstrap`
+provides repeatable initial SSH setup without a model chat, with signed-asset, prerequisite, persistent
+service, identity and separate coordinator-isolation gates. App onboarding is separate work. Setup
+requires a configured signing key and published trusted assets; it never installs packages, grants
+linger, weakens security policy or copies credentials automatically. See [SSH setup](docs/ssh-bootstrap.md).
 
 `GET /api/hello` returns a stable data-home `daemonId`, application `daemonVersion`, an independently
 versioned protocol range (`minimumClientProtocolVersion` through `protocolVersion`, currently 1),

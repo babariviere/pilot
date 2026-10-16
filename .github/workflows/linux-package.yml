@@ -39,7 +39,13 @@ jobs:
       - name: Validate relocated production package on host libraries and real SSH user-service lifecycle
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y openssh-server dbus-user-session
+          sudo apt-get install -y openssh-server dbus-user-session bubblewrap
+          # Disposable runner only. Match the isolation lane's executable-scoped userns grant.
+          if command -v apparmor_parser >/dev/null && grep -q Y /sys/module/apparmor/parameters/enabled; then
+            printf '%s\n' 'abi <abi/4.0>,' \
+              'profile pilot-ci-bwrap /usr/bin/bwrap flags=(unconfined) {' '  userns,' '}' \
+              | sudo apparmor_parser -r
+          fi
           bash scripts/linux/verify-service.sh "$RUNNER_TEMP/linux-package/Pilot-linux-x64.tar.gz"
       - uses: actions/upload-artifact@v4
         with:
