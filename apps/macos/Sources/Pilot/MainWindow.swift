@@ -150,13 +150,12 @@ struct SessionDetail: View {
 
     @ToolbarContentBuilder
     private var contextToolbarItem: some ToolbarContent {
-        if model.isUnread(session) || session.isAsk || session.missionId != nil
+        if model.isUnread(session) || session.isAsk
             || AttemptsMenu.label(for: session.attempts ?? []) != nil {
             ToolbarItem(placement: .primaryAction) {
                 HStack(spacing: 8) {
                     if model.isUnread(session) { UnreadBadge() }
                     AttemptsMenu(session: session)
-                    if let missionId = session.missionId { MissionChip(missionId: missionId) }
                     // Ask has no Changes pane, so its read-only boundary stays visible here.
                     if session.isAsk { SessionContextBadge(session: session) }
                 }
@@ -200,7 +199,7 @@ struct SessionInspectorControls: View {
     @ViewBuilder
     var body: some View {
         if session.missionId != nil {
-            InspectorToggle(tab: .mission, icon: PilotIcon.mission, help: "Mission")
+            SessionMissionControl(session: session)
         }
         if session.supportsChanges {
             InspectorToggle(tab: .changes, icon: PilotIcon.changes, help: "Changes (⇧⌘D)")
