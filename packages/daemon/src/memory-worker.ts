@@ -89,6 +89,9 @@ if (workerData.replicaRecall) {
 					case "control.next":
 						value = control.next();
 						break;
+					case "control.context":
+						value = control.context(args.id, args.n);
+						break;
 					case "control.put":
 						value = control.put(args.id, args.n, args.text);
 						break;
