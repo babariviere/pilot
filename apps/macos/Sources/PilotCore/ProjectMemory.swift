@@ -13,16 +13,18 @@ public struct MemoryEntry: Codable, Equatable, Sendable, Identifiable {
     public let deviceId: String
     public let at: Double
     public let sessionId: String
+    public let sharedOrigin: SharedSessionRef?
     public let text: String
     /// Stable ids of earlier notes this one corrects.
     public let replaces: [String]?
     /// Derived by the daemon on read: index of the latest note that corrects this one.
     public let replacedBy: Int?
     public init(index: Int, id: String, deviceId: String, at: Double, sessionId: String, text: String,
-                replaces: [String]? = nil, replacedBy: Int? = nil) {
+                replaces: [String]? = nil, replacedBy: Int? = nil, sharedOrigin: SharedSessionRef? = nil) {
         self.index = index; self.id = id; self.deviceId = deviceId
         self.at = at; self.sessionId = sessionId; self.text = text
         self.replaces = replaces; self.replacedBy = replacedBy
+        self.sharedOrigin = sharedOrigin
     }
 }
 

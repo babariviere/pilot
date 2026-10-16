@@ -24,9 +24,25 @@ import type {
 	MemoryTreeNode,
 	MemoryView,
 	ProjectMemorySummary,
+	SharedMemoryMutation,
+	SharedMemoryCommitOutcome,
+	SharedMemoryCheckpointManifest,
+	SharedMemoryCheckpointPage,
+	SharedMemoryChangePage,
+	OperationHost,
 } from "@pilot/protocol";
 import type { MemoryCompactionTrace } from "./memory-compaction.ts";
 import { cover } from "./memory-cover.ts";
+import {
+	checkMutation,
+	digestMemory,
+	memoryFingerprint,
+	MEMORY_PAGE_BYTES,
+	MEMORY_PAGE_LIMIT,
+	rawMemoryEntry,
+	memoryId,
+	checkMemoryExport,
+} from "./shared-memory-common.ts";
 export const RECORD_BYTES = 2048;
 /** Summaries this size or smaller are written from their notes, so the browsing tree lists the notes under them. */
 export const TREE_LEAF_GROUP = 16;
@@ -48,9 +64,7 @@ type Summary = { text: string; seen: number };
 export class DuplicateNote extends Error {}
 /** Case-, whitespace- and Unicode-form-insensitive identity used by the duplicate guard. */
 function fingerprint(text: string): string {
-	return createHash("sha256")
-		.update(text.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim())
-		.digest("base64url");
+	return memoryFingerprint(text);
 }
 export function checkLine(value: unknown): string {
 	if (typeof value !== "string" || !value.trim() || /[\r\n\x00]/.test(value) || Buffer.byteLength(value.trim()) > 280)
@@ -130,6 +144,7 @@ function recordFile(path: string): number {
 }
 export class MemoryDisk {
 	private lease: DatabaseSync;
+	private journal?: DatabaseSync;
 	private log!: number;
 	private levels = new Map<number, { fd: number; count: number }>();
 	/** Derived from the log at open: stable id to local index, latest correction per index, note fingerprints. */
@@ -142,7 +157,23 @@ export class MemoryDisk {
 	epoch = 0;
 	readonly dir: string;
 	readonly deviceId: string;
-	constructor(dir: string, deviceId: string) {
+	private readonly fault?: (point: "prepared" | "appended" | "finalized") => void;
+	private readonly originHost?: OperationHost;
+	constructor(
+		dir: string,
+		deviceId: string,
+		fault?: (point: "prepared" | "appended" | "finalized") => void,
+		originHost?: OperationHost,
+	) {
+		this.fault = fault;
+		if (originHost) {
+			for (const id of [originHost.hostId, originHost.daemonId, originHost.lineageId]) memoryId(id);
+			this.originHost = {
+				hostId: originHost.hostId,
+				daemonId: originHost.daemonId,
+				lineageId: originHost.lineageId,
+			};
+		}
 		this.dir = dir;
 		this.deviceId = deviceId;
 		mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -176,6 +207,23 @@ export class MemoryDisk {
 				this.levels.set(size, { fd, count });
 			}
 			for (const [index, by] of this.replacedBy) this.invalidate(index, by, true);
+			this.journal = new DatabaseSync(join(dir, "shared.sqlite"));
+			this.journal.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
+				CREATE TABLE IF NOT EXISTS mutations (operation TEXT PRIMARY KEY, payload TEXT NOT NULL, entry TEXT, outcome TEXT, idx INTEGER);
+				CREATE INDEX IF NOT EXISTS mutations_pending ON mutations(operation) WHERE outcome IS NULL;
+				CREATE TABLE IF NOT EXISTS checkpoints (id TEXT PRIMARY KEY, manifest TEXT NOT NULL);`);
+			if (
+				!this.journal
+					.prepare("PRAGMA table_info(mutations)")
+					.all()
+					.some((column) => column.name === "idx")
+			) {
+				this.journal.exec(
+					"ALTER TABLE mutations ADD COLUMN idx INTEGER; UPDATE mutations SET idx=json_extract(entry, '$.index') WHERE entry IS NOT NULL",
+				);
+			}
+			this.journal.exec("CREATE UNIQUE INDEX IF NOT EXISTS mutations_index ON mutations(idx) WHERE idx IS NOT NULL");
+			this.recoverMutations();
 			this.syncDirectory();
 		} catch (error) {
 			this.close();
@@ -195,6 +243,7 @@ export class MemoryDisk {
 	close(): void {
 		if (this.log !== undefined) closeSync(this.log);
 		for (const level of this.levels.values()) closeSync(level.fd);
+		this.journal?.close();
 		this.lease.close();
 	}
 	private scan(): void {
@@ -231,7 +280,10 @@ export class MemoryDisk {
 				}
 			}
 			let set = this.stale.get(size);
-			if (!set) this.stale.set(size, (set = new Set()));
+			if (!set) {
+				set = new Set();
+				this.stale.set(size, set);
+			}
 			set.add(block);
 		}
 	}
@@ -246,6 +298,7 @@ export class MemoryDisk {
 		return by === undefined ? entry : { ...entry, replacedBy: by };
 	}
 	note(text: string, sessionId: string, replaces: unknown = []): MemoryEntry {
+		this.recoverMutations();
 		text = checkLine(text);
 		if (typeof sessionId !== "string" || !/^[\w-]{1,100}$/.test(sessionId))
 			throw new Error("Invalid origin sessionId");
@@ -267,18 +320,220 @@ export class MemoryDisk {
 			at: Date.now(),
 			sessionId,
 			text,
+			...(this.originHost ? { sharedOrigin: { host: this.originHost, sessionId } } : {}),
 			// Stable ids, not positions, so a later log merge keeps the reference.
 			...(replaces.length ? { replaces: replaces.map((i: number) => get<MemoryEntry>(this.log, i).id) } : {}),
 		};
+		// Local writes use the same prepared/append/finalize path and sequence as shared writes.
+		const operationId = randomUUID();
+		this.prepare(operationId, JSON.stringify({ local: entry }), entry);
+		return this.finish(operationId, entry).entry!;
+	}
+	private appendEntry(entry: MemoryEntry): void {
+		if (entry.index !== this.count) throw new Error("Memory append sequence mismatch");
 		append(this.log, this.count, entry);
 		this.count++;
 		this.track(entry);
-		if (replaces.length) {
-			// In-flight compaction may have read a now-replaced note.
+		if (entry.replaces?.length) {
 			this.epoch++;
-			for (const i of replaces) this.invalidate(i, entry.index, false);
+			for (const id of entry.replaces) this.invalidate(this.ids.get(id)!, entry.index, false);
 		}
-		return entry;
+	}
+	private prepare(operation: string, payload: string, entry: MemoryEntry): void {
+		encode(entry); // Validate fixed-record capacity before durably accepting an intent.
+		this.journal!.prepare(
+			"INSERT INTO mutations (operation, payload, entry, outcome, idx) VALUES (?, ?, ?, NULL, ?)",
+		).run(operation, payload, JSON.stringify(entry), entry.index);
+		this.fault?.("prepared");
+	}
+	private finish(operationId: string, entry: MemoryEntry): SharedMemoryCommitOutcome {
+		const index = this.ids.get(entry.id);
+		if (index === undefined) this.appendEntry(entry);
+		else if (
+			JSON.stringify(rawMemoryEntry(get<MemoryEntry>(this.log, index))) !== JSON.stringify(rawMemoryEntry(entry))
+		)
+			throw new Error("Prepared memory identity does not match durable append");
+		else fsyncSync(this.log);
+		this.fault?.("appended");
+		const outcome: SharedMemoryCommitOutcome = { operationId, state: "committed", sequence: entry.index + 1, entry };
+		this.journal!.prepare("UPDATE mutations SET outcome=? WHERE operation=?").run(
+			JSON.stringify(outcome),
+			operationId,
+		);
+		this.fault?.("finalized");
+		return outcome;
+	}
+	private recoverMutations(): void {
+		// Separate indexed lookups avoid an OR/order query scanning the entire receipt history per write.
+		const rows = this.journal!.prepare("SELECT operation, entry, idx FROM mutations WHERE outcome IS NULL").all();
+		rows.push(
+			...this.journal!.prepare(
+				"SELECT operation, entry, idx FROM mutations WHERE idx>=? AND outcome IS NOT NULL ORDER BY idx",
+			).all(this.count),
+		);
+		rows.sort((a, b) => Number(a.idx) - Number(b.idx));
+		for (const row of rows) this.finish(row.operation as string, JSON.parse(row.entry as string));
+	}
+	commitSharedNote(mutation: SharedMemoryMutation): SharedMemoryCommitOutcome {
+		memoryId(mutation?.operationId);
+		this.recoverMutations();
+		const payload = JSON.stringify(mutation);
+		if (Buffer.byteLength(payload) > 12 * 1024) throw new Error("Memory mutation too large");
+		const existing = this.journal!.prepare("SELECT payload, outcome FROM mutations WHERE operation=?").get(
+			mutation.operationId,
+		);
+		if (existing) {
+			if (existing.payload !== payload)
+				return {
+					operationId: mutation.operationId,
+					state: "conflict",
+					sequence: this.count,
+					reason: "Operation identity reused with different payload",
+				};
+			const outcome = JSON.parse(existing.outcome as string) as SharedMemoryCommitOutcome;
+			if (
+				outcome.state === "committed" &&
+				(!outcome.entry || this.ids.get(outcome.entry.id) !== outcome.entry.index)
+			)
+				throw new Error("Canonical memory outcome does not match durable log");
+			return outcome;
+		}
+		const reject = (
+			state: "conflict" | "already-present" | "rejected",
+			reason: string,
+			entry?: MemoryEntry,
+		): SharedMemoryCommitOutcome => {
+			const outcome: SharedMemoryCommitOutcome = {
+				operationId: mutation.operationId,
+				state,
+				sequence: this.count,
+				reason,
+				...(entry ? { entry: rawMemoryEntry(entry) } : {}),
+			};
+			this.journal!.prepare("INSERT INTO mutations (operation, payload, entry, outcome) VALUES (?, ?, NULL, ?)").run(
+				mutation.operationId,
+				payload,
+				JSON.stringify(outcome),
+			);
+			return outcome;
+		};
+		try {
+			checkMutation(mutation);
+		} catch (error) {
+			return reject("rejected", error instanceof Error ? error.message : "Invalid memory mutation");
+		}
+		if (this.ids.has(mutation.noteId)) return reject("conflict", "Note identity already exists");
+		for (const ref of mutation.replaces) {
+			const index = this.ids.get(ref.id),
+				replacement = index === undefined ? undefined : this.replacedBy.get(index);
+			if (
+				index === undefined ||
+				(replacement === undefined ? null : get<MemoryEntry>(this.log, replacement).id) !==
+					ref.expectedReplacementId
+			)
+				return reject("conflict", "Correction target changed or is missing");
+			// A new correction cannot silently supersede a correction of this target.
+			if (replacement !== undefined) return reject("conflict", "Correct the current live replacement instead");
+		}
+		const replaced = new Set(mutation.replaces.map((r) => r.id));
+		const duplicate = this.texts
+			.get(fingerprint(mutation.text))
+			?.find((i) => !this.replacedBy.has(i) && !replaced.has(get<MemoryEntry>(this.log, i).id));
+		if (duplicate !== undefined)
+			return reject("already-present", "Normalized note already present", this.entry(duplicate));
+		const entry: MemoryEntry = {
+			index: this.count,
+			id: mutation.noteId,
+			deviceId: this.deviceId,
+			at: Date.now(),
+			sessionId: mutation.origin.sessionId,
+			text: checkLine(mutation.text),
+			sharedOrigin: mutation.origin,
+			...(replaced.size ? { replaces: [...replaced] } : {}),
+		};
+		try {
+			encode(entry);
+		} catch {
+			return reject("rejected", "Memory record too large");
+		}
+		this.prepare(mutation.operationId, payload, entry);
+		return this.finish(mutation.operationId, entry);
+	}
+	private *rawEntries(count = this.count): IterableIterator<MemoryEntry> {
+		for (let i = 0; i < count; i++) {
+			const entry = rawMemoryEntry(get<MemoryEntry>(this.log, i));
+			checkMemoryExport(entry.text);
+			yield entry;
+		}
+	}
+	beginCheckpoint(): SharedMemoryCheckpointManifest {
+		this.recoverMutations();
+		const latest = this.journal!.prepare("SELECT manifest FROM checkpoints ORDER BY rowid DESC LIMIT 1").get();
+		if (latest) {
+			const previous = JSON.parse(latest.manifest as string) as SharedMemoryCheckpointManifest;
+			if (previous.count === this.count) return previous;
+		}
+		const digest = digestMemory(this.rawEntries());
+		const manifest = {
+			checkpointId: digest,
+			sequence: this.count,
+			count: this.count,
+			digest,
+		};
+		this.journal!.prepare("INSERT OR IGNORE INTO checkpoints VALUES (?, ?)").run(
+			manifest.checkpointId,
+			JSON.stringify(manifest),
+		);
+		// Restartable transfer caches, never operation receipts or accepted execution ownership.
+		this.journal!.exec(
+			"DELETE FROM checkpoints WHERE id NOT IN (SELECT id FROM checkpoints ORDER BY rowid DESC LIMIT 128)",
+		);
+		return manifest;
+	}
+	checkpointPage(checkpointId: string, cursor: number): SharedMemoryCheckpointPage {
+		const row = this.journal!.prepare("SELECT manifest FROM checkpoints WHERE id=?").get(checkpointId);
+		if (!row) throw new Error("Unknown memory checkpoint");
+		const manifest = JSON.parse(row.manifest as string) as SharedMemoryCheckpointManifest;
+		if (!Number.isSafeInteger(cursor) || cursor < 0 || cursor > manifest.count)
+			throw new Error("Invalid checkpoint cursor");
+		const entries: MemoryEntry[] = [];
+		let bytes = 512,
+			next = cursor;
+		while (next < manifest.count && entries.length < MEMORY_PAGE_LIMIT) {
+			const entry = rawMemoryEntry(get<MemoryEntry>(this.log, next)),
+				size = Buffer.byteLength(JSON.stringify(entry));
+			checkMemoryExport(entry.text);
+			if (bytes + size > MEMORY_PAGE_BYTES) break;
+			entries.push(entry);
+			bytes += size;
+			next++;
+		}
+		return { checkpointId, cursor, entries, ...(next < manifest.count ? { next } : {}) };
+	}
+	changes(after: number, limit = MEMORY_PAGE_LIMIT): SharedMemoryChangePage {
+		this.recoverMutations();
+		if (
+			!Number.isSafeInteger(after) ||
+			after < 0 ||
+			!Number.isSafeInteger(limit) ||
+			limit < 1 ||
+			limit > MEMORY_PAGE_LIMIT
+		)
+			throw new Error("Invalid memory changes cursor or limit");
+		if (after > this.count) return { after, head: this.count, changes: [], checkpointRequired: true };
+		const changes: SharedMemoryChangePage["changes"] = [];
+		let bytes = 512,
+			next = after;
+		while (next < this.count && changes.length < limit) {
+			const change = { sequence: next + 1, entry: rawMemoryEntry(get<MemoryEntry>(this.log, next)) },
+				size = Buffer.byteLength(JSON.stringify(change));
+			checkMemoryExport(change.entry.text);
+			if (bytes + size > MEMORY_PAGE_BYTES) break;
+			changes.push(change);
+			bytes += size;
+			next++;
+		}
+		return { after, head: this.count, changes, ...(next < this.count ? { next } : {}) };
 	}
 	private built(lo: number, hi: number): boolean {
 		const size = hi - lo;
