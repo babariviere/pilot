@@ -184,7 +184,7 @@ test("legacy links migrate as references without resetting delegated tasks or re
 	const db = new DatabaseSync(file);
 	// Simulate the previous schema, retaining old assignment observations and task provenance.
 	db.exec(
-		"DROP INDEX linear_ticket_manager; DROP INDEX linear_task_contribution; DROP INDEX resources_by_linear_key; DROP INDEX resources_by_managed_linear; DROP INDEX resources_by_linear_uuid; DROP INDEX resources_by_contributing_task; ALTER TABLE resources DROP COLUMN linear_sync; ALTER TABLE resources DROP COLUMN linear_role; ALTER TABLE resources DROP COLUMN linear_key",
+		"DROP INDEX linear_ticket_manager; DROP INDEX linear_task_contribution; DROP INDEX resources_by_linear_key; DROP INDEX resources_by_managed_linear; DROP INDEX resources_by_linear_uuid; DROP INDEX resources_by_contributing_task; DROP INDEX linear_sync_attention_order; ALTER TABLE resources DROP COLUMN linear_sync; ALTER TABLE resources DROP COLUMN linear_role; ALTER TABLE resources DROP COLUMN linear_key",
 	);
 	db.close();
 	store = new MissionStore(file);

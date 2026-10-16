@@ -511,3 +511,26 @@ test("another URL cannot acquire a second writer for the same immutable UUID", a
 	assert.equal(status.issueId, undefined);
 	assert.equal(f.writes.length, 0);
 });
+
+test("Needs you counts each paused or failed managed ticket and clears on recovery", async (t) => {
+	const f = await fixture(t, true);
+	assert.equal(f.store.require(f.mission.id).needsYouCount, 0);
+	f.store.controlLinearSync(f.mission.id, f.manager.id, "pause");
+	assert.equal(f.store.require(f.mission.id).needsYouCount, 1);
+	assert.match(f.store.require(f.mission.id).needsYouReason!, /Linear ENG-1:.*paused/);
+	f.store.controlLinearSync(f.mission.id, f.manager.id, "resume");
+	assert.equal(f.store.require(f.mission.id).needsYouCount, 0);
+	f.setHook(() => {
+		throw new Error("offline");
+	});
+	await f.poll();
+	assert.equal(f.store.list()[0]!.needsYouCount, 1);
+	assert.match(f.store.require(f.mission.id).needsYouReason!, /Linear ENG-1:.*connection/);
+	await f.restart();
+	assert.equal(f.store.detail(f.mission.id).mission.needsYouCount, 1);
+	f.setHook(undefined);
+	f.store.controlLinearSync(f.mission.id, f.manager.id, "resume");
+	await f.poll();
+	assert.equal(f.store.require(f.mission.id).needsYouCount, 0);
+	assert.equal(f.store.require(f.mission.id).needsYouReason, undefined);
+});

@@ -1106,7 +1106,7 @@ test("older databases gain link and PR tracking columns without losing resources
 		missions.close();
 		const legacy = new DatabaseSync(file);
 		legacy.exec(
-			"DROP INDEX IF EXISTS resources_by_linear_task; DROP INDEX IF EXISTS resources_by_linear_key; DROP INDEX IF EXISTS linear_task_contribution; ALTER TABLE resources DROP COLUMN task_id; ALTER TABLE resources DROP COLUMN pull_request; ALTER TABLE tasks DROP COLUMN pr_sync_disabled; ALTER TABLE tasks DROP COLUMN delegated_to; ALTER TABLE tasks DROP COLUMN delegated_from_status; ALTER TABLE tasks DROP COLUMN delegated_resource_id; DROP TABLE linear_task_assignees;",
+			"DROP INDEX IF EXISTS resources_by_linear_task; DROP INDEX IF EXISTS resources_by_linear_key; DROP INDEX IF EXISTS linear_task_contribution; DROP INDEX IF EXISTS resources_by_contributing_task; ALTER TABLE resources DROP COLUMN task_id; ALTER TABLE resources DROP COLUMN pull_request; ALTER TABLE tasks DROP COLUMN pr_sync_disabled; ALTER TABLE tasks DROP COLUMN delegated_to; ALTER TABLE tasks DROP COLUMN delegated_from_status; ALTER TABLE tasks DROP COLUMN delegated_resource_id; DROP TABLE linear_task_assignees;",
 		);
 		legacy.close();
 		missions = new MissionStore(file);
@@ -1788,7 +1788,7 @@ test("existing stores gain ordered attention indexes so reason selection does no
 		missions.close();
 		const legacy = new DatabaseSync(path);
 		legacy.exec(
-			"DROP INDEX blocked_tasks_attention_order; DROP INDEX needs_you_comments_attention_order; DROP INDEX proposals_attention_order;",
+			"DROP INDEX blocked_tasks_attention_order; DROP INDEX needs_you_comments_attention_order; DROP INDEX proposals_attention_order; DROP INDEX linear_sync_attention_order;",
 		);
 		legacy.close();
 		missions = new MissionStore(path);
@@ -1812,7 +1812,17 @@ test("existing stores gain ordered attention indexes so reason selection does no
 				)
 				.all("m");
 			assert.ok(proposals.some((row) => String(row.detail).includes("proposals_attention_order")));
-			assert.ok([...tasks, ...comments, ...proposals].every((row) => !String(row.detail).includes("TEMP B-TREE")));
+			const linear = db
+				.prepare(
+					"EXPLAIN QUERY PLAN SELECT id FROM resources WHERE mission_id = ? AND linear_role = 'managed' AND json_extract(linear_sync, '$.status.state') IN ('paused', 'error') ORDER BY created_at, id LIMIT 1",
+				)
+				.all("m");
+			assert.ok(linear.some((row) => String(row.detail).includes("linear_sync_attention_order")));
+			assert.ok(
+				[...tasks, ...comments, ...proposals, ...linear].every(
+					(row) => !String(row.detail).includes("TEMP B-TREE"),
+				),
+			);
 		} finally {
 			db.close();
 		}
