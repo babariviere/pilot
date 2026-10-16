@@ -205,6 +205,9 @@ test("draft retries apply current packaging helpers without changing tagged appl
 	assert.match(workflow.slice(tools, overlay), /ref: \$\{\{ github\.sha \}\}/);
 	assert.match(workflow.slice(tools, overlay), /persist-credentials: false/);
 	assert.match(workflow.slice(tools, overlay), /path: \.pilot-release-tools/);
+	const app = workflow.split("\n  app-bundle:\n")[1].split(/\n  [a-z-]+:\n/)[0];
+	assert.match(app, /Render delegated task fixtures\n(?:        #.*\n)*        if: inputs\.release_tag == ''/);
+	assert.match(app, /Upload delegated task screenshots\n        if: inputs\.release_tag == ''/);
 	const commands = workflow
 		.slice(overlay, build)
 		.split("\n")
