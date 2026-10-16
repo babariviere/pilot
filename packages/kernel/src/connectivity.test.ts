@@ -433,13 +433,9 @@ test("a failed request names its provider's server in its own check file", { tim
 	const gate = new OfflineGate(path);
 	gate.check("https://api.example.test");
 	gate.check();
-	await until(() => {
-		try {
-			return readdirSync(root).filter((name) => name.startsWith("connectivity.json.check")).length === 2;
-		} catch {
-			return false;
-		}
-	});
-	const named = readdirSync(root).find((name) => name.startsWith("connectivity.json.check."))!;
+	const hints = () => readdirSync(root).filter((name) => name.startsWith("connectivity.json.check"));
+	await until(() => hints().length === 2 && !hints().some((name) => name.endsWith(".tmp")));
+	const named = hints().find((name) => name.startsWith("connectivity.json.check."))!;
+	assert.match(named, /^connectivity\.json\.check\.[0-9a-f]{16}$/);
 	assert.equal(readFileSync(join(root, named), "utf8"), "https://api.example.test");
 });
