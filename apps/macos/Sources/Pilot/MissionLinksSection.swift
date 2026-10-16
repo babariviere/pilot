@@ -110,9 +110,8 @@ private enum MissionLinkActions {
         NSPasteboard.general.setString(link.url, forType: .string)
     }
 
-    static func remove(_ link: MissionLink, missionId: String) {
+    static func remove(_ link: MissionLink, missionId: String, client: PilotClient) {
         guard let id = link.resourceIds.first, link.resourceIds.count == 1 else { return }
-        let client = endpoint
         AppModel.shared.missionAction { try await client.deleteMissionResource(missionId, resourceId: id) }
     }
 
@@ -140,6 +139,7 @@ private enum MissionLinkActions {
 }
 
 private struct MissionLinkMenuItems: View {
+    @EndpointClient private var endpoint
     let link: MissionLink
     let missionId: String
 
@@ -151,7 +151,7 @@ private struct MissionLinkMenuItems: View {
         Button("Copy Link") { MissionLinkActions.copy(link) }
         if link.resourceIds.count == 1 {
             Divider()
-            Button("Remove Link", role: .destructive) { MissionLinkActions.remove(link, missionId: missionId) }
+            Button("Remove Link", role: .destructive) { MissionLinkActions.remove(link, missionId: missionId, client: endpoint) }
         }
     }
 }
