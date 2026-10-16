@@ -437,6 +437,7 @@ export class KernelSession {
 				],
 				subagents,
 				hostTools: [
+					...(spec.control && hooks.callMemory ? createMemoryTools(hooks.callMemory, spec.sessionId, true) : []),
 					...(spec.control && hooks.callPilot ? [createPilotTool(hooks.callPilot)] : []),
 					...createControlMemoryTools(!!spec.control, (action, args) => hooks.callControl!(action, args)),
 					...missionTools,

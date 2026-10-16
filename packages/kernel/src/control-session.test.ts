@@ -57,6 +57,7 @@ test("control turns are fresh, tool rounds stay intact, log excludes thoughts an
 	const hooks = {
 		onWorking: () => {},
 		callPilot: async () => null,
+		callMemory: async () => ({}),
 		callControl: async (action: string, args: Record<string, JsonValue>): Promise<JsonValue> => {
 			if (action === "record") {
 				const message = args.message as Record<string, JsonValue>;
@@ -83,6 +84,8 @@ test("control turns are fresh, tool rounds stay intact, log excludes thoughts an
 	t.after(() => session.close());
 	assert.ok(adapter.session.getCallableToolNames().includes("zoom"));
 	assert.ok(adapter.session.getCallableToolNames().includes("pilot"));
+	for (const name of ["memory_wake", "memory_note", "memory_recall", "memory_zoom"])
+		assert.ok(adapter.session.getCallableToolNames().includes(name));
 	for (const denied of ["bash", "read", "find", "grep", "ls", "mission", "db", "todo", "slack_status"])
 		assert.ok(!adapter.session.getCallableToolNames().includes(denied), denied);
 	let checked = 0;
@@ -104,10 +107,8 @@ test("control turns are fresh, tool rounds stay intact, log excludes thoughts an
 			assert.equal(ctx.messages.filter((m) => m.role === "assistant").length, 0, "previous turn is not replayed");
 			assert.match(contentText(ctx.messages[1]!.content), /first reply/);
 			assert.equal(contentText(ctx.messages.at(-1)!.content), "second request");
-			assert.deepEqual(
-				getCurrentTools(ctx.messages).map((tool) => tool.name),
-				["codemode"],
-			);
+			assert.ok(getCurrentTools(ctx.messages).some((tool) => tool.name === "codemode"));
+			assert.ok(getCurrentTools(ctx.messages).some((tool) => tool.name === "memory_wake"));
 			checked++;
 			return fauxAssistantMessage(
 				{

@@ -174,6 +174,7 @@ export type KernelPacket =
 	| {
 			type: "memory.call";
 			callId: string;
+			operationId?: string;
 			action: "wake" | "note" | "recall" | "zoom";
 			args: Record<string, JsonValue>;
 	  }
