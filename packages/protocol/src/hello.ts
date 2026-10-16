@@ -27,4 +27,6 @@ export interface DaemonCapabilities {
 	independentExecution: boolean;
 	/** Instance/boot-fenced workspace terminal handshake. Absent on older runtimes. */
 	workspaceTerminalProtocol?: 2;
+	/** Journal-backed detached Linux updates with startup/admission fencing. */
+	runtimeUpdates?: 1;
 }

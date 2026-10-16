@@ -18,6 +18,10 @@ public struct LinuxBootstrapFailure: LocalizedError, Sendable {
 public struct LinuxRuntimePackage: Sendable {
     public let manifest: LinuxRuntimeManifest
     public let archiveURL: URL
+    // Exact authenticated bytes, retained for the independently journaled remote update.
+    let manifestBytes: Data
+    let signature: Data
+    let publicKey: Data
 
     public static func verified(manifest: Data, signature: Data, pinnedPublicKey: Data,
                                 releaseTag: String, expectedVersion: String, archiveURL: URL) async throws -> Self {
@@ -25,7 +29,8 @@ public struct LinuxRuntimePackage: Sendable {
             let value = try LinuxRuntimeManifest.verified(data: manifest, signature: signature,
                 publicKey: pinnedPublicKey, releaseTag: releaseTag, expectedVersion: expectedVersion)
             try value.verifyArchive(at: archiveURL)
-            return Self(manifest: value, archiveURL: archiveURL)
+            return Self(manifest: value, archiveURL: archiveURL, manifestBytes: manifest,
+                        signature: signature, publicKey: pinnedPublicKey)
         }.value
     }
 
@@ -97,7 +102,8 @@ public struct LinuxRuntimePackage: Sendable {
         let package = try await verified(manifest: manifestBytes, signature: signature, pinnedPublicKey: key,
             releaseTag: releaseTag, expectedVersion: expectedVersion, archiveURL: staged)
         try FileManager.default.moveItem(at: package.archiveURL, to: archiveURL)
-        return Self(manifest: manifest, archiveURL: archiveURL)
+        return Self(manifest: manifest, archiveURL: archiveURL, manifestBytes: manifestBytes,
+                    signature: signature, publicKey: key)
     }
 }
 

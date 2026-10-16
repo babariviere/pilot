@@ -1170,8 +1170,10 @@ export class SessionManager {
 		return join(this.home, "sessions");
 	}
 
-	async load(): Promise<void> {
-		const end = this.updateGate.begin();
+	private maintenanceLoaded = false;
+
+	async load(maintenance = false): Promise<void> {
+		const end = maintenance ? () => {} : this.updateGate.begin();
 		try {
 			await this.loadAdmitted();
 		} finally {
@@ -1230,6 +1232,14 @@ export class SessionManager {
 				await this.save(meta);
 			}
 		}
+		if (this.updateGate.frozen) {
+			this.maintenanceLoaded = true;
+			return;
+		}
+		await this.finishLoad();
+	}
+
+	private async finishLoad(): Promise<void> {
 		await this.recoverPullRequestBinding();
 		await this.recoverContinuations();
 		// Read limits before any recovery kernel can dispatch a request.
@@ -3361,6 +3371,23 @@ export class SessionManager {
 			if (!pause.ready) return pending;
 		}
 		return { ready: this.saving.size === 0, processId: process.pid };
+	}
+
+	/** Called only after a maintenance owner has released its own admission hold. */
+	async resumeMaintenance(): Promise<void> {
+		if (this.updateGate.frozen) return;
+		if (this.maintenanceLoaded) {
+			// Recovery itself owns an admission across its filesystem awaits. Another drain must
+			// not observe an empty worker map and commit a restart ahead of admitted recovery.
+			const end = this.updateGate.begin();
+			try {
+				await this.finishLoad();
+				this.maintenanceLoaded = false;
+			} finally {
+				end();
+			}
+		}
+		this.resumeAfterUpdate();
 	}
 
 	private resumeAfterUpdate(): void {

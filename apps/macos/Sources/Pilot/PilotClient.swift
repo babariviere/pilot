@@ -1120,6 +1120,14 @@ final class PilotClient: ObservableObject {
 
     // MARK: Pre-chat host setup. Explicit mutations are never queued/retried or sent to Local as fallback.
 
+    func runtimeUpdate(_ id: String? = nil) async throws -> RuntimeUpdateStatus? {
+        try await missionRequest(["runtime-update"], query: id.map { [URLQueryItem(name: "id", value: $0)] } ?? [])
+    }
+
+    func cancelRuntimeUpdate(_ id: String) async throws -> RuntimeUpdateCancellation {
+        try await missionRequest(["runtime-update", "cancel"], body: ["id": id])
+    }
+
     func setupReadiness() async throws -> SetupReadiness {
         try await missionRequest(["setup"])
     }

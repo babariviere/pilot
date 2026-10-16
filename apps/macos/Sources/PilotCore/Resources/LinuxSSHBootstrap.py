@@ -114,6 +114,11 @@ def stage(base, digest, size, stream):
         if final.exists() or final.is_symlink():
             if final.is_symlink() or (final / "complete").is_symlink() or (final / "complete").read_text() != digest:
                 raise Blocked("paths", "Existing runtime has no matching completion record. It was not overwritten.")
+            private_directory(final)
+            runtime = final / "runtime"
+            if (runtime.is_symlink() or not runtime.is_dir() or runtime.stat().st_uid != os.getuid() or
+                    runtime.stat().st_mode & 0o022):
+                raise Blocked("paths", "Existing runtime path is not owned or is writable by another user.")
             return final / "runtime"
         unpack = temporary / "unpack"
         unpack.mkdir(mode=0o700)
@@ -209,13 +214,64 @@ def setup(digest, size, pinned, stream):
         return activate(root, home)
 
 
+def update(digest, size, pinned, metadata, stream):
+    if platform.system() != "Linux" or platform.machine() != "x86_64" or os.getuid() == 0:
+        raise Blocked("platform", "Use a dedicated non-root Linux x86-64 account.")
+    home = Path.home().resolve(strict=True)
+    if not pinned or read_identity(home) != pinned:
+        raise Blocked("identity", "The saved host history differs. Update did not change the service.")
+    base = home / ".local/share/pilot/runtimes"
+    private_directory(base)
+    descriptor = os.open(base / ".bootstrap.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, "w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise Blocked("busy", "Another setup or update owns this host. Check its status before retrying.")
+        root = stage(base, digest, size, stream)
+        # Keep a durable published package before any restart intent can become durable. This work
+        # is in the SSH helper, never on the daemon event loop. Bounds were enforced during extraction.
+        for directory, dirs, files in os.walk(root, followlinks=False):
+            for name in files:
+                file = Path(directory) / name
+                if not file.is_symlink():
+                    fd = os.open(file, os.O_RDONLY | os.O_NOFOLLOW)
+                    try:
+                        os.fsync(fd)
+                    finally:
+                        os.close(fd)
+        for directory, dirs, files in os.walk(root, topdown=False, followlinks=False):
+            fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        for path in [root.parent / "complete", root.parent, base]:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        runner = root / "scripts/linux/update.mjs"
+        if runner.is_symlink() or not runner.is_file():
+            raise Blocked("assets", "This signed package has no safe updater. No service was changed.")
+        # Archive hash was checked by this trusted app helper before executing package code. The runner
+        # verifies the exact signed manifest against the app-provided trusted key again before journaling.
+        result = command([str(root / "node/bin/node"), str(runner), "prepare", metadata], "update",
+                         "The update could not be confirmed. Check the same transaction after reconnecting.", 120)
+        return json.loads(result)
+
+
 if __name__ == "__main__":
     try:
-        digest, size, pinned = sys.argv[1:]
+        digest, size, pinned = sys.argv[1:4]
         size = int(size)
         if not re.fullmatch(r"[a-f0-9]{64}", digest) or not 0 < size <= 536870912:
             raise Blocked("archive", "Invalid authenticated package coordinates.")
-        result = setup(digest, size, json.loads(pinned), sys.stdin.buffer)
+        if len(sys.argv) == 6 and sys.argv[4] == "update":
+            result = update(digest, size, json.loads(pinned), sys.argv[5], sys.stdin.buffer)
+        else:
+            result = setup(digest, size, json.loads(pinned), sys.stdin.buffer)
     except Blocked as error:
         result = error.result
     except Exception:

@@ -113,6 +113,9 @@ client connection, and disconnecting a client does not stop them.
 [Host-qualified workspace terminals](docs/workspace-terminals.md) use the same SSH
 forward, retain remote shells through disconnect and expose terminal/job/transfer admission blockers
 for safe maintenance. A lost terminal-open reply reattaches by instance instead of restarting a shell.
+`LinuxSSHUpdate` provides [safe remote updates](docs/safe-remote-updates.md): a verified package and
+independent remote journal wait for live jobs, shells and transfers before restarting. App connection
+loss does not cancel an accepted update. Older runtimes without the maintenance capability are blocked.
 HTML, React and image artifact authoring remain available; SwiftUI rendering requires macOS.
 Linux coordinators require a root-owned, non-setuid
 `bubblewrap` installation (`dnf install bubblewrap`, or the equivalent package-manager command) and working

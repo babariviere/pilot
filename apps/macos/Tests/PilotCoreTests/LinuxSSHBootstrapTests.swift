@@ -95,6 +95,35 @@ struct LinuxSSHBootstrapTests {
         }
     }
 
+    @Test func updateRetainsExactSignedPackageAndPinnedHostWithoutSendingCredentials() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let package = try await package(at: url)
+        let host = HostRef(hostId: "fixture", daemonId: UUID().uuidString.lowercased(), lineageId: UUID().uuidString.lowercased())
+        let id = UUID()
+        let args = try LinuxSSHUpdate.commandArguments(configuration: SSHConnectionConfiguration(alias: "fixture"),
+            package: package, host: host, id: id, script: LinuxSSHBootstrap.scriptSource())
+        #expect(args.contains("StrictHostKeyChecking=yes"))
+        #expect(args.contains("ForwardAgent=no"))
+        let command = try #require(args.last)
+        let encoded = try #require(command.components(separatedBy: " update '").last?.dropLast())
+        let metadata = try #require(Data(base64Encoded: String(encoded)))
+        let values = try #require(JSONSerialization.jsonObject(with: metadata) as? [String: String])
+        #expect(values["id"] == id.uuidString.lowercased())
+        #expect(values["daemonId"] == host.daemonId)
+        #expect(values["lineageId"] == host.lineageId)
+        #expect(values["manifest"] == package.manifestBytes.base64EncodedString())
+        #expect(values["publicKey"] == package.publicKey.base64EncodedString())
+        #expect(!command.contains(url.path))
+        #expect(!command.contains("Bearer"))
+        let changed = url
+        try Data("changed".utf8).write(to: changed)
+        await #expect(throws: Error.self) {
+            _ = try await LinuxSSHUpdate.start(configuration: SSHConnectionConfiguration(alias: "not-a-real-host"),
+                package: package, host: host, id: id)
+        }
+    }
+
     @Test func ownedSSHProcessStreamsInputBoundsOutputAndTimesOut() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
