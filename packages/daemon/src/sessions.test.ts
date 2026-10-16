@@ -1573,7 +1573,11 @@ for (const failure of ["clone", "factory", "ready"] as const) {
 		const changes: SessionSummary[] = [];
 		sessions.onChange((session) => changes.push(session));
 		const batches: AgentEvent[][] = [];
-		sessions.subscribe(created.id, (events) => batches.push(events));
+		const snapshotDelivered = deferred();
+		sessions.subscribe(created.id, (events) => {
+			batches.push(events);
+			snapshotDelivered.resolve();
+		});
 		if (failure === "ready") {
 			await until(() => f.workers.length === 1);
 			f.workers[0]!.gate.reject(new Error("kernel unavailable"));
@@ -1581,6 +1585,9 @@ for (const failure of ["clone", "factory", "ready"] as const) {
 		await until(() => changes.at(-1)?.state === "failed");
 		assert.match(sessions.get(created.id)!.error!, /unavailable/);
 		assert.equal(changes.at(-1)?.state, "failed");
+		// A summary can expose the failure while its persistence is still in flight.
+		// The initial transcript is a separate notification after that save settles.
+		await snapshotDelivered.promise;
 		assert.deepEqual(batches.at(-1), [snapshot]);
 		assert.equal((await f.stored(created.id)).pending.length, 1);
 		await assert.rejects(sessions.send(created.id, "retry"), /unavailable/);
