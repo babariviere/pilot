@@ -16,9 +16,14 @@ function fixture() {
 	const { id } = store.create({ projectId: "p", title: "Work" });
 	const add = (status: "todo" | "in_progress" | "blocked" | "in_review" = "todo") => {
 		const task = store.addTask(id, { title: "Task", status });
+		store.addResource(id, {
+			url: `https://linear.app/team/issue/ENG-${task.number}/task`,
+			linearRole: "managed",
+		});
 		const link = store.addResource(id, {
 			url: `https://linear.app/team/issue/ENG-${task.number}/task`,
 			taskId: task.id,
+			linearRole: "contribution",
 		});
 		return { task, link };
 	};

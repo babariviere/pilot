@@ -28,6 +28,7 @@ import type {
 	MissionDecisionWrite,
 	MissionEventWrite,
 	MissionPhaseWrite,
+	MissionResourceUpdate,
 	MissionResourceWrite,
 	MissionTaskWrite,
 	ProjectRequest,
@@ -1875,6 +1876,10 @@ async function missionRoute(
 	if (section === "resources") {
 		if (parts.length === 4 && method === "POST")
 			return json(res, 201, store.addResource(id, await readJson<MissionResourceWrite>(req))), true;
+		if (parts.length === 5 && method === "PATCH") {
+			json(res, 200, store.updateResource(id, item!, await readJson<MissionResourceUpdate>(req)));
+			return true;
+		}
 		if (parts.length === 5 && method === "DELETE") {
 			store.removeResource(id, item!);
 			return json(res, 200, { ok: true }), true;

@@ -2,6 +2,31 @@ import Foundation
 import Testing
 @testable import PilotCore
 
+@Test func linearResourceRolesDecodeSafelyAndWritesRemainExplicit() throws {
+    let raw = #"{"id":"r","url":"https://linear.app/acme/issue/ENG-1","kind":"linear.issue","createdAt":1}"#
+    let legacy = try JSONDecoder().decode(MissionResource.self, from: Data(raw.utf8))
+    #expect(legacy.linearRole == nil)
+    #expect(legacy.linearKey == nil)
+    let legacyWrite = MissionResourceWrite(url: legacy.url)
+    let legacyJSON = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(legacyWrite)) as? [String: Any])
+    #expect(legacyJSON["linearRole"] == nil)
+    let base = try #require(JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any])
+    for (wire, role) in [("reference", MissionLinearRole.reference), ("managed", .managed),
+                         ("contribution", .contribution), ("future", .reference)] {
+        var json = base
+        json["linearRole"] = wire
+        json["linearKey"] = "acme/ENG-1"
+        let resource = try JSONDecoder().decode(MissionResource.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(resource.linearRole == role)
+        #expect(resource.linearKey == "acme/ENG-1")
+        #expect(try JSONDecoder().decode(MissionResource.self, from: JSONEncoder().encode(resource)) == resource)
+        let write = MissionResourceWrite(url: legacy.url, linearRole: role)
+        #expect(try JSONDecoder().decode(MissionResourceWrite.self, from: JSONEncoder().encode(write)).linearRole == role)
+        let patch = MissionResourceUpdate(linearRole: role)
+        #expect(try JSONDecoder().decode(MissionResourceUpdate.self, from: JSONEncoder().encode(patch)).linearRole == role)
+    }
+}
+
 @Test func taskResourcesDecodeAndWritesCarryTaskId() throws {
     let resource = try JSONDecoder().decode(MissionResource.self, from: Data(#"{"id":"r","taskId":"t","url":"https://github.com/o/r/pull/42","kind":"github.pr","externalId":"o/r#42","createdAt":1}"#.utf8))
     #expect(resource.taskId == "t")

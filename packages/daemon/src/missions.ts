@@ -20,10 +20,12 @@ import type {
 	MissionEventKind,
 	MissionEventWrite,
 	MissionHealth,
+	MissionLinearRole,
 	MissionPhase,
 	MissionPhaseWrite,
 	MissionResource,
 	MissionResourceKind,
+	MissionResourceUpdate,
 	MissionResourceWrite,
 	MissionStatus,
 	MissionTask,
@@ -390,8 +392,24 @@ const num = (value: SQLInputValue) => Number(value);
 export function normalizeResourceWrite(write: MissionResourceWrite) {
 	if (!write || typeof write !== "object") throw new Error("Expected a resource object");
 	const parsed = parseResourceUrl(text(write.url, "url", MAX_URL)!);
+	if (write.linearRole !== undefined) {
+		if (!["reference", "managed", "contribution"].includes(write.linearRole)) throw new Error("Invalid Linear role");
+		if (parsed.kind !== "linear.issue") throw new Error("Linear roles require a Linear issue");
+	}
 	const title = text(write.title, "title", MAX_TITLE, { optional: true, empty: true }) || undefined;
 	return { ...parsed, ...(title ? { title } : {}) };
+}
+
+/** Workspace-scoped identifiers avoid collisions between Linear organizations. */
+function linearKey(url: string): string | undefined {
+	const parts = new URL(url).pathname.split("/").filter(Boolean);
+	if (
+		!/^[a-z0-9][a-z0-9-]*$/i.test(parts[0] ?? "") ||
+		parts[1] !== "issue" ||
+		!/^[a-z0-9]+-\d+$/i.test(parts[2] ?? "")
+	)
+		return undefined;
+	return `${parts[0]!.toLowerCase()}/${parts[2]!.toUpperCase()}`;
 }
 
 /** Recognize tracker links so later automation can act on them without a migration. */
@@ -604,6 +622,27 @@ export class MissionStore {
 					"UPDATE resources SET relationship = 'ownership' WHERE kind = 'github.pr' AND task_id IS NOT NULL",
 				);
 			});
+		this.transaction(() => {
+			if (!this.all("PRAGMA table_info(resources)").some((row) => row.name === "linear_role")) {
+				this.db.exec(
+					"ALTER TABLE resources ADD COLUMN linear_role TEXT; ALTER TABLE resources ADD COLUMN linear_key TEXT",
+				);
+				// No existing link acquires lifecycle authority. Delegated task state is deliberately untouched.
+				for (const row of this.all("SELECT id, url FROM resources WHERE kind = 'linear.issue'"))
+					this.run(
+						"UPDATE resources SET linear_role = 'reference', linear_key = ? WHERE id = ?",
+						linearKey(str(row.url!)) ?? null,
+						row.id!,
+					);
+			}
+			this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS linear_ticket_manager ON resources(linear_key)
+				WHERE linear_role = 'managed';
+				CREATE UNIQUE INDEX IF NOT EXISTS linear_task_contribution ON resources(mission_id, task_id, linear_key)
+				WHERE linear_role = 'contribution';`);
+			this.db.exec(
+				"CREATE INDEX IF NOT EXISTS resources_by_linear_key ON resources(mission_id, linear_key, task_id)",
+			);
+		});
 		if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === "pr_sync_disabled"))
 			this.db.exec("ALTER TABLE tasks ADD COLUMN pr_sync_disabled INTEGER NOT NULL DEFAULT 0");
 		this.db.exec(`CREATE INDEX IF NOT EXISTS resources_by_owned_pr ON resources(mission_id, created_at, id)
@@ -1920,7 +1959,7 @@ export class MissionStore {
 		return this.all(
 			`
 			SELECT r.id, r.external_id, m.project_id FROM missions m
-			JOIN resources r ON r.mission_id = m.id AND r.kind = 'linear.issue'
+			JOIN resources r ON r.mission_id = m.id AND r.kind = 'linear.issue' AND r.linear_role = 'contribution'
 			JOIN tasks t ON t.id = r.task_id
 			WHERE (? IS NULL OR m.project_id = ?) AND m.status = 'active' AND r.id > ?
 			AND (t.status IN ('todo', 'in_progress', 'blocked', 'in_review')
@@ -1945,7 +1984,8 @@ export class MissionStore {
 			const row = this.one(
 				`SELECT t.*, r.mission_id FROM resources r
 				JOIN missions m ON m.id = r.mission_id JOIN tasks t ON t.id = r.task_id
-				WHERE r.id = ? AND r.kind = 'linear.issue' AND m.project_id = ? AND m.status = 'active'`,
+				WHERE r.id = ? AND r.kind = 'linear.issue' AND r.linear_role = 'contribution'
+				AND m.project_id = ? AND m.status = 'active'`,
 				resourceId,
 				projectId,
 			);
@@ -2420,6 +2460,8 @@ export class MissionStore {
 
 	removeTask(id: string, taskId: string, actor: MissionActor = USER): void {
 		const task = this.resolveTask(id, taskId);
+		if (this.one("SELECT 1 FROM resources WHERE task_id = ? AND linear_role = 'contribution'", task.id))
+			throw new Conflict("Detach Linear contributions before removing this task");
 		this.transaction(() => {
 			// Match resource-link deletion semantics without overwriting an existing mission pin.
 			this.run(
@@ -3029,17 +3071,33 @@ export class MissionStore {
 		const relationship = write.relationship ?? (taskId && parsed.kind === "github.pr" ? "ownership" : "reference");
 		if (relationship === "ownership" && (!taskId || parsed.kind !== "github.pr"))
 			throw new Error("Ownership links require a task and a GitHub PR");
-		const existing = this.one(
-			"SELECT * FROM resources WHERE mission_id = ? AND url = ? COLLATE NOCASE AND task_id IS ? AND relationship = ?",
-			id,
-			parsed.url,
-			taskId ?? null,
-			relationship,
-		);
-		if (existing) return resourceFrom(existing);
+		const role = parsed.kind === "linear.issue" ? (write.linearRole ?? "reference") : undefined;
+		const key = parsed.kind === "linear.issue" ? linearKey(parsed.url) : undefined;
+		const existing = key
+			? this.one(
+					"SELECT * FROM resources WHERE mission_id = ? AND linear_key = ? AND task_id IS ? ORDER BY created_at, id LIMIT 1",
+					id,
+					key,
+					taskId ?? null,
+				)
+			: this.one(
+					"SELECT * FROM resources WHERE mission_id = ? AND url = ? COLLATE NOCASE AND task_id IS ? AND relationship = ?",
+					id,
+					parsed.url,
+					taskId ?? null,
+					relationship,
+				);
+		if (existing) {
+			if (write.linearRole !== undefined && existing.linear_role !== role)
+				throw new Conflict("Use PATCH to explicitly change the existing Linear link role");
+			return resourceFrom(existing);
+		}
+		if (role) this.validateLinearRole(id, taskId, key, role, actor);
 		const now = Date.now();
 		const resource: MissionResource = {
 			relationship,
+			...(role ? { linearRole: role } : {}),
+			...(key ? { linearKey: key } : {}),
 			id: randomUUID(),
 			...(taskId ? { taskId } : {}),
 			url: parsed.url,
@@ -3051,7 +3109,7 @@ export class MissionStore {
 		};
 		this.transaction(() => {
 			this.run(
-				"INSERT INTO resources (id, mission_id, url, title, kind, external_id, added_by_session_id, created_at, task_id, relationship) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+				"INSERT INTO resources (id, mission_id, url, title, kind, external_id, added_by_session_id, created_at, task_id, relationship, linear_role, linear_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 				resource.id,
 				id,
 				resource.url,
@@ -3062,6 +3120,8 @@ export class MissionStore {
 				now,
 				taskId ?? null,
 				relationship,
+				role ?? null,
+				key ?? null,
 			);
 			this.event(id, "resource", `Linked ${title ?? parsed.externalId ?? parsed.url}`, actor, { at: now, taskId });
 			const cached = this.one(
@@ -3078,10 +3138,98 @@ export class MissionStore {
 		return resource;
 	}
 
+	private validateLinearRole(
+		id: string,
+		taskId: string | undefined,
+		key: string | undefined,
+		role: MissionLinearRole,
+		actor: MissionActor,
+		resourceId?: string,
+	): void {
+		if (role === "reference") return;
+		if (actor.sessionId && actor.sessionId !== this.require(id).coordinatorSessionId)
+			throw new Conflict("Only the user or coordinator may manage Linear tickets and contributions");
+		if (!key) throw new Error("Managed Linear links require a workspace and issue identifier");
+		if (role === "managed") {
+			if (taskId) throw new Error("Managed Linear tickets require mission scope");
+			const manager = this.one("SELECT id FROM resources WHERE linear_key = ? AND linear_role = 'managed'", key);
+			if (manager && manager.id !== resourceId)
+				throw new Conflict("This Linear ticket already has a managing mission");
+		} else {
+			if (!taskId) throw new Error("Linear contributions require a task");
+			if (
+				!this.one(
+					"SELECT 1 FROM resources WHERE mission_id = ? AND linear_key = ? AND linear_role = 'managed'",
+					id,
+					key,
+				)
+			)
+				throw new Conflict("Manage the Linear ticket in this mission before adding contributions");
+			const existing = this.one(
+				"SELECT id FROM resources WHERE mission_id = ? AND task_id = ? AND linear_key = ? AND linear_role = 'contribution'",
+				id,
+				taskId,
+				key,
+			);
+			if (existing && existing.id !== resourceId)
+				throw new Conflict("This task already contributes to the Linear ticket");
+		}
+	}
+
+	private assertLinearDetach(id: string, resource: MissionResource): void {
+		if (
+			resource.linearRole === "managed" &&
+			this.one(
+				"SELECT 1 FROM resources WHERE mission_id = ? AND linear_key = ? AND linear_role = 'contribution'",
+				id,
+				resource.linearKey!,
+			)
+		)
+			throw new Conflict("Detach task contributions before detaching the managed Linear ticket");
+	}
+
+	updateResource(
+		id: string,
+		resourceId: string,
+		write: MissionResourceUpdate,
+		actor: MissionActor = USER,
+	): MissionResource {
+		this.require(id);
+		if (!write || !["reference", "managed", "contribution"].includes(write.linearRole))
+			throw new Error("Invalid Linear role");
+		const row = this.one("SELECT * FROM resources WHERE mission_id = ? AND id = ?", id, resourceId);
+		if (!row) throw new NotFound(`Unknown resource: ${resourceId}`);
+		const resource = resourceFrom(row);
+		if (resource.kind !== "linear.issue") throw new Error("Linear roles require a Linear issue");
+		if (actor.sessionId && actor.sessionId !== this.require(id).coordinatorSessionId)
+			throw new Conflict("Only the user or coordinator may change Linear link roles");
+		if (resource.linearRole === write.linearRole) return resource;
+		this.validateLinearRole(id, resource.taskId, resource.linearKey, write.linearRole, actor, resourceId);
+		this.assertLinearDetach(id, resource);
+		this.transaction(() => {
+			this.run("UPDATE resources SET linear_role = ? WHERE id = ?", write.linearRole, resourceId);
+			// A newly explicit contribution starts fresh assignment observation, not a replay of reference reads.
+			this.run("DELETE FROM linear_task_assignees WHERE resource_id = ?", resourceId);
+			this.event(id, "resource", `Linear link role changed to ${write.linearRole}: ${resource.externalId}`, actor, {
+				taskId: resource.taskId,
+			});
+		});
+		this.changed(id);
+		return { ...resource, linearRole: write.linearRole };
+	}
+
 	removeResource(id: string, resourceId: string, actor: MissionActor = USER): void {
 		const row = this.one("SELECT * FROM resources WHERE mission_id = ? AND id = ?", id, resourceId);
 		if (!row) throw new NotFound(`Unknown resource: ${resourceId}`);
 		const resource = resourceFrom(row);
+		this.assertLinearDetach(id, resource);
+		if (
+			resource.linearRole &&
+			resource.linearRole !== "reference" &&
+			actor.sessionId &&
+			actor.sessionId !== this.require(id).coordinatorSessionId
+		)
+			throw new Conflict("Only the user or coordinator may detach Linear contributions or managed tickets");
 		if (
 			actor.sessionId &&
 			actor.sessionId !== this.require(id).coordinatorSessionId &&
@@ -3099,7 +3247,7 @@ export class MissionStore {
 			this.event(id, "resource", `Unlinked ${resource.title ?? resource.externalId ?? resource.url}`, actor, {
 				taskId: resource.taskId,
 			});
-			if (resource.taskId) this.reconcileTaskPullRequests(id, resource.taskId);
+			if (resource.taskId && resource.kind !== "linear.issue") this.reconcileTaskPullRequests(id, resource.taskId);
 		});
 		this.changed(id);
 	}
@@ -3972,6 +4120,8 @@ function artifactFrom(row: Row): MissionArtifactLink {
 
 function resourceFrom(row: Row): MissionResource {
 	return {
+		...(row.kind === "linear.issue" ? { linearRole: (row.linear_role ?? "reference") as MissionLinearRole } : {}),
+		...(row.linear_key ? { linearKey: str(row.linear_key) } : {}),
 		id: str(row.id!),
 		relationship: str(row.relationship!) as MissionResource["relationship"],
 		...(row.pull_request ? { pullRequest: JSON.parse(str(row.pull_request)) as SessionPullRequest } : {}),
