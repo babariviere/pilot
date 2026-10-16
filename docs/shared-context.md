@@ -33,6 +33,55 @@ Canonical and provisional changes produce durable, deduplicated context notices.
 have their own durable revision, independent of canonical count. A missing mandatory replica blocks
 admission/recovery; the ordinary best-effort memory-wake timeout is not a completeness guarantee.
 
+## Native page reads
+
+The shared pages must use binding-scoped reads, not ordinary execution-project memory routes:
+
+- `GET /api/shared-contexts/:bindingId/memory/wake?lines=96`,
+  `memory/recall?regex=...&lines=96`, and `memory/zoom?lo=0&hi=1` return `SharedMemoryRead`.
+- `GET /api/shared-contexts/:bindingId/memory/tree?depth=2` returns `SharedMemoryTreeRead`.
+  Optional `lo`, `hi` select an existing aligned block; `reveal=1,2` reveals paths to at most
+  64 existing indices. Trees permit depth 1–64 and at most 1024 nodes. Replica trees additionally
+  cap node payload at 256 KiB, report `truncated`, and label groups as raw notes, not invented summaries.
+- `GET /api/shared-contexts/:bindingId/missions/:missionId` returns `SharedMissionRead`.
+  Its snapshot is committed canonical or durable replica state. Pending/conflict/rejected proposals
+  are separate, never applied speculatively to the mission. More than 256 retained contributions
+  requires reconciliation rather than silent omission.
+- `GET /api/shared-contexts/:bindingId/missions/:missionId/versions?limit=128` returns
+  `SharedMissionVersions`, with entity/tombstone revisions and distinct task `definitionRevision`.
+  Follow `next` using `after` and the original `sequence`; a changed sequence fails with 409 and
+  requires restarting the read. Generic entity revisions are for proposal CAS; task definition
+  revisions are for placement CAS. Missing legacy definition revisions are unknown, not permission
+  to infer them from timestamps, activity, grants or old proposals. New checkpoints/deltas capture
+  task definition revisions with their values; the canonical-home route always reads the real counter.
+
+Memory reads include unresolved binding-local contributions. On the memory home, received
+conflict/rejection receipts are retained with their original proposals for the same binding;
+offline proposals not yet delivered can only be shown by the execution daemon that holds them.
+
+Every response is capped at 1 MiB. Requests derive project, mission scope and authority from an
+active enrolled binding. Unknown selectors, duplicate parameters, arbitrary project/session/path
+selectors and mutations are not accepted. Incomplete replicas, disabled memory sharing and revoked
+bindings fail closed. Revocation is rechecked after asynchronous reads. Read responses use the same
+secret-like export refusal as synchronization. `conflicts` continues returning `SharedMissionProposal[]`.
+
+## Performance evidence and remaining risk
+
+The initial #555 CI fixture reported 127 operations, one complete reassembly, about 762 ms wall
+time and a 129.37 ms maximum heartbeat gap (115 ticks). Its 2000-write comparison was about
+634.8 ms unenrolled versus 735.1 ms enrolled. These are diagnostics, not proof of smooth daemon
+or GUI behavior. CPU contention has not been established as the cause. The fixture's session-list
+read is not a populated streaming-session or native interaction benchmark.
+
+Follow-up avoids hashing the full manifest once per fragment and deserializing the entire active
+outbox just to count entries or send one page. Exchange reads at most 17 indexed rows (16 plus
+the `more` sentinel). CI now compares an idle/session-read reference with transfer CPU time,
+event-loop utilization/delay percentiles, heartbeat gaps, filesystem block counters, involuntary
+context switches and RSS. The canonical-write comparison also reports process CPU. The idle
+reference is not a historical pre-change implementation. Large object serialization and final
+replica-object parsing remain synchronous, bounded work needing further CI observation. No new
+heavy performance measurement or native responsiveness check was run locally.
+
 ## Proposals and retained evidence
 
 Remote notes, comments, task/brief edits and new-task proposals are provisional until authority

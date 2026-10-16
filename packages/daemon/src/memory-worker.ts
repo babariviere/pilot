@@ -91,6 +91,9 @@ if (workerData.replicaRecall) {
 					case "replica.read":
 						value = replica.read(args.action, args.args);
 						break;
+					case "replica.tree":
+						value = replica.tree(args.args);
+						break;
 					case "replica.queue":
 						value = replica.queue(args.mutation);
 						break;

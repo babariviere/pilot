@@ -20,9 +20,14 @@ import type {
 	SharedMemoryCheckpointManifest,
 	SharedMemoryCheckpointPage,
 	SharedMemoryMutation,
+	SharedMemoryProposal,
+	SharedMemoryRead,
+	SharedMemoryTreeRead,
 	SharedMissionChange,
 	SharedMissionProposal,
+	SharedMissionRead,
 	SharedMissionSnapshot,
+	SharedMissionVersions,
 } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
 import type { MissionService } from "./mission-service.ts";
@@ -350,7 +355,7 @@ export class SharedContextService {
 		}
 		if (this.bindings().length >= 128 && !previous) throw new Conflict("Sharing enrollment quota full");
 		this.store.sharingTransaction(() => {
-			if (installation(binding.missionHome, this.host))
+			if (binding.state === "active" && installation(binding.missionHome, this.host))
 				for (const missionId of binding.missionIds) this.store.shareMission(missionId);
 			this.store.sharingPut("binding", binding.bindingId, binding);
 		});
@@ -371,8 +376,8 @@ export class SharedContextService {
 	private peerState(binding: SharedContextBinding, peer: OperationHost): PeerState {
 		return this.store.sharingGet("peer", digest([binding.bindingId, peer])) ?? {};
 	}
-	private outbox(bindingId: string, peer?: OperationHost): Outgoing[] {
-		return this.store.sharingOutbox<Outgoing>(bindingId, peer ? destinationKey(peer) : undefined);
+	private outbox(bindingId: string, peer?: OperationHost, limit = 4096): Outgoing[] {
+		return this.store.sharingOutbox<Outgoing>(bindingId, peer ? destinationKey(peer) : undefined, limit);
 	}
 	private enqueue(
 		binding: SharedContextBinding,
@@ -387,8 +392,8 @@ export class SharedContextService {
 			throw new Conflict(
 				"Complete shared object exceeds 1-MiB admission quota; mandatory context was not truncated",
 			);
-		if (this.outbox(binding.bindingId).filter((item) => !item.acknowledged).length >= 2048)
-			throw new Conflict("Sharing outbox full; retained intents cannot be evicted");
+		const active = this.store.sharingOutboxCount(binding.bindingId);
+		if (active >= 2048) throw new Conflict("Sharing outbox full; retained intents cannot be evicted");
 		const emit = (operationKind: string, value: unknown, final = false) => {
 			const sequence = (this.store.sharingGet<number>("counter", "producer") ?? 0) + 1;
 			this.store.sharingPut("counter", "producer", sequence);
@@ -418,14 +423,15 @@ export class SharedContextService {
 		else {
 			const count = Math.ceil(bytes.length / 4000),
 				fragmentId = randomUUID();
-			if (this.outbox(binding.bindingId).length + count > 4096) throw new Conflict("Sharing retention quota full");
+			if (active + count > 4096) throw new Conflict("Sharing retention quota full");
+			const hash = payloadHash(bytes);
 			for (let index = 0; index < count; index++)
 				emit(
 					"share-fragment",
 					{
 						id: fragmentId,
 						kind,
-						hash: payloadHash(bytes),
+						hash,
 						index,
 						count,
 						text: bytes.slice(index * 4000, (index + 1) * 4000),
@@ -465,14 +471,184 @@ export class SharedContextService {
 		const projectId = binding.memoryHome.projectId;
 		const value =
 			action === "wake"
-				? await this.memory.wake(projectId, 96)
+				? await this.memory.wake(projectId, Number(args.lines ?? 96))
 				: action === "recall"
-					? await this.memory.recall(projectId, String(args.regex ?? ""), 96)
+					? await this.memory.recall(projectId, String(args.regex ?? ""), Number(args.lines ?? 96))
 					: await this.memory.zoom(projectId, Number(args.lo), Number(args.hi));
-		return { state: await this.memoryState(binding), value, proposals: [] };
+		const state = await this.memoryState(binding);
+		if (!Array.isArray(value)) state.sequence = value.count;
+		return { state, value, proposals: [] };
+	}
+	private boundedRead<T>(value: T): T {
+		const json = JSON.stringify(value);
+		if (Buffer.byteLength(json) > 1024 * 1024)
+			throw new Conflict("Shared read exceeds 1 MiB; use a smaller page or shallower tree");
+		validateExport(json);
+		return value;
+	}
+	private canonicalMemoryContributions<T extends SharedMemoryRead | SharedMemoryTreeRead>(
+		binding: SharedContextBinding,
+		read: T,
+	): T {
+		if (!installation(binding.memoryHome.host, this.host)) return read;
+		const proposals = this.store.sharingList<SharedMemoryProposal>(`canonical-memory-proposal:${key(binding)}`);
+		if (proposals.length > 256)
+			throw new Conflict("Shared memory contribution inventory exceeds 256; reconcile retained proposals");
+		return {
+			...read,
+			proposals,
+			state: {
+				...read.state,
+				pendingCount: proposals.filter((p) => p.state === "pending").length,
+				conflictCount: proposals.filter((p) => p.state === "conflict").length,
+			},
+		};
+	}
+	/** UI reads have no project/session/path selector. Scope and authority come only from enrollment. */
+	async readMemory(
+		bindingId: string,
+		action: "wake" | "recall" | "zoom",
+		args: Record<string, unknown> = {},
+	): Promise<SharedMemoryRead> {
+		const binding = this.assertBindingActive(bindingId);
+		if (!binding.shareMemory) throw new Conflict("Memory is not enrolled in this binding");
+		fields(
+			args,
+			action === "wake" ? ["lines"] : action === "recall" ? ["regex", "lines"] : ["lo", "hi"],
+			"shared memory read",
+		);
+		if (action !== "wake" && action !== "recall" && action !== "zoom")
+			throw new Conflict("Unknown shared memory read");
+		if (
+			args.lines !== undefined &&
+			(!Number.isInteger(args.lines) || Number(args.lines) < 1 || Number(args.lines) > 256)
+		)
+			throw new Conflict("lines must be between 1 and 256");
+		if (action === "recall" && (typeof args.regex !== "string" || args.regex.length > 512))
+			throw new Conflict("Invalid recall regex");
+		if (
+			action === "zoom" &&
+			(!Number.isSafeInteger(args.lo) ||
+				!Number.isSafeInteger(args.hi) ||
+				Number(args.lo) < 0 ||
+				Number(args.hi) < Number(args.lo))
+		)
+			throw new Conflict("Invalid shared memory range");
+		if (!(await this.memoryState(binding)).complete) throw new Conflict("Shared memory replica is incomplete");
+		const read = await this.memoryRead(binding, action, args);
+		const result = this.canonicalMemoryContributions(binding, read);
+		await this.store.durable();
+		this.assertBindingActive(bindingId);
+		return this.boundedRead(result);
+	}
+	async readMemoryTree(
+		bindingId: string,
+		args: { lo?: number; hi?: number; depth?: number; reveal?: number[] } = {},
+	): Promise<SharedMemoryTreeRead> {
+		const binding = this.assertBindingActive(bindingId);
+		if (!binding.shareMemory) throw new Conflict("Memory is not enrolled in this binding");
+		fields(args, ["lo", "hi", "depth", "reveal"], "shared memory tree read");
+		if (!(await this.memoryState(binding)).complete) throw new Conflict("Shared memory replica is incomplete");
+		const read = installation(binding.memoryHome.host, this.host)
+			? {
+					value: await this.memory.tree(binding.memoryHome.projectId, args),
+					state: await this.memoryState(binding),
+					proposals: [],
+				}
+			: await this.memory.replicaTree(key(binding), args);
+		read.state.sequence = read.value.count;
+		const result = this.canonicalMemoryContributions(binding, read);
+		await this.store.durable();
+		this.assertBindingActive(bindingId);
+		return this.boundedRead(result);
+	}
+	private missionReadScope(
+		bindingId: string,
+		missionId: string,
+	): { binding: SharedContextBinding; snapshot: SharedMissionSnapshot; source: "canonical" | "replica" } {
+		const binding = this.assertBindingActive(bindingId);
+		if (!binding.missionIds.includes(missionId)) throw new NotFound("Mission is outside this binding");
+		if (installation(binding.missionHome, this.host))
+			return { binding, snapshot: this.store.sharedSnapshot(missionId), source: "canonical" };
+		const replica = this.replica(bindingId),
+			snapshot = replica.missions[missionId];
+		if (!replica.complete || !snapshot) throw new Conflict("Shared mission replica is incomplete");
+		return { binding, snapshot: { ...snapshot, sequence: replica.sequence }, source: "replica" };
+	}
+	async readMission(bindingId: string, missionId: string): Promise<SharedMissionRead> {
+		const { binding, snapshot, source } = this.missionReadScope(bindingId, missionId);
+		const proposals = this.store
+			.sharingList<SharedMissionProposal>(
+				source === "canonical" ? `canonical-proposal:${executionScope(binding)}` : `proposal:${bindingId}`,
+			)
+			.filter((proposal) => proposal.missionId === missionId && proposal.state !== "committed");
+		if (proposals.length > 256)
+			throw new Conflict("Shared mission contribution inventory exceeds 256; reconcile retained proposals");
+		await this.store.durable();
+		this.assertBindingActive(bindingId);
+		return this.boundedRead({
+			bindingId,
+			generation: binding.generation,
+			authority: binding.missionHome,
+			source,
+			snapshot,
+			proposals,
+		});
+	}
+	async readMissionVersions(
+		bindingId: string,
+		missionId: string,
+		args: { after?: number; limit?: number; sequence?: number } = {},
+	): Promise<SharedMissionVersions> {
+		fields(args, ["after", "limit", "sequence"], "shared version read");
+		const { after = 0, limit = 128, sequence } = args;
+		if (
+			!Number.isSafeInteger(after) ||
+			after < 0 ||
+			!Number.isInteger(limit) ||
+			limit < 1 ||
+			limit > 128 ||
+			(sequence !== undefined && (!Number.isSafeInteger(sequence) || sequence < 0))
+		)
+			throw new Conflict("Invalid shared version page");
+		if (after > 0 && sequence === undefined)
+			throw new Conflict("Subsequent version pages require their original sequence");
+		const binding = this.assertBindingActive(bindingId);
+		if (!binding.missionIds.includes(missionId)) throw new NotFound("Mission is outside this binding");
+		const canonical = installation(binding.missionHome, this.host);
+		const scope = canonical ? undefined : this.missionReadScope(bindingId, missionId);
+		const head = canonical ? this.store.sharedHead() : scope!.snapshot.sequence;
+		if (sequence !== undefined && sequence !== head)
+			throw new Conflict("Shared version sequence changed; restart paging");
+		const entities = canonical
+			? this.store.sharedVersions(missionId, after, limit + 1)
+			: scope!.snapshot.entities
+					.map(({ id, kind, revision, definitionRevision, deleted }) => ({
+						id,
+						kind,
+						revision,
+						definitionRevision,
+						deleted,
+					}))
+					.sort((a, b) => a.kind.localeCompare(b.kind) || a.id.localeCompare(b.id))
+					.slice(after, after + limit + 1);
+		const more = entities.length > limit;
+		await this.store.durable();
+		this.assertBindingActive(bindingId);
+		return this.boundedRead({
+			bindingId,
+			generation: binding.generation,
+			missionId,
+			authority: binding.missionHome,
+			source: canonical ? "canonical" : "replica",
+			sequence: head,
+			complete: true,
+			entities: entities.slice(0, limit),
+			...(more ? { next: after + limit } : {}),
+		});
 	}
 	private async prepare(binding: SharedContextBinding, peer: OperationHost): Promise<void> {
-		if (this.outbox(binding.bindingId, peer).length > 0) return;
+		if (this.outbox(binding.bindingId, peer, 1).length > 0) return;
 		if (installation(binding.executionProject.host, this.host) && installation(peer, binding.missionHome)) {
 			for (const execution of this.executions(binding.bindingId, "export")) {
 				const stream = `events:${executionScope(binding)}:${execution.grant.delegationId}`;
@@ -489,12 +665,12 @@ export class SharedContextService {
 			}
 		}
 		if (binding.state !== "active") {
-			if (
-				!this.outbox(binding.bindingId).some(
-					(item) => item.operation.kind === "share-revoke" && installation(item.operation.destination, peer),
-				)
-			)
-				this.enqueue(binding, peer, "share-revoke", {});
+			const marker = digest([binding.bindingId, binding.generation, destinationKey(peer)]);
+			if (!this.store.sharingGet("revoke-sent", marker))
+				this.store.sharingTransaction(() => {
+					this.enqueue(binding, peer, "share-revoke", {});
+					this.store.sharingPut("revoke-sent", marker, true);
+				});
 			return;
 		}
 		const state = this.peerState(binding, peer);
@@ -614,7 +790,7 @@ export class SharedContextService {
 			if (!this.peers(binding).some((item) => installation(item, peer)) || installation(peer, this.host))
 				throw new Conflict("Peer is not enrolled");
 			await this.prepare(binding, peer);
-			const outgoing = this.outbox(bindingId, peer).sort((a, b) => a.operation.sequence - b.operation.sequence);
+			const outgoing = this.outbox(bindingId, peer, 17);
 			const page = outgoing.slice(0, 16);
 			for (const item of page) {
 				item.transmitted = true;
@@ -928,6 +1104,12 @@ export class SharedContextService {
 			if (!installation(mutation.origin.host, binding.executionProject.host))
 				throw new OperationRejected("Forged proposal origin");
 			const outcome = await this.memory.commitSharedNote(binding.memoryHome.projectId, mutation);
+			if (outcome.state === "conflict" || outcome.state === "rejected")
+				this.store.sharingPut(`canonical-memory-proposal:${key(binding)}`, mutation.operationId, {
+					mutation,
+					state: outcome.state,
+					reason: outcome.reason,
+				} satisfies SharedMemoryProposal);
 			this.enqueue(binding, operation.origin, "share-memory-outcome", outcome);
 			return outcome;
 		}

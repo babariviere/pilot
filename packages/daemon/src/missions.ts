@@ -725,7 +725,9 @@ export class MissionStore {
 			] as const) {
 				const mission = `${prefix}.${table === "missions" ? "id" : "mission_id"}`;
 				const id = table === "brief_revisions" ? `${mission} || ':brief'` : `CAST(${prefix}.id AS TEXT)`;
-				const value = `json_object(${columns.flatMap((column) => [`'${column}'`, `${prefix}.${column}`]).join(",")})`;
+				const definition =
+					kind === "task" ? `(SELECT revision FROM shared_task_definitions WHERE id=${prefix}.id)` : undefined;
+				const value = `json_object(${columns.flatMap((column) => [`'${column}'`, `${prefix}.${column}`]).join(",")}${definition ? `, 'definition_revision', ${definition}` : ""})`;
 				this.db.exec(`DROP TRIGGER IF EXISTS shared_${table}_${event};
 				CREATE TRIGGER shared_${table}_${event} AFTER ${event} ON ${table}
 				WHEN EXISTS(SELECT 1 FROM shared_authority_scopes WHERE mission_id=${mission})
@@ -734,7 +736,9 @@ export class MissionStore {
 						? `AND (${columns
 								.filter((column) => column !== "updated_at")
 								.map((column) => `OLD.${column} IS NOT NEW.${column}`)
-								.join(" OR ")})`
+								.join(
+									" OR ",
+								)}${definition ? ` OR json_extract((SELECT value FROM shared_entities WHERE mission_id=${mission} AND kind='task' AND id=${id}),'$.definition_revision') IS NOT ${definition}` : ""})`
 						: ""
 				} BEGIN
 					SELECT CASE WHEN (SELECT COUNT(*) FROM shared_changes)>=16384 THEN RAISE(ABORT,'Shared change retention full; reconciliation required') END;
@@ -747,10 +751,11 @@ export class MissionStore {
 			}
 		}
 		this.db.exec(`INSERT OR IGNORE INTO shared_task_definitions SELECT id,1 FROM tasks;
-			CREATE TRIGGER IF NOT EXISTS shared_task_definition_insert AFTER INSERT ON tasks BEGIN
+			DROP TRIGGER IF EXISTS shared_task_definition_insert;
+			CREATE TRIGGER shared_task_definition_insert BEFORE INSERT ON tasks BEGIN
 				INSERT INTO shared_task_definitions VALUES(NEW.id,1); END;
 			DROP TRIGGER IF EXISTS shared_task_definition_update;
-			CREATE TRIGGER shared_task_definition_update AFTER UPDATE OF title,body,depends_on,decision_ids,preferred_model,preferred_thinking,status,phase_id,session_id,milestone ON tasks
+			CREATE TRIGGER shared_task_definition_update BEFORE UPDATE OF title,body,depends_on,decision_ids,preferred_model,preferred_thinking,status,phase_id,session_id,milestone ON tasks
 			WHEN NOT EXISTS(SELECT 1 FROM shared_internal_projection) AND (OLD.title IS NOT NEW.title OR OLD.body IS NOT NEW.body OR OLD.depends_on IS NOT NEW.depends_on
 			OR OLD.decision_ids IS NOT NEW.decision_ids OR OLD.preferred_model IS NOT NEW.preferred_model OR OLD.preferred_thinking IS NOT NEW.preferred_thinking
 			OR OLD.status IS NOT NEW.status OR OLD.phase_id IS NOT NEW.phase_id OR OLD.session_id IS NOT NEW.session_id OR OLD.milestone IS NOT NEW.milestone)
@@ -758,6 +763,11 @@ export class MissionStore {
 			CREATE TRIGGER IF NOT EXISTS shared_assignment_fence BEFORE UPDATE OF session_id ON tasks
 			WHEN NEW.session_id IS NOT NULL AND EXISTS(SELECT 1 FROM shared_allocations WHERE task_id=NEW.id AND sealed=0)
 			BEGIN SELECT RAISE(ABORT,'Task has an occupied remote execution grant'); END;`);
+		// Only current entities can be upgraded honestly. Historical deltas without a captured
+		// definition revision remain unknown; clients must not infer one from activity or timestamps.
+		this.db.exec(
+			`UPDATE shared_entities SET value=json_set(value,'$.definition_revision',(SELECT revision FROM shared_task_definitions WHERE id=shared_entities.id)) WHERE kind='task' AND json_extract(value,'$.definition_revision') IS NULL`,
+		);
 	}
 	shareMission(id: string): void {
 		this.require(id);
@@ -777,7 +787,7 @@ export class MissionStore {
 				const columns = this.all(`PRAGMA table_info(${table})`).map((row) => String(row.name));
 				const mission = table === "missions" ? "id" : "mission_id";
 				const entityId = table === "brief_revisions" ? "mission_id || ':brief'" : "CAST(id AS TEXT)";
-				const value = `json_object(${columns.flatMap((column) => [`'${column}'`, column]).join(",")})`;
+				const value = `json_object(${columns.flatMap((column) => [`'${column}'`, column]).join(",")}${kind === "task" ? `, 'definition_revision', (SELECT revision FROM shared_task_definitions WHERE id=tasks.id)` : ""})`;
 				this.run(
 					`INSERT OR IGNORE INTO shared_entities SELECT ${mission},'${kind}',${entityId},1,0,${value} FROM ${table} WHERE ${mission}=? ${table === "brief_revisions" ? "ORDER BY revision DESC" : ""}`,
 					id,
@@ -832,6 +842,11 @@ export class MissionStore {
 	sharingOutboxGet<T>(operationId: string): T | undefined {
 		const row = this.one("SELECT value FROM shared_outbox WHERE operation_id=?", operationId);
 		return row ? (JSON.parse(String(row.value)) as T) : undefined;
+	}
+	sharingOutboxCount(bindingId: string): number {
+		return Number(
+			this.one("SELECT COUNT(*) n FROM shared_outbox WHERE binding_id=? AND acknowledged=0", bindingId)?.n ?? 0,
+		);
 	}
 	sharingOutboxPut(
 		operation: import("@pilot/protocol").DurableOperation,
@@ -941,6 +956,20 @@ export class MissionStore {
 	}
 	sharedDefinitionRevision(taskId: string): number {
 		return Number(this.one("SELECT revision FROM shared_task_definitions WHERE id=?", taskId)?.revision ?? 0);
+	}
+	sharedVersions(missionId: string, after: number, limit: number): import("@pilot/protocol").SharedEntityVersion[] {
+		return this.all(
+			"SELECT e.id,e.kind,e.revision,e.deleted,d.revision AS definition_revision FROM shared_entities e LEFT JOIN shared_task_definitions d ON e.kind='task' AND e.id=d.id WHERE e.mission_id=? ORDER BY e.kind,e.id LIMIT ? OFFSET ?",
+			missionId,
+			limit,
+			after,
+		).map((row) => ({
+			id: String(row.id),
+			kind: String(row.kind) as SharedEntity["kind"],
+			revision: Number(row.revision),
+			deleted: Boolean(row.deleted),
+			...(row.definition_revision !== null ? { definitionRevision: Number(row.definition_revision) } : {}),
+		}));
 	}
 	sharedSnapshot(id: string): SharedMissionSnapshot {
 		if (!this.get(id)) {
@@ -3998,6 +4027,9 @@ function sharedEntityFrom(row: Row): SharedEntity {
 		id: String(row.id),
 		kind,
 		revision: Number(row.revision),
+		...(kind === "task" && Number.isSafeInteger(raw.definition_revision) && Number(raw.definition_revision) > 0
+			? { definitionRevision: Number(raw.definition_revision) }
+			: {}),
 		deleted: Boolean(row.deleted),
 		...(!row.deleted ? { value: map[kind](raw) } : {}),
 	};
