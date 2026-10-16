@@ -30,6 +30,10 @@ then exercises an actual replacement production package, live terminal/transfer 
 SIGKILL recovery and a completed update surviving manager restart. Its signing keys are throwaway
 fixture keys, not release secrets or evidence that public signed assets exist.
 
+React compilation releases its build helper after all concurrent artifact/library builds settle.
+`render-lifecycle.test.ts` checks success, failure and reuse without killing unrelated children;
+the packaged update runs after React publication, so a leaked helper must still block and fail it.
+
 ### Fault matrix
 
 | Contract/boundary | Automated evidence |
@@ -46,7 +50,7 @@ fixture keys, not release secrets or evidence that public signed assets exist.
 | D22: explicit linking, partial enrollment, revoked links, late evidence and no silent credential/workspace copying | shared-context authorization/revocation/unknown-field tests, `SharedProjectModelTests` enrollment recovery |
 | D23: concurrent rotating refresh, authoritative restart/SIGKILL, ambiguous exchange, login/logout/revocation generations | `credential-broker.test.ts` actual Pi OAuth, lost exchange, stale commit and real authority SIGKILL tests |
 | D23: session authorization, unavailable broker, oversized frames, denied arbitrary paths/config writes | credential broker capability/schema tests, `readonly-settings.test.ts`, Linux coordinator sandbox fixtures |
-| Safe update admissions, process/boot fencing, live shell/job/transfer cleanup | runtime admission/update/terminal tests, `scripts/linux/update.test.mjs`, packaged `verify-update.mjs` |
+| Safe update admissions, process/boot fencing, live shell/job/transfer cleanup | runtime admission/update/terminal tests, `render-lifecycle.test.ts`, `scripts/linux/update.test.mjs`, packaged `verify-update.mjs` after artifact publication |
 
 The matrix combines packaged, service integration, deterministic fault injection and native state
 tests. It does **not** claim every D19–D23 fault is injected through a packaged SSH UI session.

@@ -4,13 +4,26 @@ import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { build, type Plugin, version as esbuildVersion } from "esbuild";
 import type { ArtifactLibrary, ArtifactWrite } from "@pilot/protocol";
+import { type BuildOptions, build, version as esbuildVersion, type Plugin, stop } from "esbuild";
 import { MAX_IMAGE_SOURCE_BYTES, validateImageSource } from "./image.ts";
 import { previewSwiftUI } from "./swiftui.ts";
 
 const require = createRequire(import.meta.url);
 const resolveDir = dirname(fileURLToPath(import.meta.url));
+
+let activeBuilds = 0;
+
+/** Release our persistent build helper when idle, instead of leaving an OS process that blocks
+ * safe runtime updates. A concurrent library/artifact build must finish before stopping it. */
+async function buildArtifact(options: BuildOptions & { write: false }) {
+	activeBuilds++;
+	try {
+		return await build(options);
+	} finally {
+		if (--activeBuilds === 0) await stop();
+	}
+}
 
 export const artifactLibraries: Record<ArtifactLibrary, { version: string; description: string; global: string }> = {
 	react: { version: "19.3.0", description: "Interactive component interfaces", global: "React" },
@@ -87,7 +100,7 @@ export async function buildLibrary(name: ArtifactLibrary): Promise<string> {
 			: name === "mermaid"
 				? 'import mermaid from "mermaid"; globalThis.mermaid = mermaid;'
 				: `import * as library from ${JSON.stringify(name)}; globalThis.${artifactLibraries[name].global} = library;`;
-	const result = await build({
+	const result = await buildArtifact({
 		stdin: { contents: source, resolveDir },
 		bundle: true,
 		write: false,
@@ -206,7 +219,7 @@ async function compileReact(source: string): Promise<string> {
 			});
 		},
 	};
-	const result = await build({
+	const result = await buildArtifact({
 		stdin: {
 			contents:
 				'import React from "react"; import {createRoot} from "react-dom/client"; import Artifact from "artifact-source"; createRoot(document.getElementById("artifact-root")).render(React.createElement(Artifact));',
