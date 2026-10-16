@@ -9,10 +9,14 @@ final class SessionFeed: ObservableObject {
     @Published private(set) var hasSnapshot = false
     @Published private(set) var loadingEarlier = false
     @Published private(set) var earlierError: String?
+    /// Messages just sent from an idle chat, shown until their committed user rows arrive.
+    @Published private(set) var outgoing = OutgoingMessages()
     private let sessionId: String
     private let client: PilotClient?
     private var token: UUID?
     private var earlierLoad: Task<Void, Never>?
+    private var outgoingExpiry: Task<Void, Never>?
+    private var outgoingDeadline: Date?
     private var processor = TranscriptProcessor()
     private var pending: [[JSONValue]] = []
     private var processing: Task<Void, Never>?
@@ -92,6 +96,8 @@ final class SessionFeed: ObservableObject {
                         presentation.revision = self.presentation.revision + 1
                         self.presentation = presentation
                         self.onPresentationChanged?()
+                        // Same transaction as the rows: the committed message replaces its stand-in in one frame.
+                        self.reconcileOutgoing()
                     }
                     if events.contains(where: { $0["type"]?.string == "snapshot" }) {
                         self.hasSnapshot = true
@@ -116,6 +122,54 @@ final class SessionFeed: ObservableObject {
         // The cache retains prepared rows, not the reducer's duplicate history and tool state.
         processor = TranscriptProcessor()
         onPresentationChanged?()
+    }
+
+    /// Shows a sent message right away. Returns nil when it would only join the queue strip (a run is going).
+    func addOutgoing(_ text: String) -> UUID? {
+        guard hasSnapshot, !presentation.working, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+        return outgoing.add(text, to: presentation)
+    }
+
+    func acceptOutgoing(_ id: UUID) {
+        outgoing.accept(id)
+        reconcileOutgoing()
+    }
+
+    func removeOutgoing(_ id: UUID) {
+        outgoing.remove(id)
+        scheduleOutgoingExpiry()
+    }
+
+    /// Stop withdraws pending input into the composer, so nothing stands in for it any more.
+    func clearOutgoing() {
+        guard !outgoing.isEmpty else { return }
+        outgoing.removeAll()
+        scheduleOutgoingExpiry()
+    }
+
+    private func reconcileOutgoing() {
+        guard !outgoing.isEmpty else { return }
+        var next = outgoing
+        if next.reconcile(with: presentation) { outgoing = next }
+        scheduleOutgoingExpiry()
+    }
+
+    /// One timer for the earliest accepted message, instead of polling.
+    private func scheduleOutgoingExpiry() {
+        let deadline = outgoing.nextDeadline
+        guard deadline != outgoingDeadline || outgoingExpiry == nil else { return }
+        outgoingExpiry?.cancel()
+        outgoingExpiry = nil
+        outgoingDeadline = deadline
+        guard let deadline else { return }
+        let delay = max(0, deadline.timeIntervalSinceNow)
+        outgoingExpiry = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled, let self else { return }
+            self.outgoingExpiry = nil
+            self.reconcileOutgoing()
+        }
     }
 
     /// Loads the next older page hidden by compaction. The page joins the event queue, so it is reduced
@@ -208,6 +262,13 @@ struct ChatView: View {
                         RowView(row: row, toolExpansions: toolExpansions,
                             messageExpansions: messageExpansions, active: row.id == activeWork).equatable()
                     }
+                    // Sent messages show at once; the committed row replaces each in the same frame.
+                    ForEach(feed.outgoing.messages) { message in
+                        UserMessage(text: message.text)
+                            .frame(maxWidth: Theme.column, alignment: .leading)
+                            .frame(maxWidth: .infinity)
+                            .transition(Theme.Motion.sent(reduceMotion: reduceMotion))
+                    }
                     if let pauseNotice = session.pauseNoticeText {
                         Label(pauseNotice, icon: .paused)
                             .font(.pilot(.caption))
@@ -217,7 +278,8 @@ struct ChatView: View {
                             .frame(maxWidth: .infinity)
                     } else if showsWorkingIndicator(transcript) {
                         WorkingIndicator(retry: transcript.retry, compacting: transcript.compacting,
-                                         agentWorking: transcript.working || session.state == "starting",
+                                         agentWorking: transcript.working || session.state == "starting"
+                                             || !feed.outgoing.isEmpty,
                                          jobs: runningJobs, showJobs: { showingJobs.toggle() })
                             .frame(maxWidth: Theme.column, alignment: .leading)
                             .frame(maxWidth: .infinity)
@@ -275,6 +337,12 @@ struct ChatView: View {
                 guard scroll.follow.shouldScrollToBottom else { return }
                 proxy.scrollTo("bottom", anchor: .bottom)
             }
+            .onChange(of: feed.outgoing.messages.count) { previous, count in
+                // Sending is a request to see the conversation's end, even after reading back.
+                guard count > previous else { return }
+                scroll.follow.resumeFollowing()
+                proxy.scrollTo("bottom", anchor: .bottom)
+            }
             .onAppear {
                 let state = scroll
                 preparedAction.action = { state.contentPrepared { proxy.scrollTo("bottom", anchor: .bottom) } }
@@ -327,11 +395,14 @@ struct ChatView: View {
                     Composer(
                         state: composer,
                         working: transcript.working || session.state == "starting",
-                        queuedMessages: transcript.queuedMessagesInDeliveryOrder,
+                        queuedMessages: visibleQueuedMessages(transcript),
                         automaticInputs: transcript.automaticInputs,
                         completionDirectory: session.isAsk ? nil : session.cwd,
                         onSend: send,
-                        onStop: { model.stopSession(session.id) },
+                        onStop: {
+                            feed.clearOutgoing()
+                            model.stopSession(session.id)
+                        },
                         onEditQueuedMessage: { id, text, mode in
                             try await AppModel.shared.client.editQueuedMessage(
                                 session.id, submissionId: id, message: text, mode: mode
@@ -380,7 +451,14 @@ struct ChatView: View {
     /// Background jobs keep it after the agent's turn ends ("Waiting on 2 jobs · Tests 4m").
     private func showsWorkingIndicator(_ transcript: TranscriptPresentation) -> Bool {
         transcript.working || transcript.compacting || (session.state == "starting" && !feed.loading)
-            || !runningJobs.isEmpty
+            || !runningJobs.isEmpty || !feed.outgoing.isEmpty
+    }
+
+    /// A message on its way into the run already shows as its transcript bubble.
+    private func visibleQueuedMessages(_ transcript: TranscriptPresentation) -> [QueuedMessage] {
+        let hidden = feed.outgoing.hiddenQueueIDs
+        let messages = transcript.queuedMessagesInDeliveryOrder
+        return hidden.isEmpty ? messages : messages.filter { !hidden.contains($0.id) }
     }
 
     /// Live from the session summary, which pilotd updates whenever the worker's jobs change.
@@ -424,10 +502,13 @@ struct ChatView: View {
         let previousAttachments = composer.attachments
         composer.draft = ""
         composer.attachments = ImageAttachments()
+        let outgoing = withAnimation(Theme.Motion.standard(reduceMotion: reduceMotion)) { feed.addOutgoing(message) }
         Task {
             do {
                 try await AppModel.shared.client.send(session.id, message: message, mode: mode)
+                if let outgoing { feed.acceptOutgoing(outgoing) }
             } catch {
+                if let outgoing { feed.removeOutgoing(outgoing) }
                 composer.draft = [previous, composer.draft].filter { !$0.isEmpty }.joined(separator: "\n\n")
                 composer.attachments.items.insert(contentsOf: previousAttachments.items, at: 0)
                 composer.error = error.localizedDescription

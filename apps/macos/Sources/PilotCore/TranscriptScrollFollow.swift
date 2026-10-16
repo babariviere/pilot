@@ -12,6 +12,11 @@ public struct TranscriptScrollFollow: Equatable {
         isFollowing = false
     }
 
+    /// Sending a message returns to the end of the conversation, even after reading back.
+    public mutating func resumeFollowing() {
+        isFollowing = true
+    }
+
     public mutating func beginUserScroll() {
         isUserScrolling = true
     }
