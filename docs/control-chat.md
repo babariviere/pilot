@@ -111,3 +111,9 @@ then starts its coordinator through scoped, price-capped admission. Creation and
 have separate audit intents/results, so a failed start does not falsely claim the created mission
 was rolled back. The action must report a user request or accepted suggestion, and pilotd separately
 rejects it during a notice turn, regardless of those arguments. Draft briefs are capped at 32 KB.
+
+`mission_attach` calls the same join/claim service as the session membership endpoint, behind a
+synchronous idle guard. It rejects active/queued work, background agents, archived/failed chats and
+configuration transitions. Same-project and task-owner checks remain in the shared join service,
+before membership is changed. It requires an accepted suggestion, is forbidden during notices,
+waits for durable membership and records the target, optional claim and outcome in the audit.
