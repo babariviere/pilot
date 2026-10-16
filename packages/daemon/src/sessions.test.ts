@@ -2919,6 +2919,31 @@ test("live job snapshots clear on worker exit and daemon restart, ignoring a rep
 	});
 });
 
+test("compaction shows the chat as working and keeps its last result", async () => {
+	await outcomeFixture(async (manager, meta) => {
+		const worker = fakeWorker();
+		manager["workers"].set(meta.id, worker);
+		const changes: SessionSummary[] = [];
+		manager.onChange((summary) => changes.push(summary));
+		manager["onPacket"](meta, worker, { type: "working", working: true });
+		manager["onPacket"](meta, worker, {
+			type: "working",
+			working: false,
+			completion: { outcome: "done", outcomeAt: 10 },
+		});
+		assert.equal(manager.get(meta.id)?.outcome, "done");
+		worker.compacting = true;
+		manager["onPacket"](meta, worker, { type: "compacting", compacting: true });
+		assert.equal(changes.at(-1)?.state, "working");
+		assert.equal(changes.at(-1)?.working, true);
+		worker.compacting = false;
+		manager["onPacket"](meta, worker, { type: "compacting", compacting: false });
+		assert.equal(changes.at(-1)?.state, "idle");
+		assert.equal(changes.at(-1)?.working, false);
+		assert.equal(changes.at(-1)?.outcome, "done", "compaction is not a new result");
+	});
+});
+
 test("long jobs emit live user attention at one hour and clear on job end or worker exit", async (t) => {
 	await outcomeFixture(async (manager, meta) => {
 		t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 1_000 });

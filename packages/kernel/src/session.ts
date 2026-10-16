@@ -140,6 +140,8 @@ export interface KernelSessionHooks {
 		completion?: SessionCompletion,
 		execution?: import("./protocol.ts").ExecutionEvidence,
 	): void;
+	/** A compaction started or ended. Not a turn: it never changes the completion. */
+	onCompacting?(compacting: boolean): void;
 	onJobsChanged?(jobs: SessionJob[]): void;
 	onTodosChanged?(openCount: number): void;
 	onUsageChanged?(usage: KernelUsage): void;
@@ -183,6 +185,8 @@ export class KernelSession {
 	readonly #mission: { current?: MissionContext };
 	/** Last UI-published run state. Current work is read from the adapter's activity source. */
 	#reportedWorking = false;
+	/** Live compaction tasks, which can summarize an idle conversation without a run. */
+	readonly #compactions = new Set<string>();
 	#completion?: SessionCompletion;
 	#closing?: Promise<void>;
 	#updateRevision = 0;
@@ -623,6 +627,7 @@ export class KernelSession {
 			session.jobsMonitor = jobs;
 			await jobs.refresh();
 			session.#reportedWorking = status.snapshot.run !== undefined;
+			for (const { taskId } of status.snapshot.compactions) session.#compactions.add(String(taskId));
 			session.#toolDrain = toolDrain;
 			session.#origins = new InputOrigins(
 				owned.storage,
@@ -638,6 +643,7 @@ export class KernelSession {
 			status.start(async (events, deliveryContext) => {
 				let working = session.#reportedWorking;
 				let completion = session.#completion;
+				const wasCompacting = session.#compactions.size !== 0;
 				for (const event of events) {
 					const inputs =
 						event.type === "run_start" ? event.inputs : event.type === "snapshot" ? event.run?.inputs : undefined;
@@ -645,6 +651,11 @@ export class KernelSession {
 						const first = await owned.storage.submission(inputs[0]!, deliveryContext);
 						await hooks.onRunAdmitted(first?.requestId?.startsWith("control:") ?? false);
 					}
+					if (event.type === "snapshot") {
+						session.#compactions.clear();
+						for (const { taskId } of event.compactions) session.#compactions.add(String(taskId));
+					} else if (event.type === "compaction_start") session.#compactions.add(String(event.taskId));
+					else if (event.type === "compaction_end") session.#compactions.delete(String(event.taskId));
 					working =
 						event.type === "snapshot"
 							? event.run !== undefined
@@ -686,6 +697,8 @@ export class KernelSession {
 					session.#completion = working ? undefined : completion;
 					hooks.onWorking(working, session.#completion, await session.executionEvidence());
 				}
+				if (wasCompacting !== (session.#compactions.size !== 0))
+					hooks.onCompacting?.(session.#compactions.size !== 0);
 				if (
 					events.some((event) =>
 						["snapshot", "entry_appended", "message_end", "tool_execution_end", "run_end"].includes(event.type),
@@ -773,6 +786,11 @@ export class KernelSession {
 
 	get working(): boolean {
 		return this.adapter.working;
+	}
+
+	/** A compaction is summarizing the conversation, possibly while no run is open. */
+	get compacting(): boolean {
+		return this.#compactions.size !== 0;
 	}
 
 	get thinkingLevel(): string {

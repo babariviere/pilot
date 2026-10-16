@@ -235,6 +235,8 @@ export interface SessionWorker {
 	openTodoCount?: number;
 	/** Live-worker work continues between the last job ending and its result turn completing. */
 	awaitingJobFollowUp?: boolean;
+	/** A compaction is summarizing the conversation. Shown as work without starting a turn. */
+	compacting?: boolean;
 }
 
 export interface SessionManagerOptions {
@@ -563,6 +565,7 @@ export class Worker implements SessionWorker {
 	runningJobs?: SessionJob[];
 	openTodoCount?: number;
 	awaitingJobFollowUp?: boolean;
+	compacting = false;
 	private readonly pending = new Map<
 		string,
 		{
@@ -634,9 +637,12 @@ export class Worker implements SessionWorker {
 				this.openTodoCount = packet.openTodoCount;
 				this.initialized = true;
 				this.state = packet.working ? "working" : "idle";
+				this.compacting = packet.compacting === true;
 				markReady();
 			} else if (packet.type === "todos.changed") {
 				this.openTodoCount = packet.openCount;
+			} else if (packet.type === "compacting") {
+				this.compacting = packet.compacting;
 			} else if (packet.type === "usage") {
 				this.usage = packet.usage;
 			} else if (packet.type === "working") {
@@ -6241,6 +6247,10 @@ export class SessionManager {
 			if (this.workers.get(meta.id) === worker) worker.openTodoCount = packet.openCount;
 			return;
 		}
+		if (packet.type === "compacting") {
+			if (this.workers.get(meta.id) === worker) this.emit(meta, worker);
+			return;
+		}
 		if (packet.type === "jobs.changed") {
 			if (this.workers.get(meta.id) !== worker) return;
 			worker.runningJobs = packet.jobs;
@@ -6366,6 +6376,8 @@ export class SessionManager {
 					window.provider === this.subscriptionProviderOf(meta, worker) &&
 					!meta.subscriptionPolicy?.forced.includes(subscriptionWindowKey(window)),
 			);
+		// Compaction runs without a turn: show it as work, but keep the last result.
+		const workerState = worker?.state === "idle" && worker.compacting ? "working" : worker?.state;
 		const kernelState =
 			meta.recoveryStopped && !meta.failure
 				? "parked"
@@ -6377,7 +6389,7 @@ export class SessionManager {
 							? "starting"
 							: meta.inputError && (!meta.working || !worker)
 								? "failed"
-								: (worker?.state ?? "parked");
+								: (workerState ?? "parked");
 		const childrenWorking =
 			meta.archivedAt === undefined && (meta.subagents?.some((child) => child.state === "working") ?? false);
 		const runnableChildren =
