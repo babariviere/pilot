@@ -173,9 +173,15 @@ try {
 		}
 	}, "independent local endpoint");
 	assert.notEqual((await api(localBase, "hello")).daemonId, hello.daemonId);
-	assert.deepEqual(await api(localBase, "sessions"), []);
+	const localSessions = await api(localBase, "sessions");
+	assert.equal(localSessions.length, 1);
+	assert.equal(localSessions[0].control, true);
+	assert.equal(localSessions[0].projectId, undefined);
+	assert.equal(localSessions[0].pinned, true);
+	assert.equal(localSessions[0].state, "parked");
+	assert.notEqual(localSessions[0].id, sessionId, "local control metadata must not import the remote chat");
 	await reconnected.close();
-	assert.deepEqual(await api(localBase, "sessions"), []);
+	assert.deepEqual(await api(localBase, "sessions"), localSessions);
 	console.log(
 		JSON.stringify({
 			packagedWorkflow: "passed",
