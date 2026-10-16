@@ -330,6 +330,8 @@ final class KeyboardFocus: ObservableObject {
 
     /// The first native view inside the region that accepts keyboard focus and `accept`s, in view order. Views
     /// inside a smaller region on screen (the composer within a chat page) belong to that region instead.
+    /// Terminals are never chosen here: a cached one stays mounted, hidden, behind other inspector panes, so only
+    /// the terminal pane itself focuses its surface.
     func focusFirstKeyView(in region: KeyboardRegion, where accept: (NSView) -> Bool = { _ in true }) -> Bool {
         guard let anchor = anchor(for: region), let window = anchor.window, let root = window.contentView else { return false }
         let rect = anchor.convert(anchor.bounds, to: nil)
@@ -343,7 +345,8 @@ final class KeyboardFocus: ObservableObject {
             let center = NSPoint(x: frame.midX, y: frame.midY)
             if view !== anchor, view !== root, view.acceptsFirstResponder, view.canBecomeKeyView,
                frame.width * frame.height < content.width * content.height * 0.8,
-               rect.contains(center), !inner.contains(where: { $0.contains(center) }), accept(view) {
+               rect.contains(center), !inner.contains(where: { $0.contains(center) }), accept(view),
+               !KeyboardInputGuard.isInTerminal(view) {
                 return view
             }
             for child in view.subviews {

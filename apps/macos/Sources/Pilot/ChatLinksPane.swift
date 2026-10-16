@@ -68,6 +68,7 @@ final class ChatLinksModel: ObservableObject {
 struct SessionLinksPane: View {
     let feed: SessionFeed
     @StateObject private var model = ChatLinksModel()
+    @StateObject private var keyboardRows = KeyboardListState()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -86,6 +87,7 @@ struct SessionLinksPane: View {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(model.links) { link in
                             ChatLinkRow(link: link).equatable()
+                                .keyboardListItem(link.id) { ChatLinkActions.open(link) }
                         }
                         if model.hasEarlier {
                             earlierNote.padding(.horizontal, 12).padding(.vertical, 10)
@@ -93,6 +95,10 @@ struct SessionLinksPane: View {
                     }
                     .padding(.horizontal, 4)
                     .padding(.vertical, 4)
+                    .keyboardList(region: .inspector, state: keyboardRows, suppliesRows: true)
+                    .onChange(of: model.links.map(\.id), initial: true) { _, _ in
+                        keyboardRows.update(model.links.map { link in KeyboardListItem(id: link.id) { ChatLinkActions.open(link) } })
+                    }
                 }
             }
         }

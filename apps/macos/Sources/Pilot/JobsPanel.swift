@@ -12,6 +12,7 @@ struct JobsPanel: View {
     @State private var expanded: Set<String> = []
     @State private var stopping: Set<String> = []
     @State private var error: String?
+    @StateObject private var keyboardRows = KeyboardListState()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -39,9 +40,14 @@ struct JobsPanel: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(jobs) { job in jobRow(job) }
+                        ForEach(jobs) { job in jobRow(job).keyboardListItem(job.id) { toggle(job.id) } }
                     }
                     .padding(.horizontal, 12).padding(.vertical, 4)
+                    // Opened by /jobs or the working line, so it takes focus; Escape closes it.
+                    .keyboardList(region: nil, state: keyboardRows, suppliesRows: true, focusOnAppear: true) {
+                        close()
+                        _ = AppModel.shared.focusComposer()
+                    }
                 }
                 .frame(height: min(180, CGFloat(jobs.count) * 30 + CGFloat(expanded.count) * 66 + 8))
             }
@@ -54,6 +60,13 @@ struct JobsPanel: View {
             expanded.formIntersection(ids)
             stopping.formIntersection(ids)
         }
+        .onChange(of: jobs.map(\.id), initial: true) { _, ids in
+            keyboardRows.update(ids.map { id in KeyboardListItem(id: id) { toggle(id) } })
+        }
+    }
+
+    private func toggle(_ id: String) {
+        if expanded.contains(id) { expanded.remove(id) } else { expanded.insert(id) }
     }
 
     private func jobRow(_ job: SessionJob) -> some View {

@@ -51,6 +51,7 @@ struct ChangesPane: View {
     @Environment(\.repositoryPollingVisible) private var windowVisible
     @State private var viewingFile: String?
     @StateObject private var model: ChangesModel
+    @StateObject private var keyboardRows = KeyboardListState()
     init(session: SessionSummary, isVisible: Bool = true) {
         self.session = session
         self.isVisible = isVisible
@@ -122,9 +123,10 @@ struct ChangesPane: View {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(changes.files) { file in
                         FileRow(file: file, expanded: model.expanded.contains(file.path)) {
-                            if model.expanded.contains(file.path) { model.expanded.remove(file.path) } else { model.expanded.insert(file.path) }
+                            toggle(file.path)
                         }
                         .contextMenu { Button("View file") { viewingFile = file.path } }
+                        .keyboardListItem(file.path) { toggle(file.path) }
                         if model.expanded.contains(file.path), let diff = model.diffs[file.path] {
                             DiffView(file: diff)
                                 .padding(.vertical, 4)
@@ -136,10 +138,19 @@ struct ChangesPane: View {
                         Text("Diff truncated at 1 MiB.").font(.pilot(.small)).foregroundStyle(Theme.mutedForeground).padding(12)
                     }
                 }
+                // Return unfolds a file's diff, as a click on its row does.
+                .keyboardList(region: .inspector, state: keyboardRows, suppliesRows: true)
+                .onChange(of: changes.files.map(\.path), initial: true) { _, paths in
+                    keyboardRows.update(paths.map { path in KeyboardListItem(id: path) { toggle(path) } })
+                }
             }
         } else {
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    private func toggle(_ path: String) {
+        if model.expanded.contains(path) { model.expanded.remove(path) } else { model.expanded.insert(path) }
     }
 }
 

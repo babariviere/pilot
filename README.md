@@ -64,6 +64,10 @@ has separate storage and transport contracts; it does not change chat-result rea
   (Build or Ask, before a chat starts), `/terminal`, `/changes`, `/artifacts` and `/help`. They run in the app,
   keep the rest of the draft, and are never sent, queued or scheduled. A session prompt or skill with the same name
   keeps it.
+  In a chat, ⌃⇥ moves into the transcript: arrows or J/K move between messages, Return folds or unfolds work and
+  long messages, ⌘C copies a message, E edits a sent message (as its Edit button does), moving past the top loads
+  earlier history, and Escape returns to the composer. The inspector's Changes, Links, Artifacts and Agents lists
+  and the running-jobs panel work the same way; closing the inspector returns focus to the composer.
 - **Let the display rest while agents work.** Keep the Mac awake without keeping the display on.
   Optional closed-lid work requires power and Wi-Fi; without both, agents pause and resume on the next
   full wake with connectivity. Screen locking is left to macOS. See [agent-aware sleep](docs/agent-sleep.md) for

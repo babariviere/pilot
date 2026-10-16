@@ -69,6 +69,15 @@ enum KeyboardShortcuts {
             Entry(title: "Send selected answers", keys: "↩"),
             Entry(title: "Return from reply to answers", keys: "esc"),
         ]),
+        Group(title: "Transcript and inspector", entries: [
+            Entry(title: "Focus the transcript", keys: "⌃⇥ from the sidebar"),
+            Entry(title: "Move between messages", keys: "↑ / ↓ or J / K"),
+            Entry(title: "Fold or unfold work or a long message", keys: "↩"),
+            Entry(title: "Copy the highlighted message", keys: "⌘C"),
+            Entry(title: "Edit the highlighted sent message", keys: "E"),
+            Entry(title: "Return to the composer", keys: "esc or ⌘L"),
+            Entry(title: "Open a highlighted file, link, artifact or subagent", keys: "↩ in the inspector"),
+        ]),
         Group(title: "Editors and dialogs", entries: [
             Entry(title: "Save mission brief while editing", keys: "⌘S"),
             Entry(title: "Confirm a form with a multiline editor", keys: "⌘↩"),

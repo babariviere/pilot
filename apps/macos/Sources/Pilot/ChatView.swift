@@ -282,6 +282,7 @@ struct ChatView: View {
     @StateObject private var messageExpansions = TranscriptExpansions()
     @StateObject private var slashCommands = SlashCommandSource()
     @StateObject private var rewind = TranscriptRewind()
+    @StateObject private var transcriptKeyboard = TranscriptKeyboard()
     @State private var showingJobs = false
     @State private var retryingStartup = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -399,6 +400,7 @@ struct ChatView: View {
                 .padding(.bottom, bottomPadding)
                 .frame(maxWidth: .infinity)
                 .background(TranscriptScrollObserver(state: scroll, bottomPadding: bottomPadding))
+                .modifier(transcriptKeys(proxy, canLoadEarlier: transcript.earlierCursor != nil && feed.hasSnapshot))
             }
             .environment(\.transcriptContentPrepared, preparedAction.callback)
             .environment(\.transcriptComposer, session.isReadOnlyHistory ? nil : composer)
@@ -689,6 +691,16 @@ struct ChatView: View {
     /// The app commands this chat supports. Inspector commands need the panes the chat has.
     private var appCommands: [SlashCommand] { SlashCommands.chatAppCommands(supportsChanges: session.supportsChanges) }
 
+    private func transcriptKeys(_ proxy: ScrollViewProxy, canLoadEarlier: Bool) -> TranscriptKeyboardModifier {
+        let feed = feed
+        let scroll = scroll
+        return TranscriptKeyboardModifier(
+            keyboard: transcriptKeyboard, proxy: proxy, rows: { feed.presentation.rows },
+            messageExpansions: messageExpansions, rewind: session.isReadOnlyHistory ? nil : rewind,
+            loadEarlier: canLoadEarlier ? { feed.loadEarlier() } : nil,
+            pauseFollowing: { scroll.follow.pauseFollowing() })
+    }
+
     /// Opens the control an app command names, through the same handlers as its menu or toolbar item. Returns true
     /// when it ran; false keeps the draft, with the reason in the composer.
     @discardableResult
@@ -832,6 +844,7 @@ struct RowView: View, Equatable {
         content
             .frame(maxWidth: Theme.column, alignment: .leading)
             .frame(maxWidth: .infinity)
+            .overlay(TranscriptRowHighlight(id: row.id))
     }
 
     @ViewBuilder private var content: some View {

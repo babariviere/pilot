@@ -390,9 +390,8 @@ struct Inspector: View {
         }
         .background(Theme.background)
         .keyboardRegion(.inspector) { [model] in
-            if model.inspectorTab == .terminal { return model.terminals.focusVisible() }
-            // A cached terminal stays mounted behind the other panes; never focus it while hidden.
-            return model.keyboard.focusFirstKeyView(in: .inspector) { !KeyboardInputGuard.isInTerminal($0) }
+            // Other panes' lists take focus with their own handlers, or the first native key view does.
+            model.inspectorTab == .terminal && model.terminals.focusVisible()
         }
     }
 }
