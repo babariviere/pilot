@@ -323,6 +323,8 @@ yourself or use a coordinator chat, and review linked pull requests and artifact
 The mission's Overview shows a compact progress bar for each phase, or one overall bar for work without phases.
 The mission name in a chat's toolbar opens the Overview for coordinators, or toggles the assigned-task panel
 for member chats. The panel also links to the full mission.
+Chat inspector panes open at a compact width, leaving the conversation most of the space. Drag the
+divider to widen a terminal, diff or preview when needed.
 
 The brief is the spec; tasks track progress and blockers; decisions record agreed choices.
 Comments hold actionable discussion. Agents check existing discussions before posting and resolve

@@ -125,13 +125,10 @@ struct SessionDetail: View {
     @ObservedObject private var client = AppModel.shared.client
 
     var body: some View {
-        HSplitView {
+        ChatInspectorSplit(showsInspector: model.inspectorVisible && model.inspectorTab.isAvailable(for: session)) {
             ChatView(session: session, feed: feed, composer: model.composer(for: session.id))
-                .frame(minWidth: 420, maxWidth: .infinity)
-            if model.inspectorVisible && model.inspectorTab.isAvailable(for: session) {
-                Inspector(session: session, feed: feed)
-                    .frame(minWidth: 340, idealWidth: 520, maxWidth: .infinity)
-            }
+        } inspector: {
+            Inspector(session: session, feed: feed)
         }
         .navigationTitle(session.title)
         .navigationSubtitle(subtitle)
