@@ -174,7 +174,7 @@ struct CommandPaletteCatalog {
     }
 
     /// What can be done to one chat: retry, stop, open or merge its PRs, pin or unpin, archive. For the open chat
-    /// (suggested), the latest PR's row shows ⌘⇧P.
+    /// (suggested), the latest PR's row shows ⌘⇧P and the latest open PR's merge row shows ⌘⇧M.
     func chatActions(_ session: SessionSummary, suggested: Bool = false) -> [CommandPaletteEntry] {
         guard !session.isArchived else { return [] }
         let id = session.id
@@ -195,14 +195,17 @@ struct CommandPaletteCatalog {
         let pullRequests = session.linkedPullRequests.filter { !$0.isTerminal }
             + session.linkedPullRequests.filter(\.isTerminal)
         let latest = suggested ? session.latestPullRequest?.url : nil
+        let mergeCandidates = Set(PullRequestMergeTarget.candidates(in: session).map(\.url))
+        let latestMerge = suggested ? PullRequestMergeTarget.latest(in: session)?.pullRequest.url : nil
         for pullRequest in pullRequests {
             guard let url = pullRequest.browserURL else { continue }
             add("pr-\(pullRequest.number)", "Open PR #\(pullRequest.number) on GitHub", .openExternal, namesChat: false,
                 shortcut: pullRequest.url == latest ? "⌘⇧P" : nil) {
                 BrowserLinkOpener.shared.open(url)
             }
-            if pullRequest.state == .open, session.projectId != nil, !session.isMissionCoordinator {
-                add("merge-pr-\(pullRequest.number)", "Merge PR #\(pullRequest.number)…", .pullRequest) {
+            if mergeCandidates.contains(pullRequest.url) {
+                add("merge-pr-\(pullRequest.number)", "Merge PR #\(pullRequest.number)…", .pullRequest,
+                    shortcut: pullRequest.url == latestMerge ? "⌘⇧M" : nil) {
                     model.mergingPullRequest = PullRequestMergeTarget(sessionId: id, pullRequest: pullRequest)
                 }
             }
