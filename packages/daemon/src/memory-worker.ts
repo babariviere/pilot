@@ -3,8 +3,17 @@ import { join } from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
 import type { MemoryEntry, MemoryRecall } from "@pilot/protocol";
 import { DuplicateNote, decode, deviceIdentity, MemoryDisk, RECORD_BYTES } from "./memory-disk.ts";
+import { checkBindingKey } from "./shared-memory-common.ts";
+import { recallReplica, SharedMemoryReplica } from "./shared-memory-replica.ts";
 
-if (workerData.recall) {
+if (workerData.replicaRecall) {
+	try {
+		const { path, regex, lines } = workerData.replicaRecall;
+		parentPort!.postMessage({ value: recallReplica(path, regex, lines) });
+	} catch (error) {
+		parentPort!.postMessage({ error: String(error) });
+	}
+} else if (workerData.recall) {
 	// Dedicated, terminable worker: even a pathological regex cannot stall writes, wake or pilotd.
 	const { dir, count, regex, lines } = workerData.recall;
 	try {
@@ -52,9 +61,54 @@ if (workerData.recall) {
 	}
 } else {
 	const stores = new Map<string, MemoryDisk>();
+	const replicas = new Map<string, SharedMemoryReplica>();
 	let deviceId: string | undefined;
 	parentPort!.on("message", ({ id, projectId, method, args }) => {
 		try {
+			if (method.startsWith("replica.")) {
+				checkBindingKey(projectId);
+				let replica = replicas.get(projectId);
+				if (!replica) {
+					if (replicas.size >= 16) {
+						const [key, old] = replicas.entries().next().value!;
+						old.close();
+						replicas.delete(key);
+					}
+					replica = new SharedMemoryReplica(join(workerData.root, "shared-replicas", `${projectId}.sqlite`));
+					replicas.set(projectId, replica);
+				}
+				let value: unknown;
+				switch (method) {
+					case "replica.stage":
+						value = replica.stage(args.manifest, args.page);
+						break;
+					case "replica.activate":
+						value = replica.activate(args.manifestId);
+						break;
+					case "replica.changes":
+						value = replica.apply(args.batch);
+						break;
+					case "replica.read":
+						value = replica.read(args.action, args.args);
+						break;
+					case "replica.queue":
+						value = replica.queue(args.mutation);
+						break;
+					case "replica.proposals":
+						value = replica.proposals();
+						break;
+					case "replica.outcome":
+						value = replica.outcome(args.outcome);
+						break;
+					case "replica.state":
+						value = replica.state();
+						break;
+					default:
+						throw new Error("Unknown memory replica operation");
+				}
+				parentPort!.postMessage({ id, value });
+				return;
+			}
 			if (!/^[\w-]{1,100}$/.test(projectId)) throw new Error("Invalid project id");
 			if (method === "unload") {
 				stores.get(projectId)?.close();
@@ -65,7 +119,7 @@ if (workerData.recall) {
 			let store = stores.get(projectId);
 			if (!store) {
 				deviceId ??= deviceIdentity(workerData.root);
-				store = new MemoryDisk(join(workerData.root, projectId), deviceId);
+				store = new MemoryDisk(join(workerData.root, projectId), deviceId, undefined, workerData.originHost);
 				stores.set(projectId, store);
 			}
 			let value: unknown;
@@ -75,6 +129,18 @@ if (workerData.recall) {
 					break;
 				case "note":
 					value = store.note(args.text, args.sessionId, args.replaces ?? []);
+					break;
+				case "commitSharedNote":
+					value = store.commitSharedNote(args.mutation);
+					break;
+				case "beginCheckpoint":
+					value = store.beginCheckpoint();
+					break;
+				case "checkpointPage":
+					value = store.checkpointPage(args.checkpointId, args.cursor);
+					break;
+				case "changes":
+					value = store.changes(args.after, args.limit);
 					break;
 				case "wake":
 					value = store.wake(args.lines);
@@ -105,7 +171,9 @@ if (workerData.recall) {
 			parentPort!.postMessage({
 				id,
 				value,
-				...(["load", "note", "forget", "next", "put"].includes(method) ? { summary: store.summary() } : {}),
+				...(["load", "note", "commitSharedNote", "forget", "next", "put"].includes(method)
+					? { summary: store.summary() }
+					: {}),
 			});
 		} catch (error) {
 			parentPort!.postMessage({
