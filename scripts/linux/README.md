@@ -39,7 +39,8 @@ Select only the three named, uploaded assets from the authenticated GitHub relea
 existing credential/redirect policy. Do not pass GitHub credentials over SSH or trust download URLs
 from the manifest. The installer must stage/extract safely, reject unsafe archive entries, probe
 the target, and wait for an owned SSH tunnel's hello identity/protocol validation before mutations.
-Automatic SSH delivery/UI belongs to the installer, not this packaging helper.
+Automatic SSH delivery is provided by `PilotCore.LinuxSSHBootstrap`; see
+[the initial setup API](../../docs/ssh-bootstrap.md). Onboarding UI remains separate.
 
 ## Service and prerequisite contract
 
@@ -59,6 +60,10 @@ start at boot and outlive logout); the production helper never executes it. If t
 still unavailable, its D-Bus/session setup must be fixed explicitly. Kernel/security-policy sandbox
 capabilities remain a separate gate from service checks, consumed from daemon hello. A running
 service does not imply coordinator isolation is available.
+
+The unit's non-fatal `ExecStartPre` runs `linux-coordinator-probe.ts` under the real service policy and
+records `coordinator-preflight.json` in the private runtime. Setup requires that result and separately
+requires `hello.capabilities.coordinatorIsolation`. Missing tooling/policy is not a daemon outcome.
 
 `install` atomically writes/enables `~/.config/systemd/user/pilotd.service` without starting it.
 `start`, `status`, and `stop` only control a unit whose complete content matches that runtime's expected

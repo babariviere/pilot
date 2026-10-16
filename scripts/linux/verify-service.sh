@@ -57,6 +57,13 @@ sudo /usr/sbin/sshd -f "$work/sshd_config" -E "$work/sshd.log"
 sshd_pid="$(sudo cat "$work/sshd.pid")"
 ssh_cmd=(ssh -F /dev/null -i "$work/key" -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$work/known_hosts" "$user@127.0.0.1")
 runtime="$home/relocated release/runtime"
+repo="$(cd "$(dirname "$0")/../.." && pwd)"
+bootstrap_source="$(base64 < "$repo/apps/macos/Sources/PilotCore/Resources/LinuxSSHBootstrap.py" | tr -d '\n')"
+digest="$(sha256sum "$archive" | cut -d' ' -f1)"
+size="$(stat -c %s "$archive")"
+bootstrap() {
+	"${ssh_cmd[@]}" "python3 -c \"import base64;exec(base64.b64decode('$bootstrap_source'))\" '$digest' '$size' null" < "$archive"
+}
 # No linger is an explicit setup failure, even while an SSH session makes the manager reachable.
 set +e
 "${ssh_cmd[@]}" "'$runtime/bin/pilot-runtime' probe" > "$work/no-linger.json"
@@ -69,13 +76,38 @@ r = json.load(open(sys.argv[1]))
 assert not r['ok'] and not next(x['ok'] for x in r['requirements'] if x['id'] == 'linger')
 assert r['lingerSetup']['requiresPrivilege']
 PY
+# Exercise authenticated-package delivery's remote half before an explicit administrator grant.
+set +e
+bootstrap > "$work/bootstrap-no-linger.json"
+code=$?
+set -e
+test "$code" = 2
+python3 - "$work/bootstrap-no-linger.json" <<'PY'
+import json, sys
+r = json.load(open(sys.argv[1]))
+assert r['code'] == 'prerequisites' and r['plan']['lingerSetup']['requiresPrivilege']
+PY
 # Explicit grant in this disposable fixture only, never performed by the production setup helper.
 sudo loginctl enable-linger "$user"
 sudo systemctl start "user@$uid.service"
-"${ssh_cmd[@]}" "'$runtime/bin/pilot-runtime' probe; '$runtime/bin/pilot-runtime' install; '$runtime/bin/pilot-runtime' start"
+bootstrap > "$work/bootstrap.json"
+runtime="$home/.local/share/pilot/runtimes/$digest/runtime"
+python3 - "$work/bootstrap.json" <<'PY'
+import json, sys
+r = json.load(open(sys.argv[1]))
+assert r['ok'] and r['identity']['daemonId'] and r['identity']['lineageId']
+assert r['service']['ActiveState'] == 'active'
+PY
 userctl() { sudo -u "$user" env XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" systemctl --user "$@"; }
 pid="$(userctl show pilotd.service --property=MainPID --value)"
 test "$pid" -gt 0
+# Simulate a lost final reply: replay setup, preserve the live PID and persistent identities.
+bootstrap > "$work/bootstrap-repeated.json"
+test "$(userctl show pilotd.service --property=MainPID --value)" = "$pid"
+python3 - "$work/bootstrap.json" "$work/bootstrap-repeated.json" <<'PY'
+import json, sys
+assert json.load(open(sys.argv[1]))['identity'] == json.load(open(sys.argv[2]))['identity']
+PY
 # Every SSH session has ended. Do not keep a helper login alive to hide missing linger.
 for attempt in $(seq 1 30); do
 	sessions="$(sudo loginctl show-user "$user" --property=Sessions --value)"
@@ -95,6 +127,7 @@ python3 - "$work/hello.json" <<'PY'
 import json, sys
 h = json.load(open(sys.argv[1]))
 assert h['platform'] == 'linux' and h['arch'] == 'x64' and h['capabilities']['independentExecution']
+assert h['capabilities']['coordinatorIsolation']
 PY
 # Reconnect sees the same daemon. SIGTERM is orderly, not timeout/SIGKILL, and identity persists.
 "${ssh_cmd[@]}" "'$runtime/bin/pilot-runtime' status; '$runtime/bin/pilot-runtime' stop"

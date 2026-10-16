@@ -70,7 +70,10 @@ export function serviceUnit(root, home) {
 	if (root.includes(":") || home.includes(":")) throw new Error("Service paths cannot contain PATH separators");
 	const quote = (value) => `"${safe(value)}"`;
 	const execQuote = (value) => quote(value.replaceAll("$", () => "$$"));
-	return `${marker}\n[Unit]\nDescription=Pilot background agents\nAfter=network.target\n\n[Service]\nType=simple\nWorkingDirectory=%h\nExecStart=${execQuote(join(root, "node/bin/node"))} ${execQuote(join(root, "packages/daemon/src/main.ts"))}\nEnvironment=${quote(`HOME=${home}`)}\nEnvironment=${quote(`PILOT_HOME=${join(home, ".local/share/pilot")}`)}\nEnvironment=${quote(`PATH=${join(root, "bin")}:${join(root, "node/bin")}:${join(home, ".local/bin")}:/usr/local/bin:/usr/bin:/bin`)}\nUMask=0077\nRestart=on-failure\nRestartSec=5\nKillSignal=SIGTERM\nKillMode=mixed\nTimeoutStopSec=120\nStandardOutput=journal\nStandardError=journal\n\n[Install]\nWantedBy=default.target\n`;
+	// Same user, environment, namespaces and administrator drop-ins as pilotd, not an SSH-shell probe.
+	// Failure is recorded but does not equate service readiness with coordinator availability.
+	const preflight = `ExecStartPre=-${execQuote(join(root, "node/bin/node"))} ${execQuote(join(root, "packages/daemon/src/linux-coordinator-probe.ts"))} --output ${execQuote(join(root, "coordinator-preflight.json"))}`;
+	return `${marker}\n[Unit]\nDescription=Pilot background agents\nAfter=network.target\n\n[Service]\nType=simple\nWorkingDirectory=%h\n${preflight}\nExecStart=${execQuote(join(root, "node/bin/node"))} ${execQuote(join(root, "packages/daemon/src/main.ts"))}\nEnvironment=${quote(`HOME=${home}`)}\nEnvironment=${quote(`PILOT_HOME=${join(home, ".local/share/pilot")}`)}\nEnvironment=${quote(`PATH=${join(root, "bin")}:${join(root, "node/bin")}:${join(home, ".local/bin")}:/usr/local/bin:/usr/bin:/bin`)}\nUMask=0077\nRestart=on-failure\nRestartSec=5\nKillSignal=SIGTERM\nKillMode=mixed\nTimeoutStopSec=120\nStandardOutput=journal\nStandardError=journal\n\n[Install]\nWantedBy=default.target\n`;
 }
 
 function requireCommand(command, args, timeout) {
