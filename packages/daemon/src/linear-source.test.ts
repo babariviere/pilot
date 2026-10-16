@@ -434,7 +434,7 @@ test("rate limits preserve items/checkpoint and enforce retry-after without a re
 	assert.equal(status.error, "Linear is limiting requests.");
 	assert.equal(status.nextPollAt, Date.now() + 120_000);
 	assert.deepEqual(f.items.checkpoint(id), checkpoint);
-	assert.throws(() => f.registry.poll(id), /backing off/);
+	assert.throws(() => f.registry.poll(id), /Linear is limiting requests/);
 	t.mock.timers.tick(120_000);
 	f.setFailure();
 	assert.equal((await f.registry.poll(id)).status, "ok");
@@ -448,6 +448,9 @@ test("sync failures show plain text and log one technical line without response 
 	assert.equal(failed.status, "error");
 	assert.equal(failed.error, "Couldn't read Linear.");
 	assert.ok(failed.nextPollAt! > Date.now());
+	// A manual sync retries during ordinary error backoff instead of refusing.
+	f.setFailure();
+	assert.equal((await f.registry.poll(id)).status, "ok");
 	assert.deepEqual(warn.mock.calls[0]?.arguments, [
 		`pilotd: Linear sync failed for project ${f.project.id}: Error: Invalid estimate`,
 	]);
