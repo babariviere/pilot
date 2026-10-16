@@ -58,7 +58,11 @@ test("a queued Stop fences parked recovery until abort, preserving drafts and he
 		const entry = await tx.appendEntry(AssistantEntry, session.conversation.id, {
 			model: [fauxAssistantMessage([call], { stopReason: "toolUse" })],
 		});
-		await tx.createTask(ToolTask, { assistant: entry.id, callId: call.id }, { ownership: { kind: "conversation" } });
+		await tx.createTask(
+			ToolTask,
+			{ kind: "model", assistant: entry.id, callId: call.id },
+			{ ownership: { kind: "conversation" } },
+		);
 	}, context);
 	assert.equal(f.faux.state.callCount, 0);
 	await session.close();

@@ -399,6 +399,7 @@ const emptySnapshot: AgentEvent = {
 	type: "snapshot",
 	entries: [],
 	tools: [],
+	nestedTools: [],
 	compactions: [],
 	inbox: [],
 	agent: {},

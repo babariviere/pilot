@@ -9,6 +9,7 @@ const snapshot = (overrides: Partial<SnapshotEvent> = {}): SnapshotEvent => ({
 	entries: [],
 	inbox: [],
 	tools: [],
+	nestedTools: [],
 	compactions: [],
 	agent: {},
 	usage: { models: {}, tools: {} },

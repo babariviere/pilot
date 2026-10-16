@@ -226,7 +226,7 @@ test("an old session with status-tool history reopens without the retired declar
 					signal: { input: inputs.at(-1), outcome: "needs_input", reason: "Need approval" },
 				});
 			}, context);
-			return { content: [{ type: "text", text: "Status recorded" }] };
+			return { output: [{ type: "text", text: "Status recorded" }] };
 		},
 	});
 	registry.install({ name: "native", tools: [retired] });

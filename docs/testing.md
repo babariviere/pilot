@@ -154,10 +154,10 @@ Repository-wide lint still reports pre-existing assignment-expression errors in 
 
 ## Provider error recovery
 
-`anthropic-tool-errors.test.ts` covers text-only error payloads without dropping partial images or
-changing successful results. The model integration fixture persists a codemode image-then-error,
-reopens the failed chat and completes through the real Anthropic serializer with offline SSE,
-checking that history, request hooks and already-committed tool effects remain intact.
+Pi's Anthropic serializer moves images out of failed tool results. The model integration fixture
+persists a codemode image-then-error, reopens the failed chat and completes through the real Anthropic
+serializer with offline SSE, checking that the error result is text-only, the image is still sent, and
+history, request hooks and already-committed tool effects remain intact.
 
 ## Daemon activity hot path
 

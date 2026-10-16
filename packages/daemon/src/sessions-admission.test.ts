@@ -107,6 +107,7 @@ test("real Worker blocks accepted-before-working and queued inbox gaps until a f
 		type: "snapshot",
 		entries: [],
 		tools: [],
+		nestedTools: [],
 		compactions: [],
 		inbox: [],
 		agent: {},
