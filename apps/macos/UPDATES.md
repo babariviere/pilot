@@ -49,10 +49,11 @@ minutes and may incur charges. No App Store or Developer ID distribution is conf
    Release Please without publishing unless it creates a stable release.
 
 The workflow is `.github/workflows/release.yml`. It selects an arm64 macOS runner with Xcode
-26.2 (Swift 6.2). Verification runs in parallel: portable Node tests, native Node and packaging tests,
-Swift tests, the Mac app bundle and the Linux production package. On trusted main runs, `app-bundle`
+26.2 (Swift 6.2). Verification runs in parallel: portable Node tests, one `macos` job for native Node,
+packaging and Swift tests, the Mac app bundle and the Linux production package. On trusted main runs, `app-bundle`
 builds the self-contained app once and verifies its extracted production ZIP. PRs retain the native
-app smoke test without release configuration or credentials. The Mac publishing job downloads that
+app smoke test without release configuration or credentials, packaging the `macos` job's debug test
+build instead of running `app-bundle`. The Mac publishing job downloads that
 same ZIP, checks its source commit, version, checksum and embedded public keys, then signs and uploads
 it without recompiling or repackaging. Linux publishing likewise signs the verified runtime artifact
 after checking its tag and commit. Artifacts come only from the current workflow run, never a PR run

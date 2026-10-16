@@ -19,7 +19,7 @@ test("every PR and main push runs CI, including manifest-only and lockfile-only 
 test("portable tests run on Linux and native coverage plus packaging stay on macOS", () => {
 	const workflow = readFileSync(new URL("../../../../.github/workflows/release.yml", import.meta.url), "utf8");
 	const linux = workflow.split("\n  node:\n")[1].split(/\n  [a-z-]+:\n/)[0];
-	const macos = workflow.split("\n  node-macos:\n")[1].split(/\n  [a-z-]+:\n/)[0];
+	const macos = workflow.split("\n  macos:\n")[1].split(/\n  [a-z-]+:\n/)[0];
 	assert.match(linux, /runs-on: ubuntu-24\.04/);
 	assert.match(linux, /apt-get install --yes python3 make g\+\+/);
 	assert.match(linux, /pnpm test -- --lane=portable/);
@@ -29,7 +29,7 @@ test("portable tests run on Linux and native coverage plus packaging stay on mac
 	assert.match(macos, /node --test apps\/macos\/scripts\/tests\/\*\.test\.mjs/);
 	assert.match(macos, /Verify packaged dependency updates/);
 	assert.doesNotMatch(linux, /ditto|Packaging and release metadata tests|Verify packaged dependency updates/);
-	assert.match(macos, /pilot-ci-main-node-macos-/);
+	assert.match(macos, /pilot-ci-main-macos-/);
 });
 
 test("both Node lanes install architecture-matched checksum-verified jj before testing", () => {
@@ -38,7 +38,7 @@ test("both Node lanes install architecture-matched checksum-verified jj before t
 	assert.match(workflow, /JJ_SHA256: [a-f0-9]{64}/);
 	for (const [name, target, verifier] of [
 		["node", "x86_64-unknown-linux-musl", "sha256sum"],
-		["node-macos", "aarch64-apple-darwin", "shasum -a 256"],
+		["macos", "aarch64-apple-darwin", "shasum -a 256"],
 	]) {
 		const job = workflow.split(`\n  ${name}:\n`)[1].split(/\n  [a-z-]+:\n/)[0];
 		const start = job.indexOf("- name: Install Jujutsu");
@@ -55,7 +55,7 @@ test("both Node lanes install architecture-matched checksum-verified jj before t
 
 test("Swift verification and bundle jobs cache only pinned dependencies with toolchain-specific keys", () => {
 	const workflow = readFileSync(new URL("../../../../.github/workflows/release.yml", import.meta.url), "utf8");
-	for (const name of ["swift-test", "app-bundle"]) {
+	for (const name of ["macos", "app-bundle"]) {
 		const job = workflow.split(`\n  ${name}:\n`)[1].split(/\n  [a-z-]+:\n/)[0];
 		assert.match(job, /id: swift-toolchain/);
 		assert.match(job, /xcrun --show-sdk-version/);
@@ -73,11 +73,65 @@ test("Swift verification and bundle jobs cache only pinned dependencies with too
 	}
 });
 
+test("PRs use one macOS job, skip Swift only when the app is untouched, and smoke-test the test build", () => {
+	const workflow = readFileSync(new URL("../../../../.github/workflows/release.yml", import.meta.url), "utf8");
+	const job = (name) => workflow.split("\n  " + name + ":\n")[1].split(/\n  [a-z-]+:\n/)[0];
+	const macos = job("macos");
+	assert.doesNotMatch(workflow, /\n  (?:node-macos|swift-test):\n/);
+	assert.equal(workflow.match(/runs-on: macos-15/g).length, 3, "macos, app-bundle and release");
+	assert.match(job("app-bundle"), /^    if: github\.event_name != 'pull_request'$/m);
+	assert.match(macos, /fetch-depth: 2/);
+	const start = macos.indexOf("          swift=true");
+	const end = start + macos.slice(start).search(/\n {6}\S/);
+	assert.ok(start >= 0 && end > start);
+	const block = macos.slice(start, end).split("\n").map((line) => line.slice(10)).join("\n");
+	const prefix = 'git() { test "$*" = "diff --name-only HEAD^1 HEAD" && test "$GIT_OK" = 1 && printf "%s" "$FILES"; }';
+	for (const [event, files, ok, expected] of [
+		["push", "packages/daemon/src/a.ts", "1", "true"],
+		["workflow_dispatch", "docs/a.md", "1", "true"],
+		["pull_request", "packages/daemon/src/a.ts\ndocs/testing.md", "1", "false"],
+		["pull_request", "packages/protocol/src/a.ts\napps/macos/Sources/PilotCore/A.swift", "1", "true"],
+		["pull_request", "scripts/verification-slot.py", "1", "true"],
+		["pull_request", ".github/workflows/release.yml", "1", "true"],
+		["pull_request", "package.json", "1", "true"],
+		["pull_request", "packages/foo/package.json\nmyapps/macos/x", "1", "false"],
+		["pull_request", "", "0", "true"],
+	]) {
+		const dir = mkdtempSync(join(tmpdir(), "pilot-swift-changes-"));
+		try {
+			const output = join(dir, "outputs");
+			writeFileSync(output, "");
+			const result = spawnSync("bash", ["-euo", "pipefail", "-c", prefix + "\n" + block], {
+				encoding: "utf8",
+				env: { ...process.env, GITHUB_OUTPUT: output, EVENT_NAME: event, FILES: files, GIT_OK: ok },
+			});
+			assert.equal(result.status, 0, result.stderr);
+			assert.equal(readFileSync(output, "utf8"), "swift=" + expected + "\n", event + " " + JSON.stringify(files));
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	}
+	const swift = macos.indexOf("run: apps/macos/scripts/test.sh");
+	const bundle = macos.indexOf("run: apps/macos/scripts/bundle.sh");
+	assert.ok(macos.indexOf("pnpm test -- --lane=macos") < swift && swift < bundle);
+	assert.match(macos, /Verify Swift toolchain\n        id: swift-toolchain\n        if: \$\{\{ !cancelled\(\) && steps\.changes\.outputs\.swift == 'true' \}\}/);
+	const packaging = macos.slice(macos.lastIndexOf("- name:", bundle), bundle);
+	assert.match(packaging, /github\.event_name == 'pull_request' && steps\.swift-test\.outcome == 'success'/);
+	assert.match(packaging, /CONFIGURATION: debug/);
+	assert.match(packaging, /BUNDLE_PREBUILT: '1'/);
+	assert.doesNotMatch(packaging, /BUNDLE_RUNTIME|secrets\./);
+	assert.match(macos, /--snapshot "\$RUNNER_TEMP\/delegated-screenshots" --delegated-tasks-only/);
+	const script = readFileSync(new URL("../bundle.sh", import.meta.url), "utf8");
+	assert.match(script, /Release bundles always compile from source/);
+	const guard = script.indexOf('if [ "$prebuilt" = 1 ] && [ "$runtime" = 1 ]');
+	assert.ok(guard >= 0 && guard < script.indexOf("swift build --package-path"));
+});
+
 test("release job publishes only newly created stable releases or explicit draft retries", () => {
 	const workflow = readFileSync(new URL("../../../../.github/workflows/release.yml", import.meta.url), "utf8");
 	const condition = workflow.split("\n  release:\n")[1].match(/^    if: (.+)$/m)[1];
 	const github = { event_name: "push", ref: "refs/heads/main", event: { repository: { fork: false } } };
-	const verification = ["node", "node-macos", "swift-test", "app-bundle", "linux-production"];
+	const verification = ["node", "macos", "app-bundle", "linux-production"];
 	const needs = {
 		...Object.fromEntries(verification.map((name) => [name, { result: "success" }])),
 		"release-please": { result: "success", outputs: { release_created: "false" } },
@@ -129,8 +183,8 @@ test("release job publishes only newly created stable releases or explicit draft
 		);
 		needs[name].result = "success";
 	}
-	assert.match(workflow, /\n  release-please:\n    needs: \[node, node-macos, swift-test, app-bundle, linux-production\]\n/);
-	assert.match(workflow, /\n  release:\n(?:    #.*\n)*    needs: \[node, node-macos, swift-test, app-bundle, linux-production, release-please\]\n/);
+	assert.match(workflow, /\n  release-please:\n    needs: \[node, macos, app-bundle, linux-production\]\n/);
+	assert.match(workflow, /\n  release:\n(?:    #.*\n)*    needs: \[node, macos, app-bundle, linux-production, release-please\]\n/);
 	github.ref = "refs/heads/other";
 	assert.equal(
 		evaluate(github, needs, { release_tag: "v1.2.3" }, () => true),
@@ -151,7 +205,7 @@ test("Linux release signing follows successful production verification and stays
 	assert.match(linux, /ref: \$\{\{ inputs\.release_tag \|\| github\.sha \}\}/);
 	assert.match(linux, /uses: \.\/\.github\/workflows\/linux-package.yml/);
 	const publish = workflow.split("\n  linux-publish:\n")[1].split(/\n  [a-z-]+:\n/)[0];
-	assert.match(publish, /needs: \[node, node-macos, swift-test, app-bundle, linux-production, release-please, linux-release-rebuild\]/);
+	assert.match(publish, /needs: \[node, macos, app-bundle, linux-production, release-please, linux-release-rebuild\]/);
 	assert.match(publish, /needs\.linux-production\.result == 'success'/);
 	assert.match(publish, /contents: write/);
 	assert.ok(publish.indexOf("release-manifest.mjs sign") < publish.indexOf("gh release upload"));
@@ -288,7 +342,7 @@ test("Linux fallback rebuilds only a different release commit and failures block
 		"return " + source.replace(/needs\.([a-z-]+)/g, 'needs["$1"]'))(github, needs, inputs, () => true);
 	const condition = rebuild.match(/^    if: (.+)$/m)[1];
 	const github = { event_name: "push", ref: "refs/heads/main", sha: "a".repeat(40), event: { repository: { fork: false } } };
-	const needs = Object.fromEntries(["node", "node-macos", "swift-test", "app-bundle", "linux-production"].map((name) => [name, {result: "success"}]));
+	const needs = Object.fromEntries(["node", "macos", "app-bundle", "linux-production"].map((name) => [name, {result: "success"}]));
 	needs["release-please"] = { result: "success", outputs: { release_created: "true", sha: github.sha } };
 	needs["linux-release-rebuild"] = { result: "skipped" };
 	assert.equal(evaluate(condition, github, needs, {release_tag: ""}), false);

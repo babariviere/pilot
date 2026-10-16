@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Build Pilot.app. BUNDLE_RUNTIME=1 produces a self-contained Apple Silicon release.
+# BUNDLE_PREBUILT=1 packages the binaries already built for CONFIGURATION in this checkout (for example by
+# test.sh with CONFIGURATION=debug) instead of compiling. CI uses it for PR smoke tests; releases never do.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")/.." && pwd)"
@@ -12,6 +14,11 @@ configuration="${CONFIGURATION:-release}"
 app="$here/build/Pilot.app"
 runtime="${BUNDLE_RUNTIME:-0}"
 [ "$runtime" = 0 ] || [ "$runtime" = 1 ] || { echo "BUNDLE_RUNTIME must be 0 or 1" >&2; exit 1; }
+prebuilt="${BUNDLE_PREBUILT:-0}"
+[ "$prebuilt" = 0 ] || [ "$prebuilt" = 1 ] || { echo "BUNDLE_PREBUILT must be 0 or 1" >&2; exit 1; }
+if [ "$prebuilt" = 1 ] && [ "$runtime" = 1 ]; then
+	echo "Release bundles always compile from source. Unset BUNDLE_PREBUILT." >&2; exit 1
+fi
 if [ "$runtime" = 1 ]; then
 	[ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ] || {
 		echo "Release bundles require arm64 macOS" >&2; exit 1;
@@ -25,17 +32,16 @@ fi
 source "$here/scripts/swift-env.sh"
 "$here/scripts/vendor-ghostty.sh"
 "$here/scripts/share-artifacts.sh"
-swift build --package-path "$here" --jobs "${PILOT_SWIFT_JOBS:-2}" -c "$configuration" --product Pilot \
-	-Xswiftc -file-prefix-map -Xswiftc "$repo=/pilot" \
-	-Xswiftc -debug-prefix-map -Xswiftc "$repo=/pilot"
 bin="$(swift build --package-path "$here" -c "$configuration" --show-bin-path)"
-swift build --package-path "$here" --jobs "${PILOT_SWIFT_JOBS:-2}" -c "$configuration" --product PilotSystemEvents \
-	-Xswiftc -file-prefix-map -Xswiftc "$repo=/pilot" \
-	-Xswiftc -debug-prefix-map -Xswiftc "$repo=/pilot"
-
-swift build --package-path "$here" --jobs "${PILOT_SWIFT_JOBS:-2}" -c "$configuration" --product PilotPower \
-	-Xswiftc -file-prefix-map -Xswiftc "$repo=/pilot" \
-	-Xswiftc -debug-prefix-map -Xswiftc "$repo=/pilot"
+for product in Pilot PilotSystemEvents PilotPower; do
+	if [ "$prebuilt" = 1 ]; then
+		[ -x "$bin/$product" ] || { echo "Missing prebuilt $product in $bin. Build $configuration first." >&2; exit 1; }
+	else
+		swift build --package-path "$here" --jobs "${PILOT_SWIFT_JOBS:-2}" -c "$configuration" --product "$product" \
+			-Xswiftc -file-prefix-map -Xswiftc "$repo=/pilot" \
+			-Xswiftc -debug-prefix-map -Xswiftc "$repo=/pilot"
+	fi
+done
 
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Frameworks"
