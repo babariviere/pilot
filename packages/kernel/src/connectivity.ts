@@ -1,7 +1,7 @@
 /** Shared daemon reachability and request-only recovery. Never retries a native tool. */
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { watch } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname } from "node:path";
 import {
 	type Api,
@@ -19,6 +19,18 @@ export interface ConnectivityState {
 }
 
 const REACHABILITY_URLS = ["https://www.gstatic.com/generate_204", "https://cp.cloudflare.com/generate_204"] as const;
+
+/** Atomic, so the daemon never reads a half-written origin. Temporary `.tmp` names are ignored by it. */
+async function writeOriginHint(path: string, origin: string): Promise<void> {
+	const file = `${path}.check.${createHash("sha256").update(origin).digest("hex").slice(0, 16)}`;
+	const temp = `${file}.${randomUUID()}.tmp`;
+	try {
+		await writeFile(temp, origin, { mode: 0o600 });
+		await rename(temp, file);
+	} finally {
+		await rm(temp, { force: true });
+	}
+}
 
 /** HTTPS origin of a provider endpoint. Plain HTTP cannot prove reachability: a portal can answer it. */
 export function providerOrigin(baseUrl: unknown): string | undefined {
@@ -127,11 +139,7 @@ export class OfflineGate {
 		path = process.env.PILOT_CONNECTIVITY_POLICY,
 		// One file per provider origin, so concurrent kernels never overwrite each other's target.
 		requestCheck = (origin?: string) =>
-			origin
-				? writeFile(`${path}.check.${createHash("sha256").update(origin).digest("hex").slice(0, 16)}`, origin, {
-						mode: 0o600,
-					})
-				: writeFile(`${path}.check`, "", { mode: 0o600 }),
+			origin ? writeOriginHint(path!, origin) : writeFile(`${path}.check`, "", { mode: 0o600 }),
 		timing: OfflineTiming = {},
 		reportReachable = () => writeFile(`${path}.reachable`, "", { mode: 0o600 }),
 	) {
