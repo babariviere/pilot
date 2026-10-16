@@ -62,7 +62,13 @@ export class InputOrigins {
 	}
 
 	async #ensure(entries: readonly EntryRecord[]): Promise<void> {
-		if (!entries.some((entry) => entry.kind === "pi.user" && !this.#known.has(Number(entry.id)))) return;
+		const unknown = () => entries.some((entry) => entry.kind === "pi.user" && !this.#known.has(Number(entry.id)));
+		if (!unknown()) return;
+		// A scan already in flight may have read submissions before these entries were committed.
+		if (this.#scanning) {
+			await this.#scanning;
+			if (!unknown()) return;
+		}
 		this.#scanning ??= this.#scan().finally(() => {
 			this.#scanning = undefined;
 		});
@@ -89,20 +95,26 @@ export class InputOrigins {
 		});
 	}
 
+	/**
+	 * Annotates every event that carries entries, whatever its type. The live stream delivers committed user messages
+	 * as `message_end`, not `entry_appended`, so matching on event types would miss them.
+	 */
 	async events(events: readonly AgentEvent[]): Promise<AgentEvent[]> {
-		const users = events.some((event) =>
-			event.type === "snapshot"
-				? event.entries.some((entry) => entry.kind === "pi.user")
-				: event.type === "entry_appended" && event.entry.kind === "pi.user",
-		);
-		if (!users) return [...events];
+		if (!events.some((event) => carried(event).some((entry) => entry.kind === "pi.user"))) return [...events];
 		const annotated: AgentEvent[] = [];
 		for (const event of events) {
 			if (event.type === "snapshot") annotated.push({ ...event, entries: await this.entries(event.entries) });
-			else if (event.type === "entry_appended")
-				annotated.push({ ...event, entry: (await this.entries([event.entry]))[0]! });
+			else if (carried(event)[0]?.kind === "pi.user")
+				annotated.push({ ...event, entry: (await this.entries(carried(event)))[0]! } as AgentEvent);
 			else annotated.push(event);
 		}
 		return annotated;
 	}
+}
+
+/** Entries an event carries: a snapshot's list, or the single `entry` of entry_appended, message_end and similar. */
+function carried(event: AgentEvent): readonly EntryRecord[] {
+	if (event.type === "snapshot") return event.entries;
+	const entry = (event as { entry?: unknown }).entry;
+	return typeof entry === "object" && entry !== null && "kind" in entry ? [entry as EntryRecord] : [];
 }
