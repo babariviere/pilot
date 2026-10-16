@@ -441,6 +441,15 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// A folder is a remembered chat destination, not a registered project.
+    func chooseChatFolder(_ path: String) {
+        newSessionForm.chooseBaseBranch(nil)
+        newSessionForm.branches.restoreSelection(scope: nil, branch: nil)
+        newSessionForm.workspace = nil
+        newSessionForm.folder = path
+        draftProjectId = nil
+    }
+
     func newSession(in projectId: String?, message: String? = nil) {
         showingArchive = false
         showingInbox = false

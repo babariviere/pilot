@@ -288,11 +288,12 @@ struct TaskComposer: View {
                         form.pendingBaseBranch = nil
                         app.draftProjectId = id
                         form.folder = ""
+                    case .home:
+                        app.chooseChatFolder(FileManager.default.homeDirectoryForCurrentUser.path)
+                        lastProjectId = ""
                     case .folder:
                         if let path = chooseFolder(startingAt: form.folder) {
-                            form.folder = path
-                            form.pendingBaseBranch = nil
-                            app.draftProjectId = nil
+                            app.chooseChatFolder(path)
                             lastProjectId = ""
                         }
                     case .addProject:
@@ -508,6 +509,7 @@ private struct RunningList: View {
 
 enum ProjectChoice {
     case project(String)
+    case home
     case folder
     case addProject
 }
@@ -517,6 +519,14 @@ struct ProjectMenu: View {
     let folder: String
     let projects: [Project]
     let choose: (ProjectChoice) -> Void
+
+    var isHome: Bool {
+        selected == nil && folder == FileManager.default.homeDirectoryForCurrentUser.path
+    }
+
+    var title: String {
+        selected?.name ?? (isHome ? "Home" : folder.isEmpty ? "Choose project" : URL(filePath: folder).lastPathComponent)
+    }
 
     var body: some View {
         Menu {
@@ -528,12 +538,15 @@ struct ProjectMenu: View {
                 }
             }
             if !projects.isEmpty { Divider() }
+            Button { choose(.home) } label: {
+                if isHome { Label("Home (~)", icon: PilotIcon.selectedOption) } else { Text("Home (~)") }
+            }
             Button("Other Folder…") { choose(.folder) }
             Button("Add Project…") { choose(.addProject) }
         } label: {
             ChipLabel(
-                title: selected?.name ?? (folder.isEmpty ? "Choose project" : URL(filePath: folder).lastPathComponent),
-                icon: PilotIcon.project
+                title: title,
+                icon: isHome ? PilotIcon.home : PilotIcon.project
             )
         }
         .chipMenuStyle()

@@ -310,6 +310,75 @@ private func restoreDraftWrites(_ root: URL) throws {
     app.flushDrafts()
 }
 
+@Test @MainActor func homeFolderChoiceClearsProjectContextAndPersistsAsTheDefaultChatDestination() async throws {
+    _ = NSApplication.shared
+    let root = persistenceDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let home = FileManager.default.homeDirectoryForCurrentUser.path
+    let project = Project(id: "project", name: "Project", path: "/tmp/project", createdAt: 1)
+    let app = AppModel(draftStore: persistenceStore(root))
+    app.draftProjectId = project.id
+    app.newSessionForm.workspace = .clone
+    app.newSessionForm.pendingBaseBranch = "release"
+    await app.newSessionForm.branches.load(scope: "project:/tmp/project") {
+        RemoteBranchList(branches: ["release"], defaultBranch: "release")
+    }
+    app.newSessionForm.branches.select("release", for: "project:/tmp/project")
+    app.chooseChatFolder(home)
+    #expect(app.draftProjectId == nil)
+    #expect(app.newSessionForm.folder == home)
+    #expect(app.newSessionForm.pendingBaseBranch == nil)
+    #expect(app.newSessionForm.branches.selected == nil)
+    #expect(app.newSessionForm.workspace == nil)
+    app.flushDrafts()
+
+    // Even an empty draft retains Home through restart and later project discovery.
+    let restored = AppModel(draftStore: persistenceStore(root))
+    restored.client.fixtureModels = ModelList(models: [], defaultModel: "fixture/home-model")
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 400),
+                          styleMask: .borderless, backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    defer { window.close() }
+    let hosting = NSHostingView(rootView: TaskComposer(form: restored.newSessionForm, client: restored.client)
+        .environmentObject(restored))
+    window.contentView = hosting
+    hosting.layoutSubtreeIfNeeded()
+    restored.client.loadFixture(projects: [project], sessions: [])
+    restored.newSessionForm.message = "A chat at home"
+    try await waitForDraftUI { restored.newSessionForm.models.defaultModel == "fixture/home-model" }
+    #expect(restored.draftProjectId == nil)
+    for mode in [ChatMode.build, .ask] {
+        restored.newSessionForm.chooseMode(mode)
+        #expect(restored.newSessionForm.canStart(in: nil))
+        let request = restored.newSessionForm.spawnRequest(in: nil)
+        #expect(request.projectId == nil)
+        #expect(request.cwd == home)
+        #expect(request.baseBranch == nil)
+        #expect(request.workspace == nil)
+    }
+    let completed = restored.newSessionForm.completeSubmission(revision: restored.newSessionForm.revision)
+    #expect(completed)
+    restored.openHome()
+    restored.newChatInScope()
+    #expect(restored.draftProjectId == nil)
+    #expect(restored.newSessionForm.folder == home)
+    restored.flushDrafts()
+    #expect(AppModel(draftStore: persistenceStore(root)).newSessionForm.folder == home)
+}
+
+@Test @MainActor func projectPickerNamesTheHomeFolderWithoutRenamingRealProjectsOrOtherFolders() {
+    let home = FileManager.default.homeDirectoryForCurrentUser.path
+    let menu = ProjectMenu(selected: nil, folder: home, projects: []) { _ in }
+    #expect(menu.isHome)
+    #expect(menu.title == "Home")
+    let project = Project(id: "home-project", name: "Personal", path: home, createdAt: 1)
+    let selectedProject = ProjectMenu(selected: project, folder: home, projects: [project]) { _ in }
+    #expect(!selectedProject.isHome)
+    #expect(selectedProject.title == "Personal")
+    #expect(ProjectMenu(selected: nil, folder: "/tmp/notes", projects: []) { _ in }.title == "notes")
+    #expect(ProjectMenu(selected: nil, folder: "", projects: []) { _ in }.title == "Choose project")
+}
+
 @Test @MainActor func restoredBranchWaitsForProjectDiscoveryAndRemembersTheEffectiveDefaultProject() async throws {
     _ = NSApplication.shared
     let root = persistenceDirectory()
