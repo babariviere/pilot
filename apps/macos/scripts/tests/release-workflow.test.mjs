@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 
 test("every PR and main push runs CI, including manifest-only and lockfile-only changes", () => {
@@ -148,7 +151,7 @@ test("Linux release signing follows successful production verification and stays
 	assert.match(linux, /ref: \$\{\{ inputs\.release_tag \|\| github\.sha \}\}/);
 	assert.match(linux, /uses: \.\/\.github\/workflows\/linux-package.yml/);
 	const publish = workflow.split("\n  linux-publish:\n")[1].split(/\n  [a-z-]+:\n/)[0];
-	assert.match(publish, /needs: \[node, node-macos, swift-test, app-bundle, linux-production, release-please\]/);
+	assert.match(publish, /needs: \[node, node-macos, swift-test, app-bundle, linux-production, release-please, linux-release-rebuild\]/);
 	assert.match(publish, /needs\.linux-production\.result == 'success'/);
 	assert.match(publish, /contents: write/);
 	assert.ok(publish.indexOf("release-manifest.mjs sign") < publish.indexOf("gh release upload"));
@@ -226,8 +229,8 @@ test("production packages are built once and publishing promotes only this run's
 	const job = (name) => workflow.split("\n  " + name + ":\n")[1].split(/\n  [a-z-]+:\n/)[0];
 	const app = job("app-bundle");
 	const release = job("release");
-	assert.equal(workflow.match(/run: apps\/macos\/scripts\/bundle\.sh/g).length, 1);
-	assert.equal(workflow.match(/uses: \.\/\.github\/workflows\/linux-package.yml/g).length, 1);
+	assert.equal(app.match(/run: apps\/macos\/scripts\/bundle\.sh/g).length, 1);
+	assert.match(job("linux-production"), /uses: \.\/\.github\/workflows\/linux-package.yml/);
 	assert.match(app, /ref: \$\{\{ inputs\.release_tag \|\| github\.sha \}\}/);
 	assert.match(app, /GITHUB_RUN_NUMBER \+ BUNDLE_VERSION_OFFSET/);
 	assert.match(app, /BUNDLE_VERSION_OFFSET: '10000'/);
@@ -243,7 +246,8 @@ test("production packages are built once and publishing promotes only this run's
 	assert.match(release, /production_artifact\.py verify "\$stage" "\$\(git rev-parse HEAD\)"/);
 	assert.ok(release.indexOf("production_artifact.py verify") < release.indexOf('ditto -x -k "$stage/Pilot-arm64.zip"'));
 	assert.match(release, /publish-release.sh apps\/macos\/build\/Pilot.app "\$RUNNER_TEMP\/macos-production\/Pilot-arm64.zip"/);
-	assert.doesNotMatch(release, /bundle\.sh|swift build|pnpm install|bundle-runtime\.sh|pnpm\/action-setup/);
+	assert.doesNotMatch(release, /swift build|pnpm install|bundle-runtime\.sh/);
+	assert.match(release, /if: steps\.production-source\.outputs\.rebuild == 'true'/);
 	assert.doesNotMatch(release, /run-id:|github-token:/);
 	const headless = readFileSync(new URL("../../../../.github/workflows/linux-headless.yml", import.meta.url), "utf8");
 	assert.doesNotMatch(headless, /linux-package.yml|production:/);
@@ -271,5 +275,81 @@ test("only trusted main builds create a production Mac artifact, without exposin
 	}
 	const release = workflow.split("\n  release:\n")[1].split(/\n  [a-z-]+:\n/)[0];
 	const linuxPublish = workflow.split("\n  linux-publish:\n")[1].split(/\n  [a-z-]+:\n/)[0];
-	assert.equal(release.match(/^    if: (.+)$/m)[1], linuxPublish.match(/^    if: (.+)$/m)[1]);
+	assert.ok(linuxPublish.match(/^    if: (.+)$/m)[1].startsWith(release.match(/^    if: (.+)$/m)[1]));
+});
+
+
+test("Linux fallback rebuilds only a different release commit and failures block signing", () => {
+	const workflow = readFileSync(new URL("../../../../.github/workflows/release.yml", import.meta.url), "utf8");
+	const job = (name) => workflow.split("\n  " + name + ":\n")[1].split(/\n  [a-z-]+:\n/)[0];
+	const rebuild = job("linux-release-rebuild");
+	const publish = job("linux-publish");
+	const evaluate = (source, github, needs, inputs) => new Function("github", "needs", "inputs", "always",
+		"return " + source.replace(/needs\.([a-z-]+)/g, 'needs["$1"]'))(github, needs, inputs, () => true);
+	const condition = rebuild.match(/^    if: (.+)$/m)[1];
+	const github = { event_name: "push", ref: "refs/heads/main", sha: "a".repeat(40), event: { repository: { fork: false } } };
+	const needs = Object.fromEntries(["node", "node-macos", "swift-test", "app-bundle", "linux-production"].map((name) => [name, {result: "success"}]));
+	needs["release-please"] = { result: "success", outputs: { release_created: "true", sha: github.sha } };
+	needs["linux-release-rebuild"] = { result: "skipped" };
+	assert.equal(evaluate(condition, github, needs, {release_tag: ""}), false);
+	needs["release-please"].outputs.sha = "b".repeat(40);
+	assert.equal(evaluate(condition, github, needs, {release_tag: ""}), true);
+	assert.match(rebuild, /ref: \$\{\{ needs.release-please.outputs.sha \}\}/);
+	assert.match(rebuild, /artifact-name: linux-release-runtime/);
+	assert.doesNotMatch(rebuild, /secrets\.|contents: write/);
+	github.event_name = "workflow_dispatch";
+	needs["release-please"].result = "skipped";
+	assert.equal(evaluate(condition, github, needs, {release_tag: "v1.2.3"}), false);
+	github.event_name = "pull_request";
+	needs["release-please"].result = "success";
+	assert.equal(evaluate(condition, github, needs, {release_tag: ""}), false);
+	github.event_name = "push";
+	const publishCondition = publish.match(/^    if: (.+)$/m)[1];
+	for (const result of ["failure", "cancelled"]) {
+		needs["linux-release-rebuild"].result = result;
+		assert.equal(evaluate(publishCondition, github, needs, {release_tag: ""}), false);
+	}
+	needs["linux-release-rebuild"].result = "success";
+	assert.equal(evaluate(publishCondition, github, needs, {release_tag: ""}), true);
+	assert.match(publish, /needs.linux-release-rebuild.result == 'success' && 'linux-release-runtime' \|\| 'linux-production-runtime'/);
+});
+
+test("Mac source selection reuses matching artifacts, rebuilds only the release race, and fails closed otherwise", () => {
+	const workflow = readFileSync(new URL("../../../../.github/workflows/release.yml", import.meta.url), "utf8");
+	const release = workflow.split("\n  release:\n")[1].split(/\n  [a-z-]+:\n/)[0];
+	const start = release.indexOf('          stage="$RUNNER_TEMP/macos-production"', release.indexOf("id: production-source"));
+	const end = release.indexOf("\n      -", start);
+	assert.ok(start >= 0 && end > start);
+	const block = release.slice(start, end).split("\n").map((line) => line.slice(10)).join("\n");
+	const prefix = [
+		'git() { printf "%s" "$EXPECTED_SOURCE"; }',
+		'node() { printf "1.2.3"; }',
+		'python3() { if [ "$1" = "-c" ]; then command python3 "$@"; else printf verify >> "$VERIFY_LOG"; test "$VALID_ARCHIVE" = 1; fi; }',
+	].join("\n");
+	for (const scenario of ["match", "race", "wrong-source", "retry-mismatch", "corrupt-match"]) {
+		const dir = mkdtempSync(join(tmpdir(), "pilot-artifact-source-"));
+		try {
+			mkdirSync(join(dir, "macos-production"));
+			const expected = "a".repeat(40);
+			const trigger = "b".repeat(40);
+			const source = scenario === "match" || scenario === "corrupt-match" ? expected :
+				scenario === "wrong-source" ? "c".repeat(40) : trigger;
+			writeFileSync(join(dir, "macos-production/production-artifact.json"), JSON.stringify({commit: source}));
+			const output = join(dir, "outputs");
+			const log = join(dir, "verified");
+			writeFileSync(output, "");
+			writeFileSync(log, "");
+			const result = spawnSync("bash", ["-euo", "pipefail", "-c", prefix + "\n" + block], {
+				encoding: "utf8",
+				env: {...process.env, RUNNER_TEMP: dir, GITHUB_OUTPUT: output, GITHUB_SHA: trigger,
+					EXPECTED_SOURCE: expected, REQUESTED_RELEASE_TAG: scenario === "retry-mismatch" ? "v1.2.3" : "",
+					VERIFY_LOG: log, VALID_ARCHIVE: scenario === "corrupt-match" ? "0" : "1"},
+			});
+			assert.equal(result.status === 0, ["match", "race"].includes(scenario), scenario + ": " + result.stderr);
+			assert.equal(readFileSync(output, "utf8"), scenario === "race" ? "rebuild=true\n" : "", scenario);
+			assert.equal(readFileSync(log, "utf8"), ["match", "corrupt-match"].includes(scenario) ? "verify" : "", scenario);
+		} finally {
+			rmSync(dir, {recursive: true, force: true});
+		}
+	}
 });

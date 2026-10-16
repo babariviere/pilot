@@ -56,7 +56,10 @@ app smoke test without release configuration or credentials. The Mac publishing 
 same ZIP, checks its source commit, version, checksum and embedded public keys, then signs and uploads
 it without recompiling or repackaging. Linux publishing likewise signs the verified runtime artifact
 after checking its tag and commit. Artifacts come only from the current workflow run, never a PR run
-or a mutable build cache. A missing or mismatched artifact fails closed.
+or a mutable build cache. Missing, corrupt or unexpected artifacts fail closed. If concurrent main
+runs make Release Please select an earlier release commit, packaging falls back to that verified tag
+instead of publishing the newer commit's artifact. This exceptional path rebuilds; matching commits
+are never rebuilt by publishing.
 Release Please creates only a draft. A final publishing job releases it after the Mac ZIP/appcast
 and all three Linux assets are uploaded, so incomplete releases are not offered to the app.
 An explicit `release_tag` retry builds the requested tag once in each package job, even if `main`

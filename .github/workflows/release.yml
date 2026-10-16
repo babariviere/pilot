@@ -299,9 +299,19 @@ jobs:
     with:
       ref: ${{ inputs.release_tag || github.sha }}
 
-  linux-publish:
+  # Release Please can discover an earlier merged release PR after a newer main run finishes.
+  # Rebuild only that exceptional source mismatch; normal releases promote linux-production.
+  linux-release-rebuild:
     needs: [node, node-macos, swift-test, app-bundle, linux-production, release-please]
-    if: always() && needs.node.result == 'success' && needs.node-macos.result == 'success' && needs.swift-test.result == 'success' && needs.app-bundle.result == 'success' && needs.linux-production.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false && ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != ''))
+    if: always() && needs.node.result == 'success' && needs.node-macos.result == 'success' && needs.swift-test.result == 'success' && needs.app-bundle.result == 'success' && needs.linux-production.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false && ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')) && inputs.release_tag == '' && needs.release-please.outputs.sha != github.sha
+    uses: ./.github/workflows/linux-package.yml
+    with:
+      ref: ${{ needs.release-please.outputs.sha }}
+      artifact-name: linux-release-runtime
+
+  linux-publish:
+    needs: [node, node-macos, swift-test, app-bundle, linux-production, release-please, linux-release-rebuild]
+    if: always() && needs.node.result == 'success' && needs.node-macos.result == 'success' && needs.swift-test.result == 'success' && needs.app-bundle.result == 'success' && needs.linux-production.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false && ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')) && (needs.linux-release-rebuild.result == 'success' || needs.linux-release-rebuild.result == 'skipped')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -325,7 +335,7 @@ jobs:
           node-version: 24.21.0
       - uses: actions/download-artifact@v4
         with:
-          name: linux-production-runtime
+          name: ${{ needs.linux-release-rebuild.result == 'success' && 'linux-release-runtime' || 'linux-production-runtime' }}
           path: release
       - name: Sign verified manifest and attach to the matching stable draft
         env:
@@ -378,7 +388,7 @@ jobs:
               raise SystemExit('Release tag must match the stable package.json version.')
           PY
           test "$(git rev-parse HEAD)" = "$(gh api "repos/$PILOT_UPDATE_REPOSITORY/commits/$RELEASE_TAG" --jq '.sha')"
-      # No compiler or dependency installation here: only this run's verified artifact is accepted.
+      # Normally this only promotes the verified ZIP. A source mismatch rebuilds the tag, never main.
       - name: Load current release packaging tools
         uses: actions/checkout@v4
         with:
@@ -414,7 +424,42 @@ jobs:
         with:
           name: macos-production-app
           path: ${{ runner.temp }}/macos-production
-      - name: Verify and restore the matching production app
+      - name: Check whether the production artifact matches the release source
+        id: production-source
+        env:
+          REQUESTED_RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          stage="$RUNNER_TEMP/macos-production"
+          source="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit"])' "$stage/production-artifact.json")"
+          if [ "$source" != "$(git rev-parse HEAD)" ]; then
+            # Never promote another commit's bytes. Rebuild the verified immutable tag below.
+            if [ "$source" != "$GITHUB_SHA" ] || [ -n "$REQUESTED_RELEASE_TAG" ]; then
+              echo '::error::Production artifact has an unexpected source commit.'
+              exit 1
+            fi
+            echo 'rebuild=true' >> "$GITHUB_OUTPUT"
+          else
+            python3 apps/macos/scripts/production_artifact.py verify "$stage" "$(git rev-parse HEAD)" "$(node -p 'require("./package.json").version')"
+          fi
+      - uses: pnpm/action-setup@v4
+        if: steps.production-source.outputs.rebuild == 'true' && hashFiles('pnpm-lock.yaml') != ''
+      - name: Rebuild only when Release Please selected a different source commit
+        if: steps.production-source.outputs.rebuild == 'true'
+        env:
+          BUNDLE_RUNTIME: '1'
+          PILOT_SWIFT_JOBS: 3
+          BUNDLE_VERSION_OFFSET: '10000'
+        run: |
+          export BUNDLE_VERSION="$((GITHUB_RUN_NUMBER + BUNDLE_VERSION_OFFSET)).$GITHUB_RUN_ATTEMPT"
+          apps/macos/scripts/bundle.sh
+          stage="$RUNNER_TEMP/macos-production"
+          rm "$stage/Pilot-arm64.zip" "$stage/production-artifact.json"
+          ditto -c -k --sequesterRsrc --keepParent apps/macos/build/Pilot.app "$stage/Pilot-arm64.zip"
+          python3 apps/macos/scripts/production_artifact.py create "$stage" "$(git rev-parse HEAD)" "$(node -p 'require("./package.json").version')"
+          ditto -x -k "$stage/Pilot-arm64.zip" "$stage/rebuilt"
+          codesign --verify --deep --strict "$stage/rebuilt/Pilot.app"
+          apps/macos/scripts/check-runtime.sh "$stage/rebuilt/Pilot.app/Contents/Resources/runtime"
+      - name: Verify and restore the release ZIP
         run: |
           stage="$RUNNER_TEMP/macos-production"
           python3 apps/macos/scripts/production_artifact.py verify "$stage" "$(git rev-parse HEAD)" "$(node -p 'require("./package.json").version')"

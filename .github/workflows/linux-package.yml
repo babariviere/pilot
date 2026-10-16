@@ -6,6 +6,9 @@ on:
       ref:
         type: string
         required: true
+      artifact-name:
+        type: string
+        default: linux-production-runtime
 
 permissions:
   contents: read
@@ -49,7 +52,7 @@ jobs:
           bash scripts/linux/verify-service.sh "$RUNNER_TEMP/linux-package/Pilot-linux-x64.tar.gz"
       - uses: actions/upload-artifact@v4
         with:
-          name: linux-production-runtime
+          name: ${{ inputs.artifact-name }}
           path: ${{ runner.temp }}/linux-package/*
           if-no-files-found: error
           overwrite: true

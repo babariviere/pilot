@@ -630,7 +630,8 @@ apps/macos/scripts/build.sh       # native app build
 
 CI runs portable Node tests and typechecking on Linux, with a smaller macOS lane for native behavior
 and packaging. Both lanes, Swift verification and production-package checks gate releases.
-Publishing reuses the verified macOS ZIP and Linux runtime instead of building them again.
+Publishing reuses the verified macOS ZIP and Linux runtime instead of building them again, except
+when concurrent merges make Release Please select a different source commit.
 
 See [testing](docs/testing.md) for suite selection and offline fixtures, and the
 [CPU/memory](docs/performance-check.md) and [I/O](docs/io-performance-check.md) audits for measurement methods.
