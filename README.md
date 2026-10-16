@@ -60,6 +60,10 @@ has separate storage and transport contracts; it does not change chat-result rea
   workspace, send later, attach image from the clipboard); choosing one never sends the draft. ⌘. stops the open
   chat's agent while it works. Escape, after closing any picker or queued-message edit, leaves the composer for the
   page with the draft kept.
+  Slash commands also open controls: `/model` (the palette's model choices, `/model opus` to filter), `/mode`
+  (Build or Ask, before a chat starts), `/terminal`, `/changes`, `/artifacts` and `/help`. They run in the app,
+  keep the rest of the draft, and are never sent, queued or scheduled. A session prompt or skill with the same name
+  keeps it.
 - **Let the display rest while agents work.** Keep the Mac awake without keeping the display on.
   Optional closed-lid work requires power and Wi-Fi; without both, agents pause and resume on the next
   full wake with connectivity. Screen locking is left to macOS. See [agent-aware sleep](docs/agent-sleep.md) for

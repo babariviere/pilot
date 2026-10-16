@@ -162,6 +162,8 @@ struct Composer: View {
     /// Slash command menu entries; nil disables the menu.
     var slashCommands: [SlashCommand]? = nil
     var onSlashCommandsNeeded: (() -> Void)? = nil
+    /// Runs an app command (`/terminal`, `/model`…) picked from the slash menu. Never sends anything.
+    var onAppCommand: ((SlashCommand) -> Void)? = nil
     /// Send later: the message and when it starts. Nil hides the control.
     var onSchedule: ((String, ScheduleWhen) -> Void)? = nil
     @StateObject private var modelPicker: ChatModelPickerState
@@ -184,6 +186,7 @@ struct Composer: View {
         todos: [SessionTodo] = [],
         slashCommands: [SlashCommand]? = nil,
         onSlashCommandsNeeded: (() -> Void)? = nil,
+        onAppCommand: ((SlashCommand) -> Void)? = nil,
         onSchedule: ((String, ScheduleWhen) -> Void)? = nil,
         context: HostViewContext? = nil
     ) {
@@ -204,6 +207,7 @@ struct Composer: View {
         self.todos = todos
         self.slashCommands = slashCommands
         self.onSlashCommandsNeeded = onSlashCommandsNeeded
+        self.onAppCommand = onAppCommand
         self.onSchedule = onSchedule
         if let context {
             _modelPicker = StateObject(wrappedValue: ChatModelPickerState(cwd: session?.cwd,
@@ -347,7 +351,8 @@ struct Composer: View {
                 onPasteImages: { state.attachments.paste(from: $0) },
                 completionDirectory: completionDirectory,
                 slashCommands: slashCommands,
-                onSlashCommandsNeeded: onSlashCommandsNeeded
+                onSlashCommandsNeeded: onSlashCommandsNeeded,
+                onAppCommand: onAppCommand
             ) { flags in
                 send(flags.contains(.option) ? .followUp : .steer)
             }
@@ -465,6 +470,7 @@ private struct ComposerDraftEditor: View {
     let completionDirectory: String?
     let slashCommands: [SlashCommand]?
     let onSlashCommandsNeeded: (() -> Void)?
+    let onAppCommand: ((SlashCommand) -> Void)?
     let onSubmit: (NSEvent.ModifierFlags) -> Void
     @Environment(\.pilotFonts) private var fonts
 
@@ -481,6 +487,7 @@ private struct ComposerDraftEditor: View {
                            focusToken: focusToken, onNavigateQueue: onNavigateQueue, onCancel: onCancel,
                            onPasteImages: onPasteImages, completionDirectory: completionDirectory,
                            slashCommands: slashCommands, onSlashCommandsNeeded: onSlashCommandsNeeded,
+                           onAppCommand: onAppCommand,
                            onFocusChange: { [state] in state.onEditingChanged?($0) }, onSubmit: onSubmit)
                 .frame(height: state.height)
         }

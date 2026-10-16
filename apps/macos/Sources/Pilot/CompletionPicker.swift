@@ -35,6 +35,7 @@ struct CompletionItem: Identifiable, Equatable {
         let kind: String
         switch command.kind {
         case .builtin: (icon, tint, kind) = (PilotIcon.command, Theme.mutedForeground, "Pilot command")
+        case .app: (icon, tint, kind) = (PilotIcon.command, Theme.mutedForeground, "Opens in Pilot")
         case .prompt: (icon, tint, kind) = (PilotIcon.update, Theme.mutedForeground, "Prompt template")
         case .skill: (icon, tint, kind) = (PilotIcon.skill, Theme.mutedForeground, "Skill")
         }
