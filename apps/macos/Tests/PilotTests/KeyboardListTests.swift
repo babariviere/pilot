@@ -91,6 +91,9 @@ private func items(_ ids: [String], opened: @escaping (String) -> Void = { _ in 
     defer { window.close() }
     let root = NSView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
     window.contentView = root
+    // Key events resolve their window by number, which needs it on screen.
+    window.setFrameOrigin(NSPoint(x: -10000, y: -10000))
+    window.orderFrontRegardless()
     let focus = KeyboardFocus()
     let anchor = KeyboardRegionAnchor.AnchorView(frame: NSRect(x: 0, y: 0, width: 200, height: 400))
     anchor.region = .sidebar
