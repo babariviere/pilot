@@ -1,5 +1,6 @@
 /** One event-driven delivery timer for durable batches. Busy chats never get an inbox item. */
 import type { SessionSummary } from "@pilot/protocol";
+import { NoticeDispatcher } from "./notice-dispatcher.ts";
 import type { MissionStore } from "./missions.ts";
 import type { SessionManager } from "./sessions.ts";
 
@@ -8,16 +9,29 @@ export class MissionNotices {
 	setRemoteOccupied(read: (missionId: string) => boolean): void {
 		this.remoteOccupied = read;
 	}
-	private timer?: ReturnType<typeof setTimeout>;
-	private running?: Promise<void>;
+	private readonly dispatcher: NoticeDispatcher;
 	private stopped = true;
-	private scheduled = false;
 	private readonly seen = new Map<string, string>();
 	private readonly unsubscribe: (() => void)[];
 	private readonly store: MissionStore;
 	private readonly sessions: SessionManager;
 
 	constructor(store: MissionStore, sessions: SessionManager) {
+		this.dispatcher = new NoticeDispatcher({
+			deadlines: (now) => this.deadlines(now).map(({ missionId, at }) => ({ key: missionId, at })),
+			eligible: (missionId) => {
+				const mission = store.get(missionId);
+				const chat = mission?.coordinatorSessionId ? sessions.get(mission.coordinatorSessionId) : undefined;
+				return !!(
+					mission?.status === "active" &&
+					chat &&
+					chat.archivedAt === undefined &&
+					chat.state !== "working" &&
+					chat.state !== "starting"
+				);
+			},
+			deliver: (missionId, now) => this.deliver(missionId, now),
+		});
 		this.store = store;
 		this.sessions = sessions;
 		this.unsubscribe = [store.onChange(() => this.schedule()), sessions.onChange((session) => this.observe(session))];
@@ -27,6 +41,7 @@ export class MissionNotices {
 		this.stopped = false;
 		// Recovery can touch hundreds of PRs. Publish final contexts once per mission, not per PR/member.
 		this.store.batchChanges(() => this.recover());
+		this.dispatcher.start();
 		this.schedule();
 	}
 
@@ -118,73 +133,37 @@ export class MissionNotices {
 	}
 
 	private schedule(): void {
-		if (this.stopped || this.running || this.scheduled) return;
-		this.scheduled = true;
-		// Many synchronous changes (startup recovery, a burst of member events) need one scan/timer.
-		queueMicrotask(() => this.updateTimer());
+		this.dispatcher.schedule();
 	}
 
-	private updateTimer(): void {
-		this.scheduled = false;
-		clearTimeout(this.timer);
-		if (this.stopped || this.running) return;
-		const now = Date.now();
-		const deadlines = this.deadlines(now).filter(({ missionId }) => {
-			const mission = this.store.get(missionId);
-			const chat = mission?.coordinatorSessionId ? this.sessions.get(mission.coordinatorSessionId) : undefined;
-			return (
-				mission?.status === "active" &&
-				chat &&
-				chat.archivedAt === undefined &&
-				chat.state !== "working" &&
-				chat.state !== "starting"
-			);
-		});
-		if (!deadlines.length) return;
-		// Due-but-busy batches retry at most once a second, only while there is deliverable pending work.
-		this.timer = setTimeout(
-			() => {
-				this.running = this.flush()
-					.catch((error: unknown) => console.warn(`pilotd: notice delivery failed: ${error}`))
-					.finally(() => {
-						this.running = undefined;
-						this.schedule();
-					});
-			},
-			Math.max(1_000, Math.min(...deadlines.map((deadline) => deadline.at)) - now),
-		);
-		this.timer.unref();
-	}
-
-	/** Also callable with a virtual clock by focused delivery tests. */
 	async flush(now = Date.now()): Promise<void> {
-		for (const { missionId, at } of this.deadlines(now)) {
-			if (this.stopped || at > now) continue;
-			const mission = this.store.require(missionId);
-			const id = mission.coordinatorSessionId;
-			if (mission.status !== "active" || !id) continue;
-			// prepareNotice returns a frozen retry; canSendNotice allows that same pending ID only.
-			const retry = this.store.pendingNotice(missionId);
-			if (!this.sessions.canSendNotice(id, retry?.requestId)) continue;
-			const notice = this.store.prepareNotice(missionId, id, now);
-			if (!notice) continue;
-			try {
-				// A delivered notice must never be forgotten by a store that lost power.
-				const durable = this.store.whenDurable();
-				if (durable) await durable;
-				if (await this.sessions.sendNotice(id, notice.content, notice.requestId, notice.event))
-					this.store.acknowledgeNotice(notice, now);
-			} catch (error) {
-				console.warn(`pilotd: could not deliver ${notice.requestId}: ${error}`);
-			}
+		await this.dispatcher.flush(now);
+	}
+
+	private async deliver(missionId: string, now: number): Promise<void> {
+		const mission = this.store.require(missionId);
+		const id = mission.coordinatorSessionId;
+		if (mission.status !== "active" || !id) return;
+		// prepareNotice returns a frozen retry; canSendNotice allows that same pending ID only.
+		const retry = this.store.pendingNotice(missionId);
+		if (!this.sessions.canSendNotice(id, retry?.requestId)) return;
+		const notice = this.store.prepareNotice(missionId, id, now);
+		if (!notice) return;
+		try {
+			// A delivered notice must never be forgotten by a store that lost power.
+			const durable = this.store.whenDurable();
+			if (durable) await durable;
+			if (await this.sessions.sendNotice(id, notice.content, notice.requestId, notice.event))
+				this.store.acknowledgeNotice(notice, now);
+		} catch (error) {
+			console.warn(`pilotd: could not deliver ${notice.requestId}: ${error}`);
 		}
 	}
 
 	async stop(): Promise<void> {
 		this.stopped = true;
-		clearTimeout(this.timer);
 		for (const unsubscribe of this.unsubscribe) unsubscribe();
-		await this.running;
+		await this.dispatcher.stop();
 		this.seen.clear();
 	}
 }

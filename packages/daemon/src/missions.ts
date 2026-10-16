@@ -1,5 +1,6 @@
 /** Missions: daemon-owned state shared by the chats of one goal. pilotd is the sole writer. */
 import { randomUUID } from "node:crypto";
+import { noticeDeadline, NOTICE_WINDOW_MS, NOTICE_HOURLY_CAP } from "./notice-dispatcher.ts";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync, type Session, type SQLInputValue } from "node:sqlite";
@@ -318,10 +319,7 @@ export interface MissionNotice {
 	event: import("@pilot/protocol").ChatEventSummary;
 }
 
-export const NOTICE_DEBOUNCE_MS = 30_000;
-export const NOTICE_MAX_DELAY_MS = 30 * 60_000;
-export const NOTICE_WINDOW_MS = 3_600_000;
-export const NOTICE_HOURLY_CAP = 20;
+export { NOTICE_DEBOUNCE_MS, NOTICE_MAX_DELAY_MS, NOTICE_WINDOW_MS, NOTICE_HOURLY_CAP } from "./notice-dispatcher.ts";
 
 /** Summary-only attention and progress counts plus one bounded reason, without loading full task/comment bodies. */
 const MISSION_SELECT = `SELECT missions.*,
@@ -1679,15 +1677,19 @@ export class MissionStore {
 		);
 		return rows.map((row) => {
 			const missionId = str(row.mission_id!);
-			const settled =
-				row.busy === 1 ? Infinity : Math.max(num(row.last_at!), num(row.idle_at ?? 0)) + NOTICE_DEBOUNCE_MS;
-			const due = Math.min(
-				row.request_id && row.busy !== 1 ? Math.max(now, num(row.idle_at ?? 0) + NOTICE_DEBOUNCE_MS) : settled,
-				num(row.first_at!) + NOTICE_MAX_DELAY_MS,
-			);
 			return {
 				missionId,
-				at: row.capped_at === null ? due : Math.max(due, num(row.capped_at!) + NOTICE_WINDOW_MS),
+				at: noticeDeadline(
+					{
+						firstAt: num(row.first_at!),
+						lastAt: num(row.last_at!),
+						idleAt: num(row.idle_at ?? 0),
+						busy: row.busy === 1,
+						retry: !!row.request_id,
+						cappedAt: row.capped_at === null ? undefined : num(row.capped_at!),
+					},
+					now,
+				),
 			};
 		});
 	}
