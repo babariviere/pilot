@@ -196,9 +196,12 @@ final class TerminalStore: ObservableObject {
 
     private func shellExited(_ id: String) {
         guard states[id] != nil else { return }
-        // The exited surface may hold keyboard focus; release it before it goes away.
-        if let window = NSApp.keyWindow, window.firstResponder is NSView {
+        // The exited surface may hold keyboard focus; release it before it goes away, then return to the composer
+        // so typing has somewhere to go. Focus elsewhere is left alone.
+        if let window = NSApp.keyWindow, let view = window.firstResponder as? NSView,
+           KeyboardInputGuard.isInTerminal(view) {
             window.makeFirstResponder(nil)
+            DispatchQueue.main.async { AppModel.shared.focusComposer() }
         }
         exited.insert(id)
         if exited.count > 128, let old = exited.first(where: { $0 != id }) { exited.remove(old) }

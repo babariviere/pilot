@@ -68,6 +68,9 @@ has separate storage and transport contracts; it does not change chat-result rea
   long messages, ⌘C copies a message, E edits a sent message (as its Edit button does), moving past the top loads
   earlier history, and Escape returns to the composer. The inspector's Changes, Links, Artifacts and Agents lists
   and the running-jobs panel work the same way; closing the inspector returns focus to the composer.
+  Terminal and artifact content keep every key (Escape, Tab, ⌃C, ⌃D, letters) except the reserved ⌃⇥, ⌃⇧⇥ and
+  ⌘L, plus ⌘K and ⌘J. ⌘J closes the terminal back to the composer. In an artifact viewer, ⌃⇥ leaves the page so
+  its Close button and Escape work again.
 - **Let the display rest while agents work.** Keep the Mac awake without keeping the display on.
   Optional closed-lid work requires power and Wi-Fi; without both, agents pause and resume on the next
   full wake with connectivity. Screen locking is left to macOS. See [agent-aware sleep](docs/agent-sleep.md) for

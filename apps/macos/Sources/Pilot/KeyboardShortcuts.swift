@@ -77,6 +77,7 @@ enum KeyboardShortcuts {
             Entry(title: "Edit the highlighted sent message", keys: "E"),
             Entry(title: "Return to the composer", keys: "esc or ⌘L"),
             Entry(title: "Open a highlighted file, link, artifact or subagent", keys: "↩ in the inspector"),
+            Entry(title: "Leave the terminal or an artifact page", keys: "⌃⇥ / ⌘L / ⌘J"),
         ]),
         Group(title: "Editors and dialogs", entries: [
             Entry(title: "Save mission brief while editing", keys: "⌘S"),

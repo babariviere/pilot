@@ -412,9 +412,16 @@ final class KeyboardRouter {
 
     /// The event to deliver, or nil when a route consumed it.
     func handle(_ event: NSEvent) -> NSEvent? {
-        // Local monitors only see this app's key events; sheets and other windows keep theirs.
-        guard let focus, let window = event.window, window === focus.window, window.attachedSheet == nil else {
-            return event
+        guard let focus, let window = event.window else { return event }
+        if window !== focus.window || window.attachedSheet != nil {
+            // Sheets and other windows (an artifact viewer, a link preview) keep every key, except that ⌃⇥ always
+            // leaves web or terminal content, so the window's own controls and Escape are reachable again.
+            let target = window.attachedSheet ?? window
+            guard target === window, KeyboardInputGuard.context(for: window.firstResponder) == .embedded,
+                  event.keyCode == KeyboardChord.tabKeyCode,
+                  KeyboardChord(event).modifiers.subtracting(.shift) == [.control] else { return event }
+            Self.leaveEmbeddedContent(in: window)
+            return nil
         }
         let context = KeyboardInputGuard.context(for: window.firstResponder)
         if context == .navigation, window.firstResponder is NSTableView,
@@ -449,6 +456,20 @@ final class KeyboardRouter {
                                 timestamp: event.timestamp, windowNumber: event.windowNumber, context: nil,
                                 characters: characters, charactersIgnoringModifiers: characters,
                                 isARepeat: event.isARepeat, keyCode: down ? 125 : 126)
+    }
+
+    /// Moves focus from web or terminal content to the window's first other control, or to the window itself.
+    static func leaveEmbeddedContent(in window: NSWindow) {
+        func candidate(in view: NSView) -> NSView? {
+            guard !view.isHidden, !KeyboardInputGuard.isEmbedded(view) else { return nil }
+            if view.acceptsFirstResponder, view.canBecomeKeyView, view !== window.contentView { return view }
+            for child in view.subviews {
+                if let found = candidate(in: child) { return found }
+            }
+            return nil
+        }
+        if let target = window.contentView.flatMap(candidate), window.makeFirstResponder(target) { return }
+        window.makeFirstResponder(nil)
     }
 }
 
