@@ -417,6 +417,51 @@ export function createDaemonServer(
 		if (parts[1] === "shared-contexts") {
 			if (!sharing) throw new ServiceUnavailable("Shared context unavailable");
 			if (parts.length === 2 && req.method === "GET") return json(res, 200, await sharing.summaries());
+			if (
+				req.method === "GET" &&
+				((parts.length === 5 && parts[3] === "memory") ||
+					((parts.length === 5 || parts.length === 6) && parts[3] === "missions"))
+			) {
+				const allowed =
+					parts[3] === "memory"
+						? parts[4] === "tree"
+							? ["lo", "hi", "depth", "reveal"]
+							: parts[4] === "recall"
+								? ["regex", "lines"]
+								: parts[4] === "wake"
+									? ["lines"]
+									: parts[4] === "zoom"
+										? ["lo", "hi"]
+										: []
+						: parts.length === 6 && parts[5] === "versions"
+							? ["after", "limit", "sequence"]
+							: [];
+				for (const name of url.searchParams.keys())
+					if (!allowed.includes(name) || url.searchParams.getAll(name).length !== 1)
+						throw new HttpError(400, "Unknown or duplicate shared read parameter");
+				const args: Record<string, unknown> = {};
+				for (const [name, value] of url.searchParams) {
+					if (name === "regex") args[name] = value;
+					else if (name === "reveal") {
+						if (value !== "" && !/^\d+(,\d+)*$/.test(value)) throw new HttpError(400, "Invalid reveal indices");
+						args[name] = value === "" ? [] : value.split(",").map(Number);
+					} else {
+						if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)))
+							throw new HttpError(400, "Invalid shared read number");
+						args[name] = Number(value);
+					}
+				}
+				if (parts[3] === "memory") {
+					if (parts[4] === "tree") return json(res, 200, await sharing.readMemoryTree(parts[2]!, args));
+					if (parts[4] === "wake" || parts[4] === "recall" || parts[4] === "zoom")
+						return json(res, 200, await sharing.readMemory(parts[2]!, parts[4], args));
+				} else {
+					if (parts.length === 5) return json(res, 200, await sharing.readMission(parts[2]!, parts[4]!));
+					if (parts[5] === "versions")
+						return json(res, 200, await sharing.readMissionVersions(parts[2]!, parts[4]!, args));
+				}
+				throw new HttpError(404, "Unknown shared read operation");
+			}
 			if (parts.length === 4 && parts[3] === "conflicts" && req.method === "GET")
 				return json(res, 200, sharing.conflicts(parts[2]!));
 			if (parts.length === 5 && parts[3] === "events" && req.method === "GET")

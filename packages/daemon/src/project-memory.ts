@@ -6,16 +6,16 @@ import type {
 	MemoryRecall,
 	MemoryTree,
 	MemoryView,
+	OperationHost,
 	ProjectMemorySummary,
-	SharedMemoryMutation,
-	SharedMemoryCommitOutcome,
+	SharedMemoryChangePage,
 	SharedMemoryCheckpointManifest,
 	SharedMemoryCheckpointPage,
-	SharedMemoryChangePage,
-	SharedMemoryReplicaState,
+	SharedMemoryCommitOutcome,
+	SharedMemoryMutation,
 	SharedMemoryProposal,
 	SharedMemoryRead,
-	OperationHost,
+	SharedMemoryReplicaState,
 } from "@pilot/protocol";
 import { Conflict, ServiceUnavailable } from "./errors.ts";
 import { captureMemory, type MemoryCompactionObserver, type MemoryCompactionTrace } from "./memory-compaction.ts";
@@ -191,6 +191,9 @@ export class ProjectMemoryService {
 	}
 	replicaState(bindingKey: string): Promise<SharedMemoryReplicaState> {
 		return this.rpc(bindingKey, "replica.state");
+	}
+	replicaTree(bindingKey: string, args: MemoryTreeOptions): Promise<import("@pilot/protocol").SharedMemoryTreeRead> {
+		return this.rpc(bindingKey, "replica.tree", { args });
 	}
 	async replicaRead(
 		bindingKey: string,

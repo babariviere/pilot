@@ -12,8 +12,10 @@ import type {
 	OperationHost,
 	OperationReceipt,
 	SharedContextBinding,
+	SharedEntity,
 	SharedExchangeBatch,
 	SharedMemoryRead,
+	SharedMissionProposal,
 } from "@pilot/protocol";
 import { WebSocket } from "ws";
 import { MissionService } from "./mission-service.ts";
@@ -134,6 +136,35 @@ async function peer(t: TestContext, name: string) {
 	};
 }
 type Peer = Awaited<ReturnType<typeof peer>>;
+async function readEndpoint(peer: Peer) {
+	const server = createDaemonServer(
+		{ home: peer.home, host: "127.0.0.1", port: 0 },
+		peer.sessions,
+		peer.projects,
+		new ModelCatalog(join(peer.home, "agent")),
+		new TerminalManager(),
+		{ store: peer.store, service: peer.missions },
+		undefined,
+		peer.memory,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		peer.sharing,
+	);
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	peer.cleanupExtras.push(
+		() =>
+			new Promise<void>((resolve, reject) => {
+				server.closeAllConnections();
+				server.close((error) => (error ? reject(error) : resolve()));
+			}),
+	);
+	return `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/shared-contexts`;
+}
 async function relay(source: Peer, destination: Peer, binding: SharedContextBinding) {
 	const batch = await source.sharing.exchange(binding.bindingId, destination.host);
 	for (const operation of batch.operations) {
@@ -900,4 +931,136 @@ test("required pinned artifacts gate offer acceptance and pending recovery keeps
 	assert.equal("html" in offline, false);
 	assert.equal(target.sessions.get(grant.session.sessionId)?.id, grant.session.sessionId);
 	await assert.rejects(target.sharing.readArtifact(grant.session.sessionId, artifact.id, 2), /not authorized/);
+});
+
+test("binding-authorized HTTP reads expose canonical/replica versions and pending context without host-local leakage", async (t) => {
+	const { home, target, mission, binding, grant } = await enrolled(t);
+	await home.memory.note(home.project.id, "Home memory zero", "author");
+	await home.memory.note(home.project.id, "Home memory one", "author");
+	await target.memory.note(target.project.id, "Unrelated execution workspace notes", "local");
+	await reconcile(home, target, binding);
+	const homeBase = `${await readEndpoint(home)}/${binding.bindingId}`,
+		targetBase = `${await readEndpoint(target)}/${binding.bindingId}`;
+	const get = async (base: string, path: string) => {
+		const response = await fetch(`${base}/${path}`);
+		assert.equal(response.status, 200, await response.clone().text());
+		return response.json();
+	};
+	const before = await get(targetBase, `missions/${mission.id}/versions?limit=1`);
+	assert.equal(before.source, "replica");
+	assert.equal(before.entities.length, 1);
+	assert.equal(before.next, 1);
+	const task = home.store.resolveTask(mission.id, "1");
+	const replica = await get(targetBase, `missions/${mission.id}`);
+	assert.equal(
+		replica.snapshot.entities.find((e: SharedEntity) => e.id === task.id).definitionRevision,
+		home.store.sharedDefinitionRevision(task.id),
+	);
+	const canonical = await get(homeBase, `missions/${mission.id}/versions`);
+	assert.equal(canonical.source, "canonical");
+	assert.deepEqual(canonical.entities, (await get(targetBase, `missions/${mission.id}/versions`)).entities);
+	const pending = (await target.missions.call(grant.session.sessionId, "brief", {
+		markdown: "Offline draft",
+		expectedRevision: 0,
+	})) as { proposalId: string };
+	await target.sharing.memoryCall(grant.session.sessionId, "note", { text: "Pending shared note" });
+	const view = await get(targetBase, `missions/${mission.id}`);
+	assert.ok(
+		view.proposals.some((p: SharedMissionProposal) => p.proposalId === pending.proposalId && p.state === "pending"),
+	);
+	assert.notEqual(view.snapshot.detail.brief?.markdown, "Offline draft");
+	const memory = await get(targetBase, "memory/wake?lines=1");
+	assert.equal(memory.value.nodes.length, 1);
+	assert.ok(memory.proposals.some((p: { mutation: { text: string } }) => p.mutation.text === "Pending shared note"));
+	assert.doesNotMatch(JSON.stringify(memory), /Unrelated execution workspace/);
+	const tree = await get(targetBase, "memory/tree?depth=2");
+	assert.equal(tree.value.count, 2);
+	assert.equal(tree.state.sequence, 2);
+	assert.equal(tree.value.nodes[0].children.length, 2);
+	assert.match(JSON.stringify(tree), /Home memory zero/);
+	assert.doesNotMatch(JSON.stringify(tree), /Unrelated execution workspace/);
+	assert.equal((await get(homeBase, "memory/wake?lines=1")).value.nodes.length, 1);
+	assert.equal((await get(homeBase, "memory/tree?depth=2")).value.count, 2);
+	assert.equal((await get(targetBase, "memory/tree?depth=1&reveal=0")).value.nodes[0].children[0].lo, 0);
+	assert.equal((await get(targetBase, "memory/zoom?lo=0&hi=1")).value.length, 2);
+	assert.equal((await get(targetBase, "memory/recall?regex=Home&lines=1")).value.entries.length, 1);
+	await target.sharing.memoryCall(grant.session.sessionId, "recall", { regex: "Home memory zero" });
+	await target.sharing.memoryCall(grant.session.sessionId, "note", {
+		text: "Offline correction proposal",
+		replaces: [0],
+	});
+	await home.memory.note(home.project.id, "Concurrent canonical correction", "author", [0]);
+	home.store.writeBrief(mission.id, "Concurrent canonical brief", 0);
+	await reconcile(home, target, binding);
+	for (const base of [homeBase, targetBase]) {
+		const read = await get(base, "memory/wake");
+		assert.ok(
+			read.proposals.some(
+				(p: { state: string; mutation: { text: string } }) =>
+					p.state === "conflict" && p.mutation.text === "Offline correction proposal",
+			),
+		);
+		assert.ok(read.state.conflictCount > 0);
+	}
+	assert.equal(
+		(await fetch(`${targetBase}/missions/${mission.id}/versions?after=1&sequence=${before.sequence}`)).status,
+		409,
+	);
+	const conflicts = await get(homeBase, "conflicts");
+	assert.ok(
+		conflicts.some((p: SharedMissionProposal) => p.proposalId === pending.proposalId && p.state === "conflict"),
+	);
+	assert.ok(
+		(await get(targetBase, `missions/${mission.id}`)).proposals.some(
+			(p: SharedMissionProposal) => p.proposalId === pending.proposalId && p.state === "conflict",
+		),
+	);
+	for (const path of [
+		"memory/wake?projectId=other",
+		"memory/recall?regex=Home&sessionId=foreign",
+		"memory/tree?path=/tmp",
+		"memory/wake?lines=1&lines=2",
+		"memory/tree?reveal=oops",
+		"memory/wake?lines=-1",
+	]) {
+		assert.equal((await fetch(`${targetBase}/${path}`)).status, 400, path);
+	}
+	assert.equal((await fetch(`${targetBase}/missions/foreign`)).status, 404);
+	assert.equal((await fetch(`${targetBase}/missions/${mission.id}/versions?after=1`)).status, 409);
+	assert.equal(
+		(
+			await fetch(`${targetBase}/memory/wake`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ projectId: target.project.id }),
+			})
+		).status,
+		404,
+	);
+	await target.sharing.enroll({ ...binding, state: "revoked" });
+	for (const path of ["memory/wake", "memory/tree", `missions/${mission.id}`, `missions/${mission.id}/versions`])
+		assert.equal((await fetch(`${targetBase}/${path}`)).status, 409);
+	await reconcile(home, target, binding);
+	assert.equal((await home.sharing.exchange(binding.bindingId, target.host)).operations.length, 0);
+	assert.equal((await target.sharing.exchange(binding.bindingId, home.host)).operations.length, 0);
+});
+
+test("shared read routes fail closed for incomplete, disabled and unknown enrollment", async (t) => {
+	const { home, target, mission, binding } = await enrolled(t);
+	const incomplete = { ...binding, bindingId: "staging" };
+	await target.sharing.enroll(incomplete);
+	const base = await readEndpoint(target),
+		scope = `${base}/${incomplete.bindingId}`;
+	for (const path of ["memory/wake", "memory/tree", `missions/${mission.id}`, `missions/${mission.id}/versions`])
+		assert.equal((await fetch(`${scope}/${path}`)).status, 409, path);
+	assert.equal((await fetch(`${base}/unknown/memory/wake`)).status, 409);
+	const disabled = { ...binding, bindingId: "no-memory", shareMemory: false };
+	await target.sharing.enroll(disabled);
+	for (const path of ["memory/wake", "memory/tree"])
+		assert.equal((await fetch(`${base}/${disabled.bindingId}/${path}`)).status, 409);
+	await home.memory.note(home.project.id, `api_key: ${"A".repeat(24)}`, "test");
+	const source = await readEndpoint(home),
+		response = await fetch(`${source}/${binding.bindingId}/memory/wake`);
+	assert.equal(response.status, 409);
+	assert.doesNotMatch(await response.text(), /A{24}/);
 });

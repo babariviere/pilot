@@ -1,5 +1,5 @@
 import type { MissionDetail, SpawnRequest } from "./index.ts";
-import type { MemoryEntry, MemoryNode, MemoryRecall, MemoryView } from "./memory.ts";
+import type { MemoryEntry, MemoryNode, MemoryRecall, MemoryTree, MemoryView } from "./memory.ts";
 import type { DurableOperation, OperationHost, OperationReceipt } from "./operations.ts";
 
 /** All durable identities include storage history, independently of transport generation. */
@@ -106,6 +106,8 @@ export interface SharedEntity {
 	id: string;
 	kind: "mission" | "brief" | "task" | "decision" | "comment" | "resource" | "artifact" | "phase";
 	revision: number;
+	/** Task user-intent revision captured with this value, not execution progress. Missing on legacy replicas. */
+	definitionRevision?: number;
 	deleted: boolean;
 	value?: unknown;
 }
@@ -120,6 +122,39 @@ export interface SharedMissionSnapshot {
 	/** Allowlisted structured state only. No transcript, executable config or integration database. */
 	detail: MissionDetail;
 	entities: SharedEntity[];
+}
+export interface SharedEntityVersion {
+	id: string;
+	kind: SharedEntity["kind"];
+	revision: number;
+	definitionRevision?: number;
+	deleted: boolean;
+}
+export interface SharedMissionVersions {
+	bindingId: string;
+	generation: number;
+	missionId: string;
+	authority: OperationHost;
+	source: "canonical" | "replica";
+	sequence: number;
+	complete: boolean;
+	entities: SharedEntityVersion[];
+	/** Offset for the next page. Supply sequence on subsequent requests to reject mixed versions. */
+	next?: number;
+}
+export interface SharedMissionRead {
+	bindingId: string;
+	generation: number;
+	authority: OperationHost;
+	source: "canonical" | "replica";
+	snapshot: SharedMissionSnapshot;
+	/** Provisional/reviewed contributions remain separate from committed detail. */
+	proposals: SharedMissionProposal[];
+}
+export interface SharedMemoryTreeRead {
+	state: SharedMemoryReplicaState;
+	value: MemoryTree;
+	proposals: SharedMemoryProposal[];
 }
 export interface SharedMissionProposal {
 	proposalId: string;

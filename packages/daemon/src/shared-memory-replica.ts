@@ -8,9 +8,9 @@ import type {
 	MemoryNode,
 	MemoryRecall,
 	MemoryView,
+	SharedMemoryChangePage,
 	SharedMemoryCheckpointManifest,
 	SharedMemoryCheckpointPage,
-	SharedMemoryChangePage,
 	SharedMemoryCommitOutcome,
 	SharedMemoryMutation,
 	SharedMemoryProposal,
@@ -18,13 +18,13 @@ import type {
 	SharedMemoryReplicaState,
 } from "@pilot/protocol";
 import {
+	checkMemoryExport,
 	checkMutation,
 	digestMemory,
 	MEMORY_PAGE_BYTES,
 	MEMORY_PAGE_LIMIT,
 	memoryId,
 	rawMemoryEntry,
-	checkMemoryExport,
 } from "./shared-memory-common.ts";
 
 type Meta = { sequence: number; complete: number; manifest: string | null; overlayRevision: number };
@@ -460,6 +460,101 @@ export class SharedMemoryReplica {
 			});
 		}
 		return { state, value, proposals: this.visibleProposals() };
+	}
+	/** Raw browsing only. No model summaries are invented or copied from unrelated local memory. */
+	tree(args: {
+		lo?: number;
+		hi?: number;
+		depth?: number;
+		reveal?: number[];
+	}): import("@pilot/protocol").SharedMemoryTreeRead {
+		const state = this.state(),
+			{ lo, hi, depth = 1, reveal = [] } = args;
+		if (!state.complete) throw new Error("Shared memory replica is incomplete");
+		if (!Number.isInteger(depth) || depth < 1 || depth > 64) throw new Error("depth must be between 1 and 64");
+		if (
+			!Array.isArray(reveal) ||
+			reveal.length > 64 ||
+			reveal.some((i) => !Number.isSafeInteger(i) || i < 0 || i >= state.sequence)
+		)
+			throw new Error("reveal must list at most 64 existing indices");
+		const children = (a: number, b: number): [number, number][] =>
+			b - a > 16
+				? [
+						[a + (b - a) / 2, b],
+						[a, a + (b - a) / 2],
+					]
+				: Array.from({ length: b - a }, (_, i) => [b - 1 - i, b - i]);
+		let base: [number, number][] = [];
+		if (lo === undefined && hi === undefined) {
+			let a = 0;
+			for (let size = 2 ** Math.floor(Math.log2(Math.max(1, state.sequence))); size >= 1; size /= 2)
+				if (state.sequence - a >= size) {
+					base.unshift([a, a + size]);
+					a += size;
+				}
+		} else {
+			const size = Number(hi) - Number(lo) + 1;
+			if (
+				!Number.isSafeInteger(lo) ||
+				!Number.isSafeInteger(hi) ||
+				lo! < 0 ||
+				hi! >= state.sequence ||
+				size < 2 ||
+				!Number.isInteger(Math.log2(size)) ||
+				lo! % size
+			)
+				throw new Error("Expected an existing aligned power-of-two block");
+			base = children(lo!, hi! + 1);
+		}
+		const nodes: import("@pilot/protocol").MemoryTreeNode[] = [],
+			queue: { node: import("@pilot/protocol").MemoryTreeNode; a: number; b: number; level: number }[] = [];
+		let used = 0,
+			bytes = 0,
+			truncated = false;
+		const add = (
+			ranges: [number, number][],
+			level: number,
+		): import("@pilot/protocol").MemoryTreeNode[] | undefined => {
+			const kept = ranges.filter(([a, b]) => !reveal.length || reveal.some((i) => i >= a && i < b));
+			if (used + kept.length > 1024) {
+				truncated = true;
+				return;
+			}
+			const out = kept.map(([a, b]) => {
+				if (b - a > 1) return { lo: a, hi: b - 1, text: `[Raw shared notes #${a}-${b - 1}; expand to read]` };
+				const entry = JSON.parse(
+					String(this.db.prepare("SELECT value FROM entries WHERE idx=?").get(a)!.value),
+				) as MemoryEntry;
+				const replaced = this.db.prepare("SELECT byIndex FROM replacements WHERE id=?").get(entry.id);
+				return {
+					lo: a,
+					hi: a,
+					text: entry.text,
+					entry: replaced ? { ...entry, replacedBy: Number(replaced.byIndex) } : entry,
+					...(replaced ? { replaced: true } : {}),
+				};
+			});
+			const size = Buffer.byteLength(JSON.stringify(out));
+			if (bytes + size > 256 * 1024) {
+				truncated = true;
+				return;
+			}
+			used += kept.length;
+			bytes += size;
+			out.forEach((node, i) => {
+				const [a, b] = kept[i]!;
+				if (b - a > 1 && (reveal.length || level + 1 < depth)) queue.push({ node, a, b, level });
+			});
+			return out;
+		};
+		nodes.push(...(add(base, 0) ?? []));
+		for (let i = 0; i < queue.length; i++) {
+			const { node, a, b, level } = queue[i]!;
+			const next = add(children(a, b), level + 1);
+			if (next) node.children = next;
+		}
+		return { state, value: { count: state.sequence, nodes, truncated }, proposals: this.visibleProposals() };
 	}
 	visibleProposals(): SharedMemoryProposal[] {
 		return this.db

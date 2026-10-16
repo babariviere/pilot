@@ -79,3 +79,36 @@ test("file-backed mission changeset apply preserves exact shared sequence/revisi
 		await rm(home, { recursive: true, force: true });
 	}
 });
+
+test("task version metadata captures definition intent with each historical value, including same-status intent", () => {
+	const store = new MissionStore(":memory:");
+	try {
+		const mission = store.create({ projectId: "p", title: "Versions", tasks: [{ title: "Task" }] });
+		store.shareMission(mission.id);
+		const task = store.resolveTask(mission.id, "1"),
+			before = store.sharedHead();
+		assert.equal(store.sharedSnapshot(mission.id).entities.find((e) => e.id === task.id)?.definitionRevision, 1);
+		store.updateTask(mission.id, task.id, { body: "Two" });
+		store.updateTask(mission.id, task.id, { body: "Three" });
+		const edits = store.sharedChanges(before).filter((c) => c.entity.id === task.id);
+		assert.deepEqual(
+			edits.map((c) => [c.entity.definitionRevision, (c.entity.value as { body?: string }).body]),
+			[
+				[2, "Two"],
+				[3, "Three"],
+			],
+		);
+		store.updateTask(mission.id, task.id, { status: task.status });
+		assert.equal(store.sharedDefinitionRevision(task.id), 4);
+		assert.equal(
+			store
+				.sharedChanges(before)
+				.filter((c) => c.entity.id === task.id)
+				.at(-1)?.entity.definitionRevision,
+			4,
+		);
+		assert.equal(store.sharedVersions(mission.id, 0, 128).find((e) => e.id === task.id)?.definitionRevision, 4);
+	} finally {
+		store.close();
+	}
+});
