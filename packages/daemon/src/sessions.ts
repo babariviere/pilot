@@ -57,6 +57,7 @@ import { chatTitleContext } from "./chat-title.ts";
 import { ColdViewReader } from "./cold-view-reader.ts";
 import { coordinatorTrust } from "./coordinator-trust.ts";
 import type { CredentialBroker } from "./credential-broker.ts";
+import { answerDatabaseRequest, DatabaseService, type DatabaseState } from "./databases.ts";
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
 import { githubRepository, linkedPullRequest, type PullRequestProblems } from "./github.ts";
@@ -221,6 +222,8 @@ export interface SessionWorker {
 }
 
 export interface SessionManagerOptions {
+	/** Agent database access. Defaults to the agent directory's config, except with injected test workers. */
+	databases?: DatabaseService;
 	credentials?: CredentialBroker;
 	/** Delay after an automatic PR follow-up finishes. Defaults to five minutes. */
 	prFollowUpCooldownMs?: number;
@@ -328,6 +331,8 @@ interface SessionMeta extends OutcomeMeta {
 	unpublishedWork?: boolean;
 	model?: string;
 	thinking?: string;
+	/** Database grants for this chat, and a pending request awaiting the user's reply. */
+	databases?: DatabaseState;
 	/** Cleared only after initialization and durable input admission. */
 	initializing?: boolean;
 	/** Reopen even an idle parent after an update, so its pending child work recovers too. */
@@ -954,6 +959,7 @@ export class SessionManager {
 	private readonly longJobTimers = new LongJobTimers();
 	/** Live-only: chats that reached for an MCP server needing the user. Set by setMcpStatus. */
 	private mcpAttention?: McpChatAttention;
+	private readonly databases?: DatabaseService;
 	private readonly mainHeads = new Map<string, string>();
 	private readonly mainRepositories = new Map<string, string>();
 	private readonly mainListeners = new Set<(event: MainMoved) => unknown>();
@@ -1045,6 +1051,8 @@ export class SessionManager {
 		this.projects = projects;
 		this.agentDir = agentDir;
 		this.factories = factories;
+		this.databases =
+			options.databases ?? (factories.worker ? undefined : new DatabaseService(agentDir ?? getAgentDir()));
 		this.modelCatalog = options.models ?? new ModelCatalog(agentDir);
 		this.runner = pullRequests.runner ?? run;
 		this.pullRequestMerger = new PullRequestMerger(this.runner);
@@ -3683,6 +3691,11 @@ export class SessionManager {
 	): Promise<void> {
 		const end = this.updateGate.begin();
 		try {
+			// Only the user's own reply answers a database access question: the exact grant label grants it.
+			const meta = this.metas.get(id);
+			const databases =
+				meta && typeof message === "string" ? answerDatabaseRequest(meta.databases, message) : undefined;
+			if (meta && databases) meta.databases = databases;
 			await this.sendAdmitted(id, message, mode, requestId);
 		} finally {
 			end();
@@ -5011,6 +5024,8 @@ export class SessionManager {
 				await this.unparked(id);
 			}
 			await this.syncSubscriptionPolicy(this.require(id));
+			// Edits to the database config apply to the next kernel without restarting pilotd.
+			await this.databases?.refresh();
 			return this.openWorker(id);
 		});
 	}
@@ -5122,6 +5137,7 @@ export class SessionManager {
 					...(meta.workspaceReset ? { workspaceReset: meta.workspaceReset } : {}),
 				},
 				...(mission ? { mission } : {}),
+				...(!meta.ask && this.databases?.configured(this.projectPath(meta)) ? { databases: true } : {}),
 			},
 			(packet) => {
 				if (published) this.onPacket(meta, published, packet);
@@ -5373,6 +5389,27 @@ export class SessionManager {
 			void call.then(
 				(result) => reply({ result }),
 				(error: unknown) => reply({ error: formatFailure(error, "Tool memory") }),
+			);
+			return;
+		}
+		if (packet.type === "database.call") {
+			const reply = (result: { result?: unknown; error?: string }) => {
+				if (this.workers.get(meta.id) === worker)
+					worker.send({ type: "database.result", callId: packet.callId, ...(result as { result?: never }) });
+			};
+			const call = Promise.resolve().then(() => {
+				if (!this.databases || meta.ask) throw new Error("Database access is unavailable in this chat");
+				return this.databases.call(meta.id, this.projectPath(meta), packet.action, packet.args, {
+					read: () => meta.databases,
+					write: async (state) => {
+						meta.databases = state;
+						await this.save(meta);
+					},
+				});
+			});
+			void call.then(
+				(result) => reply({ result }),
+				(error: unknown) => reply({ error: formatFailure(error, "Tool db") }),
 			);
 			return;
 		}
@@ -6586,6 +6623,11 @@ export class SessionManager {
 
 	private dir(id: string): string {
 		return join(this.sessionsDir, id);
+	}
+
+	/** The project's own folder, which keys per-project settings such as database access. */
+	private projectPath(meta: SessionMeta): string | undefined {
+		return meta.projectId ? this.projects.get(meta.projectId)?.path : undefined;
 	}
 
 	private save(

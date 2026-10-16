@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
+import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
 	fauxAssistantMessage,
@@ -13,11 +14,16 @@ import {
 } from "@earendil-works/pi-ai";
 import { createCodemodeExtension, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { SessionCompletion } from "@pilot/protocol";
+import type { DatabaseCall } from "./database-tool.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import { QUESTION_ENTRY } from "./question-tool.ts";
 import { KernelSession } from "./session.ts";
 
-async function open(t: TestContext, name: string) {
+async function open(
+	t: TestContext,
+	name: string,
+	databases: { databases?: boolean; callDatabase?: DatabaseCall } = {},
+) {
 	const root = await mkdtemp(join(tmpdir(), "pilot-question-"));
 	const cleanup: Array<() => Promise<void>> = [];
 	t.after(async () => {
@@ -74,8 +80,14 @@ async function open(t: TestContext, name: string) {
 	);
 	const completions: SessionCompletion[] = [];
 	const session = await KernelSession.open(
-		{ sessionId: name, cwd: root, storageDir: join(root, "storage") },
 		{
+			sessionId: name,
+			cwd: root,
+			storageDir: join(root, "storage"),
+			...(databases.databases ? { databases: true } : {}),
+		},
+		{
+			...(databases.callDatabase ? { callDatabase: databases.callDatabase } : {}),
 			onWorking: (working, completion) => {
 				if (!working && completion && completion.outcomeAt !== completions.at(-1)?.outcomeAt)
 					completions.push(completion);
@@ -159,4 +171,66 @@ test("ask_user through codemode still records the question", { timeout: 20_000 }
 		{ question: "Which checks?", options: [{ label: "Typecheck" }, { label: "Tests" }], multiSelect: true },
 	]);
 	assert.equal((await settled(completions, 1))?.outcome, "question");
+});
++test("db through codemode queries pilotd, and a pending grant asks the user", { timeout: 20_000 }, async (t) => {
+	const calls: Array<[string, unknown]> = [];
+	const { session, faux, completions } = await open(t, "database-question", {
+		databases: true,
+		callDatabase: async (action, args): Promise<JsonValue> => {
+			calls.push([action, args]);
+			if (action === "query")
+				return { env: "local", mode: "read", columns: ["n"], rows: [{ n: 1 }], rowCount: 1, truncated: false };
+			return {
+				status: "pending",
+				env: "prod",
+				mode: "read",
+				question: {
+					question: "Allow read access to the prod database?",
+					options: [{ label: "Allow read access to prod" }, { label: "Deny" }],
+				},
+			};
+		},
+	});
+	let seen = "";
+	faux.setResponses([
+		fauxAssistantMessage(
+			fauxToolCall("codemode", {
+				code: 'const r = await tools.db({action:"query",env:"local",sql:"select 1 as n"}); text(JSON.stringify(r.rows)); await tools.db({action:"access",env:"prod"});',
+			}),
+			{ stopReason: "toolUse" },
+		),
+		(context) => {
+			seen = JSON.stringify(context.messages.at(-1));
+			return fauxAssistantMessage("Waiting for access.");
+		},
+	]);
+	await session.submit("ask", "Count users", "followUp");
+	await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
+	assert.deepEqual(calls, [
+		["query", { env: "local", sql: "select 1 as n" }],
+		["access", { env: "prod" }],
+	]);
+	assert.match(seen, /n\\":1/);
+	assert.deepEqual(await questions(session), [
+		{
+			question: "Allow read access to the prod database?",
+			options: [{ label: "Allow read access to prod" }, { label: "Deny" }],
+		},
+	]);
+	assert.equal((await settled(completions, 1))?.outcome, "question");
+});
+
+test("without a database config, chats have no db tool", { timeout: 20_000 }, async (t) => {
+	const { session, faux } = await open(t, "database-absent", { callDatabase: async () => assert.fail("no call") });
+	let seen = "";
+	faux.setResponses([
+		fauxAssistantMessage(fauxToolCall("codemode", { code: "text(typeof tools.db);" }), { stopReason: "toolUse" }),
+		(context) => {
+			seen = JSON.stringify(context.messages.at(-1));
+			return fauxAssistantMessage("Done.");
+		},
+	]);
+	await session.submit("ask", "Hi", "followUp");
+	await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
+	assert.match(seen, /tools\.db does not exist/);
 });

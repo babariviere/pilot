@@ -54,6 +54,7 @@ import {
 import { reconcileCompletion } from "./attention.ts";
 import { autoCompactionThreshold, shouldAutoCompact } from "./auto-compaction.ts";
 import { chatEvents, compactionEvents } from "./chat-events.ts";
+import { createDatabaseTool, type DatabaseCall } from "./database-tool.ts";
 import { detectGhStack } from "./gh-stack.ts";
 import { appendGitHubAction, GitHubActionsDoc, githubActions } from "./github-actions.ts";
 import { admitWithHeld, discardHeld, HeldInputsDoc, holdOnStop, type SystemMessageStateEvent } from "./held-inputs.ts";
@@ -71,7 +72,7 @@ import type { WorkspaceContext } from "./policy.ts";
 import { type MissionContext, withPilotPolicy } from "./policy.ts";
 import type { KernelSpec, KernelSubagent } from "./protocol.ts";
 import { PullRequestsDoc, pullRequestProvenance } from "./pull-request-provenance.ts";
-import { createQuestionTool, QUESTION_ENTRY } from "./question-tool.ts";
+import { createQuestionTool, type PublishQuestion, QUESTION_ENTRY } from "./question-tool.ts";
 import {
 	editQueuedMessage,
 	queueUpdateForDisplay,
@@ -147,6 +148,8 @@ export interface KernelSessionHooks {
 	/** Executes a `mission` tool call in pilotd. Without it, the tool is not registered. */
 	callMission?: MissionCall;
 	callMemory?: MemoryCall;
+	/** Executes a `db` tool call in pilotd. Registered only when the spec reports a database config. */
+	callDatabase?: DatabaseCall;
 	/** Read-only artifact references, authorized by pilotd on every call. */
 	readArtifactReference?: ArtifactToolOptions["readReference"];
 	prepareWorkspace?(): Promise<WorkspaceContext | undefined>;
@@ -259,7 +262,7 @@ export class KernelSession {
 			: undefined;
 		const missionTools = callMission ? [createMissionTool(callMission, mission.current?.coordinator === "self")] : [];
 		// Pending questions are transcript entries, so a restart or a codemode call shows them too.
-		const questionTool = createQuestionTool(async (callId, question) => {
+		const publishQuestion: PublishQuestion = async (callId, question) => {
 			if (!artifactConversation) throw new Error("Questions require a bound conversation");
 			await artifactConversation.submit(
 				{
@@ -269,7 +272,8 @@ export class KernelSession {
 				},
 				context,
 			);
-		});
+		};
+		const questionTool = createQuestionTool(publishQuestion);
 		const callTodo: TodoCall = async (args, actor) => {
 			validateTodoArgs(args, actor);
 			if (!artifactConversation || !harness) throw new Error("Todos require a bound chat");
@@ -413,6 +417,9 @@ export class KernelSession {
 									...createArtifactTools(artifactOptions),
 									...(spec.projectId && hooks.callMemory
 										? createMemoryTools(hooks.callMemory, spec.sessionId)
+										: []),
+									...(spec.databases && hooks.callDatabase
+										? [createDatabaseTool(hooks.callDatabase, publishQuestion)]
 										: []),
 								],
 							},
