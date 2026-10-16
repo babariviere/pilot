@@ -1180,6 +1180,22 @@ export class SessionManager {
 	controlOrganizeAllowed(): boolean {
 		return !this.controlService().handlingNotice;
 	}
+	/** The role service joins synchronously after this guard, so input cannot interleave. */
+	attachIdleToMission(id: string, join: () => SessionSummary): SessionSummary {
+		const meta = this.require(id);
+		this.assertNotContinued(meta);
+		if (
+			this.closing ||
+			meta.archivedAt !== undefined ||
+			meta.failure ||
+			this.changingModels.has(id) ||
+			this.archiveTransitions.has(id) ||
+			this.backgroundWorking(meta)
+		)
+			throw new Conflict("Only an idle, active chat can join a mission");
+		this.assertModelIdle(meta);
+		return join();
+	}
 	private readonly agentDir?: string;
 	private readonly factories: SessionFactories;
 

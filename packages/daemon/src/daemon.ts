@@ -174,6 +174,13 @@ sessions.setPilot(
 				return detail.mission;
 			},
 			startCoordinator: (id, request) => missionService.startCoordinator(id, request),
+			attachMission: async (sessionId, missionId, taskId) => {
+				const chat = sessions.attachIdleToMission(sessionId, () =>
+					missionService.join(sessionId, { missionId, ...(taskId ? { taskId } : {}) }),
+				);
+				await missionStore.durable();
+				return chat;
+			},
 			audit: () => sessions.controlAudit(),
 			startProject: async (request) => {
 				const project = projects.require(request.projectId!);

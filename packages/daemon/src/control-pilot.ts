@@ -26,6 +26,7 @@ export interface ControlPilotOptions {
 		organizeAllowed?: () => boolean;
 		createMission?: (request: CreateMissionRequest) => Promise<Mission>;
 		startCoordinator?: (missionId: string, request: StartMissionCoordinatorRequest) => Promise<SessionSummary>;
+		attachMission?: (sessionId: string, missionId: string, taskId?: string) => Promise<SessionSummary>;
 	};
 }
 const short = (text: string | undefined, n = 160) => text?.replace(/[\r\n]/g, " ").slice(0, n);
@@ -46,6 +47,24 @@ export class ControlPilot {
 		if (action === "status") return this.status(args);
 		if (action === "read") return this.read(args);
 		if (action === "mission_create") return this.createMission(caller, args, operationId);
+		if (action === "mission_attach") {
+			this.assertOrganize(args, true);
+			const mutations = this.options.mutations!;
+			if (!mutations.attachMission) throw new Error("Mission attachment unavailable");
+			const sessionId = string(args, "sessionId", true)!,
+				missionId = string(args, "missionId", true)!,
+				taskId = string(args, "taskId");
+			return mutations.audit().perform(caller, action, args, operationId, async () => {
+				this.assertOrganize(args, true);
+				const chat = await mutations.attachMission!(sessionId, missionId, taskId);
+				return {
+					sessionId: chat.id,
+					missionId: chat.missionId,
+					chatUrl: `pilot://chat/${chat.id}`,
+					...(taskId ? { taskId } : {}),
+				};
+			});
+		}
 		if (action === "start" || action === "send") {
 			if (!this.options.mutations) throw new Error("Control actions unavailable");
 			return this.options.mutations
