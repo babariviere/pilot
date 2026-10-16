@@ -76,11 +76,15 @@ func addDevboxPresentsSetupSheetAfterCancelAndReopen() async throws {
 }
 
 @MainActor private func devboxSettingsButton(_ title: String, in content: NSView) -> NSButton? {
-    devboxSettingsControl(in: content) { (button: NSButton) in button.title == title }
+    devboxSettingsControl(in: content) { (button: NSButton) in
+        [button.title, button.accessibilityLabel(), button.accessibilityTitle()].contains(title)
+    }
 }
 
 @MainActor private func devboxSettingsViewTree(_ view: NSView, depth: Int = 0) -> String {
-    let title = (view as? NSButton)?.title ?? (view as? NSTextField)?.placeholderString ?? ""
+    let title = (view as? NSButton).map {
+        "title=\($0.title), label=\($0.accessibilityLabel() ?? "nil"), axTitle=\($0.accessibilityTitle() ?? "nil"), id=\($0.accessibilityIdentifier() ?? "nil"), key=\($0.keyEquivalent.debugDescription)"
+    } ?? (view as? NSTextField)?.placeholderString ?? ""
     return String(repeating: " ", count: depth) + "\(type(of: view)) \(view.frame) \(title)\n"
         + view.subviews.map { devboxSettingsViewTree($0, depth: depth + 1) }.joined()
 }
