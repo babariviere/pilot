@@ -330,7 +330,9 @@ const MISSION_SELECT = `SELECT missions.*,
 		(SELECT COUNT(*) FROM comments WHERE mission_id = missions.id AND resolved_at IS NULL
 			AND target_session_id IS NULL AND author_session_id IS NOT NULL)
 	ELSE 0 END +
-	(SELECT COUNT(*) FROM decision_proposals WHERE mission_id = missions.id AND status = 'pending') AS needs_you_count,
+	(SELECT COUNT(*) FROM decision_proposals WHERE mission_id = missions.id AND status = 'pending') +
+	(SELECT COUNT(*) FROM resources WHERE mission_id = missions.id AND linear_role = 'managed'
+		AND json_extract(linear_sync, '$.status.state') IN ('paused', 'error')) AS needs_you_count,
 	(SELECT COUNT(*) FROM tasks WHERE mission_id = missions.id AND status = 'done') AS tasks_done,
 	(SELECT COUNT(*) FROM tasks WHERE mission_id = missions.id AND status != 'dropped') AS tasks_total,
 	(SELECT json_object('id', p.id, 'name', p.name,
@@ -346,7 +348,12 @@ const MISSION_SELECT = `SELECT missions.*,
 				AND target_session_id IS NULL AND author_session_id IS NOT NULL ORDER BY created_at, id LIMIT 1)
 		END,
 		(SELECT substr('Decision proposal: ' || reason, 1, 201) FROM decision_proposals
-			WHERE mission_id = missions.id AND status = 'pending' ORDER BY created_at, id LIMIT 1)
+			WHERE mission_id = missions.id AND status = 'pending' ORDER BY created_at, id LIMIT 1),
+		(SELECT substr('Linear ' || COALESCE(external_id, 'ticket') || ': ' ||
+			COALESCE(json_extract(linear_sync, '$.status.error'), json_extract(linear_sync, '$.status.reason'),
+				'Review synchronization'), 1, 201) FROM resources
+			WHERE mission_id = missions.id AND linear_role = 'managed'
+			AND json_extract(linear_sync, '$.status.state') IN ('paused', 'error') ORDER BY created_at, id LIMIT 1)
 	) AS needs_you_reason
 	FROM missions`;
 
@@ -668,6 +675,8 @@ export class MissionStore {
 			CREATE INDEX IF NOT EXISTS resources_by_managed_linear ON resources(id) WHERE linear_role = 'managed';
 			CREATE UNIQUE INDEX IF NOT EXISTS resources_by_linear_uuid ON resources(json_extract(linear_sync,'$.status.issueId')) WHERE linear_role='managed';
 			CREATE INDEX IF NOT EXISTS resources_by_contributing_task ON resources(task_id,linear_key,mission_id) WHERE linear_role='contribution';
+			CREATE INDEX IF NOT EXISTS linear_sync_attention_order ON resources(mission_id,created_at,id)
+				WHERE linear_role='managed' AND json_extract(linear_sync, '$.status.state') IN ('paused', 'error');
 			CREATE TRIGGER IF NOT EXISTS shared_linear_sync_task AFTER UPDATE OF status ON tasks
 			WHEN OLD.status <> NEW.status BEGIN
 				INSERT OR IGNORE INTO linear_sync_dirty(resource_id) SELECT m.id FROM resources c JOIN resources m

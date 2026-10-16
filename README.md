@@ -407,6 +407,7 @@ tasks still needed by another active managed ticket; Done tasks and reference li
 Manual Linear changes, reopened tasks and edits to an observed contribution set pause synchronization
 for review. Managed resources expose `linearSync` status and actionable errors; the user can pause or
 resume with `POST /api/missions/:id/resources/:resourceId/linear-sync` and `{action:"pause"|"resume"}`.
+Paused or failed managed tickets count in the mission's Needs you summary, with a short reason.
 Resume accepts the reviewed task scope and fresh remote baseline, and retries failed synchronization.
 Writes use verified immutable issue IDs and actual-team mappings, durable fenced intents, bounded
 retries and fresh reads before updates. Linear has no conditional status update, so a simultaneous
