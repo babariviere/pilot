@@ -1049,14 +1049,15 @@ struct MissionTaskStartButton: View {
     }
 }
 
-/// Shared by the inline picker and the row's context menu so their native menu icons stay identical.
+/// Shared by the inline picker and the row's context menu. Items are text only: the row already shows the
+/// status icon, and repeating it in the menu was more distracting than helpful.
 struct MissionTaskStatusMenuItems: View {
     let selected: MissionTaskStatus
     let setStatus: (MissionTaskStatus) -> Void
 
     var body: some View {
         ForEach(MissionTaskStatus.allCases, id: \.self) { status in
-            Button { setStatus(status) } label: { Label(status.label, menuIcon: status.icon) }
+            Button(status.label) { setStatus(status) }
                 .disabled(status == selected)
         }
     }
