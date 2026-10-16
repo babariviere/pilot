@@ -43,7 +43,20 @@ struct CommandPaletteCatalog {
     }
 
     func entries() -> [CommandPaletteEntry] {
-        chats() + remoteResources() + tasks() + missions() + projects() + pages() + actions() + focusCommands() + tracked()
+        chats() + remoteResources() + tasks() + missions() + projects() + pages() + actions() + composerEntries()
+            + focusCommands() + tracked()
+    }
+
+    /// The on-screen composer's controls (model, thinking, mode, project, branch, workspace, send later), found by
+    /// searching. They run the composer's own handlers and never send the draft.
+    private func composerEntries() -> [CommandPaletteEntry] {
+        model.keyboard.composerCommands.map { command in
+            CommandPaletteEntry(
+                item: CommandPaletteItem(id: "composer:\(command.id)", kind: .action, title: command.title,
+                                         keywords: command.keywords + ["composer"]),
+                icon: command.icon, suffix: command.current ? "Current" : nil, detail: command.detail,
+                perform: command.perform)
+        }
     }
 
     /// Named alternatives to Ctrl-Tab, for regions on screen when the palette opened.

@@ -49,6 +49,8 @@ enum KeyboardShortcuts {
             Entry(title: "Toggle terminal", keys: "⌘J"),
             Entry(title: "Open latest pull request", keys: "⇧⌘P"),
             Entry(title: "Confirm merge of latest open pull request", keys: "⇧⌘M"),
+            Entry(title: "Stop the open chat's agent", keys: "⌘."),
+            Entry(title: "Choose model, thinking, mode, project, branch or workspace", keys: "⌘K, then type"),
         ]),
         Group(title: "Composer", entries: [
             Entry(title: "Send, or steer a running agent", keys: "↩"),

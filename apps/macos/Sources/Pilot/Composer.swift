@@ -320,6 +320,7 @@ struct Composer: View {
             state.composerFocus = UUID()
             return true
         }
+        .composerCommands(revision: commandsRevision) { composerCommandList() }
         .onDisappear { state.dismissQueueRemovalError() }
         .task(id: session?.cwd) {
             if let session { await modelPicker.loadModels(cwd: session.cwd) }
@@ -342,7 +343,7 @@ struct Composer: View {
             ComposerDraftEditor(
                 state: state.draftState, working: working, focusToken: state.composerFocus,
                 onNavigateQueue: { state.navigateQueue($0, messages: remainingQueuedMessages) },
-                onCancel: cancelQueueEditAction,
+                onCancel: cancelQueueEditAction ?? { KeyboardFocus.leaveComposer() },
                 onPasteImages: { state.attachments.paste(from: $0) },
                 completionDirectory: completionDirectory,
                 slashCommands: slashCommands,
@@ -389,6 +390,37 @@ struct Composer: View {
 
     private func modelControls(_ session: SessionSummary) -> some View {
         ChatModelControls(session: session, working: working || !queuedMessages.isEmpty, state: modelPicker)
+    }
+
+    /// What the palette's composer commands read, so they re-register when it changes.
+    private var commandsRevision: String {
+        [session?.id, session?.model, session?.thinking, session?.state, "\(working)", "\(queuedMessages.count)",
+         "\(session?.isSubscriptionPaused == true)", "\(modelPicker.models.models.count)", "\(hostAvailable)"]
+            .map { $0 ?? "" }.joined(separator: "|")
+    }
+
+    /// The composer's controls for ⌘K, with the same availability as the controls themselves.
+    private func composerCommandList() -> [ComposerCommand] {
+        var commands: [ComposerCommand] = []
+        let busy = working || !queuedMessages.isEmpty
+        if let session, modelPicker.canPick(session: session, working: busy) {
+            commands += ComposerCommandText.modelCommands(modelPicker.models.models, current: session.model) { model in
+                modelPicker.pick(model, session: session, working: busy)
+            }
+            commands += ComposerCommandText.thinkingCommands(modelPicker.thinkingLevels(for: session),
+                                                             current: session.thinking) { level in
+                modelPicker.selectThinking(level, session: session, working: busy)
+            }
+        }
+        if let onSchedule, hostAvailable {
+            commands += ComposerCommandText.sendLater { when in
+                // Checked when chosen: the draft may have changed since the palette opened.
+                guard hostAvailable, state.canSend(changingModel: modelPicker.changing) else { return }
+                onSchedule(state.attachments.message(text: state.trimmed), when)
+            }
+        }
+        commands.append(ComposerCommandText.pasteImage { _ = state.attachments.paste(from: .general) })
+        return commands
     }
 
     private var cancelQueueEditAction: (() -> Void)? {

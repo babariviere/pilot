@@ -168,6 +168,27 @@ final class KeyboardFocus: ObservableObject {
     private var pendingFocus: (region: KeyboardRegion, at: TimeInterval)?
     /// When arrow keys last moved a native list (the sidebar), so a chat it opens leaves focus there.
     private var listKeyAt: TimeInterval?
+    /// Composers offering their controls to the palette, oldest first.
+    private(set) var composerProviders: [(id: UUID, provide: @MainActor () -> [ComposerCommand])] = []
+
+    func setComposerProvider(_ id: UUID, _ provide: @escaping @MainActor () -> [ComposerCommand]) {
+        if let index = composerProviders.firstIndex(where: { $0.id == id }) {
+            composerProviders[index].provide = provide
+        } else {
+            composerProviders.append((id, provide))
+        }
+    }
+
+    func removeComposerProvider(_ id: UUID) { composerProviders.removeAll { $0.id == id } }
+
+    /// Escape after any picker, marked text or queue edit: leave the composer for the page, keeping the draft.
+    static func leaveComposer() {
+        let focus = AppModel.shared.keyboard
+        if !focus.focus(.content) {
+            NSApp.keyWindow?.makeFirstResponder(nil)
+            focus.noteFocused(.content)
+        }
+    }
 
     /// A sequence letter must follow G within this time.
     static let sequenceWindow: TimeInterval = 1.5

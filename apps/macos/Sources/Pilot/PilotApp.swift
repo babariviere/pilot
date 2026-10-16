@@ -53,6 +53,10 @@ struct PilotApp: App {
                 Button("Merge Latest Pull Request…") { model.mergeLatestPullRequest() }
                     .keyboardShortcut("m", modifiers: [.command, .shift])
                     .disabled(model.latestPullRequestMergeTarget == nil)
+                Divider()
+                Button("Stop Agent") { model.stopSelectedChat() }
+                    .keyboardShortcut(".", modifiers: .command)
+                    .disabled(!model.canStopSelectedChat)
             }
             SidebarScopeCommands(model: model, client: model.client)
             KeyboardNavigationCommands(model: model)
