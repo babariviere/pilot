@@ -126,7 +126,7 @@ const SLACK_OPEN = "kind = 'slack' AND active = 1 AND dismissed = 0 AND slack_st
 const SLACK_LABEL =
 	"CASE WHEN json_type(slack_overrides, '$.label') IS NOT NULL THEN json_extract(slack_overrides, '$.label') ELSE json_extract(metadata, '$.label') END";
 /** Pairs of [projectId, label] in the second parameter. */
-const SLACK_HIDDEN = `coalesce(json_extract(metadata, '$.mentionQualified'), 0) != 1 AND EXISTS (SELECT 1 FROM json_each(?) AS hidden WHERE json_extract(hidden.value, '$[0]') = project_id AND json_extract(hidden.value, '$[1]') = ${SLACK_LABEL})`;
+const SLACK_HIDDEN = `(coalesce(json_extract(metadata, '$.mentionQualified'), 0) != 1 AND EXISTS (SELECT 1 FROM json_each(?) AS hidden WHERE json_extract(hidden.value, '$[0]') = project_id AND json_extract(hidden.value, '$[1]') = ${SLACK_LABEL}))`;
 const IN_PROJECTS = "project_id IN (SELECT value FROM json_each(?))";
 /** Labels in the bound JSON array. A missing label never matches (configured names are never empty). */
 const SLACK_LABEL_IN = `coalesce(${SLACK_LABEL}, '') IN (SELECT value FROM json_each(?))`;
