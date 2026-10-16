@@ -1,3 +1,5 @@
+import AppKit
+import QuartzCore
 import SwiftUI
 
 /// The sign of live work inside a view, such as a running tool step or the chat's working line: three round dots
@@ -5,40 +7,133 @@ import SwiftUI
 /// often replaces). In turn, left to right, each dot blends from a light grey at rest to Theme.workingInk and lifts
 /// slightly, like a typing indicator, then all three rest briefly: about 1.5 s a loop. `background` is fainter and
 /// half as fast, for an agent that is idle while its background jobs run (the same motion language as a background
-/// working corner).
+/// working corner). `size` scales the whole mark, for icon contexts.
 ///
-/// It draws on the shared corner clock (`DitherCornerClock`), so only the dots redraw each frame, never the view
-/// around it, and its frame is fixed, so neighbouring text never shifts. Reduce Motion holds one still frame. It
-/// is decorative: the text beside it carries the state for VoiceOver.
+/// It plays on Core Animation (`LoopingLayerView`) at the display's rate, with no SwiftUI updates per frame, and
+/// its frame is fixed, so neighbouring text never shifts. Spinners share a phase. Reduce Motion holds one still
+/// frame; occluded windows play nothing. It is decorative: the text beside it carries the state for VoiceOver.
 struct EllipsisSpinner: View {
     var background = false
+    var size = EllipsisDots.side
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        Group {
-            if reduceMotion {
-                dots(frame: EllipsisDots.stillFrame(background: background))
-            } else {
-                DitherCornerTicking { frame in dots(frame: frame) }
-            }
-        }
-        .frame(width: EllipsisDots.side, height: EllipsisDots.side)
-        .accessibilityHidden(true)
+        EllipsisSpinnerLayer(background: background, still: reduceMotion)
+            .frame(width: size, height: size)
+            .accessibilityHidden(true)
+    }
+}
+
+private struct EllipsisSpinnerLayer: NSViewRepresentable {
+    let background: Bool
+    let still: Bool
+
+    func makeNSView(context: Context) -> EllipsisSpinnerView {
+        let view = EllipsisSpinnerView(frame: NSRect(x: 0, y: 0, width: EllipsisDots.side, height: EllipsisDots.side))
+        updateNSView(view, context: context)
+        return view
     }
 
-    private func dots(frame: Int) -> some View {
-        let levels = EllipsisDots.levels(frame: frame, background: background)
-        let rest = Theme.faintForeground.opacity(
-            EllipsisDots.restOpacity * (background ? EllipsisDots.backgroundRestOpacity : 1))
-        let tint = Theme.workingInk
-        return Canvas { context, _ in
-            for (index, level) in levels.enumerated() {
-                let dot = Path(ellipseIn: EllipsisDots.dotRect(index, level: level))
-                context.fill(dot, with: .color(rest))
-                if level > 0 { context.fill(dot, with: .color(tint.opacity(level))) }
-            }
+    func updateNSView(_ view: EllipsisSpinnerView, context: Context) {
+        view.background = background
+        view.animates = !still
+    }
+}
+
+/// Three dot layers inside one content layer scaled to the view. Each dot is the resting grey with an ink layer
+/// on top whose opacity is the dot's level; the dot itself lifts by `EllipsisDots.lift` times that level.
+final class EllipsisSpinnerView: LoopingLayerView {
+    var background = false {
+        didSet {
+            guard background != oldValue else { return }
+            updateColors()
+            showStillFrame()
+            refreshAnimations()
         }
-        .frame(width: EllipsisDots.side, height: EllipsisDots.side)
+    }
+    private let content = CALayer()
+    private var dots: [(dot: CALayer, ink: CALayer)] = []
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        content.anchorPoint = .zero
+        content.bounds = CGRect(x: 0, y: 0, width: EllipsisDots.side, height: EllipsisDots.side)
+        for index in 0 ..< EllipsisDots.count {
+            let dot = CALayer()
+            let rect = EllipsisDots.dotRect(index)
+            // Layers are y-up: the resting rect is vertically centred, so only the lift's sign differs.
+            dot.frame = CGRect(x: rect.minX, y: EllipsisDots.side - rect.maxY, width: rect.width, height: rect.height)
+            dot.cornerRadius = EllipsisDots.dot / 2
+            dot.masksToBounds = true
+            let ink = CALayer()
+            ink.frame = dot.bounds
+            dot.addSublayer(ink)
+            content.addSublayer(dot)
+            dots.append((dot, ink))
+        }
+        layer?.addSublayer(content)
+        updateColors()
+        showStillFrame()
+    }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        let scale = bounds.width / EllipsisDots.side
+        content.position = .zero
+        content.transform = CATransform3DMakeScale(scale, scale, 1)
+        CATransaction.commit()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateColors()
+    }
+
+    private func updateColors() {
+        var rest = NSColor.gray.cgColor, ink = NSColor.systemIndigo.cgColor
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            let opacity = EllipsisDots.restOpacity * (background ? EllipsisDots.backgroundRestOpacity : 1)
+            rest = NSColor(Theme.faintForeground).withAlphaComponent(opacity).cgColor
+            ink = NSColor(Theme.workingInk).cgColor
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for (dot, inkLayer) in dots {
+            dot.backgroundColor = rest
+            inkLayer.backgroundColor = ink
+        }
+        CATransaction.commit()
+    }
+
+    /// The frame Reduce Motion holds, also the model values under the loops.
+    private func showStillFrame() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for (index, (dot, ink)) in dots.enumerated() {
+            let level = EllipsisDots.level(index, frame: EllipsisDots.stillFrame(background: background), background: background)
+            ink.opacity = Float(level)
+            dot.transform = CATransform3DMakeTranslation(0, EllipsisDots.lift * CGFloat(level), 0)
+        }
+        CATransaction.commit()
+    }
+
+    override func addLoops() {
+        let duration = EllipsisDots.loopDuration(background: background)
+        for (index, (dot, ink)) in dots.enumerated() {
+            let levels = EllipsisDots.keyframeLevels(index, background: background)
+            ink.add(Self.loop("opacity", values: levels.map { NSNumber(value: $0) }, duration: duration), forKey: "pulse")
+            dot.add(Self.loop("transform.translation.y", values: levels.map { NSNumber(value: Double(EllipsisDots.lift) * $0) },
+                              duration: duration), forKey: "lift")
+        }
+    }
+
+    override func removeLoops() {
+        for (dot, ink) in dots {
+            ink.removeAnimation(forKey: "pulse")
+            dot.removeAnimation(forKey: "lift")
+        }
     }
 }
 
@@ -86,9 +181,26 @@ enum EllipsisDots {
     /// Blend in 0...1 toward Theme.workingInk of dot `index`: a half sine over its pulse, zero otherwise.
     static func level(_ index: Int, frame: Int, background: Bool) -> Double {
         let loop = Double(background ? backgroundFrameCount : frameCount)
-        let progress = Double(loopFrame(frame, background: background)) / loop - Double(index) * stagger
-        guard progress > 0, progress < pulse else { return 0 }
-        return (background ? backgroundPeak : 1) * sin(Double.pi * progress / pulse)
+        return level(index, progress: Double(loopFrame(frame, background: background)) / loop, background: background)
+    }
+
+    /// The same pulse at any point of the loop (0 ..< 1), so Core Animation can interpolate it at the display rate.
+    static func level(_ index: Int, progress: Double, background: Bool) -> Double {
+        let local = progress - Double(index) * stagger
+        guard local > 0, local < pulse else { return 0 }
+        return (background ? backgroundPeak : 1) * sin(Double.pi * local / pulse)
+    }
+
+    /// One loop's length: `frameCount` steps of the former 12 fps clock (1.5 s), twice that in the background.
+    static func loopDuration(background: Bool) -> Double {
+        Double(background ? backgroundFrameCount : frameCount) / 12
+    }
+
+    /// Evenly spaced levels of dot `index` over one loop, ending where they start, for linear keyframes. Six
+    /// samples per former frame keep the half-sine round at 120 Hz.
+    static func keyframeLevels(_ index: Int, background: Bool) -> [Double] {
+        let samples = (background ? backgroundFrameCount : frameCount) * 6
+        return (0 ... samples).map { level(index, progress: Double($0 % samples) / Double(samples), background: background) }
     }
 
     /// Levels of the three dots, left to right.
@@ -96,4 +208,3 @@ enum EllipsisDots {
         (0 ..< count).map { level($0, frame: frame, background: background) }
     }
 }
-

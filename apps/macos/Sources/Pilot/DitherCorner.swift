@@ -132,7 +132,8 @@ private struct DitherCornerModifier: ViewModifier {
                         .overlay(alignment: .bottomTrailing) {
                             DitherCornerClocked(signal: shown, background: background && shown == .working,
                                                 previous: previous, mix: mix, recede: recedes && hovered ? 1 : 0,
-                                                still: reduceMotion, extent: extent, monochrome: monochrome)
+                                                still: reduceMotion, extent: extent, monochrome: monochrome,
+                                                onLayer: !recedes)
                         }
                         .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
                         .padding(outset)
@@ -162,7 +163,9 @@ private struct DitherCornerModifier: ViewModifier {
     }
 }
 
-/// Observes the shared clock only while something on the corner moves.
+/// Observes the shared clock only while something on the corner moves. Corners that never recede (the composer's
+/// working corner, the question tray) play their settled loop on Core Animation instead, and use the clock only
+/// while they dissolve between states.
 private struct DitherCornerClocked: View {
     let signal: SessionSignal?
     let background: Bool
@@ -172,10 +175,16 @@ private struct DitherCornerClocked: View {
     let still: Bool
     let extent: Double
     let monochrome: Bool
+    var onLayer = false
 
     var body: some View {
         let moving = !still && (DitherCorner.animates(signal) || (mix < 1 && DitherCorner.animates(previous)))
-        if moving {
+        if moving, onLayer, mix >= 1, let signal {
+            let grid = DitherCorner.grid(extent: extent)
+            DitherCornerLoop(loop: DitherCornerLoopView.Loop(signal: signal, background: background, extent: extent,
+                                                             monochrome: monochrome))
+                .frame(width: CGFloat(grid.columns) * DitherCorner.cell, height: CGFloat(grid.rows) * DitherCorner.cell)
+        } else if moving {
             DitherCornerTicking { frame in layer(frame: frame) }
         } else {
             layer(frame: 0)
@@ -189,7 +198,7 @@ private struct DitherCornerClocked: View {
     }
 }
 
-/// Redraws `content` on each shared clock frame while it is on screen. Also drives `EllipsisSpinner`.
+/// Redraws `content` on each shared clock frame while it is on screen.
 struct DitherCornerTicking<Content: View>: View {
     @ViewBuilder let content: (Int) -> Content
     @ObservedObject private var clock = DitherCornerClock.shared
@@ -235,6 +244,88 @@ private struct DitherCornerLayer: View, Animatable {
         }
     }
 }
+
+
+// MARK: - Core Animation loop
+
+private struct DitherCornerLoop: NSViewRepresentable {
+    let loop: DitherCornerLoopView.Loop
+
+    func makeNSView(context: Context) -> DitherCornerLoopView {
+        let view = DitherCornerLoopView(frame: .zero)
+        view.loop = loop
+        return view
+    }
+
+    func updateNSView(_ view: DitherCornerLoopView, context: Context) {
+        view.loop = loop
+    }
+}
+
+/// A settled, moving corner as a discrete `contents` animation over its cached 12 fps frames: the same pixels as
+/// the clocked corner, played by the render server. Frames are rendered once per loop and kept by
+/// `DitherCornerRenderer`'s cache.
+final class DitherCornerLoopView: LoopingLayerView {
+    struct Loop: Equatable {
+        var signal: SessionSignal
+        var background = false
+        var extent = 1.0
+        var monochrome = false
+
+        /// The working ripple's background loop is twice as long; every other loop is `DitherCorner.frameCount`.
+        var frameCount: Int { background ? DitherCorner.backgroundFrameCount : DitherCorner.frameCount }
+        var duration: CFTimeInterval { Double(frameCount) * DitherCorner.frameInterval }
+
+        func request(frame: Int) -> DitherCornerRequest {
+            DitherCornerRequest(signal: signal, previous: nil, frame: frame, extent: extent, background: background,
+                                monochrome: monochrome)
+        }
+    }
+
+    var loop: Loop? {
+        didSet {
+            guard loop != oldValue else { return }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            image.contents = loop.flatMap { DitherCornerRenderer.image(for: $0.request(frame: 0)) }
+            CATransaction.commit()
+            refreshAnimations()
+        }
+    }
+    private let image = CALayer()
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        image.magnificationFilter = .nearest
+        image.contentsGravity = .resize
+        layer?.addSublayer(image)
+    }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        image.frame = bounds
+        CATransaction.commit()
+    }
+
+    /// The loop's frames, in order.
+    static func frames(_ loop: Loop) -> [CGImage] {
+        (0 ..< loop.frameCount).compactMap { DitherCornerRenderer.image(for: loop.request(frame: $0)) }
+    }
+
+    override func addLoops() {
+        guard let loop else { return }
+        let frames = Self.frames(loop)
+        guard frames.count > 1 else { return }
+        image.add(Self.loop("contents", values: frames, duration: loop.duration, discrete: true), forKey: "dither")
+    }
+
+    override func removeLoops() {
+        image.removeAnimation(forKey: "dither")
+    }
+}
+
 
 // MARK: - Rendering
 

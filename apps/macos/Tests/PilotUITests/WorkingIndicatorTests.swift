@@ -65,6 +65,53 @@ private func job(_ id: String, startedAt: Double) -> SessionJob {
     }
 }
 
+@Test func ellipsisKeyframesFollowTheClockedPulseAtTheDisplayRate() {
+    for background in [false, true] {
+        let frames = background ? EllipsisDots.backgroundFrameCount : EllipsisDots.frameCount
+        #expect(abs(EllipsisDots.loopDuration(background: background) - Double(frames) * DitherCorner.frameInterval) < 0.000_001)
+        for index in 0 ..< EllipsisDots.count {
+            let levels = EllipsisDots.keyframeLevels(index, background: background)
+            #expect(levels.count == frames * 6 + 1)
+            #expect(levels.first == levels.last, "the loop closes without a jump")
+            // Every former clock frame is one of the keyframes, so the look is unchanged, only smoother.
+            for frame in 0 ..< frames {
+                #expect(abs(levels[frame * 6] - EllipsisDots.level(index, frame: frame, background: background)) < 0.000_001)
+            }
+        }
+    }
+}
+
+@Test @MainActor func ellipsisPlaysOnLayersOnlyWhileVisibleAndAnimating() {
+    let view = EllipsisSpinnerView(frame: NSRect(x: 0, y: 0, width: 26, height: 26))
+    #expect(!view.playing, "no window, nothing plays")
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 80, height: 80), styleMask: [.titled],
+                          backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    window.contentView?.addSubview(view)
+    view.layout()
+    let dots = view.layer?.sublayers?.first?.sublayers ?? []
+    #expect(dots.count == 3)
+    // Scaled to the view, the frame stays fixed: motion is a transform inside it.
+    #expect(abs((view.layer?.sublayers?.first?.transform.m11 ?? 0) - 2) < 0.000_001)
+    view.animates = false
+    #expect(!view.playing)
+    #expect(dots.allSatisfy { $0.animationKeys() == nil })
+    window.close()
+}
+
+@Test @MainActor func layerLoopsShareTheirPhaseAcrossViews() {
+    let now = Date(timeIntervalSinceReferenceDate: 1000.25)
+    let a = LoopingLayerView.sharedBeginTime(duration: 1.5, now: now)
+    let b = LoopingLayerView.sharedBeginTime(duration: 1.5, now: now)
+    #expect(abs(a - b) < 0.01)
+    let animation = LoopingLayerView.loop("contents", values: [1, 2, 3], duration: 3, discrete: true)
+    #expect(animation.keyTimes?.count == 4)
+    #expect(animation.calculationMode == .discrete)
+    #expect(animation.repeatCount == .infinity)
+    let smooth = LoopingLayerView.loop("opacity", values: [0, 1, 0], duration: 1.5)
+    #expect(smooth.keyTimes?.map(\.doubleValue) == [0, 0.5, 1])
+}
+
 @Test func reduceMotionFrameHoldsTheMiddleDotLit() {
     for background in [false, true] {
         let still = EllipsisDots.levels(frame: EllipsisDots.stillFrame(background: background), background: background)

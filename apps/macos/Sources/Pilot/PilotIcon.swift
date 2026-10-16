@@ -418,9 +418,7 @@ struct PilotSymbol: View {
 
     var body: some View {
         if icon == .working {
-            EllipsisSpinner()
-                .scaleEffect(context.markSize / EllipsisDots.side)
-                .frame(width: context.markSize, height: context.markSize)
+            EllipsisSpinner(size: context.markSize)
                 .accessibilityLabel("Working").accessibilityHidden(false)
         } else if icon == .branch || icon == .pullRequest {
             PilotMarkIcon(mark: .gitBranch, context: context)

@@ -114,6 +114,8 @@ reads as work in the background. While a chat works, its composer wears the same
 behind the editor and controls, and draws nothing when idle. Live work inside a view (a running tool step, the chat's
 working line) uses the ellipsis spinner (`EllipsisSpinner`): three grey dots that turn indigo and lift in turn, left
 to right, like a typing indicator, fainter and half speed while only background jobs run, and still under Reduce Motion.
+Chat motion plays on Core Animation (`LoopingLayerView`), never as per-frame SwiftUI updates, and changes only
+opacity, colour or a transform inside a fixed frame, so it never moves the layout.
 
 ## Sidebar
 
