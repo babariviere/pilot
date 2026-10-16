@@ -1,5 +1,92 @@
 # Changelog
 
+## [1.39.0](https://github.com/babariviere/pilot/compare/v1.38.0...v1.39.0) (2026-10-16)
+
+
+### Features
+
+* **auth:** broker canonical credentials for isolated workers ([4648241](https://github.com/babariviere/pilot/commit/4648241bbf05f72f407eff4a0d82c3a475f550d6))
+* **daemon:** isolate Linux coordinator processes with bubblewrap ([f4b2b9e](https://github.com/babariviere/pilot/commit/f4b2b9e958fba73b31c877be224359a8d3e6d5e6))
+* **daemon:** support a headless Linux runtime handshake ([56bbf74](https://github.com/babariviere/pilot/commit/56bbf74c8ccedb3c489c1af22e0512b70cad6e5f))
+* **delivery:** reserve durable operations and recover stable admissions ([2873d05](https://github.com/babariviere/pilot/commit/2873d05609df684b4d3caa9878e80ce1957ae256))
+* **linear:** classify issue size with correction learning ([474a364](https://github.com/babariviere/pilot/commit/474a36401d60d837cb2e3a05334913f680590abf))
+* **macos:** add Slack common cases view, case actions and Overview top three ([79ceab2](https://github.com/babariviere/pilot/commit/79ceab21200dcece10047467a5f2606e6ea0bc90))
+* **macos:** drag tasks to reorder and edit their dependencies ([cf11f47](https://github.com/babariviere/pilot/commit/cf11f47927bf79aa210e6fb6905a8bcace935955))
+* **macos:** manage phases in the Tasks tab and show phase progress ([b26480a](https://github.com/babariviere/pilot/commit/b26480ab8d97410310f28ca5a5f005a06c58b1bd))
+* **macos:** manage safe OpenSSH loopback forwarding ([8887591](https://github.com/babariviere/pilot/commit/88875911feb046951ba5a9cb0a76cb184672727a))
+* **macos:** open inline artifact links in the viewer ([b337cf0](https://github.com/babariviere/pilot/commit/b337cf0a1a7850a3d336e83db3e154abc35bc756))
+* **macos:** replace dot grid spinner with an ellipsis ([61d3cd6](https://github.com/babariviere/pilot/commit/61d3cd63ee4ae079146c7eb7b8d290b32ef5a2f5))
+* **macos:** show clear in-chat pause notices ([1d95c2b](https://github.com/babariviere/pilot/commit/1d95c2bafd61ad454ed794d8e99f480dbda22d25))
+* **macos:** show extra usage on Home ([80de1a7](https://github.com/babariviere/pilot/commit/80de1a7dccd0009d7ab7393f1291f399f3489d9f))
+* **macos:** show Linear size chips and suggest Start mission for planning work ([30a943a](https://github.com/babariviere/pilot/commit/30a943ad5e6d9d1f44f6f62ced6e52e136b28246))
+* **macos:** show Linear sub-issues under their parent ([1d10ab9](https://github.com/babariviere/pilot/commit/1d10ab9f69be0587624a6fcf8fa11535314b59ec))
+* **macos:** show the Linear size guide and corrections in tracking settings ([baf182f](https://github.com/babariviere/pilot/commit/baf182f4640ba271b2cda173cbda72b7783014cc))
+* **macos:** show the Slack triage guide with Rebuild in tracking settings ([1dacbd8](https://github.com/babariviere/pilot/commit/1dacbd83f8ffffa68c2e4bf47fd031c18d42f23a))
+* **memory:** show project memory as a tree page ([8776398](https://github.com/babariviere/pilot/commit/87763986884a0777278227dc38c4aa331aa8bcb7))
+* **missions:** add a preferred model per task ([2d8d6b2](https://github.com/babariviere/pilot/commit/2d8d6b26ab1eab42d4f361cc280c3a972c918ca0))
+* **missions:** add start chat options for tasks ([cd294c1](https://github.com/babariviere/pilot/commit/cd294c1780bb4cc7c3f41ad2a0446005a04da237))
+* **phases:** add ordered task phases and optional gating ([461a8c8](https://github.com/babariviere/pilot/commit/461a8c855cfbefa7ceff6c801a174303a49b1e4b))
+* **repositories:** scope remote selection and file reads by host ([718be17](https://github.com/babariviere/pilot/commit/718be17488ab9a4f29bdb0ab794302ecd56a85dc))
+* **routing:** add host-qualified endpoint and resource routing ([4423329](https://github.com/babariviere/pilot/commit/4423329ff54649acf5d1dfc7ca79e0637d074ed2))
+* **routing:** persist qualified chat drafts and navigation identity ([af3cc5b](https://github.com/babariviere/pilot/commit/af3cc5b5e24786bbb9f056c4f6298802fa97ecc9))
+* **slack:** group recurring reports into stable common cases ([f3a9f04](https://github.com/babariviere/pilot/commit/f3a9f04b92df405ab30b1d1b247e9514d157a7e7))
+* **tracking:** groom corrections into scoped triage guides ([885f3d3](https://github.com/babariviere/pilot/commit/885f3d325f7b83a0b9f8a727607fbd720afdf75a))
+* **tracking:** store Linear parent and resolve parent headers ([4f23a39](https://github.com/babariviere/pilot/commit/4f23a39796d0854e5718111dfd82502bc38c6321))
+* **transfers:** stage remote images and pin artifact resources ([bb9964c](https://github.com/babariviere/pilot/commit/bb9964c7e84be78f6e5abc0aebdb72dd1ea45989))
+
+
+### Bug Fixes
+
+* **agents:** cover deferred retrieval and quiet paused chrome ([f79007b](https://github.com/babariviere/pilot/commit/f79007b5dfc010bfeb0698eb0343c24b9fc0292f))
+* **agents:** pause recoverably when internet is unavailable ([72aaa1b](https://github.com/babariviere/pilot/commit/72aaa1ba8db404f1f980585f857224c186767613))
+* **artifacts:** respect nested clipping when measuring height ([f77fe47](https://github.com/babariviere/pilot/commit/f77fe477b56452918c943ff59e692853370969a9))
+* **auth:** fence revocation intents and preserve MCP store semantics ([79bc186](https://github.com/babariviere/pilot/commit/79bc186b5abe55d87d7114b3104e779222ec5a2a))
+* **auth:** install broker hooks once across SDK loaders ([73a4e32](https://github.com/babariviere/pilot/commit/73a4e3248ccf75b39fb8099d3934de6a82f9a372))
+* **ci:** isolate release writes from package verification ([2a7ee06](https://github.com/babariviere/pilot/commit/2a7ee062539fa43f08f2a867688f275e7085d979))
+* **daemon:** avoid traversing unused legacy auth paths ([be2d4ee](https://github.com/babariviere/pilot/commit/be2d4eea8f457cbb7a27938ab92ed2ff020850e4))
+* **daemon:** build chat titles from user and assistant text only ([cd854c8](https://github.com/babariviere/pilot/commit/cd854c8e56ab80ec1956266178a53dc618fe18ab))
+* **daemon:** parse new Slack MCP formats and let manual sync skip error backoff ([658ffc1](https://github.com/babariviere/pilot/commit/658ffc1fcc08984911149abf069ba4c27db807e3))
+* **daemon:** reject ancestor bind aliases before private writes ([bcfb4d0](https://github.com/babariviere/pilot/commit/bcfb4d03f0d532af0622253962b242cd81a9c344))
+* **daemon:** reject mount aliases in writable coordinator state ([00a0f0c](https://github.com/babariviere/pilot/commit/00a0f0c7cbdba80a6546b54fb9a0ce8e146f3327))
+* **daemon:** resolve coordinator trust before read-only launch ([01e35af](https://github.com/babariviere/pilot/commit/01e35af385e408b169d1ff008b36fc555d109a21))
+* **daemon:** suggest rebasing PRs behind their target branch ([d4806e8](https://github.com/babariviere/pilot/commit/d4806e81bd6e0c9ae53f700d75c84166b323aa4f))
+* **daemon:** verify accessible sandbox mount identities ([87b7e58](https://github.com/babariviere/pilot/commit/87b7e588b82aa6cf4ecd33594f727775b8a831cc))
+* **delivery:** finish interrupted receipt cleanup during recovery ([7d7d881](https://github.com/babariviere/pilot/commit/7d7d881203ba9dfd2d8e74de59c6659444158e0e))
+* **kernel:** pause on subscription exhaustion without failing ([65529e8](https://github.com/babariviere/pilot/commit/65529e8378d6adeb06384d1f368b48cd13569baa))
+* **kernel:** read canonical settings without writable locks ([51ea453](https://github.com/babariviere/pilot/commit/51ea453b5e6b24a70eb430a7ec1d89020bb3252b))
+* **kernel:** scope credential preloads to worker descendants ([2a5332d](https://github.com/babariviere/pilot/commit/2a5332da6981bcfac0ed4cb081a6f8b92a02437f))
+* **linux:** provide native build tooling and failure-path checks ([f495f17](https://github.com/babariviere/pilot/commit/f495f17846b2736f976306693512f3b32b3402e6))
+* **linux:** validate service paths and authenticate streamed archives ([3d2f3d2](https://github.com/babariviere/pilot/commit/3d2f3d27ef43ea4703a84db3f34fd7613f523deb))
+* **macos:** apply the offline label font through Font ([3b1f9bb](https://github.com/babariviere/pilot/commit/3b1f9bbbf50274933359d3fcc39e9009d5968b26))
+* **macos:** centralize artifact attachment symbol rendering ([36a0162](https://github.com/babariviere/pilot/commit/36a01620e4953dbd5d333e47bcaeb8f41ac8b9ec))
+* **macos:** enlarge dot grid spinner to row-icon size ([efda85f](https://github.com/babariviere/pilot/commit/efda85fb9a1a7fb5c93f75e7f5a4733da8a544bf))
+* **macos:** isolate artifact popup callbacks to the main actor ([bc6b8af](https://github.com/babariviere/pilot/commit/bc6b8afb9624b2ff0f8f91772a1ec514515cc5be))
+* **macos:** keep mission task rows still on hover ([f514384](https://github.com/babariviere/pilot/commit/f514384bef50444bb51ed2c1be67a5f276b1c11c))
+* **macos:** keep native task menu image labels concrete ([8cd2a81](https://github.com/babariviere/pilot/commit/8cd2a8157ca61a013b787c1b1d6f9d5a2ad84ca6))
+* **macos:** mirror the in-review status pie ([381e92c](https://github.com/babariviere/pilot/commit/381e92c8741ced7521527e4bfd8b2c2e80c54da3))
+* **macos:** omit redundant overall progress for phased work ([00613b9](https://github.com/babariviere/pilot/commit/00613b92958487fb7712291638de0756c1b4c4c0))
+* **macos:** open Slack links at the right message ([3de4746](https://github.com/babariviere/pilot/commit/3de474645ec222a12fa726cc1d402a550a2db7f8))
+* **macos:** preserve artifact size across renderer remounts ([a0f517e](https://github.com/babariviere/pilot/commit/a0f517e90a1fe1a88b8e8493c30209087a602869))
+* **macos:** raise dot grid spinner contrast ([4ff4285](https://github.com/babariviere/pilot/commit/4ff4285caf952ae399776bac70b7d2b99057f33e))
+* **macos:** restore phase progress to Overview ([a08b0a5](https://github.com/babariviere/pilot/commit/a08b0a5a8c7d2f0119f813fe0e26a0c9b21a7f1a))
+* **macos:** show the result of MCP Check Now ([b49b451](https://github.com/babariviere/pilot/commit/b49b4510daafba1b9d5472196bd41e6dc529543a))
+* **macos:** use native template images for all task menu icons ([d6be4ba](https://github.com/babariviere/pilot/commit/d6be4ba1c97da1a7304a71b8a01833ba8a3d6bc8))
+* **macos:** use thirds for task progress and show menu icons ([b18fb80](https://github.com/babariviere/pilot/commit/b18fb800ecb6ed090e18c972aae03d3be8822b44))
+* **power:** acknowledge sleep after durable preparation ([f9344c2](https://github.com/babariviere/pilot/commit/f9344c260280cee152b19e8be7f8eb13733f431d))
+* **power:** leave screen locking to macOS ([688d331](https://github.com/babariviere/pilot/commit/688d331f41fe786c3beefa75bab5763f48732bbe))
+* **routing:** replace endpoints and reattach subscriptions after SSH drops ([a11bcc0](https://github.com/babariviere/pilot/commit/a11bcc09554b6abcbb6366d5861899b7bece5bdd))
+* **transfers:** fence disk faults and reject missing adopted image data ([41fee59](https://github.com/babariviere/pilot/commit/41fee597c648f8b00dfe70256ec928a26c2b8d47))
+* **transfers:** inject isolated command transports into HTTP fixtures ([6015d47](https://github.com/babariviere/pilot/commit/6015d4769f05be0219c43a73654fe468dbfd45dd))
+
+
+### Performance Improvements
+
+* **daemon:** attribute event-loop stalls to CPU or waiting ([7d1283d](https://github.com/babariviere/pilot/commit/7d1283d7f6cc779f8758c61655b7ee78c9a88637))
+* **daemon:** run the mission store in memory and save it off the event loop ([1b30a38](https://github.com/babariviere/pilot/commit/1b30a38c3b7235ad0a6f0572c400be9a4c0f4fdc))
+* **macos:** retain the web-only link scanner fast path ([e380de9](https://github.com/babariviere/pilot/commit/e380de9c66c9ca73542bddd5d24a5c50bd226930))
+* **macos:** run pilotd as an Interactive launchd agent ([4f384e0](https://github.com/babariviere/pilot/commit/4f384e061b676f80b9810e5f2795c8b8b698507d))
+* **routing:** coalesce unified snapshots and test large chat lists ([22ad21d](https://github.com/babariviere/pilot/commit/22ad21db8cb02fad0c1adc92975ac3eec4bd9cb1))
+
 ## [1.38.0](https://github.com/babariviere/pilot/compare/v1.37.0...v1.38.0) (2026-10-15)
 
 
