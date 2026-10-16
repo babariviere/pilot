@@ -26,7 +26,7 @@ import { workflowStates } from "./linear-workflow.ts";
 import type { ProjectStore } from "./projects.ts";
 import { SlackModelUnavailable } from "./slack-classifier.ts";
 import { SlackFormatChanged } from "./slack-format.ts";
-import { addSlackDone, refreshSlackReactions } from "./slack-reactions.ts";
+import { addSlackDone, refreshSlackReactions, removeSlackEyes } from "./slack-reactions.ts";
 import { slackChannelProgress, slackExcerpt } from "./slack-source.ts";
 import { slackStart, slackStartAllowed } from "./slack-start.ts";
 import { type SourceMcpClient, SourceRateLimited, SourceSignInRequired } from "./source-mcp.ts";
@@ -40,7 +40,7 @@ export interface SourcePollContext {
 	config: ProjectTrackingConfig;
 	cursor?: TrackingJson;
 	signal: AbortSignal;
-	/** Logical tool name, resolved to a fixed dedicated tool. No model in the fetch path. */
+	/** Logical capability: dedicated source tools, except the local opt-in eyes removal route. No model here. */
 	call(tool: string, args: Record<string, unknown>): Promise<TrackingJson>;
 }
 export interface SourcePollResult {
@@ -711,42 +711,45 @@ export class SourceRegistry {
 					admitted = await this.items.reserveSlackDone(projectId);
 					if (!admitted) return;
 					let outcome: "reacted" | "skipped" | "error" = "error";
+					let context: SourcePollContext | undefined;
+					let current: TrackedItem | undefined;
 					try {
 						controller.signal.throwIfAborted();
-						const current = await this.items.require(admitted.id);
+						current = await this.items.require(admitted.id);
 						if (this.currentKey(sourceId) !== key || this.items.checkpoint(sourceId)?.configKey !== key)
 							throw new Conflict("Sync Slack first");
 						const health = this.health.get(sourceId);
 						if (health && !health.localBudget && health.status !== "ok" && health.nextPollAt > Date.now())
 							throw new Conflict("Source is backing off");
 						const project = structuredClone(this.projects.require(projectId));
-						outcome = await abortable(
-							addSlackDone(
-								{
-									project,
-									config: project.tracking!,
-									signal: controller.signal,
-									call: (tool, args) => {
-										controller.signal.throwIfAborted();
-										if (
-											this.currentKey(sourceId) !== key ||
-											!slackStartAllowed(
-												this.projects.require(projectId).tracking?.slackChannels ?? [],
-												current,
-											)
-										)
-											throw new Conflict("Tracking configuration changed");
-										return this.mcp.call("slack", tool, args, controller.signal);
-									},
-								},
-								current,
-							),
-							controller.signal,
-						);
+						context = {
+							project,
+							config: project.tracking!,
+							signal: controller.signal,
+							call: (tool, args) => {
+								controller.signal.throwIfAborted();
+								if (
+									this.currentKey(sourceId) !== key ||
+									!slackStartAllowed(this.projects.require(projectId).tracking?.slackChannels ?? [], current!)
+								)
+									throw new Conflict("Tracking configuration changed");
+								return this.mcp.call("slack", tool, args, controller.signal);
+							},
+						};
+						outcome = await abortable(addSlackDone(context, current), controller.signal);
 					} catch {
 						/* Done is local and never rolled back by a reaction failure. */
 					}
 					await this.items.slackDoneResult(admitted.id, outcome);
+					if (context && current) {
+						try {
+							controller.signal.throwIfAborted();
+							await abortable(removeSlackEyes(context, current), controller.signal);
+						} catch {
+							// Fixed bounded line, never proxy names, provider text, channel IDs or credentials.
+							console.warn("pilotd: Slack eyes removal skipped or failed; no retry");
+						}
+					}
 				})
 				.catch((error: unknown) => console.warn(`pilotd: Slack done reaction failed: ${logCause(error)}`))
 				.finally(() => {
@@ -774,7 +777,7 @@ export class SourceRegistry {
 		args: Record<string, unknown>,
 		signal: AbortSignal,
 	): Promise<TrackingJson> {
-		if (tool === "startIssue" || tool === "startSlack" || tool === "doneSlack")
+		if (tool === "startIssue" || tool === "startSlack" || tool === "doneSlack" || tool === "removeSlackEyes")
 			return Promise.reject(new Error("Source reads cannot write"));
 		return this.mcp.call(kind, tool, args, signal);
 	}

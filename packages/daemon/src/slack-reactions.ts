@@ -22,7 +22,7 @@ export async function refreshSlackReactions(
 	return batch.budget;
 }
 
-/** No remove tool is exposed by the dedicated server. Keep eyes; add only the authorized done reaction. */
+/** Add the check through the dedicated Slack server. Persist its outcome before attempting removal. */
 export async function addSlackDone(context: SourcePollContext, item: TrackedItem): Promise<"reacted" | "skipped"> {
 	if (item.slack?.status !== "done" || !slackStartAllowed(context.config.slackChannels, item)) return "skipped";
 	const args = { channel_id: item.metadata.channel, message_ts: item.metadata.thread_ts, emoji: "white_check_mark" };
@@ -30,4 +30,18 @@ export async function addSlackDone(context: SourcePollContext, item: TrackedItem
 	context.signal.throwIfAborted();
 	await context.call("doneSlack", args);
 	return "reacted";
+}
+
+/** Shares the durable Done admission, never its outcome. No generic proxy capability is exposed. */
+export async function removeSlackEyes(context: SourcePollContext, item: TrackedItem): Promise<void> {
+	if (
+		item.slack?.status !== "done" ||
+		!slackStartAllowed(context.config.slackChannels, item) ||
+		(item.metadata.slackStart as { outcome?: string } | undefined)?.outcome !== "reacted"
+	)
+		return;
+	const args = { channel_id: item.metadata.channel, message_ts: item.metadata.thread_ts, emoji: "eyes" };
+	if (!validSourceArguments("removeSlackEyes", args)) throw new SourceToolError("Invalid Slack parent");
+	context.signal.throwIfAborted();
+	await context.call("removeSlackEyes", args);
 }

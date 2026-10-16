@@ -8,7 +8,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { TrackedItem } from "@pilot/protocol";
 import { ProjectStore } from "./projects.ts";
 import { decodeMcpResult, dedicatedSourceTool, validSourceArguments } from "./source-mcp.ts";
-import { SourceRegistry } from "./sources.ts";
+import { type SourcePoller, SourceRegistry } from "./sources.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
 
 const parent = "1780000000.123456";
@@ -40,7 +40,7 @@ function gate() {
 	});
 	return { promise, release };
 }
-async function fixture(t: TestContext) {
+async function fixture(t: TestContext, adapter: SourcePoller = async () => ({ items: [] })) {
 	const home = await mkdtemp(join(tmpdir(), "slack-done-"));
 	const projects = new ProjectStore(home);
 	await projects.load();
@@ -52,13 +52,23 @@ async function fixture(t: TestContext) {
 	const item = (await items.list({ projectId: project.id })).items[0]!;
 	let read: Response = { structuredContent: { reactions: [] } },
 		write: Response = { structuredContent: { ok: true } };
+	let removal: Response | Error = { structuredContent: { ok: true } };
 	let beforeRead = async (_signal: AbortSignal) => {},
-		beforeWrite = async (_signal: AbortSignal) => {};
+		beforeWrite = async (_signal: AbortSignal) => {},
+		beforeRemoval = async (_signal: AbortSignal) => {};
 	const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
 	const registry = new SourceRegistry(projects, items, {
 		async call(kind, tool, args, signal) {
 			assert.equal(kind, "slack");
 			assert.ok(validSourceArguments(tool, args));
+			if (tool === "removeSlackEyes") {
+				calls.push({ tool, args });
+				assert.deepEqual(args, { channel_id: "CEXAMPLE", message_ts: parent, emoji: "eyes" });
+				await beforeRemoval(signal);
+				signal.throwIfAborted();
+				if (removal instanceof Error) throw removal;
+				return decodeMcpResult(removal, tool);
+			}
 			assert.equal(
 				dedicatedSourceTool(kind, tool),
 				tool === "reactions" ? "slack_get_reactions" : "slack_add_reaction",
@@ -77,7 +87,7 @@ async function fixture(t: TestContext) {
 			return decodeMcpResult(write, tool);
 		},
 	});
-	registry.register("slack", async () => ({ items: [] }));
+	registry.register("slack", adapter);
 	const poll = () => registry.poll(`${project.id}:slack`);
 	await poll();
 	t.after(async () => {
@@ -100,6 +110,12 @@ async function fixture(t: TestContext) {
 		write: (value: Response) => {
 			write = value;
 		},
+		removal: (value: Response | Error) => {
+			removal = value;
+		},
+		beforeRemoval: (value: typeof beforeRemoval) => {
+			beforeRemoval = value;
+		},
 		beforeRead: (value: typeof beforeRead) => {
 			beforeRead = value;
 		},
@@ -114,7 +130,7 @@ async function fixture(t: TestContext) {
 	};
 }
 
-test("all Done routes add one check on the parent only after a successful eyes outcome; eyes stays", async (t) => {
+test("all Done routes add one check and remove eyes on the parent only after a successful eyes outcome", async (t) => {
 	for (const route of ["manual", "merge", "mission", "reaction"]) {
 		const f = await fixture(t);
 		await f.eyes();
@@ -161,11 +177,82 @@ test("all Done routes add one check on the parent only after a successful eyes o
 		await f.poll();
 		await f.drain();
 		assert.equal(f.calls.filter((call) => call.tool === "doneSlack").length, 1);
+		assert.equal(f.calls.filter((call) => call.tool === "removeSlackEyes").length, 1);
 		assert.ok(
-			f.calls.every((call) => ["doneSlack", "reactions"].includes(call.tool)),
-			"no remove, messages or fallback tool",
+			f.calls.every((call) => ["doneSlack", "removeSlackEyes", "reactions"].includes(call.tool)),
+			"no messages or fallback tool",
 		);
 	}
+});
+
+test("failed removal keeps Done and the check successful, logs one safe line, and never retries", async (t) => {
+	const warnings: unknown[][] = [];
+	t.mock.method(console, "warn", (...args: unknown[]) => warnings.push(args));
+	for (const error of ["no_reaction", "not authorized", "unconfigured", "unreachable"]) {
+		const f = await fixture(t);
+		await f.eyes();
+		f.removal(
+			["unconfigured", "unreachable"].includes(error)
+				? new Error(`${error}: private fixture detail`)
+				: { isError: true, content: [{ type: "text", text: `${error}: private fixture detail` }] },
+		);
+		await f.registry.patch(f.item.id, { slack: { status: "done" } });
+		await f.drain();
+		assert.equal(outcome(await f.items.require(f.item.id)), "reacted");
+		assert.equal((await f.items.require(f.item.id)).slack?.status, "done");
+		await f.poll();
+		await f.registry.patch(f.item.id, { slack: { status: "open" } });
+		await f.registry.patch(f.item.id, { slack: { status: "done" } });
+		await f.drain();
+		assert.equal(f.calls.filter((call) => call.tool === "removeSlackEyes").length, 1);
+		const reopened = new TrackedItemStore(f.path);
+		try {
+			assert.equal(await reopened.reserveSlackDone(f.project.id), undefined);
+		} finally {
+			await reopened.close();
+		}
+	}
+	assert.deepEqual(warnings, Array(4).fill(["pilotd: Slack eyes removal skipped or failed; no retry"]));
+});
+
+test("missing, failed and pending eyes outcomes never remove any reaction", async (t) => {
+	for (const start of ["missing", "pending", "error"]) {
+		const f = await fixture(t);
+		if (start !== "missing") await f.items.reserveSlackStart(f.item.id);
+		if (start === "error") await f.items.slackStartResult(f.item.id, "error");
+		await f.registry.patch(f.item.id, { slack: { status: "done" } });
+		await f.drain();
+		assert.equal(f.calls.filter((call) => call.tool !== "reactions").length, 0);
+	}
+});
+
+test("a cancelled removal never turns an already persisted check into an error", async (t) => {
+	const f = await fixture(t),
+		entered = gate();
+	await f.eyes();
+	f.beforeRemoval(async (signal) => {
+		entered.release();
+		await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+	});
+	await f.registry.patch(f.item.id, { slack: { status: "done" } });
+	await entered.promise;
+	assert.equal(outcome(await f.items.require(f.item.id)), "reacted");
+	await f.registry.stop();
+	assert.equal(outcome(await f.items.require(f.item.id)), "reacted");
+	assert.equal((await f.items.require(f.item.id)).slack?.status, "done");
+	assert.equal(await f.items.reserveSlackDone(f.project.id), undefined);
+});
+
+test("normal source reads cannot invoke the configured removal write", async (t) => {
+	const f = await fixture(t, async (context) => {
+		await assert.rejects(
+			context.call("removeSlackEyes", { channel_id: "CEXAMPLE", message_ts: parent, emoji: "eyes" }),
+			/cannot write/,
+		);
+		return { items: [] };
+	});
+	await f.poll();
+	assert.equal(f.calls.filter((call) => call.tool === "removeSlackEyes").length, 0);
 });
 
 test("anyone's check closes Open/In progress, but not Done/Dismissed; reopen survives counts and refresh", async (t) => {
