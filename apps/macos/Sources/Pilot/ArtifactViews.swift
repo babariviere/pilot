@@ -31,6 +31,8 @@ final class ArtifactViewState: ObservableObject {
 
 /// Lazy transcript rows lose their state when scrolled away. Remember pinned revisions and
 /// measured sizes so a recreated card keeps its height instead of reloading from a placeholder.
+/// Sizes also persist across launches (once the app enables it), so a reopened chat starts each
+/// card at its last measured size rather than the 4:3 placeholder.
 @MainActor
 enum ArtifactInlineCache {
     private struct Key: Hashable { let host: HostRef?; let reference: ArtifactReference }
@@ -39,11 +41,14 @@ enum ArtifactInlineCache {
     private static var revisionOrder: [Key] = []
     private static var revisionBytes: [Key: Int] = [:]
     private static var totalBytes = 0
-    private static var sizes: [Key: CGSize] = [:]
     private static let revisionLimit = 32
     /// Image revisions can each hold 16 MiB or more. Bound memory by size as well as count.
     static let byteLimit = 64 * 1024 * 1024
-    private static let sizeLimit = 512
+    static let sizeLimit = 512
+    private static var sizes = MeasuredSizeMemory(limit: sizeLimit)
+    private static var persistence: UserDefaults?
+    private static var saveTask: Task<Void, Never>?
+    static let defaultsKey = "PilotArtifactInlineSizes"
 
     static func revision(for reference: ArtifactReference, host: HostRef? = nil) -> ArtifactRevision? { revisions[Key(host: host, reference: reference)] }
 
@@ -68,13 +73,49 @@ enum ArtifactInlineCache {
 
     static var retainedBytes: Int { totalBytes }
 
-    static func contentSize(for reference: ArtifactReference, host: HostRef? = nil) -> CGSize? { sizes[Key(host: host, reference: reference)] }
+    static func contentSize(for reference: ArtifactReference, host: HostRef? = nil) -> CGSize? { sizes[sizeKey(reference, host)] }
 
     static func storeContentSize(_ size: CGSize?, for artifact: ArtifactReference, host: HostRef? = nil) {
-        let reference = Key(host: host, reference: artifact)
         guard let size else { return }
-        if sizes.count >= sizeLimit, sizes[reference] == nil { sizes.removeAll(keepingCapacity: true) }
-        sizes[reference] = size
+        guard sizes.store(size, for: sizeKey(artifact, host)), persistence != nil else { return }
+        scheduleSave()
+    }
+
+    /// Pinned revisions are immutable, so a revision's measured size stays valid. The title is not part of the key.
+    static func sizeKey(_ reference: ArtifactReference, _ host: HostRef?) -> String {
+        [host?.hostId ?? "", host?.daemonId ?? "", host?.lineageId ?? "", reference.sessionId, reference.id, String(reference.revision)]
+            .map { $0.replacingOccurrences(of: "/", with: "%2F") }
+            .joined(separator: "/")
+    }
+
+    /// Restore sizes saved by an earlier launch and keep saving new ones. Tests never call this.
+    static func enablePersistence(_ defaults: UserDefaults = .standard) {
+        persistence = defaults
+        guard let data = defaults.data(forKey: defaultsKey),
+              let saved = try? JSONDecoder().decode([MeasuredSizeMemory.Entry].self, from: data) else { return }
+        // Measurements from this launch are newer than saved ones.
+        sizes = MeasuredSizeMemory(limit: sizeLimit, entries: saved + sizes.entries)
+    }
+
+    static func disablePersistence() {
+        flush()
+        persistence = nil
+    }
+
+    /// Coalesce measurement bursts into one small write.
+    private static func scheduleSave() {
+        guard saveTask == nil else { return }
+        saveTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            flush()
+        }
+    }
+
+    static func flush() {
+        saveTask?.cancel()
+        saveTask = nil
+        guard let persistence, let data = try? JSONEncoder().encode(sizes.entries) else { return }
+        persistence.set(data, forKey: defaultsKey)
     }
 }
 
@@ -90,6 +131,8 @@ struct ArtifactCard: View {
 
     init(reference: ArtifactReference, host: HostRef? = nil) {
         self.reference = reference
+        // Match the key the card stores under: without a host view context, the endpoint is the app's client.
+        let host = host ?? AppModel.shared.client.hostIdentity
         _state = StateObject(wrappedValue: {
             let state = ArtifactViewState()
             state.revision = ArtifactInlineCache.revision(for: reference, host: host)

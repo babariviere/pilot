@@ -8,16 +8,25 @@ private func bootstrapNonce(_ document: String) -> String? {
     return String(document[start.upperBound..<end])
 }
 
-@Test func expandedDiagramsZoomToTheViewerWidthWithoutChangingImageIsolation() {
+@Test func diagramsKeepNaturalSizeAndOnlyShrinkWithoutChangingImageIsolation() {
     for kind in [MarkdownDiagramKind.svg, .mermaid] {
         let inline = InlineDiagramDocument.document(kind: kind, source: "source")
         let expanded = InlineDiagramDocument.document(kind: kind, source: "source", expanded: true)
-        #expect(!inline.contains("img { width: 100%; }"))
-        #expect(expanded.contains("img { width: 100%; }"))
-        #expect(expanded.contains("height: auto;"))
-        #expect(expanded.contains("img-src data:;"))
-        #expect(expanded.contains("connect-src 'none'"))
-        #expect(expanded.contains("const url = svgImageURL(svg);"))
+        for document in [inline, expanded] {
+            // Never stretch to the host width: natural size, shrink to fit.
+            #expect(!document.contains("img { width: 100%; }"))
+            #expect(!document.contains(" width: 100%;"))
+            #expect(document.contains("img { display: block; max-width: 100%; width: auto; height: auto; margin: auto; }"))
+            #expect(document.contains("img-src data:;"))
+            #expect(document.contains("connect-src 'none'"))
+            #expect(document.contains("const url = svgImageURL(svg);"))
+        }
+        // Inline drawings fit the 480 pt block (less padding) instead of being clipped.
+        #expect(inline.contains("img { max-height: 456px; }"))
+        #expect(!inline.contains("position: absolute"))
+        // Expanded drawings center in the viewer and fit both of its dimensions.
+        #expect(expanded.contains("img { position: absolute; inset: 12px; max-width: calc(100vw - 24px); max-height: calc(100vh - 24px); }"))
+        #expect(!expanded.contains("max-height: 456px"))
     }
 }
 
@@ -102,12 +111,12 @@ private func bootstrapNonce(_ document: String) -> String? {
     #expect(document.contains("window.pilotDiagramReady = (async () =>"))
     #expect(document.contains("image.onload = resolve;"))
     #expect(document.contains("image.onerror = () => reject(new Error("))
-    #expect(document.contains("return { error: null, height: window.pilotDiagramHeight() }"))
+    #expect(document.contains("return { error: null, height: window.pilotDiagramHeight(), natural: window.pilotDiagramNaturalSize() }"))
     #expect(document.contains("})().catch(error => ({"))
     #expect(document.contains("error: error instanceof Error ? error.message : String(error)"))
     #expect(document.contains("window.pilotDiagramHeight = () => image.getBoundingClientRect().height + 24"))
+    #expect(document.contains("window.pilotDiagramNaturalSize = () => [image.naturalWidth, image.naturalHeight]"))
     #expect(document.contains("body { margin: 0; padding: 12px; background: white; }"))
-    #expect(document.contains("img { display: block; max-width: 100%; height: auto; margin: auto; }"))
     #expect(document.contains("color-scheme: light"))
 }
 

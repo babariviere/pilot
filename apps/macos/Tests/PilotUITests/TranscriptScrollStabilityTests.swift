@@ -53,6 +53,29 @@ import Testing
     #expect(ArtifactInlineCache.contentSize(for: reference) == CGSize(width: 700, height: 540))
 }
 
+@Test @MainActor func artifactCardSizesPersistAcrossLaunches() throws {
+    let suite = "pilot-artifact-sizes-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer {
+        ArtifactInlineCache.disablePersistence()
+        defaults.removePersistentDomain(forName: suite)
+    }
+    // A size saved by an earlier launch is restored before any card measures.
+    let earlier = ArtifactReference(id: UUID().uuidString, sessionId: "s", title: "Earlier", revision: 2)
+    let saved = [MeasuredSizeMemory.Entry(key: ArtifactInlineCache.sizeKey(earlier, nil), width: 760, height: 412)]
+    defaults.set(try JSONEncoder().encode(saved), forKey: ArtifactInlineCache.defaultsKey)
+    ArtifactInlineCache.enablePersistence(defaults)
+    #expect(ArtifactInlineCache.contentSize(for: earlier) == CGSize(width: 760, height: 412))
+
+    let current = ArtifactReference(id: UUID().uuidString, sessionId: "s", title: "Current", revision: 1)
+    ArtifactInlineCache.storeContentSize(CGSize(width: 760, height: 300), for: current)
+    ArtifactInlineCache.flush()
+    let data = try #require(defaults.data(forKey: ArtifactInlineCache.defaultsKey))
+    let entries = try JSONDecoder().decode([MeasuredSizeMemory.Entry].self, from: data)
+    #expect(entries.last == MeasuredSizeMemory.Entry(key: ArtifactInlineCache.sizeKey(current, nil), width: 760, height: 300))
+    #expect(entries.count <= ArtifactInlineCache.sizeLimit)
+}
+
 @Test @MainActor func pinnedArtifactRevisionCacheIsBoundedByBytes() {
     let large = String(repeating: "x", count: 20 * 1024 * 1024)
     func revision(_ id: String) -> (ArtifactReference, ArtifactRevision) {

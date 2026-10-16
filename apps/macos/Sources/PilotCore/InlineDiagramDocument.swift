@@ -1,6 +1,8 @@
 import Foundation
 
 /// Isolated diagram HTML. The host may read the ready promise and height, but no native bridge is needed.
+/// Drawings keep their natural size and only shrink (DiagramLayout): inline within the column and
+/// `DiagramLayout.inlineDrawingMaxHeight`, expanded within the viewer, centered in both.
 public enum InlineDiagramDocument {
     public static func document(kind: MarkdownDiagramKind, source: String, expanded: Bool = false) -> String {
         let nonce = UUID().uuidString.replacingOccurrences(of: "-", with: "")
@@ -42,21 +44,29 @@ public enum InlineDiagramDocument {
         }
         svg = new XMLSerializer().serializeToString(output);
         """# : ""
+        let padding = Int(DiagramLayout.padding)
+        // Inline drawings fit the column and the inline height ceiling, keeping their aspect ratio.
+        // Expanded ones center in the viewer, positioned so auto sizing keeps their natural size.
+        let fit = expanded
+            ? "img { position: absolute; inset: \(padding)px; max-width: calc(100vw - \(2 * padding)px); max-height: calc(100vh - \(2 * padding)px); }"
+            : "img { max-height: \(Int(DiagramLayout.inlineDrawingMaxHeight))px; }"
         return #"""
         <!doctype html><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-\#(nonce)'\#(library); style-src 'unsafe-inline'; img-src data:; connect-src 'none'; frame-src 'none'; child-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'; media-src 'none'">
         <meta http-equiv="x-dns-prefetch-control" content="off">
         <meta name="color-scheme" content="light">
         <style>
         html { background: white; color-scheme: light; }
-        body { margin: 0; padding: 12px; background: white; }
-        img { display: block; max-width: 100%; height: auto; margin: auto; }
-        \#(expanded ? "img { width: 100%; }" : "")
+        body { margin: 0; padding: \#(padding)px; background: white; }
+        img { display: block; max-width: 100%; width: auto; height: auto; margin: auto; }
+        \#(fit)
         </style>
         <body><img id="diagram" alt="Diagram">
         <script nonce="\#(nonce)">
         (() => {
           const image = document.getElementById('diagram');
-          window.pilotDiagramHeight = () => image.getBoundingClientRect().height + 24;
+          window.pilotDiagramHeight = () => image.getBoundingClientRect().height + \#(2 * padding);
+          // Natural size lets the host size the block for any width without measuring the page again.
+          window.pilotDiagramNaturalSize = () => [image.naturalWidth, image.naturalHeight];
           const sourceBase64 = '\#(encoded)';
           const oversized = \#(oversized ? "true" : "false");
 
@@ -109,7 +119,7 @@ public enum InlineDiagramDocument {
               image.onerror = () => reject(new Error('Unable to display the diagram image.'));
               image.src = url;
             });
-            return { error: null, height: window.pilotDiagramHeight() };
+            return { error: null, height: window.pilotDiagramHeight(), natural: window.pilotDiagramNaturalSize() };
           })().catch(error => ({
             error: error instanceof Error ? error.message : String(error),
             height: window.pilotDiagramHeight()
