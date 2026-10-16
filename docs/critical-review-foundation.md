@@ -40,3 +40,28 @@ replays acquisition. Session/archive deletion, access-revocation hooks, authenti
 cache invalidation outside this namespace and maintenance scheduling are **not wired**. Archive alone
 must not erase eligible objects. Those integrations must use linked erasure rather than copying text
 into another untracked store. No automatic cross-host distribution is implemented.
+
+## Consent and accounting
+
+Schema v3 adds a separate durable ledger. Only a trusted host adapter may install structured
+snapshot/run-scoped grants and current verified pricing. Admission enforces one active run per
+logical target and two per host. Every call, including classifier and follow-ups, reserves worst-case
+money/input/generated/time before a durable send claim. A send claim is single-use. Restart marks
+in-flight reservations uncertain and releases concurrency, never refunding or replaying calls.
+
+PR total profiles are $1/32k/6k/2m, $4/120k/12k/5m and $10/300k/24k/10m. Session review is a
+separate fixed $4/120k/12k/5m profile. Classifier is included, once only, capped at $0.10/12k/1.2k,
+15s provider/30s stage. At least 15% generated allowance remains for final output. Upward transitions
+consume a new authorized total, never an additive allowance. Exact provider/model/billing must match
+the grant and rate. Subscription calls still consume usage ceilings and require open provider gates;
+they cannot silently fall back to paid API calls. Shared rolling limits are $20/600k input/48k
+generated per 24h. Unknown usage remains worst-case even after the window until reconciled; known
+overruns stay charged and freeze further calls. Duplicate/conflicting receipts never reduce charges.
+
+Rates, provider gates and receipts are host assertions, not model text. No live pricing lookup,
+credential access, real provider adapter, consent UI or automatic retry is installed. Production must
+authenticate structured owner actions, verify provider maxima/prices, call recovery before admission,
+and honor send deadlines/cancellation. Wall time conservatively includes time since run creation;
+approval-wait exclusion is not yet wired and cannot extend an allowance through these primitives.
+The accounting ledger retains only opaque IDs, hashed target keys and numeric costs after linked
+erasure, so deletion cannot reset budgets. No private transcript/context text enters this ledger.

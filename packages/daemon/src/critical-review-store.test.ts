@@ -162,7 +162,7 @@ test("empty legacy database migrates idempotently; future versions fail closed",
 			await store.close();
 		}
 		const db = new DatabaseSync(file);
-		assert.equal(db.prepare("PRAGMA user_version").get()!.user_version, 2);
+		assert.equal(db.prepare("PRAGMA user_version").get()!.user_version, 3);
 		db.exec("PRAGMA user_version=99");
 		db.close();
 		const future = new CriticalReviewStore(file);
