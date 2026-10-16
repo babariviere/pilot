@@ -30,26 +30,33 @@ func addDevboxPresentsSetupSheetAfterCancelAndReopen() async throws {
     }
     hosting.layoutSubtreeIfNeeded()
     try await devboxSettingsWait("Add devbox button did not mount", in: hosting) {
-        devboxSettingsButton("Add devbox…", in: hosting) != nil
+        devboxSettingsControls(in: hosting, of: NSButton.self).count == 1
     }
 
     for _ in 0..<2 {
         #expect(window.attachedSheet == nil)
-        try devboxSettingsClick("Add devbox…", in: window)
+        // With no saved hosts, Add devbox is the destination's only button. SwiftUI's
+        // hosted labels are not exposed as NSButton titles in this in-process runner.
+        let addButtons = devboxSettingsControls(in: hosting, of: NSButton.self)
+        try #require(addButtons.count == 1)
+        let add = try #require(addButtons.first)
+        try devboxSettingsClick(add)
         try await devboxSettingsWait("Add devbox did not present its setup sheet", in: hosting) {
             window.attachedSheet != nil
         }
         let sheet = try #require(window.attachedSheet)
         let content = try #require(sheet.contentView)
         try await devboxSettingsWait("The live setup form did not mount", in: content) {
-            devboxSettingsControl(in: content, matching: { (field: NSTextField) in
-                field.isEditable && field.placeholderString == "Existing SSH alias"
-            }) != nil && devboxSettingsButton("Cancel", in: content) != nil
+            devboxSettingsControls(in: content, of: NSTextField.self).contains { $0.isEditable }
+                && devboxSettingsControls(in: content, of: NSButton.self).count >= 2
         }
-        let setup = try #require(devboxSettingsButton("Set up devbox", in: content))
+        let fields = devboxSettingsControls(in: content, of: NSTextField.self).filter(\.isEditable)
+        try #require(fields.count == 1)
+        #expect(fields.first?.stringValue == "")
+        let (cancel, setup) = try devboxSettingsFooter(in: content)
         #expect(!setup.isEnabled, "Opening setup must not grant installation permission")
         #expect(packageLoads == 0)
-        try devboxSettingsClick("Cancel", in: sheet)
+        try devboxSettingsClick(cancel)
         try await devboxSettingsWait("Cancel did not dismiss the setup sheet", in: content) {
             window.attachedSheet == nil
         }
@@ -67,32 +74,30 @@ func addDevboxPresentsSetupSheetAfterCancelAndReopen() async throws {
     try #require(ready(), Comment(rawValue: message))
 }
 
-@MainActor private func devboxSettingsControl<V: NSView>(in view: NSView, matching: (V) -> Bool) -> V? {
-    if let control = view as? V, matching(control) { return control }
-    for child in view.subviews {
-        if let found = devboxSettingsControl(in: child, matching: matching) { return found }
-    }
-    return nil
+@MainActor private func devboxSettingsControls<V: NSView>(in view: NSView, of type: V.Type) -> [V] {
+    (view as? V).map { [$0] } ?? view.subviews.flatMap { devboxSettingsControls(in: $0, of: type) }
 }
 
-@MainActor private func devboxSettingsButton(_ title: String, in content: NSView) -> NSButton? {
-    devboxSettingsControl(in: content) { (button: NSButton) in
-        [button.title, button.accessibilityLabel(), button.accessibilityTitle()].contains(title)
-    }
+/// SheetScaffold's bottom row contains Cancel followed by the primary action.
+/// Locate that mounted row, not a guessed fixed coordinate or a replacement action.
+@MainActor private func devboxSettingsFooter(in content: NSView) throws -> (NSButton, NSButton) {
+    let buttons = devboxSettingsControls(in: content, of: NSButton.self)
+    let bottom = try #require(buttons.map { $0.convert($0.bounds, to: nil).midY }.min())
+    let footer = buttons.filter { abs($0.convert($0.bounds, to: nil).midY - bottom) < 3 }
+        .sorted { $0.convert($0.bounds, to: nil).midX < $1.convert($1.bounds, to: nil).midX }
+    try #require(footer.count == 2, "Expected Cancel and Set up devbox in the real sheet footer")
+    return (footer[0], footer[1])
 }
 
 @MainActor private func devboxSettingsViewTree(_ view: NSView, depth: Int = 0) -> String {
-    let title = (view as? NSButton).map {
-        "title=\($0.title), label=\($0.accessibilityLabel() ?? "nil"), axTitle=\($0.accessibilityTitle() ?? "nil"), id=\($0.accessibilityIdentifier() ?? "nil"), key=\($0.keyEquivalent.debugDescription)"
-    } ?? (view as? NSTextField)?.placeholderString ?? ""
+    let title = (view as? NSButton)?.title ?? (view as? NSTextField)?.placeholderString ?? ""
     return String(repeating: " ", count: depth) + "\(type(of: view)) \(view.frame) \(title)\n"
         + view.subviews.map { devboxSettingsViewTree($0, depth: depth + 1) }.joined()
 }
 
 /// Find the mounted AppKit control, then send native mouse events to its window.
-@MainActor private func devboxSettingsClick(_ title: String, in window: NSWindow) throws {
-    let content = try #require(window.contentView)
-    let button = try #require(devboxSettingsButton(title, in: content), "Missing button \(title)")
+@MainActor private func devboxSettingsClick(_ button: NSButton) throws {
+    let window = try #require(button.window)
     try #require(button.isEnabled)
     try #require(!button.bounds.isEmpty)
     let location = button.convert(NSPoint(x: button.bounds.midX, y: button.bounds.midY), to: nil)
