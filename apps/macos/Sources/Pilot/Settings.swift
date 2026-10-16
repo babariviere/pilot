@@ -22,6 +22,13 @@ final class AppSettings: ObservableObject {
     @Published var terminalFontSize: Double { didSet { defaults.set(terminalFontSize, forKey: "terminalFontSize") } }
     @Published var useGhosttyConfig: Bool { didSet { defaults.set(useGhosttyConfig, forKey: "useGhosttyConfig") } }
     @Published var notifyWhenPRReady: Bool { didSet { defaults.set(notifyWhenPRReady, forKey: "notifyWhenPRReady") } }
+    /// Light, dark, or following the system. Applied app-wide through `NSApp.appearance`.
+    @Published var appearance: AppearanceMode {
+        didSet {
+            defaults.set(appearance.rawValue, forKey: "appearance")
+            applyAppearance()
+        }
+    }
 
     init() {
         chatFontFamily = defaults.string(forKey: "chatFontFamily") ?? Self.systemFont
@@ -32,6 +39,11 @@ final class AppSettings: ObservableObject {
         terminalFontSize = defaults.object(forKey: "terminalFontSize") as? Double ?? 0
         useGhosttyConfig = defaults.object(forKey: "useGhosttyConfig") as? Bool ?? true
         notifyWhenPRReady = defaults.object(forKey: "notifyWhenPRReady") as? Bool ?? false
+        appearance = defaults.string(forKey: "appearance").flatMap(AppearanceMode.init(rawValue:)) ?? .system
+    }
+
+    func applyAppearance() {
+        NSApp.appearance = appearance.nsAppearance
     }
 
     var fonts: PilotFonts {
@@ -60,6 +72,29 @@ final class AppSettings: ObservableObject {
               let font = NSFont(name: name, size: 12)
         else { return false }
         return font.isFixedPitch
+    }
+}
+
+/// The app's appearance setting. `system` follows macOS, including automatic light and dark switching.
+enum AppearanceMode: String, CaseIterable, Identifiable {
+    case system, light, dark
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .system: "System"
+        case .light: "Light"
+        case .dark: "Dark"
+        }
+    }
+
+    var nsAppearance: NSAppearance? {
+        switch self {
+        case .system: nil
+        case .light: NSAppearance(named: .aqua)
+        case .dark: NSAppearance(named: .darkAqua)
+        }
     }
 }
 
@@ -189,7 +224,7 @@ struct SettingsView: View {
     @ViewBuilder private var detail: some View {
         switch model.settingsTab {
         case .appearance:
-            SettingsPage("Appearance", subtitle: "Fonts for chat, code and tool output.") {
+            SettingsPage("Appearance", subtitle: "Theme and fonts for chat, code and tool output.") {
                 AppearanceDefaultsButton()
             } content: {
                 AppearanceSettings()
@@ -525,6 +560,16 @@ private struct AppearanceSettings: View {
     @ObservedObject private var settings = AppSettings.shared
 
     var body: some View {
+        SettingsSection("Theme") {
+            SettingsRow("Appearance", detail: "System follows macOS, including its automatic switching.") {
+                Picker("Appearance", selection: $settings.appearance) {
+                    ForEach(AppearanceMode.allCases) { Text($0.title).tag($0) }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .fixedSize()
+            }
+        }
         SettingsSection("Preview") {
             SettingsRow {
                 VStack(alignment: .leading, spacing: 8) {

@@ -480,7 +480,7 @@ private struct ConnectionFooter: View {
             Spacer()
         }
         .font(.pilot(.small))
-        .foregroundStyle(.secondary)
+        .foregroundStyle(Theme.mutedForeground)
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
     }

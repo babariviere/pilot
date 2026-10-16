@@ -624,7 +624,7 @@ private struct EarlierMessagesRow: View {
                         Text("Loading earlier messages…")
                     }
                     .font(.pilot(.caption))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.mutedForeground)
                     .fixedSize()
                 } else {
                     Button(error == nil ? "Show earlier messages" : "Retry loading earlier messages", action: load)
@@ -638,7 +638,7 @@ private struct EarlierMessagesRow: View {
             if let error, !loading {
                 Text(error)
                     .font(.pilot(.caption))
-                    .foregroundStyle(.red)
+                    .foregroundStyle(Theme.error)
                     .multilineTextAlignment(.center)
                     .textSelection(.enabled)
             }
@@ -659,7 +659,7 @@ private struct ErrorRow: View {
             } icon: {
                 PilotSymbol(PilotIcon.warning)
             }
-            .foregroundStyle(.red)
+            .foregroundStyle(Theme.error)
             .frame(maxWidth: .infinity, alignment: .leading)
             if let entryID, let rewind {
                 RetryButton(entryID: entryID, rewind: rewind)
@@ -668,6 +668,6 @@ private struct ErrorRow: View {
         .font(.callout)
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: Theme.Radius.control).fill(Color.red.opacity(0.08)))
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.control).fill(Theme.destructive.opacity(0.1)))
     }
 }

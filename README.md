@@ -59,6 +59,8 @@ See [screenshot notes](docs/screenshots/README.md) to regenerate them.*
 - **Bring work into Pilot.** Track Linear issues and Slack messages from configured sources, triage Slack
   messages by type, label and severity, see what waits on you across projects in one Inbox, then start a chat or
   mission from an item. Schedule work for later or for wake, online and time triggers.
+- **Light or dark.** Pilot follows the macOS appearance; **Settings → Appearance** can pin light or dark.
+  Artifacts stay light documents in both.
 
 ## Get started
 

@@ -111,6 +111,8 @@ struct ArtifactCard: View {
                         Color.clear
                     }
                 }
+                // Artifacts are light documents. In dark, transparent inline ones sit on light paper to stay readable.
+                .background(RoundedRectangle(cornerRadius: Theme.Radius.control).fill(state.visible ? Theme.artifactPaper : .clear))
                 .clipped()
                 // Like a folded message: content taller than the inline ceiling fades out over a
                 // soft shadow, so the cut reads as "more inside" (click opens the full viewer).
@@ -130,7 +132,7 @@ struct ArtifactCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 Button("Show \(reference.title)") { state.preview = true }
-                    .buttonStyle(.plain).foregroundStyle(.secondary)
+                    .buttonStyle(.plain).foregroundStyle(Theme.mutedForeground)
             }
         }
         .contextMenu {
@@ -215,11 +217,11 @@ struct ArtifactViewerHeader: View {
                         Text(revision.kind.rawValue.uppercased())
                     }
                 }
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(Theme.mutedForeground)
                 if let error = state.exportError {
                     InlineProblem(error).lineLimit(2)
                 } else if let message = state.exportMessage {
-                    Text(message).font(.caption).foregroundStyle(.secondary)
+                    Text(message).font(.caption).foregroundStyle(Theme.mutedForeground)
                 }
             }
             Spacer(minLength: 12)
@@ -351,7 +353,7 @@ private struct ArtifactPreview: View {
         ArtifactWebView(revision: revision, client: AppModel.shared.client, inline: inline, state: state)
             .overlay {
                 if let error = state.error {
-                    Text(error).font(.callout).foregroundStyle(.secondary).padding()
+                    Text(error).font(.callout).foregroundStyle(Theme.mutedForeground).padding()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .background(inline ? Color.clear : Theme.background)
                 } else if state.loading { ProgressView("Starting sandbox…") }

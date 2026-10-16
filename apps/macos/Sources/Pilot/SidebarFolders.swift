@@ -32,7 +32,7 @@ struct ProjectFolderEditor: View {
                 .accessibilityLabel("Folder name")
                 .onSubmit { if editor.valid { onSave() } }
             Text("Folders organize projects in Pilot only. Repositories stay where they are.")
-                .font(.pilot(.small)).foregroundStyle(.secondary)
+                .font(.pilot(.small)).foregroundStyle(Theme.mutedForeground)
             HStack {
                 Spacer()
                 Button("Cancel") { editor.presented = false }

@@ -98,7 +98,7 @@ private struct BlockView: View {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text(ordered ? "\(start + index)." : "•")
                             .font(fonts.body.monospacedDigit())
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Theme.mutedForeground)
                             .frame(minWidth: 14, alignment: .trailing)
                         SelectableMessageText(text: block.items[index], font: fonts.nsBody, monoFont: fonts.nsMono, item: index,
                                               hugsContent: hugsContent, copyPrefix: ordered ? "\(start + index). " : "• ")
@@ -112,7 +112,7 @@ private struct BlockView: View {
             InlineDiagramBlock(kind: kind, text: text).id(kind.rawValue + ":" + text)
         case let .quote(text):
             HStack(alignment: .top, spacing: 10) {
-                RoundedRectangle(cornerRadius: 1).fill(.tertiary).frame(width: 3)
+                RoundedRectangle(cornerRadius: 1).fill(Theme.faintForeground).frame(width: 3)
                 SelectableMessageText(text: block.inline ?? AttributedString(text), font: fonts.nsBody,
                                       monoFont: fonts.nsMono, color: .secondaryLabelColor, lineSpacing: 0,
                                       hugsContent: hugsContent)
@@ -141,7 +141,7 @@ struct CodeBlock: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text(language ?? "code").font(.caption).foregroundStyle(.secondary)
+                Text(language ?? "code").font(.caption).foregroundStyle(Theme.mutedForeground)
                 Spacer()
                 CopyButton(text: text)
             }
@@ -193,7 +193,7 @@ struct CopyButton: View {
             PilotSymbol(PilotIcon.copy, context: .toolbar)
         }
         .buttonStyle(.borderless)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(Theme.mutedForeground)
         .help("Copy")
     }
 }
