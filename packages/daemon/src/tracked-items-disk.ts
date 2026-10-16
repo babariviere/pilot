@@ -25,6 +25,9 @@ export type SlackCache = { state: "pending" | "error" } | { state: "done"; resul
 export type SlackReservation = SlackCache | { state: "reserved" } | { state: "budget" };
 export const SLACK_DAILY_BUDGET = 100;
 export const SLACK_REACTION_BATCH = 8;
+/** Waiting messages read per poll, and how often one message's thread is read for new replies. */
+export const SLACK_WAITING_BATCH = 4;
+export const SLACK_WAITING_INTERVAL_MS = 10 * 60_000;
 export interface SlackReactionRead {
 	item: TrackedItem;
 	version: number;
@@ -33,6 +36,24 @@ export interface SlackReactionBatch {
 	reads: SlackReactionRead[];
 	budget: boolean;
 }
+/** A waiting message to read, with the start of its wait (the fence for its result) and replies already seen. */
+export interface SlackWaitingRead {
+	item: TrackedItem;
+	since: number;
+	/** Slack ts after which replies are new. */
+	afterTs: string;
+}
+export interface SlackWaitingBatch {
+	reads: SlackWaitingRead[];
+	budget: boolean;
+}
+/** What a slack_status call changed. */
+export interface SlackAgentStatusResult {
+	updated: Array<{ title: string; status: SlackTriage["status"] }>;
+	/** Messages whose status belongs to the user (open, done or dismissed), left unchanged. */
+	unchanged: Array<{ title: string; status: SlackTriage["status"] }>;
+}
+type SlackWaiting = { since: number; reason?: string; afterTs?: string; checkedAt?: number };
 
 export type TrackedInput = Pick<TrackedItem, "externalId" | "title" | "url" | "status" | "metadata" | "updatedAt"> & {
 	/** Slack only: the thread's text, kept locally for search and never returned to clients. */
@@ -91,6 +112,7 @@ type Row = {
 	slack_reaction_seen: number;
 	slack_reaction_checked: number;
 	slack_status_version: number;
+	slack_waiting: string | null;
 	linear_size_override: import("@pilot/protocol").LinearSize | null;
 	slack_case_id: string | null;
 	created_at: number;
@@ -118,10 +140,12 @@ export interface InboxTracked {
 	linear: TrackedItemList;
 	slack: TrackedItemList & { hidden: InboxHiddenLabel[] };
 }
-// What the Inbox lists: my Linear tickets not done, and Slack messages still open or in progress.
+// What the Inbox lists: my Linear tickets not done, and Slack messages still open or in progress (not waiting).
 const LINEAR_OPEN =
 	"kind = 'linear' AND active = 1 AND dismissed = 0 AND coalesce(json_extract(metadata, '$.statusType'), '') NOT IN ('completed', 'canceled')";
 const SLACK_OPEN = "kind = 'slack' AND active = 1 AND dismissed = 0 AND slack_status IN ('open', 'in_progress')";
+/** Statuses whose work is unfinished: a ✅ in Slack, a merged PR or a completed mission marks them Done. */
+const SLACK_UNFINISHED = ["open", "in_progress", "waiting"];
 /** The effective label: a user override (an explicit null clears it) wins over the classifier's. */
 const SLACK_LABEL =
 	"CASE WHEN json_type(slack_overrides, '$.label') IS NOT NULL THEN json_extract(slack_overrides, '$.label') ELSE json_extract(metadata, '$.label') END";
@@ -212,12 +236,19 @@ export class TrackedItemDisk {
 		for (const column of ["slack_reaction_seen", "slack_reaction_checked", "slack_status_version"])
 			if (!columns.some((entry) => entry.name === column))
 				this.db.exec(`ALTER TABLE tracked_items ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0`);
+		// While a Slack message waits: { since, reason?, afterTs?, checkedAt? }. Stale once the status changes.
+		if (!columns.some((column) => column.name === "slack_waiting"))
+			this.db.exec("ALTER TABLE tracked_items ADD COLUMN slack_waiting TEXT");
 		this.db
 			.prepare(`UPDATE tracked_items SET slack_done=json_set(slack_done, '$.outcome', 'error', '$.error', ?)
 			WHERE slack_done IS NOT NULL AND json_extract(slack_done, '$.outcome') IS NULL`)
 			.run("Couldn't add done reaction in Slack.");
-		this.db.exec(`CREATE INDEX IF NOT EXISTS slack_reaction_reads ON tracked_items(project_id, slack_reaction_checked, id)
-			WHERE kind='slack' AND active=1 AND dismissed=0 AND slack_status IN ('open','in_progress');
+		// Waiting messages joined the reaction reads; the older index no longer covers their query.
+		this.db.exec(`DROP INDEX IF EXISTS slack_reaction_reads;
+			CREATE INDEX IF NOT EXISTS slack_reaction_reads_unfinished ON tracked_items(project_id, slack_reaction_checked, id)
+			WHERE kind='slack' AND active=1 AND dismissed=0 AND slack_status IN ('open','in_progress','waiting');
+			CREATE INDEX IF NOT EXISTS slack_waiting_reads ON tracked_items(project_id, id)
+			WHERE kind='slack' AND active=1 AND slack_status='waiting';
 			CREATE INDEX IF NOT EXISTS slack_done_pending ON tracked_items(project_id, id)
 			WHERE kind='slack' AND active=1 AND slack_status='done' AND slack_done IS NULL
 			AND json_extract(slack_start, '$.outcome')='reacted';`);
@@ -756,7 +787,7 @@ export class TrackedItemDisk {
 		try {
 			const rows = this.db
 				.prepare(`SELECT * FROM tracked_items WHERE project_id=? AND kind='slack'
-				AND active=1 AND dismissed=0 AND slack_status IN ('open','in_progress')
+				AND active=1 AND dismissed=0 AND slack_status IN ('open','in_progress','waiting')
 				ORDER BY slack_reaction_checked, id LIMIT ?`)
 				.all(projectId, SLACK_REACTION_BATCH) as Row[];
 			const day = new Date(now).toISOString().slice(0, 10);
@@ -787,7 +818,7 @@ export class TrackedItemDisk {
 		try {
 			const row = this.db.prepare("SELECT * FROM tracked_items WHERE id=?").get(id) as Row | undefined;
 			if (row?.kind === "slack") {
-				if (present || (row.slack_status_version === version && ["open", "in_progress"].includes(row.slack_status)))
+				if (present || (row.slack_status_version === version && SLACK_UNFINISHED.includes(row.slack_status)))
 					this.db.prepare("UPDATE tracked_items SET slack_reaction_seen=? WHERE id=?").run(present ? 1 : 0, id);
 				if (
 					present &&
@@ -795,7 +826,7 @@ export class TrackedItemDisk {
 					row.slack_status_version === version &&
 					row.active &&
 					!row.dismissed &&
-					["open", "in_progress"].includes(row.slack_status)
+					SLACK_UNFINISHED.includes(row.slack_status)
 				) {
 					const completion = {
 						...JSON.parse(row.slack_completion),
@@ -816,6 +847,140 @@ export class TrackedItemDisk {
 			throw error;
 		}
 		if (projectId) this.emit(projectId);
+	}
+
+	/**
+	 * The agent of a chat reports its Slack messages as waiting for a reply, or back in progress. Only messages whose
+	 * latest chat is this one, and only between In progress and Waiting: other statuses are the user's.
+	 */
+	agentSlackStatus(sessionId: string, status: "waiting" | "in_progress", reason?: string): SlackAgentStatusResult {
+		if (typeof sessionId !== "string" || !sessionId || sessionId.length > 200) throw new Error("Invalid chat");
+		if (status !== "waiting" && status !== "in_progress")
+			throw new Error('status must be "waiting" or "in_progress"');
+		if (reason !== undefined && (typeof reason !== "string" || reason.length > 200))
+			throw new Error("reason must be at most 200 characters");
+		const text = reason
+			?.replace(/[\x00-\x1f\x7f]+/g, " ")
+			.replace(/\s+/g, " ")
+			.trim();
+		const result: SlackAgentStatusResult = { updated: [], unchanged: [] };
+		const projects = new Set<string>();
+		this.db.exec("BEGIN IMMEDIATE");
+		try {
+			const rows = this.db
+				.prepare(`SELECT i.id, i.project_id, i.title, i.slack_status
+				FROM tracked_item_links l CROSS JOIN tracked_items i ON i.id=l.item_id
+				WHERE l.kind='sessions' AND l.target=? AND i.kind='slack' AND i.session_id=? ORDER BY i.id LIMIT ?`)
+				.all(sessionId, sessionId, LINK_LIMIT) as Pick<Row, "id" | "project_id" | "title" | "slack_status">[];
+			for (const row of rows) {
+				if (row.slack_status !== "in_progress" && row.slack_status !== "waiting") {
+					result.unchanged.push({ title: row.title, status: row.slack_status });
+					continue;
+				}
+				const waiting: SlackWaiting | null =
+					status === "waiting" ? { since: Date.now(), ...(text ? { reason: text } : {}) } : null;
+				this.db
+					.prepare("UPDATE tracked_items SET slack_status=?, slack_waiting=coalesce(?, slack_waiting) WHERE id=?")
+					.run(status, waiting && JSON.stringify(waiting), row.id);
+				result.updated.push({ title: row.title, status });
+				projects.add(row.project_id);
+			}
+			this.db.exec("COMMIT");
+		} catch (error) {
+			this.db.exec("ROLLBACK");
+			throw error;
+		}
+		if (!result.updated.length && !result.unchanged.length)
+			throw new Error("This chat isn't linked to a Slack message, so it has no Slack status.");
+		for (const projectId of projects) this.emit(projectId);
+		return result;
+	}
+
+	/** Which of these chats are the latest chat of one of the project's Slack messages. */
+	slackLinkedSessions(projectId: string, sessionIds: string[]): string[] {
+		if (
+			typeof projectId !== "string" ||
+			!Array.isArray(sessionIds) ||
+			sessionIds.length > 500 ||
+			sessionIds.some((id) => typeof id !== "string" || id.length > 200)
+		)
+			throw new Error("Invalid Slack link query");
+		if (!sessionIds.length) return [];
+		return this.db
+			.prepare(`SELECT DISTINCT session_id FROM tracked_items WHERE project_id=? AND kind='slack'
+			AND session_id IN (SELECT value FROM json_each(?))`)
+			.all(projectId, JSON.stringify(sessionIds))
+			.map((row) => String(row.session_id));
+	}
+
+	/** Waiting messages due for a reply check, least recently checked first, reserved against the daily budget. */
+	reserveSlackWaiting(projectId: string, now: number): SlackWaitingBatch {
+		this.db.exec("BEGIN IMMEDIATE");
+		try {
+			const due = (
+				this.db
+					.prepare(`SELECT * FROM tracked_items WHERE project_id=? AND kind='slack' AND active=1
+					AND slack_status='waiting' ORDER BY id LIMIT 500`)
+					.all(projectId) as Row[]
+			)
+				.map((row) => ({
+					row,
+					waiting: (row.slack_waiting ? JSON.parse(row.slack_waiting) : { since: 0 }) as SlackWaiting,
+				}))
+				.filter(({ waiting }) => now - (waiting.checkedAt ?? 0) >= SLACK_WAITING_INTERVAL_MS)
+				.sort((a, b) => (a.waiting.checkedAt ?? 0) - (b.waiting.checkedAt ?? 0))
+				.slice(0, SLACK_WAITING_BATCH);
+			const day = new Date(now).toISOString().slice(0, 10);
+			const used = Number(this.db.prepare("SELECT used FROM slack_budget WHERE day=?").get(day)?.used ?? 0);
+			const picked = due.slice(0, Math.max(0, SLACK_DAILY_BUDGET - used));
+			if (picked.length) {
+				this.db
+					.prepare(`INSERT INTO slack_budget VALUES (?, ?) ON CONFLICT(day) DO UPDATE SET used=used+excluded.used`)
+					.run(day, picked.length);
+				for (const { row, waiting } of picked)
+					this.db
+						.prepare("UPDATE tracked_items SET slack_waiting=? WHERE id=?")
+						.run(JSON.stringify({ ...waiting, checkedAt: now } satisfies SlackWaiting), row.id);
+			}
+			this.db.exec("COMMIT");
+			return {
+				reads: picked.map(({ row, waiting }) => ({
+					item: decode(row),
+					since: waiting.since,
+					afterTs: waiting.afterTs ?? `${Math.floor(waiting.since / 1000)}.000000`,
+				})),
+				budget: picked.length < due.length,
+			};
+		} catch (error) {
+			this.db.exec("ROLLBACK");
+			throw error;
+		}
+	}
+
+	/**
+	 * Applies a reply check to a message still waiting since `since`: a new reply ends the wait (In progress once its
+	 * chat was resumed, else Open), and the user's own replies only move afterTs. Returns whether it applied.
+	 */
+	slackWaitingResult(
+		id: string,
+		since: number,
+		result: { status?: "in_progress" | "open"; afterTs?: string },
+	): boolean {
+		if (result.status !== undefined && result.status !== "in_progress" && result.status !== "open")
+			throw new Error("Invalid Slack waiting result");
+		if (result.afterTs !== undefined && !/^\d{1,12}\.\d{6}$/.test(result.afterTs))
+			throw new Error("Invalid Slack timestamp");
+		const row = this.db.prepare("SELECT * FROM tracked_items WHERE id=?").get(id) as Row | undefined;
+		if (row?.kind !== "slack" || row.slack_status !== "waiting" || !row.slack_waiting) return false;
+		const waiting = JSON.parse(row.slack_waiting) as SlackWaiting;
+		if (waiting.since !== since) return false;
+		if (result.status) this.db.prepare("UPDATE tracked_items SET slack_status=? WHERE id=?").run(result.status, id);
+		else if (result.afterTs)
+			this.db
+				.prepare("UPDATE tracked_items SET slack_waiting=? WHERE id=?")
+				.run(JSON.stringify({ ...waiting, afterTs: result.afterTs } satisfies SlackWaiting), id);
+		if (result.status) this.emit(row.project_id);
+		return true;
 	}
 
 	/** Durable once-per-item admission. Reopen never schedules a reaction or clears the outcome. */
@@ -932,7 +1097,7 @@ export class TrackedItemDisk {
 		let changed = false;
 		for (const row of rows) {
 			const admitted = this.db.prepare("INSERT OR IGNORE INTO slack_done_events VALUES (?, ?)").run(row.id, event);
-			if (!admitted.changes || !["open", "in_progress"].includes(row.slack_status) || row.dismissed) continue;
+			if (!admitted.changes || !SLACK_UNFINISHED.includes(row.slack_status) || row.dismissed) continue;
 			this.db
 				.prepare(
 					"UPDATE tracked_items SET slack_status='done', closed_by_label=NULL, slack_completion=? WHERE id=?",
@@ -1009,8 +1174,13 @@ export class TrackedItemDisk {
 			if (userStatus)
 				this.db
 					.prepare(`UPDATE tracked_items SET slack_status_version=slack_status_version+1,
-					slack_reaction_seen=CASE WHEN ? IN ('open','in_progress') THEN 1 ELSE slack_reaction_seen END WHERE id=?`)
+					slack_reaction_seen=CASE WHEN ? IN ('open','in_progress','waiting') THEN 1 ELSE slack_reaction_seen END WHERE id=?`)
 					.run(patch.dismissed !== undefined || patch.slack?.status !== undefined ? status : "", id);
+			// A wait the user starts has no reason; replies after it resume work like an agent's wait.
+			if (status === "waiting" && item.slack?.status !== "waiting")
+				this.db
+					.prepare("UPDATE tracked_items SET slack_waiting=? WHERE id=?")
+					.run(JSON.stringify({ since: Date.now() } satisfies SlackWaiting), id);
 			if (userStatus)
 				this.db
 					.prepare(
@@ -1119,6 +1289,8 @@ function decode(row: Row): TrackedItem {
 	const slackDone = row.slack_done ? JSON.parse(row.slack_done) : undefined;
 	const completion = JSON.parse(row.slack_completion);
 	const overrides: SlackOverrides = JSON.parse(row.slack_overrides);
+	const waiting: SlackWaiting | undefined =
+		row.slack_status === "waiting" && row.slack_waiting ? JSON.parse(row.slack_waiting) : undefined;
 	const slack: SlackTriage | undefined =
 		row.kind === "slack"
 			? {
@@ -1130,6 +1302,8 @@ function decode(row: Row): TrackedItem {
 					overrides,
 					...(row.closed_by_label ? { closedByLabel: row.closed_by_label } : {}),
 					...(row.slack_status === "done" && completion.reason ? { doneReason: completion.reason } : {}),
+					...(waiting?.reason ? { waitingReason: waiting.reason } : {}),
+					...(waiting ? { waitingSince: waiting.since } : {}),
 				}
 			: undefined;
 	return {
@@ -1252,7 +1426,10 @@ export function validatePatch(value: unknown): asserts value is TrackedItemPatch
 			throw new Error("Invalid Slack type");
 		if (fields.severity !== undefined && !["low", "medium", "high", "critical"].includes(fields.severity))
 			throw new Error("Invalid Slack severity");
-		if (fields.status !== undefined && !["open", "in_progress", "done", "dismissed"].includes(fields.status))
+		if (
+			fields.status !== undefined &&
+			!["open", "in_progress", "waiting", "done", "dismissed"].includes(fields.status)
+		)
 			throw new Error("Invalid Slack status");
 		if (
 			fields.status !== undefined &&

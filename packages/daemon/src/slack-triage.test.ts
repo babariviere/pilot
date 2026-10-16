@@ -149,7 +149,7 @@ test("legacy global boolean cache migrates without calls or budget charges; new 
 	const db = new DatabaseSync(path);
 	db.exec(
 		`PRAGMA user_version=0;
-		DROP INDEX slack_reaction_reads; DROP INDEX slack_done_pending;
+		DROP INDEX slack_reaction_reads_unfinished; DROP INDEX slack_waiting_reads; DROP INDEX slack_done_pending;
 		ALTER TABLE tracked_items DROP COLUMN slack_status; ALTER TABLE tracked_items DROP COLUMN slack_overrides`,
 	);
 	const legacy = {

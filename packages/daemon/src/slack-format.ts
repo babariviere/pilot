@@ -206,6 +206,75 @@ export function parseSlackThreadParent(value: TrackingJson, parentTs: string): {
 		.trim();
 	return { ...(author ? { author } : {}), text: body };
 }
+export interface SlackReply {
+	ts: string;
+	/** Slack user or bot ID from the From line, when present. */
+	userId?: string;
+	/** Display name, without email or ID. */
+	author?: string;
+	text: string;
+}
+
+/** Replies of a thread read with `oldest`, which still returns the parent first. The server writes "No thread
+ * messsages" (sic) when no reply is newer. more: another page follows. */
+export function parseSlackThreadReplies(
+	value: TrackingJson,
+	parentTs: string,
+	limit: number,
+): { replies: SlackReply[]; more: boolean } {
+	const fail = (reason: string): never => {
+		throw new SlackFormatChanged(reason);
+	};
+	if (
+		!value ||
+		typeof value !== "object" ||
+		Array.isArray(value) ||
+		typeof value.messages !== "string" ||
+		typeof value.pagination_info !== "string" ||
+		Buffer.byteLength(value.messages) > 512 * 1024
+	)
+		return fail("thread fields missing or too large");
+	const text = value.messages.replace(/\r\n/g, "\n").trim();
+	const parseMessage = (part: string): SlackReply => {
+		const message = /^\s*From: ([^\n]+)\nTime: [^\n]+\nMessage TS: (\d{1,12}\.\d{6})\n([\s\S]*)$/.exec(part);
+		if (!message) return fail("thread message fields");
+		const body = splitMetadata(message[3]!, false)!.text;
+		if (/^Message TS:|^Thread:|^=== |^--- Reply /m.test(body)) return fail("framing inside a thread message");
+		const from = message[1]!;
+		const userId = /\(([UWB][A-Z0-9]{1,40})\)\s*$/.exec(from)?.[1];
+		const author = plainText(
+			from
+				.replace(/\s*\([A-Z0-9]{1,40}\)\s*$/, "")
+				.replace(/\s*<[^<>\n]*>\s*$/, "")
+				.trim(),
+		)
+			.replace(/\s+/g, " ")
+			.slice(0, 80)
+			.trim();
+		return { ts: message[2]!, ...(userId ? { userId } : {}), ...(author ? { author } : {}), text: body };
+	};
+	const empty = /^=== THREAD PARENT MESSAGE ===[ \t]*\n([\s\S]*?)\n+No thread mess?sages\.?$/.exec(text);
+	if (empty) {
+		if (parseMessage(empty[1]!).ts !== parentTs) fail("thread parent timestamp");
+		return { replies: [], more: false };
+	}
+	const header =
+		/^=== THREAD PARENT MESSAGE ===[ \t]*\n([\s\S]*?)\n=== THREAD REPLIES \((\d+) total\) ===[ \t]*\n?([\s\S]*)$/.exec(
+			text,
+		);
+	if (!header) return fail("thread header");
+	if (parseMessage(header[1]!).ts !== parentTs) fail("thread parent timestamp");
+	const count = Number(header[2]);
+	if (!Number.isSafeInteger(count) || count > limit) return fail("reply count");
+	const parts = header[3]!.split(/^--- Reply (\d+) of (\d+) ---[ \t]*$/m);
+	if (parts[0]?.trim() || parts.length !== count * 3 + 1) return fail("reply framing");
+	const replies: SlackReply[] = [];
+	for (let i = 0; i < count; i++) {
+		if (Number(parts[i * 3 + 1]) !== i + 1 || Number(parts[i * 3 + 2]) !== count) return fail("reply numbering");
+		replies.push(parseMessage(parts[i * 3 + 3]!));
+	}
+	return { replies, more: parsePagination(value.pagination_info, true) !== undefined };
+}
 
 // Control and format characters that hide or reorder text (bidi overrides, zero-width spaces). Joiners stay for emoji.
 const HIDDEN =

@@ -16,6 +16,16 @@ private let hour = 3_600_000.0
     #expect(SlackTriageText.statusTitle(reopened) == "Open")
 }
 
+@Test func waitingShowsTheAgentsReasonAndGetsItsOwnBoardColumn() {
+    let waiting = SlackTriage(type: .question, severity: .low, status: .waiting,
+                              waitingReason: "CSM to confirm the org ID", waitingSince: ms)
+    #expect(SlackTriageText.statusTitle(waiting) == "Waiting · CSM to confirm the org ID")
+    #expect(SlackTriageText.statusTitle(SlackTriage(type: .question, severity: .low, status: .waiting)) == "Waiting")
+    let resumed = SlackTriageText.applying(SlackOverrides(status: .inProgress), to: waiting)
+    #expect(resumed.waitingReason == nil)
+    #expect(SlackTriageText.boardColumns(showDismissed: false) == [.open, .inProgress, .waiting, .done])
+}
+
 private func message(_ id: String, _ type: SlackMessageType = .bug, _ severity: SlackSeverity = .medium,
                      label: String? = nil, status: SlackLocalStatus = .open, channel: String = "C1",
                      ago: Double = hour, title: String? = nil, replies: Int? = nil,

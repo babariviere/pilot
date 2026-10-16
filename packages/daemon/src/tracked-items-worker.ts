@@ -3,12 +3,16 @@ import { TrackedItemDisk } from "./tracked-items-disk.ts";
 
 const disk = new TrackedItemDisk(workerData.path);
 let changed = false;
-disk.onChange(() => {
+/** Projects changed by the current request, for operations that are not scoped to one project. */
+const emitted = new Set<string>();
+disk.onChange((projectId) => {
 	changed = true;
+	emitted.add(projectId);
 });
 parentPort!.on("message", ({ id, method, args }) => {
 	try {
 		changed = false;
+		emitted.clear();
 		let value: unknown, projectId: string | undefined, projectIds: string[] | undefined;
 		switch (method) {
 			case "triageContext":
@@ -111,6 +115,20 @@ parentPort!.on("message", ({ id, method, args }) => {
 			case "recordSlackReaction":
 				disk.recordSlackReaction(args.id, args.present, args.version);
 				if (changed) projectId = disk.require(args.id).projectId;
+				break;
+			case "reserveSlackWaiting":
+				value = disk.reserveSlackWaiting(args.projectId, args.now);
+				break;
+			case "slackWaitingResult":
+				value = disk.slackWaitingResult(args.id, args.since, args.result);
+				if (changed) projectId = disk.require(args.id).projectId;
+				break;
+			case "slackLinkedSessions":
+				value = disk.slackLinkedSessions(args.projectId, args.sessionIds);
+				break;
+			case "agentSlackStatus":
+				value = disk.agentSlackStatus(args.sessionId, args.status, args.reason);
+				projectIds = [...emitted];
 				break;
 			case "reserveSlackDone":
 				value = disk.reserveSlackDone(args.projectId);

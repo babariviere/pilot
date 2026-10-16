@@ -11,6 +11,7 @@ import type { MissionCall } from "./mission-tools.ts";
 import type { MissionContext, WorkspaceContext } from "./policy.ts";
 import type { KernelCommand, KernelPacket } from "./protocol.ts";
 import { KernelSession } from "./session.ts";
+import type { SlackStatusCall } from "./slack-status-tool.ts";
 
 const errorText = formatFailure;
 
@@ -131,6 +132,7 @@ export function runKernelWorker(): void {
 	let updateRevision = 0;
 	/** Latest context sent while the kernel was still starting. */
 	let pendingMission: { context?: MissionContext } | undefined;
+	let pendingSlackLinked: boolean | undefined;
 	const daemonCalls = new Map<string, { resolve(value: unknown): void; reject(error: Error): void }>();
 	const workspaceCalls = new Map<string, (workspace?: WorkspaceContext) => void>();
 	const prepareWorkspace = () =>
@@ -190,6 +192,8 @@ export function runKernelWorker(): void {
 		callDaemon<JsonValue>((callId) => ({ type: "memory.call", callId, action, args }));
 	const callDatabase: DatabaseCall = (action, args) =>
 		callDaemon<JsonValue>((callId) => ({ type: "database.call", callId, action, args }));
+	const callSlackStatus: SlackStatusCall = (args) =>
+		callDaemon<JsonValue>((callId) => ({ type: "slack.call", callId, args }));
 
 	async function shutdown(code = 0): Promise<void> {
 		if (exiting) return;
@@ -315,6 +319,7 @@ export function runKernelWorker(): void {
 			command.type === "mission.result" ||
 			command.type === "memory.result" ||
 			command.type === "database.result" ||
+			command.type === "slack.result" ||
 			command.type === "subscription.limit.result" ||
 			command.type === "artifact.reference.result"
 		) {
@@ -336,6 +341,11 @@ export function runKernelWorker(): void {
 		if (command.type === "mission.context") {
 			if (session) session.setMission(command.context);
 			else pendingMission = { ...(command.context ? { context: command.context } : {}) };
+			return;
+		}
+		if (command.type === "slack.linked") {
+			if (session) session.setSlackLinked(command.linked);
+			else pendingSlackLinked = command.linked;
 			return;
 		}
 		if (command.type === "start") {
@@ -379,11 +389,13 @@ export function runKernelWorker(): void {
 					callMission,
 					callMemory,
 					callDatabase,
+					callSlackStatus,
 					readArtifactReference: (id, revision) =>
 						callDaemon((callId) => ({ type: "artifact.reference.get", callId, id, revision })),
 					prepareWorkspace,
 				});
 				if (pendingMission) opened.setMission(pendingMission.context);
+				if (pendingSlackLinked !== undefined) opened.setSlackLinked(pendingSlackLinked);
 				session = opened;
 				await send({
 					type: "ready",

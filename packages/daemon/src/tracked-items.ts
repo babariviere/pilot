@@ -2,27 +2,29 @@
 import { Worker } from "node:worker_threads";
 import type {
 	DashboardTrackedSource,
-	SlackCorrection,
 	LinearSizeCorrection,
+	SlackCorrection,
 	TrackedItem,
 	TrackedItemList,
 	TrackedItemPatch,
 	TrackedKind,
-	TriageGuide,
 	TriageCorrection,
+	TriageGuide,
 } from "@pilot/protocol";
 import { NotFound, ServiceUnavailable } from "./errors.ts";
-import type { SlackClassification } from "./slack-classifier.ts";
 import type { SizeReservation } from "./linear-size.ts";
-import type { CaseInput, CaseGroup } from "./slack-cases.ts";
+import type { CaseGroup, CaseInput } from "./slack-cases.ts";
+import type { SlackClassification } from "./slack-classifier.ts";
 import type {
 	InboxQuery,
 	InboxTracked,
+	SlackAgentStatusResult,
 	SlackCache,
 	SlackPullRequestObservation,
 	SlackReactionBatch,
 	SlackReservation,
 	SlackSearchQuery,
+	SlackWaitingBatch,
 	SourceCheckpoint,
 	TrackedInput,
 	TrackedQuery,
@@ -227,6 +229,28 @@ export class TrackedItemStore {
 	}
 	recordSlackReaction(id: string, present: boolean, version: number): Promise<void> {
 		return this.rpc("recordSlackReaction", { id, present, version });
+	}
+	reserveSlackWaiting(projectId: string, now: number): Promise<SlackWaitingBatch> {
+		return this.rpc("reserveSlackWaiting", { projectId, now });
+	}
+	slackWaitingResult(
+		id: string,
+		since: number,
+		result: { status?: "in_progress" | "open"; afterTs?: string },
+	): Promise<boolean> {
+		return this.rpc("slackWaitingResult", { id, since, result });
+	}
+	/** Which of these chats are the latest chat of one of the project's Slack messages. */
+	slackLinkedSessions(projectId: string, sessionIds: string[]): Promise<string[]> {
+		return this.rpc("slackLinkedSessions", { projectId, sessionIds });
+	}
+	/** A chat's slack_status tool call. Applies only to Slack messages whose latest chat it is. */
+	agentSlackStatus(
+		sessionId: string,
+		status: "waiting" | "in_progress",
+		reason?: string,
+	): Promise<SlackAgentStatusResult> {
+		return this.rpc("agentSlackStatus", { sessionId, status, reason });
 	}
 	reserveSlackDone(projectId: string): Promise<TrackedItem | undefined> {
 		return this.rpc("reserveSlackDone", { projectId });

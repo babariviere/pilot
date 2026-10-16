@@ -36,6 +36,7 @@ struct ChatEventRow: View {
         case "coordinator_message": PilotIcon.coordinator
         case "pr_follow_up": PilotIcon.pullRequest
         case "automatic_message": PilotIcon.extensionTool
+        case "slack_reply": PilotIcon.message
         case "question": PilotIcon.question
         default: PilotIcon.unset
         }

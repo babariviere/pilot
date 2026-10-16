@@ -12,6 +12,7 @@ const PREFIXES: [string, InputOrigin | "user"][] = [
 	["mission:send:", "coordinator"],
 	["mission:", "mission"],
 	["pr-follow-up:", "pullRequest"],
+	["slack-reply:", "slack"],
 ];
 
 /** Undefined means the user's own input. `native:user:` is an extension sending on the user's behalf. */

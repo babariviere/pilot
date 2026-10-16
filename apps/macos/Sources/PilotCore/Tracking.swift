@@ -180,7 +180,9 @@ public struct SlackMessageLink: Equatable, Sendable {
 public enum SlackMessageType: String, Codable, Hashable, Sendable { case bug, question, request, unknown }
 public enum SlackSeverity: String, Codable, Hashable, Sendable { case low, medium, high, critical }
 public enum SlackLocalStatus: String, Codable, Hashable, Sendable {
-    case open, inProgress = "in_progress", done, dismissed
+    /// waiting: someone outside Pilot must answer in the thread first. A reply from anyone but the user resumes the
+    /// linked chat (In progress) or reopens the message (Open).
+    case open, inProgress = "in_progress", waiting, done, dismissed
 }
 /// What a project label does to its Slack messages. none: listed as usual. hide: kept out of the Inbox, behind Show
 /// hidden in Slack triage. close: dismissed by Pilot when the label is applied, unless the user set the status, and
@@ -250,11 +252,18 @@ public struct SlackTriage: Codable, Equatable, Sendable {
     /// Set while Pilot keeps the message dismissed because of this close label. Any status the user sets clears it.
     public let closedByLabel: String?
     public let doneReason: String?
+    /// While waiting: what for, as the agent reported it. Absent when the user set Waiting.
+    public let waitingReason: String?
+    /// While waiting: epoch ms when the wait started.
+    public let waitingSince: Double?
     public init(type: SlackMessageType, label: String? = nil, severity: SlackSeverity, status: SlackLocalStatus,
-                overrides: SlackOverrides = .init(), closedByLabel: String? = nil, doneReason: String? = nil) {
+                overrides: SlackOverrides = .init(), closedByLabel: String? = nil, doneReason: String? = nil,
+                waitingReason: String? = nil, waitingSince: Double? = nil) {
         self.type = type; self.label = label; self.severity = severity; self.status = status; self.overrides = overrides
         self.closedByLabel = closedByLabel
         self.doneReason = doneReason
+        self.waitingReason = waitingReason
+        self.waitingSince = waitingSince
     }
 }
 public struct SlackCorrection: Codable, Equatable, Sendable {

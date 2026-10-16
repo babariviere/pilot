@@ -278,9 +278,10 @@ enum TrackedItemText {
         let lead = switch item.kind {
         case .linear: ["Please work on this ticket.", sizeNote(item.linearSize)].compactMap { $0 }
             .joined(separator: " ")
-        case .slack: SlackTriageText.triage(item).type == .bug
+        case .slack: (SlackTriageText.triage(item).type == .bug
             ? "Please investigate and fix this bug reported in Slack."
-            : "Please look into this Slack message and help resolve it."
+            : "Please look into this Slack message and help resolve it.")
+            + " If you can't continue until someone answers in the thread, set slack_status to waiting; their reply resumes this chat."
         }
         return prompt(lead: lead, item: item, prefill: prefill)
     }

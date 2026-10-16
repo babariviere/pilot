@@ -386,6 +386,8 @@ public enum InputOrigin: String, Codable, Hashable, Sendable {
     case coordinator
     case mission
     case pullRequest
+    /// New replies in a Slack thread the chat was waiting on.
+    case slack
 }
 
 /// One selectable model from the user's pi scope.
