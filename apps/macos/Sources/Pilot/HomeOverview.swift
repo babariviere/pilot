@@ -105,27 +105,17 @@ enum HomeStatus {
         rows.reduce(0) { $0 + $1.counts.needsYou + $1.readyToMerge + $1.counts.tracked }
     }
 
-    /// "3 projects are active: 3 chats are working and 1 mission is moving. 7 things wait in your Inbox."
+    /// "3 working · 1 active mission · 7 in Inbox", in the dot style of the project rows. Zero counts are left out.
     static func summary(_ rows: [HomeProjectStatus]) -> String {
-        let active = rows.filter(\.isActive).count
         let working = rows.reduce(0) { $0 + $1.counts.working }
         let missions = rows.reduce(0) { $0 + $1.missions.count }
         let inbox = inboxCount(rows)
-        if active == 0 && inbox == 0 { return "All quiet. Nothing is working and your Inbox is empty." }
-        var first: String
-        if active == 0 {
-            first = "Nothing is working."
-        } else {
-            first = "\(active) \(active == 1 ? "project is" : "projects are") active"
-            let details = [
-                working > 0 ? "\(working) \(working == 1 ? "chat is" : "chats are") working" : nil,
-                missions > 0 ? "\(missions) \(missions == 1 ? "mission is" : "missions are") moving" : nil,
-            ].compactMap { $0 }
-            first += details.isEmpty ? "." : ": \(details.joined(separator: " and "))."
-        }
-        let second = inbox > 0 ? "\(inbox) \(inbox == 1 ? "thing waits" : "things wait") in your Inbox."
-            : "Your Inbox is empty."
-        return "\(first) \(second)"
+        let parts = [
+            working > 0 ? "\(working) working" : nil,
+            missions > 0 ? "\(missions) active \(missions == 1 ? "mission" : "missions")" : nil,
+            inbox > 0 ? "\(inbox) in Inbox" : nil,
+        ].compactMap { $0 }
+        return parts.isEmpty ? "All quiet" : parts.joined(separator: " · ")
     }
 
     /// Working chats, most recently active first.
@@ -220,7 +210,7 @@ struct HomeOverview: View {
                 }
                 if client.hasProjectSnapshot {
                     Text(HomeStatus.summary(rows + remoteRows.map(\.status)))
-                        .font(.pilot(.headline)).foregroundStyle(Theme.foreground)
+                        .font(.pilot(.headline)).monospacedDigit().foregroundStyle(Theme.foreground)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 let subscriptions = HomeStatus.subscriptions(client.sessions)
