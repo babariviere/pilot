@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.44.0](https://github.com/babariviere/pilot/compare/v1.43.0...v1.44.0) (2026-10-16)
+
+
+### Features
+
+* **macos:** remove the Home heading above the composer ([05fc0c9](https://github.com/babariviere/pilot/commit/05fc0c9fe06fae92c23da9c937b3e177e209a365))
+* **macos:** shorten Home summary to a count line ([fd5c246](https://github.com/babariviere/pilot/commit/fd5c24694aa48372315a517c7507be74e19edfbe))
+
+
+### Bug Fixes
+
+* **artifacts:** release idle build helpers before updates ([0fd9562](https://github.com/babariviere/pilot/commit/0fd9562668a2c28c9cbff0ee67cd20a1949a2059))
+* **slack:** read mention-only channels from history instead of search ([bee47ac](https://github.com/babariviere/pilot/commit/bee47ac1a01a34aa19da6dd0f63921ddec40375e))
+* take chats with a scheduled message out of Needs you ([cab407f](https://github.com/babariviere/pilot/commit/cab407fe15e01bd8e0a113a5d857554e56efcf41))
+
 ## [1.43.0](https://github.com/babariviere/pilot/compare/v1.42.0...v1.43.0) (2026-10-16)
 
 
