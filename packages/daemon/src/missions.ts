@@ -402,7 +402,7 @@ export function normalizeResourceWrite(write: MissionResourceWrite) {
 }
 
 /** Workspace-scoped identifiers avoid collisions between Linear organizations. */
-function linearKey(url: string): string | undefined {
+export function linearKey(url: string): string | undefined {
 	const parts = new URL(url).pathname.split("/").filter(Boolean);
 	if (
 		!/^[a-z0-9][a-z0-9-]*$/i.test(parts[0] ?? "") ||
@@ -3125,7 +3125,21 @@ export class MissionStore {
 				role ?? null,
 				key ?? null,
 			);
-			this.event(id, "resource", `Linked ${title ?? parsed.externalId ?? parsed.url}`, actor, { at: now, taskId });
+			this.event(id, "resource", `Linked ${title ?? parsed.externalId ?? parsed.url}`, actor, {
+				at: now,
+				taskId,
+				...(parsed.kind === "linear.issue" && !taskId
+					? {
+							wake: true,
+							noticeSummaries: [
+								{
+									key: `ticket:${resource.id}`,
+									text: `Linear ticket attached (${role}): ${parsed.externalId}. Read links and ticket context; clarify existing work before associating or splitting.`,
+								},
+							],
+						}
+					: {}),
+			});
 			const cached = this.one(
 				"SELECT pull_request FROM resources WHERE url = ? COLLATE NOCASE AND pull_request IS NOT NULL LIMIT 1",
 				resource.url,
@@ -3214,6 +3228,7 @@ export class MissionStore {
 			this.run("DELETE FROM linear_task_assignees WHERE resource_id = ?", resourceId);
 			this.event(id, "resource", `Linear link role changed to ${write.linearRole}: ${resource.externalId}`, actor, {
 				taskId: resource.taskId,
+				wake: true,
 			});
 		});
 		this.changed(id);

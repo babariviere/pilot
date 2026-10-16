@@ -133,6 +133,7 @@ for (const mission of missionStore.list())
 	if (mission.status === "done" && mission.completedAt !== undefined)
 		await trackedItems.completeSlackMission(mission.projectId, mission.id, mission.completedAt);
 const missionService = new MissionService(missionStore, sessions, projects);
+missionService.setLinearReader(sourceMcp);
 const sharing = new SharedContextService(
 	{ hostId: "daemon", daemonId: hello.daemonId, lineageId: hello.lineageId },
 	missionStore,

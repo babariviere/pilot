@@ -23,6 +23,71 @@ import { TerminalManager } from "./terminals.ts";
 import { legacyGitHub } from "./testing/legacy-github.ts";
 import { requiredAuthRegistration } from "./testing/required-auth.ts";
 
+test("coordinator tools associate, explicitly upgrade and split Linear ticket work with live context", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn(),
+		member = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Delivery",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(member.id, { missionId: mission.id });
+	const ref = (await f.service.call(lead.id, "link", { url: "https://linear.app/acme/issue/ENG-12" })) as {
+		id: string;
+		linearRole: string;
+	};
+	assert.equal(ref.linearRole, "reference");
+	await assert.rejects(
+		f.service.call(lead.id, "link", { url: "https://linear.app/acme/issue/ENG-12", linearRole: "managed" }),
+		/PATCH/,
+	);
+	await assert.rejects(
+		f.service.call(member.id, "updateLink", { resourceId: ref.id, linearRole: "managed" }),
+		/Only the mission coordinator/,
+	);
+	await f.service.call(lead.id, "updateLink", { resourceId: ref.id, linearRole: "managed" });
+	await assert.rejects(
+		f.service.call(member.id, "split", { resourceId: ref.id, tasks: [{ title: "A" }] }),
+		/Only the mission coordinator/,
+	);
+	const split = (await f.service.call(lead.id, "split", {
+		resourceId: ref.id,
+		tasks: [{ title: "A" }, { title: "B" }],
+	})) as { tasks: { id: string }[] };
+	const existing = f.store.addTask(mission.id, { title: "Context only" });
+	await f.service.call(lead.id, "link", { taskId: existing.id, url: "https://linear.app/acme/issue/ENG-12" });
+	f.store.claimTask(mission.id, split.tasks[0]!.id, member.id);
+	assert.equal(f.service.context(lead.id)?.tickets?.[0]?.role, "managed");
+	assert.equal(f.service.context(member.id)?.tickets?.[0]?.role, "contribution");
+	const links = (await f.service.call(lead.id, "links", {})) as {
+		links: { resourceId?: string; linearRole?: string }[];
+	};
+	assert.ok(links.links.some((ref) => ref.linearRole === "managed" && ref.resourceId));
+	f.service.setLinearReader({
+		call: async () => ({
+			id: "ENG-12",
+			url: "https://linear.app/acme/issue/ENG-12",
+			title: "Ticket",
+			description: "Untrusted text",
+		}),
+	});
+	const context = (await f.service.call(lead.id, "ticket", { resourceId: ref.id })) as { description: string };
+	assert.equal(context.description, "Untrusted text");
+	assert.equal(JSON.stringify(f.service.context(lead.id)).includes("Untrusted text"), false);
+	// Detach first so the context read can observe removal during its await.
+	for (const resource of f.store.detail(mission.id).resources.filter((ref) => ref.linearRole === "contribution"))
+		f.store.removeResource(mission.id, resource.id);
+	f.service.setLinearReader({
+		call: async () => {
+			f.store.removeResource(mission.id, ref.id);
+			return { id: "ENG-12", url: "https://linear.app/acme/issue/ENG-12" };
+		},
+	});
+	await assert.rejects(f.service.call(lead.id, "ticket", { resourceId: ref.id }), /not found/);
+});
+
 test("mission drafts name the deliverables without repeating comment policy", () => {
 	const message = draftMessage("Plan");
 	assert.match(message, /short goal and draft the brief \(scope and requirements\)/);

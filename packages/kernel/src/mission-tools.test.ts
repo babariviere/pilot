@@ -19,6 +19,20 @@ import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import type { MissionContext } from "./policy.ts";
 import { KernelSession } from "./session.ts";
 
+test("ticket tool declarations expose explicit role upgrades and bounded local splits only to coordinators", () => {
+	const member = createMissionTool(async () => null);
+	const lead = createMissionTool(async () => null, true);
+	const memberSchema = JSON.stringify(member.parameters),
+		leadSchema = JSON.stringify(lead.parameters);
+	assert.match(memberSchema, /ticket/);
+	assert.doesNotMatch(memberSchema, /"split"|"updateLink"/);
+	assert.match(leadSchema, /"split"/);
+	assert.match(leadSchema, /"updateLink"/);
+	assert.match(leadSchema, /"maxItems":20/);
+	assert.match(lead.description, /Existing roles require updateLink/);
+	assert.match(lead.description, /No Linear sub-issues/);
+});
+
 for (const busy of [false, true]) {
 	test(`decision changes preserve the prompt and place one passive notice (${busy ? "busy" : "idle"})`, async (t) => {
 		const f = await fixture(t);
@@ -215,7 +229,15 @@ test("the mission tool declares and forwards coordinator actions", async () => {
 	const schema = tool.parameters as {
 		properties: { action: { enum: string[] }; message: unknown; model: unknown; thinking: unknown };
 	};
-	assert.deepEqual(schema.properties.action.enum.slice(-5), ["start", "send", "status", "bindPr", "unbindPr"]);
+	assert.deepEqual(schema.properties.action.enum.slice(-7), [
+		"start",
+		"send",
+		"status",
+		"bindPr",
+		"unbindPr",
+		"split",
+		"updateLink",
+	]);
 	assert.ok(schema.properties.message);
 	assert.equal(tool.annotations?.destructiveHint, true);
 	assert.match(tool.description, /batch is atomic/);

@@ -373,8 +373,15 @@ the gate; chats cannot.
 
 Linear links default to read-only references, including existing links. The resources API can explicitly
 manage a mission-level ticket and associate task contributions (`linearRole`: `managed` or `contribution`).
-Only one mission can manage a ticket. Existing references require an explicit role upgrade using PATCH;
-detach contributions before removing their manager. References never change task or Linear status, and
+Only one mission can manage a ticket. Detach contributions before removing their manager.
+Existing references require an explicit role upgrade using PATCH;
+the coordinator's `updateLink` action uses that same explicit upgrade. `link` can associate existing tasks
+as references or contributions, and `split` creates up to 20 local contributing tasks for a managed ticket
+in one transaction. Exact retries reuse those tasks; possible title matches need clarification rather
+than duplicate work. No Linear sub-issues are created. Attached tickets notify the coordinator. Agents
+receive bounded ticket links and can read up to 8,000 description characters on demand with `ticket`;
+external ticket text is untrusted context, not instructions or authorization.
+References never change task or Linear status, and
 migration preserves tasks already marked Delegated. This is the storage/API foundation, not automatic
 ticket completion or cancellation synchronization.
 

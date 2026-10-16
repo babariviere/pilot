@@ -21,9 +21,12 @@ import { CoordinatorCompaction } from "./coordinator-compaction.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import { MissionNotices } from "./mission-notices.ts";
 import { parseTaskRefs } from "./mission-task-refs.ts";
+import { MissionTicketReader } from "./mission-ticket-context.ts";
+import { splitTicket } from "./mission-ticket-work.ts";
 import { type MissionActivityQuery, type MissionActor, type MissionStore, normalizeResourceWrite } from "./missions.ts";
 import type { ProjectStore } from "./projects.ts";
 import type { SessionManager } from "./sessions.ts";
+import type { SourceMcpClient } from "./source-mcp.ts";
 import { validateBaseBranch } from "./workspaces.ts";
 
 /** Sent to a chat that just became a mission, so it drafts the shared state from its own conversation. */
@@ -121,6 +124,10 @@ function taskModelChoice(
 }
 
 export class MissionService {
+	private ticketReader?: MissionTicketReader;
+	setLinearReader(mcp: SourceMcpClient): void {
+		this.ticketReader = new MissionTicketReader(mcp);
+	}
 	private sharing?: import("./shared-context.ts").SharedContextService;
 	setSharedContext(sharing: import("./shared-context.ts").SharedContextService): void {
 		this.sharing = sharing;
@@ -325,6 +332,11 @@ export class MissionService {
 				(decision.audience === "coordinator" && mission.coordinatorSessionId === sessionId) ||
 				pins.has(decision.id),
 		);
+		const owned = new Map(
+			detail.tasks
+				.filter((task) => task.sessionId === sessionId && isOpen(task))
+				.map((task) => [task.id, task.number]),
+		);
 		return {
 			id: mission.id,
 			title: mission.title,
@@ -341,6 +353,21 @@ export class MissionService {
 			decisions: selected.map((decision) => `D${decision.number}: ${decision.text}`),
 			decisionEntries: selected.map(({ id, text }) => ({ id, text })),
 			remainingDecisions: detail.decisions.length - selected.length,
+			tickets: detail.resources
+				.filter(
+					(ref) =>
+						ref.kind === "linear.issue" &&
+						(mission.coordinatorSessionId === sessionId
+							? !ref.taskId
+							: ref.taskId !== undefined && owned.has(ref.taskId)),
+				)
+				.slice(0, 20)
+				.map((ref) => ({
+					resourceId: ref.id,
+					url: ref.url,
+					role: ref.linearRole ?? "reference",
+					...(ref.taskId ? { task: owned.get(ref.taskId) } : {}),
+				})),
 			decisionVersion:
 				JSON.stringify(detail.decisions.map(({ id, text, audience }) => [id, text, audience])) +
 				JSON.stringify([...pins]),
@@ -659,7 +686,19 @@ export class MissionService {
 		if (!missionId) throw new Error("This chat is not part of a mission. Ask the user to add it to one.");
 		const mission = this.store.require(missionId);
 		if (
-			(["propose", "delete", "group", "phase", "start", "send", "status", "bindPr", "unbindPr"].includes(action) ||
+			([
+				"propose",
+				"delete",
+				"group",
+				"phase",
+				"start",
+				"send",
+				"status",
+				"bindPr",
+				"unbindPr",
+				"split",
+				"updateLink",
+			].includes(action) ||
 				(action === "task" &&
 					(args.order !== undefined || args.model !== undefined || args.thinking !== undefined))) &&
 			mission.coordinatorSessionId !== sessionId
@@ -671,6 +710,31 @@ export class MissionService {
 		const who = (id: string | undefined) => (id === undefined ? "user" : id === sessionId ? "you" : id);
 		const str = (key: string) => (typeof args[key] === "string" ? (args[key] as string) : undefined);
 		switch (action) {
+			case "split":
+				return splitTicket(this.store, missionId, args.resourceId, args.tasks, actor);
+			case "updateLink":
+				if (typeof args.resourceId !== "string") throw new Error("updateLink requires resourceId");
+				return this.store.updateResource(
+					missionId,
+					args.resourceId,
+					{ linearRole: args.linearRole as "reference" | "managed" | "contribution" },
+					actor,
+				);
+			case "ticket": {
+				const authorize = () => {
+					if (this.store.missionOf(sessionId) !== missionId) throw new Conflict("Mission membership changed");
+					const ref = this.store
+						.detail(missionId, false)
+						.resources.find((ref) => ref.id === args.resourceId && ref.kind === "linear.issue");
+					if (!ref) throw new NotFound("Linked Linear ticket not found");
+					return ref;
+				};
+				const ref = authorize();
+				if (!this.ticketReader) throw new Error("Linear context is unavailable; check the Linear connection");
+				const context = await this.ticketReader.read(ref);
+				if (JSON.stringify(authorize()) !== JSON.stringify(ref)) throw new Conflict("Ticket link changed; retry");
+				return context;
+			}
 			case "phase": {
 				const write = { name: args.name, goal: args.goal, order: args.order } as Parameters<
 					MissionStore["addPhase"]
@@ -1144,6 +1208,9 @@ export class MissionService {
 						...(args.relationship !== undefined
 							? { relationship: args.relationship as "ownership" | "reference" }
 							: {}),
+						...(args.linearRole !== undefined
+							? { linearRole: args.linearRole as "reference" | "managed" | "contribution" }
+							: {}),
 						...(str("title") ? { title: str("title") } : {}),
 						...(args.taskId !== undefined ? { taskId: args.taskId as string } : {}),
 					},
@@ -1280,6 +1347,9 @@ class MissionAgentView {
 		const owner = ref.kind === "github.pr" ? this.sessions.pullRequestOwnerSummary(ref.url) : undefined;
 		return {
 			url: ref.url,
+			...(ref.kind === "linear.issue"
+				? { resourceId: ref.id, linearRole: ref.linearRole ?? "reference", linearKey: ref.linearKey }
+				: {}),
 			kind: ref.kind,
 			...(ref.title || pr?.title ? { title: ref.title ?? pr?.title } : {}),
 			...(ref.taskId ? { task: this.numbers.get(ref.taskId) } : {}),
