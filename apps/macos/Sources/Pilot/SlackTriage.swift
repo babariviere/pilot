@@ -47,12 +47,13 @@ extension SlackSeverity {
 }
 
 extension SlackLocalStatus {
-    static let ordered: [SlackLocalStatus] = [.open, .inProgress, .done, .dismissed]
+    static let ordered: [SlackLocalStatus] = [.open, .inProgress, .waiting, .done, .dismissed]
 
     var title: String {
         switch self {
         case .open: "Open"
         case .inProgress: "In progress"
+        case .waiting: "Waiting"
         case .done: "Done"
         case .dismissed: "Dismissed"
         }
@@ -116,10 +117,12 @@ enum SlackTriageText {
         Set(labels.filter { $0.effect == .hide }.map(\.name))
     }
 
-    /// "Closed · Product" while a close label keeps the message dismissed, else the status.
+    /// "Closed · Product" while a close label keeps the message dismissed, "Waiting · CSM to confirm" with the agent's
+    /// reason, else the status.
     static func statusTitle(_ triage: SlackTriage) -> String {
         if triage.status == .dismissed, let label = triage.closedByLabel { return "Closed · \(label)" }
         if triage.status == .done, let reason = triage.doneReason { return reason }
+        if triage.status == .waiting, let reason = triage.waitingReason, !reason.isEmpty { return "Waiting · \(reason)" }
         return triage.status.title
     }
 
@@ -183,7 +186,7 @@ enum SlackTriageText {
     }
 
     static func boardColumns(showDismissed: Bool) -> [SlackLocalStatus] {
-        showDismissed ? SlackLocalStatus.ordered : [.open, .inProgress, .done]
+        showDismissed ? SlackLocalStatus.ordered : [.open, .inProgress, .waiting, .done]
     }
 
     /// Board columns of already sorted items.
@@ -254,7 +257,9 @@ enum SlackTriageText {
         return SlackTriage(type: change.type ?? triage.type, label: label, severity: change.severity ?? triage.severity,
                            status: change.status ?? triage.status, overrides: overrides,
                            closedByLabel: change.status == nil ? triage.closedByLabel : nil,
-                           doneReason: change.status == nil ? triage.doneReason : nil)
+                           doneReason: change.status == nil ? triage.doneReason : nil,
+                           waitingReason: change.status == nil ? triage.waitingReason : nil,
+                           waitingSince: change.status == nil ? triage.waitingSince : nil)
     }
 
     /// "#bugs · 2h ago · 7 replies".
@@ -1351,7 +1356,7 @@ private struct SlackTriageCard: View {
                 .fixedSize(horizontal: false, vertical: true)
             TrackedStartText(item: item, text: SlackTriageText.meta(item, now: now)).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
                 .lineLimit(1)
-            if triage.closedByLabel != nil || triage.doneReason != nil {
+            if triage.closedByLabel != nil || triage.doneReason != nil || triage.waitingReason != nil {
                 Text(SlackTriageText.statusTitle(triage)).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
                     .lineLimit(1).help(SlackTriageText.statusTitle(triage))
             }

@@ -8,6 +8,7 @@ import { installCredentialBrokerHooks } from "@pilot/kernel/credential-hooks";
 import { loadConfig } from "./config.ts";
 import { ConnectivityService } from "./connectivity.ts";
 import { CredentialBroker } from "./credential-broker.ts";
+import { Conflict, NotFound } from "./errors.ts";
 import { EventLoopWatchdog } from "./event-loop-watchdog.ts";
 import { daemonHello } from "./hello.ts";
 import { createLinearSizePoller } from "./linear-size.ts";
@@ -30,6 +31,7 @@ import { SessionManager } from "./sessions.ts";
 import { SetupService } from "./setup.ts";
 import { SharedContextService } from "./shared-context.ts";
 import { createSlackAdder, createSlackPoller } from "./slack-source.ts";
+import { createSlackWaitingWatcher } from "./slack-waiting.ts";
 import { PiSourceMcpClient } from "./source-mcp.ts";
 import { SourceRegistry } from "./sources.ts";
 import { SystemEventsDetection } from "./system-events-detection.ts";
@@ -117,6 +119,18 @@ await maintenance?.load();
 sessions.setProjectMemory(memory);
 sessions.setMcpStatus(mcpStatus);
 sessions.setPullRequestObserver((observation) => trackedItems.observeSlackPullRequests(observation));
+sessions.setSlackStatus({
+	call: (sessionId, args) => {
+		const { status, reason } = args;
+		if (status !== "waiting" && status !== "in_progress")
+			throw new Error('status must be "waiting" or "in_progress"');
+		if (reason !== undefined && typeof reason !== "string") throw new Error("reason must be a string");
+		return trackedItems.agentSlackStatus(sessionId, status, reason);
+	},
+	linked: (projectId, sessionIds) => trackedItems.slackLinkedSessions(projectId, sessionIds),
+});
+// Linking a chat to a Slack message (or unlinking it) declares or withdraws its slack_status tool.
+trackedItems.onChange((projectId) => sessions.refreshSlackLinks(projectId));
 // Membership is read while sessions load (auto-archiving, worker specs), so the bridge comes first.
 const missionStore = new MissionStore(join(config.home, "missions.sqlite"));
 const missionLinear = new MissionLinearSource(missionStore, sourceMcp);
@@ -164,6 +178,18 @@ power?.onNetworkPath((path) => connectivity.setPath(path));
 // Recover global sleep overrides before any interrupted agent can reopen.
 await power?.start();
 await sessions.load(maintenance?.frozen);
+// A reply in a waiting Slack thread resumes the message's latest chat with it, once chats are loaded.
+tracking.slackWaiting = createSlackWaitingWatcher(trackedItems, async (sessionId, message, requestId) => {
+	const chat = sessions.get(sessionId);
+	if (!chat || chat.archivedAt !== undefined || chat.state === "failed") return false;
+	try {
+		await sessions.send(sessionId, message, "followUp", requestId);
+		return true;
+	} catch (error) {
+		if (error instanceof Conflict || error instanceof NotFound) return false;
+		throw error;
+	}
+});
 if (!maintenance?.frozen) await sharing.recover();
 power?.refresh();
 if (!maintenance?.frozen) {

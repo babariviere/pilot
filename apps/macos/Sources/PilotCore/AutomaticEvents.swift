@@ -27,6 +27,8 @@ extension ChatEvent {
             event = ChatEvent(id: id, kind: "subagent_message", text: "Subagent wrote", title: preview(text), detail: text)
         case .extension:
             event = ChatEvent(id: id, kind: "automatic_message", text: "Automatic message", title: preview(text), detail: text)
+        case .slack:
+            event = ChatEvent(id: id, kind: "slack_reply", text: "New reply in Slack", detail: text)
         }
         event.timestamp = timestamp
         return event

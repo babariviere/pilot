@@ -1,4 +1,5 @@
-/** External text is untrusted. Tracking never starts agents. Only a confirmed Linear start may update its workflow state. */
+/** External text is untrusted. Tracking never starts agents; it only resumes a chat the user started from a Slack
+ * message that waits for a reply. Only a confirmed Linear start may update its workflow state. */
 export type TrackedKind = "linear" | "slack";
 export type LinearSize = "quick_fix" | "needs_planning" | "unknown";
 export interface SlackCommonCase {
@@ -26,7 +27,9 @@ export type TrackingJson = null | boolean | number | string | TrackingJson[] | {
 
 export type SlackMessageType = "bug" | "question" | "request" | "unknown";
 export type SlackSeverity = "low" | "medium" | "high" | "critical";
-export type SlackLocalStatus = "open" | "in_progress" | "done" | "dismissed";
+/** waiting: someone outside Pilot (a CSM, the reporter) must answer first. Kept out of the Inbox. A reply in the
+ * thread from anyone but the user resumes the linked chat with it (In progress), or reopens the message (Open). */
+export type SlackLocalStatus = "open" | "in_progress" | "waiting" | "done" | "dismissed";
 /**
  * What a project label does to its Slack messages. none: listed as usual. hide: kept out of the Inbox, behind
  * Show hidden in Slack triage. close: dismissed by Pilot when the label is applied (by the classifier or the user),
@@ -58,6 +61,10 @@ export interface SlackTriage {
 	closedByLabel?: string;
 	/** Why a linked work result marked this message Done. Cleared by an explicit user status. */
 	doneReason?: string;
+	/** While waiting: what the message waits for, as the agent reported it. Absent when the user set Waiting. */
+	waitingReason?: string;
+	/** While waiting: epoch ms when it started waiting. Replies after it resume work. */
+	waitingSince?: number;
 }
 /** GET /api/tracking/:kind/guide?projectId=...; POST rebuilds. Untrusted, read-only rules. */
 export interface TriageGuide {

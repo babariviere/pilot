@@ -116,6 +116,9 @@ export type KernelCommand =
 	| { type: "mission.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "memory.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "database.result"; callId: string; result?: JsonValue; error?: string }
+	| { type: "slack.result"; callId: string; result?: JsonValue; error?: string }
+	/** Whether the chat is attached to a Slack triage message, which declares or withdraws `slack_status`. */
+	| { type: "slack.linked"; linked: boolean }
 	| { type: "subscription.limit.result"; callId: string; error?: string }
 	| { type: "artifact.reference.result"; callId: string; result?: Omit<ArtifactRevision, "html">; error?: string }
 	| { type: "workspace.prepared"; callId: string; workspace?: WorkspaceContext }
@@ -169,6 +172,8 @@ export type KernelPacket =
 	  }
 	/** A `db` tool call, answered by `database.result`. Grants are checked in pilotd. */
 	| { type: "database.call"; callId: string; action: DatabaseAction; args: Record<string, JsonValue> }
+	/** A `slack_status` tool call, answered by `slack.result`. Applies only to Slack messages linked to this chat. */
+	| { type: "slack.call"; callId: string; args: Record<string, JsonValue> }
 	/** Read-only linked source lookup. Caller identity comes from the supervised worker, not this packet. */
 	| { type: "artifact.reference.get"; callId: string; id: string; revision?: number }
 	/** The kernel is awaiting its first prompt preparation. No model or tools are running. */

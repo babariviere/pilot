@@ -129,9 +129,10 @@ export type DeliveryMode = "steer" | "followUp";
 /**
  * Source of automatic input, which is not typed by the user. Such `pi.user` entries carry `origin` in transcript
  * events and history, and wait in `queue_update.automatic` instead of its editable `items`. Entries the user typed
- * omit it. `coordinator` is a message from the mission coordinator; `mission` covers other mission input.
+ * omit it. `coordinator` is a message from the mission coordinator; `mission` covers other mission input; `slack`
+ * carries new replies in a Slack thread the chat was waiting on.
  */
-export type InputOrigin = "job" | "subagent" | "extension" | "coordinator" | "mission" | "pullRequest";
+export type InputOrigin = "job" | "subagent" | "extension" | "coordinator" | "mission" | "pullRequest" | "slack";
 
 /** Durable user input waiting to join a run, in submission order. Passive writes are not messages. */
 export interface QueuedMessage {

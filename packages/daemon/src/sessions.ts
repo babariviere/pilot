@@ -857,10 +857,65 @@ export class SessionManager {
 	private pullRequestObserver?: (
 		observation: import("./tracked-items-disk.ts").SlackPullRequestObservation,
 	) => Promise<void>;
+	/**
+	 * Runs a chat's slack_status tool call against its linked Slack messages, and tells which chats are the latest chat
+	 * of a Slack triage message. Only those chats declare the tool. Without it, no chat does.
+	 */
+	private slackStatus?: {
+		call(sessionId: string, args: Record<string, unknown>): Promise<unknown>;
+		linked(projectId: string, sessionIds: string[]): Promise<string[]>;
+	};
+	/** What each live kernel was last told about slack_status (absent: not declared). */
+	private readonly slackLinkedSent = new WeakMap<SessionWorker, boolean>();
+	/** Coalesced per project: a change during a refresh runs it once more. */
+	private readonly slackLinkRefresh = new Map<string, { again: boolean }>();
 
 	/** Receives durable chat PR state, never streaming transcript updates. Install before load. */
 	setPullRequestObserver(observer: NonNullable<SessionManager["pullRequestObserver"]>): void {
 		this.pullRequestObserver = observer;
+	}
+
+	setSlackStatus(handler: NonNullable<SessionManager["slackStatus"]>): void {
+		this.slackStatus = handler;
+	}
+
+	/** Declares slack_status in a project's live chats attached to a Slack triage message, and withdraws it elsewhere. */
+	refreshSlackLinks(projectId: string): void {
+		if (!this.slackStatus || this.closing) return;
+		const running = this.slackLinkRefresh.get(projectId);
+		if (running) {
+			running.again = true;
+			return;
+		}
+		const state = { again: false };
+		this.slackLinkRefresh.set(projectId, state);
+		const slack = this.slackStatus;
+		void (async () => {
+			do {
+				state.again = false;
+				const live = [...this.workers]
+					.filter(([id]) => {
+						const meta = this.metas.get(id);
+						return meta?.projectId === projectId && !meta.ask;
+					})
+					.slice(0, 500);
+				if (!live.length) break;
+				const linked = new Set(
+					await slack.linked(
+						projectId,
+						live.map(([id]) => id),
+					),
+				);
+				for (const [id, worker] of live) {
+					const value = linked.has(id);
+					if (this.workers.get(id) !== worker || (this.slackLinkedSent.get(worker) ?? false) === value) continue;
+					this.slackLinkedSent.set(worker, value);
+					worker.send({ type: "slack.linked", linked: value });
+				}
+			} while (state.again);
+		})()
+			.catch((error: unknown) => console.warn(`pilotd: could not refresh Slack links: ${error}`))
+			.finally(() => this.slackLinkRefresh.delete(projectId));
 	}
 
 	private async observePullRequests(meta: SessionMeta): Promise<void> {
@@ -5313,6 +5368,8 @@ export class SessionManager {
 		this.lastUse.set(id, Date.now());
 		// Reattach existing subscribers, for example after a kernel restart.
 		for (const watchId of this.watchers.get(id)?.keys() ?? []) worker.send({ type: "watch", watchId });
+		// A new kernel starts without slack_status; declare it if the chat is attached to a Slack triage message.
+		if (meta.projectId && !meta.ask) this.refreshSlackLinks(meta.projectId);
 		this.emit(meta);
 		return worker;
 	}
@@ -5564,6 +5621,21 @@ export class SessionManager {
 			void call.then(
 				(result) => reply({ result }),
 				(error: unknown) => reply({ error: formatFailure(error, "Tool db") }),
+			);
+			return;
+		}
+		if (packet.type === "slack.call") {
+			const reply = (result: { result?: unknown; error?: string }) => {
+				if (this.workers.get(meta.id) === worker)
+					worker.send({ type: "slack.result", callId: packet.callId, ...(result as { result?: never }) });
+			};
+			const call = Promise.resolve().then(() => {
+				if (!this.slackStatus || meta.ask) throw new Error("Slack status is unavailable in this chat");
+				return this.slackStatus.call(meta.id, packet.args);
+			});
+			void call.then(
+				(result) => reply({ result }),
+				(error: unknown) => reply({ error: formatFailure(error, "Tool slack_status") }),
 			);
 			return;
 		}

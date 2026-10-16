@@ -13,9 +13,9 @@ import type {
 	SlackExcerpt,
 	SourceSignIn,
 	TrackedItem,
+	TrackedItemList,
 	TrackedItemPatch,
 	TrackedItemPrefill,
-	TrackedItemList,
 	TrackedKind,
 	TrackingJson,
 	TrackingLookup,
@@ -30,6 +30,7 @@ import { parseSlackMessageLink, SlackFormatChanged } from "./slack-format.ts";
 import { addSlackDone, refreshSlackReactions, removeSlackEyes } from "./slack-reactions.ts";
 import { type SlackAdder, slackChannelProgress, slackExcerpt } from "./slack-source.ts";
 import { slackStart, slackStartAllowed } from "./slack-start.ts";
+import type { SlackWaitingWatcher } from "./slack-waiting.ts";
 import { type SourceMcpClient, SourceRateLimited, SourceSignInRequired, SourceToolError } from "./source-mcp.ts";
 import { SourceSignIns } from "./source-sign-in.ts";
 import type { SourceCheckpoint, TrackedInput, TrackedItemStore, TrackedQuery } from "./tracked-items.ts";
@@ -71,6 +72,8 @@ export class SourceRegistry {
 	triage?: TriageGroomer;
 	/** Reads and classifies a Slack message the user pasted. Without it, adding by link is unavailable. */
 	slackAdder?: SlackAdder;
+	/** Reads waiting messages' threads after each Slack poll and resumes their chats. Set once chats can be resumed. */
+	slackWaiting?: SlackWaitingWatcher;
 	private readonly pollers = new Map<TrackedKind, SourcePoller>();
 	private readonly running = new Map<string, Run>();
 	private readonly health = new Map<string, Health>();
@@ -313,13 +316,16 @@ export class SourceRegistry {
 						this.projects.require(project.id).tracking?.slackChannels ?? [],
 					);
 				if (source.kind === "slack") {
-					const budget = await refreshSlackReactions(this.items, {
+					const context: SourcePollContext = {
 						project,
 						config: project.tracking!,
 						signal: controller.signal,
 						call: (tool, args) => this.readCall("slack", tool, args, controller.signal),
-					});
-					if (budget) result.issue = "slack_budget";
+					};
+					// Replies to waiting messages resume work, so they go before reaction checks in the shared budget.
+					const waiting = this.slackWaiting ? await this.slackWaiting(context) : false;
+					const budget = await refreshSlackReactions(this.items, context);
+					if (waiting || budget) result.issue = "slack_budget";
 				}
 				const nextPollAt =
 					result.issue === "slack_budget"

@@ -3175,3 +3175,45 @@ test("database access: only configured projects get db, and only the app's decis
 	await sessions["starting"].get(unrelated.id);
 	assert.equal(f.workers.at(-1)!.spec.databases, undefined);
 });
+
+test("slack_status: only chats attached to a Slack triage message declare it, and calls carry the chat's ID", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager();
+	const calls: Array<[string, Record<string, unknown>]> = [];
+	const attached = new Set<string>();
+	sessions.setSlackStatus({
+		call: async (sessionId, args) => {
+			calls.push([sessionId, args]);
+			return { updated: [], unchanged: [] };
+		},
+		linked: async (_projectId, sessionIds) => sessionIds.filter((id) => attached.has(id)),
+	});
+	const linked = (worker: (typeof f.workers)[number]) =>
+		worker.sent.filter((command) => command.type === "slack.linked").map((command) => command.linked);
+	const created = await sessions.spawn({ projectId: f.project.id, workspace: "direct", message: "Start" });
+	await sessions["starting"].get(created.id);
+	const worker = f.workers.at(-1)!;
+	const other = await sessions.spawn({ projectId: f.project.id, workspace: "direct", message: "Start" });
+	await sessions["starting"].get(other.id);
+	const otherWorker = f.workers.at(-1)!;
+	await delay(20);
+	assert.deepEqual(linked(worker), []);
+
+	attached.add(created.id);
+	sessions.refreshSlackLinks(f.project.id);
+	await until(() => linked(worker).length === 1);
+	assert.deepEqual(linked(worker), [true]);
+	sessions["onPacket"](sessions["metas"].get(created.id)!, worker, {
+		type: "slack.call",
+		callId: "s1",
+		args: { status: "waiting", reason: "CSM" },
+	});
+	await until(() => worker.sent.some((command) => command.type === "slack.result" && command.callId === "s1"));
+	assert.deepEqual(calls, [[created.id, { status: "waiting", reason: "CSM" }]]);
+
+	attached.delete(created.id);
+	sessions.refreshSlackLinks(f.project.id);
+	await until(() => linked(worker).length === 2);
+	assert.deepEqual(linked(worker), [true, false]);
+	assert.deepEqual(linked(otherWorker), []);
+});

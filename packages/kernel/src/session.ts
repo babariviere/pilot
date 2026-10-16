@@ -81,6 +81,7 @@ import {
 	watchQueue,
 } from "./queue.ts";
 import { refActivity } from "./ref-activity.ts";
+import { createSlackStatusTool, SLACK_STATUS_TOOL, type SlackStatusCall } from "./slack-status-tool.ts";
 import { openSessionStorage } from "./storage.ts";
 import { SubagentBridge, type SubagentCommand } from "./subagents.ts";
 import { startTodoBridge } from "./todo-bridge.ts";
@@ -152,6 +153,8 @@ export interface KernelSessionHooks {
 	callMemory?: MemoryCall;
 	/** Executes a `db` tool call in pilotd. Registered only when the spec reports a database config. */
 	callDatabase?: DatabaseCall;
+	/** Executes a `slack_status` tool call in pilotd. The tool is declared only while the chat has a Slack message. */
+	callSlackStatus?: SlackStatusCall;
 	/** Read-only artifact references, authorized by pilotd on every call. */
 	readArtifactReference?: ArtifactToolOptions["readReference"];
 	prepareWorkspace?(): Promise<WorkspaceContext | undefined>;
@@ -413,6 +416,7 @@ export class KernelSession {
 					...missionTools,
 					questionTool,
 					...(!spec.pilot?.ask ? [createTodoTool(callTodo, () => spec.sessionId)] : []),
+					...(!spec.pilot?.ask && hooks.callSlackStatus ? [createSlackStatusTool(hooks.callSlackStatus)] : []),
 				],
 				...(spec.pilot?.ask
 					? { askArtifacts: artifactOptions }
@@ -439,6 +443,8 @@ export class KernelSession {
 			});
 			// Only mission chats declare the tool. It stays registered so joining can enable it live.
 			if (missionTools.length) adapter.setToolActive(MISSION_TOOL, !!mission.current);
+			// Likewise slack_status, declared once pilotd reports the chat attached to a Slack triage message.
+			if (!spec.pilot?.ask && hooks.callSlackStatus) adapter.setToolActive(SLACK_STATUS_TOOL, false);
 			const prepare = (extension: Extension) => {
 				const prepared = replayUnsafe(
 					withPilotPolicy(
@@ -784,6 +790,17 @@ export class KernelSession {
 				: {}),
 			...(settled?.entry !== undefined ? { completionEntry: settled.entry } : {}),
 		};
+	}
+
+	/** The chat was attached to or detached from a Slack triage message. Applies from the next model request. */
+	setSlackLinked(linked: boolean): void {
+		if (this.#closing || this.#ask) return;
+		try {
+			this.adapter.setToolActive(SLACK_STATUS_TOOL, linked);
+		} catch (error) {
+			// Without a host bridge the tool was never registered.
+			console.warn("pilot: could not update the slack_status tool", error);
+		}
 	}
 
 	/** Joining, leaving or a mission change. Applies from the next model request. */

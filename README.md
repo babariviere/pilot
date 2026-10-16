@@ -580,8 +580,17 @@ Slack items become Done locally when every PR of a linked chat has merged, or a 
 The row explains why, for example “Done · PR #42 merged”. Closed unmerged PRs change nothing. Already Done or
 Dismissed items stay untouched, startup PR baselines do not close old items, and reopening is never undone by
 the same merge or completion.
-During normal Slack refreshes, up to eight Open/In progress parents are checked for a ✅ reaction, sharing the
-daily Slack budget. A ✅ from anyone marks the item Done with “Done · ✅ in Slack”. Reopening keeps it open while
+A Slack message can also be **Waiting**, when someone outside Pilot (a CSM, the reporter) has to answer first.
+A chat attached to the message (started from it, or linked to it) sets it with its `slack_status` tool and a short
+reason, shown as “Waiting · CSM to confirm the org ID”. Only attached chats have that tool, and it appears or goes
+away as you link or unlink them. You can also pick Waiting yourself. Waiting messages stay out of the
+Inbox. On Slack refreshes, Pilot reads each waiting thread for new replies at most every ten minutes, sharing the
+daily Slack budget. A reply from anyone but you resumes the message's latest chat with the new replies, quoted
+as context, and moves the message back to In progress; without a chat to resume, the message reopens. Your own
+replies, including ones an agent posts as you, never end a wait. The tool can only switch a chat's own messages
+between In progress and Waiting; the other statuses stay yours.
+During normal Slack refreshes, up to eight Open, In progress or Waiting parents are checked for a ✅ reaction, sharing
+the daily Slack budget. A ✅ from anyone marks the item Done with “Done · ✅ in Slack”. Reopening keeps it open while
 that reaction remains present, even if its count changes. Removing it and adding it again is a new reaction.
 When an item with a successful eyes reaction becomes Done (manually, from a merge, or from Slack), Pilot adds ✅
 once. Already reacted counts as success; failures show a quiet row error without changing Done. Reopening never
