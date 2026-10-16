@@ -12,6 +12,7 @@ import type {
 	CompactRequest,
 	CreateMissionRequest,
 	DaemonHello,
+	DatabaseAccessDecision,
 	DurableOperation,
 	EditQueuedMessageRequest,
 	Inbox,
@@ -1012,6 +1013,13 @@ export function createDaemonServer(
 			if (parts[3] === "messages") {
 				const body = await readJson<SendRequest>(req);
 				await sessions.send(id, body.message, body.mode, body.requestId);
+				return json(res, 202, { ok: true });
+			}
+			if (parts[3] === "database-access") {
+				const body = await readJson<DatabaseAccessDecision | null>(req);
+				if (!body || typeof body.id !== "string" || !body.id || typeof body.allow !== "boolean")
+					throw new HttpError(400, "id and allow are required");
+				await sessions.decideDatabaseAccess(id, body.id, body.allow);
 				return json(res, 202, { ok: true });
 			}
 			if (parts[3] === "stop") {

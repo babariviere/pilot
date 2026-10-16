@@ -605,9 +605,11 @@ Ask chats and subagents do not get the tool. Create `~/.pi/agent/pilot-databases
 
 Projects are keyed by the folder you added to Pilot. Each environment has a read connection, a write
 connection, or both; leave one out to make that mode unavailable. `access` is `allow` (granted on first use)
-or `ask` (the default): the agent asks with a question naming the environment and mode, and picking
-**Allow … access** grants it. Any other reply declines. Grants last for the rest of the chat, and write access also
-covers reads. The file is read afresh for each call; new or removed projects apply to the next chat start.
+or `ask` (the default): the agent asks with a question naming the environment and mode, and its turn ends. Picking
+**Allow … access** in the app grants it; the app sends that decision to pilotd directly, and pilotd tells the agent.
+Messages never grant access, even ones with the same words: typing a reply instead declines. Grants last for the rest
+of the chat, and write access also covers reads. The file is read afresh for each call; new or removed projects apply
+to the next chat start.
 
 The agent calls `db({ action: "access" })` to list environments and request access, and
 `db({ action: "query", env, sql, params })` to run one statement. Read mode runs inside `BEGIN READ ONLY` with the
@@ -617,8 +619,9 @@ transaction. Every call opens its own connection with a 30 s statement timeout, 
 Results are sent to the model provider, so only configure data you are comfortable sharing with it.
 
 Give read connections a role that can only read: `BEGIN READ ONLY` guards against mistakes, while the role is
-what Postgres enforces. Only pilotd reads this file and the agent sees environment names, not URLs. Agent shells
-still run as you, so this is a guardrail for a cooperating agent, not a secret store. With the bundled sandbox in
+what Postgres enforces. Only pilotd reads this file and the agent sees environment names, not URLs or request ids.
+Agent shells still run as you and can reach pilotd's local API, so this is a guardrail for a cooperating agent, not
+a secret store or a hard boundary. With the bundled sandbox in
 `workspace-write` or `read-only` mode, add the file to `denyRead` in `~/.pi/agent/sandbox.json` to keep shells
 from reading it; with the sandbox off (the default), they can.
 

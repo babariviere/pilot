@@ -125,3 +125,14 @@ private func transcript(_ entries: [String], working: Bool = false) throws -> Tr
     #expect(question.reply(selected: [7], text: "") == nil)
     #expect(AgentQuestion(entryID: 1, question: "Proceed?", options: [.init(label: "Yes")], multiSelect: true).multiSelect == false)
 }
+
+@Test func databaseAccessQuestionsCarryTheirRequestAndStaySingleChoice() throws {
+    let entry = #"{"id":4,"kind":"pilot.question","data":{"question":"Allow read access to the prod database?","options":[{"label":"Allow read access to prod"},{"label":"Deny"}],"multiSelect":true,"databaseAccess":{"id":"request-1","env":"prod","mode":"read"}},"model":[]}"#
+    let question = try #require(try transcript([userInput, entry]).pendingQuestion)
+    #expect(question.databaseAccess == AgentQuestion.DatabaseAccess(id: "request-1", env: "prod", mode: "read"))
+    #expect(question.multiSelect == false)
+    // Ordinary questions, or a request without an id, have no access request.
+    #expect(try transcript([userInput, questionEntry]).pendingQuestion?.databaseAccess == nil)
+    let noID = #"{"id":4,"kind":"pilot.question","data":{"question":"Allow?","options":[],"databaseAccess":{"env":"prod","mode":"read"}},"model":[]}"#
+    #expect(try transcript([userInput, noID]).pendingQuestion?.databaseAccess == nil)
+}

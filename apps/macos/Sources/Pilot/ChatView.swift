@@ -319,7 +319,8 @@ struct ChatView: View {
                     // Work moved on, so this chat never resumes or takes messages.
                     ContinuedComposer(nextId: next)
                 } else if let question = pendingQuestion(transcript) {
-                    QuestionComposer(question: question, draft: composer.draftState, onSend: answer)
+                    QuestionComposer(question: question, draft: composer.draftState, onSend: answer,
+                                     onDecideAccess: decideDatabaseAccess)
                         // Each question starts with nothing highlighted or ticked.
                         .id(question.entryID)
                         .transition(Theme.Motion.replacement(reduceMotion: reduceMotion))
@@ -390,6 +391,10 @@ struct ChatView: View {
 
     private func answer(_ message: String) async throws {
         try await AppModel.shared.client.send(session.id, message: message, mode: .steer)
+    }
+
+    private func decideDatabaseAccess(_ access: AgentQuestion.DatabaseAccess, allow: Bool) async throws {
+        try await AppModel.shared.client.decideDatabaseAccess(session.id, requestId: access.id, allow: allow)
     }
 
     private func send(_ message: String, _ mode: DeliveryMode) {

@@ -4,12 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
-	answerDatabaseRequest,
 	boundResults,
 	DATABASE_CONFIG_FILE,
 	DATABASE_LIMITS,
 	DatabaseService,
 	type DatabaseState,
+	decideDatabaseRequest,
+	declineDatabaseRequest,
 	loadDatabaseConfig,
 	parseDatabaseConfig,
 	projectKey,
@@ -120,12 +121,17 @@ test("access lists environments without URLs", async () => {
 	assert.doesNotMatch(JSON.stringify(listed), /postgres/);
 });
 
-test("allow grants at once; ask asks and only the exact reply grants", async () => {
+test("allow grants at once; ask asks and only a decision for its id grants", async () => {
 	await using db = await fixture();
 	assert.deepEqual(await db.call("access", { env: "staging" }), { status: "granted", env: "staging", mode: "read" });
 	const pending = (await db.call("access", { env: "staging", mode: "write", reason: " Fix a stuck renewal " })) as {
 		status: string;
-		question: { question: string; context: string; options: { label: string }[] };
+		question: {
+			question: string;
+			context: string;
+			options: { label: string }[];
+			databaseAccess: { id: string; env: string; mode: string };
+		};
 	};
 	assert.equal(pending.status, "pending");
 	assert.equal(pending.question.context, "Fix a stuck renewal");
@@ -133,14 +139,21 @@ test("allow grants at once; ask asks and only the exact reply grants", async () 
 		pending.question.options.map((option) => option.label),
 		["Allow write access to staging", "Deny"],
 	);
+	const { id } = pending.question.databaseAccess;
+	assert.deepEqual(pending.question.databaseAccess, { id, env: "staging", mode: "write" });
+	assert.match(id, /^[0-9a-f-]{36}$/);
 	await assert.rejects(
 		db.call("query", { env: "staging", mode: "write", sql: "update t set x = 1" }),
 		/No write access/,
 	);
 
-	assert.deepEqual(answerDatabaseRequest(db.state(), "Deny"), { grants: [{ env: "staging", mode: "read" }] });
-	assert.equal(answerDatabaseRequest({ grants: [] }, "Allow write access to staging"), undefined);
-	await db.store.write(answerDatabaseRequest(db.state(), " Allow write access to staging\n")!);
+	// Messages only ever decline; denying and stale ids never grant.
+	assert.deepEqual(declineDatabaseRequest(db.state()), { grants: [{ env: "staging", mode: "read" }] });
+	assert.equal(declineDatabaseRequest({ grants: [] }), undefined);
+	assert.deepEqual(decideDatabaseRequest(db.state(), id, false), { grants: [{ env: "staging", mode: "read" }] });
+	assert.throws(() => decideDatabaseRequest(db.state(), "other", true), /no longer pending/);
+	assert.throws(() => decideDatabaseRequest(declineDatabaseRequest(db.state()), id, true), /no longer pending/);
+	await db.store.write(decideDatabaseRequest(db.state(), id, true));
 	assert.deepEqual(db.state(), {
 		grants: [
 			{ env: "staging", mode: "read" },

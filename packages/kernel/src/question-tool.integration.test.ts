@@ -187,6 +187,7 @@ test("ask_user through codemode still records the question", { timeout: 20_000 }
 				question: {
 					question: "Allow read access to the prod database?",
 					options: [{ label: "Allow read access to prod" }, { label: "Deny" }],
+					databaseAccess: { id: "request-1", env: "prod", mode: "read" },
 				},
 			};
 		},
@@ -215,6 +216,7 @@ test("ask_user through codemode still records the question", { timeout: 20_000 }
 		{
 			question: "Allow read access to the prod database?",
 			options: [{ label: "Allow read access to prod" }, { label: "Deny" }],
+			databaseAccess: { id: "request-1", env: "prod", mode: "read" },
 		},
 	]);
 	assert.equal((await settled(completions, 1))?.outcome, "question");

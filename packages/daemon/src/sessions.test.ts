@@ -3024,7 +3024,7 @@ test("queued metadata writes capture each transition instead of serializing live
 	});
 });
 
-test("database access: only configured projects get db, and the user's exact reply grants an ask", async (t) => {
+test("database access: only configured projects get db, and only the app's decision grants an ask", async (t) => {
 	const f = await fixture(t);
 	const agentDir = join(f.root, "agent");
 	await mkdir(agentDir);
@@ -3058,8 +3058,23 @@ test("database access: only configured projects get db, and the user's exact rep
 
 	assert.match((await call("q1", "query", { env: "prod", sql: "select 1" })).error ?? "", /No read access to prod/);
 	assert.equal(field((await call("a1", "access", { env: "prod" })).result, "status"), "pending");
+	// Typing the option's text is just a message: it declines instead of granting.
 	await sessions.send(created.id, "Allow read access to prod");
+	assert.deepEqual(sessions["metas"].get(created.id)?.databases, {});
+
+	const asked = (await call("a2", "access", { env: "prod" })).result;
+	const requestId = field(field(field(asked, "question"), "databaseAccess"), "id");
+	assert.equal(typeof requestId, "string");
+	await assert.rejects(sessions.decideDatabaseAccess(created.id, "forged", true), /no longer pending/);
+	await sessions.decideDatabaseAccess(created.id, requestId as string, true);
 	assert.deepEqual(sessions["metas"].get(created.id)?.databases, { grants: [{ env: "prod", mode: "read" }] });
+	await until(() =>
+		worker.requests.some(
+			(command) => command.type === "input" && command.content === "Allowed read access to the prod database.",
+		),
+	);
+	// The decision is used up: a repeated click changes nothing.
+	await assert.rejects(sessions.decideDatabaseAccess(created.id, requestId as string, false), /no longer pending/);
 	assert.deepEqual(field((await call("q2", "query", { env: "prod", sql: "select 1" })).result, "rows"), [{ n: 1 }]);
 	assert.deepEqual(queries, ["postgres://ro@prod/app select 1"]);
 

@@ -23,7 +23,7 @@ export function createDatabaseTool(call: DatabaseCall, publish: PublishQuestion)
 		name: DATABASE_TOOL,
 		label: "Database",
 		description:
-			'Query the user\'s configured Postgres databases. access without env lists environments, their modes and your grants. access with env and mode requests access: it is granted at once, or the user is asked and your turn ends (their reply arrives as the next message). Grants last for this chat. query runs one SQL statement with $1 params (mode "read" by default, read-only). In mode "write", statements runs several statements in one transaction. Results are capped by maxRows (default 100).',
+			'Query the user\'s configured Postgres databases. access without env lists environments, their modes and your grants. access with env and mode requests access: it is granted at once, or the user is asked and your turn ends (their decision arrives as the next message). Grants last for this chat. query runs one SQL statement with $1 params (mode "read" by default, read-only). In mode "write", statements runs several statements in one transaction. Results are capped by maxRows (default 100).',
 		promptSnippet: "Query configured Postgres databases",
 		parameters: Type.Object({
 			action: Type.Union([Type.Literal("access"), Type.Literal("query")]),
@@ -72,15 +72,21 @@ export function createDatabaseTool(call: DatabaseCall, publish: PublishQuestion)
 			const question = pendingQuestion(result);
 			if (question) {
 				await publish(callId, question);
+				// The request id is only for the app's answer, so the agent never sees it.
+				const pending = {
+					status: "pending",
+					env: question.databaseAccess!.env,
+					mode: question.databaseAccess!.mode,
+				};
 				return {
 					content: [
 						{
 							type: "text",
-							text: "The user is asked to grant access. End your turn now; their reply arrives as the next user message.",
+							text: "The user is asked to grant access. End your turn now; their decision arrives as the next user message.",
 						},
 					],
-					details: result,
-					structuredContent: result,
+					details: pending,
+					structuredContent: pending,
 					terminate: true,
 				};
 			}
@@ -95,5 +101,20 @@ export function createDatabaseTool(call: DatabaseCall, publish: PublishQuestion)
 
 function pendingQuestion(result: JsonValue): AgentQuestion | undefined {
 	if (!result || typeof result !== "object" || Array.isArray(result) || result.status !== "pending") return undefined;
-	return normalizeQuestion(result.question as Parameters<typeof normalizeQuestion>[0]);
+	const question = result.question as Parameters<typeof normalizeQuestion>[0] & { databaseAccess?: JsonValue };
+	const access = question?.databaseAccess;
+	if (
+		!access ||
+		typeof access !== "object" ||
+		Array.isArray(access) ||
+		typeof access.id !== "string" ||
+		typeof access.env !== "string" ||
+		(access.mode !== "read" && access.mode !== "write")
+	)
+		throw new Error("pilotd returned an access request without an id");
+	// normalizeQuestion keeps only ask_user's fields, so ask_user itself can never carry databaseAccess.
+	return {
+		...normalizeQuestion({ ...question, multiSelect: false }),
+		databaseAccess: { id: access.id, env: access.env, mode: access.mode },
+	};
 }

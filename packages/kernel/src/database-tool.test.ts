@@ -23,7 +23,7 @@ test("db forwards calls to pilotd and returns its result", async () => {
 	assert.deepEqual(JSON.parse((result.content[0] as { text: string }).text).rows, [{ n: 1 }]);
 });
 
-test("a pending access request asks the user and ends the turn", async () => {
+test("a pending access request asks the user, hides its id from the agent and ends the turn", async () => {
 	const published: Array<[string, AgentQuestion]> = [];
 	const tool = createDatabaseTool(
 		async (): Promise<JsonValue> => ({
@@ -37,6 +37,7 @@ test("a pending access request asks the user and ends the turn", async () => {
 					{ label: "Allow read access to prod", detail: "Read-only, for the rest of this chat" },
 					{ label: "Deny" },
 				],
+				databaseAccess: { id: "request-1", env: "prod", mode: "read" },
 			},
 		}),
 		async (callId, question) => {
@@ -45,6 +46,8 @@ test("a pending access request asks the user and ends the turn", async () => {
 	);
 	const result = await run(tool, { action: "access", env: "prod", reason: "Check a renewal" });
 	assert.equal(result.terminate, true);
+	assert.doesNotMatch(JSON.stringify(result), /request-1/);
+	assert.deepEqual(result.details, { status: "pending", env: "prod", mode: "read" });
 	assert.deepEqual(published, [
 		[
 			"call-1",
@@ -55,6 +58,7 @@ test("a pending access request asks the user and ends the turn", async () => {
 					{ label: "Allow read access to prod", detail: "Read-only, for the rest of this chat" },
 					{ label: "Deny" },
 				],
+				databaseAccess: { id: "request-1", env: "prod", mode: "read" },
 			},
 		],
 	]);
