@@ -41,6 +41,8 @@ export class WatchEventsDisk {
 		self ??= this.control();
 		const apply = () => {
 			let matched = 0;
+			const frozen = this.db.prepare("SELECT last_event_id FROM watch_delivery WHERE delivered_at IS NULL").get();
+			const cutoff = Number(frozen?.last_event_id ?? -1);
 			const consumed = new Set<string>();
 			for (const event of events) {
 				const key = `${event.event}:${event.source}`;
@@ -92,13 +94,13 @@ export class WatchEventsDisk {
 				for (const watch of watches.values()) {
 					if (watch.createdAt > event.at || (watch.filter?.outcome && watch.filter.outcome !== event.outcome))
 						continue;
-					const old = this.db.prepare("SELECT data FROM watch_pending WHERE watch_id = ?").get(watch.id);
+					const old = this.db.prepare("SELECT event_id, data FROM watch_pending WHERE watch_id = ?").get(watch.id);
 					if (!old && Number(this.db.prepare("SELECT COUNT(*) AS n FROM watch_pending").get()!.n) >= 10000)
 						throw new Error("Pending watch limit reached");
 					const id = Number(
 						this.db.prepare("UPDATE watch_sequence SET value=value+1 WHERE id=1 RETURNING value").get()!.value,
 					);
-					const prior = old ? JSON.parse(String(old.data)) : undefined;
+					const prior = old && Number(old.event_id) > cutoff ? JSON.parse(String(old.data)) : undefined;
 					const item = {
 						watchId: watch.id,
 						note: watch.note,
@@ -108,9 +110,9 @@ export class WatchEventsDisk {
 					};
 					this.db
 						.prepare(
-							"INSERT INTO watch_pending VALUES(?,?,?,?,?) ON CONFLICT(watch_id) DO UPDATE SET event_id=excluded.event_id,last_at=excluded.last_at,data=excluded.data",
+							"INSERT INTO watch_pending VALUES(?,?,?,?,?) ON CONFLICT(watch_id) DO UPDATE SET first_at=CASE WHEN watch_pending.event_id<=? THEN excluded.first_at ELSE watch_pending.first_at END,event_id=excluded.event_id,last_at=excluded.last_at,data=excluded.data",
 						)
-						.run(watch.id, id, event.at, event.at, JSON.stringify(item));
+						.run(watch.id, id, event.at, event.at, JSON.stringify(item), cutoff);
 					if (watch.mode === "once") this.db.prepare("DELETE FROM watches WHERE id=?").run(watch.id);
 					matched++;
 				}
