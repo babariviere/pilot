@@ -19,6 +19,9 @@ See [screenshot notes](docs/screenshots/README.md) to regenerate them.*
 
 ## What you can do
 
+Critical code review is not available yet. The disabled [review foundation](docs/critical-review-foundation.md)
+has separate storage and transport contracts; it does not change chat-result read tracking.
+
 - **Run several agents at once.** Follow progress across projects, send follow-ups, queue messages or stop
   a run. Every session has its own worker process.
 - **Work on a devbox, too.** Add a working SSH alias in Settings → Devboxes, confirm its identity, and
