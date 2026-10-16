@@ -546,6 +546,9 @@ Deployed, Canceled and Duplicated, including separate choices for sub-teams. Man
 also use In review and Merged; Deployed/Canceled/Duplicated guard terminal states, not outbound actions.
 In progress must map to a started-category state. Its Automatic option selects the state named
 In progress, never the first state in workflow order. Other mappings may use any workflow state.
+Managed-ticket synchronization verifies Started states for In review, Completed for Merged/Deployed,
+and the corresponding terminal categories for Canceled/Duplicated before acting; invalid choices surface
+an error without blocking local work.
 If a target is missing, ambiguous or no longer a started state, Pilot leaves the ticket unchanged and shows
 a quiet error. Starting work still proceeds. Saved choices are rechecked against the issue's actual team.
 Confirming Start chat or Start mission moves an eligible Linear ticket to that state, or adds an `eyes`

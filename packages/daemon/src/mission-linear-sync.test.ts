@@ -487,3 +487,27 @@ test("renamed identifiers keep their pinned UUID, workspace mismatches never bin
 	assert.equal(g.writes.length, 0);
 	assert.match(g.status().error!, /workspace/);
 });
+
+test("manual pauses do not hide inbound cancellation or change its task policy", async (t) => {
+	const f = await fixture(t);
+	f.store.controlLinearSync(f.mission.id, f.manager.id, "pause");
+	f.state("canceled");
+	await f.poll();
+	assert.equal(f.status().state, "terminal");
+	assert.equal(f.status().reason, "canceled");
+	assert.equal(f.store.resolveTask(f.mission.id, "1").status, "dropped");
+	assert.equal(f.store.resolveTask(f.mission.id, "3").status, "todo");
+});
+
+test("another URL cannot acquire a second writer for the same immutable UUID", async (t) => {
+	const f = await fixture(t);
+	await f.poll();
+	const duplicate = f.store.addResource(f.mission.id, { url: url(2), linearRole: "managed" });
+	f.issues.push({ ...remote(2), id: f.issues[0]!.id });
+	await f.poll();
+	const status = f.store.linearSyncRecord(duplicate.id)!.status;
+	assert.equal(status.state, "error");
+	assert.match(status.error!, /already has a verified managing link/);
+	assert.equal(status.issueId, undefined);
+	assert.equal(f.writes.length, 0);
+});
