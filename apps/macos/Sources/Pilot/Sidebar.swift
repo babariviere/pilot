@@ -22,16 +22,21 @@ struct SessionSidebar: View {
         let counts = client.projectCounts.projects
         let focused = model.focusedProject
         let showsSearch = model.sidebarSearchVisible || searching
+        // Archived chats join the list only while searching, below the active ones.
+        let archived = searching
+            ? ArchiveFilter(projectId: focused?.id).apply(to: client.archivedSessions.filter(matches)) : []
         List(selection: $model.selectedSessionId) {
             if let focused {
                 missionsSection(visible: visible, searching: searching, projectId: focused.id)
                 urgencyGroups(visible.filter { $0.projectId == focused.id }, searching: searching,
-                              recentListId: focused.id)
+                              recentListId: focused.id, hasArchivedMatches: !archived.isEmpty)
+                archivedMatches(archived)
             } else {
                 missionsSection(visible: visible, searching: searching)
+                let names = Dictionary(client.projects.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
                 urgencyGroups(visible, searching: searching, recentListId: Self.recentListId,
-                              projectNames: Dictionary(client.projects.map { ($0.id, $0.name) },
-                                                       uniquingKeysWith: { first, _ in first }))
+                              hasArchivedMatches: !archived.isEmpty, projectNames: names)
+                archivedMatches(archived, projectNames: names)
             }
         }
         .listStyle(.sidebar)
@@ -50,9 +55,9 @@ struct SessionSidebar: View {
         }
         .safeAreaInset(edge: .top, spacing: 0) {
             // Home and the Inbox cover every project; the selector heads the scoped list below them. Archived
-            // chats live in the selector's menu, search behind ⌘F.
+            // chats live in the selector's menu, search behind ⌘F (which also finds archived chats).
             let needsYou = SidebarScopeCounts.total(counts).needsYou
-            let archived = focused.map { project in
+            let archivedCount = focused.map { project in
                 client.archivedSessions.filter { $0.projectId == project.id }.count
             } ?? client.archivedSessions.count
             VStack(spacing: 6) {
@@ -61,7 +66,7 @@ struct SessionSidebar: View {
                               needsYou: needsYou,
                               needsYouHelp: SidebarScopeCounts.needsYouReasons(total: needsYou,
                                                                                reasons: needsYouReasons, counts: counts),
-                              archivedCount: archived, folderEditor: folderEditor)
+                              archivedCount: archivedCount, folderEditor: folderEditor)
                 if showsSearch {
                     SearchField(text: $model.sidebarQuery, focused: $searchFocused) { model.hideSidebarSearch() }
                         .transition(.opacity.combined(with: .move(edge: .top)))
@@ -143,7 +148,7 @@ struct SessionSidebar: View {
     /// user but never badges. A result read in the open chat keeps its group until the user leaves the chat.
     @ViewBuilder
     private func urgencyGroups(_ sessions: [SessionSummary], searching: Bool, recentListId: String,
-                               projectNames names: [String: String]? = nil) -> some View {
+                               hasArchivedMatches: Bool = false, projectNames names: [String: String]? = nil) -> some View {
         let groups = SidebarUrgency.groups(sessions, unread: { model.isUnread($0) },
                                            held: { model.isHeld($0) })
         if !groups.pinned.isEmpty {
@@ -193,10 +198,25 @@ struct SessionSidebar: View {
                 SidebarSectionHeader(title: "Recent")
             }
         }
-        if groups.isEmpty, !client.projects.isEmpty {
+        if groups.isEmpty, !hasArchivedMatches, !client.projects.isEmpty {
             Text(searching ? "No matching chats" : "No chats yet")
                 .font(.pilot(.small)).foregroundStyle(Theme.faintForeground)
                 .selectionDisabled(true)
+        }
+    }
+
+    /// Archived chats matching the search, most recently archived first. Selecting one reads it, as in the Archive.
+    @ViewBuilder
+    private func archivedMatches(_ sessions: [SessionSummary], projectNames names: [String: String]? = nil) -> some View {
+        if !sessions.isEmpty {
+            Section {
+                ForEach(sessions) { session in
+                    SessionRow(session: session, projectName: projectName(session, names), listFocused: chatListFocused)
+                        .tag(session.id)
+                }
+            } header: {
+                SidebarSectionHeader(title: "Archived")
+            }
         }
     }
 
