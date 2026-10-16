@@ -42,21 +42,24 @@ struct CommandPaletteCatalog {
         chats() + tasks() + missions() + projects() + pages() + actions() + tracked()
     }
 
-    /// Chats by latest activity. The open chat is left out of the recent ones: it is already on screen.
+    /// Chats by latest activity, then archived chats by archive time. Archived chats are found by search only and
+    /// say so after their title. The open chat is left out of the recent ones: it is already on screen.
     private func chats() -> [CommandPaletteEntry] {
         let client = model.client
         let sessions = client.activeSessions.sorted { $0.listActivityAt > $1.listActivityAt }
         var recent = 0
-        return sessions.map { session in
-            let suggested = session.id != model.selectedSessionId && recent < Self.recentChats
+        return (sessions + ArchiveFilter.ordered(client.archivedSessions)).map { session in
+            let suggested = !session.isArchived && session.id != model.selectedSessionId && recent < Self.recentChats
             if suggested { recent += 1 }
             let keywords = [client.project(session.projectId)?.name, session.branch,
-                            session.missionId.flatMap { client.mission($0)?.title }].compactMap { $0 }
+                            session.missionId.flatMap { client.mission($0)?.title },
+                            session.isArchived ? "archived" : nil].compactMap { $0 }
             return CommandPaletteEntry(
                 item: CommandPaletteItem(id: "chat:\(session.id)", kind: .chat, title: session.title, keywords: keywords,
                                          pullRequestNumbers: session.linkedPullRequests.map(\.number),
                                          suggested: suggested),
-                icon: .message, session: session
+                icon: session.isArchived ? .archive : .message, suffix: session.isArchived ? "Archived" : nil,
+                session: session
             ) { [model] in model.reveal(session: session.id) }
         }
     }

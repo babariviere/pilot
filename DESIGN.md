@@ -127,6 +127,7 @@ Mission chats sit in the chat groups like any chat, their mission on the second 
 with "Coordinator". A pinned chat is listed only under Pinned, and its corner still shows its state. Rows are a title
 and one metadata line. Time, pin and mission marks appear under the pointer. Quiet chats fold past the first few,
 and the footer appears only while pilotd is unreachable or something needs setting up.
+While searching (⌘F), matching archived chats follow in their own Archived group, newest archive first.
 
 A row's metadata line is a `RowLine`: whole segments in a fixed order (project, Ask or Coordinator, reason, PRs,
 mission, branch) with a dot only between shown segments. When they do not fit, the line fades out before the
@@ -139,6 +140,7 @@ The ⌘K command palette is one search field over one list grouped by kind, with
 keys, Return and Escape throughout. Rows are hairline-divided, show their menu shortcut as a key cap, and chat rows
 keep their sidebar line and corner. The palette's only colour is the amber of Needs you: working and ready-to-merge
 corners turn grey there (`ditherCorner(_:monochrome:)`).
+Archived chats are never suggested; a search finds them after active ones, marked "Archived".
 
 The menu bar follows the same urgency order (Needs you, Ready to merge, Working, Recent) under a one-line heading such
 as "1 needs you · 2 working". pilotd's controls sit in their own submenu.
