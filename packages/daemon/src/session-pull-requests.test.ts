@@ -73,16 +73,17 @@ async function fixture(
 		outcomeReason: "Approval",
 		lastOutcomeAt: 10,
 		lastCompletionAt: 10,
+		// The agent created these PRs, so discovery shows them. A chat never shows a PR it did not create or attach.
+		agentPullRequests: [cached.url, "https://github.com/octo/repo/pull/11", "https://github.com/octo/repo/pull/12"],
 		...(initialPullRequest ? { pullRequest: initialPullRequest } : {}),
 	};
-	// The direct session owns the PR, so discovery here never claims it or looks up its health for follow-ups.
+	// A direct-project chat is never discovered.
 	const direct: Meta = {
 		id: randomUUID(),
 		title: "Direct",
 		cwd: home,
 		createdAt: 1,
 		updatedAt: 3,
-		agentPullRequests: [cached.url],
 	};
 	await mkdir(cwd, { recursive: true });
 	await mkdir(join(home, "sessions", direct.id), { recursive: true });
@@ -212,7 +213,7 @@ test("readiness is saved with the PR and exposed after a daemon restart with Git
 	);
 });
 
-test("fourth-argument factories remain compatible: preparation immediately discovers PRs without blocking spawn or worker readiness", async () => {
+test("fourth-argument factories remain compatible: the agent's first branch write discovers PRs without blocking spawn or worker readiness", async () => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-pr-startup-"));
 	const source = join(home, "source");
 	await mkdir(source);
@@ -235,6 +236,8 @@ test("fourth-argument factories remain compatible: preparation immediately disco
 	let workerCreated = false;
 	let lookups = 0;
 	let admit = () => {};
+	let hint = () => {};
+	let create = () => {};
 	const manager = new SessionManager(
 		home,
 		projects,
@@ -266,12 +269,15 @@ test("fourth-argument factories remain compatible: preparation immediately disco
 					onPacket({ type: "ready", model: "test/model", working: false, usage: {} });
 					releaseReady();
 				};
+				hint = () => onPacket({ type: "refs.changed" });
+				create = () => onPacket({ type: "pullRequest.created", url: cached.url });
 				return worker;
 			},
 		},
 		{
 			runner: legacyGitHub(async (file, args) => {
-				if (file === "git" && args[0] === "branch") return branch;
+				// The fresh clone has no local branches, while its checkout already points at one.
+				if (file === "git" && args[0] === "branch") return args[1] === "--show-current" ? branch : "";
 				assert.equal(file, "gh", "new clone must use the daemon-recorded upstream, not read origin");
 				lookups++;
 				await lookup;
@@ -287,11 +293,18 @@ test("fourth-argument factories remain compatible: preparation immediately disco
 		await until(() => cloning);
 		assert.equal(lookups, 0, "unprepared workspaces must not be attributed to the source checkout");
 		releaseClone();
-		await until(() => lookups === 1 && workerCreated);
+		await until(() => workerCreated);
 		assert.equal(manager.get(created.id)?.state, "starting");
-		// A blocked GitHub command must not block durable admission to the ready worker.
 		admit();
 		await until(() => manager.get(created.id)?.state === "working");
+		await manager["pullRequests"].refresh(manager["metas"].get(created.id)!);
+		assert.equal(lookups, 0, "a fresh clone has no branch of its own until the agent writes one");
+		assert.equal(manager.get(created.id)?.branch, undefined);
+		// A blocked GitHub command must not block the working chat.
+		hint();
+		await until(() => lookups === 1);
+		// The agent opens the PR while GitHub is still answering. Only a PR it created attaches.
+		create();
 		assert.equal(manager.get(created.id)?.pullRequest, undefined);
 		const active = lifecycle(manager, manager["metas"].get(created.id)!);
 		releaseLookup();
@@ -332,6 +345,8 @@ test("agent branch changes persist for the UI, clear the prior PR, and survive d
 			chosen = "fix-branch-discovery";
 			hasPr = false;
 			await manager["pullRequests"].refresh(meta);
+			assert.equal(manager.get(meta.id)?.branch, branch, "a checkout alone does not move the chat");
+			await manager["detectBranch"](meta);
 			assert.equal(manager.get(meta.id)?.branch, chosen);
 			assert.equal(changes.at(-1)?.branch, chosen);
 			assert.equal(manager.get(meta.id)?.pullRequest, undefined);
@@ -344,7 +359,7 @@ test("agent branch changes persist for the UI, clear the prior PR, and survive d
 			await manager["pullRequests"].refresh(meta);
 			assert.equal(manager.get(meta.id)?.pullRequest?.state, "open");
 			chosen = "";
-			await manager["pullRequests"].refresh(meta);
+			await manager["detectBranch"](meta);
 			assert.equal(manager.get(meta.id)?.branch, "fix-branch-discovery");
 			assert.equal(manager.get(meta.id)?.pullRequest?.number, 10);
 			assert.deepEqual(lifecycle(manager, meta), initial);
@@ -380,6 +395,39 @@ test("summaries list every session branch, including local branches without a PR
 	);
 });
 
+test("detached branches without a PR stay detached, and a branch with a PR detaches through its PR", async () => {
+	await fixture(
+		{
+			runner: async (_file, args) => {
+				const head = args.find((arg) => arg.startsWith("--head="))!.slice("--head=".length);
+				if (head !== "fix-split") return "[]";
+				return JSON.stringify([
+					{ ...candidate(), number: 12, url: "https://github.com/octo/repo/pull/12", headRefName: head },
+				]);
+			},
+		},
+		async (manager, meta, home) => {
+			await manager["pullRequests"].settled();
+			assert.deepEqual(manager.get(meta.id)!.branches, [branch, "fix-split", "fix-unpublished"]);
+			await assert.rejects(manager.detachBranch(meta.id, "fix-split"), /Detach the pull request instead/);
+			await assert.rejects(manager.detachBranch(meta.id, "unknown"), /does not track this branch/);
+			let summary = await manager.detachBranch(meta.id, "fix-unpublished");
+			assert.deepEqual(summary.branches, [branch, "fix-split"]);
+			await manager["pullRequests"].refresh(meta);
+			assert.deepEqual(manager.get(meta.id)!.branches, [branch, "fix-split"], "local branches are not rediscovered");
+			summary = await manager.detachBranch(meta.id, branch);
+			assert.equal(summary.branch, undefined);
+			// The checkout still points at the detached branch, and the agent writes again.
+			await manager["detectBranch"](meta);
+			assert.equal(manager.get(meta.id)!.branch, undefined, "a detached current branch is never adopted again");
+			assert.deepEqual(manager.get(meta.id)!.branches, ["fix-split"]);
+			assert.deepEqual((await saved(home, meta.id)).detachedBranches, ["fix-unpublished", branch]);
+		},
+		undefined,
+		(args) => (args[1] === "--show-current" ? branch : `main\n${branch}\nfix-split\nfix-unpublished`),
+	);
+});
+
 test("a session can link several PRs: switching branches keeps earlier PRs, and archiving waits for all", async () => {
 	let chosen = branch;
 	const states: Record<string, string> = { [branch]: "OPEN", "fix-second": "OPEN" };
@@ -400,7 +448,7 @@ test("a session can link several PRs: switching branches keeps earlier PRs, and 
 			await manager["pullRequests"].settled();
 			assert.equal(manager.get(meta.id)?.pullRequest?.number, 10);
 			chosen = "fix-second";
-			await manager["pullRequests"].refresh(meta);
+			await manager["detectBranch"](meta);
 			const summary = manager.get(meta.id)!;
 			assert.equal(summary.branch, "fix-second");
 			assert.equal(summary.pullRequest?.number, 11);
@@ -889,7 +937,6 @@ test("failed PR cache writes roll back merge timestamp additions, replacements a
 	const firstMerge = Date.now();
 	let remoteState = "OPEN";
 	let mergedAt = firstMerge;
-	let chosen = branch;
 	let hasPr = true;
 	await fixture(
 		{
@@ -908,7 +955,7 @@ test("failed PR cache writes roll back merge timestamp additions, replacements a
 				remoteState = transition === "open" ? "OPEN" : "MERGED";
 				if (transition === "new-merge-time") mergedAt++;
 				if (transition === "branch") {
-					chosen = "another-branch";
+					meta.detectedBranch = "another-branch";
 					hasPr = false;
 				}
 				manager["save"] = async () => {
@@ -935,7 +982,7 @@ test("failed PR cache writes roll back merge timestamp additions, replacements a
 			}
 		},
 		undefined,
-		() => chosen,
+		() => branch,
 	);
 });
 

@@ -160,6 +160,8 @@ async function setup(cooldownMs?: number) {
 		outcomeAt: 1,
 		lastOutcomeAt: 1,
 		lastCompletionAt: 1,
+		// The chat already shows the PR its agent opened. Ownership is set per test after load.
+		pullRequest: { number: 10, url, title: "PR", state: "open", checkedAt: 1 },
 	};
 	await mkdir(cwd, { recursive: true });
 	await writeFile(join(home, "sessions", id, "meta.json"), JSON.stringify(initial));
@@ -1142,7 +1144,7 @@ test("busy, queued, unowned, direct, ask, archived and transitional sessions nev
 	});
 });
 
-test("the first private session to discover an unowned PR claims it, and a PR has one owner", async () => {
+test("discovery never claims a PR: only the agent's own creation makes it automatic work", async () => {
 	await fixture(async (f) => {
 		// Another session owns it, archived or not: discovery and creation packets cannot take it over.
 		delete f.meta.agentPullRequests;
@@ -1150,28 +1152,38 @@ test("the first private session to discover an unowned PR claims it, and a PR ha
 		await f.refresh();
 		f.manager["onPacket"](f.meta, await f.worker(), { type: "pullRequest.created", url });
 		assert.equal(f.meta.agentPullRequests, undefined);
-		assert.ok(f.controls.healthCalls > 0, "unowned PR still receives display readiness");
+		assert.ok(f.controls.healthCalls > 0, "a PR the chat already shows still receives display readiness");
 		assert.equal(f.inputs.length, 0);
 
-		// Ask and archived sessions never claim delivery PRs.
+		// Unowned PRs found on the chat's branch are not claimed either, so they never get follow-ups.
 		f.ownElsewhere();
-		for (const [start, stop] of [
-			[() => (f.meta.mode = "ask"), () => delete f.meta.mode],
-			[() => (f.meta.archivedAt = 20), () => delete f.meta.archivedAt],
-		] as const) {
-			start();
-			await f.refresh();
-			stop();
-			assert.equal(f.meta.agentPullRequests, undefined);
-		}
+		await f.refresh();
+		assert.equal(f.meta.agentPullRequests, undefined);
+		assert.equal((await f.saved()).agentPullRequests, undefined);
+		assert.equal(f.inputs.length, 0);
+		assert.equal(f.manager["pullRequestOwner"](url), undefined);
 
-		// An unrecognized creation, or a PR the session was asked to take over, is claimed on discovery.
+		// The agent's own creation does.
+		f.manager["onPacket"](f.meta, await f.worker(), { type: "pullRequest.created", url });
 		await f.refresh();
 		assert.deepEqual(f.meta.agentPullRequests, [url]);
-		assert.deepEqual((await f.saved()).agentPullRequests, [url]);
 		assert.equal(f.inputs.length, 1);
 		assert.match(f.inputs[0]!.content, /merge conflicts/);
 		assert.equal(f.manager["pullRequestOwner"](url), f.id);
+	});
+});
+
+test("a PR on the chat's branch that its agent did not create never attaches", async () => {
+	await fixture(async (f) => {
+		delete f.meta.agentPullRequests;
+		delete f.meta.pullRequest;
+		await f.refresh();
+		assert.equal(f.manager.get(f.id)?.pullRequest, undefined);
+		assert.equal(f.manager.get(f.id)?.branch, branch, "the branch itself stays");
+		assert.equal(f.inputs.length, 0);
+		f.manager["onPacket"](f.meta, await f.worker(), { type: "pullRequest.created", url });
+		await f.refresh();
+		assert.equal(f.manager.get(f.id)?.pullRequest?.url, url);
 	});
 });
 

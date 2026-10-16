@@ -13,6 +13,7 @@ import type {
 	CreateMissionRequest,
 	DaemonHello,
 	DatabaseAccessDecision,
+	DetachBranchRequest,
 	DurableOperation,
 	EditQueuedMessageRequest,
 	Inbox,
@@ -135,6 +136,13 @@ export function acknowledgeWhenDurable(res: ServerResponse, store: Pick<MissionS
 
 function json(res: ServerResponse, status: number, body: unknown): void {
 	jsonText(res, status, JSON.stringify(body));
+}
+
+/** Workspace chats show the branch they recorded, not whatever the checkout currently points at. */
+function recordedBranch<T extends { branch?: string }>(value: T, recorded: { name?: string } | undefined): T {
+	if (!recorded) return value;
+	const { branch: _, ...rest } = value;
+	return (recorded.name ? { ...rest, branch: recorded.name } : rest) as T;
 }
 
 function jsonText(res: ServerResponse, status: number, body: string): void {
@@ -911,8 +919,8 @@ export function createDaemonServer(
 			return json(res, 200, session);
 		}
 		if (parts[1] === "sessions" && parts.length === 4 && parts[3] === "changes" && req.method === "GET") {
-			const { cwd, base, baseBranch } = sessions.changeBase(parts[2]!);
-			return json(res, 200, await repositoryChanges.changes(cwd, base, baseBranch));
+			const { cwd, base, baseBranch, branch } = sessions.changeBase(parts[2]!);
+			return json(res, 200, recordedBranch(await repositoryChanges.changes(cwd, base, baseBranch), branch));
 		}
 		if (parts[1] === "sessions" && parts.length === 4 && parts[3] === "commands" && req.method === "GET") {
 			const response: SessionCommandsResponse = { commands: await sessions.commands(parts[2]!) };
@@ -955,9 +963,10 @@ export function createDaemonServer(
 			(parts[4] === "summary" || parts[4] === "branch") &&
 			req.method === "GET"
 		) {
-			const { cwd, base, baseBranch } = sessions.changeBase(parts[2]!);
-			if (parts[4] === "branch") return json(res, 200, await repositoryChanges.branch(cwd));
-			return json(res, 200, await repositoryChanges.summary(cwd, base, baseBranch));
+			const { cwd, base, baseBranch, branch } = sessions.changeBase(parts[2]!);
+			if (parts[4] === "branch")
+				return json(res, 200, branch ? recordedBranch({}, branch) : await repositoryChanges.branch(cwd));
+			return json(res, 200, recordedBranch(await repositoryChanges.summary(cwd, base, baseBranch), branch));
 		}
 		if (parts[1] === "sessions" && parts[3] === "artifacts" && req.method === "GET") {
 			if (parts.length === 4) return json(res, 200, await sessions.artifacts(parts[2]!));
@@ -1016,6 +1025,12 @@ export function createDaemonServer(
 				return json(res, 200, await sessions.bindPullRequest(parts[2]!, body.url, {}, taskId));
 			}
 			return json(res, 200, await sessions.unbindPullRequest(parts[2]!, body.url, {}));
+		}
+		if (parts[1] === "sessions" && parts.length === 4 && parts[3] === "branches" && req.method === "DELETE") {
+			const body = await readJson<DetachBranchRequest>(req);
+			if (!body || typeof body.branch !== "string" || !body.branch.trim() || body.branch.length > 255)
+				throw new HttpError(400, "branch must be a non-empty string of at most 255 characters");
+			return json(res, 200, await sessions.detachBranch(parts[2]!, body.branch));
 		}
 		if (parts[1] === "sessions" && parts.length === 4 && req.method === "POST") {
 			const id = parts[2]!;

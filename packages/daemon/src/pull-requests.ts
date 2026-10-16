@@ -14,7 +14,7 @@ import {
 	run,
 	toSessionPullRequest,
 } from "./github.ts";
-import { type Runner, workspaceBranch } from "./workspaces.ts";
+import type { Runner } from "./workspaces.ts";
 
 export { githubRepository } from "./github.ts";
 
@@ -35,6 +35,13 @@ export interface PullRequestSession {
 	boundPullRequests?: string[];
 	/** PR URLs intentionally excluded from automatic discovery. */
 	unboundPullRequests?: string[];
+	/**
+	 * The workspace branch read right after the agent's last branch-changing Git or jj command. Discovery never
+	 * reads the checkout itself, so a branch the agent only looked at, or a bookmark it inherited, is not adopted.
+	 */
+	detectedBranch?: string;
+	/** Branches the user detached from the chat. They are never adopted or checked again. */
+	detachedBranches?: string[];
 }
 
 export interface PullRequestResult {
@@ -363,6 +370,7 @@ export async function inspectWorkspace(
 	}
 	const workspace = session.workspace;
 	let branch = workspace.branch;
+	const detached = new Set(session.detachedBranches);
 	// Direct delivery on the default branch is not a session PR. Avoid matching unrelated
 	// historical PRs (and potentially auto-archiving the session based on their merge time).
 	const isBase = (name: string) => workspace.base === `origin/${name}` || workspace.baseBranch === name;
@@ -372,8 +380,12 @@ export async function inspectWorkspace(
 				throw new Error("Invalid workspace branch for pull request discovery");
 		};
 		validate(branch);
-		// Keep the recorded name if a merged/deleted branch no longer has a local ref.
-		const resolved = await workspaceBranch(session.cwd, branch, runner);
+		// Only a branch-changing command of the agent moves the session to another branch. Keep the recorded name
+		// otherwise, including when a merged/deleted branch no longer has a local ref.
+		const resolved =
+			session.detectedBranch !== undefined && !detached.has(session.detectedBranch)
+				? session.detectedBranch
+				: undefined;
 		// Also keep it when only the base bookmark remains: after a squash merge, a `jj git fetch` and a
 		// rebase onto the base leave the base bookmark as the nearest one, but the PR branch is unchanged.
 		if (resolved !== undefined && !(isBase(resolved) && branch !== undefined && !isBase(branch))) branch = resolved;
@@ -392,7 +404,9 @@ export async function inspectWorkspace(
 		const cached = new Map((session.previousPullRequests ?? []).map((pr) => [pr.branch, pr]));
 		// Direct delivery to the default branch does not open PRs from other local branches.
 		const local = branch !== undefined && isBase(branch) ? [] : await localBranches(session, runner);
-		inspection.created = local.filter((name) => name !== branch && validBranch(name) && !isBase(name));
+		inspection.created = local.filter(
+			(name) => name !== branch && validBranch(name) && !isBase(name) && !detached.has(name),
+		);
 		const names = new Set<string>([
 			// A hand-bound PR links the PR, not its arbitrary (possibly fork) head. Local or observed
 			// branches still participate independently, but bindings themselves are refreshed by number.
@@ -403,7 +417,7 @@ export async function inspectWorkspace(
 			...inspection.created,
 		]);
 		for (const name of names) {
-			if (name === branch || !validBranch(name) || isBase(name)) continue;
+			if (name === branch || !validBranch(name) || isBase(name) || detached.has(name)) continue;
 			// Merged and closed PRs never poll again, like the current branch's.
 			if (isTerminalPullRequest(cached.get(name))) continue;
 			inspection.others.push(name);

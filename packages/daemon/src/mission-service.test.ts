@@ -1971,6 +1971,8 @@ test("fresh owning-chat discovery links and reconciles PR state through sessions
 		state: "open" as const,
 		checkedAt: 1,
 	};
+	// The member's agent created it.
+	meta.agentPullRequests = [pullRequest.url];
 	await f.sessions["applyPullRequest"](meta, { pullRequest });
 	assert.equal(f.store.resolveTask(id, "1").status, "in_review");
 	assert.equal(f.store.detail(id).resources[0]?.pullRequest?.state, "open");
@@ -2002,6 +2004,7 @@ test("a task-linked PR merge after the member finishes queues one grouped notice
 		state: "open" as const,
 		checkedAt: Date.now(),
 	};
+	f.sessions["require"](member.id).agentPullRequests = [open.url];
 	await f.sessions["applyPullRequest"](f.sessions["require"](member.id), { pullRequest: open });
 	const settledAt = Date.now();
 	f.workers
@@ -2110,6 +2113,7 @@ test("discovery of several heads links every PR before completing a task", async
 	// Even a terminal cache copied from a mission-level resource cannot hide the other open head.
 	f.store.addResource(id, { url: pullRequest.url });
 	f.store.updatePullRequest(pullRequest);
+	f.sessions["require"](chat.id).agentPullRequests = [pullRequest.url, other.url];
 	await f.sessions["applyPullRequest"](f.sessions["require"](chat.id), {
 		pullRequest,
 		mergedAt: pullRequest.mergedAt,

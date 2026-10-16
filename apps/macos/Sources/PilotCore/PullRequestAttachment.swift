@@ -80,6 +80,13 @@ extension SessionSummary {
     public func showsAttachedHint(_ pullRequest: SessionPullRequest, current: String?) -> Bool {
         isBoundPullRequest(pullRequest.url) && (pullRequest.branch == nil || pullRequest.branch != current)
     }
+
+    /// A Build chat can stop tracking one of its own branches that has no PR, such as one the agent created and
+    /// never used. A branch with a PR detaches through its PR instead.
+    public func canDetachBranch(_ name: String) -> Bool {
+        canAttachPullRequests && workspace == .clone && !isMissionCoordinator && (branches ?? []).contains(name)
+            && !linkedPullRequests.contains { $0.branch == name }
+    }
 }
 
 /// Pure decisions behind the Changes pane's Attach and Detach controls, kept here so they are unit-tested.
