@@ -106,17 +106,59 @@ function inertSubstitution(script: string, start: number): number {
 	return -1;
 }
 
-/** Conservative shell recognition: ordinary prefixes, then a final gh creation whose exit status is authoritative. */
+/** An assignment such as GH_REPO=owner/repo before a command. */
+const ASSIGNMENT = /^[A-Za-z_]\w*=/;
+
+/** Output filters a final pipe may pass the PR URL through. Only with pipefail, so gh's exit status still counts. */
+function outputFilter(words: string[]): boolean {
+	const [name, ...args] = words;
+	if (name === "cat") return args.length === 0;
+	if (name !== "tail" && name !== "head") return false;
+	for (let i = 0; i < args.length; i++) {
+		if (/^-n?\d+$/.test(args[i]!)) continue;
+		if (args[i] === "-n" && /^\d+$/.test(args[i + 1] ?? "")) {
+			i++;
+			continue;
+		}
+		return false;
+	}
+	return true;
+}
+
+/** Pipefail after a top-level set command such as set -o pipefail, set -euo pipefail or set +o pipefail. */
+function pipefailAfter(words: string[], enabled: boolean): boolean {
+	let index = 0;
+	while (words[index] && ASSIGNMENT.test(words[index]!)) index++;
+	if (words[index] !== "set") return enabled;
+	for (let i = index + 1; i < words.length; i++)
+		if (/^[-+][A-Za-z]*o$/.test(words[i]!) && words[i + 1] === "pipefail") enabled = words[i++]![0] === "-";
+	return enabled;
+}
+
+type ShellCommand = { words: string[]; pipes: string[][]; heredoc: boolean };
+
+/**
+ * Conservative shell recognition: ordinary prefixes, then a final gh creation whose exit status is authoritative.
+ * The final command may read its body from a heredoc, merge or drop stderr, and, after set -o pipefail, pipe its
+ * output through tail, head or cat.
+ */
 export function createsPullRequest(command: unknown): boolean {
 	if (typeof command !== "string") return false;
 	const script = command.trim();
-	const commands: string[][] = [[]];
+	const commands: ShellCommand[] = [{ words: [], pipes: [], heredoc: false }];
+	const segment = () => {
+		const current = commands.at(-1)!;
+		return current.pipes.at(-1) ?? current.words;
+	};
 	let word = "";
+	let quotedWord = false;
 	let quote = "";
 	let escaped = false;
+	let heredoc: { delimiter: string; strip: boolean; literal: boolean } | undefined;
 	const flush = () => {
-		if (word) commands.at(-1)!.push(word);
+		if (word) segment().push(word);
 		word = "";
+		quotedWord = false;
 	};
 	for (let i = 0; i < script.length; i++) {
 		const c = script[i]!;
@@ -134,29 +176,110 @@ export function createsPullRequest(command: unknown): boolean {
 			} else if (quote === '"' && c === "`") return false;
 			else if (c === quote) quote = "";
 			else word += c;
-		} else if (c === "'" || c === '"') quote = c;
-		else if (c === "&" && script[i + 1] === "&") {
+		} else if (c === "'" || c === '"') {
+			quote = c;
+			quotedWord = true;
+		} else if (c === "&" && script[i + 1] === "&") {
 			flush();
-			commands.push([]);
+			if (heredoc) return false;
+			commands.push({ words: [], pipes: [], heredoc: false });
 			i++;
 		} else if (c === ";" || c === "\n" || c === "\r") {
 			flush();
+			if (c === "\n" && heredoc) {
+				// The body is gh's stdin, never its output. Unquoted delimiters expand the body, so it must be plain text.
+				let start = i + 1;
+				let found = false;
+				while (start <= script.length) {
+					const newline = script.indexOf("\n", start);
+					const end = newline < 0 ? script.length : newline;
+					let line = script.slice(start, end).replace(/\r$/, "");
+					if (heredoc.strip) line = line.replace(/^\t+/, "");
+					if (line === heredoc.delimiter) {
+						if (!heredoc.literal && /[$`\\]/.test(script.slice(i + 1, start))) return false;
+						i = end;
+						found = true;
+						break;
+					}
+					if (newline < 0) break;
+					start = newline + 1;
+				}
+				if (!found) return false;
+				heredoc = undefined;
+				// A terminator on the last line ends the script, not just the command.
+				if (i >= script.length) break;
+			} else if (c === ";" && heredoc) return false;
 			// Blank lines and CRLF do not introduce empty commands, unlike a doubled semicolon.
-			if (commands.at(-1)!.length) commands.push([]);
+			const current = commands.at(-1)!;
+			if (current.pipes.at(-1)?.length === 0) return false;
+			if (current.words.length) commands.push({ words: [], pipes: [], heredoc: false });
 			else if (c === ";") return false;
+		} else if (c === "|") {
+			if (script[i + 1] === "|" || script[i + 1] === "&") return false;
+			flush();
+			if (!segment().length) return false;
+			commands.at(-1)!.pipes.push([]);
+		} else if (c === ">" && word === "2" && !quotedWord) {
+			// Only 2>&1 and 2>/dev/null: the exit status and stdout stay gh's.
+			const redirect = script.slice(i + 1).match(/^(?:&1|[ \t]*\/dev\/null)(?=[\s;&|]|$)/);
+			if (!redirect) return false;
+			word = "";
+			i += redirect[0].length;
+		} else if (c === "<" && script[i + 1] === "<" && script[i + 2] !== "<") {
+			flush();
+			if (heredoc) return false;
+			let j = i + 2;
+			const strip = script[j] === "-";
+			if (strip) j++;
+			while (script[j] === " " || script[j] === "\t") j++;
+			let delimiter: string;
+			let literal = false;
+			if (script[j] === "'" || script[j] === '"') {
+				const close = script.indexOf(script[j]!, j + 1);
+				if (close < 0) return false;
+				delimiter = script.slice(j + 1, close);
+				literal = true;
+				j = close + 1;
+			} else delimiter = script.slice(j).match(/^[A-Za-z_][\w-]*/)?.[0] ?? "";
+			if (!literal) j += delimiter.length;
+			if (!delimiter || (j < script.length && !/\s/.test(script[j]!))) return false;
+			heredoc = { delimiter, strip, literal };
+			commands.at(-1)!.heredoc = true;
+			i = j - 1;
 		} else if (/[|&<>`$()#]/.test(c)) return false;
 		else if (/\s/.test(c)) flush();
 		else word += c;
 	}
-	if (quote || escaped) return false;
+	if (quote || escaped || heredoc) return false;
 	flush();
 	const final = commands.pop()!;
+	let pipefail = false;
+	for (const prefix of commands) {
+		if (prefix.heredoc || ![prefix.words, ...prefix.pipes].every(ordinaryCommand)) return false;
+		// A set inside a pipeline runs in a subshell and changes nothing.
+		if (!prefix.pipes.length) pipefail = pipefailAfter(prefix.words, pipefail);
+	}
+	if (final.pipes.length && (!pipefail || !final.pipes.every(outputFilter))) return false;
+	let index = 0;
+	while (final.words[index] && ASSIGNMENT.test(final.words[index]!)) index++;
+	const words = final.words.slice(index);
 	return (
-		commands.every(ordinaryCommand) &&
-		final[0] === "gh" &&
-		final[1] === "pr" &&
-		final[2] === "create" &&
-		!final.slice(3).some(noCreationProof)
+		words[0] === "gh" &&
+		words[1] === "pr" &&
+		(words[2] === "create" || words[2] === "new") &&
+		!words.slice(3).some(noCreationProof)
+	);
+}
+
+/**
+ * A gh PR creation the strict check cannot confirm, such as one whose output is piped without pipefail. The
+ * daemon then attaches only a new PR on the chat's own branch created around this time.
+ */
+export function attemptsPullRequest(command: unknown): boolean {
+	return (
+		typeof command === "string" &&
+		/(?:^|[\s;&|(])gh[ \t]+pr[ \t]+(?:create|new)(?=[\s;&|)]|$)/.test(command) &&
+		!/\s(?:--help|-h|--dry-run)(?=[\s=]|$)/.test(command)
 	);
 }
 
@@ -188,26 +311,42 @@ export function createdPullRequest(result: Result): string | undefined {
 	return urls.length === 1 ? urls[0]!.replace(/\/$/, "") : undefined;
 }
 
+/** A confirmed creation, or an attempt that did not visibly fail but whose PR URL could not be confirmed. */
+export function pullRequestCreation(result: Result): { url: string } | { attempted: true } | undefined {
+	const url = createdPullRequest(result);
+	if (url) return { url };
+	if (result.toolName !== "bash" || result.isError) return undefined;
+	const exitCode = (result.structuredContent as { exit_code?: unknown } | undefined)?.exit_code;
+	if (exitCode !== undefined && exitCode !== 0) return undefined;
+	return attemptsPullRequest((result.input as { command?: unknown } | undefined)?.command)
+		? { attempted: true }
+		: undefined;
+}
+
 /** Native nested results are observed at execution time, even if codemode discards them or later fails. */
-export function pullRequestProvenance(record: (url: string) => Promise<void>): {
+export function pullRequestProvenance(
+	record: (url: string) => Promise<void>,
+	attempted: () => void = () => {},
+): {
 	native: ExtensionFactory;
 	prepare(extension: Extension): Extension;
 } {
 	const active = new Map<string, { error?: unknown }>();
+	const settle = async (creation: ReturnType<typeof pullRequestCreation>) => {
+		if (creation && "url" in creation) await record(creation.url);
+		else if (creation) attempted();
+	};
 	const observe = async (event: ToolResultEvent) => {
 		if (!event.parentToolCallId) return;
 		const root = [...active].find(([id]) => event.toolCallId.startsWith(`${id}/`))?.[1];
 		if (!root) return;
-		const url = createdPullRequest(event);
-		if (url) {
-			try {
-				await record(url);
-			} catch (error) {
-				// SDK notification handlers report and swallow failures. Fail the outer durable call too,
-				// rather than silently losing provenance for a successful external side effect.
-				root.error = error;
-				throw error;
-			}
+		try {
+			await settle(pullRequestCreation(event));
+		} catch (error) {
+			// SDK notification handlers report and swallow failures. Fail the outer durable call too,
+			// rather than silently losing provenance for a successful external side effect.
+			root.error = error;
+			throw error;
 		}
 	};
 	return {
@@ -226,13 +365,14 @@ export function pullRequestProvenance(record: (url: string) => Promise<void>): {
 						if (root.error !== undefined) throw root.error;
 						// NativeAdapter retains structured tool output in its durable metadata envelope.
 						const details = result.details as { __piNativeAdapter?: { structuredContent?: unknown } } | undefined;
-						const url = createdPullRequest({
-							...result,
-							toolName: tool.name,
-							input: args,
-							structuredContent: details?.__piNativeAdapter?.structuredContent,
-						});
-						if (url) await record(url);
+						await settle(
+							pullRequestCreation({
+								...result,
+								toolName: tool.name,
+								input: args,
+								structuredContent: details?.__piNativeAdapter?.structuredContent,
+							}),
+						);
 						return result;
 					} finally {
 						active.delete(api.callId);

@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createdPullRequest, createsPullRequest } from "./pull-request-provenance.ts";
+import {
+	attemptsPullRequest,
+	createdPullRequest,
+	createsPullRequest,
+	pullRequestCreation,
+} from "./pull-request-provenance.ts";
 
 const url = "https://github.com/owner/repo/pull/12";
 const result = { toolName: "bash", input: { command: "gh pr create --fill" }, content: [{ type: "text", text: url }] };
@@ -105,4 +110,91 @@ test("help, web and bundled shorthand flags cannot claim an echoed existing PR",
 		assert.equal(createsPullRequest(`echo ${url} && gh pr create ${flag}`), false, flag);
 	assert.equal(createsPullRequest("gh pr create -tTitle-with-h --fill"), true);
 	assert.equal(createsPullRequest("gh pr create -tTitle-with-w --fill"), true);
+});
+
+test("heredoc bodies, stderr merges, env prefixes, gh pr new and pipefail-guarded filters are confirmed creations", () => {
+	for (const command of [
+		"gh pr new --fill",
+		"GH_REPO=owner/repo gh pr create --fill",
+		"cd /repo && GH_PROMPT_DISABLED=1 gh pr create --fill",
+		"gh pr create --fill 2>&1",
+		"gh pr create --fill 2>/dev/null",
+		"gh pr create --fill 2> /dev/null",
+		"gh pr create --title t --body-file - <<'EOF'\n## Summary\n- Uses $HOME, $(not run) and `ticks`\nEOF",
+		'gh pr create --title t --body-file - <<"EOF"\nbody\nEOF',
+		"gh pr create --title t --body-file - <<-'EOF'\n\tbody\n\tEOF",
+		"gh pr create --title t --body-file - <<EOF\nplain body, no expansions\nEOF",
+		"jj git push --bookmark fix/pr && gh pr create --body-file - 2>&1 <<'EOF'\nbody\nEOF",
+		"set -o pipefail; gh pr create --fill 2>&1 | tail -n 1",
+		"set -euo pipefail\njj git push --bookmark fix/pr\ngh pr create --fill | head -1",
+		"set -o pipefail && gh pr create --fill | cat",
+		"set -o pipefail; gh pr create --fill 2>&1 | tail -n3 | head -n 2",
+		"jj log -r @ | head -3 && gh pr create --fill",
+	])
+		assert.ok(createsPullRequest(command), command);
+	for (const command of [
+		"gh pr create --fill | tail -1",
+		"gh pr create --fill 2>&1 | tail -n 1",
+		"set -o pipefail; set +o pipefail; gh pr create --fill | tail -1",
+		"jj log | set -o pipefail; gh pr create --fill | tail -1",
+		"set -o pipefail; gh pr create --fill | grep -o 'https.*'",
+		"set -o pipefail; gh pr create --fill | tail -f",
+		"set -o pipefail; gh pr create --fill |",
+		"set -o pipefail; gh pr create --fill | | cat",
+		"set -o pipefail; gh pr create --fill |& cat",
+		"gh pr create --fill > /tmp/out",
+		"gh pr create --fill 2>/tmp/err",
+		"gh pr create --fill 2>&2",
+		"gh pr create --fill '2'>&1",
+		"gh pr create --fill <<< body",
+		"gh pr create --fill < body.md",
+		"gh pr create --body-file - <<EOF\n$(echo https://github.com/owner/repo/pull/12 >&2)\nEOF",
+		"gh pr create --body-file - <<EOF\n`echo x`\nEOF",
+		"gh pr create --body-file - <<'EOF'\nbody without terminator",
+		"gh pr create --body-file - <<'EOF'",
+		"gh pr create --body-file - <<'EOF' && echo hi\nbody\nEOF",
+		"gh pr create --body-file - <<'EOF'\nbody\nEOF\ngh pr view 12",
+		"cat <<'EOF'\nhttps://github.com/owner/repo/pull/12\nEOF\ngh pr create --fill",
+		"GH_REPO=x gh pr view 12",
+		"gh pr new --help",
+	])
+		assert.equal(createsPullRequest(command), false, command);
+});
+
+test("an unconfirmed gh PR creation is an attempt, unless it visibly failed or only asked for help", () => {
+	const bash = (command: string, structuredContent?: unknown) => ({
+		toolName: "bash",
+		input: { command },
+		content: [{ type: "text", text: url }],
+		...(structuredContent ? { structuredContent } : {}),
+	});
+	assert.deepEqual(pullRequestCreation(bash("gh pr create --fill")), { url });
+	for (const command of [
+		"gh pr create --fill | tail -1",
+		"gh pr create --fill 2>&1 | grep -o 'https.*'",
+		"(gh pr create --fill)",
+		"jj git push && gh pr new --fill; echo done",
+	])
+		assert.deepEqual(
+			pullRequestCreation(bash(command, { exit_code: 0, output: "done" })),
+			{ attempted: true },
+			command,
+		);
+	assert.deepEqual(
+		pullRequestCreation(bash("gh pr create --fill 2>&1", { exit_code: 0, output: "Warning: 1 uncommitted change" })),
+		{ attempted: true },
+		"a confirmed command whose output has no URL",
+	);
+	assert.equal(pullRequestCreation(bash("gh pr create --fill | tail -1", { exit_code: 1, output: "" })), undefined);
+	assert.equal(pullRequestCreation({ ...bash("gh pr create --fill | tail -1"), isError: true }), undefined);
+	assert.equal(pullRequestCreation({ ...bash("gh pr create --fill | tail -1"), toolName: "read" }), undefined);
+	for (const command of [
+		"gh pr view 12",
+		"gh pr create --help | cat",
+		"gh pr create -h",
+		"gh pr create --dry-run | cat",
+		"ghx pr create",
+		"echo gh pr creates",
+	])
+		assert.equal(attemptsPullRequest(command), false, command);
 });

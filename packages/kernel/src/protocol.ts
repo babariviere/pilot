@@ -152,6 +152,8 @@ export type KernelPacket =
 	| { type: "subagents"; subagents: KernelSubagent[] }
 	| { type: "artifacts.changed" }
 	| { type: "pullRequest.created"; url: string }
+	/** The agent ran a gh PR creation whose URL could not be confirmed. A hint to look for a new PR on its branch. */
+	| { type: "pullRequest.attempted" }
 	/** The agent may have created, moved or pushed a branch. A hint to recheck PRs, not ownership. */
 	| { type: "refs.changed" }
 	| { type: "github.action"; action: import("@pilot/protocol").GitHubAction }

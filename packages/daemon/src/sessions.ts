@@ -355,6 +355,11 @@ interface SessionMeta extends OutcomeMeta {
 	 * A PR has at most one owner.
 	 */
 	agentPullRequests?: string[];
+	/**
+	 * When the agent ran a gh PR creation whose URL the kernel could not confirm, newest last. A new open PR on the
+	 * chat's own branch created around one of these times becomes the agent's.
+	 */
+	pullRequestAttempts?: number[];
 	/** Explicit ownership and durable discovery exclusions. Binding clears an exclusion. */
 	boundPullRequests?: string[];
 	unboundPullRequests?: string[];
@@ -835,6 +840,17 @@ export interface MainMoved {
 	projectId: string;
 	head: string;
 	repository: string;
+}
+
+/** How long after an unconfirmed gh PR creation a new PR on the chat's branch can still be adopted. */
+const ATTEMPT_WINDOW_MS = 15 * 60_000;
+/** The attempt is stamped when the command ends, so the PR may predate it by the command's runtime. */
+const ATTEMPT_LOOKBACK_MS = 10 * 60_000;
+/** Tolerance for GitHub's clock running ahead of this machine's. */
+const ATTEMPT_SKEW_MS = 2 * 60_000;
+
+function liveAttempts(meta: { pullRequestAttempts?: number[] }, now: number): number[] {
+	return (meta.pullRequestAttempts ?? []).filter((at) => at <= now + ATTEMPT_SKEW_MS && now - at < ATTEMPT_WINDOW_MS);
 }
 
 export class SessionManager {
@@ -5603,6 +5619,23 @@ export class SessionManager {
 			}
 			return;
 		}
+		if (packet.type === "pullRequest.attempted") {
+			if (
+				this.workers.get(meta.id) !== worker ||
+				!meta.workspace ||
+				meta.mode === "ask" ||
+				this.isMissionCoordinator(meta.id)
+			)
+				return;
+			const now = Date.now();
+			meta.pullRequestAttempts = [...liveAttempts(meta, now), now].slice(-8);
+			void this.save(meta).catch((error: unknown) =>
+				console.warn(`pilotd: could not save a PR creation attempt: ${error}`),
+			);
+			// Look for the new PR now, while the attempt is fresh.
+			void this.pullRequests.refresh(meta);
+			return;
+		}
 		if (packet.type === "refs.changed") {
 			// A branch may have been created, moved or pushed. Read it now, then recheck PRs. Only these
 			// commands move the chat to another branch, never a checkout the agent merely looked at.
@@ -5913,12 +5946,44 @@ export class SessionManager {
 			result = rest;
 		}
 		if (result.branches) result = { ...result, branches: result.branches.filter((name) => !detached.has(name)) };
+		// A gh PR creation the kernel could not confirm: adopt only a new open PR on the chat's own branch, created
+		// around the attempt and owned by no chat. An existing PR (gh fails with its URL) is never new enough.
+		const now = Date.now();
+		const attempts = liveAttempts(meta, now);
+		const ownBranches = new Set([
+			...sessionBranches(meta),
+			...(result.branch !== undefined ? [result.branch] : []),
+			...(result.branches ?? []),
+		]);
+		const adopted = new Set(
+			attempts.length && !result.error
+				? [result.pullRequest, ...(result.others ?? [])]
+						.filter(
+							(pr): pr is SessionPullRequest =>
+								pr !== undefined &&
+								(pr.state === "open" || pr.state === "draft") &&
+								pr.branch !== undefined &&
+								ownBranches.has(pr.branch) &&
+								!detached.has(pr.branch) &&
+								pr.createdAt !== undefined &&
+								attempts.some(
+									(at) => pr.createdAt! >= at - ATTEMPT_LOOKBACK_MS && pr.createdAt! <= at + ATTEMPT_SKEW_MS,
+								) &&
+								!this.excludedPullRequest(meta, pr.url) &&
+								this.pullRequestOwner(pr.url) === undefined,
+						)
+						.map((pr) => pr.url)
+				: [],
+		);
 		// Explicit handoffs win over results already in flight, including discovery on the old branch. Discovery only
 		// refreshes PRs the agent created, the user attached or the chat already shows. Another PR on one of its
 		// branches, opened by someone else or by a sibling chat, never attaches by itself.
 		const attached = (pr: SessionPullRequest) => {
 			const owner = this.boundPullRequestOwners.get(pr.url.toLowerCase());
-			return this.attachedPullRequest(meta, pr.url) && (owner === undefined || owner === meta.id);
+			return (
+				(adopted.has(pr.url) || this.attachedPullRequest(meta, pr.url)) &&
+				(owner === undefined || owner === meta.id)
+			);
 		};
 		result = {
 			...result,
@@ -5994,9 +6059,16 @@ export class SessionManager {
 		else delete meta.previousBranches;
 		if (result.error) meta.pullRequestError = result.error;
 		else delete meta.pullRequestError;
+		const previousOwned = meta.agentPullRequests;
+		const previousAttempts = meta.pullRequestAttempts;
+		const claims = [...adopted].filter((url) => !previousOwned?.includes(url));
+		if (claims.length) meta.agentPullRequests = [...(previousOwned ?? []), ...claims];
+		const expired = (previousAttempts?.length ?? 0) !== attempts.length;
+		if (attempts.length) meta.pullRequestAttempts = attempts;
+		else delete meta.pullRequestAttempts;
 		const fresh = next !== undefined || (result.others?.length ?? 0) > 0;
 		// PR freshness is not agent activity. Keep ordering and completion versions unchanged.
-		if (fresh || changed) {
+		if (fresh || changed || claims.length || expired) {
 			try {
 				await this.save(meta);
 			} catch (error) {
@@ -6017,6 +6089,10 @@ export class SessionManager {
 				else delete meta.pullRequestError;
 				if (previousMergedAt !== undefined) meta.pullRequestMergedAt = previousMergedAt;
 				else delete meta.pullRequestMergedAt;
+				if (previousOwned) meta.agentPullRequests = previousOwned;
+				else delete meta.agentPullRequests;
+				if (previousAttempts) meta.pullRequestAttempts = previousAttempts;
+				else delete meta.pullRequestAttempts;
 				throw error;
 			}
 		}

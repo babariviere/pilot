@@ -179,6 +179,7 @@ async function setup(cooldownMs?: number) {
 		reviewCommentId: "comment-1",
 		reviewUpdatedAt: "2026-01-01T00:00:00Z",
 		conflicts: true,
+		createdAt: "2026-01-01T00:00:00Z",
 		draft: false,
 		state: "OPEN",
 		mergeable: undefined as string | undefined,
@@ -227,7 +228,7 @@ async function setup(cooldownMs?: number) {
 					isDraft: controls.draft,
 					headRefName: branch,
 					isCrossRepository: false,
-					createdAt: "2026-01-01T00:00:00Z",
+					createdAt: controls.createdAt,
 					mergedAt: new Date(Date.now()).toISOString(),
 				},
 			]);
@@ -1184,6 +1185,58 @@ test("a PR on the chat's branch that its agent did not create never attaches", a
 		f.manager["onPacket"](f.meta, await f.worker(), { type: "pullRequest.created", url });
 		await f.refresh();
 		assert.equal(f.manager.get(f.id)?.pullRequest?.url, url);
+	});
+});
+
+test("an unconfirmed gh PR creation adopts only a new, unowned PR on the chat's own branch", async () => {
+	await fixture(async (f) => {
+		delete f.meta.agentPullRequests;
+		delete f.meta.pullRequest;
+		// gh failed because the PR already existed, and piped output hid the failure. It is too old to be the agent's.
+		f.manager["onPacket"](f.meta, await f.worker(), { type: "pullRequest.attempted" });
+		await f.refresh();
+		assert.equal(f.manager.get(f.id)?.pullRequest, undefined);
+		assert.equal(f.meta.agentPullRequests, undefined);
+		await Promise.all(f.manager["saving"].values());
+		assert.equal((await f.saved()).pullRequestAttempts?.length, 1, "the attempt survives a restart");
+		// A new PR another chat owns stays there.
+		f.controls.createdAt = new Date().toISOString();
+		f.ownElsewhere(url);
+		await f.refresh();
+		assert.equal(f.manager.get(f.id)?.pullRequest, undefined);
+		// A new PR on the chat's branch is the agent's, including for automatic follow-ups.
+		f.ownElsewhere();
+		await f.refresh();
+		assert.equal(f.manager.get(f.id)?.pullRequest?.url, url);
+		assert.deepEqual(f.meta.agentPullRequests, [url]);
+		assert.deepEqual((await f.saved()).agentPullRequests, [url]);
+		// Health is looked up for owned PRs, so follow-ups start from the next check.
+		await f.refresh();
+		assert.equal(f.inputs.length, 1);
+		assert.match(f.inputs[0]!.content, /merge conflicts/);
+	});
+});
+
+test("without a fresh creation attempt, a new PR on the chat's branch stays unattached", async (t) => {
+	let now = Date.now();
+	t.mock.method(Date, "now", () => now);
+	await fixture(async (f) => {
+		delete f.meta.agentPullRequests;
+		delete f.meta.pullRequest;
+		f.controls.createdAt = new Date(now).toISOString();
+		await f.refresh();
+		assert.equal(f.manager.get(f.id)?.pullRequest, undefined, "no attempt");
+		f.manager["onPacket"](f.meta, await f.worker(), { type: "pullRequest.attempted" });
+		now += 16 * 60_000;
+		f.controls.createdAt = new Date(now).toISOString();
+		await f.refresh();
+		assert.equal(f.manager.get(f.id)?.pullRequest, undefined, "expired attempt");
+		assert.equal(f.meta.pullRequestAttempts, undefined);
+		assert.equal((await f.saved()).pullRequestAttempts, undefined);
+		// Ask chats never record attempts.
+		f.meta.mode = "ask";
+		f.manager["onPacket"](f.meta, await f.worker(), { type: "pullRequest.attempted" });
+		assert.equal(f.meta.pullRequestAttempts, undefined);
 	});
 });
 
