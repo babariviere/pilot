@@ -52,6 +52,7 @@ import {
 	publicAttempts,
 } from "./attempts.ts";
 import { reconcileCompletion } from "./attention.ts";
+import { autoCompactionThreshold, shouldAutoCompact } from "./auto-compaction.ts";
 import { chatEvents, compactionEvents } from "./chat-events.ts";
 import { detectGhStack } from "./gh-stack.ts";
 import { appendGitHubAction, GitHubActionsDoc, githubActions } from "./github-actions.ts";
@@ -862,6 +863,7 @@ export class KernelSession {
 				await submitIdleInput(this.harness, this.conversation, requestId, prepared, context, event);
 				return { delivery: "delivered" };
 			}
+			if (inputOrigin(requestId) === undefined) await this.compactBeforeUserInput();
 			const submission =
 				(await queueDuringCompaction(this.harness, this.conversation, requestId, prepared, mode, context)) ??
 				(await this.conversation.submit({ type: "input", content: prepared, requestId, whenBusy: mode }, context));
@@ -877,6 +879,23 @@ export class KernelSession {
 			return { delivery: "delivered" };
 		} finally {
 			this.#admissions--;
+		}
+	}
+
+	/**
+	 * Summarize a long conversation whose prompt cache has expired before the user's message starts a turn. The input
+	 * then waits behind the summary, as it does for a manual compaction. A failure only skips the saving.
+	 */
+	private async compactBeforeUserInput(): Promise<void> {
+		try {
+			// Context usage is refreshed after every run, so most messages stop here without a storage read.
+			const usage = this.adapter.usage.current.context;
+			if (usage?.tokens === undefined || usage.tokens < autoCompactionThreshold(usage.contextWindow)) return;
+			const view = await this.conversation.context(context);
+			if (!shouldAutoCompact(view.messages, usage, Date.now())) return;
+			await this.#compactSession(this.harness, this.conversation, undefined, context, { idleOnly: true });
+		} catch (error) {
+			console.warn("pilot: could not compact before input", error);
 		}
 	}
 

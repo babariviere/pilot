@@ -59,16 +59,22 @@ export function createManualCompaction(
 
 	const extension = defineExtension({ name: "pilot.manual-compaction", tasks: [BarrierTask] });
 
-	/** Active runs retain SDK turn-boundary compaction. Idle summaries append before queued input can start. */
+	/**
+	 * Active runs retain SDK turn-boundary compaction. Idle summaries append before queued input can start.
+	 * `idleOnly` skips a busy conversation instead, and returns whether the idle compaction was reserved.
+	 */
 	async function compactSession(
 		harness: Harness,
 		conversation: Conversation,
 		instructions: string | undefined,
 		context: Context,
-	) {
+		{ idleOnly = false }: { idleOnly?: boolean } = {},
+	): Promise<boolean> {
 		const reserved = await conversation.commit(async (tx) => {
 			const live = await tx.doc(LiveDoc, conversation.id);
 			if (live.run) return false;
+			if (idleOnly && (live.compactions?.length || (await tx.doc(InboxDoc, conversation.id)).items.length))
+				return false;
 			const barrier = await tx.createTask(BarrierTask, {}, { ownership: { kind: "conversation" } });
 			const child = await tx.createTask(
 				CompactionTask,
@@ -80,7 +86,8 @@ export function createManualCompaction(
 			return true;
 		}, context);
 		if (reserved) harness.resume();
-		else await conversation.compact(instructions, context);
+		else if (!idleOnly) await conversation.compact(instructions, context);
+		return reserved;
 	}
 
 	return { extension, compactSession };

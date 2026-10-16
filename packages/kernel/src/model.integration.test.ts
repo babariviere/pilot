@@ -1936,6 +1936,57 @@ test("Stop during idle compaction returns waiting user input without sending it"
 	assert.equal((await session.harness.snapshot(InboxDoc, session.conversation.id, context))!.items.length, 0);
 });
 
+async function seedLongConversation(session: KernelSession, lastAnswerAt: number) {
+	await session.conversation.commit(async (tx) => {
+		for (let i = 0; i < 35; i++) {
+			await tx.appendEntry(session.conversation.id, {
+				kind: "pi.user",
+				model: [{ role: "user", content: "Old context. ".repeat(500), timestamp: lastAnswerAt - 1 }],
+			});
+			await tx.appendEntry(session.conversation.id, {
+				kind: "pi.assistant",
+				model: [fauxAssistantMessage("Old answer", { timestamp: lastAnswerAt })],
+			});
+		}
+	}, context);
+}
+
+for (const scenario of ["cold", "warm", "automatic"] as const) {
+	test(`long ${scenario} conversation ${scenario === "cold" ? "compacts" : "does not compact"} before the next input`, {
+		timeout: 15000,
+	}, async (t) => {
+		const f = await fixture(t);
+		const session = await f.open();
+		const adapter = f.adapters.at(-1)!;
+		// About 57k estimated tokens: over the 51k threshold, under the Harness's own background compaction at 79k.
+		adapter.models.getModel("pilot-model-a", "one")!.contextWindow = 128000;
+		// The faux API's cache lifetime is one hour.
+		await seedLongConversation(session, Date.now() - (scenario === "warm" ? 60_000 : 2 * 60 * 60_000));
+		await adapter.refreshUsage(context);
+		f.a.setResponses([
+			fauxAssistantMessage(scenario === "cold" ? "Checkpoint summary" : "Plain reply"),
+			(messages) => {
+				assert.ok(messages.messages.some((m) => JSON.stringify(m).includes("Checkpoint summary")));
+				assert.ok(messages.messages.some((m) => JSON.stringify(m).includes("Next question")));
+				return fauxAssistantMessage("Done");
+			},
+		]);
+		await session.submit(scenario === "automatic" ? "pr-follow-up:1" : "next", "Next question", "followUp");
+		await session.conversation.waitForIdle(context);
+		const entries = (await session.conversation.entries({}, 100, undefined, context)).items.toReversed();
+		const checkpoint = entries.findIndex((e) => e.kind === "pi.compaction");
+		const input = entries.findIndex((e) => userText(e) === "Next question");
+		if (scenario === "cold") {
+			assert.equal(f.a.state.callCount, 2);
+			assert.ok(checkpoint >= 0 && input > checkpoint, "summary is placed before user input");
+		} else {
+			assert.equal(f.a.state.callCount, 1);
+			assert.equal(checkpoint, -1);
+			assert.ok(input >= 0);
+		}
+	});
+}
+
 test("queued compaction input survives close and reopen exactly once", { timeout: 15000 }, async (t) => {
 	const f = await fixture(t);
 	let session = await f.open();
