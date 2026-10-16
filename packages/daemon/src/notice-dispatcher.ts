@@ -80,7 +80,8 @@ export class NoticeDispatcher {
 	async flush(now = Date.now()): Promise<void> {
 		const result = this.adapter.deadlines(now);
 		for (const { key, at } of Array.isArray(result) ? result : await result) {
-			if (this.stopped || at > now || !this.adapter.eligible(key)) continue;
+			// Scheduling eligibility is a cheap projection. Admission uses the sink's authoritative guard.
+			if (this.stopped || at > now) continue;
 			await this.adapter.deliver(key, now);
 		}
 	}

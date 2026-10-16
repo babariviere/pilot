@@ -1,7 +1,7 @@
 /** One event-driven delivery timer for durable batches. Busy chats never get an inbox item. */
 import type { SessionSummary } from "@pilot/protocol";
-import { NoticeDispatcher } from "./notice-dispatcher.ts";
 import type { MissionStore } from "./missions.ts";
+import { NoticeDispatcher } from "./notice-dispatcher.ts";
 import type { SessionManager } from "./sessions.ts";
 
 export class MissionNotices {
