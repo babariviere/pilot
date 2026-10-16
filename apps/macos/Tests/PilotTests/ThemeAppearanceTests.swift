@@ -16,11 +16,11 @@ private func hex(_ color: Color, in name: NSAppearance.Name) -> UInt32? {
 
 @Test func themeTokensResolvePerAppearance() {
     #expect(hex(Theme.background, in: .aqua) == 0xFFFFFF)
-    #expect(hex(Theme.background, in: .darkAqua) == 0x1E1E1E)
+    #expect(hex(Theme.background, in: .darkAqua) == 0x262626)
     #expect(hex(Theme.foreground, in: .aqua) == 0x262626)
-    #expect(hex(Theme.foreground, in: .darkAqua) == 0xE8E8E8)
+    #expect(hex(Theme.foreground, in: .darkAqua) == 0xD4D4D4)
     // Primary actions invert, and their text follows.
-    #expect(hex(Theme.primary, in: .darkAqua) == 0xE8E8E8)
+    #expect(hex(Theme.primary, in: .darkAqua) == 0xD4D4D4)
     #expect(hex(Theme.onPrimary, in: .darkAqua) == hex(Theme.background, in: .darkAqua))
 }
 
@@ -28,7 +28,7 @@ private func hex(_ color: Color, in name: NSAppearance.Name) -> UInt32? {
     // Attributed text built once still follows later appearance changes.
     let converted = Color(nsColor: NSColor(Theme.foreground))
     #expect(hex(converted, in: .aqua) == 0x262626)
-    #expect(hex(converted, in: .darkAqua) == 0xE8E8E8)
+    #expect(hex(converted, in: .darkAqua) == 0xD4D4D4)
 }
 
 @Test func appearanceModesMapToNativeAppearances() {
