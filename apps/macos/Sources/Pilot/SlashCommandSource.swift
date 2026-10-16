@@ -5,9 +5,14 @@ import SwiftUI
 /// loaded the first time the menu opens. pilotd caches the list, so loading reopens a parked chat at most once.
 @MainActor
 final class SlashCommandSource: ObservableObject {
-    @Published private(set) var commands = SlashCommands.builtins
+    /// The session's prompt templates and skills, once loaded.
+    @Published private(set) var session: [SessionCommand] = []
     private var loading: Task<Void, Never>?
     private var loaded = false
+
+    /// Built-ins, the app commands this composer supports (unless a session command already has the name), then
+    /// the session's commands.
+    func commands(app: [SlashCommand]) -> [SlashCommand] { SlashCommands.all(session, app: app) }
 
     func load(sessionId: String, client: PilotClient) {
         guard !loaded, loading == nil else { return }
@@ -18,11 +23,9 @@ final class SlashCommandSource: ObservableObject {
             // A failed load keeps the built-ins and retries the next time the menu opens.
             guard let result else { return }
             self.loaded = true
-            let commands = SlashCommands.all(result)
-            if commands != self.commands { self.commands = commands }
+            if result != self.session { self.session = result }
         }
     }
 
     deinit { loading?.cancel() }
 }
-

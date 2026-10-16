@@ -26,6 +26,8 @@ struct ChatTextEditor: NSViewRepresentable {
     var slashCommands: [SlashCommand]?
     /// Called when the menu opens, so the owner can load the session's commands lazily.
     var onSlashCommandsNeeded: (() -> Void)?
+    /// Runs an app command picked from the slash menu. The editor has already removed its token, keeping the rest.
+    var onAppCommand: ((SlashCommand) -> Void)?
     /// Called when the text view gains or loses keyboard focus, including when it leaves its window.
     var onFocusChange: ((Bool) -> Void)?
     var onSubmit: (NSEvent.ModifierFlags) -> Void
@@ -63,6 +65,9 @@ struct ChatTextEditor: NSViewRepresentable {
         textView.slashCommands = slashCommands
         textView.onSlashCommandsNeeded = { [weak coordinator = context.coordinator] in
             coordinator?.parent.onSlashCommandsNeeded?()
+        }
+        textView.onAppCommand = { [weak coordinator = context.coordinator] command in
+            coordinator?.parent.onAppCommand?(command)
         }
         textView.onSubmit = { [weak coordinator = context.coordinator] flags in coordinator?.parent.onSubmit(flags) }
         textView.onNavigateQueue = { [weak coordinator = context.coordinator] direction in
@@ -286,6 +291,7 @@ final class SubmitTextView: NSTextView {
         didSet { if oldValue != slashCommands, pickerMode == .slash || slashCommands == nil { updateSlashPicker() } }
     }
     var onSlashCommandsNeeded: (() -> Void)?
+    var onAppCommand: ((SlashCommand) -> Void)?
     private enum PickerMode { case path, slash }
     private(set) var completionPicker: CompletionPicker?
     private var pickerMode: PickerMode?
@@ -468,7 +474,28 @@ final class SubmitTextView: NSTextView {
             dismissCompletionPicker()
             return false
         }
+        if slashMatches[index].kind == .app, let onAppCommand {
+            runAppCommand(slashMatches[index], perform: onAppCommand)
+            return false
+        }
         let needsArguments = slashMatches[index].kind == .prompt && slashMatches[index].argumentHint != nil
         return insertSlashCommand(index, trailingSpace: needsArguments) && !needsArguments
+    }
+
+    /// Removes the typed token (and one space after it) as a single undoable edit, leaving the rest of the draft
+    /// and the caret where the token was, then runs the command. Nothing is submitted.
+    private func runAppCommand(_ command: SlashCommand, perform: (SlashCommand) -> Void) {
+        guard let range = slashRange, range.upperBound <= (string as NSString).length else {
+            dismissCompletionPicker()
+            return
+        }
+        dismissCompletionPicker()
+        var removal = range
+        let source = string as NSString
+        if removal.upperBound < source.length, source.character(at: removal.upperBound) == 32 { removal.length += 1 }
+        insertingCompletion = true
+        insertText("", replacementRange: removal)
+        insertingCompletion = false
+        perform(command)
     }
 }

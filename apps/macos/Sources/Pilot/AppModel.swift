@@ -196,6 +196,8 @@ final class AppModel: ObservableObject {
     var keyboardTarget: KeyboardTarget?
     /// The highlighted keyboard-list row of each page, by route key, so Back returns to the same row.
     var keyboardListHighlights: [String: String] = [:]
+    /// Text the command palette starts with the next time it opens, as for `/model`. One-shot.
+    var pendingPaletteQuery: String?
 
     private var started = false
     private let projectFolderDefaults: UserDefaults

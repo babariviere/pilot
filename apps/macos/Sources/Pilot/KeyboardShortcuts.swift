@@ -59,6 +59,8 @@ enum KeyboardShortcuts {
             Entry(title: "Edit previous or next queued message", keys: "⌥↑ / ⌥↓"),
             Entry(title: "Leave queued-message editing", keys: "esc"),
             Entry(title: "Complete a file path", keys: "⇥"),
+            Entry(title: "Open a control: /model, /mode, /terminal, /changes, /artifacts, /help", keys: "/ then ↩"),
+            Entry(title: "Leave the composer, keeping the draft", keys: "esc"),
         ]),
         Group(title: "Agent questions", entries: [
             Entry(title: "Select or tick an answer", keys: "1–9"),

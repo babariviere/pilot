@@ -63,6 +63,24 @@ extension AppModel {
         stopSession(id)
     }
 
+    /// Opens the palette already searching, as `/model` does for the composer's model choices.
+    func showCommandPalette(query: String) {
+        guard !showingCommandPalette else { return }
+        pendingPaletteQuery = query
+        showCommandPalette()
+        if !showingCommandPalette { pendingPaletteQuery = nil }
+    }
+
+    /// Shows an inspector pane (never hides it, unlike the toolbar toggle) and moves focus into it.
+    @discardableResult
+    func openInspector(_ tab: InspectorTab) -> Bool {
+        guard let session = selectedSession, tab.isAvailable(for: session) else { return false }
+        inspectorTab = tab
+        inspectorVisible = true
+        keyboard.focusAfterNavigation(.inspector)
+        return true
+    }
+
     /// The mission on screen: the open mission page, or the open chat's mission.
     var currentMissionId: String? { selectedMissionId ?? selectedSession?.missionId }
 

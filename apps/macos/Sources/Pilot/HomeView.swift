@@ -305,7 +305,9 @@ struct TaskComposer: View {
                                    isEditable: !form.busy, focusToken: editorFocus,
                                    onCancel: { KeyboardFocus.leaveComposer() },
                                    onPasteImages: { form.attachments.paste(from: $0) },
-                                   completionDirectory: form.mode == .ask || remote ? nil : project?.path ?? (form.folder.isEmpty ? FileManager.default.homeDirectoryForCurrentUser.path : form.folder)) { _ in
+                                   completionDirectory: form.mode == .ask || remote ? nil : project?.path ?? (form.folder.isEmpty ? FileManager.default.homeDirectoryForCurrentUser.path : form.folder),
+                                   slashCommands: SlashCommands.newChatAppCommands,
+                                   onAppCommand: { _ = runAppCommand($0, arguments: "") }) { _ in
                         start()
                     }
                     .frame(height: form.editorHeight)
@@ -398,6 +400,36 @@ struct TaskComposer: View {
 
     private var canStart: Bool {
         form.canStart(in: project, branches: branches) && (!remote || (project != nil && destinationHost.map { hosts.available.contains($0) } == true))
+    }
+
+    /// `/model`, `/mode` and `/help` before a chat exists: they open the palette's choices or the shortcut
+    /// reference, never start the chat. Returns false, keeping the draft, when one cannot run.
+    private func runAppCommand(_ command: SlashCommand, arguments: String) -> Bool {
+        form.error = nil
+        if command != SlashCommands.model, !arguments.isEmpty {
+            form.error = "Use \(command.invocation) without arguments."
+            return false
+        }
+        switch command {
+        case SlashCommands.model: app.showCommandPalette(query: arguments.isEmpty ? "Model: " : "Model: \(arguments)")
+        case SlashCommands.mode: app.showCommandPalette(query: "Mode: ")
+        case SlashCommands.help:
+            guard let open = app.openKeyboardShortcutsAction else { return false }
+            open()
+        default:
+            form.error = "\(command.invocation) needs an open chat."
+            return false
+        }
+        return true
+    }
+
+    /// A whole message that is only an app command runs it instead of starting a chat.
+    private func interceptAppCommand() -> Bool {
+        guard let invocation = SlashCommands.appInvocation(form.message, in: SlashCommands.newChatAppCommands) else {
+            return false
+        }
+        if runAppCommand(invocation.command, arguments: invocation.arguments) { form.message = "" }
+        return true
     }
 
     private var commandsRevision: String {
@@ -536,6 +568,7 @@ struct TaskComposer: View {
     }
 
     private func start() {
+        if interceptAppCommand() { return }
         guard canStart else { return }
         form.busy = true
         form.error = nil
@@ -571,6 +604,7 @@ struct TaskComposer: View {
 
     /// Send later: the same request as Start, kept by pilotd until its trigger fires.
     private func scheduleNewChat(_ when: ScheduleWhen) {
+        if interceptAppCommand() { return }
         guard canStart else { return }
         form.busy = true
         form.error = nil

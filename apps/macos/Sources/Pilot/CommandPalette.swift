@@ -585,6 +585,10 @@ struct CommandPaletteView: View {
         .onAppear {
             palette.start(model: model, openSettings: { openSettings() },
                           openKeyboardShortcuts: { openWindow(id: KeyboardShortcuts.windowID) })
+            if let query = model.pendingPaletteQuery {
+                model.pendingPaletteQuery = nil
+                palette.query = query
+            }
             fieldFocused = true
         }
         .onDisappear { palette.stop() }

@@ -499,10 +499,11 @@ struct ChatView: View {
                         onDiscardHeld: { id in try await perform { client, sessionId in try await client.discardHeldMessages(sessionId, submissionId: id) } },
                         session: session,
                         todos: session.isAsk ? [] : transcript.todos,
-                        slashCommands: slashCommands.commands,
+                        slashCommands: slashCommands.commands(app: appCommands),
                         onSlashCommandsNeeded: { [sessionId = session.id] in
                             slashCommands.load(sessionId: sessionId, client: endpoint)
                         },
+                        onAppCommand: { runAppCommand($0, arguments: "") },
                         onSchedule: session.isReadOnlyHistory || (context != nil && context?.host != model.localHost) ? nil : schedule,
                         context: context
                     )
@@ -586,6 +587,11 @@ struct ChatView: View {
     private func send(_ message: String, _ mode: DeliveryMode) {
         guard !session.isReadOnlyHistory else { return }
         composer.error = nil
+        // App commands open a control; they are never sent, steered or queued as a message.
+        if let invocation = SlashCommands.appInvocation(composer.trimmed, in: slashCommands.commands(app: appCommands)) {
+            if runAppCommand(invocation.command, arguments: invocation.arguments) { composer.draft = "" }
+            return
+        }
         if let arguments = SlashCommands.jobsArguments(composer.trimmed) {
             guard arguments.isEmpty else {
                 composer.error = "Use /jobs without arguments."
@@ -641,6 +647,10 @@ struct ChatView: View {
             composer.error = "Run /jobs now instead of scheduling it."
             return
         }
+        if let invocation = SlashCommands.appInvocation(composer.trimmed, in: slashCommands.commands(app: appCommands)) {
+            composer.error = "Run \(invocation.command.invocation) now instead of scheduling it."
+            return
+        }
         let previous = composer.draft
         do { try composer.attachments.retainForHistory() }
         catch {
@@ -663,6 +673,38 @@ struct ChatView: View {
                 composer.error = error.localizedDescription
             }
         }
+    }
+
+    /// The app commands this chat supports. Inspector commands need the panes the chat has.
+    private var appCommands: [SlashCommand] { SlashCommands.chatAppCommands(supportsChanges: session.supportsChanges) }
+
+    /// Opens the control an app command names, through the same handlers as its menu or toolbar item. Returns true
+    /// when it ran; false keeps the draft, with the reason in the composer.
+    @discardableResult
+    private func runAppCommand(_ command: SlashCommand, arguments: String) -> Bool {
+        composer.error = nil
+        if command != SlashCommands.model, !arguments.isEmpty {
+            composer.error = "Use \(command.invocation) without arguments."
+            return false
+        }
+        switch command {
+        case SlashCommands.model:
+            guard model.keyboard.composerCommands.contains(where: { $0.id.hasPrefix("model:") }) else {
+                composer.error = "The model can't change right now. Wait for the agent to finish."
+                return false
+            }
+            model.showCommandPalette(query: arguments.isEmpty ? "Model: " : "Model: \(arguments)")
+        case SlashCommands.terminal: return model.openInspector(.terminal)
+        case SlashCommands.changes: return model.openInspector(.changes)
+        case SlashCommands.artifacts: return model.openInspector(.artifacts)
+        case SlashCommands.help:
+            guard let open = model.openKeyboardShortcutsAction else { return false }
+            open()
+        default:
+            composer.error = "\(command.invocation) isn't available in this chat."
+            return false
+        }
+        return true
     }
 
     /// `/compact [instructions]` is handled by Pilot, never sent to the agent as a message.
