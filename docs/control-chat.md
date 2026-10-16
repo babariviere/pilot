@@ -54,3 +54,30 @@ unbuilt range, with no placeholders or partial messages. Four-line text blocks k
 prefix; the Anthropic payload hook marks the last whole block and the request end. No keepalive
 requests or artificial cache retention are used. Faux-provider tests cover retries, tools, same-provider
 selection, concurrency, parent readiness, failure recovery, cache blocks and shutdown cancellation.
+
+## Session and turns
+
+`SessionManager.ensureControlChat()` creates one reserved identity, without starting a worker or
+spending on a greeting. Production calls it after metadata load; `POST /api/control-chat` also returns
+the same chat. It is Ask, project-less, permanently pinned and cannot be archived. Its internal
+configuration directory is not exposed as a workspace. The native control profile constructs no
+filesystem tools, repository readers, personal extensions, project context, MCP or shell.
+
+One Harness conversation retains the transcript, input queue, tool execution, Stop and crash recovery.
+Each run's first input submission anchors the turn. A request hook sends only the shared system/tools,
+the pre-input persisted view, and that run's messages. Steering and tool rounds keep the same anchor.
+The next run gets a fresh view. Idle model changes use the selected model on the next run. Harness
+automatic and manual compaction are disabled for control. A dispatch guard fails closed if the
+projection hook fails, rather than sending the Harness's original full history.
+
+Committed entries drain incrementally, 32 at a time, into the log with stable entry/block keys and a
+durable cursor. Thoughts and system scaffolding are excluded. The pre-input view is saved in both the
+store's current-turn slot and the Harness's latest-only turn document, so retries and worker replacement
+cannot accidentally include the input in its own view. Turn origin comes from the placed submission,
+not action arguments. A recovered daemon defaults to notice restrictions until the turn is prepared.
+
+Faux-provider tests check fresh calls, unchanged tool rounds, absent filesystem tools, thought exclusion,
+restart deduplication, next-turn model selection and failed projections. No UI views are changed here;
+the control-specific sidebar and Watching list are separate work. No visual check was performed.
+The native adapter still mirrors the retained Harness transcript for SDK compatibility; the provider
+request and log drain are bounded, but very-long-chat mirror cost is an unverified performance risk.

@@ -12,6 +12,7 @@ import type {
 	SessionJob,
 	SessionSubagent,
 } from "@pilot/protocol";
+import type { ControlCall } from "./control-turn.ts";
 import type { CredentialEndpoint } from "./credential-rpc.ts";
 import type { DatabaseAction } from "./database-tool.ts";
 import type { MissionAction } from "./mission-tools.ts";
@@ -36,6 +37,7 @@ export interface KernelSubagent extends SessionSubagent {
 }
 
 export interface KernelSpec {
+	control?: boolean;
 	/** Ephemeral capability, never stored in session metadata or transcripts. Inherited by descendants. */
 	credentials?: CredentialEndpoint;
 	/** Host-resolved trust for read-only Linux configuration; never a writable trust-store exception. */
@@ -115,6 +117,7 @@ export type KernelCommand =
 	| { type: "mission.context"; context?: MissionContext }
 	| { type: "mission.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "memory.result"; callId: string; result?: JsonValue; error?: string }
+	| { type: "control.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "database.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "slack.result"; callId: string; result?: JsonValue; error?: string }
 	/** Whether the chat is attached to a Slack triage message, which declares or withdraws `slack_status`. */
@@ -164,6 +167,7 @@ export type KernelPacket =
 	| { type: "mcp.used"; namespaces: string[]; failed: boolean }
 	/** A `mission` tool call, answered by `mission.result`. */
 	| { type: "mission.call"; callId: string; action: MissionAction; args: Record<string, JsonValue> }
+	| { type: "control.call"; callId: string; action: Parameters<ControlCall>[0]; args: Record<string, JsonValue> }
 	| {
 			type: "memory.call";
 			callId: string;

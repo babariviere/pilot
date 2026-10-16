@@ -190,6 +190,8 @@ export function runKernelWorker(): void {
 		callDaemon<JsonValue>((callId) => ({ type: "mission.call", callId, action, args }));
 	const callMemory = (action: "wake" | "note" | "recall" | "zoom", args: Record<string, JsonValue>) =>
 		callDaemon<JsonValue>((callId) => ({ type: "memory.call", callId, action, args }));
+	const callControl: import("./control-turn.ts").ControlCall = (action, args) =>
+		callDaemon<JsonValue>((callId) => ({ type: "control.call", callId, action, args }));
 	const callDatabase: DatabaseCall = (action, args) =>
 		callDaemon<JsonValue>((callId) => ({ type: "database.call", callId, action, args }));
 	const callSlackStatus: SlackStatusCall = (args) =>
@@ -318,6 +320,7 @@ export function runKernelWorker(): void {
 		if (
 			command.type === "mission.result" ||
 			command.type === "memory.result" ||
+			command.type === "control.result" ||
 			command.type === "database.result" ||
 			command.type === "slack.result" ||
 			command.type === "subscription.limit.result" ||
@@ -389,6 +392,7 @@ export function runKernelWorker(): void {
 					onSubagentsChanged: (subagents) => notify({ type: "subagents", subagents }),
 					callMission,
 					callMemory,
+					callControl,
 					callDatabase,
 					callSlackStatus,
 					readArtifactReference: (id, revision) =>

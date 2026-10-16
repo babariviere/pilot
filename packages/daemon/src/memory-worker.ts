@@ -92,6 +92,12 @@ if (workerData.replicaRecall) {
 					case "control.context":
 						value = control.context(args.id, args.n);
 						break;
+					case "control.retry":
+						value = control.retry();
+						break;
+					case "control.turnView":
+						value = control.turnView(args.key);
+						break;
 					case "control.put":
 						value = control.put(args.id, args.n, args.text);
 						break;

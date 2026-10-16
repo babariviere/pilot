@@ -182,6 +182,10 @@ work. Devbox setup/selection and disconnected-state presentation remain separate
 
 ### Start your first chat
 
+The daemon keeps one project-less Control chat, pinned and never archived. Its fresh turns use a persisted
+summary view, with `zoom` and `date` for the original messages. It has no workspace or filesystem tools.
+See [control chat internals](docs/control-chat.md) for storage, compaction and recovery details.
+
 Chat messages render Linear, Slack and GitHub URLs as compact links with the service mark and a short name.
 Names come from Markdown labels or the URL, without fetching private pages. Bare `#123` references stay literal
 so mission task numbers are never mistaken for GitHub issues. Copying preserves the original text and URLs.
