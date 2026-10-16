@@ -79,6 +79,7 @@ export class ControlMemoryDisk {
 				CREATE TRIGGER IF NOT EXISTS nodes_no_delete BEFORE DELETE ON nodes BEGIN SELECT RAISE(ABORT, 'built once'); END;
 				CREATE TABLE IF NOT EXISTS view (id INTEGER PRIMARY KEY, n INTEGER NOT NULL);
 				CREATE TABLE IF NOT EXISTS compact_view (id INTEGER PRIMARY KEY, n INTEGER NOT NULL);
+				CREATE TABLE IF NOT EXISTS turn_view (slot INTEGER PRIMARY KEY CHECK(slot=1), key TEXT NOT NULL, view TEXT NOT NULL);
 				CREATE TABLE IF NOT EXISTS jobs (id INTEGER NOT NULL, n INTEGER NOT NULL, source TEXT NOT NULL, state INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(id,n));
 				CREATE INDEX IF NOT EXISTS jobs_ready ON jobs(state,id,n);
 				CREATE INDEX IF NOT EXISTS jobs_leaves ON jobs(id) WHERE n=1;
@@ -119,6 +120,21 @@ export class ControlMemoryDisk {
 			viewBytes: this.meta("bytes"),
 			merging: !!this.meta("merging"),
 		};
+	}
+	retry(): void {
+		this.db.exec("UPDATE jobs SET state=0 WHERE state=2");
+	}
+	turnView(key: string): ControlLine[] {
+		if (typeof key !== "string" || !key || key.length > 128) throw new Error("Invalid turn key");
+		const row = this.db.prepare("SELECT key,view FROM turn_view WHERE slot=1").get();
+		if (row?.key === key) return JSON.parse(String(row.view)) as ControlLine[];
+		const view = this.view();
+		this.db
+			.prepare(
+				"INSERT INTO turn_view VALUES(1,?,?) ON CONFLICT(slot) DO UPDATE SET key=excluded.key,view=excluded.view",
+			)
+			.run(key, JSON.stringify(view));
+		return view;
 	}
 	append(input: ControlMessageInput): ControlMessage[] {
 		if (!input || !kinds.has(input.kind) || typeof input.text !== "string" || input.text.includes("\0"))

@@ -55,6 +55,7 @@ import type {
 import { prepareAskSnapshot } from "./ask-snapshots.ts";
 import { chatTitleContext } from "./chat-title.ts";
 import { ColdViewReader } from "./cold-view-reader.ts";
+import { ControlChat } from "./control-chat.ts";
 import { coordinatorTrust } from "./coordinator-trust.ts";
 import type { CredentialBroker } from "./credential-broker.ts";
 import { DatabaseService, type DatabaseState, decideDatabaseRequest, declineDatabaseRequest } from "./databases.ts";
@@ -266,6 +267,7 @@ export interface SessionFactories {
 }
 
 interface SessionMeta extends OutcomeMeta {
+	control?: boolean;
 	executionEvidence?: import("@pilot/kernel").ExecutionEvidence;
 	/** Durable execution-ownership fence. Never cleared by reconnect, restart or a fresh input. */
 	delegationFenced?: boolean;
@@ -1105,6 +1107,51 @@ export class SessionManager {
 	private readonly rebasingWorkspaces = new Set<string>();
 	private readonly projects: ProjectStore;
 	private memory?: ProjectMemoryService;
+	private controlChat?: ControlChat;
+	private creatingControl?: Promise<SessionSummary>;
+	static readonly CONTROL_ID = "00000000-0000-4000-8000-000000000001";
+	isControlSession(id: string): boolean {
+		return id === SessionManager.CONTROL_ID && this.metas.get(id)?.control === true;
+	}
+	ensureControlChat(): Promise<SessionSummary> {
+		if (this.creatingControl) return this.creatingControl;
+		this.creatingControl = (async () => {
+			if (this.closing) throw new Error("pilotd is shutting down");
+			const existing = this.metas.get(SessionManager.CONTROL_ID);
+			if (existing) {
+				if (!existing.control) throw new Conflict("Reserved control identity is occupied");
+				return this.summary(existing);
+			}
+			const now = Date.now();
+			const meta: SessionMeta = {
+				id: SessionManager.CONTROL_ID,
+				control: true,
+				title: "Control",
+				mode: "ask",
+				cwd: this.home,
+				pinned: true,
+				createdAt: now,
+				updatedAt: now,
+			};
+			await mkdir(this.dir(meta.id), { recursive: true, mode: 0o700 });
+			await this.save(meta);
+			this.emit(meta);
+			return this.summary(meta);
+		})().finally(() => {
+			this.creatingControl = undefined;
+		});
+		return this.creatingControl;
+	}
+	private controlService(): ControlChat {
+		this.controlChat ??= new ControlChat(
+			this.home,
+			this.home,
+			this.modelCatalog,
+			(id) => this.isControlSession(id),
+			() => this.metas.get(SessionManager.CONTROL_ID)?.model,
+		);
+		return this.controlChat;
+	}
 	private readonly agentDir?: string;
 	private readonly factories: SessionFactories;
 
@@ -2740,6 +2787,7 @@ export class SessionManager {
 
 	/** Serialize pin changes with archiving so automatic transitions recheck the committed pin. */
 	async setPinned(id: string, pinned: boolean): Promise<SessionSummary> {
+		if (this.isControlSession(id) && !pinned) throw new Conflict("The control chat stays pinned");
 		const end = this.updateGate.begin();
 		try {
 			if (this.closing) throw new Error("pilotd is shutting down");
@@ -2814,6 +2862,7 @@ export class SessionManager {
 		autoArchivedPullRequest?: string,
 		staleBefore?: number,
 	): Promise<SessionSummary> {
+		if (this.isControlSession(id)) return Promise.reject(new Conflict("The control chat cannot be archived"));
 		if (this.closing) throw new Error("pilotd is shutting down");
 		this.require(id);
 		const previous = this.archiveTransitions.get(id);
@@ -3342,6 +3391,20 @@ export class SessionManager {
 
 	/** Corrupt metadata must never silently reopen an Ask chat as an unrestricted Build kernel. */
 	private validateMode(meta: SessionMeta, prepared = false): void {
+		if (meta.control) {
+			if (
+				meta.id !== SessionManager.CONTROL_ID ||
+				meta.mode !== "ask" ||
+				meta.ask ||
+				meta.projectId ||
+				meta.workspace ||
+				meta.preparing ||
+				meta.archivedAt ||
+				!meta.pinned
+			)
+				throw new Error("Invalid control chat metadata");
+			return;
+		}
 		if (meta.mode !== undefined && meta.mode !== "build" && meta.mode !== "ask")
 			throw new Error("Invalid session mode");
 		if (meta.mode !== "ask") {
@@ -4996,6 +5059,7 @@ export class SessionManager {
 		await Promise.allSettled(this.coordinatorUnbindings.values());
 		await Promise.allSettled(this.roleTransitions.values());
 		await Promise.all([...this.workers.values()].map((worker) => worker.close()));
+		await this.controlChat?.stop();
 		await Promise.allSettled([...this.parking.values()]);
 		await this.coldReader.close();
 		this.subagentWatchStore?.close();
@@ -5337,6 +5401,7 @@ export class SessionManager {
 		const opening = createWorker(
 			{
 				sessionId: id,
+				...(meta.control ? { control: true } : {}),
 				...(meta.projectId ? { projectId: meta.projectId } : {}),
 				storageDir: join(this.dir(id), "durable"),
 				subscriptionPolicy: join(this.dir(id), "subscription-policy.json"),
@@ -5371,7 +5436,9 @@ export class SessionManager {
 					...(meta.workspaceReset ? { workspaceReset: meta.workspaceReset } : {}),
 				},
 				...(mission ? { mission } : {}),
-				...(!meta.ask && this.databases?.configured(this.projectPath(meta)) ? { databases: true } : {}),
+				...(!meta.ask && !meta.control && this.databases?.configured(this.projectPath(meta))
+					? { databases: true }
+					: {}),
 			},
 			(packet) => {
 				if (published) this.onPacket(meta, published, packet);
@@ -5580,6 +5647,32 @@ export class SessionManager {
 						});
 				},
 			);
+			return;
+		}
+		if (packet.type === "control.call") {
+			void Promise.resolve()
+				.then(() => {
+					if (!this.isControlSession(meta.id)) throw new Error("Only the control chat may use this service");
+					return this.controlService().call(meta.id, packet.action, packet.args);
+				})
+				.then(
+					(result) => {
+						if (this.workers.get(meta.id) === worker)
+							worker.send({
+								type: "control.result",
+								callId: packet.callId,
+								result: JSON.parse(JSON.stringify(result ?? null)),
+							});
+					},
+					(error) => {
+						if (this.workers.get(meta.id) === worker)
+							worker.send({
+								type: "control.result",
+								callId: packet.callId,
+								error: formatFailure(error, "Control chat"),
+							});
+					},
+				);
 			return;
 		}
 		if (packet.type === "mission.call") {
@@ -5937,6 +6030,7 @@ export class SessionManager {
 					(meta.workspace?.base.startsWith("origin/") ? meta.workspace.base.slice("origin/".length) : undefined));
 		return {
 			id: meta.id,
+			...(meta.control ? { control: true } : {}),
 			...(meta.continuationOf ? { continuationOf: meta.continuationOf } : {}),
 			...(meta.continuedTo ? { continuedTo: meta.continuedTo } : {}),
 			mode: meta.mode === "ask" ? "ask" : "build",
@@ -5944,7 +6038,7 @@ export class SessionManager {
 			...(!coordinator && sourceBranch ? { sourceBranch } : {}),
 			...(meta.ask?.commit ? { sourceCommit: meta.ask.commit } : {}),
 			title: meta.title,
-			cwd: meta.cwd,
+			cwd: meta.control ? "" : meta.cwd,
 			sessionPath: this.dir(meta.id),
 			...(meta.projectId ? { projectId: meta.projectId } : {}),
 			...(!coordinator && meta.workspace?.branch ? { branch: meta.workspace.branch } : {}),

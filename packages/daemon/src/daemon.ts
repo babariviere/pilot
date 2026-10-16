@@ -182,6 +182,7 @@ power?.onNetworkPath((path) => connectivity.setPath(path));
 // Recover global sleep overrides before any interrupted agent can reopen.
 await power?.start();
 await sessions.load(maintenance?.frozen);
+await sessions.ensureControlChat();
 // A reply in a waiting Slack thread resumes the message's latest chat with it, once chats are loaded.
 tracking.slackWaiting = createSlackWaitingWatcher(trackedItems, async (sessionId, message, requestId) => {
 	const chat = sessions.get(sessionId);

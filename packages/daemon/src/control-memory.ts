@@ -44,6 +44,12 @@ export class ControlMemory {
 	state(): Promise<ControlMemoryState> {
 		return this.rpc("state");
 	}
+	retry(): Promise<void> {
+		return this.rpc("retry");
+	}
+	turnView(key: string): Promise<ControlLine[]> {
+		return this.rpc("turnView", { key });
+	}
 	append(message: ControlMessageInput): Promise<ControlMessage[]> {
 		return this.rpc("append", { message });
 	}

@@ -67,6 +67,7 @@ import { askSettings, createAskSession } from "./ask-runtime.ts";
 import { ASK_TOOL_NAMES, createAskTools } from "./ask-tools.ts";
 import { bundledAskTools, bundledResourceLoader } from "./bundled-extensions.ts";
 import { OfflineGate, offlineRequestStream } from "./connectivity.ts";
+import { CONTROL_SYSTEM_PROMPT, markControlCache } from "./control-context.ts";
 import { installCredentialBrokerHooks } from "./credential-hooks.ts";
 import { diagnosticFetch, formatFailure, safeFailureText, toolFailureStep } from "./failure.ts";
 import { runningJobs } from "./jobs.ts";
@@ -88,6 +89,8 @@ export interface ExtensionInput {
 }
 
 export interface NativeAdapterOptions {
+	/** Project-less read-only control profile. No filesystem or personal extensions. */
+	control?: boolean;
 	subscriptionPolicy?: string;
 	reportSubscriptionLimit?: ReportSubscriptionLimit;
 	connectivityPolicy?: string;
@@ -254,6 +257,10 @@ export class NativeAdapter {
 	#onExtensionInput?: (input: ExtensionInput) => void;
 	#registerHostTool!: (tool: ToolDefinition) => void;
 	readonly #ask: boolean;
+	readonly #allowedTools: readonly string[];
+	controlCacheBlock?: string;
+	controlRequestReady = false;
+	readonly #control: boolean;
 	readonly #performance?: PerformanceSink;
 	#requestNumber = 0;
 	#pendingPreparation?: PreparationMark;
@@ -277,6 +284,8 @@ export class NativeAdapter {
 		subscriptionPolicy?: string,
 		connectivityPolicy?: string,
 		reportSubscriptionLimit?: ReportSubscriptionLimit,
+		allowedTools: readonly string[] = ASK_TOOL_NAMES,
+		control = false,
 	) {
 		this.#subscriptionGate = new SubscriptionGate(subscriptionPolicy);
 		this.#reportSubscriptionLimit = reportSubscriptionLimit;
@@ -285,6 +294,8 @@ export class NativeAdapter {
 		this.session = session;
 		this.usage = usage;
 		this.#ask = ask;
+		this.#allowedTools = allowedTools;
+		this.#control = control;
 		this.#performance = timings;
 		// Bind every ordinary Models operation to its native runtime. In particular, getAuth and
 		// stream never snapshot credentials. No second credential store or auth-resolution layer.
@@ -312,6 +323,8 @@ export class NativeAdapter {
 						options?: ModelsSimpleStreamOptions,
 					) => {
 						this.assertOpen();
+						if (this.#control && !this.controlRequestReady)
+							throw new Error("Control turn projection did not prepare a fresh request");
 						return this.requestStream(
 							(observe, timing, signal, onProvider) =>
 								session.extensionRunner
@@ -332,6 +345,8 @@ export class NativeAdapter {
 						options?: ModelsApiStreamOptions<Api>,
 					) => {
 						this.assertOpen();
+						if (this.#control && !this.controlRequestReady)
+							throw new Error("Control turn projection did not prepare a fresh request");
 						return this.requestStream(
 							(observe, timing, signal, onProvider) =>
 								// Instrument shared fields; the spread preserves provider-specific options unchanged.
@@ -364,6 +379,10 @@ export class NativeAdapter {
 
 	static async open(options: NativeAdapterOptions): Promise<NativeAdapter> {
 		await installCredentialBrokerHooks({ descendants: true });
+		const readOnly = !!options.ask || !!options.control;
+		const allowedTools = options.control
+			? ["codemode", ...(options.hostTools ?? []).map((tool) => tool.name)]
+			: ASK_TOOL_NAMES;
 		const cwd = options.cwd;
 		const hasArtifacts = options.ask
 			? !!options.askArtifacts
@@ -371,12 +390,12 @@ export class NativeAdapter {
 		const artifactSkillPaths = hasArtifacts ? [ARTIFACT_SKILL_PATH] : [];
 		const agentDir = options.agentDir ?? getAgentDir();
 		const originalSettings = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
-		const settingsManager = options.ask ? askSettings(originalSettings) : originalSettings;
+		const settingsManager = readOnly ? askSettings(originalSettings) : originalSettings;
 		// Ask borrows only the bundled web definition, never runs arbitrary personal factories.
 		const askExtensionTools = options.ask
 			? (options.askExtensionTools ?? (await bundledAskTools(cwd, agentDir)))
 			: [];
-		const projectTrusted = options.ask
+		const projectTrusted = readOnly
 			? false
 			: (options.projectTrusted ?? resolveProjectTrust(options.trustDirectory ?? cwd, agentDir, settingsManager));
 		// The Harness compacts and retries; the native session must not do either on its own.
@@ -397,14 +416,14 @@ export class NativeAdapter {
 				pi.registerTool(tool);
 			};
 			for (const tool of hostTools.values()) pi.registerTool(tool);
-			if (options.ask) {
+			if (readOnly) {
 				// Covers nested codemode execution too, not just model declarations.
 				pi.on("tool_call", (event) => {
-					if (!ASK_TOOL_NAMES.includes(event.toolName))
+					if (!allowedTools.includes(event.toolName))
 						return { block: true, reason: `Ask mode denies tool: ${event.toolName}` };
 				});
 			}
-			if (!options.ask) options.subagents?.attach(pi.events);
+			if (!readOnly) options.subagents?.attach(pi.events);
 			pi.on("session_shutdown", () => {
 				options.subagents?.detach();
 			});
@@ -415,7 +434,7 @@ export class NativeAdapter {
 			});
 		};
 		const loader = bundledResourceLoader(
-			options.ask
+			readOnly
 				? {
 						cwd,
 						agentDir,
@@ -428,8 +447,9 @@ export class NativeAdapter {
 						noThemes: true,
 						noContextFiles: true,
 						// Do not spread loaderOptions: explicit CLI paths and inline factories bypass noExtensions.
-						systemPrompt:
-							"You are a source analysis assistant in Pilot Ask mode. The repository is read-only. Use codemode for all tool calls: read, find, grep and ls, web when available, and session-local artifacts with their sandboxed previews. Never execute arbitrary commands or change repository files. Repository implementation requires an explicit new Build session.",
+						systemPrompt: options.control
+							? CONTROL_SYSTEM_PROMPT
+							: "You are a source analysis assistant in Pilot Ask mode. The repository is read-only. Use codemode for all tool calls: read, find, grep and ls, web when available, and session-local artifacts with their sandboxed previews. Never execute arbitrary commands or change repository files. Repository implementation requires an explicit new Build session.",
 						appendSystemPrompt: [],
 						extensionFactories: [createCodemodeExtension({ models: false, mode: "only" }), capture],
 					}
@@ -453,7 +473,7 @@ export class NativeAdapter {
 						],
 					},
 			projectTrusted,
-			!options.ask && options.bundledExtensions !== false,
+			!readOnly && options.bundledExtensions !== false,
 		);
 		await loader.reload();
 		const failures = loader.getExtensions().errors;
@@ -461,11 +481,11 @@ export class NativeAdapter {
 			throw new Error(`Native extension loading failed: ${failures.map((e) => e.error).join("; ")}`);
 		const sessionConfig = {
 			...options.sessionOptions,
-			...(options.ask
+			...(readOnly
 				? {
-						tools: ASK_TOOL_NAMES,
+						tools: allowedTools,
 						customTools: [
-							...(await createAskTools(options.ask, { artifactSkill: hasArtifacts })),
+							...(options.ask ? await createAskTools(options.ask, { artifactSkill: hasArtifacts }) : []),
 							...(options.askArtifacts ? createArtifactTools({ ...options.askArtifacts, ask: true }) : []),
 							...(options.askTools ?? []),
 							...askExtensionTools,
@@ -478,22 +498,24 @@ export class NativeAdapter {
 			resourceLoader: loader,
 			sessionManager: nativeSessionManager(cwd, options),
 		};
-		const session = options.ask
+		const session = readOnly
 			? await createAskSession({
 					...sessionConfig,
-					tools: ASK_TOOL_NAMES,
+					tools: allowedTools,
 					customTools: sessionConfig.customTools ?? [],
 				})
 			: (await createAgentSession(sessionConfig)).session;
 		const adapter = new NativeAdapter(
 			session,
 			usage,
-			!!options.ask,
+			readOnly,
 			infrastructure,
 			options.performance,
 			options.subscriptionPolicy,
 			options.connectivityPolicy,
 			options.reportSubscriptionLimit,
+			allowedTools,
+			!!options.control,
 		);
 		// The SDK loop never runs here. Its default getter would report idle throughout
 		// Harness model/tool work, causing extensions (notably jobs) to notify too early.
@@ -683,7 +705,7 @@ export class NativeAdapter {
 		this.session.agent.state.messages = manager.buildSessionContext().messages;
 		const restored = getCurrentTools(view.messages)
 			.map((tool) => tool.name)
-			.filter((name) => !this.#ask || ASK_TOOL_NAMES.includes(name));
+			.filter((name) => !this.#ask || this.#allowedTools.includes(name));
 		if (restored.some((name) => !this.session.getActiveToolNames().includes(name))) {
 			this.session.setActiveToolsByName([...this.session.getActiveToolNames(), ...restored]);
 			this.refreshTools();
@@ -904,7 +926,7 @@ export class NativeAdapter {
 			// Codemode-only hides direct tools, then budgets its listing cheapest-first. Memory
 			// must stay declared even when that listing drops the longer note schema (or all tools).
 			.filter((tool) => !hidden.has(tool.name) || MEMORY_TOOL_NAMES.includes(tool.name))
-			.filter((tool) => !this.#ask || ASK_TOOL_NAMES.includes(tool.name))
+			.filter((tool) => !this.#ask || this.#allowedTools.includes(tool.name))
 			.map((tool) => ({
 				name: tool.name,
 				description: tool.description,
@@ -958,6 +980,7 @@ export class NativeAdapter {
 			hooks: [
 				hook(GenerationTask, {
 					beforeRequest: async (request, _api, context) => {
+						if (this.#control) this.controlRequestReady = false;
 						const preparation = this.#performance
 							? (this.#pendingPreparation ?? this.preparationMark())
 							: undefined;
@@ -1009,7 +1032,7 @@ export class NativeAdapter {
 				}),
 				hook(ToolTask, {
 					beforeTool: async (call, _api, context) => {
-						if (this.#ask && !ASK_TOOL_NAMES.includes(call.name))
+						if (this.#ask && !this.#allowedTools.includes(call.name))
 							return { block: `Ask mode denies tool: ${call.name}` };
 						await this.sync(context);
 						const before = new Set(this.session.sessionManager.getEntries().map((entry) => entry.id));
@@ -1278,7 +1301,9 @@ export class NativeAdapter {
 					(await options?.onPayload?.(payload, model)) ?? payload,
 				);
 				timing?.mark("payloadReadyMs");
-				return value;
+				return model.api === "anthropic-messages" && this.controlCacheBlock !== undefined
+					? markControlCache(value, this.controlCacheBlock)
+					: value;
 			},
 			transformHeaders: async (headers) =>
 				runner.emitBeforeProviderHeaders((await options?.transformHeaders?.(headers)) ?? headers),

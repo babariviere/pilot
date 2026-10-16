@@ -942,6 +942,8 @@ export function createDaemonServer(
 						(url.searchParams.get("mode") === "build" && url.searchParams.get("workspace") === "clone"),
 				),
 			);
+		if (parts[1] === "control-chat" && parts.length === 2 && req.method === "POST")
+			return json(res, 200, await sessions.ensureControlChat());
 		if (parts[1] === "sessions" && parts.length === 2) {
 			if (req.method === "GET") {
 				const archived = url.searchParams.get("archived") ?? "false";

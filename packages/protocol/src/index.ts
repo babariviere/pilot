@@ -239,6 +239,8 @@ export interface UpdatePreparation {
 }
 
 export interface SessionSummary {
+	/** The one project-less, pinned orchestration chat. */
+	control?: boolean;
 	/** Fresh provider-safe chat which continues this readable, permanently read-only chat. */
 	continuedTo?: string;
 	/** Original chat whose workspace and task ownership this fresh chat continues. */
