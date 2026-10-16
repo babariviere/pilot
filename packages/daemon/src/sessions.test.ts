@@ -716,13 +716,13 @@ test("latest user submission is exposed and persists independently of worker and
 test("PR observers receive persisted full chat heads and startup baselines, never streaming summaries", async (t) => {
 	const f = await fixture(t);
 	const releaseInspection = deferred();
+	const inspectionStarted = deferred();
 	let holdInspection = false;
-	let inspectionStarted = false;
 	const commands: { file: string; args: string[]; cwd: string }[] = [];
 	const runner: NonNullable<ConstructorParameters<typeof SessionManager>[4]>["runner"] = async (file, args, cwd) => {
 		commands.push({ file, args, cwd });
 		if (holdInspection) {
-			inspectionStarted = true;
+			inspectionStarted.resolve();
 			await releaseInspection.promise;
 		}
 		throw new Error("Synthetic observer fixture has no Git origin");
@@ -768,14 +768,23 @@ test("PR observers receive persisted full chat heads and startup baselines, neve
 	);
 	t.after(() => reopened.shutdown());
 	const recovered: typeof observed = [];
+	const baselineStarted = deferred();
+	const releaseBaseline = deferred();
 	reopened.setPullRequestObserver(async (observation) => {
 		recovered.push(observation);
+		baselineStarted.resolve();
+		await releaseBaseline.promise;
 	});
 	try {
-		await reopened.load();
+		const loading = reopened.load();
+		await baselineStarted.promise;
+		assert.deepEqual(commands, [], "startup baselines do not need Git or GitHub");
+		assert.equal(reopened["pullRequests"]["started"], false, "baseline delivery precedes the scheduler");
+		releaseBaseline.resolve();
+		await loading;
 		// Exercise the formerly timing-dependent overlap: startup baseline publication must
 		// finish before background inspection, and shutdown owns the in-flight inspection.
-		await until(() => inspectionStarted);
+		await inspectionStarted.promise;
 		assert.equal(recovered[0]?.prs.find((head) => head.number === 42)?.state, "merged");
 		assert.equal(recovered[0]?.pending, true);
 		let closed = false;
@@ -792,6 +801,7 @@ test("PR observers receive persisted full chat heads and startup baselines, neve
 		for (const command of commands)
 			assert.deepEqual(command, { file: "git", args: ["remote", "get-url", "origin"], cwd: f.source });
 	} finally {
+		releaseBaseline.resolve();
 		releaseInspection.resolve();
 	}
 });
@@ -1603,6 +1613,9 @@ test("startup retains a redacted nested network cause in summary and persisted f
 
 for (const failure of ["clone", "factory", "ready"] as const) {
 	test(`${failure} startup errors remain visible failed sessions across restart`, async (t) => {
+		const releaseFailureSave = deferred();
+		// Register before fixture cleanup so an assertion failure cannot strand shutdown.
+		t.after(() => releaseFailureSave.resolve());
 		const f = await fixture(t);
 		const sessions = await f.manager({
 			workspace: async (_source, path) => {
@@ -1616,6 +1629,15 @@ for (const failure of ["clone", "factory", "ready"] as const) {
 						}
 					: f.workerFactory(false),
 		});
+		const failureSaving = deferred();
+		const save = sessions["save"].bind(sessions);
+		sessions["save"] = async (meta, ...args) => {
+			if (meta.failure) {
+				failureSaving.resolve();
+				await releaseFailureSave.promise;
+			}
+			await save(meta, ...args);
+		};
 		const created = await sessions.spawn({ projectId: f.project.id, message: "fail visibly" });
 		const changes: SessionSummary[] = [];
 		sessions.onChange((session) => changes.push(session));
@@ -1623,18 +1645,27 @@ for (const failure of ["clone", "factory", "ready"] as const) {
 		const snapshotDelivered = deferred();
 		sessions.subscribe(created.id, (events) => {
 			batches.push(events);
-			snapshotDelivered.resolve();
+			if (sessions.get(created.id)?.state === "failed") snapshotDelivered.resolve();
 		});
 		if (failure === "ready") {
 			await until(() => f.workers.length === 1);
 			f.workers[0]!.gate.reject(new Error("kernel unavailable"));
 		}
-		await until(() => changes.at(-1)?.state === "failed");
+		await failureSaving.promise;
+		const beforeFailureSnapshot = failure === "ready" ? [[snapshot]] : [];
+		assert.deepEqual(batches, beforeFailureSnapshot);
+		assert.equal((await f.stored(created.id)).failure, undefined);
+		// A separate update can publish the in-memory failure before its save completes.
+		// Force that ordering instead of hoping the filesystem happens to expose the gap.
+		sessions["emit"](sessions["metas"].get(created.id)!);
 		assert.match(sessions.get(created.id)!.error!, /unavailable/);
 		assert.equal(changes.at(-1)?.state, "failed");
+		assert.deepEqual(batches, beforeFailureSnapshot, "a failure summary is not a transcript barrier");
 		// A summary can expose the failure while its persistence is still in flight.
 		// The initial transcript is a separate notification after that save settles.
+		releaseFailureSave.resolve();
 		await snapshotDelivered.promise;
+		assert.equal(batches.length, beforeFailureSnapshot.length + 1);
 		assert.deepEqual(batches.at(-1), [snapshot]);
 		assert.equal((await f.stored(created.id)).pending.length, 1);
 		await assert.rejects(sessions.send(created.id, "retry"), /unavailable/);
