@@ -75,7 +75,7 @@ by urgency: failed, question, scheduled failure, unread, then the rest.
 
 Each top-level view has one role. Keep new content in the view whose role it serves.
 
-- **Home watches.** It always covers every project and answers "how is everything doing": a one-sentence summary,
+- **Home watches.** It always covers every project and answers "how is everything doing": a short count line,
   quiet subscription bars, projects under their folder headings, Working now, Missions and Activity. It has no badge;
   its only actions are starting a chat and adding a project.
 - **The Inbox acts.** It is the one place to act across projects: Needs you, Ready to merge, Linear and Slack, most

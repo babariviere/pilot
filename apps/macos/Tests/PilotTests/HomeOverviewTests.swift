@@ -74,19 +74,18 @@ private func project(_ id: String, _ name: String? = nil) -> Project {
     #expect(rows[4].missionLine == "2 missions: 1 of 2 tasks")
 }
 
-@Test func homeSummarySentenceCountsActiveProjectsWorkMissionsAndInbox() {
+@Test func homeSummaryCountsWorkMissionsAndInbox() {
     let rows = HomeStatus.projects(
         [project("a"), project("b"), project("c"), project("d")],
         counts: ["a": ProjectDashboardCount(working: 2, needsYou: 1, tracked: 4),
                  "b": ProjectDashboardCount(working: 1)],
         sessions: [homeSession("r", project: "c", readyPR: true)], missions: [homeMission("m", project: "a")])
-    #expect(HomeStatus.summary(rows)
-        == "3 projects are active: 3 chats are working and 1 mission is moving. 6 things wait in your Inbox.")
+    #expect(HomeStatus.summary(rows) == "3 working · 1 active mission · 6 in Inbox")
     let one = HomeStatus.projects([project("a")], counts: ["a": ProjectDashboardCount(working: 1)], sessions: [], missions: [])
-    #expect(HomeStatus.summary(one) == "1 project is active: 1 chat is working. Your Inbox is empty.")
+    #expect(HomeStatus.summary(one) == "1 working")
     let waiting = HomeStatus.projects([project("a")], counts: ["a": ProjectDashboardCount(tracked: 1)], sessions: [], missions: [])
-    #expect(HomeStatus.summary(waiting) == "Nothing is working. 1 thing waits in your Inbox.")
-    #expect(HomeStatus.summary([]) == "All quiet. Nothing is working and your Inbox is empty.")
+    #expect(HomeStatus.summary(waiting) == "1 in Inbox")
+    #expect(HomeStatus.summary([]) == "All quiet")
 }
 
 @Test func homeWorkingListsLiveChatsNewestFirst() {
