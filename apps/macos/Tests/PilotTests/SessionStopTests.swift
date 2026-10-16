@@ -35,15 +35,7 @@ private final class StopHTTPStub: URLProtocol {
     return client
 }
 
-@MainActor private func stopEventually(_ predicate: () -> Bool) async throws {
-    let deadline = ContinuousClock.now.advanced(by: .seconds(5))
-    while !predicate() {
-        guard ContinuousClock.now < deadline else { throw ClientError("Stop fixture timed out") }
-        try await Task.sleep(for: .milliseconds(5))
-    }
-}
-
-@Test(arguments: [false, true]) @MainActor
+@Test(.timeLimit(.minutes(2)), arguments: [false, true]) @MainActor
 func localStopNormalizesQualifiedRowsAndRestoresWithdrawnMessages(qualified: Bool) async throws {
     let app = AppModel(client: stopClient("local"))
     let local = HostRef(hostId: "local", daemonId: "a", lineageId: "1")
@@ -52,17 +44,18 @@ func localStopNormalizesQualifiedRowsAndRestoresWithdrawnMessages(qualified: Boo
     let composer = app.composer(for: "same")
     composer.draft = "newer draft"
 
-    app.stopSession(qualified ? ref.storageKey : ref.localId)
+    let stop = try #require(app.stopSession(qualified ? ref.storageKey : ref.localId))
     #expect(app.pendingSessionActions == [ref.localId])
     // A second entry point for the same Local chat must not issue another Stop.
-    app.stopSession(qualified ? ref.localId : ref.storageKey)
-    try await stopEventually { app.pendingSessionActions.isEmpty }
+    #expect(app.stopSession(qualified ? ref.localId : ref.storageKey) == nil)
+    await stop.value
+    #expect(app.pendingSessionActions.isEmpty)
     #expect(app.sessionActionError == nil)
     #expect(composer.draft == "local withdrawn\n\nnewer draft")
     #expect(try app.composer(for: ref) === composer)
 }
 
-@Test @MainActor func remoteStopKeepsCollidingLocalChatAndDraftUntouched() async throws {
+@Test(.timeLimit(.minutes(2))) @MainActor func remoteStopKeepsCollidingLocalChatAndDraftUntouched() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
     let app = AppModel(client: stopClient("local"))
@@ -77,8 +70,8 @@ func localStopNormalizesQualifiedRowsAndRestoresWithdrawnMessages(qualified: Boo
     remoteComposer.draft = "remote draft"
     app.composer(for: "same").draft = "local draft"
 
-    app.stopSession(ref.storageKey)
-    try await stopEventually { remoteComposer.draft != "remote draft" || app.sessionActionError != nil }
+    let stop = try #require(app.stopSession(ref.storageKey))
+    await stop.value
     #expect(app.sessionActionError == nil)
     #expect(remoteComposer.draft == "remote withdrawn\n\nremote draft")
     #expect(app.composer(for: "same").draft == "local draft")
@@ -86,7 +79,7 @@ func localStopNormalizesQualifiedRowsAndRestoresWithdrawnMessages(qualified: Boo
     #expect(app.client.session("same")?.state == "working")
 }
 
-@Test(arguments: ["box", "local"]) @MainActor
+@Test(.timeLimit(.minutes(2)), arguments: ["box", "local"]) @MainActor
 func unavailableStopNeverFallsBackToCurrentLocalHost(hostId: String) async throws {
     let app = AppModel(client: stopClient("local"))
     try app.registerLocal(HostRef(hostId: "local", daemonId: "a", lineageId: "1"))
@@ -96,8 +89,8 @@ func unavailableStopNeverFallsBackToCurrentLocalHost(hostId: String) async throw
     let composer = try app.composer(for: ref)
     composer.draft = "unavailable draft"
     app.composer(for: "same").draft = "local draft"
-    app.stopSession(ref.storageKey)
-    try await stopEventually { app.sessionActionError != nil }
+    let stop = try #require(app.stopSession(ref.storageKey))
+    await stop.value
     #expect(app.sessionActionError?.contains("Disconnected") == true)
     #expect(composer.draft == "unavailable draft")
     #expect(app.composer(for: "same").draft == "local draft")
@@ -112,7 +105,7 @@ func unavailableStopNeverFallsBackToCurrentLocalHost(hostId: String) async throw
         HostResourceRef(host: local, kind: .mission, localId: "same").storageKey]
     for key in keys {
         app.sessionActionError = nil
-        app.stopSession(key)
+        #expect(app.stopSession(key) == nil)
         #expect(app.sessionActionError == HostRoutingError.invalidReference.localizedDescription)
         #expect(app.pendingSessionActions.isEmpty)
     }
