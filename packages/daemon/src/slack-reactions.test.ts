@@ -88,6 +88,8 @@ async function fixture(t: TestContext, adapter: SourcePoller = async () => ({ it
 		},
 	});
 	registry.register("slack", adapter);
+	// Every poll checks reactions again, so each step observes the latest fixture response.
+	registry.slackReactionRecheckMs = 0;
 	const poll = () => registry.poll(`${project.id}:slack`);
 	await poll();
 	t.after(async () => {
@@ -325,12 +327,14 @@ test("a check written on manual Done does not undo reopening, and starting work 
 	assert.equal(f.calls.filter((call) => call.tool === "doneSlack").length, 1);
 });
 
-test("Done writes are not blocked by the local daily read budget", async (t) => {
+test("a spent read budget defers only reaction checks, not discovery or Done writes", async (t) => {
 	const f = await fixture(t);
 	await f.eyes();
-	for (let i = 0; i < 100; i++) await f.items.reserveSlackReactions(f.project.id, Date.now());
+	for (let i = 0; i < 100; i++) await f.items.reserveSlackReactions(f.project.id, Date.now(), 0);
+	const reads = f.calls.filter((call) => call.tool === "reactions").length;
 	await f.poll();
-	assert.equal(f.registry.require(`${f.project.id}:slack`).status, "error");
+	assert.equal(f.registry.require(`${f.project.id}:slack`).status, "ok");
+	assert.equal(f.calls.filter((call) => call.tool === "reactions").length, reads);
 	await f.items.patch(f.item.id, { slack: { status: "done" } });
 	await until(async () => outcome(await f.items.require(f.item.id)) === "reacted");
 });
@@ -382,7 +386,7 @@ test("write failure is quiet, once-only and durable; already_reacted succeeds an
 	}
 });
 
-test("reaction reads are capped, rotate fairly and share the durable daily Slack budget", async () => {
+test("reaction reads are capped, rotate fairly, wait between checks and share the durable daily Slack budget", async () => {
 	const items = new TrackedItemStore(":memory:");
 	try {
 		await items.commit(
@@ -390,16 +394,20 @@ test("reaction reads are capped, rotate fairly and share the durable daily Slack
 			"slack",
 			Array.from({ length: 20 }, (_, i) => ({ ...input, externalId: String(i) })),
 		);
-		const first = await items.reserveSlackReactions("p", 100),
-			second = await items.reserveSlackReactions("p", 200);
+		const t = 7_200_000; // Two hours into the UTC day, so never-checked items are due.
+		const first = await items.reserveSlackReactions("p", t + 100, 0),
+			second = await items.reserveSlackReactions("p", t + 200, 0);
 		assert.equal(first.reads.length, 8);
 		assert.equal(second.reads.length, 8);
 		assert.equal(new Set([...first.reads, ...second.reads].map((read) => read.item.id)).size, 16);
-		let used = 16;
-		for (let i = 0; i < 12; i++) used += (await items.reserveSlackReactions("p", 300 + i)).reads.length;
+		// By default an item checked within the hour waits: only the four never-checked items remain.
+		assert.equal((await items.reserveSlackReactions("p", t + 300)).reads.length, 4);
+		assert.equal((await items.reserveSlackReactions("p", t + 400)).reads.length, 0);
+		let used = 20;
+		for (let i = 0; i < 12; i++) used += (await items.reserveSlackReactions("p", t + 500 + i, 0)).reads.length;
 		assert.equal(used, 100);
-		assert.deepEqual(await items.reserveSlackReactions("p", 500), { reads: [], budget: true });
-		assert.equal((await items.reserveSlack("CEXAMPLE", parent, 500, "p")).state, "budget");
+		assert.deepEqual(await items.reserveSlackReactions("p", t + 600, 0), { reads: [], budget: true });
+		assert.equal((await items.reserveSlack("CEXAMPLE", parent, t + 600, "p")).state, "budget");
 		assert.equal((await items.reserveSlackReactions("p", 86_400_000)).reads.length, 8);
 	} finally {
 		await items.close();

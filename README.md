@@ -520,13 +520,14 @@ with a collapsible "N sub-issues" count on the parent, one level deep. When the 
 tracked issues, its identifier, title and link (read with `get_issue`, cached and bounded) head the group
 as a read-only row. Starting work on a sub-issue quotes its parent's identifier and title.
 
-Each Slack channel can optionally track only new threads that mention you, directly or through one of
+Each Slack channel can optionally track only new messages that mention you, directly or through one of
 your groups. Add your own group handles in Tracking settings because the dedicated Slack MCP does not
-expose memberships. A mention in any reply qualifies the parent thread, which is classified with its
-usual bounded thread context and label effects. Existing items are unchanged. Mention discovery uses
-channel-scoped Slack search, shares the daily Slack budget, and never searches other channels.
-Public search is preferred; a private-capable search, still restricted to that configured channel,
-also finds mentions in private-channel replies without re-reading unchanged threads.
+expose memberships. Mention-only channels read the same channel history as other channels and keep
+top-level messages that mention you; a mention only in a thread reply is not found. Matching threads are
+classified with their usual bounded thread context and label effects. Existing items are unchanged.
+Channel history shows a group mention only by its ID, so Pilot learns each handle's ID once with one
+search scoped to that channel, choosing the group mentioned most often in the results, and stores it.
+A handle it cannot resolve is searched again at most once a day.
 
 Project settings provides per-team Linear state mappings for Todo, In progress, In review, Merged,
 Deployed, Canceled and Duplicated, including separate choices for sub-teams. Only In progress is applied
@@ -589,8 +590,9 @@ daily Slack budget. A reply from anyone but you resumes the message's latest cha
 as context, and moves the message back to In progress; without a chat to resume, the message reopens. Your own
 replies, including ones an agent posts as you, never end a wait. The tool can only switch a chat's own messages
 between In progress and Waiting; the other statuses stay yours.
-During normal Slack refreshes, up to eight Open, In progress or Waiting parents are checked for a ✅ reaction, sharing
-the daily Slack budget. A ✅ from anyone marks the item Done with “Done · ✅ in Slack”. Reopening keeps it open while
+During normal Slack refreshes, up to eight Open, In progress or Waiting parents are checked for a ✅ reaction, each
+at most once an hour, sharing the daily Slack budget. A spent budget pauses only these checks.
+A ✅ from anyone marks the item Done with “Done · ✅ in Slack”. Reopening keeps it open while
 that reaction remains present, even if its count changes. Removing it and adding it again is a new reaction.
 When an item with a successful eyes reaction becomes Done (manually, from a merge, or from Slack), Pilot adds ✅
 once. Already reacted counts as success; failures show a quiet row error without changing Done. Reopening never

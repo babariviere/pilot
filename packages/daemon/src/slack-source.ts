@@ -12,7 +12,13 @@ import {
 	slackExcerptText,
 	slackTimestamp,
 } from "./slack-format.ts";
-import { mentionsMe, parseSlackIdentity, parseSlackMentions, type SlackIdentity } from "./slack-mentions.ts";
+import {
+	dominantSlackGroup,
+	mentionsMe,
+	parseSlackIdentity,
+	parseSlackMentions,
+	type SlackIdentity,
+} from "./slack-mentions.ts";
 import { SourceToolError } from "./source-mcp.ts";
 import type { SourcePollContext, SourcePoller, SourcePollResult } from "./sources.ts";
 import type { TrackedInput, TrackedItemStore } from "./tracked-items.ts";
@@ -26,6 +32,14 @@ export const SLACK_EXCERPT_CHARS = 600;
 export const SLACK_EXCERPT_LINES = 10;
 /** A newly added channel starts this far back. Classification results are cached per thread. */
 const INITIAL_LOOKBACK_MS = 7 * 86_400_000;
+/** Your Slack user ID and username rarely change. One profile read a day is enough. */
+const IDENTITY_TTL_MS = 86_400_000;
+/** An unresolved group handle is searched again at most this often. A resolved one never is. */
+const GROUP_RETRY_MS = 86_400_000;
+const GROUP_SEARCH_LIMIT = 20;
+/** Mention-only scopes include this so checkpoints from the former search-based discovery start over once:
+ * their search cursors are not valid history cursors. */
+const MENTION_SCOPE_VERSION = "history";
 // Compact tuples keyed by a short channel hash, so adding or removing a channel keeps the others' progress.
 type ChannelCursor = [
 	oldest: string,
@@ -38,13 +52,13 @@ type Cursor = {
 	version: 2;
 	last: string | null;
 	channels: Record<string, ChannelCursor>;
+	// term and privateSearch are left over from search-based discovery. They are read but no longer used.
 	mentions?: Record<string, [scope: string, term: number, privateSearch?: boolean]>;
 };
 type CacheStore = Pick<
 	TrackedItemStore,
-	"slackCached" | "reserveSlack" | "reserveSlackRead" | "finishSlack" | "corrections"
+	"slackCached" | "reserveSlack" | "finishSlack" | "corrections" | "slackGroups" | "saveSlackGroup"
 >;
-class SlackReadBudget extends Error {}
 
 /** The project's labels, latest corrections and triage guide, as the classifier reads them. */
 async function classifierContextFor(store: CacheStore, context: SourcePollContext): Promise<SlackClassifierContext> {
@@ -82,7 +96,9 @@ export function slackChannelProgress(
 }
 
 /** One history page per poll, round-robin channels. At most eight tool-free classification attempts.
- * A channel the tool refuses (for example, no access) is marked failed and the others keep their turns. */
+ * A channel the tool refuses (for example, no access) is marked failed and the others keep their turns.
+ * Mention-only channels read the same history and keep top-level messages that mention you or your groups.
+ * Mentions only in thread replies are not found: that would need a search or a thread read per message. */
 export function createSlackPoller(
 	store: CacheStore,
 	models: Pick<ModelCatalog, "classifySlack"> & Partial<Pick<ModelCatalog, "prepareSlackClassifier">>,
@@ -102,7 +118,7 @@ export function createSlackPoller(
 		const filtered = context.config.slackMentionOnlyChannels?.includes(name) ?? false;
 		const groups = context.config.slackGroupHandles ?? [];
 		// Filter edits reset only this channel's discovery, never the classification cache or existing items.
-		const scope = channelKey(JSON.stringify(groups));
+		const scope = channelKey(JSON.stringify([MENTION_SCOPE_VERSION, groups]));
 		const priorMention = cursor.mentions?.[key];
 		if ((filtered && priorMention?.[0] !== scope) || (!filtered && priorMention)) {
 			cursor.channels[key] = [timestamp(now() - INITIAL_LOOKBACK_MS), null, null, null, null];
@@ -117,75 +133,39 @@ export function createSlackPoller(
 		const items: TrackedInput[] = [];
 		let issue: SourcePollResult["issue"],
 			deferred = false;
-		const read = async (tool: string, args: Record<string, unknown>) => {
-			if (!(await store.reserveSlackRead(now()))) throw new SlackReadBudget();
-			context.signal.throwIfAborted();
-			return context.call(tool, args);
-		};
 		try {
 			let me: SlackIdentity | undefined;
+			const groupIds: string[] = [];
 			if (filtered) {
-				if (!identity || now() - identity.at >= 3_600_000) {
-					const value = parseSlackIdentity(await read("profile", { response_format: "detailed" }));
+				if (!identity || now() - identity.at >= IDENTITY_TTL_MS) {
+					const value = parseSlackIdentity(await context.call("profile", { response_format: "detailed" }));
 					identity = { value, at: now() };
 				}
 				me = identity.value;
-				const mentionState = cursor.mentions![key]!;
-				const term = mentionState[1];
-				const mention = term === 0 ? `<@${me.id}>` : `@${groups[term - 1]}`;
-				const args = {
-					keywords: term === 0 ? [] : [mention],
-					filters: `${/^[CDG][A-Z0-9]+$/.test(name) ? `in:<#${name}>` : `in:${name.replace(/^#/, "")}`}${term === 0 ? ` with:${mention}` : ""}`,
-					natural_language_query: "",
-					content_types: "messages",
-					include_context: false,
-					include_bots: true,
-					sort: "timestamp",
-					sort_dir: "asc",
-					after: oldest,
-					before: latest,
+				// History shows group mentions only by ID. Learn each handle's ID once, with one search in this channel.
+				const known = groups.length ? await store.slackGroups(groups) : {};
+				const unresolved = groups.find((handle) => {
+					const entry = known[handle];
+					return !entry || (entry.id === null && now() - entry.checkedAt >= GROUP_RETRY_MS);
+				});
+				if (unresolved) {
+					const id = await resolveGroup(context, name, unresolved);
+					await store.saveSlackGroup(unresolved, id, now());
+					known[unresolved] = { id, checkedAt: now() };
+				}
+				for (const handle of groups) if (known[handle]?.id) groupIds.push(known[handle].id!);
+			}
+			page = parseSlackPage(
+				await context.call("history", {
+					channel_id: name,
+					oldest,
+					latest,
 					...(next ? { cursor: next } : {}),
 					limit: SLACK_BATCH_SIZE,
 					response_format: "detailed",
-				};
-				const search = async (privateSearch: boolean) =>
-					parseSlackMentions(
-						await read(privateSearch ? "mentionsPrivate" : "mentions", {
-							...args,
-							...(privateSearch ? { channel_types: "public_channel,private_channel" } : {}),
-						}),
-						name,
-						context.config.slackChannelNames?.[name] ?? name.replace(/^#/, ""),
-						SLACK_BATCH_SIZE,
-					);
-				if (mentionState[2]) page = await search(true);
-				else {
-					// Public search omits private channels, including modern private channels with C IDs.
-					// Try it first, then remember the channel-scoped private-capable engine and its cursor.
-					let publicPage: typeof page | undefined;
-					try {
-						publicPage = await search(false);
-					} catch (error) {
-						if (!(error instanceof SourceToolError)) throw error;
-					}
-					if (publicPage && (publicPage.messages.length || publicPage.next || next)) page = publicPage;
-					else {
-						mentionState[2] = true;
-						page = await search(true);
-					}
-				}
-			} else
-				page = parseSlackPage(
-					await context.call("history", {
-						channel_id: name,
-						oldest,
-						latest,
-						...(next ? { cursor: next } : {}),
-						limit: SLACK_BATCH_SIZE,
-						response_format: "detailed",
-					}),
-					SLACK_BATCH_SIZE,
-				);
+				}),
+				SLACK_BATCH_SIZE,
+			);
 			if (/^[CDG][A-Z0-9]+$/.test(name) && name !== page.channel) throw new SlackFormatChanged();
 			if (!/^[CDG][A-Z0-9]+$/.test(name) && name.replace(/^#/, "") !== page.name) throw new SlackFormatChanged();
 			let classifierContext: SlackClassifierContext | undefined;
@@ -193,7 +173,7 @@ export function createSlackPoller(
 			const seen = new Set<string>();
 			for (const message of page.messages) {
 				context.signal.throwIfAborted();
-				if (filtered && !mentionsMe(message.text, me!, groups)) continue;
+				if (filtered && !mentionsMe(message.text, me!, groups, groupIds)) continue;
 				if (seen.has(message.threadTs)) continue;
 				seen.add(message.threadTs);
 				// The thread's text when it was read for classification, else the message's own: kept for search only.
@@ -204,21 +184,19 @@ export function createSlackPoller(
 					cached = active.has(threadKey) ? await active.get(threadKey)! : { state: "error" };
 				}
 				if (!cached) {
-					// Search discovers mentions in replies without re-reading every thread. Read the bounded full
-					// context only for a new qualifying parent, even when the mention lies beyond that prefix.
-					const thread =
-						filtered || message.replies
-							? parseSlackThread(
-									await (filtered ? read : context.call)("thread", {
-										channel_id: page.channel,
-										message_ts: message.threadTs,
-										limit: THREAD_LIMIT,
-										response_format: "detailed",
-									}),
-									message.threadTs,
-									THREAD_LIMIT,
-								)
-							: { messages: [message] };
+					// Read the bounded full context only for a new qualifying parent with replies.
+					const thread = message.replies
+						? parseSlackThread(
+								await context.call("thread", {
+									channel_id: page.channel,
+									message_ts: message.threadTs,
+									limit: THREAD_LIMIT,
+									response_format: "detailed",
+								}),
+								message.threadTs,
+								THREAD_LIMIT,
+							)
+						: { messages: [message] };
 					message.replies = thread.messages[0]!.replies;
 					searchText = thread.messages.map((reply) => reply.text).join("\n\n");
 					classifierContext ??= await classifierContextFor(store, context);
@@ -293,28 +271,49 @@ export function createSlackPoller(
 				});
 			}
 		} catch (error) {
-			if (error instanceof SlackReadBudget) {
-				cursor.channels[key] = [oldest, latest, next, pulledAt, null];
-				return { items, cursor: cursor as unknown as TrackingJson, issue: "slack_budget" };
-			}
 			// Only the tool's own refusal is channel-specific. Sign-in, limits and format changes stop the source.
 			if (!(error instanceof SourceToolError) || context.signal.aborted) throw error;
 			cursor.channels[key] = [oldest, savedLatest, next, pulledAt, now()];
 			return { items: [], cursor: cursor as unknown as TrackingJson, issue: "slack_channel" };
 		}
 		const pulled = now();
-		const nextTerm = filtered && !page.next && cursor.mentions![key]![1] < groups.length;
-		if (filtered && !deferred && !page.next) cursor.mentions![key]![1] = nextTerm ? cursor.mentions![key]![1] + 1 : 0;
 		cursor.channels[key] = deferred
 			? [oldest, latest, next, pulled, null]
-			: page.next || nextTerm
-				? [oldest, latest, page.next ?? null, pulled, null]
+			: page.next
+				? [oldest, latest, page.next, pulled, null]
 				: [latest, null, null, pulled, null];
 		return { items, cursor: cursor as unknown as TrackingJson, ...(issue ? { issue } : {}) };
 	};
 }
 function timestamp(now: number): string {
 	return `${Math.floor(now / 1000)}.000000`;
+}
+
+/** One channel-scoped search for a group handle. A refusal or unfamiliar result leaves it unresolved for a day. */
+async function resolveGroup(context: SourcePollContext, channel: string, handle: string): Promise<string | null> {
+	try {
+		const page = parseSlackMentions(
+			await context.call("mentionsPrivate", {
+				keywords: [`@${handle}`],
+				filters: /^[CDG][A-Z0-9]+$/.test(channel) ? `in:<#${channel}>` : `in:${channel.replace(/^#/, "")}`,
+				natural_language_query: "",
+				content_types: "messages",
+				include_context: false,
+				include_bots: true,
+				channel_types: "public_channel,private_channel",
+				limit: GROUP_SEARCH_LIMIT,
+				response_format: "detailed",
+			}),
+			channel,
+			channel.replace(/^#/, ""),
+			GROUP_SEARCH_LIMIT,
+		);
+		return dominantSlackGroup(page);
+	} catch (error) {
+		if (context.signal.aborted || !(error instanceof SourceToolError || error instanceof SlackFormatChanged))
+			throw error;
+		return null;
+	}
 }
 
 export type SlackMessageLink = { channel: string; ts: string; threadTs: string };

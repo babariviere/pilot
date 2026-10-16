@@ -34,6 +34,7 @@ import type { SlackWaitingWatcher } from "./slack-waiting.ts";
 import { type SourceMcpClient, SourceRateLimited, SourceSignInRequired, SourceToolError } from "./source-mcp.ts";
 import { SourceSignIns } from "./source-sign-in.ts";
 import type { SourceCheckpoint, TrackedInput, TrackedItemStore, TrackedQuery } from "./tracked-items.ts";
+import { SLACK_REACTION_RECHECK_MS } from "./tracked-items-disk.ts";
 import { lookupLinearTeams, lookupSlackChannels } from "./tracking-lookup.ts";
 import type { TriageGroomer } from "./triage-grooming.ts";
 
@@ -74,6 +75,8 @@ export class SourceRegistry {
 	slackAdder?: SlackAdder;
 	/** Reads waiting messages' threads after each Slack poll and resumes their chats. Set once chats can be resumed. */
 	slackWaiting?: SlackWaitingWatcher;
+	/** How long an open Slack item waits before its ✅ is checked again. Tests shorten it. */
+	slackReactionRecheckMs = SLACK_REACTION_RECHECK_MS;
 	private readonly pollers = new Map<TrackedKind, SourcePoller>();
 	private readonly running = new Map<string, Run>();
 	private readonly health = new Map<string, Health>();
@@ -324,8 +327,9 @@ export class SourceRegistry {
 					};
 					// Replies to waiting messages resume work, so they go before reaction checks in the shared budget.
 					const waiting = this.slackWaiting ? await this.slackWaiting(context) : false;
-					const budget = await refreshSlackReactions(this.items, context);
-					if (waiting || budget) result.issue = "slack_budget";
+					// A budget spent by reaction checks only defers them. New messages keep being read.
+					await refreshSlackReactions(this.items, context, this.slackReactionRecheckMs);
+					if (waiting) result.issue = "slack_budget";
 				}
 				const nextPollAt =
 					result.issue === "slack_budget"
@@ -341,7 +345,7 @@ export class SourceRegistry {
 						? {
 								error:
 									result.issue === "slack_budget"
-										? "Slack daily budget reached. Searches, remaining threads and reaction checks resume tomorrow."
+										? "Slack daily budget reached. New threads are classified again tomorrow."
 										: result.issue === "slack_channel"
 											? "A Slack channel could not be read. Check its access in project settings."
 											: "Some Slack threads could not be classified. Failed or interrupted attempts are cached and never retried.",

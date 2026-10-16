@@ -352,7 +352,6 @@ test("pinned SDK wrapper calls fixed dedicated tools, reuses OAuth and detects r
 		await client.call("slack", "history", { channel_id: "C1" }, signal);
 		await client.call("slack", "thread", { channel_id: "C1", message_ts: "1.2" }, signal);
 		await client.call("slack", "profile", { response_format: "detailed" }, signal);
-		await client.call("slack", "mentions", { filters: "in:<#C1>", keywords: ["<@U1>"] }, signal);
 		await client.call(
 			"slack",
 			"mentionsPrivate",
@@ -366,7 +365,6 @@ test("pinned SDK wrapper calls fixed dedicated tools, reuses OAuth and detects r
 				{ name: "slack_read_channel", arguments: { channel_id: "C1" } },
 				{ name: "slack_read_thread", arguments: { channel_id: "C1", message_ts: "1.2" } },
 				{ name: "slack_read_user_profile", arguments: { response_format: "detailed" } },
-				{ name: "slack_search_public", arguments: { filters: "in:<#C1>", keywords: ["<@U1>"] } },
 				{
 					name: "slack_search_public_and_private",
 					arguments: { filters: "in:<#C1>", keywords: ["<@U1>"], channel_types: "public_channel,private_channel" },

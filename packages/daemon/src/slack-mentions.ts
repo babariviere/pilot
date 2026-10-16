@@ -16,14 +16,31 @@ export function parseSlackIdentity(value: TrackingJson): SlackIdentity {
 	return { id, username };
 }
 
-/** Raw Slack markup and MCP-rendered handles. Broadcast mentions can never match. */
-export function mentionsMe(text: string, me: SlackIdentity, groups: string[]): boolean {
+/** Raw Slack markup and MCP-rendered handles. Broadcast mentions can never match. Channel history shows a group
+ * mention only by ID (<!subteam^S…>), so groups also match by their learned IDs. */
+export function mentionsMe(text: string, me: SlackIdentity, groups: string[], groupIds: string[] = []): boolean {
 	if (new RegExp(`<@${me.id}(?:\\|[^<>\\n]+)?>`).test(text)) return true;
+	for (const id of groupIds)
+		if (/^S[A-Z0-9]{2,39}$/.test(id) && new RegExp(`<(?:!subteam\\^|@)${id}(?:\\|[^<>\\n]+)?>`).test(text))
+			return true;
 	const handles = [me.username, ...groups].filter((handle) => !/^(here|channel|everyone)$/i.test(handle));
 	return handles.some((handle) => {
 		const escaped = handle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 		return new RegExp(`<!subteam\\^[A-Z0-9]+\\|@?${escaped}>|(?:^|[^\\w@./-])@${escaped}(?![\\w.-])`, "i").test(text);
 	});
+}
+
+/** The group a handle search found: the ID mentioned in the most results, at least twice and more than any other.
+ * Slack search matches the handle's words, so results can also mention similarly named groups. */
+export function dominantSlackGroup(page: SlackPage): string | null {
+	const counts = new Map<string, number>();
+	for (const message of page.messages)
+		for (const id of new Set(
+			[...message.text.matchAll(/<(?:!subteam\^|@)(S[A-Z0-9]{2,39})(?:\|[^<>\n]+)?>/g)].map((match) => match[1]!),
+		))
+			counts.set(id, (counts.get(id) ?? 0) + 1);
+	const [first, second] = [...counts].sort((a, b) => b[1] - a[1]);
+	return first && first[1] >= 2 && (!second || first[1] > second[1]) ? first[0] : null;
 }
 
 /** Dedicated Slack searches' detailed wire format. Reply permalinks identify the parent through thread_ts.

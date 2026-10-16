@@ -7,8 +7,9 @@ import type { TrackedItemStore } from "./tracked-items.ts";
 export async function refreshSlackReactions(
 	items: Pick<TrackedItemStore, "reserveSlackReactions" | "recordSlackReaction">,
 	context: SourcePollContext,
+	recheckMs?: number,
 ): Promise<boolean> {
-	const batch = await items.reserveSlackReactions(context.project.id, Date.now());
+	const batch = await items.reserveSlackReactions(context.project.id, Date.now(), recheckMs);
 	for (const { item, version } of batch.reads) {
 		context.signal.throwIfAborted();
 		if (!slackStartAllowed(context.config.slackChannels, item)) continue;
