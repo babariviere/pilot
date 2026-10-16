@@ -61,7 +61,6 @@ import {
 } from "@earendil-works/pi-durable";
 import type { DeliveryMode, SessionCommand, SessionJob } from "@pilot/protocol";
 import { type ActivityStream, InfrastructureChildren, inspectChildren, watchActivity } from "./activity.ts";
-import { anthropicToolErrors } from "./anthropic-tool-errors.ts";
 import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
 import { type ArtifactToolOptions, createArtifactTools } from "./artifact-tools.ts";
 import { askSettings, createAskSession } from "./ask-runtime.ts";
@@ -175,7 +174,7 @@ function metadata(details: unknown): NativeMetadata | undefined {
 function nativeResult(result: ToolExecutionResult): AgentToolResult<unknown> {
 	const meta = metadata(result.details);
 	return {
-		content: result.content ?? [],
+		content: result.output ?? [],
 		details: meta ? meta.details : result.details,
 		structuredContent: meta?.structuredContent,
 		isError: result.isError,
@@ -187,7 +186,7 @@ function durableResult(result: AgentToolResult<unknown>): ToolExecutionResult {
 	const details = json(result.details);
 	const structuredContent = json(result.structuredContent);
 	return {
-		content: result.content,
+		output: result.content,
 		...(result.isError === undefined ? {} : { isError: result.isError }),
 		...(structuredContent !== undefined
 			? {
@@ -719,8 +718,7 @@ export class NativeAdapter {
 		const lastUser = messages.filter((m) => m.role === "user").at(-1);
 		const before = new Set(this.session.sessionManager.getEntries().map((entry) => entry.id));
 		const result = await this.session.extensionRunner.emitBeforeAgentStart(
-			lastUser ? contentText(lastUser.content) : "",
-			undefined,
+			{ messageType: "user", prompt: lastUser ? contentText(lastUser.content) : "" },
 			this.session.extensionRunner.createCommandContext().getSystemPromptOptions(),
 		);
 		this.#forcedPrompt = result.systemPromptOptions.forceSystemPrompt;
@@ -1279,9 +1277,8 @@ export class NativeAdapter {
 				const value = await runner.emitBeforeProviderRequest(
 					(await options?.onPayload?.(payload, model)) ?? payload,
 				);
-				const compatible = anthropicToolErrors(value, model.api);
 				timing?.mark("payloadReadyMs");
-				return compatible;
+				return value;
 			},
 			transformHeaders: async (headers) =>
 				runner.emitBeforeProviderHeaders((await options?.transformHeaders?.(headers)) ?? headers),

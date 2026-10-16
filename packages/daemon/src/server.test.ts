@@ -559,6 +559,7 @@ test("chat sockets stream one session each, isolate overload and resume only the
 		type: "snapshot",
 		entries: [],
 		tools: [],
+		nestedTools: [],
 		compactions: [],
 		inbox: [],
 		agent: {},

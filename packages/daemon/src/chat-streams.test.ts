@@ -15,6 +15,7 @@ const snapshot = (count: number, text = "x") =>
 		type: "snapshot",
 		entries: Array.from({ length: count }, (_, i) => entry(i + 1, text)),
 		tools: [],
+		nestedTools: [],
 		compactions: [],
 		inbox: [],
 		agent: {},

@@ -109,6 +109,7 @@ function snapshot(live: Readonly<LiveState> | null, inbox: Readonly<InboxState> 
 		type: "snapshot",
 		entries: [],
 		tools: [],
+		nestedTools: [],
 		// Manual compactions run without a run; an idle kernel must not be parked under them.
 		// tx.doc returns drafts. Spreading the array retains element/retry Proxies that
 		// Node's advanced IPC cannot clone, and leaks them beyond the transaction.

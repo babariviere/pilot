@@ -694,7 +694,7 @@ test("a failed codemode script with partial images recovers from cold history th
 								content: Array<{
 									type: string;
 									is_error?: boolean;
-									content?: Array<{ type: string; text?: string }>;
+									content?: string | Array<{ type: string; text?: string }>;
 									source?: { data: string };
 								}>;
 							}>;
@@ -704,7 +704,8 @@ test("a failed codemode script with partial images recovers from cold history th
 						const blocks = body.messages.flatMap((message) => message.content);
 						const error = blocks.find((block) => block.type === "tool_result" && block.is_error);
 						assert.ok(error);
-						assert.ok(error.content!.every((part) => part.type === "text"));
+						// Pi sends text-only tool results as a string; an array must still be text only.
+						assert.ok(typeof error.content === "string" || error.content!.every((part) => part.type === "text"));
 						assert.match(JSON.stringify(error), /Missing second image/);
 						assert.equal(blocks.find((block) => block.type === "image")?.source?.data, png);
 						return new Response(

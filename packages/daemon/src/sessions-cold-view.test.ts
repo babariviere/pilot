@@ -20,6 +20,7 @@ const cold: AgentEvent = {
 	type: "snapshot",
 	entries: [],
 	tools: [],
+	nestedTools: [],
 	compactions: [],
 	inbox: [],
 	agent: { instructions: "persisted" },
