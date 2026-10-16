@@ -1233,7 +1233,15 @@ test("a smaller destination summarizes the entire raw transcript without reading
 			() =>
 				({ messages }: { messages: readonly import("@earendil-works/pi-ai").Message[] }) => {
 					const text = JSON.stringify(messages);
-					sources.push(text);
+					sources.push(
+						messages
+							.flatMap((message) =>
+								message.role === "user" && typeof message.content === "string"
+									? [message.content.split("<transcript>\n")[1]!.split("\n</transcript>")[0]!]
+									: [],
+							)
+							.join(""),
+					);
 					assert.doesNotMatch(text, /opaque|private thought/);
 					return fauxAssistantMessage("Neutral summary of goals, facts and completed work.");
 				},
