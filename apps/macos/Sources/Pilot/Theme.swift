@@ -430,6 +430,8 @@ extension Theme {
     /// - standard: items entering, leaving or reflowing a list, such as queued messages.
     enum Motion {
         static let quick = Animation.easeOut(duration: 0.15)
+        /// Newly streamed text fades in over this long, ease-out (Core Animation, opacity only).
+        static let streamedTextFade: CFTimeInterval = 0.24
 
         static func standard(reduceMotion: Bool) -> Animation {
             reduceMotion ? .easeInOut(duration: 0.15) : .snappy(duration: 0.28, extraBounce: 0.04)

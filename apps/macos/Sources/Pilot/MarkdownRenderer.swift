@@ -179,6 +179,9 @@ final class MarkdownRenderState: ObservableObject {
     @Published var blocks: [PreparedMarkdownBlock] = []
     @Published var highlighted: AttributedString?
     var source: String?
+    /// Blocks present when this message was first shown. Blocks after them appeared while it streamed, so their
+    /// first text fades in as well.
+    var restoredBlockCount: Int?
 
     init() {}
 
@@ -189,6 +192,7 @@ final class MarkdownRenderState: ObservableObject {
         if let blocks = PreparedMarkdownCache.shared.blocks(for: text) {
             self.blocks = blocks
             source = text
+            restoredBlockCount = blocks.count
         }
     }
 }

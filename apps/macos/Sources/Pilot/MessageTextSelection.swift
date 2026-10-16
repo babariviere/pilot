@@ -166,6 +166,12 @@ private struct MessageSelectionBlockKey: EnvironmentKey {
 private struct MessageSelectionColorKey: EnvironmentKey {
     static let defaultValue = NSColor.labelColor
 }
+private struct MessageTextFadeKey: EnvironmentKey {
+    static let defaultValue: NSColor? = nil
+}
+private struct MessageTextFadesInitialKey: EnvironmentKey {
+    static let defaultValue = false
+}
 extension EnvironmentValues {
     var messageTextSelection: MessageTextSelection? {
         get { self[MessageTextSelectionKey.self] }
@@ -178,6 +184,17 @@ extension EnvironmentValues {
     var messageSelectionColor: NSColor {
         get { self[MessageSelectionColorKey.self] }
         set { self[MessageSelectionColorKey.self] = newValue }
+    }
+    /// While a reply streams, the opaque colour behind its text: appended text fades in from it. Nil (restored
+    /// history, Reduce Motion, translucent backgrounds) shows text at once.
+    var messageTextFade: NSColor? {
+        get { self[MessageTextFadeKey.self] }
+        set { self[MessageTextFadeKey.self] = newValue }
+    }
+    /// A block that appeared while its reply streamed: its first text fades in too.
+    var messageTextFadesInitial: Bool {
+        get { self[MessageTextFadesInitialKey.self] }
+        set { self[MessageTextFadesInitialKey.self] = newValue }
     }
 }
 
@@ -196,6 +213,8 @@ struct SelectableMessageText: NSViewRepresentable {
     @Environment(\.messageTextSelection) private var selection
     @Environment(\.messageSelectionBlock) private var block
     @Environment(\.messageSelectionColor) private var defaultColor
+    @Environment(\.messageTextFade) private var fade
+    @Environment(\.messageTextFadesInitial) private var fadesInitial
 
     func makeNSView(context: Context) -> MessageSelectionTextView {
         let view = MessageSelectionTextView.make()
@@ -229,8 +248,12 @@ struct SelectableMessageText: NSViewRepresentable {
                 let attributed = Self.attributed(text, style: style)
                 // Same style: edit only from the first changed character, so TextKit keeps the layout before it.
                 // A streamed block mostly grows at its end; replacing the whole storage re-laid out every line.
-                let appended = view.style == style && view.textStorage.map { view.replaceChangedTail($0, with: attributed) } == true
-                if !appended { view.textStorage?.setAttributedString(attributed) }
+                let first = view.content == nil
+                let start = view.style == style ? view.textStorage.flatMap { view.replaceChangedTail($0, with: attributed) } : nil
+                if start == nil { view.textStorage?.setAttributedString(attributed) }
+                if let fade, let from = start ?? (first && fadesInitial ? 0 : nil) {
+                    view.fadeIn(NSRange(location: from, length: attributed.length - from), from: fade)
+                }
                 view.content = text
                 view.style = style
                 view.updateLinkHover(at: nil)
@@ -367,17 +390,89 @@ final class MessageSelectionTextView: NSTextView {
         measurements.removeAll(keepingCapacity: true)
     }
 
-    /// Replaces only the part of `storage` that differs from `next`, by characters and attributes. Returns false
-    /// when nothing before the end can be kept, so a full replacement costs the same.
-    func replaceChangedTail(_ storage: NSTextStorage, with next: NSAttributedString) -> Bool {
+    /// Replaces only the part of `storage` that differs from `next`, by characters and attributes, and returns where
+    /// the edit starts. Returns nil when nothing before the end can be kept, so a full replacement costs the same.
+    func replaceChangedTail(_ storage: NSTextStorage, with next: NSAttributedString) -> Int? {
         let start = Self.firstDifference(storage, next)
-        guard start > 0 else { return false }
+        guard start > 0 else { return nil }
         storage.beginEditing()
         storage.replaceCharacters(in: NSRange(location: start, length: storage.length - start),
                                   with: next.attributedSubstring(from: NSRange(location: start, length: next.length - start)))
         storage.endEditing()
         editedInPlace = true
-        return true
+        return start
+    }
+
+    // MARK: Streamed text fade-in
+
+    /// Ranges waiting for their first draw, when their glyphs have their final place.
+    private var pendingFades: [(range: NSRange, color: NSColor)] = []
+    private var veil: StreamVeilView?
+
+    /// Fades `range` in from `color`, the opaque background behind this text: a layer of that colour covers the new
+    /// glyphs and Core Animation fades it out. Text, layout and height are untouched; nothing redraws per frame.
+    func fadeIn(_ range: NSRange, from color: NSColor) {
+        guard range.length > 0 else { return }
+        pendingFades.append((range, color))
+        needsDisplay = true
+    }
+
+    override func viewWillDraw() {
+        super.viewWillDraw()
+        showPendingFades()
+    }
+
+    /// Number of veil layers still fading, for tests.
+    var fadingVeilCount: Int { veil?.layer?.sublayers?.count ?? 0 }
+
+    private func showPendingFades() {
+        guard !pendingFades.isEmpty else { return }
+        let fades = pendingFades
+        pendingFades = []
+        guard window != nil, frame.width > 0, let layout = layoutManager, let container = textContainer,
+              let storage = textStorage else { return }
+        let veil = self.veil ?? {
+            let view = StreamVeilView(frame: bounds)
+            addSubview(view)
+            self.veil = view
+            return view
+        }()
+        veil.frame = bounds
+        guard let host = veil.layer else { return }
+        var covers: [CALayer] = []
+        let origin = textContainerOrigin
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for fade in fades {
+            let range = NSIntersectionRange(fade.range, NSRange(location: 0, length: storage.length))
+            guard range.length > 0 else { continue }
+            var color = fade.color.cgColor
+            effectiveAppearance.performAsCurrentDrawingAppearance { color = fade.color.cgColor }
+            let glyphs = layout.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            layout.enumerateEnclosingRects(forGlyphRange: glyphs, withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+                                           in: container) { rect, _ in
+                let cover = CALayer()
+                // A point of overlap hides antialiased edges of the new glyphs.
+                cover.frame = veil.convert(rect.offsetBy(dx: origin.x, dy: origin.y), from: self).insetBy(dx: -1, dy: 0)
+                cover.backgroundColor = color
+                host.addSublayer(cover)
+                covers.append(cover)
+            }
+        }
+        CATransaction.commit()
+        guard !covers.isEmpty else { return }
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { covers.forEach { $0.removeFromSuperlayer() } }
+        for cover in covers {
+            let animation = CABasicAnimation(keyPath: "opacity")
+            animation.fromValue = 1
+            animation.toValue = 0
+            animation.duration = Theme.Motion.streamedTextFade
+            animation.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            cover.opacity = 0
+            cover.add(animation, forKey: "fade")
+        }
+        CATransaction.commit()
     }
 
     /// UTF-16 offset of the first character whose text or attributes differ.
@@ -593,6 +688,21 @@ final class MessageSelectionTextView: NSTextView {
         selectionOwner?.select(from: .init(key: selectionKey, offset: range.location),
                                to: .init(key: selectionKey, offset: NSMaxRange(range)))
     }
+}
+
+/// Holds the fade-in veils above a text view's glyphs. Never hit-tested or read by VoiceOver.
+final class StreamVeilView: NSView {
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        autoresizingMask = [.width, .height]
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func isAccessibilityElement() -> Bool { false }
 }
 
 /// Paints every selected region of a message in the same color: active while any of its regions

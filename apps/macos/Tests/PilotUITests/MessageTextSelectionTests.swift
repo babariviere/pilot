@@ -310,7 +310,7 @@ struct MessageTextSelectionTests {
         for index in 0 ..< 30 {
             text += "More **words** \(index). "
             next = SelectableMessageText.attributed(AttributedString(text), style: style)
-            #expect(view.replaceChangedTail(storage, with: next))
+            #expect(view.replaceChangedTail(storage, with: next) != nil)
             #expect(storage.isEqual(to: next))
         }
         #expect(view.selectedRange() == NSRange(location: 2, length: 7))
@@ -323,6 +323,27 @@ struct MessageTextSelectionTests {
         let probed = view.measure(width: 500, unwrapped: false)
         #expect(view.textContainer?.size.width == 320)
         #expect(probed == fresh.measure(width: 500, unwrapped: false))
+    }
+
+    @Test func streamedTextFadesInUnderAVeilWithoutChangingLayout() {
+        let view = MessageSelectionTextView.make()
+        view.textContainer?.lineFragmentPadding = 0
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 200),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView?.addSubview(view)
+        view.setFrameSize(NSSize(width: 320, height: 120))
+        let text = String(repeating: "Streamed words keep arriving. ", count: 8)
+        view.textStorage?.setAttributedString(NSAttributedString(string: text, attributes: [.font: NSFont.systemFont(ofSize: 14)]))
+        let before = view.measure(width: 320, unwrapped: false)
+        view.fadeIn(NSRange(location: 60, length: text.utf16.count - 60), from: .white)
+        #expect(view.fadingVeilCount == 0, "veils wait for the draw that shows the new glyphs")
+        view.display()
+        #expect(view.fadingVeilCount > 1, "one veil per line the new text covers")
+        #expect(view.string == text)
+        view.invalidateMeasurements()
+        #expect(view.measure(width: 320, unwrapped: false) == before)
+        window.close()
     }
 
     @Test func tailEditsStartAtTheFirstChangedTextOrStyle() {
