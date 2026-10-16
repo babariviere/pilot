@@ -493,6 +493,28 @@ To opt in to removing only the eyes reaction Pilot successfully added, create a 
 ```
 
 Names above are placeholders. Use exact names from your own global `mcp.json`; omit `dispatcher` for a direct tool.
+For headless removal, use a separate MCP connection authenticated with an API key scoped only to the removal
+tool. Keep any general-purpose connection separate so the narrow key does not restrict its other tools.
+Pi's global `mcp.json` supports a Bearer header, with the secret supplied locally rather than stored in the file:
+
+```json
+{
+  "mcpServers": {
+    "my-slack-proxy": {
+      "url": "https://mcp.example.com/mcp",
+      "headers": { "Authorization": "Bearer ${SLACK_REACTION_API_KEY}" },
+      "exposure": "hidden",
+      "toolExposure": { "dispatch": "codemode" }
+    }
+  }
+}
+```
+
+Supply the variable to the daemon process as well as interactive pi, or use pi's `!command` header support to
+read the key from a local secret store. Never put keys in project settings, committed files or chat messages.
+The explicit Authorization header uses the key instead of OAuth: a revoked or rejected key fails without
+opening a browser or falling back to stored OAuth credentials. Tool-scoped keys enforce access on the server;
+`toolExposure` only controls model visibility. No server-specific API or credentials store is added to Pilot.
 The inner tool must accept `{channel, ts, name}` (`name` is always `eyes`, without colons) and return JSON
 `{ok: true}` on success, via MCP structured content or one JSON text block. The configured server must use the
 same Slack user as the dedicated server: Slack only lets users remove their own reactions.
