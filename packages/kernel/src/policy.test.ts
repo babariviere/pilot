@@ -91,6 +91,13 @@ test("every mission role separates specs, progress, decisions and actionable com
 	}
 });
 
+test("coordinators reference member chats with the links returned by mission tools", () => {
+	const prompt = missionPrompt({ ...mission, coordinator: "self" });
+	assert.match(prompt, /\[chat name\]\(chatUrl\)/);
+	assert.match(prompt, /chatUrl returned by mission status or start/);
+	assert.match(prompt, /Links open the chat inside Pilot/);
+});
+
 test("the coordinator prompt allows chat starts only on request", () => {
 	const prompt = missionPrompt({ ...mission, coordinator: "self" });
 	assert.match(prompt, /Start chats only when the user asks/);

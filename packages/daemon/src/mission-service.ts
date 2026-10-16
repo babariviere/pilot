@@ -748,7 +748,11 @@ export class MissionService {
 					throw new Conflict("Only the mission coordinator can use start");
 				// Raw session usage includes provider errors and is not an agent-facing contract.
 				const { usage: _usage, ...summary } = started;
-				return { ...summary, subscriptionUsage: this.sessions.subscriptionUsageSnapshot() };
+				return {
+					...summary,
+					chatUrl: `pilot://chat/${started.id}`,
+					subscriptionUsage: this.sessions.subscriptionUsageSnapshot(),
+				};
 			}
 			case "send": {
 				if (typeof args.targetSessionId !== "string" || !args.targetSessionId.trim())
@@ -784,6 +788,7 @@ export class MissionService {
 					const prs = member.pullRequests ?? (member.pullRequest ? [member.pullRequest] : []);
 					return {
 						id: member.id,
+						chatUrl: `pilot://chat/${member.id}`,
 						title: member.title,
 						coordinator: member.id === mission.coordinatorSessionId,
 						state:

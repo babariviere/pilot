@@ -32,6 +32,35 @@ test("mission drafts name the deliverables without repeating comment policy", ()
 	assert.doesNotMatch(message, /comments|resolve|reminders|decision ledger/);
 });
 
+test("coordinator start and status return navigable chat links without starting status targets", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Delivery",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	const task = f.store.addTask(mission.id, { title: "Implementation" });
+	const started = (await f.service.call(lead.id, "start", { id: task.id })) as { id: string; chatUrl: string };
+	assert.equal(started.chatUrl, `pilot://chat/${started.id}`);
+	assert.equal(new URL(started.chatUrl).pathname, `/${started.id}`);
+	const status = (await f.service.call(lead.id, "status", {})) as { members: { id: string; chatUrl: string }[] };
+	assert.equal(status.members.find((member) => member.id === started.id)?.chatUrl, started.chatUrl);
+	assert.equal(status.members.find((member) => member.id === lead.id)?.chatUrl, `pilot://chat/${lead.id}`);
+	await until(() => !f.sessions["starting"].has(started.id));
+	await f.sessions.stop(started.id);
+	await f.sessions.archive(started.id);
+	const spawn = t.mock.method(f.sessions, "spawn", async () => assert.fail("Reading status must not spawn a chat"));
+	const targeted = (await f.service.call(lead.id, "status", { targetSessionId: started.id })) as {
+		member: { id: string; chatUrl: string; archivedAt: number };
+	};
+	assert.equal(targeted.member.chatUrl, started.chatUrl);
+	assert.equal(targeted.member.id, started.id);
+	assert.ok(targeted.member.archivedAt);
+	assert.equal(spawn.mock.calls.length, 0);
+});
+
 test("gated starts retain preferred model, thinking and app start options together", async (t) => {
 	const f = await fixture(t);
 	const { id } = f.store.create({ projectId: f.project.id, title: "Combined" });
