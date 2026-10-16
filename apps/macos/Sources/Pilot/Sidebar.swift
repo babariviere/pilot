@@ -14,6 +14,9 @@ struct SessionSidebar: View {
 
     @FocusState private var searchFocused: Bool
     @FocusState private var chatListFocused: Bool
+    /// Lines the Missions header's + up with the compose button and Inbox badge above it. The header stays full
+    /// width under the scroll bar, so without this inset the + sat beneath it and lost clicks.
+    private static let missionsAddTrailingInset: CGFloat = 16
 
     var body: some View {
         let known = Set(client.projects.map(\.id))
@@ -268,6 +271,7 @@ struct SessionSidebar: View {
                         .help("New mission…")
                         .accessibilityLabel("New mission")
                 }
+                .padding(.trailing, Self.missionsAddTrailingInset)
                 .contextMenu {
                     Button("New Mission…") { model.missionSheet = .create(projectId: projectId) }
                 }
