@@ -32,7 +32,8 @@ let package = Package(
             ],
             path: "Sources/Pilot",
             resources: [.copy("Resources/Octicons-LICENSE.txt"), .copy("Resources/CoastScene.png"),
-                        .copy("Resources/HomeSky.png")],
+                        .copy("Resources/HomeSky.png"), .copy("Resources/HomeSkyNight.png"),
+                        .copy("Resources/HomeScenes-CREDITS.txt")],
             linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]
         ),
         .testTarget(name: "PilotCoreTests", dependencies: ["PilotCore"], path: "Tests/PilotCoreTests"),

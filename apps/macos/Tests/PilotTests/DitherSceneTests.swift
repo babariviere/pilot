@@ -25,21 +25,29 @@ import Testing
     #expect(DitherSceneRenderer.render(source, width: 0, height: 10, fade: 0.3) == nil)
 }
 
-@Test func homeSkyShipsWithTheAppAndRendersSoftenedTowardTheHorizon() throws {
-    let url = try #require(DitherSceneRenderer.sourceURL(.homeSky,
-                                                         main: Bundle(url: Bundle.module.bundleURL.deletingLastPathComponent())!))
+@Test func homeOceanSelectsASeparateNightImage() {
+    #expect(DitherSceneSource.homeSky.resolved(dark: false) == .homeSky)
+    #expect(DitherSceneSource.homeSky.resolved(dark: true) == .homeSkyNight)
+    #expect(DitherSceneSource.coast.resolved(dark: true) == .coast)
+    #expect(DitherSceneSource.coast.tone.dimsInDark)
+}
+
+@Test(arguments: [DitherSceneSource.homeSky, .homeSkyNight])
+func homeOceanImagesShipAndKeepTheirOwnColours(scene: DitherSceneSource) throws {
+    let buildDirectory = try #require(Bundle(url: Bundle.module.bundleURL.deletingLastPathComponent()))
+    let bundled = try #require(Bundle.module.url(forResource: scene.rawValue, withExtension: "png"))
+    let url = try #require(DitherSceneRenderer.sourceURL(scene, main: buildDirectory))
+    #expect(url.standardizedFileURL == bundled.standardizedFileURL)
     let source = try #require(DitherSceneRenderer.loadSource(url: url))
-    #expect(source.width == 640 && source.height == 360)
-    let plain = try #require(DitherSceneRenderer.render(source, width: 160, height: 60, fade: 0.45))
-    let soft = try #require(DitherSceneRenderer.render(source, width: 160, height: 60, fade: 0.45,
-                                                       tone: DitherSceneSource.homeSky.tone))
-    // Mean saturation of the opaque top rows: softening must lower it.
-    func saturation(_ image: CGImage) -> Double {
-        let bitmap = NSBitmapImageRep(cgImage: image)
-        var sum = 0.0
-        for y in 0 ..< 20 { for x in 0 ..< 160 { sum += Double(bitmap.colorAt(x: x, y: y)?.saturationComponent ?? 0) } }
-        return sum / 3200
-    }
-    #expect(saturation(soft) < saturation(plain))
-    #expect(soft.width == 160 && soft.height == 60)
+    #expect(source.width == 1280 && source.height == 720)
+    #expect(scene.tone.saturation == 1 && scene.tone.lift == 0)
+    #expect(!scene.tone.dimsInDark)
+    let light = try #require(DitherSceneRenderer.render(source, width: 160, height: 60, fade: 0.45,
+                                                        tone: scene.tone))
+    let dark = try #require(DitherSceneRenderer.render(source, width: 160, height: 60, fade: 0.45,
+                                                       tone: scene.tone, dark: true))
+    let lightData = try #require(light.dataProvider?.data)
+    let darkData = try #require(dark.dataProvider?.data)
+    #expect(lightData as Data == darkData as Data, "appearance must not darken an ocean photo")
+    #expect(dark.width == 160 && dark.height == 60)
 }

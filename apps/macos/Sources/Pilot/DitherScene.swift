@@ -6,7 +6,7 @@ import SwiftUI
 /// page at its foot. Rendered off the main actor once per size and cached. Falls back to the procedural
 /// `DitherSky` when the image is missing.
 ///
-/// Use it for a large, restful moment: the calm coast for an empty Inbox, the softened clouds for Home's sky.
+/// Use it for a large, restful moment: the coast for an empty Inbox, the day/night ocean for Home.
 struct DitherScene: View {
     var source: DitherSceneSource = .coast
     /// The coast's default is finer than the Home sky, so the painting keeps its detail while its pixels stay hard.
@@ -20,7 +20,8 @@ struct DitherScene: View {
         GeometryReader { geometry in
             let width = max(1, Int(geometry.size.width / cell))
             let height = max(1, Int(geometry.size.height / cell))
-            let key = DitherSceneKey(source: source, width: width, height: height, fade: fade, dark: colorScheme == .dark)
+            let dark = colorScheme == .dark
+            let key = DitherSceneKey(source: source.resolved(dark: dark), width: width, height: height, fade: fade, dark: dark)
             ZStack(alignment: .topLeading) {
                 if scene.missing {
                     DitherSky(cell: cell, fade: fade)
@@ -43,14 +44,19 @@ struct DitherScene: View {
 enum DitherSceneSource: String, Hashable, Sendable {
     /// A painted calm coast (`Resources/CoastScene.png`), in full colour. The empty Inbox.
     case coast = "CoastScene"
-    /// A photo of light clouds (`Resources/HomeSky.png`, free to use), softened toward the sky's horizon blue so it
-    /// sits quietly behind Home's composer.
+    /// Clouds over the daytime ocean. Resolves to a separate moonlit image in dark appearance.
     case homeSky = "HomeSky"
+    case homeSkyNight = "HomeSkyNight"
+
+    func resolved(dark: Bool) -> Self {
+        self == .homeSky && dark ? .homeSkyNight : self
+    }
 
     var tone: DitherSceneTone {
         switch self {
         case .coast: DitherSceneTone()
-        case .homeSky: DitherSceneTone(saturation: 0.8, lift: 0.3, levels: 12)
+        // Keep both ocean images' own colours, including the night image's moon and reflection.
+        case .homeSky, .homeSkyNight: DitherSceneTone(levels: 12, dimsInDark: false)
         }
     }
 }
@@ -61,6 +67,7 @@ struct DitherSceneTone: Hashable, Sendable {
     var saturation: Double = 1
     var lift: Double = 0
     var levels: Double = 16
+    var dimsInDark = true
     static let horizon = (0.84, 0.91, 0.98)
     /// Dark appearance: scenes dim toward this night blue, so they read as dusk on the dark page instead of a bright
     /// band. `DitherSky` uses the same.
@@ -222,7 +229,7 @@ enum DitherSceneRenderer {
                     color = (color.0 + (horizon.0 - color.0) * tone.lift, color.1 + (horizon.1 - color.1) * tone.lift,
                              color.2 + (horizon.2 - color.2) * tone.lift)
                 }
-                if dark { color = DitherSceneTone.dusk(color) }
+                if dark, tone.dimsInDark { color = DitherSceneTone.dusk(color) }
                 let threshold = bayer[(y & 7) * 8 + (x & 7)]
                 let lightness = (color.0 + color.1 + color.2) / 3
                 let quantized = floor(lightness * levels + threshold) / levels
