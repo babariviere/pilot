@@ -8,6 +8,7 @@ import Testing
 func sidebarCoordinatorShortcutsSelectEvenWhenChatIsNotVisible(inMenu: Bool, chatState: String) throws {
     _ = NSApplication.shared
     let model = AppModel()
+    try model.registerLocal(HostRef(hostId: "local", daemonId: "daemon", lineageId: "lineage"))
     // Opening must not depend on finding a member in the visible sidebar list.
     let chat = SessionSummary(id: "hidden-chat", title: "Hidden", cwd: "/repository",
                               createdAt: 1, updatedAt: 1, state: "idle",

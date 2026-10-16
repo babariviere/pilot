@@ -62,6 +62,7 @@ func sidebarChatsSelectByClickAndArrowKeysSkippingGroupHeaders() throws {
     let defaults = try #require(UserDefaults(suiteName: suite))
     defer { defaults.removePersistentDomain(forName: suite) }
     let model = AppModel(projectFolderDefaults: defaults)
+    try model.registerLocal(HostRef(hostId: "local", daemonId: "daemon", lineageId: "lineage"))
     let project = Project(id: "project", name: "Repository", path: "/repository", createdAt: 1)
     let first = SessionSummary(id: "first", title: "First session", cwd: project.path, projectId: project.id,
                                createdAt: 1, updatedAt: 3, state: "idle")
