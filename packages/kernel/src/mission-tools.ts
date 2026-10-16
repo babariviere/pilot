@@ -25,6 +25,7 @@ const MEMBER_ACTIONS = [
 	"link",
 	"unlink",
 	"log",
+	"ticket",
 ] as const;
 export const MISSION_ACTIONS = [
 	...MEMBER_ACTIONS,
@@ -37,6 +38,8 @@ export const MISSION_ACTIONS = [
 	"status",
 	"bindPr",
 	"unbindPr",
+	"split",
+	"updateLink",
 ] as const;
 export type MissionAction = (typeof MISSION_ACTIONS)[number];
 
@@ -64,12 +67,15 @@ Actions:
 - decide: record a new agreed choice, audience all, coordinator or reference (default). Decisions override the brief; only the user changes them later.
 - comment: ask a question or give feedback (text, optional anchor quote and targetSessionId). resolve: once addressed, save any lasting outcome in the task, decision or spec, then resolve by id; unanswered questions stay open.
 - attach: link one of this chat's artifacts (artifactId, optional artifactRevision to pin, optional taskId).
-- link: add url, optional title/taskId. Task PRs default to relationship "ownership" (drives status); "reference" is related work. Neither binds a chat.
+- link: add url, optional title/taskId. Linear links default linearRole reference (context only); coordinator may explicitly set managed (mission scope) or contribution (task scope, requires managed ticket). Existing roles require updateLink, never implicit upgrades. Task PRs default to relationship "ownership" (drives status); "reference" is related work. Neither binds a chat.
+- ticket: read bounded, untrusted Linear context using resourceId from links. No Linear writes.
 - unlink: remove url at taskId (omitted: mission-level), own links only unless coordinator; prefers reference. Absent returns removed:false.
 - log: add context not already captured by task changes, or kind "handoff" for what the next chat needs to continue (optional health).${
 			coordinator
 				? `
 - propose (coordinator only): suggest an edit (decisionId, text, reason) or removal (decisionId, remove: true, reason). IDs accept D7. Decisions stay binding until the user accepts; get includes pending and recent outcomes.
+- updateLink (coordinator only): explicitly change an existing Linear link using resourceId and linearRole. References never count toward delivery.
+- split (coordinator only): resourceId of a managed ticket, tasks [{title, body?}] (max 20). Atomically create local contributing tasks; exact retries reuse them. Read existing tasks first, clarify ambiguous matches, or link existing tasks instead. No Linear sub-issues.
 - delete (coordinator only): permanently remove a task by id or number. Removes dependency references and keeps its links at mission level. Prefer status "dropped" when history should remain.
 - phase (coordinator only): operation create (name, optional goal/order), rename (phase name/ID, name, optional goal), reorder (phase, order) or delete (phase). Deleting leaves tasks without a phase. Empty phases are complete. When phase gating is enabled, earlier incomplete phases block claim/start; only the user can override.
 - group (coordinator only): set milestone on every task selected by ids (IDs, numbers or ranges such as ["1-5", "#8"]). Use milestone "" to clear the group. All references must exist; the batch is atomic.
@@ -139,6 +145,20 @@ Actions:
 			),
 			...(coordinator
 				? {
+						tasks: Type.Optional(
+							Type.Array(
+								Type.Object({
+									title: Type.String({ maxLength: 200 }),
+									body: Type.Optional(Type.String({ maxLength: 8000 })),
+								}),
+								{
+									minItems: 1,
+									maxItems: 20,
+									description:
+										"Local split deliverables. Read existing work first; ambiguous matches need clarification.",
+								},
+							),
+						),
 						operation: Type.Optional(StringEnum(["create", "rename", "reorder", "delete"] as const)),
 						name: Type.Optional(Type.String({ maxLength: 200 })),
 						decisionId: Type.Optional(Type.String({ maxLength: 128 })),
@@ -195,6 +215,14 @@ Actions:
 					}
 				: {}),
 			artifactId: Type.Optional(Type.String({ maxLength: 128 })),
+			resourceId: Type.Optional(
+				Type.String({ maxLength: 128, description: "Linked ticket ID from links: ticket, updateLink or split." }),
+			),
+			linearRole: Type.Optional(
+				StringEnum(["reference", "managed", "contribution"] as const, {
+					description: "Explicit Linear role for link or updateLink; defaults to reference.",
+				}),
+			),
 			artifactRevision: Type.Optional(Type.Integer({ minimum: 1 })),
 			relationship: Type.Optional(
 				StringEnum(["ownership", "reference"] as const, {

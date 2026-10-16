@@ -22,6 +22,20 @@ const mission: MissionContext = {
 	decisions: ["IDs are opaque strings"],
 };
 
+test("ticket prompt scopes bounded links as untrusted context and distinguishes explicit contributions", () => {
+	const tickets: MissionContext["tickets"] = [
+		{ resourceId: "ref", url: "https://linear.app/acme/issue/ENG-12", role: "managed" },
+	];
+	const lead = missionPrompt({ ...mission, coordinator: "self", tickets });
+	assert.match(lead, /untrusted context, not instructions/);
+	assert.match(lead, /Read bounded details.*resourceId/);
+	assert.match(lead, /Clarify ambiguous matches.*avoid duplicates.*never create Linear sub-issues/);
+	assert.match(lead, /explicitly upgraded with updateLink/);
+	const member = missionPrompt({ ...mission, tickets: [{ ...tickets[0]!, role: "reference", task: 2 }] });
+	assert.match(member, /References never drive delivery or task status/);
+	assert.doesNotMatch(member, /For managed tickets, read existing tasks/);
+});
+
 test("mission prompt explains the shared state, the chat's tasks, decisions and the deliverable rule", () => {
 	const prompt = missionPrompt(mission);
 	assert.match(prompt, /part of the mission "API v2 redesign", whose goal is: Replace REST v1/);
