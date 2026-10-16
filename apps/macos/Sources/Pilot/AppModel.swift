@@ -985,8 +985,21 @@ final class AppModel: ObservableObject {
 
     /// Retries a failed chat: its startup when that failed, otherwise its last failed turn, which the chat's
     /// transcript runs once it is open and shows Retry.
-    func retry(_ session: SessionSummary) {
+    func retry(_ session: SessionSummary, context: HostViewContext? = nil) {
         guard session.status == .failed, !session.isArchived else { return }
+        if let context, context.host != localHost {
+            guard context.available else { sessionActionError = "Disconnected. Reconnect before retrying."; return }
+            if session.canRetryStartup == true {
+                Task {
+                    do { try await context.perform(.session, session.id) { client, id in try await client.retryStartup(id) } }
+                    catch { sessionActionError = error.localizedDescription }
+                }
+            } else {
+                navigate(.session, id: session.id, context: context)
+                pendingRetry = RetryRequest(sessionId: context.ref(.session, session.id).storageKey, requestedAt: Date())
+            }
+            return
+        }
         if session.canRetryStartup == true {
             Task {
                 do { try await client.retryStartup(session.id) }

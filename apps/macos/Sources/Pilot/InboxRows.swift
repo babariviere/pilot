@@ -187,6 +187,8 @@ struct InboxPullRequestMark: View {
 /// A pull request ready to merge. Clicking opens it on GitHub, where the user merges it (Pilot never merges); the
 /// context menu and an accessibility action open its chat. The second line reads like the chat's sidebar row.
 struct InboxReadyToMergeRow: View {
+    @Environment(\.hostViewContext) private var hostContext
+    @EndpointClient private var endpoint
     let pr: DashboardPullRequest
     /// The project name, when the list mixes projects.
     var context: String?
@@ -194,8 +196,8 @@ struct InboxReadyToMergeRow: View {
 
     var body: some View {
         let url = InboxLinks.browserURL(pr.url)
-        let session = model.client.session(pr.sessionId)
-        let missionTitle = pr.missionId.flatMap { model.client.mission($0)?.title }
+        let session = endpoint.session(pr.sessionId)
+        let missionTitle = pr.missionId.flatMap { endpoint.mission($0)?.title }
         let detail = InboxRowDetail(projectName: context, session: session, missionTitle: missionTitle,
                                     pullRequest: pr)
         Button { if let url { BrowserLinkOpener.shared.open(url) } else { openChat() } } label: {
@@ -222,7 +224,7 @@ struct InboxReadyToMergeRow: View {
         }
     }
 
-    private func openChat() { model.selectedSessionId = pr.sessionId }
+    private func openChat() { model.navigate(.session, id: pr.sessionId, context: hostContext) }
 }
 
 enum InboxLinks {

@@ -1463,6 +1463,8 @@ private struct SlackStatusText: View {
 /// The selected message: where it came from, its summary, the reclassify pickers and actions. Start Chat is
 /// the one primary action.
 struct SlackTriageInspector: View {
+    @Environment(\.hostViewContext) private var hostContext
+    @EndpointClient private var endpoint
     let item: TrackedItem?
     let labels: [SlackProjectLabel]
     let now: Date
@@ -1487,7 +1489,7 @@ struct SlackTriageInspector: View {
 
     private func details(_ item: TrackedItem) -> some View {
         let triage = SlackTriageText.triage(item)
-        let client = model.client
+        let client = endpoint
         let link = TrackedItemText.linkSummary(
             sessionIds: item.sessionIds ?? item.sessionId.map { [$0] } ?? [],
             missionIds: item.missionIds ?? item.missionId.map { [$0] } ?? [],
@@ -1626,8 +1628,8 @@ struct SlackTriageInspector: View {
 
     private func open(_ target: TrackedItemText.LinkSummary.Target) {
         switch target {
-        case let .chat(id): model.selectedSessionId = id
-        case let .mission(id): model.openMission(id)
+        case let .chat(id): model.navigate(.session, id: id, context: hostContext)
+        case let .mission(id): model.openMission(id, context: hostContext)
         }
     }
 }

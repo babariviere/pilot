@@ -88,3 +88,23 @@ import Testing
     catch { #expect(error as? HostRoutingError == .disconnected) }
     #expect(!called)
 }
+
+@Test @MainActor func remotePaletteConfirmationAndOfflineRetryKeepTheOriginalHost() throws {
+    let app = AppModel()
+    let local = HostRef(hostId: "local", daemonId: "a", lineageId: "1")
+    let remote = HostRef(hostId: "box", daemonId: "b", lineageId: "2")
+    try app.registerLocal(local)
+    let ref = HostResourceRef(host: remote, kind: .session, localId: "same")
+    let pr = SessionPullRequest(number: 1, url: "https://github.com/o/r/pull/1", title: "PR", state: .open, checkedAt: 1)
+    let session = SessionSummary(id: "same", title: "Remote", cwd: "/repo", projectId: "p", createdAt: 0, updatedAt: 0, state: "failed", pullRequests: [pr])
+    let catalog = CommandPaletteCatalog(model: app, openSettings: {}, openKeyboardShortcuts: {})
+    let actions = catalog.chatActions(session, reference: ref)
+    let merge = try #require(actions.first { $0.item.id.contains("merge-pr") })
+    merge.perform()
+    #expect(app.mergingPullRequest?.reference == ref)
+    #expect(app.mergingPullRequest?.sessionId == "same")
+    let retry = try #require(actions.first { $0.item.id.contains("action:retry:") })
+    retry.perform()
+    #expect(app.pendingRetry == nil)
+    #expect(app.sessionActionError?.contains("Disconnected") == true)
+}
