@@ -25,8 +25,10 @@ See [screenshot notes](docs/screenshots/README.md) to regenerate them.*
   that need you (each with a short reason), pull requests ready to merge, and Linear and Slack items, across
   projects or filtered to one. Each project has an Overview that starts with what is next for it.
 - **Jump anywhere from the keyboard.** ⌘K opens a command palette over chats (by title, branch, project or pull
-  request number), pages, missions and tasks (`#25`), project scopes, Linear and Slack Inbox items, and actions such
-  as new chat, pin, archive, stop, retry or opening the pull request on GitHub.
+  request number), pages, missions and tasks (`#25`), project scopes, Linear Inbox items, Slack reports in triage
+  (by summary, channel or message text, newest first, resolved ones included), and actions such as new chat, pin,
+  archive, stop, retry or opening the pull request on GitHub. Paste a Slack message link to find its report, or to
+  add it to a project's Slack triage: Pilot reads and sorts the message, then opens triage on it.
 - **Let the display rest while agents work.** Keep the Mac awake without keeping the display on.
   Optional closed-lid work requires power and Wi-Fi; without both, agents pause and resume on the next
   full wake with connectivity. Screen locking is left to macOS. See [agent-aware sleep](docs/agent-sleep.md) for
@@ -465,8 +467,13 @@ and queuing a rebuild. Project settings show each source's guide read-only above
 Slack labels, Linear under Linear sizes once a team is attached), with when it was last updated and Rebuild, which
 queues a run; the rules update in place once pilotd saves the new guide.
 
-Pilot stores a classifier summary for each Slack message, not its text; the triage inspector reads and quotes the
-message from Slack when you select it, without saving it.
+Pilot stores a classifier summary for each Slack message, and keeps up to 8,000 characters of its thread text in
+the local tracking database for search only: the API never returns it. Messages stored before search existed
+match by summary and channel. The triage inspector reads and quotes the message from Slack when you select it,
+without saving it. Searching in Slack triage or ⌘K also matches thread text and pasted Slack links.
+A message added from a link can come from any channel your Slack account can read. It is classified like a
+polled one (a failed classification is retried; without one, it is added untyped, titled by its first line), and
+stays listed, with its reactions, even when its channel is not tracked.
 Project labels can do nothing, hide messages from the Inbox, or close them locally. Close labels never replace a
 status you chose. Show hidden in Slack triage includes label-closed messages; reopening one teaches the classifier.
 Slack items become Done locally when every PR of a linked chat has merged, or a linked mission completes.

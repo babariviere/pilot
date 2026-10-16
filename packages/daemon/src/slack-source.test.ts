@@ -8,7 +8,13 @@ import { ProjectStore } from "./projects.ts";
 import { parseSlackClassification, type SlackClassification, SlackModelUnavailable } from "./slack-classifier.ts";
 import { slackHistoryFixture, slackThreadFixture } from "./slack-fixtures.ts";
 import { SlackFormatChanged } from "./slack-format.ts";
-import { createSlackPoller, SLACK_BATCH_SIZE, SLACK_EXCERPT_LINES, slackChannelProgress } from "./slack-source.ts";
+import {
+	createSlackAdder,
+	createSlackPoller,
+	SLACK_BATCH_SIZE,
+	SLACK_EXCERPT_LINES,
+	slackChannelProgress,
+} from "./slack-source.ts";
 import { SourceSignInRequired, SourceToolError } from "./source-mcp.ts";
 import { type SourcePollContext, SourceRegistry } from "./sources.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
@@ -689,4 +695,109 @@ test("inspector excerpt is read on demand from a tracked channel, latest selecti
 	await assert.rejects(registry.slackExcerpt(linear.id), /Only Slack/);
 	await projects.update(project.id, { tracking: { slackChannels: ["C2"] } });
 	await assert.rejects(registry.slackExcerpt(a.id), /removed from this project/);
+});
+
+test("a pasted Slack link adds its thread to triage from any channel, classified once and kept when untracked", async (t) => {
+	const f = await fixture(t);
+	const projects = new ProjectStore(f.home);
+	await projects.load();
+	const project = await projects.create({ path: f.home, tracking: { slackChannels: ["C000000001"] } });
+	await f.store.load([project.id]);
+	const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+	let unreadable = false;
+	const registry = new SourceRegistry(projects, f.store, {
+		call: async (_kind, tool, args) => {
+			calls.push({ tool, args });
+			if (unreadable) throw new SourceToolError("channel_not_found");
+			if (tool === "history") return standalone("C000000009", 1, "Parent");
+			return {
+				...thread(String(args.message_ts), "Checkout fails on Safari\nSteps follow."),
+				pagination_info: "There are no more messages in this thread.\n",
+			};
+		},
+	});
+	t.after(() => registry.stop());
+	const texts: string[] = [];
+	let classification: SlackClassification | Error = new Error("model failed");
+	registry.slackAdder = createSlackAdder(
+		f.store,
+		{
+			classifySlack: async (_path, text) => {
+				texts.push(text);
+				if (classification instanceof Error) throw classification;
+				return classification;
+			},
+		},
+		() => now,
+	);
+	const link =
+		"https://acme.slack.com/archives/C000000009/p1791892900000001?thread_ts=1791892800.000001&cid=C000000009";
+	// Classification failed: the message is still added, untyped, titled by its first line.
+	const first = await registry.addSlackMessage(project.id, link);
+	assert.equal(first.title, "Checkout fails on Safari");
+	assert.equal(first.externalId, "C000000009/1791892800.000001");
+	assert.equal(first.url, "https://slack.com/archives/C000000009/p1791892800000001");
+	assert.equal(first.metadata.type, "unknown");
+	assert.equal(first.metadata.channelName, "bugs");
+	assert.equal(first.metadata.manual, true);
+	assert.deepEqual(calls[0], {
+		tool: "thread",
+		args: { channel_id: "C000000009", message_ts: "1791892800.000001", limit: 30, response_format: "detailed" },
+	});
+	assert.match(texts[0]!, /^Checkout fails on Safari\nSteps follow\.\n\nA reply/);
+	// Adding again retries the failed classification and updates the same row.
+	classification = { ...bug, summary: "Safari checkout crash" };
+	const second = await registry.addSlackMessage(project.id, link);
+	assert.equal(second.id, first.id);
+	assert.equal(second.title, "Safari checkout crash");
+	assert.equal(second.metadata.type, "bug");
+	// A done classification is reused, not paid for again.
+	await registry.addSlackMessage(project.id, link);
+	assert.equal(texts.length, 2);
+	// A later poll of the same thread keeps it marked as added by hand.
+	const { manual: _manual, ...polled } = second.metadata;
+	await f.store.commit(project.id, "slack", [
+		{
+			externalId: second.externalId,
+			title: "Polled",
+			url: second.url,
+			status: "open",
+			updatedAt: second.updatedAt,
+			metadata: polled,
+		},
+	]);
+	assert.equal((await f.store.require(first.id)).metadata.manual, true);
+	assert.equal((await f.store.require(first.id)).title, "Polled");
+	assert.deepEqual(
+		(await registry.listItems({ projectId: project.id, kind: "slack" })).items.map((item) => item.id),
+		[first.id],
+	);
+	// Its channel is not tracked, yet it stays listed through settings changes, and its excerpt can be read.
+	// Search reads the stored thread text, accent- and case-insensitively, and finds a pasted link's thread. Done
+	// messages stay findable, so a search tells whether a report was resolved.
+	await f.store.patch(first.id, { slack: { status: "done" } });
+	const ids = async (query: string) => (await registry.searchSlack(query, undefined, 20)).items.map((item) => item.id);
+	assert.deepEqual(await ids("SAFÀRI steps"), [first.id]);
+	assert.deepEqual(await ids("a reply"), [first.id]);
+	assert.deepEqual(await ids("#bugs"), [first.id]);
+	assert.deepEqual(await ids(link), [first.id]);
+	assert.deepEqual(await ids("safari unrelated"), []);
+	assert.deepEqual(await ids("100%"), []);
+	assert.equal((await registry.searchSlack("safari", undefined, 20)).items[0]?.slack?.status, "done");
+	assert.equal(JSON.stringify(await registry.searchSlack("safari", undefined, 20)).includes("Steps follow"), false);
+	await projects.update(project.id, { tracking: { slackChannels: ["C000000002"] } });
+	await new Promise((resolve) => setTimeout(resolve, 50));
+	assert.equal((await registry.listItems({ projectId: project.id, kind: "slack" })).items.length, 1);
+	assert.equal((await registry.slackExcerpt(first.id)).itemId, first.id);
+	// Plain failures.
+	const warn = t.mock.method(console, "warn", () => {});
+	unreadable = true;
+	await assert.rejects(
+		registry.addSlackMessage(project.id, "https://acme.slack.com/archives/C000000009/p1791892999000001"),
+		/Couldn't read this message from Slack/,
+	);
+	warn.mock.restore();
+	assert.throws(() => registry.addSlackMessage(project.id, "https://example.com/x"), /Paste a link/);
+	await projects.update(project.id, { tracking: { slackChannels: [] } });
+	assert.throws(() => registry.addSlackMessage(project.id, link), /Add Slack channels/);
 });

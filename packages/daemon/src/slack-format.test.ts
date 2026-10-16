@@ -10,11 +10,38 @@ import {
 } from "./slack-fixtures.ts";
 import {
 	parseSlackPage,
+	parseSlackMessageLink,
 	parseSlackThread,
 	parseSlackThreadParent,
 	SlackFormatChanged,
 	slackExcerptText,
 } from "./slack-format.ts";
+
+test("Slack message links name the channel and the thread's parent", () => {
+	assert.deepEqual(parseSlackMessageLink("https://acme.slack.com/archives/C0123ABCD/p1791892800000001"), {
+		channel: "C0123ABCD",
+		ts: "1791892800.000001",
+		threadTs: "1791892800.000001",
+	});
+	// A reply's link carries its parent, which is what triage tracks.
+	assert.deepEqual(
+		parseSlackMessageLink(
+			" https://acme.slack.com/archives/C0123ABCD/p1791892900000002?thread_ts=1791892800.000001&cid=C0123ABCD ",
+		),
+		{ channel: "C0123ABCD", ts: "1791892900.000002", threadTs: "1791892800.000001" },
+	);
+	assert.equal(parseSlackMessageLink("https://slack.com/archives/G0123/p1791892800000001")?.channel, "G0123");
+	for (const value of [
+		"http://acme.slack.com/archives/C0123ABCD/p1791892800000001",
+		"https://acme.slack.com.evil.test/archives/C0123ABCD/p1791892800000001",
+		"https://acme.slack.com/archives/C0123ABCD",
+		"https://acme.slack.com/archives/c0123/p1791892800000001",
+		"https://acme.slack.com/archives/C0123ABCD/p17918928",
+		"not a link",
+		42,
+	])
+		assert.equal(parseSlackMessageLink(value), undefined, String(value));
+});
 
 test("observed history wire shape: multiline content, bot/user headers, thread counts, pagination and empty pages", () => {
 	const page = parseSlackPage(slackHistoryFixture, 8);

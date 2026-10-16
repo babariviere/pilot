@@ -15,7 +15,10 @@ export async function slackStart(context: SourcePollContext, item: TrackedItem):
 
 export function slackStartAllowed(channels: string[], item: TrackedItem): boolean {
 	const { channel, channelName } = item.metadata;
-	return channels.some(
-		(entry) => entry === channel || (typeof channelName === "string" && entry.replace(/^#/, "") === channelName),
+	return (
+		item.metadata.manual === true ||
+		channels.some(
+			(entry) => entry === channel || (typeof channelName === "string" && entry.replace(/^#/, "") === channelName),
+		)
 	);
 }

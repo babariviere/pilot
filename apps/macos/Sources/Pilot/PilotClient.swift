@@ -711,6 +711,21 @@ final class PilotClient: ObservableObject {
         try await missionRequest(["tracked-items", id, "excerpt"])
     }
 
+    /// Adds a Slack message from a pasted link to a project's triage. pilotd reads and classifies it, which can take
+    /// a few seconds, and returns the stored item (the existing one when the message is already in triage).
+    func addSlackMessage(projectId: String, url: String) async throws -> TrackedItem {
+        try await missionRequest(["tracking", "slack", "messages"],
+                                 body: SlackMessageAddRequest(projectId: projectId, url: url))
+    }
+
+    /// Slack messages in triage whose title, channel or thread text contain every word of the query, or the thread
+    /// of a pasted Slack link. Latest first, with done and dismissed ones, so a search shows whether it was resolved.
+    func searchSlack(_ query: String, projectId: String? = nil, limit: Int = 20) async throws -> TrackedItemList {
+        var items = [URLQueryItem(name: "query", value: query), URLQueryItem(name: "limit", value: String(limit))]
+        if let projectId { items.append(URLQueryItem(name: "projectId", value: projectId)) }
+        return try await missionRequest(["tracking", "slack", "search"], query: items)
+    }
+
     /// The project's Slack triage corrections, newest first (pilotd keeps the latest 500). The triage guide is built
     /// from them, and the classifier also reads the newest five as examples.
     func slackCorrections(projectId: String) async throws -> [SlackCorrection] {

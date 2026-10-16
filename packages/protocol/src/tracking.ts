@@ -240,6 +240,18 @@ export interface SlackExcerpt {
 	/** The message was longer and was cut, ending with an ellipsis. */
 	truncated: boolean;
 }
+/** POST /api/tracking/slack/messages. Adds one Slack message, from a pasted link, to a project's triage. pilotd
+ * reads its thread, classifies it like a polled message and returns the stored item. The item's metadata has
+ * `manual: true`, so it stays listed even when its channel is not one the project tracks. */
+export interface SlackMessageAddRequest {
+	projectId: string;
+	/** A Slack message link, as from Copy link: https://<workspace>.slack.com/archives/<channel>/p<ts>. */
+	url: string;
+}
+/* GET /api/tracking/slack/search?query=&projectId=&limit= returns a TrackedItemList: Slack messages in triage whose
+ * title, channel or thread text contain every word of query (case- and accent-insensitive), or the thread of a pasted
+ * Slack link. Latest first, done and dismissed included, at most limit (1..50, default 20). pilotd keeps thread
+ * text locally for this search and never returns it. */
 /** Per-channel health of a configured Slack channel. */
 export interface SlackChannelStatus {
 	/** As configured: a channel ID, or a name in older configs. */

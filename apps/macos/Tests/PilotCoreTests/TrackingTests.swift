@@ -267,3 +267,23 @@ import Testing
     #expect(slack.metadata["slackStart"]?["outcome"]?.string == "error")
     #expect(slack.missionId == "mission")
 }
+
+@Test func slackMessageLinksNameTheChannelAndThreadParent() throws {
+    let top = try #require(SlackMessageLink("https://acme.slack.com/archives/C0123ABCD/p1791892800000001"))
+    #expect(top.channel == "C0123ABCD")
+    #expect(top.ts == "1791892800.000001")
+    #expect(top.threadTs == top.ts)
+    let reply = try #require(SlackMessageLink(
+        " https://acme.slack.com/archives/C0123ABCD/p1791892900000002?thread_ts=1791892800.000001&cid=C0123ABCD\n"))
+    #expect(reply.ts == "1791892900.000002")
+    #expect(reply.threadTs == "1791892800.000001")
+    #expect(reply.url.hasPrefix("https://acme.slack.com/"))
+    for text in ["http://acme.slack.com/archives/C0123ABCD/p1791892800000001",
+                 "https://acme.slack.com.evil.test/archives/C0123ABCD/p1791892800000001",
+                 "https://acme.slack.com/archives/C0123ABCD",
+                 "https://acme.slack.com/archives/c0123/p1791892800000001",
+                 "https://acme.slack.com/archives/C0123ABCD/p17918928",
+                 "Acme invoices"] {
+        #expect(SlackMessageLink(text) == nil, "\(text)")
+    }
+}

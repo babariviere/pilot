@@ -15,6 +15,7 @@ import type {
 	TrackedItem,
 	TrackedItemPatch,
 	TrackedItemPrefill,
+	TrackedItemList,
 	TrackedKind,
 	TrackingJson,
 	TrackingLookup,
@@ -25,11 +26,11 @@ import { linearParentHeaders, linearPrefill, linearStart } from "./linear-source
 import { workflowStates } from "./linear-workflow.ts";
 import type { ProjectStore } from "./projects.ts";
 import { SlackModelUnavailable } from "./slack-classifier.ts";
-import { SlackFormatChanged } from "./slack-format.ts";
+import { parseSlackMessageLink, SlackFormatChanged } from "./slack-format.ts";
 import { addSlackDone, refreshSlackReactions, removeSlackEyes } from "./slack-reactions.ts";
-import { slackChannelProgress, slackExcerpt } from "./slack-source.ts";
+import { type SlackAdder, slackChannelProgress, slackExcerpt } from "./slack-source.ts";
 import { slackStart, slackStartAllowed } from "./slack-start.ts";
-import { type SourceMcpClient, SourceRateLimited, SourceSignInRequired } from "./source-mcp.ts";
+import { type SourceMcpClient, SourceRateLimited, SourceSignInRequired, SourceToolError } from "./source-mcp.ts";
 import { SourceSignIns } from "./source-sign-in.ts";
 import type { SourceCheckpoint, TrackedInput, TrackedItemStore, TrackedQuery } from "./tracked-items.ts";
 import { lookupLinearTeams, lookupSlackChannels } from "./tracking-lookup.ts";
@@ -68,6 +69,8 @@ type Health = {
 /** Bounded manual and background polling. Only explicitly registered sources do work. */
 export class SourceRegistry {
 	triage?: TriageGroomer;
+	/** Reads and classifies a Slack message the user pasted. Without it, adding by link is unavailable. */
+	slackAdder?: SlackAdder;
 	private readonly pollers = new Map<TrackedKind, SourcePoller>();
 	private readonly running = new Map<string, Run>();
 	private readonly health = new Map<string, Health>();
@@ -107,6 +110,8 @@ export class SourceRegistry {
 	/** The triage inspector's excerpt: latest selection wins, at most one, sharing the two MCP slots. */
 	private excerptRun?: { itemId: string; controller: AbortController; promise: Promise<SlackExcerpt> };
 	private excerptGeneration = 0;
+	/** Slack messages being added from pasted links, coalesced per message and sharing the two MCP slots. */
+	private readonly adds = new Map<string, { controller: AbortController; promise: Promise<TrackedItem> }>();
 	/** Configured Slack channels per project, to hide items of removed channels once. */
 	private slackChannels = new Map<string, string>();
 	/** Close labels last sent to the store per project, so only changed effects reconcile stored messages. */
@@ -389,6 +394,22 @@ export class SourceRegistry {
 		const list = await this.items.list({ ...rest, kinds });
 		return { ...list, items: this.withParents(list.items, (item) => item.projectId) };
 	}
+	/** Slack messages in triage, of one project or every project that tracks Slack, matching every word of a query
+	 * in their title, channel or thread text, or the thread of a pasted Slack link. Latest first, done and dismissed
+	 * included. Local only: no Slack reads. */
+	async searchSlack(query: string, projectId: string | undefined, limit: number): Promise<TrackedItemList> {
+		const projects = projectId ? [this.projects.require(projectId)] : this.projects.list();
+		const projectIds = projects.filter((project) => this.synced(project, "slack")).map((project) => project.id);
+		const link = parseSlackMessageLink(query);
+		return this.items.searchSlack({
+			projectIds,
+			query: link ? "" : query.slice(0, 500),
+			...(link
+				? { externalIds: [...new Set([`${link.channel}/${link.threadTs}`, `${link.channel}/${link.ts}`])] }
+				: {}),
+			limit,
+		});
+	}
 	/** Open tracked items the Inbox lists for a project, from cached counts: no disk read. */
 	inboxCount(projectId: string): number {
 		const project = this.projects.require(projectId);
@@ -513,7 +534,9 @@ export class SourceRegistry {
 		if (item.kind !== "slack") throw new Conflict("Only Slack messages have an excerpt");
 		const id = `${item.projectId}:slack`,
 			key = this.currentKey(id);
-		if (!key || this.items.checkpoint(id)?.configKey !== key)
+		const checkpoint = this.items.checkpoint(id);
+		// A message added by hand can be read before the first sync; it is listed then too.
+		if (!key || (checkpoint ? checkpoint.configKey !== key : item.metadata.manual !== true))
 			throw new Conflict("Sync this project's Slack source first");
 		const health = this.health.get(id);
 		if (health?.key === key && health.failures > 0 && health.nextPollAt > Date.now())
@@ -553,6 +576,67 @@ export class SourceRegistry {
 			});
 		this.excerptRun = run;
 		return run.promise;
+	}
+	/** Adds one Slack message from a pasted link to a project's triage, from any channel the user's Slack account can
+	 * read. The project must track Slack. Repeated requests for the same message share one read; a message already
+	 * in triage is returned as it is, with its local status and links. Failures are plain and leave the source's
+	 * health alone. */
+	addSlackMessage(projectId: string, url: string): Promise<TrackedItem> {
+		if (this.stopped) throw new ServiceUnavailable("Tracking is stopped");
+		const link = parseSlackMessageLink(url);
+		if (!link) throw new Conflict("Paste a link to a Slack message");
+		const project = structuredClone(this.projects.require(projectId));
+		const id = `${projectId}:slack`,
+			key = this.currentKey(id);
+		if (!key) throw new Conflict("Add Slack channels to this project's settings first");
+		if (this.items.checkpoint(id) && this.items.checkpoint(id)?.configKey !== key)
+			throw new Conflict("Sync this project's Slack source first");
+		const adder = this.slackAdder;
+		if (!adder) throw new ServiceUnavailable("Adding Slack messages is unavailable");
+		const runKey = `${projectId}/${link.channel}/${link.threadTs}`;
+		const existing = this.adds.get(runKey);
+		if (existing) return existing.promise;
+		if (this.busy() >= 2) throw new ServiceUnavailable("Tracking is busy, retry shortly");
+		const controller = new AbortController();
+		// Below the app's one-minute request timeout, so the app shows pilotd's plain reason.
+		const timer = setTimeout(() => controller.abort(new Error("Adding the message timed out")), 50_000);
+		const work = adder(
+			{
+				project,
+				config: project.tracking!,
+				signal: controller.signal,
+				call: (tool, args) => this.readCall("slack", tool, args, controller.signal),
+			},
+			link,
+		).then(async (input) => {
+			controller.signal.throwIfAborted();
+			if (this.currentKey(id) !== key) throw new Conflict("Tracking configuration changed");
+			await this.items.commit(projectId, "slack", [input]);
+			// A message stored earlier from a channel no longer tracked is shown again.
+			await this.items.retainSlack(projectId, this.projects.require(projectId).tracking?.slackChannels ?? []);
+			return this.items.requireExternal(projectId, "slack", input.externalId);
+		});
+		const promise = abortable(work, controller.signal)
+			.catch((error: unknown) => {
+				if (error instanceof Conflict) throw error;
+				console.warn(`pilotd: adding a Slack message failed for project ${projectId}: ${logCause(error)}`);
+				if (error instanceof SourceSignInRequired)
+					throw new ServiceUnavailable("Sign in to Slack to add this message");
+				if (error instanceof SourceRateLimited)
+					throw new ServiceUnavailable("Slack is limiting requests. Try again in a minute.");
+				if (error instanceof SourceToolError || error instanceof SlackFormatChanged)
+					throw new Conflict(
+						"Couldn't read this message from Slack. Check the link and that you can see it in Slack.",
+					);
+				throw new ServiceUnavailable("Couldn't add this message. Try again in a moment.");
+			})
+			.finally(() => {
+				clearTimeout(timer);
+				this.adds.delete(runKey);
+				this.schedule();
+			});
+		this.adds.set(runKey, { controller, promise });
+		return promise;
 	}
 	/** Binding is local and completes before any remote work. A normal link never writes. */
 	async patch(itemId: string, patch: TrackedItemPatch): Promise<TrackedItem> {
@@ -793,6 +877,7 @@ export class SourceRegistry {
 		for (const run of this.starts.values()) run.controller.abort(new Error("Tracking stopped"));
 		for (const run of this.doneRuns.values()) run.controller.abort(new Error("Tracking stopped"));
 		for (const run of this.lookups.values()) run.controller.abort(new Error("Tracking stopped"));
+		for (const run of this.adds.values()) run.controller.abort(new Error("Tracking stopped"));
 		const excerpt = this.excerptRun;
 		excerpt?.controller.abort(new Error("Tracking stopped"));
 		await Promise.allSettled([...this.running.values()].map((run) => run.promise));
@@ -800,6 +885,7 @@ export class SourceRegistry {
 		await Promise.allSettled([...this.lookups.values()].map((run) => run.promise));
 		await Promise.allSettled([...this.starts.values()].map((run) => run.promise));
 		await Promise.allSettled([...this.doneRuns.values()].map((run) => run.promise));
+		await Promise.allSettled([...this.adds.values()].map((run) => run.promise));
 		await excerpt?.promise.catch(() => {});
 		await signIns;
 		await this.mcp.close?.();
@@ -902,6 +988,7 @@ export class SourceRegistry {
 			this.lookups.size +
 			this.starts.size +
 			this.doneRuns.size +
+			this.adds.size +
 			(this.excerptRun ? 1 : 0)
 		);
 	}

@@ -22,6 +22,7 @@ import type {
 	SlackPullRequestObservation,
 	SlackReactionBatch,
 	SlackReservation,
+	SlackSearchQuery,
 	SourceCheckpoint,
 	TrackedInput,
 	TrackedQuery,
@@ -117,8 +118,9 @@ export class TrackedItemStore {
 	slackCached(channel: string, ts: string, projectId: string): Promise<SlackCache | undefined> {
 		return this.rpc("slackCached", { channel, ts, projectId });
 	}
-	reserveSlack(channel: string, ts: string, now: number, projectId: string): Promise<SlackReservation> {
-		return this.rpc("reserveSlack", { channel, ts, now, projectId });
+	/** retry reclassifies a cached failure, for a message the user added by hand. */
+	reserveSlack(channel: string, ts: string, now: number, projectId: string, retry = false): Promise<SlackReservation> {
+		return this.rpc("reserveSlack", { channel, ts, now, projectId, retry });
 	}
 	/** Mention discovery reads share the classification/reaction daily budget. */
 	reserveSlackRead(now: number): Promise<boolean> {
@@ -195,6 +197,12 @@ export class TrackedItemStore {
 	}
 	require(id: string): Promise<TrackedItem> {
 		return this.rpc("require", { id });
+	}
+	requireExternal(projectId: string, kind: TrackedKind, externalId: string): Promise<TrackedItem> {
+		return this.rpc("requireExternal", { projectId, kind, externalId });
+	}
+	searchSlack(query: SlackSearchQuery): Promise<TrackedItemList> {
+		return this.rpc("searchSlack", query);
 	}
 	commit(
 		projectId: string,
