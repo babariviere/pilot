@@ -1,5 +1,8 @@
 # Testing and test speed
 
+For packaged SSH workflow coverage, the shared-context/credential fault matrix and manual-only
+deployment gaps, see [devbox verification](devbox-verification.md).
+
 Node 24 strips our erasable TypeScript directly. Tests still use `node:test`, isolated processes, and
 fresh temporary state. Model tests use faux providers, never user accounts. `tsx` remains available for
 runner comparisons and the existing reopen benchmark, but is not needed by the default runner.

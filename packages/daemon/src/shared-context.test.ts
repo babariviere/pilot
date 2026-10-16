@@ -326,6 +326,41 @@ async function enrolled(t: TestContext) {
 	return { home, target, mission, binding, task, grant };
 }
 
+test("repeated partitions keep one accepted execution and import lost-ack provisional notes exactly once", async (t) => {
+	const { home, target, mission, binding, task, grant } = await enrolled(t);
+	await reconcile(home, target, binding);
+	await until(
+		() => target.workers.has(grant.session.sessionId) && !target.sessions["starting"].has(grant.session.sessionId),
+	);
+	const worker = target.workers.get(grant.session.sessionId)!;
+	const inputId = target.sharing.membership(grant.session.sessionId)!.operationId;
+	for (let cycle = 1; cycle <= 3; cycle++) {
+		const text = `Partition round ${cycle}: preserve the bounded target's contribution`;
+		await target.sharing.memoryCall(grant.session.sessionId, "note", { text });
+		const offline = (await target.sharing.memoryCall(grant.session.sessionId, "wake", {})) as SharedMemoryRead;
+		assert.ok(offline.proposals.some((proposal) => proposal.state === "pending" && proposal.mutation.text === text));
+		assert.equal((await home.memory.recall(home.project.id, `Partition round ${cycle}:`)).matches, 0);
+		await assert.rejects(target.missions.call(grant.session.sessionId, "claim", { id: task.id }), /home authority/);
+		assert.throws(() => home.store.prepareTaskStart(mission.id, [task.id]), /occupied/);
+		// The home commits, but the target loses every acknowledgment. Repeated transport delivery
+		// must use the same durable operation, never create a second note or execution.
+		const batch = await target.sharing.exchange(binding.bindingId, home.host);
+		for (const operation of batch.operations) {
+			const receipt = await home.journal.execute(operation, (op) => home.sharing.handle(op));
+			assert.deepEqual(await home.journal.execute(operation, (op) => home.sharing.handle(op)), receipt);
+		}
+		await reconcile(home, target, binding);
+		assert.equal((await home.memory.recall(home.project.id, `Partition round ${cycle}:`)).matches, 1);
+		assert.equal(target.sessions.list().length, 1);
+		assert.equal(home.store.sharedTaskGrant(task.id)?.delegationId, grant.delegationId);
+		assert.equal(
+			worker.requests.filter((command) => command.type === "input" && command.requestId === inputId).length,
+			1,
+		);
+		assert.equal(target.store.list().length, 0, "a replica must not elect or materialize another mission authority");
+	}
+});
+
 test("cancel before delayed offer retains an epoch tombstone and only target acknowledgment releases home", async (t) => {
 	const { home, target, mission, binding, task, grant } = await enrolled(t);
 	const offer = (await home.sharing.exchange(binding.bindingId, target.host)).operations.find(
