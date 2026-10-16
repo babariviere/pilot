@@ -455,6 +455,24 @@ test("follow-ups use the durable admission key and deleted targets become Needs 
 	await assert.rejects(f.service.create(request), NotFound);
 });
 
+test("pending follow-up messages mark their chat until sent or cancelled", async (t) => {
+	const f = await fixture(t);
+	assert.deepEqual([...f.service.scheduledMessageSessions()], []);
+	const later = await f.service.create({
+		trigger: "on_wake",
+		target: { kind: "message", sessionId: "existing", message: "Continue" },
+	});
+	await f.service.create(chat({ trigger: "on_wake" }));
+	assert.deepEqual([...f.service.scheduledMessageSessions()], ["existing"]);
+	await f.service.remove(later.id);
+	assert.deepEqual([...f.service.scheduledMessageSessions()], []);
+	await f.service.create({ trigger: "on_wake", target: { kind: "message", sessionId: "existing", message: "Go" } });
+	await f.service.signal({ type: "sleep", at: f.clock.now() + 1 });
+	await f.service.signal({ type: "wake", full: true });
+	assert.equal(f.calls.filter((call) => call.kind === "message").length, 1);
+	assert.deepEqual([...f.service.scheduledMessageSessions()], []);
+});
+
 test("dispatch errors never replay and interrupted claims recover as uncertain failures", async (t) => {
 	const f = await fixture(t);
 	f.fail(new Error("No model access"));

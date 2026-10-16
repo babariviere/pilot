@@ -1038,6 +1038,9 @@ export class SessionManager {
 	private readonly longJobTimers = new LongJobTimers();
 	/** Live-only: chats that reached for an MCP server needing the user. Set by setMcpStatus. */
 	private mcpAttention?: McpChatAttention;
+	/** Chats with a scheduled follow-up message. Set by setScheduledMessages. */
+	private scheduledMessages = new Set<string>();
+	private stopScheduledMessages?: () => void;
 	private readonly databases?: DatabaseService;
 	private readonly mainHeads = new Map<string, string>();
 	private readonly mainRepositories = new Map<string, string>();
@@ -1251,6 +1254,27 @@ export class SessionManager {
 			const meta = this.metas.get(id);
 			if (meta && !this.closing) this.emit(meta);
 		});
+	}
+
+	/** A chat with a scheduled follow-up message waits on that schedule, not on the user, so it leaves Needs you. */
+	setScheduledMessages(source: {
+		scheduledMessageSessions(): Set<string>;
+		onChange(listener: () => void): () => void;
+	}): void {
+		this.stopScheduledMessages?.();
+		const refresh = () => {
+			const next = source.scheduledMessageSessions();
+			const previous = this.scheduledMessages;
+			this.scheduledMessages = next;
+			if (this.closing) return;
+			for (const id of new Set([...previous, ...next])) {
+				if (previous.has(id) === next.has(id)) continue;
+				const meta = this.metas.get(id);
+				if (meta) this.emit(meta);
+			}
+		};
+		this.stopScheduledMessages = source.onChange(refresh);
+		refresh();
 	}
 
 	private get sessionsDir(): string {
@@ -5948,6 +5972,7 @@ export class SessionManager {
 			...(!working ? this.stuckPullRequestAttention(meta) : {}),
 			// After stuck PRs, so an MCP server to fix wins. Long jobs keep their own reason.
 			...(meta.archivedAt === undefined && !longJob ? this.mcpAttention?.attention(meta.id) : {}),
+			...(meta.archivedAt === undefined && this.scheduledMessages.has(meta.id) ? { scheduledMessage: true } : {}),
 			...(meta.model ? { model: meta.model } : {}),
 			...(meta.thinking ? { thinking: meta.thinking } : {}),
 			...(usage ? { usage } : {}),

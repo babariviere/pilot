@@ -286,6 +286,11 @@ export interface SessionSummary {
 	attentionReason?: NeedsYouReason;
 	/** Epoch ms when live job attention became due. Cleared with the job. */
 	attentionAt?: number;
+	/**
+	 * A follow-up message is scheduled for this chat (pending or dispatching). The chat waits on that schedule, not on
+	 * the user, so it leaves Needs you except for live reasons (long job, MCP). Omitted when none.
+	 */
+	scheduledMessage?: boolean;
 	state: SessionState;
 	/** Daemon-derived user-visible work, including live jobs and their pending follow-up. Prefer over state. */
 	working?: boolean;

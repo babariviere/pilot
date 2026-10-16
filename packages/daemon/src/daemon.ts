@@ -211,6 +211,7 @@ const schedules = new ScheduleService(scheduleStore, {
 	triggers: scheduleDetection,
 });
 await schedules.load();
+sessions.setScheduledMessages(schedules);
 if (!maintenance?.frozen) schedules.start();
 maintenance?.onOpen(() => {
 	void sharing.recover().catch((error) => console.warn("pilotd: sharing recovery", error));

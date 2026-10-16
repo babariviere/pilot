@@ -101,6 +101,9 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     /// Live user-only attention, independent of the kernel state and outcome.
     public let attentionReason: NeedsYouReason?
     public let attentionAt: Double?
+    /// A follow-up message is scheduled for this chat, so it waits on that schedule rather than the user and leaves
+    /// Needs you (live reasons excepted). Omitted when none, or by older daemons.
+    public var scheduledMessage: Bool? = nil
     public let model: String?
     /// Effective thinking level pinned for this chat. Omitted by older daemons.
     public let thinking: String?
