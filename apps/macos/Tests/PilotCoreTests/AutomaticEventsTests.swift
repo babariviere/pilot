@@ -38,8 +38,11 @@ import Testing
     """
     let event = ChatEvent.automatic(id: "1", text: text, origin: .pullRequest)
     #expect(event.text == "Following up on PRs #441 and #442")
-    #expect(event.title == "failed checks · 2 review threads · merge conflicts")
+    #expect(event.title == "attempt 1 of 3 · failed checks · 2 review threads · merge conflicts")
     #expect(event.detail == text && !event.destructive)
+
+    let unnumbered = ChatEvent.automatic(id: "2", text: "PR https://github.com/o/r/pull/7:\nThe PR has merge conflicts.", origin: .pullRequest)
+    #expect(unnumbered.title == "merge conflicts")
 }
 
 @Test func automaticMessagesAndQuestionsKeepTheFullTextBehindShow() {

@@ -108,18 +108,31 @@ struct JobResultSummary: Equatable {
     }
 }
 
-/// pilotd's automatic PR follow-up: which PRs, and what needs fixing on them.
+/// pilotd's automatic PR follow-up: which PRs, which attempt of the shared budget, and what needs fixing on them.
 struct PullRequestFollowUpSummary: Equatable {
+    struct Attempt: Equatable {
+        let number: Int
+        let limit: Int
+    }
+
     let numbers: [Int]
     let problems: [String]
+    /// "(2/3)" from the header line, so the user can tell a last attempt from a first one.
+    let attempt: Attempt?
 
     init(text: String) {
         var numbers: [Int] = []
         var problems: [String] = []
+        var attempt: Attempt?
         let number = try! NSRegularExpression(pattern: #"/pull/(\d+)"#)
+        let header = try! NSRegularExpression(pattern: #"^Pilot automatic PR follow-up \((\d+)/(\d+)\)"#)
         func add(_ problem: String) { if !problems.contains(problem) { problems.append(problem) } }
         for line in text.split(whereSeparator: \.isNewline).map(String.init) {
-            if line.hasPrefix("PR "), let match = number.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)),
+            if attempt == nil, let match = header.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)),
+               let current = Range(match.range(at: 1), in: line), let limit = Range(match.range(at: 2), in: line),
+               let currentValue = Int(line[current]), let limitValue = Int(line[limit]) {
+                attempt = Attempt(number: currentValue, limit: limitValue)
+            } else if line.hasPrefix("PR "), let match = number.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)),
                let range = Range(match.range(at: 1), in: line), let value = Int(line[range]), !numbers.contains(value) {
                 numbers.append(value)
             } else if line.hasPrefix("Failed CI checks") {
@@ -135,6 +148,7 @@ struct PullRequestFollowUpSummary: Equatable {
         }
         self.numbers = numbers
         self.problems = problems
+        self.attempt = attempt
     }
 
     var sentence: String {
@@ -146,5 +160,9 @@ struct PullRequestFollowUpSummary: Equatable {
         }
     }
 
-    var title: String? { problems.isEmpty ? nil : problems.joined(separator: " · ") }
+    /// Attempt first, so a narrow row still shows it before the problem list truncates.
+    var title: String? {
+        let parts = (attempt.map { ["attempt \($0.number) of \($0.limit)"] } ?? []) + problems
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
 }
