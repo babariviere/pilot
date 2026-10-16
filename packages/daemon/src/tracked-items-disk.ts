@@ -28,6 +28,13 @@ export const SLACK_REACTION_BATCH = 8;
 /** Waiting messages read per poll, and how often one message's thread is read for new replies. */
 export const SLACK_WAITING_BATCH = 4;
 export const SLACK_WAITING_INTERVAL_MS = 10 * 60_000;
+/** An open item's ✅ is checked at most this often. Each check is one read from the daily budget. */
+export const SLACK_REACTION_RECHECK_MS = 3_600_000;
+/** A Slack group handle's ID, learned once by search. id is null while it could not be resolved. */
+export interface SlackGroupId {
+	id: string | null;
+	checkedAt: number;
+}
 export interface SlackReactionRead {
 	item: TrackedItem;
 	version: number;
@@ -183,6 +190,7 @@ export class TrackedItemDisk {
 			 PRIMARY KEY(channel, thread_ts)
 			);
 			CREATE TABLE IF NOT EXISTS slack_budget (day TEXT PRIMARY KEY, used INTEGER NOT NULL);
+			CREATE TABLE IF NOT EXISTS slack_groups (handle TEXT PRIMARY KEY, id TEXT, checked_at INTEGER NOT NULL);
 		`);
 		if (
 			!this.db
@@ -339,7 +347,8 @@ export class TrackedItemDisk {
 			? { state: "done", result: parseSlackClassification(String(row.result)) }
 			: { state: row.state === "error" ? "error" : "pending" };
 	}
-	/** Atomic admission for discovery reads against the shared daily Slack budget. */
+	/** Crash-safe admission before any model call. One attempt per project/thread, across restarts. */
+	/** Atomic admission for one read against the shared daily Slack budget. */
 	reserveSlackRead(now: number): boolean {
 		const day = new Date(now).toISOString().slice(0, 10);
 		const result = this.db
@@ -351,7 +360,6 @@ export class TrackedItemDisk {
 			.run(new Date(now - 7 * 86_400_000).toISOString().slice(0, 10));
 		return Number(result.changes) === 1;
 	}
-	/** Crash-safe admission before any model call. One attempt per project/thread, across restarts. */
 	/** Reserves a classification against the daily budget, unless one is cached. retry reclassifies a cached failure or
 	 * an interrupted attempt, for a message the user added by hand. */
 	reserveSlack(channel: string, ts: string, now: number, projectId: string, retry = false): SlackReservation {
@@ -397,6 +405,24 @@ export class TrackedItemDisk {
 	}
 	corrections(projectId: string): SlackCorrection[] {
 		return this.triage.corrections(projectId, "slack") as SlackCorrection[];
+	}
+	/** Learned IDs of configured group handles. Handles never looked up are absent. */
+	slackGroups(handles: string[]): Record<string, SlackGroupId> {
+		const result: Record<string, SlackGroupId> = {};
+		const read = this.db.prepare("SELECT id, checked_at AS checkedAt FROM slack_groups WHERE handle=?");
+		for (const handle of handles.slice(0, 30)) {
+			const row = read.get(handle) as { id: string | null; checkedAt: number } | undefined;
+			if (row) result[handle] = { id: row.id, checkedAt: Number(row.checkedAt) };
+		}
+		return result;
+	}
+	saveSlackGroup(handle: string, id: string | null, now: number): void {
+		if (typeof handle !== "string" || !handle || handle.length > 80) throw new Error("Invalid Slack group handle");
+		if (id !== null && !/^S[A-Z0-9]{2,39}$/.test(id)) throw new Error("Invalid Slack group ID");
+		this.db
+			.prepare(`INSERT INTO slack_groups VALUES (?, ?, ?)
+			ON CONFLICT(handle) DO UPDATE SET id=excluded.id, checked_at=excluded.checked_at`)
+			.run(handle, id, now);
 	}
 	/**
 	 * Sets a project's close labels and applies them to every stored Slack message. Returns whether a row changed.
@@ -781,15 +807,16 @@ export class TrackedItemDisk {
 		this.emit(item.projectId);
 	}
 
-	/** Fair, capped reads share the classification budget, reserved durably before any network call. */
-	reserveSlackReactions(projectId: string, now: number): SlackReactionBatch {
+	/** Fair, capped reads share the classification budget, reserved durably before any network call. Items checked
+	 * within recheckMs wait their turn. */
+	reserveSlackReactions(projectId: string, now: number, recheckMs = SLACK_REACTION_RECHECK_MS): SlackReactionBatch {
 		this.db.exec("BEGIN IMMEDIATE");
 		try {
 			const rows = this.db
 				.prepare(`SELECT * FROM tracked_items WHERE project_id=? AND kind='slack'
 				AND active=1 AND dismissed=0 AND slack_status IN ('open','in_progress','waiting')
-				ORDER BY slack_reaction_checked, id LIMIT ?`)
-				.all(projectId, SLACK_REACTION_BATCH) as Row[];
+				AND slack_reaction_checked <= ? ORDER BY slack_reaction_checked, id LIMIT ?`)
+				.all(projectId, now - recheckMs, SLACK_REACTION_BATCH) as Row[];
 			const day = new Date(now).toISOString().slice(0, 10);
 			const used = Number(this.db.prepare("SELECT used FROM slack_budget WHERE day=?").get(day)?.used ?? 0);
 			const picked = rows.slice(0, Math.max(0, SLACK_DAILY_BUDGET - used));

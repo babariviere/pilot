@@ -20,6 +20,7 @@ import type {
 	InboxTracked,
 	SlackAgentStatusResult,
 	SlackCache,
+	SlackGroupId,
 	SlackPullRequestObservation,
 	SlackReactionBatch,
 	SlackReservation,
@@ -124,12 +125,19 @@ export class TrackedItemStore {
 	reserveSlack(channel: string, ts: string, now: number, projectId: string, retry = false): Promise<SlackReservation> {
 		return this.rpc("reserveSlack", { channel, ts, now, projectId, retry });
 	}
-	/** Mention discovery reads share the classification/reaction daily budget. */
+	finishSlack(channel: string, ts: string, result: SlackClassification | undefined, projectId: string): Promise<void> {
+		return this.rpc("finishSlack", { channel, ts, result, projectId });
+	}
+	/** One read against the shared daily Slack budget. */
 	reserveSlackRead(now: number): Promise<boolean> {
 		return this.rpc("reserveSlackRead", { now });
 	}
-	finishSlack(channel: string, ts: string, result: SlackClassification | undefined, projectId: string): Promise<void> {
-		return this.rpc("finishSlack", { channel, ts, result, projectId });
+	/** Learned IDs of Slack group handles, shared by all projects. */
+	slackGroups(handles: string[]): Promise<Record<string, SlackGroupId>> {
+		return this.rpc("slackGroups", { handles });
+	}
+	saveSlackGroup(handle: string, id: string | null, now: number): Promise<void> {
+		return this.rpc("saveSlackGroup", { handle, id, now });
 	}
 	corrections(projectId: string): Promise<SlackCorrection[]> {
 		return this.rpc("corrections", { projectId });
@@ -224,8 +232,8 @@ export class TrackedItemStore {
 	slackStartResult(id: string, outcome: "reacted" | "skipped" | "error"): Promise<void> {
 		return this.rpc("slackStartResult", { id, outcome });
 	}
-	reserveSlackReactions(projectId: string, now: number): Promise<SlackReactionBatch> {
-		return this.rpc("reserveSlackReactions", { projectId, now });
+	reserveSlackReactions(projectId: string, now: number, recheckMs?: number): Promise<SlackReactionBatch> {
+		return this.rpc("reserveSlackReactions", { projectId, now, recheckMs });
 	}
 	recordSlackReaction(id: string, present: boolean, version: number): Promise<void> {
 		return this.rpc("recordSlackReaction", { id, present, version });

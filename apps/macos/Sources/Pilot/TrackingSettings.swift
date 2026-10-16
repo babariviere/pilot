@@ -204,7 +204,7 @@ struct SlackChannelsEditor: View {
                                else { editor.slackMentionOnlyChannels.remove(channel.id) } }
                     ))
                     .font(.pilot(.caption))
-                    .help("A personal or group mention anywhere in a thread qualifies it. Searches only this channel, public or private. Existing items stay unchanged.")
+                    .help("A personal or group mention in a channel message qualifies it. Mentions only in thread replies are not found. Existing items stay unchanged.")
                     .accessibilityLabel("Only messages that mention me in \(channel.display)")
                 }
             }
