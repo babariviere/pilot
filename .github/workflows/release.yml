@@ -72,19 +72,40 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test -- --lane=portable
 
-  # OS-sensitive smoke coverage, native Ask artifacts and packaging stay on Darwin.
-  node-macos:
+  # One macOS job per run: native Node and packaging tests, then Swift tests. The free plan runs only a few
+  # macOS jobs at once, so separate jobs mostly waited in the queue. PRs reuse the Swift test build for the
+  # app smoke test instead of compiling the app again; main and manual runs build the optimized app in app-bundle.
+  macos:
     runs-on: macos-15
-    timeout-minutes: 15
+    timeout-minutes: 30
     # A newer main push cancels this job, which skips the superseded run's release jobs. Release
     # commits, PRs and dispatches get a unique group. Release jobs themselves are never cancelled.
     concurrency:
-      group: "pilot-ci-main-node-macos-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !startsWith(github.event.head_commit.message, 'chore(main): release') && 'main' || github.run_id }}"
+      group: "pilot-ci-main-macos-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !startsWith(github.event.head_commit.message, 'chore(main): release') && 'main' || github.run_id }}"
       cancel-in-progress: true
+    env:
+      # The scripts default to 2 jobs for agents sharing a machine. CI owns the whole runner.
+      PILOT_SWIFT_JOBS: 3
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          # A PR checks out its merge commit. Its first parent is the base, so that diff is the PR's change.
+          fetch-depth: 2
+      - name: Check whether the Mac app changed
+        id: changes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          # Main pushes and manual runs always verify the app. PRs skip Swift when nothing it reads changed.
+          swift=true
+          if [ "$EVENT_NAME" = pull_request ] && files="$(git diff --name-only HEAD^1 HEAD)"; then
+            if ! printf '%s\n' "$files" | grep -Eq '^(apps/macos/|scripts/verification-slot\.py$|\.github/workflows/release\.yml$|package\.json$)'; then
+              swift=false
+            fi
+          fi
+          echo "Swift checks: $swift"
+          echo "swift=$swift" >> "$GITHUB_OUTPUT"
       # Installs the pnpm version pinned by package.json's packageManager field.
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
@@ -124,31 +145,16 @@ jobs:
           mkdir "$stage/relocated"
           ditto -x -k "$stage/runtime.zip" "$stage/relocated"
           apps/macos/scripts/check-runtime.sh "$stage/relocated/runtime"
-
-  swift-test:
-    runs-on: macos-15
-    # A normal run takes about 3 minutes. Fail a hung test process quickly instead of after 30.
-    timeout-minutes: 12
-    # A newer main push cancels this job, which skips the superseded run's release jobs. Release
-    # commits, PRs and dispatches get a unique group. Release jobs themselves are never cancelled.
-    concurrency:
-      group: "pilot-ci-main-swift-test-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !startsWith(github.event.head_commit.message, 'chore(main): release') && 'main' || github.run_id }}"
-      cancel-in-progress: true
-    env:
-      # The scripts default to 2 jobs for agents sharing a machine. CI owns the whole runner.
-      PILOT_SWIFT_JOBS: 3
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - name: Verify toolchain and architecture
+      # Swift steps still run after a Node failure, so one run reports both.
+      - name: Verify Swift toolchain
         id: swift-toolchain
+        if: ${{ !cancelled() && steps.changes.outputs.swift == 'true' }}
         run: |
-          test "$(uname -m)" = arm64
           swift --version
           identity="$(printf '%s\n' "$(swift --version)" "$(xcrun --show-sdk-version)" | shasum -a 256 | awk '{print $1}')"
           echo "key=$identity" >> "$GITHUB_OUTPUT"
       - name: Cache pinned Swift dependencies
+        if: ${{ !cancelled() && steps.swift-toolchain.outcome == 'success' }}
         uses: actions/cache@v4
         with:
           # Only dependency downloads and patched vendor sources, never build products or signing data.
@@ -157,9 +163,37 @@ jobs:
             ~/Library/Caches/org.swift.swiftpm/artifacts
             apps/macos/Vendor/libghostty-spm
           key: swift-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.resolved', 'apps/macos/Package.swift', 'apps/macos/scripts/vendor-ghostty.sh', 'apps/macos/scripts/patch-ghostty-resources.py') }}
-      - run: apps/macos/scripts/test.sh
+      - name: Swift tests
+        id: swift-test
+        if: ${{ !cancelled() && steps.swift-toolchain.outcome == 'success' }}
+        # A normal run takes about 5 minutes. Fail a hung test process quickly instead of at the job limit.
+        timeout-minutes: 12
+        run: apps/macos/scripts/test.sh
+      # PRs package the debug binaries the tests just built and smoke-test the relocated app. The optimized
+      # build is verified by app-bundle on main before anything is published.
+      - name: Bundle the app from the Swift test build
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.swift-test.outcome == 'success' }}
+        env:
+          CONFIGURATION: debug
+          BUNDLE_PREBUILT: '1'
+        run: apps/macos/scripts/bundle.sh
+      - name: Render delegated task fixtures
+        id: pr-fixtures
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.swift-test.outcome == 'success' }}
+        run: |
+          fixture_home="$(mktemp -d "$RUNNER_TEMP/delegated-home.XXXXXX")"
+          HOME="$fixture_home" CFFIXED_USER_HOME="$fixture_home" apps/macos/build/Pilot.app/Contents/MacOS/Pilot --snapshot "$RUNNER_TEMP/delegated-screenshots" --delegated-tasks-only
+      - name: Upload delegated task screenshots
+        if: ${{ !cancelled() && steps.pr-fixtures.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: delegated-task-screenshots
+          path: ${{ runner.temp }}/delegated-screenshots/*.png
+          if-no-files-found: error
 
+  # Builds and verifies the optimized app on main and manual runs. PRs use the macos job's smoke test.
   app-bundle:
+    if: github.event_name != 'pull_request'
     runs-on: macos-15
     timeout-minutes: 45
     # A newer main push cancels this job, which skips the superseded run's release jobs. Release
@@ -266,7 +300,7 @@ jobs:
           if-no-files-found: error
 
   release-please:
-    needs: [node, node-macos, swift-test, app-bundle, linux-production]
+    needs: [node, macos, app-bundle, linux-production]
     # Never expose write permissions or release credentials to PRs or forks.
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false && inputs.release_tag == ''
     runs-on: ubuntu-latest
@@ -302,16 +336,16 @@ jobs:
   # Release Please can discover an earlier merged release PR after a newer main run finishes.
   # Rebuild only that exceptional source mismatch; normal releases promote linux-production.
   linux-release-rebuild:
-    needs: [node, node-macos, swift-test, app-bundle, linux-production, release-please]
-    if: always() && needs.node.result == 'success' && needs.node-macos.result == 'success' && needs.swift-test.result == 'success' && needs.app-bundle.result == 'success' && needs.linux-production.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false && ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')) && inputs.release_tag == '' && needs.release-please.outputs.sha != github.sha
+    needs: [node, macos, app-bundle, linux-production, release-please]
+    if: always() && needs.node.result == 'success' && needs.macos.result == 'success' && needs.app-bundle.result == 'success' && needs.linux-production.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false && ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')) && inputs.release_tag == '' && needs.release-please.outputs.sha != github.sha
     uses: ./.github/workflows/linux-package.yml
     with:
       ref: ${{ needs.release-please.outputs.sha }}
       artifact-name: linux-release-runtime
 
   linux-publish:
-    needs: [node, node-macos, swift-test, app-bundle, linux-production, release-please, linux-release-rebuild]
-    if: always() && needs.node.result == 'success' && needs.node-macos.result == 'success' && needs.swift-test.result == 'success' && needs.app-bundle.result == 'success' && needs.linux-production.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false && ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')) && (needs.linux-release-rebuild.result == 'success' || needs.linux-release-rebuild.result == 'skipped')
+    needs: [node, macos, app-bundle, linux-production, release-please, linux-release-rebuild]
+    if: always() && needs.node.result == 'success' && needs.macos.result == 'success' && needs.app-bundle.result == 'success' && needs.linux-production.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false && ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')) && (needs.linux-release-rebuild.result == 'success' || needs.linux-release-rebuild.result == 'skipped')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -356,9 +390,9 @@ jobs:
   release:
     # Signs and uploads the verified macOS update in parallel with the Linux runtime. The publish job
     # releases the draft once both platforms have uploaded their assets.
-    needs: [node, node-macos, swift-test, app-bundle, linux-production, release-please]
+    needs: [node, macos, app-bundle, linux-production, release-please]
     # always() permits an explicit retry when release-please is intentionally skipped.
-    if: always() && needs.node.result == 'success' && needs.node-macos.result == 'success' && needs.swift-test.result == 'success' && needs.app-bundle.result == 'success' && needs.linux-production.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false && ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != ''))
+    if: always() && needs.node.result == 'success' && needs.macos.result == 'success' && needs.app-bundle.result == 'success' && needs.linux-production.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false && ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != ''))
     runs-on: macos-15
     timeout-minutes: 45
     permissions:

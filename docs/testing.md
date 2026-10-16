@@ -429,7 +429,14 @@ fixtures from consuming its one-minute budget. All clipping, resize, visible-ove
 remain enabled. The output guard requires that the isolated test actually starts, so a stale filter cannot
 silently drop coverage. Explicit `--filter`, `--skip` and listing requests remain a single scoped invocation.
 
-Swift test and app-bundle CI jobs already run independently. Both now cache only pinned dependency
+CI runs native Node, packaging and Swift tests in one `macos` job, because the free plan runs only a few
+macOS jobs at once. PRs skip the Swift steps when they change nothing under `apps/macos/`, the release
+workflow, `package.json` or the verification-slot script. PRs that run Swift package the debug binaries from
+the test build (`BUNDLE_PREBUILT=1 CONFIGURATION=debug bundle.sh`) and smoke-test that app, instead of
+compiling an optimized build. Main and manual runs also build and verify the optimized app in `app-bundle`,
+so release-only compiler problems surface on `main` before publishing, not in the PR.
+
+Both Swift jobs cache only pinned dependency
 repositories/downloaded artifacts and the patched Ghostty vendor sources. Keys include OS, architecture,
 Swift and SDK versions, package pins/manifests, and vendor/patch scripts. No executable build products,
 signing material or user data are cached; dependency resolution still runs and verifies binary artifacts.
