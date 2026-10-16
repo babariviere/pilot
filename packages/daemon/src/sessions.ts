@@ -1177,6 +1177,9 @@ export class SessionManager {
 		);
 		return this.controlChat;
 	}
+	controlOrganizeAllowed(): boolean {
+		return !this.controlService().handlingNotice;
+	}
 	private readonly agentDir?: string;
 	private readonly factories: SessionFactories;
 

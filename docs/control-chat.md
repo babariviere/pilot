@@ -105,3 +105,9 @@ afterwards. Exact successful retries return the durable result; uncertain or fai
 replayed. Audit SQL runs in the memory worker. Terminal records also enqueue passive control-chat
 timeline activity, with stable delivery IDs. `GET /api/control-chat/audit` pages the durable history
 (newest first, `before` sequence and `limit` 1..50), including intents left uncertain by a crash.
+
+`mission_create(projectId, goal, brief?)` reuses the existing create service, waits for durable state,
+then starts its coordinator through scoped, price-capped admission. Creation and coordinator start
+have separate audit intents/results, so a failed start does not falsely claim the created mission
+was rolled back. The action must report a user request or accepted suggestion, and pilotd separately
+rejects it during a notice turn, regardless of those arguments. Draft briefs are capped at 32 KB.
