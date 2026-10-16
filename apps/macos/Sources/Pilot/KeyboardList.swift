@@ -118,6 +118,11 @@ final class KeyboardListState: ObservableObject {
     }
 }
 
+/// Keys a list may give meaning to beyond moving and opening: ⌥↑/⌥↓ reorder, E edits.
+enum KeyboardListCommand: Equatable {
+    case moveUp, moveDown, edit
+}
+
 extension View {
     /// A row of the enclosing `keyboardList`. Return runs `activate`, the row's ordinary click action.
     func keyboardListItem(_ id: String, target: KeyboardTarget? = nil,
@@ -133,10 +138,11 @@ extension View {
     /// `onEscape` lets one close itself.
     func keyboardList(region: KeyboardRegion? = .content, state: KeyboardListState? = nil, native: Bool = false,
                       suppliesRows: Bool = false, focusOnAppear: Bool = false,
-                      onEscape: (() -> Void)? = nil) -> some View {
+                      onEscape: (() -> Void)? = nil,
+                      onCommand: ((String, KeyboardListCommand) -> Void)? = nil) -> some View {
         modifier(KeyboardListModifier(region: region, external: state, native: native,
                                       suppliesRows: suppliesRows || native, focusOnAppear: focusOnAppear,
-                                      onEscape: onEscape))
+                                      onEscape: onEscape, onCommand: onCommand))
     }
 }
 
@@ -167,6 +173,7 @@ private struct KeyboardListModifier: ViewModifier {
     let suppliesRows: Bool
     let focusOnAppear: Bool
     let onEscape: (() -> Void)?
+    let onCommand: ((String, KeyboardListCommand) -> Void)?
     @StateObject private var own = KeyboardListState()
     @FocusState private var focused: Bool
 
@@ -174,7 +181,7 @@ private struct KeyboardListModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         KeyboardListBody(content: content, list: list, region: region, native: native, suppliesRows: suppliesRows,
-                         focusOnAppear: focusOnAppear, onEscape: onEscape, focused: $focused)
+                         focusOnAppear: focusOnAppear, onEscape: onEscape, onCommand: onCommand, focused: $focused)
     }
 }
 
@@ -203,6 +210,7 @@ private struct KeyboardListBody<Content: View>: View {
     let suppliesRows: Bool
     let focusOnAppear: Bool
     let onEscape: (() -> Void)?
+    let onCommand: ((String, KeyboardListCommand) -> Void)?
     var focused: FocusState<Bool>.Binding
     /// The page this list belongs to, for restoring its highlight after Back.
     @State private var routeKey: String?
@@ -218,6 +226,11 @@ private struct KeyboardListBody<Content: View>: View {
                 .focused(focused)
                 .focusEffectDisabled()
                 .onKeyPress(keys: [.upArrow, .downArrow, .home, .end, .return, .escape]) { press in
+                    if press.modifiers.contains(.option), press.modifiers.isDisjoint(with: [.command, .control]), let onCommand, let id = list.highlighted,
+                       press.key == .upArrow || press.key == .downArrow {
+                        onCommand(id, press.key == .upArrow ? .moveUp : .moveDown)
+                        return .handled
+                    }
                     // Arrow keys carry keypad and function flags; only real modifiers opt out.
                     guard press.modifiers.isDisjoint(with: [.command, .control, .option]) else { return .ignored }
                     switch press.key {
@@ -233,6 +246,13 @@ private struct KeyboardListBody<Content: View>: View {
                         item.activate()
                         return .handled
                     }
+                    return .handled
+                }
+                .onKeyPress(characters: CharacterSet(charactersIn: "eE")) { press in
+                    guard press.modifiers.isDisjoint(with: [.command, .control, .option]), let onCommand, let id = list.highlighted else {
+                        return .ignored
+                    }
+                    onCommand(id, .edit)
                     return .handled
                 }
                 .onChange(of: focused.wrappedValue) { _, isFocused in

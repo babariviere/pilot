@@ -71,6 +71,10 @@ has separate storage and transport contracts; it does not change chat-result rea
   Terminal and artifact content keep every key (Escape, Tab, ⌃C, ⌃D, letters) except the reserved ⌃⇥, ⌃⇧⇥ and
   ⌘L, plus ⌘K and ⌘J. ⌘J closes the terminal back to the composer. In an artifact viewer, ⌃⇥ leaves the page so
   its Close button and Escape work again.
+  On a mission's Tasks tab, the list takes focus like other pages: Return opens the task's chat (or the start
+  sheet), E edits its title (Return saves, Escape cancels), ⌥↑/⌥↓ reorders it within its phase, and ⌘K lists its
+  status, phase, model, dependency and link actions. The highlighted row shows its status and actions menus
+  without hovering. Chats and Artifacts tabs are keyboard lists too, and ⌘K reaches every mission tab.
 - **Let the display rest while agents work.** Keep the Mac awake without keeping the display on.
   Optional closed-lid work requires power and Wi-Fi; without both, agents pause and resume on the next
   full wake with connectivity. Screen locking is left to macOS. See [agent-aware sleep](docs/agent-sleep.md) for
