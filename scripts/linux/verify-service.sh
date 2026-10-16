@@ -158,6 +158,7 @@ python3 - "$work/hello.json" "$work/hello-manager-restarted.json" <<'PY'
 import json, sys
 assert json.load(open(sys.argv[1]))['daemonId'] == json.load(open(sys.argv[2]))['daemonId']
 PY
+node "$repo/scripts/linux/verify-workflow.mjs" "$home" "$runtime" "$archive" "${ssh_cmd[@]:1}"
 node "$repo/scripts/linux/verify-update.mjs" "$home" "$archive" "$update_session" "$bootstrap_source" "${ssh_cmd[@]:1}" > "$work/update.json"
 runtime="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["runtime"])' "$work/update.json")"
 userctl is-active pilotd.service
