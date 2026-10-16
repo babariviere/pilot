@@ -58,20 +58,23 @@ struct MemoryPage: View {
     }
 
     var body: some View {
+        observedPage
+            .confirmationDialog("Forget this summary?", isPresented: forgetPresented, titleVisibility: .visible) {
+                Button("Forget summary", role: .destructive) { Task { await state.confirmForget() } }
+                Button("Cancel", role: .cancel) { state.cancelForget() }
+            } message: {
+                Text("The original memory notes stay unchanged. This summary and summaries built from it will be rebuilt.")
+            }
+    }
+
+    private var forgetPresented: Binding<Bool> {
+        Binding(get: { state.forgetting != nil }, set: { if !$0 { state.cancelForget() } })
+    }
+
+    private var projectPage: some View {
         Group {
             if let project = client.project(projectId) {
-                Group {
-                    if selectedBinding != nil {
-                        GeometryReader { proxy in content(wide: proxy.size.width >= Self.detailBreakpoint) }
-                    } else if !sharedBindings.isEmpty {
-                        VStack(alignment: .leading, spacing: 16) {
-                            sharedMemoryPicker
-                            Text("Choose the shared project information to read.").font(.pilot(.body))
-                        }.padding(24)
-                    } else if let sharingError { InlineProblem(sharingError) }
-                    else if !sharingLoaded { ProgressView("Loading project memory…") }
-                    else { GeometryReader { proxy in content(wide: proxy.size.width >= Self.detailBreakpoint) } }
-                }
+                memoryContent
                 .navigationTitle("Memory")
                 .navigationSubtitle(project.name)
                 .toolbar {
@@ -86,6 +89,23 @@ struct MemoryPage: View {
                                message: "It was removed from Pilot. Its folder is unchanged.")
             }
         }
+    }
+
+    @ViewBuilder private var memoryContent: some View {
+        if selectedBinding != nil {
+            GeometryReader { proxy in content(wide: proxy.size.width >= Self.detailBreakpoint) }
+        } else if !sharedBindings.isEmpty {
+            VStack(alignment: .leading, spacing: 16) {
+                sharedMemoryPicker
+                Text("Choose the shared project information to read.").font(.pilot(.body))
+            }.padding(24)
+        } else if let sharingError { InlineProblem(sharingError) }
+        else if !sharingLoaded { ProgressView("Loading project memory…") }
+        else { GeometryReader { proxy in content(wide: proxy.size.width >= Self.detailBreakpoint) } }
+    }
+
+    private var observedPage: some View {
+        projectPage
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.background)
         .environment(\.sharedMemoryReadOnly, selectedBinding != nil)
@@ -107,14 +127,6 @@ struct MemoryPage: View {
         }
         .onChange(of: memoryRevision) { if sharedBindings.isEmpty, sharingLoaded { state.scheduleRefresh() } }
         .onDisappear { state.stop() }
-        .confirmationDialog("Forget this summary?", isPresented: Binding(
-            get: { state.forgetting != nil }, set: { if !$0 { state.cancelForget() } }
-        ), titleVisibility: .visible) {
-            Button("Forget summary", role: .destructive) { Task { await state.confirmForget() } }
-            Button("Cancel", role: .cancel) { state.cancelForget() }
-        } message: {
-            Text("The original memory notes stay unchanged. This summary and summaries built from it will be rebuilt.")
-        }
     }
 
     private var selectedBinding: SharedContextBinding? { sharedBindings.first { $0.bindingId == selectedBindingId } }
