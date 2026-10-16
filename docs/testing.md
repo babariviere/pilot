@@ -327,6 +327,12 @@ Continue using `apps/macos/scripts/test.sh` and `apps/macos/scripts/build.sh`, w
 SDK and test macro plugin. After a successful build, `apps/macos/scripts/test.sh --skip-build --filter
 <name>` is appropriate for repeating an affected test without rebuilding.
 
+A full native test run executes the WebKit content-measurement matrix in a separate test process after
+the other tests, reusing the same build and verification slot. This prevents unrelated MainActor/AppKit
+fixtures from consuming its one-minute budget. All clipping, resize, visible-overflow and Mermaid assertions
+remain enabled. The output guard requires that the isolated test actually starts, so a stale filter cannot
+silently drop coverage. Explicit `--filter`, `--skip` and listing requests remain a single scoped invocation.
+
 Swift test and app-bundle CI jobs already run independently. Both now cache only pinned dependency
 repositories/downloaded artifacts and the patched Ghostty vendor sources. Keys include OS, architecture,
 Swift and SDK versions, package pins/manifests, and vendor/patch scripts. No executable build products,
