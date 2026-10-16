@@ -200,6 +200,8 @@ You can also archive a failed startup without discarding its queued messages. Re
 The sidebar starts with **Home**, the **Inbox** and the project selector. Home covers every project: a short
 summary, subscription usage (with extra-usage spend when the provider reports it), projects (under their folders),
 work in progress, missions and recent activity.
+The new-chat project picker also offers **Home (~)** for chats in your home folder without a project.
+Pilot remembers this choice for later chats, including after restarting. You can still choose a project or **Other Folder…**.
 The Inbox carries the badge and lists, most urgent first, what **Needs you**, what is **Ready to merge**, and your
 Linear and Slack items. Its toolbar filters it to one project. Use **Open on GitHub** in a project's Overview
 actions menu or the ⌘K command palette to open its repository in your browser. Pilot resolves the repository
