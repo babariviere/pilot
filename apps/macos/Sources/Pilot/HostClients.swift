@@ -21,6 +21,7 @@ enum HostedHistoryAvailability: Equatable {
 /// Callers hold qualified refs, never select a process-wide "current server".
 @MainActor
 final class HostClients: ObservableObject {
+    let machineInformationStore = DevboxMachineStore()
     var onOperationDeliveryChanged: ((DurableOperation, OperationDelivery) -> Void)?
     var onRemoteSessionsChanged: ((HostRef, [SessionSummary], Bool) -> Void)?
     @Published private(set) var sessions: [Hosted<SessionSummary>] = []

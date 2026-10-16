@@ -35,6 +35,24 @@ or switch the entire app to another server.
 An unsent draft keeps its destination when you return Home. Starting from a mission inherits the
 mission's host. Shared task placement is a separate, explicit operation, not a way to move a running chat.
 
+## Machine information
+
+Select a saved devbox in **Settings → Devboxes** to see its Machine section. It checks on connection
+while visible, or when you choose **Refresh**. There is no continuous monitoring service. The check
+only reads information through the verified daemon connection, never installs packages, runs setup,
+copies credentials or makes privileged changes.
+
+The section shows OS, kernel, architecture, CPU model, online logical CPU count (not physical cores
+or container CPU quota), total machine memory and runtime data volume capacity/available space.
+Project and nested workspace mounts may have different disk space. Unsupported, denied or missing
+fields say **Unavailable**. Older runtimes without this endpoint report that the check was unavailable.
+
+**Running at last check** means the daemon responded, not that all agents are working. Service-manager
+state is **Unknown**, because it is not inspected; a responding daemon alone cannot establish it.
+Last-known values are marked **Stale** after disconnection, a failed check, a connection replacement,
+or five minutes without another check. They remain in memory while the app is open; relaunch starts
+unchecked. Neither a failed check nor disconnection means the machine, service or agents stopped.
+
 ## Connection loss, sleep and quit
 
 **Disconnected** describes availability, not the agent's outcome. Known remote chats, drafts and

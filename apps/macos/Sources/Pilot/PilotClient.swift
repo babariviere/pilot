@@ -1316,6 +1316,10 @@ final class PilotClient: ObservableObject {
         try await missionRequest(["setup"])
     }
 
+    func machineInformation() async throws -> MachineInformation {
+        try await missionRequest(["machine"])
+    }
+
     func setupRuns() async throws -> [SetupRun] {
         try await missionRequest(["setup", "runs"])
     }

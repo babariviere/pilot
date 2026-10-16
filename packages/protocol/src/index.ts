@@ -1532,6 +1532,7 @@ export const DEFAULT_PORT = 4319;
 export type { DaemonCapabilities, DaemonHello } from "./hello.ts";
 export { DAEMON_PROTOCOL_VERSION, MINIMUM_CLIENT_PROTOCOL_VERSION } from "./hello.ts";
 export type * from "./inbox.ts";
+export type { MachineInformation } from "./machine.ts";
 export type * from "./mcp.ts";
 export type * from "./memory.ts";
 export * from "./operations.ts";

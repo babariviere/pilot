@@ -64,6 +64,7 @@ struct DevboxSettingsContent: View {
             SettingsSection(snapshot.configuration.alias, explanation: "All actions below target this saved devbox, never Local. Closing a connection does not stop remote agents.") {
                 SettingsRow("Saved identity", detail: "Installation \(host.daemonId) · history \(host.lineageId)") { EmptyView() }
             }
+            DevboxMachineSection(host: host, hosts: hosts).id(host)
             DevboxProviderSetup(host: host, hosts: hosts).id(host)
             DevboxUpdateSection(host: host, hosts: hosts, loadPackage: loadPackage, navigate: navigate).id(host)
         }

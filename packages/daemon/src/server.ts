@@ -63,6 +63,7 @@ import { ChatStreams } from "./chat-streams.ts";
 import type { DaemonConfig } from "./config.ts";
 import { Conflict, ServiceUnavailable } from "./errors.ts";
 import { daemonPerformance, operations } from "./event-loop-watchdog.ts";
+import { MachineInformationReader } from "./machine.ts";
 import { type McpStatusService, SignInUnavailable } from "./mcp-status.ts";
 import type { MissionService } from "./mission-service.ts";
 import type { MissionStore } from "./missions.ts";
@@ -289,6 +290,7 @@ export function createDaemonServer(
 	maintenance?: RuntimeMaintenance,
 ): Server & { runtimeResources: RuntimeResources } {
 	sessions.setWorkspaceProcessGuard((id) => terminals.isRunning(id));
+	const machine = new MachineInformationReader(_config.home, hello?.daemonVersion ?? "unknown");
 	const reviews = new ReviewStore(_config.home);
 	const dashboards = new ProjectDashboardService({
 		sessions,
@@ -599,6 +601,11 @@ export function createDaemonServer(
 			if (!hello) throw new ServiceUnavailable("Daemon handshake is unavailable");
 			res.setHeader("cache-control", "no-store");
 			return json(res, 200, hello);
+		}
+		if (parts[1] === "machine" && parts.length === 2) {
+			if (req.method !== "GET") throw new HttpError(405, "Method not allowed");
+			res.setHeader("cache-control", "no-store");
+			return json(res, 200, await machine.read());
 		}
 		if (parts[1] === "power" && parts.length === 2) {
 			if (!power) throw new ServiceUnavailable("Energy management is unavailable");
