@@ -964,6 +964,15 @@ final class AppModel: ObservableObject {
         showMainWindow()
     }
 
+    /// A reply's chat link is navigation only. Missing chats leave the current conversation visible.
+    func reveal(chat link: ChatDestination) {
+        guard client.session(link.sessionId) != nil else {
+            sessionActionError = "This chat is no longer available."
+            return
+        }
+        reveal(session: link.sessionId)
+    }
+
     /// Selects a chat from outside the sidebar, such as a notification or the menu bar.
     func reveal(session id: String) {
         // Notifications stay global: a chat outside the focused project widens the sidebar to all projects.

@@ -13,6 +13,7 @@ final class BrowserLinkOpener {
     private let openNormally: (URL) -> Void
     private let openDesktop: (URL) -> Bool
     private let openArtifact: @MainActor (ArtifactLink) -> Void
+    private let openChat: @MainActor (ChatDestination) -> Void
     private var pending: URL?
     private var openingKey: String?
     private var requestVersion = 0
@@ -27,15 +28,24 @@ final class BrowserLinkOpener {
          openDesktop: @escaping (URL) -> Bool = { url in
              guard NSWorkspace.shared.urlForApplication(toOpen: url) != nil else { return false }
              return NSWorkspace.shared.open(url)
-         }, openArtifact: @escaping @MainActor (ArtifactLink) -> Void = { AppModel.shared.artifactLink = $0 }) {
+         }, openArtifact: @escaping @MainActor (ArtifactLink) -> Void = { AppModel.shared.artifactLink = $0 },
+         openChat: @escaping @MainActor (ChatDestination) -> Void = { AppModel.shared.reveal(chat: $0) }) {
         self.canLookup = canLookup
         self.focus = focus
         self.openNormally = openNormally
         self.openDesktop = openDesktop
         self.openArtifact = openArtifact
+        self.openChat = openChat
     }
 
     func open(_ url: URL) {
+        if url.scheme?.lowercased() == "pilot" {
+            // Malformed internal destinations must not fall through to an external scheme handler.
+            pending = nil
+            requestVersion += 1
+            if let link = ChatDestination(url: url) { openChat(link) }
+            return
+        }
         if url.scheme?.lowercased() == "artifact" {
             // Invalid internal links must never escape to a browser or an OS scheme handler.
             pending = nil
@@ -87,7 +97,8 @@ final class BrowserLinkOpener {
     }
 
     nonisolated static func handles(_ url: URL) -> Bool {
-        url.scheme?.lowercased() == "artifact" || pullRequestKey(url) != nil || DesktopAppLink.url(for: url) != nil
+        ["artifact", "pilot"].contains(url.scheme?.lowercased() ?? "")
+            || pullRequestKey(url) != nil || DesktopAppLink.url(for: url) != nil
     }
 }
 

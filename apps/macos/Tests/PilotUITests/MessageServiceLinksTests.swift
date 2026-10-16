@@ -79,6 +79,19 @@ struct MessageServiceLinksTests {
         #expect(linkAttributes[.backgroundColor] == nil)
     }
 
+    @Test func labelledChatLinksKeepTheirDestinationAndExistingLinkStyle() async throws {
+        let url = "pilot://chat/abee494b-d1a8-484c-a57b-669148815d37"
+        let blocks = try await MarkdownRenderer.shared.prepare("See [Implementation chat](\(url)) for progress.")
+        let parsed = try #require(blocks.first?.inline)
+        let rich = SelectableMessageText.attributed(parsed, style: style)
+        let range = (rich.string as NSString).range(of: "Implementation chat")
+        #expect(range.location != NSNotFound)
+        #expect(rich.attribute(.link, at: range.location, effectiveRange: nil) as? URL == URL(string: url))
+        expectTitleStyle(rich, range: range, url: url)
+        #expect(MessageServiceLinks.copiedText(rich, range: NSRange(location: 0, length: rich.length))
+                == "See Implementation chat for progress.")
+    }
+
     @Test func hoverDarkensOnlyTheHitLinkWithoutChangingStorageSelectionOrWrapping() throws {
         let parsed = try AttributedString(markdown:
             "[A long service title that wraps over several lines](https://github.com/acme/api/pull/42) and [docs](https://example.com)",

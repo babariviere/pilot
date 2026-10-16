@@ -3,6 +3,23 @@ import PilotCore
 import Testing
 @testable import Pilot
 
+@Test @MainActor func chatLinksOpenInternallyAndNeverReachDesktopOrBrowser() throws {
+    var opened: [ChatDestination] = []
+    let opener = BrowserLinkOpener(canLookup: { _ in
+        Issue.record("Chat links must not query the browser")
+        return false
+    }, openNormally: { _ in Issue.record("Chat links must not open externally") },
+       openDesktop: { _ in Issue.record("Chat links must not use a desktop scheme handler"); return false },
+       openChat: { opened.append($0) })
+    let id = "abee494b-d1a8-484c-a57b-669148815d37"
+    for value in ["pilot://chat/\(id)", "pilot://chat/invalid", "pilot://other/\(id)"] {
+        let url = try #require(URL(string: value))
+        #expect(BrowserLinkOpener.handles(url))
+        opener.open(url)
+    }
+    #expect(opened.map(\.sessionId) == [id])
+}
+
 @Test @MainActor func artifactLinksOpenInternallyAndNeverReachDesktopOrBrowser() throws {
     var opened: [ArtifactLink] = []
     let opener = BrowserLinkOpener(canLookup: { _ in
@@ -17,6 +34,26 @@ import Testing
         opener.open(url)
     }
     #expect(opened.map(\.id) == ["abee494b-d1a8-484c-a57b-669148815d37"])
+}
+
+@Test @MainActor func openingAChatSuppressesAnOlderPendingBrowserFallback() async throws {
+    var finish: CheckedContinuation<Bool, Never>?
+    var started: CheckedContinuation<Void, Never>?
+    var chats: [ChatDestination] = []
+    let opener = BrowserLinkOpener(canLookup: { _ in true }, focus: { _ in
+        await withCheckedContinuation {
+            finish = $0
+            started?.resume()
+        }
+    }, openNormally: { _ in Issue.record("The earlier PR must not open after navigating to a chat") },
+       openChat: { chats.append($0) })
+    let pr = try #require(URL(string: "https://github.com/acme/app/pull/42"))
+    let chat = try #require(URL(string: "pilot://chat/abee494b-d1a8-484c-a57b-669148815d37"))
+    await withCheckedContinuation { started = $0; opener.open(pr) }
+    opener.open(chat)
+    finish?.resume(returning: false)
+    await opener.task?.value
+    #expect(chats.map(\.sessionId) == ["abee494b-d1a8-484c-a57b-669148815d37"])
 }
 
 @Test func heliumPRKeysIncludeSubpagesButNotOtherPRsOrHosts() throws {

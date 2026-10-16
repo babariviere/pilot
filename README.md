@@ -338,6 +338,8 @@ yourself or use a coordinator chat, and review linked pull requests and artifact
 The mission's Overview shows a compact progress bar for each phase, or one overall bar for work without phases.
 The mission icon in any mission chat's toolbar opens the mission's Overview.
 Going the other way, the compass button beside a mission's title opens its coordinator chat.
+Coordinators can link to member chats in their replies. Click a chat's name to open it inside Pilot,
+including archived chats, without starting or restoring them.
 Chat inspector panes open at a compact width, leaving the conversation most of the space. Drag the
 divider to widen a terminal, diff or preview when needed.
 
