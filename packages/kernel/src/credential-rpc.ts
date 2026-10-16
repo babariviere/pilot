@@ -1,12 +1,24 @@
 /** Private same-host auth protocol. No paths, URLs to fetch, commands, or arbitrary file operations. */
 import { connect, type Socket } from "node:net";
+import { CATALOG_FRAME_LIMIT } from "./shared-model-catalog.ts";
 export const AUTH_FRAME_LIMIT = 64 * 1024;
 export interface CredentialEndpoint {
 	socket: string;
 	token: string;
+	/** Canonical same-host agent directory whose discovery this capability can read. */
+	catalogAgentDir?: string;
 }
 export type CredentialNamespace = "pi" | "mcp";
-export type CredentialOperation = "read" | "peek" | "list" | "status" | "statuses" | "begin" | "commit" | "delete";
+export type CredentialOperation =
+	| "read"
+	| "peek"
+	| "list"
+	| "status"
+	| "statuses"
+	| "begin"
+	| "commit"
+	| "delete"
+	| "catalog";
 /** Metadata only. Configured does not prove provider acceptance or include ambient/config auth. */
 export interface CredentialStatus {
 	state: "missing" | "configured" | "reauthentication_required";
@@ -37,6 +49,7 @@ export class CredentialChannel {
 	private deadline?: NodeJS.Timeout;
 	private buffer = Buffer.alloc(0);
 	private closed = false;
+	private responseLimit = AUTH_FRAME_LIMIT;
 	private readonly endpoint: CredentialEndpoint;
 	constructor(endpoint: CredentialEndpoint) {
 		this.endpoint = endpoint;
@@ -46,7 +59,7 @@ export class CredentialChannel {
 		this.socket.on("close", () => this.close());
 		this.socket.on("data", (bytes) => {
 			this.buffer = Buffer.concat([this.buffer, bytes]);
-			if (this.buffer.length > AUTH_FRAME_LIMIT) return this.close();
+			if (this.buffer.length > this.responseLimit) return this.close();
 			const end = this.buffer.indexOf(10);
 			if (end < 0) return;
 			const waiter = this.pending;
@@ -69,6 +82,7 @@ export class CredentialChannel {
 	}
 	request(request: CredentialRequest): Promise<unknown> {
 		if (this.closed || this.pending) return Promise.reject(authError());
+		this.responseLimit = request.op === "catalog" ? CATALOG_FRAME_LIMIT : AUTH_FRAME_LIMIT;
 		const frame = JSON.stringify({ ...request, token: this.endpoint.token }) + "\n";
 		if (Buffer.byteLength(frame) > AUTH_FRAME_LIMIT) return Promise.reject(authError("invalid"));
 		return new Promise((resolve, reject) => {

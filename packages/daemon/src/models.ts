@@ -6,7 +6,7 @@
  * outside those files). Settings are re-read on every request, so scope and default changes apply immediately.
  */
 import { stat } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import { getAgentDir, ModelRuntime, resolveModelScopeWithDiagnostics } from "@earendil-works/pi-coding-agent";
 import { installBundledAnthropicAuth } from "@pilot/kernel";
@@ -322,6 +322,10 @@ export class ModelCatalog {
 
 	/** Authenticated models, shared across directories and reloaded only when their sources change. */
 	private async available(signal?: AbortSignal): Promise<readonly ChatModel[]> {
+		// The daemon owner revalidates definitions, credentials and revocation fences. A second settled
+		// cache here would hide journal-only logout/login changes from the app and background callers.
+		if (process.env.PILOT_SHARED_CATALOG_DIR === resolve(this.agentDir))
+			return (await this.getRuntime()).getAvailable(undefined, { signal });
 		const [auth, definitions] = await Promise.all([
 			fileSignature(join(this.agentDir, "auth.json")),
 			this.definitionsSignature(),

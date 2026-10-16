@@ -4,6 +4,7 @@
 	"private": true,
 	"type": "module",
 	"exports": {
+		"./shared-model-catalog": "./src/shared-model-catalog.ts",
 		"./bundled-extensions": "./src/bundled-extensions.ts",
 		"./credential-rpc": "./src/credential-rpc.ts",
 		"./credential-client": "./src/credential-client.ts",

@@ -211,6 +211,52 @@ store reduced credential reads from 1,328 to 166, and peak concurrent SDK read i
 to 84. Runtime creation was outside the count; network model refresh was disabled. These are
 operation counts, not broker socket concurrency, wall-time measurements or streaming benchmarks.
 
+## Shared model discovery
+
+`shared-model-catalog.test.ts` covers shared pending/settled discovery, source invalidation, TTL,
+cancellation, bounded admission, failure recovery and metadata filtering. `shared-catalog.integration.test.ts`
+uses the real SDK and same-host broker to check concurrent startup, project scopes, worker provider
+overrides, virtual routing, runtime keys, live config/login/logout changes, operation types and independent
+host credentials. A blocked discovery must not block a model request. Existing credential-broker and
+per-runtime catalog-owner tests retain their canonical OAuth, Jiti and registration regressions.
+
+```sh
+node packages/daemon/src/shared-model-catalog.bench.ts 12 3
+```
+
+This offline probe alternates per-worker discovery and daemon-owned discovery across twelve real child
+processes, with the merged two-start admission limit retained in both variants. Ready workers remain
+resident. It excludes one warmup pair and reports three sample pairs. Temporary agent directories,
+synthetic configuration and a minimal environment prevent account or provider access. The baseline
+disables only the shared catalog capability; the merged per-runtime startup fixes remain active.
+
+On 2026-10-16, macOS arm64/Node 24.21.0, medians of the three sample measurements were:
+
+| Metric | Per-worker | Daemon-owned |
+| --- | ---: | ---: |
+| Shared discovery passes | 12 | 1 |
+| Canonical credential reads | 4,536 | 378 |
+| Median catalog startup | 102 ms | 22 ms |
+| p95 catalog startup | 141 ms | 72 ms |
+| Complete cohort startup (including child imports) | 3,497 ms | 3,082 ms |
+| Largest 5 ms heartbeat gap | 14.7 ms | 11.1 ms |
+| p95 broker status response | 2.37 ms | 1.65 ms |
+| Controller/daemon peak RSS | 262.7 MiB | 265.8 MiB |
+| Sum of resident worker RSS | 2,074.8 MiB | 2,067.7 MiB |
+
+The static catalog snapshot was 2,799 bytes. An earlier full-copy implementation increased worker RSS
+by about 350 MiB for this cohort; static-definition reuse removed that cost. RSS differences in the final
+probe are small and noisy, not evidence of a memory reduction. This measures SDK catalog startup and
+broker responsiveness, not Harness/history reopening, live providers, GUI responsiveness, large streaming
+conversations or sandboxed worker startup. The controller is not a complete running pilotd. Source
+signatures are checked on demand, with a five-minute backstop for ambient sources; no polling is added.
+
+The daemon does not load project or personal extension factories. Registered providers, virtual models,
+runtime keys and explicitly private SDK stores/catalog endpoints stay local. Refreshed models reuse
+worker-local transport templates; when a transport cannot be represented that way, workers restore its
+cached request configuration locally without repeating shared network discovery. Authentication is
+resolved again in the requesting process for every model request, through the canonical broker.
+
 ## Durable todo progress probe
 
 An offline probe on 2026-10-15 (macOS arm64, Node 24.21.0) seeded 10,000 transcript entries and

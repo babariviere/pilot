@@ -173,5 +173,6 @@ export function credentialEnvironment(endpoint?: CredentialEndpoint): NodeJS.Pro
 		PILOT_CREDENTIAL_SOCKET: endpoint?.socket,
 		PILOT_CREDENTIAL_TOKEN: endpoint?.token,
 		PILOT_REQUIRE_CREDENTIAL_BROKER: endpoint ? "1" : undefined,
+		PILOT_SHARED_CATALOG_DIR: endpoint?.catalogAgentDir,
 	};
 }
