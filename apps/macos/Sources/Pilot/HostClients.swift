@@ -462,6 +462,53 @@ final class HostClients: ObservableObject {
         return HostConnectionToken(host: host, generation: client.connectionGeneration)
     }
 
+    /// Setup belongs to a verified host, not a project/chat or the global Local client.
+    func setupReadiness(on host: HostRef) async throws -> SetupReadiness {
+        let client = try endpoint(host), token = try token(for: host)
+        let value = try await client.setupReadiness()
+        try validate(token)
+        return value
+    }
+
+    func setupRuns(on host: HostRef) async throws -> [HostedSetupRun] {
+        let client = try endpoint(host), token = try token(for: host)
+        let values = try await client.setupRuns()
+        try validate(token)
+        return values.map { HostedSetupRun(host: host, run: $0) }
+    }
+
+    func startSetup(on host: HostRef, request: SetupStartRequest) async throws -> HostedSetupRun {
+        let client = try endpoint(host), token = try token(for: host)
+        let run = try await client.startSetup(request)
+        try validate(token)
+        return HostedSetupRun(host: host, run: run)
+    }
+
+    func cancelSetup(_ value: HostedSetupRun) async throws -> HostedSetupRun {
+        let client = try endpoint(value.host), token = try token(for: value.host)
+        let run = try await client.cancelSetup(value.run.id)
+        try validate(token)
+        return HostedSetupRun(host: value.host, run: run)
+    }
+
+    func logoutSetupProvider(_ provider: String, on host: HostRef) async throws -> SetupCredentialStatus {
+        let client = try endpoint(host), token = try token(for: host)
+        let value = try await client.logoutSetupProvider(provider)
+        try validate(token)
+        return value
+    }
+
+    func attachSetup(_ value: HostedSetupRun, receive: @escaping (SetupServerMessage) -> Void) throws -> SetupTerminalConnection {
+        let client = try endpoint(value.host), token = try token(for: value.host)
+        return try client.attachSetup(value.run.id) { [weak self] message in
+            guard let self else { return }
+            do { try self.validate(token) } catch { return }
+            receive(message)
+        }
+    }
+
+    func detachSetup(_ value: HostedSetupRun) { entries[value.host]?.client.detachSetup(value.run.id) }
+
     func validate(_ token: HostConnectionToken) throws {
         let client = try endpoint(token.host)
         guard client.connectionGeneration == token.generation else { throw HostRoutingError.staleGeneration }

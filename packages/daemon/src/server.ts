@@ -73,6 +73,7 @@ import { RepositoryBrowser } from "./repository-browser.ts";
 import { ReviewStore } from "./reviews.ts";
 import type { ScheduleService } from "./schedules.ts";
 import { NotFound, type SessionManager } from "./sessions.ts";
+import { SetupError, type SetupService } from "./setup.ts";
 import { parseSlackMessageLink } from "./slack-format.ts";
 import type { SourceRegistry } from "./sources.ts";
 import type { TerminalManager } from "./terminals.ts";
@@ -257,6 +258,7 @@ export function createDaemonServer(
 	power?: PowerService,
 	mcp?: McpStatusService,
 	hello?: DaemonHello,
+	setup?: SetupService,
 ): Server {
 	sessions.setWorkspaceProcessGuard((id) => terminals.isRunning(id));
 	const reviews = new ReviewStore(_config.home);
@@ -343,6 +345,31 @@ export function createDaemonServer(
 		const url = new URL(req.url ?? "/", "http://localhost");
 		const parts = url.pathname.split("/").filter(Boolean);
 		if (parts[0] !== "api") throw new HttpError(404, "Not found");
+		if (parts[1] === "setup") {
+			res.setHeader("cache-control", "no-store");
+			if (!setup) throw new HttpError(503, "Host setup is unavailable.");
+			if (parts.length === 2 && req.method === "GET") return json(res, 200, await setup.readiness());
+			if (parts[2] === "runs") {
+				if (parts.length === 3 && req.method === "GET") return json(res, 200, setup.list());
+				if (parts.length === 3 && req.method === "POST") return json(res, 201, setup.start(await readJson(req)));
+				if (parts.length === 4 && req.method === "GET") return json(res, 200, setup.get(parts[3]!));
+				if (parts.length === 4 && req.method === "DELETE") return json(res, 200, await setup.cancel(parts[3]!));
+			}
+			if (parts.length === 5 && parts[2] === "providers" && parts[4] === "credential" && req.method === "DELETE")
+				return json(res, 200, await setup.logout(decodeURIComponent(parts[3]!)));
+			if (
+				parts.length === 5 &&
+				parts[2] === "integrations" &&
+				parts[4] === "sign-in" &&
+				req.method === "POST" &&
+				["linear", "slack"].includes(parts[3]!)
+			)
+				throw new HttpError(
+					409,
+					"This integration's browser callback cannot be relayed between hosts. Configure and sign in independently on this host.",
+				);
+			throw new HttpError(404, "Unknown setup operation.");
+		}
 		if (parts[1] === "attachments" && parts.length === 3) {
 			if (req.method === "PUT") {
 				const header = req.headers["x-pilot-attachment"];
@@ -1015,7 +1042,7 @@ export function createDaemonServer(
 		if (missions && req.method !== "GET" && req.method !== "HEAD") acknowledgeWhenDurable(res, missions.store);
 		route(req, res).catch((error: unknown) => {
 			const status =
-				error instanceof HttpError
+				error instanceof HttpError || error instanceof SetupError
 					? error.status
 					: error instanceof ServiceUnavailable
 						? 503
@@ -1024,7 +1051,12 @@ export function createDaemonServer(
 							: error instanceof Conflict
 								? 409
 								: 400;
-			const message = error instanceof Error ? error.message : String(error);
+			const message =
+				(req.url ?? "").startsWith("/api/setup") && !(error instanceof SetupError || error instanceof HttpError)
+					? "Setup operation failed. No credential details are returned."
+					: error instanceof Error
+						? error.message
+						: String(error);
 			if (!res.headersSent) json(res, status, { error: message });
 			else res.end();
 		});
@@ -1035,12 +1067,55 @@ export function createDaemonServer(
 	// Dedicated chat, terminal and subagent sockets. Each has its own send queue, so one stream's large snapshot,
 	// output burst or slow reader never delays another stream or the sidebar, and overload resets only that stream.
 	const streamWss = new WebSocketServer({ noServer: true, maxPayload: 4 * 1024 * 1024 });
+	const setupWss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 });
+	server.on("close", () => {
+		for (const ws of setupWss.clients) ws.terminate();
+		setupWss.close();
+	});
 	const chatStreams = new ChatStreams((sessionId, listener) => sessions.subscribe(sessionId, listener));
 	server.on("close", () => chatStreams.close());
 	server.on("upgrade", (req, socket, head) => {
 		const url = new URL(req.url ?? "/", "http://localhost");
 		if (!isAllowedOrigin(req.headers.origin)) {
 			socket.destroy();
+			return;
+		}
+		const setupRoute = /^\/api\/setup\/runs\/([a-f0-9-]{36})\/terminal\/ws$/.exec(url.pathname);
+		if (setupRoute && setup) {
+			setupWss.handleUpgrade(req, socket, head, (ws) => {
+				const send = boundedSender(ws, 64 * 1024);
+				let detach: (() => void) | undefined;
+				const report = () =>
+					send(
+						JSON.stringify({
+							type: "setup.error",
+							message: "Setup operation refused. Recheck this run on the selected host.",
+						}),
+					);
+				try {
+					detach = setup.attach(setupRoute[1]!, (message) => send(JSON.stringify(message)));
+				} catch {
+					report();
+					ws.close(SOCKET_REFUSED, "Setup unavailable");
+					return;
+				}
+				ws.on("close", () => detach?.());
+				ws.on("message", (raw) => {
+					try {
+						const message = JSON.parse(String(raw));
+						if (
+							message.type === "setup.answer" &&
+							typeof message.challengeId === "string" &&
+							typeof message.answer === "string"
+						)
+							setup.answer(setupRoute[1]!, message.challengeId, message.answer);
+						else if (message.type === "setup.resize") setup.resize(setupRoute[1]!, message.cols, message.rows);
+						else report();
+					} catch {
+						report();
+					}
+				});
+			});
 			return;
 		}
 		if (url.pathname === "/api/ws") {

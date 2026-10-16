@@ -10,8 +10,8 @@ import { ConnectivityService } from "./connectivity.ts";
 import { CredentialBroker } from "./credential-broker.ts";
 import { EventLoopWatchdog } from "./event-loop-watchdog.ts";
 import { daemonHello } from "./hello.ts";
-import { MissionLinearSource } from "./linear-source.ts";
 import { createLinearSizePoller } from "./linear-size.ts";
+import { MissionLinearSource } from "./linear-source.ts";
 import { McpStatusService, workerProbe } from "./mcp-status.ts";
 import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
@@ -25,14 +25,15 @@ import { ScheduleStore } from "./schedule-store.ts";
 import { ScheduleService } from "./schedules.ts";
 import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
+import { SetupService } from "./setup.ts";
 import { createSlackAdder, createSlackPoller } from "./slack-source.ts";
 import { PiSourceMcpClient } from "./source-mcp.ts";
 import { SourceRegistry } from "./sources.ts";
 import { SystemEventsDetection } from "./system-events-detection.ts";
 import { TerminalManager } from "./terminals.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
-import { untrackedStats } from "./untracked-stats.ts";
 import { TriageGroomer, workerTriage } from "./triage-grooming.ts";
+import { untrackedStats } from "./untracked-stats.ts";
 
 const config = loadConfig();
 await mkdir(config.agentDir ?? getAgentDir(), { recursive: true, mode: 0o700 });
@@ -139,6 +140,7 @@ power?.refresh();
 missionService.notices.start();
 missionService.compaction.start();
 const terminals = new TerminalManager();
+const setup = new SetupService(credentials, { mcp: () => mcpStatus.status() });
 const scheduleStore = new ScheduleStore(join(config.home, "schedules.sqlite"));
 const schedules = new ScheduleService(scheduleStore, {
 	sessions,
@@ -166,6 +168,7 @@ const server = createDaemonServer(
 	power,
 	mcpStatus,
 	hello,
+	setup,
 );
 server.listen(config.port, config.host, () => {
 	console.log(`pilotd listening on http://${config.host}:${config.port} (data: ${config.home})`);
@@ -190,7 +193,7 @@ async function stop(): Promise<void> {
 	await memory.stop();
 	await missionService.notices.stop();
 	await missionService.compaction.stop();
-	await Promise.all([terminals.shutdown(), sessions.shutdown()]);
+	await Promise.all([setup.close(), terminals.shutdown(), sessions.shutdown()]);
 	await credentials.close();
 	stopSlackCompletions();
 	await Promise.all(completionWrites);
