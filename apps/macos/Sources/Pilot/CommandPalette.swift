@@ -29,13 +29,15 @@ struct CommandPaletteCatalog {
     var inbox: Inbox?
     var missionDetails: [MissionDetail] = []
     let openSettings: () -> Void
+    let openKeyboardShortcuts: () -> Void
 
     /// Recent chats listed while the field is empty.
     static let recentChats = 5
 
-    init(model: AppModel, openSettings: @escaping () -> Void) {
+    init(model: AppModel, openSettings: @escaping () -> Void, openKeyboardShortcuts: @escaping () -> Void) {
         self.model = model
         self.openSettings = openSettings
+        self.openKeyboardShortcuts = openKeyboardShortcuts
     }
 
     func entries() -> [CommandPaletteEntry] {
@@ -149,6 +151,10 @@ struct CommandPaletteCatalog {
                                            icon: .archive) { [model] in model.showArchive(in: model.focusedProject?.id) })
         entries.append(CommandPaletteEntry(item: CommandPaletteItem(id: "page:settings", kind: .page, title: "Settings"),
                                            icon: .settings, shortcut: "⌘,", perform: openSettings))
+        entries.append(CommandPaletteEntry(
+            item: CommandPaletteItem(id: "page:shortcuts", kind: .page, title: "Keyboard shortcuts",
+                                     keywords: ["help", "hotkeys", "keys"]),
+            icon: .info, shortcut: KeyboardShortcuts.hint, perform: openKeyboardShortcuts))
         if let session = model.selectedSession, InspectorTab.agents.isAvailable(for: session) {
             entries.append(CommandPaletteEntry(
                 item: CommandPaletteItem(id: "page:agents", kind: .page, title: "Agents"),
@@ -351,8 +357,9 @@ final class CommandPaletteModel: ObservableObject {
 
     /// Lists what the app holds at once, then adds the Inbox's Linear items and the active missions'
     /// tasks when they arrive.
-    func start(model: AppModel, openSettings: @escaping () -> Void) {
-        catalog = CommandPaletteCatalog(model: model, openSettings: openSettings)
+    func start(model: AppModel, openSettings: @escaping () -> Void, openKeyboardShortcuts: @escaping () -> Void) {
+        catalog = CommandPaletteCatalog(model: model, openSettings: openSettings,
+                                        openKeyboardShortcuts: openKeyboardShortcuts)
         client = model.client
         rebuild()
         loading?.cancel()
@@ -464,6 +471,7 @@ final class CommandPaletteModel: ObservableObject {
 struct CommandPaletteView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
     @Environment(\.dismiss) private var dismiss
     @StateObject private var palette = CommandPaletteModel()
     @FocusState private var fieldFocused: Bool
@@ -486,7 +494,8 @@ struct CommandPaletteView: View {
         .frame(width: 620, height: 520)
         .background(Theme.background)
         .onAppear {
-            palette.start(model: model, openSettings: { openSettings() })
+            palette.start(model: model, openSettings: { openSettings() },
+                          openKeyboardShortcuts: { openWindow(id: KeyboardShortcuts.windowID) })
             fieldFocused = true
         }
         .onDisappear { palette.stop() }
