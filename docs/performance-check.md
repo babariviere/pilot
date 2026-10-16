@@ -233,6 +233,13 @@ from the wall clock, are removed while the window is occluded, and Reduce Motion
 corners, which recede on hover, still use the clock. Compare `Pilot --performance-check --working` (twelve working
 sessions) before and after.
 
+**Streamed text fade-in.** Newly appended text in a streaming block fades in over 240 ms, ease-out: a layer of the
+opaque background colour covers the new glyphs' line rectangles and Core Animation fades it out, so the text, its
+layout and the row height never change and nothing redraws per frame. Restored history, Reduce Motion and tables
+(whose fill is translucent) show text at once. The text benchmark above also times the tail edit with its veils
+(M3 Pro): 0.09 → 0.12 ms per update for a 2 KB block and 0.14–0.15 → 0.16–0.20 ms for 8 KB with 12-character
+deltas; 0.12–0.14 → 0.17–0.21 ms and 0.17 → 0.22 ms with 100-character deltas.
+
 
 
 

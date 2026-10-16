@@ -18,6 +18,7 @@ struct MarkdownView: View {
     @StateObject private var state: MarkdownRenderState
     @Environment(\.transcriptContentPrepared) private var contentPrepared
     @Environment(\.pilotFonts) private var fonts
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(text: String, textColor: NSColor = .labelColor, lazy: Bool = false, hugsContent: Bool = false,
          streaming: Bool = false) {
@@ -39,6 +40,8 @@ struct MarkdownView: View {
         }
         .environment(\.messageTextSelection, state.selection)
         .environment(\.messageSelectionColor, textColor)
+        // Streamed text fades in from the transcript's background; restored history and Reduce Motion do not.
+        .environment(\.messageTextFade, streaming && !reduceMotion ? NSColor(Theme.background) : nil)
         .frame(maxWidth: hugsContent ? nil : .infinity, alignment: .leading)
         .task(id: text) {
             state.selection.source = text
@@ -47,6 +50,7 @@ struct MarkdownView: View {
                 let blocks = try await MarkdownRenderer.shared.prepare(text, streaming: streaming)
                 try Task.checkCancellation()
                 PreparedMarkdownCache.shared.store(blocks, for: text, replacing: state.source)
+                if state.restoredBlockCount == nil { state.restoredBlockCount = blocks.count }
                 state.source = text
                 state.blocks = blocks
                 contentPrepared?()
@@ -69,6 +73,7 @@ struct MarkdownView: View {
                 // Final blocks keep their prepared ID while a reply streams, so only changed blocks update.
                 BlockView(block: block, hugsContent: hugsContent).equatable()
                     .environment(\.messageSelectionBlock, index)
+                    .environment(\.messageTextFadesInitial, index >= (state.restoredBlockCount ?? state.blocks.count))
             }
         }
     }
@@ -84,6 +89,7 @@ struct MarkdownView: View {
 
 private struct BlockView: View, Equatable {
     @Environment(\.pilotFonts) private var fonts
+    @Environment(\.messageTextFade) private var fade
     let block: PreparedMarkdownBlock
     let hugsContent: Bool
 
@@ -117,6 +123,7 @@ private struct BlockView: View, Equatable {
             }
         case let .code(language, text):
             CodeBlock(language: language, text: text, prepared: block.code)
+                .environment(\.messageTextFade, fade == nil ? nil : NSColor(Theme.code))
         case let .diagram(kind, text):
             InlineDiagramBlock(kind: kind, text: text).id(kind.rawValue + ":" + text)
         case let .quote(text):
@@ -129,6 +136,8 @@ private struct BlockView: View, Equatable {
         case let .table(rows):
             SelectableMessageText(text: AttributedString(rows.joined(separator: "\n")),
                                   font: fonts.nsMono, monoFont: fonts.nsMono, lineSpacing: 0)
+                // The table's fill is translucent, so no single colour can veil its text.
+                .environment(\.messageTextFade, nil)
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: Theme.Radius.control).fill(Theme.muted))
