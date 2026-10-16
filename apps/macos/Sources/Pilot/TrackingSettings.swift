@@ -162,8 +162,9 @@ struct LinearTeamPicker: View {
     }
 }
 
-/// Configured Slack channels with their status and a remove button, then a search field that adds more.
-/// Suggestions come from the channels I'm in; typing searches public and private channels I can read.
+/// Configured Slack channels with their status and a remove button, then the field that adds more, right below the
+/// list so it reads as the next step. Suggestions come from the channels I'm in; typing searches public and private
+/// channels I can read. Group handles only matter for mention-only channels, so they appear once one is filtered.
 struct SlackChannelsEditor: View {
     @ObservedObject var editor: ProjectEditor
     let source: TrackingSource?
@@ -206,36 +207,39 @@ struct SlackChannelsEditor: View {
                 }
             }
         }
-        if !editor.slackChannels.isEmpty {
-            SettingsRow {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("My Slack groups").font(.pilot(.body))
-                        Spacer()
-                        TextField("@support, @oncall", text: $editor.slackGroupHandles)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 220)
-                            .accessibilityLabel("My Slack group handles, separated by commas")
-                    }
-                    Text("Add the group handles you belong to, separated by commas. Slack cannot provide your memberships here. Personal mentions always count; @here, @channel and @everyone do not. Filters use channel-scoped public and private search and leave existing items unchanged.")
-                        .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-        }
         SettingsRow {
             HStack(spacing: 6) {
-                PilotSymbol(PilotIcon.search).foregroundStyle(Theme.mutedForeground).accessibilityHidden(true)
-                TextField("Add channel", text: $query, prompt: Text("Search channels to add"))
+                PilotSymbol(PilotIcon.add).foregroundStyle(Theme.mutedForeground).accessibilityHidden(true)
+                TextField("Add channel", text: $query, prompt: Text("Add a channel: search by name"))
                     .textFieldStyle(.plain)
+                    .font(.pilot(.label))
                     .labelsHidden()
                     .focused($focused)
                     .onSubmit { if let first = candidates.first { add(first) } }
                 if searching { ProgressView().controlSize(.small) }
             }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.control).fill(Theme.card))
+            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.control)
+                .strokeBorder(focused ? Theme.focusRing : Theme.border))
+            .contentShape(Rectangle())
+            .onTapGesture { focused = true }
         }
         if focused || !query.isEmpty {
             SettingsRow { suggestions }
+        }
+        if showsGroupHandles {
+            SettingsRow {
+                SettingsRowLabel(title: "My Slack groups",
+                                 detail: "Mention-only channels also keep messages that mention these groups.")
+            } control: {
+                TextField("@support, @oncall", text: $editor.slackGroupHandles)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 200)
+                    .accessibilityLabel("My Slack group handles, separated by commas")
+                    .help("Group handles you belong to, separated by commas. Slack cannot list your memberships. Personal mentions always count; @here, @channel and @everyone do not.")
+            }
         }
         SourceAccountRow(kind: .slack, label: "Slack",
                          needsSignIn: mine?.status == .signInRequired || results?.status == .signInRequired
@@ -250,6 +254,13 @@ struct SlackChannelsEditor: View {
                     await search()
                 }
             }
+    }
+
+    /// Group handles only filter mention-only channels; keep them visible while any are saved so they can be cleared.
+    private var showsGroupHandles: Bool {
+        let channels = Set(editor.slackChannels.map(\.id))
+        return !editor.slackMentionOnlyChannels.isDisjoint(with: channels)
+            || !editor.slackGroupHandles.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
     private var suggestions: some View {
