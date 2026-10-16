@@ -226,10 +226,14 @@ struct SelectableMessageText: NSViewRepresentable {
         let style = MessageSelectionTextView.Style(font: font, mono: monoFont, color: color ?? defaultColor, spacing: lineSpacing)
         if view.content != text || view.style != style {
             StreamingTrace.measure(.textUpdate) {
+                let attributed = Self.attributed(text, style: style)
+                // Same style: edit only from the first changed character, so TextKit keeps the layout before it.
+                // A streamed block mostly grows at its end; replacing the whole storage re-laid out every line.
+                let appended = view.style == style && view.textStorage.map { view.replaceChangedTail($0, with: attributed) } == true
+                if !appended { view.textStorage?.setAttributedString(attributed) }
                 view.content = text
                 view.style = style
                 view.updateLinkHover(at: nil)
-                view.textStorage?.setAttributedString(Self.attributed(text, style: style))
                 view.invalidateMeasurements()
                 view.invalidateIntrinsicContentSize()
             }
@@ -287,6 +291,11 @@ final class MessageSelectionTextView: NSTextView {
     private var measuring = false
     /// Sizes for the few widths SwiftUI probes per layout pass, so alternating probes do not relayout.
     private var measurements: [(width: CGFloat, hugsContent: Bool, size: CGSize)] = []
+    /// A second layout of the same storage for size probes at another width than the drawn one. Created only once
+    /// the text has been edited in place: resizing the drawn container would invalidate its whole layout, and the
+    /// next streamed append would lay out every line again.
+    private var probe: (layout: NSLayoutManager, container: NSTextContainer)?
+    private(set) var editedInPlace = false
     /// The text view does not own a TextKit 1 stack it was given, so it retains the root here.
     private var ownedStorage: NSTextStorage?
     private var linkTrackingArea: NSTrackingArea?
@@ -358,16 +367,66 @@ final class MessageSelectionTextView: NSTextView {
         measurements.removeAll(keepingCapacity: true)
     }
 
+    /// Replaces only the part of `storage` that differs from `next`, by characters and attributes. Returns false
+    /// when nothing before the end can be kept, so a full replacement costs the same.
+    func replaceChangedTail(_ storage: NSTextStorage, with next: NSAttributedString) -> Bool {
+        let start = Self.firstDifference(storage, next)
+        guard start > 0 else { return false }
+        storage.beginEditing()
+        storage.replaceCharacters(in: NSRange(location: start, length: storage.length - start),
+                                  with: next.attributedSubstring(from: NSRange(location: start, length: next.length - start)))
+        storage.endEditing()
+        editedInPlace = true
+        return true
+    }
+
+    /// UTF-16 offset of the first character whose text or attributes differ.
+    static func firstDifference(_ old: NSAttributedString, _ new: NSAttributedString) -> Int {
+        let common = (old.string as NSString).commonPrefix(with: new.string, options: .literal) as NSString
+        var limit = common.length
+        // A composed character can share its first UTF-16 unit with a different one; keep whole characters.
+        if limit > 0, limit < (new.string as NSString).length {
+            limit = (new.string as NSString).rangeOfComposedCharacterSequence(at: limit).location
+        }
+        var index = 0
+        while index < limit {
+            var oldRun = NSRange(), newRun = NSRange()
+            let range = NSRange(location: 0, length: limit)
+            let oldAttributes = old.attributes(at: index, longestEffectiveRange: &oldRun, in: range)
+            let newAttributes = new.attributes(at: index, longestEffectiveRange: &newRun, in: range)
+            guard (oldAttributes as NSDictionary).isEqual(to: newAttributes) else { return index }
+            let end = min(NSMaxRange(oldRun), NSMaxRange(newRun))
+            if NSMaxRange(oldRun) != NSMaxRange(newRun) { return end }
+            index = end
+        }
+        return limit
+    }
+
     func measure(width: CGFloat, unwrapped: Bool, hugsContent: Bool = false) -> CGSize {
         if let cached = measurements.first(where: { $0.width == width && $0.hugsContent == hugsContent }) { return cached.size }
         return StreamingTrace.measure(.textMeasure) { layOut(width: width, unwrapped: unwrapped, hugsContent: hugsContent) }
     }
 
     private func layOut(width: CGFloat, unwrapped: Bool, hugsContent: Bool) -> CGSize {
-        guard let container = textContainer, let layout = layoutManager else { return .zero }
+        guard var container = textContainer, var layout = layoutManager else { return .zero }
+        if editedInPlace, !unwrapped, frame.width > 0, width != frame.width, let storage = textStorage {
+            // Probe another width without resizing the drawn layout.
+            let stack = probe ?? {
+                let layout = NSLayoutManager()
+                let container = NSTextContainer(size: CGSize(width: width, height: .greatestFiniteMagnitude))
+                container.lineFragmentPadding = textContainer?.lineFragmentPadding ?? 0
+                layout.addTextContainer(container)
+                storage.addLayoutManager(layout)
+                return (layout, container)
+            }()
+            probe = stack
+            layout = stack.layout
+            container = stack.container
+        }
         // Resizable text views can resize themselves during layout. Keep the probe width meanwhile.
         measuring = true
-        container.size = CGSize(width: width, height: .greatestFiniteMagnitude)
+        // Setting an unchanged size would still invalidate the container's layout.
+        if container.size.width != width { container.size = CGSize(width: width, height: .greatestFiniteMagnitude) }
         layout.ensureLayout(for: container)
         let used = layout.usedRect(for: container)
         measuring = false

@@ -205,6 +205,24 @@ the current frame (`DisplayFramePacer`, a paused `CADisplayLink` that runs only 
 per-revision `scrollTo` is gone: while following, `TranscriptScrollObserver` already pins the bottom in the layout
 pass that grows the document. The benchmark's `chat body evaluations` should stay near zero while streaming, and
 `transcript rows evaluations` counts the row updates instead.
++
+**Appending streamed text.** The streaming block's `NSTextView` replaced its whole storage per update, so TextKit laid
+out every line again on the main thread. It now edits only from the first changed character or style
+(`MessageSelectionTextView.replaceChangedTail`), so the layout before it is kept, and size probes at another width
+use a second layout of the same storage instead of resizing the drawn one. Component benchmark (TextKit layout at
+704 pt, M3 Pro, two runs, including finding the changed range):
+
+```sh
+xcrun swiftc -O -parse-as-library apps/macos/scripts/bench-text-append.swift -o /tmp/pilot-text-bench && /tmp/pilot-text-bench
+```
+
+| Streaming block | Replace + layout per update | Tail edit + layout per update |
+| --- | --- | --- |
+| 2 KB, 12-character deltas | 0.38 ms | 0.09 ms |
+| 2 KB, 100-character deltas | 0.39 ms | 0.12 ms |
+| 8 KB, 12-character deltas | 1.42 ms | 0.13 ms |
+| 8 KB, 100-character deltas | 1.44 ms | 0.16 ms |
+
 
 
 

@@ -294,6 +294,56 @@ struct MessageTextSelectionTests {
         #expect(view.textContainer?.size.width == 320)
     }
 
+    @Test func streamedAppendsEditOnlyTheTailAndKeepSizeAndSelection() {
+        let style = MessageSelectionTextView.Style(font: .systemFont(ofSize: 14),
+            mono: .monospacedSystemFont(ofSize: 12, weight: .regular), color: .labelColor, spacing: 3)
+        let owner = MessageTextSelection()
+        let view = MessageSelectionTextView.make()
+        view.setFrameSize(NSSize(width: 320, height: 200))
+        view.selectionOwner = owner
+        owner.register(view)
+        var text = "Streaming text keeps growing. "
+        guard let storage = view.textStorage else { Issue.record("Expected text storage"); return }
+        storage.setAttributedString(SelectableMessageText.attributed(AttributedString(text), style: style))
+        owner.select(from: .init(key: view.selectionKey, offset: 2), to: .init(key: view.selectionKey, offset: 9))
+        var next = NSAttributedString()
+        for index in 0 ..< 30 {
+            text += "More **words** \(index). "
+            next = SelectableMessageText.attributed(AttributedString(text), style: style)
+            #expect(view.replaceChangedTail(storage, with: next))
+            #expect(storage.isEqual(to: next))
+        }
+        #expect(view.selectedRange() == NSRange(location: 2, length: 7))
+        let fresh = MessageSelectionTextView.make()
+        fresh.setFrameSize(NSSize(width: 320, height: 200))
+        fresh.textStorage?.setAttributedString(next)
+        view.invalidateMeasurements()
+        #expect(view.measure(width: 320, unwrapped: false) == fresh.measure(width: 320, unwrapped: false))
+        // Probing another width uses a separate layout, so the drawn one is not invalidated.
+        let probed = view.measure(width: 500, unwrapped: false)
+        #expect(view.textContainer?.size.width == 320)
+        #expect(probed == fresh.measure(width: 500, unwrapped: false))
+    }
+
+    @Test func tailEditsStartAtTheFirstChangedTextOrStyle() {
+        let font = NSFont.systemFont(ofSize: 14)
+        let bold = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
+        let plain = NSAttributedString(string: "Hello **wor", attributes: [.font: font])
+        let restyled = NSMutableAttributedString(string: "Hello ", attributes: [.font: font])
+        restyled.append(NSAttributedString(string: "world", attributes: [.font: bold]))
+        #expect(MessageSelectionTextView.firstDifference(plain, restyled) == 6)
+        let grown = NSAttributedString(string: "Hello **world", attributes: [.font: font])
+        #expect(MessageSelectionTextView.firstDifference(plain, grown) == plain.length)
+        let linked = NSMutableAttributedString(string: "See https://example.com", attributes: [.font: font])
+        linked.addAttribute(.link, value: URL(string: "https://example.com")!, range: NSRange(location: 4, length: 19))
+        let unlinked = NSAttributedString(string: "See https://example.com", attributes: [.font: font])
+        #expect(MessageSelectionTextView.firstDifference(unlinked, linked) == 4)
+        // A family emoji shares its first code units with a lone person; never split a character.
+        let person = NSAttributedString(string: "Hi 🧑", attributes: [.font: font])
+        let family = NSAttributedString(string: "Hi 🧑‍💻", attributes: [.font: font])
+        #expect(MessageSelectionTextView.firstDifference(person, family) == 3)
+    }
+
     @Test func regionsShareOneSelectionHighlight() {
         let owner = MessageTextSelection()
         let first = MessageSelectionTextView.make(), last = MessageSelectionTextView.make()
