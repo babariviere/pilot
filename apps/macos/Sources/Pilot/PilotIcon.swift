@@ -52,8 +52,8 @@ enum PilotIcon: String, CaseIterable {
 
     // MARK: Services and settings
 
-    case linearIssue, githubIssue, slackChannel, privateChannel, signInRequired, appearance, notifications, energy,
-        power, updates, activity, connections
+    case linearIssue, linearParent, githubIssue, slackChannel, privateChannel, signInRequired, appearance,
+        notifications, energy, power, updates, activity, connections
 }
 
 extension PilotIcon {
@@ -159,6 +159,7 @@ extension PilotIcon {
         case .push: "arrow.up.to.line"
         case .bug: "ladybug"
         case .linearIssue: "list.bullet.rectangle"
+        case .linearParent: "list.bullet.below.rectangle"
         case .githubIssue: "exclamationmark.bubble"
         case .slackChannel: "number"
         case .privateChannel: "lock"
@@ -324,6 +325,7 @@ extension PilotIcon {
         case .branch: "Branches use only PilotMark, including events, forks and the branch picker."
         case .bug: "A bug report or the debug session."
         case .linearIssue: "Fallback for a Linear item without its mark."
+        case .linearParent: "A parent Linear issue shown above its sub-issues, when it is not one of the user's issues."
         case .githubIssue: "Fallback for a GitHub issue without its mark."
         case .slackChannel: "A public Slack channel."
         case .privateChannel: "A private channel or a locked item."
