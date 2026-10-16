@@ -149,10 +149,13 @@ jobs:
       - name: Verify Swift toolchain
         id: swift-toolchain
         if: ${{ !cancelled() && steps.changes.outputs.swift == 'true' }}
+        env:
+          BUILD_INPUTS: ${{ hashFiles('apps/macos/Package.resolved', 'apps/macos/Package.swift', 'apps/macos/scripts/test.sh', 'apps/macos/scripts/swift-env.sh', 'apps/macos/scripts/stable-mtimes.py') }}
         run: |
           swift --version
           identity="$(printf '%s\n' "$(swift --version)" "$(xcrun --show-sdk-version)" | shasum -a 256 | awk '{print $1}')"
           echo "key=$identity" >> "$GITHUB_OUTPUT"
+          echo "build=swift-build-v1-$RUNNER_OS-$RUNNER_ARCH-$identity-$BUILD_INPUTS" >> "$GITHUB_OUTPUT"
       - name: Cache pinned Swift dependencies
         if: ${{ !cancelled() && steps.swift-toolchain.outcome == 'success' }}
         uses: actions/cache@v4
@@ -163,12 +166,35 @@ jobs:
             ~/Library/Caches/org.swift.swiftpm/artifacts
             apps/macos/Vendor/libghostty-spm
           key: swift-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.resolved', 'apps/macos/Package.swift', 'apps/macos/scripts/vendor-ghostty.sh', 'apps/macos/scripts/patch-ghostty-resources.py', 'apps/macos/scripts/patch-ghostty-layout.py') }}
+      # PRs start from main's newest debug build and recompile only inputs whose contents changed. Main always builds from scratch, so its tests, app-bundle and releases never use
+      # cached build products.
+      - name: Restore the Swift test build
+        id: swift-build-cache
+        if: ${{ !cancelled() && steps.swift-toolchain.outcome == 'success' && github.event_name == 'pull_request' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: apps/macos/.build
+          key: ${{ steps.swift-toolchain.outputs.build }}-${{ github.sha }}
+          restore-keys: ${{ steps.swift-toolchain.outputs.build }}-
+      - name: Give Swift inputs content-derived timestamps
+        if: ${{ !cancelled() && steps.swift-toolchain.outcome == 'success' }}
+        run: |
+          apps/macos/scripts/vendor-ghostty.sh
+          python3 apps/macos/scripts/stable-mtimes.py apps/macos
       - name: Swift tests
         id: swift-test
         if: ${{ !cancelled() && steps.swift-toolchain.outcome == 'success' }}
         # A normal run takes about 5 minutes. Fail a hung test process quickly instead of at the job limit.
         timeout-minutes: 12
         run: apps/macos/scripts/test.sh
+      # Only main saves (each build is ~430 MB against the repo's 10 GB cache limit), also after failing
+      # tests: the build itself stays valid for the next incremental build.
+      - name: Save the Swift test build
+        if: ${{ !cancelled() && steps.swift-test.outcome != 'skipped' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: apps/macos/.build
+          key: ${{ steps.swift-toolchain.outputs.build }}-${{ github.sha }}
       # PRs package the debug binaries the tests just built and smoke-test the relocated app. The optimized
       # build is verified by app-bundle on main before anything is published.
       - name: Bundle the app from the Swift test build
