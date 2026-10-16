@@ -24,6 +24,7 @@ See [screenshot notes](docs/screenshots/README.md) to regenerate them.*
 - **See what needs you first.** Home shows how every project is doing. The Inbox is the one place to act: chats
   that need you (each with a short reason), pull requests ready to merge, and Linear and Slack items, across
   projects or filtered to one. Each project has an Overview that starts with what is next for it.
+  Right-click a chat and choose **Go to project** to open its project's Overview.
 - **Jump anywhere from the keyboard.** ⌘K opens a command palette over chats, archived ones included (by title,
   branch, project or pull request number), pages, missions and tasks (`#25`), project scopes, Linear Inbox items,
   Slack reports in triage (by summary, channel or message text, newest first, resolved ones included), and actions

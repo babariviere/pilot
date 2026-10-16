@@ -188,6 +188,7 @@ private struct ArchiveRow: View {
         }
         .contextMenu {
             Button("Read Chat") { model.open(session: session.id) }
+            SessionProjectAction(session: session)
             SessionRenameAction(session: session)
             SessionArchiveAction(session: session)
         }

@@ -239,6 +239,7 @@ struct SessionMoreActions: View {
 
     var body: some View {
         Menu {
+            SessionProjectAction(session: session)
             SessionRenameAction(session: session)
             Divider()
             SessionMissionActions(session: session)
