@@ -5,6 +5,8 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { parentPort, workerData } from "node:worker_threads";
 import { MAX_WATCHES, validateWatch, type Watch, type WatchInput } from "./watches.ts";
+import { WatchEventsDisk } from "./watch-events-disk.ts";
+import type { WatchObservation, WatchNotice } from "./watch-delivery.ts";
 
 const { path } = workerData as { path: string };
 if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -21,6 +23,7 @@ db.exec(`
  CREATE INDEX IF NOT EXISTS watches_match ON watches(event, target_kind, target_id, target_scope);
  CREATE INDEX IF NOT EXISTS watches_expiry ON watches(expires_at) WHERE expires_at IS NOT NULL;
 `);
+const events = new WatchEventsDisk(db);
 function prune(now: number): void {
 	db.prepare("DELETE FROM watches WHERE expires_at <= ?").run(now);
 }
@@ -33,6 +36,25 @@ function list(now: number): Watch[] {
 }
 function dispatch(op: string, args: unknown): unknown {
 	const now = Date.now();
+	if (op === "attribute") {
+		const a = args as { sessionId: string; origin: string };
+		return events.attributeSessionRun(a.sessionId, a.origin);
+	}
+	if (op === "observe") {
+		const input = args as { events: WatchObservation[]; self?: string };
+		return events.observe(input.events, input.self);
+	}
+	if (op === "activity") {
+		const a = args as { busy: boolean; now: number };
+		return events.activity(a.busy, a.now);
+	}
+	if (op === "deadline") return events.deadline(Number(args));
+	if (op === "prepare") return events.prepare(Number(args));
+	if (op === "pending") return events.pending();
+	if (op === "acknowledge") {
+		const a = args as { notice: WatchNotice; now: number };
+		return events.acknowledge(a.notice, a.now);
+	}
 	if (op === "list") return list(now);
 	if (op === "add") {
 		const input = validateWatch(args as WatchInput, now);

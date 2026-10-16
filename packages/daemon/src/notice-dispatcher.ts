@@ -40,6 +40,7 @@ export class NoticeDispatcher {
 	private stopped = true;
 	private scheduled = false;
 	private generation = 0;
+	private readonly updates = new Set<Promise<void>>();
 	private readonly adapter: NoticeDispatchAdapter;
 	constructor(adapter: NoticeDispatchAdapter) {
 		this.adapter = adapter;
@@ -52,7 +53,9 @@ export class NoticeDispatcher {
 		if (this.stopped || this.running || this.scheduled) return;
 		this.scheduled = true;
 		queueMicrotask(() => {
-			void this.updateTimer().catch((error) => console.warn(`pilotd: notice scheduling failed: ${error}`));
+			const update = this.updateTimer().catch((error) => console.warn(`pilotd: notice scheduling failed: ${error}`));
+			this.updates.add(update);
+			void update.finally(() => this.updates.delete(update));
 		});
 	}
 	private async updateTimer(): Promise<void> {
@@ -89,6 +92,7 @@ export class NoticeDispatcher {
 		this.stopped = true;
 		++this.generation;
 		clearTimeout(this.timer);
+		await Promise.all(this.updates);
 		await this.running;
 	}
 }
