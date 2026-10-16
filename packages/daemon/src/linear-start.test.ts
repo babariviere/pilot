@@ -201,11 +201,35 @@ test("start state config is strictly bounded, normalized and cleared with the at
 		{ child: { inProgress: { id: "a", name: "b", type: "started" } } },
 		{ child: { unknownStage: { id: "a", name: "b" } } },
 		{ child: { inReview: null } },
+		{ child: { canceled: null } },
+		{ child: { duplicated: { id: " ", name: "Duplicate" } } },
+		{ child: { canceled: { id: "canceled", name: 1 } } },
+		{ child: { duplicated: { id: "duplicate", name: "Duplicate", team: "other" } } },
 		{ child: [] },
 		{ " ": { todo: { id: "a", name: "b" } } },
 		Object.fromEntries(Array.from({ length: 251 }, (_, i) => [`team-${i}`, { inProgress: { id: "a", name: "b" } }])),
 	])
 		assert.throws(() => validateTrackingConfig({ ...base, linearStateMappings: invalid }), /linearStateMappings/);
+});
+
+test("canceled and duplicated config normalizes references without changing existing team mappings", () => {
+	const existing = { inProgress: { id: "active", name: "Building" }, merged: { id: "merged", name: "Merged" } };
+	const config = validateTrackingConfig({
+		slackChannels: [],
+		linearTeam: "root",
+		linearStateMappings: {
+			root: existing,
+			child: {
+				canceled: { id: " canceled ", name: " Won't do " },
+				duplicated: { id: " duplicate ", name: " Duplicate " },
+			},
+		},
+	});
+	assert.deepEqual(config.linearStateMappings, {
+		root: existing,
+		child: { canceled: { id: "canceled", name: "Won't do" }, duplicated: { id: "duplicate", name: "Duplicate" } },
+	});
+	assert.equal(validateTrackingConfig({ ...config, linearTeam: "" }).linearStateMappings, undefined);
 });
 
 test("reassigned, out-of-scope, already started and terminal tickets never write", async () => {
@@ -283,7 +307,23 @@ async function registry(t: TestContext) {
 	return { ...f, item, tracking, items, project, projects, path };
 }
 
-test("all five mappings persist without writes; starting work applies only In progress", async (t) => {
+test("settings workflow choices come from the requested actual team, including terminal states", async (t) => {
+	const f = await registry(t);
+	f.setStates([
+		{ id: "canceled", name: "Won't do", type: "canceled" },
+		{ id: "duplicate", name: "Duplicate", type: "duplicate" },
+	]);
+	assert.deepEqual(await f.tracking.linearStates("team-child"), {
+		status: "ok",
+		items: [
+			{ id: "duplicate", name: "Duplicate", type: "duplicate" },
+			{ id: "canceled", name: "Won't do", type: "canceled" },
+		],
+	});
+	assert.deepEqual(f.calls, [{ tool: "states", args: { team: "team-child" } }]);
+});
+
+test("all seven mappings persist without writes; starting work applies only In progress", async (t) => {
 	const f = await registry(t);
 	const mapping = {
 		todo: { id: "todo", name: "Todo" },
@@ -291,6 +331,8 @@ test("all five mappings persist without writes; starting work applies only In pr
 		inReview: { id: "review", name: "Review" },
 		merged: { id: "merged", name: "Merged" },
 		deployed: { id: "deployed", name: "Deployed" },
+		canceled: { id: "canceled", name: "Won't do" },
+		duplicated: { id: "duplicate", name: "Duplicate" },
 	};
 	await f.projects.update(f.project.id, {
 		tracking: { ...f.project.tracking!, linearStateMappings: { "team-child": mapping } },
@@ -299,6 +341,13 @@ test("all five mappings persist without writes; starting work applies only In pr
 	const reopened = new ProjectStore(f.project.path);
 	await reopened.load();
 	assert.deepEqual(reopened.require(f.project.id).tracking?.linearStateMappings, { "team-child": mapping });
+	await assert.rejects(
+		f.projects.update(f.project.id, {
+			tracking: { ...f.project.tracking!, linearStateMappings: { "team-child": { canceled: null } } } as never,
+		}),
+		/linearStateMappings/,
+	);
+	assert.deepEqual(f.projects.require(f.project.id).tracking?.linearStateMappings, { "team-child": mapping });
 	await f.tracking.poll(`${f.project.id}:linear`);
 	assert.ok(!f.calls.some((call) => call.tool === "startIssue"), "polling never applies saved lifecycle mappings");
 	await f.tracking.startLinear(f.item);
@@ -306,6 +355,12 @@ test("all five mappings persist without writes; starting work applies only In pr
 		f.calls.filter((call) => call.tool === "startIssue"),
 		[{ tool: "startIssue", args: { id: "issue-7", state: "active" } }],
 	);
+	const { canceled: _canceled, duplicated: _duplicated, ...legacy } = mapping;
+	await f.projects.update(f.project.id, {
+		tracking: { ...f.project.tracking!, linearStateMappings: { "team-child": legacy } },
+	});
+	await reopened.load();
+	assert.deepEqual(reopened.require(f.project.id).tracking?.linearStateMappings, { "team-child": legacy });
 });
 
 test("confirmed chat/mission binding does not await MCP; duplicate starts coalesce and sync reflects state", async (t) => {

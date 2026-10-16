@@ -66,7 +66,7 @@ private struct LinearStateMappingPickers: View {
         .task { await load() }
         SettingsRow {
             VStack(alignment: .leading, spacing: 4) {
-                SettingsNote("Only In progress is applied when work starts. Todo, In review, Merged and Deployed are saved for future use.")
+                SettingsNote("Only In progress is applied when work starts. All other mappings are saved only, including Canceled and Duplicated.")
                 SettingsNote("In progress uses a started state. Automatic looks for In progress, never workflow order.")
                 if let problem {
                     InlineProblem(problem) { Task { await load() } }
