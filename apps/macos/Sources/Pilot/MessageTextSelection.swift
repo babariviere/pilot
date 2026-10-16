@@ -225,12 +225,14 @@ struct SelectableMessageText: NSViewRepresentable {
         }
         let style = MessageSelectionTextView.Style(font: font, mono: monoFont, color: color ?? defaultColor, spacing: lineSpacing)
         if view.content != text || view.style != style {
-            view.content = text
-            view.style = style
-            view.updateLinkHover(at: nil)
-            view.textStorage?.setAttributedString(Self.attributed(text, style: style))
-            view.invalidateMeasurements()
-            view.invalidateIntrinsicContentSize()
+            StreamingTrace.measure(.textUpdate) {
+                view.content = text
+                view.style = style
+                view.updateLinkHover(at: nil)
+                view.textStorage?.setAttributedString(Self.attributed(text, style: style))
+                view.invalidateMeasurements()
+                view.invalidateIntrinsicContentSize()
+            }
         }
         selection?.register(view)
     }
@@ -358,6 +360,10 @@ final class MessageSelectionTextView: NSTextView {
 
     func measure(width: CGFloat, unwrapped: Bool, hugsContent: Bool = false) -> CGSize {
         if let cached = measurements.first(where: { $0.width == width && $0.hugsContent == hugsContent }) { return cached.size }
+        return StreamingTrace.measure(.textMeasure) { layOut(width: width, unwrapped: unwrapped, hugsContent: hugsContent) }
+    }
+
+    private func layOut(width: CGFloat, unwrapped: Bool, hugsContent: Bool) -> CGSize {
         guard let container = textContainer, let layout = layoutManager else { return .zero }
         // Resizable text views can resize themselves during layout. Keep the probe width meanwhile.
         measuring = true

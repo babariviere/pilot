@@ -41,7 +41,7 @@ actor MarkdownRenderer {
             markdown[text] = entry
             return entry.value
         }
-        let result = try Markdown.parse(text).map { block -> PreparedMarkdownBlock in
+        let result = try StreamingTrace.measure(.markdownPrepare) { try Markdown.parse(text).map { block -> PreparedMarkdownBlock in
             try Task.checkCancellation()
             let attributed: AttributedString?
             var items: [AttributedString] = []
@@ -57,7 +57,7 @@ actor MarkdownRenderer {
             default: attributed = nil
             }
             return PreparedMarkdownBlock(block: block, inline: attributed, items: items, code: highlighted)
-        }
+        } }
         let cost = text.utf8.count * 8 + result.count * 256
         if cost <= byteLimit { markdown[text] = Entry(value: result, cost: cost, order: order) }
         trim(&markdown)

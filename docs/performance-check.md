@@ -117,7 +117,8 @@ apps/macos/.build/out/Products/Debug/Pilot --performance-check --working \
 ```
 
 It warms up for two seconds, measures ten seconds, then exits. Streaming sends ten text
-deltas per second. Reports include process CPU and lifetime peak RSS, not physical footprint.
+deltas per second. Reports include process CPU and lifetime peak RSS; streaming runs add physical footprint and
+frame hitches (see [Streaming benchmark](#streaming-benchmark)).
 Early debug runs measured 0.58% idle CPU and 61.34% streaming CPU with approximately
 182–188 MiB peak RSS. These exposed further UI invalidation work. Subsequent per-view
 status clocks still used 28–49% CPU for the twelve-working-session fixture. After sharing
@@ -125,6 +126,57 @@ one clock, a local run measured 5.00% working and 20.16% streaming CPU, with pea
 182 and 197 MiB respectively. These are short debug fixture observations under varying
 system load, not a claimed installed-app or battery-life improvement. Compare identical
 fixtures in packaged/release builds before drawing broader conclusions.
+
+### Streaming benchmark
+
+The streaming fixture can stream a long Markdown reply (headings, paragraphs, numbered and bulleted
+lists, Swift code, tables and quotes) at a chosen rate, in a release build:
+
+```sh
+apps/macos/scripts/bench-streaming.sh     # release build, then three runs of each case below
+apps/macos/.build/out/Products/Release/Pilot --performance-check --streaming --markdown --rate 100
+apps/macos/.build/out/Products/Release/Pilot --performance-check --streaming --markdown --rate 4 --chunk 100
+```
+
+`--rate N` sets the deltas per second (default 10), `--chunk N` the characters per delta (default 12, about three
+tokens) and `--seconds N` the measured time (default 10). Without `--markdown` the fixture streams the old
+" streamed text" phrase, so earlier numbers stay comparable. Each run prints:
+
+- process CPU and main-thread CPU, as a share of one core, over the streaming window;
+- physical footprint (the figure Activity Monitor shows), its peak while streaming and at the end, and peak RSS;
+- display frames from the window's display link: refresh rate, frames, hitches (a gap longer than one and a half
+  frames, so 12.5 ms at 120 Hz) and dropped frames, and the longest gap;
+- `ChatView` body evaluations;
+- the count, total, mean and longest duration of each streaming phase: transcript apply, publish, Markdown prepare,
+  text update (replacing an NSTextView's content) and text measure (TextKit layout for a SwiftUI size probe);
+- CPU over five seconds after the reply is committed and the run ends, which should be close to idle.
+
+The same phases are os_signpost intervals (subsystem `com.babariviere.pilot`, category `Streaming`), so an
+Instruments trace of the real app shows them on its signpost track. Totals are only collected by the fixture.
+
+**How often updates really arrive.** The kernel forwards every provider delta into pi-durable
+(`packages/kernel/src/native-adapter.ts`, the `for await` loop in the model stream), but pi-durable commits the
+partial message at most once per `progress.partialIntervalMs` with one commit in flight, and Pilot sets that to
+250 ms (`packages/kernel/src/session.ts`). Each commit becomes one `message_update` carrying everything since the
+previous one, and pilotd forwards those batches as they are. So a streaming chat receives about four updates a
+second, each with tens to hundreds of characters, not one per token. The `--rate 4 --chunk 100` case is that
+cadence; 10, 50 and 100 deltas/s are stress cases for per-update cost and for future lower intervals. Large,
+infrequent chunks are also why newly streamed text needs a short fade-in to look smooth.
+
+Numbers depend on the Mac, its display and load. Run every branch on the same Mac, plugged in, with the window on
+the built-in display and other apps idle, and compare medians of at least three runs. The baseline below comes from
+`main` before the streaming work; later changes add their before/after rows.
+
+| Case (release, `main`) | CPU | Main thread | Footprint peak | Hitches / dropped | Body evals | After completion |
+| --- | --- | --- | --- | --- | --- | --- |
+| 4/s, 100 chars | pending | | | | | |
+| 10/s, 12 chars | pending | | | | | |
+| 50/s, 12 chars | pending | | | | | |
+| 100/s, 12 chars | pending | | | | | |
+
+The Swift app is only built in CI, so these numbers have to come from a local run of
+`apps/macos/scripts/bench-streaming.sh`.
+
 
 ### Mission tab switches
 

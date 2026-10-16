@@ -98,7 +98,9 @@ final class SessionFeed: ObservableObject {
             while let self, self.generation == generation, !self.pending.isEmpty {
                 let events = self.pending.flatMap { $0 }
                 self.pending.removeAll(keepingCapacity: true)
-                guard var presentation = try? await processor.apply(events) else {
+                guard var presentation = try? await StreamingTrace.measureAsync(.transcriptApply, {
+                    try await processor.apply(events)
+                }) else {
                     if self.generation == generation { self.processing = nil }
                     return
                 }
@@ -108,7 +110,7 @@ final class SessionFeed: ObservableObject {
                 // strip, todos and composer hints animate in as if they had just appeared.
                 var transaction = Transaction()
                 transaction.disablesAnimations = !self.hasSnapshot
-                withTransaction(transaction) {
+                StreamingTrace.measure(.publish) { withTransaction(transaction) {
                     if presentation.revision != self.processorRevision {
                         self.processorRevision = presentation.revision
                         presentation.revision = self.presentation.revision + 1
@@ -123,7 +125,7 @@ final class SessionFeed: ObservableObject {
                     if events.contains(where: { ["snapshot", "task_failed"].contains($0["type"]?.string ?? "") }) {
                         self.loading = false
                     }
-                }
+                } }
             }
             if let self, self.generation == generation { self.processing = nil }
         }
