@@ -89,6 +89,8 @@ function needsReview(session: SessionSummary, isUnread: DashboardInput["isUnread
 	// Live attention holds while the chat works: a long job, or an MCP server the chat could not use.
 	if (session.attentionReason?.kind === "long_job" || session.attentionReason?.kind === "mcp") return true;
 	if (isWorking(session)) return false;
+	// A scheduled follow-up message is the user's answer: the chat now waits on that schedule.
+	if (session.scheduledMessage) return false;
 	if (session.attentionReason?.kind === "pr_stuck") return true;
 	// A question waits until it is answered, not until the chat is viewed.
 	if (session.outcome === "question") return true;

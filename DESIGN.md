@@ -65,7 +65,8 @@ by urgency: failed, question, scheduled failure, unread, then the rest.
   screen-specific phrasing.
 - **Needs you clears itself.** There is no "mark as reviewed" or "remove" action. A read result leaves once the user
   leaves its chat (never while it is open, so nothing jumps), failures stay until retried and questions until
-  answered. Live reasons (a long job, an MCP sign-in) clear when their cause does.
+  answered. Scheduling a follow-up message counts as an answer: the chat leaves at once and returns only if the
+  schedule is cancelled or fails. Live reasons (a long job, an MCP sign-in) clear when their cause does.
 - **Ready to merge waits, it never badges.** It is the user's next step, not an alarm.
 - **Waiting is working.** An idle agent whose background jobs still run is Working: no done outcome, notification or
   Needs you entry, and it never wakes a mission coordinator. Only a job past one hour asks for the user.

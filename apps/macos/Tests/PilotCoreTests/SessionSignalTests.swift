@@ -33,6 +33,27 @@ private func session(_ id: String, state: String = "idle", outcome: SessionOutco
     #expect(session("m", outcome: .failed, pr: .merged).signal(unread: false) == nil)
 }
 
+@Test func scheduledMessageTakesChatOutOfNeedsYou() {
+    func scheduled(_ value: SessionSummary) -> SessionSummary {
+        var value = value
+        value.scheduledMessage = true
+        return value
+    }
+    let question = scheduled(session("q", outcome: .question))
+    let failed = scheduled(session("f", outcome: .failed))
+    let unread = scheduled(session("u", outcome: .done))
+    let ready = scheduled(session("r", outcome: .done, pr: .open, readiness: .ready))
+    #expect(question.signal(unread: true) == nil)
+    #expect(failed.signal(unread: true) == nil)
+    #expect(unread.signal(unread: true) == nil)
+    #expect(question.needsYouReason(unread: true) == nil)
+    #expect(ready.signal(unread: true) == .readyToMerge)
+    // Scheduling from the open chat is an explicit answer: it leaves Needs you at once.
+    let groups = SidebarUrgency.groups([question, failed, unread], unread: { _ in true }, held: { _ in true })
+    #expect(groups.needsYou.isEmpty)
+    #expect(groups.recent.map(\.id) == ["q", "f", "u"])
+}
+
 @Test func urgencyGroupsPutFailuresFirstAndKeepListOrder() {
     let sessions = [
         session("quiet", outcome: .done),

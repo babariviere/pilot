@@ -322,6 +322,8 @@ stops tracking a branch that has no pull request; the branch itself stays unchan
 
 A chat with a ready-to-merge PR goes straight to **Ready to merge**, even if its result is not reviewed
 or its chat is still open. Failures, unanswered questions and other actionable problems stay in **Needs you**.
+Scheduling a follow-up message on such a chat takes it out of **Needs you** until the message is sent; cancelling the
+schedule brings it back. A long job or an MCP sign-in still needs you.
 
 Pilot monitors agent-owned PRs from isolated Build sessions for failed CI, unresolved review threads and
 merge conflicts, including earlier PRs in a stack. It sends follow-up work only when the agent is idle

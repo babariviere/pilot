@@ -88,6 +88,14 @@ export class ScheduleStore {
 				sessionId: item.sessionId,
 			}));
 	}
+	/** Chats with a follow-up message that has not been sent yet (pending or dispatching). */
+	scheduledMessageSessions(): Set<string> {
+		const ids = new Set<string>();
+		for (const item of this.items.values())
+			if ((item.state === "pending" || item.state === "dispatching") && item.target.kind === "message")
+				ids.add(item.target.sessionId);
+		return ids;
+	}
 	require(id: string): ScheduledItem {
 		const item = this.items.get(id);
 		if (!item) throw new NotFound(`Unknown schedule: ${id}`);

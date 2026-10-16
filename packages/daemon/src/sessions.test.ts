@@ -2793,6 +2793,32 @@ test("chats that reach for an MCP server needing sign-in ask for it until it wor
 	});
 });
 
+test("a scheduled follow-up message marks its chat until the schedule leaves", async () => {
+	await outcomeFixture(async (manager, meta) => {
+		let ids = new Set<string>();
+		const listeners = new Set<() => void>();
+		manager.setScheduledMessages({
+			scheduledMessageSessions: () => ids,
+			onChange: (listener) => {
+				listeners.add(listener);
+				return () => listeners.delete(listener);
+			},
+		});
+		const changes: SessionSummary[] = [];
+		manager.onChange((summary) => changes.push(summary));
+		assert.equal(manager.get(meta.id)?.scheduledMessage, undefined);
+		ids = new Set([meta.id]);
+		for (const listener of listeners) listener();
+		assert.equal(changes.at(-1)?.scheduledMessage, true);
+		const count = changes.length;
+		for (const listener of listeners) listener();
+		assert.equal(changes.length, count, "unchanged schedules publish nothing");
+		ids = new Set();
+		for (const listener of listeners) listener();
+		assert.equal(changes.at(-1)?.scheduledMessage, undefined);
+	});
+});
+
 test("idle jobs and their follow-up stay working without publishing an intermediate outcome", async () => {
 	await outcomeFixture(async (manager, meta, home) => {
 		const worker = { ...fakeWorker(), busy: false };

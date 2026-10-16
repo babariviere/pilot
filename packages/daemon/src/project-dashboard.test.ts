@@ -356,6 +356,26 @@ test("an agent question needs you until it is answered, even after the chat was 
 	assert.equal(build({ sessions: [{ ...asking, state: "working" }] }).needsYou.total, 0);
 });
 
+test("a scheduled follow-up message takes its chat out of Needs you, except for live attention", () => {
+	const asking = session({ outcome: "question", outcomeAt: 50, scheduledMessage: true });
+	const failedChat = session({ outcome: "failed", outcomeAt: 51, scheduledMessage: true });
+	const unread = session({ outcome: "done", outcomeAt: 52, scheduledMessage: true });
+	const longJob = session({
+		outcome: "done",
+		outcomeAt: 53,
+		scheduledMessage: true,
+		attentionReason: { kind: "long_job", detail: "build" },
+		attentionAt: 60,
+	});
+	const dashboard = build({ sessions: [asking, failedChat, unread, longJob] });
+	assert.deepEqual(
+		dashboard.needsYou.items.map((item) => item.sessionId),
+		[longJob.id],
+	);
+	// Cancelling the schedule brings the question back.
+	assert.equal(build({ sessions: [{ ...asking, scheduledMessage: undefined }] }).needsYou.items[0].kind, "question");
+});
+
 test("pull requests dedupe by URL, skip settled ones and list newest check first", () => {
 	const a = session({ title: "A", pullRequest: pr(1), pullRequests: [pr(1), pr(2, { state: "merged" })] });
 	const b = session({ title: "B", pullRequest: pr(1, { checkedAt: 9_000, title: "PR 1 fresh" }) });

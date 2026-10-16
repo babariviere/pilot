@@ -34,6 +34,8 @@ extension SessionSummary {
     public func signal(unread: Bool) -> SessionSignal? {
         if attentionReason?.kind.isLive == true { return .needsYou }
         if isWorking { return .working }
+        // A scheduled follow-up message answers the chat for now: it waits on the schedule, not the user.
+        if scheduledMessage == true { return isReadyToMerge ? .readyToMerge : nil }
         if status == .failed && !hasTerminalPullRequest { return .failed }
         // A question waits on the user until answered, even once viewed or after its PRs settled.
         if status == .question || attentionReason?.kind == .prStuck { return .needsYou }
@@ -103,7 +105,9 @@ public enum SidebarUrgency {
             case .needsYou: waiting.append(session)
             case .readyToMerge: groups.readyToMerge.append(session)
             case nil:
-                if held(session) { waiting.append(session) } else { groups.recent.append(session) }
+                // Scheduling a message is an explicit answer, so the open chat leaves Needs you at once.
+                if held(session) && session.scheduledMessage != true { waiting.append(session) }
+                else { groups.recent.append(session) }
             }
         }
         groups.needsYou = failed + questions + waiting

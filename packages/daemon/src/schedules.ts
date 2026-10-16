@@ -320,6 +320,9 @@ export class ScheduleService {
 	dashboard(projectId: string): DashboardScheduledItem[] {
 		return this.store.dashboard(projectId);
 	}
+	scheduledMessageSessions(): Set<string> {
+		return this.store.scheduledMessageSessions();
+	}
 	async stop(): Promise<void> {
 		this.stopped = true;
 		this.cancelTimer?.();
