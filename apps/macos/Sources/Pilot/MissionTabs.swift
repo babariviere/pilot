@@ -1195,6 +1195,7 @@ private struct MissionChatRow: View {
                     HStack(spacing: 6) {
                         Text(session.title).font(.pilot(.body, weight: unread ? .semibold : .regular))
                             .foregroundStyle(Theme.foreground).lineLimit(1)
+                        RemoteChatBadge()
                         if coordinator { MissionCoordinatorIndicator(showsLabel: true) }
                         if session.isArchived {
                             Text("Archived").font(.pilot(.small)).foregroundStyle(Theme.faintForeground)

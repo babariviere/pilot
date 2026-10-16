@@ -486,6 +486,7 @@ struct SessionRow: View {
                     .foregroundStyle(Theme.foreground)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                RemoteChatBadge(context: owner.map { HostViewContext(host: $0.host, hosts: model.hosts) })
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     if session.isPinned {
                         PilotSymbol(PilotIcon.pin, filled: true)

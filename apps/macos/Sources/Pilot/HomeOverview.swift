@@ -352,7 +352,10 @@ struct HomeOverview: View {
             HoverRow { _ in
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(session.title).font(.pilot(.body)).foregroundStyle(Theme.foreground).lineLimit(1)
+                        HStack(spacing: 6) {
+                            Text(session.title).font(.pilot(.body)).foregroundStyle(Theme.foreground).lineLimit(1)
+                            RemoteChatBadge(context: owner)
+                        }
                         RowLine(segments: RowLineSegments.session(nil, projectName: project, missionTitle: mission),
                                 maxLines: 2, font: .pilot(.caption))
                     }
@@ -368,7 +371,7 @@ struct HomeOverview: View {
             .homeCorner(.working)
         }
         .rowButtonStyle()
-        .accessibilityLabel([session.title, project, mission, "working"].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityLabel([session.title, RemoteChatBadgeText(context: owner)?.accessibilityLabel, project, mission, "working"].compactMap { $0 }.joined(separator: ", "))
         .contextMenu {
             Button("Open Chat") { app.navigate(.session, id: session.id, context: owner) }
             SessionProjectAction(session: session).environment(\.hostViewContext, owner)

@@ -168,6 +168,7 @@ private struct ArchiveRow: View {
                             .lineLimit(1)
                             .truncationMode(.tail)
                             .layoutPriority(1)
+                        RemoteChatBadge()
                         Text(meta)
                             .font(.pilot(.caption))
                             .foregroundStyle(Theme.mutedForeground)
@@ -179,7 +180,7 @@ private struct ArchiveRow: View {
                 }
                 .rowButtonStyle(outset: 2)
                 .help(readHelp)
-                .accessibilityLabel("\(session.title), \(meta)")
+                .accessibilityLabel([session.title, RemoteChatBadgeText(context: hostContext)?.accessibilityLabel, meta].compactMap { $0 }.joined(separator: ", "))
                 .accessibilityHint("Reads the archived chat")
                 SessionArchiveAction(session: session)
                     .buttonStyle(.bordered)

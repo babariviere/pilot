@@ -624,6 +624,9 @@ private struct CommandPaletteRow: View {
                         Text(prefix).foregroundStyle(Theme.faintForeground).monospacedDigit().fixedSize()
                     }
                     Text(entry.item.title).foregroundStyle(Theme.foreground).lineLimit(1)
+                    if entry.session != nil {
+                        RemoteChatBadge(context: entry.reference.map { HostViewContext(host: $0.host, hosts: model.hosts) })
+                    }
                     if let suffix = entry.suffix {
                         Text(suffix).foregroundStyle(Theme.faintForeground).lineLimit(1)
                     }
