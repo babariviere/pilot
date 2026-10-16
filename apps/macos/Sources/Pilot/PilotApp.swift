@@ -43,6 +43,9 @@ struct PilotApp: App {
                 Button("Open Latest Pull Request") { model.openLatestPullRequest() }
                     .keyboardShortcut("p", modifiers: [.command, .shift])
                     .disabled(model.selectedSession?.latestPullRequest == nil)
+                Button("Merge Latest Pull Request…") { model.mergeLatestPullRequest() }
+                    .keyboardShortcut("m", modifiers: [.command, .shift])
+                    .disabled(model.latestPullRequestMergeTarget == nil)
             }
             SidebarScopeCommands(model: model, client: model.client)
         }

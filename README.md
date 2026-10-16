@@ -30,7 +30,8 @@ See [screenshot notes](docs/screenshots/README.md) to regenerate them.*
   archive, stop, retry, opening the pull request on GitHub or **Merge PR…** for the open chat (also available
   after searching a PR number). Merging asks you to confirm the fresh PR head, target branch and a merge method
   allowed by the repository. GitHub enforces permissions and branch protection; Pilot never enables auto-merge
-  or deletes the branch. Agents remain unable to merge. ⌘⇧P opens the open chat's latest pull request
+  or deletes the branch. Agents remain unable to merge. ⌘⇧M opens the merge confirmation for the open chat's
+  latest open PR. ⌘⇧P opens the open chat's latest pull request
   (the newest open one, else the newest). Paste a Slack message link to find its report, or to
   add it to a project's Slack triage: Pilot reads and sorts the message, then opens triage on it.
 - **Let the display rest while agents work.** Keep the Mac awake without keeping the display on.

@@ -5,6 +5,17 @@ struct PullRequestMergeTarget: Identifiable {
     let sessionId: String
     let pullRequest: SessionPullRequest
     var id: String { "\(sessionId):\(pullRequest.url)" }
+
+    static func candidates(in session: SessionSummary) -> [SessionPullRequest] {
+        guard !session.isArchived, session.projectId != nil, !session.isMissionCoordinator else { return [] }
+        return session.linkedPullRequests.filter { $0.state == .open && $0.browserURL != nil }
+    }
+
+    static func latest(in session: SessionSummary) -> Self? {
+        candidates(in: session).max(by: { $0.number < $1.number }).map {
+            Self(sessionId: session.id, pullRequest: $0)
+        }
+    }
 }
 
 /// An explicit confirmation, never an agent prompt. Fresh GitHub data fences the final merge to this head.

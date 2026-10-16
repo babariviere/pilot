@@ -935,6 +935,23 @@ final class AppModel: ObservableObject {
         BrowserLinkOpener.shared.open(url)
     }
 
+    var latestPullRequestMergeTarget: PullRequestMergeTarget? {
+        guard missionSheet == nil, renamingSession == nil, mergingPullRequest == nil, artifactLink == nil,
+              let session = selectedSession else { return nil }
+        return PullRequestMergeTarget.latest(in: session)
+    }
+
+    /// Confirms the open chat's latest open PR (⌘⇧M). Never submits a merge from the shortcut itself.
+    func mergeLatestPullRequest() {
+        guard let target = latestPullRequestMergeTarget else { return }
+        if showingCommandPalette {
+            commandPaletteAction = { [self] in mergingPullRequest = target }
+            showingCommandPalette = false
+        } else {
+            mergingPullRequest = target
+        }
+    }
+
     func addProject() {
         guard let path = chooseFolder() else { return }
         Task {
