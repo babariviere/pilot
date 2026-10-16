@@ -686,6 +686,12 @@ final class AppModel: ObservableObject {
         showingInbox = true
     }
 
+    func clearProjectSubpage() {
+        memoryProjectId = nil
+        slackTriageProjectId = nil
+        slackTriageCaseId = nil
+    }
+
     /// Shows a project's page, keeping the sidebar as it is.
     func openProject(_ id: String, context: HostViewContext? = nil) {
         if let ref = resourceRef(id, kind: .project, context: context), ref.host != localHost {
