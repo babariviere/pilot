@@ -21,6 +21,8 @@ final class PilotClient: ObservableObject {
     /// Snapshot fixtures for tracked items and the settings pickers. Never set in the live app.
     var fixtureTracking: TrackingFixture?
     @Published private(set) var hasProjectSnapshot = false
+    @Published private(set) var hasSessionSnapshot = false
+    @Published private(set) var hasMissionSnapshot = false
     @Published private(set) var artifacts: [String: [ArtifactSummary]] = [:]
     private var artifactVersions: [String: Int] = [:]
     /// Every mission, including done and archived ones.
@@ -42,6 +44,7 @@ final class PilotClient: ObservableObject {
     private var fixtureMissions = false
     private var fixtureSessions = false
     @Published private(set) var connected = false
+    private(set) var connectionError: HostRoutingError?
 
     /// Includes full snapshots on initial connection and reconnect, not just deltas.
     var onSessionsChanged: (([SessionSummary], Bool) -> Void)?
@@ -81,6 +84,9 @@ final class PilotClient: ObservableObject {
         }
     }
     private var activationObserver: NSObjectProtocol?
+    deinit {
+        if let activationObserver { NotificationCenter.default.removeObserver(activationObserver) }
+    }
     private var control: SocketReader?
     private var retry = 0
     private var awaitingList: [String: SessionSummary] = [:]
@@ -113,6 +119,7 @@ final class PilotClient: ObservableObject {
         // Endpoint clients are installation-scoped. A new tunnel port needs a new client.
         guard self.baseURL == nil || self.baseURL == baseURL else { return }
         disconnected = false
+        connectionError = nil
         connectionGeneration = UUID()
         fixtureSessions = false
         self.baseURL = baseURL
@@ -183,6 +190,8 @@ final class PilotClient: ObservableObject {
         fixtureSessions = true
         self.projects = projects
         hasProjectSnapshot = true
+        hasSessionSnapshot = true
+        hasMissionSnapshot = true
         self.sessions = sessions.sorted(by: SessionSummary.listPrecedes)
         connected = true
     }
@@ -1441,7 +1450,9 @@ final class PilotClient: ObservableObject {
         return value.addingPercentEncoding(withAllowedCharacters: unreserved) ?? value
     }
 
-    private func socketURL(_ percentEncodedPath: String, query: [URLQueryItem] = []) -> URL? {
+    private func socketURL(_ percentEncodedPath: String, query: [URLQueryItem] = [], controlSocket: Bool = false) -> URL? {
+        // Remote streams wait for the control connection's freshly pinned hello on every reconnect.
+        if let host = hostIdentity, host.hostId != "local", !controlSocket, !connected { return nil }
         guard let baseURL, var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else { return nil }
         components.scheme = components.scheme == "https" ? "wss" : "ws"
         components.percentEncodedPath = percentEncodedPath
@@ -1514,9 +1525,42 @@ final class PilotClient: ObservableObject {
     private func open() {
         guard !disconnected else { return }
         connectionGeneration = UUID()
+        hasProjectSnapshot = false
+        hasSessionSnapshot = false
+        hasMissionSnapshot = false
         control?.cancel()
         control = nil
-        guard let url = socketURL("/api/ws") else { return }
+        if let host = hostIdentity, host.hostId != "local" {
+            connected = false
+            suspendStreams()
+            let generation = connectionGeneration
+            Task { [weak self] in
+                guard let self else { return }
+                do {
+                    let hello = try await self.hello()
+                    guard self.connectionGeneration == generation, !self.disconnected else { return }
+                    try host.validate(hello)
+                    self.openControlSocket()
+                } catch let error as HostRoutingError where error == .identityChanged || error == .incompatible {
+                    guard self.connectionGeneration == generation else { return }
+                    self.connectionError = error
+                    self.disconnect()
+                } catch {
+                    guard self.connectionGeneration == generation, !self.disconnected else { return }
+                    self.scheduleReconnect()
+                }
+            }
+        } else { openControlSocket() }
+    }
+
+    private func suspendStreams() {
+        for chat in chats.values { chat.socket?.suspend() }
+        for socket in terminalSockets.values { socket.suspend() }
+        for socket in subagentSockets.values { socket.suspend() }
+    }
+
+    private func openControlSocket() {
+        guard !disconnected, let url = socketURL("/api/ws", controlSocket: true) else { return }
         let reader = SocketReader(
             task: StreamSocket.task(url), label: "pilot.control-socket",
             deliver: { [weak self] reader, updates in
@@ -1527,6 +1571,7 @@ final class PilotClient: ObservableObject {
             failed: { [weak self] reader in
                 guard let self, self.control === reader else { return }
                 self.connected = false
+                if let host = self.hostIdentity, host.hostId != "local" { self.suspendStreams() }
                 self.scheduleReconnect()
             }
         )
@@ -1606,6 +1651,7 @@ final class PilotClient: ObservableObject {
             projects = list
             hasProjectSnapshot = true
         case let .sessions(list):
+            hasSessionSnapshot = true
             for session in list { awaitingList[session.id] = nil }
             // A list captured before POST completed must not undo immediate navigation.
             sessions = (list + Array(awaitingList.values)).sorted(by: SessionSummary.listPrecedes)
@@ -1625,6 +1671,7 @@ final class PilotClient: ObservableObject {
             artifactVersions[update.sessionId, default: 0] += 1
             artifacts[update.sessionId] = update.artifacts
         case let .missions(list):
+            hasMissionSnapshot = true
             applyMissions(list)
         case let .mission(detail):
             guard missionRefs[detail.mission.id] != nil else { break }

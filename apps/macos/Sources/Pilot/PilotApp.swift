@@ -63,6 +63,8 @@ struct PilotApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var terminationTask: Task<Void, Never>?
+    private var finishedTermination = false
     /// Closing the window keeps Pilot in the menu bar. Quitting Pilot never stops pilotd:
     /// the daemon is a launchd agent, so agents keep working with no app running.
     func applicationShouldTerminateAfterLastWindowClosed(_: NSApplication) -> Bool {
@@ -84,7 +86,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_: NSApplication) -> NSApplication.TerminateReply {
         AppModel.shared.flushDrafts()
-        return AppUpdater.shared.shouldDelayTermination() ? .terminateCancel : .terminateNow
+        if AppUpdater.shared.shouldDelayTermination() { return .terminateCancel }
+        if finishedTermination { return .terminateNow }
+        if terminationTask == nil {
+            terminationTask = Task { @MainActor in
+                await AppModel.shared.hosts.disconnectAll()
+                finishedTermination = true
+                NSApp.reply(toApplicationShouldTerminate: true)
+            }
+        }
+        return .terminateLater
     }
 
     func applicationDidResignActive(_: Notification) {

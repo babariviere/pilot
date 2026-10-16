@@ -85,6 +85,11 @@ final class StreamSocket {
 
     func close() {
         closed = true
+        suspend()
+    }
+
+    /// The control connection lost its identity/availability gate. Retain subscriptions, not sockets.
+    func suspend() {
         reconnect?.cancel()
         reconnect = nil
         reader?.cancel()

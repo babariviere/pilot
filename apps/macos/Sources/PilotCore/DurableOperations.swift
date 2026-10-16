@@ -49,6 +49,41 @@ public actor OperationOutbox {
     private let directory: URL
     public init(directory: URL) { self.directory = directory }
 
+    /// Read-only recovery inventory. Never executes, expires or silently reassigns an intent.
+    public func pending(destination: HostRef? = nil) throws -> [DurableOperation] {
+        guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
+        let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.fileSizeKey])
+            .filter { $0.lastPathComponent != "counter.json" && $0.pathExtension == "json" }
+        guard files.count <= 512 else { throw CocoaError(.fileReadTooLarge) }
+        return try files.map { file in
+            guard (try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) <= 512 * 1024 else {
+                throw CocoaError(.fileReadTooLarge)
+            }
+            let operation = try JSONDecoder().decode(DurableOperation.self, from: Data(contentsOf: file))
+            guard operation.schemaVersion == 1, hash(Data(operation.payload.utf8)) == operation.payloadHash else {
+                throw HostRoutingError.invalidReference
+            }
+            return operation
+        }.filter { destination == nil || $0.destination == destination }
+            .sorted { $0.sequence < $1.sequence }
+    }
+
+    public func contains(_ operation: DurableOperation) throws -> Bool {
+        let key = hash(try encode([operation.origin.hostId, operation.origin.daemonId, operation.origin.lineageId,
+            operation.destination.hostId, operation.destination.daemonId, operation.destination.lineageId,
+            operation.kind, operation.targetId, operation.payloadHash]))
+        // Creates reserve with an empty target selector, then allocate the immutable target ID.
+        let createKey = hash(try encode([operation.origin.hostId, operation.origin.daemonId, operation.origin.lineageId,
+            operation.destination.hostId, operation.destination.daemonId, operation.destination.lineageId,
+            operation.kind, "", operation.payloadHash]))
+        for name in [key, createKey] {
+            let url = directory.appendingPathComponent(name + ".json")
+            if FileManager.default.fileExists(atPath: url.path),
+               try JSONDecoder().decode(DurableOperation.self, from: Data(contentsOf: url)) == operation { return true }
+        }
+        return false
+    }
+
     private func hash(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
@@ -116,4 +151,3 @@ public actor OperationOutbox {
         }
     }
 }
-
