@@ -431,6 +431,25 @@ test("only settlements, newly blocked tasks and relevant comments create durable
 	}
 });
 
+test("coordinator notices update task progress without turning the spec or comments into a status log", () => {
+	const { store, id } = setup();
+	try {
+		store.recordMemberCompletion(completion("done", Date.now()));
+		const notice = store.prepareNotice(id, "lead", Date.now() + 30_000)!;
+		assert.match(notice.content, /Update tasks for progress and blockers/);
+		assert.match(notice.content, /do not copy status into the brief, decisions or comments/);
+		assert.match(notice.content, /Change the brief only for scope or requirements/);
+		assert.match(notice.content, /record only new agreed choices with decide/);
+		assert.match(notice.content, /resolve them once their outcome is saved/);
+		assert.match(notice.content, /Leave unanswered questions open/);
+		assert.match(notice.content, /do not post duplicate questions, unchanged reminders or acknowledgement comments/);
+		assert.match(notice.content, /without logging another copy of task state/);
+		assert.doesNotMatch(notice.content, /Update tasks and the brief as needed/);
+	} finally {
+		store.close();
+	}
+});
+
 test("30-second settle merges bursts, with a single 30-minute safety cap", (t) => {
 	t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
 	const { store, id } = setup();

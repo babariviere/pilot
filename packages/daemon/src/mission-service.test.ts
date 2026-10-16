@@ -23,6 +23,19 @@ import { TerminalManager } from "./terminals.ts";
 import { legacyGitHub } from "./testing/legacy-github.ts";
 import { requiredAuthRegistration } from "./testing/required-auth.ts";
 
+test("mission drafts keep progress in tasks, choices in decisions and only unanswered questions in comments", () => {
+	const message = draftMessage("Plan");
+	assert.match(message, /brief: the spec.*scope and requirements, not progress or a decision ledger/);
+	assert.match(
+		message,
+		/record choices we have already agreed on with decide, without duplicating existing decisions/,
+	);
+	assert.match(message, /tasks hold progress and blockers/);
+	assert.match(message, /comments only for unanswered questions needing input; check existing comments first/);
+	assert.match(message, /resolve those already addressed once their outcome is saved/);
+	assert.doesNotMatch(message, /brief:.*design decisions/);
+});
+
 test("gated starts retain preferred model, thinking and app start options together", async (t) => {
 	const f = await fixture(t);
 	const { id } = f.store.create({ projectId: f.project.id, title: "Combined" });

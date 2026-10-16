@@ -61,7 +61,7 @@ test("multi-task guidance claims requested tasks, orders work, maintains statuse
 		assert.match(prompt, /report skipped claims and unfinished dependencies instead of working past them/);
 		assert.match(
 			prompt,
-			/in_progress while working, blocked with a comment saying why, in_review once a pull request is open/,
+			/in_progress while working, blocked with the reason in the task body, in_review once a pull request is open/,
 		);
 		if (coordinator === "self") {
 			assert.match(prompt, /Delegate all code changes to member chats/);
@@ -75,7 +75,22 @@ test("multi-task guidance claims requested tasks, orders work, maintains statuse
 		assert.match(prompt, /Only the user or coordinator binds PRs/);
 		assert.match(prompt, /Never rewrite or push branches of PRs owned by other chats, or PRs unbound from you/);
 		assert.match(prompt, /a PR bound to you is yours, including its head branch, CI\/review follow-ups and pushes/);
-		assert.match(prompt, /post a handoff with log before stopping with unfinished work/);
+		assert.match(prompt, /Post a handoff with log before stopping with unfinished work/);
+	}
+});
+
+test("every mission role separates specs, progress, decisions and actionable comments", () => {
+	for (const coordinator of ["self", "other", "user"] as const) {
+		const prompt = missionPrompt({ ...mission, coordinator });
+		assert.match(prompt, /Tasks are the source of truth for progress, blockers and follow-up work/);
+		assert.match(prompt, /brief is the spec, not a progress log or decision ledger/);
+		assert.match(prompt, /only when scope or requirements change/);
+		assert.match(prompt, /Record agreed choices with decide, never task progress or completion/);
+		assert.match(prompt, /Comments are actionable questions or feedback, not status updates or handoffs/);
+		assert.match(prompt, /Read open comments before posting; do not repeat an existing question/);
+		assert.match(prompt, /save the outcome in the task, decision or spec as appropriate, then resolve/);
+		assert.match(prompt, /Leave unanswered questions open/);
+		assert.doesNotMatch(prompt, /blocked with a comment/);
 	}
 });
 
