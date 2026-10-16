@@ -117,3 +117,12 @@ synchronous idle guard. It rejects active/queued work, background agents, archiv
 configuration transitions. Same-project and task-owner checks remain in the shared join service,
 before membership is changed. It requires an accepted suggestion, is forbidden during notices,
 waits for durable membership and records the target, optional claim and outcome in the audit.
+
+## Cross-project memory
+
+Control declares `memory_wake`, `memory_recall`, `memory_zoom` and `memory_note`, each with a required
+registered `projectId`. Ordinary chats retain their implicit project and cannot supply a project
+override. The daemon checks the live caller role and registered project on every control call.
+Read results are quoted as untrusted. Notes always use the supervised control chat as origin,
+ignoring any supplied author, and use the same durable audit/timeline path as orchestration actions.
+No forget operation is exposed. Corrections append new notes; existing log records remain intact.

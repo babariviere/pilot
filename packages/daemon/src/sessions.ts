@@ -58,6 +58,7 @@ import { ColdViewReader } from "./cold-view-reader.ts";
 import { ControlChat } from "./control-chat.ts";
 import type { ControlPilot } from "./control-pilot.ts";
 import { ControlActions } from "./control-actions.ts";
+import { ControlProjectMemory } from "./control-project-memory.ts";
 import { coordinatorTrust } from "./coordinator-trust.ts";
 import type { CredentialBroker } from "./credential-broker.ts";
 import { DatabaseService, type DatabaseState, decideDatabaseRequest, declineDatabaseRequest } from "./databases.ts";
@@ -1112,6 +1113,7 @@ export class SessionManager {
 	private controlChat?: ControlChat;
 	private pilot?: ControlPilot;
 	private controlActions?: ControlActions;
+	private controlProjectMemory?: ControlProjectMemory;
 	controlAudit(): ControlActions {
 		this.controlActions ??= new ControlActions(
 			this.controlService().memory,
@@ -5767,6 +5769,18 @@ export class SessionManager {
 					worker.send({ type: "memory.result", callId: packet.callId, ...(result as { result?: never }) });
 			};
 			const call = Promise.resolve().then(async () => {
+				if (this.isControlSession(meta.id)) {
+					if (!this.memory) throw new Error("Project memory is unavailable");
+					this.controlProjectMemory ??= new ControlProjectMemory(
+						this.memory,
+						(id) => this.projects.require(id),
+						(id) => this.isControlSession(id),
+						() => this.controlAudit(),
+					);
+					return this.controlProjectMemory.call(meta.id, packet.action, packet.args, packet.operationId);
+				}
+				if (packet.args.projectId !== undefined)
+					throw new Error("Ordinary chats use their implicit project memory");
 				if (this.sharing?.membership(meta.id)) return this.sharing.memoryCall(meta.id, packet.action, packet.args);
 				if (!meta.projectId || !this.memory) throw new Error("Project memory is unavailable");
 				const args = packet.args;
