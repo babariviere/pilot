@@ -20,6 +20,8 @@ PASSED = ('✔ Test run with 122 tests in 9 suites passed after 0.100 seconds.\n
 STARTED = '◇ Test run started.\n'
 ISOLATED = "artifactHeightRespectsNestedClippingWhileKeepingVisibleOverflow"
 ISOLATED_OUTPUT = STARTED + f"◇ Test {ISOLATED}() started.\n" + PASSED
+DEVBOX = "addDevboxPresentsSetupSheetAfterCancelAndReopen"
+DEVBOX_OUTPUT = STARTED + f"◇ Test {DEVBOX}() started.\n" + PASSED
 
 
 class TestOutputTests(unittest.TestCase):
@@ -34,7 +36,8 @@ class TestOutputTests(unittest.TestCase):
             self.assertFalse(guard.failed_summary(line), line)
 
     def run_wrapper(self, output, status=0, args=(), wrapper="test.sh", prepare_status=0,
-                    second_output=None, second_status=0, all_calls=False):
+                    second_output=None, second_status=0, all_calls=False,
+                    third_output=DEVBOX_OUTPUT, third_status=0):
         # Exercise the actual shell wrapper without downloading/building the app.
         with tempfile.TemporaryDirectory(prefix="swift wrapper ") as directory:
             root = Path(directory)
@@ -55,6 +58,9 @@ class TestOutputTests(unittest.TestCase):
                 '#!/bin/sh\nprintf "__SWIFT_CALL__\\n" >> "$ARGUMENTS"\n'
                 'printf "%s\\n" "$@" >> "$ARGUMENTS"\n'
                 'if [ -e "$CALLED" ]; then\n'
+                '  if [ -e "$SECOND_CALLED" ]; then\n'
+                '    printf "%s" "$THIRD_OUTPUT" >&2\nexit "$THIRD_STATUS"\nfi\n'
+                '  touch "$SECOND_CALLED"\n'
                 '  printf "%s" "$SECOND_OUTPUT" >&2\nexit "$SECOND_STATUS"\nfi\n'
                 'touch "$CALLED"\nprintf "%s" "$TEST_OUTPUT" >&2\nexit "$TEST_STATUS"\n')
             (root / "swift").chmod(0o755)
@@ -65,6 +71,8 @@ class TestOutputTests(unittest.TestCase):
                    "TEST_STATUS": str(status), "ARGUMENTS": str(arguments), "PILOT_SWIFT_JOBS": "2",
                    "CALLED": str(root / "called"), "SECOND_OUTPUT": ISOLATED_OUTPUT if second_output is None else second_output,
                    "SECOND_STATUS": str(second_status),
+                   "SECOND_CALLED": str(root / "second-called"), "THIRD_OUTPUT": third_output,
+                   "THIRD_STATUS": str(third_status),
                    "PILOT_HOME": str(root / "home"), "BUNDLE_RUNTIME": "0"}
             # Use macOS's Bash 3.2, not a newer Homebrew bash picked by env.
             result = subprocess.run(
@@ -74,17 +82,29 @@ class TestOutputTests(unittest.TestCase):
                      if arguments.exists() else [])
             return result, marker.exists(), calls if all_calls else calls[-1] if calls else []
 
-    def test_full_suite_runs_geometry_separately_without_rebuilding(self):
+    def test_full_suite_runs_geometry_and_devbox_separately_without_rebuilding(self):
         result, continued, calls = self.run_wrapper(PASSED, all_calls=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(continued)
-        self.assertEqual(len(calls), 2)
-        self.assertEqual(calls[0][-2:], ["--skip", ISOLATED])
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(calls[0][-2:], ["--skip", f"{ISOLATED}|{DEVBOX}"])
         self.assertNotIn("--skip-build", calls[0])
         self.assertIn("--skip-build", calls[1])
         self.assertEqual(calls[1][-2:], ["--filter", ISOLATED])
+        self.assertIn("--skip-build", calls[2])
+        self.assertEqual(calls[2][-2:], ["--filter", DEVBOX])
         self.assertEqual(result.stderr.count("acquired slot 1/1"), 1)
-        self.assertEqual(result.stdout, PASSED + ISOLATED_OUTPUT)
+        self.assertEqual(result.stdout, PASSED + ISOLATED_OUTPUT + DEVBOX_OUTPUT)
+
+    def test_isolated_devbox_must_start_finish_and_pass(self):
+        for output, status in [("", 0), (PASSED, 0),
+                               (STARTED + f"◇ Test {DEVBOX}() started.\n", 0),
+                               (DEVBOX_OUTPUT + FAILED, 0), (DEVBOX_OUTPUT, 42)]:
+            result, continued, calls = self.run_wrapper(PASSED, third_output=output,
+                                                       third_status=status, all_calls=True)
+            self.assertNotEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(continued)
+            self.assertEqual(len(calls), 3)
 
     def test_isolated_geometry_failures_and_driver_status_stop_chain(self):
         for output, status in [(STARTED + f"◇ Test {ISOLATED}() started.\n" + FAILED, 0),
@@ -129,7 +149,7 @@ class TestOutputTests(unittest.TestCase):
     def test_explicit_build_options_still_partition_full_suite(self):
         result, _, calls = self.run_wrapper(PASSED, args=("--jobs=1", "--skip-build"), all_calls=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 3)
         for call in calls:
             self.assertIn("--jobs=1", call)
             self.assertNotIn("--jobs", call)
