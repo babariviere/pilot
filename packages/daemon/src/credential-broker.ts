@@ -10,13 +10,15 @@ import {
 	type CredentialEndpoint,
 	type CredentialNamespace,
 	type CredentialRequest,
+	type CredentialStatus,
 } from "@pilot/kernel/credential-rpc";
 import lockfile from "proper-lockfile";
 
 type ObjectValue = Record<string, unknown>;
 type Fence = { generation: number; fingerprint: string; pending?: string; revoked?: boolean; revoking?: boolean };
 type Journal = Record<string, Fence>;
-type Actor = { admin: boolean; sockets: Set<Socket> };
+type Scope = { namespace: CredentialNamespace; key: string };
+type Actor = { admin: boolean; scope?: Scope; sockets: Set<Socket>; revoked?: boolean; loginGeneration?: number };
 type Held = {
 	namespace: CredentialNamespace;
 	key: string;
@@ -87,6 +89,19 @@ function validValue(namespace: CredentialNamespace, value: unknown): boolean {
 			].includes(key),
 		)
 	);
+}
+function credentialStatus(namespace: CredentialNamespace, fence: Fence | undefined, value: unknown): CredentialStatus {
+	const fenced =
+		fence?.revoking ||
+		(fence?.fingerprint === fingerprint(value) && (fence.pending || (fence.revoked && value !== undefined)));
+	return {
+		state:
+			fenced || (value !== undefined && !validValue(namespace, value))
+				? "reauthentication_required"
+				: value === undefined
+					? "missing"
+					: "configured",
+	};
 }
 async function readObject(path: string, limit = 4 * 1024 * 1024): Promise<ObjectValue> {
 	const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -162,17 +177,43 @@ export class CredentialBroker {
 		});
 		await chmod(this.socket, 0o600);
 	}
-	grant(admin = false): CredentialEndpoint {
+	grant(admin = false, scope?: Scope): CredentialEndpoint {
+		if (scope && !validKey(scope.namespace, scope.key)) throw new Rejected("invalid");
 		if (!this.socket) throw new Error("Credential broker unavailable");
 		if (this.actors.size >= 4096) throw new Error("Credential broker capacity reached");
 		const token = randomBytes(32).toString("hex");
-		this.actors.set(token, { admin, sockets: new Set() });
+		this.actors.set(token, { admin, ...(scope ? { scope: { ...scope } } : {}), sockets: new Set() });
 		return { socket: this.socket, token };
 	}
 	revoke(endpoint: CredentialEndpoint): void {
 		const actor = this.actors.get(endpoint.token);
+		if (actor) actor.revoked = true;
 		this.actors.delete(endpoint.token);
 		for (const socket of actor?.sockets ?? []) socket.destroy();
+	}
+	/** Cancel one trusted setup helper. Revocation alone cannot fence a commit already awaiting I/O. */
+	async cancelSetup(endpoint: CredentialEndpoint): Promise<{ reauthenticationRequired: boolean }> {
+		const actor = this.actors.get(endpoint.token);
+		const scope = actor?.scope;
+		if (!scope) throw new Rejected("unauthorized");
+		this.revoke(endpoint);
+		return this.updateJournal(async (journal) => {
+			const key = identity(scope.namespace, scope.key),
+				old = journal[key];
+			// Login claims its generation under this same lock. Cancelling before that claim stops
+			// begin via actor.revoked. A newer explicit login/logout owns its own generation and is
+			// never quarantined by cancellation of this older helper.
+			if (actor.loginGeneration === undefined || old?.generation !== actor.loginGeneration) {
+				const values = await readObject(this.paths[scope.namespace]);
+				const value = Object.hasOwn(values, scope.key) ? values[scope.key] : undefined;
+				return {
+					reauthenticationRequired:
+						credentialStatus(scope.namespace, old, value).state === "reauthentication_required",
+				};
+			}
+			journal[key] = { generation: old.generation + 1, fingerprint: old.fingerprint, revoked: true, revoking: true };
+			return { reauthenticationRequired: true };
+		});
 	}
 	private async regular(path: string): Promise<void> {
 		const info = await lstat(path);
@@ -201,8 +242,10 @@ export class CredentialBroker {
 			return result;
 		});
 	}
-	private async fence(namespace: CredentialNamespace, key: string): Promise<number> {
+	private async fence(namespace: CredentialNamespace, key: string, actor?: Actor): Promise<number> {
 		return this.updateJournal((journal) => {
+			if (actor?.revoked || (actor?.scope && actor.loginGeneration !== undefined))
+				throw new Rejected("unauthorized");
 			const old = journal[identity(namespace, key)];
 			journal[identity(namespace, key)] = {
 				generation: (old?.generation ?? 0) + 1,
@@ -210,7 +253,9 @@ export class CredentialBroker {
 				revoked: true,
 				revoking: true,
 			};
-			return journal[identity(namespace, key)]!.generation;
+			const generation = journal[identity(namespace, key)]!.generation;
+			if (actor) actor.loginGeneration = generation;
+			return generation;
 		});
 	}
 	private async begin(
@@ -218,8 +263,9 @@ export class CredentialBroker {
 		key: string,
 		login: boolean,
 		socket: Socket,
+		actor: Actor,
 	): Promise<{ held: Held; value: unknown }> {
-		const loginGeneration = login ? await this.fence(namespace, key) : undefined;
+		const loginGeneration = login ? await this.fence(namespace, key, actor) : undefined;
 		const path = this.paths[namespace];
 		await this.regular(path);
 		let compromised = false;
@@ -320,7 +366,7 @@ export class CredentialBroker {
 		}
 		return value;
 	}
-	private async commit(held: Held, value: unknown, changed: boolean): Promise<void> {
+	private async commit(held: Held, value: unknown, changed: boolean, authorized: () => boolean): Promise<void> {
 		if (held.compromised()) throw new Rejected("stale");
 		if (changed && !validValue(held.namespace, value)) throw new Rejected("invalid");
 		if (
@@ -348,7 +394,13 @@ export class CredentialBroker {
 		await this.mutex(this.journal, async () => {
 			const journal = (await readObject(this.journal)) as Journal;
 			const fence = journal[identity(held.namespace, held.key)];
-			if (fence?.generation !== held.generation || fence.pending !== held.id || fence.revoked || held.compromised())
+			if (
+				!authorized() ||
+				fence?.generation !== held.generation ||
+				fence.pending !== held.id ||
+				fence.revoked ||
+				held.compromised()
+			)
 				throw new Rejected("stale");
 			if (changed) {
 				values[held.key] = value;
@@ -434,12 +486,52 @@ export class CredentialBroker {
 						const values = await readObject(this.paths.pi);
 						return send(
 							Object.entries(values)
-								.filter(([key, value]) => validKey("pi", key) && validValue("pi", value))
+								.filter(
+									([key, value]) =>
+										validKey("pi", key) &&
+										validValue("pi", value) &&
+										(!actor!.scope || (actor!.scope.namespace === "pi" && actor!.scope.key === key)),
+								)
 								.map(([providerId, value]) => ({ providerId, type: (value as ObjectValue).type })),
+						);
+					}
+					if (req.op === "statuses" && req.namespace === "pi" && !held && req.key === undefined) {
+						const values = await readObject(this.paths.pi),
+							journal = (await readObject(this.journal)) as Journal;
+						const keys = new Set([
+							...Object.keys(values),
+							...Object.keys(journal)
+								.filter((key) => key.startsWith("pi:"))
+								.map((key) => key.slice(3)),
+						]);
+						const selected = [...keys].filter(
+							(key) =>
+								validKey("pi", key) &&
+								(!actor!.scope || (actor!.scope.namespace === "pi" && actor!.scope.key === key)),
+						);
+						if (selected.length > 256) throw new Rejected("busy");
+						return send(
+							selected.map((providerId) => ({
+								providerId,
+								...credentialStatus(
+									"pi",
+									journal[identity("pi", providerId)],
+									Object.hasOwn(values, providerId) ? values[providerId] : undefined,
+								),
+							})),
 						);
 					}
 					if (!validKey(req.namespace, req.key)) throw new Rejected("invalid");
 					const key = req.key;
+					if (actor.scope && (actor.scope.namespace !== req.namespace || actor.scope.key !== key))
+						throw new Rejected("unauthorized");
+					if (req.op === "status" && !held) {
+						const journal = (await readObject(this.journal)) as Journal;
+						const fence = journal[identity(req.namespace, key)];
+						const values = await readObject(this.paths[req.namespace]);
+						const value = Object.hasOwn(values, key) ? values[key] : undefined;
+						return send(credentialStatus(req.namespace, fence, value));
+					}
 					if ((req.op === "read" || req.op === "peek") && !held) {
 						return send(await this.readCredential(req.namespace, key, req.op === "peek"));
 					}
@@ -464,7 +556,7 @@ export class CredentialBroker {
 					}
 					if (req.op === "begin" && !held && ["refresh", "login"].includes(req.mode ?? "")) {
 						if (req.mode === "login" && !actor.admin) throw new Rejected("unauthorized");
-						const begun = await this.begin(req.namespace, key, req.mode === "login", socket);
+						const begun = await this.begin(req.namespace, key, req.mode === "login", socket, actor);
 						held = begun.held;
 						if (expired || socket.destroyed || !this.actors.has(token)) {
 							await held.release();
@@ -480,7 +572,7 @@ export class CredentialBroker {
 						held.namespace === req.namespace &&
 						typeof req.changed === "boolean"
 					) {
-						await this.commit(held, req.value, req.changed);
+						await this.commit(held, req.value, req.changed, () => this.actors.has(token!));
 						await held.release();
 						held = undefined;
 						return send(true);

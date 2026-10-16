@@ -6,7 +6,12 @@ export interface CredentialEndpoint {
 	token: string;
 }
 export type CredentialNamespace = "pi" | "mcp";
-export type CredentialOperation = "read" | "peek" | "list" | "begin" | "commit" | "delete";
+export type CredentialOperation = "read" | "peek" | "list" | "status" | "statuses" | "begin" | "commit" | "delete";
+/** Metadata only. Configured does not prove provider acceptance or include ambient/config auth. */
+export interface CredentialStatus {
+	state: "missing" | "configured" | "reauthentication_required";
+}
+export type CredentialStatuses = Array<CredentialStatus & { providerId: string }>;
 export interface CredentialRequest {
 	op: CredentialOperation;
 	namespace: CredentialNamespace;

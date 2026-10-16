@@ -28,7 +28,7 @@ export function loginShell(): ShellCommand {
 }
 
 /** Installs may skip node-pty's install script, which marks the prebuilt spawn helper executable. */
-function loadPty(): NodePty {
+export function loadPty(): NodePty {
 	if (pty) return pty;
 	const root = dirname(require.resolve("node-pty/package.json"));
 	for (const dir of [join(root, "prebuilds", `${process.platform}-${process.arch}`), join(root, "build", "Release")]) {

@@ -96,6 +96,7 @@ final class PilotClient: ObservableObject {
     private var subagentSockets: [SubagentKey: StreamSocket] = [:]
     private var terminals: [String: TerminalAttachment] = [:]
     private var terminalSockets: [String: StreamSocket] = [:]
+    private var setupSockets: [String: SetupTerminalConnection] = [:]
 
     /// One open chat's socket and where to resume its stream after a disconnect.
     private final class ChatStream {
@@ -130,6 +131,7 @@ final class PilotClient: ObservableObject {
     }
 
     func disconnect() {
+        closeSetupAttachments()
         disconnected = true
         connectionGeneration = UUID()
         connected = false
@@ -1050,6 +1052,52 @@ final class PilotClient: ObservableObject {
 
     // MARK: MCP servers
 
+    // MARK: Pre-chat host setup. Explicit mutations are never queued/retried or sent to Local as fallback.
+
+    func setupReadiness() async throws -> SetupReadiness {
+        try await missionRequest(["setup"])
+    }
+
+    func setupRuns() async throws -> [SetupRun] {
+        try await missionRequest(["setup", "runs"])
+    }
+
+    func startSetup(_ request: SetupStartRequest) async throws -> SetupRun {
+        try await missionRequest(["setup", "runs"], body: request)
+    }
+
+    func setupRun(_ id: String) async throws -> SetupRun {
+        try await missionRequest(["setup", "runs", id])
+    }
+
+    func cancelSetup(_ id: String) async throws -> SetupRun {
+        try await missionRequest(["setup", "runs", id], method: "DELETE")
+    }
+
+    func logoutSetupProvider(_ provider: String) async throws -> SetupCredentialStatus {
+        try await missionRequest(["setup", "providers", provider, "credential"], method: "DELETE")
+    }
+
+    func attachSetup(_ id: String, receive: @escaping (SetupServerMessage) -> Void) throws -> SetupTerminalConnection {
+        guard connected, !disconnected, let url = socketURL("/api/setup/runs/\(Self.pathSegment(id))/terminal/ws"),
+              setupSockets[id] != nil || setupSockets.count < 4 else { throw HostRoutingError.disconnected }
+        setupSockets.removeValue(forKey: id)?.close()
+        let generation = connectionGeneration
+        let connection = SetupTerminalConnection(url: url, configuration: commandConfiguration,
+            isCurrent: { [weak self] in self?.connectionGeneration == generation && self?.connected == true && self?.disconnected == false },
+            receive: receive, onClose: { [weak self] in _ = self?.setupSockets.removeValue(forKey: id) })
+        setupSockets[id] = connection
+        return connection
+    }
+
+    func detachSetup(_ id: String) { setupSockets.removeValue(forKey: id)?.close() }
+
+    private func closeSetupAttachments() {
+        let connections = Array(setupSockets.values)
+        setupSockets.removeAll()
+        for connection in connections { connection.close() }
+    }
+
     /// Recheck every server, or one. Results arrive over the control socket.
     func checkMcp(server: String? = nil) async {
         if mcp.fixture { return }
@@ -1541,6 +1589,7 @@ final class PilotClient: ObservableObject {
     }
 
     private func open() {
+        closeSetupAttachments()
         guard !disconnected else { return }
         connectionGeneration = UUID()
         hasProjectSnapshot = false
@@ -1572,6 +1621,7 @@ final class PilotClient: ObservableObject {
     }
 
     private func suspendStreams() {
+        closeSetupAttachments()
         for chat in chats.values { chat.socket?.suspend() }
         for socket in terminalSockets.values { socket.suspend() }
         for socket in subagentSockets.values { socket.suspend() }

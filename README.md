@@ -132,6 +132,12 @@ fails closed. Native parents, subagents, Ask, model catalogs, MCP status/trackin
 helpers use the same authority. Existing Pi file/refresh locks are honored; unrelated external programs
 are not retrofitted with the broker's crash journal. Nothing copies credentials between hosts.
 
+The [pre-chat setup API and host-qualified client helpers](docs/credential-setup.md) report independent
+host readiness and run a trusted, bounded setup PTY without an existing chat or working model. Audited
+Codex device and Anthropic manual-code login use that host's canonical broker. Other provider flows and
+cross-host MCP browser callbacks are explicitly unsupported, not silently relayed or copied. These are
+onboarding integration APIs, not a complete devbox setup screen.
+
 Read-only workers use the SDK settings-storage seam to read existing canonical configuration without
 creating adjacent lock directories. Live writer locks, malformed, oversized or changing files fail closed;
 configuration writes remain denied. Fixed trusted preloads install the same adapters before immutable
