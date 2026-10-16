@@ -6,8 +6,8 @@ import SwiftUI
 ///
 /// - Light: white surfaces, a neutral-50 sidebar, 8% black hairlines, 4% black fills, neutral-800 text and dark
 ///   primary buttons.
-/// - Dark: a neutral-900 page over a darker sidebar, lifted grey cards and trays, 10% white hairlines, 6% white
-///   fills, neutral-200 text and light primary buttons.
+/// - Dark: soft, low-contrast greys rather than near-black. A neutral-800 page over a slightly darker sidebar, lifted
+///   grey cards and trays, 8% white hairlines, 5% white fills, neutral-300 text and light primary buttons.
 ///
 /// Views use these tokens instead of literal or system colours, so both appearances stay consistent. Signal fills
 /// (`info`, `success`, `warning`, `destructive`) keep one hue in both; text-weight colours lighten in dark.
@@ -17,22 +17,22 @@ enum Theme {
     /// Readable width of settings pages; wider settings windows center the page.
     static let settingsColumn: CGFloat = 680
 
-    static let background = Color(light: 0xFFFFFF, dark: 0x1E1E1E)
-    static let sidebar = Color(light: 0xFAFAFA, dark: 0x181818)
-    static let foreground = Color(light: 0x262626, dark: 0xE8E8E8)
-    static let mutedForeground = Color(light: 0x6B6B6B, dark: 0xA1A1A1)
-    static let faintForeground = Color(light: 0xA3A3A3, dark: 0x6E6E6E)
-    static let border = Color(light: .black.withAlphaComponent(0.08), dark: .white.withAlphaComponent(0.1))
-    static let muted = Color(light: .black.withAlphaComponent(0.04), dark: .white.withAlphaComponent(0.06))
-    static let selected = Color(light: .black.withAlphaComponent(0.06), dark: .white.withAlphaComponent(0.09))
-    static let card = Color(light: 0xFFFFFF, dark: 0x2A2A2A)
+    static let background = Color(light: 0xFFFFFF, dark: 0x262626)
+    static let sidebar = Color(light: 0xFAFAFA, dark: 0x202020)
+    static let foreground = Color(light: 0x262626, dark: 0xD4D4D4)
+    static let mutedForeground = Color(light: 0x6B6B6B, dark: 0x9A9A9A)
+    static let faintForeground = Color(light: 0xA3A3A3, dark: 0x6B6B6B)
+    static let border = Color(light: .black.withAlphaComponent(0.08), dark: .white.withAlphaComponent(0.08))
+    static let muted = Color(light: .black.withAlphaComponent(0.04), dark: .white.withAlphaComponent(0.05))
+    static let selected = Color(light: .black.withAlphaComponent(0.06), dark: .white.withAlphaComponent(0.08))
+    static let card = Color(light: 0xFFFFFF, dark: 0x303030)
     /// Opaque tray behind composers. Holds the editor card and its controls.
-    static let tray = Color(light: 0xF5F5F5, dark: 0x242424)
-    static let code = Color(light: 0xFAFAFA, dark: 0x242424)
+    static let tray = Color(light: 0xF5F5F5, dark: 0x2C2C2C)
+    static let code = Color(light: 0xFAFAFA, dark: 0x2C2C2C)
     /// Fill of primary actions (the composers' send button, a ticked answer, a strong key cap).
-    static let primary = Color(light: 0x262626, dark: 0xE8E8E8)
+    static let primary = Color(light: 0x262626, dark: 0xD4D4D4)
     /// Text and symbols drawn on `primary`.
-    static let onPrimary = Color(light: 0xFFFFFF, dark: 0x1E1E1E)
+    static let onPrimary = Color(light: 0xFFFFFF, dark: 0x262626)
     /// Fill of a disabled primary action.
     static let disabledFill = Color(light: .black.withAlphaComponent(0.15), dark: .white.withAlphaComponent(0.15))
     /// Symbols drawn on `disabledFill`.
