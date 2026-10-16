@@ -70,7 +70,7 @@ parentPort!.on("message", ({ id, method, args }) => {
 				value = disk.slackCached(args.channel, args.ts, args.projectId);
 				break;
 			case "reserveSlack":
-				value = disk.reserveSlack(args.channel, args.ts, args.now, args.projectId);
+				value = disk.reserveSlack(args.channel, args.ts, args.now, args.projectId, args.retry === true);
 				break;
 			case "reserveSlackRead":
 				value = disk.reserveSlackRead(args.now);
@@ -86,6 +86,12 @@ parentPort!.on("message", ({ id, method, args }) => {
 				break;
 			case "require":
 				value = disk.require(args.id);
+				break;
+			case "requireExternal":
+				value = disk.requireExternal(args.projectId, args.kind, args.externalId);
+				break;
+			case "searchSlack":
+				value = disk.searchSlack(args);
 				break;
 			case "commit":
 				disk.commit(args.projectId, args.kind, args.items, args.checkpoint, args.activeIds);

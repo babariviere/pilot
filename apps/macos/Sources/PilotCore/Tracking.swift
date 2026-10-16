@@ -133,6 +133,50 @@ public struct SlackExcerpt: Codable, Equatable, Sendable {
         self.itemId = itemId; self.author = author; self.text = text; self.truncated = truncated
     }
 }
+
+/// POST /api/tracking/slack/messages: adds one Slack message, from a pasted link, to a project's triage.
+public struct SlackMessageAddRequest: Encodable, Sendable {
+    public let projectId: String
+    public let url: String
+    public init(projectId: String, url: String) { self.projectId = projectId; self.url = url }
+}
+
+/// A Slack message link, as from Copy link: https://<workspace>.slack.com/archives/<channel>/p<16 digits>, with
+/// thread_ts for a reply. Mirrors pilotd's parseSlackMessageLink, which is authoritative.
+public struct SlackMessageLink: Equatable, Sendable {
+    public let channel: String
+    public let ts: String
+    /// The thread's parent, which is what triage tracks.
+    public let threadTs: String
+    /// The link as pasted, trimmed.
+    public let url: String
+
+    public init?(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.utf8.count <= 2000, let parts = URLComponents(string: trimmed),
+              parts.scheme?.lowercased() == "https", let host = parts.host?.lowercased(),
+              host == "slack.com" || host.hasSuffix(".slack.com") else { return nil }
+        let path = parts.path.split(separator: "/", omittingEmptySubsequences: true)
+        guard path.count == 3, path[0] == "archives", let first = path[1].first, "CDG".contains(first),
+              (2 ... 200).contains(path[1].count),
+              path[1].allSatisfy({ $0.isASCII && ($0.isUppercase || $0.isNumber) }),
+              path[2].first == "p" else { return nil }
+        let digits = path[2].dropFirst()
+        guard (16 ... 18).contains(digits.count), digits.allSatisfy({ $0.isASCII && $0.isNumber }) else { return nil }
+        let ts = "\(digits.dropLast(6)).\(digits.suffix(6))"
+        let thread = parts.queryItems?.first { $0.name == "thread_ts" }?.value
+        channel = String(path[1])
+        self.ts = ts
+        threadTs = thread.flatMap { Self.isTimestamp($0) ? $0 : nil } ?? ts
+        url = trimmed
+    }
+
+    static func isTimestamp(_ value: String) -> Bool {
+        let parts = value.split(separator: ".", omittingEmptySubsequences: false)
+        return parts.count == 2 && (1 ... 12).contains(parts[0].count) && parts[1].count == 6
+            && parts.allSatisfy { $0.allSatisfy { $0.isASCII && $0.isNumber } }
+    }
+}
 public enum SlackMessageType: String, Codable, Hashable, Sendable { case bug, question, request, unknown }
 public enum SlackSeverity: String, Codable, Hashable, Sendable { case low, medium, high, critical }
 public enum SlackLocalStatus: String, Codable, Hashable, Sendable {

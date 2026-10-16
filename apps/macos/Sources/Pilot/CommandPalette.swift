@@ -21,8 +21,8 @@ struct CommandPaletteEntry {
     let perform: @MainActor () -> Void
 }
 
-/// Everything the palette can list, built from what the app already holds, plus the Inbox's Linear and Slack items
-/// and the active missions' tasks, which the palette loads when it opens.
+/// Everything the palette can list, built from what the app already holds, plus the Inbox's Linear items and the
+/// active missions' tasks, which the palette loads when it opens. Slack reports come from a search as you type.
 @MainActor
 struct CommandPaletteCatalog {
     let model: AppModel
@@ -208,23 +208,63 @@ struct CommandPaletteCatalog {
         return entries
     }
 
-    /// The Inbox's Linear and Slack items, opened as from the Inbox.
+    /// The Inbox's Linear items, opened as from the Inbox. Slack messages come from pilotd's search instead (see
+    /// reports), which also reads their thread text and lists done ones.
     private func tracked() -> [CommandPaletteEntry] {
-        let linear = inbox?.linear?.items ?? []
-        let slack = inbox?.slack?.items ?? []
-        return (linear + slack).map { item in
+        (inbox?.linear?.items ?? []).map { item in
             let identifier = TrackedItemText.identifier(item)
             let project = model.client.project(item.projectId)?.name
-            let isLinear = item.kind == .linear
             return CommandPaletteEntry(
-                item: CommandPaletteItem(id: "tracked:\(item.id)", kind: isLinear ? .linear : .slack, title: item.title,
+                item: CommandPaletteItem(id: "tracked:\(item.id)", kind: .linear, title: item.title,
                                          keywords: [identifier, project].compactMap { $0 }),
-                icon: isLinear ? .linearIssue : .slackChannel, prefix: isLinear ? identifier : nil,
-                detail: [isLinear ? nil : identifier, project, TrackedItemText.subtitle(item)].compactMap { $0 }
+                icon: .linearIssue, prefix: identifier,
+                detail: [project, TrackedItemText.subtitle(item)].compactMap { $0 }
                     .filter { !$0.isEmpty }.joined(separator: " · ")
             ) {
                 if let url = trackedBrowserURL(item.url) { BrowserLinkOpener.shared.open(url) }
             }
+        }
+    }
+
+    /// Slack messages in triage that pilotd found for the query, latest first. The status leads, so a search for a
+    /// client tells at once whether their report was resolved. Opens the message in its project's triage.
+    func reports(_ items: [TrackedItem]) -> [CommandPaletteEntry] {
+        items.map { item in
+            let project = model.client.project(item.projectId)?.name
+            return CommandPaletteEntry(
+                item: CommandPaletteItem(id: "report:\(item.id)", kind: .slack, title: item.title),
+                icon: .slackChannel,
+                detail: [SlackTriageText.statusTitle(SlackTriageText.triage(item)), TrackedItemText.subtitle(item), project]
+                    .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+            ) { [model] in model.showSlackTriageItem(item) }
+        }
+    }
+
+    /// A pasted Slack message link: add it to a project's Slack triage. Projects tracking the message's channel come
+    /// first, then the focused one, then the others in sidebar order. With none tracking Slack, Settings.
+    func slackLink(_ link: SlackMessageLink) -> [CommandPaletteEntry] {
+        let focused = model.focusedProject?.id
+        let tracking = InboxText.triageProjects(model.orderedProjects, sources: model.client.trackingSources, scope: nil)
+        func rank(_ project: Project) -> Int {
+            (project.tracking?.slackChannels ?? []).contains(link.channel) ? 0 : project.id == focused ? 1 : 2
+        }
+        let projects = tracking.enumerated()
+            .sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }
+            .map(\.element)
+        guard !projects.isEmpty else {
+            return [CommandPaletteEntry(
+                item: CommandPaletteItem(id: "slack-link:settings", kind: .action, title: "Add to Slack triage"),
+                icon: .slackChannel, detail: "No project tracks Slack yet. Add channels in Settings first.",
+                perform: openSettings)]
+        }
+        let channel = projects.lazy.compactMap { $0.tracking?.slackChannelNames?[link.channel] }.first
+        return projects.map { project in
+            CommandPaletteEntry(
+                item: CommandPaletteItem(id: "slack-link:\(project.id)", kind: .action, title: "Add to Slack triage"),
+                icon: .slackChannel, suffix: "in \(project.name)",
+                detail: [channel.map { "#\($0)" }, "Pilot reads and sorts the message, then opens triage"]
+                    .compactMap { $0 }.joined(separator: " · ")
+            ) { [model] in model.addSlackMessageToTriage(link, projectId: project.id) }
         }
     }
 }
@@ -261,7 +301,11 @@ extension AppModel {
 @MainActor
 final class CommandPaletteModel: ObservableObject {
     @Published var query = "" {
-        didSet { if query != oldValue { refresh() } }
+        didSet {
+            guard query != oldValue else { return }
+            refresh()
+            searchReports()
+        }
     }
     @Published private(set) var sections: [CommandPaletteSection] = []
     @Published var selection: String?
@@ -269,14 +313,23 @@ final class CommandPaletteModel: ObservableObject {
     private var items: [CommandPaletteItem] = []
     private var catalog: CommandPaletteCatalog?
     private var loading: Task<Void, Never>?
+    private weak var client: PilotClient?
+    /// Slack messages pilotd found for the current query, and the query they answer.
+    private var reports: (query: String, items: [TrackedItem]) = ("", [])
+    private var searching: Task<Void, Never>?
 
     /// Active missions whose tasks the palette loads, at most.
     static let missionLimit = 20
+    /// Slack messages a search lists, latest first.
+    static let reportLimit = 8
+    /// Typing pause before pilotd searches Slack messages.
+    static let searchDelay: Duration = .milliseconds(150)
 
-    /// Lists what the app holds at once, then adds the Inbox's Linear and Slack items and the active missions'
+    /// Lists what the app holds at once, then adds the Inbox's Linear items and the active missions'
     /// tasks when they arrive.
     func start(model: AppModel, openSettings: @escaping () -> Void) {
         catalog = CommandPaletteCatalog(model: model, openSettings: openSettings)
+        client = model.client
         rebuild()
         loading?.cancel()
         loading = Task { [weak self] in
@@ -303,6 +356,28 @@ final class CommandPaletteModel: ObservableObject {
     func stop() {
         loading?.cancel()
         loading = nil
+        searching?.cancel()
+        searching = nil
+    }
+
+    /// Asks pilotd for Slack messages matching the query (words in their title, channel or thread text, or a pasted
+    /// link's thread) after a short pause. Only the latest query's answer is kept.
+    private func searchReports() {
+        searching?.cancel()
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let client, trimmed.count >= 2, CommandPalette.number(in: trimmed) == nil else {
+            if !reports.items.isEmpty { reports = ("", []); refresh(keepingSelection: true) }
+            return
+        }
+        searching = Task { [weak self] in
+            try? await Task.sleep(for: Self.searchDelay)
+            guard !Task.isCancelled else { return }
+            let found = (try? await client.searchSlack(trimmed, limit: Self.reportLimit))?.items ?? []
+            guard !Task.isCancelled, let self,
+                  self.query.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed else { return }
+            self.reports = (trimmed, found)
+            self.refresh(keepingSelection: true)
+        }
     }
 
     private func rebuild() {
@@ -317,12 +392,26 @@ final class CommandPaletteModel: ObservableObject {
         guard let catalog else { return }
         var added: [CommandPaletteEntry] = []
         let entries = entries
-        sections = CommandPalette.results(for: query, items: items) { chatId in
+        var results = CommandPalette.results(for: query, items: items) { chatId in
             guard let session = entries[chatId]?.session else { return [] }
             let actions = catalog.chatActions(session)
             added += actions
             return actions.map(\.item)
         }
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let found = reports.query == trimmed ? catalog.reports(reports.items) : []
+        let adding = SlackMessageLink(trimmed).map(catalog.slackLink) ?? []
+        added += found + adding
+        if !found.isEmpty {
+            let section = CommandPaletteSection(id: "slack-reports", title: "Slack reports", items: found.map(\.item))
+            // A pasted link names one message: show it first. Words list reports after closer matches.
+            if adding.isEmpty { results.append(section) } else { results.insert(section, at: 0) }
+        }
+        if !adding.isEmpty {
+            results.insert(CommandPaletteSection(id: "slack-link", title: "Slack message", items: adding.map(\.item)),
+                           at: found.isEmpty ? 0 : 1)
+        }
+        sections = results
         for entry in added { self.entries[entry.item.id] = entry }
         let shown = order
         if !keepingSelection || !(selection.map(shown.contains) ?? false) { selection = shown.first }
@@ -343,9 +432,11 @@ final class CommandPaletteModel: ObservableObject {
 // MARK: - View
 
 /// The ⌘K command palette: one search field over one list, grouped by kind, with the top match selected. Chats,
-/// pull request numbers, pages, missions and tasks, actions, project scopes and the Inbox's Linear and Slack items.
-/// Arrow keys move, Return opens, Escape closes. Rows wear the sidebar's state corner, grey except the amber of
-/// Needs you. Searching inside transcripts is not covered.
+/// pull request numbers, pages, missions and tasks, actions, project scopes, the Inbox's Linear items, and Slack
+/// reports in triage (title, channel or thread text, latest first, resolved ones included). A pasted Slack message
+/// link finds that report and offers to add it to a project's triage. Arrow keys move, Return opens, Escape closes.
+/// Rows wear the sidebar's state corner, grey except the amber of Needs you. Searching inside transcripts is not
+/// covered.
 struct CommandPaletteView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.openSettings) private var openSettings
@@ -380,7 +471,7 @@ struct CommandPaletteView: View {
     private var field: some View {
         HStack(spacing: 10) {
             PilotSymbol(PilotIcon.search).foregroundStyle(Theme.faintForeground)
-            TextField("Search chats, pages, missions and actions", text: $palette.query)
+            TextField("Search chats, pages, missions and Slack reports, or paste a Slack link", text: $palette.query)
                 .textFieldStyle(.plain)
                 .font(.pilot(.headline))
                 .focused($fieldFocused)

@@ -25,7 +25,7 @@ import { ScheduleStore } from "./schedule-store.ts";
 import { ScheduleService } from "./schedules.ts";
 import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
-import { createSlackPoller } from "./slack-source.ts";
+import { createSlackAdder, createSlackPoller } from "./slack-source.ts";
 import { PiSourceMcpClient } from "./source-mcp.ts";
 import { SourceRegistry } from "./sources.ts";
 import { SystemEventsDetection } from "./system-events-detection.ts";
@@ -63,6 +63,7 @@ tracking.register("linear", createLinearSizePoller(trackedItems, workerTriage(co
 tracking.startPolling("linear");
 const models = new ModelCatalog(config.agentDir);
 tracking.register("slack", createSlackPoller(trackedItems, models));
+tracking.slackAdder = createSlackAdder(trackedItems, models);
 tracking.startPolling("slack");
 const memory = new ProjectMemoryService(config.home, (prompt, signal, observe) =>
 	models.summarizeMemory(prompt, signal, observe),

@@ -22,10 +22,31 @@ export interface SlackPage {
 	next?: string;
 }
 const TS = /^\d{1,12}\.\d{6}$/;
+/** Characters of a Slack thread pilotd keeps locally for search. Never returned to clients. */
+export const SLACK_SEARCH_CHARS = 8000;
 const METADATA = /^(Thread|Reactions|Files): /;
 const THREAD = /^Thread: (\d+) repl(?:y|ies)(?: \(latest: [^\n]+\))?[ \t]*$/;
 export function slackTimestamp(value: unknown): value is string {
 	return typeof value === "string" && TS.test(value);
+}
+
+/** A Slack message link (Copy link): https://<workspace>.slack.com/archives/<channel>/p<16 digits>, with
+ * thread_ts for a reply. threadTs is the thread's parent, which is what triage tracks. */
+export function parseSlackMessageLink(value: unknown): { channel: string; ts: string; threadTs: string } | undefined {
+	if (typeof value !== "string" || value.length > 2000) return undefined;
+	let url: URL;
+	try {
+		url = new URL(value.trim());
+	} catch {
+		return undefined;
+	}
+	const host = url.hostname.toLowerCase();
+	if (url.protocol !== "https:" || (host !== "slack.com" && !host.endsWith(".slack.com"))) return undefined;
+	const path = /^\/archives\/([CDG][A-Z0-9]{1,199})\/p(\d{10,12})(\d{6})\/?$/.exec(url.pathname);
+	if (!path) return undefined;
+	const ts = `${path[2]}.${path[3]}`;
+	const thread = url.searchParams.get("thread_ts");
+	return { channel: path[1]!, ts, threadTs: thread && TS.test(thread) ? thread : ts };
 }
 
 /** Messages end with known metadata lines (Thread, Reactions, Files) in any order, at most once each.

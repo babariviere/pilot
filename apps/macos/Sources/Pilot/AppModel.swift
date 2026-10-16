@@ -88,6 +88,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var slackTriageProjectId: String?
     /// The common case Slack triage opens on, from the Overview. Cleared with the triage view.
     @Published private(set) var slackTriageCaseId: String?
+    /// A Slack message being added to triage from a pasted link. The triage view shows its progress, then selects it.
+    @Published private(set) var slackTriageAdd: SlackTriageAdd?
     /// The project whose Memory page replaces its page. Cleared when another page is selected.
     @Published private(set) var memoryProjectId: String?
     /// What the sidebar lists: nil for every project (the default), or one focused project's id.
@@ -624,6 +626,7 @@ final class AppModel: ObservableObject {
         selectedProjectId = id
         slackTriageProjectId = nil
         slackTriageCaseId = nil
+        slackTriageAdd = nil
         memoryProjectId = nil
     }
 
@@ -632,6 +635,38 @@ final class AppModel: ObservableObject {
         openProject(projectId)
         slackTriageCaseId = caseId
         slackTriageProjectId = projectId
+    }
+
+    /// Opens a project's Slack triage and adds the message behind a pasted Slack link to it. pilotd reads and
+    /// classifies the message; the triage view shows progress, then selects it, or shows why it couldn't be added.
+    func addSlackMessageToTriage(_ link: SlackMessageLink, projectId: String) {
+        if let scope = sidebarScope, scope != projectId { focus(on: projectId) }
+        openSlackTriage(projectId)
+        let add = SlackTriageAdd(projectId: projectId, link: link)
+        slackTriageAdd = add
+        let client = client
+        Task { [weak self] in
+            let state: SlackTriageAdd.State
+            do {
+                state = .added(try await client.addSlackMessage(projectId: projectId, url: link.url))
+            } catch {
+                state = .failed(error.localizedDescription)
+            }
+            guard let self, self.slackTriageAdd?.id == add.id else { return }
+            self.slackTriageAdd?.state = state
+        }
+    }
+
+    /// Opens a project's Slack triage with one message selected, as from a search in the ⌘K palette.
+    func showSlackTriageItem(_ item: TrackedItem) {
+        if let scope = sidebarScope, scope != item.projectId { focus(on: item.projectId) }
+        openSlackTriage(item.projectId)
+        slackTriageAdd = SlackTriageAdd(projectId: item.projectId, link: nil, state: .added(item))
+    }
+
+    /// The triage view has shown the result of an add, or the user dismissed its failure.
+    func clearSlackTriageAdd(_ id: UUID) {
+        if slackTriageAdd?.id == id { slackTriageAdd = nil }
     }
 
     /// Shows a project's Memory page in place of its page.

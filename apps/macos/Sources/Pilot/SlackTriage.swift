@@ -124,8 +124,10 @@ enum SlackTriageText {
     }
 
     /// What the view lists: filters applied, then severity (most urgent first), then newest first.
-    static func visible(_ items: [TrackedItem], filter: Filter, hidden: Set<String>, showDismissed: Bool)
-        -> [TrackedItem] {
+    /// matches: messages pilotd found for the query in their thread text or by a pasted link (see
+    /// SlackTriageModel.search); they pass the query like a title match.
+    static func visible(_ items: [TrackedItem], filter: Filter, hidden: Set<String>, showDismissed: Bool,
+                        matches: Set<String>? = nil) -> [TrackedItem] {
         let query = filter.trimmedQuery
         return items.filter { item in
             let triage = triage(item)
@@ -143,7 +145,8 @@ enum SlackTriageText {
             }
             if let channel = filter.channel, channelId(item) != channel { return false }
             if !query.isEmpty, !item.title.localizedCaseInsensitiveContains(query),
-               !TrackedItemText.identifier(item).localizedCaseInsensitiveContains(query) { return false }
+               !TrackedItemText.identifier(item).localizedCaseInsensitiveContains(query),
+               matches?.contains(item.id) != true { return false }
             return true
         }
         .sorted(by: precedes)
@@ -154,6 +157,15 @@ enum SlackTriageText {
         if left != right { return left < right }
         if lhs.updatedAt != rhs.updatedAt { return lhs.updatedAt > rhs.updatedAt }
         return lhs.id < rhs.id
+    }
+
+    /// Filters that show a message just added from a link: narrowing cleared, and Show hidden on when its label hides
+    /// it or a close label dismissed it. showDismissed tells whether Show dismissed must turn on as well.
+    static func revealing(_ item: TrackedItem, filter: Filter, hidden: Set<String>) -> (filter: Filter, showDismissed: Bool) {
+        let triage = triage(item)
+        var next = Filter(showHidden: filter.showHidden)
+        if triage.closedByLabel != nil || triage.label.map(hidden.contains) == true { next.showHidden = true }
+        return (next, triage.status == .dismissed && triage.closedByLabel == nil)
     }
 
     /// Messages with a hidden label or closed by a label, for "Show hidden (N)".
@@ -318,6 +330,22 @@ extension TrackedItem {
 
 // MARK: Model
 
+/// A Slack message being added to triage from a pasted link, or one found by a search (both from the ⌘K palette),
+/// held by AppModel until the triage view selects it or the user dismisses a failure.
+struct SlackTriageAdd: Equatable {
+    enum State: Equatable {
+        case adding
+        case added(TrackedItem)
+        case failed(String)
+    }
+
+    let id = UUID()
+    let projectId: String
+    /// The pasted link, for Try Again. Nil when opening a message already in triage.
+    let link: SlackMessageLink?
+    var state: State = .adding
+}
+
 /// A project's Slack messages: a bounded number of pages, refreshed on WebSocket invalidation (coalesced),
 /// with local changes shown at once and kept until pilotd confirms them.
 @MainActor
@@ -331,6 +359,8 @@ final class SlackTriageModel: ObservableObject {
     /// Per-item failures of a change, shown in the inspector.
     @Published private(set) var errors: [String: String] = [:]
     @Published var showDismissed = false { didSet { if showDismissed != oldValue { reload() } } }
+    /// Messages pilotd found for a search query in their thread text, or by a pasted Slack link.
+    @Published private(set) var matches: (query: String, ids: Set<String>)?
     private var pending: [String: SlackTriage] = [:]
     private weak var client: PilotClient?
     private var observer: UUID?
@@ -427,6 +457,20 @@ final class SlackTriageModel: ObservableObject {
         self.items = items
         total = items.filter { !$0.dismissed }.count
         loaded = true
+    }
+
+    /// Asks pilotd which of this project's messages contain the query in their thread text (titles and channels are
+    /// matched locally), or are a pasted link's thread. Call from a task tied to the query: a new query cancels it.
+    func search(_ query: String) async {
+        guard let client, query.count >= 2 else {
+            if matches != nil { matches = nil }
+            return
+        }
+        try? await Task.sleep(for: .milliseconds(150))
+        guard !Task.isCancelled,
+              let found = try? await client.searchSlack(query, projectId: projectId, limit: 50),
+              !Task.isCancelled else { return }
+        matches = (query, Set(found.items.map(\.id)))
     }
 }
 
@@ -558,7 +602,10 @@ struct SlackTriagePage: View {
                 triage.start(client: client)
                 cases.start(client: client)
             }
+            reveal(model.slackTriageAdd)
         }
+        .onChange(of: model.slackTriageAdd) { _, add in reveal(add) }
+        .task(id: filter.trimmedQuery) { if !fixture { await triage.search(filter.trimmedQuery) } }
         .onDisappear {
             triage.stop()
             cases.stop()
@@ -601,6 +648,63 @@ struct SlackTriagePage: View {
         }
     }
 
+    /// Messages pilotd found for the current search in their thread text or by a pasted link, once it answered.
+    private var contentMatches: Set<String>? {
+        guard let matches = triage.matches, matches.query == filter.trimmedQuery else { return nil }
+        return matches.ids
+    }
+
+    /// A message added from a pasted link, or found by a search in the ⌘K palette: the table or board while pilotd
+    /// reads it, then the message selected, with filters that show it.
+    private func reveal(_ add: SlackTriageAdd?) {
+        guard let add, add.projectId == projectId else { return }
+        if layout == .cases { layout = .table }
+        guard case let .added(item) = add.state else { return }
+        let hidden = SlackTriageText.hiddenLabels(client.project(projectId)?.tracking?.slackLabels ?? [])
+        let shown = SlackTriageText.revealing(item, filter: filter, hidden: hidden)
+        filter = shown.filter
+        if shown.showDismissed { triage.showDismissed = true }
+        selection = item.id
+        triage.reload()
+        model.clearSlackTriageAdd(add.id)
+    }
+
+    /// Progress of a message being added from a pasted link, or why it couldn't be added.
+    @ViewBuilder private var addBanner: some View {
+        if let add = model.slackTriageAdd, add.projectId == projectId {
+            switch add.state {
+            case .adding:
+                HStack(spacing: 10) {
+                    ProgressView().controlSize(.small)
+                    Text("Adding the Slack message…").font(.pilot(.body)).foregroundStyle(Theme.mutedForeground)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 16).padding(.vertical, 8)
+                .accessibilityElement(children: .combine)
+            case let .failed(message):
+                HStack(spacing: 10) {
+                    PilotSymbol(PilotIcon.warning).foregroundStyle(Theme.error).frame(width: 16)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Couldn't add the Slack message").font(.pilot(.body)).foregroundStyle(Theme.foreground)
+                        Text(message).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).lineLimit(2)
+                    }
+                    Spacer(minLength: 8)
+                    Button("Dismiss") { model.clearSlackTriageAdd(add.id) }
+                    if let link = add.link {
+                        Button("Try Again") { model.addSlackMessageToTriage(link, projectId: projectId) }
+                    }
+                }
+                .padding(12)
+                .background(RoundedRectangle(cornerRadius: Theme.Radius.card).fill(Theme.muted))
+                .accessibilityElement(children: .contain)
+                .padding(.horizontal, 16).padding(.vertical, 6)
+            case .added:
+                EmptyView()
+            }
+        }
+    }
+
     @ViewBuilder private func content(_ project: Project) -> some View {
         if (project.tracking?.slackChannels ?? []).isEmpty, triage.items.isEmpty {
             EmptyStateView(icon: PilotIcon.chats, title: "No Slack channels yet",
@@ -629,7 +733,7 @@ struct SlackTriagePage: View {
         let labels = project.tracking?.slackLabels ?? []
         let hidden = SlackTriageText.hiddenLabels(labels)
         let visible = SlackTriageText.visible(triage.items, filter: filter, hidden: hidden,
-                                              showDismissed: triage.showDismissed)
+                                              showDismissed: triage.showDismissed, matches: contentMatches)
         let unfiltered = SlackTriageText.visible(triage.items, filter: .init(showHidden: filter.showHidden),
                                                  hidden: hidden, showDismissed: triage.showDismissed).count
         let columns = SlackTriageText.keyColumns(visible, layout: layout,
@@ -647,6 +751,7 @@ struct SlackTriagePage: View {
                 ProjectRefreshBanner(receivedAt: nil, error: error, retrying: false) { triage.reload() }
                     .padding(.horizontal, 16).padding(.vertical, 6)
             }
+            addBanner
             HStack(spacing: 0) {
                 list(visible: visible, hidden: hidden, columns: columns, now: now)
                     .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)

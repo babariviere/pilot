@@ -73,6 +73,7 @@ import { RepositoryBrowser } from "./repository-browser.ts";
 import { ReviewStore } from "./reviews.ts";
 import type { ScheduleService } from "./schedules.ts";
 import { NotFound, type SessionManager } from "./sessions.ts";
+import { parseSlackMessageLink } from "./slack-format.ts";
 import type { SourceRegistry } from "./sources.ts";
 import type { TerminalManager } from "./terminals.ts";
 import { validatePatch } from "./tracked-items.ts";
@@ -465,6 +466,26 @@ export function createDaemonServer(
 		if (parts[1] === "sources" || parts[1] === "tracked-items" || parts[1] === "tracking") {
 			if (!tracking) throw new ServiceUnavailable("Tracking is unavailable");
 			if (parts[1] === "tracking") {
+				if (parts.length === 4 && parts[2] === "slack" && parts[3] === "search" && req.method === "GET") {
+					const projectId = url.searchParams.get("projectId") ?? undefined;
+					if (projectId) projects.require(projectId);
+					const limit = url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : 20;
+					if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw new HttpError(400, "limit must be 1..50");
+					return json(res, 200, await tracking.searchSlack(url.searchParams.get("query") ?? "", projectId, limit));
+				}
+				if (parts.length === 4 && parts[2] === "slack" && parts[3] === "messages" && req.method === "POST") {
+					const body = await readJson<import("@pilot/protocol").SlackMessageAddRequest | null>(req);
+					if (
+						!body ||
+						typeof body !== "object" ||
+						typeof body.projectId !== "string" ||
+						typeof body.url !== "string"
+					)
+						throw new HttpError(400, "projectId and url are required");
+					projects.require(body.projectId);
+					if (!parseSlackMessageLink(body.url)) throw new HttpError(400, "Paste a link to a Slack message");
+					return json(res, 200, await tracking.addSlackMessage(body.projectId, body.url));
+				}
 				if (parts[2] === "slack" && parts[3] === "cases") {
 					const projectId = url.searchParams.get("projectId") ?? "";
 					projects.require(projectId);

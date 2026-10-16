@@ -16,6 +16,7 @@ import type {
 } from "@pilot/protocol";
 import { NotFound } from "./errors.ts";
 import { parseSlackClassification, type SlackClassification } from "./slack-classifier.ts";
+import { SLACK_SEARCH_CHARS } from "./slack-format.ts";
 import { TriageGuideDisk } from "./triage-guide-disk.ts";
 import { LinearSizeDisk } from "./linear-size.ts";
 import { SlackCaseDisk } from "./slack-cases.ts";
@@ -33,7 +34,26 @@ export interface SlackReactionBatch {
 	budget: boolean;
 }
 
-export type TrackedInput = Pick<TrackedItem, "externalId" | "title" | "url" | "status" | "metadata" | "updatedAt">;
+export type TrackedInput = Pick<TrackedItem, "externalId" | "title" | "url" | "status" | "metadata" | "updatedAt"> & {
+	/** Slack only: the thread's text, kept locally for search and never returned to clients. */
+	searchText?: string;
+};
+/** Case- and accent-insensitive form used both for stored search text and for queries. */
+export function searchForm(text: string): string {
+	return text
+		.normalize("NFD")
+		.replace(/[\u0300-\u036f]/g, "")
+		.toLowerCase()
+		.replace(/[\x00-\x1f\x7f]+/g, " ");
+}
+export interface SlackSearchQuery {
+	projectIds: string[];
+	/** Words that must all appear in a message's title, channel or thread text. */
+	query: string;
+	/** Exact threads, from a pasted Slack link. */
+	externalIds?: string[];
+	limit: number;
+}
 export interface SlackPullRequestObservation {
 	projectId: string;
 	sessionId: string;
@@ -243,6 +263,9 @@ export class TrackedItemDisk {
 		this.cases = new SlackCaseDisk(this.db, this.triage);
 		if (!columns.some((column) => column.name === "linear_size_override"))
 			this.db.exec("ALTER TABLE tracked_items ADD COLUMN linear_size_override TEXT");
+		// Slack title, channel and thread text in searchForm, for search. Rows stored earlier match by title.
+		if (!columns.some((column) => column.name === "search_text"))
+			this.db.exec("ALTER TABLE tracked_items ADD COLUMN search_text TEXT");
 		if (Number(this.db.prepare("PRAGMA user_version").get()!.user_version) < 1)
 			this.db.exec(`
 			UPDATE slack_classifications SET result=json_object(
@@ -298,20 +321,23 @@ export class TrackedItemDisk {
 		return Number(result.changes) === 1;
 	}
 	/** Crash-safe admission before any model call. One attempt per project/thread, across restarts. */
-	reserveSlack(channel: string, ts: string, now: number, projectId: string): SlackReservation {
+	/** Reserves a classification against the daily budget, unless one is cached. retry reclassifies a cached failure or
+	 * an interrupted attempt, for a message the user added by hand. */
+	reserveSlack(channel: string, ts: string, now: number, projectId: string, retry = false): SlackReservation {
 		validateSlackKey(channel, ts, projectId);
 		const day = new Date(now).toISOString().slice(0, 10);
 		this.db.exec("BEGIN IMMEDIATE");
 		try {
 			const cached = this.slackCached(channel, ts, projectId);
 			let result: SlackReservation;
-			if (cached) result = cached;
+			if (cached && (cached.state === "done" || !retry)) result = cached;
 			else {
 				const used = Number(this.db.prepare("SELECT used FROM slack_budget WHERE day=?").get(day)?.used ?? 0);
 				if (used >= SLACK_DAILY_BUDGET) result = { state: "budget" };
 				else {
 					this.db
-						.prepare("INSERT INTO slack_project_classifications VALUES (?, ?, ?, 'pending', NULL)")
+						.prepare(`INSERT INTO slack_project_classifications VALUES (?, ?, ?, 'pending', NULL)
+						ON CONFLICT(project_id, channel, thread_ts) DO UPDATE SET state='pending', result=NULL`)
 						.run(projectId, channel, ts);
 					this.db
 						.prepare("INSERT INTO slack_budget VALUES (?, 1) ON CONFLICT(day) DO UPDATE SET used=used+1")
@@ -407,6 +433,50 @@ export class TrackedItemDisk {
 		const row = this.db.prepare("SELECT * FROM tracked_items WHERE id = ?").get(id) as Row | undefined;
 		if (!row) throw new NotFound(`Unknown tracked item: ${id}`);
 		return decode(row);
+	}
+	/** A project's item by its source ID, for example a Slack message just added by hand. */
+	requireExternal(projectId: string, kind: TrackedKind, externalId: string): TrackedItem {
+		const row = this.db
+			.prepare("SELECT * FROM tracked_items WHERE project_id=? AND kind=? AND external_id=?")
+			.get(projectId, kind, externalId) as Row | undefined;
+		if (!row) throw new NotFound(`Unknown tracked item: ${externalId}`);
+		return decode(row);
+	}
+	/** Slack messages of the given projects matching every word, or the exact threads of a pasted link, latest first.
+	 * Done and dismissed messages are included, so a search tells whether a report was resolved. */
+	searchSlack(query: SlackSearchQuery): TrackedItemList {
+		const { projectIds, limit } = query;
+		if (
+			!Array.isArray(projectIds) ||
+			projectIds.length > 200 ||
+			projectIds.some((id) => typeof id !== "string") ||
+			typeof query.query !== "string" ||
+			query.query.length > 500 ||
+			!Number.isInteger(limit) ||
+			limit < 1 ||
+			limit > 50 ||
+			(query.externalIds !== undefined &&
+				(!Array.isArray(query.externalIds) ||
+					query.externalIds.length > 4 ||
+					query.externalIds.some((id) => typeof id !== "string" || id.length > 500)))
+		)
+			throw new Error("Invalid Slack search");
+		const words = searchForm(query.query).split(/\s+/).filter(Boolean).slice(0, 8);
+		if (!projectIds.length || (!words.length && !query.externalIds?.length)) return { items: [], total: 0 };
+		const like = (word: string) => `%${word.replace(/[\\%_]/g, (match) => `\\${match}`)}%`;
+		const where = query.externalIds?.length
+			? "external_id IN (SELECT value FROM json_each(?))"
+			: words.map(() => "(coalesce(search_text, lower(title)) LIKE ? ESCAPE '\\')").join(" AND ");
+		const filter = `project_id IN (SELECT value FROM json_each(?)) AND kind='slack' AND active=1 AND ${where}`;
+		const args = [
+			JSON.stringify(projectIds),
+			...(query.externalIds?.length ? [JSON.stringify(query.externalIds)] : words.map(like)),
+		];
+		const total = Number(this.db.prepare(`SELECT COUNT(*) AS n FROM tracked_items WHERE ${filter}`).get(...args)!.n);
+		const rows = this.db
+			.prepare(`SELECT * FROM tracked_items WHERE ${filter} ORDER BY updated_at DESC, id LIMIT ?`)
+			.all(...args, limit) as Row[];
+		return { items: rows.map(decode), total };
 	}
 	list(query: TrackedQuery): TrackedItemList {
 		const limit = query.limit ?? 100,
@@ -572,12 +642,18 @@ export class TrackedItemDisk {
 		if (checkpoint && Buffer.byteLength(JSON.stringify(checkpoint)) > 32 * 1024)
 			throw new Error("Checkpoint too large");
 		const put = this.db.prepare(`INSERT INTO tracked_items
-		 (id, project_id, kind, external_id, title, url, status, metadata, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 (id, project_id, kind, external_id, title, url, status, metadata, created_at, updated_at, search_text)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(project_id, kind, external_id) DO UPDATE SET
-		 title=excluded.title, url=excluded.url, status=excluded.status, metadata=excluded.metadata, updated_at=excluded.updated_at
+		 title=excluded.title, url=excluded.url, status=excluded.status, updated_at=excluded.updated_at,
+		 metadata=CASE WHEN json_extract(tracked_items.metadata, '$.manual') = 1
+		  THEN json_set(excluded.metadata, '$.manual', json('true')) ELSE excluded.metadata END,
+		 search_text=CASE WHEN length(coalesce(excluded.search_text, '')) >= length(coalesce(tracked_items.search_text, ''))
+		  THEN excluded.search_text ELSE tracked_items.search_text END
 		 WHERE excluded.updated_at >= tracked_items.updated_at AND
-		 (title != excluded.title OR url != excluded.url OR status != excluded.status OR metadata != excluded.metadata OR updated_at != excluded.updated_at)`);
+		 (title != excluded.title OR url != excluded.url OR status != excluded.status OR metadata != excluded.metadata OR updated_at != excluded.updated_at
+		  OR (excluded.search_text IS NOT tracked_items.search_text
+		   AND length(coalesce(excluded.search_text, '')) >= length(coalesce(tracked_items.search_text, ''))))`);
 		let changed = false;
 		this.db.exec("BEGIN");
 		try {
@@ -594,6 +670,7 @@ export class TrackedItemDisk {
 						JSON.stringify(item.metadata),
 						Date.now(),
 						item.updatedAt,
+						kind === "slack" ? slackSearchText(item) : null,
 					).changes || changed;
 			if (activeIds) {
 				const ids = JSON.stringify(activeIds);
@@ -990,13 +1067,15 @@ export class TrackedItemDisk {
 		return next;
 	}
 
-	/** Slack rows stay stored when a channel is removed, with their links, and show again if it is re-added. */
+	/** Slack rows stay stored when a channel is removed, with their links, and show again if it is re-added. Messages
+	 * added by hand stay shown whatever their channel. */
 	retainSlack(projectId: string, channels: string[]): void {
 		if (!Array.isArray(channels) || channels.length > 100 || channels.some((channel) => typeof channel !== "string"))
 			throw new Error("Invalid Slack channel list");
 		const scope = JSON.stringify(channels.map((channel) => channel.replace(/^#/, "")));
 		const match = `(json_extract(metadata, '$.channel') IN (SELECT value FROM json_each(?))
-		 OR json_extract(metadata, '$.channelName') IN (SELECT value FROM json_each(?)))`;
+		 OR json_extract(metadata, '$.channelName') IN (SELECT value FROM json_each(?))
+		 OR coalesce(json_extract(metadata, '$.manual'), 0) = 1)`;
 		let changed = false;
 		for (const [next, previous, condition] of [
 			[0, 1, `NOT ${match}`],
@@ -1024,6 +1103,11 @@ function validateSlackKey(channel: string, ts: string, projectId: string): void 
 		!/^\d{1,12}\.\d{6}$/.test(ts)
 	)
 		throw new Error("Invalid Slack thread key");
+}
+/** Title, channel and bounded thread text of a Slack row, in searchForm. */
+function slackSearchText(item: TrackedInput): string {
+	const channel = typeof item.metadata.channelName === "string" ? `#${item.metadata.channelName}` : "";
+	return searchForm(`${item.title}\n${channel}\n${(item.searchText ?? "").slice(0, SLACK_SEARCH_CHARS)}`);
 }
 function decode(row: Row): TrackedItem {
 	const links = row.links ? (JSON.parse(row.links) as { sessions?: string[]; missions?: string[] }) : {};
@@ -1114,6 +1198,8 @@ function bind(current: string[], link: string | null | undefined): string[] {
 	return [...current.filter((id) => id !== link), link].slice(-LINK_LIMIT);
 }
 function validateInput(item: TrackedInput): void {
+	if (item.searchText !== undefined && (typeof item.searchText !== "string" || item.searchText.length > 64 * 1024))
+		throw new Error("Invalid tracked item search text");
 	for (const [value, max] of [
 		[item.externalId, 500],
 		[item.title, 2000],

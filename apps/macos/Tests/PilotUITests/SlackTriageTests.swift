@@ -251,3 +251,26 @@ private func message(_ id: String, _ type: SlackMessageType = .bug, _ severity: 
     await task.value
     #expect(store.states.isEmpty)
 }
+
+@Test func searchMatchesFromThreadTextPassTheQuery() {
+    let items = [message("a", title: "Export crashes"), message("b", title: "Login loop")]
+    let filter = SlackTriageText.Filter(query: "Acme")
+    #expect(SlackTriageText.visible(items, filter: filter, hidden: [], showDismissed: false).isEmpty)
+    #expect(SlackTriageText.visible(items, filter: filter, hidden: [], showDismissed: false, matches: ["b"])
+        .map(\.id) == ["b"])
+}
+
+@Test func revealingAMessageClearsNarrowingAndShowsHiddenOrDismissedOnes() {
+    let narrowed = SlackTriageText.Filter(type: .question, query: "vat")
+    let open = SlackTriageText.revealing(message("a"), filter: narrowed, hidden: ["Product"])
+    #expect(open.filter == .init())
+    #expect(!open.showDismissed)
+    let hidden = SlackTriageText.revealing(message("b", label: "Product"), filter: narrowed, hidden: ["Product"])
+    #expect(hidden.filter == .init(showHidden: true))
+    let closed = message("c", label: "Product", status: .dismissed).withTriage(
+        SlackTriage(type: .bug, label: "Product", severity: .low, status: .dismissed, closedByLabel: "Product"))
+    let revealedClosed = SlackTriageText.revealing(closed, filter: .init(), hidden: [])
+    #expect(revealedClosed.filter == .init(showHidden: true))
+    #expect(!revealedClosed.showDismissed)
+    #expect(SlackTriageText.revealing(message("d", status: .dismissed), filter: .init(), hidden: []).showDismissed)
+}

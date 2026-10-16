@@ -7,6 +7,7 @@ import {
 	parseSlackPage,
 	parseSlackThread,
 	parseSlackThreadParent,
+	SLACK_SEARCH_CHARS,
 	SlackFormatChanged,
 	slackExcerptText,
 	slackTimestamp,
@@ -44,6 +45,21 @@ type CacheStore = Pick<
 	"slackCached" | "reserveSlack" | "reserveSlackRead" | "finishSlack" | "corrections"
 >;
 class SlackReadBudget extends Error {}
+
+/** The project's labels, latest corrections and triage guide, as the classifier reads them. */
+async function classifierContextFor(store: CacheStore, context: SourcePollContext): Promise<SlackClassifierContext> {
+	const recent =
+		"triageContext" in store
+			? await (store as TrackedItemStore).triageContext(context.project.id, "slack")
+			: undefined;
+	return {
+		labels: context.config.slackLabels ?? [],
+		corrections: recent
+			? (recent.corrections as SlackClassifierContext["corrections"])
+			: (await store.corrections(context.project.id)).slice(0, 5),
+		guide: recent?.guide.text ?? "",
+	};
+}
 
 /** Per-channel progress for source status. Old or foreign checkpoints report nothing. */
 export function slackChannelProgress(
@@ -180,6 +196,8 @@ export function createSlackPoller(
 				if (filtered && !mentionsMe(message.text, me!, groups)) continue;
 				if (seen.has(message.threadTs)) continue;
 				seen.add(message.threadTs);
+				// The thread's text when it was read for classification, else the message's own: kept for search only.
+				let searchText = message.text;
 				const threadKey = `${context.project.id}/${page.channel}/${message.threadTs}`;
 				let cached = await store.slackCached(page.channel, message.threadTs, context.project.id);
 				if (cached?.state === "pending") {
@@ -202,19 +220,8 @@ export function createSlackPoller(
 								)
 							: { messages: [message] };
 					message.replies = thread.messages[0]!.replies;
-					if (!classifierContext) {
-						const recent =
-							"triageContext" in store
-								? await (store as TrackedItemStore).triageContext(context.project.id, "slack")
-								: undefined;
-						classifierContext = {
-							labels: context.config.slackLabels ?? [],
-							corrections: recent
-								? (recent.corrections as SlackClassifierContext["corrections"])
-								: (await store.corrections(context.project.id)).slice(0, 5),
-							guide: recent?.guide.text ?? "",
-						};
-					}
+					searchText = thread.messages.map((reply) => reply.text).join("\n\n");
+					classifierContext ??= await classifierContextFor(store, context);
 					classify ??= models.prepareSlackClassifier
 						? await models.prepareSlackClassifier(context.project.path, context.signal, classifierContext)
 						: (text) => models.classifySlack(context.project.path, text, context.signal, classifierContext);
@@ -269,6 +276,7 @@ export function createSlackPoller(
 				items.push({
 					externalId: `${page.channel}/${message.threadTs}`,
 					title: result.summary,
+					searchText: searchText.slice(0, SLACK_SEARCH_CHARS),
 					url: `https://slack.com/archives/${page.channel}/p${message.threadTs.replace(".", "")}`,
 					status: "open",
 					updatedAt: Number(message.threadTs) * 1000,
@@ -308,16 +316,136 @@ function timestamp(now: number): string {
 	return `${Math.floor(now / 1000)}.000000`;
 }
 
+export type SlackMessageLink = { channel: string; ts: string; threadTs: string };
+export type SlackAdder = (context: SourcePollContext, link: SlackMessageLink) => Promise<TrackedInput>;
+
+/** Adds one message the user pasted, from any channel their Slack account can read. Reads its thread and classifies
+ * it like a polled thread: cached per project and sharing the daily budget, but a cached failure is retried because
+ * the user asked. When classification is unavailable the message is still added, untyped, titled by its first line.
+ * The row is marked manual, so it stays listed when its channel is not tracked. */
+export function createSlackAdder(
+	store: CacheStore,
+	models: Pick<ModelCatalog, "classifySlack"> & Partial<Pick<ModelCatalog, "prepareSlackClassifier">>,
+	now = Date.now,
+): SlackAdder {
+	return async (context, link) => {
+		const thread = parseSlackThread(
+			await context.call("thread", {
+				channel_id: link.channel,
+				message_ts: link.threadTs,
+				limit: THREAD_LIMIT,
+				response_format: "detailed",
+			}),
+			link.threadTs,
+			THREAD_LIMIT,
+		);
+		const parent = thread.messages[0]!;
+		let channelName = context.config.slackChannelNames?.[link.channel];
+		if (!channelName) {
+			// Thread reads omit the channel. One history read around the parent names it; the row works without it.
+			try {
+				const page = parseSlackPage(
+					await context.call("history", {
+						channel_id: link.channel,
+						oldest: link.threadTs,
+						latest: link.threadTs,
+						limit: 1,
+						response_format: "detailed",
+					}),
+					1,
+				);
+				if (page.channel === link.channel) channelName = page.name;
+			} catch (error) {
+				if (context.signal.aborted) throw error;
+			}
+		}
+		context.signal.throwIfAborted();
+		let result: SlackClassification | undefined;
+		const reservation = await store.reserveSlack(link.channel, link.threadTs, now(), context.project.id, true);
+		if (reservation.state === "done") result = reservation.result;
+		else if (reservation.state === "reserved") {
+			try {
+				const classifierContext = await classifierContextFor(store, context);
+				const classified = models.prepareSlackClassifier
+					? await (await models.prepareSlackClassifier(context.project.path, context.signal, classifierContext))(
+							thread.messages
+								.map((reply) => reply.text)
+								.join("\n\n")
+								.slice(0, 12_000),
+						)
+					: await models.classifySlack(
+							context.project.path,
+							thread.messages
+								.map((reply) => reply.text)
+								.join("\n\n")
+								.slice(0, 12_000),
+							context.signal,
+							classifierContext,
+						);
+				result = parseSlackClassification(JSON.stringify(classified), classifierContext.labels);
+			} catch (error) {
+				if (context.signal.aborted) {
+					await store.finishSlack(link.channel, link.threadTs, undefined, context.project.id);
+					throw error;
+				}
+			}
+			await store.finishSlack(link.channel, link.threadTs, result, context.project.id);
+		}
+		context.signal.throwIfAborted();
+		const title = result?.summary ?? firstLine(parent.text);
+		const type = !result || result.confidence < SLACK_CONFIDENCE_THRESHOLD ? "unknown" : result.type;
+		const label =
+			result && context.config.slackLabels?.some((entry) => entry.name === result.label) ? result.label : null;
+		return {
+			externalId: `${link.channel}/${link.threadTs}`,
+			title,
+			searchText: thread.messages
+				.map((reply) => reply.text)
+				.join("\n\n")
+				.slice(0, SLACK_SEARCH_CHARS),
+			url: `https://slack.com/archives/${link.channel}/p${link.threadTs.replace(".", "")}`,
+			status: "open",
+			updatedAt: Number(link.threadTs) * 1000,
+			metadata: {
+				channel: link.channel,
+				...(channelName ? { channelName } : {}),
+				thread_ts: link.threadTs,
+				replies: parent.replies,
+				...(result ?? { confidence: 0, severity: "low", summary: title }),
+				type,
+				label,
+				manual: true,
+			},
+		};
+	};
+}
+/** A plain, single-line title from a message's text, for messages Pilot could not classify. */
+function firstLine(text: string): string {
+	const line = text
+		.split("\n")
+		.map((part) =>
+			part
+				.replace(/[\x00-\x1f\x7f]/g, " ")
+				.replace(/\s+/g, " ")
+				.trim(),
+		)
+		.find(Boolean);
+	if (!line) return "Slack message";
+	return line.length > 240 ? `${line.slice(0, 239).trimEnd()}…` : line;
+}
+
 /** Read one thread's first message for the triage inspector, only from a channel the project still tracks.
  * Plain, bounded text that is returned to the app and never stored. */
 export async function slackExcerpt(context: SourcePollContext, item: TrackedItem): Promise<SlackExcerpt> {
 	const { channel, channelName, thread_ts: ts } = item.metadata;
 	if (typeof channel !== "string" || !/^[CDG][A-Z0-9]{1,199}$/.test(channel) || !slackTimestamp(ts))
 		throw new Conflict("This message can't be read from Slack");
-	const tracked = context.config.slackChannels.some(
-		(configured) =>
-			configured === channel || (typeof channelName === "string" && configured.replace(/^#/, "") === channelName),
-	);
+	const tracked =
+		item.metadata.manual === true ||
+		context.config.slackChannels.some(
+			(configured) =>
+				configured === channel || (typeof channelName === "string" && configured.replace(/^#/, "") === channelName),
+		);
 	if (!tracked) throw new Conflict("This message's channel was removed from this project");
 	const parent = parseSlackThreadParent(
 		// Only the parent is shown. Fetch as few replies as the tool allows.
