@@ -17,6 +17,12 @@ export interface WatchNotice {
 	items: { watchId: string; note: string; event: WatchEvent; text: string; count: number }[];
 	overflow: number;
 }
+/** First observation establishes a baseline; only a changed state can emit candidate. */
+export interface WatchTransition {
+	source: string;
+	state: string;
+	candidate?: Omit<WatchObservation, "version">;
+}
 export interface WatchNoticeSink {
 	readonly sessionId: string;
 	/** Must recheck idleness at admission, and durably dedupe requestId. */

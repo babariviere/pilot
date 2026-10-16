@@ -1251,8 +1251,11 @@ export class SessionManager {
 					for (const id of ids) this.requestMainRefresh(id);
 				},
 				linked: {
-					targets: () => this.missions?.linkedPullRequests?.() ?? [],
-					apply: (pr) => this.missions?.pullRequestUpdated?.(pr),
+					targets: () => [...(this.missions?.linkedPullRequests?.() ?? []), ...(this.watchPrs?.targets() ?? [])],
+					apply: (pr) => {
+						this.missions?.pullRequestUpdated?.(pr);
+						this.watchPrs?.apply(pr);
+					},
 				},
 			},
 			pullRequests,
@@ -1261,6 +1264,22 @@ export class SessionManager {
 
 	setProjectMemory(memory: ProjectMemoryService): void {
 		this.memory = memory;
+	}
+	private watchPrs?: import("./watch-pull-requests.ts").PullRequestWatchSource;
+	setWatchPullRequests(source: import("./watch-pull-requests.ts").PullRequestWatchSource): void {
+		this.watchPrs = source;
+		for (const meta of this.metas.values()) {
+			source.openedBy(meta.id, this.openedPullRequests(meta.id));
+			for (const pr of sessionPullRequests(meta)) source.apply(pr);
+		}
+	}
+	refreshWatchedPullRequest(target: LinkedPullRequest): void {
+		void this.pullRequests.refreshLinked(target);
+	}
+	private openedPullRequests(id: string): SessionPullRequest[] {
+		const meta = this.metas.get(id);
+		const opened = new Set(meta?.agentPullRequests?.map((url) => url.toLowerCase()) ?? []);
+		return meta ? sessionPullRequests(meta).filter((pr) => opened.has(pr.url.toLowerCase())) : [];
 	}
 	private sharing?: import("./shared-context.ts").SharedContextService;
 	setSharedContext(sharing: import("./shared-context.ts").SharedContextService): void {
@@ -6393,6 +6412,10 @@ export class SessionManager {
 			);
 		else for (const pr of discovered) this.missions?.pullRequestCreated?.(meta.id, pr.url);
 		for (const pr of [next, ...(result.others ?? [])]) if (pr) this.missions?.pullRequestUpdated?.(pr);
+		if (this.watchPrs) {
+			this.watchPrs.openedBy(meta.id, this.openedPullRequests(meta.id));
+			for (const pr of [next, ...(result.others ?? [])]) if (pr) this.watchPrs.apply(pr);
+		}
 		if (!result.error && fresh) await this.observePullRequests(meta);
 		// Observers announce terminal PRs only after every discovered head is linked and reconciled.
 		if (fresh || changed) this.emit(meta);
