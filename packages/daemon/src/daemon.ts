@@ -166,6 +166,20 @@ sessions.setPilot(
 		projects: () => projects.list(),
 		missions: () => [...controlMissions.values()],
 		linear: (id) => trackedItems.preview(id, "linear").items,
+		mutations: {
+			audit: () => sessions.controlAudit(),
+			startProject: async (request) => {
+				const project = projects.require(request.projectId!);
+				const selection = await sessions.selectTaskModel(
+					project.path,
+					request.model ?? project.model,
+					request.thinking,
+				);
+				return sessions.spawn({ ...request, ...selection });
+			},
+			startTask: (missionId, taskId, request) => missionService.startTask(missionId, taskId, request, "coordinator"),
+			send: sessions.sendReported.bind(sessions),
+		},
 	}),
 );
 missionService.setLinearClosingGuard((missionId, resourceId) => linearSync.closingEligibility(missionId, resourceId));

@@ -944,6 +944,17 @@ export function createDaemonServer(
 			);
 		if (parts[1] === "control-chat" && parts.length === 2 && req.method === "POST")
 			return json(res, 200, await sessions.ensureControlChat());
+		if (parts[1] === "control-chat" && parts[2] === "audit" && parts.length === 3 && req.method === "GET")
+			return json(
+				res,
+				200,
+				await sessions
+					.controlAudit()
+					.page(
+						url.searchParams.has("before") ? Number(url.searchParams.get("before")) : undefined,
+						url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : undefined,
+					),
+			);
 		if (parts[1] === "sessions" && parts.length === 2) {
 			if (req.method === "GET") {
 				const archived = url.searchParams.get("archived") ?? "false";

@@ -1,4 +1,12 @@
-import type { DashboardTrackedItem, Mission, Project } from "@pilot/protocol";
+import type {
+	DashboardTrackedItem,
+	Mission,
+	Project,
+	SessionSummary,
+	SpawnRequest,
+	StartMissionTaskRequest,
+} from "@pilot/protocol";
+import type { ControlActions } from "./control-actions.ts";
 import type { SessionManager } from "./sessions.ts";
 
 export interface ControlPilotOptions {
@@ -8,6 +16,12 @@ export interface ControlPilotOptions {
 	missions: () => Mission[];
 	projects: () => Project[];
 	linear: (projectId: string) => DashboardTrackedItem[];
+	mutations?: {
+		audit: () => ControlActions;
+		startProject: (request: SpawnRequest) => Promise<SessionSummary>;
+		startTask: (missionId: string, taskId: string, request: StartMissionTaskRequest) => Promise<SessionSummary>;
+		send: SessionManager["sendReported"];
+	};
 }
 const short = (text: string | undefined, n = 160) => text?.replace(/[\r\n]/g, " ").slice(0, n);
 function string(args: Record<string, unknown>, key: string, required = false): string | undefined {
@@ -22,11 +36,83 @@ export class ControlPilot {
 	constructor(options: ControlPilotOptions) {
 		this.options = options;
 	}
-	async call(caller: string, action: string, args: Record<string, unknown>): Promise<unknown> {
+	async call(caller: string, action: string, args: Record<string, unknown>, operationId = ""): Promise<unknown> {
 		if (!this.options.isControl(caller)) throw new Error("Only the control chat may call pilot");
 		if (action === "status") return this.status(args);
 		if (action === "read") return this.read(args);
+		if (action === "start" || action === "send") {
+			if (!this.options.mutations) throw new Error("Control actions unavailable");
+			return this.options.mutations
+				.audit()
+				.perform<unknown>(caller, action, args, operationId, () =>
+					action === "start" ? this.start(args) : this.send(args, operationId),
+				);
+		}
 		throw new Error("Unknown pilot action");
+	}
+	private async start(args: Record<string, unknown>) {
+		const projectId = string(args, "projectId"),
+			missionId = string(args, "missionId"),
+			taskId = string(args, "taskId");
+		const message = args.message;
+		if (message !== undefined && (typeof message !== "string" || !message.trim() || message.length > 4000))
+			throw new Error("message must be 1..4000 characters");
+		for (const key of ["model", "thinking"])
+			if (
+				args[key] !== undefined &&
+				(typeof args[key] !== "string" || !String(args[key]).trim() || String(args[key]).length > 256)
+			)
+				throw new Error(`Invalid ${key}`);
+		const choice = {
+			...(args.model ? { model: args.model as string } : {}),
+			...(args.thinking ? { thinking: args.thinking as string } : {}),
+		};
+		let chat: SessionSummary;
+		if (missionId) {
+			const mission = this.options.missions().find((m) => m.id === missionId);
+			if (!mission) throw new Error("Unknown mission");
+			if (projectId && projectId !== mission.projectId) throw new Error("Mission belongs to another project");
+			if (!taskId) throw new Error("A mission start requires taskId");
+			chat = await this.options.mutations!.startTask(missionId, taskId, {
+				...choice,
+				...(message ? { message: message as string } : {}),
+			});
+		} else {
+			if (!projectId || !message || taskId)
+				throw new Error("Project starts require projectId and message, without taskId");
+			chat = await this.options.mutations!.startProject({ projectId, message: message as string, ...choice });
+		}
+		return {
+			id: chat.id,
+			chatUrl: `pilot://chat/${chat.id}`,
+			title: chat.title,
+			projectId: chat.projectId,
+			missionId: chat.missionId,
+			model: chat.model,
+		};
+	}
+	private async send(args: Record<string, unknown>, operationId: string) {
+		const id = string(args, "sessionId", true)!;
+		if (typeof args.message !== "string" || !args.message.trim() || args.message.length > 4000)
+			throw new Error("message must be 1..4000 characters");
+		if (args.direct !== undefined && typeof args.direct !== "boolean") throw new Error("direct must be a boolean");
+		const chat = this.options.sessions.get(id);
+		if (!chat) throw new Error("Unknown chat");
+		if (this.options.isControl(id)) throw new Error("Use a user message, not send, for the control chat itself");
+		let target = id;
+		if (chat.missionId && !args.direct) {
+			const mission = this.options.missions().find((m) => m.id === chat.missionId);
+			if (!mission?.coordinatorSessionId)
+				throw new Error("This mission has no coordinator; choose direct=true for a member");
+			target = mission.coordinatorSessionId;
+		}
+		const result = await this.options.mutations!.send(
+			target,
+			args.message,
+			`control:send:${operationId}`,
+			"followUp",
+		);
+		return { ...result, sessionId: target, requestedSessionId: id, chatUrl: `pilot://chat/${target}` };
 	}
 	private status(args: Record<string, unknown>) {
 		const projectId = string(args, "projectId"),

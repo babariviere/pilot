@@ -3,6 +3,7 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import type { ControlAuditEntry } from "./control-actions.ts";
 import {
 	CONTROL_VIEW_HIGH,
 	CONTROL_VIEW_LOW,
@@ -80,6 +81,10 @@ export class ControlMemoryDisk {
 				CREATE TABLE IF NOT EXISTS view (id INTEGER PRIMARY KEY, n INTEGER NOT NULL);
 				CREATE TABLE IF NOT EXISTS compact_view (id INTEGER PRIMARY KEY, n INTEGER NOT NULL);
 				CREATE TABLE IF NOT EXISTS turn_view (slot INTEGER PRIMARY KEY CHECK(slot=1), key TEXT NOT NULL, view TEXT NOT NULL);
+				CREATE TABLE IF NOT EXISTS audit (seq INTEGER PRIMARY KEY AUTOINCREMENT, operation TEXT NOT NULL, payload TEXT NOT NULL);
+				CREATE INDEX IF NOT EXISTS audit_operation ON audit(operation,seq DESC);
+				CREATE TRIGGER IF NOT EXISTS audit_no_update BEFORE UPDATE ON audit BEGIN SELECT RAISE(ABORT, 'append only'); END;
+				CREATE TRIGGER IF NOT EXISTS audit_no_delete BEFORE DELETE ON audit BEGIN SELECT RAISE(ABORT, 'append only'); END;
 				CREATE TABLE IF NOT EXISTS jobs (id INTEGER NOT NULL, n INTEGER NOT NULL, source TEXT NOT NULL, state INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(id,n));
 				CREATE INDEX IF NOT EXISTS jobs_ready ON jobs(state,id,n);
 				CREATE INDEX IF NOT EXISTS jobs_leaves ON jobs(id) WHERE n=1;
@@ -123,6 +128,28 @@ export class ControlMemoryDisk {
 	}
 	retry(): void {
 		this.db.exec("UPDATE jobs SET state=0 WHERE state=2");
+	}
+	auditAppend(entry: Omit<ControlAuditEntry, "seq">): ControlAuditEntry {
+		const payload = JSON.stringify(entry);
+		if (Buffer.byteLength(payload) > 64_000) throw new Error("Audit record exceeds 64 KB");
+		const result = this.db
+			.prepare("INSERT INTO audit(operation,payload) VALUES (?,?)")
+			.run(entry.operationId, payload);
+		return { ...entry, seq: Number(result.lastInsertRowid) };
+	}
+	auditOperation(operationId: string): ControlAuditEntry | undefined {
+		const row = this.db
+			.prepare("SELECT seq,payload FROM audit WHERE operation=? ORDER BY seq DESC LIMIT 1")
+			.get(operationId);
+		return row ? { ...JSON.parse(String(row.payload)), seq: Number(row.seq) } : undefined;
+	}
+	auditPage(before = Number.MAX_SAFE_INTEGER, limit = 20): ControlAuditEntry[] {
+		if (!Number.isSafeInteger(before) || before < 1 || !Number.isInteger(limit) || limit < 1 || limit > 50)
+			throw new Error("Invalid audit page");
+		return this.db
+			.prepare("SELECT seq,payload FROM audit WHERE seq<? ORDER BY seq DESC LIMIT ?")
+			.all(before, limit)
+			.map((row) => ({ ...JSON.parse(String(row.payload)), seq: Number(row.seq) }));
 	}
 	turnView(key: string): ControlLine[] {
 		if (typeof key !== "string" || !key || key.length > 128) throw new Error("Invalid turn key");

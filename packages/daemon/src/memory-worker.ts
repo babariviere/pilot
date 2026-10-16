@@ -95,6 +95,15 @@ if (workerData.replicaRecall) {
 					case "control.retry":
 						value = control.retry();
 						break;
+					case "control.auditAppend":
+						value = control.auditAppend(args.entry);
+						break;
+					case "control.auditOperation":
+						value = control.auditOperation(args.operationId);
+						break;
+					case "control.auditPage":
+						value = control.auditPage(args.before, args.limit);
+						break;
 					case "control.turnView":
 						value = control.turnView(args.key);
 						break;

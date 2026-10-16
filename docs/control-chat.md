@@ -92,3 +92,16 @@ to every resource family. Responses are capped at 24 KB with explicit totals and
 `read` uses one bounded cold-history page, not a worker wake or an unbounded search for old replies.
 It returns a last assistant result found in that page, or up to 40 tail messages, capped at 12,000
 characters. Thoughts are omitted and content is explicitly labelled as quoted, untrusted data.
+
+## Audited actions
+
+`start` uses the existing project spawn path with task-model scope and price validation, or the
+existing mission task-start admission (including user-set task preferences). `send` is a follow-up,
+so busy targets queue it. Mission member targets route to the current coordinator unless `direct`
+is true; a mission without a coordinator requires an explicit direct target. Self-send is rejected.
+
+The supervised tool call ID keys an append-only audit intent before the effect and a terminal result
+afterwards. Exact successful retries return the durable result; uncertain or failed requests are not
+replayed. Audit SQL runs in the memory worker. Terminal records also enqueue passive control-chat
+timeline activity, with stable delivery IDs. `GET /api/control-chat/audit` pages the durable history
+(newest first, `before` sequence and `limit` 1..50), including intents left uncertain by a crash.

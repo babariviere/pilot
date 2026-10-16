@@ -1,6 +1,7 @@
 /** Bounded RPC to the project-memory storage worker. No synchronous disk work in pilotd. */
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
+import type { ControlAuditEntry } from "./control-actions.ts";
 import type { ControlJob, ControlMemoryState, ControlMessage, ControlMessageInput } from "./control-memory-disk.ts";
 import type { ControlLine } from "./control-view.ts";
 
@@ -49,6 +50,15 @@ export class ControlMemory {
 	}
 	turnView(key: string): Promise<ControlLine[]> {
 		return this.rpc("turnView", { key });
+	}
+	auditAppend(entry: Omit<ControlAuditEntry, "seq">): Promise<ControlAuditEntry> {
+		return this.rpc("auditAppend", { entry });
+	}
+	auditOperation(operationId: string): Promise<ControlAuditEntry | undefined> {
+		return this.rpc("auditOperation", { operationId });
+	}
+	auditPage(before?: number, limit?: number): Promise<ControlAuditEntry[]> {
+		return this.rpc("auditPage", { before, limit });
 	}
 	append(message: ControlMessageInput): Promise<ControlMessage[]> {
 		return this.rpc("append", { message });
