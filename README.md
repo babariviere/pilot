@@ -290,6 +290,12 @@ the provider's prompt cache has expired (5 minutes for Anthropic, 10 for OpenAI,
 request in the turn then reads the short summary instead of rereading the whole history at full price.
 A warm cache is never discarded, and automatic messages don't trigger it.
 
+Changing an idle chat's model keeps its existing context when the provider stays the same. When a different
+provider cannot use its compacted context, Pilot automatically creates a new conversation attempt from the
+durable transcript, including messages hidden by compaction. It replays plain messages if they fit the new
+window, otherwise builds a plain-text summary with the selected model. The previous attempt stays restorable
+in the attempt menu. Workspace files are not reverted, and a failed rebuild leaves the previous attempt active.
+
 **Continue with another model…** explains the change before confirming. A model from the same provider
 keeps this chat and compatible context, but does not bypass its subscription limit. A different provider
 starts a linked chat with a bounded plain-text handoff, not provider-specific history or compaction. It

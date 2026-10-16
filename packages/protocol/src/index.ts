@@ -358,7 +358,7 @@ export interface SessionAttempt {
 	/** Durable conversation ID. */
 	id: string;
 	/** Omitted for the original conversation. */
-	reason?: RewindAction;
+	reason?: RewindAction | "model";
 	/** Epoch milliseconds. Omitted for the original conversation. */
 	createdAt?: number;
 	/** Start of the message this attempt resent, when it resent one. */

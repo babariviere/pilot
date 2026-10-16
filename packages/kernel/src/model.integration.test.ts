@@ -274,7 +274,10 @@ async function fixture(
 	});
 	const b = fauxProvider({
 		provider: "pilot-model-b",
-		models: [{ id: "three", reasoning: true, contextWindow: 128_000 }],
+		models: [
+			{ id: "three", reasoning: true, contextWindow: 128_000 },
+			{ id: "small", contextWindow: 16_000, maxTokens: 2048 },
+		],
 	});
 	runtime.registerNativeProvider(a.provider);
 	runtime.registerNativeProvider(b.provider);
@@ -284,7 +287,7 @@ async function fixture(
 		defaultTools: [],
 		defaultProvider: "pilot-model-a",
 		defaultModel: "one",
-		enabledModels: [first, `${second}:high`, `${third}:low`, "pilot-model-a/plain"],
+		enabledModels: [first, `${second}:high`, `${third}:low`, "pilot-model-a/plain", "pilot-model-b/small"],
 	});
 	const adapters: NativeAdapter[] = [];
 	const openAdapter = NativeAdapter.open;
@@ -1123,6 +1126,202 @@ test("model selection updates native and durable choices, context usage and thin
 		globalSettings,
 		"session-specific selection does not rewrite pi's global model, thinking or scope settings",
 	);
+});
+
+async function providerCompaction(session: KernelSession, large = false) {
+	await session.conversation.commit(async (tx) => {
+		for (let i = 0; i < 70; i++)
+			await tx.appendEntry(session.conversation.id, {
+				kind: "pi.user",
+				model: [
+					{
+						role: "user",
+						content: `Hidden original ${i}. ${large ? "Raw fact. ".repeat(500) : ""}`,
+						timestamp: i,
+					},
+				],
+			});
+		await tx.appendEntry(session.conversation.id, {
+			kind: "pi.assistant",
+			model: [
+				fauxAssistantMessage([
+					{ type: "thinking", thinking: "private thought", thinkingSignature: "opaque-signature" },
+					{ type: "text", text: "Completed the file change", textSignature: "opaque-text" },
+					{ ...fauxToolCall("write", { path: "example.ts", content: "done" }), thoughtSignature: "opaque-call" },
+				]),
+			],
+		});
+		await tx.appendEntry(session.conversation.id, {
+			kind: "pi.tool-result",
+			model: [
+				{
+					role: "toolResult",
+					toolCallId: "old-call",
+					toolName: "write",
+					content: [{ type: "text", text: "File written once" }],
+					isError: false,
+					timestamp: 71,
+				},
+			],
+		});
+		await tx.appendEntry(session.conversation.id, {
+			kind: "pi.compaction",
+			head: "self",
+			model: [{ role: "user", content: "opaque-old-provider-compaction", timestamp: 72 }],
+		});
+	}, context);
+}
+
+test("cross-provider compacted context replays hidden raw history in a restorable attempt", {
+	timeout: 20_000,
+}, async (t) => {
+	const f = await fixture(t);
+	let session = await f.open();
+	await providerCompaction(session);
+	const original = session.conversation.id;
+	const before = JSON.stringify((await session.conversation.context(context)).messages);
+	assert.match(before, /opaque-old-provider/);
+	await session.changeModel(second);
+	assert.equal(session.attempts, undefined, "same-provider switches never rebuild");
+	assert.equal(JSON.stringify((await session.conversation.context(context)).messages), before);
+	const result = await session.changeModel(third, "high");
+	assert.equal(result?.switched, true);
+	assert.deepEqual(
+		result?.attempts?.map((attempt) => attempt.reason),
+		[undefined, "model"],
+	);
+	await assert.rejects(session.submit("late", "Do not enter the retired attempt", "followUp"), ConversationBusy);
+	await session.close();
+	session = await f.open();
+	assert.notEqual(session.conversation.id, original);
+	assert.equal(session.model, third);
+	assert.equal(session.thinkingLevel, "high");
+	const messages = JSON.stringify((await session.conversation.context(context)).messages);
+	assert.match(messages, /Hidden original 0/);
+	assert.match(messages, /Hidden original 69/);
+	assert.match(messages, /Completed the file change/);
+	assert.match(messages, /File written once/);
+	assert.match(messages, /Recorded tool call/);
+	assert.doesNotMatch(messages, /opaque|private thought|toolCall|toolResult/);
+	assert.equal(f.a.state.callCount + f.b.state.callCount, 0, "raw replay spends no model call");
+	f.b.setResponses([
+		({ messages }) => {
+			assert.equal(messages.filter((message) => message.role === "system").length, 1);
+			assert.doesNotMatch(JSON.stringify(messages), /opaque-old-provider/);
+			return fauxAssistantMessage("Continuing on the new provider");
+		},
+	]);
+	await session.submit("next", "Continue", "followUp");
+	await session.conversation.waitForIdle(context);
+	await session.activateAttempt(Number(original));
+	await session.close();
+	session = await f.open();
+	assert.equal(session.model, second, "restoring also restores the original provider selection");
+	assert.equal(JSON.stringify((await session.conversation.context(context)).messages), before);
+});
+
+test("a smaller destination summarizes the entire raw transcript without reading opaque compaction", {
+	timeout: 20_000,
+}, async (t) => {
+	const f = await fixture(t);
+	const session = await f.open();
+	await providerCompaction(session, true);
+	const sources: string[] = [];
+	f.b.setResponses(
+		Array.from(
+			{ length: 200 },
+			() =>
+				({ messages }: { messages: readonly import("@earendil-works/pi-ai").Message[] }) => {
+					const text = JSON.stringify(messages);
+					sources.push(text);
+					assert.doesNotMatch(text, /opaque|private thought/);
+					return fauxAssistantMessage("Neutral summary of goals, facts and completed work.");
+				},
+		),
+	);
+	assert.equal((await session.changeModel("pilot-model-b/small"))?.switched, true);
+	assert.ok(sources.length > 1, "large histories use bounded sequential chunks");
+	assert.match(sources.join(""), /Hidden original 0/);
+	assert.match(sources.join(""), /Hidden original 69/);
+	assert.match(sources.join(""), /File written once/);
+	await session.close();
+	const rebuilt = await f.open();
+	const view = await rebuilt.conversation.context(context);
+	assert.match(JSON.stringify(view.messages), /Neutral summary/);
+	assert.doesNotMatch(JSON.stringify(view.messages), /opaque|Hidden original/);
+	// A subsequent switch must still have the original raw entries, not just this new summary.
+	assert.equal(
+		(await rebuilt.conversation.entries({ order: "ascending" }, 1, undefined, context)).items[0]?.kind,
+		"pi.user",
+	);
+	f.a.setResponses(
+		Array.from(
+			{ length: 200 },
+			() =>
+				({ messages }: { messages: readonly import("@earendil-works/pi-ai").Message[] }) => {
+					assert.doesNotMatch(JSON.stringify(messages), /Neutral summary of goals/);
+					return fauxAssistantMessage("Rebuilt again from raw records.");
+				},
+		),
+	);
+	assert.equal((await rebuilt.changeModel(first))?.switched, true);
+	await rebuilt.close();
+	const again = await f.open();
+	assert.match(JSON.stringify((await again.conversation.context(context)).messages), /Rebuilt again from raw records/);
+});
+
+test("a failed rebuild commit never changes the active conversation or its pinned model", async (t) => {
+	const f = await fixture(t);
+	const session = await f.open();
+	await providerCompaction(session);
+	t.mock.method(session.conversation, "fork", async () => {
+		throw new Error("fork commit failed");
+	});
+	await assert.rejects(session.changeModel(third), /fork commit failed/);
+	assert.equal(session.model, first);
+	assert.equal(session.attempts, undefined);
+	await session.close();
+	const reopened = await f.open();
+	assert.equal(reopened.model, first);
+	assert.equal(reopened.attempts, undefined);
+	assert.match(JSON.stringify((await reopened.conversation.context(context)).messages), /opaque-old-provider/);
+});
+
+test("failed or cancelled rebuilds leave the old model, context and active attempt unchanged", {
+	timeout: 20_000,
+}, async (t) => {
+	const f = await fixture(t);
+	const session = await f.open();
+	await providerCompaction(session, true);
+	const before = JSON.stringify((await session.conversation.context(context)).messages);
+	f.b.setResponses([fauxAssistantMessage("", { stopReason: "error", errorMessage: "summary unavailable" })]);
+	await assert.rejects(session.changeModel("pilot-model-b/small"), /summary unavailable/);
+	assert.equal(session.model, first);
+	assert.equal(session.attempts, undefined);
+	assert.equal(JSON.stringify((await session.conversation.context(context)).messages), before);
+	const started = deferred();
+	f.b.setResponses([
+		async (_messages, options) => {
+			started.resolve();
+			return new Promise((resolve) =>
+				options?.signal?.addEventListener(
+					"abort",
+					() => resolve(fauxAssistantMessage("", { stopReason: "aborted" })),
+					{ once: true },
+				),
+			);
+		},
+	]);
+	const change = session.changeModel("pilot-model-b/small");
+	const rejected = assert.rejects(change, /closing|aborted|closed/);
+	await started.promise;
+	await assert.rejects(session.submit("race", "No admission during summary", "followUp"), ConversationBusy);
+	await session.close();
+	await rejected;
+	const reopened = await f.open();
+	assert.equal(reopened.model, first);
+	assert.equal(reopened.attempts, undefined);
+	assert.equal(JSON.stringify((await reopened.conversation.context(context)).messages), before);
 });
 
 test("same-provider continuation reconfigures a working durable run after draining, preserving its compaction and tool effects", {

@@ -6,6 +6,7 @@ import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
+import { estimateMessageTokens } from "@earendil-works/pi-ai/utils/estimate";
 import {
 	type AgentChange,
 	AgentDoc,
@@ -26,6 +27,7 @@ import {
 	ROOT_CONVERSATION_ID,
 	type Storage,
 	type SubmissionId,
+	UsageDoc,
 	watchEvents,
 } from "@earendil-works/pi-durable";
 import { ArtifactStore } from "@pilot/artifacts";
@@ -68,6 +70,7 @@ import { mcpActivity } from "./mcp-activity.ts";
 import { createMemoryTools, type MemoryCall } from "./memory-tools.ts";
 import { createMissionTool, MISSION_TOOL, type MissionCall } from "./mission-tools.ts";
 import { continueModelInPlace } from "./model-continuation.ts";
+import { rebuildContext } from "./model-rebuild.ts";
 import { NativeAdapter } from "./native-adapter.ts";
 import { PerformanceLog } from "./performance.ts";
 import { createPilotTool, type PilotCall } from "./pilot-tool.ts";
@@ -771,12 +774,18 @@ export class KernelSession {
 		);
 	}
 
+	#modelChangeAbort?: AbortController;
 	/** Configure on the durable mutation line, with the same busy/inbox barrier as input admission. */
-	async changeModel(model: string, thinking?: string): Promise<void> {
+	async changeModel(
+		model: string,
+		thinking?: string,
+	): Promise<{ switched: true; attempts?: SessionAttempt[] } | undefined> {
 		if (this.#closing || this.#changingModel || this.#admissions || this.#moving)
 			throw new ConversationBusy(this.conversation.id);
 		if (typeof model !== "string" || !model.trim()) throw new Error("model is required");
 		this.#changingModel = true;
+		const controller = new AbortController();
+		this.#modelChangeAbort = controller;
 		const previous = this.adapter.session.model!;
 		const previousThinking = this.adapter.thinkingLevel;
 		const configureIdle = (change = false) =>
@@ -805,6 +814,95 @@ export class KernelSession {
 			if (thinking === undefined || model.trim() !== this.model) await this.adapter.session.setModel(choice.model);
 			const level = thinking ?? choice.thinkingLevel;
 			if (level !== undefined) this.adapter.session.setThinkingLevel(level as ModelThinkingLevel);
+			const head = await this.#storage.findLatestHeadMarker(this.conversation.id, undefined, context);
+			if (previous.provider !== choice.model.provider && head?.kind === "pi.compaction") {
+				const tail = (await this.conversation.entries({}, 1, undefined, context)).items[0]!;
+				const agent = await this.conversation.agent(context);
+				const budget =
+					Math.floor(choice.model.contextWindow * 0.95) -
+					estimateMessageTokens({
+						role: "system",
+						content: this.adapter.session.systemPrompt,
+						toolsAdded: [...agent.tools],
+						timestamp: 0,
+					}) -
+					Math.min(choice.model.maxTokens, 16_384, Math.floor(choice.model.contextWindow * 0.2));
+				const entry = await rebuildContext({
+					storage: this.#storage,
+					conversationId: this.conversation.id,
+					tail: tail.id,
+					budget,
+					maxOutputTokens: choice.model.maxTokens,
+					context,
+					signal: AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]),
+					summarize: async (text, maxTokens, signal) => {
+						const answer = await this.adapter.models.completeSimple(
+							choice.model,
+							{
+								messages: [{ role: "user", content: text, timestamp: Date.now() }],
+							},
+							{ maxTokens, signal },
+						);
+						// Like ordinary compaction, every response costs usage, even if rebuilding later fails.
+						await this.harness.commit(async (tx) => {
+							const models = (await tx.doc(UsageDoc, this.conversation.id)).models;
+							const key = `${answer.provider}/${answer.model}`;
+							const total = Object.hasOwn(models, key) ? models[key] : undefined;
+							if (!total) models[key] = JSON.parse(JSON.stringify(answer.usage));
+							else {
+								for (const field of [
+									"input",
+									"output",
+									"cacheRead",
+									"cacheWrite",
+									"totalTokens",
+									"reasoning",
+									"cacheWrite1h",
+								] as const) {
+									if (answer.usage[field] !== undefined)
+										total[field] = (total[field] ?? 0) + answer.usage[field];
+								}
+								for (const field of ["input", "output", "cacheRead", "cacheWrite", "total"] as const)
+									total.cost[field] += answer.usage.cost[field];
+							}
+						}, context);
+						if (answer.stopReason !== "stop" || answer.content.some((part) => part.type === "toolCall"))
+							throw new Error(`Could not rebuild conversation: ${answer.errorMessage ?? answer.stopReason}`);
+						return answer.content
+							.flatMap((part) => (part.type === "text" ? [part.text] : []))
+							.join("\n")
+							.trim();
+					},
+				});
+				await configureIdle();
+				controller.signal.throwIfAborted();
+				const pullRequests =
+					(await this.harness.snapshot(PullRequestsDoc, this.conversation.id, context))?.urls ?? [];
+				let attempts: SessionAttempt[] | undefined;
+				// Fork and publish the rebuilt context/selection atomically. A crash before this commit leaves
+				// the old attempt active; a crash after it reopens the fully prepared new attempt.
+				await this.conversation.fork(
+					tail.id,
+					{
+						ownership: { kind: "ownerless" },
+						agent: { model: this.adapter.model, thinkingLevel: this.adapter.thinkingLevel },
+						init: async (tx, id) => {
+							await tx.appendEntry(id, entry);
+							const state = await tx.doc(AttemptsDoc);
+							const previousAttempt = state.attempts.find((attempt) => attempt.id === this.conversation.id);
+							if (previousAttempt) delete previousAttempt.hidden;
+							state.attempts.push({ id, reason: "model", createdAt: Date.now(), preview: model.trim() });
+							state.active = id;
+							if (pullRequests.length) (await tx.doc(PullRequestsDoc, id)).urls.push(...pullRequests);
+							attempts = publicAttempts(state);
+						},
+					},
+					context,
+				);
+				this.#retired = true;
+				this.#attempts = attempts;
+				return { switched: true, ...(this.#attempts ? { attempts: this.#attempts } : {}) };
+			}
 			await configureIdle(true);
 			// Display-only failures must not turn a successfully persisted selection into a rejection.
 			try {
@@ -820,6 +918,7 @@ export class KernelSession {
 			throw error;
 		} finally {
 			this.#changingModel = false;
+			this.#modelChangeAbort = undefined;
 		}
 	}
 
@@ -1192,6 +1291,7 @@ export class KernelSession {
 		return (state) => {
 			const attempt = state.attempts.find((attempt) => attempt.id === id);
 			if (!attempt) return;
+			if (attempt.reason === "model") return;
 			if (hidden) attempt.hidden = true;
 			else delete attempt.hidden;
 		};
@@ -1309,6 +1409,7 @@ export class KernelSession {
 	/** Pause: pending work stays durable and resumes on the next open. */
 	close(): Promise<void> {
 		this.#closing ??= (async () => {
+			this.#modelChangeAbort?.abort(new Error("Session is closing"));
 			await this.jobsMonitor?.close();
 			for (const id of [...this.#watches.keys()]) await this.unwatch(id).catch(() => undefined);
 			await this.status.stop().catch(() => undefined);

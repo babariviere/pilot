@@ -575,11 +575,19 @@ public enum RewindAction: String, Codable, Hashable, Sendable {
     case restore
 }
 
+/// Why a conversation attempt was created, including an automatic model-context rebuild.
+public enum SessionAttemptReason: String, Codable, Hashable, Sendable {
+    case retry
+    case edit
+    case restore
+    case model
+}
+
 /// One conversation of a session. The chat shows and continues only its active attempt.
 public struct SessionAttempt: Codable, Identifiable, Equatable, Hashable, Sendable {
     public let id: String
     /// Nil for the original conversation, and for actions this client does not know.
-    public let reason: RewindAction?
+    public let reason: SessionAttemptReason?
     /// Epoch milliseconds. Nil for the original conversation.
     public let createdAt: Double?
     public let preview: String?
@@ -587,7 +595,7 @@ public struct SessionAttempt: Codable, Identifiable, Equatable, Hashable, Sendab
 
     public var isActive: Bool { active ?? false }
 
-    public init(id: String, reason: RewindAction? = nil, createdAt: Double? = nil, preview: String? = nil,
+    public init(id: String, reason: SessionAttemptReason? = nil, createdAt: Double? = nil, preview: String? = nil,
                 active: Bool? = nil) {
         self.id = id
         self.reason = reason
@@ -601,7 +609,7 @@ public struct SessionAttempt: Codable, Identifiable, Equatable, Hashable, Sendab
         id = try container.decode(String.self, forKey: .id)
         // Unknown actions from newer daemons decode as nil rather than failing the whole session.
         let rawReason: String? = try container.decodeIfPresent(String.self, forKey: .reason)
-        reason = rawReason.flatMap { RewindAction(rawValue: $0) }
+        reason = rawReason.flatMap { SessionAttemptReason(rawValue: $0) }
         createdAt = try container.decodeIfPresent(Double.self, forKey: .createdAt)
         preview = try container.decodeIfPresent(String.self, forKey: .preview)
         active = try container.decodeIfPresent(Bool.self, forKey: .active)
@@ -613,6 +621,7 @@ public struct SessionAttempt: Codable, Identifiable, Equatable, Hashable, Sendab
         case nil: return "Original"
         case .retry: return "Retry"
         case .restore: return "Restored"
+        case .model: return "Model changed"
         case .edit:
             guard let preview else { return "Edited" }
             let line: Substring = preview.split(whereSeparator: \.isNewline).first ?? Substring(preview)

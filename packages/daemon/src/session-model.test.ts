@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import type { KernelCommand, KernelPacket, KernelUsage } from "@pilot/kernel";
-import type { SessionState, SessionSummary } from "@pilot/protocol";
+import type { SessionAttempt, SessionState, SessionSummary } from "@pilot/protocol";
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
@@ -34,6 +34,8 @@ class FakeWorker implements SessionWorker {
 	usage: KernelUsage = { context: { tokens: 5, contextWindow: 100, percent: 5 }, provider: "provider" };
 	readonly commands: Command[] = [];
 	rejectBusy = false;
+	rebuild = false;
+	closed = false;
 	gate?: Promise<void>;
 	private readonly onPacket: (packet: KernelPacket) => void;
 	constructor(onPacket: (packet: KernelPacket) => void) {
@@ -52,11 +54,16 @@ class FakeWorker implements SessionWorker {
 				model: command.model,
 				thinking: command.thinking ?? "low",
 				usage: this.usage,
+				...(this.rebuild ? { switched: true, attempts: rebuiltAttempts } : {}),
 			});
 		}
 	}
-	async close(): Promise<void> {}
+	async close(): Promise<void> {
+		this.closed = true;
+	}
 }
+
+const rebuiltAttempts: SessionAttempt[] = [{ id: "1" }, { id: "7", reason: "model", active: true }];
 
 async function fixture(t: TestContext) {
 	const home = await mkdtemp(join(tmpdir(), "pilot-session-model-"));
@@ -70,10 +77,18 @@ async function fixture(t: TestContext) {
 	const projects = new ProjectStore(home);
 	const workers: FakeWorker[] = [];
 	const sessions = new SessionManager(home, projects, undefined, {
-		worker: (_spec, onPacket) => {
+		worker: (spec, onPacket) => {
 			const worker = new FakeWorker(onPacket);
 			workers.push(worker);
-			queueMicrotask(() => onPacket({ type: "ready", model: first, working: false, usage: worker.usage }));
+			queueMicrotask(() =>
+				onPacket({
+					type: "ready",
+					model: spec.model ?? first,
+					working: false,
+					usage: worker.usage,
+					...(workers.length > 1 ? { attempts: rebuiltAttempts } : {}),
+				}),
+			);
 			return worker;
 		},
 	});
@@ -114,6 +129,21 @@ test("idle parked session switches through the kernel, persists metadata, publis
 	assert.equal(reopened.get(f.id)?.thinking, "low");
 	assert.equal(reopened.get(f.id)?.usage, undefined);
 	await reopened.shutdown();
+});
+
+test("an automatic context rebuild replaces the retired worker and preserves the attempt switcher", async (t) => {
+	const f = await fixture(t);
+	const stop = f.sessions.subscribe(f.id, () => {});
+	t.after(stop);
+	await f.sessions["ensureWorker"](f.id);
+	f.workers[0]!.rebuild = true;
+	const changed = await f.sessions.changeModel(f.id, second, f.models);
+	assert.equal(changed.model, second);
+	assert.deepEqual(changed.attempts, rebuiltAttempts);
+	assert.equal(f.workers[0]!.closed, true);
+	assert.equal(f.workers.length, 2);
+	assert.equal(f.sessions["changingModels"].has(f.id), false);
+	assert.deepEqual(JSON.parse(await readFile(join(f.dir, "meta.json"), "utf8")).attempts, rebuiltAttempts);
 });
 
 test("busy, starting, queued, archived and in-flight admissions reject rather than interrupting work", async (t) => {

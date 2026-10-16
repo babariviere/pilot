@@ -259,7 +259,7 @@ struct AttemptsMenu: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
-            .help("Switch between attempts created by retry, edit and restore. Files are not reverted.")
+            .help("Switch between conversation attempts, including model changes. Files are not reverted.")
             .accessibilityLabel("\(label). Switch attempt")
             .confirmationDialog("Stop the current run and switch attempts?", isPresented: Binding(
                 get: { switching.confirming != nil },
