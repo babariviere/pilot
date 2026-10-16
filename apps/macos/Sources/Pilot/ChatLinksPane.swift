@@ -22,7 +22,7 @@ final class ChatLinksModel: ObservableObject {
     static let throttle: DispatchQueue.SchedulerTimeType.Stride = .milliseconds(500)
 
     func attach(_ feed: SessionFeed) {
-        subscription = feed.$presentation
+        subscription = feed.rows.$presentation
             .throttle(for: Self.throttle, scheduler: DispatchQueue.main, latest: true)
             .sink { [weak self] presentation in
                 guard let self else { return }

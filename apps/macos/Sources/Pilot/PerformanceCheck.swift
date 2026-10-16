@@ -90,6 +90,7 @@ enum PerformanceCheck {
             let clock = ContinuousClock()
             let began = clock.now
             let chatBodies = ChatView.bodyEvaluations
+            let rowSections = TranscriptRowsSection.bodyEvaluations
             if streaming {
                 feed.applyFixtureEvents([.object([
                     "type": .string("message_start"),
@@ -158,7 +159,8 @@ enum PerformanceCheck {
             func percent(_ value: Double) -> String { String(format: "%.1f%%", value) }
             var summary = "performance-check \(mode): CPU=\(percent(cpu / wall * 100)) of one core, main thread=\(percent(mainCPU / wall * 100)), "
                 + "peak RSS=\(String(format: "%.1f", Double(end.ru_maxrss) / 1048576)) MiB, rows=\(feed.presentation.rows.count), "
-                + "chat body evaluations=\(ChatView.bodyEvaluations - chatBodies)"
+                + "chat body evaluations=\(ChatView.bodyEvaluations - chatBodies), "
+                + "transcript rows evaluations=\(TranscriptRowsSection.bodyEvaluations - rowSections)"
             if streaming {
                 summary += ", physical footprint peak=\(mib(footprintPeak)) end=\(mib(physicalFootprint()))"
                 summary += ", \(frames.summary)"

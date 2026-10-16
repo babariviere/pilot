@@ -210,6 +210,63 @@ public struct TranscriptPresentation: Equatable, Sendable {
     }
 }
 
+
+/// The chat around the transcript (composer, working line, banners, queue) reads only this. It changes with a
+/// turn's state, not with each streamed token, so those views are not re-evaluated while text streams.
+public struct TranscriptStatus: Equatable, Sendable {
+    public var working = false
+    public var streaming = false
+    public var queuedMessages: [QueuedMessage] = []
+    public var automaticInputs: [PendingAutomaticInput] = []
+    public var todos: [SessionTodo] = []
+    public var retry: String?
+    public var compacting = false
+    public var error: String?
+    public var earlierCursor: Int?
+    public var pendingQuestion: AgentQuestion?
+    public var hasRows = false
+    /// The failed turn the chat offers to retry, see `TranscriptPresentation.retryEntryID`.
+    public var retryEntryID: Int?
+    /// The last row's text when it is an error, so the failure banner does not repeat it.
+    public var lastErrorText: String?
+
+    public init() {}
+
+    public init(_ presentation: TranscriptPresentation) {
+        working = presentation.working
+        streaming = presentation.streaming
+        queuedMessages = presentation.queuedMessages
+        automaticInputs = presentation.automaticInputs
+        todos = presentation.todos
+        retry = presentation.retry
+        compacting = presentation.compacting
+        error = presentation.error
+        earlierCursor = presentation.earlierCursor
+        pendingQuestion = presentation.pendingQuestion
+        let last = presentation.liveRows.last ?? presentation.historyRows.last
+        hasRows = last != nil
+        retryEntryID = presentation.retryEntryID
+        if case let .error(_, text)? = last { lastErrorText = text }
+    }
+
+    public var queuedMessagesInDeliveryOrder: [QueuedMessage] {
+        queuedMessages.filter { $0.mode == .steer } + queuedMessages.filter { $0.mode == .followUp }
+    }
+
+    /// Same as `TranscriptPresentation.failureBannerText(for:)`.
+    public func failureBannerText(for session: SessionSummary) -> String? {
+        guard error == nil, !session.isWorking,
+              let reason = session.error ?? (session.outcome == .failed ? session.outcomeReason : nil) else { return nil }
+        return lastErrorText == reason ? nil : reason
+    }
+
+    /// Same as `TranscriptPresentation.questionForComposer(session:hasSnapshot:)`.
+    public func questionForComposer(session: SessionSummary, hasSnapshot: Bool) -> AgentQuestion? {
+        guard hasSnapshot, !working, session.state != "starting", session.state != "working" else { return nil }
+        return pendingQuestion
+    }
+}
+
 private extension JSONValue {
     var cachedByteCount: Int {
         switch self {
