@@ -779,12 +779,32 @@ export interface MissionArtifactLink {
 /** Linear lifecycle authority is separate from GitHub PR ownership. */
 export type MissionLinearRole = "reference" | "managed" | "contribution";
 
+/** Daemon-owned synchronization for a managed ticket. References never have this field. */
+export interface MissionLinearSync {
+	state: "idle" | "pending" | "synced" | "paused" | "error" | "terminal";
+	target?: "inProgress" | "inReview" | "merged";
+	reason?: string;
+	error?: string;
+	issueId?: string;
+	teamId?: string;
+	observedStateId?: string;
+	observedStateName?: string;
+	updatedAt: number;
+	retryAt?: number;
+}
+
+/** POST /api/missions/:id/resources/:resourceId/linear-sync. Explicit user review, not an agent action. */
+export interface MissionLinearSyncWrite {
+	action: "pause" | "resume";
+}
+
 /** External link. Kind and external ID are parsed by pilotd when saved. */
 export interface MissionResource {
 	/** Linear issues only. Older links are read-only references, never implicit contributions. */
 	linearRole?: MissionLinearRole;
 	/** Canonical workspace/issue identifier, at most 256 ASCII characters; independent of URL slug/query/fragment. */
 	linearKey?: string;
+	linearSync?: MissionLinearSync;
 	/** Task ownership drives PR status; references are related work only. */
 	relationship: "ownership" | "reference";
 	/** Current chat owning this PR in tool get results; null when unbound. */
