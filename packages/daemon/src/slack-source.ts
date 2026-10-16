@@ -282,6 +282,7 @@ export function createSlackPoller(
 					updatedAt: Number(message.threadTs) * 1000,
 					metadata: {
 						channel: page.channel,
+						...(filtered ? { mentionQualified: true } : {}),
 						channelName: page.name,
 						thread_ts: message.threadTs,
 						replies: message.replies,
