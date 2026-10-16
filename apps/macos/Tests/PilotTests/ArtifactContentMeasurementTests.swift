@@ -19,7 +19,20 @@ func artifactHeightRespectsNestedClippingWhileKeepingVisibleOverflow(kind: Artif
     let view = ArtifactWebView.makeSandboxView(coordinator: coordinator,
         libraries: ArtifactLibraryHandler(libraries: [], client: client), inline: inline)
     view.frame = CGRect(x: 0, y: 0, width: 760, height: 570)
-    defer { ArtifactWebView.dismantleNSView(view, coordinator: coordinator) }
+    // Production samples a window-backed renderer. A detached WKWebView can throttle
+    // JavaScript and layout, turning this matrix of IPC reads into a timing test.
+    let window = NSWindow(contentRect: view.frame, styleMask: .borderless,
+                          backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    let container = NSView(frame: view.frame)
+    window.contentView = container
+    container.addSubview(view)
+    window.orderBack(nil)
+    defer {
+        ArtifactWebView.dismantleNSView(view, coordinator: coordinator)
+        view.removeFromSuperview()
+        window.close()
+    }
     coordinator.install(in: view, document: ArtifactPreviewDocument.document(revision, inline: inline))
     let deadline = ContinuousClock.now + .seconds(10)
     while state.loading && state.error == nil && ContinuousClock.now < deadline {

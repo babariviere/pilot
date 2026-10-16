@@ -24,5 +24,31 @@ done
 # failures, not just SwiftPM's aggregate exit status. pipefail also preserves
 # build failures, crashes and other nonzero driver exits.
 # Bash 3.2 (macOS /bin/bash) treats an empty array as unset under nounset.
-swift test --package-path "$here" ${jobs[@]+"${jobs[@]}"} -Xswiftc -plugin-path -Xswiftc "$plugins" "$@" 2>&1 \
-	| python3 "$here/scripts/check-test-output.py"
+# This WebKit matrix must not compete with hundreds of unrelated MainActor tests
+# and their nested AppKit run loops. Keep all its assertions and its 60s limit,
+# but run it in its own process after the normal suite, reusing the same build.
+isolated=artifactHeightRespectsNestedClippingWhileKeepingVisibleOverflow
+partition=1
+reuse=(--skip-build)
+for argument in "$@"; do
+	case "$argument" in
+		--skip-build) reuse=() ;;
+		--filter|--filter=*|--skip|--skip=*|--list-tests|--list-tests=*|-l|list|--version|--help|-h|--show-codecov-path)
+			partition=0 ;;
+	esac
+done
+run_tests() {
+	local required="$1"
+	shift
+	local guards=()
+	if [ -n "$required" ]; then guards=(--require-test "$required"); fi
+	swift test --package-path "$here" ${jobs[@]+"${jobs[@]}"} -Xswiftc -plugin-path -Xswiftc "$plugins" "$@" 2>&1 \
+		| python3 "$here/scripts/check-test-output.py" ${guards[@]+"${guards[@]}"}
+}
+if [ "$partition" = 1 ]; then
+	run_tests "" "$@" --skip "$isolated"
+	run_tests "$isolated" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$isolated"
+else
+	# Explicit selection/listing is the caller's scope. Do not append another filter.
+	run_tests "" "$@"
+fi

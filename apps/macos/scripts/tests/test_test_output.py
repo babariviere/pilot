@@ -18,6 +18,8 @@ FAILED = '✘ Test run with 1 test in 1 suite failed after 0.001 seconds with 1 
 PASSED = ('✔ Test run with 122 tests in 9 suites passed after 0.100 seconds.\n'
           '✔ Test run with 221 tests in 12 suites passed after 0.200 seconds.\n')
 STARTED = '◇ Test run started.\n'
+ISOLATED = "artifactHeightRespectsNestedClippingWhileKeepingVisibleOverflow"
+ISOLATED_OUTPUT = STARTED + f"◇ Test {ISOLATED}() started.\n" + PASSED
 
 
 class TestOutputTests(unittest.TestCase):
@@ -31,7 +33,8 @@ class TestOutputTests(unittest.TestCase):
                      '◇ Test named "failed after" started.', 'Build complete!']:
             self.assertFalse(guard.failed_summary(line), line)
 
-    def run_wrapper(self, output, status=0, args=(), wrapper="test.sh", prepare_status=0):
+    def run_wrapper(self, output, status=0, args=(), wrapper="test.sh", prepare_status=0,
+                    second_output=None, second_status=0, all_calls=False):
         # Exercise the actual shell wrapper without downloading/building the app.
         with tempfile.TemporaryDirectory(prefix="swift wrapper ") as directory:
             root = Path(directory)
@@ -49,20 +52,79 @@ class TestOutputTests(unittest.TestCase):
             (root / "xcrun").write_text('#!/bin/sh\nprintf "%s\\n" "$FAKE_SWIFT"\n')
             (root / "xcrun").chmod(0o755)
             (root / "swift").write_text(
-                '#!/bin/sh\nprintf "%s\\n" "$@" > "$ARGUMENTS"\n'
-                'printf "%s" "$TEST_OUTPUT" >&2\nexit "$TEST_STATUS"\n')
+                '#!/bin/sh\nprintf "__SWIFT_CALL__\\n" >> "$ARGUMENTS"\n'
+                'printf "%s\\n" "$@" >> "$ARGUMENTS"\n'
+                'if [ -e "$CALLED" ]; then\n'
+                '  printf "%s" "$SECOND_OUTPUT" >&2\nexit "$SECOND_STATUS"\nfi\n'
+                'touch "$CALLED"\nprintf "%s" "$TEST_OUTPUT" >&2\nexit "$TEST_STATUS"\n')
             (root / "swift").chmod(0o755)
             marker = root / "continued"
             arguments = root / "arguments"
             env = {**os.environ, "PATH": f"{root}:{os.environ['PATH']}",
                    "FAKE_SWIFT": str(root / "swift"), "TEST_OUTPUT": output,
                    "TEST_STATUS": str(status), "ARGUMENTS": str(arguments), "PILOT_SWIFT_JOBS": "2",
+                   "CALLED": str(root / "called"), "SECOND_OUTPUT": ISOLATED_OUTPUT if second_output is None else second_output,
+                   "SECOND_STATUS": str(second_status),
                    "PILOT_HOME": str(root / "home"), "BUNDLE_RUNTIME": "0"}
             # Use macOS's Bash 3.2, not a newer Homebrew bash picked by env.
             result = subprocess.run(
                 ["/bin/bash", "-c", '/bin/bash "$@" && touch "$CONTINUED"', "test", str(scripts / wrapper), *args],
                 env={**env, "CONTINUED": str(marker)}, capture_output=True, text=True)
-            return result, marker.exists(), arguments.read_text().splitlines() if arguments.exists() else []
+            calls = ([part.splitlines() for part in arguments.read_text().split("__SWIFT_CALL__\n")[1:]]
+                     if arguments.exists() else [])
+            return result, marker.exists(), calls if all_calls else calls[-1] if calls else []
+
+    def test_full_suite_runs_geometry_separately_without_rebuilding(self):
+        result, continued, calls = self.run_wrapper(PASSED, all_calls=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(continued)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0][-2:], ["--skip", ISOLATED])
+        self.assertNotIn("--skip-build", calls[0])
+        self.assertIn("--skip-build", calls[1])
+        self.assertEqual(calls[1][-2:], ["--filter", ISOLATED])
+        self.assertEqual(result.stderr.count("acquired slot 1/1"), 1)
+        self.assertEqual(result.stdout, PASSED + ISOLATED_OUTPUT)
+
+    def test_isolated_geometry_failures_and_driver_status_stop_chain(self):
+        for output, status in [(STARTED + f"◇ Test {ISOLATED}() started.\n" + FAILED, 0),
+                               ("error: driver failed\n", 42)]:
+            result, continued, calls = self.run_wrapper(PASSED, second_output=output,
+                                                        second_status=status, all_calls=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(continued)
+            self.assertEqual(len(calls), 2)
+
+    def test_isolated_geometry_must_actually_run(self):
+        for output in ["", "No matching tests\n", PASSED]:
+            result, continued, _ = self.run_wrapper(PASSED, second_output=output)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(continued)
+            self.assertIn("required native test did not start", result.stderr)
+
+    def test_isolated_geometry_accepts_parameterized_parent_start(self):
+        output = STARTED + f"◇ Test {ISOLATED}(kind:inline:) started.\n" + PASSED
+        result, continued, _ = self.run_wrapper(PASSED, second_output=output)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(continued)
+
+    def test_explicit_selection_and_listing_remain_single_invocation(self):
+        for args in [("--filter", ISOLATED), ("--filter=other",), ("--skip", ISOLATED),
+                     ("--skip=other",), ("--list-tests",), ("list",), ("--version",)]:
+            result, continued, calls = self.run_wrapper(PASSED, args=args, all_calls=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(continued)
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0][-len(args):], list(args))
+
+    def test_explicit_build_options_still_partition_full_suite(self):
+        result, _, calls = self.run_wrapper(PASSED, args=("--jobs=1", "--skip-build"), all_calls=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(calls), 2)
+        for call in calls:
+            self.assertIn("--jobs=1", call)
+            self.assertNotIn("--jobs", call)
+            self.assertEqual(call.count("--skip-build"), 1)
 
     def test_all_swift_entrypoints_hold_a_slot_before_package_preparation(self):
         for wrapper in ["build.sh", "test.sh", "bundle.sh"]:

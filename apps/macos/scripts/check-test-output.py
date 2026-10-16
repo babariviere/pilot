@@ -6,6 +6,7 @@ record a failed expectation and omit its terminal summary. Do not inspect
 warning/diagnostic prose or trust the aggregate exit status.
 """
 
+import argparse
 import re
 import sys
 
@@ -26,6 +27,11 @@ def failed_summary(line):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--require-test", help="Fail if this Swift Testing function did not start")
+    args = parser.parse_args()
+    required = re.compile(r"^◇ Test " + re.escape(args.require_test) + r"\(") if args.require_test else None
+    seen_required = False
     failed = False
     started = 0
     terminal = 0
@@ -33,6 +39,8 @@ def main():
         sys.stdout.buffer.write(line)
         sys.stdout.buffer.flush()
         decoded = ANSI.sub("", line.decode("utf-8", errors="replace")).strip()
+        if required and required.match(decoded):
+            seen_required = True
         failed |= failed_summary(decoded) or bool(SWIFT_RECORDED_FAILURE.match(decoded))
         if SWIFT_START.match(decoded) or XCTEST_START.match(decoded):
             started += 1
@@ -43,7 +51,10 @@ def main():
         print(f"error: {started - terminal} native test runner(s) started without a terminal summary", file=sys.stderr)
     if failed:
         print("error: a native test target failed (see runner summary above)", file=sys.stderr)
-    return int(failed or incomplete)
+    missing = required is not None and not seen_required
+    if missing:
+        print(f"error: required native test did not start: {args.require_test}", file=sys.stderr)
+    return int(failed or incomplete or missing)
 
 
 if __name__ == "__main__":
