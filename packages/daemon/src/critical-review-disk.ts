@@ -3,6 +3,7 @@ import { chmodSync, lstatSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { CriticalReviewRecord, CriticalReviewRecords } from "@pilot/protocol";
+import { ReviewRetentionDisk } from "./critical-review-retention.ts";
 import { canonicalJSON } from "./operation-journal.ts";
 
 export const reviewId = /^[A-Za-z0-9_-]{1,128}$/;
@@ -63,6 +64,7 @@ export function validateReviewRecord(record: CriticalReviewRecord): void {
 
 export class CriticalReviewDisk {
 	readonly db: DatabaseSync;
+	readonly retention: ReviewRetentionDisk;
 	constructor(file: string) {
 		mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
 		const parent = lstatSync(dirname(file));
@@ -79,14 +81,28 @@ export class CriticalReviewDisk {
 			"PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000; PRAGMA secure_delete=ON;",
 		);
 		const version = Number(this.db.prepare("PRAGMA user_version").get()!.user_version);
-		if (version > 1) {
+		if (version > 2) {
 			this.db.close();
 			throw new Error("Unsupported critical review database version");
 		}
 		this.db.exec(`BEGIN IMMEDIATE;
 			CREATE TABLE IF NOT EXISTS review_records(kind TEXT NOT NULL, id TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(kind,id));
 			CREATE TABLE IF NOT EXISTS review_sources(source TEXT NOT NULL, kind TEXT NOT NULL, id TEXT NOT NULL, PRIMARY KEY(source,kind,id));
-			PRAGMA user_version=1; COMMIT;`);
+			CREATE TABLE IF NOT EXISTS review_retention(kind TEXT NOT NULL,id TEXT NOT NULL,project TEXT NOT NULL,bytes INTEGER NOT NULL,last_use INTEGER NOT NULL,pinned INTEGER NOT NULL,active INTEGER NOT NULL,PRIMARY KEY(kind,id));
+			CREATE TABLE IF NOT EXISTS review_staging(id TEXT PRIMARY KEY,project TEXT NOT NULL,bytes INTEGER NOT NULL);
+			CREATE TABLE IF NOT EXISTS review_unavailable(kind TEXT NOT NULL,id TEXT NOT NULL,reason TEXT NOT NULL,project TEXT NOT NULL,bytes INTEGER NOT NULL,pending INTEGER NOT NULL,PRIMARY KEY(kind,id));
+			CREATE TABLE IF NOT EXISTS review_erased_sources(source TEXT PRIMARY KEY);
+			COMMIT;`);
+		this.retention = new ReviewRetentionDisk(this);
+		// v1 had immutable records but no lifecycle index. Rebuild once without changing their bytes.
+		if (version < 2)
+			this.transaction(() => {
+				for (const row of this.db.prepare("SELECT body FROM review_records ORDER BY rowid").all()) {
+					const record = JSON.parse(row.body as string) as CriticalReviewRecord;
+					this.retention.track(record, row.body as string);
+				}
+				this.db.exec("PRAGMA user_version=2");
+			});
 	}
 	transaction<T>(action: () => T): T {
 		this.db.exec("BEGIN IMMEDIATE");
@@ -114,21 +130,24 @@ export class CriticalReviewDisk {
 		}
 		if (Number(this.db.prepare("SELECT COUNT(*) AS n FROM review_records").get()!.n) >= 10_000)
 			throw new Error("Review record capacity reached");
+		this.retention.track(record, body);
 		this.db.prepare("INSERT INTO review_records VALUES(?,?,?)").run(record.kind, record.id, body);
 		for (const source of new Set(record.sourceIds))
 			this.db.prepare("INSERT INTO review_sources VALUES(?,?,?)").run(source, record.kind, record.id);
 		return record;
 	}
-	get(kind: string, id: string): CriticalReviewRecord | undefined {
+	get(kind: string, id: string, now?: number): CriticalReviewRecord | undefined {
+		if (now !== undefined && !this.retention.available(kind, id, now)) return undefined;
 		const row = this.db.prepare("SELECT body FROM review_records WHERE kind=? AND id=?").get(kind, id);
 		return row ? JSON.parse(row.body as string) : undefined;
 	}
-	list(kind: string, after: string, limit: number): CriticalReviewRecord[] {
+	list(kind: string, after: string, limit: number, now?: number): CriticalReviewRecord[] {
 		if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error("Invalid review page size");
 		return this.db
 			.prepare("SELECT body FROM review_records WHERE kind=? AND id>? ORDER BY id LIMIT ?")
 			.all(kind, after, limit)
-			.map((row) => JSON.parse(row.body as string));
+			.map((row) => JSON.parse(row.body as string) as CriticalReviewRecord)
+			.filter((row) => now === undefined || this.retention.available(row.kind, row.id, now));
 	}
 	close(): void {
 		this.db.close();

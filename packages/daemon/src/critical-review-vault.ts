@@ -126,7 +126,8 @@ export class CriticalReviewVault {
 				throw new Error("Invalid evidence capture");
 			await privateDirectory(this.root);
 			if (await this.store.get("evidence", input.id)) throw new Error("Evidence already sealed");
-			const staging = join(this.root, `${randomUUID()}.part`);
+			await this.store.rpc("vaultStage", { id: input.id, projectId: input.projectId, bytes: 0 });
+			const staging = join(this.root, `${input.id}.part`);
 			await mkdir(staging, { mode: 0o700 });
 			const entries: ReviewEvidenceEntry[] = [];
 			const omissions: ReviewOmission[] = [];
@@ -200,6 +201,11 @@ export class CriticalReviewVault {
 						continue;
 					}
 					const blobId = randomUUID();
+					await this.store.rpc("vaultStage", {
+						id: input.id,
+						projectId: input.projectId,
+						bytes: total + bytes.byteLength + entries.length + 1,
+					});
 					const sha256 = await evidenceDigest(bytes);
 					const handle = await open(join(staging, blobId), "wx", 0o600);
 					try {
@@ -256,6 +262,7 @@ export class CriticalReviewVault {
 				throw error;
 			} finally {
 				await rm(staging, { recursive: true, force: true });
+				await this.store.rpc("abortStage", { id: input.id });
 			}
 		});
 	}
@@ -312,10 +319,64 @@ export class CriticalReviewVault {
 				)
 					throw new Error("Evidence digest mismatch");
 				const end = Math.min(offset + limit, entry.bytes);
+				// A separate owner may have revoked/deleted evidence while this async read was in flight.
+				await this.manifest(manifestId);
 				return { text: bytes.subarray(offset, end).toString("utf8"), ...(end < entry.bytes ? { next: end } : {}) };
 			} finally {
 				await handle.close();
 			}
 		});
+	}
+	/** Trusted owner action adapter only. Reads never refresh retention implicitly. */
+	ownerAction(kind: string, id: string, action: "use" | "pin" | "unpin" | "activate" | "release"): Promise<void> {
+		return this.serial(() => this.store.rpc("retentionAction", { kind, id, action }));
+	}
+	/** Tombstone first, then unlink; an interrupted erase stays unreadable and retryable. */
+	eraseSource(source: string): Promise<void> {
+		return this.serial(async () => {
+			if (!opaqueId.test(source)) throw new Error("Invalid erasure source");
+			await this.store.rpc("eraseSource", { source });
+			await this.finishErasure();
+		});
+	}
+	maintain(): Promise<void> {
+		return this.serial(async () => {
+			await this.store.rpc("expire");
+			await this.finishErasure();
+		});
+	}
+	/** Only at startup before admitting captures. The daemon is the sole vault owner. */
+	recover(): Promise<void> {
+		return this.serial(async () => {
+			await privateDirectory(this.root);
+			for (const row of await this.store.rpc<Array<{ id: string }>>("stagedCaptures")) {
+				if (!opaqueId.test(row.id)) throw new Error("Invalid staged capture");
+				await rm(join(this.root, `${row.id}.part`), { recursive: true, force: true });
+				if (!(await this.store.get("evidence", row.id)))
+					await rm(join(this.root, row.id), { recursive: true, force: true });
+				await this.store.rpc("abortStage", row);
+			}
+			await this.store.rpc("expire");
+			await this.finishErasure();
+		});
+	}
+	private async finishErasure(): Promise<void> {
+		await privateDirectory(this.root);
+		for (let page = 0; page < 100; page++) {
+			const pending = await this.store.rpc<Array<{ kind: string; id: string }>>("pendingErasure");
+			if (!pending.length) return;
+			for (const row of pending) {
+				if (!opaqueId.test(row.id)) throw new Error("Invalid retained ID");
+				if (row.kind === "evidence") await rm(join(this.root, row.id), { recursive: true, force: true });
+				const directory = await open(this.root, "r");
+				try {
+					await directory.sync();
+				} finally {
+					await directory.close();
+				}
+				await this.store.rpc("finishErasure", row);
+			}
+		}
+		throw new Error("Erasure requires another maintenance pass");
 	}
 }
