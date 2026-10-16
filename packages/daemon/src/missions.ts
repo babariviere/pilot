@@ -78,6 +78,7 @@ const MAX_TEXT = 8_000;
 const MAX_GOAL = 4_000;
 const MAX_BRIEF = 256 * 1024;
 const MAX_URL = 2_048;
+const MAX_LINEAR_KEY = 256;
 const DETAIL_EVENTS = 50;
 const DETAIL_RESOLVED_COMMENTS = 20;
 
@@ -406,10 +407,11 @@ function linearKey(url: string): string | undefined {
 	if (
 		!/^[a-z0-9][a-z0-9-]*$/i.test(parts[0] ?? "") ||
 		parts[1] !== "issue" ||
-		!/^[a-z0-9]+-\d+$/i.test(parts[2] ?? "")
+		!/^[a-z0-9]+-[1-9]\d*$/i.test(parts[2] ?? "")
 	)
 		return undefined;
-	return `${parts[0]!.toLowerCase()}/${parts[2]!.toUpperCase()}`;
+	const key = `${parts[0]!.toLowerCase()}/${parts[2]!.toUpperCase()}`;
+	return key.length <= MAX_LINEAR_KEY ? key : undefined;
 }
 
 /** Recognize tracker links so later automation can act on them without a migration. */

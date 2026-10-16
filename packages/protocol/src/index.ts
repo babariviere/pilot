@@ -775,7 +775,7 @@ export type MissionLinearRole = "reference" | "managed" | "contribution";
 export interface MissionResource {
 	/** Linear issues only. Older links are read-only references, never implicit contributions. */
 	linearRole?: MissionLinearRole;
-	/** Canonical workspace/issue identifier, independent of URL slug, query and fragment. */
+	/** Canonical workspace/issue identifier, at most 256 ASCII characters; independent of URL slug/query/fragment. */
 	linearKey?: string;
 	/** Task ownership drives PR status; references are related work only. */
 	relationship: "ownership" | "reference";

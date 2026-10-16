@@ -82,6 +82,10 @@ test("one mission manages each workspace-scoped ticket across projects and URL v
 	const manager = store.addResource(a, { url, linearRole: "managed" });
 	const variant = "https://linear.app/ACME/issue/eng-12/new-title?view=1#comment";
 	assert.equal(store.addResource(a, { url: variant, linearRole: "managed" }).id, manager.id);
+	assert.throws(
+		() => store.addResource(b, { url: "http://linear.app/acme/issue/ENG-12", linearRole: "managed" }),
+		/already has a managing mission/,
+	);
 	assert.throws(() => store.addResource(b, { url: variant, linearRole: "managed" }), /already has a managing mission/);
 	const ref = store.addResource(b, { url: variant, taskId: "1" });
 	assert.equal(ref.linearRole, "reference");
@@ -113,6 +117,9 @@ test("Linear roles validate issue kind, scope, task membership and authority wit
 		{ url: "https://linear.app/acme/project/thing", linearRole: "managed" },
 		{ url: "https://linear.app/acme/issue/not-an-id", linearRole: "managed" },
 		{ url: "https://linear.app/%61cme/issue/ENG-12", linearRole: "managed" },
+		{ url: "https://linear.app/acme/issue/%45NG-12", linearRole: "managed" },
+		{ url: "https://linear.app/acme/issue/ENG-012", linearRole: "managed" },
+		{ url: "https://linear.app/acme/issue/ENG-0", linearRole: "managed" },
 		{ url, taskId: "1", linearRole: "managed" },
 		{ url, linearRole: "contribution" },
 		{ url, taskId: foreignTask.id, linearRole: "contribution" },
@@ -136,6 +143,29 @@ test("Linear roles validate issue kind, scope, task membership and authority wit
 	assert.throws(() => store.removeResource(id, ref.id, { sessionId: "member" }), /Only the user or coordinator/);
 	assert.throws(() => store.updateResource(id, managed.id, {} as never), /Invalid Linear role/);
 	assert.throws(() => store.updateResource(other.id, ref.id, { linearRole: "reference" }), /Unknown resource/);
+});
+
+test("Linear identity fields are bounded and unsupported identity forms cannot be upgraded", (t) => {
+	const store = new MissionStore(":memory:");
+	t.after(() => store.close());
+	const { id } = store.create({ projectId: "p", title: "Work" });
+	const largest = `https://linear.app/${"a".repeat(249)}/issue/ENG-12`;
+	assert.equal(store.addResource(id, { url: largest, linearRole: "managed" }).linearKey?.length, 256);
+	for (const unsupported of [
+		`https://linear.app/${"a".repeat(250)}/issue/ENG-12`,
+		"https://linear.app/acme/issue/ENG-012",
+		"https://linear.app/%61cme/issue/ENG-12",
+		"https://linear.app/acme/issue/%45NG-12",
+	]) {
+		const reference = store.addResource(id, { url: unsupported });
+		assert.equal(reference.linearRole, "reference");
+		assert.equal(reference.linearKey, undefined);
+		assert.throws(
+			() => store.updateResource(id, reference.id, { linearRole: "managed" }),
+			/workspace and issue identifier/,
+		);
+	}
+	assert.throws(() => store.addResource(id, { url: `${url}/${"x".repeat(2048)}` }), /url/);
 });
 
 test("legacy links migrate as references without resetting delegated tasks or replaying observations", async (t) => {
