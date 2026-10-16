@@ -90,7 +90,8 @@ import Testing
     let states = ["team-child": LinearStateMapping(
         todo: .init(id: "todo", name: "Todo"), inProgress: .init(id: "active", name: "Building"),
         inReview: .init(id: "review", name: "Review"), merged: .init(id: "merged", name: "Merged"),
-        deployed: .init(id: "deployed", name: "Deployed"))]
+        deployed: .init(id: "deployed", name: "Deployed"), canceled: .init(id: "canceled", name: "Won't do"),
+        duplicated: .init(id: "duplicate", name: "Duplicate"))]
     let editor = ProjectEditor()
     let project = Project(id: "p", name: "Repo", path: "/repo",
                           tracking: .init(linearTeam: "team-root", linearStateMappings: states), createdAt: 1)
@@ -108,6 +109,19 @@ import Testing
     #expect(editor.hasChanges)
     #expect(editor.request.tracking?.linearStateMappings?["team-child"]?.deployed == nil)
     #expect(editor.request.tracking?.linearStateMappings?["team-child"]?.merged?.id == "merged")
+    #expect(editor.request.tracking?.linearStateMappings?["team-child"]?.canceled?.id == "canceled")
+    #expect(editor.request.tracking?.linearStateMappings?["team-child"]?.duplicated?.id == "duplicate")
+    editor.load(project)
+    editor.linearStateMappings["team-child"]?.canceled = nil
+    #expect(editor.hasChanges)
+    #expect(editor.request.tracking?.linearStateMappings?["team-child"]?.canceled == nil)
+    #expect(editor.request.tracking?.linearStateMappings?["team-child"]?.duplicated?.id == "duplicate")
+    #expect(editor.request.tracking?.linearStateMappings?["team-child"]?.inProgress?.id == "active")
+    editor.load(project)
+    editor.linearStateMappings["team-child"]?.duplicated = nil
+    #expect(editor.hasChanges)
+    #expect(editor.request.tracking?.linearStateMappings?["team-child"]?.duplicated == nil)
+    #expect(editor.request.tracking?.linearStateMappings?["team-child"]?.canceled?.id == "canceled")
     editor.linearTeam = nil
     #expect(editor.request.tracking?.linearStateMappings == nil)
     editor.load(Project(id: "q", name: "Other", path: "/other", createdAt: 1))

@@ -89,10 +89,14 @@ import Testing
     {"slackChannels":[],"linearTeam":"root","linearStateMappings":{"child":{
       "todo":{"id":"todo","name":"Todo"},"inProgress":{"id":"active","name":"Building"},
       "inReview":{"id":"review","name":"Review"},"merged":{"id":"merged","name":"Merged"},
-      "deployed":{"id":"deployed","name":"Deployed"}}}}
+      "deployed":{"id":"deployed","name":"Deployed"},
+      "canceled":{"id":"canceled","name":"Won't do"},
+      "duplicated":{"id":"duplicate","name":"Duplicate"}}}}
     """#.utf8)
     let config = try JSONDecoder().decode(ProjectTrackingConfig.self, from: json)
     #expect(config.linearStateMappings?["child"]?.inProgress == LinearWorkflowState(id: "active", name: "Building"))
+    #expect(config.linearStateMappings?["child"]?.canceled == LinearWorkflowState(id: "canceled", name: "Won't do"))
+    #expect(config.linearStateMappings?["child"]?.duplicated == LinearWorkflowState(id: "duplicate", name: "Duplicate"))
     for stage in LinearWorkflowStage.allCases {
         #expect(config.linearStateMappings?["child"]?[stage] != nil)
     }
@@ -110,6 +114,24 @@ import Testing
         mapping[stage] = nil
         #expect(mapping[stage] == nil)
     }
+}
+
+@Test func trackingPreservesLegacyLinearMappingsWithoutTerminalChoices() throws {
+    let json = Data(#"""
+    {"slackChannels":[],"linearTeam":"root","linearStateMappings":{"child":{
+      "todo":{"id":"todo","name":"Todo"},"inProgress":{"id":"active","name":"Building"},
+      "inReview":{"id":"review","name":"Review"},"merged":{"id":"merged","name":"Merged"},
+      "deployed":{"id":"deployed","name":"Deployed"}}}}
+    """#.utf8)
+    let config = try JSONDecoder().decode(ProjectTrackingConfig.self, from: json)
+    let roundTrip = try JSONDecoder().decode(ProjectTrackingConfig.self, from: JSONEncoder().encode(config))
+    #expect(roundTrip == config)
+    #expect(roundTrip.linearStateMappings?["child"]?.deployed?.id == "deployed")
+    #expect(roundTrip.linearStateMappings?["child"]?.canceled == nil)
+    #expect(roundTrip.linearStateMappings?["child"]?.duplicated == nil)
+    let encoded = try JSONValue.decode(JSONEncoder().encode(config))
+    #expect(encoded["linearStateMappings"]?["child"]?["canceled"] == nil)
+    #expect(encoded["linearStateMappings"]?["child"]?["duplicated"] == nil)
 }
 
 @Test func trackingDecodesItemsStatusAndWebSocketChanges() throws {

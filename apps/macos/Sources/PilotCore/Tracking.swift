@@ -320,7 +320,7 @@ public struct LinearWorkflowStateOption: Codable, Identifiable, Equatable, Hasha
 }
 
 public enum LinearWorkflowStage: String, CaseIterable, Identifiable, Sendable {
-    case todo, inProgress, inReview, merged, deployed
+    case todo, inProgress, inReview, merged, deployed, canceled, duplicated
     public var id: String { rawValue }
     public var title: String {
         switch self {
@@ -329,6 +329,8 @@ public enum LinearWorkflowStage: String, CaseIterable, Identifiable, Sendable {
         case .inReview: "In review"
         case .merged: "Merged"
         case .deployed: "Deployed"
+        case .canceled: "Canceled"
+        case .duplicated: "Duplicated"
         }
     }
 }
@@ -339,11 +341,15 @@ public struct LinearStateMapping: Codable, Equatable, Hashable, Sendable {
     public var inReview: LinearWorkflowState?
     public var merged: LinearWorkflowState?
     public var deployed: LinearWorkflowState?
+    public var canceled: LinearWorkflowState?
+    public var duplicated: LinearWorkflowState?
     public init(todo: LinearWorkflowState? = nil, inProgress: LinearWorkflowState? = nil,
                 inReview: LinearWorkflowState? = nil, merged: LinearWorkflowState? = nil,
-                deployed: LinearWorkflowState? = nil) {
+                deployed: LinearWorkflowState? = nil, canceled: LinearWorkflowState? = nil,
+                duplicated: LinearWorkflowState? = nil) {
         self.todo = todo; self.inProgress = inProgress; self.inReview = inReview
         self.merged = merged; self.deployed = deployed
+        self.canceled = canceled; self.duplicated = duplicated
     }
     public subscript(stage: LinearWorkflowStage) -> LinearWorkflowState? {
         get {
@@ -353,6 +359,8 @@ public struct LinearStateMapping: Codable, Equatable, Hashable, Sendable {
             case .inReview: inReview
             case .merged: merged
             case .deployed: deployed
+            case .canceled: canceled
+            case .duplicated: duplicated
             }
         }
         set {
@@ -362,6 +370,8 @@ public struct LinearStateMapping: Codable, Equatable, Hashable, Sendable {
             case .inReview: inReview = newValue
             case .merged: merged = newValue
             case .deployed: deployed = newValue
+            case .canceled: canceled = newValue
+            case .duplicated: duplicated = newValue
             }
         }
     }

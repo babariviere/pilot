@@ -482,9 +482,9 @@ channel-scoped Slack search, shares the daily Slack budget, and never searches o
 Public search is preferred; a private-capable search, still restricted to that configured channel,
 also finds mentions in private-channel replies without re-reading unchanged threads.
 
-Project settings provides per-team Linear state mappings for Todo, In progress, In review, Merged and
-Deployed, including separate choices for sub-teams. Only In progress is applied when work starts;
-the other four mappings are saved for future use and do not trigger automatic transitions.
+Project settings provides per-team Linear state mappings for Todo, In progress, In review, Merged,
+Deployed, Canceled and Duplicated, including separate choices for sub-teams. Only In progress is applied
+when work starts; the other mappings are saved only and do not trigger automatic transitions.
 In progress must map to a started-category state. Its Automatic option selects the state named
 In progress, never the first state in workflow order. Other mappings may use any workflow state.
 If a target is missing, ambiguous or no longer a started state, Pilot leaves the ticket unchanged and shows

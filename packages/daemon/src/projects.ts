@@ -258,7 +258,9 @@ export function validateTrackingConfig(value: unknown): ProjectTrackingConfig {
 					Array.isArray(mapping) ||
 					Object.entries(mapping).some(
 						([stage, state]) =>
-							!["todo", "inProgress", "inReview", "merged", "deployed"].includes(stage) ||
+							!["todo", "inProgress", "inReview", "merged", "deployed", "canceled", "duplicated"].includes(
+								stage,
+							) ||
 							!state ||
 							typeof state !== "object" ||
 							Array.isArray(state) ||
@@ -270,7 +272,7 @@ export function validateTrackingConfig(value: unknown): ProjectTrackingConfig {
 			))
 	)
 		throw new Error(
-			"linearStateMappings must map at most 250 team IDs to Todo, In progress, In review, Merged and Deployed state references",
+			"linearStateMappings must map at most 250 team IDs to Todo, In progress, In review, Merged, Deployed, Canceled and Duplicated state references",
 		);
 	if (
 		labels !== undefined &&

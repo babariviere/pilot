@@ -110,6 +110,8 @@ export interface LinearStateMapping {
 	inReview?: LinearWorkflowState;
 	merged?: LinearWorkflowState;
 	deployed?: LinearWorkflowState;
+	canceled?: LinearWorkflowState;
+	duplicated?: LinearWorkflowState;
 }
 
 /** A saved workflow reference. Names are display-only; writes validate the ID against the live workflow. */
