@@ -84,3 +84,33 @@ test("restart replaces cached online with unknown before recovery, and stale pro
 	await delay(10);
 	assert.equal(JSON.parse(await readFile(file, "utf8")).online, false);
 });
+
+test("a blocked primary check does not persist an offline hold when the independent host is reachable", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-connectivity-fallback-"));
+	const file = join(root, "connectivity.json");
+	let connected = true;
+	t.mock.method(globalThis, "fetch", async (url: string) => {
+		if (!connected || url === "https://www.gstatic.com/generate_204") throw new TypeError("fetch failed");
+		assert.equal(url, "https://cp.cloudflare.com/generate_204");
+		return new Response(null, { status: 204 });
+	});
+	const detector = new ScheduleDetection();
+	const published: boolean[] = [];
+	const service = new ConnectivityService(file, detector, (online) => published.push(online));
+	t.after(async () => {
+		await service.stop();
+		await rm(root, { recursive: true, force: true });
+	});
+	const state = async () => JSON.parse(await readFile(file, "utf8")) as ConnectivityState;
+	await service.start();
+	await until(async () => (await state()).online);
+	assert.equal(published.at(-1), true);
+	connected = false;
+	await detector.refreshOnline();
+	await until(async () => !(await state()).online);
+	assert.equal(published.at(-1), false);
+	connected = true;
+	await detector.refreshOnline();
+	await until(async () => (await state()).online);
+	assert.equal(published.at(-1), true);
+});

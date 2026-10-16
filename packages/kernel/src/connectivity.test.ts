@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { createAssistantMessageEventStream, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
-import { isTransportFailure, OfflineGate, offlineRequestStream } from "./connectivity.ts";
+import { isTransportFailure, OfflineGate, offlineRequestStream, probeReachability } from "./connectivity.ts";
 
 const model = fauxProvider().getModel();
 async function until(check: () => boolean) {
@@ -15,6 +15,89 @@ async function until(check: () => boolean) {
 		await delay(2);
 	}
 }
+
+test("one unreachable check host cannot mark a connected host offline", async (t) => {
+	const urls: string[] = [];
+	t.mock.method(globalThis, "fetch", async (url: string, options: RequestInit) => {
+		urls.push(url);
+		assert.equal(options.method, "HEAD");
+		assert.equal(options.redirect, "manual");
+		assert.equal(options.cache, "no-store");
+		assert.equal(options.credentials, "omit");
+		if (url === "https://www.gstatic.com/generate_204") throw new TypeError("fetch failed");
+		assert.equal(url, "https://cp.cloudflare.com/generate_204");
+		return new Response(null, { status: 204 });
+	});
+	assert.equal(await probeReachability(new AbortController().signal), true);
+	assert.equal(urls.length, 2);
+});
+
+test("reachability requires at least one validated 204, not a portal, redirect or provider error", async (t) => {
+	for (const status of [200, 302, 401, 429, 500]) {
+		const fetch = t.mock.method(globalThis, "fetch", async () => new Response(null, { status }));
+		assert.equal(await probeReachability(new AbortController().signal), false);
+		assert.equal(fetch.mock.callCount(), 2);
+		fetch.mock.restore();
+	}
+	t.mock.method(globalThis, "fetch", async () => {
+		throw new TypeError("fetch failed");
+	});
+	assert.equal(await probeReachability(new AbortController().signal), false);
+});
+
+test("a successful reachability check cancels a stalled peer without waiting for its timeout", async (t) => {
+	let cancelled = false;
+	t.mock.method(globalThis, "fetch", async (url: string, options: RequestInit) => {
+		if (url === "https://cp.cloudflare.com/generate_204") return new Response(null, { status: 204 });
+		return new Promise<Response>((_resolve, reject) => {
+			options.signal!.addEventListener(
+				"abort",
+				() => {
+					cancelled = true;
+					reject(options.signal!.reason);
+				},
+				{ once: true },
+			);
+		});
+	});
+	assert.equal(await probeReachability(new AbortController().signal), true);
+	assert.equal(cancelled, true);
+});
+
+test("reachability checks share one five-second deadline and cancel on caller abort", async (t) => {
+	let timeout = new AbortController();
+	const deadlines: number[] = [];
+	t.mock.method(AbortSignal, "timeout", (ms: number) => {
+		deadlines.push(ms);
+		return timeout.signal;
+	});
+	const signals: AbortSignal[] = [];
+	t.mock.method(globalThis, "fetch", async (_url: string, options: RequestInit) => {
+		const signal = options.signal!;
+		signals.push(signal);
+		return new Promise<Response>((_resolve, reject) => {
+			signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+		});
+	});
+	const stop = new AbortController();
+	const check = probeReachability(stop.signal);
+	assert.equal(signals.length, 2);
+	assert.equal(signals[0], signals[1]);
+	assert.deepEqual(deadlines, [5_000]);
+	timeout.abort();
+	assert.equal(await check, false);
+	assert.ok(signals.every((signal) => signal.aborted));
+
+	timeout = new AbortController();
+	const cancelled = probeReachability(stop.signal);
+	assert.equal(signals.length, 4);
+	stop.abort();
+	assert.equal(await cancelled, false);
+	assert.ok(signals.every((signal) => signal.aborted));
+	const before = signals.length;
+	assert.equal(await probeReachability(stop.signal), false);
+	assert.equal(signals.length, before, "pre-aborted calls do not start network work");
+});
 
 test("transport classification excludes HTTP/auth/quota/provider failures", () => {
 	for (const error of [
