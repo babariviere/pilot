@@ -24,6 +24,6 @@ Local host, preserves qualified keys and refuses collisions. AppModel migrates l
 drafts after identifying Local, persists that identity for offline relaunch, and bridges local
 composer calls to qualified keys. Remote composers/navigation use explicit resource refs.
 Subscriptions reattach to replacement endpoint clients after verified tunnel reconnects.
-Remote enrollment,
-persistent offline summaries and visible disconnected presentation are not enabled by
-this routing layer alone.
+The [lifecycle layer](remote-lifecycle.md) adds explicit enrollment, private persistent offline
+summaries, receipt-only reconnect recovery and awaited forward cleanup. Visible devbox setup and
+disconnected presentation remain separate UI work.

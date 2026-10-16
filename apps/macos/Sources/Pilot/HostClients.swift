@@ -2,6 +2,21 @@ import Combine
 import Foundation
 import PilotCore
 
+/// The only lifecycle operations exposed to the app are on owned local forwards.
+protocol HostTunnel: AnyObject, Sendable {
+    func states() async -> AsyncStream<SSHTunnelState>
+    func connect() async throws -> URL
+    func disconnect() async
+}
+extension ManagedSSHTunnel: HostTunnel {}
+
+enum HostedHistoryAvailability: Equatable {
+    case online, cached, requiresReconnect
+    var explanation: String? {
+        self == .requiresReconnect ? "This history is not cached. Reconnect to load it." : nil
+    }
+}
+
 /// Unified navigation/data facade. Each endpoint keeps its own caches, subscriptions and sockets.
 /// Callers hold qualified refs, never select a process-wide "current server".
 @MainActor
@@ -10,6 +25,12 @@ final class HostClients: ObservableObject {
     @Published private(set) var projects: [Hosted<Project>] = []
     @Published private(set) var missions: [Hosted<Mission>] = []
     @Published private(set) var available: Set<HostRef> = []
+    @Published private(set) var connectionStates: [HostRef: SSHTunnelState] = [:]
+    @Published private(set) var offlineHosts: [HostRef: OfflineHostSnapshot] = [:]
+    @Published private(set) var persistenceError: String?
+    /// Receipts remain here until the owning composer adopts them durably. Unknown is not rejection.
+    @Published private(set) var pendingOperations: [String: DurableOperation] = [:]
+    @Published private(set) var operationDeliveries: [String: OperationDelivery] = [:]
     @Published var selection: HostResourceRef?
     @Published private(set) var dashboards: [HostResourceRef: ProjectDashboard] = [:]
     @Published private(set) var missionDetails: [HostResourceRef: MissionDetail] = [:]
@@ -19,9 +40,108 @@ final class HostClients: ObservableObject {
         var observations: [AnyCancellable]
     }
     private var entries: [HostRef: Entry] = [:]
-    private var tunnels: [HostRef: ManagedSSHTunnel] = [:]
+    private var tunnels: [HostRef: any HostTunnel] = [:]
     private var tunnelWatches: [HostRef: Task<Void, Never>] = [:]
     private var tunnelURLs: [HostRef: URL] = [:]
+    private var connectionAttempts: [HostRef: UUID] = [:]
+    private let makeTunnel: (SSHConnectionConfiguration, HostRef) -> any HostTunnel
+    private let makeClient: @MainActor () -> PilotClient
+    private let connectClient: @MainActor (PilotClient, URL) -> Void
+    private var offlineStore: OfflineHostStore?
+    private var offlineReady = false
+    private var saveTask: Task<Void, Never>?
+    private var saveRevision: UInt64 = 0
+    private var reconciliationTasks: [HostRef: Task<Void, Never>] = [:]
+    private var reconciliationGenerations: [HostRef: UUID] = [:]
+    private var shuttingDown = false
+
+    init(operationDirectory: URL? = nil,
+         makeTunnel: @escaping (SSHConnectionConfiguration, HostRef) -> any HostTunnel = { configuration, host in
+             ManagedSSHTunnel(configuration: configuration) { data in
+                 try host.validate(JSONDecoder().decode(DaemonHello.self, from: data))
+             }
+         }, makeClient: @escaping @MainActor () -> PilotClient = {
+             let configuration = URLSessionConfiguration.ephemeral
+             configuration.timeoutIntervalForRequest = 15
+             configuration.timeoutIntervalForResource = 30
+             return PilotClient(commandConfiguration: configuration)
+         },
+         connectClient: @escaping @MainActor (PilotClient, URL) -> Void = { $0.connect(to: $1) }) {
+        self.makeTunnel = makeTunnel; self.makeClient = makeClient
+        self.connectClient = connectClient
+        operations = OperationOutbox(directory: operationDirectory ?? FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Pilot/Operations"))
+    }
+
+    /// Startup reads local metadata only. No SSH, mutation replay, outcome notifications or failover.
+    func restoreOffline(from store: OfflineHostStore) async throws {
+        guard offlineStore == nil else { return }
+        offlineStore = store
+        do {
+            let snapshots = try await store.load()
+            for snapshot in snapshots where entries[snapshot.host] == nil {
+                offlineHosts[snapshot.host] = snapshot
+                connectionStates[snapshot.host] = .disconnected
+                replaceSummaries(snapshot.host, sessions: snapshot.sessions, projects: snapshot.projects,
+                                 missions: snapshot.missions)
+            }
+            for operation in try await operations.pending() {
+                pendingOperations[operation.operationId] = operation
+                operationDeliveries[operation.operationId] = .unknown
+            }
+            offlineReady = true
+        } catch { persistenceError = "Could not read saved host metadata. The original data was kept."; throw error }
+    }
+
+    /// Explicit user-confirmed enrollment. A changed daemon/lineage requires a separate repair flow.
+    func enroll(_ host: HostRef, configuration: SSHConnectionConfiguration) async throws {
+        guard !shuttingDown, offlineReady, host.hostId != "local", !host.hostId.isEmpty,
+              !host.daemonId.isEmpty, !host.lineageId.isEmpty,
+              !offlineHosts.keys.contains(where: { $0.hostId == host.hostId && $0 != host }),
+              offlineHosts[host] != nil || offlineHosts.count < 32 else { throw HostRoutingError.identityChanged }
+        let previous = offlineHosts[host]
+        if let existing = previous {
+            offlineHosts[host] = OfflineHostSnapshot(host: host, configuration: configuration,
+                receivedAt: existing.receivedAt, sessions: existing.sessions, projects: existing.projects,
+                missions: existing.missions, stopRequests: existing.stopRequests)
+        } else { offlineHosts[host] = OfflineHostSnapshot(host: host, configuration: configuration) }
+        do { try await flushOffline() }
+        catch { offlineHosts[host] = previous; throw error }
+    }
+
+    func reconnect(_ host: HostRef) async throws {
+        guard let configuration = offlineHosts[host]?.configuration else { throw HostRoutingError.invalidReference }
+        try await connect(host: host, configuration: configuration)
+    }
+
+    func historyAvailability(_ ref: HostResourceRef, cached: Bool) -> HostedHistoryAvailability {
+        available.contains(ref.host) ? .online : cached ? .cached : .requiresReconnect
+    }
+
+    private func scheduleSave() {
+        guard offlineStore != nil else { return }
+        saveTask?.cancel()
+        saveTask = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(500)); try await self?.flushOffline() }
+            catch {}
+        }
+    }
+
+    func flushOffline() async throws {
+        saveTask?.cancel(); saveTask = nil
+        // Quit may race the initial actor read. Never flush a not-yet-restored empty partition.
+        guard offlineReady, let offlineStore else { return }
+        // Actor scheduling need not be FIFO. An older in-flight save cannot replace the quit flush.
+        saveRevision += 1
+        let revision = saveRevision
+        do {
+            try await offlineStore.save(Array(offlineHosts.values), revision: revision)
+            if saveRevision == revision { persistenceError = nil }
+        } catch {
+            if saveRevision == revision { persistenceError = "Could not save offline host metadata." }
+            throw error
+        }
+    }
     @MainActor private final class Subscription {
         let ref: HostResourceRef
         let listener: ([JSONValue]) -> Void
@@ -71,8 +191,7 @@ final class HostClients: ObservableObject {
         try validate(fence)
         return HostedAttachment(host: host, attachment: attachment)
     }
-    private let operations = OperationOutbox(directory: FileManager.default.urls(
-        for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Pilot/Operations"))
+    private let operations: OperationOutbox
 
     /// Return the original intent with a conclusive or uncertain delivery state. No draft is cleared here.
     func deliver<Payload: Encodable & Sendable>(host: HostRef, kind: String, targetId: String?,
@@ -81,22 +200,79 @@ final class HostClients: ObservableObject {
         let fence = try token(for: host)
         let operation = try await operations.reserve(kind: kind, targetId: targetId, payload: payload,
                                                      origin: origin, destination: host)
+        pendingOperations[operation.operationId] = operation
         do {
+            try validate(fence)
             // Receipt first. An unknown receipt may only be retried through this immutable endpoint.
             let known = try await client.operation(operation, lookup: true)
             try validate(fence)
-            if case let .receipt(receipt) = known, receipt.state != .pending { return (operation, known) }
+            // Pending already has a durable owner. Never POST it again from the app.
+            if case .receipt = known {
+                recordDelivery(known, operation: operation)
+                return (operation, known)
+            }
             let delivery = try await client.operation(operation, lookup: false)
             try validate(fence)
+            recordDelivery(delivery, operation: operation)
             return (operation, delivery)
         } catch {
             // The request may have been accepted. Keep original intent, draft and attachments.
+            recordDelivery(.unknown, operation: operation)
             return (operation, .unknown)
         }
     }
 
     func acknowledge(_ operation: DurableOperation, receipt: OperationReceipt) async throws {
         try await operations.acknowledge(operation, receipt: receipt)
+        pendingOperations[operation.operationId] = nil
+        operationDeliveries[operation.operationId] = nil
+    }
+
+    private func recordDelivery(_ delivery: OperationDelivery, operation: DurableOperation) {
+        guard pendingOperations[operation.operationId] != nil else { return }
+        // Concurrent lookup and delivery may finish out of order. Durable ownership/conclusive
+        // receipts never regress to unknown because a stale lookup or socket failed later.
+        if let known = operationDeliveries[operation.operationId], case let .receipt(existing) = known {
+            if existing.state != .pending { return }
+            if case .unknown = delivery { return }
+        }
+        operationDeliveries[operation.operationId] = delivery
+    }
+
+    /// Reconnect performs bounded receipt reads only. No timers, POST retry, adoption or draft clearing.
+    func reconcileOperations(_ host: HostRef) async throws {
+        let client = try endpoint(host)
+        let fence = try token(for: host)
+        for operation in try await operations.pending(destination: host) {
+            try Task.checkCancellation()
+            try validate(fence)
+            guard try await operations.contains(operation) else { continue }
+            pendingOperations[operation.operationId] = operation
+            do {
+                let delivery = try await client.operation(operation, lookup: true)
+                try validate(fence)
+                if try await operations.contains(operation) { recordDelivery(delivery, operation: operation) }
+            } catch {
+                recordDelivery(.unknown, operation: operation)
+                try validate(fence)
+            }
+        }
+    }
+
+    /// No offline stop queue. An ambiguous response stays requested across relaunch; neither an
+    /// idle snapshot nor loss of contact acknowledges cancellation, releases a grant or allows failover.
+    func requestStop(_ ref: HostResourceRef) async throws -> String? {
+        let client = try endpoint(ref, kind: .session)
+        let fence = try token(for: ref.host)
+        guard offlineHosts[ref.host] != nil else { throw HostRoutingError.invalidReference }
+        offlineHosts[ref.host]?.stopRequests[ref.localId] = .requested
+        try await flushOffline()
+        try validate(fence)
+        let draft = try await client.stop(ref.localId)
+        try validate(fence)
+        offlineHosts[ref.host]?.stopRequests[ref.localId] = .acknowledged
+        try await flushOffline()
+        return draft
     }
 
     func deliverAttached<Request: Codable & Sendable>(host: HostRef, kind: String, targetId: String?,
@@ -133,6 +309,10 @@ final class HostClients: ObservableObject {
     }
 
     func install(_ client: PilotClient, host: HostRef) throws {
+        guard !shuttingDown,
+              !offlineHosts.keys.contains(where: { $0.hostId == host.hostId && $0 != host }) else {
+            throw HostRoutingError.identityChanged
+        }
         try client.bind(host)
         if entries[host]?.client === client { return }
         removeConnection(host)
@@ -148,6 +328,9 @@ final class HostClients: ObservableObject {
             .sink { [weak self] _ in
                 self?.enqueueRefresh(host, details: true)
             })
+        entry.observations.append(Publishers.CombineLatest3(
+            client.$hasProjectSnapshot, client.$hasSessionSnapshot, client.$hasMissionSnapshot
+        ).sink { [weak self] _ in self?.enqueueRefresh(host) })
         entries[host] = entry
         for subscription in subscriptions.values where subscription.ref.host == host { attach(subscription) }
         for (ref, count) in retained where ref.host == host {
@@ -159,16 +342,46 @@ final class HostClients: ObservableObject {
 
     /// Enrollment pins an explicitly confirmed identity. No first-response TOFU during reconnect.
     func connect(host: HostRef, configuration: SSHConnectionConfiguration) async throws {
-        guard host.hostId != "local" else { throw HostRoutingError.invalidReference }
-        await disconnect(host)
-        let tunnel = ManagedSSHTunnel(configuration: configuration) { data in
-            try host.validate(JSONDecoder().decode(DaemonHello.self, from: data))
+        guard !shuttingDown, offlineReady, host.hostId != "local",
+              offlineHosts[host]?.configuration == configuration,
+              !offlineHosts.keys.contains(where: { $0.hostId == host.hostId && $0 != host }) else {
+            throw HostRoutingError.invalidReference
         }
+        let attempt = UUID()
+        connectionAttempts[host] = attempt
+        await closeConnection(host)
+        guard !shuttingDown, connectionAttempts[host] == attempt else { throw HostRoutingError.staleGeneration }
+        let tunnel = makeTunnel(configuration, host)
+        try await attachTunnel(tunnel, host: host)
+    }
+
+    /// Adopt only after enrollment was explicitly confirmed and durably persisted. Bootstrap has
+    /// already validated this owned forward. Keep its state stream, never just its first URL.
+    func adopt(_ connection: LinuxBootstrapConnection, configuration: SSHConnectionConfiguration) async throws {
+        guard offlineReady, offlineHosts[connection.host]?.configuration == configuration, !shuttingDown else {
+            throw HostRoutingError.invalidReference
+        }
+        let attempt = UUID()
+        connectionAttempts[connection.host] = attempt
+        await closeConnection(connection.host)
+        guard !shuttingDown, connectionAttempts[connection.host] == attempt else {
+            throw HostRoutingError.staleGeneration
+        }
+        try await attachTunnel(connection.tunnel, host: connection.host)
+    }
+
+    private func attachTunnel(_ tunnel: any HostTunnel, host: HostRef) async throws {
+        guard !shuttingDown else { throw HostRoutingError.disconnected }
         tunnels[host] = tunnel
         let states = await tunnel.states()
+        guard !shuttingDown, tunnels[host] === tunnel else {
+            await tunnel.disconnect()
+            throw HostRoutingError.staleGeneration
+        }
         tunnelWatches[host] = Task { [weak self] in
             for await state in states {
                 guard !Task.isCancelled, let self, self.tunnels[host] === tunnel else { break }
+                self.connectionStates[host] = state
                 switch state {
                 case let .connected(url):
                     do { try self.installTunnelEndpoint(host, url: url) }
@@ -191,27 +404,44 @@ final class HostClients: ObservableObject {
 
     private func installTunnelEndpoint(_ host: HostRef, url: URL) throws {
         if tunnelURLs[host] == url, entries[host] != nil { return }
-        let client = PilotClient()
+        let client = makeClient()
         try install(client, host: host)
         tunnelURLs[host] = url
-        client.connect(to: url)
+        connectClient(client, url)
     }
 
     func disconnect(_ host: HostRef) async {
+        connectionAttempts[host] = nil
+        await closeConnection(host)
+    }
+
+    private func closeConnection(_ host: HostRef) async {
         tunnelWatches.removeValue(forKey: host)?.cancel()
         tunnelURLs[host] = nil
         let tunnel = tunnels.removeValue(forKey: host)
         removeConnection(host)
+        connectionStates[host] = .disconnected
         await tunnel?.disconnect()
     }
 
     /// Quit closes only owned local forwards, never remote agents or daemon services.
     func disconnectAll() async {
+        // Fence startup/reconnect completions before the first suspension. Keep Local installed;
+        // no daemon stop, power command, remote service management or agent mutation is reachable.
+        shuttingDown = true
+        connectionAttempts.removeAll()
+        for host in tunnels.keys {
+            if let entry = entries[host] { refresh(host, token: entry.token) }
+        }
         for host in Array(tunnels.keys) { await disconnect(host) }
+        do { try await flushOffline() }
+        catch { persistenceError = "Could not save offline host metadata before quitting." }
     }
 
     /// Removal keeps last-known summaries. It does not invent an execution outcome.
     private func removeConnection(_ host: HostRef) {
+        reconciliationTasks.removeValue(forKey: host)?.cancel()
+        reconciliationGenerations[host] = nil
         for subscription in subscriptions.values where subscription.ref.host == host { subscription.detach() }
         entries.removeValue(forKey: host)?.client.disconnect()
         available.remove(host)
@@ -248,11 +478,13 @@ final class HostClients: ObservableObject {
         return value
     }
 
-    func send(_ session: HostResourceRef, message: String, mode: DeliveryMode) async throws {
-        let client = try endpoint(session, kind: .session)
-        let token = try token(for: session.host)
-        try await client.send(session.localId, message: message, mode: mode)
-        try validate(token)
+    /// Remote sends must expose their durable delivery state to the owning composer, not an
+    /// unreceipted success/failure that could clear a draft after an ambiguous network response.
+    func send(_ session: HostResourceRef, message: String, mode: DeliveryMode,
+              origin: HostRef) async throws -> (DurableOperation, OperationDelivery) {
+        guard session.kind == .session else { throw HostRoutingError.invalidReference }
+        return try await deliver(host: session.host, kind: "chat-send", targetId: session.localId,
+                                 payload: SendRequest(message: message, mode: mode), origin: origin)
     }
 
     func subscribe(_ session: HostResourceRef, listener: @escaping ([JSONValue]) -> Void) throws -> () -> Void {
@@ -328,16 +560,42 @@ final class HostClients: ObservableObject {
 
     private func refresh(_ host: HostRef, token: HostConnectionToken) {
         guard let entry = entries[host], entry.token == token else { return }
-        if entry.client.connected { available.insert(host) } else { available.remove(host) }
+        if entry.client.connected {
+            available.insert(host)
+            let generation = entry.client.connectionGeneration
+            if offlineReady, !shuttingDown, reconciliationGenerations[host] != generation {
+                reconciliationTasks[host]?.cancel()
+                reconciliationGenerations[host] = generation
+                reconciliationTasks[host] = Task { [weak self] in try? await self?.reconcileOperations(host) }
+            }
+        } else {
+            available.remove(host)
+            if entry.client.connectionError != nil { connectionStates[host] = .failed(.rejectedHello) }
+            reconciliationTasks.removeValue(forKey: host)?.cancel()
+            reconciliationGenerations[host] = nil
+        }
         // A temporary empty endpoint before its first authoritative list must not erase offline data.
-        guard entry.client.hasProjectSnapshot else { return }
-        sessions = sessions.filter { $0.ref.host != host } + entry.client.sessions.map {
+        guard entry.client.connected, entry.client.hasProjectSnapshot, entry.client.hasSessionSnapshot,
+              entry.client.hasMissionSnapshot else { return }
+        replaceSummaries(host, sessions: entry.client.sessions, projects: entry.client.projects,
+                         missions: entry.client.missions)
+        if let previous = offlineHosts[host] {
+            offlineHosts[host] = OfflineHostSnapshot(host: host, configuration: previous.configuration,
+                receivedAt: Date(), sessions: entry.client.sessions, projects: entry.client.projects,
+                missions: entry.client.missions, stopRequests: previous.stopRequests)
+            scheduleSave()
+        }
+    }
+
+    private func replaceSummaries(_ host: HostRef, sessions values: [SessionSummary], projects projectValues: [Project],
+                                  missions missionValues: [Mission]) {
+        sessions = sessions.filter { $0.ref.host != host } + values.map {
             Hosted(ref: HostResourceRef(host: host, kind: .session, localId: $0.id), value: $0)
         }
-        projects = projects.filter { $0.ref.host != host } + entry.client.projects.map {
+        projects = projects.filter { $0.ref.host != host } + projectValues.map {
             Hosted(ref: HostResourceRef(host: host, kind: .project, localId: $0.id), value: $0)
         }
-        missions = missions.filter { $0.ref.host != host } + entry.client.missions.map {
+        missions = missions.filter { $0.ref.host != host } + missionValues.map {
             Hosted(ref: HostResourceRef(host: host, kind: .mission, localId: $0.id), value: $0)
         }
     }

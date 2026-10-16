@@ -423,6 +423,14 @@ final class AppModel: ObservableObject {
         }
         terminals.bind(to: settings)
         Task {
+            do {
+                try await hosts.restoreOffline(from: OfflineHostStore(directory: FileManager.default.urls(
+                    for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                    .appendingPathComponent("Pilot/Hosts", isDirectory: true)))
+            } catch {
+                // Keep Local usable. Never reinterpret a corrupt index as empty or re-pair pins.
+                sessionActionError = "Could not restore offline devbox metadata. The saved file was kept."
+            }
             await daemon.ensureRunning()
             client.connect(to: daemon.baseURL)
             Task {

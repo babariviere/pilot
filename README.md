@@ -137,7 +137,10 @@ The source includes [host-qualified client routing](docs/host-routing.md),
 [durable operation receipts](docs/durable-operations.md), [server-side repository/file reads](docs/host-repositories.md)
 and [staged image/artifact transfers](docs/host-transfers.md). These are integration adapters, not a complete
 remote setup or chat-selection workflow in the app. They do not copy credentials or implement cross-host
-context/delegation semantics.
+context/delegation semantics. The [remote lifecycle layer](docs/remote-lifecycle.md) preserves private
+offline chat summaries and pinned identities across relaunch, reconciles ambiguous delivery receipts
+without replaying mutations, and awaits local forward cleanup on normal quit without stopping remote
+work. Devbox setup/selection and disconnected-state presentation remain separate UI work.
 
 ### Start your first chat
 

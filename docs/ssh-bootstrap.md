@@ -44,8 +44,9 @@ owns explicit user-confirmed enrollment/persistence, then must supply the saved 
 An identity mismatch/missing previously pinned identity fails before install/start. Never silently
 re-pair a restored/cloned/different host. Consume `tunnel.states()` and recreate host-qualified clients
 on reconnect, not from a retained first forwarded URL. Await `disconnect()` on ordinary teardown.
-Remote agents/service remain independent. Lifecycle/offline reconciliation and independent provider
-setup terminals are downstream integrations, not implicit side effects here.
+Remote agents/service remain independent. The [lifecycle layer](remote-lifecycle.md) owns explicit
+enrollment, offline summaries and receipt reconciliation. Independent provider setup terminals are
+a separate integration, not implicit setup side effects here.
 
 ## Failures and recovery
 
