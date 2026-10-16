@@ -56,34 +56,38 @@ struct MainWindow: View {
             SessionSidebar(model: model, client: client)
                 .navigationSplitViewColumnWidth(min: 230, ideal: 280, max: 400)
         } detail: {
-            if let ref = hosts.selection, ref.host != model.localHost, ref.kind == .session,
-               let hosted = hosts.sessions.first(where: { $0.ref == ref }) {
-                SessionDetail(session: hosted.value, context: HostViewContext(host: ref.host, hosts: hosts))
-                    .environment(\.hostViewContext, HostViewContext(host: ref.host, hosts: hosts))
-                    .environment(\.openURL, HostViewContext(host: ref.host, hosts: hosts).openURL)
-                    .id(ref.storageKey)
-            } else if let ref = hosts.selection, ref.host != model.localHost, ref.kind == .project {
-                Group {
-                    if model.slackTriageProjectId == ref.storageKey {
-                        SlackTriagePage(projectId: ref.localId, openCase: model.slackTriageCaseId)
-                    } else if model.memoryProjectId == ref.storageKey {
-                        MemoryPage(projectId: ref.localId, context: HostViewContext(host: ref.host, hosts: hosts))
-                    } else { ProjectPage(projectId: ref.localId) }
+            Group {
+                if let ref = hosts.selection, ref.host != model.localHost, ref.kind == .session,
+                   let hosted = hosts.sessions.first(where: { $0.ref == ref }) {
+                    SessionDetail(session: hosted.value, context: HostViewContext(host: ref.host, hosts: hosts))
+                        .environment(\.hostViewContext, HostViewContext(host: ref.host, hosts: hosts))
+                        .environment(\.openURL, HostViewContext(host: ref.host, hosts: hosts).openURL)
+                        .id(ref.storageKey)
+                } else if let ref = hosts.selection, ref.host != model.localHost, ref.kind == .project {
+                    Group {
+                        if model.slackTriageProjectId == ref.storageKey {
+                            SlackTriagePage(projectId: ref.localId, openCase: model.slackTriageCaseId)
+                        } else if model.memoryProjectId == ref.storageKey {
+                            MemoryPage(projectId: ref.localId, context: HostViewContext(host: ref.host, hosts: hosts))
+                        } else { ProjectPage(projectId: ref.localId) }
+                    }
+                        .environment(\.hostViewContext, HostViewContext(host: ref.host, hosts: hosts))
+                        .environment(\.openURL, HostViewContext(host: ref.host, hosts: hosts).openURL)
+                        .id(ref.storageKey)
+                } else if let ref = hosts.selection, ref.host != model.localHost, ref.kind == .mission {
+                    MissionPage(missionId: ref.localId)
+                        .environment(\.hostViewContext, HostViewContext(host: ref.host, hosts: hosts))
+                        .environment(\.openURL, HostViewContext(host: ref.host, hosts: hosts).openURL)
+                        .id(ref.storageKey)
+                } else if let ref = hosts.selection, ref.host != model.localHost {
+                    EmptyStateView(icon: PilotIcon.message, title: "Chat unavailable", message: "Reconnect to load this chat.")
+                } else {
+                    localDetail
                 }
-                    .environment(\.hostViewContext, HostViewContext(host: ref.host, hosts: hosts))
-                    .environment(\.openURL, HostViewContext(host: ref.host, hosts: hosts).openURL)
-                    .id(ref.storageKey)
-            } else if let ref = hosts.selection, ref.host != model.localHost, ref.kind == .mission {
-                MissionPage(missionId: ref.localId)
-                    .environment(\.hostViewContext, HostViewContext(host: ref.host, hosts: hosts))
-                    .environment(\.openURL, HostViewContext(host: ref.host, hosts: hosts).openURL)
-                    .id(ref.storageKey)
-            } else if let ref = hosts.selection, ref.host != model.localHost {
-                EmptyStateView(icon: PilotIcon.message, title: "Chat unavailable", message: "Reconnect to load this chat.")
-            } else {
-                localDetail
             }
+            .keyboardRegion(.content)
         }
+        .overlay(alignment: .bottom) { KeyboardSequenceHint(focus: model.keyboard) }
         .environment(\.hostViewContext, model.localHost.map { HostViewContext(host: $0, hosts: hosts) })
         .environment(\.repositoryPollingVisible, repositoryPollingVisible)
         .background(RepositoryWindowVisibility { visible in
@@ -141,6 +145,10 @@ struct MainWindow: View {
         }
         .onAppear {
             model.openWindowAction = { openWindow(id: MainWindow.id) }
+            model.openKeyboardShortcutsAction = { openWindow(id: KeyboardShortcuts.windowID) }
+            KeyboardRouter.shared.install(focus: model.keyboard) { [weak model] route in
+                model?.performKeyboardRoute(route) ?? false
+            }
             NSApp.setActivationPolicy(.regular)
         }
         .onDisappear {
@@ -381,6 +389,11 @@ struct Inspector: View {
             }
         }
         .background(Theme.background)
+        .keyboardRegion(.inspector) { [model] in
+            if model.inspectorTab == .terminal { return model.terminals.focusVisible() }
+            // A cached terminal stays mounted behind the other panes; never focus it while hidden.
+            return model.keyboard.focusFirstKeyView(in: .inspector) { !KeyboardInputGuard.isInTerminal($0) }
+        }
     }
 }
 

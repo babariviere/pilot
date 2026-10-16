@@ -48,6 +48,11 @@ has separate storage and transport contracts; it does not change chat-result rea
   message, then opens triage on it. ⌘? (Command-Shift-/ on a US keyboard) opens the keyboard-shortcuts reference,
   also available from **Help → Keyboard Shortcuts** or by searching for shortcuts in ⌘K. ⌘← and ⌘→ go back
   and forward through visited chats and pages, restoring their sidebar scope.
+  ⌃⇥ and ⌃⇧⇥ move focus between the sidebar, the page, the composer and the inspector, and ⌘L focuses the
+  composer (or the open question), including from the terminal or an artifact. Outside text fields, G then a letter
+  goes to a page (G H Home, G I Inbox, G P the focused project's Overview, G M/T/B the current mission's Overview,
+  Tasks or Brief, G A Archive), J and K move through lists, and ? opens the shortcut reference. The **Go** menu
+  lists the same destinations.
 - **Let the display rest while agents work.** Keep the Mac awake without keeping the display on.
   Optional closed-lid work requires power and Wi-Fi; without both, agents pause and resume on the next
   full wake with connectivity. Screen locking is left to macOS. See [agent-aware sleep](docs/agent-sleep.md) for

@@ -55,6 +55,10 @@ struct QuestionComposer: View {
         .onAppear {
             if options.isEmpty { replyFocus = UUID() } else { choicesFocused = true }
         }
+        .keyboardRegion(.composer) {
+            if options.isEmpty { replyFocus = UUID() } else { choicesFocused = true }
+            return true
+        }
     }
 
     private var header: some View {

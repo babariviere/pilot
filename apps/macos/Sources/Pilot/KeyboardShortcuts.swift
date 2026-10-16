@@ -22,6 +22,7 @@ enum KeyboardShortcuts {
     static let groups: [Group] = [
         Group(title: "Navigation", entries: [
             Entry(title: "Show keyboard shortcuts", keys: hint),
+            Entry(title: "Show keyboard shortcuts outside text", keys: "?"),
             Entry(title: "Open command palette", keys: "⌘K"),
             Entry(title: "Search chats", keys: "⌘F"),
             Entry(title: "Back", keys: "⌘←"),
@@ -31,6 +32,15 @@ enum KeyboardShortcuts {
             Entry(title: "Add project", keys: "⇧⌘O"),
             Entry(title: "Open settings", keys: "⌘,"),
         ]),
+        Group(title: "Focus", entries: [
+            Entry(title: "Focus next region", keys: "⌃⇥"),
+            Entry(title: "Focus previous region", keys: "⌃⇧⇥"),
+            Entry(title: "Focus composer or question", keys: "⌘L"),
+            Entry(title: "Move through a list", keys: "↑ / ↓ or J / K"),
+        ]),
+        Group(title: "Go to (outside text)", entries: GoDestination.allCases.map { destination in
+            Entry(title: destination.menuTitle, keys: destination.keys)
+        }),
         Group(title: "Chat", entries: [
             Entry(title: "New chat", keys: "⌘N"),
             Entry(title: "Toggle changes", keys: "⇧⌘D"),
