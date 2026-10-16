@@ -1,9 +1,11 @@
 import type {
+	CreateMissionRequest,
 	DashboardTrackedItem,
 	Mission,
 	Project,
 	SessionSummary,
 	SpawnRequest,
+	StartMissionCoordinatorRequest,
 	StartMissionTaskRequest,
 } from "@pilot/protocol";
 import type { ControlActions } from "./control-actions.ts";
@@ -21,6 +23,9 @@ export interface ControlPilotOptions {
 		startProject: (request: SpawnRequest) => Promise<SessionSummary>;
 		startTask: (missionId: string, taskId: string, request: StartMissionTaskRequest) => Promise<SessionSummary>;
 		send: SessionManager["sendReported"];
+		organizeAllowed?: () => boolean;
+		createMission?: (request: CreateMissionRequest) => Promise<Mission>;
+		startCoordinator?: (missionId: string, request: StartMissionCoordinatorRequest) => Promise<SessionSummary>;
 	};
 }
 const short = (text: string | undefined, n = 160) => text?.replace(/[\r\n]/g, " ").slice(0, n);
@@ -40,6 +45,7 @@ export class ControlPilot {
 		if (!this.options.isControl(caller)) throw new Error("Only the control chat may call pilot");
 		if (action === "status") return this.status(args);
 		if (action === "read") return this.read(args);
+		if (action === "mission_create") return this.createMission(caller, args, operationId);
 		if (action === "start" || action === "send") {
 			if (!this.options.mutations) throw new Error("Control actions unavailable");
 			return this.options.mutations
@@ -49,6 +55,55 @@ export class ControlPilot {
 				);
 		}
 		throw new Error("Unknown pilot action");
+	}
+	private assertOrganize(args: Record<string, unknown>, attachment = false): void {
+		if (!this.options.mutations?.organizeAllowed?.())
+			throw new Error("Creating or attaching missions is forbidden while handling a watch notice");
+		if (
+			attachment
+				? args.authorization !== "accepted_suggestion"
+				: args.authorization !== "user_request" && args.authorization !== "accepted_suggestion"
+		)
+			throw new Error(
+				attachment ? "User must accept the attachment suggestion" : "User request or accepted suggestion required",
+			);
+	}
+	private async createMission(caller: string, args: Record<string, unknown>, operationId: string) {
+		this.assertOrganize(args);
+		const mutations = this.options.mutations!;
+		if (!mutations.createMission || !mutations.startCoordinator) throw new Error("Mission creation unavailable");
+		const projectId = string(args, "projectId", true)!;
+		if (typeof args.goal !== "string" || !args.goal.trim() || args.goal.length > 3500)
+			throw new Error("goal must be 1..3500 characters");
+		if (args.brief !== undefined && (typeof args.brief !== "string" || Buffer.byteLength(args.brief) > 32_000))
+			throw new Error("brief exceeds 32,000 characters");
+		const goal = args.goal.trim(),
+			brief = args.brief as string | undefined;
+		const created = await mutations.audit().perform(caller, "mission_create", args, operationId, async () => {
+			this.assertOrganize(args);
+			const mission = await mutations.createMission!({
+				projectId,
+				goal,
+				title: goal.replace(/\s+/g, " ").slice(0, 100),
+				...(brief !== undefined ? { brief } : {}),
+				startCoordinator: false,
+			});
+			return { missionId: mission.id, title: mission.title, projectId: mission.projectId };
+		});
+		const coordinator = await mutations
+			.audit()
+			.perform(
+				caller,
+				"coordinator_start",
+				{ missionId: created.missionId },
+				`${operationId}:coordinator`,
+				async () => {
+					this.assertOrganize(args);
+					const chat = await mutations.startCoordinator!(created.missionId, {});
+					return { sessionId: chat.id, chatUrl: `pilot://chat/${chat.id}`, model: chat.model };
+				},
+			);
+		return { ...created, coordinator };
 	}
 	private async start(args: Record<string, unknown>) {
 		const projectId = string(args, "projectId"),

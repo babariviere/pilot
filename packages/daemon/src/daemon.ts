@@ -167,6 +167,13 @@ sessions.setPilot(
 		missions: () => [...controlMissions.values()],
 		linear: (id) => trackedItems.preview(id, "linear").items,
 		mutations: {
+			organizeAllowed: () => sessions.controlOrganizeAllowed(),
+			createMission: async (request) => {
+				const detail = await missionService.create(request);
+				await missionStore.durable();
+				return detail.mission;
+			},
+			startCoordinator: (id, request) => missionService.startCoordinator(id, request),
 			audit: () => sessions.controlAudit(),
 			startProject: async (request) => {
 				const project = projects.require(request.projectId!);
