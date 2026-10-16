@@ -123,6 +123,10 @@ extension MissionNeedsYouItem {
             return NeedsYouReason(kind: .mission, detail: comment.text).label(at: comment.createdAt, now: now)
         case let .decisionProposal(proposal, number):
             return NeedsYouReason(kind: .mission, detail: "Decision D\(number): \(proposal.reason)").label(at: proposal.createdAt, now: now)
+        case let .linearTicket(resource):
+            let line = MissionTicketSyncLine(resource.linearSync)?.text ?? "Linear updates paused"
+            return NeedsYouReason(kind: .mission, detail: "\(resource.externalId ?? "Linear ticket") · \(line)")
+                .label(at: resource.linearSync?.updatedAt ?? resource.createdAt, now: now)
         }
     }
 }
