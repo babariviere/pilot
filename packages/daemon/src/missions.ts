@@ -1,6 +1,5 @@
 /** Missions: daemon-owned state shared by the chats of one goal. pilotd is the sole writer. */
 import { randomUUID } from "node:crypto";
-import { noticeDeadline, NOTICE_WINDOW_MS, NOTICE_HOURLY_CAP } from "./notice-dispatcher.ts";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync, type Session, type SQLInputValue } from "node:sqlite";
@@ -49,6 +48,7 @@ import {
 } from "./mission-linear-state.ts";
 import { MissionReplica } from "./mission-replica.ts";
 import { reasonLine } from "./needs-you-reason.ts";
+import { NOTICE_HOURLY_CAP, NOTICE_WINDOW_MS, noticeDeadline } from "./notice-dispatcher.ts";
 import type { PullRequestBinding } from "./sessions.ts";
 
 /** Who changed mission state. Omitted sessionId means the user (or pilotd itself). */
@@ -319,7 +319,7 @@ export interface MissionNotice {
 	event: import("@pilot/protocol").ChatEventSummary;
 }
 
-export { NOTICE_DEBOUNCE_MS, NOTICE_MAX_DELAY_MS, NOTICE_WINDOW_MS, NOTICE_HOURLY_CAP } from "./notice-dispatcher.ts";
+export { NOTICE_DEBOUNCE_MS, NOTICE_HOURLY_CAP, NOTICE_MAX_DELAY_MS, NOTICE_WINDOW_MS } from "./notice-dispatcher.ts";
 
 /** Summary-only attention and progress counts plus one bounded reason, without loading full task/comment bodies. */
 const MISSION_SELECT = `SELECT missions.*,
