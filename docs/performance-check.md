@@ -176,6 +176,27 @@ the built-in display and other apps idle, and compare medians of at least three 
 
 The Swift app is only built in CI, so these numbers have to come from a local run of
 `apps/macos/scripts/bench-streaming.sh`.
++
+**Incremental Markdown.** A streaming reply was parsed and styled again in full on every update, so its cost
+grew with the reply. `MarkdownStream` (PilotCore) keeps the blocks before the last boundary (a blank line, closing
+fence, heading or rule outside a code fence) and parses only the text after it; `MarkdownRenderer` keeps their
+prepared, styled blocks and their IDs, so unchanged blocks also skip their text views. The component benchmark
+compares a full parse per update with the stream, both followed by inline `AttributedString` Markdown for the blocks
+they prepare (code highlighting, also skipped now for finished code blocks, is not included):
+
+```sh
+xcrun swiftc -O -parse-as-library apps/macos/scripts/bench-markdown.swift \
+  apps/macos/Sources/PilotCore/Markdown.swift -o /tmp/pilot-markdown-bench && /tmp/pilot-markdown-bench
+```
+
+| 24 KB reply (M3 Pro, two runs) | Full parse per update | Incremental per update |
+| --- | --- | --- |
+| 12-character deltas, 2,028 updates | 1.9–2.2 ms | 0.04–0.05 ms |
+| 100-character deltas, 244 updates | 1.8–2.0 ms | 0.06 ms |
+
+The full parse is the mean over the reply; near its end a single update cost about 4 ms off the main thread.
+Whole-app numbers come from the streaming benchmark above.
+
 
 
 ### Mission tab switches

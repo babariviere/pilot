@@ -721,9 +721,11 @@ struct RowView: View, Equatable {
                 ChatEventRow(event: .automatic(id: id, text: text, origin: origin, timestamp: timestamp),
                              expansion: messageExpansions?.state(for: id))
             }
-        case let .text(_, text, timestamp):
+        case let .text(id, text, timestamp):
             // Agent replies are always shown in full. Only user bubbles fold.
-            MessageWithActions(text: text, milliseconds: timestamp) { MarkdownView(text: text) }
+            MessageWithActions(text: text, milliseconds: timestamp) {
+                MarkdownView(text: text, streaming: id.hasPrefix("streaming-"))
+            }
                 .rewindMenu(for: row)
         case let .work(id, group):
             WorkGroupView(id: id, group: group, active: active, toolExpansions: toolExpansions,

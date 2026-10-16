@@ -13,15 +13,19 @@ struct MarkdownView: View {
     /// Sizes text blocks to their longest line instead of the offered width, so user bubbles stay
     /// narrow for short messages. Code blocks, tables and rules still take the full width.
     let hugsContent: Bool
+    /// A reply still streaming: only text after its last block boundary is prepared again per update.
+    let streaming: Bool
     @StateObject private var state: MarkdownRenderState
     @Environment(\.transcriptContentPrepared) private var contentPrepared
     @Environment(\.pilotFonts) private var fonts
 
-    init(text: String, textColor: NSColor = .labelColor, lazy: Bool = false, hugsContent: Bool = false) {
+    init(text: String, textColor: NSColor = .labelColor, lazy: Bool = false, hugsContent: Bool = false,
+         streaming: Bool = false) {
         self.text = text
         self.textColor = textColor
         self.lazy = lazy
         self.hugsContent = hugsContent
+        self.streaming = streaming
         _state = StateObject(wrappedValue: MarkdownRenderState(markdown: text))
     }
 
@@ -40,7 +44,7 @@ struct MarkdownView: View {
             state.selection.source = text
             guard state.source != text else { return }
             do {
-                let blocks = try await MarkdownRenderer.shared.prepare(text)
+                let blocks = try await MarkdownRenderer.shared.prepare(text, streaming: streaming)
                 try Task.checkCancellation()
                 PreparedMarkdownCache.shared.store(blocks, for: text, replacing: state.source)
                 state.source = text
@@ -62,7 +66,8 @@ struct MarkdownView: View {
             }
         } else {
             ForEach(Array(state.blocks.enumerated()), id: \.offset) { index, block in
-                BlockView(block: block, hugsContent: hugsContent)
+                // Final blocks keep their prepared ID while a reply streams, so only changed blocks update.
+                BlockView(block: block, hugsContent: hugsContent).equatable()
                     .environment(\.messageSelectionBlock, index)
             }
         }
@@ -77,10 +82,14 @@ struct MarkdownView: View {
     }
 }
 
-private struct BlockView: View {
+private struct BlockView: View, Equatable {
     @Environment(\.pilotFonts) private var fonts
     let block: PreparedMarkdownBlock
     let hugsContent: Bool
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.block.id == rhs.block.id && lhs.hugsContent == rhs.hugsContent
+    }
 
     var body: some View {
         switch block.block {
