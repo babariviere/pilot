@@ -14,12 +14,12 @@
 	},
 	"dependencies": {
 		"@babariviere/pi-extensions": "git+https://github.com/babariviere/pi-extensions.git#4fe615e0acff0920a16f6749092ab2af308355e3",
-		"@earendil-works/chord": "1.1.0",
-		"@earendil-works/pi-agent-core": "1.1.0",
-		"@earendil-works/pi-ai": "1.1.0",
-		"@earendil-works/pi-coding-agent": "1.1.0",
-		"@earendil-works/pi-mcp": "1.1.0",
-		"@earendil-works/pi-durable": "1.1.0",
+		"@earendil-works/chord": "1.3.0",
+		"@earendil-works/pi-agent-core": "1.3.0",
+		"@earendil-works/pi-ai": "1.3.0",
+		"@earendil-works/pi-coding-agent": "1.3.0",
+		"@earendil-works/pi-mcp": "1.3.0",
+		"@earendil-works/pi-durable": "1.3.0",
 		"@gotgenes/pi-anthropic-auth": "3.4.2",
 		"@pilot/artifacts": "workspace:*",
 		"@pilot/protocol": "workspace:*"
