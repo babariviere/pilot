@@ -238,6 +238,26 @@ CREATE TABLE IF NOT EXISTS pull_request_bindings (
 	task_id TEXT,
 	PRIMARY KEY (session_id, url)
 );
+CREATE TABLE IF NOT EXISTS watch_activity (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+	task_id TEXT,
+	task_number INTEGER,
+	title TEXT NOT NULL,
+	at INTEGER NOT NULL,
+	origin_session_id TEXT,
+	annotated INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS watch_activity_unannotated ON watch_activity(mission_id) WHERE annotated=0;
+CREATE TRIGGER IF NOT EXISTS watch_task_done AFTER UPDATE OF status ON tasks
+WHEN NEW.status='done' AND OLD.status<>'done' BEGIN
+	INSERT INTO watch_activity(mission_id,task_id,task_number,title,at)
+	VALUES(NEW.mission_id,NEW.id,NEW.number,NEW.title,NEW.updated_at);
+END;
+CREATE TRIGGER IF NOT EXISTS watch_mission_done AFTER UPDATE OF status ON missions
+WHEN NEW.status='done' AND OLD.status<>'done' BEGIN
+	INSERT INTO watch_activity(mission_id,title,at) VALUES(NEW.id,NEW.title,NEW.updated_at);
+END;
 CREATE TABLE IF NOT EXISTS pending_notices (
 	event_id INTEGER PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,
 	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
@@ -1284,6 +1304,7 @@ export class MissionStore {
 				const result = work();
 				if (!this.initializing) for (const id of this.phaseReconciliations) this.reconcilePhases(id);
 				if (!this.initializing) this.reconcileLinearSync();
+				this.run("UPDATE watch_activity SET annotated=1 WHERE annotated=0");
 				this.db.exec("COMMIT");
 				return result;
 			} catch (error) {
@@ -1331,6 +1352,12 @@ export class MissionStore {
 			);
 		this.run("UPDATE missions SET updated_at = MAX(updated_at, ?) WHERE id = ?", at, missionId);
 		const eventId = Number(result.lastInsertRowid);
+		if (actor.sessionId)
+			this.run(
+				"UPDATE watch_activity SET origin_session_id=?,annotated=1 WHERE mission_id=? AND annotated=0",
+				actor.sessionId,
+				missionId,
+			);
 		if (extra.wake && (!actor.sessionId || actor.sessionId !== this.require(missionId).coordinatorSessionId)) {
 			this.run(
 				"INSERT INTO pending_notices (event_id, mission_id, at, text) VALUES (?, ?, ?, ?)",
@@ -4051,6 +4078,32 @@ export class MissionStore {
 		).map(eventFrom);
 	}
 
+	/** Structured completion activity. Triggers capture all writers, including PR and remote projections. */
+	watchActivity(
+		after: number,
+		limit = 100,
+	): {
+		id: number;
+		missionId: string;
+		taskId?: string;
+		taskNumber?: number;
+		title: string;
+		at: number;
+		originSessionId?: string;
+	}[] {
+		return this.all(
+			"SELECT * FROM watch_activity WHERE id>? ORDER BY id LIMIT ?",
+			after,
+			Math.max(1, Math.min(limit, 100)),
+		).map((row) => ({
+			id: num(row.id!),
+			missionId: str(row.mission_id!),
+			title: str(row.title!),
+			at: num(row.at!),
+			...(row.task_id ? { taskId: str(row.task_id!), taskNumber: num(row.task_number!) } : {}),
+			...(row.origin_session_id ? { originSessionId: str(row.origin_session_id) } : {}),
+		}));
+	}
 	events(id: string, before?: number, limit = DETAIL_EVENTS): MissionEvent[] {
 		this.require(id);
 		const rows =

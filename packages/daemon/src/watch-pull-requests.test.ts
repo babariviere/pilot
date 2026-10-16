@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { SessionPullRequest } from "@pilot/protocol";
-import { WatchService } from "./watch-service.ts";
-import { PullRequestWatchSource } from "./watch-pull-requests.ts";
 import type { WatchNotice } from "./watch-delivery.ts";
+import { PullRequestWatchSource } from "./watch-pull-requests.ts";
+import { WatchService } from "./watch-service.ts";
+
 const pr: SessionPullRequest = {
 	url: "https://github.com/o/r/pull/1",
 	number: 1,

@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { WatchService } from "./watch-service.ts";
-import { LinearWatchSource } from "./watch-linear.ts";
 import type { SourceMcpClient } from "./source-mcp.ts";
 import type { WatchNotice } from "./watch-delivery.ts";
+import { LinearWatchSource } from "./watch-linear.ts";
+import { WatchService } from "./watch-service.ts";
+
 const input = {
 	event: "linear.done" as const,
 	target: { kind: "linear" as const, id: "ENG-1" },

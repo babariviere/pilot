@@ -3,11 +3,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { WatchService } from "./watch-service.ts";
-import type { WatchNotice, WatchObservation } from "./watch-delivery.ts";
-import { SessionWatchSource } from "./watch-sessions.ts";
-import type { SessionManager } from "./sessions.ts";
 import type { SessionSummary } from "@pilot/protocol";
+import type { SessionManager } from "./sessions.ts";
+import type { WatchNotice, WatchObservation } from "./watch-delivery.ts";
+import { WatchService } from "./watch-service.ts";
+import { SessionWatchSource } from "./watch-sessions.ts";
+
 const input = {
 	event: "chat.settled" as const,
 	target: { kind: "project" as const, id: "p" },
@@ -208,5 +209,50 @@ test("rolling 20/hour limit and 30-minute cap share the mission policy", async (
 		assert.equal(sent.length, 21);
 	} finally {
 		await s.close();
+	}
+});
+test("large batches preserve every action note across delivery cutoffs", async () => {
+	const s = new WatchService(":memory:");
+	const sent: WatchNotice[] = [];
+	try {
+		for (let i = 0; i < 101; i++) await s.add({ ...input, note: `Action ${i}`, mode: "once" });
+		s.bindSink({
+			sessionId: "control",
+			canSend: () => true,
+			deliver: async (n) => {
+				sent.push(n);
+				return true;
+			},
+		});
+		const at = Date.now();
+		await s.observe([event("1", at)]);
+		await s.flush(at + 60000);
+		await s.flush(at + 60000);
+		assert.equal(sent.length, 2);
+		assert.equal(sent.flatMap((n) => n.items).length, 101);
+		assert.equal(new Set(sent.flatMap((n) => n.items.map((i) => i.note))).size, 101);
+	} finally {
+		await s.close();
+	}
+});
+test("run attribution suppresses both chat events after restart without suppressing a later independent run", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "watch-self-"));
+	const path = join(dir, "watches.sqlite");
+	let s = new WatchService(path);
+	try {
+		await s.add(input);
+		s.bindSink({ sessionId: "control", canSend: () => true, deliver: async () => true });
+		await s.attributeSessionRun("c", "control");
+		await s.close();
+		s = new WatchService(path);
+		const e = event();
+		assert.equal(await s.observe([e, { ...e, event: "chat.failed" }]), 0);
+		await s.close();
+		s = new WatchService(path);
+		assert.equal(await s.observe([e]), 0, "suppressed completions stay suppressed after recovery");
+		assert.equal(await s.observe([event("later")]), 1);
+	} finally {
+		await s.close();
+		await rm(dir, { recursive: true, force: true });
 	}
 });

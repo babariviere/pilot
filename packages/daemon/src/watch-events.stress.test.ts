@@ -5,10 +5,10 @@ import { join } from "node:path";
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
+import type { SessionSummary } from "@pilot/protocol";
+import type { SessionManager } from "./sessions.ts";
 import { WatchService } from "./watch-service.ts";
 import { SessionWatchSource } from "./watch-sessions.ts";
-import type { SessionManager } from "./sessions.ts";
-import type { SessionSummary } from "@pilot/protocol";
 
 test("10,000 indexed watches and 500 active chats keep streaming off SQLite and the event loop responsive", async (t) => {
 	const dir = await mkdtemp(join(tmpdir(), "watch-stress-"));

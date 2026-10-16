@@ -40,10 +40,11 @@ import { TerminalManager } from "./terminals.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
 import { TriageGroomer, workerTriage } from "./triage-grooming.ts";
 import { untrackedStats } from "./untracked-stats.ts";
+import { LinearWatchSource } from "./watch-linear.ts";
+import { MissionWatchSource } from "./watch-missions.ts";
+import { PullRequestWatchSource } from "./watch-pull-requests.ts";
 import { WatchService } from "./watch-service.ts";
 import { SessionWatchSource } from "./watch-sessions.ts";
-import { PullRequestWatchSource } from "./watch-pull-requests.ts";
-import { LinearWatchSource } from "./watch-linear.ts";
 
 const config = loadConfig();
 await mkdir(config.agentDir ?? getAgentDir(), { recursive: true, mode: 0o700 });
@@ -143,6 +144,7 @@ sessions.setSlackStatus({
 trackedItems.onChange((projectId) => sessions.refreshSlackLinks(projectId));
 // Membership is read while sessions load (auto-archiving, worker specs), so the bridge comes first.
 const missionStore = new MissionStore(join(config.home, "missions.sqlite"));
+const missionWatches = new MissionWatchSource(missionStore, watches);
 const missionLinear = new MissionLinearSource(missionStore, sourceMcp);
 missionLinear.start();
 const linearSync = new MissionLinearSyncService(missionStore, projects, sourceMcp);
@@ -335,6 +337,7 @@ async function stop(): Promise<void> {
 	await Promise.all(completionWrites);
 	await trackedItems.close();
 	await sessionWatches.stop();
+	await missionWatches.stop();
 	await prWatches.stop();
 	await watches.close();
 	await power?.stop();

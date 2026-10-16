@@ -2,6 +2,7 @@ import type { SourceMcpClient } from "./source-mcp.ts";
 import { SourceRateLimited, SourceSignInRequired } from "./source-mcp.ts";
 import type { TrackedInput } from "./tracked-items.ts";
 import type { WatchService } from "./watch-service.ts";
+
 const TYPES = new Set(["triage", "backlog", "unstarted", "started", "completed", "canceled", "duplicate"]);
 
 /** Existing tracker observations plus a bounded, read-only list_issues fallback for out-of-scope watches. */

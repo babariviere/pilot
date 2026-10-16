@@ -13,6 +13,10 @@ export class WatchService {
 	private broken?: Error;
 	private sink?: WatchNoticeSink;
 	private readonly dispatcher: NoticeDispatcher;
+	private expiryTimer?: ReturnType<typeof setTimeout>;
+	private expiryUpdate?: Promise<void>;
+	private expiryDirty = false;
+	private closing = false;
 	constructor(path: string) {
 		this.dispatcher = new NoticeDispatcher({
 			deadlines: async (now) => {
@@ -49,9 +53,14 @@ export class WatchService {
 		this.worker.on("exit", (code) => fail(new Error(`Watch worker exited (${code})`)));
 		this.worker.unref();
 		this.dispatcher.start();
+		this.refreshExpiry();
 	}
 	bindSink(sink: WatchNoticeSink | undefined): void {
 		this.sink = sink;
+		if (sink)
+			void this.rpc("self", sink.sessionId).catch((error) =>
+				console.warn(`pilotd: watch identity failed: ${error}`),
+			);
 		this.dispatcher.schedule();
 	}
 	/** Call on control-chat state changes, including a return to idle. */
@@ -68,6 +77,17 @@ export class WatchService {
 	}
 	async transition(input: WatchTransition): Promise<number> {
 		const matched = await this.rpc<number>("transition", { input, self: this.sink?.sessionId });
+		if (matched) {
+			this.changed();
+			this.dispatcher.schedule();
+		}
+		return matched;
+	}
+	cursor(source: string): Promise<number> {
+		return this.rpc("cursor", source);
+	}
+	async consume(source: string, events: WatchObservation[]): Promise<number> {
+		const matched = await this.rpc<number>("consume", { source, events, self: this.sink?.sessionId });
 		if (matched) {
 			this.changed();
 			this.dispatcher.schedule();
@@ -112,10 +132,33 @@ export class WatchService {
 		return () => this.listeners.delete(listener);
 	}
 	protected changed(): void {
+		this.refreshExpiry();
 		for (const listener of this.listeners) listener();
+	}
+	private refreshExpiry(): void {
+		this.expiryDirty = true;
+		if (this.expiryUpdate || this.closing) return;
+		this.expiryUpdate = (async () => {
+			while (this.expiryDirty && !this.closing) {
+				this.expiryDirty = false;
+				const at = await this.rpc<number | undefined>("expiry");
+				clearTimeout(this.expiryTimer);
+				if (at !== undefined && !this.closing) {
+					this.expiryTimer = setTimeout(() => this.changed(), Math.max(1, Math.min(2147483647, at - Date.now())));
+					this.expiryTimer.unref();
+				}
+			}
+		})()
+			.catch((error) => console.warn(`pilotd: watch expiry failed: ${error}`))
+			.finally(() => {
+				this.expiryUpdate = undefined;
+			});
 	}
 	async close(): Promise<void> {
 		if (this.closed) return;
+		this.closing = true;
+		clearTimeout(this.expiryTimer);
+		await this.expiryUpdate;
 		await this.dispatcher.stop();
 		try {
 			await this.rpc("close");
