@@ -5,12 +5,13 @@ import Testing
 struct PowerReplyReaderTests {
     @Test(.timeLimit(.minutes(1))) func shortReplyDoesNotWaitForFullBufferOrEOF() async throws {
         let pipe = Pipe()
-        let reader = PowerReplyReader(input: pipe.fileHandleForReading)
+        let input = pipe.fileHandleForReading
         let (events, continuation) = AsyncStream<ReplyEvent>.makeStream()
         defer { try? pipe.fileHandleForWriting.close() }
         // This is a deliberately blocking pipe reader. Give it its own thread rather than
         // waiting synchronously for a global-queue block that may not have been scheduled.
         let worker = Thread {
+            let reader = PowerReplyReader(input: input)
             defer { continuation.finish() }
             for index in 0..<2 {
                 continuation.yield(.reading(index))
