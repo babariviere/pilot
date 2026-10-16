@@ -326,6 +326,19 @@ async function fixture(
 	};
 	const changes: KernelUsage[] = [];
 	const jobChanges: SessionJob[][] = [];
+	const compacting: boolean[] = [];
+	const compactingWaiters = new Set<() => void>();
+	const compactingReports = (count: number) =>
+		new Promise<void>((resolve) => {
+			const check = () => {
+				if (compacting.length < count) return;
+				compactingWaiters.delete(check);
+				resolve();
+			};
+			compactingWaiters.add(check);
+			check();
+		});
+	const working: boolean[] = [];
 	const completed = deferred<SessionCompletion>();
 	const open = async (model = first, continuationModel?: { model: string; thinking?: string; requestId?: string }) => {
 		const session = await KernelSession.open(
@@ -337,8 +350,13 @@ async function fixture(
 					: {}),
 			},
 			{
-				onWorking: (_working, completion) => {
+				onWorking: (value, completion) => {
+					working.push(value);
 					if (completion) completed.resolve(completion);
+				},
+				onCompacting: (value) => {
+					compacting.push(value);
+					for (const check of [...compactingWaiters]) check();
 				},
 				onUsageChanged: (usage) => changes.push(usage),
 				onJobsChanged: (jobs) => {
@@ -350,7 +368,20 @@ async function fixture(
 		sessions.push(session);
 		return session;
 	};
-	return { open, a, b, bus, changes, jobChanges, adapters, spec, completed: completed.promise };
+	return {
+		open,
+		a,
+		b,
+		bus,
+		changes,
+		jobChanges,
+		compacting,
+		compactingReports,
+		working,
+		adapters,
+		spec,
+		completed: completed.promise,
+	};
 }
 
 for (const nested of [false, true]) {
@@ -2254,6 +2285,36 @@ for (const result of ["failure", "no-op"] as const) {
 		assert.equal(f.a.state.callCount, result === "failure" ? 2 : 1);
 	});
 }
+
+test("idle compaction reports compacting until its summary is placed, without starting a turn", {
+	timeout: 15000,
+}, async (t) => {
+	const f = await fixture(t);
+	const session = await f.open();
+	f.adapters.at(-1)!.models.getModel("pilot-model-a", "one")!.contextWindow = 128000;
+	await seedCompaction(session);
+	const entered = deferred();
+	const summary = deferred<ReturnType<typeof fauxAssistantMessage>>();
+	t.after(() => summary.resolve(fauxAssistantMessage("Cancelled")));
+	f.a.setResponses([
+		async () => {
+			entered.resolve();
+			return summary.promise;
+		},
+	]);
+	await session.compact();
+	await entered.promise;
+	await f.compactingReports(1);
+	assert.deepEqual(f.compacting, [true]);
+	assert.equal(session.compacting, true);
+	assert.equal(session.working, false);
+	summary.resolve(fauxAssistantMessage("Summary"));
+	await session.conversation.waitForIdle(context);
+	await f.compactingReports(2);
+	assert.deepEqual(f.compacting, [true, false]);
+	assert.equal(session.compacting, false);
+	assert.deepEqual(f.working, [], "compaction is not a turn");
+});
 
 test("Stop during idle compaction returns waiting user input without sending it", { timeout: 15000 }, async (t) => {
 	const f = await fixture(t);

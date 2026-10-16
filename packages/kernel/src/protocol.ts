@@ -149,6 +149,8 @@ export type KernelPacket =
 			model: string;
 			thinking?: string;
 			working: boolean;
+			/** A compaction is summarizing the conversation, possibly without a run. */
+			compacting?: boolean;
 			usage: KernelUsage;
 			/** All statuses except done/closed; absent on older kernels. */
 			openTodoCount?: number;
@@ -215,5 +217,7 @@ export type KernelPacket =
 			attempts?: SessionAttempt[];
 	  }
 	| { type: "working"; working: boolean; completion?: SessionCompletion; execution?: ExecutionEvidence }
+	/** A compaction started or ended. Shown as work, but it is not a turn and produces no result. */
+	| { type: "compacting"; compacting: boolean }
 	| { type: "events"; watchId: string; events: AgentEvent[] }
 	| { type: "error"; requestId?: string; message: string; code?: "busy" };
