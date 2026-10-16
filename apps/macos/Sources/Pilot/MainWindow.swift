@@ -226,17 +226,6 @@ struct SessionInspectorControls: View {
             // Also while the Agents tab is open, so the toggle that closes it never disappears.
             if !(session.subagents ?? []).isEmpty || (model.inspectorVisible && model.inspectorTab == .agents) {
                 InspectorToggle(tab: .agents, icon: PilotIcon.subagents, help: "Subagents")
-                    .overlay(alignment: .topTrailing) {
-                        let unread = model.unreadSubagents(in: session)
-                        if unread > 0 {
-                            // New answers are not something the user must act on: a neutral count, not a signal.
-                            CountBadge(count: unread)
-                                .background(Capsule().fill(Theme.background))
-                                .offset(x: 6, y: -4)
-                                .allowsHitTesting(false)
-                                .accessibilityLabel(unread == 1 ? "1 new answer" : "\(unread) new answers")
-                        }
-                    }
             }
         }
         InspectorToggle(tab: .artifacts, icon: PilotIcon.artifact, help: "Artifacts")

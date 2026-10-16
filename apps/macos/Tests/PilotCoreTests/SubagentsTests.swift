@@ -56,37 +56,16 @@ private func decodeSession(_ extra: String = "") throws -> SessionSummary {
     }
 }
 
-@Test func displayStatePrefersWorkThenFailureThenUnreadAnswers() {
+@Test func displayStatePrefersWorkThenFailureThenDone() {
     let working = SessionSubagent(name: "a", state: .working, task: "", createdAt: 0, cwd: "/", lastAnswerId: "1", error: "x")
     let failed = SessionSubagent(name: "b", state: .idle, task: "", createdAt: 0, cwd: "/", lastAnswerId: "1", error: "x")
     let answered = SessionSubagent(name: "c", state: .idle, task: "", createdAt: 0, cwd: "/", lastAnswerId: "1")
-    #expect(SubagentDisplayState(working, unread: true) == .working)
-    #expect(SubagentDisplayState(failed, unread: true) == .failed)
-    #expect(SubagentDisplayState(answered, unread: true) == .newAnswer)
-    #expect(SubagentDisplayState(answered, unread: false) == .idle)
-}
-
-@Test func readStateTracksAnswerIdentityPerSessionAndRoundTrips() throws {
-    var reads = SubagentReadState()
-    let first = SessionSubagent(name: "review", state: .idle, task: "", createdAt: 0, cwd: "/", lastAnswerId: "10")
-    let pending = SessionSubagent(name: "fresh", state: .working, task: "", createdAt: 0, cwd: "/")
-    #expect(reads.isUnread(first, in: "s1"))
-    #expect(!reads.isUnread(pending, in: "s1"), "no answer yet means nothing to read")
-    #expect(reads.unreadCount([first, pending], in: "s1") == 1)
-    let marked = reads.markRead(first, in: "s1")
-    let markedAgain = reads.markRead(first, in: "s1")
-    #expect(marked)
-    #expect(!markedAgain)
-    #expect(!reads.isUnread(first, in: "s1"))
-    #expect(reads.isUnread(first, in: "s2"), "reads are per session")
-    let next = SessionSubagent(name: "review", state: .idle, task: "", createdAt: 0, cwd: "/", lastAnswerId: "14")
-    #expect(reads.isUnread(next, in: "s1"), "a new answer is unread again")
-    let working = SessionSubagent(name: "review", state: .working, task: "", createdAt: 0, cwd: "/", lastAnswerId: "14")
-    #expect(reads.unreadCount([working], in: "s1") == 0, "working subagents are not counted as new answers")
-    let decoded = try JSONDecoder().decode(SubagentReadState.self, from: JSONEncoder().encode(reads))
-    #expect(decoded == reads)
-    reads.retain(sessions: ["s2"])
-    #expect(reads.isUnread(first, in: "s1"))
+    let fresh = SessionSubagent(name: "d", state: .idle, task: "", createdAt: 0, cwd: "/")
+    #expect(SubagentDisplayState(working) == .working)
+    #expect(SubagentDisplayState(failed) == .failed)
+    #expect(SubagentDisplayState(answered) == .done, "a finished answer is for the parent chat, not the user")
+    #expect(SubagentDisplayState(fresh) == .done)
+    #expect(SubagentDisplayState(answered).label == "Done")
 }
 
 @Test func notificationsParseExtensionAnswersAndFailures() throws {

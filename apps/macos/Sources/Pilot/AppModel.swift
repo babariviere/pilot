@@ -160,15 +160,6 @@ final class AppModel: ObservableObject {
     @Published var pendingRetry: RetryRequest?
     /// Subagent shown in the Agents tab, per session.
     @Published var selectedSubagents: [String: String] = [:]
-    /// Subagent answers the user has opened. Persisted, so restarts do not resurface old answers.
-    @Published private(set) var subagentReads: SubagentReadState {
-        didSet {
-            if let data = try? JSONEncoder().encode(subagentReads) {
-                projectFolderDefaults.set(data, forKey: Self.subagentReadsKey)
-            }
-        }
-    }
-    private static let subagentReadsKey = "subagentReads"
 
     /// Captured from SwiftUI so non-view code (notifications, menu) can reopen the window.
     var openWindowAction: (() -> Void)?
@@ -186,11 +177,11 @@ final class AppModel: ObservableObject {
         self.projectFolderDefaults = projectFolderDefaults
         // The sidebar always groups chats by urgency now; drop the old choice.
         projectFolderDefaults.removeObject(forKey: "pilot.sidebarGroupsByUrgency")
+        // Subagent answers are no longer tracked as read or unread; drop the old marks.
+        projectFolderDefaults.removeObject(forKey: "subagentReads")
         attention = SessionAttention(defaults: projectFolderDefaults)
         self.draftStore = draftStore
         projectFolders = ProjectFolders.load(defaults: projectFolderDefaults)
-        subagentReads = projectFolderDefaults.data(forKey: Self.subagentReadsKey)
-            .flatMap { try? JSONDecoder().decode(SubagentReadState.self, from: $0) } ?? SubagentReadState()
         loadDrafts()
         newSessionForm.onDraftChanged = { [weak self] in self?.saveDrafts() }
         newSessionForm.branches.onSelectionChanged = { [weak self] in self?.saveDrafts() }
@@ -884,22 +875,9 @@ final class AppModel: ObservableObject {
 
     // MARK: Subagents
 
-    func isUnread(_ subagent: SessionSubagent, in sessionId: String) -> Bool {
-        subagentReads.isUnread(subagent, in: sessionId)
-    }
-
     /// The shared live transcript of one subagent.
     func subagentFeed(_ sessionId: String, _ name: String) -> SubagentFeed {
         subagentFeeds.feed(SubagentKey(sessionId: sessionId, name: name), client: client)
-    }
-
-    func unreadSubagents(in session: SessionSummary) -> Int {
-        subagentReads.unreadCount(session.subagents ?? [], in: session.id)
-    }
-
-    func markSubagentRead(_ subagent: SessionSubagent, in sessionId: String) {
-        var reads = subagentReads
-        if reads.markRead(subagent, in: sessionId) { subagentReads = reads }
     }
 
     /// Opens the Agents tab on one subagent's transcript.

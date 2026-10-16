@@ -1673,8 +1673,6 @@ enum Snapshot {
             base: "origin/main", branch: session.branch, fileCount: 3, additions: 48, deletions: 6
         )]
         model.client.fixtureSubagentTranscripts = Fixtures.subagentTranscripts
-        let subagents = session.subagents ?? []
-        if let read = subagents.first(where: { $0.name == "docs-check" }) { model.markSubagentRead(read, in: session.id) }
         model.selectedSessionId = session.id
         model.selectedSubagents[session.id] = nil
         model.inspectorTab = .agents
