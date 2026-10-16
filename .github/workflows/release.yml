@@ -252,10 +252,13 @@ jobs:
           overwrite: true
           compression-level: 0
       - name: Render delegated task fixtures
+        # Older tags may predate this snapshot mode; their bundle/runtime checks still run above.
+        if: inputs.release_tag == ''
         run: |
           fixture_home="$(mktemp -d "$RUNNER_TEMP/delegated-home.XXXXXX")"
           HOME="$fixture_home" CFFIXED_USER_HOME="$fixture_home" apps/macos/build/Pilot.app/Contents/MacOS/Pilot --snapshot "$RUNNER_TEMP/delegated-screenshots" --delegated-tasks-only
       - name: Upload delegated task screenshots
+        if: inputs.release_tag == ''
         uses: actions/upload-artifact@v4
         with:
           name: delegated-task-screenshots
