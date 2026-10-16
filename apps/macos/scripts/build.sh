@@ -9,6 +9,7 @@ unset PILOT_VERIFICATION_SWIFT_PID
 # shellcheck source=swift-env.sh
 source "$here/scripts/swift-env.sh"
 "$here/scripts/vendor-ghostty.sh"
+"$here/scripts/vendor-mermaidkit.sh"
 "$here/scripts/share-artifacts.sh"
 jobs=(--jobs "${PILOT_SWIFT_JOBS:-2}")
 for argument in "$@"; do

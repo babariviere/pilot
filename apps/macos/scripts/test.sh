@@ -12,6 +12,7 @@ python3 "$here/scripts/check-font-roles.py"
 # shellcheck source=swift-env.sh
 source "$here/scripts/swift-env.sh"
 "$here/scripts/vendor-ghostty.sh"
+"$here/scripts/vendor-mermaidkit.sh"
 "$here/scripts/share-artifacts.sh"
 plugins="$(dirname "$(xcrun --find swift)")/../lib/swift/host/plugins/testing"
 # Multiple agents can verify concurrently. Avoid each one consuming every available CPU.

@@ -125,7 +125,7 @@ private struct BlockView: View, Equatable {
             CodeBlock(language: language, text: text, prepared: block.code)
                 .environment(\.messageTextFade, fade == nil ? nil : NSColor(Theme.code))
         case let .diagram(kind, text):
-            InlineDiagramBlock(kind: kind, text: text).id(kind.rawValue + ":" + text)
+            InlineDiagramBlock(kind: kind, text: text, native: block.diagram).id(kind.rawValue + ":" + text)
         case let .quote(text):
             HStack(alignment: .top, spacing: 10) {
                 RoundedRectangle(cornerRadius: 1).fill(Theme.faintForeground).frame(width: 3)

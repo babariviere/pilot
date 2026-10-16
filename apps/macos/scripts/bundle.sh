@@ -31,6 +31,7 @@ fi
 # shellcheck source=swift-env.sh
 source "$here/scripts/swift-env.sh"
 "$here/scripts/vendor-ghostty.sh"
+"$here/scripts/vendor-mermaidkit.sh"
 "$here/scripts/share-artifacts.sh"
 bin="$(swift build --package-path "$here" -c "$configuration" --show-bin-path)"
 for product in Pilot PilotSystemEvents PilotPower; do

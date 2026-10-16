@@ -12,6 +12,8 @@ import SwiftUI
 /// --scrolling drives native live-scroll gestures through the transcript at 60 Hz, --sidebar-typing
 /// types into the sidebar search, and --session-updates delivers daemon updates for other sessions.
 /// --rich replaces the plain user messages with a realistic mix of Markdown, code and tool rows.
+/// --diagrams adds a Mermaid flowchart to each --rich answer; --web-diagrams draws them with the
+/// WebView renderer instead of the native one, for before/after comparisons in the same build.
 @MainActor
 enum PerformanceCheck {
     static func run() async {
@@ -28,6 +30,8 @@ enum PerformanceCheck {
         let measuredSeconds = max(1, min(number("--seconds") ?? 10, 120))
         let chunk = max(1, number("--chunk") ?? 12)
         let working = streaming || arguments.contains("--working")
+        let diagrams = arguments.contains("--diagrams")
+        NativeMermaid.webOnly = arguments.contains("--web-diagrams")
         NSApp.appearance = NSAppearance(named: .aqua)
         for window in NSApp.windows { window.close() }
         let model = AppModel.shared
@@ -48,7 +52,7 @@ enum PerformanceCheck {
         model.daemon.markRunningForSnapshot()
         model.selectedSessionId = sessions[0].id
         model.inspectorVisible = false
-        let entries: [JSONValue] = arguments.contains("--rich") ? richEntries(count: 1000) : (1...1000).map { id in
+        let entries: [JSONValue] = arguments.contains("--rich") ? richEntries(count: 1000, diagrams: diagrams) : (1...1000).map { id in
             .object([
                 "id": .number(Double(id)), "kind": .string("pi.user"),
                 "model": .array([.object(["role": .string("user"), "content": .string("Historical message \(id)")])]),
@@ -153,7 +157,9 @@ enum PerformanceCheck {
             let mode = [streaming ? "streaming" : working ? "working" : "idle",
                         streaming ? "\(rate)/s" : nil, streaming && markdown ? "markdown \(chunk) chars" : nil,
                         scrolling ? "scrolling" : nil, sidebarTyping ? "sidebar-typing" : nil,
-                        sessionUpdates ? "session-updates" : nil].compactMap { $0 }.joined(separator: "+")
+                        sessionUpdates ? "session-updates" : nil,
+                        diagrams ? (NativeMermaid.webOnly ? "web-diagrams" : "native-diagrams") : nil]
+            .compactMap { $0 }.joined(separator: "+")
             func ms(_ value: Double) -> String { String(format: "%.1fms", value) }
             func mib(_ bytes: UInt64) -> String { String(format: "%.1f MiB", Double(bytes) / 1_048_576) }
             func percent(_ value: Double) -> String { String(format: "%.1f%%", value) }
@@ -215,7 +221,7 @@ enum PerformanceCheck {
     }
 
     /// Turns of a user request, a tool call with its result, and a Markdown answer with code.
-    private static func richEntries(count: Int) -> [JSONValue] {
+    private static func richEntries(count: Int, diagrams: Bool = false) -> [JSONValue] {
         func entry(_ id: Int, _ kind: String, _ message: JSONValue) -> JSONValue {
             .object(["id": .number(Double(id)), "kind": .string(kind), "model": .array([message])])
         }
@@ -238,7 +244,7 @@ enum PerformanceCheck {
                     "toolName": .string("bash"), "isError": .bool(false),
                     "content": .array([.object(["type": .string("text"), "text": .string(output.joined(separator: "\n"))])])]))
             default:
-                let text = """
+                var text = """
                 ## Finding \(turn)
 
                 The list re-sorts on **every** session update, so a restarting worker briefly moves to the top. \
@@ -257,6 +263,19 @@ enum PerformanceCheck {
 
                 > Restarts no longer reorder the sidebar; only user-visible activity does.
                 """
+                if diagrams {
+                    text += """
+
+
+                    ```mermaid
+                    flowchart LR
+                      A[Worker \(turn) restarts] --> B{Sort key}
+                      B -->|updatedAt| C[Jumps to the top]
+                      B -->|lastActivityAt| D[Stays in place]
+                      D --> E[(Session list)]
+                    ```
+                    """
+                }
                 return entry(id, "pi.assistant", .object(["role": .string("assistant"), "stopReason": .string("stop"),
                     "content": .array([.object(["type": .string("text"), "text": .string(text)])])]))
             }

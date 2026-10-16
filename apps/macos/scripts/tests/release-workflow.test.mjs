@@ -64,10 +64,12 @@ test("Swift verification and bundle jobs cache only pinned dependencies with too
 		assert.match(job, /runner\.os.*runner\.arch/);
 		assert.match(job, /hashFiles\('apps\/macos\/Package.resolved', 'apps\/macos\/Package.swift'/);
 		assert.match(job, /scripts\/vendor-ghostty.sh.*scripts\/patch-ghostty-resources.py/);
+		assert.match(job, /scripts\/vendor-mermaidkit.sh.*scripts\/patches\/\*\*/);
 		const cached = job.slice(job.indexOf("path: |"), job.indexOf("key: swift-deps"));
 		assert.match(cached, /org.swift.swiftpm\/repositories/);
 		assert.match(cached, /org.swift.swiftpm\/artifacts/);
 		assert.match(cached, /Vendor\/libghostty-spm/);
+		assert.match(cached, /Vendor\/MermaidKit/);
 		assert.ok(!cached.includes(".build") && !cached.includes("build/") && !cached.includes("sign"));
 		assert.ok(job.indexOf("uses: actions/cache@v4") < job.indexOf("run: apps/macos/scripts/"));
 	}
