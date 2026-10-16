@@ -300,3 +300,99 @@ test("an HTTP error racing offline stays an error; a successful response waits w
 		assert.equal(calls, 1);
 	}
 });
+
+test("a confirmed outage spares a stream receiving data and stops it once silent", { timeout: 10_000 }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-offline-active-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const path = join(root, "connectivity.json");
+	const save = async (online: boolean) => {
+		await writeFile(`${path}.tmp`, JSON.stringify({ version: 1, online, checkedAt: Date.now() }));
+		await rename(`${path}.tmp`, path);
+	};
+	await save(true);
+	let reachable = 0,
+		calls = 0,
+		aborted = false;
+	const gate = new OfflineGate(
+		path,
+		async () => {},
+		{ activeMs: 150, tickMs: 20, stallMs: 60_000 },
+		async () => {
+			reachable++;
+		},
+	);
+	const sources: ReturnType<typeof createAssistantMessageEventStream>[] = [];
+	const stop = new AbortController();
+	t.after(() => stop.abort());
+	const stream = offlineRequestStream(
+		(signal) => {
+			calls++;
+			const source = createAssistantMessageEventStream();
+			sources.push(source);
+			if (calls === 1)
+				signal.addEventListener(
+					"abort",
+					() => {
+						aborted = true;
+						source.end(fauxAssistantMessage("partial", { stopReason: "aborted" }));
+					},
+					{ once: true },
+				);
+			else source.end(fauxAssistantMessage("finished"));
+			return source;
+		},
+		model,
+		gate,
+		stop.signal,
+	);
+	await until(() => calls === 1);
+	const partial = fauxAssistantMessage("");
+	sources[0]!.push({ type: "start", partial });
+	await save(false);
+	await delay(60);
+	assert.equal(aborted, false, "data arriving within activeMs proves this stream works");
+	sources[0]!.push({ type: "text_start", contentIndex: 0, partial });
+	await until(() => reachable === 1);
+	await until(() => aborted);
+	await save(true);
+	assert.equal((await stream.result()).stopReason, "stop");
+	assert.equal(calls, 2);
+});
+
+test("a silent stream asks for one shared check and keeps running while the network is fine", {
+	timeout: 10_000,
+}, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-offline-stall-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const path = join(root, "connectivity.json");
+	await writeFile(path, JSON.stringify({ version: 1, online: true, checkedAt: 0 }));
+	let checks = 0,
+		aborted = false;
+	const gate = new OfflineGate(
+		path,
+		async () => {
+			checks++;
+		},
+		{ stallMs: 50, tickMs: 10, activeMs: 1_000 },
+	);
+	let source!: ReturnType<typeof createAssistantMessageEventStream>;
+	const stream = offlineRequestStream(
+		(signal) => {
+			source = createAssistantMessageEventStream();
+			signal.addEventListener("abort", () => {
+				aborted = true;
+			});
+			return source;
+		},
+		model,
+		gate,
+	);
+	await until(() => checks === 1);
+	await delay(100);
+	assert.equal(checks, 1, "one check per silent period");
+	source.push({ type: "start", partial: fauxAssistantMessage("") });
+	await until(() => checks === 2);
+	assert.equal(aborted, false);
+	source.end(fauxAssistantMessage("finished"));
+	assert.equal((await stream.result()).stopReason, "stop");
+});

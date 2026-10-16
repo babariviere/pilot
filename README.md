@@ -239,8 +239,12 @@ Paused chats show a quiet line inside the conversation explaining the hold: slee
 or a usage limit. The line replaces the working indicator and clears when work resumes.
 
 If internet connectivity is lost, chats show **Paused offline** rather than exhausting model retries
-into a failure. The daemon checks independent reachability hosts, so one blocked check host does not
-pause chats, and resumes automatically when connectivity returns, even with the app closed.
+into a failure, and resume automatically when connectivity returns, even with the app closed. Pilot
+pauses only on evidence: macOS reports no network for a few seconds, or a model request fails with a
+network error and a check against independent hosts fails too. A failed check alone never pauses
+chats, a stream still receiving data keeps running, and a stream that goes silent triggers a check.
+Chats resume when the network returns, a check passes, or any chat receives model data. Pilot sends
+no periodic checks while things work.
 Queued messages and unfinished requests survive restarts. Running native tools finish their current
 round; they are never killed or replayed for an outage. Sleep, update, subscription and manual Stop
 holds remain independent. Authentication, quota and provider errors are not treated as offline.

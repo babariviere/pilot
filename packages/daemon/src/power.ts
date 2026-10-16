@@ -44,6 +44,8 @@ export class PowerService {
 	private stopSessions?: () => void;
 	private working = new Set<string>();
 	private listeners = new Set<() => void>();
+	private networkListeners = new Set<(path: boolean | undefined) => void>();
+	private networkPath?: boolean;
 	private dirty = false;
 	private evaluating?: Promise<void>;
 	private stopping = false;
@@ -102,6 +104,7 @@ export class PowerService {
 				(state) => {
 					this.state = state;
 					this.failures = 0;
+					this.setNetworkPath(state.online);
 					this.schedule();
 				},
 				() => this.lost(),
@@ -118,6 +121,7 @@ export class PowerService {
 	private lost(): void {
 		this.helper = undefined;
 		this.applied = undefined;
+		this.setNetworkPath(undefined);
 		this.keepingAwake = false;
 		this.error = "Energy helper unavailable. Closed-lid operation is off.";
 		// If monitoring disappears during a closed-lid session, preserve work, never keep blindly running.
@@ -233,6 +237,16 @@ export class PowerService {
 	onChange(listener: () => void): () => void {
 		this.listeners.add(listener);
 		return () => this.listeners.delete(listener);
+	}
+	/** Network.framework path availability, independent of Energy settings. `undefined` while the helper is down. */
+	onNetworkPath(listener: (path: boolean | undefined) => void): () => void {
+		this.networkListeners.add(listener);
+		return () => this.networkListeners.delete(listener);
+	}
+	private setNetworkPath(path: boolean | undefined): void {
+		if (path === this.networkPath) return;
+		this.networkPath = path;
+		for (const listener of this.networkListeners) listener(path);
 	}
 	private publish(): void {
 		const value = JSON.stringify(this.status());

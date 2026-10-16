@@ -157,6 +157,8 @@ export class ScheduleDetection implements ScheduleTriggerSource {
 		const active = this.scheduleActive || this.agentsActive;
 		if (active === this.active) {
 			this.updateWakeActivity();
+			// Schedules joining agent-only detection resume the online sampling agents do not need.
+			if (active && this.scheduleActive && !this.probing && !this.cancelProbeTimer) void this.refreshOnline();
 			return;
 		}
 		this.active = active;
@@ -322,8 +324,12 @@ export class ScheduleDetection implements ScheduleTriggerSource {
 			this.publishConnectivity(reachable, this.time.now());
 			if (this.active && generation === this.generation) {
 				this.probing = undefined;
-				const delay = reachable ? ONLINE_SAMPLE_MS : OFFLINE_BACKOFF_MS[this.failures - 1];
-				this.cancelProbeTimer = this.time.setTimeout(() => void this.refreshOnline(), delay);
+				// Schedules sample while online to observe an offline edge. Agents check only on a failure,
+				// so a healthy host sends no periodic traffic for them.
+				if (!reachable || this.scheduleActive) {
+					const delay = reachable ? ONLINE_SAMPLE_MS : OFFLINE_BACKOFF_MS[this.failures - 1];
+					this.cancelProbeTimer = this.time.setTimeout(() => void this.refreshOnline(), delay);
+				}
 			}
 			return reachable;
 		})();

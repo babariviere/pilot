@@ -257,6 +257,17 @@ test("monitor loss during closed-lid work fails closed, and never resumes a dura
 	assert.equal(f.sessions.resumes, 0);
 });
 
+test("network path changes are reported once per edge, and a lost helper reports unknown", async (t) => {
+	const f = await fixture(t);
+	const paths: Array<boolean | undefined> = [];
+	f.service.onNetworkPath((path) => paths.push(path));
+	await f.emit({ online: false });
+	await f.emit({ online: false, wifiConnected: false });
+	await f.emit({ online: true });
+	f.fail();
+	assert.deepEqual(paths, [false, true, undefined]);
+});
+
 test("10,000 unchanged streaming/activity updates do not enqueue native writes", async (t) => {
 	const f = await fixture(t);
 	const before = f.commands.length;
