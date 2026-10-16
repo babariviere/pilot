@@ -316,6 +316,10 @@ struct Composer: View {
         .task(id: state.queueRemovalError) {
             await state.dismissQueueRemovalError(after: .seconds(5))
         }
+        .keyboardRegion(.composer) {
+            state.composerFocus = UUID()
+            return true
+        }
         .onDisappear { state.dismissQueueRemovalError() }
         .task(id: session?.cwd) {
             if let session { await modelPicker.loadModels(cwd: session.cwd) }

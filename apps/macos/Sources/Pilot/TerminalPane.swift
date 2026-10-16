@@ -84,6 +84,14 @@ final class TerminalStore: ObservableObject {
         evictInactiveSurfaces()
     }
 
+    /// Moves keyboard focus into the shown terminal, as region focus does. False when none is shown.
+    @discardableResult
+    func focusVisible() -> Bool {
+        guard let id = retention.visibleSessionId, let state = states[id] else { return false }
+        state.requestFocus()
+        return true
+    }
+
     /// Cached states are shared by outgoing/incoming SessionDetail trees. Ignore all late leaf
     /// callbacks from the old owner, and callbacks capturing a surface replaced by restart.
     func surfaceVisibilityChanged(_ id: String, state: TerminalViewState, paneID: UUID) {

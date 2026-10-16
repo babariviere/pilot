@@ -55,6 +55,7 @@ struct PilotApp: App {
                     .disabled(model.latestPullRequestMergeTarget == nil)
             }
             SidebarScopeCommands(model: model, client: model.client)
+            KeyboardNavigationCommands(model: model)
             KeyboardShortcutsCommands()
         }
 

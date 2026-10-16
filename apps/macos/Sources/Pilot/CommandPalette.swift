@@ -43,7 +43,39 @@ struct CommandPaletteCatalog {
     }
 
     func entries() -> [CommandPaletteEntry] {
-        chats() + remoteResources() + tasks() + missions() + projects() + pages() + actions() + tracked()
+        chats() + remoteResources() + tasks() + missions() + projects() + pages() + actions() + focusCommands() + tracked()
+    }
+
+    /// Named alternatives to Ctrl-Tab, for regions on screen when the palette opened.
+    private func focusCommands() -> [CommandPaletteEntry] {
+        let keyboard = model.keyboard
+        return keyboard.visibleRegions.map { region in
+            CommandPaletteEntry(
+                item: CommandPaletteItem(id: "focus:\(region.rawValue)", kind: .action, title: "Focus \(region.title.lowercased())",
+                                         keywords: ["focus", "keyboard", "region"]),
+                icon: .info, shortcut: region == .composer ? "⌘L" : nil
+            ) {
+                // After the palette's sheet has returned focus to the window.
+                DispatchQueue.main.async { keyboard.focus(region) }
+            }
+        }
+    }
+
+    /// The chat a keyboard list highlights, with its actions under a label naming it. The open chat's actions are
+    /// already listed, so it has no separate group.
+    func targetActions() -> (title: String, entries: [CommandPaletteEntry])? {
+        guard let target = model.keyboardTargetSession, target.session.id != model.selectedSession?.id else { return nil }
+        let model = model
+        let entries = chatActions(target.session, reference: target.reference).map { entry in
+            CommandPaletteEntry(item: CommandPaletteItem(id: "target:" + entry.item.id, kind: .action, title: entry.item.title,
+                                                         keywords: [target.session.title]),
+                                icon: entry.icon, prefix: entry.prefix, shortcut: nil) {
+                // Revalidated when chosen: the chat may have gone while the palette was open.
+                guard model.keyboardTargetSession?.session.id == target.session.id else { return }
+                entry.perform()
+            }
+        }
+        return entries.isEmpty ? nil : ("Highlighted: \(target.session.title)", entries)
     }
 
     /// Chats by latest activity, then archived chats by archive time. Archived chats are found by search only and
@@ -374,6 +406,8 @@ final class CommandPaletteModel: ObservableObject {
     /// Slack messages pilotd found for the current query, and the query they answer.
     private var reports: (query: String, items: [TrackedItem]) = ("", [])
     private var searching: Task<Void, Never>?
+    /// Actions for the row a keyboard list highlighted when the palette opened.
+    private var target: (title: String, entries: [CommandPaletteEntry])?
 
     /// Active missions whose tasks the palette loads, at most.
     static let missionLimit = 20
@@ -447,6 +481,7 @@ final class CommandPaletteModel: ObservableObject {
         let list = catalog.entries()
         items = list.map(\.item)
         entries = Dictionary(list.map { ($0.item.id, $0) }, uniquingKeysWith: { first, _ in first })
+        target = catalog.targetActions()
         refresh(keepingSelection: true)
     }
 
@@ -472,6 +507,16 @@ final class CommandPaletteModel: ObservableObject {
         if !adding.isEmpty {
             results.insert(CommandPaletteSection(id: "slack-link", title: "Slack message", items: adding.map(\.item)),
                            at: found.isEmpty ? 0 : 1)
+        }
+        if let target {
+            // Labeled, after navigation results: the highlighted row's actions never replace jumping somewhere.
+            let tokens = CommandPalette.tokens(trimmed)
+            let matching = trimmed.isEmpty ? target.entries
+                : target.entries.filter { CommandPalette.score($0.item, tokens: tokens) != nil }
+            if !matching.isEmpty {
+                results.append(CommandPaletteSection(id: "target", title: target.title, items: matching.map(\.item)))
+                added += matching
+            }
         }
         sections = results
         for entry in added { self.entries[entry.item.id] = entry }

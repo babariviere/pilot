@@ -146,6 +146,15 @@ keep their sidebar line and corner. The palette's only colour is the amber of Ne
 corners turn grey there (`ditherCorner(_:monochrome:)`).
 Archived chats are never suggested; a search finds them after active ones, marked "Archived".
 
+Keyboard navigation (`KeyboardNavigation.swift`) has one owner at a time. The window has four regions, in ⌃⇥
+order: sidebar, page, composer and inspector, skipping those not on screen. A region marks itself with
+`keyboardRegion(_:onFocus:)`, and a page's main list takes the page's focus with `keyboardFocusHandler`.
+Plain-letter keys (G sequences, J/K, ?) work only outside text, IME composition, terminals and web content;
+`KeyboardInputGuard` reads the AppKit first responder to tell. Only ⌃⇥, ⌃⇧⇥ and ⌘L, plus ⌘K and ⌘J from a
+terminal or artifact, are read before the focused view. Every other shortcut is a menu key equivalent, so a
+focused view keeps its own first. Highlight, focus and editing stay distinct: moving through a list never opens,
+edits or submits.
+
 The menu bar follows the same urgency order (Needs you, Ready to merge, Working, Recent) under a one-line heading such
 as "1 needs you · 2 working". pilotd's controls sit in their own submenu.
 

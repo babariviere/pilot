@@ -51,6 +51,14 @@ struct SessionSidebar: View {
         }
         .listStyle(.sidebar)
         .focused($chatListFocused)
+        .keyboardRegion(.sidebar) {
+            if model.keyboard.focusFirstKeyView(in: .sidebar, where: { $0 is NSTableView }) { return true }
+            chatListFocused = true
+            return true
+        }
+        .onChange(of: chatListFocused) { _, focused in
+            if focused { model.keyboard.noteFocused(.sidebar) }
+        }
         .focusEffectDisabled()
         .scrollContentBackground(.hidden)
         .background(Theme.sidebar)

@@ -185,6 +185,8 @@ struct TaskComposer: View {
     @StateObject private var form: NewSessionForm
     @StateObject private var branches: BranchSelectorState
     @FocusState private var focused: Bool
+    /// Bumped by ⌘L and region focus to move the caret into the message editor.
+    @State private var editorFocus: UUID?
 
     @MainActor init(branches: BranchSelectorState? = nil, form: NewSessionForm? = nil, client: PilotClient? = nil) {
         let form = form ?? NewSessionForm()
@@ -247,6 +249,12 @@ struct TaskComposer: View {
         .task(id: modelScopeKey) { await loadModels() }
         .task(id: branchLoadKey) { await loadBranches() }
         .onAppear { consumeDraft() }
+        .keyboardRegion(.composer) {
+            // A new editor focuses itself on appear; an existing one takes the token.
+            if form.tab != .newTask { form.tab = .newTask }
+            editorFocus = UUID()
+            return true
+        }
         .confirmationDialog("Retry the original chat start?", isPresented: Binding(get: { retryingCreate != nil }, set: { if !$0 { retryingCreate = nil } }), presenting: retryingCreate) { operation in
             Button("Retry original start") { Task { do { try await hosts.retryOperation(operation) } catch { form.error = error.localizedDescription } } }
         } message: { _ in Text("Only the original saved request is retried on its original devbox. Your newer draft is not sent.") }
@@ -293,7 +301,8 @@ struct TaskComposer: View {
                     }
                     ChatTextEditor(text: $form.message, height: $form.editorHeight, font: fonts.nsBody, minLines: 3, maxLines: 14,
                                    maxWindowFraction: 0.5,
-                                   isEditable: !form.busy, onPasteImages: { form.attachments.paste(from: $0) },
+                                   isEditable: !form.busy, focusToken: editorFocus,
+                                   onPasteImages: { form.attachments.paste(from: $0) },
                                    completionDirectory: form.mode == .ask || remote ? nil : project?.path ?? (form.folder.isEmpty ? FileManager.default.homeDirectoryForCurrentUser.path : form.folder)) { _ in
                         start()
                     }
