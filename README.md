@@ -333,9 +333,8 @@ Use a mission when one goal needs several chats. Its shared brief and decisions 
 starting point, while tasks record ownership, dependencies and progress. You can coordinate the work
 yourself or use a coordinator chat, and review linked pull requests and artifacts in one place.
 The mission's Overview shows a compact progress bar for each phase, or one overall bar for work without phases.
-The mission name in a chat's toolbar opens the Overview for coordinators, or toggles the assigned-task panel
-for member chats. The panel also links to the full mission. Going the other way, the compass button beside
-a mission's title opens its coordinator chat.
+The mission icon in any mission chat's toolbar opens the mission's Overview.
+Going the other way, the compass button beside a mission's title opens its coordinator chat.
 Chat inspector panes open at a compact width, leaving the conversation most of the space. Drag the
 divider to widen a terminal, diff or preview when needed.
 

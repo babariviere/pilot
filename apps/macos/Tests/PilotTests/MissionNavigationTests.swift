@@ -2,7 +2,7 @@ import PilotCore
 import Testing
 @testable import Pilot
 
-@Test @MainActor func coordinatorMissionControlOpensOverviewWithoutChangingInspectorState() {
+@Test @MainActor func coordinatorMissionInspectorActionOpensOverviewWithoutChangingInspectorState() {
     let app = AppModel()
     let coordinator = missionNavigationChat(coordinator: true)
     app.client.loadFixture(projects: [], sessions: [coordinator])
@@ -23,7 +23,7 @@ import Testing
     #expect(app.terminals.order.isEmpty)
 }
 
-@Test @MainActor func memberMissionControlStillSwitchesAndClosesTaskInspector() {
+@Test @MainActor func memberMissionInspectorBindingStillSwitchesAndClosesTaskInspector() {
     let app = AppModel()
     let member = missionNavigationChat(coordinator: false)
     app.client.loadFixture(projects: [], sessions: [member])
