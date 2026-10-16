@@ -17,6 +17,7 @@ struct CommandPaletteEntry {
     var detail: String? = nil
     /// A chat's row shows the sidebar's second line and state corner.
     var session: SessionSummary? = nil
+    var reference: HostResourceRef? = nil
     /// The menu shortcut that does the same, such as ⌘N.
     var shortcut: String? = nil
     let perform: @MainActor () -> Void
@@ -73,7 +74,7 @@ struct CommandPaletteCatalog {
             let name = HostViewContext(host: item.ref.host, hosts: hosts).name
             return CommandPaletteEntry(item: CommandPaletteItem(id: "chat:" + item.ref.storageKey, kind: .chat,
                 title: item.value.title, keywords: [name, item.value.branch ?? ""], pullRequestNumbers: item.value.linkedPullRequests.map(\.number)),
-                icon: .message, suffix: name, detail: hosts.available.contains(item.ref.host) ? nil : "Disconnected. Current state unknown.") {
+                icon: item.value.isArchived ? .archive : .message, suffix: item.value.isArchived ? "\(name) · Archived" : name, detail: hosts.available.contains(item.ref.host) ? nil : "Disconnected. Current state unknown.", session: item.value, reference: item.ref) {
                     try? model.selectSession(item.ref)
                 }
         }
@@ -212,15 +213,16 @@ struct CommandPaletteCatalog {
                 icon: .openExternal, suffix: project.name
             ) { [model] in model.openProjectOnGitHub(project) })
         }
-        if let session = model.selectedSession { entries += chatActions(session, suggested: true) }
+        if let session = model.selectedSession { entries += chatActions(session, suggested: true, reference: model.hosts.selection) }
         return entries
     }
 
     /// What can be done to one chat: retry, stop, open or merge its PRs, pin or unpin, archive. For the open chat
     /// (suggested), the latest PR's row shows ⌘⇧P and the latest open PR's merge row shows ⌘⇧M.
-    func chatActions(_ session: SessionSummary, suggested: Bool = false) -> [CommandPaletteEntry] {
+    func chatActions(_ session: SessionSummary, suggested: Bool = false, reference: HostResourceRef? = nil) -> [CommandPaletteEntry] {
         guard !session.isArchived else { return [] }
-        let id = session.id
+        let id = reference?.storageKey ?? session.id
+        let context = reference.map { HostViewContext(host: $0.host, hosts: model.hosts) }
         let model = model
         var entries: [CommandPaletteEntry] = []
         func add(_ key: String, _ title: String, _ icon: PilotIcon, namesChat: Bool = true, shortcut: String? = nil,
@@ -230,7 +232,7 @@ struct CommandPaletteCatalog {
                 icon: icon, suffix: namesChat ? session.title : nil, shortcut: shortcut, perform: perform))
         }
         if session.status == .failed {
-            add("retry", "Retry", .refresh) { model.retry(session) }
+            add("retry", "Retry", .refresh) { model.retry(session, context: context) }
         }
         if session.isWorking {
             add("stop", "Stop agent", .stop) { model.stopSession(id) }
@@ -249,7 +251,7 @@ struct CommandPaletteCatalog {
             if mergeCandidates.contains(pullRequest.url) {
                 add("merge-pr-\(pullRequest.number)", "Merge PR #\(pullRequest.number)…", .pullRequest,
                     shortcut: pullRequest.url == latestMerge ? "⌘⇧M" : nil) {
-                    model.mergingPullRequest = PullRequestMergeTarget(sessionId: id, pullRequest: pullRequest)
+                    model.mergingPullRequest = PullRequestMergeTarget(sessionId: session.id, pullRequest: pullRequest, reference: reference)
                 }
             }
         }
@@ -454,7 +456,7 @@ final class CommandPaletteModel: ObservableObject {
         let entries = entries
         var results = CommandPalette.results(for: query, items: items) { chatId in
             guard let session = entries[chatId]?.session else { return [] }
-            let actions = catalog.chatActions(session)
+            let actions = catalog.chatActions(session, reference: entries[chatId]?.reference)
             added += actions
             return actions.map(\.item)
         }
@@ -609,10 +611,11 @@ private struct CommandPaletteRow: View {
 
     var body: some View {
         let session = entry.session
-        let unread = session.map { model.isUnread($0) || model.isHeld($0) } ?? false
+        let unread = session.map { session in entry.reference.map { model.isUnread(session, on: $0.host) } ?? (model.isUnread(session) || model.isHeld(session)) } ?? false
+        let disconnected = entry.reference.map { $0.host != model.localHost && !model.hosts.available.contains($0.host) } ?? false
         let state = session?.signal(unread: unread)
         // Failed chats are in Needs you: the palette's only colour is its amber.
-        let signal: SessionSignal? = state == .failed ? .needsYou : state
+        let signal: SessionSignal? = disconnected ? .readyToMerge : state == .failed ? .needsYou : state
         HStack(spacing: 10) {
             PilotSymbol(entry.icon).foregroundStyle(Theme.mutedForeground).frame(width: 16)
             VStack(alignment: .leading, spacing: 2) {
@@ -626,10 +629,12 @@ private struct CommandPaletteRow: View {
                     }
                 }
                 .font(.pilot(.body))
-                if let session {
+                if disconnected {
+                    Text("Disconnected · Current state unknown").font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                } else if let session {
                     // An unsent draft replaces the details after the project, as on the chat's sidebar row.
                     RowLine(segments: RowLineSegments.shown(segments(session, unread: unread),
-                                                            draft: model.chatDraft(session.id)))
+                                                            draft: entry.reference.flatMap { model.chatDraft(for: $0) } ?? model.chatDraft(session.id)))
                 } else if let detail = entry.detail, !detail.isEmpty {
                     Text(detail).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).lineLimit(1)
                 }
@@ -653,7 +658,7 @@ private struct CommandPaletteRow: View {
     }
 
     private func segments(_ session: SessionSummary, unread: Bool) -> [RowLineSegment] {
-        let client = model.client
+        let client = entry.reference.map { model.hosts.presentationClient($0.host) } ?? model.client
         let reason = session.needsYouReason(unread: unread, now: now)?
             .label(at: session.outcomeAt ?? session.updatedAt, now: now)
         return RowLineSegments.session(

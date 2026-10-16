@@ -87,6 +87,7 @@ struct CoordinatorChatFields: View {
 }
 
 struct StartCoordinatorSheet: View {
+    @Environment(\.hostViewContext) private var hostContext
     let missionId: String
     @EnvironmentObject private var model: AppModel
     @EndpointClient private var client
@@ -122,7 +123,7 @@ struct StartCoordinatorSheet: View {
             do {
                 let session = try await client.startMissionCoordinator(missionId, request)
                 dismiss()
-                model.selectedSessionId = session.id
+                model.navigate(.session, id: session.id, context: hostContext)
             } catch { self.error = error.localizedDescription }
         }
     }

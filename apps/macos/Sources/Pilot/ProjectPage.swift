@@ -806,7 +806,7 @@ private struct ProjectWorkingRow: View {
             .filter { !$0.isEmpty }.joined(separator: ", "))
         .contextMenu {
             Button("Open Chat") { model.navigate(.session, id: item.sessionId, context: hostContext) }
-            Button("Stop Chat") { model.stopSession(item.sessionId) }
+            Button("Stop Chat") { model.stopSession(hostContext?.ref(.session, item.sessionId).storageKey ?? item.sessionId) }
             if let pr = item.pullRequest, let url = dashboardBrowserURL(pr.url) {
                 Link("Open PR #\(pr.number) in Browser", destination: url)
             }

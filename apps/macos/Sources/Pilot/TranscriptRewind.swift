@@ -53,6 +53,7 @@ final class TranscriptRewind: ObservableObject {
 
 /// Wires a chat's rewind actions to pilotd and its composer, and confirms stopping a running turn.
 struct TranscriptRewindHost: ViewModifier {
+    @Environment(\.hostViewContext) private var hostContext
     @EndpointClient private var endpoint
     @ObservedObject var rewind: TranscriptRewind
     let feed: SessionFeed
@@ -91,8 +92,9 @@ struct TranscriptRewindHost: ViewModifier {
     /// Runs a retry the command palette asked for, once this chat shows its failed turn's Retry.
     private func runPendingRetry() {
         let model = AppModel.shared
-        guard let request = model.pendingRetry, request.sessionId == sessionId else { return }
-        guard request.isCurrent(for: sessionId) else {
+        let key = hostContext.map { $0.host == model.localHost ? sessionId : $0.ref(.session, sessionId).storageKey } ?? sessionId
+        guard let request = model.pendingRetry, request.sessionId == key else { return }
+        guard request.isCurrent(for: key) else {
             model.pendingRetry = nil
             return
         }

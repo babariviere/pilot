@@ -160,7 +160,7 @@ private struct ArchiveRow: View {
     var body: some View {
         HoverRow { hovered in
             HStack(spacing: 12) {
-                Button { model.open(session: session.id) } label: {
+                Button { model.navigate(.session, id: session.id, context: hostContext) } label: {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text(session.title)
                             .font(.pilot(.body))
@@ -188,7 +188,7 @@ private struct ArchiveRow: View {
             }
         }
         .contextMenu {
-            Button("Read Chat") { model.open(session: session.id) }
+            Button("Read Chat") { model.navigate(.session, id: session.id, context: hostContext) }
             SessionProjectAction(session: session)
             SessionRenameAction(session: session)
             SessionArchiveAction(session: session)
