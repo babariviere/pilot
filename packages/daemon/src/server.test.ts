@@ -9,7 +9,7 @@ import { test } from "node:test";
 import type { AgentEvent, ServerMessage, SessionSummary } from "@pilot/protocol";
 import { WebSocket } from "ws";
 import { RepositoryChanges } from "./changes.ts";
-import { Conflict } from "./errors.ts";
+import { Conflict, ServiceUnavailable } from "./errors.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
@@ -338,6 +338,50 @@ test("repository invalidation ignores title and quota updates, but preserves wor
 	assert.deepEqual(invalidated, ["/work", "/work"], "completion refreshes repository changes");
 	updated({ ...completed, cwd: "/new-work" });
 	assert.deepEqual(invalidated, ["/work", "/work", "/work", "/new-work"]);
+});
+
+test("project GitHub GET returns a browser URL and preserves route guards", async (t) => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-server-github-"));
+	const projects = new ProjectStore(root, async () => "https://github.com/octo/repo");
+	await projects.load();
+	const project = await projects.create({ path: root });
+	const sessions = new SessionManager(root, projects);
+	const terminals = new TerminalManager();
+	const server = createDaemonServer(
+		{ home: root, host: "127.0.0.1", port: 0 },
+		sessions,
+		projects,
+		new ModelCatalog(root),
+		terminals,
+	);
+	t.after(async () => {
+		terminals.shutdown();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+		rmSync(root, { recursive: true, force: true });
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/projects`;
+	const url = `${base}/${project.id}/github`;
+	const response = await fetch(url);
+	assert.equal(response.status, 200);
+	assert.deepEqual(await response.json(), { url: "https://github.com/octo/repo" });
+	for (const [path, options, status] of [
+		[`${base}/missing/github`, {}, 404],
+		[url, { method: "POST" }, 404],
+		[`${url}/extra`, {}, 404],
+		[url, { headers: { origin: "https://example.com" } }, 403],
+	] as const) {
+		const rejected = await fetch(path, options);
+		assert.equal(rejected.status, status);
+		await rejected.arrayBuffer();
+	}
+	t.mock.method(projects, "github", async () => {
+		throw new ServiceUnavailable("Check remotes");
+	});
+	const unavailable = await fetch(url);
+	assert.equal(unavailable.status, 503);
+	assert.deepEqual(await unavailable.json(), { error: "Check remotes" });
 });
 
 test("project branches GET returns live origin heads/default, sensible empty lists and clear remote errors", async (t) => {

@@ -146,6 +146,8 @@ final class AppModel: ObservableObject {
     /// nil includes chats from every mission, as well as chats without one.
     @Published var archiveMissionId: String?
     @Published var sessionActionError: String?
+    @Published var projectActionError: String?
+    @Published private(set) var openingGitHubProjectId: String?
     @Published var pendingSessionActions: Set<String> = []
     /// The chat whose rename sheet is open.
     @Published var renamingSession: SessionRenameTarget?
@@ -949,6 +951,18 @@ final class AppModel: ObservableObject {
             showingCommandPalette = false
         } else {
             mergingPullRequest = target
+        }
+    }
+
+    /// Resolve on the daemon's host, then open in the user's browser, never on a remote devbox.
+    func openProjectOnGitHub(_ project: Project) {
+        guard openingGitHubProjectId == nil else { return }
+        openingGitHubProjectId = project.id
+        projectActionError = nil
+        Task {
+            defer { openingGitHubProjectId = nil }
+            do { BrowserLinkOpener.shared.open(try await client.projectGitHubURL(project.id)) }
+            catch { projectActionError = "Couldn't open \(project.name) on GitHub. \(error.localizedDescription)" }
         }
     }
 

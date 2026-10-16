@@ -450,6 +450,11 @@ export interface Project {
 
 export type WorkspaceMode = "clone" | "direct";
 
+/** GET /api/projects/:id/github. Resolved on demand by GitHub CLI on the project's host. */
+export interface ProjectGitHubRepository {
+	url: string;
+}
+
 /** Build may modify its workspace; Ask is read-only. Omitted mode defaults to Build. */
 export type ChatMode = "build" | "ask";
 

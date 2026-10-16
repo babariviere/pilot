@@ -185,6 +185,10 @@ private struct ProjectToolbar: ToolbarContent {
                 Button { NSWorkspace.shared.open(URL(filePath: project.path)) } label: {
                     Label("Open in Finder", icon: PilotIcon.project)
                 }
+                Button { model.openProjectOnGitHub(project) } label: {
+                    Label("Open on GitHub", icon: PilotIcon.openExternal)
+                }
+                .disabled(model.openingGitHubProjectId != nil)
                 Divider()
                 Button { model.showArchive(in: project.id) } label: {
                     Label("Browse Archived Chats", icon: PilotIcon.archive)
