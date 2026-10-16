@@ -241,6 +241,7 @@ private struct ProjectDashboardBody: View {
                     .padding(.vertical, 24)
                     .frame(maxWidth: Theme.column, alignment: .leading)
                     .frame(maxWidth: .infinity)
+                    .keyboardList()
             }
         }
     }
@@ -294,6 +295,9 @@ private struct ProjectDashboardBody: View {
                     ForEach(Array(dashboard.working.items.enumerated()), id: \.element.id) { index, item in
                         if index > 0 { HairlineDivider(leading: InboxRowLayout.dividerInset) }
                         ProjectWorkingRow(item: item, now: now)
+                            .keyboardListItem("working:" + item.sessionId, target: chatTarget(item.sessionId)) {
+                                model.navigate(.session, id: item.sessionId, context: hostContext)
+                            }
                     }
                     ProjectMoreLine(hidden: dashboard.working.hiddenCount, total: dashboard.working.total,
                                     noun: "working") { showFullList(.working) }
@@ -306,6 +310,10 @@ private struct ProjectDashboardBody: View {
                     ForEach(Array(overview.pullRequests.enumerated()), id: \.element.id) { index, pr in
                         if index > 0 { HairlineDivider(leading: InboxRowLayout.dividerInset) }
                         ProjectPullRequestRow(pr: pr)
+                            .keyboardListItem("pr:\(pr.sessionId):\(pr.number)", target: chatTarget(pr.sessionId)) {
+                                if let url = InboxLinks.browserURL(pr.url) { BrowserLinkOpener.shared.open(url) }
+                                else { model.navigate(.session, id: pr.sessionId, context: hostContext) }
+                            }
                     }
                     ProjectMoreLine(hidden: overview.pullRequestTotal - overview.pullRequests.count,
                                     total: dashboard.pullRequests.total, noun: "open") { showFullList(.pullRequests) }
@@ -318,6 +326,9 @@ private struct ProjectDashboardBody: View {
                     ForEach(Array(dashboard.missions.items.enumerated()), id: \.element.id) { index, mission in
                         if index > 0 { HairlineDivider(leading: 34) }
                         ProjectMissionRow(mission: mission, coordinatorColumn: coordinatorColumn)
+                            .keyboardListItem("mission:" + mission.id) {
+                                model.openMission(mission.id, context: hostContext)
+                            }
                     }
                     ProjectMoreLine(hidden: dashboard.missions.hiddenCount, total: dashboard.missions.total,
                                     noun: "active") { showFullList(.missions) }
@@ -374,10 +385,17 @@ private struct ProjectDashboardBody: View {
                 }) {
                     ForEach(dashboard.recent.items) { item in
                         ProjectRecentRow(item: item, missionTitle: client.mission(item.missionId)?.title, now: now)
+                            .keyboardListItem("recent:" + item.sessionId, target: chatTarget(item.sessionId)) {
+                                model.navigate(.session, id: item.sessionId, context: hostContext)
+                            }
                     }
                 }
             }
         }
+    }
+
+    private func chatTarget(_ sessionId: String) -> KeyboardTarget {
+        .session(id: sessionId, reference: hostContext?.ref(.session, sessionId))
     }
 }
 
@@ -686,6 +704,8 @@ struct ProjectNeedsYouRow: View {
         NeedsYouRow(title: item.title, isChat: chatId != nil, action: action, help: item.needsYouLabel(now: now),
                     accessibilityDetail: detail.accessibilityText(using: model), open: open) { detail }
         .modifier(NeedsYouRowActions(item: item, chatId: chatId))
+        .keyboardListItem("needs:" + item.id,
+                          target: chatId.map { .session(id: $0, reference: hostContext?.ref(.session, $0)) }) { open() }
     }
 
     /// The chat the row stands for. A failed schedule only names the chat it targets.

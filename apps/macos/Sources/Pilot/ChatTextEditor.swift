@@ -82,7 +82,11 @@ struct ChatTextEditor: NSViewRepresentable {
         scroll.documentView = textView
 
         if focusOnAppear {
-            DispatchQueue.main.async { textView.window?.makeFirstResponder(textView) }
+            DispatchQueue.main.async {
+                // Arrowing through sidebar chats keeps browsing; ⌘L or a click focuses the composer.
+                guard !AppModel.shared.keyboard.isBrowsingList else { return }
+                textView.window?.makeFirstResponder(textView)
+            }
         }
         context.coordinator.lastFocusToken = focusToken
         context.coordinator.recalculate(textView)

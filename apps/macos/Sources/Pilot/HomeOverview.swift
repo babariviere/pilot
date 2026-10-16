@@ -281,6 +281,7 @@ struct HomeOverview: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .keyboardList()
     }
 
     private func section<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
@@ -326,6 +327,9 @@ struct HomeOverview: View {
         .rowButtonStyle()
         .help("Open \(row.project.name) Overview")
         .accessibilityLabel(label + ". Open Overview.")
+        .keyboardListItem("project:" + (context?.ref(.project, row.project.id).storageKey ?? row.project.id)) {
+            app.openProject(row.project.id, context: owner)
+        }
         .contextMenu {
             Button("Open Overview") { app.openProject(row.project.id, context: owner) }
             Button("New Chat") { app.newSession(in: row.project.id, context: owner) }
@@ -362,6 +366,10 @@ struct HomeOverview: View {
         }
         .rowButtonStyle()
         .accessibilityLabel([session.title, RemoteChatBadgeText(context: owner)?.accessibilityLabel, project, mission, "working"].compactMap { $0 }.joined(separator: ", "))
+        .keyboardListItem("chat:" + (context?.ref(.session, session.id).storageKey ?? session.id),
+                          target: .session(id: session.id, reference: context?.ref(.session, session.id))) {
+            app.navigate(.session, id: session.id, context: owner)
+        }
         .contextMenu {
             Button("Open Chat") { app.navigate(.session, id: session.id, context: owner) }
             SessionProjectAction(session: session).environment(\.hostViewContext, owner)
@@ -417,6 +425,9 @@ struct HomeOverview: View {
             }
         }
         .homeCorner(signal)
+        .keyboardListItem("mission:" + (context?.ref(.mission, mission.id).storageKey ?? mission.id)) {
+            app.openMission(mission.id, context: owner)
+        }
     }
 
     private func quietLine(_ text: String) -> some View {

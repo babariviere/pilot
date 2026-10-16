@@ -164,6 +164,10 @@ final class KeyboardFocus: ObservableObject {
     private var handlers: [KeyboardRegion: [(id: UUID, perform: () -> Bool)]] = [:]
     private var sequenceStarted: TimeInterval?
     private var sequenceTimeout: Task<Void, Never>?
+    /// A region to focus once its destination view registers, after a navigation command.
+    private var pendingFocus: (region: KeyboardRegion, at: TimeInterval)?
+    /// When arrow keys last moved a native list (the sidebar), so a chat it opens leaves focus there.
+    private var listKeyAt: TimeInterval?
 
     /// A sequence letter must follow G within this time.
     static let sequenceWindow: TimeInterval = 1.5
@@ -188,6 +192,14 @@ final class KeyboardFocus: ObservableObject {
     func addHandler(_ id: UUID, for region: KeyboardRegion, perform: @escaping () -> Bool) {
         handlers[region, default: []].removeAll { $0.id == id }
         handlers[region, default: []].append((id, perform))
+        if let pending = pendingFocus, pending.region == region,
+           ProcessInfo.processInfo.systemUptime - pending.at < 1 {
+            pendingFocus = nil
+            // After the view's first layout, so its focusable views exist.
+            DispatchQueue.main.async { [weak self] in
+                if perform() { self?.lastRegion = region }
+            }
+        }
     }
 
     func removeHandler(_ id: UUID) {
@@ -196,6 +208,28 @@ final class KeyboardFocus: ObservableObject {
 
     /// A region reports that the user focused it, as by clicking a SwiftUI list.
     func noteFocused(_ region: KeyboardRegion) { lastRegion = region }
+
+    /// A navigation command succeeded: focus the destination's region once its view appears, or, when the
+    /// destination was already on screen, shortly after.
+    func focusAfterNavigation(_ region: KeyboardRegion) {
+        let at = ProcessInfo.processInfo.systemUptime
+        pendingFocus = (region, at)
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard let self, let pending = self.pendingFocus, pending.region == region, pending.at == at else { return }
+            self.pendingFocus = nil
+            self.focus(region)
+        }
+    }
+
+    /// Arrow keys moved a native list, as when browsing sidebar rows.
+    func noteListKey() { listKeyAt = ProcessInfo.processInfo.systemUptime }
+
+    /// True right after arrow keys moved a list that still has focus. A composer appearing then must not take it.
+    var isBrowsingList: Bool {
+        guard let listKeyAt, ProcessInfo.processInfo.systemUptime - listKeyAt < 1 else { return false }
+        return window?.firstResponder is NSTableView
+    }
 
     // MARK: Geometry
 
@@ -359,6 +393,10 @@ final class KeyboardRouter {
             return event
         }
         let context = KeyboardInputGuard.context(for: window.firstResponder)
+        if context == .navigation, window.firstResponder is NSTableView,
+           [125, 126].contains(event.keyCode) || ["j", "k"].contains(event.charactersIgnoringModifiers ?? "") {
+            focus.noteListKey()
+        }
         let route = KeyboardRoute.decide(KeyboardChord(event), context: context, pending: focus.sequenceIsPending)
         switch route {
         case .pass:
