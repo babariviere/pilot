@@ -76,8 +76,9 @@ commits (`feat!:` or `BREAKING CHANGE:`) use Release Please's semantic-version r
 pre-1.0 rules). Release notes are generated from conventional commits. The manifest starts at `0.1.0`;
 versions without prerelease suffixes are stable releases, even before `1.0.0`.
 
-Sparkle's separate build version still uses the workflow run number and attempt. Keep the workflow
-identity and signing key stable so build versions continue increasing. Publication checks both
+Sparkle's separate build version is the workflow run number plus `BUNDLE_VERSION_OFFSET`, then the
+attempt. Renaming or recreating the workflow restarts its run numbers, so raise the offset above the
+latest published build when that happens, and keep the signing key stable. Publication checks both
 semantic and Sparkle build ordering. Old `pilot-N.M` releases are supported as a one-way migration;
 the first stable release can replace them without changing the installed app's signing trust.
 
