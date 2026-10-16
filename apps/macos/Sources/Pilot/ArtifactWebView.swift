@@ -83,6 +83,8 @@ struct ArtifactWebView: NSViewRepresentable {
         configuration.mediaTypesRequiringUserActionForPlayback = .all
         configuration.setURLSchemeHandler(libraries, forURLScheme: "pilot-artifact")
         let view = WKWebView(frame: .zero, configuration: configuration)
+        // Artifacts are light documents (`color-scheme: light`), so their scrollbars and form controls stay light too.
+        view.appearance = NSAppearance(named: .aqua)
         if inline { view.setValue(false, forKey: "drawsBackground") }
         view.navigationDelegate = coordinator
         view.uiDelegate = coordinator

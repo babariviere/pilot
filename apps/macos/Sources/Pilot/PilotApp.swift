@@ -75,8 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_: Notification) {
-        // Light theme only, for now.
-        NSApp.appearance = NSAppearance(named: .aqua)
+        AppSettings.shared.applyAppearance()
         if Bundle.main.bundleIdentifier == nil, let icon = PlaneImage.developmentIcon {
             NSApp.applicationIconImage = icon
         }

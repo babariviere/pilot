@@ -282,20 +282,26 @@ enum DitherCornerRenderer {
         3, 35, 11, 43, 1, 33, 9, 41, 51, 19, 59, 27, 49, 17, 57, 25, 15, 47, 7, 39, 13, 45, 5, 37, 63, 31, 55, 23, 61, 29, 53, 21,
     ].map { ($0 + 0.5) / 64 }
 
+    /// Corners are translucent, so one set of tints (the light ones) reads on both appearances and the cache stays
+    /// independent of the appearance.
     private static var tints: [SessionSignal: (Double, Double, Double)] = {
         var tints: [SessionSignal: (Double, Double, Double)] = [:]
         for signal in SessionSignal.allCases {
-            let color = NSColor(signal.tint).usingColorSpace(.sRGB) ?? .gray
-            tints[signal] = (Double(color.redComponent), Double(color.greenComponent), Double(color.blueComponent))
+            tints[signal] = components(signal.tint)
         }
         return tints
     }()
 
     /// The monochrome tint of states that do not need the user.
-    private static let quietTint: (Double, Double, Double) = {
-        let color = NSColor(Theme.faintForeground).usingColorSpace(.sRGB) ?? .gray
-        return (Double(color.redComponent), Double(color.greenComponent), Double(color.blueComponent))
-    }()
+    private static let quietTint: (Double, Double, Double) = components(Theme.faintForeground)
+
+    private static func components(_ tint: Color) -> (Double, Double, Double) {
+        var resolved = NSColor.gray
+        NSAppearance(named: .aqua)?.performAsCurrentDrawingAppearance {
+            resolved = NSColor(tint).usingColorSpace(.sRGB) ?? .gray
+        }
+        return (Double(resolved.redComponent), Double(resolved.greenComponent), Double(resolved.blueComponent))
+    }
 
     /// Coverage in 0...1 of one cell. `u` and `v` are the cell's distance in cells from the right and bottom.
     nonisolated static func coverage(_ signal: SessionSignal?, u: Double, v: Double, frame: Int, recede: Double = 0,

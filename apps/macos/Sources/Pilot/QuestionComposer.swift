@@ -127,7 +127,7 @@ struct QuestionComposer: View {
             }
             Button { send(fromChoices: choicesFocused) } label: {
                 if sending {
-                    ProgressView().controlSize(.small).tint(.white)
+                    ProgressView().controlSize(.small).tint(Theme.onPrimary)
                 } else {
                     PilotSymbol(PilotIcon.send, context: .toolbar)
                 }
@@ -309,7 +309,7 @@ private struct QuestionCheckCap: View {
             RoundedRectangle(cornerRadius: Theme.Radius.small).fill(checked ? Theme.primary : Theme.card)
             RoundedRectangle(cornerRadius: Theme.Radius.small).strokeBorder(checked ? Color.clear : Theme.border)
             if checked {
-                PilotSymbol(PilotIcon.selectedOption).foregroundStyle(.white)
+                PilotSymbol(PilotIcon.selectedOption).foregroundStyle(Theme.onPrimary)
             } else {
                 Text(key).font(.pilot(.small, weight: .semibold).monospacedDigit()).foregroundStyle(Theme.mutedForeground)
             }

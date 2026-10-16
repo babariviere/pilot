@@ -8,13 +8,14 @@ struct DitherSky: View {
     var cell: CGFloat = 2
     var fade: Double = 0.45
 
+    @Environment(\.colorScheme) private var colorScheme
     @StateObject private var sky = SkyImageState()
 
     var body: some View {
         GeometryReader { geometry in
             let width = max(1, Int(geometry.size.width / cell))
             let height = max(1, Int(geometry.size.height / cell))
-            let key = SkyRenderKey(width: width, height: height, fade: fade)
+            let key = SkyRenderKey(width: width, height: height, fade: fade, dark: colorScheme == .dark)
             ZStack(alignment: .topLeading) {
                 // Geometry can change before its task starts. Never display the old size's image.
                 if let rendered = sky.rendered, rendered.key == key {
@@ -35,6 +36,7 @@ private struct SkyRenderKey: Hashable, Sendable {
     let width: Int
     let height: Int
     let fade: Double
+    let dark: Bool
 }
 
 @MainActor
@@ -80,7 +82,7 @@ private actor SkyRenderer {
             cache.append(entry)
             return entry.image
         }
-        guard let image = Self.render(width: key.width, height: key.height, fade: key.fade),
+        guard let image = Self.render(width: key.width, height: key.height, fade: key.fade, dark: key.dark),
               !Task.isCancelled else { return nil }
         let bytes = image.bytesPerRow * image.height
         // Oversized images can still be displayed, but must not expand the shared cache.
@@ -99,7 +101,7 @@ private actor SkyRenderer {
         3, 35, 11, 43, 1, 33, 9, 41, 51, 19, 59, 27, 49, 17, 57, 25, 15, 47, 7, 39, 13, 45, 5, 37, 63, 31, 55, 23, 61, 29, 53, 21,
     ].map { ($0 + 0.5) / 64 }
 
-    private static func render(width: Int, height: Int, fade: Double) -> CGImage? {
+    private static func render(width: Int, height: Int, fade: Double, dark: Bool) -> CGImage? {
         guard width > 0, height > 0, fade.isFinite, !Task.isCancelled else { return nil }
         let (pixelCount, pixelOverflow) = width.multipliedReportingOverflow(by: height)
         let (byteCount, byteOverflow) = pixelCount.multipliedReportingOverflow(by: 4)
@@ -137,6 +139,7 @@ private actor SkyRenderer {
                     let streak = 0.03 * (fbm(u * 0.004, v * 0.6) - 0.5)
                     color = mix(color, (sea.0 + streak, sea.1 + streak, sea.2 + streak), 0.9)
                 }
+                if dark { color = DitherSceneTone.dusk(color) }
 
                 // Ordered dither of lightness, keeping hue smooth.
                 let threshold = bayer[(y & 7) * 8 + (x & 7)]

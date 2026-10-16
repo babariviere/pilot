@@ -121,7 +121,7 @@ private struct InlineDiagramPreview: View {
         if let error = render.error {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Could not render \(kind.rawValue): \(error)")
-                    .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 10)
+                    .font(.caption).foregroundStyle(Theme.mutedForeground).padding(.horizontal, 10)
                 CodeBlock(language: kind.rawValue, text: text)
             }.padding(.top, 8)
         } else {

@@ -109,7 +109,7 @@ private struct WorkStepView: View {
             ThinkingStep(text: text, streaming: streaming)
         case let .note(_, text):
             MarkdownView(text: text, textColor: .secondaryLabelColor)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.mutedForeground)
         case let .tool(item):
             ToolStepRow(item: item, active: active, expansion: expansions?.state(for: item.id))
         case let .reads(_, items):
@@ -187,7 +187,7 @@ private struct ThinkingStep: View {
             .accessibilityValue(expansion.expanded ? "Expanded" : "Collapsed")
             if expansion.expanded {
                 MarkdownView(text: text, textColor: .secondaryLabelColor)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.mutedForeground)
                     .padding(.leading, 21)
             }
         }
@@ -393,13 +393,13 @@ private struct OutputBlock: View {
         ScrollView {
             Text(text)
                 .font(fonts.mono)
-                .foregroundStyle(isError ? Color.red : Color.primary.opacity(0.85))
+                .foregroundStyle(isError ? Theme.error : Theme.foreground)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(10)
         }
         .frame(maxHeight: 260)
-        .background(Color.black.opacity(0.04))
+        .background(Theme.code)
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.control))
         .overlay(RoundedRectangle(cornerRadius: Theme.Radius.control).strokeBorder(Theme.border))
     }

@@ -447,7 +447,7 @@ private struct ComposerSendButtons: View {
         HStack(spacing: 8) {
             if working {
                 Button(action: onStop) { PilotSymbol(PilotIcon.stop, context: .toolbar) }
-                    .buttonStyle(CircleIconButtonStyle(tint: Theme.destructive))
+                    .buttonStyle(CircleIconButtonStyle(tint: Theme.destructive, foreground: .white))
                     .help("Stop the current run")
             }
             Button(action: onSend) { PilotSymbol(PilotIcon.send, context: .toolbar) }

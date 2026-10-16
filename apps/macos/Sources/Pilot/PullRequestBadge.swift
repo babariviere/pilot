@@ -103,9 +103,9 @@ extension PullRequestState {
     var color: Color {
         switch self {
         case .draft: Theme.mutedForeground
-        case .open: Color(hex: 0x15803D)
-        case .merged: Color(hex: 0x7C3AED)
-        case .closed: Color(hex: 0xB91C1C)
+        case .open: Theme.pullRequestOpen
+        case .merged: Theme.pullRequestMerged
+        case .closed: Theme.pullRequestClosed
         }
     }
 }

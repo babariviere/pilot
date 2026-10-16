@@ -94,7 +94,7 @@ struct CollapsibleMessage<Content: View>: View {
                             .buttonStyle(.plain)
                             .help("Copy full message")
                         }
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.mutedForeground)
                     }
                 }
             } else {
@@ -115,7 +115,7 @@ struct CollapsibleMessage<Content: View>: View {
                                 ], startPoint: .top, endPoint: .bottom))
                         }
                         PilotSymbol(PilotIcon.disclosureOpen, context: .disclosure)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Theme.mutedForeground)
                             .frame(maxWidth: .infinity)
                     }
                     .contentShape(Rectangle())

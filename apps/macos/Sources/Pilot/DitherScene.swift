@@ -13,13 +13,14 @@ struct DitherScene: View {
     var cell: CGFloat = 1.5
     var fade: Double = 0.22
 
+    @Environment(\.colorScheme) private var colorScheme
     @StateObject private var scene = SceneImageState()
 
     var body: some View {
         GeometryReader { geometry in
             let width = max(1, Int(geometry.size.width / cell))
             let height = max(1, Int(geometry.size.height / cell))
-            let key = DitherSceneKey(source: source, width: width, height: height, fade: fade)
+            let key = DitherSceneKey(source: source, width: width, height: height, fade: fade, dark: colorScheme == .dark)
             ZStack(alignment: .topLeading) {
                 if scene.missing {
                     DitherSky(cell: cell, fade: fade)
@@ -61,6 +62,16 @@ struct DitherSceneTone: Hashable, Sendable {
     var lift: Double = 0
     var levels: Double = 16
     static let horizon = (0.84, 0.91, 0.98)
+    /// Dark appearance: scenes dim toward this night blue, so they read as dusk on the dark page instead of a bright
+    /// band. `DitherSky` uses the same.
+    static let night = (0.07, 0.09, 0.16)
+
+    /// Dims a toned colour for the dark appearance, before dithering.
+    static func dusk(_ color: (Double, Double, Double)) -> (Double, Double, Double) {
+        let keep = 0.42, toward = 0.25
+        return (color.0 * keep * (1 - toward) + night.0 * toward, color.1 * keep * (1 - toward) + night.1 * toward,
+                color.2 * keep * (1 - toward) + night.2 * toward)
+    }
 }
 
 struct DitherSceneKey: Hashable, Sendable {
@@ -68,6 +79,7 @@ struct DitherSceneKey: Hashable, Sendable {
     let width: Int
     let height: Int
     let fade: Double
+    var dark = false
 }
 
 @MainActor
@@ -132,7 +144,7 @@ private actor SceneRenderer {
         }
         guard let source = sources[key.source] ?? nil else { return .missing }
         guard let image = DitherSceneRenderer.render(source, width: key.width, height: key.height, fade: key.fade,
-                                                     tone: key.source.tone),
+                                                     tone: key.source.tone, dark: key.dark),
               !Task.isCancelled else { return .cancelled }
         let bytes = image.bytesPerRow * image.height
         if bytes <= maximumBytes {
@@ -171,10 +183,11 @@ enum DitherSceneRenderer {
         3, 35, 11, 43, 1, 33, 9, 41, 51, 19, 59, 27, 49, 17, 57, 25, 15, 47, 7, 39, 13, 45, 5, 37, 63, 31, 55, 23, 61, 29, 53, 21,
     ].map { ($0 + 0.5) / 64 }
 
-    /// Samples `source` to fill `width` x `height` pixels (centered, cropped to the aspect), tones it, then dithers
-    /// its lightness in the tone's levels, keeping hue smooth, and dissolves the bottom `fade` of the height.
+    /// Samples `source` to fill `width` x `height` pixels (centered, cropped to the aspect), tones it (dimmed to dusk
+    /// when `dark`), then dithers its lightness in the tone's levels, keeping hue smooth, and dissolves the bottom
+    /// `fade` of the height.
     static func render(_ source: CGImage, width: Int, height: Int, fade: Double,
-                       tone: DitherSceneTone = DitherSceneTone()) -> CGImage? {
+                       tone: DitherSceneTone = DitherSceneTone(), dark: Bool = false) -> CGImage? {
         let levels = tone.levels
         let horizon = DitherSceneTone.horizon
         guard width > 0, height > 0, width <= 4096, height <= 4096, fade.isFinite, !Task.isCancelled,
@@ -209,6 +222,7 @@ enum DitherSceneRenderer {
                     color = (color.0 + (horizon.0 - color.0) * tone.lift, color.1 + (horizon.1 - color.1) * tone.lift,
                              color.2 + (horizon.2 - color.2) * tone.lift)
                 }
+                if dark { color = DitherSceneTone.dusk(color) }
                 let threshold = bayer[(y & 7) * 8 + (x & 7)]
                 let lightness = (color.0 + color.1 + color.2) / 3
                 let quantized = floor(lightness * levels + threshold) / levels

@@ -30,8 +30,13 @@ Calm is not plain. The app should look sleek and feel pleasant to the eye, like 
 - **Polish in the details.** Consistent corner radii, optical alignment, crisp icons from one family, smooth
   hover and focus states. Small imperfections add up to a restless app.
 - **Native first.** Use system materials, SF Symbols, system fonts and platform conventions. The app should look
-  at home on macOS and at any window size. Pilot is light only for now: design and check every change in the light
-  appearance, with no dark-mode variants or checks.
+  at home on macOS and at any window size, in light and dark. Pilot follows the macOS appearance unless
+  Settings → Appearance pins one.
+- **One theme, two appearances.** Every colour comes from `Theme` tokens, which resolve per appearance
+  (`Color(light:dark:)`); never use literal, system or `.secondary`-style colours in views, and add a missing token
+  centrally. Dark keeps the light hierarchy: a darker sidebar beside the page, lifted cards and trays, light primary
+  buttons with `onPrimary` text, text-weight colours lightened for contrast. Dithered scenes dim to dusk; status
+  corners keep one translucent tint set. Artifacts are light documents and keep a light page in both.
 - **Typography carries the page.** Weight and size separate headline, section and row. Use secondary and
   tertiary text colors for meta information, and keep line lengths comfortable.
 - **Delight without noise.** Motion and effects are subtle and purposeful (a soft transition, a gentle highlight).
@@ -223,5 +228,6 @@ zero counts omitted); compact rows keep the bar plus "9 of 18".
 - Looks calm and polished, checked by eye (attach a SwiftUI artifact for new layouts).
 - Long content, and loading, empty, error and disabled states.
 - Narrow and wide windows.
+- Light and dark appearances.
 - Keyboard access, readable contrast, reduced motion, and VoiceOver labels (color is never the only signal).
 - No layout shift from live updates, and nothing slows scrolling or typing.
