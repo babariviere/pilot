@@ -131,7 +131,8 @@ You can also archive a failed startup without discarding its queued messages. Re
 ### Home, Inbox and Overview
 
 The sidebar starts with **Home**, the **Inbox** and the project selector. Home covers every project: a short
-summary, subscription usage, projects (under their folders), work in progress, missions and recent activity.
+summary, subscription usage (with extra-usage spend when the provider reports it), projects (under their folders),
+work in progress, missions and recent activity.
 The Inbox carries the badge and lists, most urgent first, what **Needs you**, what is **Ready to merge**, and your
 Linear and Slack items. Its toolbar filters it to one project. Focusing a project adds its **Overview**, which
 leads with Up next, then work in progress, pull requests, missions, schedules, the current Linear cycle, Slack,

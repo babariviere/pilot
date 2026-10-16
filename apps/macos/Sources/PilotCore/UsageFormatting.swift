@@ -137,15 +137,18 @@ extension SubscriptionUsage {
         return SubscriptionNotice(text: text, help: displayHelpText(now: now), limited: limited)
     }
 
-    /// The windows Home draws as bars: the 5-hour and weekly limits, not extra-usage spend.
+    /// The rate-limit windows (5-hour, weekly), not extra-usage spend.
     public var limitWindows: [SubscriptionWindow] { windows.filter { !$0.isExtra && $0.usedPercent.isFinite } }
 
+    /// The windows Home draws as bars: the limits, then extra-usage spend when the provider reports it.
+    public var homeWindows: [SubscriptionWindow] { windows.filter { $0.usedPercent.isFinite } }
+
     /// Home's usage columns across providers, one per window kind: hour limits (shortest first), then weekly,
-    /// then any others in the order they first appear. Values are `SubscriptionWindow.columnLabel`s.
+    /// then any others in the order they first appear, then extra usage. Values are `SubscriptionWindow.columnLabel`s.
     public static func columns(_ usages: [SubscriptionUsage]) -> [String] {
         var ranks: [String: Int] = [:]
         var order: [String] = []
-        for window in usages.flatMap(\.limitWindows) where ranks[window.columnLabel] == nil {
+        for window in usages.flatMap(\.homeWindows) where ranks[window.columnLabel] == nil {
             ranks[window.columnLabel] = window.columnRank
             order.append(window.columnLabel)
         }
@@ -156,7 +159,7 @@ extension SubscriptionUsage {
 
     /// This provider's window in a Home column, or nil when it has no window of that kind.
     public func window(inColumn column: String) -> SubscriptionWindow? {
-        limitWindows.first { $0.columnLabel == column }
+        homeWindows.first { $0.columnLabel == column }
     }
 
     public var providerLabel: String {
@@ -194,28 +197,60 @@ extension SubscriptionUsage {
 }
 
 extension SubscriptionWindow {
+    /// Extra-usage spend parsed from pi's label, "Extra [on] 46.17/200.00" or "Extra [active] 12.00": amounts in
+    /// the provider's credits, as reported. `active` means spend is covering a used-up limit right now.
+    public struct ExtraUsage: Equatable, Sendable {
+        public let spent: String
+        public let cap: String?
+        public let active: Bool
+    }
+
     public var gaugeFraction: Double? { UsageFormatting.gaugeFraction(usedPercent) }
     public var percentLabel: String { UsageFormatting.percent(usedPercent) }
     /// Extra usage reports spend against a cap, not a rate limit.
     public var isExtra: Bool { label.hasPrefix("Extra") }
     public var resetDate: Date? { resetsAt.flatMap(UsageFormatting.resetDate) }
 
+    public var extraUsage: ExtraUsage? {
+        guard isExtra else { return nil }
+        var rest = label.dropFirst("Extra".count).trimmingCharacters(in: .whitespaces)
+        var status = ""
+        if rest.hasPrefix("["), let close = rest.firstIndex(of: "]") {
+            status = String(rest[rest.index(after: rest.startIndex)..<close])
+            rest = rest[rest.index(after: close)...].trimmingCharacters(in: .whitespaces)
+        }
+        let parts = rest.split(separator: "/", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+        guard let spent = parts.first, !spent.isEmpty else { return nil }
+        return ExtraUsage(spent: spent, cap: parts.count > 1 && !parts[1].isEmpty ? parts[1] : nil,
+                          active: status == "active")
+    }
+
+    /// The value after a bar on Home: the percent for a limit, the spend for extra usage ("46.17/200").
+    public var valueLabel: String {
+        guard let extra = extraUsage else { return percentLabel }
+        func short(_ amount: String) -> String { amount.hasSuffix(".00") ? String(amount.dropLast(3)) : amount }
+        return extra.cap.map { "\(short(extra.spent))/\(short($0))" } ?? short(extra.spent)
+    }
+
     /// The limit in a sentence: "5h" is "5-hour", "Week" is "weekly".
     public var limitName: String {
+        if isExtra { return "extra usage" }
         if let hours = hours { return "\(hours)-hour" }
         if isWeek { return "weekly" }
         return label.lowercased()
     }
 
-    /// Label before a bar on Home: "5-hour", "Weekly".
+    /// Label before a bar on Home: "5-hour", "Weekly", "Extra".
     public var columnLabel: String {
+        if isExtra { return "Extra" }
         if let hours = hours { return "\(hours)-hour" }
         if isWeek { return "Weekly" }
         return label
     }
 
-    /// Column order on Home: hour limits by length, then weekly, then the rest.
+    /// Column order on Home: hour limits by length, then weekly, then the rest, then extra usage.
     var columnRank: Int {
+        if isExtra { return 30_000 }
         if let hours = hours { return hours }
         return isWeek ? 10_000 : 20_000
     }
@@ -228,6 +263,10 @@ extension SubscriptionWindow {
     private var isWeek: Bool { ["week", "weekly", "7d"].contains(label.lowercased()) }
 
     public var helpText: String {
+        if let extra = extraUsage {
+            let spend = extra.cap.map { "\(extra.spent) of \($0)" } ?? extra.spent
+            return "Extra usage: \(spend) spent (\(percentLabel))" + (extra.active ? ". In use now." : "")
+        }
         let reset: String
         if let resetsAt {
             reset = UsageFormatting.resetDate(resetsAt).map { UsageFormatting.timestamp($0) } ?? "Unknown (\(resetsAt))"

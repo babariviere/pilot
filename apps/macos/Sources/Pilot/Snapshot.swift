@@ -1978,6 +1978,7 @@ enum Fixtures {
         subscription: SubscriptionUsage(fetchedAt: now - 600_000, provider: .anthropic, windows: [
             SubscriptionWindow(label: "5h", usedPercent: 92, resetsAt: "2026-06-15T19:30:00.000Z"),
             SubscriptionWindow(label: "Week", usedPercent: 45),
+            SubscriptionWindow(label: "Extra [on] 46.17/200.00", usedPercent: 23.085),
         ])
     )
 
