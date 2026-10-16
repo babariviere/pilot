@@ -1934,6 +1934,10 @@ async function missionRoute(
 		return false;
 	}
 	if (section === "resources") {
+		if (parts.length === 6 && parts[5] === "linear-sync" && method === "POST") {
+			const write = await readJson<{ action: "pause" | "resume" }>(req);
+			return json(res, 200, store.controlLinearSync(id, item!, write?.action)), true;
+		}
 		if (parts.length === 4 && method === "POST")
 			return json(res, 201, store.addResource(id, await readJson<MissionResourceWrite>(req))), true;
 		if (parts.length === 5 && method === "PATCH") {

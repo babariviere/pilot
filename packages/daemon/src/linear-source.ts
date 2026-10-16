@@ -1,4 +1,5 @@
-/** Dedicated Linear adapter. Lists are mine/team scoped; only confirmed starts may update state. */
+/** Dedicated Inbox Linear adapter. Lists are mine/team scoped; confirmed starts update state.
+ * Managed-ticket lifecycle synchronization lives in mission-linear-sync.ts. */
 import type {
 	LinearCycleSummary,
 	LinearParentHeader,

@@ -4448,6 +4448,22 @@ test("HTTP routes and WebSocket mission subscriptions", async (t) => {
 	}).then((response) => response.json());
 	assert.equal(contribution.linearRole, "contribution");
 	assert.equal(contribution.linearKey, "acme/ENG-12");
+	const syncPath = `/missions/${id}/resources/${linearReference.id}/linear-sync`;
+	const pausedLinear = await api(syncPath, { method: "POST", body: JSON.stringify({ action: "pause" }) });
+	assert.equal(pausedLinear.status, 200);
+	assert.equal((await pausedLinear.json()).linearSync.state, "paused");
+	const resumedLinear = await api(syncPath, { method: "POST", body: JSON.stringify({ action: "resume" }) });
+	assert.equal(resumedLinear.status, 200);
+	assert.equal((await resumedLinear.json()).linearSync.state, "idle");
+	const invalidSync = await api(syncPath, { method: "POST", body: JSON.stringify({ action: "anything" }) });
+	assert.equal(invalidSync.status, 400);
+	await invalidSync.arrayBuffer();
+	const referenceSync = await api(`/missions/${id}/resources/${contribution.id}/linear-sync`, {
+		method: "POST",
+		body: JSON.stringify({ action: "resume" }),
+	});
+	assert.equal(referenceSync.status, 404);
+	await referenceSync.arrayBuffer();
 	const unsafeDetach = await api(`/missions/${id}/resources/${linearReference.id}`, { method: "DELETE" });
 	assert.equal(unsafeDetach.status, 409);
 	await unsafeDetach.arrayBuffer();
