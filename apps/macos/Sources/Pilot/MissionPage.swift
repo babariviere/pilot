@@ -119,6 +119,18 @@ private struct MissionToolbar: ToolbarContent {
     let compactTabs: Bool
 
     var body: some ToolbarContent {
+        // The coordinator is the chat people open most from a mission, so it sits beside the title rather than
+        // only in the actions menu. Without one, "Start a Coordinator…" stays in the menu.
+        if let coordinator = mission.coordinatorSessionId {
+            ToolbarItem(placement: .navigation) {
+                let title = model.client.session(coordinator)?.title
+                Button { model.selectedSessionId = coordinator } label: {
+                    PilotSymbol(PilotIcon.coordinator, context: .toolbar)
+                }
+                .help(title.map { "Open the coordinator, \($0)" } ?? "Open the coordinator")
+                .accessibilityLabel("Open coordinator")
+            }
+        }
         ToolbarItem(placement: .principal) {
             MissionTabPicker(mission: mission, compact: compactTabs, selection: model.missionTabSelection)
                 .environmentObject(model)
