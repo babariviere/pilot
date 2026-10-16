@@ -119,18 +119,7 @@ private struct MissionToolbar: ToolbarContent {
     let compactTabs: Bool
 
     var body: some ToolbarContent {
-        // The coordinator is the chat people open most from a mission, so it sits beside the title rather than
-        // only in the actions menu. Without one, "Start a Coordinator…" stays in the menu.
-        if let coordinator = mission.coordinatorSessionId {
-            ToolbarItem(placement: .navigation) {
-                let title = model.client.session(coordinator)?.title
-                Button { model.selectedSessionId = coordinator } label: {
-                    PilotSymbol(PilotIcon.coordinator, context: .toolbar)
-                }
-                .help(title.map { "Open the coordinator, \($0)" } ?? "Open the coordinator")
-                .accessibilityLabel("Open coordinator")
-            }
-        }
+        coordinatorToolbar
         ToolbarItem(placement: .principal) {
             MissionTabPicker(mission: mission, compact: compactTabs, selection: model.missionTabSelection)
                 .environmentObject(model)
@@ -167,6 +156,30 @@ private struct MissionToolbar: ToolbarContent {
             .menuIndicator(.hidden)
             .help("Mission actions")
             .accessibilityLabel("Mission actions")
+        }
+    }
+
+    /// The coordinator is the chat people open most from a mission, so a plain icon sits beside the title rather
+    /// than only in the actions menu. Without one, "Start a Coordinator…" stays in the menu.
+    @ToolbarContentBuilder private var coordinatorToolbar: some ToolbarContent {
+        if let coordinator = mission.coordinatorSessionId {
+            if #available(macOS 26.0, *) {
+                coordinatorItem(coordinator).sharedBackgroundVisibility(.hidden)
+            } else {
+                coordinatorItem(coordinator)
+            }
+        }
+    }
+
+    private func coordinatorItem(_ coordinator: String) -> some ToolbarContent {
+        ToolbarItem(placement: .navigation) {
+            let title = model.client.session(coordinator)?.title
+            Button { model.selectedSessionId = coordinator } label: {
+                PilotSymbol(PilotIcon.coordinator, context: .toolbar)
+            }
+            .buttonStyle(.borderless)
+            .help(title.map { "Open the coordinator, \($0)" } ?? "Open the coordinator")
+            .accessibilityLabel("Open coordinator")
         }
     }
 
