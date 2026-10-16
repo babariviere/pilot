@@ -196,6 +196,16 @@ xcrun swiftc -O -parse-as-library apps/macos/scripts/bench-markdown.swift \
 
 The full parse is the mean over the reply; near its end a single update cost about 4 ms off the main thread.
 Whole-app numbers come from the streaming benchmark above.
++
+**Narrow invalidation.** Every streamed batch used to republish `SessionFeed`, so `ChatView`'s whole body (including
+the composer, the working line and scheduled messages) was evaluated once per update. Rows now publish through
+`SessionFeed.rows`, observed only by `TranscriptRowsSection`; the feed publishes `TranscriptStatus`, which changes
+with a turn's state, not with its text. Publication waits for the next display frame when one already happened in
+the current frame (`DisplayFramePacer`, a paused `CADisplayLink` that runs only while an update waits). The
+per-revision `scrollTo` is gone: while following, `TranscriptScrollObserver` already pins the bottom in the layout
+pass that grows the document. The benchmark's `chat body evaluations` should stay near zero while streaming, and
+`transcript rows evaluations` counts the row updates instead.
+
 
 
 

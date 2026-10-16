@@ -2,9 +2,21 @@ import PilotCore
 import SwiftUI
 
 /// Live transcript for one session, fed by pilotd's agent event stream.
+/// Rows publish through `rows`, observed only by the transcript's row views, and at most once per display frame.
+/// The feed itself publishes `status`, which changes with a turn's state rather than per streamed token, so the
+/// composer and the chat around the rows are not re-evaluated while text streams.
 @MainActor
 final class SessionFeed: ObservableObject {
-    @Published private(set) var presentation: TranscriptPresentation
+    let rows: TranscriptRowsModel
+    @Published private(set) var status: TranscriptStatus
+    var presentation: TranscriptPresentation {
+        get { rows.presentation }
+        set {
+            rows.presentation = newValue
+            let next = TranscriptStatus(newValue)
+            if next != status { status = next }
+        }
+    }
     @Published private(set) var loading = true
     @Published private(set) var hasSnapshot = false
     @Published private(set) var loadingEarlier = false
@@ -24,6 +36,11 @@ final class SessionFeed: ObservableObject {
     private var processing: Task<Void, Never>?
     private var generation = UUID()
     private var processorRevision = 0
+    /// The newest reduced state not yet published, and whether its batches held a snapshot or a failure.
+    private var staged: TranscriptPresentation?
+    private var stagedSnapshot = false
+    private var stagedLoaded = false
+    private lazy var pacer = DisplayFramePacer { [weak self] in self?.publishStaged() }
     var onPresentationChanged: (() -> Void)?
     var onEventsApplied: (([JSONValue]) -> Void)?
     var isSubscribed: Bool { token != nil || releaseHosted != nil }
@@ -32,21 +49,25 @@ final class SessionFeed: ObservableObject {
     init(sessionId: String, client: PilotClient, initialPresentation: TranscriptPresentation = TranscriptPresentation()) {
         self.sessionId = sessionId
         self.client = client
-        presentation = initialPresentation
+        rows = TranscriptRowsModel(initialPresentation)
+        status = TranscriptStatus(initialPresentation)
     }
 
     init(ref: HostResourceRef, hosts: HostClients, initialPresentation: TranscriptPresentation = TranscriptPresentation()) {
         sessionId = ref.localId
         client = nil
         hostedContext = HostViewContext(host: ref.host, hosts: hosts)
-        presentation = initialPresentation
+        rows = TranscriptRowsModel(initialPresentation)
+        status = TranscriptStatus(initialPresentation)
     }
 
     /// A static transcript, for snapshots and previews.
     init(sessionId: String, transcript: Transcript) {
         self.sessionId = sessionId
         client = nil
-        presentation = TranscriptPresentation(transcript: transcript)
+        let presentation = TranscriptPresentation(transcript: transcript)
+        rows = TranscriptRowsModel(presentation)
+        status = TranscriptStatus(presentation)
         loading = false
         hasSnapshot = true
     }
@@ -63,6 +84,7 @@ final class SessionFeed: ObservableObject {
         }
         guard let client, token == nil else { return }
         generation = UUID()
+        clearStaged()
         processor = TranscriptProcessor()
         processorRevision = 0
         // Cached rows can paint immediately, but stale queue/status must not drive actions or review.
@@ -98,7 +120,7 @@ final class SessionFeed: ObservableObject {
             while let self, self.generation == generation, !self.pending.isEmpty {
                 let events = self.pending.flatMap { $0 }
                 self.pending.removeAll(keepingCapacity: true)
-                guard var presentation = try? await StreamingTrace.measureAsync(.transcriptApply, {
+                guard let presentation = try? await StreamingTrace.measureAsync(.transcriptApply, {
                     try await processor.apply(events)
                 }) else {
                     if self.generation == generation { self.processing = nil }
@@ -106,29 +128,51 @@ final class SessionFeed: ObservableObject {
                 }
                 guard !Task.isCancelled, self.generation == generation else { return }
                 self.onEventsApplied?(events)
-                // Restoring a session's state on open is not a live change: without this, the queue
-                // strip, todos and composer hints animate in as if they had just appeared.
-                var transaction = Transaction()
-                transaction.disablesAnimations = !self.hasSnapshot
-                StreamingTrace.measure(.publish) { withTransaction(transaction) {
-                    if presentation.revision != self.processorRevision {
-                        self.processorRevision = presentation.revision
-                        presentation.revision = self.presentation.revision + 1
-                        self.presentation = presentation
-                        self.onPresentationChanged?()
-                        // Same transaction as the rows: the committed message replaces its stand-in in one frame.
-                        self.reconcileOutgoing()
-                    }
-                    if events.contains(where: { $0["type"]?.string == "snapshot" }) {
-                        self.hasSnapshot = true
-                    }
-                    if events.contains(where: { ["snapshot", "task_failed"].contains($0["type"]?.string ?? "") }) {
-                        self.loading = false
-                    }
-                } }
+                if presentation.revision != self.processorRevision {
+                    self.processorRevision = presentation.revision
+                    self.staged = presentation
+                }
+                if events.contains(where: { $0["type"]?.string == "snapshot" }) { self.stagedSnapshot = true }
+                if events.contains(where: { ["snapshot", "task_failed"].contains($0["type"]?.string ?? "") }) {
+                    self.stagedLoaded = true
+                }
+                self.pacer.request()
             }
             if let self, self.generation == generation { self.processing = nil }
         }
+    }
+
+    /// Publishes the newest reduced state, once per display frame at most.
+    private func publishStaged() {
+        guard staged != nil || stagedSnapshot || stagedLoaded else { return }
+        let next = staged
+        let snapshot = stagedSnapshot
+        let loaded = stagedLoaded
+        clearStaged()
+        // Restoring a session's state on open is not a live change: without this, the queue
+        // strip, todos and composer hints animate in as if they had just appeared.
+        var transaction = Transaction()
+        transaction.disablesAnimations = !hasSnapshot
+        StreamingTrace.measure(.publish) {
+            withTransaction(transaction) {
+                if var next {
+                    next.revision = presentation.revision + 1
+                    presentation = next
+                    onPresentationChanged?()
+                    // Same transaction as the rows: the committed message replaces its stand-in in one frame.
+                    reconcileOutgoing()
+                }
+                if snapshot { hasSnapshot = true }
+                if loaded { loading = false }
+            }
+        }
+    }
+
+    private func clearStaged() {
+        staged = nil
+        stagedSnapshot = false
+        stagedLoaded = false
+        pacer.cancel()
     }
 
     func stop() {
@@ -136,6 +180,7 @@ final class SessionFeed: ObservableObject {
         if let token { client?.unsubscribe(sessionId, token: token) }
         token = nil
         generation = UUID()
+        clearStaged()
         processing?.cancel()
         processing = nil
         cancelEarlierLoad()
@@ -263,7 +308,7 @@ struct ChatView: View {
 
     var body: some View {
         let _ = Self.bodyEvaluations &+= 1
-        let transcript = feed.presentation
+        let transcript = feed.status
         ScrollViewReader { proxy in
             ScrollView {
                 // History already owns a lazy stack. Making its container lazy as well
@@ -276,7 +321,7 @@ struct ChatView: View {
                             .frame(maxWidth: .infinity)
                     }
                     if let context, !context.available {
-                        DisconnectedNotice(context: context, historyCached: !transcript.rows.isEmpty)
+                        DisconnectedNotice(context: context, historyCached: transcript.hasRows)
                             .frame(maxWidth: Theme.column).frame(maxWidth: .infinity)
                     }
                     if feed.loading, session.state != "failed", context?.available != false {
@@ -288,16 +333,9 @@ struct ChatView: View {
                             .frame(maxWidth: Theme.column)
                             .frame(maxWidth: .infinity)
                     }
-                    if transcript.historyRowCount > 0 {
-                        TranscriptHistoryRows(revision: transcript.historyRevision,
-                            rows: transcript.historyRows[...], toolExpansions: toolExpansions,
-                            messageExpansions: messageExpansions).equatable()
-                    }
-                    let activeWork = transcript.working ? transcript.liveRows.last(where: \.isWork)?.id : nil
-                    ForEach(transcript.liveRows) { row in
-                        RowView(row: row, toolExpansions: toolExpansions,
-                            messageExpansions: messageExpansions, active: row.id == activeWork).equatable()
-                    }
+                    // The only part observing streamed rows; everything else here reads the turn's status.
+                    TranscriptRowsSection(model: feed.rows, toolExpansions: toolExpansions,
+                                          messageExpansions: messageExpansions)
                     // Sent messages show at once; the committed row replaces each in the same frame.
                     ForEach(feed.outgoing.messages) { message in
                         UserMessage(text: message.text)
@@ -369,10 +407,8 @@ struct ChatView: View {
             .environment(\.transcriptContentPrepared, preparedAction.callback)
             .environment(\.transcriptMessageToggled, scroll.messageToggled)
             .environment(\.transcriptRewind, session.isReadOnlyHistory ? nil : rewind)
-            .onChange(of: transcript.revision) { _, _ in
-                guard scroll.follow.shouldScrollToBottom else { return }
-                proxy.scrollTo("bottom", anchor: .bottom)
-            }
+            // New rows need no scroll request: while following, the native observer pins the bottom when the
+            // document grows, within the same layout pass (TranscriptScrollObserver).
             .onChange(of: feed.outgoing.messages.count) { previous, count in
                 // Sending is a request to see the conversation's end, even after reading back.
                 guard count > previous else { return }
@@ -396,7 +432,8 @@ struct ChatView: View {
                     // Matches the other rows above the composer, such as the queued-messages header.
                     HStack {
                         Button {
-                            model.buildWithContext(from: session, rows: transcript.rows, context: context)
+                            // Read at click time: the button's view does not observe streamed rows.
+                            model.buildWithContext(from: session, rows: feed.presentation.rows, context: context)
                         } label: {
                             Label("Start a Build chat with this context", icon: PilotIcon.buildMode)
                         }
@@ -507,13 +544,13 @@ struct ChatView: View {
     /// and tools run, so activity never looks like it stopped. A manual compaction can run
     /// while idle, so it shows too. A starting session shows it once the loading spinner is gone.
     /// Background jobs keep it after the agent's turn ends ("Waiting on 2 jobs · Tests 4m").
-    private func showsWorkingIndicator(_ transcript: TranscriptPresentation) -> Bool {
+    private func showsWorkingIndicator(_ transcript: TranscriptStatus) -> Bool {
         transcript.working || transcript.compacting || (session.state == "starting" && !feed.loading)
             || !runningJobs.isEmpty || !feed.outgoing.isEmpty
     }
 
     /// A message on its way into the run already shows as its transcript bubble.
-    private func visibleQueuedMessages(_ transcript: TranscriptPresentation) -> [QueuedMessage] {
+    private func visibleQueuedMessages(_ transcript: TranscriptStatus) -> [QueuedMessage] {
         let hidden = feed.outgoing.hiddenQueueIDs
         let messages = transcript.queuedMessagesInDeliveryOrder
         return hidden.isEmpty ? messages : messages.filter { !hidden.contains($0.id) }
@@ -523,7 +560,7 @@ struct ChatView: View {
     private var runningJobs: [SessionJob] { session.isArchived ? [] : session.runningJobs ?? [] }
 
     /// The agent's question replaces the composer once its run has ended.
-    private func pendingQuestion(_ transcript: TranscriptPresentation) -> AgentQuestion? {
+    private func pendingQuestion(_ transcript: TranscriptStatus) -> AgentQuestion? {
         transcript.questionForComposer(session: session, hasSnapshot: feed.hasSnapshot)
     }
 
@@ -636,6 +673,41 @@ struct ChatView: View {
                 composer.draft = [previous, composer.draft].filter { !$0.isEmpty }.joined(separator: "\n\n")
                 composer.error = error.localizedDescription
             }
+        }
+    }
+}
+
+/// The transcript's rows, published per streamed update (at most once per display frame). Only
+/// `TranscriptRowsSection` observes it, so a token re-evaluates the rows, not the chat around them.
+@MainActor
+final class TranscriptRowsModel: ObservableObject {
+    @Published fileprivate(set) var presentation: TranscriptPresentation
+
+    init(_ presentation: TranscriptPresentation) {
+        self.presentation = presentation
+    }
+}
+
+/// History (one equatable subtree) and the live tail. Lays out as children of the transcript's stack.
+struct TranscriptRowsSection: View {
+    @ObservedObject var model: TranscriptRowsModel
+    let toolExpansions: TranscriptExpansions
+    let messageExpansions: TranscriptExpansions
+    /// Offline performance checks report this next to ChatView's count.
+    static var bodyEvaluations = 0
+
+    var body: some View {
+        let _ = Self.bodyEvaluations &+= 1
+        let transcript = model.presentation
+        if transcript.historyRowCount > 0 {
+            TranscriptHistoryRows(revision: transcript.historyRevision,
+                rows: transcript.historyRows[...], toolExpansions: toolExpansions,
+                messageExpansions: messageExpansions).equatable()
+        }
+        let activeWork = transcript.working ? transcript.liveRows.last(where: \.isWork)?.id : nil
+        ForEach(transcript.liveRows) { row in
+            RowView(row: row, toolExpansions: toolExpansions,
+                messageExpansions: messageExpansions, active: row.id == activeWork).equatable()
         }
     }
 }
