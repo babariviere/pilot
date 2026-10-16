@@ -145,6 +145,13 @@ extension SessionSummary {
         return pullRequest.map { [$0] } ?? []
     }
 
+    /// The PR ⌘⇧P opens: the newest open one, else the newest of any state. GitHub numbers grow with each new PR,
+    /// so the highest number is the latest. PRs whose URL is unsafe to open are skipped.
+    public var latestPullRequest: SessionPullRequest? {
+        let prs = linkedPullRequests.filter { $0.browserURL != nil }
+        return prs.filter { !$0.isTerminal }.max { $0.number < $1.number } ?? prs.max { $0.number < $1.number }
+    }
+
     /// Every session branch paired with its PR, the current branch first. PRs without a known head branch
     /// (older daemons) attach to the current branch when it has none, otherwise they follow without a name.
     public func branchLinks(current: String? = nil) -> [SessionBranchLink] {

@@ -173,17 +173,18 @@ struct CommandPaletteCatalog {
         return entries
     }
 
-    /// What can be done to one chat: retry, stop, open its PRs, pin or unpin, archive.
+    /// What can be done to one chat: retry, stop, open its PRs, pin or unpin, archive. For the open chat
+    /// (suggested), the latest PR's row shows ⌘⇧P.
     func chatActions(_ session: SessionSummary, suggested: Bool = false) -> [CommandPaletteEntry] {
         guard !session.isArchived else { return [] }
         let id = session.id
         let model = model
         var entries: [CommandPaletteEntry] = []
-        func add(_ key: String, _ title: String, _ icon: PilotIcon, namesChat: Bool = true,
+        func add(_ key: String, _ title: String, _ icon: PilotIcon, namesChat: Bool = true, shortcut: String? = nil,
                  perform: @escaping @MainActor () -> Void) {
             entries.append(CommandPaletteEntry(
                 item: CommandPaletteItem(id: "action:\(key):\(id)", kind: .action, title: title, suggested: suggested),
-                icon: icon, suffix: namesChat ? session.title : nil, perform: perform))
+                icon: icon, suffix: namesChat ? session.title : nil, shortcut: shortcut, perform: perform))
         }
         if session.status == .failed {
             add("retry", "Retry", .refresh) { model.retry(session) }
@@ -193,9 +194,11 @@ struct CommandPaletteCatalog {
         }
         let pullRequests = session.linkedPullRequests.filter { !$0.isTerminal }
             + session.linkedPullRequests.filter(\.isTerminal)
+        let latest = suggested ? session.latestPullRequest?.url : nil
         for pullRequest in pullRequests {
             guard let url = pullRequest.browserURL else { continue }
-            add("pr-\(pullRequest.number)", "Open PR #\(pullRequest.number) on GitHub", .openExternal, namesChat: false) {
+            add("pr-\(pullRequest.number)", "Open PR #\(pullRequest.number) on GitHub", .openExternal, namesChat: false,
+                shortcut: pullRequest.url == latest ? "⌘⇧P" : nil) {
                 BrowserLinkOpener.shared.open(url)
             }
         }
