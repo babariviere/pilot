@@ -1,0 +1,68 @@
+/** All watch SQLite work, including startup and indexed matching, stays off the daemon loop. */
+import { randomUUID } from "node:crypto";
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { parentPort, workerData } from "node:worker_threads";
+import { MAX_WATCHES, validateWatch, type Watch, type WatchInput } from "./watches.ts";
+
+const { path } = workerData as { path: string };
+if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+const db = new DatabaseSync(path);
+db.exec(`
+ PRAGMA journal_mode=WAL;
+ PRAGMA synchronous=FULL;
+ PRAGMA max_page_count=32768;
+ PRAGMA journal_size_limit=4194304;
+ CREATE TABLE IF NOT EXISTS watches (
+ id TEXT PRIMARY KEY, event TEXT NOT NULL, target_kind TEXT NOT NULL,
+ target_id TEXT NOT NULL, target_scope TEXT NOT NULL, data TEXT NOT NULL, expires_at INTEGER
+ );
+ CREATE INDEX IF NOT EXISTS watches_match ON watches(event, target_kind, target_id, target_scope);
+ CREATE INDEX IF NOT EXISTS watches_expiry ON watches(expires_at) WHERE expires_at IS NOT NULL;
+`);
+function prune(now: number): void {
+	db.prepare("DELETE FROM watches WHERE expires_at <= ?").run(now);
+}
+function list(now: number): Watch[] {
+	prune(now);
+	return db
+		.prepare("SELECT data FROM watches ORDER BY rowid")
+		.all()
+		.map((row) => JSON.parse(String(row.data)));
+}
+function dispatch(op: string, args: unknown): unknown {
+	const now = Date.now();
+	if (op === "list") return list(now);
+	if (op === "add") {
+		const input = validateWatch(args as WatchInput, now);
+		prune(now);
+		if (Number(db.prepare("SELECT COUNT(*) AS n FROM watches").get()!.n) >= MAX_WATCHES)
+			throw new Error("Watch limit reached");
+		const watch: Watch = { ...input, id: randomUUID(), createdAt: now };
+		db.prepare("INSERT INTO watches VALUES (?, ?, ?, ?, ?, ?, ?)").run(
+			watch.id,
+			watch.event,
+			watch.target.kind,
+			watch.target.id,
+			watch.target.missionId ?? "",
+			JSON.stringify(watch),
+			watch.expiresAt ?? null,
+		);
+		return watch;
+	}
+	if (op === "remove") return Number(db.prepare("DELETE FROM watches WHERE id = ?").run(String(args)).changes) > 0;
+	if (op === "close") {
+		db.close();
+		return null;
+	}
+	throw new Error("Unknown watch operation");
+}
+parentPort!.on("message", ({ id, op, args }: { id: number; op: string; args: unknown }) => {
+	try {
+		parentPort!.postMessage({ id, value: dispatch(op, args) });
+	} catch (error) {
+		parentPort!.postMessage({ id, error: String(error) });
+	}
+	if (op === "close") parentPort!.close();
+});

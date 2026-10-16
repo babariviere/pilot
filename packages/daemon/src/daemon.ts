@@ -40,6 +40,7 @@ import { TerminalManager } from "./terminals.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
 import { TriageGroomer, workerTriage } from "./triage-grooming.ts";
 import { untrackedStats } from "./untracked-stats.ts";
+import { WatchService } from "./watch-service.ts";
 
 const config = loadConfig();
 await mkdir(config.agentDir ?? getAgentDir(), { recursive: true, mode: 0o700 });
@@ -56,6 +57,8 @@ watchdog.start();
 const projects = new ProjectStore(config.home);
 await projects.load();
 const trackedItems = new TrackedItemStore(join(config.home, "tracked-items.sqlite"));
+const watches = new WatchService(join(config.home, "watches.sqlite"));
+await watches.list();
 await trackedItems.load(projects.list().map((project) => project.id));
 const sourceMcp = new PiSourceMcpClient(config.agentDir);
 const tracking = new SourceRegistry(projects, trackedItems, sourceMcp);
@@ -319,6 +322,7 @@ async function stop(): Promise<void> {
 	stopSlackCompletions();
 	await Promise.all(completionWrites);
 	await trackedItems.close();
+	await watches.close();
 	await power?.stop();
 	await untrackedStats.close();
 	missionStore.close();
