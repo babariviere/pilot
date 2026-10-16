@@ -5,6 +5,7 @@ import { ServiceUnavailable } from "./errors.ts";
 export class UpdateGate {
 	private pending = 0;
 	private pausedUntil = 0;
+	private freezes = 0;
 
 	private readonly leaseMs: number;
 	private readonly now: () => number;
@@ -15,7 +16,23 @@ export class UpdateGate {
 	}
 
 	get paused(): boolean {
-		return this.now() < this.pausedUntil;
+		return this.freezes > 0 || this.now() < this.pausedUntil;
+	}
+	freezeAdmissions(): () => void {
+		this.freezes++;
+		let released = false;
+		return () => {
+			if (!released) {
+				released = true;
+				this.freezes--;
+			}
+		};
+	}
+	get admissions(): number {
+		return this.pending;
+	}
+	get frozen(): boolean {
+		return this.freezes > 0;
 	}
 
 	assertOpen(): void {

@@ -1,6 +1,16 @@
 import Foundation
+import PilotCore
 import Testing
 @testable import Pilot
+
+@Test func terminalSurfaceKeysKeepIdenticalIDsAndPathsOnDifferentHostsSeparate() {
+    let local = HostResourceRef(host: HostRef(hostId: "local", daemonId: "one", lineageId: "one"), kind: .session, localId: "same")
+    let remote = HostResourceRef(host: HostRef(hostId: "box", daemonId: "two", lineageId: "two"), kind: .session, localId: "same")
+    var retention = TerminalSurfaceRetention(inactiveLimit: 0)
+    retention.touch(local.storageKey); retention.touch(remote.storageKey)
+    retention.select(remote.storageKey, isVisible: true, paneID: UUID())
+    #expect(retention.evictions() == [local.storageKey])
+}
 
 @Test func terminalRetentionBoundsInactiveSurfacesAndProtectsTheVisibleSurface() {
     var retention = TerminalSurfaceRetention()

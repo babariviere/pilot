@@ -93,3 +93,29 @@ test("same upload ID on separate hosts cannot substitute bytes, and PNG dimensio
 	const invalid = { ...uploadMetadata(), sha256: createHash("sha256").update(huge).digest("hex") };
 	await assert.rejects(remote.stage(invalid, chunks(huge)), /24 megapixels/);
 });
+
+test("transfer freeze covers admitted bodies, metadata and cleanup before releasing blockers", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "pilot-upload-freeze-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
+	const store = new AttachmentStore(home),
+		upload = uploadMetadata();
+	let finish!: () => void;
+	const bodyGate = new Promise<void>((resolve) => {
+		finish = resolve;
+	});
+	async function* body() {
+		await bodyGate;
+		yield png;
+	}
+	const staging = store.stage(upload, body());
+	assert.equal(store.blockers().length, 1, "registered before the first await");
+	const release = store.freezeAdmissions();
+	await assert.rejects(store.stage(uploadMetadata(), chunks()), /frozen/);
+	await assert.rejects(store.discard(upload.uploadId), /frozen/);
+	assert.equal(store.blockers().length, 1);
+	finish();
+	await staging;
+	assert.deepEqual(store.blockers(), []);
+	release();
+	await store.discard(upload.uploadId);
+});

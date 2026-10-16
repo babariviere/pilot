@@ -96,6 +96,9 @@ final class PilotClient: ObservableObject {
     private var subagentSockets: [SubagentKey: StreamSocket] = [:]
     private var terminals: [String: TerminalAttachment] = [:]
     private var terminalSockets: [String: StreamSocket] = [:]
+    private(set) var terminalIntents: [String: WorkspaceTerminalIntent] = [:]
+    private var terminalReady: Set<String> = []
+    private var workspaceTerminalProtocol: Int?
     private var setupSockets: [String: SetupTerminalConnection] = [:]
 
     /// One open chat's socket and where to resume its stream after a disconnect.
@@ -110,10 +113,11 @@ final class PilotClient: ObservableObject {
     struct TerminalAttachment {
         var cols: Int
         var rows: Int
-        let onData: (String) -> Void
-        let onExit: (Int) -> Void
+        var onData: (String) -> Void
+        var onExit: (Int) -> Void
         /// Called before the daemon replays scrollback on (re)attach, so the surface can reset.
-        let onReplay: () -> Void
+        var onReplay: () -> Void
+        var onStatus: (TerminalConnectionState) -> Void = { _ in }
     }
 
     func connect(to baseURL: URL) {
@@ -143,7 +147,10 @@ final class PilotClient: ObservableObject {
     }
 
     func hello() async throws -> DaemonHello {
-        try await call("api/hello", method: "GET")
+        let generation = connectionGeneration
+        let hello: DaemonHello = try await call("api/hello", method: "GET")
+        if generation == connectionGeneration { workspaceTerminalProtocol = hello.capabilities.workspaceTerminalProtocol ?? 0 }
+        return hello
     }
 
     func operation(_ operation: DurableOperation, lookup: Bool) async throws -> OperationDelivery {
@@ -189,6 +196,7 @@ final class PilotClient: ObservableObject {
 
     /// Static data for snapshots and previews.
     func loadFixture(projects: [Project], sessions: [SessionSummary]) {
+        workspaceTerminalProtocol = 2
         fixtureSessions = true
         self.projects = projects
         hasProjectSnapshot = true
@@ -1535,28 +1543,68 @@ final class PilotClient: ObservableObject {
     // MARK: Terminals (daemon-owned PTYs)
 
     /// Attach on the terminal's own socket. Reconnects reattach without restarting, replaying the scrollback.
-    func attachTerminal(_ sessionId: String, cols: Int, rows: Int, restart: Bool = false, _ attachment: TerminalAttachment) {
+    func attachTerminal(_ sessionId: String, cols: Int, rows: Int, restart: Bool = false,
+                        intent: WorkspaceTerminalIntent? = nil, _ attachment: TerminalAttachment) {
+        guard terminals[sessionId] != nil || terminals.count < 16 else {
+            attachment.onStatus(.unavailable("Too many attached shells")); return
+        }
+        let intent = intent ?? WorkspaceTerminalIntent(restart: restart)
+        terminalIntents[sessionId] = intent
         terminals[sessionId] = attachment
         terminalSockets.removeValue(forKey: sessionId)?.close()
-        var restartNext = restart
         let socket = StreamSocket(
             url: { [weak self] in
                 guard let self, let attachment = self.terminals[sessionId] else { return nil }
-                defer { restartNext = false }
-                var query = [
+                guard self.workspaceTerminalProtocol == 2 else {
+                    if self.workspaceTerminalProtocol != nil {
+                        attachment.onStatus(.unavailable("Update this host runtime to use instance-safe workspace shells."))
+                    }
+                    return nil
+                }
+                let query = [
+                    URLQueryItem(name: "protocol", value: "2"),
                     URLQueryItem(name: "cols", value: String(attachment.cols)),
                     URLQueryItem(name: "rows", value: String(attachment.rows)),
                 ]
-                if restartNext { query.append(URLQueryItem(name: "restart", value: "1")) }
                 return self.socketURL("/api/sessions/\(Self.pathSegment(sessionId))/terminal/ws", query: query)
             },
-            willConnect: { [weak self] in self?.terminals[sessionId]?.onReplay() },
+            willConnect: { [weak self] in
+                self?.terminalReady.remove(sessionId)
+                self?.terminals[sessionId]?.onStatus(.connecting)
+            },
+            terminalBudget: true,
+            unavailable: { [weak self] in
+                self?.terminalReady.remove(sessionId)
+                self?.terminals[sessionId]?.onStatus(.disconnected)
+            },
             receive: { [weak self] updates in
                 guard let self else { return }
                 for update in updates {
                     switch update {
+                    case let .terminalHello(id, bootId, currentId) where id == sessionId:
+                        guard intent.bootId == nil || intent.bootId == bootId else {
+                            self.terminals[id]?.onStatus(.unavailable("The daemon restarted. Open a new shell explicitly."))
+                            self.terminalSockets[id]?.close()
+                            continue
+                        }
+                        if intent.bootId == nil { intent.terminalId = currentId }
+                        intent.bootId = bootId
+                        var open: [String: JSONValue] = ["type": .string("terminal.open"),
+                            "bootId": .string(bootId), "requestId": .string(intent.requestId), "restart": .bool(intent.restart)]
+                        if let terminalId = intent.terminalId { open["terminalId"] = .string(terminalId) }
+                        self.terminalSockets[id]?.send(open)
+                    case let .terminalReady(id, terminalId) where id == sessionId:
+                        intent.terminalId = terminalId
+                        self.terminalReady.insert(id)
+                        self.terminals[id]?.onReplay()
+                        self.terminals[id]?.onStatus(.connected)
                     case let .terminalData(id, _) where id == sessionId: self.handle(update)
-                    case let .terminalExit(id, _) where id == sessionId: self.handle(update)
+                    case let .terminalExit(id, _) where id == sessionId:
+                        self.terminalReady.remove(id)
+                        self.handle(update)
+                    case let .error(id?, _, message) where id == sessionId:
+                        self.terminalReady.remove(id)
+                        self.terminals[id]?.onStatus(.unavailable(message))
                     default: break
                     }
                 }
@@ -1569,19 +1617,34 @@ final class PilotClient: ObservableObject {
     func detachTerminal(_ sessionId: String) {
         guard terminals.removeValue(forKey: sessionId) != nil else { return }
         terminalSockets.removeValue(forKey: sessionId)?.close()
+        terminalIntents[sessionId] = nil
+        terminalReady.remove(sessionId)
     }
 
-    func terminalInput(_ sessionId: String, _ data: Data) {
-        terminalSockets[sessionId]?.send(["type": .string("terminal.input"), "data": .string(String(decoding: data, as: UTF8.self))])
+    @discardableResult func terminalInput(_ sessionId: String, _ data: Data) -> Bool {
+        guard terminalReady.contains(sessionId), data.count <= 16 * 1024,
+              let text = String(data: data, encoding: .utf8), let id = terminalIntents[sessionId]?.terminalId else { return false }
+        return terminalSockets[sessionId]?.send(["type": .string("terminal.input"), "terminalId": .string(id),
+            "data": .string(text)]) ?? false
     }
 
     func terminalResize(_ sessionId: String, cols: Int, rows: Int) {
-        guard cols > 0, rows > 0 else { return }
+        guard cols > 0, rows > 0, cols <= 1000, rows <= 1000 else { return }
         terminals[sessionId]?.cols = cols
         terminals[sessionId]?.rows = rows
+        guard terminalReady.contains(sessionId), let id = terminalIntents[sessionId]?.terminalId else { return }
         terminalSockets[sessionId]?.send([
-            "type": .string("terminal.resize"), "cols": .number(Double(cols)), "rows": .number(Double(rows)),
+            "type": .string("terminal.resize"), "terminalId": .string(id), "cols": .number(Double(cols)), "rows": .number(Double(rows)),
         ])
+    }
+    @discardableResult func closeTerminal(_ sessionId: String) -> Bool {
+        guard terminalReady.contains(sessionId), let id = terminalIntents[sessionId]?.terminalId else { return false }
+        let sent = terminalSockets[sessionId]?.send(["type": .string("terminal.close"), "terminalId": .string(id)]) ?? false
+        if sent { terminalReady.remove(sessionId); terminals[sessionId]?.onStatus(.closing) }
+        return sent
+    }
+    func terminalReadPaused(_ sessionId: String, _ paused: Bool) {
+        terminalSockets[sessionId]?.setReadPaused(paused)
     }
     private func post(_ message: [String: JSONValue]) {
         guard connected, let control, let data = try? JSONEncoder().encode(JSONValue.object(message)) else { return }
@@ -1592,6 +1655,7 @@ final class PilotClient: ObservableObject {
         closeSetupAttachments()
         guard !disconnected else { return }
         connectionGeneration = UUID()
+        workspaceTerminalProtocol = nil
         hasProjectSnapshot = false
         hasSessionSnapshot = false
         hasMissionSnapshot = false
@@ -1617,7 +1681,25 @@ final class PilotClient: ObservableObject {
                     self.scheduleReconnect()
                 }
             }
-        } else { openControlSocket() }
+        } else {
+            openControlSocket()
+            let generation = connectionGeneration
+            // Local lists remain usable independently. Terminal support is re-negotiated on
+            // every connection too, so a replaced/older Local runtime cannot receive a legacy open.
+            Task { [weak self] in
+                guard let self else { return }
+                do {
+                    _ = try await self.hello()
+                    guard self.connectionGeneration == generation, !self.disconnected else { return }
+                    for socket in self.terminalSockets.values { socket.retryNow() }
+                } catch {
+                    guard self.connectionGeneration == generation, !self.disconnected else { return }
+                    for attachment in self.terminals.values {
+                        attachment.onStatus(.unavailable("Could not verify workspace shell support. Reconnect to try again."))
+                    }
+                }
+            }
+        }
     }
 
     private func suspendStreams() {
@@ -1754,6 +1836,8 @@ final class PilotClient: ObservableObject {
             terminals[id]?.onData(data)
         case let .terminalExit(id, code):
             terminals[id]?.onExit(code)
+        case .terminalHello, .terminalReady:
+            break
         case let .error(id, name, message):
             // Others include terminal-command failures, not agent transcript events.
             guard let id, let name else { break }

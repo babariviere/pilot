@@ -17,6 +17,11 @@ final class TerminalStore: ObservableObject {
     private(set) var states: [String: TerminalViewState] = [:]
     /// Host side of each surface, for tests that read the screen.
     private(set) var memories: [String: InMemoryTerminalSession] = [:]
+    @Published private(set) var connections: [String: TerminalConnectionState] = [:]
+    private var refs: [String: HostResourceRef] = [:]
+    private var callbacks: [String: TerminalCallbacks] = [:]
+    private let routing: HostClients?
+    init(hosts: HostClients? = nil) { routing = hosts }
     private var settings: AppSettings?
     private var subscriptions: Set<AnyCancellable> = []
     private var retention = TerminalSurfaceRetention()
@@ -34,7 +39,7 @@ final class TerminalStore: ObservableObject {
         return useGhostty && FileManager.default.fileExists(atPath: Self.ghosttyConfig) ? .file(Self.ghosttyConfig) : .none
     }
 
-    private var client: PilotClient { AppModel.shared.client }
+    private var hosts: HostClients { routing ?? AppModel.shared.hosts }
 
     /// Applies font and config changes from Settings to every open terminal, live.
     func bind(to settings: AppSettings) {
@@ -52,22 +57,24 @@ final class TerminalStore: ObservableObject {
     }
 
     /// Attaches to the session's shell unless attached or exited (restart is explicit).
-    func ensure(_ session: SessionSummary) {
-        if states[session.id] != nil {
-            retention.touch(session.id)
+    func ensure(_ session: SessionSummary, ref: HostResourceRef) {
+        let id = ref.storageKey
+        if states[id] != nil {
+            retention.touch(id)
             return
         }
-        guard session.state != "starting", states[session.id] == nil, !exited.contains(session.id) else { return }
-        start(session, restart: false)
+        guard session.state != "starting", states[id] == nil, !exited.contains(id) else { return }
+        start(session, ref: ref, restart: false)
     }
 
     /// Only the displayed surface is protected. A hidden tab/window has no active surface.
-    func select(_ session: SessionSummary, isVisible: Bool, paneID: UUID) {
-        let shouldFocus = isVisible && (retention.visibleSessionId != session.id || !retention.ownsSurfaceCallbacks(paneID: paneID))
-        retention.select(session.id, isVisible: isVisible, paneID: paneID)
-        ensure(session)
+    func select(_ session: SessionSummary, ref: HostResourceRef, isVisible: Bool, paneID: UUID) {
+        let id = ref.storageKey
+        let shouldFocus = isVisible && (retention.visibleSessionId != id || !retention.ownsSurfaceCallbacks(paneID: paneID))
+        retention.select(id, isVisible: isVisible, paneID: paneID)
+        ensure(session, ref: ref)
         synchronizeSurfaceVisibility()
-        if shouldFocus { states[session.id]?.requestFocus() }
+        if shouldFocus { states[id]?.requestFocus() }
         evictInactiveSurfaces()
     }
 
@@ -97,34 +104,51 @@ final class TerminalStore: ObservableObject {
         for id in retention.evictions() { remove(id) }
     }
 
-    func restart(_ session: SessionSummary) {
+    func restart(_ session: SessionSummary, ref: HostResourceRef) {
         guard session.state != "starting" else { return }
-        exited.remove(session.id)
-        if states[session.id] != nil { remove(session.id) }
-        start(session, restart: true)
+        guard hosts.available.contains(ref.host) else { connections[ref.storageKey] = .disconnected; return }
+        exited.remove(ref.storageKey)
+        if states[ref.storageKey] != nil { remove(ref.storageKey) }
+        start(session, ref: ref, restart: true)
     }
 
-    private func start(_ session: SessionSummary, restart: Bool) {
-        let id = session.id
+    func close(_ ref: HostResourceRef) {
+        if !hosts.closeTerminal(ref) { connections[ref.storageKey] = .unavailable("Close was not delivered. Reconnect to inspect this shell.") }
+    }
+
+    private func start(_ session: SessionSummary, ref: HostResourceRef, restart: Bool) {
+        guard ref.kind == .session, ref.localId == session.id else { return }
+        let id = ref.storageKey
+        let callback = TerminalCallbacks { [weak self] inputs, viewport, rejected, outputPaused in
+            guard let self, self.refs[id] == ref else { return }
+            var accepted = !rejected
+            for data in inputs {
+                if !self.hosts.terminalInput(ref, data: data) { accepted = false; break }
+            }
+            if let viewport { self.hosts.terminalResize(ref, cols: viewport.0, rows: viewport.1) }
+            if let outputPaused { self.hosts.terminalReadPaused(ref, outputPaused) }
+            if !accepted { self.connections[id] = .unavailable("Input was not accepted. Reconnect if needed; paste at most 16 KiB at once.") }
+        }
+        callback.setInputEnabled(false)
+        callbacks[id] = callback
+        refs[id] = ref
+        connections[id] = .connecting
         let memory = InMemoryTerminalSession(
-            write: { data in
-                Task { @MainActor in AppModel.shared.client.terminalInput(id, data) }
-            },
+            write: { callback.write($0) },
             resize: { viewport in
-                Task { @MainActor in
-                    AppModel.shared.client.terminalResize(id, cols: Int(viewport.columns), rows: Int(viewport.rows))
-                }
+                callback.resize(cols: Int(viewport.columns), rows: Int(viewport.rows))
             },
             suppressesPixelOnlyResizes: true
         )
         let state = TerminalViewState(controller: controller)
+        memory.setOutputBacklogHandler(highWater: 512 * 1024, lowWater: 128 * 1024) { callback.backlog($0) }
         state.isSurfaceVisible = id == retention.visibleSessionId
         state.configuration = TerminalSurfaceOptions(backend: .inMemory(memory))
         state.onClose = { [weak self, weak state] _ in
             // Reported from a libghostty callback; change the view tree on the next turn.
             DispatchQueue.main.async {
                 guard let self, let state, self.states[id] === state else { return }
-                self.shellExited(id)
+                self.close(ref)
             }
         }
         states[id] = state
@@ -134,15 +158,15 @@ final class TerminalStore: ObservableObject {
         if state.isSurfaceVisible { state.requestFocus() }
         order.append(id)
         retention.touch(id)
-        client.attachTerminal(
-            id,
-            cols: 80,
-            rows: 24,
-            restart: restart,
-            .init(
+        do { try hosts.attachTerminal(ref, restart: restart, attachment: .init(
                 cols: 80,
                 rows: 24,
-                onData: { memory.receive($0) },
+                onData: { [weak self] data in
+                    memory.receive(data)
+                    // Pause before requesting the next WebSocket frame, not after an unbounded
+                    // queue of output has already reached the renderer's asynchronous parser.
+                    if memory.pendingOutputByteCount >= 512 * 1024 { self?.hosts.terminalReadPaused(ref, true) }
+                },
                 onExit: { [weak self, weak state] code in
                     memory.finish(exitCode: UInt32(clamping: max(0, code)), runtimeMilliseconds: 0)
                     DispatchQueue.main.async {
@@ -151,9 +175,14 @@ final class TerminalStore: ObservableObject {
                     }
                 },
                 // Reset before the daemon replays scrollback, so reconnects do not duplicate output.
-                onReplay: { memory.receive("\u{1B}c") }
-            )
-        )
+                onReplay: { memory.receive("\u{1B}c") },
+                onStatus: { [weak self, weak state] status in
+                    guard let self, let state, self.states[id] === state else { return }
+                    callback.setInputEnabled(status == .connected)
+                    self.connections[id] = status
+                }
+            ))
+        } catch { connections[id] = .unavailable("This shell could not attach to its host.") }
         evictInactiveSurfaces()
     }
 
@@ -164,12 +193,16 @@ final class TerminalStore: ObservableObject {
             window.makeFirstResponder(nil)
         }
         exited.insert(id)
+        if exited.count > 128, let old = exited.first(where: { $0 != id }) { exited.remove(old) }
         remove(id)
     }
 
     /// Detaches the view; the daemon keeps the shell (if still running) for the next attach.
     func remove(_ id: String) {
-        client.detachTerminal(id)
+        if let ref = refs.removeValue(forKey: id) { hosts.detachTerminal(ref) }
+        callbacks.removeValue(forKey: id)?.close()
+        memories[id]?.setOutputBacklogHandler(highWater: 512 * 1024, lowWater: 128 * 1024, nil)
+        connections[id] = nil
         states[id]?.isSurfaceVisible = false
         states[id] = nil
         memories[id] = nil
@@ -227,40 +260,70 @@ struct TerminalPane: View {
     @StateObject private var lifetime = TerminalPaneLifetime()
     @ObservedObject var store: TerminalStore
     let session: SessionSummary
+    let ref: HostResourceRef
+    @ObservedObject var hosts: HostClients
     var isVisible = true
+    @State private var reconnecting = false
+    @State private var reconnectError: String?
+    private var key: String { ref.storageKey }
 
     var body: some View {
         VStack(spacing: 0) {
             InspectorPaneHeader("Shell", detail: {
-                Text(session.cwd.abbreviatingHome)
+                Text("\(ref.host.hostId == "local" ? "Local" : ref.host.hostId) · \(session.cwd)")
                     .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
                     .lineLimit(1).truncationMode(.head)
                     .help(session.cwd)
             }, trailing: {
-                Button {
-                    store.restart(session)
-                } label: {
-                    PilotSymbol(PilotIcon.refresh, context: .toolbar)
-                }
-                .buttonStyle(QuietIconButtonStyle())
-                .disabled(session.state == "starting")
-                .help("Restart shell")
-                .accessibilityLabel("Restart shell")
+                Menu {
+                    Button("Restart shell") { store.restart(session, ref: ref) }
+                    Button("Close shell") { store.close(ref) }
+                } label: { PilotSymbol(PilotIcon.more, context: .toolbar) }
+                .menuStyle(.borderlessButton)
+                .disabled(session.state == "starting" || !hosts.available.contains(ref.host))
+                .help("Shell actions")
             })
+            if !hosts.available.contains(ref.host) {
+                HStack {
+                    Text("Disconnected. The shell may still be running on \(ref.host.hostId).")
+                        .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                    Spacer()
+                    Button("Reconnect", action: reconnect).disabled(reconnecting)
+                }.padding(8)
+            } else if let status = store.connections[key] {
+                switch status {
+                case let .unavailable(message):
+                    HStack {
+                        Text(message).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                        Spacer()
+                        Button("Reconnect", action: reconnect).disabled(reconnecting)
+                    }.padding(8)
+                case .disconnected:
+                    Text("Shell disconnected. Reconnecting without replaying input…")
+                        .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).padding(8)
+                case .closing:
+                    Text("Closing shell. Waiting for process exit…")
+                        .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).padding(8)
+                case .connecting, .connected: EmptyView()
+                }
+            }
+            if let reconnectError {
+                Text(reconnectError).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).padding(8)
+            }
             ZStack {
                 ForEach(store.order, id: \.self) { id in
                     if let state = store.states[id] {
                         TerminalSurfaceView(context: state)
-                            .opacity(id == session.id ? 1 : 0)
-                            .allowsHitTesting(id == session.id)
-                            .onChange(of: Self.surfaceIsVisible(id, selected: session.id, paneVisible: isVisible), initial: true) { _, _ in
+                            .opacity(id == key ? 1 : 0)
+                            .allowsHitTesting(id == key && hosts.available.contains(ref.host) && store.connections[key] == .connected)
+                            .onChange(of: Self.surfaceIsVisible(id, selected: key, paneVisible: isVisible), initial: true) { _, _ in
                                 store.surfaceVisibilityChanged(id, state: state, paneID: lifetime.id)
                             }
                             .onDisappear { store.surfaceDidDisappear(id, state: state, paneID: lifetime.id) }
                     }
                 }
-                if store.exited.contains(session.id) {
-                    ExitedPlaceholder { store.restart(session) }
+                if store.exited.contains(key) {
+                    ExitedPlaceholder { store.restart(session, ref: ref) }
                 } else if session.state == "starting" {
                     ProgressView("Preparing task…")
                 }
@@ -269,15 +332,27 @@ struct TerminalPane: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.background)
-        .onAppear { store.select(session, isVisible: isVisible, paneID: lifetime.id) }
-        .onChange(of: session.id) { _, _ in store.select(session, isVisible: isVisible, paneID: lifetime.id) }
-        .onChange(of: session.state) { _, _ in store.select(session, isVisible: isVisible, paneID: lifetime.id) }
-        .onChange(of: isVisible) { _, visible in store.select(session, isVisible: visible, paneID: lifetime.id) }
-        .onDisappear { store.paneDidDisappear(sessionId: session.id, paneID: lifetime.id) }
+        .onAppear { store.select(session, ref: ref, isVisible: isVisible, paneID: lifetime.id) }
+        .onChange(of: ref) { _, _ in store.select(session, ref: ref, isVisible: isVisible, paneID: lifetime.id) }
+        .onChange(of: session.state) { _, _ in store.select(session, ref: ref, isVisible: isVisible, paneID: lifetime.id) }
+        .onChange(of: isVisible) { _, visible in store.select(session, ref: ref, isVisible: visible, paneID: lifetime.id) }
+        .onDisappear { store.paneDidDisappear(sessionId: key, paneID: lifetime.id) }
     }
 
     static func surfaceIsVisible(_ id: String, selected: String, paneVisible: Bool) -> Bool {
         paneVisible && id == selected
+    }
+    private func reconnect() {
+        guard !reconnecting else { return }
+        reconnecting = true
+        reconnectError = nil
+        Task { @MainActor in
+            defer { reconnecting = false }
+            do {
+                if hosts.available.contains(ref.host) { try hosts.reconnectTerminal(ref) }
+                else { try await hosts.reconnect(ref.host) }
+            } catch { reconnectError = "Couldn't reconnect to this host. Check its connection settings." }
+        }
     }
 }
 

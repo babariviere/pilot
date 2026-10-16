@@ -27,6 +27,8 @@ public enum ServerUpdate: Sendable {
     case dashboardCounts(ProjectDashboardCounts)
     case terminalData(sessionId: String, data: String)
     case terminalExit(sessionId: String, code: Int)
+    case terminalHello(sessionId: String, bootId: String, terminalId: String?)
+    case terminalReady(sessionId: String, terminalId: String)
     case error(sessionId: String?, name: String?, message: String)
 
     public static func decode(_ data: Data) throws -> ServerUpdate? {
@@ -89,6 +91,12 @@ public enum ServerUpdate: Sendable {
         case "terminal.exit":
             guard let id = json["sessionId"]?.string else { return nil }
             return .terminalExit(sessionId: id, code: json["code"]?.int ?? 0)
+        case "terminal.hello":
+            guard let id = json["sessionId"]?.string, let boot = json["bootId"]?.string else { return nil }
+            return .terminalHello(sessionId: id, bootId: boot, terminalId: json["terminalId"]?.string)
+        case "terminal.ready":
+            guard let id = json["sessionId"]?.string, let terminal = json["terminalId"]?.string else { return nil }
+            return .terminalReady(sessionId: id, terminalId: terminal)
         case "error":
             return .error(
                 sessionId: json["sessionId"]?.string, name: json["name"]?.string,

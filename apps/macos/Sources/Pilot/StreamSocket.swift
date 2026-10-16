@@ -26,16 +26,26 @@ final class StreamSocket {
     private var retry = 0
     private var reconnect: Task<Void, Never>?
     private var closed = false
+    private let terminalBudget: Bool
+    private let unavailable: @MainActor () -> Void
+    private var pending: [String] = []
+    private var pendingBytes = 0
+    private var sending = false
+    private var readsPaused = false
 
     /// `url` is read on every connection, so it can carry resume state. `willConnect` runs just before.
     init(
         url: @escaping @MainActor () -> URL?,
         willConnect: @escaping @MainActor () -> Void = {},
+        terminalBudget: Bool = false,
+        unavailable: @escaping @MainActor () -> Void = {},
         receive: @escaping @MainActor ([ServerUpdate]) -> Void
     ) {
         self.url = url
         self.willConnect = willConnect
         self.receive = receive
+        self.terminalBudget = terminalBudget
+        self.unavailable = unavailable
     }
 
     func connect() {
@@ -43,10 +53,13 @@ final class StreamSocket {
         reconnect = nil
         reader?.cancel()
         reader = nil
+        clearSends()
         guard !closed, let url = url() else { return }
         willConnect()
+        let task = Self.task(url)
+        if terminalBudget { task.maximumMessageSize = 128 * 1024 }
         let reader = SocketReader(
-            task: Self.task(url), label: "pilot.stream-socket",
+            task: task, label: "pilot.stream-socket", boundedDelivery: terminalBudget,
             deliver: { [weak self] reader, updates in
                 guard let self, self.reader === reader else { return }
                 self.retry = 0
@@ -55,6 +68,8 @@ final class StreamSocket {
             failed: { [weak self] reader in
                 guard let self, self.reader === reader else { return }
                 self.reader = nil
+                self.clearSends()
+                self.unavailable()
                 // 4400–4499: pilotd refused this stream for good (unknown target, read-only session).
                 if (4400..<4500).contains(reader.task.closeCode.rawValue) { return }
                 let delay = min(10.0, 0.5 * pow(2.0, Double(self.retry)))
@@ -67,6 +82,7 @@ final class StreamSocket {
             }
         )
         self.reader = reader
+        reader.setReadPaused(readsPaused)
         reader.start()
     }
 
@@ -78,9 +94,41 @@ final class StreamSocket {
     }
 
     /// Dropped while disconnected, like input to a closed terminal.
-    func send(_ message: [String: JSONValue]) {
-        guard let reader, let data = try? JSONEncoder().encode(JSONValue.object(message)) else { return }
-        reader.task.send(.string(String(decoding: data, as: UTF8.self))) { _ in }
+    @discardableResult func send(_ message: [String: JSONValue]) -> Bool {
+        guard reader != nil, let data = try? JSONEncoder().encode(JSONValue.object(message)),
+              data.count <= (terminalBudget ? 128 * 1024 : 1024 * 1024),
+              pending.count < 64, pendingBytes + data.count <= 256 * 1024 else { return false }
+        pending.append(String(decoding: data, as: UTF8.self))
+        pendingBytes += data.count
+        pump()
+        return true
+    }
+
+    private func pump() {
+        guard !sending, let reader, let frame = pending.first else { return }
+        sending = true
+        reader.task.send(.string(frame)) { [weak self, weak reader] error in
+            Task { @MainActor in
+                guard let self, let reader, self.reader === reader else { return }
+                self.sending = false
+                if error != nil {
+                    self.clearSends(); self.unavailable()
+                    reader.task.cancel(with: .goingAway, reason: nil)
+                    return
+                }
+                self.pending.removeFirst()
+                self.pendingBytes -= frame.utf8.count
+                self.pump()
+            }
+        }
+    }
+
+    private func clearSends() {
+        pending.removeAll(); pendingBytes = 0; sending = false
+    }
+    func setReadPaused(_ paused: Bool) {
+        readsPaused = paused
+        reader?.setReadPaused(paused)
     }
 
     func close() {
@@ -94,5 +142,6 @@ final class StreamSocket {
         reconnect = nil
         reader?.cancel()
         reader = nil
+        clearSends()
     }
 }

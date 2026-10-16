@@ -40,6 +40,84 @@ final class HostClients: ObservableObject {
         var observations: [AnyCancellable]
     }
     private var entries: [HostRef: Entry] = [:]
+    @MainActor private final class TerminalRegistration {
+        let ref: HostResourceRef
+        let intent: WorkspaceTerminalIntent
+        var attachment: PilotClient.TerminalAttachment
+        var client: PilotClient?
+        init(ref: HostResourceRef, restart: Bool, attachment: PilotClient.TerminalAttachment) {
+            self.ref = ref; self.intent = WorkspaceTerminalIntent(restart: restart); self.attachment = attachment
+        }
+        func detach() { client?.detachTerminal(ref.localId); client = nil }
+    }
+    private var terminalRegistrations: [HostResourceRef: TerminalRegistration] = [:]
+
+    /// Retain intent, not a tunnel URL. Replacement verified clients reattach the same shell/key.
+    func attachTerminal(_ ref: HostResourceRef, restart: Bool = false,
+                        attachment: PilotClient.TerminalAttachment) throws {
+        guard ref.kind == .session, terminalRegistrations[ref] != nil || terminalRegistrations.count < 16 else {
+            throw HostRoutingError.invalidReference
+        }
+        terminalRegistrations.removeValue(forKey: ref)?.detach()
+        let registration = TerminalRegistration(ref: ref, restart: restart, attachment: attachment)
+        terminalRegistrations[ref] = registration
+        attachTerminalRegistration(registration)
+    }
+
+    private func attachTerminalRegistration(_ registration: TerminalRegistration) {
+        registration.detach()
+        let ref = registration.ref
+        guard let entry = entries[ref.host] else { registration.attachment.onStatus(.disconnected); return }
+        registration.client = entry.client
+        let token = entry.token
+        var attachment = registration.attachment
+        attachment.onData = { [weak self, weak registration] data in
+            guard let self, let registration, self.entries[ref.host]?.token == token,
+                  self.terminalRegistrations[ref] === registration else { return }
+            registration.attachment.onData(data)
+        }
+        attachment.onExit = { [weak self, weak registration] code in
+            guard let self, let registration, self.entries[ref.host]?.token == token,
+                  self.terminalRegistrations[ref] === registration else { return }
+            registration.attachment.onExit(code)
+        }
+        attachment.onReplay = { [weak self, weak registration] in
+            guard let self, let registration, self.entries[ref.host]?.token == token,
+                  self.terminalRegistrations[ref] === registration else { return }
+            registration.attachment.onReplay()
+        }
+        attachment.onStatus = { [weak self, weak registration] status in
+            guard let self, let registration, self.entries[ref.host]?.token == token,
+                  self.terminalRegistrations[ref] === registration else { return }
+            registration.attachment.onStatus(status)
+        }
+        entry.client.attachTerminal(ref.localId, cols: attachment.cols, rows: attachment.rows,
+                                    intent: registration.intent, attachment)
+    }
+
+    func detachTerminal(_ ref: HostResourceRef) { terminalRegistrations.removeValue(forKey: ref)?.detach() }
+    func reconnectTerminal(_ ref: HostResourceRef) throws {
+        _ = try endpoint(ref, kind: .session)
+        guard let registration = terminalRegistrations[ref] else { throw HostRoutingError.invalidReference }
+        attachTerminalRegistration(registration)
+    }
+    @discardableResult func terminalInput(_ ref: HostResourceRef, data: Data) -> Bool {
+        guard let client = try? endpoint(ref, kind: .session), terminalRegistrations[ref]?.client === client else { return false }
+        return client.terminalInput(ref.localId, data)
+    }
+    func terminalResize(_ ref: HostResourceRef, cols: Int, rows: Int) {
+        guard let registration = terminalRegistrations[ref] else { return }
+        registration.attachment.cols = cols; registration.attachment.rows = rows
+        guard let client = try? endpoint(ref, kind: .session), registration.client === client else { return }
+        client.terminalResize(ref.localId, cols: cols, rows: rows)
+    }
+    @discardableResult func closeTerminal(_ ref: HostResourceRef) -> Bool {
+        guard let client = try? endpoint(ref, kind: .session), terminalRegistrations[ref]?.client === client else { return false }
+        return client.closeTerminal(ref.localId)
+    }
+    func terminalReadPaused(_ ref: HostResourceRef, _ paused: Bool) {
+        terminalRegistrations[ref]?.client?.terminalReadPaused(ref.localId, paused)
+    }
     private var tunnels: [HostRef: any HostTunnel] = [:]
     private var tunnelWatches: [HostRef: Task<Void, Never>] = [:]
     private var tunnelURLs: [HostRef: URL] = [:]
@@ -332,6 +410,9 @@ final class HostClients: ObservableObject {
             client.$hasProjectSnapshot, client.$hasSessionSnapshot, client.$hasMissionSnapshot
         ).sink { [weak self] _ in self?.enqueueRefresh(host) })
         entries[host] = entry
+        for registration in terminalRegistrations.values where registration.ref.host == host {
+            attachTerminalRegistration(registration)
+        }
         for subscription in subscriptions.values where subscription.ref.host == host { attach(subscription) }
         for (ref, count) in retained where ref.host == host {
             for _ in 0..<count { retainOnEndpoint(ref, client: client) }
@@ -440,6 +521,9 @@ final class HostClients: ObservableObject {
 
     /// Removal keeps last-known summaries. It does not invent an execution outcome.
     private func removeConnection(_ host: HostRef) {
+        for registration in terminalRegistrations.values where registration.ref.host == host {
+            registration.detach(); registration.attachment.onStatus(.disconnected)
+        }
         reconciliationTasks.removeValue(forKey: host)?.cancel()
         reconciliationGenerations[host] = nil
         for subscription in subscriptions.values where subscription.ref.host == host { subscription.detach() }

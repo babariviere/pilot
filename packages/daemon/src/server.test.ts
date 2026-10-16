@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
@@ -683,12 +684,14 @@ test("terminal and subagent sockets stream one target each and accept only their
 	});
 	t.mock.method(sessions, "changeBase", () => ({ cwd: "/tmp" }));
 	let output!: { data(data: string): void; exit(code: number): void };
+	const terminalId = randomUUID();
 	let detached = 0;
 	const attach = t.mock.method(
 		terminals,
 		"attach",
 		(_id: string, _cwd: string, _cols: number, _rows: number, listener: typeof output) => {
 			output = listener;
+			(listener as typeof listener & { ready(id: string): void }).ready(terminalId);
 			listener.data("scrollback");
 			return () => {
 				detached++;
@@ -697,6 +700,7 @@ test("terminal and subagent sockets stream one target each and accept only their
 	);
 	const write = t.mock.method(terminals, "write", () => {});
 	const resize = t.mock.method(terminals, "resize", () => {});
+	const closeTerminal = t.mock.method(terminals, "close", () => {});
 	let watcher!: { events(events: AgentEvent[]): void; error(message: string): void };
 	let unwatched = 0;
 	t.mock.method(sessions, "watchSubagent", (_id: string, name: string, listener: typeof watcher) => {
@@ -734,7 +738,11 @@ test("terminal and subagent sockets stream one target each and accept only their
 		return { socket, messages, until };
 	};
 
-	const terminal = open("/api/sessions/session-1/terminal/ws?cols=100&rows=30&restart=1");
+	const terminal = open("/api/sessions/session-1/terminal/ws?protocol=2&cols=100&rows=30");
+	await terminal.until((m) => m.type === "terminal.hello");
+	terminal.socket.send(
+		JSON.stringify({ type: "terminal.open", bootId: terminals.bootId, requestId: randomUUID(), restart: true }),
+	);
 	assert.deepEqual(await terminal.until((m) => m.type === "terminal.data"), {
 		type: "terminal.data",
 		sessionId: "session-1",
@@ -742,18 +750,23 @@ test("terminal and subagent sockets stream one target each and accept only their
 	});
 	assert.deepEqual(attach.mock.calls[0]?.arguments.slice(0, 4), ["session-1", "/tmp", 100, 30]);
 	assert.equal(attach.mock.calls[0]?.arguments[5], true);
-	terminal.socket.send(JSON.stringify({ type: "terminal.input", data: "ls\r" }));
-	terminal.socket.send(JSON.stringify({ type: "terminal.resize", cols: 120, rows: 40 }));
+	terminal.socket.send(JSON.stringify({ type: "terminal.input", terminalId, data: "ls\r" }));
+	terminal.socket.send(JSON.stringify({ type: "terminal.resize", terminalId, cols: 120, rows: 40 }));
 	terminal.socket.send(JSON.stringify({ type: "terminal.close" }));
 	assert.deepEqual(await terminal.until((m) => m.type === "error"), {
 		type: "error",
 		sessionId: "session-1",
 		message: "Invalid terminal message",
 	});
-	assert.deepEqual(write.mock.calls[0]?.arguments, ["session-1", "ls\r"]);
-	assert.deepEqual(resize.mock.calls[0]?.arguments, ["session-1", 120, 40]);
+	assert.deepEqual(write.mock.calls[0]?.arguments, ["session-1", "ls\r", terminalId]);
+	assert.deepEqual(resize.mock.calls[0]?.arguments, ["session-1", 120, 40, terminalId]);
+	terminal.socket.send(JSON.stringify({ type: "terminal.close", terminalId }));
+	const terminalPong = once(terminal.socket, "pong");
+	terminal.socket.ping();
+	await terminalPong;
 	output.exit(0);
 	await terminal.until((m) => m.type === "terminal.exit");
+	assert.deepEqual(closeTerminal.mock.calls[0]?.arguments, ["session-1", terminalId]);
 	terminal.socket.close();
 	await once(terminal.socket, "close");
 	while (!detached) await new Promise((resolve) => setTimeout(resolve, 5));
@@ -762,6 +775,7 @@ test("terminal and subagent sockets stream one target each and accept only their
 		["/api/sessions/ask/terminal/ws?cols=80&rows=24", 4409],
 		["/api/sessions/missing/terminal/ws?cols=80&rows=24", 4404],
 		["/api/sessions/session-1/terminal/ws?cols=0&rows=24", 4409],
+		["/api/sessions/session-1/terminal/ws?cols=80&rows=24", 4409],
 	] as const) {
 		const refused = open(path);
 		const [code] = await once(refused.socket, "close");

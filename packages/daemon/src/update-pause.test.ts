@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test, type TestContext } from "node:test";
+import { type TestContext, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import type { KernelCommand, KernelPacket } from "@pilot/kernel";
 import { ServiceUnavailable } from "./errors.ts";
@@ -56,6 +56,100 @@ async function updateSleepFixture(t: TestContext) {
 	const metadata = async () => JSON.parse(await readFile(join(home, "sessions", chat.id, "meta.json"), "utf8"));
 	return { sessions, internal, workers, metadata };
 }
+
+test("runtime safety snapshot preserves parent jobs, child OS processes and unknown inspection after drain", async (t) => {
+	const { sessions, internal, workers } = await updateSleepFixture(t);
+	const release = sessions.freezeAdmissions();
+	try {
+		const worker = workers[0]!;
+		worker.jobs = async () => [{ id: "job", name: "live", state: "running", startedAt: 1, outputPath: "/tmp/job" }];
+		worker.hasChildren = async () => true;
+		assert.deepEqual((await sessions.blockers()).map((blocker) => blocker.kind).sort(), ["child-process", "job"]);
+		worker.stopJob = async () => {};
+		await worker.stopJob("job");
+		assert.ok(
+			(await sessions.blockers()).some((blocker) => blocker.kind === "job"),
+			"stop response is not process exit proof",
+		);
+		worker.jobs = async () => [];
+		assert.ok(
+			(await sessions.blockers()).some((blocker) => blocker.kind === "child-process"),
+			"child jobs are not ruled out by the parent's empty list",
+		);
+		worker.jobs = async () => {
+			throw new Error("IPC lost");
+		};
+		assert.ok((await sessions.blockers()).some((blocker) => blocker.kind === "unknown-process"));
+		worker.jobs = async () => [];
+		worker.hasChildren = async () => false;
+		assert.deepEqual(await sessions.blockers(), []);
+		internal.resumeAfterUpdate();
+		assert.equal(
+			worker.commands.some((command) => command.type === "update.resume"),
+			false,
+			"legacy lease expiry cannot thaw an externally frozen drain",
+		);
+	} finally {
+		release();
+	}
+});
+
+test("runtime inspection bounds concurrency/output, retains overflow and fences replaced workers", async (t) => {
+	const { sessions } = await updateSleepFixture(t);
+	const release = sessions.freezeAdmissions();
+	const internals = sessions as unknown as {
+		workers: Map<string, SessionWorker>;
+		updatePausing: Map<SessionWorker, { id: string; ready: boolean }>;
+	};
+	const original = [...internals.workers];
+	let active = 0,
+		peak = 0;
+	try {
+		for (let i = 0; i < 140; i++) {
+			const worker: SessionWorker = {
+				ready: Promise.resolve(),
+				state: "idle",
+				send() {},
+				request: async () => {},
+				close: async () => {},
+				jobs: async () => {
+					active++;
+					peak = Math.max(peak, active);
+					await delay(1);
+					active--;
+					return Array.from({ length: 256 }, (_, j) => ({
+						id: `job-${j}`,
+						name: "job",
+						state: "running" as const,
+						startedAt: 1,
+						outputPath: "/tmp/job",
+					}));
+				},
+				hasChildren: async () => true,
+			};
+			internals.workers.set(`worker-${i}`, worker);
+			internals.updatePausing.set(worker, { id: `${i}`, ready: true });
+		}
+		const blockers = await sessions.blockers();
+		assert.ok(peak <= 4);
+		assert.ok(blockers.length <= 1024);
+		assert.ok(blockers.some((blocker) => blocker.id === "blocker-overflow"));
+		assert.ok(blockers.some((blocker) => blocker.id === "worker-inspection-overflow"));
+		internals.workers.clear();
+		const [id, worker] = original[0]!;
+		internals.workers.set(id, worker);
+		worker.hasChildren = async () => false;
+		worker.jobs = async () => {
+			internals.workers.set(id, { ...worker });
+			return [];
+		};
+		assert.ok((await sessions.blockers()).some((blocker) => blocker.kind === "unknown-process"));
+	} finally {
+		internals.workers.clear();
+		for (const [id, worker] of original) internals.workers.set(id, worker);
+		release();
+	}
+});
 
 test("update expiry preserves recovery while the sleep latch is still being persisted", async (t) => {
 	const { sessions, internal, workers, metadata } = await updateSleepFixture(t);

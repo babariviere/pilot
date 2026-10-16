@@ -53,6 +53,6 @@ export async function daemonHello(home: string, capabilities: DaemonCapabilities
 		minimumClientProtocolVersion: MINIMUM_CLIENT_PROTOCOL_VERSION,
 		platform: process.platform,
 		arch: process.arch,
-		capabilities,
+		capabilities: { ...capabilities, workspaceTerminalProtocol: 2 },
 	};
 }
