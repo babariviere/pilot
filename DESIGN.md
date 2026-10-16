@@ -91,7 +91,7 @@ The progress pies fill clockwise from 12 o'clock.
 | --- | --- | --- |
 | Working | An agent is running, or it is idle while its background jobs or subagents run | No |
 | Needs you | Failed, unreviewed result, agent or mission question, scheduled item that could not start, limit reached, stuck pull request, MCP server needing sign-in, job running over an hour. Clears itself (see Attention budget) | Yes |
-| Ready to merge | Open PR with no blockers (Pilot never merges) | Optional notification |
+| Ready to merge | Open PR with no blockers (only the user can confirm a merge) | Optional notification |
 | Blocked or pending | PR waiting on checks, reviews or conflicts | No |
 | Done | Finished and reviewed | No |
 

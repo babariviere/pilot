@@ -149,6 +149,9 @@ final class AppModel: ObservableObject {
     @Published var pendingSessionActions: Set<String> = []
     /// The chat whose rename sheet is open.
     @Published var renamingSession: SessionRenameTarget?
+    @Published var mergingPullRequest: PullRequestMergeTarget?
+    /// Run only once the palette has left, so a command can safely present its confirmation sheet.
+    var commandPaletteAction: (@MainActor () -> Void)?
     /// The ⌘K command palette sheet.
     @Published var showingCommandPalette = false
     /// A retry the command palette asked for, run by the chat's transcript once it shows the failed turn's Retry.
@@ -697,7 +700,7 @@ final class AppModel: ObservableObject {
             showingCommandPalette = false
             return
         }
-        guard missionSheet == nil, renamingSession == nil else { return }
+        guard missionSheet == nil, renamingSession == nil, mergingPullRequest == nil else { return }
         showingCommandPalette = true
     }
 

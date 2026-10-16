@@ -84,7 +84,14 @@ struct MainWindow: View {
         .sheet(item: $model.renamingSession) { target in
             SessionRenameSheet(target: target).environmentObject(model)
         }
-        .sheet(isPresented: $model.showingCommandPalette) {
+        .sheet(item: $model.mergingPullRequest) { target in
+            PullRequestMergeSheet(target: target).environmentObject(model)
+        }
+        .sheet(isPresented: $model.showingCommandPalette, onDismiss: {
+            let action = model.commandPaletteAction
+            model.commandPaletteAction = nil
+            action?()
+        }) {
             CommandPaletteView().environmentObject(model)
         }
         .onAppear {

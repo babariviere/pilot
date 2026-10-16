@@ -59,6 +59,27 @@ export interface UnbindPullRequestRequest {
 	url: string;
 }
 
+export type PullRequestMergeMethod = "squash" | "merge" | "rebase";
+
+/** Fresh confirmation data for a user-initiated merge. Never enables auto-merge or bypasses protection. */
+export interface PullRequestMergePreview {
+	url: string;
+	number: number;
+	title: string;
+	headSha: string;
+	headBranch: string;
+	baseBranch: string;
+	methods: PullRequestMergeMethod[];
+}
+
+/** POST /api/sessions/:id/pull-requests/merge. Returns { merged: true }. */
+export interface MergePullRequestRequest {
+	url: string;
+	headSha: string;
+	baseBranch: string;
+	method: PullRequestMergeMethod;
+}
+
 export interface PullRequestReadiness {
 	state: "ready" | "pending" | "blocked";
 	reasons: PullRequestReadinessReason[];
