@@ -151,7 +151,7 @@ struct HomeView: View {
     var body: some View {
         ScrollView {
             ZStack(alignment: .top) {
-                // The softened cloud photo; DitherScene falls back to the procedural DitherSky without it.
+                // Day/night ocean photos; DitherScene falls back to the procedural sky without them.
                 DitherScene(source: .homeSky, cell: 2, fade: 0.45)
                     .frame(height: 440)
                 VStack(spacing: 0) {
