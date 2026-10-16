@@ -13,8 +13,8 @@ import xml.etree.ElementTree as ET
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.dont_write_bytecode = True
 from release_metadata import (
-    SPARKLE, appcast, dmg_release_tag, newer_build_than_latest, newer_than_latest, prepare_runtime,
-    release_state, stable_version, validate_symlinks, write_plist,
+    DRAFT_ASSETS, SPARKLE, appcast, appcast_build, complete_draft, dmg_release_tag, newer_build_than_latest,
+    newer_than_latest, prepare_runtime, release_state, stable_version, validate_symlinks, write_plist,
 )
 
 
@@ -90,6 +90,32 @@ class ReleaseMetadataTests(unittest.TestCase):
                         {**draft, "isDraft": False, "isPrerelease": True}]:
             with self.subTest(release=release), self.assertRaises(ValueError):
                 release_state(release)
+
+    def test_draft_publication_requires_every_platform_asset(self):
+        draft = {"isDraft": True, "isPrerelease": False, "assets": [
+            {"name": name, "state": "uploaded"} for name in DRAFT_ASSETS
+        ]}
+        self.assertEqual(complete_draft(draft), "complete")
+        self.assertIn("Pilot-linux-x64.tar.gz", DRAFT_ASSETS)
+        self.assertIn("runtime-manifest.json.sig", DRAFT_ASSETS)
+        for name in DRAFT_ASSETS:
+            with self.subTest(missing=name), self.assertRaises(ValueError):
+                complete_draft({**draft, "assets": [a for a in draft["assets"] if a["name"] != name]})
+            with self.subTest(pending=name), self.assertRaises(ValueError):
+                complete_draft({**draft, "assets": [
+                    {**a, "state": "new"} if a["name"] == name else a for a in draft["assets"]]})
+        with self.assertRaises(ValueError):
+            complete_draft({**draft, "isDraft": False})
+
+    def test_draft_appcast_build_matches_release_version(self):
+        feed = self.root / "appcast.xml"
+        feed.write_bytes(appcast("owner/repo", "123", "10.2", "0.2.0", base64.b64encode(bytes(64)).decode(), 1))
+        self.assertEqual(appcast_build(feed, "0.2.0"), "10.2")
+        with self.assertRaises(ValueError):
+            appcast_build(feed, "0.3.0")
+        feed.write_text('<rss><channel><item /></channel></rss>')
+        with self.assertRaises(ValueError):
+            appcast_build(feed, "0.2.0")
 
     def test_dmg_requires_a_complete_published_stable_release_without_an_installer(self):
         release = {"tagName": "v1.2.3", "isDraft": False, "isPrerelease": False, "assets": [

@@ -83,6 +83,8 @@ function main() {
 	} else if (action === "sign") {
 		const bytes = readFileSync(join(output, manifestName));
 		validateManifest(JSON.parse(bytes));
+		if (!process.env.LINUX_RUNTIME_PRIVATE_KEY || !process.env.LINUX_RUNTIME_PUBLIC_KEY)
+			throw new Error("Set LINUX_RUNTIME_PRIVATE_KEY and LINUX_RUNTIME_PUBLIC_KEY to sign the manifest");
 		const key = createPrivateKey(process.env.LINUX_RUNTIME_PRIVATE_KEY ?? "");
 		if (key.asymmetricKeyType !== "ed25519") throw new Error("Ed25519 release key required");
 		const expected = Buffer.from(process.env.LINUX_RUNTIME_PUBLIC_KEY ?? "", "base64");
