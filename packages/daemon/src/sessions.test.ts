@@ -993,7 +993,7 @@ async function fixture(t: TestContext) {
 	}> => JSON.parse(await readFile(join(home, "sessions", id, "meta.json"), "utf8"));
 	t.after(async () => {
 		await Promise.all(managers.map((sessions) => sessions.shutdown()));
-		await rm(root, { recursive: true, force: true });
+		await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
 	});
 	return { root, home, source, projects, project, workers, workerFactory, manager, stored };
 }
