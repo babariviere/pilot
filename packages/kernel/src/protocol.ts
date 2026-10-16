@@ -16,6 +16,7 @@ import type { ControlCall } from "./control-turn.ts";
 import type { CredentialEndpoint } from "./credential-rpc.ts";
 import type { DatabaseAction } from "./database-tool.ts";
 import type { MissionAction } from "./mission-tools.ts";
+import type { PilotAction } from "./pilot-tool.ts";
 import type { MissionContext, PilotContext, WorkspaceContext } from "./policy.ts";
 import type { KernelUsage } from "./usage.ts";
 
@@ -118,6 +119,7 @@ export type KernelCommand =
 	| { type: "mission.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "memory.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "control.result"; callId: string; result?: JsonValue; error?: string }
+	| { type: "pilot.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "database.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "slack.result"; callId: string; result?: JsonValue; error?: string }
 	/** Whether the chat is attached to a Slack triage message, which declares or withdraws `slack_status`. */
@@ -167,6 +169,7 @@ export type KernelPacket =
 	| { type: "mcp.used"; namespaces: string[]; failed: boolean }
 	/** A `mission` tool call, answered by `mission.result`. */
 	| { type: "mission.call"; callId: string; action: MissionAction; args: Record<string, JsonValue> }
+	| { type: "pilot.call"; callId: string; action: PilotAction; args: Record<string, JsonValue> }
 	| { type: "control.call"; callId: string; action: Parameters<ControlCall>[0]; args: Record<string, JsonValue> }
 	| {
 			type: "memory.call";

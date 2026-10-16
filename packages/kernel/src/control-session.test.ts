@@ -56,6 +56,7 @@ test("control turns are fresh, tool rounds stay intact, log excludes thoughts an
 		fail = false;
 	const hooks = {
 		onWorking: () => {},
+		callPilot: async () => null,
 		callControl: async (action: string, args: Record<string, JsonValue>): Promise<JsonValue> => {
 			if (action === "record") {
 				const message = args.message as Record<string, JsonValue>;
@@ -81,6 +82,7 @@ test("control turns are fresh, tool rounds stay intact, log excludes thoughts an
 	);
 	t.after(() => session.close());
 	assert.ok(adapter.session.getCallableToolNames().includes("zoom"));
+	assert.ok(adapter.session.getCallableToolNames().includes("pilot"));
 	for (const denied of ["bash", "read", "find", "grep", "ls", "mission", "db", "todo", "slack_status"])
 		assert.ok(!adapter.session.getCallableToolNames().includes(denied), denied);
 	let checked = 0;

@@ -56,6 +56,7 @@ import { prepareAskSnapshot } from "./ask-snapshots.ts";
 import { chatTitleContext } from "./chat-title.ts";
 import { ColdViewReader } from "./cold-view-reader.ts";
 import { ControlChat } from "./control-chat.ts";
+import type { ControlPilot } from "./control-pilot.ts";
 import { coordinatorTrust } from "./coordinator-trust.ts";
 import type { CredentialBroker } from "./credential-broker.ts";
 import { DatabaseService, type DatabaseState, decideDatabaseRequest, declineDatabaseRequest } from "./databases.ts";
@@ -1108,6 +1109,10 @@ export class SessionManager {
 	private readonly projects: ProjectStore;
 	private memory?: ProjectMemoryService;
 	private controlChat?: ControlChat;
+	private pilot?: ControlPilot;
+	setPilot(pilot: ControlPilot): void {
+		this.pilot = pilot;
+	}
 	private creatingControl?: Promise<SessionSummary>;
 	static readonly CONTROL_ID = "00000000-0000-4000-8000-000000000001";
 	isControlSession(id: string): boolean {
@@ -5647,6 +5652,33 @@ export class SessionManager {
 						});
 				},
 			);
+			return;
+		}
+		if (packet.type === "pilot.call") {
+			void Promise.resolve()
+				.then(() => {
+					if (!this.isControlSession(meta.id) || !this.pilot)
+						throw new Error("Only the control chat may call pilot");
+					return this.pilot.call(meta.id, packet.action, packet.args);
+				})
+				.then(
+					(result) => {
+						if (this.workers.get(meta.id) === worker)
+							worker.send({
+								type: "pilot.result",
+								callId: packet.callId,
+								result: JSON.parse(JSON.stringify(result ?? null)),
+							});
+					},
+					(error) => {
+						if (this.workers.get(meta.id) === worker)
+							worker.send({
+								type: "pilot.result",
+								callId: packet.callId,
+								error: formatFailure(error, "Tool pilot"),
+							});
+					},
+				);
 			return;
 		}
 		if (packet.type === "control.call") {

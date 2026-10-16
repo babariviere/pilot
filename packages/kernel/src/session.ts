@@ -70,6 +70,7 @@ import { createMissionTool, MISSION_TOOL, type MissionCall } from "./mission-too
 import { continueModelInPlace } from "./model-continuation.ts";
 import { NativeAdapter } from "./native-adapter.ts";
 import { PerformanceLog } from "./performance.ts";
+import { createPilotTool, type PilotCall } from "./pilot-tool.ts";
 import type { WorkspaceContext } from "./policy.ts";
 import { type MissionContext, withPilotPolicy } from "./policy.ts";
 import type { KernelSpec, KernelSubagent } from "./protocol.ts";
@@ -154,6 +155,7 @@ export interface KernelSessionHooks {
 	callMission?: MissionCall;
 	callMemory?: MemoryCall;
 	callControl?: ControlCall;
+	callPilot?: PilotCall;
 	/** Executes a `db` tool call in pilotd. Registered only when the spec reports a database config. */
 	callDatabase?: DatabaseCall;
 	/** Executes a `slack_status` tool call in pilotd. The tool is declared only while the chat has a Slack message. */
@@ -435,6 +437,7 @@ export class KernelSession {
 				],
 				subagents,
 				hostTools: [
+					...(spec.control && hooks.callPilot ? [createPilotTool(hooks.callPilot)] : []),
 					...createControlMemoryTools(!!spec.control, (action, args) => hooks.callControl!(action, args)),
 					...missionTools,
 					questionTool,
