@@ -188,8 +188,8 @@ export function runKernelWorker(): void {
 		});
 	const callMission: MissionCall = (action, args) =>
 		callDaemon<JsonValue>((callId) => ({ type: "mission.call", callId, action, args }));
-	const callPilot: import("./pilot-tool.ts").PilotCall = (action, args) =>
-		callDaemon<JsonValue>((callId) => ({ type: "pilot.call", callId, action, args }));
+	const callPilot: import("./pilot-tool.ts").PilotCall = (action, args, operationId) =>
+		callDaemon<JsonValue>((callId) => ({ type: "pilot.call", callId, operationId, action, args }));
 	const callMemory = (action: "wake" | "note" | "recall" | "zoom", args: Record<string, JsonValue>) =>
 		callDaemon<JsonValue>((callId) => ({ type: "memory.call", callId, action, args }));
 	const callControl: import("./control-turn.ts").ControlCall = (action, args) =>

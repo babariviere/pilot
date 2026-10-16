@@ -169,7 +169,7 @@ export type KernelPacket =
 	| { type: "mcp.used"; namespaces: string[]; failed: boolean }
 	/** A `mission` tool call, answered by `mission.result`. */
 	| { type: "mission.call"; callId: string; action: MissionAction; args: Record<string, JsonValue> }
-	| { type: "pilot.call"; callId: string; action: PilotAction; args: Record<string, JsonValue> }
+	| { type: "pilot.call"; callId: string; operationId: string; action: PilotAction; args: Record<string, JsonValue> }
 	| { type: "control.call"; callId: string; action: Parameters<ControlCall>[0]; args: Record<string, JsonValue> }
 	| {
 			type: "memory.call";

@@ -57,6 +57,7 @@ import { chatTitleContext } from "./chat-title.ts";
 import { ColdViewReader } from "./cold-view-reader.ts";
 import { ControlChat } from "./control-chat.ts";
 import type { ControlPilot } from "./control-pilot.ts";
+import { ControlActions } from "./control-actions.ts";
 import { coordinatorTrust } from "./coordinator-trust.ts";
 import type { CredentialBroker } from "./credential-broker.ts";
 import { DatabaseService, type DatabaseState, decideDatabaseRequest, declineDatabaseRequest } from "./databases.ts";
@@ -1110,6 +1111,25 @@ export class SessionManager {
 	private memory?: ProjectMemoryService;
 	private controlChat?: ControlChat;
 	private pilot?: ControlPilot;
+	private controlActions?: ControlActions;
+	controlAudit(): ControlActions {
+		this.controlActions ??= new ControlActions(
+			this.controlService().memory,
+			(id) => this.isControlSession(id),
+			async (entry) => {
+				const meta = this.require(SessionManager.CONTROL_ID);
+				meta.prActivities ??= [];
+				meta.prActivities.push({
+					type: "activity",
+					requestId: `control-audit:${entry.seq}`,
+					text: `Control ${entry.action} ${entry.phase}. ${JSON.stringify(entry.result ?? {}).slice(0, 1000)}`,
+				});
+				await this.save(meta);
+				if (this.workers.has(meta.id)) void this.start(meta.id, true);
+			},
+		);
+		return this.controlActions;
+	}
 	setPilot(pilot: ControlPilot): void {
 		this.pilot = pilot;
 	}
@@ -5064,6 +5084,7 @@ export class SessionManager {
 		await Promise.allSettled(this.coordinatorUnbindings.values());
 		await Promise.allSettled(this.roleTransitions.values());
 		await Promise.all([...this.workers.values()].map((worker) => worker.close()));
+		await this.controlActions?.settled();
 		await this.controlChat?.stop();
 		await Promise.allSettled([...this.parking.values()]);
 		await this.coldReader.close();
@@ -5659,7 +5680,7 @@ export class SessionManager {
 				.then(() => {
 					if (!this.isControlSession(meta.id) || !this.pilot)
 						throw new Error("Only the control chat may call pilot");
-					return this.pilot.call(meta.id, packet.action, packet.args);
+					return this.pilot.call(meta.id, packet.action, packet.args, packet.operationId);
 				})
 				.then(
 					(result) => {
