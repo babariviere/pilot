@@ -91,6 +91,14 @@ struct KeyboardNavigationCommands: Commands {
 
     var body: some Commands {
         CommandMenu("Go") {
+            // The same history as ⌘← and ⌘→ in the View menu, on keys that text fields don't use for moving the caret.
+            Button("Back") { model.goBack() }
+                .keyboardShortcut("[", modifiers: .command)
+                .disabled(!model.navigationHistory.canGoBack)
+            Button("Forward") { model.goForward() }
+                .keyboardShortcut("]", modifiers: .command)
+                .disabled(!model.navigationHistory.canGoForward)
+            Divider()
             Button("Next Region") { model.keyboard.cycle(forward: true) }
                 .keyboardShortcut(.tab, modifiers: .control)
             Button("Previous Region") { model.keyboard.cycle(forward: false) }

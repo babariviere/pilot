@@ -197,6 +197,8 @@ final class AppModel: ObservableObject {
     /// The row a keyboard list highlights, which ⌘K offers actions for. Not published: the palette reads it when
     /// it opens, so moving through a list never re-renders views observing the app model.
     var keyboardTarget: KeyboardTarget?
+    /// The highlighted keyboard-list row of each page, by route key, so Back returns to the same row.
+    var keyboardListHighlights: [String: String] = [:]
 
     private var started = false
     private let projectFolderDefaults: UserDefaults
