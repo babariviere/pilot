@@ -126,7 +126,7 @@ final class MenuBarModel: ObservableObject {
                 let (values, waiting) = combined
                 // @Published delivers before storing the new value. Use the emitted
                 // sessions/status, rather than rereading potentially stale properties.
-                MenuBarSnapshot(sessions: values.0, isUnread: model.isUnread,
+                return MenuBarSnapshot(sessions: values.0, isUnread: model.isUnread,
                                 status: values.2, lifecycleBusy: values.3, waitingToInstall: waiting,
                                 hosted: hosted.filter { $0.ref.host != model.localHost }, availableHosts: available,
                                 isUnreadHost: { model.isUnread($0.value, on: $0.ref.host) })

@@ -175,8 +175,8 @@ private struct MissionToolbar: ToolbarContent {
 
     private func coordinatorItem(_ coordinator: String) -> some ToolbarContent {
         ToolbarItem(placement: .navigation) {
-            let title = model.client.session(coordinator)?.title
-            Button { model.selectedSessionId = coordinator } label: {
+            let title = (hostContext.map { $0.hosts.presentationClient($0.host) } ?? model.client).session(coordinator)?.title
+            Button { model.navigate(.session, id: coordinator, context: hostContext) } label: {
                 PilotSymbol(PilotIcon.coordinator, context: .toolbar)
             }
             .buttonStyle(.borderless)

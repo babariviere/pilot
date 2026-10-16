@@ -676,7 +676,7 @@ final class AppModel: ObservableObject {
     /// Shows the Inbox, its project filter preset to `projectId` (from a project's Overview), else to the focused
     /// project (every project when none is focused).
     func showInbox(for projectId: String? = nil, context: HostViewContext? = nil) {
-        inboxHost = context?.host
+        inboxHost = context?.host ?? focusedProjectRef?.host
         hosts.selection = nil
         showingArchive = false
         selectedSessionId = nil
@@ -703,10 +703,10 @@ final class AppModel: ObservableObject {
     }
 
     /// Shows a project's Slack triage view in place of its page, optionally on one common case.
-    func openSlackTriage(_ projectId: String, caseId: String? = nil) {
-        openProject(projectId)
+    func openSlackTriage(_ projectId: String, caseId: String? = nil, context: HostViewContext? = nil) {
+        openProject(projectId, context: context)
         slackTriageCaseId = caseId
-        slackTriageProjectId = projectId
+        slackTriageProjectId = context.map { $0.ref(.project, projectId).storageKey } ?? projectId
     }
 
     /// Opens a project's Slack triage and adds the message behind a pasted Slack link to it. pilotd reads and
@@ -779,7 +779,11 @@ final class AppModel: ObservableObject {
     }
 
     /// The focused project, once it is known to exist. nil while listing every project.
-    var focusedProject: Project? { client.project(sidebarScope) }
+    var focusedProjectRef: HostResourceRef? { sidebarScope.flatMap { resourceRef($0, kind: .project) } }
+    var focusedProject: Project? {
+        if let ref = focusedProjectRef, ref.host != localHost { return hosts.projects.first { $0.ref == ref }?.value }
+        return client.project(sidebarScope)
+    }
 
     /// Projects in picker order (by folder, then ungrouped), which is also the ⌘1…⌘9 order.
     var orderedProjects: [Project] {
@@ -800,6 +804,14 @@ final class AppModel: ObservableObject {
     /// left and restores the last selection of the new scope; a project seen for the first time opens its
     /// Overview. Home and the Inbox stay open.
     func focus(on projectId: String?) {
+        if let projectId, let ref = try? HostResourceRef.decodeKey(projectId), ref.host != localHost {
+            guard ref.kind == .project, hosts.projects.contains(where: { $0.ref == ref }), sidebarScope != projectId else { return }
+            scopeSelections[SidebarSelection.scopeKey(sidebarScope)] = currentSelection
+            sidebarScope = ref.storageKey
+            saveSidebarScope()
+            navigate(.project, id: ref.storageKey)
+            return
+        }
         let target = projectId.flatMap { client.project($0)?.id }
         guard projectId == nil || target != nil, target != sidebarScope else { return }
         let leaving = currentSelection
@@ -815,23 +827,25 @@ final class AppModel: ObservableObject {
     /// Home, which always covers every project, whatever the sidebar's scope.
     func openHome() {
         hosts.selection = nil
-        newSession(in: draftProjectId)
+        newSession(in: newSessionForm.hasUnsubmittedDraft ? nil : draftProjectId)
     }
 
     /// The focused project's Overview, the first row of a focused sidebar.
     func openOverview() {
-        guard let project = focusedProject else { return }
-        openProject(project.id)
+        guard let ref = focusedProjectRef else { return }
+        openProject(ref.storageKey)
     }
 
     /// A new chat in the focused project, or in the last chosen project otherwise.
     func newChatInScope() {
-        let context = focusedProject == nil ? newSessionForm.executionHost.map { HostViewContext(host: $0, hosts: hosts) } : nil
+        if newSessionForm.hasUnsubmittedDraft { newSession(in: nil); return }
+        let context = (focusedProjectRef?.host ?? newSessionForm.executionHost).map { HostViewContext(host: $0, hosts: hosts) }
         newSession(in: focusedProject?.id ?? draftProjectId, context: context)
     }
 
     /// Falls back to every project once the project list shows the focused one is gone.
     func validateSidebarScope() {
+        if let ref = focusedProjectRef, ref.host != localHost { return }
         guard let scope = sidebarScope, client.hasProjectSnapshot, client.project(scope) == nil else { return }
         scopeSelections[SidebarSelection.scopeKey(scope)] = nil
         sidebarScope = nil

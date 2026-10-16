@@ -132,9 +132,12 @@ struct SessionSidebar: View {
         let query = model.sidebarQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let values = hosts.sessions.filter { hosted in
             (!hosted.value.isArchived || !query.isEmpty) && (query.isEmpty || hosted.value.title.lowercased().contains(query))
-                && (model.sidebarScope == nil || (hosted.ref.host == model.localHost && hosted.value.projectId == model.sidebarScope))
+                && (model.focusedProjectRef == nil || (hosted.ref.host == model.focusedProjectRef?.host && hosted.value.projectId == model.focusedProjectRef?.localId))
         }.sorted { $0.value.listActivityAt > $1.value.listActivityAt }
-        let missions = hosts.missions.filter { $0.value.status == .active && (query.isEmpty || $0.value.title.lowercased().contains(query)) }
+        let missions = hosts.missions.filter {
+            $0.value.status == .active && (query.isEmpty || $0.value.title.lowercased().contains(query))
+                && (model.focusedProjectRef == nil || ($0.ref.host == model.focusedProjectRef?.host && $0.value.projectId == model.focusedProjectRef?.localId))
+        }
         if !missions.isEmpty {
             Section {
                 ForEach(missions) { item in

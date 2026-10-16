@@ -4,6 +4,7 @@ import SwiftUI
 /// Inspector tab for a mission member chat: the mission's header, this chat's task and one summary line that opens
 /// the mission page. Everything else (other tasks, decisions, activity) lives on the page.
 struct MissionInspectorPane: View {
+    @Environment(\.hostViewContext) private var hostContext
     let session: SessionSummary
     @EnvironmentObject private var model: AppModel
     @EndpointClient private var client
@@ -57,7 +58,7 @@ struct MissionInspectorPane: View {
                 if mission.status != .active { MissionStatusChip(status: mission.status) }
                 Spacer(minLength: 6)
                 // A chevron: the page opens in this window. The arrow out is kept for the browser.
-                Button { model.openMission(mission.id) } label: {
+                Button { model.openMission(mission.id, context: hostContext) } label: {
                     HStack(spacing: 3) {
                         Text("Open")
                         PilotSymbol(PilotIcon.disclosure)
@@ -87,9 +88,9 @@ struct MissionInspectorPane: View {
 
     /// "12 of 18 done · 3 working now · 2 need you" over the tasks bar and its legend, opening the mission's Overview.
     private func summary(_ mission: Mission, detail: MissionDetail) -> some View {
-        let needs = model.needsYouCount(mission)
+        let needs = model.needsYouCount(mission, context: hostContext)
         let counts = MissionTaskCounts(detail.tasks)
-        return Button { model.openMission(mission.id, tab: .overview) } label: {
+        return Button { model.openMission(mission.id, tab: .overview, context: hostContext) } label: {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 5) {
                     Text(counts.progressLine(working: MissionTaskOrdering.inFlight(detail.tasks).count))
@@ -145,6 +146,7 @@ struct MissionInspectorPane: View {
 
 /// A single icon opens the mission's Overview from any mission chat.
 struct SessionMissionControl: View {
+    @Environment(\.hostViewContext) private var hostContext
     let session: SessionSummary
     @EnvironmentObject private var model: AppModel
     @EndpointClient private var client
@@ -152,7 +154,7 @@ struct SessionMissionControl: View {
     var body: some View {
         Button {
             if let missionId = session.missionId {
-                model.openMission(missionId, tab: .overview)
+                model.openMission(missionId, tab: .overview, context: hostContext)
             }
         } label: {
             PilotSymbol(PilotIcon.mission, context: .toolbar)

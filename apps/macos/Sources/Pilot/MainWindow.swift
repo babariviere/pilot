@@ -64,7 +64,9 @@ struct MainWindow: View {
                     .id(ref.storageKey)
             } else if let ref = hosts.selection, ref.host != model.localHost, ref.kind == .project {
                 Group {
-                    if model.memoryProjectId == ref.storageKey {
+                    if model.slackTriageProjectId == ref.storageKey {
+                        SlackTriagePage(projectId: ref.localId, openCase: model.slackTriageCaseId)
+                    } else if model.memoryProjectId == ref.storageKey {
                         MemoryPage(projectId: ref.localId, context: HostViewContext(host: ref.host, hosts: hosts))
                     } else { ProjectPage(projectId: ref.localId) }
                 }

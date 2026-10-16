@@ -180,7 +180,7 @@ private struct ProjectToolbar: ToolbarContent {
             Menu {
                 Button(action: showTracked) { Label("Linear and Slack…", icon: PilotIcon.inbox) }
                 if !(project.tracking?.slackChannels ?? []).isEmpty {
-                    Button { model.openSlackTriage(project.id) } label: {
+                    Button { model.openSlackTriage(project.id, context: hostContext) } label: {
                         Label("Slack Triage", icon: PilotIcon.chats)
                     }
                 }
@@ -199,12 +199,12 @@ private struct ProjectToolbar: ToolbarContent {
                 Button(action: showArtifacts) { Label("Artifacts…", icon: PilotIcon.artifact) }
                 Button { model.openMemory(project.id, context: hostContext) } label: { Label("Memory", icon: PilotIcon.memory) }
                 Divider()
-                if model.sidebarScope == project.id {
+                if model.focusedProjectRef == model.resourceRef(project.id, kind: .project, context: hostContext) {
                     Button { model.focus(on: nil) } label: {
                         Label("Show All Projects", icon: PilotIcon.allProjects)
                     }
                 } else {
-                    Button { model.focus(on: project.id) } label: {
+                    Button { model.focus(on: hostContext?.ref(.project, project.id).storageKey ?? project.id) } label: {
                         Label("Focus on This Project", icon: PilotIcon.focusProject)
                     }
                 }
@@ -758,6 +758,7 @@ private struct NeedsYouRowActions: ViewModifier {
 }
 
 private struct ProjectScheduledRow: View {
+    @Environment(\.hostViewContext) private var hostContext
     @EndpointClient private var endpoint
     let item: ScheduledItem
     @EnvironmentObject private var model: AppModel
@@ -767,7 +768,7 @@ private struct ProjectScheduledRow: View {
             endpoint.session(sessionId)?.title
         } else { nil }
         ScheduledItemRow(item: item, detail: ScheduleText.detail(item, chatTitle: chatTitle)) {
-            model.selectedSessionId = $0
+            model.navigate(.session, id: $0, context: hostContext)
         }
     }
 }

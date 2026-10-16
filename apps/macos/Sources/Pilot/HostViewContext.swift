@@ -19,6 +19,15 @@ struct HostViewContext {
 
     var openURL: OpenURLAction {
         OpenURLAction { url in
+            if let link = ChatDestination(url: url) {
+                let reference = self.ref(.session, link.sessionId)
+                guard hosts.sessions.contains(where: { $0.ref == reference }) else {
+                    AppModel.shared.sessionActionError = "This chat is no longer available on this devbox."
+                    return .handled
+                }
+                AppModel.shared.navigate(.session, id: reference.storageKey)
+                return .handled
+            }
             if url.scheme?.lowercased() == "artifact" {
                 if let link = ArtifactLink(url: url) {
                     AppModel.shared.artifactLinkContext = self

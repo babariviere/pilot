@@ -57,10 +57,14 @@ extension AppModel {
         guard let origin = localHost else { throw HostRoutingError.invalidReference }
         _ = try hosts.endpoint(host)
         try await finishAdopted(on: host)
-        let text = form.message
         let images = form.attachments.items
         let operation: DurableOperation
         let receipt: OperationReceipt
+        if form.pendingOperationId == nil {
+            form.pendingOperationId = hosts.pendingOperations.values.first {
+                $0.destination == host && ($0.kind == "chat-create" || $0.kind == "chat-create-attached")
+            }?.operationId
+        }
         if let id = form.pendingOperationId, let pending = hosts.pendingOperations[id] {
             guard pending.destination == host,
                   case let .receipt(known)? = hosts.operationDeliveries[id], known.state != .pending else {
@@ -86,12 +90,18 @@ extension AppModel {
             }
             operation = result.0; receipt = known
         }
+        try await adoptCreatedChat(operation, receipt: receipt, form: form, revision: revision)
+    }
+
+    func adoptCreatedChat(_ operation: DurableOperation, receipt: OperationReceipt, form: NewSessionForm, revision: UUID) async throws {
         try receipt.validate(operation)
+        let host = operation.destination
         if receipt.state == .accepted {
             let payload = try JSONDecoder().decode(JSONValue.self, from: Data(operation.payload.utf8))
             let request = payload["request"] ?? payload
+            let imageIDs = Set((payload["attachments"]?.array ?? []).compactMap { $0["uploadId"]?.string })
             // A late result must not erase a newer draft, even after an app restart.
-            if form.message == text, request["message"]?.string == text, form.revision == revision {
+            if request["message"]?.string == form.message, imageIDs == Set(form.attachments.items.map { $0.id.uuidString }), form.revision == revision {
                 _ = form.completeSubmission(revision: revision)
             }
         }
@@ -116,6 +126,11 @@ extension AppModel {
 
     func navigate(_ kind: HostResourceKind, id: String, context: HostViewContext? = nil) {
         guard let ref = resourceRef(id, kind: kind, context: context) else { return }
+        showingArchive = false
+        showingInbox = false
+        memoryProjectId = nil
+        slackTriageProjectId = nil
+        slackTriageCaseId = nil
         let key = ref.host == localHost ? ref.localId : ref.storageKey
         switch kind {
         case .session: try? selectSession(ref)
@@ -139,7 +154,13 @@ extension AppModel {
         defer { composer?.delivering = false }
         let savedText = composer?.draft
         let images = includeImages ? composer?.attachments.items ?? [] : []
-        if let id = composer?.pendingOperationId, let known = hosts.pendingOperations[id] {
+        let pending = composer?.pendingOperationId.flatMap { hosts.pendingOperations[$0] }
+            ?? hosts.pendingOperations.values.first {
+                $0.destination == ref.host && $0.targetId == ref.localId &&
+                    ($0.kind == "chat-send" || $0.kind == "chat-send-attached") && !adoptedOperationIds.contains($0.operationId)
+            }
+        if let known = pending {
+            let id = known.operationId
             guard case let .receipt(receipt)? = hosts.operationDeliveries[id], receipt.state != .pending else {
                 throw ClientError("Delivery is not yet confirmed. Reconnect and check before sending another message.")
             }
