@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
+import { readdirSync, readFileSync } from "node:fs";
 import { mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { createAssistantMessageEventStream, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
-import { isTransportFailure, OfflineGate, offlineRequestStream, probeReachability } from "./connectivity.ts";
+import {
+	isTransportFailure,
+	OfflineGate,
+	offlineRequestStream,
+	probeReachability,
+	providerOrigin,
+} from "./connectivity.ts";
 
 const model = fauxProvider().getModel();
 async function until(check: () => boolean) {
@@ -395,4 +402,44 @@ test("a silent stream asks for one shared check and keeps running while the netw
 	assert.equal(aborted, false);
 	source.end(fauxAssistantMessage("finished"));
 	assert.equal((await stream.result()).stopReason, "stop");
+});
+
+test("a provider's own server proves reachability with any HTTPS response when public hosts are blocked", async (t) => {
+	const urls: string[] = [];
+	t.mock.method(globalThis, "fetch", async (url: string, options: RequestInit) => {
+		urls.push(url);
+		assert.equal(options.credentials, "omit");
+		assert.equal(options.redirect, "manual");
+		if (url === "https://api.example.test/") return new Response(null, { status: 401 });
+		throw new TypeError("fetch failed");
+	});
+	assert.equal(await probeReachability(new AbortController().signal, undefined, ["https://api.example.test"]), true);
+	assert.equal(urls.length, 3);
+	assert.equal(await probeReachability(new AbortController().signal, undefined, ["https://down.example.test"]), false);
+});
+
+test("only HTTPS origins without credentials can name a provider server", () => {
+	assert.equal(providerOrigin("https://api.anthropic.com/v1"), "https://api.anthropic.com");
+	assert.equal(providerOrigin("https://host.test:8443/a?b"), "https://host.test:8443");
+	for (const value of ["http://api.test", "https://user:secret@api.test", "not a url", "", undefined, 3])
+		assert.equal(providerOrigin(value), undefined);
+});
+
+test("a failed request names its provider's server in its own check file", { timeout: 10_000 }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-offline-origin-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const path = join(root, "connectivity.json");
+	await writeFile(path, JSON.stringify({ version: 1, online: true, checkedAt: 0 }));
+	const gate = new OfflineGate(path);
+	gate.check("https://api.example.test");
+	gate.check();
+	await until(() => {
+		try {
+			return readdirSync(root).filter((name) => name.startsWith("connectivity.json.check")).length === 2;
+		} catch {
+			return false;
+		}
+	});
+	const named = readdirSync(root).find((name) => name.startsWith("connectivity.json.check."))!;
+	assert.equal(readFileSync(join(root, named), "utf8"), "https://api.example.test");
 });

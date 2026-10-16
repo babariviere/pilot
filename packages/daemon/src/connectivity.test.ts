@@ -204,3 +204,31 @@ test("model data received during a hold releases it for every chat", { timeout: 
 	await writeFile(`${file}.reachable`, "");
 	await until(async () => (await state()).online);
 });
+
+test("checks include the provider server a request failed to reach, until a check passes", {
+	timeout: 10_000,
+}, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-connectivity-origin-"));
+	const file = join(root, "connectivity.json");
+	const seen: string[][] = [];
+	const reachable = true;
+	const detector = new ScheduleDetection({
+		probe: async (_signal, origins) => {
+			seen.push([...origins]);
+			return reachable;
+		},
+	});
+	const service = new ConnectivityService(file, detector, () => {});
+	t.after(async () => {
+		await service.stop();
+		await rm(root, { recursive: true, force: true });
+	});
+	await service.start();
+	await until(() => seen.length === 1);
+	await writeFile(`${file}.check.abc`, "https://api.example.test");
+	await writeFile(`${file}.check.def`, "http://portal.test");
+	await until(() => seen.length === 2);
+	assert.deepEqual(seen[1], ["https://api.example.test"], "only HTTPS origins are checked");
+	await detector.refreshOnline();
+	assert.deepEqual(seen.at(-1), [], "a passing check clears the list");
+});

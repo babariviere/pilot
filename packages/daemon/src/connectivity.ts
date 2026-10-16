@@ -1,13 +1,20 @@
 /** Agents pause only on evidence of an outage and resume on the first sign of recovery. */
 import { randomUUID } from "node:crypto";
 import { type FSWatcher, watch } from "node:fs";
-import { rename, rm, writeFile } from "node:fs/promises";
-import { basename, dirname } from "node:path";
-import type { ConnectivityState } from "@pilot/kernel";
+import { open, rename, rm, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
+import { type ConnectivityState, providerOrigin } from "@pilot/kernel";
 import type { ScheduleDetection } from "./schedule-detection.ts";
 
 /** Wi-Fi roaming, VPN reconnects and helper startup report brief path loss. Only a lasting loss is an outage. */
 export const PATH_LOSS_DEBOUNCE_MS = 3_000;
+/** Distinct provider servers checked at once. Older ones are dropped first. */
+const MAX_ORIGINS = 8;
+
+type Detection = Pick<
+	ScheduleDetection,
+	"subscribeConnectivity" | "setAgentsActive" | "refreshOnline" | "setProbeOrigins"
+>;
 
 export interface ConnectivityOptions {
 	pathLossDebounceMs?: number;
@@ -32,13 +39,15 @@ export class ConnectivityService {
 	private pathDown = false;
 	/** A kernel saw a transport failure or a silent stream, so the next check result decides. */
 	private suspect = false;
+	/** Provider servers named by recent failures, checked alongside the public hosts until one passes. */
+	private origins: string[] = [];
 	private readonly file: string;
-	private readonly detection: Pick<ScheduleDetection, "subscribeConnectivity" | "setAgentsActive" | "refreshOnline">;
+	private readonly detection: Detection;
 	private readonly publish: (online: boolean) => void;
 	private readonly pathLossDebounceMs: number;
 	constructor(
 		file: string,
-		detection: Pick<ScheduleDetection, "subscribeConnectivity" | "setAgentsActive" | "refreshOnline">,
+		detection: Detection,
 		publish: (online: boolean) => void,
 		options: ConnectivityOptions = {},
 	) {
@@ -56,19 +65,9 @@ export class ConnectivityService {
 		this.watcher = watch(dirname(this.file), (_event, name) => {
 			if (this.stopped) return;
 			if (name === reachable) this.recovered();
-			if (name !== check) return;
-			this.suspect = true;
-			if (this.checkTimer) return;
-			// Many failed requests share one debounced, bounded probe, not one probe per kernel.
-			this.checkTimer = setTimeout(
-				() => {
-					this.checkTimer = undefined;
-					this.nextCheck = Date.now() + 5_000;
-					this.refresh();
-				},
-				Math.max(200, this.nextCheck - Date.now()),
-			);
-			this.checkTimer.unref();
+			if (name === check) this.requestCheck();
+			else if (name?.startsWith(`${check}.`) && !name.endsWith(".tmp"))
+				void this.readOrigin(join(dirname(this.file), name)).finally(() => this.requestCheck());
 		});
 		this.watcher.on("error", (error) => console.warn(`pilotd: connectivity hints: ${error}`));
 		this.dispose = this.detection.subscribeConnectivity((state) => this.checked(state));
@@ -119,6 +118,10 @@ export class ConnectivityService {
 		if (state.online) {
 			// Real traffic got through, even if the helper still reports no path.
 			this.pathDown = false;
+			if (this.origins.length) {
+				this.origins = [];
+				this.detection.setProbeOrigins([]);
+			}
 			if (this.offline || suspect) this.set(true, state.checkedAt);
 		} else if (this.offline || suspect) this.set(false, state.checkedAt);
 	}
@@ -167,5 +170,39 @@ export class ConnectivityService {
 		this.detection.setAgentsActive(false);
 		await this.tail;
 		this.stopped = true;
+	}
+	private requestCheck(): void {
+		if (this.stopped) return;
+		this.suspect = true;
+		if (this.checkTimer) return;
+		// Many failed requests share one debounced, bounded probe, not one probe per kernel.
+		this.checkTimer = setTimeout(
+			() => {
+				this.checkTimer = undefined;
+				this.nextCheck = Date.now() + 5_000;
+				this.refresh();
+			},
+			Math.max(200, this.nextCheck - Date.now()),
+		);
+		this.checkTimer.unref();
+	}
+
+	/** A kernel names the HTTPS server it failed to reach. Bounded read; anything else is ignored. */
+	private async readOrigin(path: string): Promise<void> {
+		try {
+			const handle = await open(path, "r");
+			try {
+				const buffer = Buffer.alloc(2048);
+				const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+				const origin = providerOrigin(buffer.subarray(0, bytesRead).toString("utf8").trim());
+				if (!origin || this.origins.includes(origin)) return;
+				this.origins = [...this.origins, origin].slice(-MAX_ORIGINS);
+				this.detection.setProbeOrigins(this.origins);
+			} finally {
+				await handle.close();
+			}
+		} catch {
+			/* A missing or unreadable hint still triggers the public-host check. */
+		}
 	}
 }

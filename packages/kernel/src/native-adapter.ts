@@ -1107,7 +1107,7 @@ export class NativeAdapter {
 			observe: (error: unknown) => void,
 			timing?: RequestTiming,
 			signal?: AbortSignal,
-			onProvider?: (provider: string) => void,
+			onProvider?: (provider: string, baseUrl?: string) => void,
 		) => AssistantMessageEventStream,
 		model: Parameters<Models["streamSimple"]>[0],
 		signal?: AbortSignal,
@@ -1115,6 +1115,7 @@ export class NativeAdapter {
 		if (!this.#offlineGate.path && !this.#reportSubscriptionLimit)
 			return this.rawRequestStream(dispatch, model, signal);
 		let provider = model.provider;
+		let baseUrl: string | undefined;
 		return offlineRequestStream(
 			(attemptSignal) => {
 				if (signal) {
@@ -1122,14 +1123,16 @@ export class NativeAdapter {
 					if (preparation) this.#preparations.set(attemptSignal, preparation);
 					this.#preparations.delete(signal);
 				}
-				return this.rawRequestStream(dispatch, model, attemptSignal, (physical) => {
+				return this.rawRequestStream(dispatch, model, attemptSignal, (physical, physicalBaseUrl) => {
 					provider = physical;
+					baseUrl = physicalBaseUrl;
 				});
 			},
 			model,
 			this.#offlineGate,
 			signal,
 			subscriptionRecovery(() => provider, this.#subscriptionGate, this.#reportSubscriptionLimit),
+			() => baseUrl,
 		);
 	}
 
@@ -1138,11 +1141,11 @@ export class NativeAdapter {
 			observe: (error: unknown) => void,
 			timing?: RequestTiming,
 			signal?: AbortSignal,
-			onProvider?: (provider: string) => void,
+			onProvider?: (provider: string, baseUrl?: string) => void,
 		) => AssistantMessageEventStream,
 		model: Parameters<Models["streamSimple"]>[0],
 		signal?: AbortSignal,
-		onProvider?: (provider: string) => void,
+		onProvider?: (provider: string, baseUrl?: string) => void,
 	): AssistantMessageEventStream {
 		const stream = createAssistantMessageEventStream();
 		const preparation = signal ? this.#preparations.get(signal) : undefined;
@@ -1239,7 +1242,7 @@ export class NativeAdapter {
 		observe: (error: unknown) => void,
 		api: string,
 		timing?: RequestTiming,
-		onProvider?: (provider: string) => void,
+		onProvider?: (provider: string, baseUrl?: string) => void,
 	): ModelsSimpleStreamOptions {
 		const runner = this.session.extensionRunner;
 		const settings = this.session.settingsManager;
@@ -1269,7 +1272,7 @@ export class NativeAdapter {
 				model: Parameters<NonNullable<ModelsSimpleStreamOptions["onPayload"]>>[1],
 			) => {
 				this.#physicalSubscriptionProvider = model.provider;
-				onProvider?.(model.provider);
+				onProvider?.(model.provider, model.baseUrl);
 				this.usage.set(this.usage.current.context, model.provider);
 				await this.#subscriptionGate.wait(model.provider, options.signal);
 				await this.#offlineGate.wait(options.signal);
