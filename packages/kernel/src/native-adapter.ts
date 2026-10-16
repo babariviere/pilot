@@ -61,6 +61,7 @@ import {
 } from "@earendil-works/pi-durable";
 import type { DeliveryMode, SessionCommand, SessionJob } from "@pilot/protocol";
 import { type ActivityStream, InfrastructureChildren, inspectChildren, watchActivity } from "./activity.ts";
+import { anthropicToolErrors } from "./anthropic-tool-errors.ts";
 import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
 import { type ArtifactToolOptions, createArtifactTools } from "./artifact-tools.ts";
 import { askSettings, createAskSession } from "./ask-runtime.ts";
@@ -1275,8 +1276,9 @@ export class NativeAdapter {
 				const value = await runner.emitBeforeProviderRequest(
 					(await options?.onPayload?.(payload, model)) ?? payload,
 				);
+				const compatible = anthropicToolErrors(value, model.api);
 				timing?.mark("payloadReadyMs");
-				return value;
+				return compatible;
 			},
 			transformHeaders: async (headers) =>
 				runner.emitBeforeProviderHeaders((await options?.transformHeaders?.(headers)) ?? headers),

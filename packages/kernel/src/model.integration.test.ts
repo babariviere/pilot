@@ -592,6 +592,145 @@ test("direct and nested tool exceptions keep step and command without turning a 
 	assert.equal((await readSessionSnapshot(f.spec.storageDir, f.spec.cwd)).completion?.outcome, "done");
 });
 
+test("a failed codemode script with partial images recovers from cold history through the real Anthropic transport", async (t) => {
+	const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aarsAAAAASUVORK5CYII=";
+	let effects = 0;
+	let hookCalls = 0;
+	const f = await fixture(t, [
+		createCodemodeExtension({ mode: "on" }),
+		(pi) => {
+			pi.registerTool({
+				name: "picture",
+				label: "Picture",
+				description: "Offline image fixture",
+				parameters: Type.Object({}),
+				outputSchema: Type.Unknown(),
+				execute: async () => {
+					effects++;
+					return {
+						content: [],
+						structuredContent: { type: "image", mimeType: "image/png", data: png },
+						details: undefined,
+					};
+				},
+			});
+			pi.on("before_provider_request", (event) => {
+				hookCalls++;
+				return { ...(event.payload as object), temperature: 0.25 };
+			});
+		},
+	]);
+	let session = await f.open();
+	f.adapters[0]!.setToolActive("codemode", true);
+	f.a.setResponses([
+		fauxAssistantMessage(
+			fauxToolCall("codemode", {
+				code: 'image(await tools.picture({})); throw new Error("Missing second image");',
+			}),
+			{ stopReason: "toolUse" },
+		),
+		// Reproduce the older adapter's response, leaving the mixed result in persisted history.
+		fauxAssistantMessage("", {
+			stopReason: "error",
+			errorMessage: "tool_result: all content must be type text if is_error is true",
+		}),
+	]);
+	await session.submit("partial-image", "Read two images", "followUp");
+	await session.conversation.waitForIdle(context);
+	await f.completed;
+	assert.equal(session.completion?.outcome, "failed");
+	const history = (await session.conversation.context(context)).messages;
+	const failed = history.find((m) => m.role === "toolResult" && m.toolName === "codemode");
+	assert.ok(failed?.role === "toolResult" && failed.isError);
+	assert.ok(
+		failed.content.some((part) => part.type === "image"),
+		JSON.stringify(failed.content),
+	);
+	assert.match(JSON.stringify(failed.content), /Missing second image/);
+	await session.close();
+
+	session = await f.open();
+	const adapter = f.adapters.at(-1)!;
+	const model = adapter.models.getModels("anthropic")[0]!;
+	assert.ok(model);
+	const events = [
+		{
+			type: "message_start",
+			message: {
+				id: "offline",
+				type: "message",
+				role: "assistant",
+				model: model.id,
+				content: [],
+				stop_reason: null,
+				stop_sequence: null,
+				usage: { input_tokens: 1, output_tokens: 0 },
+			},
+		},
+		{ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+		{ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Recovered" } },
+		{ type: "content_block_stop", index: 0 },
+		{ type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } },
+		{ type: "message_stop" },
+	];
+	let requests = 0;
+	f.a.setResponses([
+		async ({ messages }) =>
+			adapter.models.completeSimple(
+				{ ...model, baseUrl: "https://example.invalid" },
+				{ messages },
+				{
+					apiKey: "sk-ant-api03-offline-fixture",
+					maxRetries: 0,
+					maxTokens: 16,
+					onPayload: (payload) => ({ ...(payload as object), metadata: { user_id: "caller-hook" } }),
+					fetch: async (input, init) => {
+						requests++;
+						const body = (await new Request(input, init).json()) as {
+							metadata: { user_id: string };
+							temperature: number;
+							messages: Array<{
+								role: string;
+								content: Array<{
+									type: string;
+									is_error?: boolean;
+									content?: Array<{ type: string; text?: string }>;
+									source?: { data: string };
+								}>;
+							}>;
+						};
+						assert.equal(body.metadata.user_id, "caller-hook");
+						assert.equal(body.temperature, 0.25);
+						const blocks = body.messages.flatMap((message) => message.content);
+						const error = blocks.find((block) => block.type === "tool_result" && block.is_error);
+						assert.ok(error);
+						assert.ok(error.content!.every((part) => part.type === "text"));
+						assert.match(JSON.stringify(error), /Missing second image/);
+						assert.equal(blocks.find((block) => block.type === "image")?.source?.data, png);
+						return new Response(
+							events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""),
+							{
+								headers: { "content-type": "text/event-stream" },
+							},
+						);
+					},
+				},
+			),
+	]);
+	await session.submit("recover", "Continue", "followUp");
+	await session.conversation.waitForIdle(context);
+	assert.equal(requests, 1);
+	assert.equal(hookCalls, 1);
+	assert.equal(effects, 1, "recovering never replays the failed script's effects");
+	const recovered = (await session.conversation.context(context)).messages;
+	assert.deepEqual(
+		recovered.find((m) => m.role === "toolResult" && m.toolName === "codemode"),
+		failed,
+	);
+	await session.close();
+	assert.equal((await readSessionSnapshot(f.spec.storageDir, f.spec.cwd)).completion?.outcome, "done");
+});
+
 test("daemon activity is durable, idempotent and never starts a model turn", async (t) => {
 	const f = await fixture(t);
 	const session = await f.open();
