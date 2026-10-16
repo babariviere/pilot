@@ -24,8 +24,10 @@ can be forwarded, for example `pnpm test:integration -- --test-name-pattern='res
 CI runs the portable lane and typechecking on Ubuntu x86-64. A smaller macOS arm64 lane retains
 the real coordinator sandbox, native Ask artifact publication/preview, wake sampling, PTYs, runtime
 environment and bundled-extension coverage, plus packaging and relocated production-runtime checks.
-Both lanes gate releases alongside Swift tests and the app bundle. The separate Linux headless smoke
-workflow still verifies daemon/kernel execution and the native dependency ABI.
+Both lanes gate releases alongside Swift tests, the app bundle and the Linux production package.
+Production packages are built once in this workflow and promoted to publishing after commit checks.
+The separate Linux headless smoke workflow still verifies daemon/kernel execution and the native
+dependency ABI, but no longer builds a second production package.
 
 Lane selection is explicit in `scripts/test-suites.ts`: new files default to the portable lane; only
 `kernel/ask.integration.test.ts` is currently native-only because it publishes and previews SwiftUI.

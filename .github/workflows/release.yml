@@ -161,7 +161,7 @@ jobs:
 
   app-bundle:
     runs-on: macos-15
-    timeout-minutes: 15
+    timeout-minutes: 45
     # A newer main push cancels this job, which skips the superseded run's release jobs. Release
     # commits, PRs and dispatches get a unique group. Release jobs themselves are never cancelled.
     concurrency:
@@ -169,10 +169,31 @@ jobs:
       cancel-in-progress: true
     env:
       PILOT_SWIFT_JOBS: 3
+      # Public configuration only. Private signing keys remain in publishing jobs.
+      BUNDLE_RUNTIME: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false && '1' || '0' }}
+      PILOT_UPDATE_REPOSITORY: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false && github.repository || '' }}
+      SPARKLE_PUBLIC_KEY: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false && vars.SPARKLE_PUBLIC_KEY || '' }}
+      LINUX_RUNTIME_PUBLIC_KEY: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false && vars.LINUX_RUNTIME_PUBLIC_KEY || '' }}
+      # Keep Sparkle builds increasing even after the workflow file was renamed.
+      BUNDLE_VERSION_OFFSET: '10000'
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          # A manual old-draft retry builds the tag once, in this verification job.
+          ref: ${{ inputs.release_tag || github.sha }}
+      - uses: pnpm/action-setup@v4
+        if: env.BUNDLE_RUNTIME == '1' && hashFiles('pnpm-lock.yaml') != ''
+      - uses: actions/setup-node@v4
+        if: env.BUNDLE_RUNTIME == '1'
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Configure production bundle
+        if: env.BUNDLE_RUNTIME == '1'
+        run: |
+          test -n "$SPARKLE_PUBLIC_KEY" || { echo '::error::Configure SPARKLE_PUBLIC_KEY before building production packages.'; exit 1; }
+          test -n "$LINUX_RUNTIME_PUBLIC_KEY" || { echo '::error::Configure LINUX_RUNTIME_PUBLIC_KEY before building production packages.'; exit 1; }
+          echo "BUNDLE_VERSION=$((GITHUB_RUN_NUMBER + BUNDLE_VERSION_OFFSET)).$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
       - name: Verify toolchain and architecture
         id: swift-toolchain
         run: |
@@ -189,8 +210,47 @@ jobs:
             ~/Library/Caches/org.swift.swiftpm/artifacts
             apps/macos/Vendor/libghostty-spm
           key: swift-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.resolved', 'apps/macos/Package.swift', 'apps/macos/scripts/vendor-ghostty.sh', 'apps/macos/scripts/patch-ghostty-resources.py') }}
+      - name: Load current release packaging tools
+        if: inputs.release_tag != ''
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          path: .pilot-release-tools
+          sparse-checkout: apps/macos/scripts
+      - name: Apply current packaging policy to tagged application source
+        if: inputs.release_tag != ''
+        # An older draft must still use ZIP-only publishing and runtime cleanup.
+        # Overlay only packaging helpers, keeping the app, dependencies and vendor pins tagged.
+        run: |
+          cp .pilot-release-tools/apps/macos/scripts/production_artifact.py apps/macos/scripts/production_artifact.py
+          cp .pilot-release-tools/apps/macos/scripts/release_metadata.py apps/macos/scripts/release_metadata.py
+          cp .pilot-release-tools/apps/macos/scripts/publish-release.sh apps/macos/scripts/publish-release.sh
+          # Preserve the executable bit even when retrying a tag with a non-executable helper.
+          cp -p .pilot-release-tools/apps/macos/scripts/check-runtime.sh apps/macos/scripts/check-runtime.sh
       # Build, sign and smoke-test the relocated app, not just the Swift executable.
       - run: apps/macos/scripts/bundle.sh
+      - name: Archive and verify the production app
+        if: env.BUNDLE_RUNTIME == '1'
+        run: |
+          stage="$RUNNER_TEMP/macos-production"
+          mkdir -p "$stage"
+          ditto -c -k --sequesterRsrc --keepParent apps/macos/build/Pilot.app "$stage/Pilot-arm64.zip"
+          python3 apps/macos/scripts/production_artifact.py create "$stage" "$(git rev-parse HEAD)" "$(node -p 'require("./package.json").version')"
+          ditto -x -k "$stage/Pilot-arm64.zip" "$stage/extracted"
+          codesign --verify --deep --strict "$stage/extracted/Pilot.app"
+          apps/macos/scripts/check-runtime.sh "$stage/extracted/Pilot.app/Contents/Resources/runtime"
+      - name: Upload verified production app
+        if: env.BUNDLE_RUNTIME == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-production-app
+          path: |
+            ${{ runner.temp }}/macos-production/Pilot-arm64.zip
+            ${{ runner.temp }}/macos-production/production-artifact.json
+          if-no-files-found: error
+          overwrite: true
+          compression-level: 0
       - name: Render delegated task fixtures
         run: |
           fixture_home="$(mktemp -d "$RUNNER_TEMP/delegated-home.XXXXXX")"
@@ -203,7 +263,7 @@ jobs:
           if-no-files-found: error
 
   release-please:
-    needs: [node, node-macos, swift-test, app-bundle]
+    needs: [node, node-macos, swift-test, app-bundle, linux-production]
     # Never expose write permissions or release credentials to PRs or forks.
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false && inputs.release_tag == ''
     runs-on: ubuntu-latest
@@ -227,16 +287,18 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-  linux-release:
-    needs: [node, node-macos, swift-test, app-bundle, release-please]
-    if: always() && needs.node.result == 'success' && needs.node-macos.result == 'success' && needs.swift-test.result == 'success' && needs.app-bundle.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false && ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != ''))
+  # Build and validate once per commit, then promote the same bytes after release creation.
+  linux-production:
+    concurrency:
+      group: "pilot-ci-main-linux-production-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !startsWith(github.event.head_commit.message, 'chore(main): release') && 'main' || github.run_id }}"
+      cancel-in-progress: true
     uses: ./.github/workflows/linux-package.yml
     with:
-      ref: ${{ inputs.release_tag || needs.release-please.outputs.tag_name }}
+      ref: ${{ inputs.release_tag || github.sha }}
 
   linux-publish:
-    needs: [linux-release, release-please]
-    if: always() && needs.linux-release.result == 'success'
+    needs: [node, node-macos, swift-test, app-bundle, linux-production, release-please]
+    if: always() && needs.node.result == 'success' && needs.node-macos.result == 'success' && needs.swift-test.result == 'success' && needs.app-bundle.result == 'success' && needs.linux-production.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false && ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != ''))
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -270,42 +332,35 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag || needs.release-please.outputs.tag_name }}
         run: |
           set -euo pipefail
-          node scripts/linux/release-manifest.mjs sign "$PWD/release"
           test "$RELEASE_TAG" = "$(node -p "JSON.parse(require('node:fs').readFileSync('release/runtime-manifest.json')).tag")"
           test "$(git rev-parse HEAD)" = "$(node -p "JSON.parse(require('node:fs').readFileSync('release/runtime-manifest.json')).commit")"
           test "$(git rev-parse HEAD)" = "$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha)"
+          node scripts/linux/release-manifest.mjs sign "$PWD/release"
           gh release view "$RELEASE_TAG" --json isDraft,isPrerelease > release-state.json
           node --input-type=module -e 'import fs from "node:fs"; const r=JSON.parse(fs.readFileSync("release-state.json")); if (!r.isDraft || r.isPrerelease) throw Error("Only stable drafts may receive runtime assets")'
           gh release upload "$RELEASE_TAG" release/Pilot-linux-x64.tar.gz release/runtime-manifest.json release/runtime-manifest.json.sig --clobber
 
   release:
-    # Builds and uploads the macOS update in parallel with the Linux runtime. The publish job
+    # Signs and uploads the verified macOS update in parallel with the Linux runtime. The publish job
     # releases the draft once both platforms have uploaded their assets.
-    needs: [node, node-macos, swift-test, app-bundle, release-please]
+    needs: [node, node-macos, swift-test, app-bundle, linux-production, release-please]
     # always() permits an explicit retry when release-please is intentionally skipped.
-    if: always() && needs.node.result == 'success' && needs.node-macos.result == 'success' && needs.swift-test.result == 'success' && needs.app-bundle.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false && ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != ''))
+    if: always() && needs.node.result == 'success' && needs.node-macos.result == 'success' && needs.swift-test.result == 'success' && needs.app-bundle.result == 'success' && needs.linux-production.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false && ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != ''))
     runs-on: macos-15
     timeout-minutes: 45
     permissions:
       contents: write
     env:
       PILOT_UPDATE_REPOSITORY: ${{ github.repository }}
-      # Renaming the workflow file restarted github.run_number at 1, below the last published
-      # Sparkle build (1061.1). The offset keeps CFBundleVersion increasing; never lower it.
-      BUNDLE_VERSION_OFFSET: '10000'
+      SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
+      LINUX_RUNTIME_PUBLIC_KEY: ${{ vars.LINUX_RUNTIME_PUBLIC_KEY }}
       RELEASE_TAG: ${{ inputs.release_tag || needs.release-please.outputs.tag_name }}
     steps:
-      - name: Compute monotonic Sparkle build version
-        run: echo "BUNDLE_VERSION=$((GITHUB_RUN_NUMBER + BUNDLE_VERSION_OFFSET)).$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-          # Build the immutable release commit, not a newer main during a retry.
+          # Verify the immutable release commit, not a newer main during a retry.
           ref: ${{ inputs.release_tag || needs.release-please.outputs.sha || github.sha }}
-      # bundle-runtime.sh installs the production runtime with pnpm. Retried drafts from before the
-      # pnpm migration have no pnpm pin and still install with npm.
-      - uses: pnpm/action-setup@v4
-        if: hashFiles('pnpm-lock.yaml') != ''
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -320,8 +375,7 @@ jobs:
               raise SystemExit('Release tag must match the stable package.json version.')
           PY
           test "$(git rev-parse HEAD)" = "$(gh api "repos/$PILOT_UPDATE_REPOSITORY/commits/$RELEASE_TAG" --jq '.sha')"
-      # Tests are not repeated here. Both Node lanes and Swift verification gate this job, and a draft
-      # retry rebuilds a tag whose commit already passed them when it landed on main.
+      # No compiler or dependency installation here: only this run's verified artifact is accepted.
       - name: Load current release packaging tools
         uses: actions/checkout@v4
         with:
@@ -333,6 +387,7 @@ jobs:
         # An older draft must still use ZIP-only publishing and runtime cleanup.
         # Overlay only packaging helpers, keeping the app, dependencies and vendor pins tagged.
         run: |
+          cp .pilot-release-tools/apps/macos/scripts/production_artifact.py apps/macos/scripts/production_artifact.py
           cp .pilot-release-tools/apps/macos/scripts/release_metadata.py apps/macos/scripts/release_metadata.py
           cp .pilot-release-tools/apps/macos/scripts/publish-release.sh apps/macos/scripts/publish-release.sh
           # Preserve the executable bit even when retrying a tag with a non-executable helper.
@@ -352,17 +407,22 @@ jobs:
             echo '::error::Configure the LINUX_RUNTIME_PUBLIC_KEY repository variable (see scripts/linux/README.md) before publishing.'
             exit 1
           fi
-      - name: Build self-contained Pilot.app (arm64 only)
-        env:
-          BUNDLE_RUNTIME: '1'
-          SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
-          LINUX_RUNTIME_PUBLIC_KEY: ${{ vars.LINUX_RUNTIME_PUBLIC_KEY }}
-        run: apps/macos/scripts/bundle.sh
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-production-app
+          path: ${{ runner.temp }}/macos-production
+      - name: Verify and restore the matching production app
+        run: |
+          stage="$RUNNER_TEMP/macos-production"
+          python3 apps/macos/scripts/production_artifact.py verify "$stage" "$(git rev-parse HEAD)" "$(node -p 'require("./package.json").version')"
+          mkdir -p apps/macos/build
+          ditto -x -k "$stage/Pilot-arm64.zip" apps/macos/build
+          codesign --verify --deep --strict apps/macos/build/Pilot.app
       - name: Sign and upload the macOS update ZIP and appcast to the stable draft
         env:
           GH_TOKEN: ${{ github.token }}
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
-        run: apps/macos/scripts/publish-release.sh
+        run: apps/macos/scripts/publish-release.sh apps/macos/build/Pilot.app "$RUNNER_TEMP/macos-production/Pilot-arm64.zip"
 
   publish:
     needs: [release-please, linux-publish, release]

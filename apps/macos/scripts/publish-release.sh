@@ -47,7 +47,12 @@ if len(key) not in (32, 64, 96):
 PY
 archive="$stage/Pilot-arm64.zip"
 "$here/scripts/fetch-sparkle.sh" "$stage/sparkle"
-ditto -c -k --sequesterRsrc --keepParent "$app" "$archive"
+if [ -n "${2:-}" ]; then
+	# CI promotes the exact ZIP already validated by app-bundle. Local callers may still package an app.
+	cp "$2" "$archive"
+else
+	ditto -c -k --sequesterRsrc --keepParent "$app" "$archive"
+fi
 signature="$(printf '%s\n' "$SPARKLE_PRIVATE_KEY" | "$stage/sparkle/bin/sign_update" --ed-key-file - -p "$archive")"
 # Check against the PUBLIC KEY actually embedded in this app, not just the private key's own public half.
 public_key="$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$app/Contents/Info.plist")"
