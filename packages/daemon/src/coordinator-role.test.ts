@@ -182,15 +182,6 @@ test("promotion unbinds PRs, shares main, retains scratch, and demotion restores
 	await writeFile(join(meta.cwd, "new.txt"), "normal writes return");
 	await manager.send(id, "continue coding");
 	assert.equal(specs[0]!.pilot?.coordinatorView, undefined);
-	assert.ok(
-		manager["canClaimPullRequest"](meta, {
-			number: 43,
-			url: "https://github.com/octo/repo/pull/43",
-			title: "New work",
-			state: "open",
-			checkedAt: 3,
-		}),
-	);
 	busy = true;
 	coordinator = true;
 	manager.missionChanged(id);

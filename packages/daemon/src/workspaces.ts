@@ -194,11 +194,15 @@ export async function copyLocalConfigs(source: string, destination: string, runn
 	}
 }
 
-/** The checked-out Git branch, or the nearest local jj bookmark on the working copy's ancestry. */
+/**
+ * The checked-out Git branch, or the nearest local jj bookmark on the working copy's ancestry. Branches the user
+ * detached from the chat (`exclude`) never count.
+ */
 export async function workspaceBranch(
 	cwd: string,
 	previous?: string,
 	runner: Runner = run,
+	exclude: readonly string[] = [],
 ): Promise<string | undefined> {
 	if (existsSync(join(cwd, ".jj"))) {
 		const output = await runner(
@@ -217,11 +221,12 @@ export async function workspaceBranch(
 			cwd,
 			10_000,
 		);
-		const names = [...new Set(output.trim().split("\n").filter(Boolean))];
+		const names = [...new Set(output.trim().split("\n").filter(Boolean))].filter((name) => !exclude.includes(name));
 		// Several bookmarks may share a commit. Do not guess which one is this session's branch.
 		return previous && names.includes(previous) ? previous : names.length === 1 ? names[0] : undefined;
 	}
-	return (await runner("git", ["branch", "--show-current"], cwd, 10_000)).trim() || undefined;
+	const branch = (await runner("git", ["branch", "--show-current"], cwd, 10_000)).trim() || undefined;
+	return branch !== undefined && exclude.includes(branch) ? undefined : branch;
 }
 
 /**

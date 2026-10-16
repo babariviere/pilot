@@ -119,6 +119,7 @@ import {
 	validateBaseBranch,
 	type Workspace,
 	workspaceBorrowsObjects,
+	workspaceBranch,
 } from "./workspaces.ts";
 
 export { NotFound } from "./errors.ts";
@@ -350,8 +351,8 @@ interface SessionMeta extends OutcomeMeta {
 	/** Observed GitHub merge time of the current PR, retained for local delayed archiving without terminal PR polling. */
 	pullRequestMergedAt?: number;
 	/**
-	 * PRs this session owns, the only ones eligible for automatic work. A PR has at most one owner: the session
-	 * that created it, or else the first private-workspace session to discover it on its branch.
+	 * PRs this session's agent created, which with bound PRs are the only ones it shows and works on automatically.
+	 * A PR has at most one owner.
 	 */
 	agentPullRequests?: string[];
 	/** Explicit ownership and durable discovery exclusions. Binding clears an exclusion. */
@@ -379,6 +380,10 @@ interface SessionMeta extends OutcomeMeta {
 	previousPullRequests?: SessionPullRequest[];
 	/** Earlier branches without a known PR, still checked in case one is opened from them. */
 	previousBranches?: string[];
+	/** Workspace branch read after the agent's last branch-changing Git or jj command. Discovery adopts it. */
+	detectedBranch?: string;
+	/** Branches the user detached from this chat, oldest first. Never adopted again. */
+	detachedBranches?: string[];
 	/** Latest subagents reported by the kernel, kept while it is parked. Includes private storage paths. */
 	subagents?: KernelSubagent[];
 }
@@ -937,6 +942,8 @@ export class SessionManager {
 	>();
 	private readonly pullRequests: PullRequestSync<SessionMeta, FollowUpContext>;
 	private readonly runner: Runner;
+	/** One branch read per session at a time. Hints during a read ask for one more afterwards. */
+	private readonly branchDetections = new Map<string, { again: boolean }>();
 	private readonly pullRequestMerger: PullRequestMerger;
 	/** Last unpublished-work check per session, and the one in flight. */
 	private readonly unpublishedChecks = new Map<string, { at: number; promise?: Promise<boolean> }>();
@@ -1847,6 +1854,69 @@ export class SessionManager {
 	): Promise<SessionSummary & PullRequestBindingResult> {
 		const result = await this.changePullRequestBinding(id, url, false, actor);
 		return { ...this.summary(this.require(id)), ...result };
+	}
+
+	/**
+	 * Stops tracking a branch that has no pull request, such as one the agent created and never used. The branch
+	 * itself stays unchanged, and discovery never adopts it again in this chat.
+	 */
+	async detachBranch(id: string, branch: string): Promise<SessionSummary> {
+		this.assertWritable(id);
+		const meta = this.require(id);
+		if (typeof branch !== "string" || !branch.trim() || branch.length > 255)
+			throw new Error("branch must be a non-empty branch name of at most 255 characters");
+		if (!sessionBranches(meta).includes(branch)) throw new NotFound("The chat does not track this branch");
+		const prBranch = (pr: SessionPullRequest) =>
+			pr.branch ?? (pr.url === meta.pullRequest?.url ? meta.workspace?.branch : undefined);
+		if (sessionPullRequests(meta).some((pr) => prBranch(pr) === branch))
+			throw new Conflict("The branch has a pull request. Detach the pull request instead.");
+		meta.detachedBranches = [...(meta.detachedBranches ?? []).filter((name) => name !== branch), branch].slice(-64);
+		if (meta.workspace?.branch === branch) {
+			delete meta.workspace.branch;
+			delete meta.pullRequestMergedAt;
+		}
+		if (meta.detectedBranch === branch) delete meta.detectedBranch;
+		const previous = meta.previousBranches?.filter((name) => name !== branch);
+		if (previous?.length) meta.previousBranches = previous;
+		else delete meta.previousBranches;
+		await this.save(meta);
+		this.emit(meta);
+		return this.summary(meta);
+	}
+
+	/**
+	 * Reads the workspace branch after a branch-changing command of the agent, then rechecks PRs. Hints that
+	 * arrive during a read coalesce into one more read.
+	 */
+	private async detectBranch(meta: SessionMeta): Promise<void> {
+		const pending = this.branchDetections.get(meta.id);
+		if (pending) {
+			pending.again = true;
+			return;
+		}
+		const state = { again: true };
+		this.branchDetections.set(meta.id, state);
+		try {
+			while (state.again) {
+				state.again = false;
+				const workspace = meta.workspace;
+				if (!workspace || meta.workspaceRecovery || this.metas.get(meta.id) !== meta) return;
+				try {
+					const branch = await workspaceBranch(
+						meta.cwd,
+						meta.detectedBranch ?? workspace.branch,
+						this.runner,
+						meta.detachedBranches,
+					);
+					if (branch !== undefined && !meta.detachedBranches?.includes(branch)) meta.detectedBranch = branch;
+				} catch (error) {
+					console.warn(`pilotd: could not read the branch of session ${meta.id}: ${error}`);
+				}
+			}
+		} finally {
+			this.branchDetections.delete(meta.id);
+		}
+		await this.pullRequests.refresh(meta);
 	}
 
 	private changePullRequestBinding(
@@ -2945,6 +3015,8 @@ export class SessionManager {
 						pullRequest: structuredClone(meta.pullRequest),
 						previousPullRequests: structuredClone(meta.previousPullRequests),
 						previousBranches: structuredClone(meta.previousBranches),
+						detectedBranch: meta.detectedBranch,
+						detachedBranches: structuredClone(meta.detachedBranches),
 						agentPullRequests: [...(meta.agentPullRequests ?? [])],
 						boundPullRequests: [...(meta.boundPullRequests ?? [])],
 						unboundPullRequests: [...(meta.unboundPullRequests ?? [])],
@@ -3141,8 +3213,12 @@ export class SessionManager {
 			throw new Conflict("Session must be idle with no queued messages before changing its model or thinking level");
 	}
 
-	/** Where the session's changes start: its workspace base, else the folder's HEAD. */
-	changeBase(id: string): { cwd: string; base?: string; baseBranch?: string } {
+	/**
+	 * Where the session's changes start: its workspace base, else the folder's HEAD. Workspace chats also report
+	 * their recorded branch, which only the agent's own branch-changing commands move, instead of whatever the
+	 * checkout points at.
+	 */
+	changeBase(id: string): { cwd: string; base?: string; baseBranch?: string; branch?: { name?: string } } {
 		this.assertWritable(id);
 		const meta = this.require(id);
 		if (meta.preparing) throw new Error("Session workspace is still preparing");
@@ -3151,6 +3227,7 @@ export class SessionManager {
 			cwd: meta.cwd,
 			...(workspace ? { base: workspace.base } : {}),
 			...(workspace?.baseBranch ? { baseBranch: workspace.baseBranch } : {}),
+			...(workspace ? { branch: workspace.branch ? { name: workspace.branch } : {} } : {}),
 		};
 	}
 
@@ -5527,14 +5604,15 @@ export class SessionManager {
 			return;
 		}
 		if (packet.type === "refs.changed") {
-			// A branch may have been created or pushed. Repeated hints coalesce in the sync.
+			// A branch may have been created, moved or pushed. Read it now, then recheck PRs. Only these
+			// commands move the chat to another branch, never a checkout the agent merely looked at.
 			if (
 				this.workers.get(meta.id) === worker &&
 				meta.workspace &&
 				meta.mode !== "ask" &&
 				!this.isMissionCoordinator(meta.id)
 			)
-				void this.pullRequests.refresh(meta);
+				void this.detectBranch(meta);
 			return;
 		}
 		if (packet.type === "github.action") {
@@ -5805,12 +5883,11 @@ export class SessionManager {
 		const fresh = [result.pullRequest, ...(result.others ?? [])].filter(
 			(pr): pr is SessionPullRequest => pr !== undefined,
 		);
-		const eligible = (pr: SessionPullRequest) =>
-			this.ownsOpenPullRequest(meta, pr) || this.canClaimPullRequest(meta, pr);
+		const eligible = (pr: SessionPullRequest) => this.ownsOpenPullRequest(meta, pr);
 		if (!this.canFollowUp(meta, [...fresh, ...sessionPullRequests(meta)], eligible)) return undefined;
 		const branch = result.branch ?? meta.workspace?.branch;
 		const current = result.pullRequest?.url ?? meta.pullRequest?.url;
-		// Only fresh heads owned (or claimable) by this session qualify. The current branch may already be terminal while
+		// Only fresh heads owned by this session qualify. The current branch may already be terminal while
 		// earlier stack heads are still open. Query each PR against its own head, not the workspace's.
 		const prs = fresh.filter((pr) => eligible(pr) && (pr.branch || pr.url === current));
 		return prs.length
@@ -5829,10 +5906,19 @@ export class SessionManager {
 	): Promise<void> {
 		if (meta.continuedTo || meta.continuationPending || this.isMissionCoordinator(meta.id)) return;
 		const bindingOperation = meta.prBindingOperation;
-		// Explicit handoffs win over results already in flight, including discovery on the old branch.
+		// A lookup that started before the user detached a branch must not bring it back.
+		const detached = new Set(meta.detachedBranches);
+		if (result.branch !== undefined && detached.has(result.branch)) {
+			const { branch: _, ...rest } = result;
+			result = rest;
+		}
+		if (result.branches) result = { ...result, branches: result.branches.filter((name) => !detached.has(name)) };
+		// Explicit handoffs win over results already in flight, including discovery on the old branch. Discovery only
+		// refreshes PRs the agent created, the user attached or the chat already shows. Another PR on one of its
+		// branches, opened by someone else or by a sibling chat, never attaches by itself.
 		const attached = (pr: SessionPullRequest) => {
 			const owner = this.boundPullRequestOwners.get(pr.url.toLowerCase());
-			return !this.excludedPullRequest(meta, pr.url) && (owner === undefined || owner === meta.id);
+			return this.attachedPullRequest(meta, pr.url) && (owner === undefined || owner === meta.id);
 		};
 		result = {
 			...result,
@@ -5908,16 +5994,9 @@ export class SessionManager {
 		else delete meta.previousBranches;
 		if (result.error) meta.pullRequestError = result.error;
 		else delete meta.pullRequestError;
-		const previousOwned = meta.agentPullRequests;
-		const claims = result.error
-			? []
-			: [next, ...(result.others ?? [])].filter(
-					(pr): pr is SessionPullRequest => pr !== undefined && this.canClaimPullRequest(meta, pr),
-				);
-		if (claims.length) meta.agentPullRequests = [...(previousOwned ?? []), ...new Set(claims.map((pr) => pr.url))];
 		const fresh = next !== undefined || (result.others?.length ?? 0) > 0;
 		// PR freshness is not agent activity. Keep ordering and completion versions unchanged.
-		if (fresh || changed || claims.length) {
+		if (fresh || changed) {
 			try {
 				await this.save(meta);
 			} catch (error) {
@@ -5938,8 +6017,6 @@ export class SessionManager {
 				else delete meta.pullRequestError;
 				if (previousMergedAt !== undefined) meta.pullRequestMergedAt = previousMergedAt;
 				else delete meta.pullRequestMergedAt;
-				if (previousOwned) meta.agentPullRequests = previousOwned;
-				else delete meta.agentPullRequests;
 				throw error;
 			}
 		}
@@ -6155,24 +6232,6 @@ export class SessionManager {
 			)
 				return meta.id;
 		return undefined;
-	}
-
-	/**
-	 * An open PR discovered on this private delivery session's branch, owned by no session yet. The first session
-	 * to see it claims it, which covers PRs it was asked to take over and creations the kernel did not recognize.
-	 */
-	private canClaimPullRequest(meta: SessionMeta, pr: SessionPullRequest): boolean {
-		return Boolean(
-			!meta.continuedTo &&
-				!meta.continuationPending &&
-				!this.isMissionCoordinator(meta.id) &&
-				meta.workspace &&
-				!this.excludedPullRequest(meta, pr.url) &&
-				meta.mode !== "ask" &&
-				meta.archivedAt === undefined &&
-				(pr.state === "open" || pr.state === "draft") &&
-				this.pullRequestOwner(pr.url) === undefined,
-		);
 	}
 
 	private async followUpPullRequests(

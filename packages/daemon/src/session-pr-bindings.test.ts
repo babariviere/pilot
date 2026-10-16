@@ -763,6 +763,7 @@ test("unbind during discovery persistence suppresses stale mission links and PR 
 				await release.promise;
 			}
 		});
+		f.meta().agentPullRequests = [url];
 		const applying = f.manager["applyPullRequest"](f.meta(), {
 			pullRequest: { number: 42, url, title: "Fresh discovery", branch: head, state: "open", checkedAt: Date.now() },
 		});

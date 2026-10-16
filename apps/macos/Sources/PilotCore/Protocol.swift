@@ -28,6 +28,15 @@ public struct UnbindPullRequestRequest: Codable, Equatable, Sendable {
     }
 }
 
+/// DELETE /api/sessions/:id/branches. Stops tracking a branch that has no PR; returns SessionSummary.
+public struct DetachBranchRequest: Codable, Equatable, Sendable {
+    public let branch: String
+
+    public init(branch: String) {
+        self.branch = branch
+    }
+}
+
 public enum ChatMode: String, Codable, Hashable, Sendable {
     case build
     case ask

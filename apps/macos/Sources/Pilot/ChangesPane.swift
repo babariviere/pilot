@@ -179,11 +179,15 @@ struct ChangesRepositoryContext: View {
             if !links.isEmpty || !pending.isEmpty {
                 VStack(spacing: 2) {
                     ForEach(links) { link in
+                        let branchKey = link.name.map { "branch:\($0)" }
                         BranchLinkRow(
                             link: link, current: link.name != nil && link.name == branch, stale: session.pullRequestIsStale,
                             attached: link.pullRequest.map { session.showsAttachedHint($0, current: branch) } ?? false,
-                            busy: link.pullRequest.map { detaching.contains($0.url) } ?? false,
-                            detach: link.pullRequest.map { pr in { requestDetach(url: pr.url, number: pr.number) } }
+                            busy: (link.pullRequest?.url ?? branchKey).map { detaching.contains($0) } ?? false,
+                            detach: link.pullRequest.map { pr in { requestDetach(url: pr.url, number: pr.number) } },
+                            detachBranch: link.pullRequest == nil
+                                ? link.name.flatMap { name in session.canDetachBranch(name) ? { detachBranch(name) } : nil }
+                                : nil
                         )
                     }
                     ForEach(pending, id: \.self) { url in
@@ -264,6 +268,19 @@ struct ChangesRepositoryContext: View {
         }
     }
 
+    /// One click, like detaching a PR outside a mission. The branch stays in the repository.
+    private func detachBranch(_ name: String) {
+        let sessionId = session.id
+        let key = "branch:\(name)"
+        detachError = nil
+        detaching.insert(key)
+        Task { @MainActor in
+            defer { detaching.remove(key) }
+            do { try await AppModel.shared.client.detachBranch(sessionId, branch: name) }
+            catch { detachError = "Couldn't detach the branch. \(error.localizedDescription)" }
+        }
+    }
+
     private var workspaceIcon: PilotIcon {
         if session.isAsk { return PilotIcon.askMode }
         if session.workspaceStorage == .shared { return PilotIcon.sharedWorkspace }
@@ -277,7 +294,8 @@ private struct DetachConfirmation: Equatable {
 }
 
 /// A session branch and the PR opened from it or attached to the chat. Long names wrap so the full branch
-/// stays readable. PR rows reveal a ⋯ menu on hover, mirrored in the context menu.
+/// stays readable. PR rows, and branch rows the chat can detach, reveal a ⋯ menu on hover, mirrored in the
+/// context menu.
 private struct BranchLinkRow: View {
     let link: SessionBranchLink
     let current: Bool
@@ -286,6 +304,8 @@ private struct BranchLinkRow: View {
     var attached = false
     var busy = false
     var detach: (() -> Void)?
+    /// Stops tracking a branch without a PR.
+    var detachBranch: (() -> Void)?
     @State private var hovered = false
 
     var body: some View {
@@ -318,6 +338,8 @@ private struct BranchLinkRow: View {
             Spacer(minLength: 0)
             if let pr = link.pullRequest, let detach {
                 PullRequestRowMenu(url: pr.url, number: pr.number, busy: busy, visible: hovered, detach: detach)
+            } else if let name = link.name, let detachBranch {
+                BranchRowMenu(name: name, busy: busy, visible: hovered, detach: detachBranch)
             }
         }
         .padding(.horizontal, 8)
@@ -329,6 +351,8 @@ private struct BranchLinkRow: View {
         .contextMenu {
             if let pr = link.pullRequest, let detach {
                 PullRequestRowActions(url: pr.url, detach: detach)
+            } else if let name = link.name, let detachBranch {
+                BranchRowActions(name: name, detach: detachBranch)
             }
         }
         .accessibilityElement(children: .contain)
@@ -444,6 +468,44 @@ private struct PullRequestRowActions: View {
         }
         Divider()
         Button("Detach from This Chat", role: .destructive, action: detach)
+    }
+}
+
+/// The hover ⋯ menu of a branch row without a PR, or a spinner while it is being detached.
+private struct BranchRowMenu: View {
+    let name: String
+    let busy: Bool
+    let visible: Bool
+    let detach: () -> Void
+
+    var body: some View {
+        if busy {
+            ProgressView().controlSize(.mini).frame(width: 20, height: 20)
+        } else {
+            Menu { BranchRowActions(name: name, detach: detach) } label: { PilotSymbol(PilotIcon.more, context: .toolbar) }
+                .menuStyle(.button)
+                .rowIconButtonStyle()
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Branch actions")
+                .accessibilityLabel("Actions for branch \(name)")
+                .revealed(visible)
+        }
+    }
+}
+
+private struct BranchRowActions: View {
+    let name: String
+    let detach: () -> Void
+
+    var body: some View {
+        Button("Copy Branch Name") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(name, forType: .string)
+        }
+        Divider()
+        Button("Detach from This Chat", role: .destructive, action: detach)
+            .help("This chat stops tracking the branch. The branch itself stays unchanged.")
     }
 }
 

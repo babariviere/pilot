@@ -59,6 +59,11 @@ export interface UnbindPullRequestRequest {
 	url: string;
 }
 
+/** DELETE /api/sessions/:id/branches. Stops tracking a branch without a PR; returns SessionSummary. */
+export interface DetachBranchRequest {
+	branch: string;
+}
+
 export type PullRequestMergeMethod = "squash" | "merge" | "rebase";
 
 /** Fresh confirmation data for a user-initiated merge. Never enables auto-merge or bypasses protection. */

@@ -455,9 +455,8 @@ test("detached private sessions wait for the agent's branch before asking GitHub
 	let lookups = 0;
 	const runner: Runner = async (file, args) => {
 		if (file === "git") {
-			if (args[1] === "--format=%(refname:short)") return chosen;
-			assert.deepEqual(args, ["branch", "--show-current"]);
-			return chosen;
+			assert.deepEqual(args, ["branch", "--format=%(refname:short)"], "discovery never reads the checkout");
+			return "";
 		}
 		lookups++;
 		assert.ok(args.includes("--head=fix-reopen-race"));
@@ -466,11 +465,18 @@ test("detached private sessions wait for the agent's branch before asking GitHub
 	assert.deepEqual(await discoverPullRequest(target, runner), {});
 	assert.equal(lookups, 0);
 	chosen = "fix-reopen-race";
+	assert.deepEqual(await discoverPullRequest(target, runner), {}, "a checkout alone is not adopted");
+	assert.equal(lookups, 0);
+	// The daemon reads the branch after the agent's own Git or jj write.
+	target.detectedBranch = chosen;
 	const result = await discoverPullRequest(target, runner);
 	assert.equal(result.branch, chosen);
 	assert.equal(result.pullRequest?.state, "open");
 	assert.equal(lookups, 1);
 	assert.equal(target.workspace!.branch, undefined, "discovery does not mutate session metadata");
+	target.detachedBranches = [chosen];
+	assert.deepEqual(await discoverPullRequest(target, runner), {}, "a detached branch is never adopted");
+	assert.equal(lookups, 1);
 });
 
 test("a newly checked-out branch supersedes the cached branch and does not retain its PR", async () => {
@@ -482,8 +488,9 @@ test("a newly checked-out branch supersedes the cached branch and does not retai
 		state: "open",
 		checkedAt: 1,
 	};
+	target.detectedBranch = "fix-new-task";
 	const result = await discoverPullRequest(target, async (file, args) => {
-		if (file === "git") return "fix-new-task";
+		if (file === "git") return "";
 		assert.ok(args.includes("--head=fix-new-task"));
 		return "[]";
 	});

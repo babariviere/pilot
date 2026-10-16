@@ -67,6 +67,20 @@ private func chat(_ id: String, project: String? = "p", updatedAt: Double = 1, a
     #expect(!chat("archived", archived: true).canAttachPullRequests)
 }
 
+@Test func onlyOwnBuildBranchesWithoutAPullRequestCanBeDetached() {
+    let prs = [pr(7, branch: "feat/pr")]
+    func session(workspace: WorkspaceMode? = .clone, archived: Bool = false) -> SessionSummary {
+        SessionSummary(id: "s", title: "Chat", cwd: "/tmp", projectId: "p", branch: "feat/idle", createdAt: 1,
+                       updatedAt: 1, state: "idle", pullRequest: prs[0], pullRequests: prs,
+                       archivedAt: archived ? 2 : nil, workspace: workspace, branches: ["feat/idle", "feat/pr"])
+    }
+    #expect(session().canDetachBranch("feat/idle"))
+    #expect(!session().canDetachBranch("feat/pr"), "a branch with a PR detaches through its PR")
+    #expect(!session().canDetachBranch("main"), "only the chat's own branches")
+    #expect(!session(workspace: .direct).canDetachBranch("feat/idle"), "a project checkout's branch is the user's")
+    #expect(!session(archived: true).canDetachBranch("feat/idle"))
+}
+
 @Test func attachingNamesTheChatThePullRequestMovesFrom() {
     let sessions = [
         chat("here", prs: [pr(7)]),

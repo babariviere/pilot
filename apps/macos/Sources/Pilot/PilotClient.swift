@@ -651,6 +651,17 @@ final class PilotClient: ObservableObject {
         return session
     }
 
+    /// Stops tracking a branch without a PR. The branch stays in the repository, and pilotd never adopts it again
+    /// in this chat.
+    @discardableResult
+    func detachBranch(_ sessionId: String, branch: String) async throws -> SessionSummary {
+        let session: SessionSummary = try await call(
+            "api/sessions/\(sessionId)/branches", method: "DELETE", body: DetachBranchRequest(branch: branch)
+        )
+        update(session)
+        return session
+    }
+
     func previewPullRequestMerge(_ sessionId: String, url: String) async throws -> PullRequestMergePreview {
         try await call("api/sessions/\(sessionId)/pull-requests/merge-preview", body: ["url": url])
     }

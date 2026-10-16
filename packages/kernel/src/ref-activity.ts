@@ -1,13 +1,14 @@
 /**
- * A hint, never proof: the agent ran a command that may have created, moved or pushed a branch or bookmark.
- * pilotd rechecks the session's pull requests right away instead of waiting for its polling cadence.
- * Ownership of PRs still comes only from pull-request-provenance.ts.
+ * A hint, never proof: the agent ran a Git or jj write that may have created, moved or pushed a branch or bookmark.
+ * pilotd reads the workspace branch only after these commands, so a branch the agent merely checked out to look
+ * at is never adopted, then rechecks the session's pull requests right away. Ownership of PRs still comes only from
+ * pull-request-provenance.ts.
  */
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import type { Extension } from "@earendil-works/pi-durable";
 
 const REF_CHANGE =
-	/(?:^|[\s;&|(])(?:jj\s+(?:bookmark|b)\s+(?:create|c|set|s|move|m|rename|r|track|t|delete|d|forget|f)\b|jj\s+git\s+push\b|git\s+push\b|git\s+(?:checkout|switch)\s+-[bcBC]\b|git\s+branch\s+\S|gh\s+(?:pr\s+(?:create|ready|edit|reopen)|stack\s+link)\b)/;
+	/(?:^|[\s;&|(])(?:jj\s+(?:bookmark|b)\s+(?:create|c|set|s|move|m|rename|r|track|t|delete|d|forget|f)\b|jj\s+(?:commit|ci|describe|desc|squash|split)\b|jj\s+git\s+push\b|git\s+(?:push|commit)\b|git\s+(?:checkout|switch)\s+-[bcBC]\b|git\s+branch\s+\S|gh\s+(?:pr\s+(?:create|ready|edit|reopen)|stack\s+link)\b)/;
 
 export function changesRefs(toolName: string, input: unknown): boolean {
 	if (toolName !== "bash") return false;

@@ -748,6 +748,7 @@ test("PR observers receive persisted full chat heads and startup baselines, neve
 		checkedAt: 10,
 	};
 	const earlier: SessionPullRequest = { ...pr, number: 41, url: "https://github.com/example/sample/pull/41" };
+	meta.agentPullRequests = [pr.url, earlier.url];
 	await sessions["applyPullRequest"](meta, { pullRequest: pr, others: [earlier] });
 	assert.equal(observed.length, 1);
 	assert.equal(observed[0]?.prs.length, 2);
@@ -872,6 +873,7 @@ test("stack-only PR updates publish, persist and leave chat activity unchanged",
 		state: "open" as const,
 		checkedAt: Date.now(),
 	};
+	meta.agentPullRequests = [pr.url];
 	await sessions["applyPullRequest"](meta, { pullRequest: pr });
 	const activity = sessions.get(created.id)!.updatedAt;
 	let changes = 0;
@@ -1311,7 +1313,7 @@ test("POST returns durable starting session before clone or worker, guarding cha
 	assert.equal(f.workers[0]!.spec.cwd, created.cwd);
 	assert.equal(f.workers[0]!.spec.trustDirectory, f.source);
 	assert.equal(f.workers[0]!.requests[0]!.requestId, meta.pending[0]!.requestId);
-	assert.deepEqual(sessions.changeBase(created.id), { cwd: created.cwd, base: "origin/main" });
+	assert.deepEqual(sessions.changeBase(created.id), { cwd: created.cwd, base: "origin/main", branch: {} });
 });
 
 test("direct projects and cwd overrides return before worker readiness without cloning", async (t) => {
@@ -1384,7 +1386,7 @@ test("restart retries an unfinished clone, removes only its partial destination 
 	await until(() => reopened.get(created.id)?.state === "working");
 	assert.equal(clones, 1);
 	assert.equal(reopened.get(created.id)?.sourceBranch, "release/stable");
-	assert.deepEqual(reopened.changeBase(created.id), { cwd: created.cwd, base: "origin/release/stable" });
+	assert.deepEqual(reopened.changeBase(created.id), { cwd: created.cwd, base: "origin/release/stable", branch: {} });
 	assert.equal(await readFile(join(f.source, "keep"), "utf8"), "source");
 	assert.deepEqual(f.workers[0]!.requests, before.pending);
 	assert.deepEqual((await f.stored(created.id)).pending, []);
@@ -1394,7 +1396,11 @@ test("restart retries an unfinished clone, removes only its partial destination 
 			throw new Error("must reuse prepared base");
 		},
 	});
-	assert.deepEqual(readyRestart.changeBase(created.id), { cwd: created.cwd, base: "origin/release/stable" });
+	assert.deepEqual(readyRestart.changeBase(created.id), {
+		cwd: created.cwd,
+		base: "origin/release/stable",
+		branch: {},
+	});
 	assert.equal(readyRestart.get(created.id)?.sourceBranch, "release/stable");
 });
 
