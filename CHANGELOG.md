@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.40.0](https://github.com/babariviere/pilot/compare/v1.39.0...v1.40.0) (2026-10-16)
+
+
+### Features
+
+* **kernel:** compact long cold chats before the next user message ([8fe073a](https://github.com/babariviere/pilot/commit/8fe073ad31f5b4b8167cd6718e1fe52aa6991478))
+* **macos:** open the open chat's latest PR with ⌘⇧P ([b7dff9f](https://github.com/babariviere/pilot/commit/b7dff9f728c19a42c5f586499bfdd747f2d897d3))
+* **macos:** quote tracked tickets as Markdown and let composers grow with the window ([488ac0a](https://github.com/babariviere/pilot/commit/488ac0a3639004f1b0ad9ed3edb301a1e81d10fb))
+* **macos:** render user messages as Markdown ([70dbe78](https://github.com/babariviere/pilot/commit/70dbe78c9b4221a0f3e22117982256286637b938))
+* **macos:** show attempt number on PR follow-up events ([0d54608](https://github.com/babariviere/pilot/commit/0d54608ebb405de8aa0baf13c5e1fe5b9115666d))
+* **ssh:** bootstrap the verified Linux runtime safely ([873f10a](https://github.com/babariviere/pilot/commit/873f10a79ad41c20bf1c66d81a77af5121a6dc0b))
+* **tracking:** add Slack messages to triage by link and search reports ([1e65d54](https://github.com/babariviere/pilot/commit/1e65d548f71b362ecb25da507f61aef37e011389))
+
+
+### Bug Fixes
+
+* keep progress in tasks and reduce comment noise ([5d527a8](https://github.com/babariviere/pilot/commit/5d527a8bcb8bbe2905e901493787f9ae1c738453))
+* **kernel:** tag automatic input in live message events ([c8c4cab](https://github.com/babariviere/pilot/commit/c8c4cab7faa27809b395a8df9b4eff16b1c1cc95))
+* **macos:** keep the menu bar pilotd submenu open while chats work ([e3662ff](https://github.com/babariviere/pilot/commit/e3662ff44302bd18284a8f0a5d9282fadc325ee6))
+* **macos:** make adding a Slack channel easier to find ([29e8e73](https://github.com/babariviere/pilot/commit/29e8e732c76714d88ad7134fb8940b44441c2b23))
+* **slack:** remove eyes on Done through an opt-in MCP route ([893ec49](https://github.com/babariviere/pilot/commit/893ec493c6995d58d59f34fb798720604fe2864d))
+
 ## [1.39.0](https://github.com/babariviere/pilot/compare/v1.38.0...v1.39.0) (2026-10-16)
 
 
