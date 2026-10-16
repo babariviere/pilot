@@ -1111,7 +1111,14 @@ final class AppModel: ObservableObject {
         }
         if let session = selectedSession, !tab.isAvailable(for: session) { return }
         if inspectorVisible, inspectorTab == tab {
+            // Closing the pane that has focus returns it to the composer (or the page), never to nothing.
+            let hadFocus = keyboard.currentRegion() == .inspector
             inspectorVisible = false
+            if hadFocus {
+                DispatchQueue.main.async { [keyboard] in
+                    if !keyboard.focus(.composer) { keyboard.focus(.content) }
+                }
+            }
         } else {
             inspectorTab = tab
             inspectorVisible = true

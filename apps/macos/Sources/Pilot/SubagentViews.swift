@@ -373,6 +373,7 @@ struct SubagentsPane: View {
     @Environment(\.hostViewContext) private var hostContext
     let session: SessionSummary
     @EnvironmentObject private var model: AppModel
+    @StateObject private var keyboardRows = KeyboardListState()
 
     var body: some View {
         let subagents = session.subagents ?? []
@@ -392,15 +393,24 @@ struct SubagentsPane: View {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(Array(subagents.enumerated()), id: \.element.id) { index, subagent in
                             if index > 0 { HairlineDivider(leading: InboxRowLayout.dividerInset) }
-                            SubagentRow(subagent: subagent) { model.openSubagent(subagent.name, in: hostContext?.ref(.session, session.id).storageKey ?? session.id) }
+                            SubagentRow(subagent: subagent) { open(subagent) }
                                 .inboxCorner(subagent.cornerSignal)
+                                .keyboardListItem(subagent.name) { open(subagent) }
                         }
                     }
                     .padding(8)
+                    .keyboardList(region: .inspector, state: keyboardRows, suppliesRows: true)
+                    .onChange(of: subagents.map(\.name), initial: true) { _, _ in
+                        keyboardRows.update(subagents.map { subagent in KeyboardListItem(id: subagent.name) { open(subagent) } })
+                    }
                 }
                 .frame(maxHeight: .infinity)
             }
         }
+    }
+
+    private func open(_ subagent: SessionSubagent) {
+        model.openSubagent(subagent.name, in: hostContext?.ref(.session, session.id).storageKey ?? session.id)
     }
 }
 

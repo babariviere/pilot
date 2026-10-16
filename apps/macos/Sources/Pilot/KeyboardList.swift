@@ -128,9 +128,15 @@ extension View {
     /// The page's main list: one focus stop for the region's keyboard entry, with arrow, J/K, Home/End and Return
     /// handling. Put it inside the page's ScrollView so highlighted rows scroll into view.
     /// Pass `native: true` for a SwiftUI List, which already takes focus as a table. Preferences do not leave
-    /// List rows, so a native list's owner supplies `state` and updates its rows itself.
-    func keyboardList(region: KeyboardRegion = .content, state: KeyboardListState? = nil, native: Bool = false) -> some View {
-        modifier(KeyboardListModifier(region: region, external: state, native: native))
+    /// List rows, nor report unrealized rows of a lazy stack, so such a list's owner passes `suppliesRows` and
+    /// updates `state` with every row itself. `focusOnAppear` is for lists opened by an explicit command, and
+    /// `onEscape` lets one close itself.
+    func keyboardList(region: KeyboardRegion? = .content, state: KeyboardListState? = nil, native: Bool = false,
+                      suppliesRows: Bool = false, focusOnAppear: Bool = false,
+                      onEscape: (() -> Void)? = nil) -> some View {
+        modifier(KeyboardListModifier(region: region, external: state, native: native,
+                                      suppliesRows: suppliesRows || native, focusOnAppear: focusOnAppear,
+                                      onEscape: onEscape))
     }
 }
 
@@ -155,16 +161,20 @@ private struct KeyboardListItemModifier: ViewModifier {
 }
 
 private struct KeyboardListModifier: ViewModifier {
-    let region: KeyboardRegion
+    let region: KeyboardRegion?
     let external: KeyboardListState?
     let native: Bool
+    let suppliesRows: Bool
+    let focusOnAppear: Bool
+    let onEscape: (() -> Void)?
     @StateObject private var own = KeyboardListState()
     @FocusState private var focused: Bool
 
     private var list: KeyboardListState { external ?? own }
 
     func body(content: Content) -> some View {
-        KeyboardListBody(content: content, list: list, region: region, native: native, focused: $focused)
+        KeyboardListBody(content: content, list: list, region: region, native: native, suppliesRows: suppliesRows,
+                         focusOnAppear: focusOnAppear, onEscape: onEscape, focused: $focused)
     }
 }
 
@@ -176,11 +186,23 @@ private struct FocusStop: ViewModifier {
     }
 }
 
+private struct OptionalRegionHandler: ViewModifier {
+    let region: KeyboardRegion?
+    let perform: () -> Bool
+
+    func body(content: Content) -> some View {
+        if let region { content.keyboardFocusHandler(region, perform: perform) } else { content }
+    }
+}
+
 private struct KeyboardListBody<Content: View>: View {
     let content: Content
     @ObservedObject var list: KeyboardListState
-    let region: KeyboardRegion
+    let region: KeyboardRegion?
     let native: Bool
+    let suppliesRows: Bool
+    let focusOnAppear: Bool
+    let onEscape: (() -> Void)?
     var focused: FocusState<Bool>.Binding
     /// The page this list belongs to, for restoring its highlight after Back.
     @State private var routeKey: String?
@@ -190,12 +212,12 @@ private struct KeyboardListBody<Content: View>: View {
             content
                 .environment(\.keyboardListHighlight, KeyboardListHighlight(id: list.highlighted, focused: focused.wrappedValue))
                 .onPreferenceChange(KeyboardListItemsKey.self) { rows in
-                    MainActor.assumeIsolated { if !native { list.update(rows) } }
+                    MainActor.assumeIsolated { if !suppliesRows { list.update(rows) } }
                 }
                 .modifier(FocusStop(native: native))
                 .focused(focused)
                 .focusEffectDisabled()
-                .onKeyPress(keys: [.upArrow, .downArrow, .home, .end, .return]) { press in
+                .onKeyPress(keys: [.upArrow, .downArrow, .home, .end, .return, .escape]) { press in
                     // Arrow keys carry keypad and function flags; only real modifiers opt out.
                     guard press.modifiers.isDisjoint(with: [.command, .control, .option]) else { return .ignored }
                     switch press.key {
@@ -203,6 +225,9 @@ private struct KeyboardListBody<Content: View>: View {
                     case .downArrow: list.move(by: 1)
                     case .home: list.moveToEnd(false)
                     case .end: list.moveToEnd(true)
+                    case .escape:
+                        guard let onEscape else { return .ignored }
+                        onEscape()
                     default:
                         guard let item = list.highlightedItem else { return .ignored }
                         item.activate()
@@ -212,7 +237,7 @@ private struct KeyboardListBody<Content: View>: View {
                 }
                 .onChange(of: focused.wrappedValue) { _, isFocused in
                     guard isFocused else { return }
-                    AppModel.shared.keyboard.noteFocused(region)
+                    if let region { AppModel.shared.keyboard.noteFocused(region) }
                     list.highlightFirstIfNeeded()
                     AppModel.shared.keyboardTarget = list.highlightedItem?.target
                 }
@@ -230,11 +255,12 @@ private struct KeyboardListBody<Content: View>: View {
                 .onAppear {
                     routeKey = AppModel.shared.currentRoute.key
                     if let routeKey, let saved = AppModel.shared.keyboardListHighlights[routeKey] { list.restore(saved) }
+                    if focusOnAppear { DispatchQueue.main.async { focused.wrappedValue = true } }
                 }
-                .keyboardFocusHandler(region) {
+                .modifier(OptionalRegionHandler(region: region) {
                     focused.wrappedValue = true
                     return true
-                }
+                })
                 .onDisappear {
                     if let target = list.highlightedItem?.target, AppModel.shared.keyboardTarget == target {
                         AppModel.shared.keyboardTarget = nil

@@ -427,6 +427,7 @@ struct SessionArtifactsPane: View {
     let sessionId: String
     @ObservedObject var client: PilotClient
     @StateObject private var state = SessionArtifactsState()
+    @StateObject private var keyboardRows = KeyboardListState()
 
     private var artifacts: [ArtifactSummary] { client.artifacts[sessionId] ?? [] }
 
@@ -479,8 +480,15 @@ struct SessionArtifactsPane: View {
                             }
                             .buttonStyle(.plain)
                             .help("Open \(artifact.title), latest revision")
+                            .keyboardListItem(artifact.id) { state.selected = artifact.reference }
                             Rectangle().fill(Theme.border).frame(height: 1)
                         }
+                    }
+                    .keyboardList(region: .inspector, state: keyboardRows, suppliesRows: true)
+                    .onChange(of: artifacts.map(\.id), initial: true) { _, _ in
+                        keyboardRows.update(artifacts.map { artifact in
+                            KeyboardListItem(id: artifact.id) { state.selected = artifact.reference }
+                        })
                     }
                 }
             }
