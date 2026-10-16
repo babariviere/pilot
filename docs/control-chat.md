@@ -81,3 +81,14 @@ restart deduplication, next-turn model selection and failed projections. No UI v
 the control-specific sidebar and Watching list are separate work. No visual check was performed.
 The native adapter still mirrors the retained Harness transcript for SDK compatibility; the provider
 request and log drain are bounded, but very-long-chat mirror cost is an unverified performance risk.
+
+## Global reads
+
+Only the control profile registers `pilot`. Every IPC call checks the supervised session's current
+role again in pilotd. `status` uses session/project memory, cached Linear previews and a change-driven
+mission snapshot. It never reads SQL or starts/subscribes to a worker from the tool path. Filters apply
+to every resource family. Responses are capped at 24 KB with explicit totals and truncation.
+
+`read` uses one bounded cold-history page, not a worker wake or an unbounded search for old replies.
+It returns a last assistant result found in that page, or up to 40 tail messages, capped at 12,000
+characters. Thoughts are omitted and content is explicitly labelled as quoted, untrusted data.

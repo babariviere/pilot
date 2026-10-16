@@ -151,6 +151,23 @@ for (const mission of missionStore.list())
 	if (mission.status === "done" && mission.completedAt !== undefined)
 		await trackedItems.completeSlackMission(mission.projectId, mission.id, mission.completedAt);
 const missionService = new MissionService(missionStore, sessions, projects);
+// Mission reads use a change-driven snapshot, never SQL from a control tool call.
+const controlMissions = new Map(missionStore.list().map((mission) => [mission.id, mission]));
+const stopControlMissions = missionStore.onChange((id) => {
+	const mission = missionStore.get(id);
+	if (mission) controlMissions.set(id, mission);
+	else controlMissions.delete(id);
+});
+const { ControlPilot } = await import("./control-pilot.ts");
+sessions.setPilot(
+	new ControlPilot({
+		isControl: (id) => sessions.isControlSession(id),
+		sessions,
+		projects: () => projects.list(),
+		missions: () => [...controlMissions.values()],
+		linear: (id) => trackedItems.preview(id, "linear").items,
+	}),
+);
 missionService.setLinearClosingGuard((missionId, resourceId) => linearSync.closingEligibility(missionId, resourceId));
 missionService.setLinearReader(sourceMcp);
 const linearPrChecks = new MissionLinearPrChecks(
@@ -266,6 +283,7 @@ async function stop(): Promise<void> {
 	await tracking.stop();
 	await tracking.triage?.stop();
 	await memory.stop();
+	stopControlMissions();
 	await missionService.notices.stop();
 	await missionService.compaction.stop();
 	await Promise.all([setup.close(), terminals.shutdown(), sessions.shutdown()]);

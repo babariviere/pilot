@@ -188,6 +188,8 @@ export function runKernelWorker(): void {
 		});
 	const callMission: MissionCall = (action, args) =>
 		callDaemon<JsonValue>((callId) => ({ type: "mission.call", callId, action, args }));
+	const callPilot: import("./pilot-tool.ts").PilotCall = (action, args) =>
+		callDaemon<JsonValue>((callId) => ({ type: "pilot.call", callId, action, args }));
 	const callMemory = (action: "wake" | "note" | "recall" | "zoom", args: Record<string, JsonValue>) =>
 		callDaemon<JsonValue>((callId) => ({ type: "memory.call", callId, action, args }));
 	const callControl: import("./control-turn.ts").ControlCall = (action, args) =>
@@ -321,6 +323,7 @@ export function runKernelWorker(): void {
 			command.type === "mission.result" ||
 			command.type === "memory.result" ||
 			command.type === "control.result" ||
+			command.type === "pilot.result" ||
 			command.type === "database.result" ||
 			command.type === "slack.result" ||
 			command.type === "subscription.limit.result" ||
@@ -393,6 +396,7 @@ export function runKernelWorker(): void {
 					callMission,
 					callMemory,
 					callControl,
+					callPilot,
 					callDatabase,
 					callSlackStatus,
 					readArtifactReference: (id, revision) =>
