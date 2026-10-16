@@ -189,7 +189,9 @@ struct SidebarHeader: View {
     private func composeButton(project: Project?) -> some View {
         Menu {
             Button("New Chat") { model.newChatInScope() }
-            Button("New Mission…") { model.missionSheet = .create(projectId: project?.id) }
+            Button("New Mission…") {
+                model.presentMissionSheet(.create(projectId: project?.id), context: model.focusedProjectRef.map { HostViewContext(host: $0.host, hosts: model.hosts) })
+            }
                 .disabled(client.projects.isEmpty)
         } label: {
             PilotSymbol(PilotIcon.compose)
@@ -285,7 +287,8 @@ struct SidebarProjectSelector: View {
         .accessibilityHint("Choose which projects the sidebar lists")
         .help("Switch projects: ⌘0 for all projects, ⌘1 to ⌘9 for one")
         .popover(isPresented: $showingList, arrowEdge: .bottom) {
-            SidebarScopeList(projects: model.orderedProjects, folders: model.projectFolders, scope: project?.id,
+            VStack(spacing: 0) {
+            SidebarScopeList(projects: model.orderedProjects, folders: model.projectFolders, scope: model.sidebarScope,
                              counts: counts, archivedCount: archivedCount,
                              choose: { id in
                                  showingList = false
@@ -293,7 +296,7 @@ struct SidebarProjectSelector: View {
                              },
                              showArchive: {
                                  showingList = false
-                                 model.showArchive(in: project?.id)
+                                 model.showArchive(in: project?.id, context: model.focusedProjectRef.map { HostViewContext(host: $0.host, hosts: model.hosts) })
                              },
                              search: {
                                  showingList = false
@@ -313,6 +316,25 @@ struct SidebarProjectSelector: View {
                              },
                              deleteFolder: { model.projectFolders.remove($0) },
                              move: { model.projectFolders.move(projectId: $0, to: $1) })
+            if !model.hosts.offlineHosts.isEmpty {
+                HairlineDivider()
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(model.hosts.projects.filter { $0.ref.host != model.localHost }) { item in
+                            Button {
+                                showingList = false
+                                model.focus(on: item.ref.storageKey)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(item.value.name).font(.pilot(.body))
+                                    Text(HostViewContext(host: item.ref.host, hosts: model.hosts).name).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                                }.frame(maxWidth: .infinity, alignment: .leading).padding(6)
+                            }.rowButtonStyle()
+                        }
+                    }.padding(8)
+                }.frame(maxHeight: 180)
+            }
+            }
         }
     }
 }

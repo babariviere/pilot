@@ -252,7 +252,7 @@ struct SettingsView: View {
                let project = model.hosts.projects.first(where: { $0.ref == ref })?.value {
                 ProjectSettings(project: project)
                     .environment(\.hostViewContext, HostViewContext(host: ref.host, hosts: model.hosts)).id(ref.storageKey)
-            } else if let project = client.projects.first(where: { $0.id == id }) {
+            } else if let project = client.projects.first(where: { $0.id == (model.resourceRef(id, kind: .project)?.localId ?? id) }) {
                 ProjectSettings(project: project).id(project.id)
             } else {
                 Text("This project was removed.")

@@ -56,7 +56,12 @@ extension AppModel {
         return editor
     }
 
-    var selectedMission: Mission? { client.mission(selectedMissionId) }
+    var selectedMission: Mission? {
+        if let id = selectedMissionId, let ref = resourceRef(id, kind: .mission), ref.host != localHost {
+            return hosts.missions.first { $0.ref == ref }?.value
+        }
+        return client.mission(selectedMissionId)
+    }
 
     func openMission(_ id: String, tab: MissionTab? = nil, context: HostViewContext? = nil) {
         if let ref = resourceRef(id, kind: .mission, context: context), ref.host != localHost {
@@ -76,12 +81,13 @@ extension AppModel {
     func needsYou(_ mission: Mission, context: HostViewContext? = nil) -> [MissionNeedsYouItem] {
         let client = context.map { $0.hosts.presentationClient($0.host) } ?? self.client
         MissionNeedsYou.items(mission: mission, detail: client.missionDetails[mission.id],
-                              members: members(of: mission), isUnread: { attention.isUnread($0) })
+                              members: members(of: mission, context: context),
+                              isUnread: { session in context.map { self.isUnread(session, on: $0.host) } ?? self.attention.isUnread(session) })
     }
 
-    func needsYouCount(_ mission: Mission) -> Int {
-        MissionNeedsYou.count(mission: mission, members: members(of: mission),
-                              isUnread: { attention.isUnread($0) })
+    func needsYouCount(_ mission: Mission, context: HostViewContext? = nil) -> Int {
+        MissionNeedsYou.count(mission: mission, members: members(of: mission, context: context),
+                              isUnread: { session in context.map { self.isUnread(session, on: $0.host) } ?? self.attention.isUnread(session) })
     }
 
     /// Runs a mission write, reporting failures in the window's action alert.
@@ -94,6 +100,12 @@ extension AppModel {
 
     /// Clear only the deleted mission's selection, and only after the daemon succeeds.
     func deleteMission(_ id: String, using client: PilotClient? = nil) async throws {
+        if let ref = try? HostResourceRef.decodeKey(id) {
+            try await hosts.perform(ref, kind: .mission) { client, id in try await client.deleteMission(id) }
+            missionBriefEditors.removeValue(forKey: ref.storageKey)
+            if selectedMissionId == ref.storageKey { selectedMissionId = nil; hosts.selection = nil }
+            return
+        }
         try await (client ?? self.client).deleteMission(id)
         missionBriefEditors.removeValue(forKey: id)
         if selectedMissionId == id { selectedMissionId = nil }
@@ -410,11 +422,12 @@ struct MissionStatusActions: View {
 }
 
 struct MissionDeleteAction: View {
+    @Environment(\.hostViewContext) private var hostContext
     let missionId: String
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        Button(role: .destructive) { model.pendingMissionDeletionId = missionId } label: {
+        Button(role: .destructive) { model.pendingMissionDeletionId = hostContext?.ref(.mission, missionId).storageKey ?? missionId } label: {
             Label("Delete Mission…", icon: PilotIcon.delete)
         }
     }

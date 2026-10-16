@@ -21,6 +21,11 @@ See [screenshot notes](docs/screenshots/README.md) to regenerate them.*
 
 - **Run several agents at once.** Follow progress across projects, send follow-ups, queue messages or stop
   a run. Every session has its own worker process.
+- **Work on a devbox, too.** Add a working SSH alias in Settings → Devboxes, confirm its identity, and
+  sign in to providers independently there. Choose Local or that devbox in the new-chat composer.
+  Known remote chats stay visible as Disconnected through network loss, Mac sleep and app quit;
+  remote work continues independently. Project sharing explicitly selects notes and missions,
+  keeps pending contributions and conflicting edits separate, and never copies files or sign-ins.
 - **See what needs you first.** Home shows how every project is doing. The Inbox is the one place to act: chats
   that need you (each with a short reason), pull requests ready to merge, and Linear and Slack items, across
   projects or filtered to one. Each project has an Overview that starts with what is next for it.
@@ -101,7 +106,8 @@ headless daemon/kernel smoke test. [Production Linux packaging](scripts/linux/RE
 signed manifest, private Node/jj runtime and an explicitly provisioned persistent systemd user service.
 CI verifies extracted production assets and real SSH logout survival. `PilotCore.LinuxSSHBootstrap`
 provides repeatable initial SSH setup without a model chat, with signed-asset, prerequisite, persistent
-service, identity and separate coordinator-isolation gates. App onboarding is separate work. Setup
+service, identity and separate coordinator-isolation gates. Settings → Devboxes exposes setup,
+provider helpers, reconnect and user-triggered safe updates. Setup
 requires a configured signing key and published trusted assets; it never installs packages, grants
 linger, weakens security policy or copies credentials automatically. See [SSH setup](docs/ssh-bootstrap.md).
 

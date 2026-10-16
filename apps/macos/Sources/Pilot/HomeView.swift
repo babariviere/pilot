@@ -29,7 +29,7 @@ final class NewSessionForm: ObservableObject {
 
     var hasUnsubmittedDraft: Bool {
         !message.isEmpty || !attachments.items.isEmpty || pendingBaseBranch != nil || mission != nil || trackedItem != nil
-            || busy
+            || pendingOperationId != nil || busy
     }
 
     func resetChatContext() {
@@ -200,6 +200,12 @@ struct TaskComposer: View {
     }
 
     private var destinationHost: HostRef? { form.executionHost ?? app.localHost }
+    private var pendingCreate: DurableOperation? {
+        if let id = form.pendingOperationId, let operation = hosts.pendingOperations[id] { return operation }
+        return hosts.pendingOperations.values.first {
+            $0.destination == destinationHost && ($0.kind == "chat-create" || $0.kind == "chat-create-attached")
+        }
+    }
     private var remote: Bool { destinationHost != nil && destinationHost != app.localHost }
     private var client: PilotClient { destinationHost.map { hosts.presentationClient($0) } ?? localClient }
 
@@ -218,7 +224,7 @@ struct TaskComposer: View {
                     }
                 } label: {
                     ChipLabel(title: destinationHost.map { HostViewContext(host: $0, hosts: hosts).name } ?? "Local", icon: PilotIcon.terminal)
-                }.chipMenuStyle().disabled(form.busy || form.mission != nil || form.trackedItem != nil)
+                }.chipMenuStyle().disabled(form.busy || form.pendingOperationId != nil || form.mission != nil || form.trackedItem != nil)
                 TabButton(title: "New chat", selected: form.tab == .newTask) { form.tab = .newTask }
                 TabButton(title: "Running", count: client.workingCount, selected: form.tab == .running) { form.tab = .running }
                 Spacer()
@@ -237,7 +243,7 @@ struct TaskComposer: View {
             if form.tab == .newTask {
                 newTask
             } else {
-                RunningList(sessions: client.activeSessions.filter(\.isWorking))
+                RunningList(sessions: client.activeSessions.filter(\.isWorking), host: destinationHost)
                     .frame(minHeight: 120, alignment: .top)
             }
         }
@@ -265,13 +271,18 @@ struct TaskComposer: View {
 
     private var newTask: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if let id = form.pendingOperationId, let operation = hosts.pendingOperations[id] {
+            if let operation = pendingCreate {
                 HStack {
                     Text("Chat start needs confirmation. Your draft has been kept.").font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
                     Button("Check") { Task { try? await hosts.reconcileOperations(operation.destination) } }
-                    if case let .receipt(receipt)? = hosts.operationDeliveries[id], receipt.state != .pending {
-                        Button("Save result") { start() }
-                    } else if case .unknown? = hosts.operationDeliveries[id] {
+                    if case let .receipt(receipt)? = hosts.operationDeliveries[operation.operationId], receipt.state != .pending {
+                        Button("Save result") {
+                            Task {
+                                do { try await app.adoptCreatedChat(operation, receipt: receipt, form: form, revision: form.revision) }
+                                catch { form.error = error.localizedDescription }
+                            }
+                        }
+                    } else if case .unknown? = hosts.operationDeliveries[operation.operationId] {
                         Button("Retry original start…") { retryingCreate = operation }
                     }
                 }.padding(8)
@@ -341,7 +352,7 @@ struct TaskComposer: View {
                         if remote { choosingRepository = true } else { app.addProject() }
                     }
                 }
-                .disabled(form.busy || form.mission != nil || form.trackedItem != nil)
+                .disabled(form.busy || form.pendingOperationId != nil || form.mission != nil || form.trackedItem != nil)
                 .help(form.mission != nil ? "The project is locked to this mission."
                     : form.trackedItem != nil ? "The project is locked to the linked ticket." : "Choose a project")
                 if let scope = branchScopeKey {
@@ -391,7 +402,7 @@ struct TaskComposer: View {
     }
 
     private func chooseHost(_ host: HostRef) {
-        guard destinationHost != host else { return }
+        guard destinationHost != host, form.pendingOperationId == nil else { return }
         form.invalidatePendingSubmission()
         form.executionHost = host
         form.model = ""; form.models = ModelList(models: [])
@@ -535,6 +546,7 @@ private struct TabButton: View {
 
 private struct RunningList: View {
     let sessions: [SessionSummary]
+    var host: HostRef?
     @EnvironmentObject private var app: AppModel
 
     var body: some View {
@@ -546,12 +558,12 @@ private struct RunningList: View {
                     .frame(maxWidth: .infinity, minHeight: 100)
             }
             ForEach(sessions) { session in
-                Button { app.selectedSessionId = session.id } label: {
+                Button { app.navigate(.session, id: session.id, context: host.map { HostViewContext(host: $0, hosts: app.hosts) }) } label: {
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.mini)
                         Text(session.title).lineLimit(1)
                         Spacer()
-                        Text(app.client.project(session.projectId)?.name ?? URL(filePath: session.cwd).lastPathComponent)
+                        Text((host.map { app.hosts.presentationClient($0) } ?? app.client).project(session.projectId)?.name ?? URL(filePath: session.cwd).lastPathComponent)
                             .foregroundStyle(Theme.mutedForeground)
                     }
                     .font(.system(size: 13))

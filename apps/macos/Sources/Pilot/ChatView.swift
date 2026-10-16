@@ -532,7 +532,9 @@ struct ChatView: View {
     }
 
     private func decideDatabaseAccess(_ access: AgentQuestion.DatabaseAccess, allow: Bool) async throws {
-        try await AppModel.shared.client.decideDatabaseAccess(session.id, requestId: access.id, allow: allow)
+        try await perform { client, id in
+            try await client.decideDatabaseAccess(id, requestId: access.id, allow: allow)
+        }
     }
 
     private func send(_ message: String, _ mode: DeliveryMode) {

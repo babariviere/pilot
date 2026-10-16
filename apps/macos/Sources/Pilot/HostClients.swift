@@ -588,6 +588,7 @@ final class HostClients: ObservableObject {
         let removed = entries.removeValue(forKey: host)
         removed?.client.onSharedContextsChanged = nil
         removed?.client.disconnect()
+        if let removed { presentationClients[host] = removed.client }
         sharedContextGenerations[host] = nil
         refreshSharedContextEndpoints()
         available.remove(host)
