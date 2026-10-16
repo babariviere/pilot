@@ -84,7 +84,8 @@ final class PowerRuntime {
             DispatchQueue.main.async { self?.wifiConnected = path.status == .satisfied; self?.report() }
         }
         network.pathUpdateHandler = { [weak self] path in
-            DispatchQueue.main.async { self?.online = path.status == .satisfied; self?.report() }
+            // .requiresConnection (on-demand VPN, cellular) can connect when used. Only .unsatisfied is no path.
+            DispatchQueue.main.async { self?.online = path.status != .unsatisfied; self?.report() }
         }
         let networkQueue = DispatchQueue(label: "pilot.power.network", qos: .utility)
         wifi.start(queue: networkQueue)

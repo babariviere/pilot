@@ -81,16 +81,44 @@ export function isTransportFailure(error: unknown): boolean {
 	return false;
 }
 
+export interface OfflineTiming {
+	/** A stream silent this long asks the daemon for a check. Stopping it still needs a confirmed outage. */
+	stallMs?: number;
+	/** A stream that received data this recently is working, so a confirmed outage does not stop it yet. */
+	activeMs?: number;
+	tickMs?: number;
+}
+
 /** One host-owned file for every kernel and child. Missing/invalid configured state holds recovery. */
 export class OfflineGate {
 	readonly path?: string;
+	readonly stallMs: number;
+	readonly activeMs: number;
+	readonly tickMs: number;
 	private readonly requestCheck: () => Promise<void>;
+	private readonly reportReachable: () => Promise<void>;
 	constructor(
 		path = process.env.PILOT_CONNECTIVITY_POLICY,
 		requestCheck = () => writeFile(`${path}.check`, "", { mode: 0o600 }),
+		timing: OfflineTiming = {},
+		reportReachable = () => writeFile(`${path}.reachable`, "", { mode: 0o600 }),
 	) {
 		this.path = path;
 		this.requestCheck = requestCheck;
+		this.reportReachable = reportReachable;
+		this.stallMs = timing.stallMs ?? 30_000;
+		this.activeMs = timing.activeMs ?? 5_000;
+		this.tickMs = timing.tickMs ?? 5_000;
+	}
+
+	/** Ask the daemon for one shared check. Its result alone cannot pause requests. */
+	check(): void {
+		if (this.path) void this.requestCheck().catch(() => {});
+	}
+
+	/** Model data arrived while held: the network works, so the daemon can release the hold. */
+	reachable(): void {
+		if (this.path) void this.reportReachable().catch(() => {});
 	}
 
 	private async state(): Promise<ConnectivityState | undefined> {
@@ -184,23 +212,55 @@ export function offlineRequestStream(
 				const monitor = new AbortController();
 				const requestSignal = signal ? AbortSignal.any([signal, request.signal]) : request.signal;
 				let offline = false;
+				// Confirmed outages stop requests that are not receiving data. A silent request only asks for a check.
+				let held = false,
+					checked = false,
+					reported = false,
+					lastData = Number.NEGATIVE_INFINITY,
+					lastActivity = Date.now();
+				const evaluate = () => {
+					const now = Date.now();
+					if (held) {
+						if (!offline && now - lastData >= gate.activeMs) {
+							offline = true;
+							request.abort(new Error("Internet connectivity unavailable"));
+						}
+					} else if (!checked && now - lastActivity >= gate.stallMs) {
+						checked = true;
+						gate.check();
+					}
+				};
+				const received = () => {
+					lastData = lastActivity = Date.now();
+					checked = false;
+					if (held && !reported) {
+						reported = true;
+						gate.reachable();
+					}
+				};
 				const watching = gate.path
-					? gate
-							.untilOffline(monitor.signal)
-							.then(() => {
-								offline = true;
-								request.abort(new Error("Internet connectivity unavailable"));
-							})
-							.catch(() => {})
+					? (async () => {
+							while (!monitor.signal.aborted) {
+								await gate.untilOffline(monitor.signal);
+								held = true;
+								evaluate();
+								await gate.wait(monitor.signal);
+								held = false;
+							}
+						})().catch(() => {})
 					: Promise.resolve();
+				const tick = gate.path ? setInterval(evaluate, gate.tickMs) : undefined;
+				tick?.unref();
 				let message: AssistantMessage;
 				try {
 					const source = dispatch(requestSignal);
 					if ("then" in source) message = await source;
 					else {
 						// Do not forward terminal errors: Harness must retain its request checkpoint during an outage.
-						for await (const event of source)
+						for await (const event of source) {
+							received();
 							if (event.type !== "error" && event.type !== "done") stream.push(event);
+						}
 						message = await source.result();
 					}
 				} catch (error) {
@@ -209,6 +269,7 @@ export function offlineRequestStream(
 					if (await gate.recover(error, signal)) continue;
 					throw error;
 				} finally {
+					clearInterval(tick);
 					monitor.abort();
 					await watching;
 				}

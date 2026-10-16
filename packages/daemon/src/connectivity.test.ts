@@ -58,12 +58,12 @@ test("closed-app detection is shared, debounces failure hints and never runs the
 	assert.equal(probes, 3);
 });
 
-test("restart replaces cached online with unknown before recovery, and stale probes cannot release it", {
+test("restart replaces a cached offline hold with unknown, which admits requests until a failure", {
 	timeout: 10_000,
 }, async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "pilot-connectivity-restart-"));
 	const file = join(root, "connectivity.json");
-	await writeFile(file, JSON.stringify({ version: 1, online: true, checkedAt: Date.now() }));
+	await writeFile(file, JSON.stringify({ version: 1, online: false, checkedAt: Date.now() }));
 	let finish!: (value: boolean) => void;
 	const detector = new ScheduleDetection({
 		probe: () =>
@@ -77,16 +77,18 @@ test("restart replaces cached online with unknown before recovery, and stale pro
 		await rm(root, { recursive: true, force: true });
 	});
 	await service.start();
-	assert.equal(JSON.parse(await readFile(file, "utf8")).online, false);
+	assert.deepEqual(JSON.parse(await readFile(file, "utf8")), { version: 1, online: true, checkedAt: 0 });
 	await until(() => !!finish);
 	await service.stop();
-	finish(true);
+	finish(false);
 	await delay(10);
-	assert.equal(JSON.parse(await readFile(file, "utf8")).online, false);
+	assert.equal(JSON.parse(await readFile(file, "utf8")).online, true);
 });
 
-test("a blocked primary check does not persist an offline hold when the independent host is reachable", async (t) => {
-	const root = await mkdtemp(join(tmpdir(), "pilot-connectivity-fallback-"));
+test("a failed check alone never pauses agents; a failed request confirmed by a check does", {
+	timeout: 10_000,
+}, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-connectivity-evidence-"));
 	const file = join(root, "connectivity.json");
 	let connected = true;
 	t.mock.method(globalThis, "fetch", async (url: string) => {
@@ -103,14 +105,102 @@ test("a blocked primary check does not persist an offline hold when the independ
 	});
 	const state = async () => JSON.parse(await readFile(file, "utf8")) as ConnectivityState;
 	await service.start();
-	await until(async () => (await state()).online);
-	assert.equal(published.at(-1), true);
 	connected = false;
 	await detector.refreshOnline();
+	await delay(20);
+	assert.equal((await state()).online, true, "blocked check hosts without a failed request change nothing");
+	await writeFile(`${file}.check`, "");
 	await until(async () => !(await state()).online);
 	assert.equal(published.at(-1), false);
 	connected = true;
 	await detector.refreshOnline();
 	await until(async () => (await state()).online);
 	assert.equal(published.at(-1), true);
+});
+
+test("a healthy host sends no periodic checks for agents", { timeout: 10_000 }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-connectivity-idle-"));
+	const file = join(root, "connectivity.json");
+	const timers: Array<() => void> = [];
+	let probes = 0;
+	const detector = new ScheduleDetection({
+		clock: {
+			now: () => 1,
+			setTimeout(callback) {
+				timers.push(callback);
+				return () => {};
+			},
+		},
+		probe: async () => {
+			probes++;
+			return true;
+		},
+	});
+	const service = new ConnectivityService(file, detector, () => {});
+	t.after(async () => {
+		await service.stop();
+		await rm(root, { recursive: true, force: true });
+	});
+	await service.start();
+	await until(() => probes === 1);
+	await delay(10);
+	assert.equal(timers.length, 0, "no follow-up probe is scheduled while online");
+});
+
+test("lasting path loss pauses, a returning path resumes, and a lost helper defers to a check", {
+	timeout: 10_000,
+}, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-connectivity-path-"));
+	const file = join(root, "connectivity.json");
+	let reachable = false,
+		probes = 0;
+	const detector = new ScheduleDetection({
+		probe: async () => {
+			probes++;
+			return reachable;
+		},
+	});
+	const service = new ConnectivityService(file, detector, () => {}, { pathLossDebounceMs: 30 });
+	t.after(async () => {
+		await service.stop();
+		await rm(root, { recursive: true, force: true });
+	});
+	const state = async () => JSON.parse(await readFile(file, "utf8")) as ConnectivityState;
+	await service.start();
+	await until(() => probes === 1);
+	service.setPath(false);
+	service.setPath(true);
+	await delay(60);
+	assert.equal((await state()).online, true, "a brief loss (roaming, VPN reconnect) is ignored");
+	service.setPath(false);
+	await until(async () => !(await state()).online);
+	service.setPath(true);
+	await until(async () => (await state()).online);
+	assert.equal(probes, 1, "a returning path resumes without waiting for a check");
+	service.setPath(false);
+	await until(async () => !(await state()).online);
+	service.setPath(undefined);
+	await until(() => probes === 2);
+	await delay(20);
+	assert.equal((await state()).online, false, "unknown keeps the hold while checks still fail");
+	reachable = true;
+	await detector.refreshOnline();
+	await until(async () => (await state()).online);
+});
+
+test("model data received during a hold releases it for every chat", { timeout: 10_000 }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-connectivity-data-"));
+	const file = join(root, "connectivity.json");
+	const detector = new ScheduleDetection({ probe: async () => false });
+	const service = new ConnectivityService(file, detector, () => {});
+	t.after(async () => {
+		await service.stop();
+		await rm(root, { recursive: true, force: true });
+	});
+	const state = async () => JSON.parse(await readFile(file, "utf8")) as ConnectivityState;
+	await service.start();
+	await writeFile(`${file}.check`, "");
+	await until(async () => !(await state()).online);
+	await writeFile(`${file}.reachable`, "");
+	await until(async () => (await state()).online);
 });

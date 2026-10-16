@@ -149,8 +149,10 @@ const scheduleDetection = new ScheduleDetection({ power: systemEventsDetection }
 const connectivity = new ConnectivityService(join(config.home, "connectivity.json"), scheduleDetection, (online) =>
 	sessions.setConnectivity(online),
 );
-// Persist unknown/offline before interrupted work can reopen, even with no app or pending schedule.
+// Persist unknown (admitting) before interrupted work can reopen, even with no app or pending schedule.
 await connectivity.start();
+// macOS path loss pauses agents at once, and a returning path resumes them without waiting for a check.
+power?.onNetworkPath((path) => connectivity.setPath(path));
 // Recover global sleep overrides before any interrupted agent can reopen.
 await power?.start();
 await sessions.load(maintenance?.frozen);
