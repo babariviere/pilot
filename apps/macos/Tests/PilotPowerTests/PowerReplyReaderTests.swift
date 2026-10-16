@@ -3,26 +3,39 @@ import PilotPowerSupport
 import Testing
 
 struct PowerReplyReaderTests {
-    @Test func shortReplyDoesNotWaitForFullBufferOrEOF() throws {
+    @Test(.timeLimit(.minutes(1))) func shortReplyDoesNotWaitForFullBufferOrEOF() async throws {
         let pipe = Pipe()
         let reader = PowerReplyReader(input: pipe.fileHandleForReading)
-        let received = DispatchSemaphore(value: 0)
-        let finished = DispatchSemaphore(value: 0)
-        defer {
-            try? pipe.fileHandleForWriting.close()
-            #expect(finished.wait(timeout: .now() + 2) == .success)
-        }
-        DispatchQueue.global().async {
-            for _ in 0..<2 {
-                if reader.readReply() { received.signal() }
+        let (events, continuation) = AsyncStream<ReplyEvent>.makeStream()
+        defer { try? pipe.fileHandleForWriting.close() }
+        // This is a deliberately blocking pipe reader. Give it its own thread rather than
+        // waiting synchronously for a global-queue block that may not have been scheduled.
+        let worker = Thread {
+            defer { continuation.finish() }
+            for index in 0..<2 {
+                continuation.yield(.reading(index))
+                continuation.yield(.reply(index, reader.readReply()))
             }
-            finished.signal()
+            continuation.yield(.finished)
         }
+        worker.start()
+        var iterator = events.makeAsyncIterator()
         // Startup and later activity acknowledgements must both arrive while the guardian stays alive.
-        for _ in 0..<2 {
+        for index in 0..<2 {
+            let reading = await iterator.next()
+            try #require(reading == .reading(index))
             try pipe.fileHandleForWriting.write(contentsOf: Data("{\"ok\":true}\n".utf8))
-            #expect(received.wait(timeout: .now() + 2) == .success)
+            let reply = await iterator.next()
+            try #require(reply == .reply(index, true))
         }
+        // Keep the writer open until both replies and worker completion. A full-buffer/EOF
+        // regression cannot pass by having cleanup close the writer and release the read.
+        let finished = await iterator.next()
+        #expect(finished == .finished)
+    }
+
+    private enum ReplyEvent: Equatable, Sendable {
+        case reading(Int), reply(Int, Bool), finished
     }
 
     @Test func retainsCoalescedRepliesBetweenRequests() throws {
