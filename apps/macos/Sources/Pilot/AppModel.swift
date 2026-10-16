@@ -32,7 +32,7 @@ final class AppModel: ObservableObject {
     static let shared = AppModel()
 
     let daemon = DaemonController()
-    let client = PilotClient()
+    let client: PilotClient
     /// Host-qualified facade for remote surfaces. The existing client remains Local only.
     let hosts = HostClients()
     @Published private(set) var localHost: HostRef?
@@ -186,7 +186,9 @@ final class AppModel: ObservableObject {
     private var draftSaveRevision = 0
 
     /// A nil store keeps fixtures and previews isolated from the user's persisted drafts.
-    init(projectFolderDefaults: UserDefaults = .standard, draftStore: DraftStore? = nil) {
+    init(projectFolderDefaults: UserDefaults = .standard, draftStore: DraftStore? = nil,
+         client: PilotClient = PilotClient()) {
+        self.client = client
         self.projectFolderDefaults = projectFolderDefaults
         // The sidebar always groups chats by urgency now; drop the old choice.
         projectFolderDefaults.removeObject(forKey: "pilot.sidebarGroupsByUrgency")
@@ -957,19 +959,28 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func stopSession(_ sessionId: String) {
-        if let ref = try? HostResourceRef.decodeKey(sessionId), ref.host != localHost {
-            Task {
-                do {
-                    if let restored = try await hosts.requestStop(ref), !restored.isEmpty {
-                        let composer = try composer(for: ref)
-                        composer.draft = [restored, composer.draft].filter { !$0.isEmpty }.joined(separator: "\n\n")
-                        try persistDrafts()
-                    }
-                } catch { sessionActionError = "Stop requested. Not yet confirmed. " + error.localizedDescription }
+    func stopSession(_ id: String) {
+        let sessionId: String
+        if id.hasPrefix("hostref1:") {
+            guard let ref = try? HostResourceRef.decodeKey(id), ref.kind == .session else {
+                sessionActionError = HostRoutingError.invalidReference.localizedDescription
+                return
             }
-            return
-        }
+            if ref.host != localHost {
+                Task {
+                    do {
+                        if let restored = try await hosts.requestStop(ref), !restored.isEmpty {
+                            let composer = try composer(for: ref)
+                            composer.draft = [restored, composer.draft].filter { !$0.isEmpty }.joined(separator: "\n\n")
+                            try persistDrafts()
+                        }
+                    } catch { sessionActionError = "Stop requested. Not yet confirmed. " + error.localizedDescription }
+                }
+                return
+            }
+            // Qualified Local rows and legacy bare IDs must share the API ID and pending guard.
+            sessionId = ref.localId
+        } else { sessionId = id }
 
         guard !pendingSessionActions.contains(sessionId) else { return }
         pendingSessionActions.insert(sessionId)
