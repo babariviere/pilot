@@ -289,15 +289,15 @@ test("ordinary member declarations omit privileged actions and their guidance", 
 test("member and coordinator tools guide a low-noise comment lifecycle and task-based progress", () => {
 	for (const coordinator of [false, true]) {
 		const { description } = createMissionTool(async () => null, coordinator);
-		assert.match(description, /brief: read the spec.*only when scope or requirements change/);
-		assert.match(description, /No progress log, completion checklist or decision ledger/);
-		assert.match(description, /decide: record an agreed choice, never progress, completion/);
-		assert.match(description, /Check existing decisions first; do not duplicate them/);
-		assert.match(description, /Check open comments first; do not duplicate questions/);
-		assert.match(description, /Keep task blockers in the task body; comment only if an answer is needed/);
-		assert.match(description, /save the outcome in the task, decision or spec as appropriate, then resolve by id/);
-		assert.match(description, /Leave unanswered questions open/);
-		assert.match(description, /log: record a meaningful update not already captured by task changes/);
+		assert.match(description, /brief: read a revision, or replace the spec with markdown and expectedRevision/);
+		assert.match(description, /decide: record a new agreed choice/);
+		assert.match(description, /check for an existing discussion before posting/);
+		assert.match(
+			description,
+			/once addressed, save any lasting outcome in the task, decision or spec, then resolve by id/,
+		);
+		assert.match(description, /unanswered questions stay open/);
+		assert.match(description, /log: add context not already captured by task changes/);
 	}
 });
 

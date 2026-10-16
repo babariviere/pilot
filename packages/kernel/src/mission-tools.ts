@@ -54,19 +54,19 @@ Actions:
 - get: without id, compact goal/status/brief revision, tasks grouped by phase with progress, your open tasks and references, other open tasks as [number,title,status,dependsOn?], and counts. Coordinator also gets member states, needs-you, PRs in review and pending/recent decision proposals. No history. Read before work and handoff. With id (task ID or number), one full task: body, dependency/dependent numbers, assignee chat, links with kind/PR state, artifacts and 15 recent events (pass activityCursor as activity cursor with taskId for older events). Prefer this targeted read to scanning lists.
 - links, artifacts: references, filtered by taskId and filter open (default), done or all.
 - decisions: decisions not already in your prompt. Changes arrive as short notices; re-read, as current decisions supersede old prompt text.
-- comments: read open questions and feedback before posting, or when relevant to your work.
+- comments: read open questions and feedback; check for an existing discussion before posting.
 - activity: newest first; filter taskId, kind, since (ISO timestamp with timezone or numeric event ID, exclusive), limit (default 15, max 100). Returns recentActivity with event IDs and cursor (null at end); pass cursor with the same filters for older events. Unfiltered first-page reads also include an independent recentUserNotes window.
-- brief: read the spec, or replace with markdown and expectedRevision (stale writes fail) only when scope or requirements change. No progress log, completion checklist or decision ledger; use tasks for progress and decide for agreed choices.
+- brief: read a revision, or replace the spec with markdown and expectedRevision (stale writes fail).
 - update: change the mission title or goal.
 - tasks: list tasks, filter open (default), done or all, mine and phase (name or ID, "" for none). Prefer filtered lists or get with id for detail. task: id alone aliases get with id; title creates one, other fields update it (body, status, phase, dependsOn, decisionIds to pin decisions). Tasks are referenced by ID or number (#3). Use status "delegated" for work owned by someone else (not finished or startable). Use status "dropped" to retire work while keeping its history.
 - claim: take id or ids (IDs, numbers or ranges such as ["1-5","#8"]). Returns claimed tasks and skipped tasks with reasons; never takes another chat's task.
 - release: clear claims using the same selectors. Members release their own, coordinator any. Resets active/blocked to todo, preserves other states and links.
-- decide: record an agreed choice, never progress, completion or routine implementation facts. Check existing decisions first; do not duplicate them. Audience all, coordinator or reference (default). Decisions override the brief; only the user changes them later.
-- comment: ask an actionable question or give feedback (text, optional anchor quote and targetSessionId). Check open comments first; do not duplicate questions, add unchanged reminders, or post status updates, handoffs or acknowledgements. Keep task blockers in the task body; comment only if an answer is needed. resolve: after addressing a comment, save the outcome in the task, decision or spec as appropriate, then resolve by id. Leave unanswered questions open.
+- decide: record a new agreed choice, audience all, coordinator or reference (default). Decisions override the brief; only the user changes them later.
+- comment: ask a question or give feedback (text, optional anchor quote and targetSessionId). resolve: once addressed, save any lasting outcome in the task, decision or spec, then resolve by id; unanswered questions stay open.
 - attach: link one of this chat's artifacts (artifactId, optional artifactRevision to pin, optional taskId).
 - link: add url, optional title/taskId. Task PRs default to relationship "ownership" (drives status); "reference" is related work. Neither binds a chat.
 - unlink: remove url at taskId (omitted: mission-level), own links only unless coordinator; prefers reference. Absent returns removed:false.
-- log: record a meaningful update not already captured by task changes, or, with kind "handoff", what the next chat needs to continue unfinished work (optional health). No routine status echo or repeated unchanged update.${
+- log: add context not already captured by task changes, or kind "handoff" for what the next chat needs to continue (optional health).${
 			coordinator
 				? `
 - propose (coordinator only): suggest an edit (decisionId, text, reason) or removal (decisionId, remove: true, reason). IDs accept D7. Decisions stay binding until the user accepts; get includes pending and recent outcomes.

@@ -82,15 +82,12 @@ test("multi-task guidance claims requested tasks, orders work, maintains statuse
 test("every mission role separates specs, progress, decisions and actionable comments", () => {
 	for (const coordinator of ["self", "other", "user"] as const) {
 		const prompt = missionPrompt({ ...mission, coordinator });
-		assert.match(prompt, /Tasks are the source of truth for progress, blockers and follow-up work/);
-		assert.match(prompt, /brief is the spec, not a progress log or decision ledger/);
-		assert.match(prompt, /only when scope or requirements change/);
-		assert.match(prompt, /Record agreed choices with decide, never task progress or completion/);
-		assert.match(prompt, /Comments are actionable questions or feedback, not status updates or handoffs/);
-		assert.match(prompt, /Read open comments before posting; do not repeat an existing question/);
-		assert.match(prompt, /save the outcome in the task, decision or spec as appropriate, then resolve/);
-		assert.match(prompt, /Leave unanswered questions open/);
-		assert.doesNotMatch(prompt, /blocked with a comment/);
+		assert.match(
+			prompt,
+			/The brief is the spec; tasks track progress and blockers; decisions record agreed choices; comments hold actionable discussion/,
+		);
+		// Comment mechanics belong in the tool description, not every turn's prompt.
+		assert.doesNotMatch(prompt, /blocked with a comment|resolve by id|expectedRevision|acknowledgement/);
 	}
 });
 

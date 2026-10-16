@@ -431,20 +431,14 @@ test("only settlements, newly blocked tasks and relevant comments create durable
 	}
 });
 
-test("coordinator notices update task progress without turning the spec or comments into a status log", () => {
+test("coordinator notices report changes without repeating workflow policy", () => {
 	const { store, id } = setup();
 	try {
 		store.recordMemberCompletion(completion("done", Date.now()));
 		const notice = store.prepareNotice(id, "lead", Date.now() + 30_000)!;
-		assert.match(notice.content, /Update tasks for progress and blockers/);
-		assert.match(notice.content, /do not copy status into the brief, decisions or comments/);
-		assert.match(notice.content, /Change the brief only for scope or requirements/);
-		assert.match(notice.content, /record only new agreed choices with decide/);
-		assert.match(notice.content, /resolve them once their outcome is saved/);
-		assert.match(notice.content, /Leave unanswered questions open/);
-		assert.match(notice.content, /do not post duplicate questions, unchanged reminders or acknowledgement comments/);
-		assert.match(notice.content, /without logging another copy of task state/);
-		assert.doesNotMatch(notice.content, /Update tasks and the brief as needed/);
+		assert.match(notice.content, /chat finished/);
+		assert.ok(notice.content.endsWith("Read the mission with get for details."));
+		assert.doesNotMatch(notice.content, /Update tasks|brief|decide|resolve|Summarise|Do not start chats/);
 	} finally {
 		store.close();
 	}
