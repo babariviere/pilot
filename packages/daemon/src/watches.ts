@@ -48,7 +48,11 @@ export function validateWatch(value: WatchInput, now = Date.now()): WatchInput {
 		/[\x00-\x1f]/.test(value.target.id)
 	)
 		throw new Error("Invalid target ID");
-	const target = { ...value.target, id: value.target.id.trim() };
+	const target: WatchTarget = {
+		kind: value.target.kind,
+		id: value.target.id.trim(),
+		...(value.target.missionId === undefined ? {} : { missionId: value.target.missionId }),
+	};
 	if (target.kind === "pr") {
 		const match = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/([1-9]\d*)\/?$/i.exec(target.id);
 		if (!match) throw new Error("Expected a GitHub PR URL");

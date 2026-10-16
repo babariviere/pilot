@@ -4,9 +4,9 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { parentPort, workerData } from "node:worker_threads";
-import { MAX_WATCHES, validateWatch, type Watch, type WatchInput } from "./watches.ts";
+import type { WatchNotice, WatchObservation, WatchTransition } from "./watch-delivery.ts";
 import { WatchEventsDisk } from "./watch-events-disk.ts";
-import type { WatchObservation, WatchNotice, WatchTransition } from "./watch-delivery.ts";
+import { MAX_WATCHES, validateWatch, type Watch, type WatchInput } from "./watches.ts";
 
 const { path } = workerData as { path: string };
 if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -36,6 +36,17 @@ function list(now: number): Watch[] {
 }
 function dispatch(op: string, args: unknown): unknown {
 	const now = Date.now();
+	if (op === "self") return events.setControl(String(args));
+	if (op === "expiry") {
+		prune(now);
+		const row = db.prepare("SELECT MIN(expires_at) AS at FROM watches WHERE expires_at IS NOT NULL").get();
+		return row?.at ?? undefined;
+	}
+	if (op === "cursor") return events.cursor(String(args));
+	if (op === "consume") {
+		const a = args as { source: string; events: WatchObservation[]; self?: string };
+		return events.consume(a.source, a.events, a.self);
+	}
 	if (op === "targets") {
 		prune(now);
 		return db

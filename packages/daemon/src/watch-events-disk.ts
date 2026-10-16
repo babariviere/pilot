@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { noticeDeadline, NOTICE_WINDOW_MS, NOTICE_HOURLY_CAP } from "./notice-dispatcher.ts";
+import { NOTICE_HOURLY_CAP, NOTICE_WINDOW_MS, noticeDeadline } from "./notice-dispatcher.ts";
 import type { WatchNotice, WatchObservation, WatchTransition } from "./watch-delivery.ts";
 import type { Watch } from "./watches.ts";
 
@@ -12,6 +12,8 @@ export class WatchEventsDisk {
 			CREATE TABLE IF NOT EXISTS watch_observations (source TEXT PRIMARY KEY, version TEXT NOT NULL, at INTEGER NOT NULL);
 			CREATE TABLE IF NOT EXISTS watch_causes (session_id TEXT PRIMARY KEY, origin TEXT NOT NULL);
 			CREATE TABLE IF NOT EXISTS watch_states (source TEXT PRIMARY KEY, state TEXT NOT NULL, revision INTEGER NOT NULL, at INTEGER NOT NULL);
+			CREATE TABLE IF NOT EXISTS watch_cursors (source TEXT PRIMARY KEY, cursor INTEGER NOT NULL);
+			CREATE TABLE IF NOT EXISTS watch_control (id INTEGER PRIMARY KEY CHECK(id=1), session_id TEXT NOT NULL);
    CREATE TABLE IF NOT EXISTS watch_pending (
     watch_id TEXT PRIMARY KEY, event_id INTEGER NOT NULL, first_at INTEGER NOT NULL, last_at INTEGER NOT NULL, data TEXT NOT NULL
    );
@@ -36,19 +38,36 @@ export class WatchEventsDisk {
 	}
 	observe(events: WatchObservation[], self?: string, inside = false): number {
 		if (events.length > 128) throw new Error("Watch observation batch too large");
+		self ??= this.control();
 		const apply = () => {
 			let matched = 0;
 			const consumed = new Set<string>();
 			for (const event of events) {
+				const key = `${event.event}:${event.source}`;
+				const record = () =>
+					this.db
+						.prepare(
+							"INSERT INTO watch_observations VALUES(?,?,?) ON CONFLICT(source) DO UPDATE SET version=excluded.version,at=excluded.at",
+						)
+						.run(key, event.version, Date.now());
 				if (event.event.startsWith("chat.")) {
 					const cause = this.db.prepare("SELECT origin FROM watch_causes WHERE session_id=?").get(event.source);
 					if (cause) {
 						consumed.add(event.source);
-						if (cause.origin === self) continue;
+						if (cause.origin === self) {
+							record();
+							continue;
+						}
 					}
 				}
-				if (event.originSessionId && event.originSessionId === self) continue;
-				if (event.targets.some((t) => t.kind === "chat" && t.id === self)) continue;
+				if (event.originSessionId && event.originSessionId === self) {
+					record();
+					continue;
+				}
+				if (event.targets.some((t) => t.kind === "chat" && t.id === self)) {
+					record();
+					continue;
+				}
 				const now = Date.now();
 				const watches = new Map<string, Watch>();
 				for (const target of event.targets) {
@@ -63,7 +82,6 @@ export class WatchEventsDisk {
 					}
 				}
 				if (!watches.size) continue;
-				const key = event.event + ":" + event.source;
 				const previous = this.db.prepare("SELECT version FROM watch_observations WHERE source = ?").get(key);
 				if (previous?.version === event.version) continue;
 				this.db
@@ -106,6 +124,15 @@ export class WatchEventsDisk {
 		};
 		return inside ? apply() : this.transaction(apply);
 	}
+	control(): string | undefined {
+		const row = this.db.prepare("SELECT session_id FROM watch_control WHERE id=1").get();
+		return row ? String(row.session_id) : undefined;
+	}
+	setControl(id: string): void {
+		this.db
+			.prepare("INSERT INTO watch_control VALUES(1,?) ON CONFLICT(id) DO UPDATE SET session_id=excluded.session_id")
+			.run(id);
+	}
 	transition(input: WatchTransition, self?: string): number {
 		return this.transaction(() => {
 			const previous = this.db.prepare("SELECT state, revision FROM watch_states WHERE source=?").get(input.source);
@@ -122,6 +149,21 @@ export class WatchEventsDisk {
 			return previous && input.candidate
 				? this.observe([{ ...input.candidate, version: String(revision) }], self, true)
 				: 0;
+		});
+	}
+	cursor(source: string): number {
+		return Number(this.db.prepare("SELECT cursor FROM watch_cursors WHERE source=?").get(source)?.cursor ?? 0);
+	}
+	consume(source: string, events: WatchObservation[], self?: string): number {
+		return this.transaction(() => {
+			const cursor = this.cursor(source);
+			const fresh = events.filter((event) => Number(event.version) > cursor);
+			if (!fresh.length) return 0;
+			const matched = this.observe(fresh, self, true);
+			this.db
+				.prepare("INSERT INTO watch_cursors VALUES(?,?) ON CONFLICT(source) DO UPDATE SET cursor=excluded.cursor")
+				.run(source, Math.max(...fresh.map((event) => Number(event.version))));
+			return matched;
 		});
 	}
 	attributeSessionRun(sessionId: string, origin: string): void {

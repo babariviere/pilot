@@ -1,7 +1,7 @@
 import type { SessionSummary } from "@pilot/protocol";
 import type { SessionManager } from "./sessions.ts";
-import type { WatchService } from "./watch-service.ts";
 import type { WatchObservation } from "./watch-delivery.ts";
+import type { WatchService } from "./watch-service.ts";
 
 /** Lifecycle-only projection. Token streaming never sends RPCs or scans subscriptions. */
 export class SessionWatchSource {
@@ -27,39 +27,44 @@ export class SessionWatchSource {
 		this.seen.delete(s.id);
 		this.seen.set(s.id, version);
 		if (this.seen.size > 50000) this.seen.delete(this.seen.keys().next().value!);
+		const outcome = s.state === "failed" ? "failed" : s.outcome;
 		if (
 			s.working ||
 			s.state === "working" ||
 			s.state === "starting" ||
 			s.runningJobs?.length ||
-			!["done", "failed", "stopped"].includes(s.outcome ?? "")
+			!["done", "failed", "stopped"].includes(outcome ?? "")
 		)
 			return;
-		const outcome = s.outcome as "done" | "failed" | "stopped";
 		const targets: WatchObservation["targets"] = [{ kind: "chat", id: s.id }];
 		if (s.projectId) targets.push({ kind: "project", id: s.projectId });
 		if (s.missionId) targets.push({ kind: "mission", id: s.missionId });
 		const event: WatchObservation = {
 			source: s.id,
-			version: String(s.outcomeAt ?? s.updatedAt),
+			version: JSON.stringify([s.state === "failed" ? s.updatedAt : (s.outcomeAt ?? s.updatedAt), outcome]),
 			event: "chat.settled",
 			targets,
-			at: s.outcomeAt ?? Date.now(),
+			at: s.state === "failed" ? s.updatedAt : (s.outcomeAt ?? Date.now()),
 			text: `Chat ${s.title ?? s.id} ${outcome}`,
-			outcome,
+			outcome: outcome as "done" | "failed" | "stopped",
 		};
-		if (this.pending.size >= 50000 && !this.pending.has(s.id)) {
+		const key = `${s.id}:${event.version}`;
+		if (this.pending.size >= 50000 && !this.pending.has(key)) {
 			console.warn("pilotd: watch session queue full");
 			return;
 		}
-		this.pending.set(s.id, outcome === "failed" ? [event, { ...event, event: "chat.failed" }] : [event]);
+		this.pending.set(key, outcome === "failed" ? [event, { ...event, event: "chat.failed" }] : [event]);
 		this.drain();
 	}
 	private drain(): void {
 		if (this.running || this.stopped) return;
 		this.running = (async () => {
 			while (this.pending.size && !this.stopped) {
-				const batch = [...this.pending.entries()].slice(0, 64);
+				const batch: [string, WatchObservation[]][] = [];
+				for (const entry of this.pending) {
+					batch.push(entry);
+					if (batch.length === 64) break;
+				}
 				await this.watches.observe(batch.flatMap(([, events]) => events));
 				for (const [id, events] of batch) if (this.pending.get(id) === events) this.pending.delete(id);
 			}

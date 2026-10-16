@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { WatchService } from "./watch-service.ts";
 import { validateWatch, type WatchInput } from "./watches.ts";
+
 const input: WatchInput = {
 	event: "chat.settled",
 	target: { kind: "chat", id: "chat" },
