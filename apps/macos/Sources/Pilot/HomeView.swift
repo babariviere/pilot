@@ -224,7 +224,7 @@ struct TaskComposer: View {
                     }
                 } label: {
                     ChipLabel(title: destinationHost.map { HostViewContext(host: $0, hosts: hosts).name } ?? "Local", icon: PilotIcon.terminal)
-                }.chipMenuStyle().disabled(form.busy || form.pendingOperationId != nil || form.mission != nil || form.trackedItem != nil)
+                }.chipMenuStyle().disabled(form.busy || pendingCreate != nil || form.mission != nil || form.trackedItem != nil)
                 TabButton(title: "New chat", selected: form.tab == .newTask) { form.tab = .newTask }
                 TabButton(title: "Running", count: client.workingCount, selected: form.tab == .running) { form.tab = .running }
                 Spacer()
@@ -340,6 +340,7 @@ struct TaskComposer: View {
                         app.draftProjectId = id
                         form.folder = ""
                     case .home:
+                        if remote { choosingRepository = true; return }
                         app.chooseChatFolder(FileManager.default.homeDirectoryForCurrentUser.path)
                         lastProjectId = ""
                     case .folder:
@@ -352,7 +353,7 @@ struct TaskComposer: View {
                         if remote { choosingRepository = true } else { app.addProject() }
                     }
                 }
-                .disabled(form.busy || form.pendingOperationId != nil || form.mission != nil || form.trackedItem != nil)
+                .disabled(form.busy || pendingCreate != nil || form.mission != nil || form.trackedItem != nil)
                 .help(form.mission != nil ? "The project is locked to this mission."
                     : form.trackedItem != nil ? "The project is locked to the linked ticket." : "Choose a project")
                 if let scope = branchScopeKey {
@@ -402,7 +403,7 @@ struct TaskComposer: View {
     }
 
     private func chooseHost(_ host: HostRef) {
-        guard destinationHost != host, form.pendingOperationId == nil else { return }
+        guard destinationHost != host, pendingCreate == nil else { return }
         form.invalidatePendingSubmission()
         form.executionHost = host
         form.model = ""; form.models = ModelList(models: [])
