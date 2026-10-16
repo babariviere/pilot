@@ -127,8 +127,9 @@ try {
 			method: "POST",
 			body: { ...op, destination: { ...op.destination, lineageId: "untrusted-clone" } },
 		}),
-		/HTTP 409/,
+		/HTTP 400/,
 	);
+	assert.equal((await api(reconnected.base, "sessions")).filter((value) => value.id === sessionId).length, 1);
 	const file = await api(reconnected.base, `sessions/${sessionId}/files?path=tracked.txt`);
 	assert.match(JSON.stringify(file), /remote-workflow-ok/);
 	const changes = await api(reconnected.base, `sessions/${sessionId}/changes`);
