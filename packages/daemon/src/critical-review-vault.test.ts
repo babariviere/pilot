@@ -13,7 +13,7 @@ import {
 
 async function fixture() {
 	const home = await realpath(await mkdtemp(join(tmpdir(), "review-vault-")));
-	const store = new CriticalReviewStore(join(home, "db", "records.sqlite"));
+	const store = new CriticalReviewStore(join(home, "db", "records.sqlite"), () => 100);
 	const vault = new CriticalReviewVault(join(home, "vault"), store);
 	const capture = (selections: ReviewSelection[], id = "manifest"): ReviewCapture => ({
 		id,

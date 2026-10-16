@@ -122,7 +122,7 @@ const records: CriticalReviewRecord[] = [
 test("separate versioned records round-trip, immutable/idempotent across restart", async () => {
 	const home = await mkdtemp(join(tmpdir(), "critical-review-"));
 	const file = join(home, "critical", "records.sqlite");
-	let store = new CriticalReviewStore(file);
+	let store = new CriticalReviewStore(file, () => 100);
 	try {
 		for (const record of records) {
 			assert.deepEqual(await store.put(record), record);
@@ -136,7 +136,7 @@ test("separate versioned records round-trip, immutable/idempotent across restart
 		await assert.rejects(store.list("target", "", 101), /page/);
 		assert.equal((await stat(file)).mode & 0o777, 0o600);
 		await store.close();
-		store = new CriticalReviewStore(file);
+		store = new CriticalReviewStore(file, () => 100);
 		for (const record of records) assert.deepEqual(await store.get(record.kind, record.id), record);
 		assert.deepEqual(await store.list("finding"), [records[6]]);
 		const marks = new ReviewStore(home);
@@ -162,7 +162,7 @@ test("empty legacy database migrates idempotently; future versions fail closed",
 			await store.close();
 		}
 		const db = new DatabaseSync(file);
-		assert.equal(db.prepare("PRAGMA user_version").get()!.user_version, 1);
+		assert.equal(db.prepare("PRAGMA user_version").get()!.user_version, 2);
 		db.exec("PRAGMA user_version=99");
 		db.close();
 		const future = new CriticalReviewStore(file);

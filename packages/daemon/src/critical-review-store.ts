@@ -7,8 +7,10 @@ export class CriticalReviewStore {
 	private serial = 0;
 	private closed = false;
 	private fault?: Error;
+	private readonly clock: () => number;
 	private readonly pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
-	constructor(file: string) {
+	constructor(file: string, clock: () => number = Date.now) {
+		this.clock = clock;
 		this.worker = new Worker(new URL("./critical-review-worker.ts", import.meta.url), { workerData: { file } });
 		this.worker.on("message", ({ id, value, error }) => {
 			const waiting = this.pending.get(id);
@@ -35,7 +37,7 @@ export class CriticalReviewStore {
 			const id = ++this.serial;
 			this.pending.set(id, { resolve: (value) => resolve(value as T), reject });
 			this.worker.ref();
-			this.worker.postMessage({ id, method, args });
+			this.worker.postMessage({ id, method, args: { now: this.clock(), ...args } });
 		});
 	}
 	/** Immutable create, idempotent only for byte-equivalent canonical content. */
