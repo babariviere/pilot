@@ -25,6 +25,7 @@ test("ticket tool declarations expose explicit role upgrades and bounded local s
 	const memberSchema = JSON.stringify(member.parameters),
 		leadSchema = JSON.stringify(lead.parameters);
 	assert.match(memberSchema, /ticket/);
+	assert.match(memberSchema, /prGuidance/);
 	assert.doesNotMatch(memberSchema, /"split"|"updateLink"/);
 	assert.match(leadSchema, /"split"/);
 	assert.match(leadSchema, /"updateLink"/);

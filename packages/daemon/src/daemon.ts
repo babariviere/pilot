@@ -13,6 +13,7 @@ import { daemonHello } from "./hello.ts";
 import { createLinearSizePoller } from "./linear-size.ts";
 import { MissionLinearSource } from "./linear-source.ts";
 import { McpStatusService, workerProbe } from "./mcp-status.ts";
+import { MissionLinearPrChecks } from "./mission-linear-prs.ts";
 import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
@@ -134,6 +135,12 @@ for (const mission of missionStore.list())
 		await trackedItems.completeSlackMission(mission.projectId, mission.id, mission.completedAt);
 const missionService = new MissionService(missionStore, sessions, projects);
 missionService.setLinearReader(sourceMcp);
+const linearPrChecks = new MissionLinearPrChecks(
+	missionStore,
+	(id, taskId) => missionService.prGuidance(id, taskId),
+	(projectId) => projects.get(projectId)?.path,
+);
+linearPrChecks.start();
 const sharing = new SharedContextService(
 	{ hostId: "daemon", daemonId: hello.daemonId, lineageId: hello.lineageId },
 	missionStore,
@@ -220,6 +227,7 @@ async function stop(): Promise<void> {
 	stopMemoryProjects();
 	await mcpStatus.close();
 	await missionLinear.stop();
+	await linearPrChecks.stop();
 	await tracking.stop();
 	await tracking.triage?.stop();
 	await memory.stop();

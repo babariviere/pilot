@@ -19,6 +19,7 @@ import type {
 } from "@pilot/protocol";
 import { CoordinatorCompaction } from "./coordinator-compaction.ts";
 import { Conflict, NotFound } from "./errors.ts";
+import { type LinearClosingGuard, linearPrGuidance, unavailableClosingGuard } from "./mission-linear-pr-guidance.ts";
 import { MissionNotices } from "./mission-notices.ts";
 import { parseTaskRefs } from "./mission-task-refs.ts";
 import { MissionTicketReader } from "./mission-ticket-context.ts";
@@ -124,6 +125,13 @@ function taskModelChoice(
 }
 
 export class MissionService {
+	private linearClosingGuard: LinearClosingGuard = unavailableClosingGuard;
+	setLinearClosingGuard(guard: LinearClosingGuard): void {
+		this.linearClosingGuard = guard;
+	}
+	prGuidance(missionId: string, taskId: string) {
+		return linearPrGuidance(this.store, missionId, taskId, this.linearClosingGuard);
+	}
 	private ticketReader?: MissionTicketReader;
 	setLinearReader(mcp: SourceMcpClient): void {
 		this.ticketReader = new MissionTicketReader(mcp);
@@ -710,6 +718,13 @@ export class MissionService {
 		const who = (id: string | undefined) => (id === undefined ? "user" : id === sessionId ? "you" : id);
 		const str = (key: string) => (typeof args[key] === "string" ? (args[key] as string) : undefined);
 		switch (action) {
+			case "prGuidance": {
+				if (args.taskId === undefined) throw new Error("prGuidance requires taskId");
+				const task = this.store.resolveTask(missionId, args.taskId);
+				const result = await this.prGuidance(missionId, task.id);
+				if (this.store.missionOf(sessionId) !== missionId) throw new Conflict("Mission membership changed");
+				return result;
+			}
 			case "split":
 				return splitTicket(this.store, missionId, args.resourceId, args.tasks, actor);
 			case "updateLink":

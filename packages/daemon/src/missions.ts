@@ -484,6 +484,12 @@ export class MissionStore {
 		this.db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
 		const migratePrTransitions = !this.one("SELECT 1 FROM sqlite_master WHERE name = 'pull_request_transitions'");
 		this.db.exec(SCHEMA);
+		this.db.exec(`CREATE TABLE IF NOT EXISTS linear_pr_safety_reports (
+			resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
+			mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+			comment_id TEXT REFERENCES comments(id) ON DELETE SET NULL,
+			text TEXT NOT NULL
+		);`);
 		this.db.exec(`CREATE TABLE IF NOT EXISTS phases (
 			id TEXT PRIMARY KEY, mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
 			name TEXT NOT NULL, goal TEXT, sort REAL NOT NULL, completed_at INTEGER,
@@ -2920,6 +2926,47 @@ export class MissionStore {
 		}
 		this.changed(id, accept ? this.members(id) : []);
 		return proposalFrom(this.one("SELECT * FROM decision_proposals WHERE id = ?", proposalId)!);
+	}
+
+	/** PR safety needs no task bodies, brief, decisions, events, comments or attention aggregation. */
+	linearPrScope(id: string) {
+		const mission = this.one("SELECT project_id, status FROM missions WHERE id = ?", id);
+		if (!mission) throw new NotFound(`Unknown mission: ${id}`);
+		return {
+			mission: { projectId: str(mission.project_id!), status: str(mission.status!) },
+			tasks: this.all("SELECT id, number, status FROM tasks WHERE mission_id = ? ORDER BY number", id).map(
+				(row) => ({ id: str(row.id!), number: num(row.number!), status: str(row.status!) }),
+			),
+			resources: this.all(
+				"SELECT * FROM resources WHERE mission_id = ? AND kind IN ('linear.issue', 'github.pr') ORDER BY created_at, id",
+				id,
+			).map(resourceFrom),
+		};
+	}
+
+	/** Daemon-owned correction flags. Persist comment IDs to avoid duplicate notices after restart. */
+	reportLinearPrSafety(id: string, resourceId: string, url: string, warnings: string[]): void {
+		const previous = this.one(
+			"SELECT * FROM linear_pr_safety_reports WHERE resource_id = ? AND mission_id = ?",
+			resourceId,
+			id,
+		);
+		const message = warnings.length
+			? `Linear PR safety: ${url}\n${[...new Set(warnings)].join("\n").slice(0, 7000)}\nCorrect explicitly and recheck; no PR was edited.`
+			: "";
+		if ((!previous && !message) || previous?.text === message) return;
+		if (!this.one("SELECT 1 FROM resources WHERE id = ? AND mission_id = ?", resourceId, id)) return;
+		this.batchChanges(() => {
+			if (previous?.comment_id) this.resolveComment(id, str(previous.comment_id));
+			const comment = message ? this.addComment(id, { text: message }) : undefined;
+			this.run(
+				"INSERT INTO linear_pr_safety_reports VALUES (?, ?, ?, ?) ON CONFLICT(resource_id) DO UPDATE SET comment_id = excluded.comment_id, text = excluded.text",
+				resourceId,
+				id,
+				comment?.id ?? null,
+				message,
+			);
+		});
 	}
 
 	// Comments

@@ -380,6 +380,12 @@ References never change task or Linear status, and
 migration preserves tasks already marked Delegated. This is the storage/API foundation, not automatic
 ticket completion or cancellation synchronization.
 
+For linked task PRs, `prGuidance` gives current ticket-specific wording: earlier contributors use
+`Related to`, while the final contributor uses `Closes` only after every other contributor is Done
+and live safeguards permit it. Daemon checks flag unsafe PR/commit directives and risky branch links
+locally without editing GitHub. [Linear PR safety](docs/linear-pr-safety.md) explains check bounds and
+the independent integration automations, which may target a different state than Merged.
+
 Open tasks contributing to a managed Linear issue become **Delegated** when someone else
 is assigned in Linear. Returning the issue to you restores the previous status; unassignment changes
 nothing. A manual status change wins until the assignment changes again. Delegated work is not done

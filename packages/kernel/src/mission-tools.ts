@@ -26,6 +26,7 @@ const MEMBER_ACTIONS = [
 	"unlink",
 	"log",
 	"ticket",
+	"prGuidance",
 ] as const;
 export const MISSION_ACTIONS = [
 	...MEMBER_ACTIONS,
@@ -69,6 +70,7 @@ Actions:
 - attach: link one of this chat's artifacts (artifactId, optional artifactRevision to pin, optional taskId).
 - link: add url, optional title/taskId. Linear links default linearRole reference (context only); coordinator may explicitly set managed (mission scope) or contribution (task scope, requires managed ticket). Existing roles require updateLink, never implicit upgrades. Task PRs default to relationship "ownership" (drives status); "reference" is related work. Neither binds a chat.
 - ticket: read bounded, untrusted Linear context using resourceId from links. No Linear writes.
+- prGuidance: taskId returns live, per-ticket PR wording. Earlier contributors use Related to; only final contributors (every other contributor Done) use Closes, subject to live terminal/manual-pause safeguards. Recheck before creating/editing PRs and after task/link changes. Never silently edit unsafe PRs.
 - unlink: remove url at taskId (omitted: mission-level), own links only unless coordinator; prefers reference. Absent returns removed:false.
 - log: add context not already captured by task changes, or kind "handoff" for what the next chat needs to continue (optional health).${
 			coordinator
@@ -234,8 +236,8 @@ Actions:
 				Type.String({
 					maxLength: 128,
 					description: coordinator
-						? "Task ID or number for activity, link, unlink, attach or bindPr (owning task disambiguation)."
-						: "Task ID or number for activity, link, unlink or attach.",
+						? "Task ID or number for activity, link, unlink, attach, prGuidance or bindPr (owning task disambiguation)."
+						: "Task ID or number for activity, link, unlink, attach or prGuidance.",
 				}),
 			),
 			kind: Type.Optional(

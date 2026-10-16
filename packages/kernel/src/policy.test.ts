@@ -31,6 +31,11 @@ test("ticket prompt scopes bounded links as untrusted context and distinguishes 
 	assert.match(lead, /Read bounded details.*resourceId/);
 	assert.match(lead, /Clarify ambiguous matches.*avoid duplicates.*never create Linear sub-issues/);
 	assert.match(lead, /explicitly upgraded with updateLink/);
+	assert.match(
+		lead,
+		/only the final contributor uses Closes after every other contributor is Done and live safeguards allow/,
+	);
+	assert.match(lead, /never silently edit them/);
 	const member = missionPrompt({ ...mission, tickets: [{ ...tickets[0]!, role: "reference", task: 2 }] });
 	assert.match(member, /References never drive delivery or task status/);
 	assert.doesNotMatch(member, /For managed tickets, read existing tasks/);
