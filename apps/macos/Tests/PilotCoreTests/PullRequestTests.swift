@@ -134,6 +134,22 @@ private func pr(_ state: PullRequestState = .open, url: String = "https://github
     #expect(!newBranch.hasTerminalPullRequest, "a new branch without its PR yet is still active")
 }
 
+@Test func latestPullRequestPrefersTheNewestOpenOneThenTheNewestOfAny() {
+    func numbered(_ number: Int, _ state: PullRequestState, url: String? = nil) -> SessionPullRequest {
+        SessionPullRequest(number: number, url: url ?? "https://github.com/example/repo/pull/\(number)", title: "PR",
+                           state: state, checkedAt: 1)
+    }
+    func session(_ prs: [SessionPullRequest]) -> SessionSummary {
+        SessionSummary(id: "s", title: "Task", cwd: "/tmp", createdAt: 1, updatedAt: 2, state: "idle",
+                       pullRequest: prs.first, pullRequests: prs)
+    }
+    #expect(session([]).latestPullRequest == nil)
+    #expect(session([numbered(3, .open), numbered(9, .merged), numbered(5, .open)]).latestPullRequest?.number == 5)
+    #expect(session([numbered(3, .closed), numbered(9, .merged)]).latestPullRequest?.number == 9)
+    let unsafe = numbered(12, .open, url: "javascript:alert(1)")
+    #expect(session([numbered(4, .open), unsafe]).latestPullRequest?.number == 4)
+}
+
 @Test func pullRequestBrowserURLsAllowEnterpriseButNotOtherSchemes() {
     for url in ["https://github.com/example/repo/pull/7", "https://github.acme.test/team/repo/pull/7",
                 "http://github.local/team/repo/pull/7", "HTTPS://github.acme.test/team/repo/pull/7"] {

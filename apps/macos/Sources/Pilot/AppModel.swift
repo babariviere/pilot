@@ -918,6 +918,12 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Opens the open chat's latest pull request in the browser (⌘⇧P). Does nothing when it has none.
+    func openLatestPullRequest() {
+        guard let url = selectedSession?.latestPullRequest?.browserURL else { return }
+        BrowserLinkOpener.shared.open(url)
+    }
+
     func addProject() {
         guard let path = chooseFolder() else { return }
         Task {

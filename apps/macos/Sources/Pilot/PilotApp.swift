@@ -39,6 +39,10 @@ struct PilotApp: App {
                     .disabled(model.selectedSessionId == nil)
                 Button("Toggle Links") { model.toggleInspector(.links) }
                     .disabled(model.selectedSessionId == nil)
+                Divider()
+                Button("Open Latest Pull Request") { model.openLatestPullRequest() }
+                    .keyboardShortcut("p", modifiers: [.command, .shift])
+                    .disabled(model.selectedSession?.latestPullRequest == nil)
             }
             SidebarScopeCommands(model: model, client: model.client)
         }
