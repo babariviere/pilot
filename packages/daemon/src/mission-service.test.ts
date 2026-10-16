@@ -97,6 +97,36 @@ test("mission drafts name the deliverables without repeating comment policy", ()
 	assert.doesNotMatch(message, /comments|resolve|reminders|decision ledger/);
 });
 
+test("PR guidance tool forwards live safeguards and recomputes task/link eligibility", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Delivery",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	const url = "https://linear.app/acme/issue/ENG-12";
+	const manager = f.store.addResource(mission.id, { url, linearRole: "managed" });
+	const task = f.store.addTask(mission.id, { title: "Only work" });
+	f.store.addResource(mission.id, { url, taskId: task.id, linearRole: "contribution" });
+	const guidance = async () =>
+		(await f.service.call(lead.id, "prGuidance", { taskId: String(task.number) })) as {
+			tickets: { closingAllowed: boolean; directive: string }[];
+		};
+	assert.equal((await guidance()).tickets[0]!.closingAllowed, false);
+	f.service.setLinearClosingGuard(async (id, ref) => {
+		assert.equal(id, mission.id);
+		assert.equal(ref, manager.id);
+		return { allowed: true };
+	});
+	assert.equal((await guidance()).tickets[0]!.directive, "Closes ENG-12");
+	const earlier = f.store.addTask(mission.id, { title: "Another contributor" });
+	f.store.addResource(mission.id, { url, taskId: earlier.id, linearRole: "contribution" });
+	assert.equal((await guidance()).tickets[0]!.directive, "Related to ENG-12");
+	await assert.rejects(f.service.call(lead.id, "prGuidance", {}), /requires taskId/);
+});
+
 test("coordinator start and status return navigable chat links without starting status targets", async (t) => {
 	const f = await fixture(t);
 	const lead = await f.spawn();
