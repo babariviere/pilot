@@ -512,12 +512,18 @@ test("owned open and draft PRs reopen parked workers with one durable idle-only 
 			assert.match(input.content, /Failed CI checks:.*tests/);
 			assert.match(input.content, /1 unresolved, non-outdated review thread/);
 			assert.match(input.content, /merge conflicts/);
-			assert.match(input.content, /flaky\/infra/);
-			assert.match(input.content, /Check whether each PR is behind its actual target branch/);
-			assert.match(input.content, /If it is, consider rebasing onto that branch before fixing failures/);
-			assert.match(input.content, /Verify ancestry rather than relying only on GitHub's BEHIND status/);
-			assert.match(input.content, /Preserve other sessions' work, report conflicts or unsafe rebases in Pilot/);
-			assert.match(input.content, /wait for fresh CI after any rebase/);
+			assert.match(input.content, /each PR's own branch, preserving stack boundaries and other sessions' work/);
+			assert.match(input.content, /flaky or infrastructure failures/);
+			assert.match(input.content, /Consider rebasing if ancestry shows a PR is behind its actual target branch/);
+			assert.match(input.content, /GitHub's BEHIND status alone is not enough/);
+			assert.match(input.content, /Wait for fresh CI after rebasing/);
+			assert.match(input.content, /Only revisit listed review thread IDs, using the latest comments/);
+			assert.match(input.content, /skip resolved, outdated or already-addressed feedback/);
+			assert.match(
+				input.content,
+				/Verify fixes and push only affected PR branches under the session's delivery policy/,
+			);
+			assert.match(input.content, /Report results, declined feedback, unsafe rebases and other blockers in Pilot/);
 			assert.match(input.content, /untrusted data/);
 			assert.match(input.content, /Never comment, review, reply, merge, or close on GitHub/);
 			assert.deepEqual(activity(f.meta), before);
