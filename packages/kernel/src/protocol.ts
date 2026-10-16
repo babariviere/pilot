@@ -194,7 +194,15 @@ export type KernelPacket =
 	 * message retry resends or edit restores to the composer.
 	 */
 	| { type: "rewound"; requestId: string; switched: boolean; content?: string; attempts?: SessionAttempt[] }
-	| { type: "modelChanged"; requestId: string; model: string; thinking: string; usage: KernelUsage }
+	| {
+			type: "modelChanged";
+			requestId: string;
+			model: string;
+			thinking: string;
+			usage: KernelUsage;
+			switched?: boolean;
+			attempts?: SessionAttempt[];
+	  }
 	| { type: "working"; working: boolean; completion?: SessionCompletion; execution?: ExecutionEvidence }
 	| { type: "events"; watchId: string; events: AgentEvent[] }
 	| { type: "error"; requestId?: string; message: string; code?: "busy" };

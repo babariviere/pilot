@@ -3385,17 +3385,23 @@ export class SessionManager {
 			// A fresh worker's activity snapshot may follow ready. The kernel's atomic guard checks
 			// its durable inbox before switching, so unknown fresh activity is not proof of busy work.
 			this.assertModelIdle(meta, reopening);
+			const requestId = randomUUID();
+			let result: { switched: boolean } | undefined;
 			try {
 				await worker.request({
 					type: "changeModel",
-					requestId: randomUUID(),
+					requestId,
 					model: name,
 					...(thinking !== undefined ? { thinking } : {}),
 				});
 			} catch (error) {
 				if (error instanceof CommandRejected && error.code === "busy") throw new Conflict(error.message);
 				throw error;
+			} finally {
+				result = this.rewindResults.get(requestId);
+				this.rewindResults.delete(requestId);
 			}
+			if (result?.switched) await this.restartAttempt(id, worker, meta);
 			// The modelChanged packet carries the native selection and effective thinking level.
 			meta.updatedAt = Date.now();
 			await this.save(meta);
@@ -4575,7 +4581,7 @@ export class SessionManager {
 			if (meta.pending?.length) throw new Conflict("Session is still delivering a message. Try again shortly.");
 			await this.unparked(id);
 			if (this.closing) throw new Error("pilotd is shutting down");
-			let worker = await this.ensureWorker(id);
+			const worker = await this.ensureWorker(id);
 			await worker.ready;
 			let result: { switched: boolean; content?: string } | undefined;
 			try {
@@ -4589,26 +4595,7 @@ export class SessionManager {
 			}
 			if (!result) throw new Error("The kernel did not report the new attempt");
 			if (result.switched) {
-				if (this.workers.get(id) === worker) {
-					this.workers.delete(id);
-					this.parked.add(worker);
-					const closing: Promise<void> = worker.close().finally(() => {
-						if (this.parking.get(id) === closing) this.parking.delete(id);
-					});
-					this.parking.set(id, closing);
-				}
-				// The outcome and errors described the conversation that was left.
-				clearOutcome(meta);
-				delete meta.inputError;
-				this.kernelErrors.delete(id);
-				meta.updatedAt = Date.now();
-				await this.save(meta);
-				await this.unparked(id);
-				const refresh = !this.workers.has(id) ? this.workspaceRefreshes.get(id) : undefined;
-				if (refresh) await refresh;
-				if (this.closing) throw new Error("pilotd is shutting down");
-				worker = await this.ensureWorker(id);
-				await worker.ready;
+				await this.restartAttempt(id, worker, meta);
 			}
 			this.lastUse.set(id, Date.now());
 			this.emit(meta);
@@ -4618,6 +4605,29 @@ export class SessionManager {
 			release();
 			end();
 		}
+	}
+
+	/** Reopen the atomically selected attempt while the caller retains the configuration lock. */
+	private async restartAttempt(id: string, worker: SessionWorker, meta: SessionMeta): Promise<void> {
+		if (this.workers.get(id) === worker) {
+			this.workers.delete(id);
+			this.parked.add(worker);
+			const closing: Promise<void> = worker.close().finally(() => {
+				if (this.parking.get(id) === closing) this.parking.delete(id);
+			});
+			this.parking.set(id, closing);
+		}
+		clearOutcome(meta);
+		delete meta.inputError;
+		this.kernelErrors.delete(id);
+		meta.updatedAt = Date.now();
+		await this.save(meta);
+		await this.unparked(id);
+		const refresh = !this.workers.has(id) ? this.workspaceRefreshes.get(id) : undefined;
+		if (refresh) await refresh;
+		if (this.closing) throw new Error("pilotd is shutting down");
+		const replacement = await this.ensureWorker(id);
+		await replacement.ready;
 	}
 
 	/** Returns true when the persisted list changed. */
@@ -5990,8 +6000,13 @@ export class SessionManager {
 			return;
 		}
 		if (packet.type === "modelChanged") {
+			if (this.workers.get(meta.id) !== worker) return;
 			meta.model = packet.model;
 			meta.thinking = packet.thinking;
+			if (packet.switched) {
+				this.rewindResults.set(packet.requestId, { switched: true });
+				this.applyAttempts(meta, packet.attempts);
+			}
 		} else if (packet.type === "rewound") {
 			if (this.workers.get(meta.id) !== worker) return;
 			this.rewindResults.set(packet.requestId, {

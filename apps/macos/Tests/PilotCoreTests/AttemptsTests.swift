@@ -43,12 +43,13 @@ private let failure = #"{"id":9,"conversationId":7,"kind":"pi.assistant","model"
       {"id":"1"},
       {"id":"7","reason":"retry","createdAt":1700000000000,"preview":"Fix the test"},
       {"id":"9","reason":"edit","createdAt":1700000001000,"preview":"Fix the flaky login test, then\nrun it","active":true},
+      {"id":"10","reason":"model","preview":"anthropic/claude-opus"},
       {"id":"11","reason":"future"}
     ]}
     """#.utf8)
     let session = try JSONDecoder().decode(SessionSummary.self, from: data)
     let attempts = try #require(session.attempts)
-    #expect(attempts.map(\.title) == ["Original", "Retry", "Edited: Fix the flaky login test, then", "Original"])
+    #expect(attempts.map(\.title) == ["Original", "Retry", "Edited: Fix the flaky login test, then", "Model changed", "Original"])
     #expect(attempts.last?.reason == nil, "unknown actions from newer daemons still decode")
     #expect(attempts.filter(\.isActive).map(\.id) == ["9"])
     #expect(try JSONDecoder().decode(SessionSummary.self, from: JSONEncoder().encode(session)) == session)

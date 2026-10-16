@@ -18,7 +18,7 @@ import type { RewindAction, SessionAttempt } from "@pilot/protocol";
 
 export type AttemptRecord = {
 	id: number;
-	reason: RewindAction;
+	reason: NonNullable<SessionAttempt["reason"]>;
 	createdAt: number;
 	/** Start of the resent message, for retry and edit. */
 	preview?: string;

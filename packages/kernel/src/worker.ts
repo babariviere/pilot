@@ -273,16 +273,18 @@ export function runKernelWorker(): void {
 				await session.editQueuedMessage(command.submissionId, command.content, command.mode);
 				await send({ type: "accepted", requestId: command.requestId });
 				break;
-			case "changeModel":
-				await session.changeModel(command.model, command.thinking);
+			case "changeModel": {
+				const result = await session.changeModel(command.model, command.thinking);
 				await send({
 					type: "modelChanged",
 					requestId: command.requestId,
 					model: session.model,
 					thinking: session.thinkingLevel,
 					usage: session.usage,
+					...result,
 				});
 				break;
+			}
 			case "continuation.pause":
 				await session.pauseForUpdate();
 				await send({ type: "accepted", requestId: command.requestId });
