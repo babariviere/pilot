@@ -87,8 +87,17 @@ test("removal accepts explicit success only, discards provider text and fixes ey
 test("fake MCP transport uses only the explicit local route, never another server or a raw tool request", async () => {
 	const home = await mkdtemp(join(tmpdir(), "slack-route-transport-"));
 	const calls: unknown[] = [];
+	const authorization: Array<string | undefined> = [];
+	const paths: string[] = [];
+	let rejectKey = false;
 	let response: Parameters<typeof decodeMcpResult>[0] = { structuredContent: { ok: true } };
 	const server = createServer(async (req, res) => {
+		authorization.push(req.headers.authorization);
+		paths.push(req.url ?? "");
+		if (rejectKey) {
+			res.writeHead(401, { "www-authenticate": 'Bearer error="invalid_token"' }).end("fixture revoked key");
+			return;
+		}
 		if (req.url?.endsWith("/unavailable")) {
 			res.writeHead(503).end("private fixture failure");
 			return;
@@ -163,6 +172,61 @@ test("fake MCP transport uses only the explicit local route, never another serve
 					!error.message.includes("private fixture") && /Couldn't remove Slack eyes reaction/.test(error.message),
 			);
 		}
+		// A separate local connection can use a tool-scoped key without changing the general server's OAuth.
+		await configure({ ...route, dispatcher: { tool: "dispatch", nameKey: "name", argumentsKey: "arguments" } });
+		await writeFile(
+			join(home, "mcp.json"),
+			JSON.stringify({
+				mcpServers: {
+					[route.server]: { url, headers: { Authorization: "Bearer fixture-scoped-key" } },
+					general: { command: "must-not-start" },
+				},
+			}),
+		);
+		await writeFile(
+			join(home, "mcp-auth.json"),
+			JSON.stringify({
+				[`mcp__${route.server}|${url}`]: {
+					tokens: { access_token: "fixture-old-oauth-token", token_type: "Bearer" },
+					tokensExpireAt: Date.now() + 3_600_000,
+				},
+			}),
+		);
+		response = { structuredContent: { ok: true } };
+		authorization.length = 0;
+		assert.deepEqual(await client.call("slack", "removeSlackEyes", args, signal), { ok: true });
+		assert.ok(authorization.length > 0);
+		assert.ok(
+			authorization.every((value) => value === "Bearer fixture-scoped-key"),
+			"configured key wins over stored OAuth",
+		);
+		assert.deepEqual(calls.at(-1), {
+			name: "dispatch",
+			arguments: {
+				name: route.tool,
+				arguments: { channel: "CEXAMPLE", ts: parent, name: "eyes" },
+			},
+		});
+		rejectKey = true;
+		authorization.length = 0;
+		paths.length = 0;
+		const callsBeforeRevocation = calls.length;
+		await assert.rejects(
+			client.call("slack", "removeSlackEyes", args, signal),
+			(error: Error) =>
+				!error.message.includes("fixture-scoped-key") && !error.message.includes("fixture-old-oauth-token"),
+		);
+		assert.equal(calls.length, callsBeforeRevocation, "a revoked key executes no tool");
+		assert.ok(authorization.length > 0);
+		assert.ok(
+			authorization.every((value) => value === "Bearer fixture-scoped-key"),
+			"no OAuth authentication fallback",
+		);
+		assert.ok(
+			paths.every((path) => path === "/mcp"),
+			"no browser login, authorization discovery or token refresh",
+		);
+		rejectKey = false;
 		const count = calls.length;
 		for (const value of [
 			{ ...route, server: "not-configured" },
