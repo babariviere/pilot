@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.42.0](https://github.com/babariviere/pilot/compare/v1.41.0...v1.42.0) (2026-10-16)
+
+
+### Features
+
+* **updates:** safely update a devbox without stopping live work ([1485427](https://github.com/babariviere/pilot/commit/1485427443cd6080c1ccc81153b8ab2bab31b88e))
+
+
+### Bug Fixes
+
+* **startup:** serialize catalogs and batch mission recovery ([e957d4a](https://github.com/babariviere/pilot/commit/e957d4a8038bccd6ffbc51f2e7ce74cc24fb53f4))
+* **updates:** use the right user service environment ([965ff12](https://github.com/babariviere/pilot/commit/965ff12b706d8edf1549d93e9c8a1c7b8a5d567b))
+
 ## [1.41.0](https://github.com/babariviere/pilot/compare/v1.40.0...v1.41.0) (2026-10-16)
 
 
