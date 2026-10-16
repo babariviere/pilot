@@ -2123,7 +2123,7 @@ enum Fixtures {
           {"id":3,"kind":"pi.tool-result","model":[{"role":"toolResult","toolCallId":"a1","toolName":"read","isError":false,"content":[{"type":"text","text":"export type AgentEvent = ..."}]}]},
           {"id":4,"kind":"pi.tool-result","model":[{"role":"toolResult","toolCallId":"a2","toolName":"bash","isError":false,"content":[{"type":"text","text":"11 matches"}]}]},
           {"id":5,"kind":"pi.assistant","model":[{"role":"assistant","stopReason":"toolUse","content":[{"type":"text","text":"The daemon emits **11** event kinds. PilotCore decodes 9; compaction events fall through to the unknown case."},{"type":"toolCall","id":"a3","name":"read","arguments":{"path":"apps/macos/Sources/PilotCore/Transcript.swift"}}]}]}
-        ],"tools":[],"compactions":[],"inbox":[],"agent":{},"usage":{}}]
+        ],"tools":[],"compactions":[],"inbox":[],"agent":{"model":{"provider":"anthropic","modelId":"claude-sonnet-5-5"},"thinkingLevel":"high"},"usage":{}}]
         """#
         let mirror = #"""
         [{"type":"snapshot","entries":[

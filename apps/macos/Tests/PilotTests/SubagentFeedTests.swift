@@ -32,7 +32,7 @@ private func until(_ check: @MainActor () -> Bool) async {
     let client = PilotClient()
     let key = SubagentKey(sessionId: "s1", name: "review")
     client.fixtureSubagentTranscripts = ["review": try events(#"""
-    [{"type":"snapshot","entries":[\#(entry(1, "First"))],"tools":[],"compactions":[],"inbox":[],"agent":{},"usage":{}}]
+    [{"type":"snapshot","entries":[\#(entry(1, "First"))],"tools":[],"compactions":[],"inbox":[],"agent":{"model":{"provider":"test","modelId":"child"},"thinkingLevel":"high"},"usage":{}}]
     """#)]
     let feeds = SubagentFeeds()
     let feed = feeds.feed(key, client: client)
@@ -42,15 +42,20 @@ private func until(_ check: @MainActor () -> Bool) async {
     feed.retain()
     await until { !feed.loading }
     #expect(feed.presentation.rows.count == 1)
+    #expect(feed.configuration.model == "test/child")
+    #expect(feed.configuration.thinking == "high")
 
     client.handle(.subagentEvents(sessionId: "s1", name: "review", events: try events("[{\"type\":\"entry_appended\",\"entry\":\(entry(2, "Second"))}]")))
     await until { feed.presentation.rows.count == 2 }
     #expect(feed.presentation.rows.count == 2, "appended entries extend the transcript")
+    #expect(feed.configuration.thinking == "high", "incremental entries retain the child's configuration")
     client.handle(.subagentEvents(sessionId: "s1", name: "other", events: try events("[{\"type\":\"entry_appended\",\"entry\":\(entry(3, "Elsewhere"))}]")))
     client.handle(.error(sessionId: "s1", name: "review", message: "Session history is busy"))
     #expect(feed.error == "Session history is busy")
+    #expect(feed.configuration.thinking == "high", "errors retain the last reported configuration")
     client.handle(.subagentEvents(sessionId: "s1", name: "review", events: []))
     #expect(feed.presentation.rows.isEmpty, "an empty batch replaces the transcript")
+    #expect(feed.configuration == SubagentConfiguration(), "an empty batch also clears stale configuration")
 
     feed.release()
     feed.release()
