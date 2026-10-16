@@ -84,6 +84,16 @@ private func item(_ id: String, state: ScheduleState = .pending, trigger: Schedu
     #expect(calendar.dateComponents([.hour, .minute], from: suggested) == DateComponents(hour: 23, minute: 0))
 }
 
+@Test func scheduleSheetSendsWholeMillisecondsAtTheStartOfTheMinute() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let minute = calendar.date(from: DateComponents(year: 2026, month: 10, day: 16, hour: 19, minute: 10))!
+    let picked = minute.addingTimeInterval(37.1234567)
+    let at = ScheduleSheet.epochMilliseconds(picked, calendar: calendar)
+    #expect(at == minute.timeIntervalSince1970 * 1000)
+    #expect(at == at.rounded())
+}
+
 @Test func scheduleChoicesOfferOnlyLiveTriggers() {
     #expect(ScheduleText.choices == [.onBack, .onOnline, .at])
     #expect(!ScheduleText.choices.contains(.removed) && !ScheduleText.choices.contains(.onWake))

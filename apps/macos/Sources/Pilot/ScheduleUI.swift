@@ -210,7 +210,7 @@ struct ScheduleSheet: View {
         guard canSave else { return }
         saving = true
         error = nil
-        let when = ScheduleWhen(trigger: trigger, at: trigger == .at ? date.timeIntervalSince1970 * 1000 : nil)
+        let when = ScheduleWhen(trigger: trigger, at: trigger == .at ? ScheduleSheet.epochMilliseconds(date) : nil)
         Task {
             defer { saving = false }
             do {
@@ -226,6 +226,13 @@ struct ScheduleSheet: View {
     static func suggestedTime(now: Date = Date(), calendar: Calendar = .current) -> Date {
         let soon = now.addingTimeInterval(30 * 60)
         return calendar.dateInterval(of: .hour, for: soon)?.end ?? soon
+    }
+
+    /// The picked time as whole epoch milliseconds, at the start of its minute (the picker shows no seconds).
+    /// pilotd rejects fractional values, which Date arithmetic often produces.
+    static func epochMilliseconds(_ date: Date, calendar: Calendar = .current) -> Double {
+        let minute = calendar.dateInterval(of: .minute, for: date)?.start ?? date
+        return (minute.timeIntervalSince1970 * 1000).rounded()
     }
 }
 
