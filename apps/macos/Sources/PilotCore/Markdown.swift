@@ -118,6 +118,8 @@ public enum Markdown {
         return blocks
     }
 
+    static func isHeading(_ line: String) -> Bool { headingLevel(line) != nil }
+
     private static func headingLevel(_ line: String) -> Int? {
         let hashes = line.prefix { $0 == "#" }.count
         guard (1 ... 6).contains(hashes), line.dropFirst(hashes).first == " " else { return nil }
@@ -136,5 +138,75 @@ public enum Markdown {
             }
         }
         return nil
+    }
+}
+
+/// Parses a message that only grows by appending, such as a streamed reply, in time proportional to the new text.
+/// A blank line, a closing fence, a heading or a rule outside a code fence ends every open block, so the blocks
+/// before the last such line are final and later text cannot change them. Each update scans only the new lines
+/// and parses again only the text after that boundary. `blocks` always equals `Markdown.parse(source)`.
+public struct MarkdownStream: Sendable {
+    public private(set) var source = ""
+    /// Final blocks: everything before `stableLength`.
+    public private(set) var stableBlocks: [MarkdownBlock] = []
+    /// UTF-8 length of the final prefix, which ends just after a boundary line.
+    public private(set) var stableLength = 0
+    /// Blocks after the final prefix, parsed again on every update.
+    public private(set) var tailBlocks: [MarkdownBlock] = []
+    /// UTF-8 bytes handed to `Markdown.parse` so far, for cost regressions.
+    public private(set) var parsedByteCount = 0
+    /// Start of the first line not yet scanned (it has no newline yet), and the fence open before it.
+    private var scanned = 0
+    private var fence: Int?
+
+    public init() {}
+
+    public var blocks: [MarkdownBlock] { stableBlocks + tailBlocks }
+
+    /// Takes the message's current text. Text that does not extend the previous source starts over.
+    public mutating func update(_ text: String) {
+        let utf8 = text.utf8
+        if utf8.count < source.utf8.count || !utf8.starts(with: source.utf8) { self = MarkdownStream() }
+        source = text
+        var boundary = stableLength
+        var lineStart = scanned
+        var index = utf8.index(utf8.startIndex, offsetBy: scanned)
+        var offset = scanned
+        while let newline = utf8[index...].firstIndex(of: UInt8(ascii: "\n")) {
+            let distance = utf8.distance(from: index, to: newline)
+            let lineEnd = offset + distance
+            let line = String(decoding: utf8[utf8.index(utf8.startIndex, offsetBy: lineStart) ..< newline], as: UTF8.self)
+            if endsBlocks(line) { boundary = lineEnd + 1 }
+            index = utf8.index(after: newline)
+            offset = lineEnd + 1
+            lineStart = offset
+        }
+        scanned = lineStart
+        if boundary > stableLength {
+            let start = utf8.index(utf8.startIndex, offsetBy: stableLength)
+            let end = utf8.index(utf8.startIndex, offsetBy: boundary)
+            stableBlocks += Markdown.parse(String(decoding: utf8[start ..< end], as: UTF8.self))
+            parsedByteCount += boundary - stableLength
+            stableLength = boundary
+        }
+        let tail = String(decoding: utf8[utf8.index(utf8.startIndex, offsetBy: stableLength)...], as: UTF8.self)
+        tailBlocks = tail.isEmpty ? [] : Markdown.parse(tail)
+        parsedByteCount += tail.utf8.count
+    }
+
+    /// Mirrors `Markdown.parse`: whether this complete line leaves no block open after it, and tracks fences.
+    private mutating func endsBlocks(_ rawLine: String) -> Bool {
+        let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        let ticks = line.prefix { $0 == "`" }.count
+        if let open = fence {
+            guard ticks >= open, line.dropFirst(ticks).isEmpty else { return false }
+            fence = nil
+            return true
+        }
+        if ticks >= 3, !line.dropFirst(ticks).contains("`") {
+            fence = ticks
+            return false
+        }
+        return line.isEmpty || Markdown.isHeading(line) || line == "---" || line == "***" || line == "___"
     }
 }

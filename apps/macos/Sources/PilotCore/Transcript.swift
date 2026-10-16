@@ -180,8 +180,14 @@ public struct Transcript: Equatable, Sendable {
     var committedRowRevision: UInt64 = 0
     /// In-flight assistant message, until its entry is committed.
     public var streaming: ChatMessage? {
-        didSet { if streaming != oldValue { rowRevision &+= 1 } }
+        get { storedStreaming }
+        set {
+            guard storedStreaming != newValue else { return }
+            storedStreaming = newValue
+            rowRevision &+= 1
+        }
     }
+    private var storedStreaming: ChatMessage?
     private var storedTools: [String: LiveTool] = [:]
     public var tools: [String: LiveTool] {
         get { storedTools }
@@ -355,9 +361,14 @@ public struct Transcript: Equatable, Sendable {
                 streaming = ChatMessage(json: message)
             }
         case "message_update":
-            guard var message = streaming else { return }
-            for change in event["changes"]?.array ?? [] { Self.apply(change, to: &message) }
-            streaming = message
+            // Take the message out, so a delta appends to its text in place when nothing else shares it, and
+            // never compare the whole message: a delta that changes something bumps the revision directly.
+            guard var message = storedStreaming else { return }
+            storedStreaming = nil
+            var changed = false
+            for change in event["changes"]?.array ?? [] { changed = Self.apply(change, to: &message) || changed }
+            storedStreaming = message
+            if changed { rowRevision &+= 1 }
             retry = nil
         case "message_end":
             streaming = nil
@@ -495,27 +506,43 @@ public struct Transcript: Equatable, Sendable {
         displayedEntries = result
     }
 
-    private static func apply(_ change: JSONValue, to message: inout ChatMessage) {
+    /// Returns whether the change could alter the message.
+    private static func apply(_ change: JSONValue, to message: inout ChatMessage) -> Bool {
         if change["type"]?.string == "message", let full = change["message"] {
             message = ChatMessage(json: full)
-            return
+            return true
         }
-        guard let index = change["contentIndex"]?.int, index >= 0 else { return }
-        while message.blocks.count <= index { message.blocks.append(.other) }
+        guard let index = change["contentIndex"]?.int, index >= 0 else { return false }
+        var changed = false
+        while message.blocks.count <= index {
+            message.blocks.append(.other)
+            changed = true
+        }
         switch change["type"]?.string {
         case "text_start", "thinking_start", "toolcall_start", "block":
-            if let block = change["block"] { message.blocks[index] = Block(json: block) }
+            if let block = change["block"] {
+                message.blocks[index] = Block(json: block)
+                changed = true
+            }
         case "text_delta":
-            if case let .text(text) = message.blocks[index] {
-                message.blocks[index] = .text(text + (change["delta"]?.string ?? ""))
+            if case var .text(text) = message.blocks[index], let delta = change["delta"]?.string, !delta.isEmpty {
+                // Release the block's reference first, so the append does not copy the text when it is unshared.
+                message.blocks[index] = .other
+                text += delta
+                message.blocks[index] = .text(text)
+                changed = true
             }
         case "thinking_delta":
-            if case let .thinking(text) = message.blocks[index] {
-                message.blocks[index] = .thinking(text + (change["delta"]?.string ?? ""))
+            if case var .thinking(text) = message.blocks[index], let delta = change["delta"]?.string, !delta.isEmpty {
+                message.blocks[index] = .other
+                text += delta
+                message.blocks[index] = .thinking(text)
+                changed = true
             }
         default:
             // toolcall_delta carries partial JSON arguments; the final "block" change replaces it.
             break
         }
+        return changed
     }
 }

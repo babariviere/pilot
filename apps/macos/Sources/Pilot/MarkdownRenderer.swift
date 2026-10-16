@@ -3,6 +3,8 @@ import PilotCore
 import SwiftUI
 
 struct PreparedMarkdownBlock: Sendable {
+    /// Unique per preparation. A block kept from an earlier preparation keeps its ID, so views can skip it.
+    let id: Int
     let block: MarkdownBlock
     let inline: AttributedString?
     let items: [AttributedString]
@@ -11,6 +13,8 @@ struct PreparedMarkdownBlock: Sendable {
 
 /// Parsing, inline Markdown and lexical highlighting never run from a view body.
 /// Source-keyed caches are bounded, and font choices remain a live view environment concern.
+/// A streaming message is prepared incrementally: blocks before its last block boundary are final and kept,
+/// so each update parses and styles only the text after that boundary.
 actor MarkdownRenderer {
     static let shared = MarkdownRenderer()
     private struct CodeKey: Hashable {
@@ -22,9 +26,20 @@ actor MarkdownRenderer {
         let cost: Int
         var order: Int
     }
+    /// One streaming message: its incremental parser, its prepared final blocks and its last prepared tail.
+    private struct Stream {
+        var parser = MarkdownStream()
+        var stable: [PreparedMarkdownBlock] = []
+        var tail: [PreparedMarkdownBlock] = []
+        var order = 0
+    }
     private var markdown: [String: Entry<[PreparedMarkdownBlock]>] = [:]
     private var code: [CodeKey: Entry<AttributedString>] = [:]
+    /// Few messages stream at once; a fixed small count bounds the retained parsers.
+    private var streams: [Stream] = []
+    private let streamLimit = 2
     private var order = 0
+    private var nextBlockID = 0
     private let byteLimit: Int
     private let countLimit: Int
 
@@ -33,7 +48,9 @@ actor MarkdownRenderer {
         self.countLimit = max(1, countLimit)
     }
 
-    func prepare(_ text: String) throws -> [PreparedMarkdownBlock] {
+    /// `streaming` marks a message that grows by appending: it keeps incremental state for the next update instead
+    /// of caching every prefix. A finished message still reuses a stream it extends, without changing it.
+    func prepare(_ text: String, streaming: Bool = false) throws -> [PreparedMarkdownBlock] {
         try Task.checkCancellation()
         order += 1
         if var entry = markdown[text] {
@@ -41,27 +58,77 @@ actor MarkdownRenderer {
             markdown[text] = entry
             return entry.value
         }
-        let result = try StreamingTrace.measure(.markdownPrepare) { try Markdown.parse(text).map { block -> PreparedMarkdownBlock in
-            try Task.checkCancellation()
-            let attributed: AttributedString?
-            var items: [AttributedString] = []
-            var highlighted: AttributedString?
-            switch block {
-            case let .heading(_, text), let .paragraph(text), let .quote(text): attributed = inline(text)
-            case let .list(_, _, values):
-                attributed = nil
-                items = try values.map { try Task.checkCancellation(); return inline($0) }
-            case let .code(language, text):
-                attributed = nil
-                highlighted = try prepareCode(text, language: language)
-            default: attributed = nil
+        let extended = streams.indices.filter { text.utf8.starts(with: streams[$0].parser.source.utf8) }
+            .max { streams[$0].parser.source.utf8.count < streams[$1].parser.source.utf8.count }
+        if streaming {
+            return try StreamingTrace.measure(.markdownPrepare) { try prepareStream(text, at: extended, keep: true) }
+        }
+        let result = try StreamingTrace.measure(.markdownPrepare) {
+            // The committed text of a message that just streamed: reuse its final blocks.
+            if let extended, streams[extended].parser.stableLength > 0 {
+                return try prepareStream(text, at: extended, keep: false)
             }
-            return PreparedMarkdownBlock(block: block, inline: attributed, items: items, code: highlighted)
-        } }
+            return try Markdown.parse(text).map(prepareBlock)
+        }
         let cost = text.utf8.count * 8 + result.count * 256
         if cost <= byteLimit { markdown[text] = Entry(value: result, cost: cost, order: order) }
         trim(&markdown)
         return result
+    }
+
+    /// Prepares only blocks that became final since the stream's last update, plus the tail. Tail blocks equal to the
+    /// previous tail's keep their preparation. The stream changes only once everything succeeded, so a cancelled
+    /// update leaves it consistent for the next one.
+    private func prepareStream(_ text: String, at index: Int?, keep: Bool) throws -> [PreparedMarkdownBlock] {
+        var stream = index.map { streams[$0] } ?? Stream()
+        let previousTail = stream.tail
+        let previousStableCount = stream.parser.stableBlocks.count
+        stream.parser.update(text)
+        // Blocks that were in the old tail and are now final often have not changed.
+        var reusable = previousTail[...]
+        func prepared(_ block: MarkdownBlock) throws -> PreparedMarkdownBlock {
+            if let first = reusable.first, first.block == block {
+                reusable = reusable.dropFirst()
+                return first
+            }
+            reusable = []
+            return try prepareBlock(block)
+        }
+        if stream.parser.stableBlocks.count < previousStableCount { stream.stable = [] }
+        for block in stream.parser.stableBlocks.dropFirst(stream.stable.count) {
+            stream.stable.append(try prepared(block))
+        }
+        stream.tail = try stream.parser.tailBlocks.map(prepared)
+        guard keep else { return stream.stable + stream.tail }
+        stream.order = order
+        if let index {
+            streams[index] = stream
+        } else {
+            if streams.count >= streamLimit, let oldest = streams.indices.min(by: { streams[$0].order < streams[$1].order }) {
+                streams.remove(at: oldest)
+            }
+            streams.append(stream)
+        }
+        return stream.stable + stream.tail
+    }
+
+    private func prepareBlock(_ block: MarkdownBlock) throws -> PreparedMarkdownBlock {
+        try Task.checkCancellation()
+        let attributed: AttributedString?
+        var items: [AttributedString] = []
+        var highlighted: AttributedString?
+        switch block {
+        case let .heading(_, text), let .paragraph(text), let .quote(text): attributed = inline(text)
+        case let .list(_, _, values):
+            attributed = nil
+            items = try values.map { try Task.checkCancellation(); return inline($0) }
+        case let .code(language, text):
+            attributed = nil
+            highlighted = try prepareCode(text, language: language)
+        default: attributed = nil
+        }
+        nextBlockID += 1
+        return PreparedMarkdownBlock(id: nextBlockID, block: block, inline: attributed, items: items, code: highlighted)
     }
 
     func prepareCode(_ text: String, language: String?) throws -> AttributedString {
