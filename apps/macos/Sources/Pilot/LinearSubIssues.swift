@@ -168,7 +168,7 @@ struct LinearParentHeaderRow: View {
             HStack(spacing: 10) {
                 Button(action: open) {
                     HStack(spacing: 10) {
-                        PilotSymbol(PilotIcon.linearIssue, context: .row).foregroundStyle(Theme.faintForeground)
+                        PilotSymbol(PilotIcon.linearParent, context: .row).foregroundStyle(Theme.faintForeground)
                             .frame(width: 16)
                         Text(header.identifier).font(.pilot(.caption)).monospacedDigit()
                             .foregroundStyle(Theme.faintForeground).fixedSize()
