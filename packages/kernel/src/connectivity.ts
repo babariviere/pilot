@@ -17,23 +17,35 @@ export interface ConnectivityState {
 	checkedAt: number;
 }
 
-/** No credentials, redirects or captive-portal success. Shared with schedule detection. */
-export async function probeReachability(
-	signal: AbortSignal,
-	url = "https://www.gstatic.com/generate_204",
-): Promise<boolean> {
+const REACHABILITY_URLS = ["https://www.gstatic.com/generate_204", "https://cp.cloudflare.com/generate_204"] as const;
+
+/** Independent hosts share one deadline. No credentials, redirects or captive-portal success. */
+export async function probeReachability(signal: AbortSignal, url?: string): Promise<boolean> {
+	const finished = new AbortController();
+	const deadline = AbortSignal.any([signal, finished.signal, AbortSignal.timeout(5_000)]);
 	try {
-		const response = await fetch(url, {
-			method: "HEAD",
-			redirect: "manual",
-			cache: "no-store",
-			headers: { Connection: "close" },
-			signal: AbortSignal.any([signal, AbortSignal.timeout(5_000)]),
-		});
-		await response.body?.cancel();
-		return response.status === 204;
+		deadline.throwIfAborted();
+		// One blocked host is not a host-wide outage. First validated success wins;
+		// Promise.any consumes losing rejections, including cancellation after success.
+		await Promise.any(
+			(url === undefined ? REACHABILITY_URLS : [url]).map(async (url) => {
+				const response = await fetch(url, {
+					method: "HEAD",
+					redirect: "manual",
+					cache: "no-store",
+					credentials: "omit",
+					headers: { Connection: "close" },
+					signal: deadline,
+				});
+				await response.body?.cancel();
+				if (response.status !== 204) throw new Error("Reachability check did not return 204");
+			}),
+		);
+		return !deadline.aborted;
 	} catch {
 		return false;
+	} finally {
+		finished.abort();
 	}
 }
 
