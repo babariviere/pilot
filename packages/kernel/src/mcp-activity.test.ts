@@ -5,9 +5,9 @@ import { mcpActivity, mcpNamespaces } from "./mcp-activity.ts";
 test("MCP namespaces come from codemode scripts and direct MCP tools, never other tools", () => {
 	assert.deepEqual(
 		mcpNamespaces("codemode", {
-			code: "await tools.mcp__datadog__search_logs({});\nawait tools.mcp__stoik_data__CALL_TOOL({});\ntools.mcp__datadog__x()",
+			code: "await tools.mcp__datadog__search_logs({});\nawait tools.mcp__acme_data__CALL_TOOL({});\ntools.mcp__datadog__x()",
 		}),
-		["datadog", "stoik_data"],
+		["datadog", "acme_data"],
 	);
 	assert.deepEqual(mcpNamespaces("codemode", { code: 'await describeNamespace("mcp__linear")' }), ["linear"]);
 	assert.deepEqual(mcpNamespaces("mcp__sentry__list_issues", {}), ["sentry"]);
