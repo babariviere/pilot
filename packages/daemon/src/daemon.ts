@@ -43,6 +43,7 @@ import { untrackedStats } from "./untracked-stats.ts";
 import { WatchService } from "./watch-service.ts";
 import { SessionWatchSource } from "./watch-sessions.ts";
 import { PullRequestWatchSource } from "./watch-pull-requests.ts";
+import { LinearWatchSource } from "./watch-linear.ts";
 
 const config = loadConfig();
 await mkdir(config.agentDir ?? getAgentDir(), { recursive: true, mode: 0o700 });
@@ -63,7 +64,10 @@ const watches = new WatchService(join(config.home, "watches.sqlite"));
 await watches.list();
 await trackedItems.load(projects.list().map((project) => project.id));
 const sourceMcp = new PiSourceMcpClient(config.agentDir);
+const linearWatches = new LinearWatchSource(watches, sourceMcp);
+linearWatches.start();
 const tracking = new SourceRegistry(projects, trackedItems, sourceMcp);
+tracking.linearObserved = (projectId, items, activeIds) => linearWatches.tracked(projectId, items, activeIds);
 tracking.triage = new TriageGroomer(projects, trackedItems, workerTriage(config.agentDir));
 // Shared MCP status for Settings and Needs you. Checks once now, then only when pi's MCP files change.
 const mcpStatus = new McpStatusService({
@@ -316,6 +320,7 @@ async function stop(): Promise<void> {
 	stopMemoryProjects();
 	await mcpStatus.close();
 	await missionLinear.stop();
+	await linearWatches.stop();
 	await linearPrChecks.stop();
 	await linearSync.stop();
 	await tracking.stop();

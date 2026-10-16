@@ -70,6 +70,8 @@ type Health = {
 
 /** Bounded manual and background polling. Only explicitly registered sources do work. */
 export class SourceRegistry {
+	/** Optional read-only consumer. Runs only after a validated Linear poll is committed. */
+	linearObserved?: (projectId: string, items: TrackedInput[], activeIds: string[]) => Promise<void>;
 	triage?: TriageGroomer;
 	/** Reads and classifies a Slack message the user pasted. Without it, adding by link is unavailable. */
 	slackAdder?: SlackAdder;
@@ -313,6 +315,12 @@ export class SourceRegistry {
 					...(result.linear ? { linear: result.linear } : {}),
 				};
 				await this.items.commit(project.id, source.kind, result.items, checkpoint, result.activeIds);
+				if (source.kind === "linear")
+					await this.linearObserved?.(
+						project.id,
+						result.items,
+						result.activeIds ?? result.items.map((item) => item.externalId),
+					);
 				if (source.kind === "slack")
 					await this.items.retainSlack(
 						project.id,
