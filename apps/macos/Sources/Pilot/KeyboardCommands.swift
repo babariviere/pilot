@@ -5,6 +5,7 @@ import SwiftUI
 /// The item a keyboard list highlights. ⌘K labels its actions with it and revalidates it before acting.
 enum KeyboardTarget: Equatable {
     case session(id: String, reference: HostResourceRef?)
+    case missionTask(missionId: String, taskId: String)
 }
 
 extension AppModel {

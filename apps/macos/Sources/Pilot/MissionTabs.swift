@@ -548,6 +548,7 @@ private struct CommentRow: View {
 // MARK: Tasks
 
 struct MissionTasksTab: View {
+    @Environment(\.hostViewContext) private var hostContext
     let mission: Mission
     let detail: MissionDetail
     /// The page's scroll view, for "Show task".
@@ -561,6 +562,8 @@ struct MissionTasksTab: View {
     @State private var showDropped = false
     /// The task "Show task" just revealed, shown with a soft fill for a moment.
     @State private var highlighted: String?
+    /// The keyboard list's rows: every visible task, since the lazy list only reports realized rows.
+    @StateObject private var keyboardRows = KeyboardListState()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -574,6 +577,7 @@ struct MissionTasksTab: View {
         let members = model.members(of: mission).filter { !$0.isArchived }
         // Only first-class phases take moved tasks; milestone stand-ins from an older daemon are read-only.
         let choices = index.isEditable ? index.phases : []
+        let items = MissionTaskListItem.items(phases, folds: folds)
         LazyVStack(alignment: .leading, spacing: 0) {
             if counts.total > 0 || phases.dropped > 0 {
                 HStack(alignment: .top, spacing: 12) {
@@ -604,7 +608,7 @@ struct MissionTasksTab: View {
                 .padding(.top, 16)
             }
             if phases.isFlat, !phases.groups.isEmpty { Color.clear.frame(height: 12) }
-            ForEach(MissionTaskListItem.items(phases, folds: folds)) { item in
+            ForEach(items) { item in
                 switch item {
                 case let .header(group, folded):
                     MissionPhaseHeader(group: group, folded: folded, mission: mission, phases: index,
@@ -631,6 +635,9 @@ struct MissionTasksTab: View {
                                            apply(MissionTaskMove.drop(id, on: task.id, after: after, tasks: detail.tasks,
                                                                       phases: phases.index))
                                        })
+                            .keyboardListItem(task.id, target: .missionTask(missionId: mission.id, taskId: task.id)) {
+                                activate(task)
+                            }
                     }
                 }
             }
@@ -642,6 +649,33 @@ struct MissionTasksTab: View {
         }
         .onAppear { reveal(scroll) }
         .onChange(of: model.revealedMissionTaskId) { _, _ in reveal(scroll) }
+        // ⌃⇥ or G T focuses the tasks; arrows move, Return opens or starts, E edits, ⌥↑/⌥↓ reorder.
+        .keyboardList(state: keyboardRows, suppliesRows: true) { taskId, command in
+            switch command {
+            case .edit: model.missionTaskRequests.send(.editTitle, to: taskId)
+            case .moveUp: model.missionTaskRequests.send(.moveUp, to: taskId)
+            case .moveDown: model.missionTaskRequests.send(.moveDown, to: taskId)
+            }
+        }
+        .onChange(of: items.map(\.id), initial: true) { _, _ in
+            keyboardRows.update(items.compactMap { item in
+                guard case let .task(task, _, _) = item else { return nil }
+                return KeyboardListItem(id: task.id, target: .missionTask(missionId: mission.id, taskId: task.id)) {
+                    activate(task)
+                }
+            })
+        }
+    }
+
+    /// Return on a task: its chat when it has one, else the start sheet (which still asks before starting).
+    private func activate(_ task: MissionTask) {
+        if let sessionId = task.sessionId {
+            model.navigate(.session, id: sessionId, context: hostContext)
+        } else if task.status.canStart, mission.status == .active {
+            model.missionTaskRequests.send(.start, to: task.id)
+        } else {
+            model.missionTaskRequests.send(.editTitle, to: task.id)
+        }
     }
 
     /// Saves a drag: the dragged task's order and phase, then any renumbered neighbours. A task moved into another
@@ -760,6 +794,8 @@ struct MissionTaskRow: View {
     @State private var dropEdge: MissionTaskDropEdge?
     @State private var height: CGFloat = 0
     @StateObject private var artifacts = MissionArtifactsState()
+    @Environment(\.keyboardListHighlight) private var keyboardHighlight
+    @FocusState private var titleFocused: Bool
     /// Rows built, so the tab-switch check can confirm the list stays lazy.
     static var bodyEvaluations = 0
 
@@ -787,11 +823,14 @@ struct MissionTaskRow: View {
     var body: some View {
         let _ = Self.bodyEvaluations &+= 1
         let waiting = dependencies.isWaiting || gating != nil
+        // The keyboard-highlighted row builds its menus too, so they never need hovering.
+        let keyboardActive = keyboardHighlight.focused && keyboardHighlight.id == task.id
         HoverRow(verticalPadding: 7) { hovered in
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 // Menus are AppKit pop-up buttons and costly to create, so rows build them only on hover.
                 // The context menu offers the same actions without hovering.
-                MissionTaskStatusMenu(task: task, missionId: mission.id, subdued: waiting, interactive: hovered)
+                MissionTaskStatusMenu(task: task, missionId: mission.id, subdued: waiting,
+                                      interactive: hovered || keyboardActive)
                 Text("#\(task.number)").font(.pilot(.caption)).monospacedDigit().foregroundStyle(Theme.faintForeground)
                     .frame(minWidth: 20, alignment: .leading)
                     .help([gating, dependencies.helpText].compactMap { $0 }.joined(separator: "\n"))
@@ -805,7 +844,16 @@ struct MissionTaskRow: View {
                         .font(.pilot(.body))
                         .strikethrough(task.workStatus.isClosed)
                         .foregroundStyle(task.workStatus.isClosed || waiting ? Theme.mutedForeground : Theme.foreground)
-                        .onSubmit(saveTitle)
+                        .focused($titleFocused)
+                        .onSubmit {
+                            saveTitle()
+                            if titleFocused { finishEditing() }
+                        }
+                        // Escape cancels the edit and returns to the task list.
+                        .onExitCommand {
+                            title.title = task.title
+                            finishEditing()
+                        }
                         .accessibilityLabel("Task \(task.number) title")
                     if let gating { MissionTaskPhaseLine(gating: gating).help(gating) }
                     if dependencies.isWaiting { waitingLine }
@@ -852,7 +900,7 @@ struct MissionTaskRow: View {
                     // hover cannot move the row.
                     Color.clear.frame(width: 20, height: 20)
                         .overlay {
-                            if hovered {
+                            if hovered || keyboardActive {
                                 Menu { menuItems } label: { PilotSymbol(PilotIcon.more, context: .toolbar) }
                                     .menuStyle(.button)
                                     .rowIconButtonStyle()
@@ -863,10 +911,14 @@ struct MissionTaskRow: View {
                             }
                         }
                 }
-                .revealed(hovered)
+                .revealed(hovered || keyboardActive)
             }
         }
         .onChange(of: task.title) { _, value in title.title = value }
+        .onReceive(model.missionTaskRequests.$latest) { request in
+            guard let command = model.missionTaskRequests.take(request, for: task.id) else { return }
+            perform(command)
+        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilitySummary)
         .background(RoundedRectangle(cornerRadius: Theme.Radius.row).fill(highlighted ? Theme.selected : .clear))
@@ -994,6 +1046,25 @@ struct MissionTaskRow: View {
             reference: ArtifactReference(id: item.artifactId, sessionId: item.sessionId,
                                          title: item.title, revision: item.revision ?? 0),
             latest: item.revision == nil)
+    }
+
+    /// A keyboard or palette request: the same state the row's menu items set.
+    private func perform(_ command: MissionTaskCommand) {
+        switch command {
+        case .editTitle: titleFocused = true
+        case .start: if task.status.canStart, mission.status == .active { startingChat = true }
+        case .model: choosingModel = true
+        case .dependencies: editingDependencies = true
+        case .link: addingLink = true
+        case .moveUp: move(-1)
+        case .moveDown: move(1)
+        }
+    }
+
+    /// Leaves the title field for the task list, so arrows move between tasks again.
+    private func finishEditing() {
+        titleFocused = false
+        DispatchQueue.main.async { AppModel.shared.keyboard.focus(.content) }
     }
 
     private func saveTitle() {
@@ -1126,6 +1197,7 @@ private final class MissionChatsState: ObservableObject {
 }
 
 struct MissionChatsTab: View {
+    @Environment(\.hostViewContext) private var hostContext
     let mission: Mission
     let detail: MissionDetail
     @EnvironmentObject private var model: AppModel
@@ -1171,8 +1243,13 @@ struct MissionChatsTab: View {
                 if index > 0 { HairlineDivider(leading: 34) }
                 MissionChatRow(session: session, mission: mission,
                                tasks: tasksByChat[session.id] ?? [])
+                    .keyboardListItem(session.id, target: .session(id: session.id,
+                                                                   reference: hostContext?.ref(.session, session.id))) {
+                        model.navigate(.session, id: session.id, context: hostContext)
+                    }
             }
         }
+        .keyboardList()
     }
 }
 
@@ -1312,8 +1389,10 @@ struct MissionArtifactsTab: View {
                 .accessibilityAddTraits(.isButton)
                 .accessibilityAction { open(link) }
                 .help("Open \(link.title)")
+                .keyboardListItem(link.id) { open(link) }
             }
         }
+        .keyboardList()
         .task(id: mission.id) {
             for member in members where client.artifacts[member.id] == nil {
                 _ = try? await client.sessionArtifacts(member.id)

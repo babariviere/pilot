@@ -201,6 +201,8 @@ final class AppModel: ObservableObject {
     var keyboardListHighlights: [String: String] = [:]
     /// Text the command palette starts with the next time it opens, as for `/model`. One-shot.
     var pendingPaletteQuery: String?
+    /// Keyboard and palette requests to the mission task row that shows a task.
+    let missionTaskRequests = MissionTaskRequests()
 
     private var started = false
     private let projectFolderDefaults: UserDefaults

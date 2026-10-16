@@ -77,6 +77,9 @@ struct CommandPaletteCatalog {
     /// The chat a keyboard list highlights, with its actions under a label naming it. The open chat's actions are
     /// already listed, so it has no separate group.
     func targetActions() -> (title: String, entries: [CommandPaletteEntry])? {
+        if case let .missionTask(missionId, taskId) = model.keyboardTarget {
+            return missionTaskActions(missionId: missionId, taskId: taskId)
+        }
         guard let target = model.keyboardTargetSession, target.session.id != model.selectedSession?.id else { return nil }
         let model = model
         let entries = chatActions(target.session, reference: target.reference).map { entry in
@@ -230,6 +233,16 @@ struct CommandPaletteCatalog {
                 item: CommandPaletteItem(id: "page:agents", kind: .page, title: "Agents"),
                 icon: .subagents, suffix: session.title
             ) { [model] in model.showAgents() })
+        }
+        // The open mission's tabs, beyond G M, G T and G B.
+        if let missionId = model.currentMissionId, let mission = model.client.mission(missionId) {
+            for tab in MissionTab.allCases {
+                entries.append(CommandPaletteEntry(
+                    item: CommandPaletteItem(id: "page:mission-tab:\(tab.rawValue)", kind: .page, title: "Mission \(tab.title)",
+                                             keywords: ["mission", tab.title, mission.title]),
+                    icon: .mission, suffix: mission.title
+                ) { [model] in model.openMission(missionId, tab: tab) })
+            }
         }
         return entries
     }

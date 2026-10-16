@@ -79,6 +79,13 @@ enum KeyboardShortcuts {
             Entry(title: "Open a highlighted file, link, artifact or subagent", keys: "↩ in the inspector"),
             Entry(title: "Leave the terminal or an artifact page", keys: "⌃⇥ / ⌘L / ⌘J"),
         ]),
+        Group(title: "Task list", entries: [
+            Entry(title: "Open the task's chat, or start one", keys: "↩"),
+            Entry(title: "Edit the task title", keys: "E"),
+            Entry(title: "Save or cancel the title", keys: "↩ / esc"),
+            Entry(title: "Move the task up or down in its phase", keys: "⌥↑ / ⌥↓"),
+            Entry(title: "Status, phase, model, dependencies and links", keys: "⌘K"),
+        ]),
         Group(title: "Editors and dialogs", entries: [
             Entry(title: "Save mission brief while editing", keys: "⌘S"),
             Entry(title: "Confirm a form with a multiline editor", keys: "⌘↩"),
