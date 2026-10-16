@@ -452,6 +452,12 @@ public struct PullRequestBindingResult: Codable, Equatable, Sendable {
     }
 }
 
+/// Linear lifecycle authority, independent of GitHub PR ownership.
+public enum MissionLinearRole: String, LenientStringEnum {
+    case reference, managed, contribution
+    public static let fallback = MissionLinearRole.reference
+}
+
 public struct MissionResource: Codable, Identifiable, Equatable, Hashable, Sendable {
     public let id: String
     public let taskId: String?
@@ -465,6 +471,9 @@ public struct MissionResource: Codable, Identifiable, Equatable, Hashable, Senda
     /// Nil for older daemons: task GitHub PRs imply ownership; other links are references.
     public var relationship: MissionResourceRelationship? = nil
     public var owner: MissionResourceOwner? = nil
+    /// Nil from older daemons means read-only reference.
+    public var linearRole: MissionLinearRole? = nil
+    public var linearKey: String? = nil
 
     public var displayTitle: String { title ?? externalId ?? url }
 
@@ -480,14 +489,23 @@ public struct MissionResourceWrite: Codable, Sendable {
     public let title: String?
     public let taskId: String?
     public let relationship: MissionResourceRelationship?
+    public let linearRole: MissionLinearRole?
 
     public init(url: String, title: String? = nil, taskId: String? = nil,
-                relationship: MissionResourceRelationship? = nil) {
+                relationship: MissionResourceRelationship? = nil, linearRole: MissionLinearRole? = nil) {
         self.url = url
         self.title = title
         self.taskId = taskId
         self.relationship = relationship
+        self.linearRole = linearRole
     }
+}
+
+/// PATCH /api/missions/:id/resources/:resourceId. Existing references require explicit upgrade.
+public struct MissionResourceUpdate: Codable, Sendable {
+    public let linearRole: MissionLinearRole
+
+    public init(linearRole: MissionLinearRole) { self.linearRole = linearRole }
 }
 
 /// POST /api/missions/:id/decisions; PATCH /api/missions/:id/decisions/:decisionId.

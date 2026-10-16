@@ -359,7 +359,14 @@ is off by default; enabling it holds claims and starts in later phases until ear
 those tasks say which phase they wait for. You can still assign or start them yourself, which overrides
 the gate; chats cannot.
 
-Open tasks linked to a Linear issue become **Delegated** when someone else
+Linear links default to read-only references, including existing links. The resources API can explicitly
+manage a mission-level ticket and associate task contributions (`linearRole`: `managed` or `contribution`).
+Only one mission can manage a ticket. Existing references require an explicit role upgrade using PATCH;
+detach contributions before removing their manager. References never change task or Linear status, and
+migration preserves tasks already marked Delegated. This is the storage/API foundation, not automatic
+ticket completion or cancellation synchronization.
+
+Open tasks contributing to a managed Linear issue become **Delegated** when someone else
 is assigned in Linear. Returning the issue to you restores the previous status; unassignment changes
 nothing. A manual status change wins until the assignment changes again. Delegated work is not done
 and cannot start or satisfy dependencies. Existing chats keep running, and the coordinator is notified.

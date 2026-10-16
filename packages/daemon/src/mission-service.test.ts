@@ -4302,6 +4302,47 @@ test("HTTP routes and WebSocket mission subscriptions", async (t) => {
 	const resourceBody = (await resource.json()) as { kind: string; taskId: string; id: string };
 	assert.equal(resourceBody.kind, "github.pr");
 	assert.equal(resourceBody.taskId, taskId);
+	const linearUrl = "https://linear.app/acme/issue/ENG-12";
+	const linearReference = await api(`/missions/${id}/resources`, {
+		method: "POST",
+		body: JSON.stringify({ url: linearUrl }),
+	}).then((response) => response.json());
+	assert.equal(linearReference.linearRole, "reference");
+	const upgrade = await api(`/missions/${id}/resources/${linearReference.id}`, {
+		method: "PATCH",
+		body: JSON.stringify({ linearRole: "managed" }),
+	});
+	assert.equal(upgrade.status, 200);
+	assert.equal((await upgrade.json()).linearRole, "managed");
+	const contribution = await api(`/missions/${id}/resources`, {
+		method: "POST",
+		body: JSON.stringify({ url: linearUrl, taskId, linearRole: "contribution" }),
+	}).then((response) => response.json());
+	assert.equal(contribution.linearRole, "contribution");
+	assert.equal(contribution.linearKey, "acme/ENG-12");
+	const unsafeDetach = await api(`/missions/${id}/resources/${linearReference.id}`, { method: "DELETE" });
+	assert.equal(unsafeDetach.status, 409);
+	await unsafeDetach.arrayBuffer();
+	const invalidRole = await api(`/missions/${id}/resources/${contribution.id}`, {
+		method: "PATCH",
+		body: JSON.stringify({ linearRole: "invalid" }),
+	});
+	assert.equal(invalidRole.status, 400);
+	await invalidRole.arrayBuffer();
+	const pushedLinear = await until(() =>
+		messages.findLast(
+			(message) =>
+				message.type === "mission" &&
+				message.mission.resources.some((link) => link.id === contribution.id && link.linearRole === "contribution"),
+		),
+	);
+	assert.ok(pushedLinear);
+	await api(`/missions/${id}/resources/${contribution.id}`, { method: "DELETE" }).then((response) =>
+		response.arrayBuffer(),
+	);
+	await api(`/missions/${id}/resources/${linearReference.id}`, { method: "DELETE" }).then((response) =>
+		response.arrayBuffer(),
+	);
 	const unlinked = await api(`/missions/${id}/resources/${resourceBody.id}`, { method: "DELETE" });
 	assert.equal(unlinked.status, 200);
 	await unlinked.arrayBuffer();

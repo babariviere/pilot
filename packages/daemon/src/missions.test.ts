@@ -1106,7 +1106,7 @@ test("older databases gain link and PR tracking columns without losing resources
 		missions.close();
 		const legacy = new DatabaseSync(file);
 		legacy.exec(
-			"DROP INDEX IF EXISTS resources_by_linear_task; ALTER TABLE resources DROP COLUMN task_id; ALTER TABLE resources DROP COLUMN pull_request; ALTER TABLE tasks DROP COLUMN pr_sync_disabled; ALTER TABLE tasks DROP COLUMN delegated_to; ALTER TABLE tasks DROP COLUMN delegated_from_status; ALTER TABLE tasks DROP COLUMN delegated_resource_id; DROP TABLE linear_task_assignees;",
+			"DROP INDEX IF EXISTS resources_by_linear_task; DROP INDEX IF EXISTS resources_by_linear_key; DROP INDEX IF EXISTS linear_task_contribution; ALTER TABLE resources DROP COLUMN task_id; ALTER TABLE resources DROP COLUMN pull_request; ALTER TABLE tasks DROP COLUMN pr_sync_disabled; ALTER TABLE tasks DROP COLUMN delegated_to; ALTER TABLE tasks DROP COLUMN delegated_from_status; ALTER TABLE tasks DROP COLUMN delegated_resource_id; DROP TABLE linear_task_assignees;",
 		);
 		legacy.close();
 		missions = new MissionStore(file);
@@ -1116,7 +1116,12 @@ test("older databases gain link and PR tracking columns without losing resources
 		missions.updatePullRequest(pr(1, "merged"));
 		assert.equal(missions.resolveTask(id, "1").status, "done");
 		missions.updateTask(id, "1", { status: "todo" });
-		const linear = missions.addResource(id, { taskId: "1", url: "https://linear.app/team/issue/ENG-1" });
+		missions.addResource(id, { url: "https://linear.app/team/issue/ENG-1", linearRole: "managed" });
+		const linear = missions.addResource(id, {
+			taskId: "1",
+			url: "https://linear.app/team/issue/ENG-1",
+			linearRole: "contribution",
+		});
 		missions.observeLinearAssignee("p", linear.id, { id: "other", name: "Alex" }, "me");
 		assert.equal(missions.resolveTask(id, "1").delegatedTo, "Alex");
 	} finally {
