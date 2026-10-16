@@ -53,6 +53,9 @@ export class ControlMemory {
 	next(): Promise<ControlJob | undefined> {
 		return this.rpc("next");
 	}
+	context(id: number, n: number): Promise<ControlLine[]> {
+		return this.rpc("context", { id, n });
+	}
 	put(id: number, n: number, text: string): Promise<void> {
 		return this.rpc("put", { id, n, text });
 	}

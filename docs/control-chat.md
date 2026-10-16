@@ -34,3 +34,23 @@ paging and message kinds. On a local offline run the 20,001-prefix comparison to
 600-message storage/batch/reopen case took 515 ms. These are synthetic storage checks, not
 provider streaming or whole-daemon responsiveness measurements. There is no old control store
 to compare against. Full live-session responsiveness remains an integration check for the session.
+
+## Background compaction
+
+`ControlCompactor` admits at most eight calls, from the durable ready queue. A leaf starts only
+among the first eight unbuilt leaves; a parent enters the queue only when both children exist.
+Failures retry on the next message, not a timer. Shutdown races cancellation against the provider,
+so even an uncooperative provider cannot hold daemon shutdown open. Storage closes after cancellation.
+
+`ModelCatalog.compactControl` chooses the cheapest authenticated model in the turn's scope and
+provider, never a cross-provider fallback. `control-context.ts` owns the stable system prompt and
+tool/context construction shared with turns. Compactions declare the same tools but cannot execute
+them. A 512-dash ruler and up to five correction retries enforce a 512-byte line. The shortest valid
+line wins; oversized output is never silently truncated into memory.
+
+A second persisted range list is the compaction view, merged from 32,000 to 16,000 bytes, or when
+the main view merges. Its context ends at the target node (before a leaf), and stops at the first
+unbuilt range, with no placeholders or partial messages. Four-line text blocks keep an append-stable
+prefix; the Anthropic payload hook marks the last whole block and the request end. No keepalive
+requests or artificial cache retention are used. Faux-provider tests cover retries, tools, same-provider
+selection, concurrency, parent readiness, failure recovery, cache blocks and shutdown cancellation.

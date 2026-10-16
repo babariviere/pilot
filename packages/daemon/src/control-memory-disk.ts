@@ -78,11 +78,18 @@ export class ControlMemoryDisk {
 				CREATE TRIGGER IF NOT EXISTS nodes_no_update BEFORE UPDATE ON nodes BEGIN SELECT RAISE(ABORT, 'built once'); END;
 				CREATE TRIGGER IF NOT EXISTS nodes_no_delete BEFORE DELETE ON nodes BEGIN SELECT RAISE(ABORT, 'built once'); END;
 				CREATE TABLE IF NOT EXISTS view (id INTEGER PRIMARY KEY, n INTEGER NOT NULL);
+				CREATE TABLE IF NOT EXISTS compact_view (id INTEGER PRIMARY KEY, n INTEGER NOT NULL);
 				CREATE TABLE IF NOT EXISTS jobs (id INTEGER NOT NULL, n INTEGER NOT NULL, source TEXT NOT NULL, state INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(id,n));
 				CREATE INDEX IF NOT EXISTS jobs_ready ON jobs(state,id,n);
+				CREATE INDEX IF NOT EXISTS jobs_leaves ON jobs(id) WHERE n=1;
 				CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
-				INSERT OR IGNORE INTO meta VALUES ('count',0), ('bytes',0), ('merging',0);
+				INSERT INTO compact_view SELECT * FROM view WHERE NOT EXISTS (SELECT 1 FROM meta WHERE key='compactBytes');
+				INSERT OR IGNORE INTO meta VALUES ('count',0), ('bytes',0), ('merging',0), ('compactBytes',0);
 				UPDATE jobs SET state=0 WHERE state=1;`);
+			this.setMeta(
+				"compactBytes",
+				this.compactLines().reduce((sum, line) => sum + Buffer.byteLength(controlLine(line)), 0),
+			);
 		} catch (error) {
 			this.lease.close();
 			throw error;
@@ -156,12 +163,18 @@ export class ControlMemoryDisk {
 					.prepare("INSERT INTO messages VALUES (?,?,?,?,?)")
 					.run(id, key ?? null, message.at, message.kind, JSON.stringify(message));
 				this.db.prepare("INSERT INTO view VALUES (?,1)").run(id);
+				this.db.prepare("INSERT INTO compact_view VALUES (?,1)").run(id);
 				this.setMeta("count", id + 1);
 				this.setMeta("bytes", this.meta("bytes") + Buffer.byteLength(controlLine({ id, n: 1, text: PENDING })));
+				this.setMeta(
+					"compactBytes",
+					this.meta("compactBytes") + Buffer.byteLength(controlLine({ id, n: 1, text: PENDING })),
+				);
 				this.enqueue(id, 1, source(message));
 				out.push(message);
 			}
 			this.reduce();
+			this.reduceCompact();
 			return out;
 		});
 	}
@@ -179,6 +192,13 @@ export class ControlMemoryDisk {
 			this.setMeta(
 				"bytes",
 				this.meta("bytes") +
+					Buffer.byteLength(controlLine({ id, n, text })) -
+					Buffer.byteLength(controlLine({ id, n, text: PENDING })),
+			);
+		if (this.db.prepare("SELECT 1 FROM compact_view WHERE id=? AND n=?").get(id, n))
+			this.setMeta(
+				"compactBytes",
+				this.meta("compactBytes") +
 					Buffer.byteLength(controlLine({ id, n, text })) -
 					Buffer.byteLength(controlLine({ id, n, text: PENDING })),
 			);
@@ -207,11 +227,69 @@ export class ControlMemoryDisk {
 		const bytes = lines.reduce((sum, line) => sum + Buffer.byteLength(controlLine(line)), 0);
 		this.setMeta("bytes", bytes);
 		if (bytes <= CONTROL_VIEW_LOW) this.setMeta("merging", 0);
+		if (merges.length) {
+			this.db.exec("DELETE FROM compact_view; INSERT INTO compact_view SELECT * FROM view");
+			this.setMeta("compactBytes", bytes);
+			this.reduceCompact(true);
+		}
+	}
+	private compactLines(): ControlLine[] {
+		return this.db
+			.prepare(
+				"SELECT v.id,v.n,coalesce(t.text,?) AS text FROM compact_view v LEFT JOIN nodes t ON v.id=t.id AND v.n=t.n ORDER BY v.id",
+			)
+			.all(PENDING) as unknown as ControlLine[];
+	}
+	private reduceCompact(force = false): void {
+		if (!force && this.meta("compactBytes") <= 32_000) return;
+		const { lines, merges } = mergeControlView(this.compactLines(), this.meta("count"), (id, n) => this.node(id, n), {
+			bytes: 16_000,
+		});
+		for (const line of merges) {
+			this.db.prepare("DELETE FROM compact_view WHERE id=? OR id=?").run(line.id, line.id + line.n / 2);
+			this.db.prepare("INSERT INTO compact_view VALUES (?,?)").run(line.id, line.n);
+		}
+		this.setMeta(
+			"compactBytes",
+			lines.reduce((sum, line) => sum + Buffer.byteLength(controlLine(line)), 0),
+		);
+	}
+	/** Built-only prefix ending at the job. Descend a boundary range, never scan the tree. */
+	context(id: number, n: number): ControlLine[] {
+		range(id, n);
+		const end = n === 1 ? id : id + n;
+		const out: ControlLine[] = [];
+		let bytes = 0,
+			stopped = false;
+		const add = (line: ControlLine) => {
+			if (stopped || line.id >= end) return;
+			if (line.id + line.n > end && line.n > 1) {
+				for (const id of [line.id, line.id + line.n / 2]) add({ id, n: line.n / 2, text: "" });
+				return;
+			}
+			const text = this.node(line.id, line.n);
+			if (text === undefined) {
+				stopped = true;
+				return;
+			}
+			const built = { ...line, text },
+				size = Buffer.byteLength(controlLine(built));
+			if (bytes + size > 32_000) {
+				stopped = true;
+				return;
+			}
+			out.push(built);
+			bytes += size;
+		};
+		for (const line of this.compactLines()) add(line);
+		return out;
 	}
 	/** Ready queue, not a scan of the tree. A caller owns each claimed node until put/fail. */
 	next(): ControlJob | undefined {
 		const job = this.db
-			.prepare("SELECT id,n,source FROM jobs WHERE state=0 ORDER BY id,n LIMIT 1")
+			.prepare(
+				"SELECT id,n,source FROM jobs WHERE state=0 AND (n>1 OR id<=coalesce((SELECT id FROM jobs WHERE n=1 ORDER BY id LIMIT 1 OFFSET 7),9223372036854775807)) ORDER BY id,n LIMIT 1",
+			)
 			.get() as unknown as ControlJob | undefined;
 		if (job) this.db.prepare("UPDATE jobs SET state=1 WHERE id=? AND n=?").run(job.id, job.n);
 		return job;
@@ -225,6 +303,7 @@ export class ControlMemoryDisk {
 				throw new Error("Node is not claimed");
 			this.build(id, n, text);
 			this.reduce();
+			this.reduceCompact();
 		});
 	}
 	fail(id: number, n: number): void {
