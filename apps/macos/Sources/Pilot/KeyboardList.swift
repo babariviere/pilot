@@ -168,7 +168,8 @@ private struct KeyboardListBody<Content: View>: View {
                 .focused(focused)
                 .focusEffectDisabled()
                 .onKeyPress(keys: [.upArrow, .downArrow, .home, .end, .return]) { press in
-                    guard press.modifiers.isEmpty else { return .ignored }
+                    // Arrow keys carry keypad and function flags; only real modifiers opt out.
+                    guard press.modifiers.isDisjoint(with: [.command, .control, .option]) else { return .ignored }
                     switch press.key {
                     case .upArrow: list.move(by: -1)
                     case .downArrow: list.move(by: 1)
