@@ -3,6 +3,7 @@ import { chmodSync, lstatSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { CriticalReviewRecord, CriticalReviewRecords } from "@pilot/protocol";
+import { ReviewAccountingDisk } from "./critical-review-accounting.ts";
 import { ReviewRetentionDisk } from "./critical-review-retention.ts";
 import { canonicalJSON } from "./operation-journal.ts";
 
@@ -65,6 +66,7 @@ export function validateReviewRecord(record: CriticalReviewRecord): void {
 export class CriticalReviewDisk {
 	readonly db: DatabaseSync;
 	readonly retention: ReviewRetentionDisk;
+	readonly accounting: ReviewAccountingDisk;
 	constructor(file: string) {
 		mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
 		const parent = lstatSync(dirname(file));
@@ -81,7 +83,7 @@ export class CriticalReviewDisk {
 			"PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000; PRAGMA secure_delete=ON;",
 		);
 		const version = Number(this.db.prepare("PRAGMA user_version").get()!.user_version);
-		if (version > 2) {
+		if (version > 3) {
 			this.db.close();
 			throw new Error("Unsupported critical review database version");
 		}
@@ -92,8 +94,15 @@ export class CriticalReviewDisk {
 			CREATE TABLE IF NOT EXISTS review_staging(id TEXT PRIMARY KEY,project TEXT NOT NULL,bytes INTEGER NOT NULL);
 			CREATE TABLE IF NOT EXISTS review_unavailable(kind TEXT NOT NULL,id TEXT NOT NULL,reason TEXT NOT NULL,project TEXT NOT NULL,bytes INTEGER NOT NULL,pending INTEGER NOT NULL,PRIMARY KEY(kind,id));
 			CREATE TABLE IF NOT EXISTS review_erased_sources(source TEXT PRIMARY KEY);
+			CREATE TABLE IF NOT EXISTS review_rates(id TEXT PRIMARY KEY,body TEXT NOT NULL);
+			CREATE TABLE IF NOT EXISTS review_admissions(run_id TEXT PRIMARY KEY,target_key TEXT NOT NULL,effort TEXT NOT NULL,active INTEGER NOT NULL,started_at INTEGER NOT NULL,approval_id TEXT NOT NULL,billing TEXT NOT NULL,escalations INTEGER NOT NULL);
+			CREATE TABLE IF NOT EXISTS review_calls(call_id TEXT PRIMARY KEY,run_id TEXT NOT NULL,state TEXT NOT NULL,at INTEGER NOT NULL,request TEXT NOT NULL,money INTEGER NOT NULL,input INTEGER NOT NULL,generated INTEGER NOT NULL,duration INTEGER NOT NULL);
+			CREATE TABLE IF NOT EXISTS review_ledger_meta(key TEXT PRIMARY KEY,value INTEGER NOT NULL);
+			CREATE INDEX IF NOT EXISTS review_calls_by_run ON review_calls(run_id);
+			CREATE INDEX IF NOT EXISTS review_calls_by_time ON review_calls(at);
 			COMMIT;`);
 		this.retention = new ReviewRetentionDisk(this);
+		this.accounting = new ReviewAccountingDisk(this);
 		// v1 had immutable records but no lifecycle index. Rebuild once without changing their bytes.
 		if (version < 2)
 			this.transaction(() => {
@@ -103,6 +112,7 @@ export class CriticalReviewDisk {
 				}
 				this.db.exec("PRAGMA user_version=2");
 			});
+		this.db.exec("PRAGMA user_version=3");
 	}
 	transaction<T>(action: () => T): T {
 		this.db.exec("BEGIN IMMEDIATE");

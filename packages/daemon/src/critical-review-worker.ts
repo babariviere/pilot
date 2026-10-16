@@ -16,6 +16,14 @@ parentPort!.on("message", ({ id, method, args }) => {
 		else if (method === "vaultStage") value = disk.retention.stage(args.id, args.projectId, args.bytes);
 		else if (method === "abortStage") value = disk.db.prepare("DELETE FROM review_staging WHERE id=?").run(args.id);
 		else if (method === "stagedCaptures") value = disk.db.prepare("SELECT id FROM review_staging LIMIT 16").all();
+		else if (method === "verifyRate") value = disk.accounting.verifyRate(args.rate, args.now);
+		else if (method === "admit")
+			value = disk.accounting.admit(args.runId, args.approvalId, args.effort, args.gates, args.now);
+		else if (method === "reserve") value = disk.accounting.reserve(args.request, args.now);
+		else if (method === "send") value = disk.accounting.send(args.callId, args.gates, args.now);
+		else if (method === "settle") value = disk.accounting.settle(args.callId, args.usage);
+		else if (method === "finishRun") value = disk.accounting.finish(args.runId);
+		else if (method === "recoverAccounting") value = disk.accounting.recover();
 		else if (method === "close") disk.close();
 		else throw new Error("Unknown critical review operation");
 		parentPort!.postMessage({ id, value });
