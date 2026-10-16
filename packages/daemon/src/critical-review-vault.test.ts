@@ -138,6 +138,21 @@ test("blob/guidance/read/path limits are explicit and paginated", async () => {
 	}
 });
 
+test("UTF-8 paging preserves exact text and rejects mid-character offsets", async () => {
+	const f = await fixture();
+	try {
+		const manifest = await f.vault.capture(f.capture([selection("unicode", "aé🙂z")]));
+		const blob = manifest.entries[0]!.blobId;
+		assert.deepEqual(await f.vault.read(manifest.id, blob, 0, 2), { text: "a", next: 1 });
+		assert.deepEqual(await f.vault.read(manifest.id, blob, 1, 2), { text: "é", next: 3 });
+		assert.deepEqual(await f.vault.read(manifest.id, blob, 3, 4), { text: "🙂", next: 7 });
+		await assert.rejects(f.vault.read(manifest.id, blob, 2, 4), /boundary/);
+		await assert.rejects(f.vault.read(manifest.id, blob, 3, 1), /small/);
+	} finally {
+		await f.close();
+	}
+});
+
 test("failed seal cleans staged bytes; modified/deleted blobs never fall back to live data", async () => {
 	const f = await fixture();
 	try {

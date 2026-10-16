@@ -186,6 +186,7 @@ export class CriticalReviewVault {
 					// Fail closed for recognizable credentials and host-known secrets, including labels.
 					if (
 						secretText.test(value) ||
+						secretText.test(selection.label) ||
 						input.knownSecrets.some((secret) => value.includes(secret) || selection.label.includes(secret))
 					) {
 						omit("secret");
@@ -318,7 +319,11 @@ export class CriticalReviewVault {
 					(await evidenceDigest(bytes.subarray(0, read.bytesRead))) !== entry.sha256
 				)
 					throw new Error("Evidence digest mismatch");
-				const end = Math.min(offset + limit, entry.bytes);
+				if (offset < entry.bytes && (bytes[offset]! & 0xc0) === 0x80)
+					throw new Error("Invalid UTF-8 page boundary");
+				let end = Math.min(offset + limit, entry.bytes);
+				while (end > offset && end < entry.bytes && (bytes[end]! & 0xc0) === 0x80) end--;
+				if (end === offset && offset < entry.bytes) throw new Error("Page too small for UTF-8 character");
 				// A separate owner may have revoked/deleted evidence while this async read was in flight.
 				await this.manifest(manifestId);
 				return { text: bytes.subarray(offset, end).toString("utf8"), ...(end < entry.bytes ? { next: end } : {}) };

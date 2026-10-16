@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import type { CriticalReviewRecord } from "@pilot/protocol";
 import { CriticalReviewStore } from "./critical-review-store.ts";
+import { canonicalJSON } from "./operation-journal.ts";
 import { ReviewStore } from "./reviews.ts";
 
 const base = { schemaVersion: 1, projectId: "project", hostId: "host", sourceIds: ["source"], createdAt: 100 } as const;
@@ -168,6 +169,31 @@ test("empty legacy database migrates idempotently; future versions fail closed",
 		const future = new CriticalReviewStore(file);
 		await assert.rejects(future.list("run"), /Unsupported/);
 		await future.close().catch(() => {});
+	} finally {
+		await rm(home, { recursive: true, force: true });
+	}
+});
+
+test("populated v1 records migrate to lifecycle and accounting indexes without rewriting", async () => {
+	const home = await mkdtemp(join(tmpdir(), "critical-v1-"));
+	const file = join(home, "records.sqlite");
+	try {
+		const db = new DatabaseSync(file);
+		db.exec(
+			"CREATE TABLE review_records(kind TEXT NOT NULL,id TEXT NOT NULL,body TEXT NOT NULL,PRIMARY KEY(kind,id)); CREATE TABLE review_sources(source TEXT NOT NULL,kind TEXT NOT NULL,id TEXT NOT NULL,PRIMARY KEY(source,kind,id)); PRAGMA user_version=1",
+		);
+		db.prepare("INSERT INTO review_records VALUES(?,?,?)").run("target", "target", canonicalJSON(records[0]));
+		db.prepare("INSERT INTO review_sources VALUES(?,?,?)").run("source", "target", "target");
+		db.close();
+		for (let i = 0; i < 2; i++) {
+			const store = new CriticalReviewStore(file, () => 100);
+			try {
+				assert.deepEqual(await store.get("target", "target"), records[0]);
+				assert.deepEqual(await store.put(records[0]!), records[0]);
+			} finally {
+				await store.close();
+			}
+		}
 	} finally {
 		await rm(home, { recursive: true, force: true });
 	}
