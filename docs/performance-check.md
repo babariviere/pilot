@@ -222,6 +222,17 @@ xcrun swiftc -O -parse-as-library apps/macos/scripts/bench-text-append.swift -o 
 | 2 KB, 100-character deltas | 0.39 ms | 0.12 ms |
 | 8 KB, 12-character deltas | 1.42 ms | 0.13 ms |
 | 8 KB, 100-character deltas | 1.44 ms | 0.16 ms |
++
+**Spinners and the composer corner on Core Animation.** `EllipsisSpinner` (the working line, running tool steps
+and other working marks) and moving corners that never recede (the composer's working corner, the question tray)
+used to redraw through SwiftUI on every tick of the shared 12 fps `DitherCornerClock`. They now play on layers
+(`LoopingLayerView`): the spinner's dots are three layers whose ink opacity and lift follow linear keyframes sampled
+six times per former frame, so they move at the display's rate; a corner plays its cached 12 fps dither frames as a
+discrete `contents` animation. The render server plays both with no main-thread work per frame. Loops share a phase
+from the wall clock, are removed while the window is occluded, and Reduce Motion keeps the still frame. Sidebar row
+corners, which recede on hover, still use the clock. Compare `Pilot --performance-check --working` (twelve working
+sessions) before and after.
+
 
 
 

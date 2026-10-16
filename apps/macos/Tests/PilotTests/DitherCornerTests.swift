@@ -65,6 +65,23 @@ import Testing
     #expect(recededCells > 0 && recededCells < restingCells / 2)
 }
 
+@Test @MainActor func settledMovingCornersLoopTheirCachedClockFrames() {
+    let working = DitherCornerLoopView.Loop(signal: .working, extent: ComposerCorner.extent)
+    let frames = DitherCornerLoopView.frames(working)
+    #expect(frames.count == DitherCorner.frameCount)
+    #expect(abs(working.duration - 3) < 0.000_001)
+    // The same images the clocked corner draws, from the renderer's cache.
+    let clocked = DitherCornerRenderer.image(for: DitherCornerRequest(signal: .working, previous: nil, frame: 5,
+                                                                        extent: ComposerCorner.extent))
+    #expect(frames[5] === clocked)
+    let background = DitherCornerLoopView.Loop(signal: .working, background: true, extent: ComposerCorner.extent)
+    #expect(DitherCornerLoopView.frames(background).count == DitherCorner.backgroundFrameCount)
+    let view = DitherCornerLoopView(frame: NSRect(x: 0, y: 0, width: 156, height: 72))
+    view.loop = working
+    #expect(!view.playing, "detached views hold their first frame")
+    #expect(view.layer?.sublayers?.first?.contents != nil)
+}
+
 @Test func onlyWorkingAndNeedsYouCornersMove() {
     #expect(DitherCorner.animates(.working))
     #expect(DitherCorner.animates(.needsYou))
