@@ -321,6 +321,8 @@ Use a mission when one goal needs several chats. Its shared brief and decisions 
 starting point, while tasks record ownership, dependencies and progress. You can coordinate the work
 yourself or use a coordinator chat, and review linked pull requests and artifacts in one place.
 The mission's Overview shows a compact progress bar for each phase, or one overall bar for work without phases.
+The mission name in a chat's toolbar opens the Overview for coordinators, or toggles the assigned-task panel
+for member chats. The panel also links to the full mission.
 
 The brief is the spec; tasks track progress and blockers; decisions record agreed choices.
 Comments hold actionable discussion. Agents check existing discussions before posting and resolve

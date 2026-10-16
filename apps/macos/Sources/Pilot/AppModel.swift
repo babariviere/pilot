@@ -12,7 +12,7 @@ enum InspectorTab: Hashable {
 
     func isAvailable(for session: SessionSummary) -> Bool {
         if self == .changes || self == .terminal { return session.supportsChanges }
-        if self == .mission { return session.missionId != nil }
+        if self == .mission { return session.missionId != nil && !session.isMissionCoordinator }
         return !session.isAsk || self == .artifacts || self == .links
     }
 }
@@ -921,7 +921,13 @@ final class AppModel: ObservableObject {
     }
 
     /// Shows the inspector on `tab`, or hides it when it already shows that tab.
+    /// Coordinators open the mission's Overview instead of an inspector with no assigned task.
     func toggleInspector(_ tab: InspectorTab) {
+        if tab == .mission, let session = selectedSession, session.isMissionCoordinator,
+           let missionId = session.missionId {
+            openMission(missionId, tab: .overview)
+            return
+        }
         if let session = selectedSession, !tab.isAvailable(for: session) { return }
         if inspectorVisible, inspectorTab == tab {
             inspectorVisible = false

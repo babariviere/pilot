@@ -143,27 +143,40 @@ struct MissionInspectorPane: View {
     }
 }
 
-/// Header chip that opens the chat's mission.
-struct MissionChip: View {
-    let missionId: String
+/// One native toolbar control replaces the mission badge and separate inspector icon.
+/// Coordinators navigate to the Overview; member chats toggle their assigned-task inspector.
+struct SessionMissionControl: View {
+    let session: SessionSummary
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
 
     var body: some View {
-        Button { model.openMission(missionId) } label: {
-            HStack(spacing: 4) {
-                PilotSymbol(PilotIcon.mission)
-                Text(client.mission(missionId)?.title ?? "Mission").lineLimit(1)
+        Group {
+            if session.isMissionCoordinator {
+                Button { model.toggleInspector(.mission) } label: {
+                    label
+                }
+            } else {
+                Toggle(isOn: InspectorToggle.selection(for: .mission, in: model)) {
+                    label
+                }
+                .toggleStyle(.button)
             }
-            .font(.pilot(.caption, weight: .medium))
-            .foregroundStyle(Theme.mutedForeground)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 2)
-            .background(Capsule().fill(Theme.muted))
-            .frame(maxWidth: 200)
         }
-        .buttonStyle(.plain)
-        .help("Open mission: \(client.mission(missionId)?.title ?? "")")
-        .accessibilityLabel("Open mission \(client.mission(missionId)?.title ?? "")")
+        .help(session.isMissionCoordinator ? "Open mission Overview: \(title)" : "Show mission tasks: \(title)")
+        .accessibilityLabel(session.isMissionCoordinator ? "Open mission \(title)" : "Mission tasks for \(title)")
+    }
+
+    private var title: String { client.mission(session.missionId)?.title ?? "Mission" }
+
+    private var label: some View {
+        HStack(spacing: 5) {
+            PilotSymbol(PilotIcon.mission, context: .toolbar)
+            Text(title).font(.pilot(.label)).lineLimit(1).truncationMode(.tail)
+                .frame(maxWidth: 160, alignment: .leading).fixedSize(horizontal: true, vertical: false)
+            if session.isMissionCoordinator {
+                PilotSymbol(PilotIcon.disclosure)
+            }
+        }
     }
 }
