@@ -53,17 +53,19 @@ struct DevboxSettingsContent: View {
             if let problem { SettingsRow { InlineProblem(problem) } }
             if let problem = hosts.persistenceError { SettingsRow { InlineProblem(problem) } }
         }
+        // EmptyView is not a mounted presentation anchor. Keep the sheet on the
+        // section that owns the Add button, including after cancellation.
+        .sheet(isPresented: $adding) {
+            DevboxAddSheet(hosts: hosts, loadPackage: loadPackage) { host in
+                selectedHost = host; adding = false
+            }
+        }
         if let host = selectedHost, let snapshot = hosts.offlineHosts[host] {
             SettingsSection(snapshot.configuration.alias, explanation: "All actions below target this saved devbox, never Local. Closing a connection does not stop remote agents.") {
                 SettingsRow("Saved identity", detail: "Installation \(host.daemonId) · history \(host.lineageId)") { EmptyView() }
             }
             DevboxProviderSetup(host: host, hosts: hosts).id(host)
             DevboxUpdateSection(host: host, hosts: hosts, loadPackage: loadPackage, navigate: navigate).id(host)
-        }
-        EmptyView().sheet(isPresented: $adding) {
-            DevboxAddSheet(hosts: hosts, loadPackage: loadPackage) { host in
-                selectedHost = host; adding = false
-            }
         }
     }
 
