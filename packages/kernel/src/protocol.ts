@@ -13,6 +13,7 @@ import type {
 	SessionSubagent,
 } from "@pilot/protocol";
 import type { CredentialEndpoint } from "./credential-rpc.ts";
+import type { DatabaseAction } from "./database-tool.ts";
 import type { MissionAction } from "./mission-tools.ts";
 import type { MissionContext, PilotContext, WorkspaceContext } from "./policy.ts";
 import type { KernelUsage } from "./usage.ts";
@@ -64,6 +65,8 @@ export interface KernelSpec {
 	pilot?: PilotContext;
 	/** The mission this chat belongs to, when it starts. Later changes arrive as `mission.context`. */
 	mission?: MissionContext;
+	/** pilotd has a database config; register the `db` tool. Connection details stay in pilotd. */
+	databases?: boolean;
 }
 
 export type KernelCommand =
@@ -112,6 +115,7 @@ export type KernelCommand =
 	| { type: "mission.context"; context?: MissionContext }
 	| { type: "mission.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "memory.result"; callId: string; result?: JsonValue; error?: string }
+	| { type: "database.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "subscription.limit.result"; callId: string; error?: string }
 	| { type: "artifact.reference.result"; callId: string; result?: Omit<ArtifactRevision, "html">; error?: string }
 	| { type: "workspace.prepared"; callId: string; workspace?: WorkspaceContext }
@@ -161,6 +165,8 @@ export type KernelPacket =
 			action: "wake" | "note" | "recall" | "zoom";
 			args: Record<string, JsonValue>;
 	  }
+	/** A `db` tool call, answered by `database.result`. Grants are checked in pilotd. */
+	| { type: "database.call"; callId: string; action: DatabaseAction; args: Record<string, JsonValue> }
 	/** Read-only linked source lookup. Caller identity comes from the supervised worker, not this packet. */
 	| { type: "artifact.reference.get"; callId: string; id: string; revision?: number }
 	/** The kernel is awaiting its first prompt preparation. No model or tools are running. */

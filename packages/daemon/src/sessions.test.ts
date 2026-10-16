@@ -3,12 +3,13 @@ import assert from "node:assert/strict";
 import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter, once } from "node:events";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mock, type TestContext, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
+import type { JsonValue } from "@earendil-works/chord";
 import type { KernelCommand, KernelPacket, KernelSubagent, KernelUsage } from "@pilot/kernel";
 import type {
 	AgentEvent,
@@ -19,6 +20,7 @@ import type {
 	SessionSummary,
 } from "@pilot/protocol";
 import { WebSocket } from "ws";
+import { DATABASE_CONFIG_FILE, DatabaseService } from "./databases.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import type { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
@@ -3065,4 +3067,52 @@ test("queued metadata writes capture each transition instead of serializing live
 			await second;
 		}
 	});
+});
+
+test("database access: only configured projects get db, and the user's exact reply grants an ask", async (t) => {
+	const f = await fixture(t);
+	const agentDir = join(f.root, "agent");
+	await mkdir(agentDir);
+	const config = join(agentDir, DATABASE_CONFIG_FILE);
+	await writeFile(
+		config,
+		JSON.stringify({
+			projects: { [f.project.path]: { environments: { prod: { read: { url: "postgres://ro@prod/app" } } } } },
+		}),
+	);
+	await chmod(config, 0o600);
+	const queries: string[] = [];
+	const databases = new DatabaseService(agentDir, async (target, statements) => {
+		queries.push(`${target.url} ${statements[0]?.sql}`);
+		return [{ columns: ["n"], rows: [{ n: 1 }], rowCount: 1, truncated: false }];
+	});
+	const sessions = await f.manager({}, { databases });
+	const created = await sessions.spawn({ projectId: f.project.id, workspace: "direct", message: "Start" });
+	await sessions["starting"].get(created.id);
+	const worker = f.workers.at(-1)!;
+	assert.equal(worker.spec.databases, true);
+	const meta = sessions["metas"].get(created.id)!;
+	const call = async (callId: string, action: "access" | "query", args: Record<string, JsonValue>) => {
+		sessions["onPacket"](meta, worker, { type: "database.call", callId, action, args });
+		await until(() => worker.sent.some((command) => command.type === "database.result" && command.callId === callId));
+		const reply = worker.sent.find((command) => command.type === "database.result" && command.callId === callId);
+		return reply as Extract<KernelCommand, { type: "database.result" }>;
+	};
+	const field = (value: JsonValue | undefined, key: string) =>
+		value && typeof value === "object" && !Array.isArray(value) ? value[key] : undefined;
+
+	assert.match((await call("q1", "query", { env: "prod", sql: "select 1" })).error ?? "", /No read access to prod/);
+	assert.equal(field((await call("a1", "access", { env: "prod" })).result, "status"), "pending");
+	await sessions.send(created.id, "Allow read access to prod");
+	assert.deepEqual(sessions["metas"].get(created.id)?.databases, { grants: [{ env: "prod", mode: "read" }] });
+	assert.deepEqual(field((await call("q2", "query", { env: "prod", sql: "select 1" })).result, "rows"), [{ n: 1 }]);
+	assert.deepEqual(queries, ["postgres://ro@prod/app select 1"]);
+
+	// Another project has no databases: its chats never get the tool.
+	const other = join(f.root, "other");
+	await mkdir(other);
+	const project = await f.projects.create({ path: other, model: "test/preferred" });
+	const unrelated = await sessions.spawn({ projectId: project.id, workspace: "direct", message: "Start" });
+	await sessions["starting"].get(unrelated.id);
+	assert.equal(f.workers.at(-1)!.spec.databases, undefined);
 });

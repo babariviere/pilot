@@ -57,6 +57,8 @@ See [screenshot notes](docs/screenshots/README.md) to regenerate them.*
   extensions are available in Build sessions.
 - **Get more than text back.** Agents can publish images, interactive HTML and React previews, diagrams and
   static SwiftUI renders. Artifacts stay attached to their chat and can be linked to missions and tasks.
+- **Query your databases.** Give a project's chats read-only or read-write Postgres access per environment,
+  granted up front or when you answer the agent's request. See [Databases](#databases).
 - **Bring work into Pilot.** Track Linear issues and Slack messages from configured sources, triage Slack
   messages by type, label and severity, see what waits on you across projects in one Inbox, then start a chat or
   mission from an item. Schedule work for later or for wake, online and time triggers.
@@ -576,6 +578,53 @@ replay old Done items. No Slack messages or replies are sent.
 Slack messages and Linear issue or project links open in their desktop apps when installed, with a
 browser fallback when the app is unavailable. Copied links remain web URLs.
 Slack links without a workspace ID use Slack's active workspace.
+
+### Databases
+
+Build chats of a project can query Postgres databases you configure for that project. Chats of other projects,
+Ask chats and subagents do not get the tool. Create `~/.pi/agent/pilot-databases.json` (or under
+`PILOT_AGENT_DIR`), readable only by you (`chmod 600`; Pilot refuses a file others can read):
+
+```json
+{
+  "projects": {
+    "~/src/github.com/acme/app": {
+      "environments": {
+        "local": {
+          "read": { "url": "postgres://app_ro@localhost/app", "access": "allow" },
+          "write": { "url": "postgres://app@localhost/app", "access": "allow" }
+        },
+        "staging": {
+          "read": { "url": "postgres://app_ro:…@staging.example.com/app", "access": "allow" },
+          "write": { "url": "postgres://app:…@staging.example.com/app", "access": "ask" }
+        },
+        "prod": {
+          "read": { "url": "postgres://app_ro:…@prod.example.com/app", "access": "ask" }
+        }
+      }
+    }
+  }
+}
+```
+
+Projects are keyed by the folder you added to Pilot. Each environment has a read connection, a write
+connection, or both; leave one out to make that mode unavailable. `access` is `allow` (granted on first use)
+or `ask` (the default): the agent asks with a question naming the environment and mode, and picking
+**Allow … access** grants it. Any other reply declines. Grants last for the rest of the chat, and write access also
+covers reads. The file is read afresh for each call; new or removed projects apply to the next chat start.
+
+The agent calls `db({ action: "access" })` to list environments and request access, and
+`db({ action: "query", env, sql, params })` to run one statement. Read mode runs inside `BEGIN READ ONLY` with the
+extended protocol (one statement, no `COMMIT` escape) and is rolled back; in write mode, `statements` run in one
+transaction. Every call opens its own connection with a 30 s statement timeout, a 5 s lock timeout,
+`application_name=pilot-<chat id>`, and capped rows (100 by default, at most 1,000) and result size.
+Results are sent to the model provider, so only configure data you are comfortable sharing with it.
+
+Give read connections a role that can only read: `BEGIN READ ONLY` guards against mistakes, while the role is
+what Postgres enforces. Only pilotd reads this file and the agent sees environment names, not URLs. Agent shells
+still run as you, so this is a guardrail for a cooperating agent, not a secret store. With the bundled sandbox in
+`workspace-write` or `read-only` mode, add the file to `denyRead` in `~/.pi/agent/sandbox.json` to keep shells
+from reading it; with the sandbox off (the default), they can.
 
 ## Development
 

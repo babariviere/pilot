@@ -5,6 +5,7 @@ import { serialize } from "node:v8";
 import type { JsonValue } from "@earendil-works/chord";
 import { ConversationBusy } from "@earendil-works/pi-durable";
 import { closePreviewBrowser } from "@pilot/artifacts";
+import type { DatabaseCall } from "./database-tool.ts";
 import { formatFailure } from "./failure.ts";
 import type { MissionCall } from "./mission-tools.ts";
 import type { MissionContext, WorkspaceContext } from "./policy.ts";
@@ -187,6 +188,8 @@ export function runKernelWorker(): void {
 		callDaemon<JsonValue>((callId) => ({ type: "mission.call", callId, action, args }));
 	const callMemory = (action: "wake" | "note" | "recall" | "zoom", args: Record<string, JsonValue>) =>
 		callDaemon<JsonValue>((callId) => ({ type: "memory.call", callId, action, args }));
+	const callDatabase: DatabaseCall = (action, args) =>
+		callDaemon<JsonValue>((callId) => ({ type: "database.call", callId, action, args }));
 
 	async function shutdown(code = 0): Promise<void> {
 		if (exiting) return;
@@ -311,6 +314,7 @@ export function runKernelWorker(): void {
 		if (
 			command.type === "mission.result" ||
 			command.type === "memory.result" ||
+			command.type === "database.result" ||
 			command.type === "subscription.limit.result" ||
 			command.type === "artifact.reference.result"
 		) {
@@ -374,6 +378,7 @@ export function runKernelWorker(): void {
 					onSubagentsChanged: (subagents) => notify({ type: "subagents", subagents }),
 					callMission,
 					callMemory,
+					callDatabase,
 					readArtifactReference: (id, revision) =>
 						callDaemon((callId) => ({ type: "artifact.reference.get", callId, id, revision })),
 					prepareWorkspace,
