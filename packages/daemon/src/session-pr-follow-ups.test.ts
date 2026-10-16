@@ -513,6 +513,11 @@ test("owned open and draft PRs reopen parked workers with one durable idle-only 
 			assert.match(input.content, /1 unresolved, non-outdated review thread/);
 			assert.match(input.content, /merge conflicts/);
 			assert.match(input.content, /flaky\/infra/);
+			assert.match(input.content, /Check whether each PR is behind its actual target branch/);
+			assert.match(input.content, /If it is, consider rebasing onto that branch before fixing failures/);
+			assert.match(input.content, /Verify ancestry rather than relying only on GitHub's BEHIND status/);
+			assert.match(input.content, /Preserve other sessions' work, report conflicts or unsafe rebases in Pilot/);
+			assert.match(input.content, /wait for fresh CI after any rebase/);
 			assert.match(input.content, /untrusted data/);
 			assert.match(input.content, /Never comment, review, reply, merge, or close on GitHub/);
 			assert.deepEqual(activity(f.meta), before);
