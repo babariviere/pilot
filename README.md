@@ -425,8 +425,9 @@ The project Overview shows the top three cases under Slack.
 Triage keeps up to 500 corrections per project across sources. A debounced, tool-free worker folds three new
 corrections (or a day with new corrections) into a short read-only guide. Classifiers use that guide and five
 recent examples. Guides contain rules and summaries, not Slack excerpts. Tracking guide APIs support reading
-and queuing a rebuild. Project settings show the Slack guide read-only above the recent corrections, with when it
-was last updated and Rebuild, which queues a run; the rules update in place once pilotd saves the new guide.
+and queuing a rebuild. Project settings show each source's guide read-only above its recent corrections (Slack under
+Slack labels, Linear under Linear sizes once a team is attached), with when it was last updated and Rebuild, which
+queues a run; the rules update in place once pilotd saves the new guide.
 
 Pilot stores a classifier summary for each Slack message, not its text; the triage inspector reads and quotes the
 message from Slack when you select it, without saving it.

@@ -14,6 +14,7 @@ struct TrackingFixture {
     var myChannels = TrackingLookup<SlackChannelOption>(status: .ok)
     var searchChannels = TrackingLookup<SlackChannelOption>(status: .ok)
     var corrections: [SlackCorrection] = []
+    var linearCorrections: [LinearSizeCorrection] = []
     var guides: [TrackedKind: TriageGuide] = [:]
     var cases = SlackCommonCaseList(cases: [])
 

@@ -47,6 +47,9 @@ private let slack = TrackedItem(
     #expect(TriageGuideText.tooltip(guide).hasPrefix("Updated "))
     #expect(TriageGuideText.rebuildFailed(" ") == "Couldn't start a rebuild.")
     #expect(TriageGuideText.rebuildFailed("Tracking is unavailable") == "Couldn't start a rebuild: Tracking is unavailable")
+    #expect(TriageGuideText.correctionsNote(empty: true, kind: .slack) == "Changes you make in Slack triage appear here.")
+    #expect(TriageGuideText.correctionsNote(empty: true, kind: .linear) == "Sizes you correct on Linear issues appear here.")
+    #expect(TriageGuideText.correctionsNote(empty: false, kind: .linear) == "Newest first. Pilot keeps the latest 500 for the guide.")
 }
 
 @Test func triageGuideRebuildWaitsForAGuideNewerThanTheOneItReturned() {

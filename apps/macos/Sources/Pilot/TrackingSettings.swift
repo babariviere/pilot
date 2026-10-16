@@ -3,7 +3,8 @@ import PilotCore
 import SwiftUI
 
 // Project settings → Tracking: attach a Linear team, pick Slack channels and define the labels Slack messages
-// are sorted into. Lookups are read-only MCP calls made by pilotd; nothing is tracked until the project is saved.
+// are sorted into, with each source's triage guide and recent corrections. Lookups are read-only MCP calls made by
+// pilotd; nothing is tracked until the project is saved.
 
 /// A configured Slack channel: its ID and, when picked from Slack, its name.
 struct TrackedChannelRef: Hashable, Identifiable {
@@ -51,6 +52,9 @@ struct TrackingSettingsSection: View {
             SlackChannelsEditor(editor: editor,
                                 source: client.source(projectId: project.id, kind: .slack),
                                 saved: Set(project.tracking?.slackChannels ?? []), query: channelQuery)
+        }
+        if editor.linearTeam != nil {
+            LinearSizesSection(projectId: project.id)
         }
         if !editor.slackChannels.isEmpty || !editor.slackLabels.isEmpty {
             SlackLabelsSection(project: project, editor: editor)
@@ -435,7 +439,20 @@ struct SlackLabelsSection: View {
                 .disabled(editor.slackLabels.count >= 50)
             }
             TriageGuideSection(projectId: project.id, kind: .slack)
-            SlackCorrectionsList(projectId: project.id)
+            TriageCorrectionsList(projectId: project.id, kind: .slack)
+        }
+    }
+}
+
+/// How Pilot sizes Linear issues, shown once a team is attached: the triage guide built from the user's size
+/// corrections, then the latest corrections. Sizes are corrected from an issue's row, not here.
+struct LinearSizesSection: View {
+    let projectId: String
+
+    var body: some View {
+        SettingsSection("Linear sizes", explanation: "A small model estimates each of your issues as Quick fix or Needs planning. Correct a size from the issue's row, and Pilot sizes similar issues the same way.") {
+            TriageGuideSection(projectId: projectId, kind: .linear)
+            TriageCorrectionsList(projectId: projectId, kind: .linear)
         }
     }
 }
@@ -748,14 +765,27 @@ enum TriageGuideText {
         let reason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
         return reason.isEmpty ? "Couldn't start a rebuild." : "Couldn't start a rebuild: \(reason)"
     }
+
+    /// The note under "Recent corrections": where corrections come from while there are none.
+    static func correctionsNote(empty: Bool, kind: TrackedKind) -> String {
+        guard empty else { return "Newest first. Pilot keeps the latest 500 for the guide." }
+        return kind == .slack ? "Changes you make in Slack triage appear here." : "Sizes you correct on Linear issues appear here."
+    }
 }
 
-/// The project's Slack triage corrections, newest first: five, then 25 more at a time. Read-only; they change as the
-/// user reclassifies messages. pilotd keeps the latest 500.
-private struct SlackCorrectionsList: View {
+/// A source's corrections for the project, newest first: five, then 25 more at a time. Read-only; they change as the
+/// user reclassifies Slack messages or corrects Linear sizes. pilotd keeps the latest 500 per source.
+private struct TriageCorrectionsList: View {
+    /// What was corrected (message summary or issue title) and what the user changed it to.
+    struct Row {
+        let summary: String
+        let change: String
+    }
+
     let projectId: String
+    let kind: TrackedKind
     @ObservedObject private var client = AppModel.shared.client
-    @State private var corrections: [SlackCorrection]?
+    @State private var corrections: [Row]?
     @State private var failed = false
     @State private var visibleCount = Self.shown
     private static let shown = 5
@@ -763,9 +793,8 @@ private struct SlackCorrectionsList: View {
 
     var body: some View {
         let items = corrections ?? []
-        SettingsSubheading("Recent corrections", note: corrections != nil && items.isEmpty
-            ? "Changes you make in Slack triage appear here."
-            : "Newest first. Pilot keeps the latest 500 for the guide.")
+        SettingsSubheading("Recent corrections",
+                           note: TriageGuideText.correctionsNote(empty: corrections != nil && items.isEmpty, kind: kind))
             .task(id: projectId) { await load() }
         if failed, corrections == nil {
             SettingsRow { InlineProblem("Couldn't load your corrections.") { Task { await load() } } }
@@ -775,7 +804,7 @@ private struct SlackCorrectionsList: View {
                 Text(verbatim: correction.summary).font(.pilot(.body)).foregroundStyle(Theme.foreground)
                     .lineLimit(1).truncationMode(.tail)
             } control: {
-                Text(SlackTriageText.correction(correction.values)).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                Text(correction.change).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
                     .lineLimit(1).fixedSize()
             }
             .accessibilityElement(children: .combine)
@@ -808,7 +837,16 @@ private struct SlackCorrectionsList: View {
 
     private func load() async {
         do {
-            corrections = try await client.slackCorrections(projectId: projectId)
+            switch kind {
+            case .slack:
+                corrections = try await client.slackCorrections(projectId: projectId).map {
+                    Row(summary: $0.summary, change: SlackTriageText.correction($0.values))
+                }
+            case .linear:
+                corrections = try await client.linearSizeCorrections(projectId: projectId).map {
+                    Row(summary: $0.summary, change: $0.values.size.title)
+                }
+            }
             failed = false
         } catch {
             failed = true
