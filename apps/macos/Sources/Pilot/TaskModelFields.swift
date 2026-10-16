@@ -62,7 +62,7 @@ struct TaskModelFields<Leading: View>: View {
     var defaultModel: String?
     var defaultThinking: String?
     @ViewBuilder var leading: () -> Leading
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
 
     init(projectId: String, model: Binding<String>, thinking: Binding<String>, options: Binding<TaskModelOptions>,
          defaultModel: String? = nil, defaultThinking: String? = nil, @ViewBuilder leading: @escaping () -> Leading) {
@@ -150,7 +150,7 @@ enum TaskModelLabel {
 struct MissionTaskModelSheet: View {
     let task: MissionTask
     let mission: Mission
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
     @Environment(\.dismiss) private var dismiss
     @State private var model: String
     @State private var thinking: String

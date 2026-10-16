@@ -1423,6 +1423,8 @@ export class SharedContextService {
 		request: {
 			bindingId: string;
 			expectedRevision: number;
+			/** Latest task grant at mission home, including sealed grants across bindings; zero only if absent. */
+			expectedPreviousEpoch: number;
 			model: string;
 			thinking?: string;
 			references?: SharedContextReference[];
@@ -1433,9 +1435,24 @@ export class SharedContextService {
 		return this.serial(request.bindingId, async () => {
 			fields(
 				request,
-				["bindingId", "expectedRevision", "model", "thinking", "references", "onlineOnlyUrls", "message"],
+				[
+					"bindingId",
+					"expectedRevision",
+					"expectedPreviousEpoch",
+					"model",
+					"thinking",
+					"references",
+					"onlineOnlyUrls",
+					"message",
+				],
 				"delegation request",
 			);
+			if (
+				!Number.isSafeInteger(request.expectedPreviousEpoch) ||
+				request.expectedPreviousEpoch < 0 ||
+				request.expectedPreviousEpoch >= Number.MAX_SAFE_INTEGER
+			)
+				throw new Conflict("expectedPreviousEpoch must be the observed nonnegative safe task epoch");
 			if (request.message !== undefined && (typeof request.message !== "string" || request.message.length > 8000))
 				throw new Conflict("Delegation instructions exceed bounded accepted scope");
 			const binding = this.assertBindingActive(request.bindingId);
@@ -1445,6 +1462,8 @@ export class SharedContextService {
 			const task = this.store.resolveTask(missionId, taskId);
 			if (request.expectedRevision !== this.store.sharedDefinitionRevision(task.id))
 				throw new Conflict("Task definition CAS conflict");
+			if (request.expectedPreviousEpoch !== (this.store.sharedTaskGrant(task.id)?.executionEpoch ?? 0))
+				throw new Conflict("Task execution epoch CAS conflict; refresh mission-home inventory");
 			if (typeof request.model !== "string" || !request.model.includes("/"))
 				throw new Conflict("An explicit independently available target model is required");
 			if (task.preferredModelSetBy === "user" && task.preferredModel !== request.model)
@@ -1509,7 +1528,6 @@ export class SharedContextService {
 					});
 				}
 			}
-			const previous = this.store.sharedTaskGrant(task.id);
 			this.assertBindingActive(binding.bindingId);
 			if (
 				binding.shareMemory &&
@@ -1520,7 +1538,7 @@ export class SharedContextService {
 			const grant: DelegationGrant = {
 				delegationId: randomUUID(),
 				task: { mission: { home: binding.missionHome, missionId }, taskId: task.id },
-				executionEpoch: (previous?.executionEpoch ?? 0) + 1,
+				executionEpoch: request.expectedPreviousEpoch + 1,
 				bindingId: binding.bindingId,
 				bindingGeneration: binding.generation,
 				target: binding.executionProject,
@@ -1540,7 +1558,7 @@ export class SharedContextService {
 				state: "reserved",
 			};
 			this.store.sharingTransaction(() => {
-				this.store.reserveSharedGrant(grant);
+				this.store.reserveSharedGrant(grant, request.expectedPreviousEpoch);
 				this.enqueue(binding, binding.executionProject.host, "share-offer", grant);
 			});
 			await this.store.durable();

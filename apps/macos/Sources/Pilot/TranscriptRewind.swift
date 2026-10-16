@@ -53,6 +53,7 @@ final class TranscriptRewind: ObservableObject {
 
 /// Wires a chat's rewind actions to pilotd and its composer, and confirms stopping a running turn.
 struct TranscriptRewindHost: ViewModifier {
+    @EndpointClient private var endpoint
     @ObservedObject var rewind: TranscriptRewind
     let feed: SessionFeed
     let composer: ComposerState
@@ -64,7 +65,7 @@ struct TranscriptRewindHost: ViewModifier {
             .onAppear {
                 rewind.isWorking = { [feed] in feed.presentation.working }
                 rewind.perform = { [sessionId, composer] request in
-                    await Self.perform(request, sessionId: sessionId, composer: composer)
+                    await perform(request, sessionId: sessionId, composer: composer)
                 }
             }
             .onDisappear { rewind.perform = nil }
@@ -105,10 +106,10 @@ struct TranscriptRewindHost: ViewModifier {
     }
 
     /// Retry resends from the daemon; edit puts the message back in the composer to change and send.
-    private static func perform(_ request: TranscriptRewind.Request, sessionId: String, composer: ComposerState) async {
+    private func perform(_ request: TranscriptRewind.Request, sessionId: String, composer: ComposerState) async {
         composer.error = nil
         do {
-            let draft = try await AppModel.shared.client.rewind(
+            let draft = try await endpoint.rewind(
                 sessionId, action: request.action, entryId: request.entryID
             )
             guard request.action == .edit, let draft else { return }
@@ -217,6 +218,7 @@ private final class AttemptSwitch: ObservableObject {
 
 /// Toolbar chip listing the chat's attempts. Hidden while there is only the original.
 struct AttemptsMenu: View {
+    @EndpointClient private var endpoint
     let session: SessionSummary
     @EnvironmentObject private var model: AppModel
     @StateObject private var switching = AttemptSwitch()
@@ -280,7 +282,7 @@ struct AttemptsMenu: View {
     private func activate(_ attempt: SessionAttempt) {
         let id = session.id
         Task {
-            do { try await AppModel.shared.client.activateAttempt(id, attemptId: attempt.id) }
+            do { try await endpoint.activateAttempt(id, attemptId: attempt.id) }
             catch { model.sessionActionError = error.localizedDescription }
         }
     }

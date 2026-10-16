@@ -4,7 +4,8 @@ import SwiftUI
 /// Settings › Connections: the user's global pi MCP servers as pilotd last found them, with sign-in where pi
 /// can run it in the browser. Chats keep their own connections and pick up a new sign-in on their next turn.
 struct ConnectionSettings: View {
-    @ObservedObject private var store = AppModel.shared.client.mcp
+    @EndpointClient private var endpoint
+    private var store: McpStatusStore { endpoint.mcp }
 
     var body: some View {
         ConnectionSettingsContent(status: store.status, error: store.actionError)
@@ -53,7 +54,8 @@ struct ConnectionSettingsContent: View {
 
 /// The count on the Connections sidebar row: servers that need the user. Only this badge observes MCP status.
 struct ConnectionsTabBadge: View {
-    @ObservedObject private var store = AppModel.shared.client.mcp
+    @EndpointClient private var endpoint
+    private var store: McpStatusStore { endpoint.mcp }
 
     var body: some View {
         let count = store.needingUser.count
@@ -69,7 +71,8 @@ struct ConnectionsTabBadge: View {
 /// Sidebar footer, shown only while an MCP server waits for the user to sign in. Opens Settings › Connections.
 /// Failing servers stay in Settings; chats that hit one show under Needs you.
 struct McpSignInFooter: View {
-    @ObservedObject private var store = AppModel.shared.client.mcp
+    @EndpointClient private var endpoint
+    private var store: McpStatusStore { endpoint.mcp }
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
@@ -101,7 +104,8 @@ struct McpSignInFooter: View {
 
 /// The header accessory: checks every server again, then says how it went until the next check.
 struct McpCheckButton: View {
-    @ObservedObject private var store = AppModel.shared.client.mcp
+    @EndpointClient private var endpoint
+    private var store: McpStatusStore { endpoint.mcp }
     @State private var busy = false
     /// The user asked for a check and waits for its result.
     @State private var awaiting = false
@@ -130,7 +134,7 @@ struct McpCheckButton: View {
                 finished = false
                 Task {
                     defer { busy = false }
-                    await AppModel.shared.client.checkMcp()
+                    await endpoint.checkMcp()
                     // A failed request, or a check that ended before its reply, never flips `checking` here.
                     if store.actionError != nil { awaiting = false } else if store.status?.checking == false { finish() }
                 }
@@ -161,6 +165,7 @@ struct McpCheckButton: View {
 /// One server: its name, a plain state line and at most one action (Sign in, Cancel or Check again).
 /// Sign in again stays in the context menu.
 struct McpServerRow: View {
+    @EndpointClient private var endpoint
     let server: McpServerStatus
 
     var body: some View {
@@ -190,9 +195,9 @@ struct McpServerRow: View {
         .help(server.state == .failed ? "Run pi mcp list in a terminal for the full error." : "")
         .contextMenu {
             if server.canSignIn == true, server.state == .connected {
-                Button("Sign in again") { Task { await AppModel.shared.client.startMcpSignIn(server.name, again: true) } }
+                Button("Sign in again") { Task { await endpoint.startMcpSignIn(server.name, again: true) } }
             }
-            Button("Check again") { Task { await AppModel.shared.client.checkMcp(server: server.name) } }
+            Button("Check again") { Task { await endpoint.checkMcp(server: server.name) } }
         }
         .accessibilityElement(children: .contain)
     }
@@ -262,7 +267,7 @@ extension PilotClient {
         case .signIn: if let server { await startMcpSignIn(server) }
         case .cancel: if let server { await cancelMcpSignIn(server) }
         case .openSettings:
-            AppModel.shared.settingsTab = .connections
+            AppModel.shared.settingsTab = hostIdentity?.hostId != nil && hostIdentity?.hostId != "local" ? .devboxes : .connections
             openSettings()
         }
     }
@@ -271,14 +276,16 @@ extension PilotClient {
 /// One quiet line above the composer while this chat waits on an MCP server, with its one action.
 /// Clears once the server works again or the user writes in the chat.
 struct McpChatNotice: View {
+    @Environment(\.hostViewContext) private var hostContext
+    @EndpointClient private var endpoint
     let reason: NeedsYouReason
-    @ObservedObject private var store = AppModel.shared.client.mcp
+    private var store: McpStatusStore { endpoint.mcp }
     @Environment(\.openSettings) private var openSettings
     @State private var busy = false
 
     var body: some View {
         let server = reason.server.flatMap { store.status?.server(named: $0) }
-        let action = McpServerRowText.attentionAction(server)
+        let action: McpServerRowText.AttentionAction = hostContext?.host.hostId != nil && hostContext?.host.hostId != "local" ? .openSettings : McpServerRowText.attentionAction(server)
         let waiting = action == .cancel
         HStack(spacing: 6) {
             PilotSymbol(PilotIcon.signInRequired).foregroundStyle(Theme.blocked).accessibilityHidden(true)
@@ -291,7 +298,7 @@ struct McpChatNotice: View {
                 busy = true
                 Task {
                     defer { busy = false }
-                    await AppModel.shared.client.performMcpAttention(action, server: reason.server) { openSettings() }
+                    await endpoint.performMcpAttention(action, server: reason.server) { openSettings() }
                 }
             }
             .buttonStyle(.link)
@@ -305,6 +312,7 @@ struct McpChatNotice: View {
 }
 
 private struct McpServerAction: View {
+    @EndpointClient private var endpoint
     let server: McpServerStatus
     @State private var busy = false
 
@@ -314,7 +322,7 @@ private struct McpServerAction: View {
                 busy = true
                 Task {
                     defer { busy = false }
-                    let client = AppModel.shared.client
+                    let client = endpoint
                     switch action {
                     case .signIn: await client.startMcpSignIn(server.name)
                     case .cancel: await client.cancelMcpSignIn(server.name)

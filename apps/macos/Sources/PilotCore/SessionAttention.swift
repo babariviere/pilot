@@ -91,8 +91,8 @@ public struct SessionOutcomeNotification: Equatable, Sendable {
 /// leaving the chat, closing the window or quitting releases it.
 public final class SessionAttention {
     private let defaults: UserDefaults
-    private let reviewedKey = "pilot.reviewedOutcomeAt"
-    private let observedKey = "pilot.observedOutcomeAt"
+    private let reviewedKey: String
+    private let observedKey: String
     /// Earlier builds persisted viewed results here to keep them under Needs you. Removed on launch.
     private static let legacyAwaitingReplyKey = "pilot.awaitingReplyOutcomeAt"
     private var reviewed: [String: Double]
@@ -116,7 +116,9 @@ public final class SessionAttention {
         }.value
     }
 
-    public init(defaults: UserDefaults = .standard) {
+    public init(defaults: UserDefaults = .standard, keyPrefix: String = "") {
+        reviewedKey = keyPrefix + "pilot.reviewedOutcomeAt"
+        observedKey = keyPrefix + "pilot.observedOutcomeAt"
         self.defaults = defaults
         reviewed = defaults.dictionary(forKey: reviewedKey) as? [String: Double] ?? [:]
         observed = defaults.dictionary(forKey: observedKey) as? [String: Double] ?? [:]

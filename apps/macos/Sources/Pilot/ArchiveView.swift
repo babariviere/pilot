@@ -6,7 +6,7 @@ import SwiftUI
 /// client's WebSocket inventory, but never in normal chat lists.
 struct ArchiveView: View {
     @EnvironmentObject private var model: AppModel
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
     @StateObject private var browser = ArchiveBrowserState()
 
     private var sessions: [SessionSummary] {
@@ -93,7 +93,7 @@ private struct ArchiveFilterBar: View {
     /// Shown chats, or nil while loading or failed.
     let shown: Int?
     @EnvironmentObject private var model: AppModel
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
 
     var body: some View {
         let missions = client.missions.filter { model.archiveProjectId == nil || $0.projectId == model.archiveProjectId }
@@ -151,6 +151,7 @@ private struct ArchiveFilterBar: View {
 /// One archived chat on one line: its title, then "pilot · archived 3d ago". Clicking reads the chat; Restore shows
 /// under the pointer or keyboard focus and stays in the context menu.
 private struct ArchiveRow: View {
+    @Environment(\.hostViewContext) private var hostContext
     let session: SessionSummary
     let projectName: String?
     let now: Date
@@ -192,7 +193,7 @@ private struct ArchiveRow: View {
             SessionRenameAction(session: session)
             SessionArchiveAction(session: session)
         }
-        .accessibilityAction(named: "Restore") { model.setArchived(false, sessionId: session.id) }
+        .accessibilityAction(named: "Restore") { model.setArchived(false, sessionId: hostContext?.ref(.session, session.id).storageKey ?? session.id) }
     }
 
     /// "pilot · archived 3d ago", or the folder for chats outside a project.
@@ -210,13 +211,14 @@ private struct ArchiveRow: View {
 
 /// Used in the toolbar, chat context menu, archive browser, and archived composer.
 struct SessionArchiveAction: View {
+    @Environment(\.hostViewContext) private var hostContext
     let session: SessionSummary
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
         let pending = model.pendingSessionActions.contains(session.id)
         Button {
-            model.setArchived(!session.isArchived, sessionId: session.id)
+            model.setArchived(!session.isArchived, sessionId: hostContext?.ref(.session, session.id).storageKey ?? session.id)
         } label: {
             Label(title(pending: pending), icon: session.isArchived ? PilotIcon.restore : PilotIcon.archive)
         }

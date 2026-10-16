@@ -18,6 +18,14 @@ final class SessionFeedCache {
         self.byteLimit = max(0, byteLimit)
     }
 
+    func feed(ref: HostResourceRef, hosts: HostClients) -> SessionFeed {
+        let key = ref.storageKey
+        if let existing = entries[key]?.feed { touch(key); return existing }
+        let feed = SessionFeed(ref: ref, hosts: hosts)
+        retain(feed, sessionId: key)
+        return feed
+    }
+
     func feed(sessionId: String, client: PilotClient) -> SessionFeed {
         if let existing = entries[sessionId]?.feed {
             touch(sessionId)

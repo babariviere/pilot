@@ -17,14 +17,14 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
-    func deliver(_ notification: SessionOutcomeNotification) {
+    func deliver(_ notification: SessionOutcomeNotification, reference: HostResourceRef? = nil) {
         guard available else { return }
         let content = UNMutableNotificationContent()
         content.title = notification.title
         content.body = notification.body
-        content.userInfo = ["sessionId": notification.sessionId]
+        content.userInfo = ["sessionId": reference?.storageKey ?? notification.sessionId]
         content.sound = .default
-        let request = UNNotificationRequest(identifier: notification.identifier, content: content, trigger: nil)
+        let request = UNNotificationRequest(identifier: (reference?.storageKey ?? "") + notification.identifier, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request)
     }
 

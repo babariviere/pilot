@@ -7,6 +7,7 @@ import SwiftUI
 /// appear on hover, in space the row always reserves, while the corner recedes from under them. Selection is the
 /// row's only fill.
 struct MissionSidebarRow: View {
+    @Environment(\.hostViewContext) private var hostContext
     let mission: Mission
     let needsYou: Int
     let working: Int
@@ -23,7 +24,7 @@ struct MissionSidebarRow: View {
         let progress = line?.text
         let active = mission.status == .active
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Button { model.openMission(mission.id) } label: {
+            Button { model.openMission(mission.id, context: hostContext) } label: {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         PilotSymbol(PilotIcon.mission, context: .row)
@@ -64,7 +65,7 @@ struct MissionSidebarRow: View {
                 MissionSidebarCoordinatorAction(mission: mission)
                     .revealed(hovered)
                 if active {
-                    Button { model.newSession(in: mission) } label: { PilotSymbol(PilotIcon.compose, context: .toolbar) }
+                    Button { model.newSession(in: mission, context: hostContext) } label: { PilotSymbol(PilotIcon.compose, context: .toolbar) }
                         .rowIconButtonStyle()
                         .help("New chat in \(mission.title)")
                         .accessibilityLabel("New chat in \(mission.title)")
@@ -86,10 +87,10 @@ struct MissionSidebarRow: View {
         .onHover { hovered = $0 }
         .animation(Theme.Motion.quick, value: hovered)
         .contextMenu {
-            Button("Open Mission") { model.openMission(mission.id) }
+            Button("Open Mission") { model.openMission(mission.id, context: hostContext) }
             MissionSidebarCoordinatorAction(mission: mission, inMenu: true)
             Divider()
-            Button("New Chat") { model.newSession(in: mission) }
+            Button("New Chat") { model.newSession(in: mission, context: hostContext) }
                 .disabled(!active)
             Menu("Add Existing Chat") { MissionExistingChatItems(mission: mission) }
             MissionEditAction(missionId: mission.id)
@@ -103,16 +104,17 @@ struct MissionSidebarRow: View {
 
 /// Secondary action shared by the toolbar, Chats tab and sidebar group.
 struct MissionExistingChatItems: View {
+    @EndpointClient private var endpoint
     let mission: Mission
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        let candidates = model.client.activeSessions.filter {
+        let candidates = endpoint.activeSessions.filter {
             $0.projectId == mission.projectId && $0.missionId == nil
         }
         ForEach(candidates) { session in
             Button(session.title) {
-                model.missionAction { [client = model.client, id = mission.id] in
+                model.missionAction { [client = endpoint, id = mission.id] in
                     try await client.joinMission(session.id, JoinMissionRequest(missionId: id))
                 }
             }
@@ -123,6 +125,7 @@ struct MissionExistingChatItems: View {
 
 /// Both shortcuts select by ID, independent of archive state and sidebar filters.
 struct MissionSidebarCoordinatorAction: View {
+    @Environment(\.hostViewContext) private var hostContext
     let mission: Mission
     var inMenu = false
     @EnvironmentObject private var model: AppModel
@@ -130,9 +133,9 @@ struct MissionSidebarCoordinatorAction: View {
     var body: some View {
         if let coordinator = mission.coordinatorSessionId {
             if inMenu {
-                Button("Open Coordinator") { model.selectedSessionId = coordinator }
+                Button("Open Coordinator") { model.navigate(.session, id: coordinator, context: hostContext) }
             } else {
-                Button { model.selectedSessionId = coordinator } label: {
+                Button { model.navigate(.session, id: coordinator, context: hostContext) } label: {
                     PilotSymbol(PilotIcon.coordinator)
                 }
                 .rowIconButtonStyle()

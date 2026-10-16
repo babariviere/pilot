@@ -197,24 +197,180 @@ final class PilotClient: ObservableObject {
             body: JSONEncoder().encode(acknowledgment))
     }
 
+    func sharedMission(_ binding: SharedContextBinding, missionId: String) async throws -> SharedMissionRead {
+        try validateSharedRead(binding, missionId: missionId)
+        let result: SharedMissionRead = try await sharedRead(binding, path: ["missions", missionId])
+        try validateSharedMissionIdentity(binding, bindingId: result.bindingId, generation: result.generation,
+                                          authority: result.authority, source: result.source)
+        guard result.snapshot.missionId == missionId, result.snapshot.detail.mission.id == missionId,
+              result.snapshot.sequence >= 0, result.proposals.count <= 256,
+              result.proposals.allSatisfy({ $0.missionId == missionId }) else { throw HostRoutingError.invalidReference }
+        return result
+    }
+
+    /// Read one page. A later page must retain the first page's sequence; a 409 requires
+    /// starting again, not combining task versions from different reads.
+    func sharedMissionVersions(_ binding: SharedContextBinding, missionId: String, after: Int = 0,
+                               limit: Int = 128, sequence: Int? = nil) async throws -> SharedMissionVersions {
+        try validateSharedRead(binding, missionId: missionId)
+        guard (1...128).contains(limit), after >= 0, after <= 9_007_199_254_740_991 - limit,
+              sequence.map({ $0 >= 0 && $0 <= 9_007_199_254_740_991 }) ?? true,
+              after == 0 || sequence != nil else { throw HostRoutingError.invalidReference }
+        var query = [URLQueryItem(name: "after", value: String(after)), URLQueryItem(name: "limit", value: String(limit))]
+        if let sequence { query.append(URLQueryItem(name: "sequence", value: String(sequence))) }
+        let result: SharedMissionVersions = try await sharedRead(binding, path: ["missions", missionId, "versions"], query: query)
+        try validateSharedMissionIdentity(binding, bindingId: result.bindingId, generation: result.generation,
+                                          authority: result.authority, source: result.source)
+        guard result.complete, result.missionId == missionId, result.sequence >= 0,
+              sequence == nil || sequence == result.sequence, result.entities.count <= limit,
+              result.next == nil || (result.next == after + result.entities.count && result.entities.count == limit),
+              Set(result.entities.map { [$0.kind.rawValue, $0.id] }).count == result.entities.count,
+              result.entities.allSatisfy({ !$0.id.isEmpty && $0.revision >= 0
+                  && ($0.definitionRevision.map { $0 >= 0 } ?? true) }) else {
+            throw HostRoutingError.invalidReference
+        }
+        return result
+    }
+
+    func sharedMissionConflicts(_ binding: SharedContextBinding) async throws -> [SharedMissionProposal] {
+        let result: [SharedMissionProposal] = try await sharedRead(binding, path: ["conflicts"])
+        guard result.count <= 128, result.allSatisfy({ binding.missionIds.contains($0.missionId) }) else {
+            throw HostRoutingError.invalidReference
+        }
+        return result
+    }
+
+    func sharedMemoryWake(_ binding: SharedContextBinding, lines: Int = 96) async throws -> SharedMemoryRead {
+        guard (1...256).contains(lines) else { throw HostRoutingError.invalidReference }
+        let result = try await sharedMemoryRead(binding, action: "wake", query: [URLQueryItem(name: "lines", value: String(lines))])
+        guard case .view = result.value else { throw HostRoutingError.invalidReference }
+        return result
+    }
+
+    func sharedMemoryRecall(_ binding: SharedContextBinding, regex: String, lines: Int = 96) async throws -> SharedMemoryRead {
+        guard (1...256).contains(lines), regex.utf16.count <= 512 else { throw HostRoutingError.invalidReference }
+        let result = try await sharedMemoryRead(binding, action: "recall", query: [
+            URLQueryItem(name: "regex", value: regex), URLQueryItem(name: "lines", value: String(lines)),
+        ])
+        guard case .recall = result.value else { throw HostRoutingError.invalidReference }
+        return result
+    }
+
+    func sharedMemoryZoom(_ binding: SharedContextBinding, range: MemoryRange) async throws -> SharedMemoryRead {
+        let result = try await sharedMemoryRead(binding, action: "zoom", query: sharedMemoryRange(range))
+        guard case .nodes = result.value else { throw HostRoutingError.invalidReference }
+        return result
+    }
+
+    func sharedMemoryTree(_ binding: SharedContextBinding, range: MemoryRange? = nil,
+                          depth: Int = 2, reveal: [Int] = []) async throws -> SharedMemoryTreeRead {
+        guard binding.shareMemory, (1...64).contains(depth), reveal.count <= 64, reveal.allSatisfy({ $0 >= 0 }) else {
+            throw HostRoutingError.invalidReference
+        }
+        var query = [URLQueryItem(name: "depth", value: String(depth))]
+        if let range { query += try sharedMemoryRange(range) }
+        if !reveal.isEmpty { query.append(URLQueryItem(name: "reveal", value: reveal.map(String.init).joined(separator: ","))) }
+        let result: SharedMemoryTreeRead = try await sharedRead(binding, path: ["memory", "tree"], query: query)
+        try validateSharedMemoryState(result.state, proposals: result.proposals)
+        var nodes = result.value.nodes, visited = 0
+        guard nodes.count <= 1024 else { throw HostRoutingError.invalidReference }
+        while let node = nodes.popLast() {
+            visited += 1
+            let children = node.children ?? []
+            guard visited + nodes.count + children.count <= 1024 else { throw HostRoutingError.invalidReference }
+            nodes.append(contentsOf: children)
+        }
+        return result
+    }
+
+    private func sharedMemoryRange(_ range: MemoryRange) throws -> [URLQueryItem] {
+        guard range.lo >= 0, range.hi >= range.lo else { throw HostRoutingError.invalidReference }
+        return [URLQueryItem(name: "lo", value: String(range.lo)), URLQueryItem(name: "hi", value: String(range.hi))]
+    }
+
+    private func sharedMemoryRead(_ binding: SharedContextBinding, action: String,
+                                  query: [URLQueryItem]) async throws -> SharedMemoryRead {
+        guard binding.shareMemory else { throw HostRoutingError.invalidReference }
+        let result: SharedMemoryRead = try await sharedRead(binding, path: ["memory", action], query: query)
+        try validateSharedMemoryState(result.state, proposals: result.proposals)
+        return result
+    }
+
+    private func validateSharedMemoryState(_ state: SharedMemoryReplicaState, proposals: [SharedMemoryProposal]) throws {
+        guard state.complete, state.sequence >= 0, state.pendingCount >= 0, state.conflictCount >= 0,
+              proposals.count <= 256 else { throw HostRoutingError.invalidReference }
+    }
+
+    private func validateSharedRead(_ binding: SharedContextBinding, missionId: String? = nil) throws {
+        guard let hostIdentity, binding.schemaVersion == 1, binding.generation > 0, binding.state == .active,
+              binding.peers.contains(OperationHost(hostIdentity)),
+              missionId.map({ binding.missionIds.contains($0) }) ?? true else { throw HostRoutingError.invalidReference }
+    }
+
+    private func validateSharedMissionIdentity(_ binding: SharedContextBinding, bindingId: String, generation: UInt64,
+                                               authority: OperationHost, source: SharedReadSource) throws {
+        guard let hostIdentity, bindingId == binding.bindingId, generation == binding.generation,
+              authority == binding.missionHome,
+              (source == .canonical) == authority.matches(hostIdentity) else { throw HostRoutingError.identityChanged }
+    }
+
+    private func sharedRead<Response: Decodable & Sendable>(
+        _ binding: SharedContextBinding, path: [String], query: [URLQueryItem] = []
+    ) async throws -> Response {
+        try validateSharedRead(binding)
+        let value: Response = try await sharedContextRequest([binding.bindingId] + path, query: query, maximumBytes: 1024 * 1024)
+        try validateSharedRead(binding)
+        return value
+    }
+
+    private var activeSharedRequests = 0
+
     private func sharedContextRequest<Response: Decodable & Sendable>(
-        _ path: [String], method: String = "GET", body: Data? = nil
+        _ path: [String], method: String = "GET", body: Data? = nil,
+        query: [URLQueryItem] = [], maximumBytes: Int = 2 * 1024 * 1024
     ) async throws -> Response {
         guard connected, !disconnected else { throw HostRoutingError.disconnected }
         guard (body?.count ?? 0) <= 128 * 1024 else { throw HostRoutingError.invalidReference }
+        guard activeSharedRequests < 2 else { throw ClientError("Shared notes and tasks are busy. Try again.") }
+        activeSharedRequests += 1
+        defer { activeSharedRequests -= 1 }
         let generation = connectionGeneration
-        var request = URLRequest(url: try missionURL(["shared-contexts"] + path))
+        var request = URLRequest(url: try missionURL(["shared-contexts"] + path, query: query))
         request.httpMethod = method; request.httpBody = body
         if body != nil { request.setValue("application/json", forHTTPHeaderField: "content-type") }
-        let (data, response) = try await BoundedHTTPData.read(request, maximumBytes: 2 * 1024 * 1024,
+        let (data, response) = try await BoundedHTTPData.read(request, maximumBytes: maximumBytes,
                                                             configuration: commandConfiguration)
         guard connected, !disconnected, generation == connectionGeneration else { throw HostRoutingError.staleGeneration }
         guard (200 ..< 300).contains(response.statusCode) else {
             // Do not include exported prose or raw daemon diagnostics in UI errors.
-            throw ClientError("Shared context reconciliation is unavailable.", status: response.statusCode)
+            throw ClientError("Shared notes and tasks are unavailable.", status: response.statusCode)
         }
         let value = try await Task.detached(priority: .utility) { try JSONDecoder().decode(Response.self, from: data) }.value
         guard connected, !disconnected, generation == connectionGeneration else { throw HostRoutingError.staleGeneration }
+        try Task.checkCancellation()
+        return value
+    }
+
+    /// Bounded resource transport for typed native adapters. Never accepts a host URL.
+    func resourceRequest<Response: Decodable & Sendable>(_ path: [String], method: String = "GET",
+        body: Data? = nil, query: [URLQueryItem] = [], maximumBytes: Int = 1024 * 1024) async throws -> Response {
+        guard connected, !disconnected else { throw HostRoutingError.disconnected }
+        guard !path.isEmpty, path.count <= 12, path.allSatisfy({ !$0.isEmpty }),
+              (body?.count ?? 0) <= 128 * 1024, maximumBytes > 0, maximumBytes <= 2 * 1024 * 1024,
+              activeSharedRequests < 2 else { throw HostRoutingError.invalidReference }
+        activeSharedRequests += 1
+        defer { activeSharedRequests -= 1 }
+        let fence = connectionGeneration
+        var request = URLRequest(url: try missionURL(path, query: query))
+        request.httpMethod = method; request.httpBody = body
+        if body != nil { request.setValue("application/json", forHTTPHeaderField: "content-type") }
+        let (data, response) = try await BoundedHTTPData.read(request, maximumBytes: maximumBytes, configuration: commandConfiguration)
+        guard connected, !disconnected, connectionGeneration == fence else { throw HostRoutingError.staleGeneration }
+        guard (200..<300).contains(response.statusCode) else {
+            throw ClientError(response.statusCode == 409 ? "This changed elsewhere. Refresh and try again." : "This action could not finish. Your changes have been kept.", status: response.statusCode)
+        }
+        let value = try await Task.detached(priority: .utility) { try JSONDecoder().decode(Response.self, from: data) }.value
+        guard connected, !disconnected, connectionGeneration == fence else { throw HostRoutingError.staleGeneration }
         try Task.checkCancellation()
         return value
     }
@@ -262,6 +418,16 @@ final class PilotClient: ObservableObject {
         hasMissionSnapshot = true
         self.sessions = sessions.sorted(by: SessionSummary.listPrecedes)
         connected = true
+    }
+
+    /// Private offline metadata is presentation only, never a fixture or a live endpoint.
+    func restoreOfflinePresentation(_ snapshot: OfflineHostSnapshot) {
+        guard !connected, baseURL == nil else { return }
+        projects = snapshot.projects
+        sessions = snapshot.sessions.sorted(by: SessionSummary.listPrecedes)
+        missions = snapshot.missions
+        hasProjectSnapshot = true; hasSessionSnapshot = true; hasMissionSnapshot = true
+        disconnected = true
     }
 
     /// Static missions for snapshots and previews. Details are served without subscriptions.

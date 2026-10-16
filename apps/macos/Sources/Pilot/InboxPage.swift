@@ -8,24 +8,30 @@ import SwiftUI
 /// Inbox opens and never saved. Rows keep their usual actions and name their project when listing every project.
 struct InboxPage: View {
     @EnvironmentObject private var model: AppModel
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
+    @ObservedObject private var hosts = AppModel.shared.hosts
     @StateObject private var inbox = InboxModel()
     @StateObject private var actions = TrackedItemActions()
 
     var body: some View {
         let scope = client.project(model.inboxProjectId)
-        content(scope: scope)
+        Group {
+            if model.inboxHost == nil, model.inboxProjectId == nil, !hosts.offlineHosts.isEmpty {
+                UnifiedInboxContent(hosts: hosts)
+            } else { content(scope: scope) }
+        }
             .navigationTitle("Inbox")
             .navigationSubtitle(InboxText.filterTitle(scope))
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
-                    InboxProjectFilter(selection: $model.inboxProjectId, projects: model.orderedProjects, scope: scope)
+                    InboxProjectFilter(selection: $model.inboxProjectId, projects: client.projects, scope: scope)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Theme.background)
             .onAppear { inbox.start(client: client, projectId: scope?.id) }
             .onChange(of: scope?.id) { _, id in inbox.start(client: client, projectId: id) }
+            .onChange(of: client.connectionGeneration) { _, _ in inbox.start(client: client, projectId: scope?.id) }
             .onDisappear { inbox.stop() }
     }
 
@@ -81,6 +87,7 @@ private struct InboxProjectFilter: View {
 
 /// The populated page: Needs you and Ready to merge, then Linear and Slack when a project in scope tracks them.
 private struct InboxSections: View {
+    @EndpointClient private var endpoint
     let inbox: Inbox
     let scope: Project?
     @ObservedObject var actions: TrackedItemActions
@@ -193,17 +200,17 @@ private struct InboxSections: View {
 
     /// Rows name their project only when the Inbox lists every project.
     private func projectName(_ id: String) -> String? {
-        scope == nil ? model.client.project(id)?.name : nil
+        scope == nil ? endpoint.project(id)?.name : nil
     }
 
     /// Slack triage is per project: every project in scope that tracks Slack, in sidebar order.
     private var triageProjects: [Project] {
-        InboxText.triageProjects(model.client.projects, sources: model.client.trackingSources, scope: scope?.id)
+        InboxText.triageProjects(endpoint.projects, sources: endpoint.trackingSources, scope: scope?.id)
     }
 
     /// Sign-in is shared by every project, so one line per source kind is enough.
     private func signInSource(_ kind: TrackedKind) -> TrackingSource? {
-        model.client.trackingSources.first {
+        endpoint.trackingSources.first {
             $0.kind == kind && $0.configured && $0.status == .signInRequired && (scope == nil || $0.projectId == scope?.id)
         }
     }
@@ -224,6 +231,7 @@ final class InboxModel: ObservableObject {
     /// Starts watching, or switches scope. Rows already shown stay until the new scope arrives.
     func start(client: PilotClient, projectId: String?) {
         let changed = self.client !== client || projectId != self.projectId
+        if self.client !== client { stop() }
         self.client = client
         self.projectId = projectId
         if observer == nil {

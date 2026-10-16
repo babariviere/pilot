@@ -33,9 +33,16 @@ struct MemoryCompactionLine: View {
 /// with guide lines so the shape reads at a glance. Search shows matching notes in place with their summaries. Opened
 /// from the Overview's Memory section, the project's … menu and ⌘K. Wide windows add a detail column.
 struct MemoryPage: View {
+    @Environment(\.hostViewContext) private var hostContext
     let projectId: String
     @EnvironmentObject private var model: AppModel
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
+    @State private var sharedBindings: [SharedContextBinding] = []
+    @State private var selectedBindingId = ""
+    @State private var sharingLoaded = false
+    @State private var sharingError: String?
+    @ObservedObject private var hosts = AppModel.shared.hosts
+    @StateObject private var source: SharedMemoryPageSource
     @StateObject private var state: MemoryPageModel
     @FocusState private var treeFocused: Bool
     @FocusState private var searchFocused: Bool
@@ -43,22 +50,33 @@ struct MemoryPage: View {
     /// Width from which the selected node's detail column shows beside the tree.
     static let detailBreakpoint: CGFloat = 980
 
-    init(projectId: String) {
+    init(projectId: String, context: HostViewContext? = nil) {
         self.projectId = projectId
-        _state = StateObject(wrappedValue: MemoryPageModel(projectId: projectId, client: AppModel.shared.client))
+        let source = SharedMemoryPageSource(context: context, local: AppModel.shared.client)
+        _source = StateObject(wrappedValue: source)
+        _state = StateObject(wrappedValue: MemoryPageModel(projectId: projectId, client: source))
     }
 
     var body: some View {
         Group {
             if let project = client.project(projectId) {
-                GeometryReader { proxy in
-                    content(wide: proxy.size.width >= Self.detailBreakpoint)
+                Group {
+                    if selectedBinding != nil {
+                        GeometryReader { proxy in content(wide: proxy.size.width >= Self.detailBreakpoint) }
+                    } else if !sharedBindings.isEmpty {
+                        VStack(alignment: .leading, spacing: 16) {
+                            sharedMemoryPicker
+                            Text("Choose the shared project information to read.").font(.pilot(.body))
+                        }.padding(24)
+                    } else if let sharingError { InlineProblem(sharingError) }
+                    else if !sharingLoaded { ProgressView("Loading project memory…") }
+                    else { GeometryReader { proxy in content(wide: proxy.size.width >= Self.detailBreakpoint) } }
                 }
                 .navigationTitle("Memory")
                 .navigationSubtitle(project.name)
                 .toolbar {
                     ToolbarItem(placement: .navigation) {
-                        Button { model.openProject(project.id) } label: { PilotSymbol(PilotIcon.back) }
+                        Button { model.openProject(project.id, context: hostContext) } label: { PilotSymbol(PilotIcon.back) }
                             .help("Back to \(project.name)")
                             .accessibilityLabel("Back to \(project.name)")
                     }
@@ -70,8 +88,14 @@ struct MemoryPage: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.background)
+        .environment(\.sharedMemoryReadOnly, selectedBinding != nil)
         .dashboardSubscription(projectId, client: client)
-        .task { await state.load() }
+        .task(id: hosts.sharedRevision) { await loadSharing() }
+        .task(id: selectedBindingId + ":" + String(sharingLoaded) + ":" + String(hosts.sharedRevision)) {
+            guard sharingLoaded, sharingError == nil, sharedBindings.isEmpty || selectedBinding != nil else { return }
+            source.select(selectedBinding)
+            await state.load()
+        }
         .task(id: state.query) {
             guard !state.query.trimmingCharacters(in: .whitespaces).isEmpty else {
                 state.clearSearch()
@@ -81,7 +105,7 @@ struct MemoryPage: View {
             guard !Task.isCancelled else { return }
             await state.search()
         }
-        .onChange(of: memoryRevision) { state.scheduleRefresh() }
+        .onChange(of: memoryRevision) { if sharedBindings.isEmpty, sharingLoaded { state.scheduleRefresh() } }
         .onDisappear { state.stop() }
         .confirmationDialog("Forget this summary?", isPresented: Binding(
             get: { state.forgetting != nil }, set: { if !$0 { state.cancelForget() } }
@@ -91,6 +115,32 @@ struct MemoryPage: View {
         } message: {
             Text("The original memory notes stay unchanged. This summary and summaries built from it will be rebuilt.")
         }
+    }
+
+    private var selectedBinding: SharedContextBinding? { sharedBindings.first { $0.bindingId == selectedBindingId } }
+
+    private var sharedMemoryPicker: some View {
+        Picker("Shared project", selection: $selectedBindingId) {
+            Text("Choose shared project").tag("")
+            ForEach(sharedBindings, id: \.bindingId) { binding in
+                Text("\(binding.logicalProjectId) · \(binding.executionProject.projectId)").tag(binding.bindingId)
+            }
+        }.pickerStyle(.menu)
+    }
+
+    private func loadSharing() async {
+        guard let context = hostContext else { sharingLoaded = true; return }
+        do {
+            let values = try await context.hosts.sharedContexts(on: context.host)
+            guard !Task.isCancelled else { return }
+            sharedBindings = values.map(\.binding).filter { binding in
+                binding.state == .active && binding.shareMemory &&
+                ((binding.executionProject.host.matches(context.host) && binding.executionProject.projectId == projectId) ||
+                 (binding.memoryHome.host.matches(context.host) && binding.memoryHome.projectId == projectId))
+            }
+            if selectedBindingId.isEmpty, sharedBindings.count == 1 { selectedBindingId = sharedBindings[0].bindingId }
+            sharingError = nil; sharingLoaded = true
+        } catch { sharingLoaded = true; sharingError = "Reconnect to read this project's saved and pending information." }
     }
 
     private var memory: ProjectMemorySummary? { client.projectDashboards[projectId]?.memory }
@@ -106,6 +156,7 @@ struct MemoryPage: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         header
+                        if !sharedBindings.isEmpty { sharedMemoryPicker.padding(.top, 12) }
                         searchField.padding(.top, 16)
                         statusLine.padding(.top, 6)
                         if let error = state.error {
@@ -113,6 +164,10 @@ struct MemoryPage: View {
                                 .padding(.horizontal, 8).padding(.vertical, 4)
                         }
                         tree.padding(.top, 4)
+                        if let binding = selectedBinding, let context = hostContext {
+                            SharedMemoryContent(host: context.host, binding: binding, hosts: context.hosts,
+                                onOpenChat: { try? model.selectSession($0) }, contributions: source.proposals)
+                        }
                     }
                     .padding(.horizontal, 32)
                     .padding(.vertical, 24)
@@ -133,7 +188,7 @@ struct MemoryPage: View {
     }
 
     private var header: some View {
-        let count = memory?.count ?? state.count
+        let count = selectedBinding == nil ? memory?.count ?? state.count : state.count
         return PageHeader("Memory", subtitle: "\(count) \(count == 1 ? "note" : "notes") from agents in this project, summarised as they grow.") {
             HStack(spacing: 2) {
                 quietButton("Expand all") { Task { await state.expandAll() } }
@@ -181,7 +236,7 @@ struct MemoryPage: View {
             Text("\(matches) matching \(matches == 1 ? "note" : "notes"), shown in the tree · Esc clears")
                 .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
                 .padding(.horizontal, 8).padding(.vertical, 3)
-        } else if let compaction = memory?.compaction {
+        } else if selectedBinding == nil, let compaction = memory?.compaction {
             MemoryCompactionLine(compaction: compaction)
         }
         if let notice = state.notice {
@@ -242,6 +297,7 @@ private struct MemoryRevision: Equatable {
 /// One row of the tree: guide lines, a chevron (summaries) or a dot (notes), the text clamped to two lines and its
 /// metadata. Forget waits under the pointer and in the context menu.
 private struct MemoryTreeRowView: View {
+    @Environment(\.sharedMemoryReadOnly) private var sharedReadOnly
     let row: MemoryTreeRow
     let selected: Bool
     let focused: Bool
@@ -284,7 +340,7 @@ private struct MemoryTreeRowView: View {
                 MemoryNodeMeta(node: node, matches: matches)
             }
             Spacer(minLength: 4)
-            if node.canForget {
+            if node.canForget && !sharedReadOnly {
                 Button(action: forget) { PilotSymbol(PilotIcon.delete, context: .toolbar) }
                     .rowIconButtonStyle(hoverTint: Theme.destructive)
                     .help("Forget this summary")
@@ -309,7 +365,7 @@ private struct MemoryTreeRowView: View {
         .onTapGesture(perform: select)
         .onHover { hovered = $0 }
         .contextMenu {
-            if node.canForget { Button("Forget Summary…", role: .destructive, action: forget) }
+            if node.canForget && !sharedReadOnly { Button("Forget Summary…", role: .destructive, action: forget) }
         }
         .help(node.pending == true ? "Summary is being built" : node.title)
         .accessibilityElement(children: .contain)
@@ -371,6 +427,7 @@ private struct MemoryNodeMeta: View {
 
 /// The selected node in full: its text, range and children (the halves a summary was built from, or its notes).
 private struct MemoryNodeDetail: View {
+    @Environment(\.sharedMemoryReadOnly) private var sharedReadOnly
     @ObservedObject var state: MemoryPageModel
 
     var body: some View {
@@ -435,7 +492,7 @@ private struct MemoryNodeDetail: View {
             } else {
                 ProgressView().controlSize(.small)
             }
-            if node.canForget {
+            if node.canForget && !sharedReadOnly {
                 Button("Forget summary…") { state.requestForget(node) }
                     .destructiveOutlineButtonStyle()
                     .padding(.top, 20)

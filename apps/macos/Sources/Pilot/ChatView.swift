@@ -14,6 +14,8 @@ final class SessionFeed: ObservableObject {
     private let sessionId: String
     private let client: PilotClient?
     private var token: UUID?
+    private var hostedContext: HostViewContext?
+    private var releaseHosted: (() -> Void)?
     private var earlierLoad: Task<Void, Never>?
     private var outgoingExpiry: Task<Void, Never>?
     private var outgoingDeadline: Date?
@@ -24,12 +26,19 @@ final class SessionFeed: ObservableObject {
     private var processorRevision = 0
     var onPresentationChanged: (() -> Void)?
     var onEventsApplied: (([JSONValue]) -> Void)?
-    var isSubscribed: Bool { token != nil }
+    var isSubscribed: Bool { token != nil || releaseHosted != nil }
     var cachedByteCount: Int { presentation.cachedByteCount }
 
     init(sessionId: String, client: PilotClient, initialPresentation: TranscriptPresentation = TranscriptPresentation()) {
         self.sessionId = sessionId
         self.client = client
+        presentation = initialPresentation
+    }
+
+    init(ref: HostResourceRef, hosts: HostClients, initialPresentation: TranscriptPresentation = TranscriptPresentation()) {
+        sessionId = ref.localId
+        client = nil
+        hostedContext = HostViewContext(host: ref.host, hosts: hosts)
         presentation = initialPresentation
     }
 
@@ -43,6 +52,15 @@ final class SessionFeed: ObservableObject {
     }
 
     func start() {
+        if let context = hostedContext {
+            guard releaseHosted == nil else { return }
+            loading = presentation.rows.isEmpty && context.available
+            hasSnapshot = false
+            releaseHosted = try? context.hosts.subscribe(context.ref(.session, sessionId)) { [weak self] events in
+                self?.enqueue(events)
+            }
+            return
+        }
         guard let client, token == nil else { return }
         generation = UUID()
         processor = TranscriptProcessor()
@@ -67,7 +85,7 @@ final class SessionFeed: ObservableObject {
 
     /// Offline performance fixtures use the production reduction/publication path without a socket.
     func applyFixtureEvents(_ events: [JSONValue]) {
-        guard client == nil else { return }
+        guard client == nil, hostedContext == nil else { return }
         enqueue(events)
     }
 
@@ -112,6 +130,7 @@ final class SessionFeed: ObservableObject {
     }
 
     func stop() {
+        releaseHosted?(); releaseHosted = nil
         if let token { client?.unsubscribe(sessionId, token: token) }
         token = nil
         generation = UUID()
@@ -175,13 +194,19 @@ final class SessionFeed: ObservableObject {
     /// Loads the next older page hidden by compaction. The page joins the event queue, so it is reduced
     /// off the main actor and in order with live events; a page for a stale cursor is ignored there.
     func loadEarlier() {
-        guard let client, token != nil, hasSnapshot, earlierLoad == nil, let before = presentation.earlierCursor else { return }
+        guard isSubscribed, hasSnapshot, earlierLoad == nil, let before = presentation.earlierCursor else { return }
+        let client = self.client
+        let context = hostedContext
         let generation = generation
         loadingEarlier = true
         earlierError = nil
         earlierLoad = Task { [weak self, sessionId] in
             let result: Result<JSONValue, Error>
-            do { result = .success(try await client.history(sessionId, before: before)) }
+            do {
+                if let context { result = .success(try await context.perform(.session, sessionId) { client, id in try await client.history(id, before: before) }) }
+                else if let client { result = .success(try await client.history(sessionId, before: before)) }
+                else { throw HostRoutingError.disconnected }
+            }
             catch { result = .failure(error) }
             guard let self, !Task.isCancelled, self.generation == generation else { return }
             self.earlierLoad = nil
@@ -218,10 +243,15 @@ struct ChatView: View {
     /// Offline performance checks report this, so redundant transcript invalidations are countable.
     static var bodyEvaluations = 0
 
-    init(session: SessionSummary, feed: SessionFeed? = nil, composer: ComposerState? = nil) {
+    private let context: HostViewContext?
+    @ObservedObject private var hosts = AppModel.shared.hosts
+    @EndpointClient private var endpoint
+
+    init(session: SessionSummary, feed: SessionFeed? = nil, composer: ComposerState? = nil, context: HostViewContext? = nil) {
+        self.context = context
         self.session = session
-        _feed = StateObject(wrappedValue: feed ?? AppModel.shared.feeds.feed(sessionId: session.id, client: AppModel.shared.client))
-        _composerOwner = StateObject(wrappedValue: ChatComposerOwner(composer ?? AppModel.shared.composer(for: session.id)))
+        _feed = StateObject(wrappedValue: feed ?? context.map { AppModel.shared.feeds.feed(ref: $0.ref(.session, session.id), hosts: $0.hosts) } ?? AppModel.shared.feeds.feed(sessionId: session.id, client: AppModel.shared.client))
+        _composerOwner = StateObject(wrappedValue: ChatComposerOwner(composer ?? context.flatMap { try? AppModel.shared.composer(for: $0.ref(.session, session.id)) } ?? AppModel.shared.composer(for: session.id)))
     }
 
     private var composer: ComposerState { composerOwner.state }
@@ -243,7 +273,11 @@ struct ChatView: View {
                             .frame(maxWidth: Theme.column, alignment: .leading)
                             .frame(maxWidth: .infinity)
                     }
-                    if feed.loading, session.state != "failed" {
+                    if let context, !context.available {
+                        DisconnectedNotice(context: context, historyCached: !transcript.rows.isEmpty)
+                            .frame(maxWidth: Theme.column).frame(maxWidth: .infinity)
+                    }
+                    if feed.loading, session.state != "failed", context?.available != false {
                         ProgressView(session.state == "starting" ? "Starting task…" : "Loading conversation…")
                             .frame(maxWidth: .infinity)
                     }
@@ -293,7 +327,7 @@ struct ChatView: View {
                                     composer.error = nil
                                     Task {
                                         defer { retryingStartup = false }
-                                        do { try await model.client.retryStartup(session.id) }
+                                        do { try await perform { client, id in try await client.retryStartup(id) } }
                                         catch { composer.error = error.localizedDescription }
                                     }
                                 } label: {
@@ -319,8 +353,8 @@ struct ChatView: View {
                             .background(ChatReviewVisibility {
                                 guard !session.isWorking, session.outcome != nil,
                                       feed.hasSnapshot, !transcript.working, !transcript.streaming,
-                                      model.selectedSessionId == session.id else { return }
-                                model.review(session, chatVisible: true)
+                                      model.hosts.selection == context?.ref(.session, session.id) || (context == nil && model.selectedSessionId == session.id) else { return }
+                                if let context { model.review(session, on: context.host, chatVisible: true) } else { model.review(session, chatVisible: true) }
                             })
                     }
                 }
@@ -351,11 +385,16 @@ struct ChatView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
+                if let context, context.host != model.localHost {
+                    OperationDeliveryNotice(ref: context.ref(.session, session.id), hosts: context.hosts,
+                        adopt: { operation in try await model.adoptPendingMessage(operation, composer: composer) })
+                        .padding(.horizontal, 24)
+                }
                 if session.isAsk {
                     // Matches the other rows above the composer, such as the queued-messages header.
                     HStack {
                         Button {
-                            model.buildWithContext(from: session, rows: transcript.rows)
+                            model.buildWithContext(from: session, rows: transcript.rows, context: context)
                         } label: {
                             Label("Start a Build chat with this context", icon: PilotIcon.buildMode)
                         }
@@ -389,6 +428,7 @@ struct ChatView: View {
                 } else if let question = pendingQuestion(transcript) {
                     QuestionComposer(question: question, draft: composer.draftState, onSend: answer,
                                      onDecideAccess: decideDatabaseAccess)
+                        .disabled(context?.available == false)
                         // Each question starts with nothing highlighted or ticked.
                         .id(question.entryID)
                         .transition(Theme.Motion.replacement(reduceMotion: reduceMotion))
@@ -396,31 +436,29 @@ struct ChatView: View {
                     Composer(
                         state: composer,
                         working: transcript.working || session.state == "starting",
+                        hostAvailable: context?.available ?? true,
+                        rawAttachments: context != nil && context?.host != model.localHost,
                         queuedMessages: visibleQueuedMessages(transcript),
                         automaticInputs: transcript.automaticInputs,
-                        completionDirectory: session.isAsk ? nil : session.cwd,
+                        completionDirectory: session.isAsk || (context != nil && context?.host != model.localHost) ? nil : session.cwd,
                         onSend: send,
-                        onStop: {
-                            feed.clearOutgoing()
-                            model.stopSession(session.id)
-                        },
+                        onStop: { feed.clearOutgoing(); stop() },
                         onEditQueuedMessage: { id, text, mode in
-                            try await AppModel.shared.client.editQueuedMessage(
-                                session.id, submissionId: id, message: text, mode: mode
-                            )
+                            try await perform { client, sessionId in try await client.editQueuedMessage(sessionId, submissionId: id, message: text, mode: mode) }
                         },
                         onRemoveQueuedMessage: { id in
-                            try await AppModel.shared.client.removeQueuedMessage(session.id, submissionId: id)
+                            try await perform { client, sessionId in try await client.removeQueuedMessage(sessionId, submissionId: id) }
                         },
-                        onSendHeld: { try await AppModel.shared.client.sendHeldMessages(session.id) },
-                        onDiscardHeld: { id in try await AppModel.shared.client.discardHeldMessages(session.id, submissionId: id) },
+                        onSendHeld: { try await perform { client, id in try await client.sendHeldMessages(id) } },
+                        onDiscardHeld: { id in try await perform { client, sessionId in try await client.discardHeldMessages(sessionId, submissionId: id) } },
                         session: session,
                         todos: session.isAsk ? [] : transcript.todos,
                         slashCommands: slashCommands.commands,
                         onSlashCommandsNeeded: { [sessionId = session.id] in
-                            slashCommands.load(sessionId: sessionId, client: AppModel.shared.client)
+                            slashCommands.load(sessionId: sessionId, client: endpoint)
                         },
-                        onSchedule: session.isReadOnlyHistory ? nil : schedule
+                        onSchedule: session.isReadOnlyHistory || (context != nil && context?.host != model.localHost) ? nil : schedule,
+                        context: context
                     )
                     .transition(Theme.Motion.replacement(reduceMotion: reduceMotion))
                 }
@@ -443,6 +481,23 @@ struct ChatView: View {
         .onDisappear {
             feed.onEventsApplied = nil
             feed.stop(); scroll.cancelPreparedScroll(); preparedAction.action = nil
+        }
+    }
+
+    private func perform<Value>(_ action: (PilotClient, String) async throws -> Value) async throws -> Value {
+        if let context { return try await context.perform(.session, session.id, action) }
+        return try await action(endpoint, session.id)
+    }
+
+    private func stop() {
+        guard let context, context.host != model.localHost else { model.stopSession(session.id); return }
+        Task {
+            do {
+                if let withdrawn = try await context.hosts.requestStop(context.ref(.session, session.id)), !withdrawn.isEmpty {
+                    composer.draft = [composer.draft, withdrawn].filter { !$0.isEmpty }.joined(separator: "\n\n")
+                    try model.persistDrafts()
+                }
+            } catch { composer.error = "Stop requested. Not yet confirmed. " + error.localizedDescription }
         }
     }
 
@@ -471,7 +526,9 @@ struct ChatView: View {
     }
 
     private func answer(_ message: String) async throws {
-        try await AppModel.shared.client.send(session.id, message: message, mode: .steer)
+        if let context, context.host != model.localHost {
+            try await model.deliverMessage(context.ref(.session, session.id), text: message, mode: .steer, composer: composer, includeImages: false)
+        } else { try await endpoint.send(session.id, message: message, mode: .steer) }
     }
 
     private func decideDatabaseAccess(_ access: AgentQuestion.DatabaseAccess, allow: Bool) async throws {
@@ -498,6 +555,13 @@ struct ChatView: View {
             compact(instructions)
             return
         }
+        if let context, context.host != model.localHost {
+            Task {
+                do { try await model.deliverMessage(context.ref(.session, session.id), text: composer.trimmed, mode: mode, composer: composer) }
+                catch { composer.error = error.localizedDescription }
+            }
+            return
+        }
         let previous = composer.draft
         do { try composer.attachments.retainForHistory() }
         catch {
@@ -510,7 +574,7 @@ struct ChatView: View {
         let outgoing = withAnimation(Theme.Motion.standard(reduceMotion: reduceMotion)) { feed.addOutgoing(message) }
         Task {
             do {
-                try await AppModel.shared.client.send(session.id, message: message, mode: mode)
+                try await perform { client, id in try await client.send(id, message: message, mode: mode) }
                 if let outgoing { feed.acceptOutgoing(outgoing) }
             } catch {
                 if let outgoing { feed.removeOutgoing(outgoing) }
@@ -544,7 +608,7 @@ struct ChatView: View {
         )
         Task {
             do {
-                _ = try await AppModel.shared.client.createSchedule(request)
+                _ = try await perform { client, _ in try await client.createSchedule(request) }
             } catch {
                 composer.draft = [previous, composer.draft].filter { !$0.isEmpty }.joined(separator: "\n\n")
                 composer.attachments.items.insert(contentsOf: previousAttachments.items, at: 0)
@@ -563,7 +627,7 @@ struct ChatView: View {
         composer.draft = ""
         Task {
             do {
-                try await AppModel.shared.client.compact(session.id, instructions: instructions.isEmpty ? nil : instructions)
+                try await perform { client, id in try await client.compact(id, instructions: instructions.isEmpty ? nil : instructions) }
             } catch {
                 composer.draft = [previous, composer.draft].filter { !$0.isEmpty }.joined(separator: "\n\n")
                 composer.error = error.localizedDescription
@@ -605,6 +669,7 @@ private final class TranscriptPreparedAction: ObservableObject {
 }
 
 struct RowView: View, Equatable {
+    @Environment(\.hostViewContext) private var hostContext
     let row: ChatRow
     let toolExpansions: TranscriptExpansions?
     let messageExpansions: TranscriptExpansions?
@@ -664,7 +729,7 @@ struct RowView: View, Equatable {
             WorkGroupView(id: row.id, group: TurnWork(rows: [row]), active: active, toolExpansions: toolExpansions,
                           expansions: messageExpansions)
         case let .artifact(_, reference):
-            ArtifactCard(reference: reference)
+            ArtifactCard(reference: reference, host: hostContext?.host)
         case let .question(id, question):
             ChatEventRow(event: .question(id: id, question: question), expansion: messageExpansions?.state(for: id))
         case let .error(_, text):

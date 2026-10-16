@@ -8,9 +8,10 @@ import SwiftUI
 /// Overview: one reading column, a headline summary and hairline-row sections, with the project name as the
 /// window title and its actions in the toolbar. Chat rows carry the sidebar's dithered corner, not a status icon.
 struct ProjectPage: View {
+    @Environment(\.hostViewContext) private var hostContext
     let projectId: String
     @EnvironmentObject private var model: AppModel
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
     @Environment(\.openSettings) private var openSettings
     @State private var showingArtifacts = false
     /// The tracked items sheet: every source from the … menu, or one source from its page section.
@@ -83,9 +84,9 @@ struct ProjectPage: View {
                         banner
                         EmptyStateView(icon: PilotIcon.project, title: "Start the first chat",
                                        message: "Chats, pull requests and missions for \(project.name) appear here.") {
-                            Button("New Chat") { model.newSession(in: project.id) }
+                            Button("New Chat") { model.newSession(in: project.id, context: hostContext) }
                                 .buttonStyle(.borderedProminent)
-                            Button("New Mission…") { model.missionSheet = .create(projectId: project.id) }
+                            Button("New Mission…") { model.presentMissionSheet(.create(projectId: project.id), context: hostContext) }
                         }
                     }
                     .padding(.horizontal, 32)
@@ -97,7 +98,7 @@ struct ProjectPage: View {
                 ProjectDashboardBody(project: project, dashboard: dashboard,
                                      scheduled: scheduled,
                                      banner: banner, showFullList: showFullList,
-                                     browseMemory: { model.openMemory(project.id) },
+                                     browseMemory: { model.openMemory(project.id, context: hostContext) },
                                      trackedActions: trackedActions,
                                      showTracked: { trackedSheet = $0 },
                                      openSettings: { openProjectSettings(project) })
@@ -145,13 +146,15 @@ struct ProjectPage: View {
     }
 
     private func openProjectSettings(_ project: Project) {
-        model.settingsTab = .project(project.id)
+        model.settingsTab = .project(hostContext?.ref(.project, project.id).storageKey ?? project.id)
         openSettings()
     }
 }
 
 /// New chat (with New mission in its menu) and the project's secondary actions.
 private struct ProjectToolbar: ToolbarContent {
+    @Environment(\.hostViewContext) private var hostContext
+    @EndpointClient private var endpoint
     let project: Project
     let model: AppModel
     let openSettings: () -> Void
@@ -161,15 +164,15 @@ private struct ProjectToolbar: ToolbarContent {
     var body: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
             Menu {
-                Button { model.newSession(in: project.id) } label: { Label("New Chat", icon: PilotIcon.compose) }
-                Button { model.missionSheet = .create(projectId: project.id) } label: {
+                Button { model.newSession(in: project.id, context: hostContext) } label: { Label("New Chat", icon: PilotIcon.compose) }
+                Button { model.presentMissionSheet(.create(projectId: project.id), context: hostContext) } label: {
                     Label("New Mission…", icon: PilotIcon.mission)
                 }
             } label: {
                 Label("New chat", icon: PilotIcon.compose)
                     .labelStyle(.titleAndIcon)
             } primaryAction: {
-                model.newSession(in: project.id)
+                model.newSession(in: project.id, context: hostContext)
             }
             .help("Start a chat in \(project.name)")
         }
@@ -182,19 +185,19 @@ private struct ProjectToolbar: ToolbarContent {
                     }
                 }
                 Button(action: openSettings) { Label("Project Settings…", icon: PilotIcon.settings) }
-                Button { NSWorkspace.shared.open(URL(filePath: project.path)) } label: {
-                    Label("Open in Finder", icon: PilotIcon.project)
+                if hostContext == nil || hostContext?.host.hostId == "local" {
+                    Button { NSWorkspace.shared.open(URL(filePath: project.path)) } label: { Label("Open in Finder", icon: PilotIcon.project) }
                 }
-                Button { model.openProjectOnGitHub(project) } label: {
+                Button { Task { do { BrowserLinkOpener.shared.open(try await endpoint.projectGitHubURL(project.id)) } catch { model.projectActionError = error.localizedDescription } } } label: {
                     Label("Open on GitHub", icon: PilotIcon.openExternal)
                 }
                 .disabled(model.openingGitHubProjectId != nil)
                 Divider()
-                Button { model.showArchive(in: project.id) } label: {
+                Button { model.showArchive(in: project.id, context: hostContext) } label: {
                     Label("Browse Archived Chats", icon: PilotIcon.archive)
                 }
                 Button(action: showArtifacts) { Label("Artifacts…", icon: PilotIcon.artifact) }
-                Button { model.openMemory(project.id) } label: { Label("Memory", icon: PilotIcon.memory) }
+                Button { model.openMemory(project.id, context: hostContext) } label: { Label("Memory", icon: PilotIcon.memory) }
                 Divider()
                 if model.sidebarScope == project.id {
                     Button { model.focus(on: nil) } label: {
@@ -217,6 +220,8 @@ private struct ProjectToolbar: ToolbarContent {
 
 /// The populated page. One minute timeline keeps relative times current without per-row timers.
 private struct ProjectDashboardBody: View {
+    @Environment(\.hostViewContext) private var hostContext
+    @EndpointClient private var endpoint
     let project: Project
     let dashboard: ProjectDashboard
     let scheduled: [ScheduledItem]
@@ -241,7 +246,7 @@ private struct ProjectDashboardBody: View {
     }
 
     private func sections(now: Date) -> some View {
-        let client = model.client
+        let client = endpoint
         let overview = ProjectOverview(dashboard)
         return VStack(alignment: .leading, spacing: 28) {
             if let banner { banner }
@@ -265,7 +270,7 @@ private struct ProjectDashboardBody: View {
             }
 
             ProjectPageSection(header: PageSectionHeader(title: "Up next", linkTitle: overview.inboxLinkTitle) {
-                model.showInbox(for: project.id)
+                model.showInbox(for: project.id, context: hostContext)
             }) {
                 if overview.upNext.isEmpty {
                     HStack(spacing: 8) {
@@ -365,7 +370,7 @@ private struct ProjectDashboardBody: View {
 
             if !dashboard.recent.items.isEmpty {
                 ProjectPageSection(header: PageSectionHeader(title: "Recent", linkTitle: "Archived chats") {
-                    model.showArchive(in: project.id)
+                    model.showArchive(in: project.id, context: hostContext)
                 }) {
                     ForEach(dashboard.recent.items) { item in
                         ProjectRecentRow(item: item, missionTitle: client.mission(item.missionId)?.title, now: now)
@@ -445,6 +450,7 @@ private enum ProjectFullList: String, Identifiable {
 
 /// A bounded, one-time dashboard read keeps long lists out of the live page and uses no polling.
 private struct ProjectFullListSheet: View {
+    @EndpointClient private var endpoint
     let project: Project
     let list: ProjectFullList
     let dashboard: ProjectDashboard?
@@ -473,7 +479,7 @@ private struct ProjectFullListSheet: View {
                             capNote(dashboard.pullRequests.total, dashboard.pullRequests.items.count)
                         case .missions:
                             let coordinatorColumn = ProjectPageText.hasCoordinator(dashboard.missions.items,
-                                                                                   client: model.client)
+                                                                                   client: endpoint)
                             ForEach(Array(dashboard.missions.items.enumerated()), id: \.element.id) { index, item in
                                 if index > 0 { HairlineDivider(leading: 34) }
                                 ProjectMissionRow(mission: item, coordinatorColumn: coordinatorColumn)
@@ -541,6 +547,7 @@ struct ProjectRefreshBanner: View {
 /// five open rows and "All N issues" for my full list. With no active cycle, my open issues in the team.
 /// One quiet line until a team is attached. Rows reuse the tracked row and its Start chat / Start mission.
 private struct ProjectCycleSection: View {
+    @EndpointClient private var endpoint
     let project: Project
     /// The dashboard's Linear group, absent until a team is attached and the source is configured.
     let group: DashboardTrackedSource?
@@ -556,7 +563,7 @@ private struct ProjectCycleSection: View {
                                                       linkTitle: total > 0 ? TrackedItemText.allIssues(total) : nil,
                                                       link: showAll)) {
             if let group {
-                let source = projectTrackingSource(group, projectId: project.id, kind: .linear, client: model.client)
+                let source = projectTrackingSource(group, projectId: project.id, kind: .linear, client: endpoint)
                 let open = group.items.map { TrackedItem(dashboard: $0, projectId: project.id, kind: .linear) }
                 let done = (group.done?.items ?? []).map { TrackedItem(dashboard: $0, projectId: project.id, kind: .linear) }
                 let doneCount = group.done?.total ?? 0
@@ -581,6 +588,7 @@ private struct ProjectCycleSection: View {
 /// status, at most five rows and "Show all N". Slack opens its triage view. One quiet line until a source is
 /// configured.
 private struct ProjectTrackedSection: View {
+    @EndpointClient private var endpoint
     let project: Project
     /// Dashboard groups other than Linear, which has the Current cycle section.
     let groups: [DashboardTrackedSource]
@@ -604,7 +612,7 @@ private struct ProjectTrackedSection: View {
     }
 
     private func sourceGroup(_ group: DashboardTrackedSource, kind: TrackedKind) -> some View {
-        let source = projectTrackingSource(group, projectId: project.id, kind: kind, client: model.client)
+        let source = projectTrackingSource(group, projectId: project.id, kind: kind, client: endpoint)
         let items = group.items.map { TrackedItem(dashboard: $0, projectId: project.id, kind: kind) }
         let openAll = { kind == .slack ? model.openSlackTriage(project.id) : showAll(kind) }
         return VStack(alignment: .leading, spacing: 4) {
@@ -662,12 +670,14 @@ private func projectTrackingSource(_ group: DashboardTrackedSource, projectId: S
 
 /// Also listed in the Inbox, where `context` names the row's project. Lists add `.inboxCorner(item.signal)`.
 struct ProjectNeedsYouRow: View {
+    @Environment(\.hostViewContext) private var hostContext
+    @EndpointClient private var endpoint
     let item: DashboardNeedsYouItem
     let now: Date
     /// The project name, when the list mixes projects.
     var context: String? = nil
     @EnvironmentObject private var model: AppModel
-    @ObservedObject private var mcp = AppModel.shared.client.mcp
+    private var mcp: McpStatusStore { endpoint.mcp }
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
@@ -685,9 +695,9 @@ struct ProjectNeedsYouRow: View {
 
     /// Reads like the chat's sidebar row: mission or coordinator, PR badge, branch, then the reason.
     private var detail: InboxRowDetail {
-        let session = chatId.flatMap { model.client.session($0) }
+        let session = chatId.flatMap { endpoint.session($0) }
         // A mission's own row (a question or blocked task) is titled with the mission already.
-        let missionTitle = chatId == nil ? nil : item.missionId.flatMap { model.client.mission($0)?.title }
+        let missionTitle = chatId == nil ? nil : item.missionId.flatMap { endpoint.mission($0)?.title }
         return InboxRowDetail(projectName: context, session: session, missionTitle: missionTitle,
                               reason: ProjectPageText.needsSubtitle(item, now: now))
     }
@@ -700,14 +710,14 @@ struct ProjectNeedsYouRow: View {
     private func open() {
         switch item.kind {
         case .question:
-            if let sessionId = item.sessionId { model.selectedSessionId = sessionId }
-            else if let missionId = item.missionId { model.openMission(missionId) }
+            if let sessionId = item.sessionId { model.navigate(.session, id: sessionId, context: hostContext) }
+            else if let missionId = item.missionId { model.openMission(missionId, context: hostContext) }
         case .unread, .failed, .scheduledFailed, .longJob, .prStuck:
-            if let sessionId = item.sessionId { model.selectedSessionId = sessionId }
+            if let sessionId = item.sessionId { model.navigate(.session, id: sessionId, context: hostContext) }
         case .mcp:
             let action = mcpAction
             let server = item.attentionReason?.server
-            Task { await model.client.performMcpAttention(action, server: server) { openSettings() } }
+            Task { await endpoint.performMcpAttention(action, server: server) { openSettings() } }
         }
     }
 }
@@ -715,6 +725,8 @@ struct ProjectNeedsYouRow: View {
 /// A chat row opens its chat or its mission from the context menu. A scheduled item that could not start stays
 /// under Needs you until dismissed, which deletes it in pilotd.
 private struct NeedsYouRowActions: ViewModifier {
+    @Environment(\.hostViewContext) private var hostContext
+    @EndpointClient private var endpoint
     let item: DashboardNeedsYouItem
     let chatId: String?
     @EnvironmentObject private var model: AppModel
@@ -723,14 +735,14 @@ private struct NeedsYouRowActions: ViewModifier {
         if item.kind == .scheduledFailed, let id = item.scheduledId {
             content
                 .contextMenu {
-                    if let sessionId = item.sessionId { Button("Open Chat") { model.selectedSessionId = sessionId } }
+                    if let sessionId = item.sessionId { Button("Open Chat") { model.navigate(.session, id: sessionId, context: hostContext) } }
                     Button("Dismiss") { dismiss(id) }
                 }
                 .accessibilityAction(named: "Dismiss") { dismiss(id) }
         } else if let chatId {
             content.contextMenu {
-                Button("Open Chat") { model.selectedSessionId = chatId }
-                if let missionId = item.missionId { Button("Open Mission") { model.openMission(missionId) } }
+                Button("Open Chat") { model.navigate(.session, id: chatId, context: hostContext) }
+                if let missionId = item.missionId { Button("Open Mission") { model.openMission(missionId, context: hostContext) } }
             }
         } else {
             content
@@ -739,19 +751,20 @@ private struct NeedsYouRowActions: ViewModifier {
 
     private func dismiss(_ id: String) {
         Task {
-            do { try await model.client.deleteSchedule(id) }
+            do { try await endpoint.deleteSchedule(id) }
             catch { model.sessionActionError = error.localizedDescription }
         }
     }
 }
 
 private struct ProjectScheduledRow: View {
+    @EndpointClient private var endpoint
     let item: ScheduledItem
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
         let chatTitle: String? = if case let .message(sessionId, _) = item.target {
-            model.client.session(sessionId)?.title
+            endpoint.session(sessionId)?.title
         } else { nil }
         ScheduledItemRow(item: item, detail: ScheduleText.detail(item, chatTitle: chatTitle)) {
             model.selectedSessionId = $0
@@ -762,16 +775,18 @@ private struct ProjectScheduledRow: View {
 /// A running chat. Its second line reads like its sidebar row (coordinator, or mission, PR badge and branch),
 /// then mode and model; its corner is the chat's live state.
 private struct ProjectWorkingRow: View {
+    @Environment(\.hostViewContext) private var hostContext
+    @EndpointClient private var endpoint
     let item: DashboardWorkingItem
     let now: Date
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        let session = model.client.session(item.sessionId)
+        let session = endpoint.session(item.sessionId)
         let mode = ProjectPageText.workingMode(item)
         let detail = InboxRowDetail(session: session, missionTitle: item.missionTitle, reason: mode)
         let elapsed = item.state == .starting ? "Starting" : SessionTimeFormatting.relative(item.startedAt, now: now)
-        Button { model.selectedSessionId = item.sessionId } label: {
+        Button { model.navigate(.session, id: item.sessionId, context: hostContext) } label: {
             HoverRow(verticalPadding: 7) { _ in
                 InboxRowLabel(title: item.title) {
                     if session != nil { detail } else { fallbackDetail }
@@ -789,7 +804,7 @@ private struct ProjectWorkingRow: View {
                              "working for \(elapsed)"]
             .filter { !$0.isEmpty }.joined(separator: ", "))
         .contextMenu {
-            Button("Open Chat") { model.selectedSessionId = item.sessionId }
+            Button("Open Chat") { model.navigate(.session, id: item.sessionId, context: hostContext) }
             Button("Stop Chat") { model.stopSession(item.sessionId) }
             if let pr = item.pullRequest, let url = dashboardBrowserURL(pr.url) {
                 Link("Open PR #\(pr.number) in Browser", destination: url)
@@ -908,14 +923,16 @@ struct PullRequestReadinessStyle: Equatable {
 /// An open pull request. The second line reads like its chat's sidebar row (mission or coordinator, PR badge with
 /// its readiness, branch), then what it waits on. Ready ones carry the Ready to merge corner; the others are quiet.
 private struct ProjectPullRequestRow: View {
+    @Environment(\.hostViewContext) private var hostContext
+    @EndpointClient private var endpoint
     let pr: DashboardPullRequest
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
         let readiness = PullRequestReadinessStyle(pr)
         let url = dashboardBrowserURL(pr.url)
-        let detail = InboxRowDetail(session: model.client.session(pr.sessionId),
-                                    missionTitle: pr.missionId.flatMap { model.client.mission($0)?.title },
+        let detail = InboxRowDetail(session: endpoint.session(pr.sessionId),
+                                    missionTitle: pr.missionId.flatMap { endpoint.mission($0)?.title },
                                     reason: readiness.label, pullRequest: pr)
         Button { if let url { BrowserLinkOpener.shared.open(url) } else { openChat() } } label: {
             HoverRow(verticalPadding: 7) { hovered in
@@ -944,10 +961,12 @@ private struct ProjectPullRequestRow: View {
         }
     }
 
-    private func openChat() { model.selectedSessionId = pr.sessionId }
+    private func openChat() { model.navigate(.session, id: pr.sessionId, context: hostContext) }
 }
 
 private struct ProjectMissionRow: View {
+    @Environment(\.hostViewContext) private var hostContext
+    @EndpointClient private var endpoint
     let mission: DashboardMission
     /// Some row of the list has a coordinator button: rows without one keep its space so progress bars line up.
     var coordinatorColumn = false
@@ -961,7 +980,7 @@ private struct ProjectMissionRow: View {
         // The row opens the mission; the coordinator button beside it is a sibling, so it never opens both.
         HoverRow(verticalPadding: 7) { _ in
             HStack(spacing: 10) {
-                Button { model.openMission(mission.id) } label: {
+                Button { model.openMission(mission.id, context: hostContext) } label: {
                     HStack(spacing: 10) {
                         PilotSymbol(PilotIcon.mission, context: .row).foregroundStyle(Theme.foreground).frame(width: 16)
                         Text(mission.title).font(.pilot(.body)).foregroundStyle(Theme.foreground).lineLimit(1)
@@ -1014,7 +1033,7 @@ private struct ProjectMissionRow: View {
             MissionEditAction(missionId: mission.id)
             Divider()
             // Dashboard rows carry counts, not status. Use the live mission summary.
-            if let summary = model.client.mission(mission.id) {
+            if let summary = endpoint.mission(mission.id) {
                 MissionStatusActions(missionId: mission.id, status: summary.status)
             }
             Divider()
@@ -1028,36 +1047,38 @@ private struct ProjectMissionRow: View {
     }
 
     private var coordinator: String? {
-        ProjectPageText.coordinator(mission, live: model.client.mission(mission.id))
+        ProjectPageText.coordinator(mission, live: endpoint.mission(mission.id))
     }
 
     /// The sidebar's mission corner (its most urgent chat), or the dashboard counts until the mission loads.
     private var signal: SessionSignal? {
-        guard let live = model.client.mission(mission.id) else { return mission.signal }
-        return MissionSidebarSummary.signal(mission: live, members: model.members(of: live),
+        guard let live = endpoint.mission(mission.id) else { return mission.signal }
+        return MissionSidebarSummary.signal(mission: live, members: model.members(of: live, context: hostContext),
                                             isUnread: { model.isUnread($0) })
     }
 
     /// Its working chats only wait on background jobs, as the sidebar's mission row reads it.
     private var waitingOnJobs: Bool {
-        guard let live = model.client.mission(mission.id) else { return false }
-        return MissionSidebarSummary.waitingOnJobs(mission: live, members: model.members(of: live))
+        guard let live = endpoint.mission(mission.id) else { return false }
+        return MissionSidebarSummary.waitingOnJobs(mission: live, members: model.members(of: live, context: hostContext))
     }
 }
 
 /// A finished chat on one line: title, then its sidebar second line (mission or coordinator, PR badge, branch).
 private struct ProjectRecentRow: View {
+    @Environment(\.hostViewContext) private var hostContext
+    @EndpointClient private var endpoint
     let item: DashboardRecentItem
     let missionTitle: String?
     let now: Date
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        let session = model.client.session(item.sessionId)
+        let session = endpoint.session(item.sessionId)
         let detail = InboxRowDetail(session: session, missionTitle: missionTitle)
         let meta = session == nil ? fallbackMeta : detail.accessibilityText(using: model)
         let time = SessionTimeFormatting.relative(item.outcomeAt, now: now)
-        Button { model.selectedSessionId = item.sessionId } label: {
+        Button { model.navigate(.session, id: item.sessionId, context: hostContext) } label: {
             HoverRow(verticalPadding: 5) { _ in
                 HStack(spacing: 10) {
                     Text(item.title).font(.pilot(.body)).foregroundStyle(Theme.foreground).lineLimit(1)
@@ -1197,17 +1218,21 @@ enum ProjectPageText {
 
 /// Keeps one project's dashboard subscribed while a view is on screen.
 struct DashboardSubscription: ViewModifier {
+    @Environment(\.hostViewContext) private var hostContext
+    @State private var release: (() -> Void)?
     let projectId: String
     let client: PilotClient
-
     func body(content: Content) -> some View {
-        content
-            .onAppear { client.retainDashboard(projectId) }
-            .onDisappear { client.releaseDashboard(projectId) }
-            .onChange(of: projectId) { old, new in
-                client.releaseDashboard(old)
-                client.retainDashboard(new)
+        content.onAppear { retain() }
+            .onDisappear { if let release { release(); self.release = nil } else { client.releaseDashboard(projectId) } }
+            .onChange(of: projectId) { old, _ in
+                if let release { release(); self.release = nil } else { client.releaseDashboard(old) }
+                retain()
             }
+    }
+    private func retain() {
+        if let context = hostContext { release = try? context.hosts.retain(context.ref(.project, projectId)) }
+        else { client.retainDashboard(projectId) }
     }
 }
 

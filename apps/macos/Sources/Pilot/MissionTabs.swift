@@ -93,7 +93,7 @@ struct MissionBriefTab: View {
     let mission: Mission
     let detail: MissionDetail
     @EnvironmentObject private var model: AppModel
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
     @ObservedObject var editor: BriefEditorState
     @State private var decision = MissionInput()
     @State private var newDecisionAudience: MissionDecisionAudience = .reference
@@ -465,7 +465,7 @@ private struct BriefRevisionItem: Identifiable {
 private struct BriefRevisionViewer: View {
     let brief: MissionBrief
     @ObservedObject var editor: BriefEditorState
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -491,7 +491,7 @@ private struct CommentRow: View {
     let comment: MissionComment
     let missionId: String
     @EnvironmentObject private var model: AppModel
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
 
     var body: some View {
         HoverRow(verticalPadding: 7) { hovered in
@@ -553,7 +553,7 @@ struct MissionTasksTab: View {
     /// The page's scroll view, for "Show task".
     let scroll: ScrollViewProxy
     @EnvironmentObject private var model: AppModel
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
     @State private var input = MissionInput()
     /// Finished phases start folded; the user's choices hold across refreshes.
     @State private var folds = MissionPhaseFolds()
@@ -727,6 +727,7 @@ private final class TaskTitleState: ObservableObject {
 /// One task: status, number, editable title, description and links. Start chat and the actions menu
 /// appear on hover; the context menu has every action.
 struct MissionTaskRow: View {
+    @Environment(\.hostViewContext) private var hostContext
     let task: MissionTask
     let mission: Mission
     /// The displayed list this row reorders within.
@@ -749,7 +750,7 @@ struct MissionTaskRow: View {
     /// Takes a task dropped on this row: its id, and whether it goes after the row rather than before.
     var onDropTask: ((String, Bool) -> Void)? = nil
     @EnvironmentObject private var model: AppModel
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
     @StateObject private var title: TaskTitleState
     @State private var addingLink = false
     @State private var choosingModel = false
@@ -834,7 +835,7 @@ struct MissionTaskRow: View {
                 Spacer(minLength: 8)
                 if let sessionId = task.sessionId {
                     let chat = client.session(sessionId)?.title
-                    Button { model.selectedSessionId = sessionId } label: {
+                    Button { model.navigate(.session, id: sessionId, context: hostContext) } label: {
                         Label(MissionTaskOwnerLabel.text(task: task, chatTitle: chat), icon: PilotIcon.message)
                             .lineLimit(1).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
                     }
@@ -945,7 +946,7 @@ struct MissionTaskRow: View {
 
     @ViewBuilder private var menuItems: some View {
         if let sessionId = task.sessionId {
-            Button("Open Chat") { model.selectedSessionId = sessionId }
+            Button("Open Chat") { model.navigate(.session, id: sessionId, context: hostContext) }
         } else if task.status.canStart {
             Button(gating == nil ? "Start Chat…" : "Start Chat Anyway…") { startingChat = true }
                 .disabled(mission.status != .active)
@@ -1066,6 +1067,7 @@ struct MissionTaskStatusMenuItems: View {
 /// The task's status icon, in its colour, opening a status menu. A plain menu style keeps the colour
 /// (borderless pop-ups redraw the label as a template image).
 struct MissionTaskStatusMenu: View {
+    @EndpointClient private var endpoint
     let task: MissionTask
     let missionId: String
     /// Waiting on unfinished dependencies: a muted symbol. The stored status is unchanged.
@@ -1104,7 +1106,7 @@ struct MissionTaskStatusMenu: View {
     }
 
     private func set(_ status: MissionTaskStatus) {
-        model.missionAction { [client = model.client] in
+        model.missionAction { [client = endpoint] in
             try await client.updateMissionTask(missionId, taskId: task.id, MissionTaskWrite(status: status))
         }
     }
@@ -1127,7 +1129,7 @@ struct MissionChatsTab: View {
     let mission: Mission
     let detail: MissionDetail
     @EnvironmentObject private var model: AppModel
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
     @StateObject private var state = MissionChatsState()
 
     var body: some View {
@@ -1176,6 +1178,7 @@ struct MissionChatsTab: View {
 
 /// A member chat. The whole row opens it; actions sit in a menu shown on hover and in the context menu.
 private struct MissionChatRow: View {
+    @Environment(\.hostViewContext) private var hostContext
     let session: SessionSummary
     let mission: Mission
     let tasks: [MissionTask]
@@ -1219,16 +1222,16 @@ private struct MissionChatRow: View {
                 }
             }
         }
-        .onTapGesture { model.selectedSessionId = session.id }
+        .onTapGesture { model.navigate(.session, id: session.id, context: hostContext) }
         .contextMenu { actions(coordinator: coordinator) }
         .accessibilityElement(children: .contain)
         .accessibilityAddTraits(.isButton)
-        .accessibilityAction { model.selectedSessionId = session.id }
+        .accessibilityAction { model.navigate(.session, id: session.id, context: hostContext) }
         .help("Open “\(session.title)”")
     }
 
     @ViewBuilder private func actions(coordinator: Bool) -> some View {
-        Button("Open Chat") { model.selectedSessionId = session.id }
+        Button("Open Chat") { model.navigate(.session, id: session.id, context: hostContext) }
         if coordinator {
             Button("Coordinate It Yourself") { model.setCoordinator(nil, missionId: mission.id) }
         } else if !session.isArchived {
@@ -1256,7 +1259,7 @@ struct MissionArtifactsTab: View {
     let mission: Mission
     let detail: MissionDetail
     @EnvironmentObject private var model: AppModel
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
     @StateObject private var state = MissionArtifactsState()
 
     var body: some View {
@@ -1368,7 +1371,7 @@ struct MissionActivityTab: View {
     let mission: Mission
     let detail: MissionDetail
     @EnvironmentObject private var model: AppModel
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
     @State private var input = MissionInput()
     @State private var state = MissionActivityState()
 

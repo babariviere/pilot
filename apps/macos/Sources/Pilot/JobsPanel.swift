@@ -5,6 +5,7 @@ import SwiftUI
 /// The chat's running background jobs, live from the session summary (no fetch of its own), with Stop on each.
 /// Opened from the working line or /jobs. Stopping a job tells the agent, which then takes a short turn.
 struct JobsPanel: View {
+    @EndpointClient private var endpoint
     let sessionId: String
     let jobs: [SessionJob]
     let close: () -> Void
@@ -117,7 +118,7 @@ struct JobsPanel: View {
         error = nil
         Task {
             do {
-                try await AppModel.shared.client.stopJob(sessionId, jobId: job.id)
+                try await endpoint.stopJob(sessionId, jobId: job.id)
             } catch {
                 stopping.remove(job.id)
                 self.error = "Could not stop \(job.name): \(error.localizedDescription)"

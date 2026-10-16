@@ -501,20 +501,20 @@ final class TrackedItemActions: ObservableObject {
         }
     }
 
-    func startChat(_ item: TrackedItem, app: AppModel) {
-        prepare(item, app: app, failure: "Couldn't prepare the chat") { prefill in
-            app.startChat(from: item, prefill: prefill)
+    func startChat(_ item: TrackedItem, app: AppModel, context: HostViewContext? = nil) {
+        prepare(item, app: app, context: context, failure: "Couldn't prepare the chat") { prefill in
+            app.startChat(from: item, prefill: prefill, context: context)
         }
     }
 
-    func startMission(_ item: TrackedItem, app: AppModel) {
-        prepare(item, app: app, failure: "Couldn't prepare the mission") { prefill in
-            app.missionSheet = .fromSource(TrackedItemText.missionDraft(item, prefill: prefill))
+    func startMission(_ item: TrackedItem, app: AppModel, context: HostViewContext? = nil) {
+        prepare(item, app: app, context: context, failure: "Couldn't prepare the mission") { prefill in
+            app.presentMissionSheet(.fromSource(TrackedItemText.missionDraft(item, prefill: prefill)), context: context)
         }
     }
 
     /// Linear descriptions are fetched on demand with a fresh assignment check. Slack items use stored fields.
-    private func prepare(_ item: TrackedItem, app: AppModel, failure: String,
+    private func prepare(_ item: TrackedItem, app: AppModel, context: HostViewContext?, failure: String,
                          open: @escaping (TrackedItemPrefill?) -> Void) {
         guard !busy.contains(item.id) else { return }
         errors[item.id] = nil
@@ -526,7 +526,9 @@ final class TrackedItemActions: ObservableObject {
         Task {
             defer { busy.remove(item.id) }
             do {
-                let prefill = try await app.client.trackedItemPrefill(item.id)
+                let prefill: TrackedItemPrefill
+                if let context { prefill = try await context.perform(.project, item.projectId) { client, _ in try await client.trackedItemPrefill(item.id) } }
+                else { prefill = try await app.client.trackedItemPrefill(item.id) }
                 present { open(prefill) }
             } catch {
                 errors[item.id] = "\(failure): \(error.localizedDescription)"
@@ -595,6 +597,8 @@ struct TrackedStartText: View {
 /// Start chat, or Start mission marked Suggested when the ticket needs planning. Everything is also in the context
 /// menu and as VoiceOver actions.
 struct TrackedItemRow: View {
+    @Environment(\.hostViewContext) private var hostContext
+    @EndpointClient private var endpoint
     let item: TrackedItem
     @ObservedObject var actions: TrackedItemActions
     var now = Date()
@@ -609,7 +613,7 @@ struct TrackedItemRow: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        let client = model.client
+        let client = endpoint
         let link = TrackedItemText.linkSummary(
             sessionIds: item.sessionIds ?? item.sessionId.map { [$0] } ?? [],
             missionIds: item.missionIds ?? item.missionId.map { [$0] } ?? [],
@@ -730,9 +734,9 @@ struct TrackedItemRow: View {
             Button(link.action) { openLink(link.target) }
             Divider()
         }
-        let chat = Button(link == nil ? "Start Chat" : "Start Another Chat") { actions.startChat(item, app: model) }
+        let chat = Button(link == nil ? "Start Chat" : "Start Another Chat") { actions.startChat(item, app: model, context: hostContext) }
         let mission = Button(link == nil ? "Start Mission…" : "Start Another Mission…") {
-            actions.startMission(item, app: model)
+            actions.startMission(item, app: model, context: hostContext)
         }
         if suggestsMission {
             mission
@@ -741,13 +745,13 @@ struct TrackedItemRow: View {
             chat
             mission
         }
-        let missions = model.client.missions.filter {
+        let missions = endpoint.missions.filter {
             $0.projectId == item.projectId && $0.status == .active && !(item.missionIds ?? []).contains($0.id)
         }
         if !missions.isEmpty {
             Menu("Link to Mission") {
                 ForEach(missions) { mission in
-                    Button(mission.title) { actions.link(item, missionId: mission.id, client: model.client, done: changed) }
+                    Button(mission.title) { actions.link(item, missionId: mission.id, client: endpoint, done: changed) }
                 }
             }
         }
@@ -769,9 +773,9 @@ struct TrackedItemRow: View {
         }
         Divider()
         if item.dismissed {
-            Button("Restore") { actions.setDismissed(item, false, client: model.client, done: changed) }
+            Button("Restore") { actions.setDismissed(item, false, client: endpoint, done: changed) }
         } else {
-            Button("Dismiss") { actions.setDismissed(item, true, client: model.client, done: changed) }
+            Button("Dismiss") { actions.setDismissed(item, true, client: endpoint, done: changed) }
         }
     }
 
@@ -780,18 +784,18 @@ struct TrackedItemRow: View {
     }
 
     private func start(mission: Bool) {
-        if mission { actions.startMission(item, app: model) } else { actions.startChat(item, app: model) }
+        if mission { actions.startMission(item, app: model, context: hostContext) } else { actions.startChat(item, app: model, context: hostContext) }
     }
 
     private func correctSize(_ size: LinearSize) {
-        actions.correctSize(item, to: size, client: model.client, done: changed)
+        actions.correctSize(item, to: size, client: endpoint, done: changed)
     }
 
     private func openLink(_ target: TrackedItemText.LinkSummary.Target) {
         actions.present {
             switch target {
-            case let .chat(id): model.selectedSessionId = id
-            case let .mission(id): model.openMission(id)
+            case let .chat(id): model.navigate(.session, id: id, context: hostContext)
+            case let .mission(id): model.openMission(id, context: hostContext)
             }
         }
     }
@@ -872,11 +876,12 @@ extension SlackSeverity {
 /// Sync state of a source: synced, syncing, sign-in required (with Sign in, then waiting with Cancel) or an
 /// error with retry.
 struct TrackedSourceStatusLine: View {
+    @EndpointClient private var endpoint
     let source: TrackingSource
     @ObservedObject var actions: TrackedItemActions
     var now = Date()
     @EnvironmentObject private var model: AppModel
-    @ObservedObject private var signIns = AppModel.shared.client.sourceSignIns
+    private var signIns: SourceSignInStore { endpoint.sourceSignIns }
 
     var body: some View {
         let signIn = signIns[source.kind]
@@ -907,7 +912,7 @@ struct TrackedSourceStatusLine: View {
             if waiting || needsSignIn {
                 SourceSignInButton(kind: source.kind, label: source.label)
             } else if !syncing {
-                Button { actions.sync(source, client: model.client) } label: { PilotSymbol(PilotIcon.refresh, context: .toolbar) }
+                Button { actions.sync(source, client: endpoint) } label: { PilotSymbol(PilotIcon.refresh, context: .toolbar) }
                     .rowIconButtonStyle()
                     .help("Sync now")
                     .accessibilityLabel("Sync \(source.label) now")
@@ -922,20 +927,27 @@ struct TrackedSourceStatusLine: View {
 /// Sign in to a tracking source's MCP server. pilotd runs pi's OAuth login and opens the browser; while it
 /// waits, the button is Cancel. Tokens stay in pi's credential file. Shared by status lines and settings.
 struct SourceSignInButton: View {
+    @Environment(\.openSettings) private var openSettings
+    @Environment(\.hostViewContext) private var hostContext
+    @EndpointClient private var endpoint
     let kind: TrackedKind
     let label: String
     /// Re-authenticate while signed in, for example with another account.
     var again = false
-    @ObservedObject private var signIns = AppModel.shared.client.sourceSignIns
+    private var signIns: SourceSignInStore { endpoint.sourceSignIns }
     @State private var busy = false
 
     var body: some View {
         let waiting = signIns[kind]?.state == .waiting
+        if let context = hostContext, context.host.hostId != "local" {
+            Button("Devbox setup…") { AppModel.shared.settingsTab = .devboxes; openSettings() }
+                .controlSize(.small).help("Configure this devbox independently. Local sign-ins are not copied.")
+        } else {
         Button(waiting ? "Cancel" : again ? "Sign in again" : "Sign in") {
             busy = true
             Task {
                 defer { busy = false }
-                let client = AppModel.shared.client
+                let client = endpoint
                 if waiting { await client.cancelSourceSignIn(kind) } else {
                     await client.startSourceSignIn(kind, again: again)
                 }
@@ -946,6 +958,7 @@ struct SourceSignInButton: View {
         .help(waiting ? "Stop waiting for the browser" : "Opens your browser to sign in to \(label)")
         .accessibilityLabel(waiting ? "Cancel \(label) sign-in" : again ? "Sign in to \(label) again"
             : "Sign in to \(label)")
+        }
     }
 }
 
@@ -1131,7 +1144,7 @@ struct TrackedInboxSheet: View {
     /// Closes the sheet, then runs navigation (a prefilled composer, a mission sheet or a chat).
     let finish: (@escaping () -> Void) -> Void
     @EnvironmentObject private var model: AppModel
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
 
     init(project: Project, kinds: [TrackedKind] = [.linear, .slack], openSettings: @escaping () -> Void,
          finish: @escaping (@escaping () -> Void) -> Void) {

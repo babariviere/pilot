@@ -3,11 +3,12 @@ import PilotCore
 import SwiftUI
 
 struct MainWindow: View {
+    @Environment(\.hostViewContext) private var hostContext
     static let id = "main"
 
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var daemon = AppModel.shared.daemon
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
     @ObservedObject private var hosts = AppModel.shared.hosts
     @Environment(\.openWindow) private var openWindow
     @State private var repositoryPollingVisible = false
@@ -26,24 +27,24 @@ struct MainWindow: View {
                     SlackTriagePage(projectId: projectId, openCase: model.slackTriageCaseId)
                         .id("slack-triage-\(projectId)-\(model.slackTriageCaseId ?? "")")
                 } else if model.memoryProjectId == projectId {
-                    MemoryPage(projectId: projectId)
+                    MemoryPage(projectId: projectId, context: model.localHost.map { HostViewContext(host: $0, hosts: hosts) })
                         .id("memory-\(projectId)")
                 } else {
                     ProjectPage(projectId: projectId)
                         .id(projectId)
                 }
             } else if model.showingInbox {
-                InboxPage()
+                InboxPage().environment(\.hostViewContext, model.inboxHost.map { HostViewContext(host: $0, hosts: hosts) } ?? model.localHost.map { HostViewContext(host: $0, hosts: hosts) })
             } else if model.showingArchive {
-                ArchiveView()
+                ArchiveView().environment(\.hostViewContext, model.archiveHost.map { HostViewContext(host: $0, hosts: hosts) } ?? model.localHost.map { HostViewContext(host: $0, hosts: hosts) })
             } else {
                 HomeView()
                     .navigationTitle("Pilot")
             }
         case let .failed(message):
-            DaemonProblem(message: message)
+            if !hosts.offlineHosts.isEmpty { HomeView() } else { DaemonProblem(message: message) }
         case .stopped:
-            DaemonProblem(message: "pilotd is stopped.")
+            if !hosts.offlineHosts.isEmpty { HomeView() } else { DaemonProblem(message: "pilotd is stopped.") }
         case .unknown, .starting:
             ProgressView("Starting pilotd…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -57,12 +58,31 @@ struct MainWindow: View {
         } detail: {
             if let ref = hosts.selection, ref.host != model.localHost, ref.kind == .session,
                let hosted = hosts.sessions.first(where: { $0.ref == ref }) {
-                HostedWorkspaceTerminal(session: hosted, store: model.terminals, hosts: hosts)
+                SessionDetail(session: hosted.value, context: HostViewContext(host: ref.host, hosts: hosts))
+                    .environment(\.hostViewContext, HostViewContext(host: ref.host, hosts: hosts))
+                    .environment(\.openURL, HostViewContext(host: ref.host, hosts: hosts).openURL)
                     .id(ref.storageKey)
+            } else if let ref = hosts.selection, ref.host != model.localHost, ref.kind == .project {
+                Group {
+                    if model.memoryProjectId == ref.storageKey {
+                        MemoryPage(projectId: ref.localId, context: HostViewContext(host: ref.host, hosts: hosts))
+                    } else { ProjectPage(projectId: ref.localId) }
+                }
+                    .environment(\.hostViewContext, HostViewContext(host: ref.host, hosts: hosts))
+                    .environment(\.openURL, HostViewContext(host: ref.host, hosts: hosts).openURL)
+                    .id(ref.storageKey)
+            } else if let ref = hosts.selection, ref.host != model.localHost, ref.kind == .mission {
+                MissionPage(missionId: ref.localId)
+                    .environment(\.hostViewContext, HostViewContext(host: ref.host, hosts: hosts))
+                    .environment(\.openURL, HostViewContext(host: ref.host, hosts: hosts).openURL)
+                    .id(ref.storageKey)
+            } else if let ref = hosts.selection, ref.host != model.localHost {
+                EmptyStateView(icon: PilotIcon.message, title: "Chat unavailable", message: "Reconnect to load this chat.")
             } else {
                 localDetail
             }
         }
+        .environment(\.hostViewContext, model.localHost.map { HostViewContext(host: $0, hosts: hosts) })
         .environment(\.repositoryPollingVisible, repositoryPollingVisible)
         .background(RepositoryWindowVisibility { visible in
             if visible { client.refreshRepositoryCaches() }
@@ -96,15 +116,19 @@ struct MainWindow: View {
         }
         .sheet(item: $model.missionSheet) { sheet in
             MissionSheetView(sheet: sheet).environmentObject(model)
+                .environment(\.hostViewContext, model.missionSheetContext ?? hostContext)
         }
         .sheet(item: $model.artifactLink) { link in
             ArtifactLinkView(link: link).id(link.id)
+                .environment(\.hostViewContext, model.artifactLinkContext ?? hostContext)
         }
         .sheet(item: $model.renamingSession) { target in
             SessionRenameSheet(target: target).environmentObject(model)
+                .environment(\.hostViewContext, model.resourceRef(target.id, kind: .session).map { HostViewContext(host: $0.host, hosts: hosts) })
         }
         .sheet(item: $model.mergingPullRequest) { target in
             PullRequestMergeSheet(target: target).environmentObject(model)
+                .environment(\.hostViewContext, target.reference.map { HostViewContext(host: $0.host, hosts: hosts) } ?? hostContext)
         }
         .sheet(isPresented: $model.showingCommandPalette, onDismiss: {
             let action = model.commandPaletteAction
@@ -132,15 +156,16 @@ struct MainWindow: View {
 struct SessionDetail: View {
     let session: SessionSummary
     var feed: SessionFeed?
+    var context: HostViewContext? = nil
     @EnvironmentObject private var model: AppModel
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
 
 
     var body: some View {
         ChatInspectorSplit(showsInspector: model.inspectorVisible && model.inspectorTab.isAvailable(for: session)) {
-            ChatView(session: session, feed: feed, composer: model.composer(for: session.id))
+            ChatView(session: session, feed: feed, context: context ?? model.localHost.map { HostViewContext(host: $0, hosts: model.hosts) })
         } inspector: {
-            Inspector(session: session, feed: feed)
+            Inspector(session: session, feed: feed, context: context ?? model.localHost.map { HostViewContext(host: $0, hosts: model.hosts) })
         }
         .navigationTitle(session.title)
         .navigationSubtitle(subtitle)
@@ -167,11 +192,11 @@ struct SessionDetail: View {
 
     @ToolbarContentBuilder
     private var contextToolbarItem: some ToolbarContent {
-        if model.isUnread(session) || session.isAsk
+        if (context.map { model.isUnread(session, on: $0.host) } ?? model.isUnread(session)) || session.isAsk
             || AttemptsMenu.label(for: session.attempts ?? []) != nil {
             ToolbarItem(placement: .primaryAction) {
                 HStack(spacing: 8) {
-                    if model.isUnread(session) { UnreadBadge() }
+                    if (context.map { model.isUnread(session, on: $0.host) } ?? model.isUnread(session)) { UnreadBadge() }
                     AttemptsMenu(session: session)
                     // Ask has no Changes pane, so its read-only boundary stays visible here.
                     if session.isAsk { SessionContextBadge(session: session) }
@@ -210,6 +235,7 @@ struct SessionInspectorActions: ToolbarContent {
 
 /// No custom container: the toolbar owns control spacing, backgrounds and selection.
 struct SessionInspectorControls: View {
+    @Environment(\.hostViewContext) private var hostContext
     let session: SessionSummary
     @EnvironmentObject private var model: AppModel
 
@@ -234,6 +260,7 @@ struct SessionInspectorControls: View {
 }
 
 struct SessionMoreActions: View {
+    @Environment(\.hostViewContext) private var hostContext
     let session: SessionSummary
     @EnvironmentObject private var model: AppModel
 
@@ -251,7 +278,7 @@ struct SessionMoreActions: View {
                 }
             }
             Divider()
-            Button { model.debugSession(session) } label: {
+            Button { model.debugSession(session, context: hostContext) } label: {
                 Label("Debug Chat", icon: PilotIcon.bug)
             }
         } label: {
@@ -299,7 +326,9 @@ struct Inspector: View {
     let session: SessionSummary
     /// The chat's feed for the Links tab. Nil uses the cached feed the transcript shares.
     var feed: SessionFeed? = nil
+    var context: HostViewContext? = nil
     @EnvironmentObject private var model: AppModel
+    @EndpointClient private var endpoint
 
     var body: some View {
         ZStack {
@@ -310,7 +339,7 @@ struct Inspector: View {
                     .accessibilityHidden(model.inspectorTab != .changes)
             }
             // Mounted once opened, so browsing other tabs never starts a shell.
-            if let host = model.localHost, session.supportsChanges,
+            if let host = context?.host ?? model.localHost, session.supportsChanges,
                model.inspectorTab == .terminal || model.terminals.order.contains(HostResourceRef(host: host, kind: .session, localId: session.id).storageKey) {
                 TerminalPane(store: model.terminals, session: session,
                              ref: HostResourceRef(host: host, kind: .session, localId: session.id),
@@ -320,7 +349,7 @@ struct Inspector: View {
                     .accessibilityHidden(model.inspectorTab != .terminal)
             }
             if model.inspectorTab == .artifacts {
-                SessionArtifactsPane(sessionId: session.id, client: model.client)
+                SessionArtifactsPane(sessionId: session.id, client: endpoint)
                     .id(session.id)
             }
             if !session.isAsk && model.inspectorTab == .agents {
@@ -332,7 +361,7 @@ struct Inspector: View {
                     .id(session.id)
             }
             if model.inspectorTab == .links {
-                SessionLinksPane(feed: feed ?? model.feeds.feed(sessionId: session.id, client: model.client))
+                SessionLinksPane(feed: feed ?? context.map { model.feeds.feed(ref: $0.ref(.session, session.id), hosts: $0.hosts) } ?? model.feeds.feed(sessionId: session.id, client: model.client))
                     .id(session.id)
             }
         }

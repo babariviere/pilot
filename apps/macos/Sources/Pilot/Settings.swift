@@ -160,10 +160,10 @@ extension EnvironmentValues {
 
 /// A page of the settings window. General pages come first in the sidebar, then one page per project.
 enum SettingsTab: Hashable {
-    case appearance, notifications, connections, energy, terminal, updates
+    case appearance, notifications, connections, energy, terminal, updates, devboxes
     case project(String)
 
-    static let general: [SettingsTab] = [.appearance, .notifications, .connections, .energy, .terminal, .updates]
+    static let general: [SettingsTab] = [.appearance, .notifications, .connections, .energy, .terminal, .updates, .devboxes]
 
     var title: String {
         switch self {
@@ -172,6 +172,7 @@ enum SettingsTab: Hashable {
         case .connections: "Connections"
         case .energy: "Energy"
         case .terminal: "Terminal"
+        case .devboxes: "Devboxes"
         case .updates: "Updates"
         case .project: "Project"
         }
@@ -184,6 +185,7 @@ enum SettingsTab: Hashable {
         case .connections: PilotIcon.connections
         case .energy: PilotIcon.energy
         case .terminal: PilotIcon.terminal
+        case .devboxes: PilotIcon.terminal
         case .updates: PilotIcon.updates
         case .project: PilotIcon.project
         }
@@ -193,7 +195,7 @@ enum SettingsTab: Hashable {
 /// Sidebar of general pages and projects beside the selected page. Resizable; pages keep a readable column.
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
     @State private var addError: String?
 
     var body: some View {
@@ -210,7 +212,7 @@ struct SettingsView: View {
         .navigationTitle(title)
         .onChange(of: client.projects) { _, projects in
             // A removed project falls back to the first page.
-            if case let .project(id) = model.settingsTab, !projects.contains(where: { $0.id == id }) {
+            if case let .project(id) = model.settingsTab, !id.hasPrefix("hostref1:"), !projects.contains(where: { $0.id == id }) {
                 model.settingsTab = .appearance
             }
         }
@@ -241,10 +243,16 @@ struct SettingsView: View {
             SettingsPage("Energy", subtitle: "Keep work moving. Let the display rest.") { EnergySettings() }
         case .terminal:
             SettingsPage("Terminal", subtitle: "The chat terminal runs on Ghostty.") { TerminalSettings() }
+        case .devboxes:
+            DevboxSettings(hosts: model.hosts, navigate: { ref in model.navigate(ref.kind, id: ref.storageKey); model.showMainWindow() })
         case .updates:
             SettingsPage("Updates", subtitle: "Pilot updates itself from private GitHub releases.") { UpdateSettings() }
         case let .project(id):
-            if let project = client.projects.first(where: { $0.id == id }) {
+            if let ref = model.resourceRef(id, kind: .project), ref.host != model.localHost,
+               let project = model.hosts.projects.first(where: { $0.ref == ref })?.value {
+                ProjectSettings(project: project)
+                    .environment(\.hostViewContext, HostViewContext(host: ref.host, hosts: model.hosts)).id(ref.storageKey)
+            } else if let project = client.projects.first(where: { $0.id == id }) {
                 ProjectSettings(project: project).id(project.id)
             } else {
                 Text("This project was removed.")
@@ -774,8 +782,9 @@ final class ProjectEditor: ObservableObject {
 /// One project's settings. Edits stay local until Save, whose bar appears only while something changed. Remove, at
 /// the end of the page, keeps the chats and the folder.
 private struct ProjectSettings: View {
+    @Environment(\.hostViewContext) private var hostContext
     let project: Project
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
     @StateObject private var editor = ProjectEditor()
     @State private var saving = false
     @State private var confirmingRemoval = false
@@ -784,10 +793,10 @@ private struct ProjectSettings: View {
 
     var body: some View {
         SettingsPage(project.name, subtitle: project.path.abbreviatingHome) {
-            Button("Show in Finder") {
-                NSWorkspace.shared.activateFileViewerSelecting([URL(filePath: project.path)])
+            if hostContext == nil || hostContext?.host.hostId == "local" {
+                Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(filePath: project.path)]) }
+                    .controlSize(.small)
             }
-            .controlSize(.small)
         } content: {
             SettingsSection("General") {
                 SettingsRow("Name") {
@@ -812,6 +821,9 @@ private struct ProjectSettings: View {
                                isOn: $editor.requirePullRequest)
             }
             TrackingSettingsSection(project: project, editor: editor)
+            if let host = hostContext?.host ?? AppModel.shared.localHost {
+                ProjectSharingSection(project: HostResourceRef(host: host, kind: .project, localId: project.id), hosts: AppModel.shared.hosts)
+            }
             ProjectRemoval(error: removeError) { confirmingRemoval = true }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {

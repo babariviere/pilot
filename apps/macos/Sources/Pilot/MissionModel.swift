@@ -58,18 +58,23 @@ extension AppModel {
 
     var selectedMission: Mission? { client.mission(selectedMissionId) }
 
-    func openMission(_ id: String, tab: MissionTab? = nil) {
+    func openMission(_ id: String, tab: MissionTab? = nil, context: HostViewContext? = nil) {
+        if let ref = resourceRef(id, kind: .mission, context: context), ref.host != localHost {
+            if let tab { missionTab = tab }; navigate(.mission, id: ref.storageKey); return
+        }
+        hosts.selection = nil
         showingArchive = false
         selectedSessionId = nil
         if let tab { missionTab = tab } else if selectedMissionId != id { missionTab = .overview }
         selectedMissionId = id
     }
 
-    func members(of mission: Mission) -> [SessionSummary] {
-        MissionMembers.members(of: mission, in: client.sessions)
+    func members(of mission: Mission, context: HostViewContext? = nil) -> [SessionSummary] {
+        MissionMembers.members(of: mission, in: context.map { $0.hosts.presentationClient($0.host).sessions } ?? client.sessions)
     }
 
-    func needsYou(_ mission: Mission) -> [MissionNeedsYouItem] {
+    func needsYou(_ mission: Mission, context: HostViewContext? = nil) -> [MissionNeedsYouItem] {
+        let client = context.map { $0.hosts.presentationClient($0.host) } ?? self.client
         MissionNeedsYou.items(mission: mission, detail: client.missionDetails[mission.id],
                               members: members(of: mission), isUnread: { attention.isUnread($0) })
     }
@@ -94,7 +99,8 @@ extension AppModel {
         if selectedMissionId == id { selectedMissionId = nil }
     }
 
-    func removeFromMission(_ sessionId: String) {
+    func removeFromMission(_ sessionId: String, context: HostViewContext? = nil) {
+        let client = context.map { $0.hosts.presentationClient($0.host) } ?? self.client
         missionAction { [client] in try await client.leaveMission(sessionId) }
     }
 
@@ -104,7 +110,8 @@ extension AppModel {
         missionTab = .tasks
     }
 
-    func setCoordinator(_ sessionId: String?, missionId: String) {
+    func setCoordinator(_ sessionId: String?, missionId: String, context: HostViewContext? = nil) {
+        let client = context.map { $0.hosts.presentationClient($0.host) } ?? self.client
         missionAction { [client] in
             try await client.updateMission(missionId, UpdateMissionRequest(
                 coordinatorSessionId: sessionId.map { .set($0) } ?? .clear))
@@ -121,17 +128,24 @@ extension AppModel {
 
 /// Keeps one mission's detail subscribed while a view is on screen.
 struct MissionSubscription: ViewModifier {
+    @Environment(\.hostViewContext) private var hostContext
+    @State private var release: (() -> Void)?
     let missionId: String?
     let client: PilotClient
 
     func body(content: Content) -> some View {
         content
-            .onAppear { if let missionId { client.retainMission(missionId) } }
-            .onDisappear { if let missionId { client.releaseMission(missionId) } }
+            .onAppear { retain() }
+            .onDisappear { if let release { release(); self.release = nil } else if let missionId { client.releaseMission(missionId) } }
             .onChange(of: missionId) { old, new in
-                if let old { client.releaseMission(old) }
-                if let new { client.retainMission(new) }
+                if let release { release(); self.release = nil } else if let old { client.releaseMission(old) }
+                if new != nil { retain() }
             }
+    }
+    private func retain() {
+        guard let missionId else { return }
+        if let context = hostContext { release = try? context.hosts.retain(context.ref(.mission, missionId)) }
+        else { client.retainMission(missionId) }
     }
 }
 
@@ -143,25 +157,27 @@ extension View {
 
 /// Chat-level mission actions, shared by the chat header menu and the sidebar context menu.
 struct SessionMissionActions: View {
+    @Environment(\.hostViewContext) private var hostContext
+    @EndpointClient private var endpoint
     let session: SessionSummary
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
         if let missionId = session.missionId {
-            if AppModel.shared.client.mission(missionId)?.coordinatorSessionId != session.id && !session.isArchived {
-                Button("Make coordinator") { model.setCoordinator(session.id, missionId: missionId) }
+            if endpoint.mission(missionId)?.coordinatorSessionId != session.id && !session.isArchived {
+                Button("Make coordinator") { model.setCoordinator(session.id, missionId: missionId, context: hostContext) }
             }
-            Button { model.openMission(missionId) } label: {
+            Button { model.openMission(missionId, context: hostContext) } label: {
                 Label("Open mission", icon: PilotIcon.mission)
             }
-            Button { model.removeFromMission(session.id) } label: {
+            Button { model.removeFromMission(session.id, context: hostContext) } label: {
                 Label("Remove from mission", icon: PilotIcon.remove)
             }
         } else if session.projectId != nil {
-            Button { model.missionSheet = .make(sessionId: session.id) } label: {
+            Button { model.presentMissionSheet(.make(sessionId: session.id), context: hostContext) } label: {
                 Label("Make a mission…", icon: PilotIcon.mission)
             }
-            Button { model.missionSheet = .add(sessionId: session.id) } label: {
+            Button { model.presentMissionSheet(.add(sessionId: session.id), context: hostContext) } label: {
                 Label("Add to mission…", icon: PilotIcon.addTo)
             }
         }
@@ -357,17 +373,19 @@ func missionRelativeTime(_ milliseconds: Double, now: Date = Date()) -> String {
 
 // Shared menu items keep the toolbar and both row menus consistent.
 struct MissionEditAction: View {
+    @Environment(\.hostViewContext) private var hostContext
     let missionId: String
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        Button { model.missionSheet = .edit(missionId: missionId) } label: {
+        Button { model.presentMissionSheet(.edit(missionId: missionId), context: hostContext) } label: {
             Label("Edit Title and Goal…", icon: PilotIcon.edit)
         }
     }
 }
 
 struct MissionStatusActions: View {
+    @EndpointClient private var endpoint
     let missionId: String
     let status: MissionStatus
     @EnvironmentObject private var model: AppModel
@@ -385,7 +403,7 @@ struct MissionStatusActions: View {
     }
 
     private func setStatus(_ status: MissionStatus) {
-        model.missionAction { [client = model.client, missionId] in
+        model.missionAction { [client = endpoint, missionId] in
             try await client.updateMission(missionId, UpdateMissionRequest(status: status))
         }
     }

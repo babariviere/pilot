@@ -21,6 +21,8 @@ enum HostedHistoryAvailability: Equatable {
 /// Callers hold qualified refs, never select a process-wide "current server".
 @MainActor
 final class HostClients: ObservableObject {
+    var onOperationDeliveryChanged: ((DurableOperation, OperationDelivery) -> Void)?
+    var onRemoteSessionsChanged: ((HostRef, [SessionSummary], Bool) -> Void)?
     @Published private(set) var sessions: [Hosted<SessionSummary>] = []
     @Published private(set) var projects: [Hosted<Project>] = []
     @Published private(set) var missions: [Hosted<Mission>] = []
@@ -34,17 +36,33 @@ final class HostClients: ObservableObject {
     @Published var selection: HostResourceRef?
     @Published private(set) var dashboards: [HostResourceRef: ProjectDashboard] = [:]
     @Published private(set) var missionDetails: [HostResourceRef: MissionDetail] = [:]
+    // A presentation client may be offline, but is never redirected to another host.
+    private var presentationClients: [HostRef: PilotClient] = [:]
+    func presentationClient(_ host: HostRef) -> PilotClient {
+        if let client = entries[host]?.client { return client }
+        if let client = presentationClients[host] { return client }
+        let client = PilotClient()
+        try? client.bind(host)
+        if let snapshot = offlineHosts[host] {
+            client.restoreOfflinePresentation(snapshot)
+        }
+        client.disconnect()
+        presentationClients[host] = client
+        return client
+    }
+
     private struct Entry {
         let client: PilotClient
         let token: HostConnectionToken
         var observations: [AnyCancellable]
     }
     private var entries: [HostRef: Entry] = [:]
+    @Published private(set) var sharedRevision = 0
     let sharedContextCourier = SharedContextCourier()
     private var sharedContextGenerations: [HostRef: UUID] = [:]
 
     /// Explicit UI enrollment/edit reconciliation. Never queues an arbitrary chat mutation.
-    func reconcileSharedContexts() { sharedContextCourier.trigger() }
+    func reconcileSharedContexts() { sharedRevision &+= 1; sharedContextCourier.trigger() }
 
     private func refreshSharedContextEndpoints() {
         guard !shuttingDown else { return }
@@ -314,6 +332,20 @@ final class HostClients: ObservableObject {
         }
     }
 
+    /// Explicit user retry only. Original immutable intent and destination survive every lookup.
+    func retryOperation(_ operation: DurableOperation) async throws {
+        guard try await operations.contains(operation) else { throw HostRoutingError.invalidReference }
+        let client = try endpoint(operation.destination), fence = try token(for: operation.destination)
+        do {
+            let known = try await client.operation(operation, lookup: true)
+            try validate(fence)
+            if case .receipt = known { recordDelivery(known, operation: operation); return }
+            let result = try await client.operation(operation, lookup: false)
+            try validate(fence)
+            recordDelivery(result, operation: operation)
+        } catch { recordDelivery(.unknown, operation: operation); throw error }
+    }
+
     func acknowledge(_ operation: DurableOperation, receipt: OperationReceipt) async throws {
         try await operations.acknowledge(operation, receipt: receipt)
         pendingOperations[operation.operationId] = nil
@@ -329,6 +361,7 @@ final class HostClients: ObservableObject {
             if case .unknown = delivery { return }
         }
         operationDeliveries[operation.operationId] = delivery
+        onOperationDeliveryChanged?(operation, delivery)
     }
 
     /// Reconnect performs bounded receipt reads only. No timers, POST retry, adoption or draft clearing.
@@ -406,6 +439,10 @@ final class HostClients: ObservableObject {
             throw HostRoutingError.identityChanged
         }
         try client.bind(host)
+        presentationClients[host] = client
+        if host.hostId != "local" {
+            client.onSessionsChanged = { [weak self] values, snapshot in self?.onRemoteSessionsChanged?(host, values, snapshot) }
+        }
         if entries[host]?.client === client { return }
         removeConnection(host)
         let token = HostConnectionToken(host: host)
@@ -569,6 +606,62 @@ final class HostClients: ObservableObject {
     func token(for host: HostRef) throws -> HostConnectionToken {
         let client = try endpoint(host)
         return HostConnectionToken(host: host, generation: client.connectionGeneration)
+    }
+
+    // Shared pages always retain the chosen host and enrollment. They never read an
+    // execution project's unrelated local memory or switch to another reachable daemon.
+    func sharedContexts(on host: HostRef) async throws -> [SharedContextSummary] {
+        let client = try endpoint(host), fence = try token(for: host)
+        let result = try await client.sharedContexts()
+        try validate(fence)
+        guard result.allSatisfy({ $0.binding.peers.contains(OperationHost(host)) }) else {
+            throw HostRoutingError.identityChanged
+        }
+        return result
+    }
+
+    func sharedMission(_ binding: SharedContextBinding, on host: HostRef, missionId: String) async throws -> SharedMissionRead {
+        try await withSharedBinding(binding, on: host) { try await $0.sharedMission(binding, missionId: missionId) }
+    }
+
+    func sharedMissionVersions(_ binding: SharedContextBinding, on host: HostRef, missionId: String,
+                               after: Int = 0, limit: Int = 128, sequence: Int? = nil) async throws -> SharedMissionVersions {
+        try await withSharedBinding(binding, on: host) {
+            try await $0.sharedMissionVersions(binding, missionId: missionId, after: after, limit: limit, sequence: sequence)
+        }
+    }
+
+    func sharedMissionConflicts(_ binding: SharedContextBinding, on host: HostRef) async throws -> [SharedMissionProposal] {
+        try await withSharedBinding(binding, on: host) { try await $0.sharedMissionConflicts(binding) }
+    }
+
+    func sharedMemoryWake(_ binding: SharedContextBinding, on host: HostRef, lines: Int = 96) async throws -> SharedMemoryRead {
+        try await withSharedBinding(binding, on: host) { try await $0.sharedMemoryWake(binding, lines: lines) }
+    }
+
+    func sharedMemoryRecall(_ binding: SharedContextBinding, on host: HostRef,
+                            regex: String, lines: Int = 96) async throws -> SharedMemoryRead {
+        try await withSharedBinding(binding, on: host) { try await $0.sharedMemoryRecall(binding, regex: regex, lines: lines) }
+    }
+
+    func sharedMemoryZoom(_ binding: SharedContextBinding, on host: HostRef, range: MemoryRange) async throws -> SharedMemoryRead {
+        try await withSharedBinding(binding, on: host) { try await $0.sharedMemoryZoom(binding, range: range) }
+    }
+
+    func sharedMemoryTree(_ binding: SharedContextBinding, on host: HostRef, range: MemoryRange? = nil,
+                          depth: Int = 2, reveal: [Int] = []) async throws -> SharedMemoryTreeRead {
+        try await withSharedBinding(binding, on: host) {
+            try await $0.sharedMemoryTree(binding, range: range, depth: depth, reveal: reveal)
+        }
+    }
+
+    private func withSharedBinding<Value>(_ binding: SharedContextBinding, on host: HostRef,
+                                          _ operation: (PilotClient) async throws -> Value) async throws -> Value {
+        guard binding.peers.contains(OperationHost(host)) else { throw HostRoutingError.identityChanged }
+        let client = try endpoint(host), fence = try token(for: host)
+        let result = try await operation(client)
+        try validate(fence)
+        return result
     }
 
     /// Setup belongs to a verified host, not a project/chat or the global Local client.

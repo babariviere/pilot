@@ -176,12 +176,12 @@ final class SubscriptionForceState: ObservableObject {
     }
 
     /// Returns the failure to show, or nil. Ignored while a change is in flight.
-    func toggle(session: SessionSummary) async -> String? {
+    func toggle(session: SessionSummary, perform: ((String, Bool) async throws -> Void)? = nil) async -> String? {
         guard !busy, !session.isReadOnlyHistory else { return nil }
         busy = true
         defer { busy = false }
         do {
-            try await setForce(session.id, !session.isWorkingPastUsageLimit)
+            try await (perform ?? setForce)(session.id, !session.isWorkingPastUsageLimit)
             return nil
         } catch {
             return error.localizedDescription
@@ -192,6 +192,7 @@ final class SubscriptionForceState: ObservableObject {
 /// Only while pilotd reports a pause: "Continue with another model…" and "Force work", or just "Pause at limit"
 /// once forced, as quiet links.
 struct SubscriptionLimitActions: View {
+    @EndpointClient private var endpoint
     let session: SessionSummary
     let working: Bool
     @ObservedObject var modelPicker: ChatModelPickerState
@@ -209,7 +210,7 @@ struct SubscriptionLimitActions: View {
                 .help(ModelContinuation.pickerHelp)
             }
             Button(session.isWorkingPastUsageLimit ? "Pause at limit" : "Force work") {
-                Task { if let error = await force.toggle(session: session) { onError(error) } }
+                Task { if let error = await force.toggle(session: session, perform: { id, value in try await endpoint.forceSubscription(id, force: value) }) { onError(error) } }
             }
             .disabled(force.busy || modelPicker.continuing)
             .help(session.isWorkingPastUsageLimit

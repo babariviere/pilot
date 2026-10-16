@@ -2,7 +2,7 @@ import PilotCore
 import SwiftUI
 
 struct EnergySettings: View {
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
     @State private var busy = false
     @State private var error: String?
 

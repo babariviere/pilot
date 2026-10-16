@@ -134,8 +134,10 @@ final class MemoryPageModel: ObservableObject {
             if !loadedOnce, let newest = roots.first, children[newest.key] != nil { expanded.insert(newest.key) }
             loadedOnce = true
         } catch {
+            guard !(error is CancellationError), !Task.isCancelled else { return }
             self.error = error.localizedDescription
         }
+        guard !Task.isCancelled else { return }
         loading = false
         rebuild()
     }

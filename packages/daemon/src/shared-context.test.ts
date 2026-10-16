@@ -9,6 +9,7 @@ import { type TestContext, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import type { KernelCommand, KernelPacket, KernelSpec } from "@pilot/kernel";
 import type {
+	DelegationGrant,
 	OperationHost,
 	OperationReceipt,
 	SharedContextBinding,
@@ -214,6 +215,7 @@ test("real stores/bridges admit one bounded remote session, retain offline propo
 	const grant = await home.sharing.reserve(mission.id, task.id, {
 		bindingId: binding.bindingId,
 		expectedRevision: home.store.sharedDefinitionRevision(task.id),
+		expectedPreviousEpoch: 0,
 		model: "test/model",
 	});
 	assert.throws(() => home.store.prepareTaskStart(mission.id, [task.id]), /occupied/);
@@ -288,6 +290,7 @@ test("real stores/bridges admit one bounded remote session, retain offline propo
 		home.sharing.reserve(mission.id, task.id, {
 			bindingId: binding.bindingId,
 			expectedRevision: home.store.sharedDefinitionRevision(task.id),
+			expectedPreviousEpoch: grant.executionEpoch,
 			model: "test/model",
 		}),
 		/occupied/,
@@ -317,6 +320,7 @@ async function enrolled(t: TestContext) {
 	const grant = await home.sharing.reserve(mission.id, task.id, {
 		bindingId: binding.bindingId,
 		expectedRevision: home.store.sharedDefinitionRevision(task.id),
+		expectedPreviousEpoch: 0,
 		model: "test/model",
 	});
 	return { home, target, mission, binding, task, grant };
@@ -656,6 +660,7 @@ test("memory authority may be the execution host and remains separate from its e
 	const grant = await home.sharing.reserve(mission.id, task.id, {
 		bindingId: binding.bindingId,
 		expectedRevision: home.store.sharedDefinitionRevision(task.id),
+		expectedPreviousEpoch: 0,
 		model: "test/model",
 	});
 	await reconcile(home, target, binding);
@@ -739,6 +744,7 @@ test("offline pending notes notify every accepted binding-local chat with durabl
 	const other = await home.sharing.reserve(mission.id, second.id, {
 		bindingId: binding.bindingId,
 		expectedRevision: home.store.sharedDefinitionRevision(second.id),
+		expectedPreviousEpoch: 0,
 		model: "test/model",
 	});
 	await reconcile(home, target, binding);
@@ -899,6 +905,7 @@ test("required pinned artifacts gate offer acceptance and pending recovery keeps
 		home.sharing.reserve(mission.id, task.id, {
 			bindingId: binding.bindingId,
 			expectedRevision: home.store.sharedDefinitionRevision(task.id),
+			expectedPreviousEpoch: 0,
 			model: "test/model",
 		}),
 		/Classify every linked/,
@@ -906,6 +913,7 @@ test("required pinned artifacts gate offer acceptance and pending recovery keeps
 	const grant = await home.sharing.reserve(mission.id, task.id, {
 		bindingId: binding.bindingId,
 		expectedRevision: home.store.sharedDefinitionRevision(task.id),
+		expectedPreviousEpoch: 0,
 		model: "test/model",
 		references: [
 			{ host: home.host, sessionId: author.id, artifactId: artifact.id, revision: 1, requirement: "required" },
@@ -1063,4 +1071,106 @@ test("shared read routes fail closed for incomplete, disabled and unknown enroll
 		response = await fetch(`${source}/${binding.bindingId}/memory/wake`);
 	assert.equal(response.status, 409);
 	assert.doesNotMatch(await response.text(), /A{24}/);
+});
+
+test("a delayed placement POST cannot create a new execution after a later grant accepted and sealed", async (t) => {
+	const { home, target, mission, binding } = await enrolled(t);
+	const task = home.store.addTask(mission.id, { title: "Epoch-fenced placement" });
+	await reconcile(home, target, binding);
+	const base = (await readEndpoint(home)).replace(/\/api\/shared-contexts$/, ""),
+		url = `${base}/api/missions/${mission.id}/tasks/${task.id}/delegations`;
+	const inventory = (await (
+		await fetch(`${base}/api/shared-contexts`)
+	).json()) as import("@pilot/protocol").SharedContextSummary[];
+	assert.equal(
+		inventory.flatMap((summary) => summary.grants).filter((grant) => grant.task.taskId === task.id).length,
+		0,
+	);
+	const delayed = {
+		bindingId: binding.bindingId,
+		expectedRevision: home.store.sharedDefinitionRevision(task.id),
+		expectedPreviousEpoch: 0,
+		model: "test/model",
+	};
+	const post = (body: unknown) =>
+		fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+	const accepted = await post({ ...delayed });
+	assert.equal(accepted.status, 201, await accepted.clone().text());
+	const grant = (await accepted.json()) as DelegationGrant;
+	assert.equal(grant.executionEpoch, 1);
+	await reconcile(home, target, binding);
+	await until(
+		() => target.workers.has(grant.session.sessionId) && !target.sessions["starting"].has(grant.session.sessionId),
+	);
+	target.workers
+		.get(grant.session.sessionId)!
+		.packet({ type: "working", working: false, completion: { outcome: "done", outcomeAt: 1 } });
+	await reconcile(home, target, binding);
+	assert.equal((await target.sharing.seal(grant.delegationId, binding.bindingId)).sealed, true);
+	await reconcile(home, target, binding);
+	assert.equal(home.store.sharedTaskGrant(task.id)?.state, "sealed");
+	assert.equal(
+		home.store.sharedDefinitionRevision(task.id),
+		delayed.expectedRevision,
+		"internal execution projections do not fence a delayed placement through definition CAS",
+	);
+	const sessions = target.sessions
+			.list()
+			.map((session) => session.id)
+			.sort(),
+		count = home.store.sharingOutboxCount(binding.bindingId);
+	assert.equal(
+		(await post(delayed)).status,
+		409,
+		"old epoch-zero request must fail even though the task definition still matches",
+	);
+	const { expectedPreviousEpoch: _ignored, ...legacy } = delayed;
+	for (const body of [
+		legacy,
+		{ ...delayed, expectedPreviousEpoch: -1 },
+		{ ...delayed, expectedPreviousEpoch: "1" },
+		{ ...delayed, expectedPreviousEpoch: 1.5 },
+		{ ...delayed, expectedPreviousEpoch: Number.MAX_SAFE_INTEGER },
+	])
+		assert.equal((await post(body)).status, 409, "missing/invalid epochs cannot default to the current grant");
+	const next = {
+		...grant,
+		executionEpoch: 2,
+		delegationId: "atomic-retry",
+		session: { ...grant.session, sessionId: "atomic-retry-session" },
+		state: "reserved" as const,
+		context: { ...grant.context, mission: home.store.sharedHead() },
+	};
+	assert.throws(
+		() => home.store.reserveSharedGrant(next, 0),
+		/epoch CAS/,
+		"the domain transaction independently rejects stale intent",
+	);
+	assert.throws(
+		() => home.store.reserveSharedGrant(next, undefined as unknown as number),
+		/epoch CAS/,
+		"programmatic calls cannot omit the fence",
+	);
+	assert.equal(home.store.sharedTaskGrant(task.id)?.delegationId, grant.delegationId);
+	assert.equal(home.store.sharingOutboxCount(binding.bindingId), count);
+	assert.ok(
+		!(await home.sharing.exchange(binding.bindingId, target.host)).operations.some(
+			(operation) => operation.kind === "share-offer",
+		),
+	);
+	assert.deepEqual(
+		target.sessions
+			.list()
+			.map((session) => session.id)
+			.sort(),
+		sessions,
+		"a stale POST must not create another target session",
+	);
+	const refreshed = await post({ ...delayed, expectedPreviousEpoch: grant.executionEpoch });
+	assert.equal(refreshed.status, 201, await refreshed.clone().text());
+	assert.equal(
+		((await refreshed.json()) as DelegationGrant).executionEpoch,
+		2,
+		"an explicit fresh request can reserve the next epoch",
+	);
 });

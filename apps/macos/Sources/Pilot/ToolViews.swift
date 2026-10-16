@@ -7,6 +7,7 @@ import SwiftUI
 /// failed ones are red.
 /// Artifacts a step published stay visible while the line is folded.
 struct WorkGroupView: View {
+    @Environment(\.hostViewContext) private var hostContext
     @Environment(\.pilotFonts) private var fonts
     @Environment(\.transcriptMessageToggled) private var messageToggled
     let group: TurnWork
@@ -59,7 +60,7 @@ struct WorkGroupView: View {
             if open { steps.padding(.top, 8) }
 
             ForEach(group.tools.compactMap(\.artifact), id: \.id) { artifact in
-                ArtifactCard(reference: artifact).padding(.top, 8)
+                ArtifactCard(reference: artifact, host: hostContext?.host).padding(.top, 8)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

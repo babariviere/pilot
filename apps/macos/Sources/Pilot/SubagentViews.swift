@@ -1,3 +1,4 @@
+import Combine
 import PilotCore
 import SwiftUI
 
@@ -10,7 +11,9 @@ final class SubagentFeed: ObservableObject {
     @Published private(set) var loading = true
     @Published private(set) var error: String?
     let key: SubagentKey
-    private let client: PilotClient
+    private var client: PilotClient
+    private var hosted: (HostResourceRef, HostClients)?
+    private var hostObservation: AnyCancellable?
     private var token: UUID?
     private var processor = TranscriptProcessor()
     private var pending: [[JSONValue]] = []
@@ -27,6 +30,20 @@ final class SubagentFeed: ObservableObject {
         self.client = client
     }
 
+    convenience init(ref: HostResourceRef, name: String, hosts: HostClients) {
+        self.init(key: SubagentKey(sessionId: ref.localId, name: name), client: hosts.presentationClient(ref.host))
+        hosted = (ref, hosts)
+        hostObservation = hosts.objectWillChange.sink { [weak self] _ in
+            Task { @MainActor [weak self] in self?.refreshHost() }
+        }
+    }
+    private func refreshHost() {
+        guard let (ref, hosts) = hosted, users > 0 else { return }
+        guard let next = try? hosts.endpoint(ref.host) else { stop(); loading = false; return }
+        if client !== next { stop(); client = next }
+        attach()
+    }
+
     var isActive: Bool { users > 0 || linger != nil }
 
     /// Views retain the feed while visible. The stream outlives a brief gap, such as list to detail and back.
@@ -34,6 +51,11 @@ final class SubagentFeed: ObservableObject {
         users += 1
         linger?.cancel()
         linger = nil
+        if hosted != nil { refreshHost(); return }
+        attach()
+    }
+
+    private func attach() {
         guard token == nil else { return }
         generation = UUID()
         loading = true
@@ -109,17 +131,30 @@ final class SubagentFeed: ObservableObject {
 /// Live subagent feeds by session and name, dropped shortly after their last view disappears.
 @MainActor
 final class SubagentFeeds {
-    private var feeds: [SubagentKey: SubagentFeed] = [:]
+    private var feeds: [String: SubagentFeed] = [:]
 
     func feed(_ key: SubagentKey, client: PilotClient) -> SubagentFeed {
-        if let feed = feeds[key] { return feed }
+        let cacheKey = (client.hostIdentity.map { HostResourceRef(host: $0, kind: .session, localId: key.sessionId).storageKey } ?? key.sessionId) + ":" + Data(key.name.utf8).base64EncodedString()
+        if let feed = feeds[cacheKey] { return feed }
         let feed = SubagentFeed(key: key, client: client)
+        keep(feed, key: cacheKey)
+        return feed
+    }
+
+    func feed(ref: HostResourceRef, name: String, hosts: HostClients) -> SubagentFeed {
+        let cacheKey = ref.storageKey + ":" + Data(name.utf8).base64EncodedString()
+        if let feed = feeds[cacheKey] { return feed }
+        let feed = SubagentFeed(ref: ref, name: name, hosts: hosts)
+        keep(feed, key: cacheKey)
+        return feed
+    }
+
+    private func keep(_ feed: SubagentFeed, key: String) {
         feed.onIdle = { [weak self, weak feed] in
             guard let self, let feed, self.feeds[key] === feed, !feed.isActive else { return }
             self.feeds[key] = nil
         }
         feeds[key] = feed
-        return feed
     }
 
     var count: Int { feeds.count }
@@ -131,6 +166,7 @@ final class SubagentFeeds {
 /// state, name and task, working ones first. The list opens when a subagent starts working; clicking a row opens its
 /// transcript in the Agents tab.
 struct SubagentsStrip: View {
+    @Environment(\.hostViewContext) private var hostContext
     let session: SessionSummary
     @EnvironmentObject private var model: AppModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -155,7 +191,7 @@ struct SubagentsStrip: View {
                 TrayRowList(count: ordered.count) {
                     ForEach(ordered, id: \.0.id) { subagent, state in
                         SubagentTrayRow(subagent: subagent, state: state) {
-                            model.openSubagent(subagent.name, in: session.id)
+                            model.openSubagent(subagent.name, in: hostContext?.ref(.session, session.id).storageKey ?? session.id)
                         }
                     }
                 }
@@ -334,6 +370,7 @@ extension SessionSubagent {
 /// Every subagent of a session as one list. Clicking a row opens its detail view (transcript and composer) in place,
 /// with a back button to the list. `AppModel.selectedSubagents` holds the open subagent per chat; nil shows the list.
 struct SubagentsPane: View {
+    @Environment(\.hostViewContext) private var hostContext
     let session: SessionSummary
     @EnvironmentObject private var model: AppModel
 
@@ -344,9 +381,9 @@ struct SubagentsPane: View {
                            message: "Subagents this chat starts appear here, with their transcripts.")
                 .padding(.horizontal, 16)
                 .frame(maxHeight: .infinity)
-        } else if let name = model.selectedSubagents[session.id],
+        } else if let name = model.selectedSubagents[hostContext?.ref(.session, session.id).storageKey ?? session.id],
                   let selected = subagents.first(where: { $0.name == name }) {
-            SubagentDetail(session: session, subagent: selected) { model.selectedSubagents[session.id] = nil }
+            SubagentDetail(session: session, subagent: selected, context: hostContext) { model.selectedSubagents[hostContext?.ref(.session, session.id).storageKey ?? session.id] = nil }
                 .id(selected.name)
         } else {
             VStack(spacing: 0) {
@@ -355,7 +392,7 @@ struct SubagentsPane: View {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(Array(subagents.enumerated()), id: \.element.id) { index, subagent in
                             if index > 0 { HairlineDivider(leading: InboxRowLayout.dividerInset) }
-                            SubagentRow(subagent: subagent) { model.openSubagent(subagent.name, in: session.id) }
+                            SubagentRow(subagent: subagent) { model.openSubagent(subagent.name, in: hostContext?.ref(.session, session.id).storageKey ?? session.id) }
                                 .inboxCorner(subagent.cornerSignal)
                         }
                     }
@@ -402,6 +439,8 @@ private struct SubagentDraft {
 /// One subagent's transcript and composer, pushed over the Agents list. Its model and thinking stay visible;
 /// Stop and the working directory sit in the header's ⋯ menu.
 private struct SubagentDetail: View {
+    @Environment(\.hostViewContext) private var hostContext
+    @EndpointClient private var endpoint
     let session: SessionSummary
     let subagent: SessionSubagent
     let back: () -> Void
@@ -410,11 +449,11 @@ private struct SubagentDetail: View {
     @State private var draft = SubagentDraft()
     @Environment(\.pilotFonts) private var fonts
 
-    init(session: SessionSummary, subagent: SessionSubagent, back: @escaping () -> Void) {
+    init(session: SessionSummary, subagent: SessionSubagent, context: HostViewContext? = nil, back: @escaping () -> Void) {
         self.session = session
         self.subagent = subagent
         self.back = back
-        feed = AppModel.shared.subagentFeed(session.id, subagent.name)
+        feed = context.map { AppModel.shared.subagentFeeds.feed(ref: $0.ref(.session, session.id), name: subagent.name, hosts: $0.hosts) } ?? AppModel.shared.subagentFeed(session.id, subagent.name)
     }
 
     var body: some View {
@@ -502,7 +541,7 @@ private struct SubagentDetail: View {
     private var actions: some View {
         Menu {
             if subagent.isWorking {
-                Button(role: .destructive) { model.stopSubagent(subagent.name, in: session.id) } label: {
+                Button(role: .destructive) { model.stopSubagent(subagent.name, in: hostContext?.ref(.session, session.id).storageKey ?? session.id) } label: {
                     Label("Stop", icon: PilotIcon.stop)
                 }
                 .disabled(model.pendingSessionActions.contains("\(session.id)/subagent/\(subagent.name)"))
@@ -517,7 +556,7 @@ private struct SubagentDetail: View {
                     Label("Copy Path", icon: PilotIcon.copy)
                 }
                 Button {
-                    NSWorkspace.shared.activateFileViewerSelecting([URL(filePath: subagent.cwd)])
+                    if hostContext == nil || hostContext?.host.hostId == "local" { NSWorkspace.shared.activateFileViewerSelecting([URL(filePath: subagent.cwd)]) }
                 } label: {
                     Label("Show in Finder", icon: PilotIcon.project)
                 }
@@ -621,7 +660,7 @@ private struct SubagentDetail: View {
         Task {
             defer { draft.sending = false }
             do {
-                try await AppModel.shared.client.sendToSubagent(session.id, name: subagent.name, message: message, mode: mode)
+                try await endpoint.sendToSubagent(session.id, name: subagent.name, message: message, mode: mode)
                 if draft.text == message { draft.text = "" }
             } catch {
                 draft.error = error.localizedDescription

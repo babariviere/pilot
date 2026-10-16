@@ -6,7 +6,7 @@ import SwiftUI
 struct ContinuedComposer: View {
     let nextId: String
     /// Only this footer follows the session list, for the new chat's title, so the transcript is not re-rendered.
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
 
     var body: some View {
         HStack(spacing: 12) {
@@ -37,7 +37,7 @@ struct ContinuedComposer: View {
 /// One quiet link above a continued chat's transcript, back to the read-only chat it continues.
 struct ContinuedFromRow: View {
     let originId: String
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
 
     var body: some View {
         Button { AppModel.shared.reveal(session: originId) } label: {

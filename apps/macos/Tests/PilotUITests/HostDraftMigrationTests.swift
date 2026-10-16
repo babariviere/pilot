@@ -25,7 +25,7 @@ import Testing
     #expect(try app.composer(for: remoteRef) === remoteComposer)
     legacy.draft = "Edited after migration"
     try app.selectSession(remoteRef)
-    #expect(app.selectedSessionId == nil)
+    #expect(app.selectedSessionId == remoteRef.storageKey)
     #expect(app.hosts.selection == remoteRef)
     app.flushDrafts()
     let saved = try store().load()
