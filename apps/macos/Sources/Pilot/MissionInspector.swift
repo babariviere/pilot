@@ -143,40 +143,23 @@ struct MissionInspectorPane: View {
     }
 }
 
-/// One native toolbar control replaces the mission badge and separate inspector icon.
-/// Coordinators navigate to the Overview; member chats toggle their assigned-task inspector.
+/// A single icon opens the mission's Overview from any mission chat.
 struct SessionMissionControl: View {
     let session: SessionSummary
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
 
     var body: some View {
-        Group {
-            if session.isMissionCoordinator {
-                Button { model.toggleInspector(.mission) } label: {
-                    label
-                }
-            } else {
-                Toggle(isOn: InspectorToggle.selection(for: .mission, in: model)) {
-                    label
-                }
-                .toggleStyle(.button)
+        Button {
+            if let missionId = session.missionId {
+                model.openMission(missionId, tab: .overview)
             }
+        } label: {
+            PilotSymbol(PilotIcon.mission, context: .toolbar)
         }
-        .help(session.isMissionCoordinator ? "Open mission Overview: \(title)" : "Show mission tasks: \(title)")
-        .accessibilityLabel(session.isMissionCoordinator ? "Open mission \(title)" : "Mission tasks for \(title)")
+        .help("Open mission Overview: \(title)")
+        .accessibilityLabel("Open mission \(title)")
     }
 
     private var title: String { client.mission(session.missionId)?.title ?? "Mission" }
-
-    private var label: some View {
-        HStack(spacing: 5) {
-            PilotSymbol(PilotIcon.mission, context: .toolbar)
-            Text(title).font(.pilot(.label)).lineLimit(1).truncationMode(.tail)
-                .frame(maxWidth: 160, alignment: .leading).fixedSize(horizontal: true, vertical: false)
-            if session.isMissionCoordinator {
-                PilotSymbol(PilotIcon.disclosure)
-            }
-        }
-    }
 }
