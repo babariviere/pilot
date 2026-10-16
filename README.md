@@ -216,6 +216,12 @@ Transient rate limits, authentication and billing errors retain their normal err
 Beside the usage warning, **Force work** lets that chat and its subagents continue past the current
 windows. The override ends when those windows reset or clear. **Pause at limit** restores the guard early.
 
+When you message a long chat (context at 40% of the window or 100k tokens, whichever is lower) after
+the provider's prompt cache has expired (5 minutes for Anthropic, 10 for OpenAI, longer with
+`PI_CACHE_RETENTION=long`), Pilot compacts it first and your message waits behind the summary. Every model
+request in the turn then reads the short summary instead of rereading the whole history at full price.
+A warm cache is never discarded, and automatic messages don't trigger it.
+
 **Continue with another model…** explains the change before confirming. A model from the same provider
 keeps this chat and compatible context, but does not bypass its subscription limit. A different provider
 starts a linked chat with a bounded plain-text handoff, not provider-specific history or compaction. It
