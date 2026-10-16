@@ -52,7 +52,8 @@ import Testing
 }
 
 @Test @MainActor func invalidatedInFlightReadCannotOverwriteNewerCacheValue() async throws {
-    let cache = AsyncReadCache<String, Int>(ttl: 10)
+    // Exercise invalidation, not expiry while suspended readers wait for the main actor.
+    let cache = AsyncReadCache<String, Int>(ttl: 10, now: { Date(timeIntervalSince1970: 100) })
     var release: CheckedContinuation<Int, Never>?
     let old = Task { @MainActor in
         try await cache.value(for: "s") { await withCheckedContinuation { release = $0 } }
