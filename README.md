@@ -27,7 +27,10 @@ See [screenshot notes](docs/screenshots/README.md) to regenerate them.*
 - **Jump anywhere from the keyboard.** ⌘K opens a command palette over chats (by title, branch, project or pull
   request number), pages, missions and tasks (`#25`), project scopes, Linear Inbox items, Slack reports in triage
   (by summary, channel or message text, newest first, resolved ones included), and actions such as new chat, pin,
-  archive, stop, retry or opening the pull request on GitHub. ⌘⇧P opens the open chat's latest pull request
+  archive, stop, retry, opening the pull request on GitHub or **Merge PR…** for the open chat (also available
+  after searching a PR number). Merging asks you to confirm the fresh PR head, target branch and a merge method
+  allowed by the repository. GitHub enforces permissions and branch protection; Pilot never enables auto-merge
+  or deletes the branch. Agents remain unable to merge. ⌘⇧P opens the open chat's latest pull request
   (the newest open one, else the newest). Paste a Slack message link to find its report, or to
   add it to a project's Slack triage: Pilot reads and sorts the message, then opens triage on it.
 - **Let the display rest while agents work.** Keep the Mac awake without keeping the display on.

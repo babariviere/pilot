@@ -173,7 +173,7 @@ struct CommandPaletteCatalog {
         return entries
     }
 
-    /// What can be done to one chat: retry, stop, open its PRs, pin or unpin, archive. For the open chat
+    /// What can be done to one chat: retry, stop, open or merge its PRs, pin or unpin, archive. For the open chat
     /// (suggested), the latest PR's row shows ⌘⇧P.
     func chatActions(_ session: SessionSummary, suggested: Bool = false) -> [CommandPaletteEntry] {
         guard !session.isArchived else { return [] }
@@ -200,6 +200,11 @@ struct CommandPaletteCatalog {
             add("pr-\(pullRequest.number)", "Open PR #\(pullRequest.number) on GitHub", .openExternal, namesChat: false,
                 shortcut: pullRequest.url == latest ? "⌘⇧P" : nil) {
                 BrowserLinkOpener.shared.open(url)
+            }
+            if pullRequest.state == .open, session.projectId != nil, !session.isMissionCoordinator {
+                add("merge-pr-\(pullRequest.number)", "Merge PR #\(pullRequest.number)…", .pullRequest) {
+                    model.mergingPullRequest = PullRequestMergeTarget(sessionId: id, pullRequest: pullRequest)
+                }
             }
         }
         add("pin", session.isPinned ? "Unpin" : "Pin", session.isPinned ? .unpin : .pin) {
@@ -535,8 +540,8 @@ struct CommandPaletteView: View {
 
     private func run(_ id: String?) {
         guard let id, let entry = palette.entries[id] else { return }
+        model.commandPaletteAction = entry.perform
         dismiss()
-        entry.perform()
     }
 }
 

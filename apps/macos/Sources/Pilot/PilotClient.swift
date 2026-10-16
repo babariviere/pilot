@@ -576,6 +576,18 @@ final class PilotClient: ObservableObject {
         return session
     }
 
+    func previewPullRequestMerge(_ sessionId: String, url: String) async throws -> PullRequestMergePreview {
+        try await call("api/sessions/\(sessionId)/pull-requests/merge-preview", body: ["url": url])
+    }
+
+    func mergePullRequest(_ sessionId: String, preview: PullRequestMergePreview,
+                          method: PullRequestMergeMethod) async throws {
+        struct Result: Decodable { let merged: Bool }
+        let result: Result = try await call("api/sessions/\(sessionId)/pull-requests/merge",
+                                            body: MergePullRequestRequest(preview: preview, method: method))
+        guard result.merged else { throw ClientError("GitHub did not merge the pull request.") }
+    }
+
     func createProject(_ request: ProjectRequest) async throws -> Project {
         let project: Project = try await call("api/projects", body: request)
         upsert(project)

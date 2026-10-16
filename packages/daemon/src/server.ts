@@ -20,6 +20,7 @@ import type {
 	McpSignInRequest,
 	MemoryNoteRequest,
 	MemoryRange,
+	MergePullRequestRequest,
 	MissionArtifactLinkWrite,
 	MissionBriefWrite,
 	MissionCommentWrite,
@@ -837,6 +838,30 @@ export function createDaemonServer(
 					await sessions.artifact(parts[2]!, parts[4]!, value === undefined ? undefined : Number(value)),
 				);
 			}
+		}
+		if (
+			parts[1] === "sessions" &&
+			parts.length === 5 &&
+			parts[3] === "pull-requests" &&
+			(parts[4] === "merge-preview" || parts[4] === "merge") &&
+			req.method === "POST"
+		) {
+			const body = await readJson<MergePullRequestRequest>(req);
+			if (!body || typeof body.url !== "string" || !body.url.trim() || body.url.length > 2048)
+				throw new HttpError(400, "url must be a non-empty string of at most 2048 characters");
+			if (parts[4] === "merge-preview")
+				return json(res, 200, await sessions.previewPullRequestMerge(parts[2]!, body.url));
+			if (
+				!["squash", "merge", "rebase"].includes(body.method) ||
+				typeof body.headSha !== "string" ||
+				!/^[a-f0-9]{40,64}$/.test(body.headSha) ||
+				typeof body.baseBranch !== "string" ||
+				!body.baseBranch ||
+				body.baseBranch.length > 1024
+			)
+				throw new HttpError(400, "A merge method, confirmed headSha and baseBranch are required");
+			await sessions.mergePullRequest(parts[2]!, body);
+			return json(res, 200, { merged: true });
 		}
 		if (
 			parts[1] === "sessions" &&

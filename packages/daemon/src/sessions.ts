@@ -31,7 +31,9 @@ import type {
 	ArtifactRevision,
 	ArtifactSummary,
 	DeliveryMode,
+	MergePullRequestRequest,
 	PullRequestBindingResult,
+	PullRequestMergePreview,
 	RewindAction,
 	RewindResponse,
 	SessionAttempt,
@@ -66,6 +68,7 @@ import { stuckPullRequestReason } from "./needs-you-reason.ts";
 import { PullRequestAutoRebase } from "./pr-auto-rebase.ts";
 import type { ProjectMemoryService } from "./project-memory.ts";
 import { type ProjectStore, requireDirectory } from "./projects.ts";
+import { mergeTarget, PullRequestMerger } from "./pull-request-merge.ts";
 import { type HealthCheck, PullRequestSync } from "./pull-request-sync.ts";
 import {
 	isTerminalPullRequest,
@@ -924,6 +927,7 @@ export class SessionManager {
 	>();
 	private readonly pullRequests: PullRequestSync<SessionMeta, FollowUpContext>;
 	private readonly runner: Runner;
+	private readonly pullRequestMerger: PullRequestMerger;
 	/** Last unpublished-work check per session, and the one in flight. */
 	private readonly unpublishedChecks = new Map<string, { at: number; promise?: Promise<boolean> }>();
 	private readonly pool?: WorkerPool;
@@ -1039,6 +1043,7 @@ export class SessionManager {
 		this.factories = factories;
 		this.modelCatalog = options.models ?? new ModelCatalog(agentDir);
 		this.runner = pullRequests.runner ?? run;
+		this.pullRequestMerger = new PullRequestMerger(this.runner);
 		this.autoRebase = new PullRequestAutoRebase(this.runner);
 		this.pullRequests = new PullRequestSync<SessionMeta, FollowUpContext>(
 			{
@@ -1682,6 +1687,44 @@ export class SessionManager {
 			if (this.isMissionCoordinator(meta.id) || meta.coordinatorView) this.missionChanged(meta.id);
 		this.refreshMissionPullRequests();
 		this.refreshMainWorkspaces();
+	}
+
+	/** Only the native confirmation flow calls these endpoints; no kernel tool exposes merges. */
+	async previewPullRequestMerge(id: string, url: string): Promise<PullRequestMergePreview> {
+		return this.pullRequestMerger.perform(url, async () => {
+			const cwd = await this.mergePullRequestContext(id, url);
+			return this.pullRequestMerger.preview(url, cwd);
+		});
+	}
+
+	async mergePullRequest(id: string, request: MergePullRequestRequest): Promise<void> {
+		await this.pullRequestMerger.perform(request.url, async () => {
+			const cwd = await this.mergePullRequestContext(id, request.url);
+			const preview = await this.pullRequestMerger.preview(request.url, cwd);
+			// A detach, project edit or shutdown during the GitHub read invalidates the action.
+			await this.mergePullRequestContext(id, request.url);
+			await this.pullRequestMerger.merge(request, preview, cwd);
+			// A refresh uses the ordinary reconciliation path (mission tasks, notices and main-moved events).
+			// Its failure cannot turn a successful external mutation into a failed merge response.
+			void this.pullRequests.refresh(this.require(id)).catch(() => undefined);
+		});
+	}
+
+	private async mergePullRequestContext(id: string, url: string): Promise<string> {
+		const meta = this.require(id);
+		const { repo } = mergeTarget(url);
+		if (!meta.projectId) throw new Conflict("The chat must belong to a project repository");
+		const project = this.projects.require(meta.projectId);
+		const upstream =
+			meta.workspace?.upstream ?? (await this.runner("git", ["remote", "get-url", "origin"], project.path, 20_000));
+		if (githubRepository(upstream.trim()).identity.toLowerCase() !== repo.identity.toLowerCase())
+			throw new Conflict("The pull request must belong to the chat's project repository");
+		this.assertNotContinued(meta);
+		if (this.closing || meta.archivedAt || this.isMissionCoordinator(id))
+			throw new Conflict("This chat cannot merge pull requests");
+		if (!sessionPullRequests(meta).some((pr) => pr.url.toLowerCase() === url.toLowerCase() && pr.state === "open"))
+			throw new Conflict("The open pull request is no longer linked to this chat");
+		return project.path;
 	}
 
 	async bindPullRequest(
@@ -4522,6 +4565,7 @@ export class SessionManager {
 		clearTimeout(this.parkTimer);
 		this.pool?.close();
 		this.subscriptionUsage?.close();
+		await this.pullRequestMerger.settled();
 		const drainPullRequests = this.pullRequests.stop();
 		this.shutdownSignal.abort();
 		await Promise.allSettled([...this.titleTasks]);
