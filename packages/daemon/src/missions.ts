@@ -1174,9 +1174,6 @@ export class MissionStore {
 					? [`- ${num(events[0]!.total!) - events.length} additional groups; read the activity for details.`]
 					: []),
 				"Read the mission with get for details.",
-				"Update tasks for progress and blockers; do not copy status into the brief, decisions or comments. Change the brief only for scope or requirements, and record only new agreed choices with decide.",
-				"Address relevant open comments and resolve them once their outcome is saved in the task, decision or spec. Leave unanswered questions open; do not post duplicate questions, unchanged reminders or acknowledgement comments.",
-				"Summarise for the user and propose next steps without logging another copy of task state. Do not start chats unless the user asks.",
 			].join("\n");
 			this.run(
 				"INSERT INTO notices (request_id, mission_id, last_event_id, session_id, content, created_at, chat_event) VALUES (?, ?, ?, ?, ?, ?, ?)",
