@@ -153,7 +153,7 @@ struct HomeView: View {
             ZStack(alignment: .top) {
                 // The softened cloud photo; DitherScene falls back to the procedural DitherSky without it.
                 DitherScene(source: .homeSky, cell: 2, fade: 0.45)
-                    .frame(height: 300)
+                    .frame(height: 440)
                 VStack(spacing: 0) {
                     Text("What’s on your mind?")
                         .font(.system(size: 24, weight: .semibold))
@@ -161,7 +161,7 @@ struct HomeView: View {
                         .foregroundStyle(Theme.foreground)
                         .shadow(color: Theme.halo, radius: 6)
                         .shadow(color: Theme.halo, radius: 16)
-                        .padding(.top, 196)
+                        .padding(.top, 290)
                         .padding(.bottom, 16)
                     TaskComposer(form: app.newSessionForm, client: app.client)
                         .frame(maxWidth: 640)
