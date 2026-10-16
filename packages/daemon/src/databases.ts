@@ -2,6 +2,7 @@
  * Agent access to user-configured Postgres databases. pilotd alone reads the config and opens connections; kernels
  * only see environment names. Grants live in session metadata and last for the session.
  */
+import { randomUUID } from "node:crypto";
 import { open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -19,9 +20,12 @@ export interface DatabaseGrant {
 	mode: DatabaseMode;
 }
 
-/** A pending "ask" request. The user's reply grants it only when it is exactly answer. */
+/**
+ * A pending "ask" request. Only the app's decision for this id grants it (see decideDatabaseRequest); messages
+ * never do.
+ */
 export interface DatabaseRequest extends DatabaseGrant {
-	answer: string;
+	id: string;
 }
 
 /** Persisted per session. */
@@ -155,11 +159,6 @@ export async function loadDatabaseConfig(agentDir: string): Promise<DatabaseProj
 	}
 }
 
-/** The exact reply that grants a request. Questions offer it as an answer. */
-export function databaseAnswer(env: string, mode: DatabaseMode): string {
-	return `Allow ${mode} access to ${env}`;
-}
-
 function granted(state: DatabaseState | undefined, env: string, mode: DatabaseMode): boolean {
 	// Write access is the broader grant: it covers read-mode queries too.
 	return !!state?.grants?.some((grant) => grant.env === env && (grant.mode === mode || grant.mode === "write"));
@@ -174,13 +173,21 @@ function withGrant(state: DatabaseState | undefined, env: string, mode: Database
 }
 
 /**
- * Applies a user message to a pending request: the exact answer grants it, anything else declines it.
- * Undefined when nothing changes.
+ * Applies the app's decision on the pending request with this id. Throws when that request is no longer pending,
+ * so a stale or repeated click changes nothing.
  */
-export function answerDatabaseRequest(state: DatabaseState | undefined, message: string): DatabaseState | undefined {
+export function decideDatabaseRequest(state: DatabaseState | undefined, id: string, allow: boolean): DatabaseState {
 	const request = state?.request;
-	if (!request) return undefined;
-	if (message.trim() === request.answer) return withGrant(state, request.env, request.mode);
+	if (!request || request.id !== id) throw new Error("This database access request is no longer pending");
+	return allow ? withGrant(state, request.env, request.mode) : withoutRequest(state);
+}
+
+/** Any message while a request is pending declines it: the agent moves on. Undefined when nothing is pending. */
+export function declineDatabaseRequest(state: DatabaseState | undefined): DatabaseState | undefined {
+	return state?.request ? withoutRequest(state) : undefined;
+}
+
+function withoutRequest(state: DatabaseState | undefined): DatabaseState {
 	return { ...(state?.grants?.length ? { grants: state.grants } : {}) };
 }
 
@@ -268,11 +275,8 @@ export class DatabaseService {
 			await store.write(withGrant(store.read(), env, mode));
 			return { status: "granted", env, mode };
 		}
-		const answer = databaseAnswer(env, mode);
-		await store.write({
-			...(store.read()?.grants?.length ? { grants: store.read()!.grants } : {}),
-			request: { env, mode, answer },
-		});
+		const id = randomUUID();
+		await store.write({ ...withoutRequest(store.read()), request: { env, mode, id } });
 		const reason = typeof args.reason === "string" ? args.reason.trim().slice(0, 600) : "";
 		return {
 			status: "pending",
@@ -283,7 +287,7 @@ export class DatabaseService {
 				...(reason ? { context: reason } : {}),
 				options: [
 					{
-						label: answer,
+						label: `Allow ${mode} access to ${env}`,
 						detail:
 							mode === "write"
 								? "Reads and writes, for the rest of this chat"
@@ -291,6 +295,7 @@ export class DatabaseService {
 					},
 					{ label: "Deny" },
 				],
+				databaseAccess: { id, env, mode },
 			},
 		};
 	}

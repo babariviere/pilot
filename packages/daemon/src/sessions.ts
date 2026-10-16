@@ -57,7 +57,7 @@ import { chatTitleContext } from "./chat-title.ts";
 import { ColdViewReader } from "./cold-view-reader.ts";
 import { coordinatorTrust } from "./coordinator-trust.ts";
 import type { CredentialBroker } from "./credential-broker.ts";
-import { answerDatabaseRequest, DatabaseService, type DatabaseState } from "./databases.ts";
+import { DatabaseService, type DatabaseState, decideDatabaseRequest, declineDatabaseRequest } from "./databases.ts";
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
 import { githubRepository, linkedPullRequest, type PullRequestProblems } from "./github.ts";
@@ -3718,15 +3718,34 @@ export class SessionManager {
 	): Promise<void> {
 		const end = this.updateGate.begin();
 		try {
-			// Only the user's own reply answers a database access question: the exact grant label grants it.
+			// A message never grants database access (only decideDatabaseAccess does); it declines a pending request.
 			const meta = this.metas.get(id);
-			const databases =
-				meta && typeof message === "string" ? answerDatabaseRequest(meta.databases, message) : undefined;
+			const databases = meta ? declineDatabaseRequest(meta.databases) : undefined;
 			if (meta && databases) meta.databases = databases;
 			await this.sendAdmitted(id, message, mode, requestId);
 		} finally {
 			end();
 		}
+	}
+
+	/**
+	 * The app's answer to a db access question. Saves the decision, then tells the agent with a short message, which
+	 * starts its next turn. Only the pending request's id is accepted.
+	 */
+	async decideDatabaseAccess(id: string, requestId: string, allow: boolean): Promise<void> {
+		const meta = this.require(id);
+		if (meta.archivedAt !== undefined) throw new Conflict("Restore the archived session before answering");
+		const request = meta.databases?.request;
+		let databases: DatabaseState;
+		try {
+			databases = decideDatabaseRequest(meta.databases, requestId, allow);
+		} catch (error) {
+			throw new Conflict(error instanceof Error ? error.message : String(error));
+		}
+		meta.databases = databases;
+		await this.save(meta);
+		const message = `${allow ? "Allowed" : "Denied"} ${request!.mode} access to the ${request!.env} database.`;
+		await this.send(id, message, "steer", `database-access:${requestId}`);
 	}
 
 	async sendDurable(id: string, message: string, mode: DeliveryMode, operationId: string): Promise<void> {

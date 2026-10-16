@@ -15,6 +15,20 @@ public struct AgentQuestion: Equatable, Sendable {
         }
     }
 
+    /// Set on the db tool's access requests. The app answers them through pilotd's database-access endpoint, never
+    /// with a message: the first answer allows, any other denies. A typed reply is a message, which declines.
+    public struct DatabaseAccess: Equatable, Sendable {
+        public let id: String
+        public let env: String
+        public let mode: String
+
+        public init(id: String, env: String, mode: String) {
+            self.id = id
+            self.env = env
+            self.mode = mode
+        }
+    }
+
     public static let entryKind = "pilot.question"
     public static let toolName = "ask_user"
     /// Number keys 1 to 9 pick answers.
@@ -26,13 +40,17 @@ public struct AgentQuestion: Equatable, Sendable {
     public let context: String?
     public let options: [Option]
     public let multiSelect: Bool
+    public let databaseAccess: DatabaseAccess?
 
-    public init(entryID: Int, question: String, context: String? = nil, options: [Option] = [], multiSelect: Bool = false) {
+    public init(entryID: Int, question: String, context: String? = nil, options: [Option] = [], multiSelect: Bool = false,
+                databaseAccess: DatabaseAccess? = nil) {
         self.entryID = entryID
         self.question = question
         self.context = context
         self.options = Array(options.prefix(Self.maxOptions))
-        self.multiSelect = multiSelect && self.options.count > 1
+        // Access requests are single choice: allow or deny.
+        self.multiSelect = databaseAccess == nil && multiSelect && self.options.count > 1
+        self.databaseAccess = databaseAccess
     }
 
     init?(entryID: Int, data: JSONValue?) {
@@ -46,8 +64,14 @@ public struct AgentQuestion: Equatable, Sendable {
                           suggested: option["suggested"]?.bool ?? false)
         }
         let context = data["context"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let access = data["databaseAccess"]
+        let databaseAccess = access.flatMap { access -> DatabaseAccess? in
+            guard let id = access["id"]?.string, !id.isEmpty, let env = access["env"]?.string,
+                  let mode = access["mode"]?.string else { return nil }
+            return DatabaseAccess(id: id, env: env, mode: mode)
+        }
         self.init(entryID: entryID, question: question, context: context?.isEmpty == false ? context : nil,
-                  options: options, multiSelect: data["multiSelect"]?.bool ?? false)
+                  options: options, multiSelect: data["multiSelect"]?.bool ?? false, databaseAccess: databaseAccess)
     }
 
     /// The message sent as the reply: the picked answers' labels, then any text in the user's own words.

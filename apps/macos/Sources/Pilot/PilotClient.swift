@@ -356,6 +356,13 @@ final class PilotClient: ObservableObject {
         let _: Ack = try await call("api/sessions/\(sessionId)/messages", body: SendRequest(message: message, mode: mode))
     }
 
+    /// Answers a db access request. pilotd records the decision and tells the agent, so no message is sent here.
+    func decideDatabaseAccess(_ sessionId: String, requestId: String, allow: Bool) async throws {
+        let _: Ack = try await call(
+            "api/sessions/\(sessionId)/database-access", body: DatabaseAccessDecision(id: requestId, allow: allow)
+        )
+    }
+
     /// Stops current work. Returns the user's queued messages that Stop withdrew, which belong in the composer.
     func stop(_ sessionId: String) async throws -> String? {
         let response: StopResponse = try await call("api/sessions/\(sessionId)/stop", body: [String: String]())

@@ -479,6 +479,17 @@ public struct SendRequest: Codable, Sendable {
     }
 }
 
+/// POST /api/sessions/:id/database-access: the user's answer to a db access request.
+public struct DatabaseAccessDecision: Codable, Sendable {
+    public var id: String
+    public var allow: Bool
+
+    public init(id: String, allow: Bool) {
+        self.id = id
+        self.allow = allow
+    }
+}
+
 /// A prompt template (`/name`) or skill (`/skill:name`) that the session's kernel expands when sent.
 public struct SessionCommand: Codable, Equatable, Sendable {
     public enum Source: String, Codable, Sendable { case prompt, skill }

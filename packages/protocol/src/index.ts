@@ -517,6 +517,25 @@ export interface AgentQuestion {
 	options: Array<{ label: string; detail?: string; suggested?: boolean }>;
 	/** Several answers can be picked together. */
 	multiSelect?: boolean;
+	/**
+	 * Set on the db tool's access requests. The app answers them with POST /api/sessions/:id/database-access, never
+	 * with a message: the first option allows, the second denies. A typed reply declines.
+	 */
+	databaseAccess?: DatabaseAccessRequest;
+}
+
+/** A type, not an interface, so questions stay assignable to JSON values. */
+export type DatabaseAccessRequest = {
+	/** Random per request. Only the matching pending request can be decided. */
+	id: string;
+	env: string;
+	mode: "read" | "write";
+};
+
+/** POST /api/sessions/:id/database-access */
+export interface DatabaseAccessDecision {
+	id: string;
+	allow: boolean;
 }
 
 /** POST /api/projects, PATCH /api/projects/:id (partial). An empty model clears it. */

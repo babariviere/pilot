@@ -6,11 +6,14 @@ import SwiftUI
 /// Number keys highlight an answer (or tick it, for multi-select) and Return sends, so a stray key never answers.
 /// 0 moves to the reply field, Escape returns to the answers. The reply field shares the composer's draft, so text
 /// typed before the question stays, and text typed here returns to the composer if the question goes away.
+/// Database access requests send the picked answer to pilotd as a decision instead of a message.
 struct QuestionComposer: View {
     let question: AgentQuestion
     @ObservedObject var draft: ComposerDraftState
     /// Sends the reply as the next user message. Throws to keep the question open.
     let onSend: (String) async throws -> Void
+    /// Allows or denies a database access request. Throws to keep the question open.
+    let onDecideAccess: (AgentQuestion.DatabaseAccess, Bool) async throws -> Void
 
     @Environment(\.pilotFonts) private var fonts
     @State private var highlighted: Int?
@@ -224,14 +227,34 @@ struct QuestionComposer: View {
         return nil
     }
 
+    /// The answer Return or the send button picks for a single-choice question, when it sends an answer rather than
+    /// the reply text. Matches reply(fromChoices:).
+    private func choice(fromChoices: Bool) -> Int? {
+        guard !question.multiSelect, let highlighted, options.indices.contains(highlighted) else { return nil }
+        if fromChoices { return highlighted }
+        return draft.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? highlighted : nil
+    }
+
     private func send(fromChoices: Bool) {
-        guard !sending, let reply = reply(fromChoices: fromChoices) else { return }
+        guard !sending else { return }
+        if let access = question.databaseAccess, let index = choice(fromChoices: fromChoices) {
+            // The first answer allows. pilotd posts the decision to the chat, which closes the question.
+            run { try await onDecideAccess(access, index == 0) }
+            return
+        }
+        guard let reply = reply(fromChoices: fromChoices) else { return }
+        run {
+            try await onSend(reply.message)
+            if reply.usesDraft { draft.draft = "" }
+        }
+    }
+
+    private func run(_ action: @escaping @MainActor () async throws -> Void) {
         sending = true
         error = nil
         Task {
             do {
-                try await onSend(reply.message)
-                if reply.usesDraft { draft.draft = "" }
+                try await action()
                 // Stay busy: the tray leaves once the reply reaches the transcript.
             } catch {
                 self.error = error.localizedDescription
