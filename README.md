@@ -300,8 +300,10 @@ Disabling it permits direct default-branch delivery. Pilot never auto-merges pul
 A Build chat picks up a branch only when its agent writes one: commits, describes or squashes, creates or moves
 a bookmark or branch, or pushes. Checking out another branch just to look at it does not attach it. A pull
 request shows in a chat only when its agent opened it with `gh pr create` or you attached it, never just
-because it was opened from one of the chat's branches. In Changes, **Detach from This Chat** stops tracking a
-branch that has no pull request; the branch itself stays unchanged.
+because it was opened from one of the chat's branches. When Pilot can't read the new PR's link from the
+command's output (for example, piped output), it attaches an open PR on the chat's own branch only if GitHub
+created it within minutes of that command and no other chat owns it. In Changes, **Detach from This Chat**
+stops tracking a branch that has no pull request; the branch itself stays unchanged.
 
 A chat with a ready-to-merge PR goes straight to **Ready to merge**, even if its result is not reviewed
 or its chat is still open. Failures, unanswered questions and other actionable problems stay in **Needs you**.

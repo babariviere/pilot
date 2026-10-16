@@ -38,6 +38,8 @@ export interface SessionPullRequest {
 	branch?: string;
 	/** GitHub's merge time, epoch milliseconds, for merged PRs. */
 	mergedAt?: number;
+	/** GitHub's creation time, epoch milliseconds. Omitted by older daemons and caches. */
+	createdAt?: number;
 	/** Last successful GitHub lookup, epoch milliseconds. Cached across restarts. */
 	checkedAt: number;
 	/** Read-only GitHub stack membership. Absent for unstacked PRs or unsupported servers. */

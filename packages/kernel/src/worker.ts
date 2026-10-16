@@ -372,6 +372,7 @@ export function runKernelWorker(): void {
 						callDaemon<void>((callId) => ({ type: "subscription.limit", callId, limit })),
 					onArtifactsChanged: () => notify({ type: "artifacts.changed" }),
 					onPullRequestCreated: (url) => notify({ type: "pullRequest.created", url }),
+					onPullRequestAttempted: () => notify({ type: "pullRequest.attempted" }),
 					onRefsChanged: () => notify({ type: "refs.changed" }),
 					onGitHubAction: (action) => notify({ type: "github.action", action }),
 					onMcpUsed: (namespaces, failed) => notify({ type: "mcp.used", namespaces, failed }),

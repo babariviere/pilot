@@ -231,6 +231,7 @@ export function toSessionPullRequest(pr: Candidate, now = Date.now()): SessionPu
 		state: pr.state === "MERGED" ? "merged" : pr.state === "CLOSED" ? "closed" : pr.isDraft ? "draft" : "open",
 		branch: pr.headRefName,
 		...(pr.state === "MERGED" ? { mergedAt: Date.parse(pr.mergedAt!) } : {}),
+		createdAt: Date.parse(pr.createdAt),
 		checkedAt: now,
 		...(pr.stack ? { stack: pr.stack } : {}),
 	};

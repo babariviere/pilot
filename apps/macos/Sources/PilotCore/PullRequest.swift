@@ -28,6 +28,8 @@ public struct SessionPullRequest: Codable, Equatable, Hashable, Sendable {
     public let branch: String?
     /// GitHub's merge time, epoch milliseconds, for merged PRs.
     public let mergedAt: Double?
+    /// GitHub's creation time, epoch milliseconds. Omitted by older daemons and caches.
+    public let createdAt: Double?
     /// Last successful lookup, epoch milliseconds.
     public let checkedAt: Double
     public let stack: PullRequestStack?
@@ -35,13 +37,14 @@ public struct SessionPullRequest: Codable, Equatable, Hashable, Sendable {
 
     public init(number: Int, url: String, title: String, state: PullRequestState, checkedAt: Double,
                 branch: String? = nil, mergedAt: Double? = nil, stack: PullRequestStack? = nil,
-                readiness: PullRequestReadiness? = nil) {
+                readiness: PullRequestReadiness? = nil, createdAt: Double? = nil) {
         self.number = number
         self.url = url
         self.title = title
         self.state = state
         self.branch = branch
         self.mergedAt = mergedAt
+        self.createdAt = createdAt
         self.checkedAt = checkedAt
         self.stack = stack
         self.readiness = readiness

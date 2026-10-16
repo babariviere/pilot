@@ -138,6 +138,8 @@ export interface KernelSessionHooks {
 	onArtifactsChanged?(): void;
 	/** Created by an agent tool, committed before notification; replayed on open. */
 	onPullRequestCreated?(url: string): void;
+	/** A gh PR creation ran but its URL could not be confirmed. Hint only; not replayed. */
+	onPullRequestAttempted?(): void;
 	/** A tool call may have changed branches or bookmarks. Hint only; may repeat. */
 	onRefsChanged?(): void;
 	onGitHubAction?(action: GitHubAction): void;
@@ -319,16 +321,19 @@ export class KernelSession {
 		try {
 			const provenance =
 				spec.pilot?.workspace && !spec.pilot.ask
-					? pullRequestProvenance(async (url) => {
-							if (!artifactConversation) throw new Error("PR provenance requires a bound conversation");
-							const added = await artifactConversation.commit(async (tx) => {
-								const state = await tx.doc(PullRequestsDoc, artifactConversation!.id);
-								if (state.urls.includes(url)) return false;
-								state.urls.push(url);
-								return true;
-							}, context);
-							if (added) hooks.onPullRequestCreated?.(url);
-						})
+					? pullRequestProvenance(
+							async (url) => {
+								if (!artifactConversation) throw new Error("PR provenance requires a bound conversation");
+								const added = await artifactConversation.commit(async (tx) => {
+									const state = await tx.doc(PullRequestsDoc, artifactConversation!.id);
+									if (state.urls.includes(url)) return false;
+									state.urls.push(url);
+									return true;
+								}, context);
+								if (added) hooks.onPullRequestCreated?.(url);
+							},
+							() => hooks.onPullRequestAttempted?.(),
+						)
 					: undefined;
 			const refs =
 				spec.pilot?.workspace && !spec.pilot.ask && hooks.onRefsChanged
