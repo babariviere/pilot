@@ -19,8 +19,9 @@ tests alone do not meet these checks. This is not proof of deployment on any use
 - `runtime-manifest.json.sig` is a base64 Ed25519 signature over the **exact manifest bytes**.
   `runtime-abi.json` inside the archive records every audited ELF. The manifest is the trusted checksum
   authority; an unsigned checksum downloaded beside a package is not authentication.
-- The macOS release workflow builds/tests these assets from the immutable stable tag and uploads them
-  to its draft before publishing the Mac update. PR builds never access signing secrets or publish.
+- The release workflow builds/tests these assets from the immutable stable tag and uploads them to
+  its draft in parallel with the Mac update. A final `publish` job releases the draft only once both
+  platforms' assets are uploaded. PR builds never access signing secrets or publish.
   Failed packaging, service or signing checks block publication. Retry through the existing main-only
   `release_tag` input. Published releases cannot be overwritten by this path.
 

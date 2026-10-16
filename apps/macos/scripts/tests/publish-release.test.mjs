@@ -85,8 +85,8 @@ if (args[0] === "release" && args[1] === "upload" && args.includes("--clobber"))
 	}
 });
 
-for (const scenario of ["stable-first", "stable-upgrade", "older-app", "older-build", "api-error"]) {
-	test(`publication safety: ${scenario}`, () => {
+for (const scenario of ["stable-first", "stable-upgrade", "older-app", "older-build", "api-error", "incomplete"]) {
+	test("publication safety: " + scenario, () => {
 		const dir = mkdtempSync(join(tmpdir(), "pilot-publication-test-"));
 		try {
 			const bin = join(dir, "bin");
@@ -94,16 +94,24 @@ for (const scenario of ["stable-first", "stable-upgrade", "older-app", "older-bu
 			const log = join(dir, "calls.jsonl");
 			writeFileSync(
 				join(bin, "gh"),
-				`#!${process.execPath}
-const { appendFileSync } = require("node:fs");
+				"#!" + process.execPath + "\n" +
+					String.raw`const { appendFileSync } = require("node:fs");
 const args = process.argv.slice(2);
 const scenario = process.env.SCENARIO;
-appendFileSync(process.env.CALL_LOG, JSON.stringify(args) + "\\n");
-if (args[0] === "release" && args[1] === "upload") {
+appendFileSync(process.env.CALL_LOG, JSON.stringify(args) + "\n");
+const feed = (build) => '<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><item>' +
+  '<sparkle:version>' + build + '</sparkle:version><sparkle:shortVersionString>0.2.0</sparkle:shortVersionString></item></channel></rss>';
+if (args[0] === "release" && args[1] === "view" && args[args.indexOf("--json") + 1] === "isDraft,isPrerelease,assets") {
+  const names = ["Pilot-arm64.zip", "appcast.xml", "Pilot-linux-x64.tar.gz", "runtime-manifest.json", "runtime-manifest.json.sig"];
+  console.log(JSON.stringify({isDraft: true, isPrerelease: false,
+    assets: names.filter((name) => scenario !== "incomplete" || !name.startsWith("runtime-"))
+      .map((name) => ({name, state: "uploaded"}))}));
 } else if (args[0] === "release" && args[1] === "view") {
   console.log("12345");
 } else if (args[0] === "api" && args[1].endsWith("/12345/assets")) {
-  console.log("67890");
+  console.log("555");
+} else if (args[0] === "api" && args[1].endsWith("/assets/555")) {
+  console.log(feed("10.1"));
 } else if (args[0] === "api" && args[1].endsWith("/releases/latest")) {
   if (scenario === "stable-first" || scenario === "api-error") {
     console.error(scenario === "stable-first" ? "HTTP 404" : "HTTP 403");
@@ -112,10 +120,9 @@ if (args[0] === "release" && args[1] === "upload") {
   console.log(JSON.stringify({tag_name: scenario === "older-app" ? "v0.3.0" : "v0.1.0",
     assets: [{name: "appcast.xml", id: 777}]}));
 } else if (args[0] === "api" && args[1].endsWith("/assets/777")) {
-  console.log('<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><item><sparkle:version>' +
-    (scenario === "older-build" ? "11.1" : "9.1") + '</sparkle:version></item></channel></rss>');
+  console.log(feed(scenario === "older-build" ? "11.1" : "9.1"));
 } else if (args[0] === "release" && args[1] === "edit") {
-  const valid = args.includes("--latest") && !args.includes("--prerelease");
+  const valid = args.includes("--draft=false") && args.includes("--latest") && !args.includes("--prerelease");
   if (!valid) process.exit(1);
 } else {
   console.error("Unexpected call: " + JSON.stringify(args));
@@ -124,48 +131,22 @@ if (args[0] === "release" && args[1] === "upload") {
 `,
 				{ mode: 0o755 },
 			);
-			const app = join(dir, "Pilot.app");
-			mkdirSync(join(app, "Contents"), { recursive: true });
-			const plist = spawnSync(
-				"python3",
-				[
-					"-c",
-					"import plistlib,sys; plistlib.dump({'CFBundleVersion':'10.1','CFBundleShortVersionString':'0.2.0','PilotUpdateRepository':'owner/repo','LSMinimumSystemVersion':'14.0'},open(sys.argv[1],'wb'))",
-					join(app, "Contents/Info.plist"),
-				],
-				{ encoding: "utf8" },
-			);
-			assert.equal(plist.status, 0, plist.stderr);
-			const archive = join(dir, "Pilot-arm64.zip");
-			writeFileSync(archive, "signed archive fixture");
-			const script = readFileSync(new URL("../publish-release.sh", import.meta.url), "utf8");
-			const start = script.indexOf('gh release upload "$tag" "$archive"');
-			assert.ok(start > 0);
-			const result = spawnSync("bash", ["-euo", "pipefail", "-c", script.slice(start)], {
+			const result = spawnSync("bash", [new URL("../finalize-release.sh", import.meta.url).pathname], {
 				encoding: "utf8",
 				env: {
 					...process.env,
-					PATH: `${bin}:${process.env.PATH}`,
+					PATH: bin + ":" + process.env.PATH,
 					CALL_LOG: log,
 					SCENARIO: scenario,
-					here: new URL("../../", import.meta.url).pathname,
-					stage: dir,
-					app,
-					archive,
-					tag: "v0.2.0",
-					app_version: "0.2.0",
-					build_version: "10.1",
+					GH_TOKEN: "test-only-token",
+					RELEASE_TAG: "v0.2.0",
 					PILOT_UPDATE_REPOSITORY: "owner/repo",
-					signature: Buffer.alloc(64).toString("base64"),
 				},
 			});
-			if (scenario === "api-error") assert.notEqual(result.status, 0);
+			if (["api-error", "incomplete"].includes(scenario)) assert.notEqual(result.status, 0);
 			else assert.equal(result.status, 0, result.stderr);
 			const calls = readFileSync(log, "utf8").trim().split("\n").map(JSON.parse);
-			assert.deepEqual(
-				calls.filter((args) => args[1] === "upload").map((args) => args[3]),
-				[archive, join(dir, "appcast.xml")],
-			);
+			assert.ok(!calls.some((args) => args[1] === "upload"));
 			const edits = calls.filter((args) => args[1] === "edit");
 			assert.equal(edits.length, ["stable-first", "stable-upgrade"].includes(scenario) ? 1 : 0);
 		} finally {
@@ -173,3 +154,8 @@ if (args[0] === "release" && args[1] === "upload") {
 		}
 	});
 }
+
+test("macOS upload never publishes the draft", () => {
+	const script = readFileSync(new URL("../publish-release.sh", import.meta.url), "utf8");
+	assert.doesNotMatch(script, /gh release edit|--draft=false|releases\/latest/);
+});

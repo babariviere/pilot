@@ -242,6 +242,15 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Require Linux runtime signing configuration
+        env:
+          LINUX_RUNTIME_PRIVATE_KEY: ${{ secrets.LINUX_RUNTIME_PRIVATE_KEY }}
+          LINUX_RUNTIME_PUBLIC_KEY: ${{ vars.LINUX_RUNTIME_PUBLIC_KEY }}
+        run: |
+          if [ -z "$LINUX_RUNTIME_PUBLIC_KEY" ] || [ -z "$LINUX_RUNTIME_PRIVATE_KEY" ]; then
+            echo '::error::Configure the LINUX_RUNTIME_PUBLIC_KEY repository variable and LINUX_RUNTIME_PRIVATE_KEY secret (see scripts/linux/README.md) before publishing.'
+            exit 1
+          fi
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.release_tag || needs.release-please.outputs.tag_name }}
@@ -270,15 +279,13 @@ jobs:
           gh release upload "$RELEASE_TAG" release/Pilot-linux-x64.tar.gz release/runtime-manifest.json release/runtime-manifest.json.sig --clobber
 
   release:
-    needs: [node, node-macos, swift-test, app-bundle, release-please, linux-publish]
+    # Builds and uploads the macOS update in parallel with the Linux runtime. The publish job
+    # releases the draft once both platforms have uploaded their assets.
+    needs: [node, node-macos, swift-test, app-bundle, release-please]
     # always() permits an explicit retry when release-please is intentionally skipped.
-    if: always() && needs.node.result == 'success' && needs.node-macos.result == 'success' && needs.swift-test.result == 'success' && needs.app-bundle.result == 'success' && needs.linux-publish.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false && ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != ''))
+    if: always() && needs.node.result == 'success' && needs.node-macos.result == 'success' && needs.swift-test.result == 'success' && needs.app-bundle.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false && ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != ''))
     runs-on: macos-15
     timeout-minutes: 45
-    # Serialize stable publishing. Semantic-version ordering protects latest.
-    concurrency:
-      group: pilot-macos-release-${{ github.repository }}-stable
-      cancel-in-progress: false
     permissions:
       contents: write
     env:
@@ -330,9 +337,15 @@ jobs:
         env:
           SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          LINUX_RUNTIME_PUBLIC_KEY: ${{ vars.LINUX_RUNTIME_PUBLIC_KEY }}
         run: |
           if [ -z "$SPARKLE_PUBLIC_KEY" ] || [ -z "$SPARKLE_PRIVATE_KEY" ]; then
             echo '::error::Configure SPARKLE_PUBLIC_KEY repository variable and SPARKLE_PRIVATE_KEY secret with apps/macos/scripts/setup-updates.sh before publishing.'
+            exit 1
+          fi
+          # The app pins this key to authenticate Linux runtimes it installs over SSH.
+          if [ -z "$LINUX_RUNTIME_PUBLIC_KEY" ]; then
+            echo '::error::Configure the LINUX_RUNTIME_PUBLIC_KEY repository variable (see scripts/linux/README.md) before publishing.'
             exit 1
           fi
       - name: Build self-contained Pilot.app (arm64 only)
@@ -341,8 +354,33 @@ jobs:
           SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
           LINUX_RUNTIME_PUBLIC_KEY: ${{ vars.LINUX_RUNTIME_PUBLIC_KEY }}
         run: apps/macos/scripts/bundle.sh
-      - name: Sign and publish stable release (update ZIP and appcast)
+      - name: Sign and upload the macOS update ZIP and appcast to the stable draft
         env:
           GH_TOKEN: ${{ github.token }}
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: apps/macos/scripts/publish-release.sh
+
+  publish:
+    needs: [release-please, linux-publish, release]
+    if: always() && needs.linux-publish.result == 'success' && needs.release.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # Serialize stable publishing. Semantic-version ordering protects latest.
+    concurrency:
+      group: pilot-macos-release-${{ github.repository }}-stable
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      # Current release tools, as in the release job's packaging overlay. No tagged source is built here.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          sparse-checkout: apps/macos/scripts
+      - name: Publish the complete stable draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PILOT_UPDATE_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.release_tag || needs.release-please.outputs.tag_name }}
+        run: bash apps/macos/scripts/finalize-release.sh

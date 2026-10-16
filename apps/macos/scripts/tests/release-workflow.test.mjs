@@ -74,7 +74,7 @@ test("release job publishes only newly created stable releases or explicit draft
 	const workflow = readFileSync(new URL("../../../../.github/workflows/release.yml", import.meta.url), "utf8");
 	const condition = workflow.split("\n  release:\n")[1].match(/^    if: (.+)$/m)[1];
 	const github = { event_name: "push", ref: "refs/heads/main", event: { repository: { fork: false } } };
-	const verification = ["node", "node-macos", "swift-test", "app-bundle", "linux-publish"];
+	const verification = ["node", "node-macos", "swift-test", "app-bundle"];
 	const needs = {
 		...Object.fromEntries(verification.map((name) => [name, { result: "success" }])),
 		"release-please": { result: "success", outputs: { release_created: "false" } },
@@ -127,7 +127,7 @@ test("release job publishes only newly created stable releases or explicit draft
 		needs[name].result = "success";
 	}
 	assert.match(workflow, /\n  release-please:\n    needs: \[node, node-macos, swift-test, app-bundle\]\n/);
-	assert.match(workflow, /\n  release:\n    needs: \[node, node-macos, swift-test, app-bundle, release-please, linux-publish\]\n/);
+	assert.match(workflow, /\n  release:\n(?:    #.*\n)*    needs: \[node, node-macos, swift-test, app-bundle, release-please\]\n/);
 	github.ref = "refs/heads/other";
 	assert.equal(
 		evaluate(github, needs, { release_tag: "v1.2.3" }, () => true),
@@ -153,12 +153,32 @@ test("Linux release signing follows successful production verification and stays
 	assert.match(publish, /needs\.linux-release\.result == 'success'/);
 	assert.match(publish, /contents: write/);
 	assert.ok(publish.indexOf("release-manifest.mjs sign") < publish.indexOf("gh release upload"));
+	assert.ok(publish.indexOf("Require Linux runtime signing configuration") < publish.indexOf("uses: actions/checkout"));
 	assert.match(publish, /Only stable drafts may receive runtime assets/);
 	assert.match(publish, /runtime-manifest\.json\.sig/);
 	const verification = readFileSync(new URL("../../../../.github/workflows/linux-package.yml", import.meta.url), "utf8");
 	assert.match(verification, /permissions:\n  contents: read/);
 	assert.doesNotMatch(verification, /contents: write|secrets\.|gh release upload|PRIVATE_KEY/);
 	assert.match(verification, /verify-service\.sh/);
+});
+
+test("macOS and Linux release jobs run in parallel and one serialized job publishes the complete draft", () => {
+	const workflow = readFileSync(new URL("../../../../.github/workflows/release.yml", import.meta.url), "utf8");
+	const job = (name) => workflow.split("\n  " + name + ":\n")[1].split(/\n  [a-z-]+:\n/)[0];
+	const release = job("release");
+	assert.doesNotMatch(release, /linux-publish|linux-release|concurrency:/);
+	assert.doesNotMatch(release, /--draft=false|finalize-release/);
+	assert.match(release, /run: apps\/macos\/scripts\/publish-release\.sh/);
+	assert.match(release, /LINUX_RUNTIME_PUBLIC_KEY repository variable/);
+	const publish = job("publish");
+	assert.match(publish, /needs: \[release-please, linux-publish, release\]/);
+	assert.match(publish, /if: always\(\) && needs\.linux-publish\.result == 'success' && needs\.release\.result == 'success'\n/);
+	assert.match(publish, /group: pilot-macos-release-\$\{\{ github\.repository \}\}-stable\n      cancel-in-progress: false/);
+	assert.match(publish, /ref: \$\{\{ github\.sha \}\}/);
+	assert.match(publish, /run: bash apps\/macos\/scripts\/finalize-release\.sh/);
+	assert.doesNotMatch(publish, /secrets\./);
+	const script = readFileSync(new URL("../publish-release.sh", import.meta.url), "utf8");
+	assert.doesNotMatch(script, /--draft=false/);
 });
 
 test("DMG workflow is manual-only and limited to trusted main", () => {

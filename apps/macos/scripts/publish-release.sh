@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Publish a complete private GitHub release. Only run for trusted main-branch CI builds.
+# Upload the signed macOS update ZIP and appcast to a stable draft. Only run for trusted main-branch CI builds.
+# finalize-release.sh publishes the draft after every platform has uploaded its assets.
 # Secrets are passed over stdin to sign_update, never on the command line or into the bundle.
 set +x
 set -euo pipefail
@@ -65,38 +66,4 @@ asset_id="$(gh api "repos/$PILOT_UPDATE_REPOSITORY/releases/$release_id/assets" 
 python3 "$here/scripts/release_metadata.py" appcast "$app/Contents/Info.plist" \
 	"$archive" "$asset_id" "$signature" "$stage/appcast.xml"
 gh release upload "$tag" "$stage/appcast.xml" --repo "$PILOT_UPDATE_REPOSITORY" --clobber
-# Drafts never appear in /releases/latest. ZIP and appcast must exist before publication.
-if gh api "repos/$PILOT_UPDATE_REPOSITORY/releases/latest" > "$stage/latest.json" 2> "$stage/latest-error"; then
-	latest_tag="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["tag_name"])' "$stage/latest.json")"
-else
-	# Only a 404 means there is no latest release yet. Authentication/network failures must fail closed.
-	if grep -q 'HTTP 404' "$stage/latest-error"; then
-		latest_tag=""
-	else
-		echo "Unable to query latest release; refusing to publish." >&2
-		exit 1
-	fi
-fi
-if ! python3 "$here/scripts/release_metadata.py" is-newer "$app_version" "$latest_tag"; then
-	echo "Leaving $tag as a draft; $latest_tag already has an equal or newer app version."
-	exit 0
-fi
-if [ -n "$latest_tag" ]; then
-	# A delayed run must also stay newer in Sparkle's numeric build ordering. If an
-	# earlier stable release was retried in a newer run, dispatch this draft again.
-	latest_appcast_id="$(python3 - "$stage/latest.json" <<'PY'
-import json, sys
-assets = [a['id'] for a in json.load(open(sys.argv[1]))['assets'] if a['name'] == 'appcast.xml']
-if len(assets) != 1:
-    raise SystemExit('Latest release must have exactly one appcast.xml asset.')
-print(assets[0])
-PY
-)"
-	gh api "repos/$PILOT_UPDATE_REPOSITORY/releases/assets/$latest_appcast_id" \
-		-H 'Accept: application/octet-stream' > "$stage/latest-appcast.xml"
-	if ! python3 "$here/scripts/release_metadata.py" is-newer-build "$build_version" "$stage/latest-appcast.xml"; then
-		echo "Leaving $tag as a draft; retry it in a new workflow run for a newer Sparkle build version."
-		exit 0
-	fi
-fi
-gh release edit "$tag" --repo "$PILOT_UPDATE_REPOSITORY" --draft=false --latest
+# finalize-release.sh publishes the draft once the Linux runtime assets are attached too.
