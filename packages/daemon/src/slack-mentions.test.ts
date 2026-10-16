@@ -189,6 +189,23 @@ test("strict search framing resolves reply parents and rejects other channels an
 		assert.throws(() => parseSlackMentions(value, channel, "bugs", 8), SlackFormatChanged);
 });
 
+test("search accepts the newer reply-count line, Markdown permalinks and result separators", () => {
+	const permalink = `https://example.slack.com/archives/${channel}/p${reply.replace(".", "")}?thread_ts=${parent}&cid=${channel}`;
+	const result = (link: string) => ({
+		results: `# Search Results for: \n\n## Messages (1 result)\n### Result 1 of 1\nChannel: #bugs (ID: ${channel})\nFrom: Reporter <r@example.test> (ID: U000000001) \nTime: 2026-10-13 12:00:00 CEST\nMessage_ts: ${reply}\nReply count: 5\nPermalink: ${link}\nText: \n<@U000000099> export crashes\n\n---\n\n`,
+		pagination_info: end,
+	});
+	const page = parseSlackMentions(result(`[link](${permalink})`), channel, "bugs", 8);
+	assert.deepEqual(page.messages, [{ ts: reply, threadTs: parent, text: "<@U000000099> export crashes", replies: 0 }]);
+	assert.equal(parseSlackMentions(result(permalink), channel, "bugs", 8).messages[0]?.threadTs, parent);
+	for (const link of [
+		`[link](${permalink.replace("example.slack.com", "example.test")})`,
+		`[link](${permalink}`,
+		`[link](${permalink}) extra`,
+	])
+		assert.throws(() => parseSlackMentions(result(link), channel, "bugs", 8), SlackFormatChanged);
+});
+
 test("personal mentions classify full bounded thread context and cache identity and thread reads", async (t) => {
 	const f = await fixture(t);
 	f.set(search("<@U000000099> please investigate"));

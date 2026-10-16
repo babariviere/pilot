@@ -59,6 +59,8 @@ type Health = {
 	status: "ok" | "sign_in_required" | "error";
 	error?: string;
 	localBudget?: boolean;
+	/** The provider asked Pilot to wait (rate limit). Manual syncs respect it; ordinary error backoff they skip. */
+	limited?: boolean;
 	failures: number;
 	nextPollAt: number;
 };
@@ -246,8 +248,15 @@ export class SourceRegistry {
 		const source = this.require(id);
 		if (!source.configured) throw new Conflict("Attach a Linear team or Slack channels in project settings first");
 		const key = this.currentKey(id)!;
-		if ((this.health.get(id)?.nextPollAt ?? 0) > Date.now() && this.health.get(id)?.status !== "ok")
-			throw new Conflict("Source is backing off. Retry after nextPollAt.");
+		// Background polling waits out error backoff on its own schedule. A manual sync retries right away,
+		// except while the provider is rate limiting or Slack's local daily budget is spent.
+		const health = this.health.get(id);
+		if (health && health.status !== "ok" && health.nextPollAt > Date.now() && (health.limited || health.localBudget))
+			throw new Conflict(
+				health.localBudget
+					? (health.error ?? "Slack daily budget reached.")
+					: `${source.kind === "slack" ? "Slack" : "Linear"} is limiting requests. Pilot will retry automatically.`,
+			);
 		const running = this.running.get(id);
 		if (running) {
 			if (running.key !== key) throw new Conflict("Previous poll is cancelling, retry shortly");
@@ -453,7 +462,7 @@ export class SourceRegistry {
 			if (item.kind !== "linear" || !key || this.items.checkpoint(id)?.configKey !== key)
 				throw new Conflict("Sync this project's Linear source first");
 			if ((this.health.get(id)?.nextPollAt ?? 0) > Date.now() && this.health.get(id)?.status !== "ok")
-				throw new Conflict("Source is backing off. Retry after nextPollAt.");
+				throw new Conflict("Linear is unavailable right now. Try again shortly.");
 			run.sourceId = id;
 			run.key = key;
 			const project = structuredClone(this.projects.require(item.projectId));
@@ -911,6 +920,7 @@ export class SourceRegistry {
 						: Math.min(30 * 60_000, 30_000 * 2 ** Math.min(failures - 1, 6)),
 				),
 			status: error instanceof SourceSignInRequired ? "sign_in_required" : "error",
+			...(error instanceof SourceRateLimited ? { limited: true } : {}),
 			error:
 				error instanceof SourceSignInRequired
 					? "Sign in required"

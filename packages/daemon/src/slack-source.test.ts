@@ -572,7 +572,7 @@ test("shared scheduler polls Slack only when configured, preserves partial check
 	assert.deepEqual(f.store.checkpoint(limited.id)?.cursor, { remaining: true });
 	const midnight = Date.UTC(2026, 9, 14);
 	assert.equal(limited.nextPollAt, midnight);
-	assert.throws(() => registry.poll(limited.id), /backing off/);
+	assert.throws(() => registry.poll(limited.id), /daily budget/);
 	assert.equal((await registry.poll(`${project.id}:linear`)).status, "ok", "Slack budget does not block Linear");
 	t.mock.timers.tick(midnight - Date.now() - 1);
 	assert.equal(calls, 1);
@@ -599,8 +599,9 @@ test("cached classification failures commit partial results and keep a bounded s
 	assert.match(failed.error!, /attempts are cached/);
 	assert.equal(failed.nextPollAt, now + 300_000);
 	assert.deepEqual(f.store.checkpoint(failed.id)?.cursor, { processed: true });
-	assert.throws(() => registry.poll(failed.id), /backing off/);
 	t.mock.timers.tick(300_000);
+	assert.equal((await registry.poll(failed.id)).nextPollAt, now + 600_000);
+	// Manual sync is not blocked by the cadence; it runs and keeps the same bounded next poll.
 	assert.equal((await registry.poll(failed.id)).nextPollAt, now + 600_000);
 });
 function thread(ts: string, body: string) {

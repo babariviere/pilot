@@ -297,7 +297,11 @@ function decodeSlackReactionRead(result: Parameters<typeof decodeMcpResult>[0]):
 	const object =
 		value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 	if (object?.error || object?.ok === false) throw new SourceToolError("Couldn't read Slack reactions");
-	const reactions = object?.reactions ?? (object?.message as Record<string, unknown> | undefined)?.reactions ?? value;
+	// Newer servers return formatted text in "result": ":white_check_mark: × 2 — names", or "No reactions found".
+	const reactions =
+		object?.reactions ??
+		(object?.message as Record<string, unknown> | undefined)?.reactions ??
+		(typeof object?.result === "string" ? object.result : value);
 	if (Array.isArray(reactions) && reactions.length <= 50) {
 		let present = false;
 		for (const reaction of reactions) {
@@ -315,8 +319,11 @@ function decodeSlackReactionRead(result: Parameters<typeof decodeMcpResult>[0]):
 	}
 	if (typeof reactions === "string") {
 		// Formatted metadata from this tool, not Slack message text. Match the exact emoji and an explicit count.
-		const match = /(?:^|\n)[ \t]*(?:[-*•] )?:?white_check_mark:?[ \t]*\((\d+)(?: reactions?)?\)/.exec(reactions);
-		if (match) return { present: Number(match[1]) > 0 };
+		const match =
+			/(?:^|\n)[ \t]*(?:[-*•] )?:?white_check_mark:?[ \t]*(?:\((\d+)(?: reactions?)?\)|[×x][ \t]*(\d+)(?![\d]))/.exec(
+				reactions,
+			);
+		if (match) return { present: Number(match[1] ?? match[2]) > 0 };
 		if (!/\bwhite_check_mark\b/.test(reactions) && /\bno reactions\b|^Reactions[: ]|^\w+ \(\d+\)/im.test(reactions))
 			return { present: false };
 	}

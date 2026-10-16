@@ -27,7 +27,8 @@ export function mentionsMe(text: string, me: SlackIdentity, groups: string[]): b
 }
 
 /** Dedicated Slack searches' detailed wire format. Reply permalinks identify the parent through thread_ts.
- * Search text is only qualification evidence, never classifier context or the tracked item's identity. */
+ * Newer servers add an optional "Reply count" line, wrap the permalink as a Markdown link and separate results
+ * with "---". Search text is only qualification evidence, never classifier context or the tracked item's identity. */
 export function parseSlackMentions(value: TrackingJson, channel: string, name: string, limit: number): SlackPage {
 	const fail = (reason: string): never => {
 		throw new SlackFormatChanged(reason);
@@ -54,11 +55,12 @@ export function parseSlackMentions(value: TrackingJson, channel: string, name: s
 	if (parts.length - 1 > limit) return fail("search result count");
 	const messages = parts.slice(1).map((part) => {
 		const fields =
-			/^\s*Channel: #([^\n]+) \(ID: ([CG][A-Z0-9]{1,199})\)\nFrom: [^\n]+\nTime: [^\n]+\nMessage_ts: (\d{1,12}\.\d{6})\nPermalink: (https:\/\/[^\s]+)\nText:([\s\S]*)$/.exec(
+			/^\s*Channel: #([^\n]+) \(ID: ([CG][A-Z0-9]{1,199})\)\nFrom: [^\n]+\nTime: [^\n]+\nMessage_ts: (\d{1,12}\.\d{6})\n(?:Reply count: \d{1,9}\n)?Permalink: (?:\[[^\]\n]{0,80}\]\((https:\/\/[^\s()]+)\)|(https:\/\/[^\s]+))\nText:([\s\S]*)$/.exec(
 				part,
 			);
 		if (!fields) return fail("search message fields");
-		const [, foundName, foundChannel, ts, permalink, body] = fields;
+		const [, foundName, foundChannel, ts, linked, bare, body] = fields;
+		const permalink = linked ?? bare;
 		if (/^[CDG][A-Z0-9]+$/.test(channel) ? foundChannel !== channel : foundName !== channel.replace(/^#/, ""))
 			return fail("search channel mismatch");
 		let url: URL;
@@ -76,7 +78,7 @@ export function parseSlackMentions(value: TrackingJson, channel: string, name: s
 			return fail("search permalink");
 		const threadTs = url.searchParams.get("thread_ts") ?? ts;
 		if (!slackTimestamp(threadTs)) return fail("search parent timestamp");
-		return { ts: ts!, threadTs, text: body!.trim(), replies: 0 };
+		return { ts: ts!, threadTs, text: body!.replace(/\n-{3}\s*$/, "").trim(), replies: 0 };
 	});
 	// The scope was validated on every result. Names are display-only.
 	const first = /^\s*Channel: #([^\n]+) \(ID: ([CG][A-Z0-9]{1,199})\)/.exec(parts[1]!);

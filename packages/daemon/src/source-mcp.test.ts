@@ -109,8 +109,30 @@ test("check reads expose only reaction metadata and Done writes are fixed to whi
 		{ structuredContent: { reactions: [{ name: "white_check_mark", count: 2, users: ["private-name"] }] } },
 		{ content: [{ type: "text", text: '{"reactions":[{"name":"white_check_mark","count":1}]}' }] },
 		{ content: [{ type: "text", text: "Reactions:\n:white_check_mark: (2)\nUsers: private-name" }] },
+		{
+			content: [
+				{
+					type: "text",
+					text: JSON.stringify({
+						result:
+							"Reactions on message:\n\n:eyes: × 1 — Someone (U000000001)\n:white_check_mark: × 2 — Someone (U000000001)",
+					}),
+				},
+			],
+		},
 	])
 		assert.deepEqual(decodeMcpResult(response, "reactions"), { present: true });
+	for (const result of [
+		"No reactions found on this message.",
+		"Reactions on message:\n\n:fire: × 3 — Someone (U000000001)\n:pray: × 1 — Someone (U000000001)",
+		"Reactions on message:\n\n:white_check_mark: × 0 — ",
+	])
+		assert.deepEqual(
+			decodeMcpResult({ content: [{ type: "text", text: JSON.stringify({ result }) }] }, "reactions"),
+			{
+				present: false,
+			},
+		);
 	for (const reactions of [
 		[],
 		[{ name: "eyes", count: 2 }],
