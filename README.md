@@ -52,7 +52,9 @@ has separate storage and transport contracts; it does not change chat-result rea
   composer (or the open question), including from the terminal or an artifact. Outside text fields, G then a letter
   goes to a page (G H Home, G I Inbox, G P the focused project's Overview, G M/T/B the current mission's Overview,
   Tasks or Brief, G A Archive), J and K move through lists, and ? opens the shortcut reference. The **Go** menu
-  lists the same destinations.
+  lists the same destinations. Home, Overview, Inbox and Archive each have one keyboard list: ⌃⇥ (or a G
+  destination) focuses it, arrows or J/K move the highlight, Return opens the row as a click would, and ⌘K lists
+  the highlighted chat's actions under its name.
 - **Let the display rest while agents work.** Keep the Mac awake without keeping the display on.
   Optional closed-lid work requires power and Wi-Fi; without both, agents pause and resume on the next
   full wake with connectivity. Screen locking is left to macOS. See [agent-aware sleep](docs/agent-sleep.md) for

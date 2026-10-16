@@ -668,6 +668,7 @@ struct TrackedItemRow: View {
             }
         }
         .contextMenu { menu(link: link, suggestsMission: suggestsMission) }
+        .keyboardListItem("tracked:" + item.id) { openInApp() }
         .onChange(of: item.linearSizeOverride) { actions.settleSize(item) }
         // The suggested start comes first.
         .accessibilityAction(named: suggestsMission ? "Start mission" : "Start chat") { start(mission: suggestsMission) }

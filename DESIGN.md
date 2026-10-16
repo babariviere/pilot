@@ -161,6 +161,10 @@ Plain-letter keys (G sequences, J/K, ?) work only outside text, IME composition,
 terminal or artifact, are read before the focused view. Every other shortcut is a menu key equivalent, so a
 focused view keeps its own first. Highlight, focus and editing stay distinct: moving through a list never opens,
 edits or submits.
+Long pages use `keyboardList()` on their column and `keyboardListItem(_:target:activate:)` on rows (`KeyboardList.swift`):
+one focus stop, a neutral selected fill plus focus ring on the highlighted row, Return for the row's click action,
+and the highlight kept by row id through refreshes (the nearest row takes over when it leaves). Arrowing through
+sidebar chats keeps focus in the sidebar; the composer of the chat it opens waits for ⌘L, ⌃⇥ or a click.
 
 The menu bar follows the same urgency order (Needs you, Ready to merge, Working, Recent) under a one-line heading such
 as "1 needs you · 2 working". pilotd's controls sit in their own submenu.

@@ -219,6 +219,10 @@ struct InboxReadyToMergeRow: View {
         .accessibilityLabel("\(pr.title). Ready to merge. \(detail.accessibilityText(using: model))")
         .accessibilityHint(url == nil ? "Opens the chat" : "Opens the pull request in the browser")
         .accessibilityAction(named: "Open chat", openChat)
+        .keyboardListItem("pr:\(pr.sessionId):\(pr.number)",
+                          target: .session(id: pr.sessionId, reference: hostContext?.ref(.session, pr.sessionId))) {
+            if let url { BrowserLinkOpener.shared.open(url) } else { openChat() }
+        }
         .contextMenu {
             if let url { Link("Open in Browser", destination: url) }
             Button("Open Chat", action: openChat)

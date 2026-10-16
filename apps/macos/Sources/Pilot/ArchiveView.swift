@@ -5,9 +5,11 @@ import SwiftUI
 /// open the chat, with Restore under the pointer, in the context menu and on keyboard focus. Archives remain in the
 /// client's WebSocket inventory, but never in normal chat lists.
 struct ArchiveView: View {
+    @Environment(\.hostViewContext) private var hostContext
     @EnvironmentObject private var model: AppModel
     @EndpointClient private var client
     @StateObject private var browser = ArchiveBrowserState()
+    @StateObject private var keyboardRows = KeyboardListState()
 
     private var sessions: [SessionSummary] {
         let query = browser.query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -77,12 +79,25 @@ struct ArchiveView: View {
                 List(shown) { session in
                     ArchiveRow(session: session, projectName: client.project(session.projectId)?.name,
                                now: context.date)
+                        .keyboardListItem(session.id, target: .session(id: session.id,
+                                                                       reference: hostContext?.ref(.session, session.id))) {
+                            model.navigate(.session, id: session.id, context: hostContext)
+                        }
                         .listRowInsets(EdgeInsets(top: 1, leading: 0, bottom: 1, trailing: 0))
                         .listRowSeparator(.hidden)
                         .listRowBackground(Color.clear)
                 }
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
+                .keyboardList(state: keyboardRows, native: true)
+                .onChange(of: shown.map(\.id), initial: true) { _, _ in
+                    keyboardRows.update(shown.map { session in
+                        KeyboardListItem(id: session.id, target: .session(id: session.id,
+                                                                          reference: hostContext?.ref(.session, session.id))) {
+                            model.navigate(.session, id: session.id, context: hostContext)
+                        }
+                    })
+                }
             }
         }
     }

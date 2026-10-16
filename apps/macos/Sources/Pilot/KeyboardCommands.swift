@@ -27,7 +27,10 @@ extension AppModel {
             toggleInspector(.terminal)
             return true
         case let .go(letter):
-            if let destination = GoDestination(key: letter) { go(to: destination) }
+            if let destination = GoDestination(key: letter), canGo(to: destination) {
+                go(to: destination)
+                keyboard.focusAfterNavigation(.content)
+            }
             return true
         case .showShortcuts:
             guard let openKeyboardShortcutsAction else { return false }

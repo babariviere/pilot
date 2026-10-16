@@ -45,6 +45,7 @@ struct InboxPage: View {
                         .padding(.vertical, 24)
                         .frame(maxWidth: Theme.column, alignment: .leading)
                         .frame(maxWidth: .infinity)
+                        .keyboardList()
                 }
             }
         } else if let error = inbox.error {
