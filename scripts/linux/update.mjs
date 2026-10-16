@@ -68,7 +68,13 @@ export function updaterUnit(runtime, home) {
 		.split("\n")
 		.find((line) => line.startsWith("ExecStart="))
 		.replace("packages/daemon/src/main.ts", "scripts/linux/update.mjs");
-	return `# Managed by Pilot remote updater v1\n[Unit]\nDescription=Finish a requested Pilot update\nAfter=network.target\n\n[Service]\nType=simple\n${exec} run\nUMask=0077\nRestart=on-failure\nRestartSec=5\nTimeoutStopSec=15\n\n[Install]\nWantedBy=default.target\n`;
+	const environment = base
+		.split("\n")
+		.filter((line) => line.startsWith("Environment="))
+		.join("\n");
+	// A user manager can inherit another login's HOME/XDG values. Never derive the update
+	// journal/lock or user bus from those inherited values. %t is this systemd user's runtime dir.
+	return `# Managed by Pilot remote updater v1\n[Unit]\nDescription=Finish a requested Pilot update\nAfter=network.target\n\n[Service]\nType=simple\nWorkingDirectory=%h\n${exec} run\n${environment}\nEnvironment="XDG_RUNTIME_DIR=%t"\nEnvironment="DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus"\nUMask=0077\nRestart=on-failure\nRestartSec=5\nTimeoutStopSec=15\n\n[Install]\nWantedBy=default.target\n`;
 }
 export async function replaceOwned(file, oldValue, newValue) {
 	if ((await realpath(dirname(file))) !== dirname(file)) throw new Error("Service paths must not traverse links");

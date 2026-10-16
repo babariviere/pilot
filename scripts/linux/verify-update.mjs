@@ -11,24 +11,44 @@ import { openUpdateFixtureTerminal } from "./update-terminal.mjs";
 
 if (process.env.GITHUB_ACTIONS !== "true") throw new Error("Disposable CI fixture only");
 const [home, archive, sessionId, helperSource, ...sshArgs] = process.argv.slice(2);
-async function child(command, args, input) {
+async function child(command, args, input, timeoutMs = 120_000) {
 	return new Promise((resolve, reject) => {
 		const proc = spawn(command, args, { stdio: ["pipe", "pipe", "inherit"] });
 		const chunks = [];
-		proc.stdout.on("data", (chunk) => chunks.push(chunk));
-		proc.on("error", reject);
-		proc.on("exit", (code) =>
-			code === 0 ? resolve(Buffer.concat(chunks).toString()) : reject(new Error(`${command}: ${code}`)),
-		);
+		let retained = 0;
+		proc.stdout.on("data", (chunk) => {
+			retained += chunk.length;
+			if (retained <= 64 * 1024) chunks.push(chunk);
+			else {
+				proc.kill();
+				reject(new Error("Fixture child output exceeded 64 KiB"));
+			}
+		});
+		const timer = setTimeout(() => {
+			proc.kill("SIGKILL");
+			reject(new Error("Fixture child exceeded its bounded deadline"));
+		}, timeoutMs);
+		proc.on("error", (error) => {
+			clearTimeout(timer);
+			reject(error);
+		});
+		proc.on("exit", (code) => {
+			clearTimeout(timer);
+			if (code === 0) resolve(Buffer.concat(chunks).toString());
+			else reject(new Error(`${command}: ${code}`));
+		});
 		proc.stdin.on("error", () => {});
 		proc.stdin.end(input);
 	});
 }
-const ssh = (command) => child("ssh", [...sshArgs, command]);
-async function until(check) {
+const ssh = (command) => child("ssh", [...sshArgs, command], undefined, 20_000);
+async function until(check, label, diagnostic = async () => "") {
 	const deadline = Date.now() + 120_000;
 	while (!(await check())) {
-		if (Date.now() > deadline) throw new Error("Update fixture timed out");
+		if (Date.now() > deadline) {
+			const context = await diagnostic().catch(() => "bounded diagnostics unavailable");
+			throw new Error(`Update fixture timed out waiting for ${label}: ${String(context).slice(0, 8000)}`);
+		}
 		await delay(250);
 	}
 }
@@ -92,19 +112,60 @@ try {
 			).toString("base64"),
 		},
 	});
-	upload.on("error", () => {});
+	const uploadState = { startedAt: Date.now(), response: undefined, error: undefined, closed: false };
+	upload.on("response", (response) => {
+		uploadState.response = response.statusCode;
+		response.resume();
+	});
+	upload.on("error", (error) => {
+		uploadState.error = String(error.code ?? "upload error").slice(0, 80);
+	});
+	upload.on("close", () => {
+		uploadState.closed = true;
+	});
 	upload.write(image.subarray(0, 33));
 	const accepted = JSON.parse(await child("ssh", [...sshArgs, command], bytes));
 	assert.equal(accepted.id, metadata.id); // SSH ends here. No connection owns the update.
 	assert.equal(accepted.requestConfirmed, true);
-	await until(async () => {
-		const status = await (await fetch("http://127.0.0.1:4319/api/runtime-update")).json();
-		return (
-			status.phase === "waiting" &&
-			status.blockers.some((item) => item.kind === "transfer") &&
-			status.blockers.some((item) => item.kind === "terminal")
+	let lastStatus;
+	const status = async () => {
+		const response = await fetch("http://127.0.0.1:4319/api/runtime-update", { signal: AbortSignal.timeout(5000) });
+		const value = await response.json();
+		lastStatus = value && {
+			id: value.id,
+			phase: value.phase,
+			revision: value.revision,
+			requestConfirmed: value.requestConfirmed,
+			detail: String(value.detail ?? "").slice(0, 400),
+			blockers: Array.isArray(value.blockers)
+				? value.blockers.slice(0, 12).map((item) => ({ kind: item.kind, id: item.id }))
+				: [],
+		};
+		return lastStatus;
+	};
+	const diagnostic = async () => {
+		// Fixed service/fields only, never the raw signed journal, process environment or shell output.
+		const owner = await ssh(
+			"systemctl --user show pilot-update.service --property=ActiveState,SubState,MainPID,ExecMainStatus,Result,NRestarts; journalctl --user -u pilot-update.service --no-pager -n 12 --output=short",
 		);
-	});
+		return JSON.stringify({
+			lastStatus,
+			upload: { ...uploadState, ageMs: Date.now() - uploadState.startedAt },
+			owner: owner.slice(-6000),
+		});
+	};
+	await until(
+		async () => {
+			const current = await status();
+			return (
+				current?.phase === "waiting" &&
+				current.blockers.some((item) => item.kind === "transfer") &&
+				current.blockers.some((item) => item.kind === "terminal")
+			);
+		},
+		"live terminal and transfer blockers",
+		diagnostic,
+	);
 	assert.equal((await pid()).trim(), oldPid);
 	// Kill only the independently owned updater. systemd recovery must retain journal and blockers.
 	await ssh("systemctl --user kill --signal=SIGKILL --kill-whom=all pilot-update.service");
@@ -112,13 +173,17 @@ try {
 	assert.equal((await pid()).trim(), oldPid);
 	upload.destroy();
 	await terminal.closeShell();
-	await until(async () => {
-		try {
-			return (await (await fetch("http://127.0.0.1:4319/api/runtime-update")).json()).phase === "completed";
-		} catch {
-			return false;
-		}
-	});
+	await until(
+		async () => {
+			try {
+				return (await status())?.phase === "completed";
+			} catch {
+				return false;
+			}
+		},
+		"completed remote update",
+		diagnostic,
+	);
 	assert.notEqual((await pid()).trim(), oldPid);
 	const after = await (await fetch("http://127.0.0.1:4319/api/hello")).json();
 	assert.equal(after.daemonVersion, release.version);

@@ -713,7 +713,21 @@ test("latest user submission is exposed and persists independently of worker and
 
 test("PR observers receive persisted full chat heads and startup baselines, never streaming summaries", async (t) => {
 	const f = await fixture(t);
-	const sessions = await f.manager();
+	const releaseInspection = deferred();
+	let holdInspection = false;
+	let inspectionStarted = false;
+	const commands: { file: string; args: string[]; cwd: string }[] = [];
+	const runner: NonNullable<ConstructorParameters<typeof SessionManager>[4]>["runner"] = async (file, args, cwd) => {
+		commands.push({ file, args, cwd });
+		if (holdInspection) {
+			inspectionStarted = true;
+			await releaseInspection.promise;
+		}
+		throw new Error("Synthetic observer fixture has no Git origin");
+	};
+	// Bound PRs make the background scheduler eligible, even with a fake kernel. Never let
+	// this observer/persistence test launch a real Git/gh subprocess that shutdown must drain.
+	const sessions = await f.manager({}, {}, { runner });
 	const created = await sessions.spawn({ cwd: f.source, message: "sample" });
 	await until(() => sessions.get(created.id)?.state === "working");
 	await sessions.stop(created.id);
@@ -742,15 +756,42 @@ test("PR observers receive persisted full chat heads and startup baselines, neve
 	assert.equal(observed.at(-1)?.pending, true);
 	assert.equal(observed.at(-1)?.prs.find((head) => head.number === 41)?.state, "open");
 	await sessions.shutdown();
-	const reopened = new SessionManager(f.home, f.projects, undefined, { worker: f.workerFactory() });
+	holdInspection = true;
+	const reopened = new SessionManager(
+		f.home,
+		f.projects,
+		undefined,
+		{ worker: f.workerFactory(), title: async () => undefined },
+		{ runner },
+	);
 	t.after(() => reopened.shutdown());
 	const recovered: typeof observed = [];
 	reopened.setPullRequestObserver(async (observation) => {
 		recovered.push(observation);
 	});
-	await reopened.load();
-	assert.equal(recovered[0]?.prs.find((head) => head.number === 42)?.state, "merged");
-	assert.equal(recovered[0]?.pending, true);
+	try {
+		await reopened.load();
+		// Exercise the formerly timing-dependent overlap: startup baseline publication must
+		// finish before background inspection, and shutdown owns the in-flight inspection.
+		await until(() => inspectionStarted);
+		assert.equal(recovered[0]?.prs.find((head) => head.number === 42)?.state, "merged");
+		assert.equal(recovered[0]?.pending, true);
+		let closed = false;
+		const closing = reopened.shutdown().then(() => {
+			closed = true;
+		});
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		assert.equal(closed, false, "shutdown must drain the owned background inspection");
+		releaseInspection.resolve();
+		await closing;
+		assert.equal(closed, true);
+		assert.equal(recovered.length, 1, "draining inspection cannot replace the persisted startup baseline");
+		assert.ok(commands.length > 0);
+		for (const command of commands)
+			assert.deepEqual(command, { file: "git", args: ["remote", "get-url", "origin"], cwd: f.source });
+	} finally {
+		releaseInspection.resolve();
+	}
 });
 
 test("title waits for a completed turn, uses the thread and generates only once", async (t) => {
@@ -958,7 +999,11 @@ async function fixture(t: TestContext) {
 			if (autoReady) queueMicrotask(() => worker.open());
 			return worker;
 		};
-	const manager = async (factories: SessionFactories = {}, options: SessionManagerOptions = {}) => {
+	const manager = async (
+		factories: SessionFactories = {},
+		options: SessionManagerOptions = {},
+		pullRequests: ConstructorParameters<typeof SessionManager>[4] = {},
+	) => {
 		const sessions = new SessionManager(
 			home,
 			projects,
@@ -968,7 +1013,7 @@ async function fixture(t: TestContext) {
 				worker: workerFactory(),
 				...factories,
 			},
-			{},
+			pullRequests,
 			options,
 		);
 		managers.push(sessions);
