@@ -126,12 +126,16 @@ private struct DitherCornerModifier: ViewModifier {
             .environment(\.rowHasDitherCorner, true)
             .background {
                 if shown != nil || (previous != nil && mix < 1) {
-                    DitherCornerClocked(signal: shown, background: background && shown == .working,
-                                        previous: previous, mix: mix, recede: recedes && hovered ? 1 : 0,
-                                        still: reduceMotion, extent: extent, monochrome: monochrome)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                        .padding(outset)
+                    // Let the surface size the clip, not the fixed-size bitmap. Short rows must not
+                    // inherit the corner's minimum height (or narrow rows its minimum width).
+                    Color.clear
+                        .overlay(alignment: .bottomTrailing) {
+                            DitherCornerClocked(signal: shown, background: background && shown == .working,
+                                                previous: previous, mix: mix, recede: recedes && hovered ? 1 : 0,
+                                                still: reduceMotion, extent: extent, monochrome: monochrome)
+                        }
                         .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+                        .padding(outset)
                         .allowsHitTesting(false)
                         .accessibilityElement()
                         .accessibilityLabel(shown.map { "Status: \($0.label)\(background ? " in the background" : "")" } ?? "")
