@@ -25,6 +25,12 @@ export class MissionNotices {
 
 	start(): void {
 		this.stopped = false;
+		// Recovery can touch hundreds of PRs. Publish final contexts once per mission, not per PR/member.
+		this.store.batchChanges(() => this.recover());
+		this.schedule();
+	}
+
+	private recover(): void {
 		// Recover completions that were saved before a crash, but not yet recorded in missions.sqlite.
 		const missions = new Set<string>();
 		for (const session of this.sessions.list({ archived: "all" })) {
@@ -46,7 +52,6 @@ export class MissionNotices {
 			}
 			this.refreshActivity(id);
 		}
-		this.schedule();
 	}
 
 	private observe(session: SessionSummary, recovering = false): void {

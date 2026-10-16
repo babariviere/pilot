@@ -10,9 +10,11 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { createModels, type OAuthCredential } from "@earendil-works/pi-ai";
 import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { CredentialClient, credentialEnvironment } from "@pilot/kernel/credential-client";
 import { CredentialChannel } from "@pilot/kernel/credential-rpc";
 import { NativeAdapter } from "../../kernel/src/native-adapter.ts";
+import { ownModelCatalog } from "../../kernel/src/model-catalog-owner.ts";
 import { CredentialBroker } from "./credential-broker.ts";
 import { workerProbe } from "./mcp-status.ts";
 import { approve, oauthFixture } from "./mcp-test-fixtures.ts";
@@ -68,6 +70,15 @@ async function fixture(t: { after(fn: () => Promise<void>): void }) {
 	});
 	return { root, dir, broker, admin, client };
 }
+
+test("overlapping native model availability refreshes do not exhaust the credential queue", async (t) => {
+	const { client } = await fixture(t);
+	const runtime = await ModelRuntime.create({ credentials: client.pi, modelsPath: null, allowModelNetwork: false });
+	ownModelCatalog(runtime);
+	const expected = runtime.getAvailableSnapshot();
+	const available = await Promise.all(Array.from({ length: 8 }, () => runtime.getAvailable()));
+	for (const models of available) assert.deepEqual(models, expected);
+});
 
 test("actual Pi OAuth double-checks latest canonical tokens and exchanges one rotating grant across concurrent consumers", async (t) => {
 	const { dir, client, broker } = await fixture(t);
@@ -353,7 +364,7 @@ test("native parent runtime retains provider registration with canonical broker 
 		join(dir, "fixture.ts"),
 		`
 import {fauxProvider} from ${JSON.stringify(import.meta.resolve("@earendil-works/pi-ai/providers/faux"))};
-export default pi=>{const faux=fauxProvider();pi.registerProvider({...faux.provider,auth:{oauth:{name:'Fixture',login:async()=>{throw Error('no login')},refresh:async current=>({...current,expires:Date.now()+3600000}),toAuth:async current=>({apiKey:current.access})}}});};`,
+export default pi=>{const faux=fauxProvider();for(let i=0;i<12;i++)pi.registerProvider({...faux.provider,id:'catalog-'+i,getModels:()=>[]});pi.registerProvider({...faux.provider,auth:{oauth:{name:'Fixture',login:async()=>{throw Error('no login')},refresh:async current=>({...current,expires:Date.now()+3600000}),toAuth:async current=>({apiKey:current.access})}}});};`,
 	);
 	await writeFile(
 		join(dir, "settings.json"),

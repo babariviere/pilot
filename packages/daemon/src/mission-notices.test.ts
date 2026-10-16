@@ -34,6 +34,65 @@ function completion(outcome: SessionSummary["outcome"], outcomeAt: number): Sess
 	};
 }
 
+test("startup recovers PRs and phases before one final notification per mission", async () => {
+	const store = new MissionStore(":memory:");
+	const chats = new Map<string, SessionSummary>();
+	const missionIds: string[] = [];
+	for (let index = 0; index < 2; index++) {
+		const mission = store.create({ projectId: "project", title: `Mission ${index}` });
+		missionIds.push(mission.id);
+		const lead = `lead-${index}`;
+		store.join(lead, mission.id);
+		store.update(mission.id, { coordinatorSessionId: lead });
+		chats.set(lead, { ...completion(undefined, 0), id: lead, missionId: mission.id, pullRequest: undefined });
+		const phase = store.addPhase(mission.id, { name: "Build" });
+		for (let member = 0; member < 16; member++) {
+			const id = `member-${index}-${member}`;
+			store.join(id, mission.id);
+			const task = store.addTask(mission.id, { title: id, phaseId: phase.id });
+			store.claimTask(mission.id, task.id, id);
+			const pr = {
+				number: index * 16 + member + 1,
+				url: `https://github.com/o/r/pull/${index * 16 + member + 1}`,
+				title: id,
+				state: "merged" as const,
+				checkedAt: Date.now(),
+				mergedAt: Date.now(),
+			};
+			store.addResource(mission.id, { url: pr.url, taskId: task.id });
+			chats.set(id, { ...completion(undefined, 0), id, missionId: mission.id, pullRequest: pr });
+		}
+	}
+	const sessions = {
+		list: () => [...chats.values()],
+		get: (id: string) => chats.get(id),
+		onChange: () => () => {},
+		ownedPullRequests: (id: string) => (chats.get(id)?.pullRequest ? [chats.get(id)!.pullRequest!] : []),
+	} as unknown as SessionManager;
+	const delivery = new MissionNotices(store, sessions);
+	const notifications: string[] = [];
+	store.onChange((id) => {
+		notifications.push(id);
+		// Context subscribers see the complete recovery, never a partial member/phase snapshot.
+		assert.ok(store.tasks(id).every((task) => task.status === "done"));
+		assert.ok(store.phases(id).every((phase) => phase.completedAt !== undefined));
+	});
+	try {
+		delivery.start();
+		assert.deepEqual(notifications.toSorted(), missionIds.toSorted());
+		for (const id of missionIds) {
+			assert.equal(store.detail(id).resources.length, 16);
+			assert.ok(store.detail(id).resources.every((resource) => resource.pullRequest?.state === "merged"));
+		}
+		// Ordinary live changes still publish immediately after startup.
+		store.addComment(missionIds[0]!, { text: "Live update" });
+		assert.equal(notifications.length, 3);
+	} finally {
+		await delivery.stop();
+		store.close();
+	}
+});
+
 const backgroundJob = {
 	id: "tests",
 	name: "Test suite",

@@ -7,6 +7,58 @@ import { test } from "node:test";
 import type { SessionPullRequest } from "@pilot/protocol";
 import { MissionStore, parseResourceUrl } from "./missions.ts";
 
+test("recovery batches publish nested changes and membership once, only after commit", (t) => {
+	const store = new MissionStore(":memory:");
+	t.after(() => store.close());
+	const { id } = store.create({ projectId: "p", title: "Before" });
+	const missions: string[] = [];
+	const members: string[] = [];
+	store.onChange((missionId) => {
+		assert.equal(store.require(id).title, "After");
+		missions.push(missionId);
+	});
+	store.onMembershipChange((sessionId) => members.push(sessionId));
+	const result = store.batchChanges(() => {
+		store.join("member", id);
+		store.sharingTransaction(() => {
+			store.update(id, { title: "After" });
+			store.addComment(id, { text: "Recovered" });
+		});
+		assert.deepEqual(missions, []);
+		assert.deepEqual(members, []);
+		return "committed";
+	});
+	assert.equal(result, "committed");
+	assert.deepEqual(missions, [id]);
+	assert.deepEqual(members, ["member"]);
+});
+
+test("failed recovery batches roll back writes and discard notifications without trapping later changes", (t) => {
+	const store = new MissionStore(":memory:");
+	t.after(() => store.close());
+	const { id } = store.create({ projectId: "p", title: "Before" });
+	const missions: string[] = [];
+	const members: string[] = [];
+	store.onChange((id) => missions.push(id));
+	store.onMembershipChange((id) => members.push(id));
+	assert.throws(
+		() =>
+			store.batchChanges(() => {
+				store.join("member", id);
+				store.update(id, { title: "Rolled back" });
+				throw new Error("Recovery failed");
+			}),
+		/Recovery failed/,
+	);
+	assert.equal(store.require(id).title, "Before");
+	assert.equal(store.membership("member"), undefined);
+	assert.deepEqual(missions, []);
+	assert.deepEqual(members, []);
+	store.join("member", id);
+	assert.deepEqual(missions, [id]);
+	assert.deepEqual(members, ["member"]);
+});
+
 test("owned PR resource projection uses its partial index and excludes reference links", (t) => {
 	const missions = new MissionStore(":memory:");
 	t.after(() => missions.close());

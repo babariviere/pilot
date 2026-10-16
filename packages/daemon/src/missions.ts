@@ -434,7 +434,7 @@ export class MissionStore {
 	private readonly memberListeners = new Set<(sessionId: string) => void>();
 	private writing = false;
 	private referenceBatch?: string;
-	private sharingChanges?: Map<string, Set<string>>;
+	private batchedChanges?: Map<string, Set<string>>;
 	/** Saves each commit to missions.sqlite off the event loop. Absent for ":memory:" stores. */
 	private replica?: MissionReplica;
 	/** Records the changes of the current commit, for the replica. */
@@ -860,16 +860,21 @@ export class MissionStore {
 		);
 	}
 	sharingTransaction<T>(work: () => T): T {
-		if (this.sharingChanges) return this.transaction(work);
+		return this.batchChanges(work);
+	}
+
+	/** Commit related recovery writes together, then notify each affected mission/member once. */
+	batchChanges<T>(work: () => T): T {
+		if (this.batchedChanges) return this.transaction(work);
 		const changed = new Map<string, Set<string>>();
-		this.sharingChanges = changed;
+		this.batchedChanges = changed;
 		let committed = false;
 		try {
 			const value = this.transaction(work);
 			committed = true;
 			return value;
 		} finally {
-			this.sharingChanges = undefined;
+			this.batchedChanges = undefined;
 			if (committed) for (const [missionId, sessions] of changed) this.changed(missionId, [...sessions]);
 		}
 	}
@@ -1091,10 +1096,10 @@ export class MissionStore {
 	}
 
 	private changed(missionId: string, sessions: string[] = []): void {
-		if (this.sharingChanges) {
-			const pending = this.sharingChanges.get(missionId) ?? new Set<string>();
+		if (this.batchedChanges) {
+			const pending = this.batchedChanges.get(missionId) ?? new Set<string>();
 			for (const session of sessions) pending.add(session);
-			this.sharingChanges.set(missionId, pending);
+			this.batchedChanges.set(missionId, pending);
 			return;
 		}
 		if (this.referenceBatch === missionId) return;

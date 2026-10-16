@@ -1,6 +1,7 @@
 /** Pinned SDK compatibility seam. Public ModelRuntime credential injection also covers immutable child adapters. */
 import { getAgentDir, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { credentialClient } from "./credential-client.ts";
+import { ownModelCatalog } from "./model-catalog-owner.ts";
 import { readonlySettings } from "./readonly-settings.ts";
 
 // Jiti child profiles and native ESM share this SDK class, but not module-local state.
@@ -21,11 +22,12 @@ export function installCredentialBrokerHooks(options: { descendants?: boolean } 
 		const create = ModelRuntime.create;
 		ModelRuntime.create = async (options = {}) => {
 			const client = credentialClient();
-			if (!client) return create.call(ModelRuntime, options);
-			await client.pi.list(); // No best-effort SDK availability fallback when the authority is unavailable.
-			if (options.credentials && options.credentials !== client.pi)
+			if (client) await client.pi.list(); // No best-effort SDK fallback when the authority is unavailable.
+			if (client && options.credentials && options.credentials !== client.pi)
 				throw new Error("Credential broker requires the canonical credential store");
-			const runtime = await create.call(ModelRuntime, { ...options, credentials: client.pi });
+			const runtime = await create.call(ModelRuntime, client ? { ...options, credentials: client.pi } : options);
+			ownModelCatalog(runtime);
+			if (!client) return runtime;
 			const login = runtime.login.bind(runtime);
 			runtime.login = (provider, type, interaction, options) =>
 				client.transaction("pi", provider, "login", () => login(provider, type, interaction, options));

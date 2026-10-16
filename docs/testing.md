@@ -170,6 +170,47 @@ temporary copies; no real chats, providers, credentials or network services are 
 index migration are outside the measurement. This isolates synchronous store work, not whole-daemon latency,
 Git diff performance, IPC throughput or live GUI responsiveness. Run without a competing local test/build.
 
+## Mission startup recovery
+
+```sh
+node scripts/bench/mission-recovery.ts 965ff12b 3
+```
+
+This offline probe alternates baseline/current notice recovery with real mission-context subscribers,
+using three in-memory missions, 120 members and 240 tasks with 8,000-character bodies. It excludes
+setup/imports, discards one warmup pair and reports medians. No daemon, workers, accounts, network
+services or user state are opened. On 2026-10-16, macOS arm64/Node 24.21.0, three samples measured:
+
+| Metric | Before | After |
+| --- | --- | --- |
+| Recovery wall / process CPU | 10,031 / 10,039 ms | 259 / 259 ms |
+| Mission notifications | 360 | 3 |
+| Full detail reads | 14,403 | 123 |
+
+Recovery still reconciles every member/hand-linked PR and completion. One transaction now publishes
+final contexts once per affected mission after phase reconciliation, instead of rebuilding all member
+contexts after each recovered PR. `mission-notices.test.ts` guards final task/phase/cache state and
+notification fan-out; `missions.test.ts` guards nested batching, membership and rollback. This isolates
+synchronous recovery cost, not full daemon launch time, provider startup or live GUI responsiveness.
+
+## Native model-catalog ownership
+
+`model-catalog-owner.test.ts` checks one serialized full-refresh/availability lane per native runtime,
+queued registration coalescing, trailing invalidation, explicit option boundaries, credential changes,
+independent cancellation and error recovery. Concurrent callers share pending availability work, not
+settled results or credentials. Worker catalogs remain separate because extension providers are local
+to each session. The broker's canonical reads and concurrency/queue limits are unchanged.
+
+`credential-broker.test.ts` drives eight overlapping real SDK availability calls through a temporary
+broker, plus native startup with twelve extension provider registrations. Without ownership, the
+availability burst fails with `Credential broker busy`; with ownership all eight calls succeed.
+These are offline fixtures with synthetic auth, not real accounts or a live GUI launch check.
+
+A count-only Pi 1.1.0 probe with eight concurrent callers and a synthetic asynchronous credential
+store reduced credential reads from 1,328 to 166, and peak concurrent SDK read invocations from 672
+to 84. Runtime creation was outside the count; network model refresh was disabled. These are
+operation counts, not broker socket concurrency, wall-time measurements or streaming benchmarks.
+
 ## Durable todo progress probe
 
 An offline probe on 2026-10-15 (macOS arm64, Node 24.21.0) seeded 10,000 transcript entries and
