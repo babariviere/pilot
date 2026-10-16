@@ -222,8 +222,8 @@ struct CommandPaletteCatalog {
     func chatActions(_ session: SessionSummary, suggested: Bool = false, reference: HostResourceRef? = nil) -> [CommandPaletteEntry] {
         guard !session.isArchived else { return [] }
         let id = reference?.storageKey ?? session.id
-        let context = reference.map { HostViewContext(host: $0.host, hosts: model.hosts) }
         let model = model
+        let context = reference.map { HostViewContext(host: $0.host, hosts: model.hosts) }
         var entries: [CommandPaletteEntry] = []
         func add(_ key: String, _ title: String, _ icon: PilotIcon, namesChat: Bool = true, shortcut: String? = nil,
                  perform: @escaping @MainActor () -> Void) {

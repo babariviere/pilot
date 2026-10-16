@@ -207,7 +207,7 @@ struct Composer: View {
         self.onSchedule = onSchedule
         if let context {
             _modelPicker = StateObject(wrappedValue: ChatModelPickerState(cwd: session?.cwd,
-                changeModel: { id, request in try await context.perform(.session, id) { client, id in try await client.changeModel(id, model: request.model, thinking: request.thinking) } },
+                changeModel: { id, request in _ = try await context.perform(.session, id) { client, id in try await client.changeModel(id, model: request.model, thinking: request.thinking) } },
                 cachedModels: { cwd in context.hosts.presentationClient(context.host).cachedModels(projectId: nil, cwd: cwd) },
                 fetchModels: { cwd in try await context.perform(.session, session?.id ?? "") { client, _ in try await client.models(projectId: nil, cwd: cwd) } },
                 continueModel: { id, request in try await context.perform(.session, id) { client, id in try await client.continueModel(id, model: request.model, thinking: request.thinking) } },
