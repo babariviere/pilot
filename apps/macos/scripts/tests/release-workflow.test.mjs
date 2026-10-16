@@ -127,6 +127,35 @@ test("PRs use one macOS job, skip Swift only when the app is untouched, and smok
 	assert.ok(guard >= 0 && guard < script.indexOf("swift build --package-path"));
 });
 
+test("only main saves and only PRs reuse a cached Swift test build, with content-derived timestamps", () => {
+	const workflow = readFileSync(new URL("../../../../.github/workflows/release.yml", import.meta.url), "utf8");
+	const job = (name) => workflow.split("\n  " + name + ":\n")[1].split(/\n  [a-z-]+:\n/)[0];
+	const macos = job("macos");
+	const step = (name) => macos.slice(macos.indexOf("- name: " + name), macos.indexOf("\n      - ", macos.indexOf("- name: " + name)));
+	const restore = step("Restore the Swift test build");
+	const save = step("Save the Swift test build");
+	assert.match(restore, /github\.event_name == 'pull_request' \}\}/);
+	assert.match(restore, /uses: actions\/cache\/restore@v4/);
+	assert.match(save, /uses: actions\/cache\/save@v4/);
+	assert.match(save, /if: \$\{\{ !cancelled\(\) && steps\.swift-test\.outcome != 'skipped' && github\.ref == 'refs\/heads\/main' \}\}/);
+	const settings = (text) => text.split("\n").filter((line) => /^\s+(path|key):/.test(line));
+	assert.deepEqual(settings(restore), settings(save));
+	assert.deepEqual(settings(save), [
+		"          path: apps/macos/.build",
+		"          key: ${{ steps.swift-toolchain.outputs.build }}-${{ github.sha }}",
+	]);
+	assert.match(restore, /restore-keys: \$\{\{ steps\.swift-toolchain\.outputs\.build \}\}-$/);
+	assert.match(macos, /BUILD_INPUTS: \$\{\{ hashFiles\('apps\/macos\/Package\.resolved', 'apps\/macos\/Package\.swift', 'apps\/macos\/scripts\/test\.sh', 'apps\/macos\/scripts\/swift-env\.sh', 'apps\/macos\/scripts\/stable-mtimes\.py'\) \}\}/);
+	const stamped = macos.indexOf("python3 apps/macos/scripts/stable-mtimes.py apps/macos");
+	assert.ok(macos.indexOf("Restore the Swift test build") < stamped);
+	assert.ok(macos.indexOf("apps/macos/scripts/vendor-ghostty.sh", macos.indexOf("Give Swift inputs")) < stamped);
+	assert.ok(stamped < macos.indexOf("run: apps/macos/scripts/test.sh"));
+	assert.ok(macos.indexOf("run: apps/macos/scripts/test.sh") < macos.indexOf("Save the Swift test build"));
+	for (const name of ["app-bundle", "release", "publish"]) {
+		assert.doesNotMatch(job(name), /swift-build|actions\/cache\/restore|stable-mtimes/, name);
+	}
+});
+
 test("release job publishes only newly created stable releases or explicit draft retries", () => {
 	const workflow = readFileSync(new URL("../../../../.github/workflows/release.yml", import.meta.url), "utf8");
 	const condition = workflow.split("\n  release:\n")[1].match(/^    if: (.+)$/m)[1];

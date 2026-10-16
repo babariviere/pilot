@@ -440,8 +440,16 @@ the test build (`BUNDLE_PREBUILT=1 CONFIGURATION=debug bundle.sh`) and smoke-tes
 compiling an optimized build. Main and manual runs also build and verify the optimized app in `app-bundle`,
 so release-only compiler problems surface on `main` before publishing, not in the PR.
 
-Both Swift jobs cache only pinned dependency
+Both Swift jobs cache pinned dependency
 repositories/downloaded artifacts and the patched Ghostty vendor sources. Keys include OS, architecture,
-Swift and SDK versions, package pins/manifests, and vendor/patch scripts. No executable build products,
-signing material or user data are cached; dependency resolution still runs and verifies binary artifacts.
+Swift and SDK versions, package pins/manifests, and vendor/patch scripts. Dependency resolution still runs
+and verifies binary artifacts. No signing material or user data are cached.
+
+On main, the `macos` job also saves its debug test build (`apps/macos/.build`, about 430 MB) after the Swift
+tests run, even if some fail, because the build stays valid for the next incremental one. PRs don't save
+(the repository's cache limit is 10 GB); they restore main's latest build. A fresh checkout stamps every file with the current
+time, which would make Swift recompile everything, so CI first runs `scripts/stable-mtimes.py`: each file
+under `apps/macos` gets an old timestamp derived from its contents, and only files whose contents changed
+recompile. Main always builds from scratch before saving, and `app-bundle` and releases never use cached
+build products, so a stale incremental build can at worst let a PR pass that main then catches.
 Local APFS sharing in `share-artifacts.sh` remains separate from this download cache.
