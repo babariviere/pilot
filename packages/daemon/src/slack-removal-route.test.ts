@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -9,11 +9,14 @@ import { test } from "node:test";
 import { loadSlackRemovalRoute, parseSlackRemovalRoute, slackRemovalCall } from "./slack-removal-route.ts";
 import { decodeMcpResult, PiSourceMcpClient, validSourceArguments } from "./source-mcp.ts";
 
-const route = { server: "my-slack-proxy", tool: "remove_reaction" };
+const route = {
+	server: { url: "https://mcp.example.com/mcp", headers: { Authorization: "Bearer fixture-scoped-key" } },
+	tool: "remove_reaction",
+};
 const parent = "1780000000.123456";
 const args = { channel_id: "CEXAMPLE", message_ts: parent, emoji: "eyes" };
 
-test("local route validation is strict and supports direct and configurable dispatcher shapes", async () => {
+test("local route owns a strict HTTP server definition with explicit key auth and optional dispatcher", async () => {
 	assert.deepEqual(parseSlackRemovalRoute(route), route);
 	assert.deepEqual(slackRemovalCall(route, "CEXAMPLE", parent), {
 		server: route.server,
@@ -26,21 +29,42 @@ test("local route validation is strict and supports direct and configurable disp
 		tool: "dispatch",
 		args: { operation: "remove_reaction", payload: { channel: "CEXAMPLE", ts: parent, name: "eyes" } },
 	});
+	for (const headers of [{ Authorization: `Bearer \${REMOVAL_KEY}` }, { Authorization: "!read-local-key" }])
+		assert.deepEqual(
+			parseSlackRemovalRoute({ ...route, server: { ...route.server, headers } }).server.headers,
+			headers,
+		);
+	assert.equal(parseSlackRemovalRoute({ ...route, enabled: false }).enabled, false);
 	for (const invalid of [
 		undefined,
 		null,
 		[],
 		{},
-		{ ...route, server: "" },
+		{ ...route, server: "my-slack-proxy" },
 		{ ...route, token: "secret" },
+		{ ...route, enabled: "false" },
 		{ ...route, tool: "bad\nname" },
 		{ ...route, dispatcher: {} },
 		{ ...route, dispatcher: { ...dispatcher, argumentsKey: "operation" } },
 		{ ...route, dispatcher: { ...dispatcher, nameKey: "__proto__" } },
 		{ ...route, dispatcher: { ...dispatcher, extra: "not allowed" } },
-	]) {
+		...[
+			{},
+			{ command: "must-not-start" },
+			{ ...route.server, oauth: {} },
+			{ ...route.server, url: "http://public.example.com/mcp" },
+			{ ...route.server, url: "https://user:password@mcp.example.com/mcp" },
+			{ ...route.server, url: "https://mcp.example.com/mcp#fragment" },
+			{ ...route.server, url: "file:///tmp/mcp" },
+			{ ...route.server, headers: {} },
+			{ ...route.server, headers: { Authorization: "Bearer " } },
+			{ ...route.server, headers: { Authorization: "Basic secret" } },
+			{ ...route.server, headers: { Authorization: "Bearer key\nextra" } },
+			{ ...route.server, headers: { Authorization: "!" } },
+			{ ...route.server, headers: { Authorization: "Bearer key", extra: "not allowed" } },
+		].map((server) => ({ ...route, server })),
+	])
 		assert.throws(() => parseSlackRemovalRoute(invalid), /Invalid Slack eyes removal route/);
-	}
 	const home = await mkdtemp(join(tmpdir(), "slack-route-config-"));
 	try {
 		await assert.rejects(loadSlackRemovalRoute(home), /unconfigured or invalid/);
@@ -84,16 +108,14 @@ test("removal accepts explicit success only, discards provider text and fixes ey
 		assert.equal(validSourceArguments("removeSlackEyes", invalid), false);
 });
 
-test("fake MCP transport uses only the explicit local route, never another server or a raw tool request", async () => {
+test("daemon calls only its inline server with a Bearer key, independently of mcp.json and OAuth", async () => {
 	const home = await mkdtemp(join(tmpdir(), "slack-route-transport-"));
 	const calls: unknown[] = [];
-	const authorization: Array<string | undefined> = [];
-	const paths: string[] = [];
+	const requests: Array<{ path?: string; authorization?: string }> = [];
 	let rejectKey = false;
 	let response: Parameters<typeof decodeMcpResult>[0] = { structuredContent: { ok: true } };
 	const server = createServer(async (req, res) => {
-		authorization.push(req.headers.authorization);
-		paths.push(req.url ?? "");
+		requests.push({ path: req.url, authorization: req.headers.authorization });
 		if (rejectKey) {
 			res.writeHead(401, { "www-authenticate": 'Bearer error="invalid_token"' }).end("fixture revoked key");
 			return;
@@ -138,32 +160,46 @@ test("fake MCP transport uses only the explicit local route, never another serve
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/mcp`;
+	const local = { ...route, server: { ...route.server, url } };
 	const client = new PiSourceMcpClient(home);
 	const signal = new AbortController().signal;
 	const configure = (value: unknown) =>
 		writeFile(join(home, "pilot-tracking.json"), JSON.stringify({ slackEyesRemoval: value }));
+	const authFile = JSON.stringify({
+		[`mcp__pilot-slack-removal|${url}`]: {
+			tokens: { access_token: "fixture-old-oauth-token", token_type: "Bearer" },
+			tokensExpireAt: Date.now() + 3_600_000,
+		},
+	});
 	try {
 		await writeFile(
 			join(home, "mcp.json"),
 			JSON.stringify({
 				mcpServers: {
-					[route.server]: { url },
+					"my-slack-proxy": { url },
 					slack: { command: "must-not-start" },
-					unused: { command: "must-not-start" },
+					general: { command: "must-not-start" },
 				},
 			}),
 		);
+		await writeFile(join(home, "mcp-auth.json"), authFile);
 		await assert.rejects(client.call("slack", "removeSlackEyes", args, signal));
-		assert.equal(calls.length, 0, "unconfigured means no fallback");
+		assert.equal(requests.length, 0, "unconfigured inline route never discovers a fallback");
+		// Invalid global MCP config must not prevent a separately configured daemon API call.
+		await writeFile(join(home, "mcp.json"), "must not be parsed for removal");
 		for (const configured of [
-			route,
-			{ ...route, dispatcher: { tool: "dispatch", nameKey: "name", argumentsKey: "arguments" } },
+			local,
+			{ ...local, dispatcher: { tool: "dispatch", nameKey: "name", argumentsKey: "arguments" } },
+			{ ...local, dispatcher: { tool: "dispatch", nameKey: "operation", argumentsKey: "payload" } },
+			{ ...local, server: { url, headers: { Authorization: "!printf 'Bearer fixture-scoped-key'" } } },
 		]) {
 			await configure(configured);
 			assert.deepEqual(await client.call("slack", "removeSlackEyes", args, signal), { ok: true });
 			const expected = slackRemovalCall(configured, "CEXAMPLE", parent);
 			assert.deepEqual(calls.at(-1), { name: expected.tool, arguments: expected.args });
 		}
+		assert.ok(requests.length > 0);
+		assert.ok(requests.every((request) => request.authorization === "Bearer fixture-scoped-key"));
 		for (const error of ["no_reaction", "not authorized"]) {
 			response = { isError: true, content: [{ type: "text", text: `${error}: private fixture detail` }] };
 			await assert.rejects(
@@ -172,82 +208,41 @@ test("fake MCP transport uses only the explicit local route, never another serve
 					!error.message.includes("private fixture") && /Couldn't remove Slack eyes reaction/.test(error.message),
 			);
 		}
-		// A separate local connection can use a tool-scoped key without changing the general server's OAuth.
-		await configure({ ...route, dispatcher: { tool: "dispatch", nameKey: "name", argumentsKey: "arguments" } });
-		await writeFile(
-			join(home, "mcp.json"),
-			JSON.stringify({
-				mcpServers: {
-					[route.server]: { url, headers: { Authorization: "Bearer fixture-scoped-key" } },
-					general: { command: "must-not-start" },
-				},
-			}),
-		);
-		await writeFile(
-			join(home, "mcp-auth.json"),
-			JSON.stringify({
-				[`mcp__${route.server}|${url}`]: {
-					tokens: { access_token: "fixture-old-oauth-token", token_type: "Bearer" },
-					tokensExpireAt: Date.now() + 3_600_000,
-				},
-			}),
-		);
-		response = { structuredContent: { ok: true } };
-		authorization.length = 0;
-		assert.deepEqual(await client.call("slack", "removeSlackEyes", args, signal), { ok: true });
-		assert.ok(authorization.length > 0);
-		assert.ok(
-			authorization.every((value) => value === "Bearer fixture-scoped-key"),
-			"configured key wins over stored OAuth",
-		);
-		assert.deepEqual(calls.at(-1), {
-			name: "dispatch",
-			arguments: {
-				name: route.tool,
-				arguments: { channel: "CEXAMPLE", ts: parent, name: "eyes" },
-			},
-		});
 		rejectKey = true;
-		authorization.length = 0;
-		paths.length = 0;
+		requests.length = 0;
 		const callsBeforeRevocation = calls.length;
 		await assert.rejects(
 			client.call("slack", "removeSlackEyes", args, signal),
 			(error: Error) =>
 				!error.message.includes("fixture-scoped-key") && !error.message.includes("fixture-old-oauth-token"),
 		);
-		assert.equal(calls.length, callsBeforeRevocation, "a revoked key executes no tool");
-		assert.ok(authorization.length > 0);
+		assert.equal(calls.length, callsBeforeRevocation);
+		assert.ok(requests.length > 0);
 		assert.ok(
-			authorization.every((value) => value === "Bearer fixture-scoped-key"),
-			"no OAuth authentication fallback",
-		);
-		assert.ok(
-			paths.every((path) => path === "/mcp"),
-			"no browser login, authorization discovery or token refresh",
+			requests.every((request) => request.authorization === "Bearer fixture-scoped-key" && request.path === "/mcp"),
+			"a revoked key cannot fall back to OAuth or attempt authorization discovery",
 		);
 		rejectKey = false;
-		const count = calls.length;
-		for (const value of [
-			{ ...route, server: "not-configured" },
-			{ ...route, tool: "missing-tool" },
+		const requestsBeforeInvalid = requests.length;
+		for (const invalid of [
+			{ ...local, enabled: false },
+			{ ...local, server: "my-slack-proxy" },
+			{ ...local, server: { url } },
+			{ ...local, server: { url, headers: { Authorization: "!exit 1" } } },
 		]) {
-			await configure(value);
+			await configure(invalid);
 			await assert.rejects(client.call("slack", "removeSlackEyes", args, signal));
 		}
-		await configure(route);
-		for (const config of [
-			{ url, enabled: false },
-			{ url, toolExposure: { remove_reaction: "hidden" } },
-			{ url: `${url}/unavailable` },
-		]) {
-			await writeFile(join(home, "mcp.json"), JSON.stringify({ mcpServers: { [route.server]: config } }));
-			await assert.rejects(client.call("slack", "removeSlackEyes", args, signal));
-		}
+		assert.equal(requests.length, requestsBeforeInvalid, "disabled, invalid or missing-key config never connects");
+		await configure({ ...local, tool: "missing-tool" });
+		await assert.rejects(client.call("slack", "removeSlackEyes", args, signal));
+		await configure({ ...local, server: { ...local.server, url: `${url}/unavailable` } });
+		await assert.rejects(client.call("slack", "removeSlackEyes", args, signal));
 		await assert.rejects(client.call("linear", "removeSlackEyes", args, signal), /Unknown dedicated/);
 		await assert.rejects(client.call("slack", "remove_reaction", args, signal), /Unknown dedicated/);
 		await assert.rejects(client.call("slack", "removeSlackEyes", { ...args, emoji: "other" }, signal), /Invalid/);
-		assert.equal(calls.length, count, "no hidden, disabled, missing or raw tool can execute");
+		assert.equal(calls.length, callsBeforeRevocation, "missing tools and failures never execute a fallback");
+		assert.equal(await readFile(join(home, "mcp-auth.json"), "utf8"), authFile, "OAuth storage is untouched");
 	} finally {
 		await client.close();
 		server.closeAllConnections();

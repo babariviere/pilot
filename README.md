@@ -485,41 +485,32 @@ To opt in to removing only the eyes reaction Pilot successfully added, create a 
 ```json
 {
   "slackEyesRemoval": {
-    "server": "my-slack-proxy",
+    "server": {
+      "url": "https://mcp.example.com/mcp",
+      "headers": { "Authorization": "Bearer ${SLACK_REACTION_API_KEY}" }
+    },
     "tool": "remove_reaction",
     "dispatcher": { "tool": "dispatch", "nameKey": "name", "argumentsKey": "arguments" }
   }
 }
 ```
 
-Names above are placeholders. Use exact names from your own global `mcp.json`; omit `dispatcher` for a direct tool.
-For headless removal, use a separate MCP connection authenticated with an API key scoped only to the removal
-tool. Keep any general-purpose connection separate so the narrow key does not restrict its other tools.
-Pi's global `mcp.json` supports a Bearer header, with the secret supplied locally rather than stored in the file:
-
-```json
-{
-  "mcpServers": {
-    "my-slack-proxy": {
-      "url": "https://mcp.example.com/mcp",
-      "headers": { "Authorization": "Bearer ${SLACK_REACTION_API_KEY}" },
-      "exposure": "hidden",
-      "toolExposure": { "dispatch": "codemode" }
-    }
-  }
-}
-```
-
-Supply the variable to the daemon process as well as interactive pi, or use pi's `!command` header support to
-read the key from a local secret store. Never put keys in project settings, committed files or chat messages.
-The explicit Authorization header uses the key instead of OAuth: a revoked or rejected key fails without
-opening a browser or falling back to stored OAuth credentials. Tool-scoped keys enforce access on the server;
-`toolExposure` only controls model visibility. No server-specific API or credentials store is added to Pilot.
+Names and URL above are placeholders. Use the exact tool names from your server; omit `dispatcher` for a direct
+tool. The daemon owns this MCP-over-HTTP connection entirely from `pilot-tracking.json`: it never reads or
+registers a removal server in pi's `mcp.json`, and the tools do not appear in agent tool listings. Your existing
+general-purpose MCP connections and their permissions are unchanged.
+Use an API key scoped only to the removal tool. HTTPS is required, except for loopback development servers.
+Supply the variable to the daemon process, or use a header beginning with `!command` to read the complete
+`Bearer <key>` value from a local secret store (using pi's existing header expansion). Never put keys in project
+settings, committed files or chat messages. Only an explicit Authorization header is accepted; no OAuth store
+is used. A revoked or rejected key fails without opening a browser or falling back to OAuth or another server.
+Tool-scoped keys enforce access on the server, rather than just hiding tools from a model.
+Set `slackEyesRemoval.enabled` to `false` to leave a prepared route inactive until its key is available.
 The inner tool must accept `{channel, ts, name}` (`name` is always `eyes`, without colons) and return JSON
 `{ok: true}` on success, via MCP structured content or one JSON text block. The configured server must use the
 same Slack user as the dedicated server: Slack only lets users remove their own reactions.
 This local file is read afresh for each new Done attempt, never from a repository or replicated project settings.
-Missing/invalid config, unreachable/hidden tools, `no_reaction`, private-channel authorization failures and other
+Missing/invalid config, disabled routes, unreachable/missing tools, `no_reaction`, authorization failures and other
 errors leave eyes in place, do not affect ✅ or local Done, and log one bounded line without retrying or falling
 back to another server. Each item is attempted once, including across restarts; configuring a route does not
 replay old Done items. No Slack messages or replies are sent.
