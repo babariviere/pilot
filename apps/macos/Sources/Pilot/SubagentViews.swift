@@ -6,6 +6,7 @@ import SwiftUI
 @MainActor
 final class SubagentFeed: ObservableObject {
     @Published private(set) var presentation = TranscriptPresentation()
+    @Published private(set) var configuration = SubagentConfiguration()
     @Published private(set) var loading = true
     @Published private(set) var error: String?
     let key: SubagentKey
@@ -77,11 +78,15 @@ final class SubagentFeed: ObservableObject {
             generation = UUID()
             if events.isEmpty {
                 presentation = TranscriptPresentation()
+                configuration = SubagentConfiguration()
                 loading = false
                 error = nil
                 return
             }
         }
+        var configuration = self.configuration
+        configuration.apply(events)
+        if self.configuration != configuration { self.configuration = configuration }
         pending.append(events)
         guard processing == nil else { return }
         let generation = generation
@@ -257,8 +262,8 @@ private struct SubagentDraft {
     var error: String?
 }
 
-/// One subagent's transcript and composer, pushed over the Agents list. Stop, its model and working directory sit
-/// in the header's ⋯ menu.
+/// One subagent's transcript and composer, pushed over the Agents list. Its model and thinking stay visible;
+/// Stop and the working directory sit in the header's ⋯ menu.
 private struct SubagentDetail: View {
     let session: SessionSummary
     let subagent: SessionSubagent
@@ -321,8 +326,28 @@ private struct SubagentDetail: View {
             .padding(.leading, 6)
             .padding(.trailing, 8)
             .frame(minHeight: 32)
+            configuration
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
             HairlineDivider()
         }
+    }
+
+    private var configuration: some View {
+        let model = feed.configuration.model ?? subagent.model
+        let name = model?.split(separator: "/", maxSplits: 1).last.map(String.init) ?? "Model not reported"
+        return HStack(spacing: 12) {
+            Label(name, icon: PilotIcon.model)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(model ?? "Model not reported")
+                .accessibilityLabel("Model: \(model ?? "not reported")")
+            Label(feed.configuration.thinkingLabel, icon: PilotIcon.thinking)
+                .fixedSize()
+            Spacer(minLength: 0)
+        }
+        .font(.pilot(.caption))
+        .foregroundStyle(Theme.mutedForeground)
     }
 
     @ViewBuilder
@@ -351,11 +376,6 @@ private struct SubagentDetail: View {
                 }
                 .disabled(model.pendingSessionActions.contains("\(session.id)/subagent/\(subagent.name)"))
                 Divider()
-            }
-            if let modelName = subagent.model {
-                Section("Model") {
-                    Text(modelName)
-                }
             }
             Section("Working directory") {
                 Text(subagent.cwd.abbreviatingHome)

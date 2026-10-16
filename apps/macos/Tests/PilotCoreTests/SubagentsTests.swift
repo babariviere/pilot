@@ -25,6 +25,37 @@ private func decodeSession(_ extra: String = "") throws -> SessionSummary {
     #expect(try JSONDecoder().decode(SessionSummary.self, from: JSONEncoder().encode(session)) == session)
 }
 
+@Test func subagentConfigurationUsesItsOwnSnapshotAndSurvivesIncrementalEntries() throws {
+    let events = try JSONDecoder().decode([JSONValue].self, from: Data(#"""
+    [{"type":"snapshot","agent":{"model":{"provider":"test","modelId":"child-model"},"thinkingLevel":"xhigh"}}]
+    """#.utf8))
+    var configuration = SubagentConfiguration()
+    configuration.apply(events)
+    #expect(configuration.model == "test/child-model")
+    #expect(configuration.thinking == "xhigh")
+    #expect(configuration.thinkingLabel == "Thinking: XHigh")
+    configuration.apply([.object(["type": .string("entry_appended")])])
+    #expect(configuration.model == "test/child-model")
+    #expect(configuration.thinking == "xhigh")
+    configuration.apply([.object(["type": .string("snapshot"), "agent": .object([:])])])
+    #expect(configuration.model == nil)
+    #expect(configuration.thinking == nil)
+    #expect(configuration.thinkingLabel == "Thinking not reported")
+}
+
+@Test func subagentConfigurationDistinguishesThinkingOffFromUnreported() throws {
+    var configuration = SubagentConfiguration()
+    #expect(configuration.thinkingLabel == "Thinking not reported")
+    for (level, label) in [("off", "Off"), ("high", "High"), ("", "")] {
+        let events = try JSONDecoder().decode([JSONValue].self, from: Data("""
+        [{"type":"snapshot","agent":{"model":{"provider":"test"},"thinkingLevel":"\(level)"}}]
+        """.utf8))
+        configuration.apply(events)
+        #expect(configuration.model == nil, "Incomplete model references are not displayed")
+        #expect(configuration.thinkingLabel == (level.isEmpty ? "Thinking not reported" : "Thinking: \(label)"))
+    }
+}
+
 @Test func displayStatePrefersWorkThenFailureThenUnreadAnswers() {
     let working = SessionSubagent(name: "a", state: .working, task: "", createdAt: 0, cwd: "/", lastAnswerId: "1", error: "x")
     let failed = SessionSubagent(name: "b", state: .idle, task: "", createdAt: 0, cwd: "/", lastAnswerId: "1", error: "x")

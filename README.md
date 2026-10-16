@@ -193,6 +193,9 @@ In a chat, each turn's thinking and tool calls fold into one line ("Worked for 3
 commands"). Automatic items (pushes and pull requests, job results, subagent answers, mission updates, compaction
 and stops) appear as one-line events where they happened, expanding on **Show**.
 
+The **Agents** tab opens each subagent's live transcript, with its model and thinking level visible beneath
+the header. Unreported thinking levels are labelled as such rather than inferred from the parent chat.
+
 ### Stopping and system messages
 
 Stop ends the current run and returns your undelivered queued messages to the composer. System messages

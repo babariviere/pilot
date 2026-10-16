@@ -41,6 +41,32 @@ public struct SessionSubagent: Codable, Identifiable, Equatable, Hashable, Senda
     }
 }
 
+/// Configuration reported by the child's own transcript, not inherited from its parent chat.
+public struct SubagentConfiguration: Equatable, Sendable {
+    public private(set) var model: String?
+    public private(set) var thinking: String?
+
+    public init() {}
+
+    public mutating func apply(_ events: [JSONValue]) {
+        for event in events where event["type"]?.string == "snapshot" {
+            let agent = event["agent"]
+            if let provider = agent?["model"]?["provider"]?.string, !provider.isEmpty,
+               let modelId = agent?["model"]?["modelId"]?.string, !modelId.isEmpty {
+                model = "\(provider)/\(modelId)"
+            } else {
+                model = nil
+            }
+            thinking = agent?["thinkingLevel"]?.string.flatMap { $0.isEmpty ? nil : $0 }
+        }
+    }
+
+    public var thinkingLabel: String {
+        guard let thinking else { return "Thinking not reported" }
+        return "Thinking: \(thinking == "xhigh" ? "XHigh" : thinking.capitalized)"
+    }
+}
+
 /// What a subagent chip or row shows, in priority order.
 public enum SubagentDisplayState: Equatable, Sendable {
     case working
