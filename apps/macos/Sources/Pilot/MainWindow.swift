@@ -194,10 +194,12 @@ struct SessionDetail: View {
 
     @ToolbarContentBuilder
     private var contextToolbarItem: some ToolbarContent {
-        if (context.map { model.isUnread(session, on: $0.host) } ?? model.isUnread(session)) || session.isAsk
+        if RemoteChatBadgeText(context: context) != nil
+            || (context.map { model.isUnread(session, on: $0.host) } ?? model.isUnread(session)) || session.isAsk
             || AttemptsMenu.label(for: session.attempts ?? []) != nil {
             ToolbarItem(placement: .primaryAction) {
                 HStack(spacing: 8) {
+                    RemoteChatBadge(context: context)
                     if (context.map { model.isUnread(session, on: $0.host) } ?? model.isUnread(session)) { UnreadBadge() }
                     AttemptsMenu(session: session)
                     // Ask has no Changes pane, so its read-only boundary stays visible here.

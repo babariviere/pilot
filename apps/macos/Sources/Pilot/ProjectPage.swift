@@ -683,7 +683,7 @@ struct ProjectNeedsYouRow: View {
     var body: some View {
         let action = item.kind == .mcp ? McpServerRowText.title(mcpAction) : ProjectPageText.needsAction(item)
         let detail = detail
-        NeedsYouRow(title: item.title, action: action, help: item.needsYouLabel(now: now),
+        NeedsYouRow(title: item.title, isChat: chatId != nil, action: action, help: item.needsYouLabel(now: now),
                     accessibilityDetail: detail.accessibilityText(using: model), open: open) { detail }
         .modifier(NeedsYouRowActions(item: item, chatId: chatId))
     }
@@ -789,7 +789,7 @@ private struct ProjectWorkingRow: View {
         let elapsed = item.state == .starting ? "Starting" : SessionTimeFormatting.relative(item.startedAt, now: now)
         Button { model.navigate(.session, id: item.sessionId, context: hostContext) } label: {
             HoverRow(verticalPadding: 7) { _ in
-                InboxRowLabel(title: item.title) {
+                InboxRowLabel(title: item.title, isChat: true) {
                     if session != nil { detail } else { fallbackDetail }
                 } trailing: {
                     if session == nil, let pr = item.pullRequest { DashboardPullRequestMark(ref: pr) }
@@ -1084,6 +1084,7 @@ private struct ProjectRecentRow: View {
                 HStack(spacing: 10) {
                     Text(item.title).font(.pilot(.body)).foregroundStyle(Theme.foreground).lineLimit(1)
                         .layoutPriority(1)
+                    RemoteChatBadge()
                     if session != nil {
                         detail
                     } else if !meta.isEmpty {
@@ -1098,7 +1099,7 @@ private struct ProjectRecentRow: View {
         .rowButtonStyle()
         .inboxCorner(session.map { $0.signal(unread: model.isUnread($0)) } ?? item.signal,
                      background: session?.isWaitingOnJobs == true)
-        .accessibilityLabel([item.title, item.outcome.status.rawValue, meta, time].filter { !$0.isEmpty }
+        .accessibilityLabel([item.title, RemoteChatBadgeText(context: hostContext)?.accessibilityLabel ?? "", item.outcome.status.rawValue, meta, time].filter { !$0.isEmpty }
             .joined(separator: ", "))
     }
 

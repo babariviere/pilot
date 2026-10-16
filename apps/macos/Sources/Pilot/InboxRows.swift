@@ -19,6 +19,7 @@ extension View {
 /// sidebar. Divide these rows with `HairlineDivider(leading: InboxRowLayout.dividerInset)`.
 struct InboxRowLabel<Detail: View, Trailing: View>: View {
     let title: String
+    var isChat = false
     /// Settled rows, such as merged pull requests, read quieter than the ones still in play.
     var quiet = false
     @ViewBuilder var detail: Detail
@@ -27,8 +28,11 @@ struct InboxRowLabel<Detail: View, Trailing: View>: View {
     var body: some View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 1) {
-                Text(title).font(.pilot(.body)).foregroundStyle(quiet ? Theme.mutedForeground : Theme.foreground)
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(title).font(.pilot(.body)).foregroundStyle(quiet ? Theme.mutedForeground : Theme.foreground)
+                        .lineLimit(1)
+                    if isChat { RemoteChatBadge() }
+                }
                 detail
             }
             Spacer(minLength: 8)
@@ -41,7 +45,9 @@ struct InboxRowLabel<Detail: View, Trailing: View>: View {
 /// reason line and a trailing action ("Review", "Answer", "Open chat"). Lists add `.inboxCorner(signal)`; the
 /// help tag and VoiceOver carry the full reason.
 struct NeedsYouRow<Detail: View>: View {
+    @Environment(\.hostViewContext) private var hostContext
     let title: String
+    var isChat = false
     /// Nil when there is nothing to open; the row is then disabled.
     let action: String?
     let help: String
@@ -52,7 +58,7 @@ struct NeedsYouRow<Detail: View>: View {
     var body: some View {
         Button(action: open) {
             HoverRow(verticalPadding: 7) { hovered in
-                InboxRowLabel(title: title) { detail } trailing: {
+                InboxRowLabel(title: title, isChat: isChat) { detail } trailing: {
                     if let action { InboxRowAction(title: action, hovered: hovered) }
                 }
             }
@@ -60,7 +66,7 @@ struct NeedsYouRow<Detail: View>: View {
         .rowButtonStyle()
         .disabled(action == nil)
         .help(help)
-        .accessibilityLabel("\(title). \(accessibilityDetail)")
+        .accessibilityLabel([title, isChat ? RemoteChatBadgeText(context: hostContext)?.accessibilityLabel : nil, accessibilityDetail].compactMap { $0 }.joined(separator: ". "))
         .accessibilityHint(action ?? "")
     }
 }
