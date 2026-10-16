@@ -458,6 +458,32 @@ public enum MissionLinearRole: String, LenientStringEnum {
     public static let fallback = MissionLinearRole.reference
 }
 
+public struct MissionLinearSync: Codable, Equatable, Hashable, Sendable {
+    public enum State: String, LenientStringEnum {
+        case idle, pending, synced, paused, error, terminal
+        public static let fallback = State.paused
+    }
+    public enum Target: String, LenientStringEnum {
+        case inProgress, inReview, merged
+        public static let fallback = Target.inProgress
+    }
+    public let state: State
+    public let target: Target?
+    public let reason: String?
+    public let error: String?
+    public let issueId: String?
+    public let teamId: String?
+    public let observedStateId: String?
+    public let observedStateName: String?
+    public let updatedAt: Double
+    public let retryAt: Double?
+}
+
+public struct MissionLinearSyncWrite: Codable, Sendable {
+    public let action: String
+    public init(action: String) { self.action = action }
+}
+
 public struct MissionResource: Codable, Identifiable, Equatable, Hashable, Sendable {
     public let id: String
     public let taskId: String?
@@ -475,6 +501,7 @@ public struct MissionResource: Codable, Identifiable, Equatable, Hashable, Senda
     public var linearRole: MissionLinearRole? = nil
     /// Canonical workspace/issue identifier, at most 256 ASCII characters.
     public var linearKey: String? = nil
+    public var linearSync: MissionLinearSync? = nil
 
     public var displayTitle: String { title ?? externalId ?? url }
 
