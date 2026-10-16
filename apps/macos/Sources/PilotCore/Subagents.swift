@@ -15,7 +15,7 @@ public struct SessionSubagent: Codable, Identifiable, Equatable, Hashable, Senda
     public let createdAt: Double
     public let cwd: String
     public let model: String?
-    /// Identity of the latest completed answer. A change means a new answer.
+    /// Identity of the latest completed answer.
     public let lastAnswerId: String?
     public let error: String?
     public let retired: Bool?
@@ -67,56 +67,25 @@ public struct SubagentConfiguration: Equatable, Sendable {
     }
 }
 
-/// What a subagent chip or row shows, in priority order.
+/// What a subagent chip or row shows, in priority order. A finished subagent is simply done: its answer goes to the
+/// parent chat, which acts on it, so it never waits on the user.
 public enum SubagentDisplayState: Equatable, Sendable {
     case working
-    case newAnswer
     case failed
-    case idle
+    case done
 
-    public init(_ subagent: SessionSubagent, unread: Bool) {
+    public init(_ subagent: SessionSubagent) {
         if subagent.isWorking { self = .working }
         else if subagent.isFailed { self = .failed }
-        else if unread { self = .newAnswer }
-        else { self = .idle }
+        else { self = .done }
     }
 
     public var label: String {
         switch self {
         case .working: "Working"
-        case .newAnswer: "New answer"
         case .failed: "Failed"
-        case .idle: "Idle"
+        case .done: "Done"
         }
-    }
-}
-
-/// Answers the user has opened, per session and subagent. A different answer ID is unread again.
-public struct SubagentReadState: Codable, Equatable, Sendable {
-    private var seen: [String: [String: String]] = [:]
-
-    public init() {}
-
-    public func isUnread(_ subagent: SessionSubagent, in sessionId: String) -> Bool {
-        guard let answer = subagent.lastAnswerId else { return false }
-        return seen[sessionId]?[subagent.name] != answer
-    }
-
-    public func unreadCount(_ subagents: [SessionSubagent], in sessionId: String) -> Int {
-        subagents.filter { isUnread($0, in: sessionId) && !$0.isWorking }.count
-    }
-
-    /// Returns whether anything changed.
-    @discardableResult
-    public mutating func markRead(_ subagent: SessionSubagent, in sessionId: String) -> Bool {
-        guard let answer = subagent.lastAnswerId, seen[sessionId]?[subagent.name] != answer else { return false }
-        seen[sessionId, default: [:]][subagent.name] = answer
-        return true
-    }
-
-    /// Forget sessions that no longer exist.
-    public mutating func retain(sessions: Set<String>) {
-        seen = seen.filter { sessions.contains($0.key) }
     }
 }
 

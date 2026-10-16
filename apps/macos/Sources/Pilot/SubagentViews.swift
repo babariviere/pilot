@@ -143,7 +143,7 @@ struct SubagentsStrip: View {
 
     var body: some View {
         let subagents = session.subagents ?? []
-        let states = subagents.map { SubagentDisplayState($0, unread: model.isUnread($0, in: session.id)) }
+        let states = subagents.map(SubagentDisplayState.init)
         let ordered = zip(subagents, states).sorted { a, b in
             if a.1.trayOrder != b.1.trayOrder { return a.1.trayOrder < b.1.trayOrder }
             return a.0.createdAt > b.0.createdAt
@@ -224,18 +224,17 @@ struct SubagentsStrip: View {
 }
 
 private extension SubagentDisplayState {
-    /// Tray order: what is running, then what needs a look, then the rest.
+    /// Tray order: what is running, then failures, then finished work.
     var trayOrder: Int {
         switch self {
         case .working: 0
         case .failed: 1
-        case .newAnswer: 2
-        case .idle: 3
+        case .done: 2
         }
     }
 }
 
-/// The tray's per-state counts. An idle subagent has finished its latest task, so it counts as done.
+/// The tray's per-state counts.
 private struct SubagentTrayCounts {
     var working = 0
     var done = 0
@@ -246,7 +245,7 @@ private struct SubagentTrayCounts {
             switch state {
             case .working: working += 1
             case .failed: failed += 1
-            case .newAnswer, .idle: done += 1
+            case .done: done += 1
             }
         }
     }
@@ -274,7 +273,7 @@ private struct SubagentTrayRow: View {
                 mark.frame(width: 14)
                 Text(subagent.name)
                     .font(.pilot(.label, weight: .medium))
-                    .foregroundStyle(state == .idle ? Theme.mutedForeground : Theme.foreground)
+                    .foregroundStyle(state == .done ? Theme.mutedForeground : Theme.foreground)
                     .lineLimit(1)
                     .fixedSize()
                 Text(subagent.task)
@@ -283,7 +282,7 @@ private struct SubagentTrayRow: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 4)
-                Text(label)
+                Text(state.label)
                     .font(.pilot(.caption))
                     .foregroundStyle(labelColor)
                     .lineLimit(1)
@@ -298,25 +297,15 @@ private struct SubagentTrayRow: View {
         .onHover { hovered = $0 }
         .animation(Theme.Motion.quick, value: hovered)
         .help(subagent.error.map { "\(subagent.name) failed: \($0)" } ?? subagent.task)
-        .accessibilityLabel("\(subagent.name), \(label). \(subagent.task)")
+        .accessibilityLabel("\(subagent.name), \(state.label). \(subagent.task)")
         .accessibilityHint("Opens its transcript in the Agents tab")
-    }
-
-    private var label: String {
-        switch state {
-        case .working: "Working"
-        case .failed: "Failed"
-        case .newAnswer: "New answer"
-        case .idle: "Done"
-        }
     }
 
     private var labelColor: Color {
         switch state {
         case .working: Theme.workingInk
         case .failed: Theme.destructive
-        case .newAnswer: Theme.info
-        case .idle: Theme.faintForeground
+        case .done: Theme.faintForeground
         }
     }
 
@@ -325,8 +314,7 @@ private struct SubagentTrayRow: View {
         switch state {
         case .working: EllipsisSpinner()
         case .failed: PilotSymbol(PilotIcon.warning).foregroundStyle(Theme.destructive)
-        case .newAnswer: Circle().fill(Theme.info).frame(width: 7, height: 7)
-        case .idle: PilotSymbol(PilotIcon.complete).foregroundStyle(Theme.success)
+        case .done: PilotSymbol(PilotIcon.complete).foregroundStyle(Theme.success)
         }
     }
 }
@@ -334,8 +322,8 @@ private struct SubagentTrayRow: View {
 // MARK: - Agents inspector tab
 
 extension SessionSubagent {
-    /// The sidebar's corner vocabulary for a subagent row: the working ripple or failed red. An unread answer is not
-    /// something the user must act on, so idle subagents draw no corner.
+    /// The sidebar's corner vocabulary for a subagent row: the working ripple or failed red. A finished subagent's
+    /// answer is for the parent chat, not the user, so done subagents draw no corner.
     var cornerSignal: SessionSignal? {
         if isWorking { return .working }
         if isFailed { return .failed }
@@ -399,7 +387,7 @@ private struct SubagentRow: View {
         }
         .rowButtonStyle()
         .help(subagent.task)
-        .accessibilityLabel("\(subagent.name), \(SubagentDisplayState(subagent, unread: false).label). \(subagent.task)")
+        .accessibilityLabel("\(subagent.name), \(SubagentDisplayState(subagent).label). \(subagent.task)")
         .accessibilityHint("Opens its transcript")
     }
 }
@@ -446,13 +434,7 @@ private struct SubagentDetail: View {
             transcript
             composer
         }
-        .onAppear {
-            feed.retain()
-            model.markSubagentRead(subagent, in: session.id)
-        }
-        .onChange(of: subagent) { _, value in
-            model.markSubagentRead(value, in: session.id)
-        }
+        .onAppear { feed.retain() }
         .onDisappear { feed.release() }
     }
 

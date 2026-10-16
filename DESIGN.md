@@ -199,8 +199,9 @@ A chat reads as a conversation, not a log.
   composer tray.
 - **The composer tray** holds the chat's tasks and subagents above the editor. Each has a summary line ("Tasks 1 of
   3", "4 subagents · 1 working · 3 done") that opens one row per item, up to four before scrolling: tasks open while
-  some remain, subagents when one starts working. Rows lead with their state (working dots, green check, red failure,
-  blue new answer) and running items sort first; a subagent row opens its transcript.
+  some remain, subagents when one starts working. Rows lead with their state (working dots, green check, red failure)
+  and running items sort first; a subagent row opens its transcript. A finished subagent is just done: its answer goes
+  to the parent chat, so it never asks for the user's attention.
 - **The working line** ("Working… · 2 jobs", "Waiting on 2 jobs…") carries live work and opens the jobs panel when
   jobs run. Nothing else stacks above the composer except a subscription notice, shown only past 80% or when limited.
   The context gauge lives in the composer bar.
