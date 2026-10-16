@@ -415,8 +415,18 @@ test("option off preserves history behaviour and enabling it never hides/closes 
 	newMention = true;
 	assert.equal((await registry.poll(`${project.id}:slack`)).status, "ok");
 	const closed = await f.store.list({ projectId: project.id, kind: "slack", dismissed: true });
-	assert.equal(closed.total, 2, "a new qualifying thread still takes its classifier label's close effect");
-	assert.ok(closed.items.every((item) => item.slack?.closedByLabel === "Client"));
+	assert.equal(closed.total, 1, "the classifier's close label cannot hide a qualifying mention");
+	const mentionedItem = (await f.store.list({ projectId: project.id, kind: "slack" })).items.find((item) =>
+		item.externalId.endsWith(secondParent),
+	);
+	assert.ok(mentionedItem);
+	assert.equal(mentionedItem.slack?.status, "open");
+	assert.equal(mentionedItem.metadata.mentionQualified, true);
+	assert.equal(mentionedItem.metadata.label, "Client", "classification still supplies the label");
+	assert.equal(
+		await f.store.patch(mentionedItem.id, { slack: { status: "dismissed" } }).then((item) => item.slack?.status),
+		"dismissed",
+	);
 });
 
 test("filter edits cancel stale in-flight admission without invalidating existing source scope", async (t) => {

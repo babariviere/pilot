@@ -15,11 +15,11 @@ import type {
 	TrackingJson,
 } from "@pilot/protocol";
 import { NotFound } from "./errors.ts";
+import { LinearSizeDisk } from "./linear-size.ts";
+import { SlackCaseDisk } from "./slack-cases.ts";
 import { parseSlackClassification, type SlackClassification } from "./slack-classifier.ts";
 import { SLACK_SEARCH_CHARS } from "./slack-format.ts";
 import { TriageGuideDisk } from "./triage-guide-disk.ts";
-import { LinearSizeDisk } from "./linear-size.ts";
-import { SlackCaseDisk } from "./slack-cases.ts";
 
 export type SlackCache = { state: "pending" | "error" } | { state: "done"; result: SlackClassification };
 export type SlackReservation = SlackCache | { state: "reserved" } | { state: "budget" };
@@ -126,7 +126,7 @@ const SLACK_OPEN = "kind = 'slack' AND active = 1 AND dismissed = 0 AND slack_st
 const SLACK_LABEL =
 	"CASE WHEN json_type(slack_overrides, '$.label') IS NOT NULL THEN json_extract(slack_overrides, '$.label') ELSE json_extract(metadata, '$.label') END";
 /** Pairs of [projectId, label] in the second parameter. */
-const SLACK_HIDDEN = `EXISTS (SELECT 1 FROM json_each(?) AS hidden WHERE json_extract(hidden.value, '$[0]') = project_id AND json_extract(hidden.value, '$[1]') = ${SLACK_LABEL})`;
+const SLACK_HIDDEN = `coalesce(json_extract(metadata, '$.mentionQualified'), 0) != 1 AND EXISTS (SELECT 1 FROM json_each(?) AS hidden WHERE json_extract(hidden.value, '$[0]') = project_id AND json_extract(hidden.value, '$[1]') = ${SLACK_LABEL})`;
 const IN_PROJECTS = "project_id IN (SELECT value FROM json_each(?))";
 /** Labels in the bound JSON array. A missing label never matches (configured names are never empty). */
 const SLACK_LABEL_IN = `coalesce(${SLACK_LABEL}, '') IN (SELECT value FROM json_each(?))`;
@@ -407,7 +407,7 @@ export class TrackedItemDisk {
 		for (const [set, where] of [
 			[
 				"slack_status='open', dismissed=0, closed_by_label=NULL",
-				`closed_by_label IS NOT NULL AND NOT ${SLACK_LABEL_IN}`,
+				`closed_by_label IS NOT NULL AND (NOT ${SLACK_LABEL_IN} OR json_extract(metadata, '$.mentionQualified') IS 1)`,
 			],
 			[
 				`closed_by_label=${SLACK_LABEL}`,
@@ -415,7 +415,7 @@ export class TrackedItemDisk {
 			],
 			[
 				`slack_status='dismissed', dismissed=1, closed_by_label=${SLACK_LABEL}`,
-				`closed_by_label IS NULL AND slack_status='open' AND dismissed=0 AND json_type(slack_overrides, '$.status') IS NULL AND ${SLACK_LABEL_IN}`,
+				`closed_by_label IS NULL AND slack_status='open' AND dismissed=0 AND json_type(slack_overrides, '$.status') IS NULL AND coalesce(json_extract(metadata, '$.mentionQualified'), 0) != 1 AND ${SLACK_LABEL_IN}`,
 			],
 		] as const)
 			changes += Number(
