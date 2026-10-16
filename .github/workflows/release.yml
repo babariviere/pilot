@@ -40,6 +40,8 @@ jobs:
       cancel-in-progress: true
     env:
       JJ_SHA256: fce0271158e665ceb82dc66c5eb95b1728649094e9133074f3b5baece345fc08
+      # The Linux runner has 4 cores and runs nothing else. The default of 2 suits shared machines.
+      PILOT_TEST_CONCURRENCY: 4
     steps:
       - uses: actions/checkout@v4
         with:
