@@ -29,27 +29,28 @@ func addDevboxPresentsSetupSheetAfterCancelAndReopen() async throws {
         window.close()
     }
     hosting.layoutSubtreeIfNeeded()
-    try await devboxSettingsWait("Add devbox button did not mount") {
-        devboxSettingsElement(in: hosting, role: .button, title: "Add devbox…") != nil
+    try await devboxSettingsWait("Add devbox button did not mount", in: hosting) {
+        devboxSettingsButton("Add devbox…", in: hosting) != nil
     }
 
     for _ in 0..<2 {
         #expect(window.attachedSheet == nil)
         try devboxSettingsClick("Add devbox…", in: window)
-        try await devboxSettingsWait("Add devbox did not present its setup sheet") {
+        try await devboxSettingsWait("Add devbox did not present its setup sheet", in: hosting) {
             window.attachedSheet != nil
         }
         let sheet = try #require(window.attachedSheet)
         let content = try #require(sheet.contentView)
-        try await devboxSettingsWait("The live setup form did not mount") {
-            devboxSettingsElement(in: content, role: .textField, title: "Existing SSH alias") != nil
-                && devboxSettingsElement(in: content, role: .button, title: "Cancel") != nil
+        try await devboxSettingsWait("The live setup form did not mount", in: content) {
+            devboxSettingsControl(in: content, matching: { (field: NSTextField) in
+                field.isEditable && field.placeholderString == "Existing SSH alias"
+            }) != nil && devboxSettingsButton("Cancel", in: content) != nil
         }
-        let setup = try #require(devboxSettingsElement(in: content, role: .button, title: "Set up devbox"))
-        #expect(!setup.isAccessibilityEnabled(), "Opening setup must not grant installation permission")
+        let setup = try #require(devboxSettingsButton("Set up devbox", in: content))
+        #expect(!setup.isEnabled, "Opening setup must not grant installation permission")
         #expect(packageLoads == 0)
         try devboxSettingsClick("Cancel", in: sheet)
-        try await devboxSettingsWait("Cancel did not dismiss the setup sheet") {
+        try await devboxSettingsWait("Cancel did not dismiss the setup sheet", in: content) {
             window.attachedSheet == nil
         }
     }
@@ -58,31 +59,39 @@ func addDevboxPresentsSetupSheetAfterCancelAndReopen() async throws {
     #expect(hosts.available.isEmpty)
 }
 
-@MainActor private func devboxSettingsWait(_ message: String, until ready: () -> Bool) async throws {
+@MainActor private func devboxSettingsWait(_ message: String, in content: NSView,
+                                          until ready: () -> Bool) async throws {
     let deadline = Date().addingTimeInterval(10)
     while !ready(), Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+    if !ready() { print(devboxSettingsViewTree(content)) }
     try #require(ready(), Comment(rawValue: message))
 }
 
-@MainActor private func devboxSettingsElement(in element: Any, role: NSAccessibility.Role,
-                                             title: String, depth: Int = 0) -> NSAccessibilityProtocol? {
-    guard depth < 40, let accessible = element as? NSAccessibilityProtocol else { return nil }
-    if accessible.accessibilityRole() == role,
-       [accessible.accessibilityTitle(), accessible.accessibilityLabel()].contains(title) { return accessible }
-    for child in accessible.accessibilityChildren() ?? [] {
-        if let found = devboxSettingsElement(in: child, role: role, title: title, depth: depth + 1) { return found }
+@MainActor private func devboxSettingsControl<V: NSView>(in view: NSView, matching: (V) -> Bool) -> V? {
+    if let control = view as? V, matching(control) { return control }
+    for child in view.subviews {
+        if let found = devboxSettingsControl(in: child, matching: matching) { return found }
     }
     return nil
 }
 
-/// Locate the real control through accessibility, then send native mouse events to its window.
+@MainActor private func devboxSettingsButton(_ title: String, in content: NSView) -> NSButton? {
+    devboxSettingsControl(in: content) { (button: NSButton) in button.title == title }
+}
+
+@MainActor private func devboxSettingsViewTree(_ view: NSView, depth: Int = 0) -> String {
+    let title = (view as? NSButton)?.title ?? (view as? NSTextField)?.placeholderString ?? ""
+    return String(repeating: " ", count: depth) + "\(type(of: view)) \(view.frame) \(title)\n"
+        + view.subviews.map { devboxSettingsViewTree($0, depth: depth + 1) }.joined()
+}
+
+/// Find the mounted AppKit control, then send native mouse events to its window.
 @MainActor private func devboxSettingsClick(_ title: String, in window: NSWindow) throws {
     let content = try #require(window.contentView)
-    let button = try #require(devboxSettingsElement(in: content, role: .button, title: title), "Missing button \(title)")
-    try #require(button.isAccessibilityEnabled())
-    let frame = button.accessibilityFrame()
-    try #require(!frame.isEmpty)
-    let location = window.convertPoint(fromScreen: NSPoint(x: frame.midX, y: frame.midY))
+    let button = try #require(devboxSettingsButton(title, in: content), "Missing button \(title)")
+    try #require(button.isEnabled)
+    try #require(!button.bounds.isEmpty)
+    let location = button.convert(NSPoint(x: button.bounds.midX, y: button.bounds.midY), to: nil)
     let event = { (type: NSEvent.EventType) in
         try #require(NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
             timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
