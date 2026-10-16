@@ -959,15 +959,16 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func stopSession(_ id: String) {
+    @discardableResult
+    func stopSession(_ id: String) -> Task<Void, Never>? {
         let sessionId: String
         if id.hasPrefix("hostref1:") {
             guard let ref = try? HostResourceRef.decodeKey(id), ref.kind == .session else {
                 sessionActionError = HostRoutingError.invalidReference.localizedDescription
-                return
+                return nil
             }
             if ref.host != localHost {
-                Task {
+                return Task {
                     do {
                         if let restored = try await hosts.requestStop(ref), !restored.isEmpty {
                             let composer = try composer(for: ref)
@@ -976,15 +977,14 @@ final class AppModel: ObservableObject {
                         }
                     } catch { sessionActionError = "Stop requested. Not yet confirmed. " + error.localizedDescription }
                 }
-                return
             }
             // Qualified Local rows and legacy bare IDs must share the API ID and pending guard.
             sessionId = ref.localId
         } else { sessionId = id }
 
-        guard !pendingSessionActions.contains(sessionId) else { return }
+        guard !pendingSessionActions.contains(sessionId) else { return nil }
         pendingSessionActions.insert(sessionId)
-        Task {
+        return Task {
             defer { pendingSessionActions.remove(sessionId) }
             do {
                 // Queued messages were sent before anything typed since, so they lead the draft.
