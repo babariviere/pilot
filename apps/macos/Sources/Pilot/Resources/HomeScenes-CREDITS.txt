@@ -1,8 +1,8 @@
 Home ocean scenes
 
 HomeSky.png
-The Blue Ocean and the Sky, Engin Akyurt
-https://www.pexels.com/photo/the-blue-ocean-and-the-sky-11326635/
+Photo of a Blue Sky and a Turquoise Seascape, Elly Kang
+https://www.pexels.com/photo/photo-of-a-blue-sky-and-a-turquoise-seascape-19331283/
 
 HomeSkyNight.png
 Body of Water during Night Time, Pramod Tiwari
@@ -10,7 +10,7 @@ https://www.pexels.com/photo/body-of-water-during-night-time-14539405/
 
 Both images are used under the Pexels License:
 https://www.pexels.com/license/
-Downloaded at 1280 x 720 and converted to PNG. Pilot crops, dithers and
+Resized/cropped to 1280 x 720 and converted to PNG. Pilot crops, dithers and
 dissolves the images into the page. No endorsement is implied.
 
 Pexels permits free use and modification without required attribution.
