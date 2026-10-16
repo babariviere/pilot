@@ -41,23 +41,28 @@ minutes and may incur charges. No App Store or Developer ID distribution is conf
    only needed if CI must run automatically on bot-created PRs that change more than release metadata:
    the default `GITHUB_TOKEN` creates PR workflow runs that require approval. Do not give this token
    access to other repositories. The macOS publishing job still uses only `GITHUB_TOKEN`.
-4. Merge the workflow changes, then merge the Release Please PR when ready to release. PRs changing
-   only `CHANGELOG.md`, `package.json` and `.release-please-manifest.json` skip
-   workflows, so release PRs need no workflow approval. Merging triggers full verification and
+4. Merge the workflow changes, then merge the Release Please PR when ready to release. Every PR runs
+   verification, including release metadata and lockfile changes. Merging triggers full verification and
    publishing on `main`. Other PRs run verification only, without release secrets or publishing
-   permissions. The release job fails with
-   a configuration message if signing keys are missing. Ordinary main commits run verification and
+   permissions. Trusted main builds require the public signing keys; only publishing jobs receive
+   private keys. Missing configuration fails with a setup message. Ordinary main commits run verification and
    Release Please without publishing unless it creates a stable release.
 
 The workflow is `.github/workflows/release.yml`. It selects an arm64 macOS runner with Xcode
-26.2 (Swift 6.2). Verification runs as three parallel jobs (`node` for TypeScript and packaging tests,
-`swift-test` for Swift tests, `app-bundle` for the signed app smoke test); releasing waits for all three.
-The release job then builds the app, stages a production runtime, and
-publishes only the signed `Pilot-arm64.zip` and `appcast.xml` in a GitHub Release. Release Please creates
-only a draft, so incomplete uploads are not offered to the app. The tagged application source is built
-and tested even if `main` has advanced. After its tests, the workflow overlays the current release
-metadata and publisher helpers so old draft retries also use runtime cleanup and ZIP-only publishing.
-Application code, dependencies and vendor pins remain tagged. App versions come from root `package.json`; Release Please
+26.2 (Swift 6.2). Verification runs in parallel: portable Node tests, native Node and packaging tests,
+Swift tests, the Mac app bundle and the Linux production package. On trusted main runs, `app-bundle`
+builds the self-contained app once and verifies its extracted production ZIP. PRs retain the native
+app smoke test without release configuration or credentials. The Mac publishing job downloads that
+same ZIP, checks its source commit, version, checksum and embedded public keys, then signs and uploads
+it without recompiling or repackaging. Linux publishing likewise signs the verified runtime artifact
+after checking its tag and commit. Artifacts come only from the current workflow run, never a PR run
+or a mutable build cache. A missing or mismatched artifact fails closed.
+Release Please creates only a draft. A final publishing job releases it after the Mac ZIP/appcast
+and all three Linux assets are uploaded, so incomplete releases are not offered to the app.
+An explicit `release_tag` retry builds the requested tag once in each package job, even if `main`
+has advanced or old artifacts expired. Current release metadata, runtime-check and publisher helpers
+are overlaid for old drafts. Application code, dependencies and vendor pins remain tagged.
+App versions come from root `package.json`; Release Please
 updates it, `.release-please-manifest.json` and `CHANGELOG.md` in the release PR.
 The existing source plist is only a template; bundling writes the package version into the app.
 Before signing, isolated runtime staging removes source maps and TypeScript declarations while
@@ -82,9 +87,10 @@ latest published build when that happens, and keep the signing key stable. Publi
 semantic and Sparkle build ordering. Old `pilot-N.M` releases are supported as a one-way migration;
 the first stable release can replace them without changing the installed app's signing trust.
 
-If publication fails after draft creation, rerun the failed release job, or use **Run workflow** on
+If publication fails after draft creation, rerun the failed publishing job to reuse its verified
+artifact, or use **Run workflow** on
 `main` with **`release_tag`** set to the existing stable draft (for example `v0.2.0`). A new dispatch
-also fixes a draft whose Sparkle build version is older than the latest release. Retrying replaces
+also rebuilds expired artifacts and fixes a draft whose Sparkle build version is older than the latest release. Retrying replaces
 only draft assets; published releases and prereleases cannot be overwritten. Leave `release_tag`
 empty to run Release Please normally, without publishing unless it creates a stable release.
 Obsolete incomplete `pilot-N.M` drafts may be deleted manually,

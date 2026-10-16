@@ -74,7 +74,7 @@ test("release job publishes only newly created stable releases or explicit draft
 	const workflow = readFileSync(new URL("../../../../.github/workflows/release.yml", import.meta.url), "utf8");
 	const condition = workflow.split("\n  release:\n")[1].match(/^    if: (.+)$/m)[1];
 	const github = { event_name: "push", ref: "refs/heads/main", event: { repository: { fork: false } } };
-	const verification = ["node", "node-macos", "swift-test", "app-bundle"];
+	const verification = ["node", "node-macos", "swift-test", "app-bundle", "linux-production"];
 	const needs = {
 		...Object.fromEntries(verification.map((name) => [name, { result: "success" }])),
 		"release-please": { result: "success", outputs: { release_created: "false" } },
@@ -126,8 +126,8 @@ test("release job publishes only newly created stable releases or explicit draft
 		);
 		needs[name].result = "success";
 	}
-	assert.match(workflow, /\n  release-please:\n    needs: \[node, node-macos, swift-test, app-bundle\]\n/);
-	assert.match(workflow, /\n  release:\n(?:    #.*\n)*    needs: \[node, node-macos, swift-test, app-bundle, release-please\]\n/);
+	assert.match(workflow, /\n  release-please:\n    needs: \[node, node-macos, swift-test, app-bundle, linux-production\]\n/);
+	assert.match(workflow, /\n  release:\n(?:    #.*\n)*    needs: \[node, node-macos, swift-test, app-bundle, linux-production, release-please\]\n/);
 	github.ref = "refs/heads/other";
 	assert.equal(
 		evaluate(github, needs, { release_tag: "v1.2.3" }, () => true),
@@ -143,14 +143,13 @@ test("release job publishes only newly created stable releases or explicit draft
 
 test("Linux release signing follows successful production verification and stays out of PR jobs", () => {
 	const workflow = readFileSync(new URL("../../../../.github/workflows/release.yml", import.meta.url), "utf8");
-	const linux = workflow.split("\n  linux-release:\n")[1].split(/\n  [a-z-]+:\n/)[0];
-	assert.match(linux, /needs: \[node, node-macos, swift-test, app-bundle, release-please\]/);
-	assert.match(linux, /github\.ref == 'refs\/heads\/main'/);
-	assert.match(linux, /github\.event\.repository\.fork == false/);
+	const linux = workflow.split("\n  linux-production:\n")[1].split(/\n  [a-z-]+:\n/)[0];
+	assert.doesNotMatch(linux, /needs:|if:|secrets\./);
+	assert.match(linux, /ref: \$\{\{ inputs\.release_tag \|\| github\.sha \}\}/);
 	assert.match(linux, /uses: \.\/\.github\/workflows\/linux-package.yml/);
 	const publish = workflow.split("\n  linux-publish:\n")[1].split(/\n  [a-z-]+:\n/)[0];
-	assert.match(publish, /needs: \[linux-release, release-please\]/);
-	assert.match(publish, /needs\.linux-release\.result == 'success'/);
+	assert.match(publish, /needs: \[node, node-macos, swift-test, app-bundle, linux-production, release-please\]/);
+	assert.match(publish, /needs\.linux-production\.result == 'success'/);
 	assert.match(publish, /contents: write/);
 	assert.ok(publish.indexOf("release-manifest.mjs sign") < publish.indexOf("gh release upload"));
 	assert.ok(publish.indexOf("Require Linux runtime signing configuration") < publish.indexOf("uses: actions/checkout"));
@@ -166,7 +165,7 @@ test("macOS and Linux release jobs run in parallel and one serialized job publis
 	const workflow = readFileSync(new URL("../../../../.github/workflows/release.yml", import.meta.url), "utf8");
 	const job = (name) => workflow.split("\n  " + name + ":\n")[1].split(/\n  [a-z-]+:\n/)[0];
 	const release = job("release");
-	assert.doesNotMatch(release, /linux-publish|linux-release|concurrency:/);
+	assert.doesNotMatch(release, /needs:.*linux-publish|concurrency:/);
 	assert.doesNotMatch(release, /--draft=false|finalize-release/);
 	assert.match(release, /run: apps\/macos\/scripts\/publish-release\.sh/);
 	assert.match(release, /LINUX_RUNTIME_PUBLIC_KEY repository variable/);
@@ -201,7 +200,7 @@ test("draft retries apply current packaging helpers without changing tagged appl
 	const workflow = readFileSync(new URL("../../../../.github/workflows/release.yml", import.meta.url), "utf8");
 	const tools = workflow.indexOf("- name: Load current release packaging tools");
 	const overlay = workflow.indexOf("- name: Apply current packaging policy");
-	const build = workflow.indexOf("- name: Build self-contained Pilot.app");
+	const build = workflow.indexOf("- run: apps/macos/scripts/bundle.sh", overlay);
 	assert.ok(tools >= 0 && tools < overlay && overlay < build);
 	assert.match(workflow.slice(tools, overlay), /ref: \$\{\{ github\.sha \}\}/);
 	assert.match(workflow.slice(tools, overlay), /persist-credentials: false/);
@@ -212,8 +211,62 @@ test("draft retries apply current packaging helpers without changing tagged appl
 		.map((line) => line.trim())
 		.filter((line) => line.startsWith("cp "));
 	assert.deepEqual(commands, [
+		"cp .pilot-release-tools/apps/macos/scripts/production_artifact.py apps/macos/scripts/production_artifact.py",
 		"cp .pilot-release-tools/apps/macos/scripts/release_metadata.py apps/macos/scripts/release_metadata.py",
 		"cp .pilot-release-tools/apps/macos/scripts/publish-release.sh apps/macos/scripts/publish-release.sh",
 		"cp -p .pilot-release-tools/apps/macos/scripts/check-runtime.sh apps/macos/scripts/check-runtime.sh",
 	]);
+});
+
+test("production packages are built once and publishing promotes only this run's verified artifacts", () => {
+	const workflow = readFileSync(new URL("../../../../.github/workflows/release.yml", import.meta.url), "utf8");
+	const job = (name) => workflow.split("\n  " + name + ":\n")[1].split(/\n  [a-z-]+:\n/)[0];
+	const app = job("app-bundle");
+	const release = job("release");
+	assert.equal(workflow.match(/run: apps\/macos\/scripts\/bundle\.sh/g).length, 1);
+	assert.equal(workflow.match(/uses: \.\/\.github\/workflows\/linux-package.yml/g).length, 1);
+	assert.match(app, /ref: \$\{\{ inputs\.release_tag \|\| github\.sha \}\}/);
+	assert.match(app, /GITHUB_RUN_NUMBER \+ BUNDLE_VERSION_OFFSET/);
+	assert.match(app, /BUNDLE_VERSION_OFFSET: '10000'/);
+	assert.match(app, /GITHUB_RUN_ATTEMPT/);
+	assert.doesNotMatch(app, /secrets\.|contents: write/);
+	assert.match(app, /production_artifact\.py create/);
+	assert.match(app, /codesign --verify --deep --strict "\$stage\/extracted\/Pilot.app"/);
+	assert.match(app, /check-runtime.sh "\$stage\/extracted\/Pilot.app\/Contents\/Resources\/runtime"/);
+	assert.ok(app.indexOf("check-runtime.sh \"$stage/extracted") < app.indexOf("- name: Upload verified production app"));
+	assert.match(app, /name: macos-production-app/);
+	assert.match(app, /overwrite: true/);
+	assert.match(release, /uses: actions\/download-artifact@v4\n        with:\n          name: macos-production-app/);
+	assert.match(release, /production_artifact\.py verify "\$stage" "\$\(git rev-parse HEAD\)"/);
+	assert.ok(release.indexOf("production_artifact.py verify") < release.indexOf('ditto -x -k "$stage/Pilot-arm64.zip"'));
+	assert.match(release, /publish-release.sh apps\/macos\/build\/Pilot.app "\$RUNNER_TEMP\/macos-production\/Pilot-arm64.zip"/);
+	assert.doesNotMatch(release, /bundle\.sh|swift build|pnpm install|bundle-runtime\.sh|pnpm\/action-setup/);
+	assert.doesNotMatch(release, /run-id:|github-token:/);
+	const headless = readFileSync(new URL("../../../../.github/workflows/linux-headless.yml", import.meta.url), "utf8");
+	assert.doesNotMatch(headless, /linux-package.yml|production:/);
+});
+
+test("only trusted main builds create a production Mac artifact, without exposing signing secrets", () => {
+	const workflow = readFileSync(new URL("../../../../.github/workflows/release.yml", import.meta.url), "utf8");
+	const app = workflow.split("\n  app-bundle:\n")[1].split(/\n  [a-z-]+:\n/)[0];
+	const condition = app.match(/BUNDLE_RUNTIME: \$\{\{ (.+) \}\}/)[1];
+	const evaluate = new Function("github", "return " + condition);
+	const github = {event_name: "push", ref: "refs/heads/main", event: {repository: {fork: false}}};
+	assert.equal(evaluate(github), "1");
+	github.event_name = "workflow_dispatch";
+	assert.equal(evaluate(github), "1");
+	github.event_name = "pull_request";
+	assert.equal(evaluate(github), "0");
+	github.event_name = "push";
+	github.ref = "refs/heads/other";
+	assert.equal(evaluate(github), "0");
+	github.ref = "refs/heads/main";
+	github.event.repository.fork = true;
+	assert.equal(evaluate(github), "0");
+	for (const name of ["Configure production bundle", "Archive and verify the production app", "Upload verified production app"]) {
+		assert.ok(app.includes("- name: " + name + "\n        if: env.BUNDLE_RUNTIME == '1'"));
+	}
+	const release = workflow.split("\n  release:\n")[1].split(/\n  [a-z-]+:\n/)[0];
+	const linuxPublish = workflow.split("\n  linux-publish:\n")[1].split(/\n  [a-z-]+:\n/)[0];
+	assert.equal(release.match(/^    if: (.+)$/m)[1], linuxPublish.match(/^    if: (.+)$/m)[1]);
 });

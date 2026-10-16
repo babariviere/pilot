@@ -52,3 +52,5 @@ jobs:
           name: linux-production-runtime
           path: ${{ runner.temp }}/linux-package/*
           if-no-files-found: error
+          overwrite: true
+          compression-level: 0

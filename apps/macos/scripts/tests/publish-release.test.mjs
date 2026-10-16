@@ -159,3 +159,32 @@ test("macOS upload never publishes the draft", () => {
 	const script = readFileSync(new URL("../publish-release.sh", import.meta.url), "utf8");
 	assert.doesNotMatch(script, /gh release edit|--draft=false|releases\/latest/);
 });
+
+test("promotion copies the verified ZIP byte-for-byte without repackaging", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pilot-promote-zip-"));
+	try {
+		const source = join(dir, "verified app.zip");
+		const destination = join(dir, "release.zip");
+		const bytes = Buffer.from("verified ZIP bytes\0with binary data");
+		writeFileSync(source, bytes);
+		const script = readFileSync(new URL("../publish-release.sh", import.meta.url), "utf8");
+		const start = script.indexOf('if [ -n "${2:-}" ]; then');
+		const end = script.indexOf("\nfi", start) + "\nfi".length;
+		assert.ok(start >= 0 && end > start);
+		const result = spawnSync("bash", ["-euo", "pipefail", "-c",
+			`ditto() { echo "Unexpected repackaging" >&2; return 1; }\n${script.slice(start, end)}`,
+			"_", "unused app", source], {
+			encoding: "utf8",
+			env: { ...process.env, archive: destination },
+		});
+		assert.equal(result.status, 0, result.stderr);
+		assert.deepEqual(readFileSync(destination), bytes);
+		const missing = spawnSync("bash", ["-euo", "pipefail", "-c", script.slice(start, end),
+			"_", "unused app", join(dir, "missing.zip")], {
+			encoding: "utf8", env: { ...process.env, archive: destination },
+		});
+		assert.notEqual(missing.status, 0, "missing verified archive must not fall back to repackaging");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
