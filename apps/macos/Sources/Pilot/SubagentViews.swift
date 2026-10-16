@@ -127,22 +127,52 @@ final class SubagentFeeds {
 
 // MARK: - Strip above the composer
 
-/// Subagents as one line at the top of the composer tray, shaped like `SystemMessagesStrip`: "3 subagents", with the
-/// working spinner while any of them works and failures in red. Click it to open the Agents tab's list.
+/// Subagents at the top of the composer tray: "3 subagents · 1 working · 2 done", then one row per subagent with its
+/// state, name and task, working ones first. The list opens when a subagent starts working; clicking a row opens its
+/// transcript in the Agents tab.
 struct SubagentsStrip: View {
     let session: SessionSummary
     @EnvironmentObject private var model: AppModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var expanded: Bool
+
+    init(session: SessionSummary) {
+        self.session = session
+        _expanded = State(initialValue: (session.subagents ?? []).contains(where: \.isWorking))
+    }
 
     var body: some View {
         let subagents = session.subagents ?? []
-        let failed = subagents.filter(\.isFailed).count
-        let working = subagents.contains(where: \.isWorking)
-        let title = subagents.count == 1 ? "1 subagent" : "\(subagents.count) subagents"
-        Button {
-            model.selectedSubagents[session.id] = nil
-            model.inspectorTab = .agents
-            model.inspectorVisible = true
-        } label: {
+        let states = subagents.map { SubagentDisplayState($0, unread: model.isUnread($0, in: session.id)) }
+        let ordered = zip(subagents, states).sorted { a, b in
+            if a.1.trayOrder != b.1.trayOrder { return a.1.trayOrder < b.1.trayOrder }
+            return a.0.createdAt > b.0.createdAt
+        }
+        let anyWorking = states.contains(.working)
+        VStack(alignment: .leading, spacing: 2) {
+            summary(states: states, working: anyWorking)
+            if expanded {
+                TrayRowList(count: ordered.count) {
+                    ForEach(ordered, id: \.0.id) { subagent, state in
+                        SubagentTrayRow(subagent: subagent, state: state) {
+                            model.openSubagent(subagent.name, in: session.id)
+                        }
+                    }
+                }
+                .transition(Theme.Motion.insertion(reduceMotion: reduceMotion))
+            }
+        }
+        .onChange(of: anyWorking) { _, working in
+            if working, !expanded {
+                withAnimation(Theme.Motion.standard(reduceMotion: reduceMotion)) { expanded = true }
+            }
+        }
+    }
+
+    private func summary(states: [SubagentDisplayState], working: Bool) -> some View {
+        let title = states.count == 1 ? "1 subagent" : "\(states.count) subagents"
+        let counts = SubagentTrayCounts(states)
+        return Button(action: toggle) {
             HStack(spacing: 8) {
                 Group {
                     if working {
@@ -153,13 +183,20 @@ struct SubagentsStrip: View {
                 }
                 .frame(width: 14)
                 Text(title)
-                    .font(.pilot(.label))
+                    .font(.pilot(.label, weight: .medium))
                     .foregroundStyle(Theme.mutedForeground)
                     .lineLimit(1)
                     .fixedSize()
-                if failed > 0 {
+                if !counts.detail.isEmpty {
+                    Text(counts.detail)
+                        .font(.pilot(.label))
+                        .monospacedDigit()
+                        .foregroundStyle(Theme.faintForeground)
+                        .lineLimit(1)
+                }
+                if counts.failed > 0 {
                     // Failure is the one subagent state that needs the user.
-                    Text("· \(failed) failed")
+                    Text("· \(counts.failed) failed")
                         .font(.pilot(.label))
                         .foregroundStyle(Theme.destructive)
                         .lineLimit(1)
@@ -167,6 +204,7 @@ struct SubagentsStrip: View {
                 }
                 Spacer(minLength: 4)
                 PilotSymbol(PilotIcon.disclosure, context: .disclosure)
+                    .rotationEffect(.degrees(expanded ? 90 : 0))
                     .foregroundStyle(Theme.faintForeground)
                     .frame(width: 16, height: 16)
             }
@@ -175,10 +213,121 @@ struct SubagentsStrip: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Open the Agents tab")
-        .accessibilityLabel(([title] + (working ? ["working"] : []) + (failed > 0 ? ["\(failed) failed"] : []))
-            .joined(separator: ", "))
-        .accessibilityHint("Opens the Agents tab")
+        .help(expanded ? "Hide subagents" : "Show subagents")
+        .accessibilityLabel(([title] + counts.parts).joined(separator: ", "))
+        .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+    }
+
+    private func toggle() {
+        withAnimation(Theme.Motion.standard(reduceMotion: reduceMotion)) { expanded.toggle() }
+    }
+}
+
+private extension SubagentDisplayState {
+    /// Tray order: what is running, then what needs a look, then the rest.
+    var trayOrder: Int {
+        switch self {
+        case .working: 0
+        case .failed: 1
+        case .newAnswer: 2
+        case .idle: 3
+        }
+    }
+}
+
+/// The tray's per-state counts. An idle subagent has finished its latest task, so it counts as done.
+private struct SubagentTrayCounts {
+    var working = 0
+    var done = 0
+    var failed = 0
+
+    init(_ states: [SubagentDisplayState]) {
+        for state in states {
+            switch state {
+            case .working: working += 1
+            case .failed: failed += 1
+            case .newAnswer, .idle: done += 1
+            }
+        }
+    }
+
+    /// "· 2 working · 3 done"; failures are shown on their own, in red.
+    var detail: String { [working > 0 ? "\(working) working" : nil, done > 0 ? "\(done) done" : nil]
+        .compactMap { $0 }.map { "· " + $0 }.joined(separator: " ") }
+
+    var parts: [String] {
+        [working > 0 ? "\(working) working" : nil, done > 0 ? "\(done) done" : nil, failed > 0 ? "\(failed) failed" : nil]
+            .compactMap { $0 }
+    }
+}
+
+/// One subagent in the composer tray: state mark, name, task and a state word. Click to open its transcript.
+private struct SubagentTrayRow: View {
+    let subagent: SessionSubagent
+    let state: SubagentDisplayState
+    let open: () -> Void
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: 8) {
+                mark.frame(width: 14)
+                Text(subagent.name)
+                    .font(.pilot(.label, weight: .medium))
+                    .foregroundStyle(state == .idle ? Theme.mutedForeground : Theme.foreground)
+                    .lineLimit(1)
+                    .fixedSize()
+                Text(subagent.task)
+                    .font(.pilot(.label))
+                    .foregroundStyle(Theme.faintForeground)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 4)
+                Text(label)
+                    .font(.pilot(.caption))
+                    .foregroundStyle(labelColor)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            .padding(.horizontal, 8)
+            .frame(maxWidth: .infinity, minHeight: QueuedMessagesStrip.rowHeight, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.row).fill(hovered ? Theme.selected : .clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .animation(Theme.Motion.quick, value: hovered)
+        .help(subagent.error.map { "\(subagent.name) failed: \($0)" } ?? subagent.task)
+        .accessibilityLabel("\(subagent.name), \(label). \(subagent.task)")
+        .accessibilityHint("Opens its transcript in the Agents tab")
+    }
+
+    private var label: String {
+        switch state {
+        case .working: "Working"
+        case .failed: "Failed"
+        case .newAnswer: "New answer"
+        case .idle: "Done"
+        }
+    }
+
+    private var labelColor: Color {
+        switch state {
+        case .working: Theme.workingInk
+        case .failed: Theme.destructive
+        case .newAnswer: Theme.info
+        case .idle: Theme.faintForeground
+        }
+    }
+
+    @ViewBuilder
+    private var mark: some View {
+        switch state {
+        case .working: EllipsisSpinner()
+        case .failed: PilotSymbol(PilotIcon.warning).foregroundStyle(Theme.destructive)
+        case .newAnswer: Circle().fill(Theme.info).frame(width: 7, height: 7)
+        case .idle: PilotSymbol(PilotIcon.complete).foregroundStyle(Theme.success)
+        }
     }
 }
 
