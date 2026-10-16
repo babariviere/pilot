@@ -424,7 +424,8 @@ private struct ComposerDraftEditor: View {
                     .foregroundStyle(Theme.faintForeground)
                     .allowsHitTesting(false)
             }
-            ChatTextEditor(text: $state.draft, height: $state.height, font: fonts.nsBody,
+            // Grows with a long draft up to 40% of the window, so the transcript keeps most of the room.
+            ChatTextEditor(text: $state.draft, height: $state.height, font: fonts.nsBody, maxWindowFraction: 0.4,
                            focusToken: focusToken, onNavigateQueue: onNavigateQueue, onCancel: onCancel,
                            onPasteImages: onPasteImages, completionDirectory: completionDirectory,
                            slashCommands: slashCommands, onSlashCommandsNeeded: onSlashCommandsNeeded,
