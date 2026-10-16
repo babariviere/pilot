@@ -455,6 +455,7 @@ struct SessionRow: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilityLabel(described, state: reason == nil && coordinatorDetail == nil ? signal?.label : nil))
         .contextMenu {
+            SessionProjectAction(session: session)
             SessionRenameAction(session: session)
             Button {
                 model.setPinned(!session.isPinned, sessionId: session.id)

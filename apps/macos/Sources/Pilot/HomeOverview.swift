@@ -336,6 +336,7 @@ struct HomeOverview: View {
         .accessibilityLabel([session.title, project, mission, "working"].compactMap { $0 }.joined(separator: ", "))
         .contextMenu {
             Button("Open Chat") { app.selectedSessionId = session.id }
+            SessionProjectAction(session: session)
             Button("Stop Chat") { app.stopSession(session.id) }
         }
     }
