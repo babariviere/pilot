@@ -64,6 +64,10 @@ export function reconcileLinearRecord(
 				["done", "dropped"].includes(old.status) &&
 				contributors.some((t) => t.taskId === old.taskId && !["done", "dropped"].includes(t.status)),
 		);
+	if (previous?.status.state === "terminal" && !reopened) {
+		record.status.state = "terminal";
+		return record;
+	}
 	if (
 		previous?.paused ||
 		previous?.status.state === "paused" ||
@@ -77,10 +81,6 @@ export function reconcileLinearRecord(
 				? previous.status.reason
 				: "Contributing links changed. Review the scope, then resume synchronization.";
 		record.paused = previous?.paused ?? record.status.reason;
-		return record;
-	}
-	if (previous?.status.state === "terminal") {
-		record.status.state = "terminal";
 		return record;
 	}
 	delete record.status.reason;

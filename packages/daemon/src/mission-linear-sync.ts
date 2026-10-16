@@ -39,6 +39,7 @@ export class MissionLinearSyncService {
 	private unsubscribe?: () => void;
 	private projectUnsubscribe?: () => void;
 	private dirty = false;
+	private retryAt?: number;
 	private readonly busy = new Set<string>();
 	private guardRun?: { controller: AbortController; promise: Promise<boolean | undefined> };
 	private publishing = false;
@@ -78,7 +79,8 @@ export class MissionLinearSyncService {
 					clearTimeout(deadline);
 					this.run = undefined;
 					// Coalesce local edits, but never spin in response to our own observation writes.
-					this.schedule(this.dirty ? 5_000 : 300_000);
+					const retryDelay = this.retryAt ? Math.max(5_000, this.retryAt - Date.now()) : 300_000;
+					this.schedule(this.dirty ? 5_000 : Math.min(300_000, retryDelay));
 				});
 			this.run = { controller, promise };
 		}, delay);
@@ -97,12 +99,15 @@ export class MissionLinearSyncService {
 
 	/** Public for offline fixtures. At most 25 tickets, sequential MCP calls, 90s service deadline. */
 	async poll(signal: AbortSignal): Promise<void> {
+		this.retryAt = undefined;
 		let links = this.store.linearSyncBatch(this.cursor);
 		if (!links.length) links = this.store.linearSyncBatch();
 		for (const link of links) {
 			signal.throwIfAborted();
 			const current = this.store.linearSyncResource(link.resource.id);
 			if (current) await this.synchronize(current, signal);
+			const retryAt = this.store.linearSyncRecord(link.resource.id)?.status.retryAt;
+			if (retryAt && retryAt > Date.now()) this.retryAt = Math.min(this.retryAt ?? retryAt, retryAt);
 			this.cursor = link.resource.id;
 		}
 	}
