@@ -455,6 +455,18 @@ extension Theme {
                     removal: .opacity
                 )
         }
+
+        /// A message the user just sent: it rises from the composer into place at the end of the transcript.
+        /// Removal is instant because the committed message replaces it in the same frame.
+        static func sent(reduceMotion: Bool) -> AnyTransition {
+            reduceMotion
+                ? .asymmetric(insertion: .opacity, removal: .identity)
+                : .asymmetric(
+                    insertion: .offset(y: 24).combined(with: .scale(scale: 0.94, anchor: .bottomTrailing))
+                        .combined(with: .opacity),
+                    removal: .identity
+                )
+        }
     }
 }
 
