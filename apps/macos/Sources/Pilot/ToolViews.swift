@@ -38,6 +38,8 @@ struct WorkGroupView: View {
                 HStack(spacing: 6) {
                     DisclosureChevron(expanded: open)
                         .frame(width: 10)
+                        // A transform on the chevron only; the rows below open without a height animation.
+                        .animation(Theme.Motion.quick, value: open)
                     Text(summary.lead)
                         .foregroundStyle(hovered ? Theme.foreground : Theme.mutedForeground)
                     if let detail = summary.detail {
@@ -57,7 +59,7 @@ struct WorkGroupView: View {
             .accessibilityValue(open ? "Expanded" : "Collapsed")
             .accessibilityHint(open ? "Hides the steps" : "Shows the steps")
 
-            if open { steps.padding(.top, 8) }
+            if open { steps.padding(.top, 8).revealsWhenOpened(expansion) }
 
             ForEach(group.tools.compactMap(\.artifact), id: \.id) { artifact in
                 ArtifactCard(reference: artifact, host: hostContext?.host).padding(.top, 8)
@@ -74,6 +76,7 @@ struct WorkGroupView: View {
             if limited {
                 Button("Show \(all.count - shown.count) earlier steps") {
                     messageToggled?()
+                    expansion.markOpened()
                     expansion.showAllSteps = true
                 }
                 .buttonStyle(.plain)
@@ -93,7 +96,8 @@ struct WorkGroupView: View {
     private func toggle() {
         // Opening finished work must not trigger Markdown's bottom-follow.
         messageToggled?()
-        withAnimation(Theme.Motion.quick) { expansion.choice = !open }
+        if !open { expansion.markOpened() }
+        expansion.choice = !open
     }
 }
 
@@ -128,7 +132,7 @@ private struct StepMark: View {
     var body: some View {
         Group {
             switch status {
-            case .running where active, .pending where active:
+            case _ where status.isLive(active: active):
                 EllipsisSpinner()
             case .error:
                 PilotSymbol(PilotIcon.warning).foregroundStyle(Theme.destructive)
@@ -147,22 +151,27 @@ private struct StepSentence: View {
     let subject: String?
     var failed = false
     var highlighted = false
+    /// A running step: its title shimmers (see `runningShimmer`).
+    var running = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        let shimmer = running && !failed && !reduceMotion
         HStack(spacing: 4) {
             Text(verb)
-                .foregroundStyle(failed ? Theme.destructive : highlighted ? Theme.foreground : Theme.mutedForeground)
+                .foregroundStyle(failed ? Theme.destructive : highlighted || shimmer ? Theme.foreground : Theme.mutedForeground)
                 .layoutPriority(1)
             if let subject, !subject.isEmpty {
                 Text(subject)
                     .font(fonts.monoSmall)
-                    .foregroundStyle(highlighted ? Theme.foreground : Theme.mutedForeground)
+                    .foregroundStyle(highlighted || shimmer ? Theme.foreground : Theme.mutedForeground)
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
         }
         .font(fonts.chat(fonts.chatSize - 1))
         .lineLimit(1)
+        .overlay { if shimmer { Color.clear.runningShimmer() } }
     }
 }
 
@@ -175,11 +184,12 @@ private struct ThinkingStep: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Button {
-                withAnimation(Theme.Motion.quick) { expansion.expanded.toggle() }
+                expansion.toggleExpanded()
             } label: {
                 HStack(spacing: 7) {
                     StepMark(icon: PilotIcon.thinking)
-                    StepSentence(verb: streaming ? "Thinking…" : "Thought", subject: nil, highlighted: hovered)
+                    StepSentence(verb: streaming ? "Thinking…" : "Thought", subject: nil, highlighted: hovered,
+                                 running: streaming)
                 }
                 .contentShape(Rectangle())
             }
@@ -190,6 +200,7 @@ private struct ThinkingStep: View {
                 MarkdownView(text: text, textColor: .secondaryLabelColor)
                     .foregroundStyle(Theme.mutedForeground)
                     .padding(.leading, 21)
+                    .revealsWhenOpened(expansion)
             }
         }
     }
@@ -208,11 +219,12 @@ private struct ReadsStep: View {
         let sentence = step.sentence
         VStack(alignment: .leading, spacing: 6) {
             Button {
-                withAnimation(Theme.Motion.quick) { expansion.expanded.toggle() }
+                expansion.toggleExpanded()
             } label: {
                 HStack(spacing: 7) {
                     StepMark(icon: PilotIcon.document)
-                    StepSentence(verb: sentence.verb, subject: sentence.subject, highlighted: hovered)
+                    StepSentence(verb: sentence.verb, subject: sentence.subject, highlighted: hovered,
+                                 running: items.contains { $0.status.isLive(active: active) })
                 }
                 .contentShape(Rectangle())
             }
@@ -227,6 +239,7 @@ private struct ReadsStep: View {
                     }
                 }
                 .padding(.leading, 21)
+                .revealsWhenOpened(expansion)
             }
         }
     }
@@ -239,6 +252,23 @@ final class ExpansionState: ObservableObject {
     @Published var choice: Bool?
     /// A running work row shows only its latest steps until the user asks for the rest.
     @Published var showAllSteps = false
+    /// When the user last opened this disclosure. Not published: it only decides, as the content is inserted,
+    /// whether it is revealed (see `revealsWhenOpened`).
+    private(set) var openedAt: Date?
+
+    func markOpened(at date: Date = .now) { openedAt = date }
+
+    /// Opening reveals the content on Core Animation; closing removes it at once. Neither animates layout.
+    func toggleExpanded() {
+        if !expanded { markOpened() }
+        expanded.toggle()
+    }
+
+    /// True right after the user opened it, while the opened content is being inserted.
+    func justOpened(at date: Date = .now) -> Bool {
+        guard let openedAt else { return false }
+        return date.timeIntervalSince(openedAt) < 0.35
+    }
 }
 
 /// Chat-scoped ownership keeps expansion alive when a group moves between the live tail and
@@ -329,12 +359,12 @@ struct ToolStepRow: View {
         let summary = item.summary
         VStack(alignment: .leading, spacing: 6) {
             Button {
-                withAnimation(Theme.Motion.quick) { expansion.expanded.toggle() }
+                expansion.toggleExpanded()
             } label: {
                 HStack(spacing: 7) {
                     StepMark(icon: summary.icon.pilotIcon, status: item.status, active: active)
                     StepSentence(verb: summary.verb, subject: summary.subject, failed: item.status == .error,
-                                 highlighted: hovered)
+                                 highlighted: hovered, running: item.status.isLive(active: active))
                     if summary.additions + summary.deletions > 0 {
                         Text(summary.deletions > 0 ? "+\(summary.additions) −\(summary.deletions)" : "+\(summary.additions)")
                             .font(.pilot(.caption).monospacedDigit())
@@ -380,6 +410,7 @@ struct ToolStepRow: View {
                     }
                 }
                 .padding(.leading, 21)
+                .revealsWhenOpened(expansion)
             }
         }
     }

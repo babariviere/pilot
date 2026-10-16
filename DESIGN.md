@@ -190,7 +190,8 @@ A chat reads as a conversation, not a log.
 - **A turn folds.** Thinking, notes and tool calls between the user's message and the answer fold into one line
   ("Worked for 3 min · read 3 files, edited 1, ran 2 commands"). It stays open while the turn runs with the latest
   step visible, folds when the turn ends and stays open on a failed step. Steps read as sentences; finished steps
-  show no checkmark.
+  show no checkmark. A running step's title shimmers (a light band sweeps across it) until the tool finishes, and an
+  opened step appears at its full height at once, uncovered from the top, so the transcript never animates height.
 - **Automatic items are one-line events** (`ChatEventRow`): GitHub actions ("Agent pushed fix/x", "Agent opened PR
   #441") where they happened, mission updates, compaction and reset, Stopped, job results, subagent answers,
   coordinator messages, PR follow-ups and answered questions. They are written for the user, expand to the full text

@@ -240,6 +240,14 @@ layout and the row height never change and nothing redraws per frame. Restored h
 (M3 Pro): 0.09 → 0.12 ms per update for a 2 KB block and 0.14–0.15 → 0.16–0.20 ms for 8 KB with 12-character
 deltas; 0.12–0.14 → 0.17–0.21 ms and 0.17 → 0.22 ms with 100-character deltas.
 
+**Tool rows.** Opening a step, a thinking block, grouped reads or a turn's work line used to animate the inserted
+content's height for 150 ms (`withAnimation`), relaying out the eager live tail of the transcript on every frame.
+Content now takes its full height in one layout and a background-coloured cover shrinks and fades over it on Core
+Animation (180 ms). A running step's title shimmers: a `CAGradientLayer` veil sweeps across it every 1.8 s, colour
+only, removed when the tool finishes and while the window is occluded. Neither runs under Reduce Motion. Not measured
+locally (the app builds only in CI here); the main-thread difference is one layout per click instead of one per frame
+for 150 ms.
+
 
 
 

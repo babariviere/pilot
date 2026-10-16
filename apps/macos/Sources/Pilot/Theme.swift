@@ -432,6 +432,12 @@ extension Theme {
         static let quick = Animation.easeOut(duration: 0.15)
         /// Newly streamed text fades in over this long, ease-out (Core Animation, opacity only).
         static let streamedTextFade: CFTimeInterval = 0.24
+        /// Running tool titles: one sweep of the shimmer band and its rest, and the background veil's opacity, which
+        /// turns `foreground` text into `mutedForeground` outside the band in both appearances.
+        static let shimmerLoop: CFTimeInterval = 1.8
+        static let shimmerVeil = 0.33
+        /// Content a disclosure opens is uncovered from the top over this long (Core Animation, no height animation).
+        static let expandReveal: CFTimeInterval = 0.18
 
         static func standard(reduceMotion: Bool) -> Animation {
             reduceMotion ? .easeInOut(duration: 0.15) : .snappy(duration: 0.28, extraBounce: 0.04)
