@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -321,11 +322,57 @@ test("owned service publication rejects substitutions and quotes spaces, dollars
 	assert.equal(rootFromUnit(unit, "/home/u"), path);
 	assert.throws(() => rootFromUnit(`${unit}\n[Service]\nExecStart=bad`, "/home/u"));
 	assert.match(updaterUnit(path, "/home/u"), /scripts\/linux\/update.mjs.* run/);
+	assert.match(updaterUnit(path, "/home/u"), /Environment="HOME=\/home\/u"/);
+	assert.match(updaterUnit(path, "/home/u"), /Environment="PILOT_HOME=\/home\/u\/\.local\/share\/pilot"/);
+	assert.match(updaterUnit(path, "/home/u"), /Environment="PATH=.*node\/bin/);
+	assert.match(updaterUnit(path, "/home/u"), /Environment="XDG_RUNTIME_DIR=%t"/);
+	assert.match(updaterUnit(path, "/home/u"), /Environment="DBUS_SESSION_BUS_ADDRESS=unix:path=%t\/bus"/);
+	assert.match(updaterUnit(path, "/home/u"), /WorkingDirectory=%h/);
 	assert.doesNotMatch(updaterUnit(path, "/home/u"), /PartOf=|BindsTo=|pilotd.service/);
 	const file = join(f.home, "unit");
 	await writeFile(file, "foreign", { mode: 0o600 });
 	await assert.rejects(replaceOwned(file, "old", "new"));
 	assert.equal(await readFile(file, "utf8"), "foreign");
+});
+
+test("the updater's rendered environment overrides a foreign inherited home and bus for journal and control commands", async (t) => {
+	const f = await fixture(t);
+	const runtimeDir = `/run/user/${process.getuid()}`;
+	const unit = updaterUnit("/private/verified-runtime", f.home);
+	// Resolve this unit's fixed systemd environment values. No real service, bus or host writes.
+	const environment = Object.fromEntries(
+		unit
+			.split("\n")
+			.filter((line) => line.startsWith("Environment="))
+			.map((line) => {
+				const assignment = JSON.parse(line.slice("Environment=".length)).replaceAll("%t", runtimeDir);
+				const equals = assignment.indexOf("=");
+				return [assignment.slice(0, equals), assignment.slice(equals + 1)];
+			}),
+	);
+	const script = `import { homedir } from 'node:os'; import { checked } from ${JSON.stringify(new URL("./update.mjs", import.meta.url).href)};
+		console.log(checked(process.execPath, ['-e', 'console.log(JSON.stringify({home:require("node:os").homedir(), data:process.env.PILOT_HOME, runtime:process.env.XDG_RUNTIME_DIR, bus:process.env.DBUS_SESSION_BUS_ADDRESS, cwd:process.cwd()}))']));`;
+	const result = JSON.parse(
+		execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+			cwd: f.home,
+			encoding: "utf8",
+			env: {
+				...process.env,
+				HOME: "/foreign/user",
+				PILOT_HOME: "/foreign/data",
+				XDG_RUNTIME_DIR: "/run/user/foreign",
+				DBUS_SESSION_BUS_ADDRESS: "unix:path=/foreign/bus",
+				...environment,
+			},
+		}),
+	);
+	assert.deepEqual(result, {
+		home: f.home,
+		data: join(f.home, ".local/share/pilot"),
+		runtime: runtimeDir,
+		bus: `unix:path=${runtimeDir}/bus`,
+		cwd: f.home,
+	});
 });
 
 test("Linux process identity uses boot plus process start, not kill(pid, 0) alone", {
