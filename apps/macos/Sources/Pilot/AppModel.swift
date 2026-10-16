@@ -187,8 +187,8 @@ final class AppModel: ObservableObject {
 
     /// A nil store keeps fixtures and previews isolated from the user's persisted drafts.
     init(projectFolderDefaults: UserDefaults = .standard, draftStore: DraftStore? = nil,
-         client: PilotClient = PilotClient()) {
-        self.client = client
+         client: PilotClient? = nil) {
+        self.client = client ?? PilotClient()
         self.projectFolderDefaults = projectFolderDefaults
         // The sidebar always groups chats by urgency now; drop the old choice.
         projectFolderDefaults.removeObject(forKey: "pilot.sidebarGroupsByUrgency")
