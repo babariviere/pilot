@@ -1,5 +1,67 @@
 # Changelog
 
+## [1.43.0](https://github.com/babariviere/pilot/compare/v1.42.0...v1.43.0) (2026-10-16)
+
+
+### Features
+
+* **chat:** add Go to project to chat menus ([6ad175f](https://github.com/babariviere/pilot/commit/6ad175f9158b4035709fd3765835b2d7075418b1))
+* **chat:** add Home to the project picker ([9fe5480](https://github.com/babariviere/pilot/commit/9fe5480e753c2fc73418d2c7868349732907c732))
+* **chats:** open chat links from coordinator replies ([173f5f4](https://github.com/babariviere/pilot/commit/173f5f44b2ae573e328f68bf434055ba804cbe4c))
+* **context:** expose shared notes and tasks to the app ([78ba711](https://github.com/babariviere/pilot/commit/78ba7116b47d151fbc93e2fb88d12a0ede2acffe))
+* let agents query a project's Postgres databases ([c7f1b81](https://github.com/babariviere/pilot/commit/c7f1b81b62d5c1fe247b82a59b2a062123336878))
+* **linear:** add Canceled and Duplicated state mappings ([e49a850](https://github.com/babariviere/pilot/commit/e49a85085a28a2e1e745d86ed69b39b094b5f5a8))
+* **linear:** associate tickets with existing and split work ([27b2803](https://github.com/babariviere/pilot/commit/27b28032a3c89d59b33d89e913783d3d1aa25c26))
+* **linear:** check closing directives against remaining work ([684e46e](https://github.com/babariviere/pilot/commit/684e46e1849db7996d6d525766b12ca90a2e9a0c))
+* **linear:** expose ticket synchronization status ([dec6bc4](https://github.com/babariviere/pilot/commit/dec6bc4c7823e3a68dcb621d6950429030543c60))
+* **linear:** keep ticket status in step with contributing work ([2cfb8db](https://github.com/babariviere/pilot/commit/2cfb8db3afbd02ce5e37ca57ac5c614201acbd27))
+* **linear:** store managed tickets and task contributions ([bb5c7c7](https://github.com/babariviere/pilot/commit/bb5c7c70af5ee7b098bc7936bdf94a99ded0c835))
+* **macos:** add a keyboard shortcuts reference ([53f6f4d](https://github.com/babariviere/pilot/commit/53f6f4d5fd9d0d9ce18398464507ecf1a748e348))
+* **macos:** add devbox setup and unified remote chats ([cae3a72](https://github.com/babariviere/pilot/commit/cae3a723012d21584697ef1e13616fa304aa4b18))
+* **macos:** mark remote chats with a neutral badge ([a38b86d](https://github.com/babariviere/pilot/commit/a38b86d6c8359b02cff2b109ae7fbf82c8d01218))
+* **macos:** open the coordinator from the mission title ([26763c8](https://github.com/babariviere/pilot/commit/26763c836c38e3e1ccf6c670b6acbad714565c6d))
+* **macos:** show sent messages instantly with a send animation ([3fc6e16](https://github.com/babariviere/pilot/commit/3fc6e16546d1b527131f8b3a95698bc1eee3bb94))
+* **prs:** recognize more gh pr create forms, with a timed branch fallback ([04ebd83](https://github.com/babariviere/pilot/commit/04ebd83bb150e62f66bbb1fdecd10096dc1e96e9))
+* **slack:** add Waiting status that resumes chats on thread replies ([fc6257a](https://github.com/babariviere/pilot/commit/fc6257a676c97bdfaf4410facb5bde0726b65a2c))
+
+
+### Bug Fixes
+
+* **branches:** attach a chat's branch and PRs only from the agent's own writes ([8e1d8a0](https://github.com/babariviere/pilot/commit/8e1d8a0a5c0c4f9b4d3ec5b2756f1e42b0972839))
+* **chats:** keep saved history visible after startup fails ([176baec](https://github.com/babariviere/pilot/commit/176baec26439e2cf627f4de55c0da342f2159f6c))
+* **connectivity:** check the provider server before declaring an outage ([f9fc3a2](https://github.com/babariviere/pilot/commit/f9fc3a26df33abd7c571e2e7bca75b92880557f3))
+* **connectivity:** pause agents only on evidence of an outage ([1e8faac](https://github.com/babariviere/pilot/commit/1e8faacaf935171c5e4b8b078692cd6e28ece165))
+* **connectivity:** tolerate an unreachable probe host ([6698da5](https://github.com/babariviere/pilot/commit/6698da5eb04233a32926e0f29b193d47fdbaada1))
+* **connectivity:** write provider hints atomically ([b6ccef5](https://github.com/babariviere/pilot/commit/b6ccef5bac841106baef71bab21cb5e7e95c8b75))
+* **deps:** update dependency playwright to v1.64.1 ([bf926c3](https://github.com/babariviere/pilot/commit/bf926c357edc56d447eca5719a66fbc55d88726a))
+* **deps:** update react monorepo to v19.3.1 ([119f399](https://github.com/babariviere/pilot/commit/119f399685e91a48f2d26083ae550b8a6f8ac34a))
+* grant database access only from the app's decision, never from a message ([7d91b6e](https://github.com/babariviere/pilot/commit/7d91b6edd4c95edd006e54016da411a047ec7dfd))
+* **linear:** bound canonical ticket identities ([7ea66a1](https://github.com/babariviere/pilot/commit/7ea66a17697bcb867b971cd7e23a4339308bcf9e))
+* **linear:** count sync issues and repair migration fixture ([0666ba4](https://github.com/babariviere/pilot/commit/0666ba4e44d43b1f328af3aaab0cdfbf12fbcecc))
+* **linear:** retain terminal observations while paused ([46420cf](https://github.com/babariviere/pilot/commit/46420cfc2e45d070718bad068e9932682f8ebd83))
+* **macos:** clear project pages within their state owner ([fed701b](https://github.com/babariviere/pilot/commit/fed701b54431b4b246113f252b852edc73f05403))
+* **macos:** keep native navigation on the owning devbox ([6ab39b1](https://github.com/babariviere/pilot/commit/6ab39b1b56ff55ce7f9e358cc980232c3424ab63))
+* **macos:** keep remote folder and recovery choices on their host ([dea26d9](https://github.com/babariviere/pilot/commit/dea26d949352701ec2085e12e8ece90c2c346615))
+* **macos:** line up the New mission button with the sidebar icons ([947da59](https://github.com/babariviere/pilot/commit/947da59e9382bee419cfe573da77aca61f31ff9b))
+* **macos:** open the project on the chat host ([f1de06b](https://github.com/babariviere/pilot/commit/f1de06ba16a48b25f41b176786ee446e4dafe986))
+* **macos:** paint a neutral background behind the chat in dark mode ([c9e4a54](https://github.com/babariviere/pilot/commit/c9e4a54e78684aa38c9098bed66cc2586f7c8927))
+* **macos:** pass the host client to link actions ([ac8db85](https://github.com/babariviere/pilot/commit/ac8db850b8c091d713763b4223b14321a8c47772))
+* **macos:** qualify archive and secondary chat actions ([59fb2b2](https://github.com/babariviere/pilot/commit/59fb2b2feae6e441f4022241724811006b4d82f5))
+* **macos:** resolve host-aware action compile errors ([932b14b](https://github.com/babariviere/pilot/commit/932b14b1ec705ae4c68d0a7d3dbae4de1aabdaad))
+* **macos:** restore local overview navigation and update stale tests ([c5921b0](https://github.com/babariviere/pilot/commit/c5921b0f2d0c87bb067f6df167a64f364ce95f7e))
+* **macos:** show finished subagents as done, not as new answers ([15381a9](https://github.com/babariviere/pilot/commit/15381a9c320e0ca36aa67c71bc9fa591ce3d0c8c))
+* **macos:** show task status menu items as text only ([f6b0524](https://github.com/babariviere/pilot/commit/f6b0524176eb8ccfc1a340eafa78acf9fae1c8c7))
+* **macos:** show the coordinator button without a background ([7005163](https://github.com/babariviere/pilot/commit/7005163a50b97c8d1bc8fd329e5d6c46e3aa66c0))
+* **macos:** simplify shared memory view type inference ([3273489](https://github.com/babariviere/pilot/commit/32734897e5e51545134f078be7f85d584bdd2f67))
+* **macos:** simplify the mission toolbar button ([712b2b1](https://github.com/babariviere/pilot/commit/712b2b1876dcb3f6b7474505ed158f218bc14e17))
+* **slack:** keep hidden labels scoped to unmentioned threads ([1b3c781](https://github.com/babariviere/pilot/commit/1b3c781dc371c5bd34ac7dc683851083d7155342))
+* **slack:** keep mentioned threads visible ([05048ec](https://github.com/babariviere/pilot/commit/05048ec4e3e449ffaaaa6e22a5008de6112c1094))
+
+
+### Performance Improvements
+
+* **models:** share model discovery through the daemon ([41cbe34](https://github.com/babariviere/pilot/commit/41cbe3457787629f04130dd7f6ca0b75bc0c9900))
+
 ## [1.42.0](https://github.com/babariviere/pilot/compare/v1.41.0...v1.42.0) (2026-10-16)
 
 
