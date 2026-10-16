@@ -26,6 +26,7 @@ import { ScheduleService } from "./schedules.ts";
 import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { SetupService } from "./setup.ts";
+import { SharedContextService } from "./shared-context.ts";
 import { createSlackAdder, createSlackPoller } from "./slack-source.ts";
 import { PiSourceMcpClient } from "./source-mcp.ts";
 import { SourceRegistry } from "./sources.ts";
@@ -43,6 +44,7 @@ Object.assign(process.env, credentialEnvironment(credentials.grant(true)));
 await installCredentialBrokerHooks();
 const capabilities = await detectPlatformCapabilities();
 const hello = await daemonHello(config.home, capabilities);
+if (!hello.lineageId) throw new Error("Storage lineage is required for sharing");
 // Log long timer delays with context, without assuming sleep or descheduling is synchronous CPU work.
 const watchdog = new EventLoopWatchdog({ histogram: true });
 watchdog.start();
@@ -66,8 +68,11 @@ const models = new ModelCatalog(config.agentDir);
 tracking.register("slack", createSlackPoller(trackedItems, models));
 tracking.slackAdder = createSlackAdder(trackedItems, models);
 tracking.startPolling("slack");
-const memory = new ProjectMemoryService(config.home, (prompt, signal, observe) =>
-	models.summarizeMemory(prompt, signal, observe),
+const memory = new ProjectMemoryService(
+	config.home,
+	(prompt, signal, observe) => models.summarizeMemory(prompt, signal, observe),
+	30_000,
+	{ hostId: "daemon", daemonId: hello.daemonId, lineageId: hello.lineageId },
 );
 // Load metadata and resume pending compaction, but a damaged/busy memory store cannot stop pilotd.
 const knownMemoryProjects = new Set<string>();
@@ -125,6 +130,16 @@ for (const mission of missionStore.list())
 	if (mission.status === "done" && mission.completedAt !== undefined)
 		await trackedItems.completeSlackMission(mission.projectId, mission.id, mission.completedAt);
 const missionService = new MissionService(missionStore, sessions, projects);
+const sharing = new SharedContextService(
+	{ hostId: "daemon", daemonId: hello.daemonId, lineageId: hello.lineageId },
+	missionStore,
+	memory,
+	projects,
+	sessions,
+	missionService,
+);
+sessions.setSharedContext(sharing);
+missionService.setSharedContext(sharing);
 const power = capabilities.powerManagement ? new PowerService(config.home, sessions) : undefined;
 const systemEventsDetection = capabilities.systemSleepEvents ? new SystemEventsDetection() : undefined;
 const scheduleDetection = new ScheduleDetection({ power: systemEventsDetection });
@@ -136,6 +151,7 @@ await connectivity.start();
 // Recover global sleep overrides before any interrupted agent can reopen.
 await power?.start();
 await sessions.load();
+await sharing.recover();
 power?.refresh();
 missionService.notices.start();
 missionService.compaction.start();
@@ -169,6 +185,7 @@ const server = createDaemonServer(
 	mcpStatus,
 	hello,
 	setup,
+	sharing,
 );
 server.listen(config.port, config.host, () => {
 	console.log(`pilotd listening on http://${config.host}:${config.port} (data: ${config.home})`);
@@ -181,6 +198,7 @@ async function stop(): Promise<void> {
 	console.log("pilotd: pausing sessions");
 	watchdog.stop();
 	server.close();
+	await sharing.stop();
 	await schedules.stop();
 	await connectivity.stop();
 	systemEventsDetection?.stop();

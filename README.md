@@ -152,8 +152,12 @@ child SDK runtimes are constructed, after the Linux boundary has been validated.
 The source includes [host-qualified client routing](docs/host-routing.md),
 [durable operation receipts](docs/durable-operations.md), [server-side repository/file reads](docs/host-repositories.md)
 and [staged image/artifact transfers](docs/host-transfers.md). These are integration adapters, not a complete
-remote setup or chat-selection workflow in the app. They do not copy credentials or implement cross-host
-context/delegation semantics. The [remote lifecycle layer](docs/remote-lifecycle.md) preserves private
+remote setup or chat-selection workflow in the app. They do not copy credentials.
+[Shared context and delegation](docs/shared-context.md) adds explicitly enrolled canonical homes,
+durable replicas/provisional proposals and receipt-backed sole execution grants. Accepted bounded work
+can continue without the Mac; cancellation/reassignment requires target acknowledgment, not a timeout.
+Enrollment/delegation/conflict presentation remains part of the pending devbox UI, not an enabled
+end-to-end setup experience. The [remote lifecycle layer](docs/remote-lifecycle.md) preserves private
 offline chat summaries and pinned identities across relaunch, reconciles ambiguous delivery receipts
 without replaying mutations, and awaits local forward cleanup on normal quit without stopping remote
 work. Devbox setup/selection and disconnected-state presentation remain separate UI work.

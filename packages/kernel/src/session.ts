@@ -125,7 +125,11 @@ async function pinnedAgent(
 export interface KernelSessionHooks {
 	reportSubscriptionLimit?: import("./subscription-limit.ts").ReportSubscriptionLimit;
 	onSystemMessageState?(event: SystemMessageStateEvent): void;
-	onWorking(working: boolean, completion?: SessionCompletion): void;
+	onWorking(
+		working: boolean,
+		completion?: SessionCompletion,
+		execution?: import("./protocol.ts").ExecutionEvidence,
+	): void;
 	onJobsChanged?(jobs: SessionJob[]): void;
 	onTodosChanged?(openCount: number): void;
 	onUsageChanged?(usage: KernelUsage): void;
@@ -594,7 +598,7 @@ export class KernelSession {
 				) {
 					session.#reportedWorking = working;
 					session.#completion = working ? undefined : completion;
-					hooks.onWorking(working, session.#completion);
+					hooks.onWorking(working, session.#completion, await session.executionEvidence());
 				}
 				if (
 					events.some((event) =>
@@ -754,6 +758,20 @@ export class KernelSession {
 
 	get completion(): SessionCompletion | undefined {
 		return this.#completion;
+	}
+	async executionEvidence(): Promise<import("./protocol.ts").ExecutionEvidence> {
+		const settled = this.#completion as (SessionCompletion & { input?: number; entry?: number }) | undefined;
+		const input =
+			settled?.input !== undefined
+				? await this.#storage.submission(settled.input as SubmissionId, context)
+				: undefined;
+		return {
+			attemptId: String(this.conversation.id),
+			...(input
+				? { inputSubmissionId: input.id, ...(input.requestId ? { inputOperationId: input.requestId } : {}) }
+				: {}),
+			...(settled?.entry !== undefined ? { completionEntry: settled.entry } : {}),
+		};
 	}
 
 	/** Joining, leaving or a mission change. Applies from the next model request. */

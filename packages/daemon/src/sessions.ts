@@ -262,6 +262,9 @@ export interface SessionFactories {
 }
 
 interface SessionMeta extends OutcomeMeta {
+	executionEvidence?: import("@pilot/kernel").ExecutionEvidence;
+	/** Durable execution-ownership fence. Never cleared by reconnect, restart or a fresh input. */
+	delegationFenced?: boolean;
 	/** Stable create reservation. Never reuse this session ID for another operation. */
 	createOperationId?: string;
 	createMissionId?: string;
@@ -1074,6 +1077,84 @@ export class SessionManager {
 
 	setProjectMemory(memory: ProjectMemoryService): void {
 		this.memory = memory;
+	}
+	private sharing?: import("./shared-context.ts").SharedContextService;
+	setSharedContext(sharing: import("./shared-context.ts").SharedContextService): void {
+		this.sharing = sharing;
+	}
+	async fenceDelegatedSession(id: string): Promise<void> {
+		const meta = this.require(id);
+		meta.delegationFenced = true;
+		await this.save(meta);
+	}
+	async pauseDelegatedJournalFault(id: string): Promise<void> {
+		await this.fenceDelegatedSession(id);
+		const worker = this.workers.get(id);
+		if (worker) await worker.request({ type: "continuation.pause", requestId: randomUUID() });
+	}
+	async sharedContextNotice(id: string, requestId: string, text: string): Promise<void> {
+		const meta = this.require(id);
+		if (meta.delegationFenced) return;
+		// Passive durable input identity, admitted through the same kernel dedupe as other notices.
+		await this.sendDurable(id, text, "steer", requestId);
+	}
+	async sealDelegatedSession(id: string): Promise<boolean> {
+		const meta = this.require(id);
+		await this.fenceDelegatedSession(id);
+		if (
+			this.starting.has(id) ||
+			this.sending.has(id) ||
+			this.delivering.has(id) ||
+			this.parking.has(id) ||
+			this.artifactNotifications.has(id) ||
+			this.changingModels.has(id) ||
+			this.roleTransitions.has(id) ||
+			this.workspaceRefreshes.has(id) ||
+			this.workspaceMaintenance.has(id) ||
+			this.rebasingWorkspaces.has(id) ||
+			this.archiveTransitions.has(id) ||
+			meta.preparing ||
+			meta.initializing ||
+			meta.pending?.length ||
+			this.backgroundWorking(meta) ||
+			meta.working ||
+			this.hasWorkspaceProcess?.(id)
+		)
+			return false;
+		const worker = this.workers.get(id);
+		if (worker) {
+			if (!worker.jobs || !worker.hasChildren || worker.busy !== false || worker.state !== "idle") return false;
+			await worker.request({ type: "continuation.pause", requestId: randomUUID() });
+			const [jobs, children] = await Promise.all([worker.jobs(), worker.hasChildren()]);
+			if (
+				this.workers.get(id) !== worker ||
+				jobs.length ||
+				children ||
+				worker.busy ||
+				meta.pending?.length ||
+				this.backgroundWorking(meta)
+			)
+				return false;
+			await worker.close();
+			if (this.workers.get(id) === worker) this.workers.delete(id);
+		}
+		return (
+			!this.starting.has(id) &&
+			!this.parking.has(id) &&
+			!this.artifactNotifications.has(id) &&
+			!this.saving.has(id) &&
+			!this.sending.has(id) &&
+			!this.delivering.has(id) &&
+			!this.changingModels.has(id) &&
+			!this.roleTransitions.has(id) &&
+			!this.workspaceRefreshes.has(id) &&
+			!this.workspaceMaintenance.has(id) &&
+			!this.rebasingWorkspaces.has(id) &&
+			!this.archiveTransitions.has(id) &&
+			!meta.pending?.length &&
+			!this.workers.has(id) &&
+			!this.hasWorkspaceProcess?.(id)
+		);
 	}
 
 	/** Chats that reach for an MCP server needing sign-in (or failing) show under Needs you until it works. */
@@ -2653,6 +2734,9 @@ export class SessionManager {
 		const meta = this.metas.get(id);
 		return meta && this.summary(meta);
 	}
+	executionEvidence(id: string): import("@pilot/kernel").ExecutionEvidence | undefined {
+		return this.metas.get(id)?.executionEvidence;
+	}
 
 	/** Task starts use the same agent directory/catalog as other session model operations. */
 	selectTaskModel(cwd: string, model?: string, thinking?: string): Promise<{ model: string; thinking: string }> {
@@ -2674,6 +2758,7 @@ export class SessionManager {
 		let locked = false;
 		try {
 			const meta = this.require(id);
+			if (this.sharing?.membership(id)) this.assertNotContinued(meta);
 			if (this.changingModels.has(id)) throw new Conflict("Session is changing configuration");
 			if (meta.continuedTo) {
 				await this.recoverContinuations();
@@ -2712,6 +2797,10 @@ export class SessionManager {
 			const worker = this.workers.get(id);
 			const configuredProvider = modelProvider(meta.model);
 			const provider = worker?.usage?.provider ?? configuredProvider;
+			if (this.sharing?.membership(id) && (configuredProvider !== option.provider || provider !== option.provider))
+				throw new Conflict(
+					"Cross-provider execution handoff requires a sealed home-authorized grant; the current allocation remains occupied",
+				);
 			let continuationView: PersistedSessionView | undefined;
 			if (worker) {
 				await worker.ready;
@@ -2947,7 +3036,10 @@ export class SessionManager {
 		this.emit(target);
 	}
 
-	private assertNotContinued(meta: SessionMeta): void {
+	private assertNotContinued(meta: SessionMeta, allowFenced = false): void {
+		if (!allowFenced) this.sharing?.assertAdmission(meta.id);
+		if (meta.delegationFenced && !allowFenced)
+			throw new Conflict("Delegated execution is fenced; reassignment requires a target seal receipt");
 		if (meta.continuedTo) throw new Conflict(`This chat is read-only. Continued in ${meta.continuedTo}`);
 		if (meta.continuationPending) throw new Conflict("Chat ownership transfer is not complete");
 	}
@@ -3102,6 +3194,7 @@ export class SessionManager {
 
 	/** Called only after durable operation reservation. Crash recovery uses this exact target/input ID. */
 	async spawnDurable(request: SpawnRequest, targetId: string, operationId: string): Promise<SessionSummary> {
+		this.sharing?.assertCreate(targetId, operationId);
 		if (!ID_PATTERN.test(targetId)) throw new Conflict("Invalid reserved session ID");
 		const end = this.updateGate.begin();
 		try {
@@ -3726,7 +3819,7 @@ export class SessionManager {
 
 	async stop(id: string): Promise<StopResponse> {
 		const meta = this.require(id);
-		this.assertNotContinued(meta);
+		this.assertNotContinued(meta, true);
 		if (this.changingModels.has(id)) throw new Conflict("Session is changing its model or conversation");
 		if (this.closing) throw new Error("pilotd is shutting down");
 		if (meta.failure) return { ok: true };
@@ -3765,7 +3858,7 @@ export class SessionManager {
 				: [],
 		);
 		const requestId = randomUUID();
-		const automatic = (meta.pending ?? [])
+		const automatic = (meta.delegationFenced ? [] : (meta.pending ?? []))
 			.filter(
 				(command) =>
 					command.type === "input" &&
@@ -4684,6 +4777,8 @@ export class SessionManager {
 		const existing = this.starting.get(id);
 		if (existing) return existing;
 		const meta = this.require(id);
+		if (meta.delegationFenced && !meta.pending?.some((command) => command.type === "abort"))
+			return Promise.resolve(new Map());
 		if (meta.continuedTo || meta.continuationPending || (!admitted && this.changingModels.has(id)))
 			return Promise.resolve(new Map());
 		if (this.closing || this.sleepPause || meta.failure) return Promise.resolve(new Map());
@@ -4900,7 +4995,10 @@ export class SessionManager {
 	}
 
 	private async ensureWorker(id: string): Promise<SessionWorker> {
-		this.assertNotContinued(this.require(id));
+		this.assertNotContinued(
+			this.require(id),
+			this.require(id).delegationFenced && this.require(id).pending?.some((command) => command.type === "abort"),
+		);
 		if (this.sleepPause) throw new ServiceUnavailable("Agents are paused until the next wake with connectivity");
 		const existing = this.workers.get(id);
 		if (existing) return existing;
@@ -4924,6 +5022,7 @@ export class SessionManager {
 		if (existing) return existing;
 		if (this.closing) throw new Error("pilotd is shutting down");
 		const meta = this.require(id);
+		if (!meta.delegationFenced) await this.sharing?.assertRunnable(id);
 		this.assertNotContinued(meta);
 		if (meta.archivedAt !== undefined) throw new Conflict("Restore the archived session before starting its worker");
 		if (meta.failure) throw new Conflict("Retry startup before starting its worker");
@@ -5185,6 +5284,8 @@ export class SessionManager {
 					worker.send({ type: "artifact.reference.result", callId: packet.callId, ...result });
 			};
 			const call = Promise.resolve().then(() => {
+				if (this.sharing?.membership(meta.id))
+					return this.sharing.readArtifact(meta.id, packet.id, packet.revision);
 				if (!this.missions?.readArtifactReference) throw new Error("Artifact reference is not authorized");
 				return this.missions.readArtifactReference(meta.id, packet.id, packet.revision);
 			});
@@ -5249,6 +5350,7 @@ export class SessionManager {
 					worker.send({ type: "memory.result", callId: packet.callId, ...(result as { result?: never }) });
 			};
 			const call = Promise.resolve().then(async () => {
+				if (this.sharing?.membership(meta.id)) return this.sharing.memoryCall(meta.id, packet.action, packet.args);
 				if (!meta.projectId || !this.memory) throw new Error("Project memory is unavailable");
 				const args = packet.args;
 				switch (packet.action) {
@@ -5394,6 +5496,7 @@ export class SessionManager {
 			});
 			if (this.applyAttempts(meta, packet.attempts)) void this.save(meta);
 		} else if (packet.type === "ready" || packet.type === "working") {
+			if (packet.execution) meta.executionEvidence = packet.execution;
 			if (
 				this.workers.get(meta.id) === worker &&
 				!packet.working &&

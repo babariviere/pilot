@@ -54,6 +54,12 @@ export async function durableJSON(file: string, value: unknown): Promise<void> {
  * An exception leaves a recoverable pending receipt, not a possibly false rejection.
  */
 export class OperationJournal {
+	private readonly settledListeners = new Set<(operation: DurableOperation) => void>();
+	/** Invalidations follow durable final receipt publication, never merely handler entry. */
+	onSettled(listener: (operation: DurableOperation) => void): () => void {
+		this.settledListeners.add(listener);
+		return () => this.settledListeners.delete(listener);
+	}
 	private readonly records = new Map<string, StoredOperation>();
 	private readonly sequences = new Map<string, string>();
 	private floors: Record<string, number> = {};
@@ -249,6 +255,13 @@ export class OperationJournal {
 				if (Buffer.byteLength(JSON.stringify(updated)) > MAX_PAYLOAD * 2) throw new Error("Receipt too large");
 				await this.persist(join(this.directory, `${payloadHash(op.operationId)}.json`), updated);
 				this.records.set(op.operationId, updated);
+				for (const listener of this.settledListeners) {
+					try {
+						listener(structuredClone(op));
+					} catch {
+						/* Observers cannot undo a durable receipt. */
+					}
+				}
 				return structuredClone(updated.receipt);
 			});
 		})().finally(() => {

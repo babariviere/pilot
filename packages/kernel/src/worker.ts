@@ -354,8 +354,13 @@ export function runKernelWorker(): void {
 					onSystemMessageState: (event) => {
 						void send({ type: "systemMessageState", event });
 					},
-					onWorking: (working, completion) =>
-						notify({ type: "working", working, ...(completion ? { completion } : {}) }),
+					onWorking: (working, completion, execution) =>
+						notify({
+							type: "working",
+							working,
+							...(completion ? { completion } : {}),
+							...(execution ? { execution } : {}),
+						}),
 					onJobsChanged: (jobs) => notify({ type: "jobs.changed", jobs }),
 					onTodosChanged: (openCount) => notify({ type: "todos.changed", openCount }),
 					onUsageChanged: (usage) => notify({ type: "usage", usage }),
@@ -380,6 +385,7 @@ export function runKernelWorker(): void {
 					model: session.model,
 					thinking: session.thinkingLevel,
 					working: session.working,
+					execution: await session.executionEvidence(),
 					usage: session.usage,
 					openTodoCount: session.openTodoCount,
 					...(session.completion ? { completion: session.completion } : {}),

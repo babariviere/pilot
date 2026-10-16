@@ -274,6 +274,7 @@ export function createDaemonServer(
 	mcp?: McpStatusService,
 	hello?: DaemonHello,
 	setup?: SetupService,
+	sharing?: import("./shared-context.ts").SharedContextService,
 ): Server & { runtimeResources: RuntimeResources } {
 	sessions.setWorkspaceProcessGuard((id) => terminals.isRunning(id));
 	const reviews = new ReviewStore(_config.home);
@@ -312,6 +313,10 @@ export function createDaemonServer(
 			})
 		: undefined;
 	const admitOperation = async (op: DurableOperation): Promise<unknown> => {
+		if (op.kind.startsWith("share-")) {
+			if (!sharing) throw new OperationRejected("Shared context unavailable");
+			return sharing.handle(op);
+		}
 		let payload: unknown;
 		try {
 			payload = JSON.parse(op.payload);
@@ -359,6 +364,55 @@ export function createDaemonServer(
 		if (!isAllowedOrigin(req.headers.origin)) throw new HttpError(403, "Browser requests are not allowed");
 		const url = new URL(req.url ?? "/", "http://localhost");
 		const parts = url.pathname.split("/").filter(Boolean);
+		if (parts[0] !== "api") throw new HttpError(404, "Not found");
+		if (parts[1] === "shared-contexts") {
+			if (!sharing) throw new ServiceUnavailable("Shared context unavailable");
+			if (parts.length === 2 && req.method === "GET") return json(res, 200, await sharing.summaries());
+			if (parts.length === 4 && parts[3] === "conflicts" && req.method === "GET")
+				return json(res, 200, sharing.conflicts(parts[2]!));
+			if (parts.length === 5 && parts[3] === "events" && req.method === "GET")
+				return json(res, 200, sharing.audit(parts[2]!, parts[4]!, Number(url.searchParams.get("after") ?? 0)));
+			if (parts.length === 6 && parts[3] === "proposals" && parts[5] === "resolve" && req.method === "POST")
+				return json(res, 200, await sharing.resolveProposal(parts[2]!, parts[4]!, await readJson(req)));
+			if (parts.length === 2 && req.method === "POST") {
+				await sharing.enroll(await readJson(req));
+				return json(res, 201, { ok: true });
+			}
+			if (parts.length === 4 && parts[3] === "exchange" && req.method === "POST") {
+				const body = await readJson<{ peer: import("@pilot/protocol").OperationHost }>(req);
+				return json(res, 200, await sharing.exchange(parts[2]!, body.peer));
+			}
+			if (parts.length === 4 && parts[3] === "ack" && req.method === "POST") {
+				await sharing.acknowledge(parts[2]!, await readJson(req));
+				return json(res, 200, { ok: true });
+			}
+			throw new HttpError(404, "Unknown shared context operation");
+		}
+		if (
+			parts[1] === "missions" &&
+			parts[3] === "tasks" &&
+			parts[5] === "delegations" &&
+			parts.length === 6 &&
+			req.method === "POST"
+		) {
+			if (!sharing) throw new ServiceUnavailable("Delegation unavailable");
+			return json(res, 201, await sharing.reserve(parts[2]!, parts[4]!, await readJson(req)));
+		}
+		if (parts[1] === "delegations" && parts.length === 4 && req.method === "POST") {
+			if (!sharing) throw new ServiceUnavailable("Delegation unavailable");
+			if (parts[3] === "cancel") {
+				const grant = sharing.cancel(parts[2]!);
+				await missions?.store.durable();
+				return json(res, 200, grant);
+			}
+			if (parts[3] === "seal") {
+				const body =
+					req.headers["content-length"] === undefined || req.headers["content-length"] === "0"
+						? {}
+						: await readJson<{ bindingId?: string }>(req);
+				return json(res, 200, await sharing.seal(parts[2]!, body.bindingId));
+			}
+		}
 		if (parts[0] !== "api") throw new HttpError(404, "Not found");
 		if (parts[1] === "setup") {
 			res.setHeader("cache-control", "no-store");
@@ -1201,6 +1255,35 @@ export function createDaemonServer(
 		const data = JSON.stringify(message);
 		for (const send of clients.values()) send(data);
 	};
+	let sharingInvalidationScheduled = false;
+	const invalidateSharing = () => {
+		if (sharingInvalidationScheduled) return;
+		sharingInvalidationScheduled = true;
+		queueMicrotask(() => {
+			sharingInvalidationScheduled = false;
+			broadcast({ type: "shared-contexts.changed" });
+		});
+	};
+	let recoveringSharing: Promise<void> | undefined;
+	const stopSharingWatch = sharing?.onChange(() => {
+		invalidateSharing();
+		// A prerequisite/context change can unblock a reserved handler. Pending receipts are
+		// not resubmitted by couriers; recovery belongs to this intact destination journal.
+		if (journal && !recoveringSharing)
+			recoveringSharing = journal
+				.recover(admitOperation)
+				.catch(() => {})
+				.finally(() => {
+					recoveringSharing = undefined;
+				});
+	});
+	const stopSharingReceipts = journal?.onSettled((operation) => {
+		if (operation.kind.startsWith("share-")) invalidateSharing();
+	});
+	server.on("close", () => {
+		stopSharingWatch?.();
+		stopSharingReceipts?.();
+	});
 	const stopPowerWatch = power?.onChange(() => broadcast({ type: "power", power: power.status() }));
 	server.on("close", () => stopPowerWatch?.());
 	const stopMcpWatch = mcp?.onChange((status) => broadcast({ type: "mcp", mcp: status }));
