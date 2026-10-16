@@ -9,6 +9,8 @@ public struct MissionLink: Identifiable, Equatable, Sendable {
     public let resource: MissionResource
     /// Every saved link with this URL. A row can only be removed from the Overview when there is one.
     public let resourceIds: [String]
+    /// The mission-level copy of the link, if any: the one a Linear issue is managed from.
+    public var missionResourceId: String? = nil
     /// The lowest-numbered task that holds this link, if any.
     public let taskId: String?
     public let taskNumber: Int?
@@ -171,11 +173,12 @@ public enum MissionLinks {
         let text = display(representative, pullRequest: pullRequest)
         return MissionLink(
             id: representative.id, resource: representative, resourceIds: copies.map(\.id),
+            missionResourceId: copies.first { $0.taskId == nil }?.id,
             taskId: owner?.id, taskNumber: owner?.number, pullRequest: pullRequest,
             identifier: text.identifier, title: text.title, chipTitle: text.chip, age: age)
     }
 
-    private static func display(_ resource: MissionResource, pullRequest: SessionPullRequest?)
+    static func display(_ resource: MissionResource, pullRequest: SessionPullRequest?)
         -> (identifier: String, title: String, chip: String) {
         let saved = resource.title?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
         let number = resource.externalId?.split(separator: "#").last.map { "#\($0)" }

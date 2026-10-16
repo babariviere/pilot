@@ -10,6 +10,8 @@ public enum MissionNeedsYouItem: Identifiable, Equatable, Sendable {
     /// An open agent comment addressed to nobody while the user coordinates.
     case comment(MissionComment)
     case decisionProposal(MissionDecisionProposal, number: Int)
+    /// A managed Linear ticket whose updates are paused for review or failed.
+    case linearTicket(MissionResource)
 
     public var id: String {
         switch self {
@@ -17,6 +19,7 @@ public enum MissionNeedsYouItem: Identifiable, Equatable, Sendable {
         case let .blockedTask(task): "task-\(task.id)"
         case let .comment(comment): "comment-\(comment.id)"
         case let .decisionProposal(proposal, _): "proposal-\(proposal.id)"
+        case let .linearTicket(resource): "linear-\(resource.id)"
         }
     }
 }
@@ -51,6 +54,13 @@ public enum MissionNeedsYou {
         guard let detail else { return items }
         // Phase gating is shown on the task itself; it is planned waiting, not something for the user.
         items += MissionTaskOrdering.sorted(detail.tasks).filter { $0.workStatus == .blocked }.map { .blockedTask($0) }
+        // Paused or failed Linear updates wait on the user's review; the ticket's row offers Resume or Retry.
+        items += detail.resources.filter { resource in
+            resource.taskId == nil && resource.effectiveLinearRole == .managed
+                && (resource.linearSync?.state == .paused || resource.linearSync?.state == .error)
+        }
+        .sorted { ($0.createdAt, $0.id) < ($1.createdAt, $1.id) }
+        .map { .linearTicket($0) }
         if mission.coordinatorSessionId == nil {
             // The user's own comments are not waiting on the user.
             items += detail.comments

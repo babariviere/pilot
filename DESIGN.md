@@ -224,8 +224,13 @@ next, Working now, Pull requests, Missions, Scheduled, Current cycle, Slack, Mem
 Up next leads with the project's top Inbox rows (Needs you, then Ready to merge) and links to the Inbox filtered to
 the project; Pull requests then lists only those still waiting on checks, review or a fix, so each chat appears once.
 A mission's Overview has the same shape: its goal, one meta line, the task progress bar with its
-legend, then Needs you (hidden when empty), Working now and Links. Both share the Inbox's rows and words (Needs you
-rows, Ready to merge). Sections added later follow the same rules.
+legend, then Needs you (hidden when empty), Working now, Linear tickets (hidden when the mission manages none) and
+Links. Both share the Inbox's rows and words (Needs you rows, Ready to merge). Sections added later follow the same
+rules. A managed ticket nests its contributing tasks one level deep, like sub-issues, and says only in words which
+links count toward it ("Counts toward ENG-123") and which are references ("Referenced by #7 · not counted"); Links
+holds every other link, so a ticket appears once. Its Linear update line is muted while up to date, amber with
+Resume when paused for review and an `InlineProblem` with Retry when an update failed. A canceled ticket's tasks read
+Dropped, never done.
 
 Progress bars (`SegmentedProgressBar`) are one plain 6 pt capsule with no gaps, dither or animation. Task bars use the
 row colours: green done, amber in review, indigo in progress, red blocked, and the faint track for to do. Where there is

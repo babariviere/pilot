@@ -87,13 +87,16 @@ struct LinearIssueTree {
     }
 }
 
-/// A parent's quiet "N sub-issues" and whether its children show.
+/// A parent's quiet "N sub-issues" and whether its children show. A managed ticket's contributing tasks use the same
+/// disclosure with their own noun ("3 tasks").
 struct SubIssueDisclosure {
     let count: Int
     let expanded: Bool
     let toggle: () -> Void
+    /// Singular and plural names of the children.
+    var noun: (singular: String, plural: String) = ("sub-issue", "sub-issues")
 
-    var title: String { count == 1 ? "1 sub-issue" : "\(count) sub-issues" }
+    var title: String { count == 1 ? "1 \(noun.singular)" : "\(count) \(noun.plural)" }
 }
 
 /// Layout shared by sub-issue rows and their connector.
@@ -208,7 +211,7 @@ struct SubIssueToggle: View {
         }
         .buttonStyle(.plain)
         .fixedSize()
-        .help(disclosure.expanded ? "Hide sub-issues" : "Show sub-issues")
+        .help(disclosure.expanded ? "Hide \(disclosure.noun.plural)" : "Show \(disclosure.noun.plural)")
         .accessibilityLabel("\(disclosure.title) of \(parent)")
         .accessibilityValue(disclosure.expanded ? "Shown" : "Hidden")
     }

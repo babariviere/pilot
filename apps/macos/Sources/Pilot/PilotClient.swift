@@ -1673,6 +1673,22 @@ final class PilotClient: ObservableObject {
         let _: Ack = try await missionRequest(["missions", id, "resources", resourceId], method: "DELETE")
     }
 
+    /// Explicitly changes a Linear link's role: manage a ticket, count a task toward it, or make it a reference.
+    @discardableResult
+    func updateMissionResource(_ id: String, resourceId: String, _ write: MissionResourceUpdate) async throws
+        -> MissionResource {
+        try await missionRequest(["missions", id, "resources", resourceId], method: "PATCH", body: write)
+    }
+
+    /// Pauses or resumes Pilot's Linear updates for a managed ticket. Resuming accepts the ticket's current tasks
+    /// and Linear status, and retries a failed update.
+    @discardableResult
+    func setMissionLinearSync(_ id: String, resourceId: String, action: MissionLinearSyncAction) async throws
+        -> MissionResource {
+        try await missionRequest(["missions", id, "resources", resourceId, "linear-sync"],
+                                 body: MissionLinearSyncWrite(action: action.rawValue))
+    }
+
     @discardableResult
     func linkMissionArtifact(_ id: String, _ write: MissionArtifactLinkWrite) async throws -> MissionArtifactLink {
         try await missionRequest(["missions", id, "artifacts"], body: write)

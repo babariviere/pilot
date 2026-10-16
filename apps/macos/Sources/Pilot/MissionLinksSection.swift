@@ -4,6 +4,8 @@ import SwiftUI
 
 // The Overview's one Links list: open pull requests (ready to merge first), Linear, other links, then merged pull
 // requests, with closed ones under Show all. Links come from the mission and from every task, de-duplicated by URL.
+// Linear tickets the mission manages, and task links to them, are listed under Linear tickets instead; every Linear
+// issue left here is a reference.
 
 /// Builds the link groups once per change of the mission's links, not on every body evaluation.
 /// A body only compares the saved links and task numbers with the last build. Chats' PR reports are read
@@ -18,13 +20,14 @@ final class MissionLinkGroupsCache: ObservableObject {
 
     func groups(for detail: MissionDetail, sessions: @autoclosure () -> [SessionSummary]) -> MissionLinkGroups {
         let numbers = MissionLinksInput.taskNumbers(detail.tasks)
-        let unchanged = input.map { $0.resources == detail.resources && $0.taskNumbers == numbers } ?? false
+        let resources = MissionTickets.listedLinks(detail.resources)
+        let unchanged = input.map { $0.resources == resources && $0.taskNumbers == numbers } ?? false
         let pending = unchanged
             ? unresolved
-            : MissionLinksInput(resources: detail.resources, taskNumbers: numbers).unresolvedPullRequestURLs
+            : MissionLinksInput(resources: resources, taskNumbers: numbers).unresolvedPullRequestURLs
         let reported = pending.isEmpty ? [:] : Self.reported(pending, in: sessions())
         if unchanged, reported == input?.reportedPullRequests { return cached }
-        let next = MissionLinksInput(resources: detail.resources, taskNumbers: numbers, reportedPullRequests: reported)
+        let next = MissionLinksInput(resources: resources, taskNumbers: numbers, reportedPullRequests: reported)
         builds += 1
         unresolved = pending
         input = next
@@ -120,12 +123,24 @@ private enum MissionLinkActions {
         AppModel.shared.showMissionTask(taskId)
     }
 
+    /// A mission-level Linear reference with a canonical key can be explicitly upgraded to a managed ticket.
+    static func manageableId(_ link: MissionLink) -> String? {
+        guard link.kind == .linearIssue, link.resource.linearKey != nil else { return nil }
+        return link.missionResourceId
+    }
+
+    static func manage(_ link: MissionLink, missionId: String) {
+        guard let id = manageableId(link) else { return }
+        MissionTicketActions.setRole(.managed, resourceId: id, missionId: missionId)
+    }
+
     /// What VoiceOver reads: the service and number or ID, the title and the task.
     static func accessibilityLabel(_ link: MissionLink, status: String? = nil) -> String {
         var parts = [link.resource.accessibilityName(pullRequest: link.pullRequest)]
         if !link.title.isEmpty, !parts[0].contains(link.title) { parts.append(link.title) }
         // Saved state is already in the name; readiness is not.
         if let status, link.pullRequest?.state == .open { parts.append(status) }
+        if link.kind == .linearIssue { parts.append("reference only") }
         if let number = link.taskNumber { parts.append("task \(number)") }
         return parts.joined(separator: ", ")
     }
@@ -133,6 +148,7 @@ private enum MissionLinkActions {
     static func help(_ link: MissionLink) -> String {
         var lines = [link.url]
         if let stack = link.pullRequest?.stack { lines.append(stack.helpText) }
+        if link.kind == .linearIssue { lines.append(MissionLinearRoleText.referenceHelp) }
         if let number = link.taskNumber { lines.append("Task #\(number)") }
         return lines.joined(separator: "\n")
     }
@@ -149,6 +165,10 @@ private struct MissionLinkMenuItems: View {
             Button("Show Task") { MissionLinkActions.showTask(link) }
         }
         Button("Copy Link") { MissionLinkActions.copy(link) }
+        if MissionLinkActions.manageableId(link) != nil {
+            Divider()
+            Button("Manage Delivery in This Mission") { MissionLinkActions.manage(link, missionId: missionId) }
+        }
         if link.resourceIds.count == 1 {
             Divider()
             Button("Remove Link", role: .destructive) { MissionLinkActions.remove(link, missionId: missionId, client: endpoint) }
@@ -225,6 +245,10 @@ struct MissionLinkRow: View, Equatable {
             if let stack = link.pullRequest?.stack, !settled {
                 Text("·").foregroundStyle(Theme.faintForeground)
                 Text(stack.label).lineLimit(1)
+            }
+            if link.kind == .linearIssue {
+                Text("·").foregroundStyle(Theme.faintForeground)
+                Text("Reference").lineLimit(1).fixedSize()
             }
             if let number = link.taskNumber {
                 Text("·").foregroundStyle(Theme.faintForeground)

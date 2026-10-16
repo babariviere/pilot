@@ -344,6 +344,7 @@ struct MissionOverviewTab: View {
                     }
                 }
             }
+            MissionTicketsSection(mission: mission, detail: detail)
             MissionLinksSection(mission: mission, detail: detail)
         }
     }
@@ -512,6 +513,7 @@ private struct MissionNeedsYouRow: View {
         case let .blockedTask(task): "#\(task.number) \(task.title)"
         case let .comment(comment): comment.text
         case let .decisionProposal(_, number): "Decision D\(number): proposed change"
+        case let .linearTicket(resource): [resource.externalId, resource.title].compactMap { $0 }.joined(separator: " ")
         }
     }
 
@@ -521,6 +523,7 @@ private struct MissionNeedsYouRow: View {
         case .blockedTask: "View task"
         case .comment: "Reply"
         case .decisionProposal: "Review"
+        case .linearTicket: "Open in Linear"
         }
     }
 
@@ -529,6 +532,7 @@ private struct MissionNeedsYouRow: View {
         case let .chat(session): model.navigate(.session, id: session.id, context: hostContext)
         case let .blockedTask(task): model.showMissionTask(task.id)
         case .comment, .decisionProposal: model.missionTab = .brief
+        case let .linearTicket(resource): MissionTicketActions.open(resource.url)
         }
     }
 }
@@ -609,6 +613,8 @@ struct MissionEventByline: View {
 /// A mission or task link as an inline chip: service mark, then the PR number with its readiness or the link's
 /// title, in muted caption text. The one chip style for links inside task rows and the chat inspector; the
 /// Overview lists links as rows (`MissionLinksSection`). The context menu copies or removes it.
+/// A task's Linear link names its role: "Counts toward ENG-123" for a contribution; a reference keeps the plain
+/// identifier and says so in its tooltip and VoiceOver label. Their menus change the role explicitly.
 struct MissionLinkChip: View {
     let resource: MissionResource
     let missionId: String
@@ -617,9 +623,10 @@ struct MissionLinkChip: View {
 
     var body: some View {
         let pr = resource.pullRequest ?? client.sessions.flatMap(\.linkedPullRequests).first { $0.url == resource.url }
+        let role = linearRole
         let label = HStack(spacing: 5) {
             MissionLinkIcon(kind: resource.kind, pullRequestState: pr?.state, size: 10)
-            Text(title(pr)).lineLimit(1)
+            Text(role == .contribution ? "Counts toward \(resource.badgeTitle)" : title(pr)).lineLimit(1)
         }
         .font(.pilot(.caption))
         .foregroundStyle(Theme.mutedForeground)
@@ -631,16 +638,53 @@ struct MissionLinkChip: View {
                 label
             }
         }
-        .help([resource.url, pr?.stack?.helpText].compactMap { $0 }.joined(separator: "\n"))
-        .accessibilityLabel(resource.accessibilityName(pullRequest: pr))
+        .help([resource.url, pr?.stack?.helpText, roleHelp(role)].compactMap { $0 }.joined(separator: "\n"))
+        .accessibilityLabel([resource.accessibilityName(pullRequest: pr), roleAccessibility(role)]
+            .compactMap { $0 }.joined(separator: ", "))
         .contextMenu {
             Button("Copy Link") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(resource.url, forType: .string)
             }
+            if role == .contribution {
+                Button("Stop Counting Toward Ticket") {
+                    MissionTicketActions.setRole(.reference, resourceId: resource.id, missionId: missionId)
+                }
+            } else if role == .reference, canContribute {
+                Button("Count Toward Ticket") {
+                    MissionTicketActions.setRole(.contribution, resourceId: resource.id, missionId: missionId)
+                }
+            }
             Button("Remove Link", role: .destructive, action: remove)
         }
         .accessibilityAction(named: "Remove link", remove)
+    }
+
+    /// Task-level Linear issue links only; mission-level tickets are listed on the Overview.
+    private var linearRole: MissionLinearRole? {
+        resource.kind == .linearIssue && resource.taskId != nil ? resource.effectiveLinearRole : nil
+    }
+
+    /// A task's reference can count toward the ticket only when this mission manages it.
+    private var canContribute: Bool {
+        guard let key = resource.linearKey, let detail = client.missionDetails[missionId] else { return false }
+        return detail.resources.contains { $0.taskId == nil && $0.linearKey == key && $0.effectiveLinearRole == .managed }
+    }
+
+    private func roleHelp(_ role: MissionLinearRole?) -> String? {
+        switch role {
+        case .contribution: MissionLinearRoleText.contributionHelp(resource.badgeTitle)
+        case .reference: MissionLinearRoleText.referenceHelp
+        case .managed, nil: nil
+        }
+    }
+
+    private func roleAccessibility(_ role: MissionLinearRole?) -> String? {
+        switch role {
+        case .contribution: "counts toward the ticket"
+        case .reference: "reference only"
+        case .managed, nil: nil
+        }
     }
 
     /// "Ready to merge #412 · Stack 2/3", "Merged #398" or the link's title.
@@ -682,6 +726,8 @@ struct MissionAddLinkButton: View {
 }
 
 /// URL and optional title for a new mission or task link. Shown in a popover.
+/// A Linear issue adds one checkbox for its role: a mission link manages the ticket's delivery (on by default), and
+/// a task link to a ticket the mission manages can count toward it (off by default, so it stays a reference).
 struct MissionAddLinkForm: View {
     @EndpointClient private var endpoint
     let missionId: String
@@ -690,14 +736,20 @@ struct MissionAddLinkForm: View {
     let dismiss: () -> Void
     @EnvironmentObject private var model: AppModel
     @State private var input = MissionInput()
+    /// The checkbox, once the user has touched it; nil follows the choice's default.
+    @State private var linearOn: Bool?
 
     var body: some View {
+        let choice = linearChoice
         VStack(alignment: .leading, spacing: 8) {
             Text(title).font(.pilot(.body, weight: .semibold))
             TextField("Linear, GitHub, Slack or any URL", text: $input.text)
                 .textFieldStyle(.roundedBorder).onSubmit(add)
             TextField("Title (optional)", text: $input.secondary)
                 .textFieldStyle(.roundedBorder).onSubmit(add)
+            if choice != .none {
+                linearToggle(choice)
+            }
             HStack {
                 Spacer()
                 Button("Cancel", action: dismiss).keyboardShortcut(.cancelAction)
@@ -709,16 +761,57 @@ struct MissionAddLinkForm: View {
         .frame(width: 340)
     }
 
+    private var linearChoice: MissionLinearAttachChoice {
+        MissionLinearAttachChoice.choice(url: input.trimmed(input.text), taskId: taskId,
+                                         resources: model.client.missionDetails[missionId]?.resources ?? [])
+    }
+
+    private func linearToggle(_ choice: MissionLinearAttachChoice) -> some View {
+        let on = Binding(get: { linearOn ?? choice.defaultOn }, set: { linearOn = $0 })
+        let (label, detail): (String, String) = switch choice {
+        case .manage:
+            ("Manage delivery in this mission",
+             "Its contributing tasks move it in Linear. Turn off to keep it as a reference.")
+        case let .contribute(identifier):
+            ("Counts toward \(identifier)",
+             "This task's progress moves the ticket in Linear. Otherwise it is a reference.")
+        case .none: ("", "")
+        }
+        return VStack(alignment: .leading, spacing: 2) {
+            Toggle(label, isOn: on).toggleStyle(.checkbox).font(.pilot(.label))
+            Text(detail).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.leading, 20)
+        }
+        .padding(.top, 2)
+    }
+
     private func add() {
         let url = input.trimmed(input.text)
         guard !input.busy, URL(string: url)?.scheme != nil else { return }
         let title = input.trimmed(input.secondary)
+        let choice = linearChoice
+        let role: MissionLinearRole? = switch choice {
+        case .manage: (linearOn ?? choice.defaultOn) ? .managed : nil
+        case .contribute: (linearOn ?? choice.defaultOn) ? .contribution : nil
+        case .none: nil
+        }
+        let plan = MissionLinearAttachPlan.plan(url: url, taskId: taskId, role: role,
+                                                resources: model.client.missionDetails[missionId]?.resources ?? [])
         input.busy = true
         model.missionAction { [client = endpoint] in
             defer { input.busy = false }
-            try await client.addMissionResource(missionId, MissionResourceWrite(url: url, title: title.isEmpty ? nil : title,
-                                                                                taskId: taskId))
+            switch plan {
+            case let .add(role):
+                try await client.addMissionResource(missionId, MissionResourceWrite(
+                    url: url, title: title.isEmpty ? nil : title, taskId: taskId, linearRole: role))
+            case let .update(resourceId, role):
+                try await client.updateMissionResource(missionId, resourceId: resourceId,
+                                                       MissionResourceUpdate(linearRole: role))
+            case .existing: break
+            }
             input = MissionInput()
+            linearOn = nil
             dismiss()
         }
     }

@@ -421,6 +421,15 @@ and live safeguards permit it. Daemon checks flag unsafe PR/commit directives an
 locally without editing GitHub. [Linear PR safety](docs/linear-pr-safety.md) explains check bounds and
 the independent integration automations, which may target a different state than Merged.
 
+In the app, a mission's Overview lists the tickets it manages under **Linear tickets**. Each ticket shows
+its progress ("1 of 3 tasks done · 1 dropped") with its contributing tasks nested under it, which other
+managed tickets a shared task also counts toward, and tasks that only reference it ("Referenced by #7 ·
+not counted"). One line reports Pilot's Linear updates: paused updates offer **Resume**, failed ones
+**Retry**, and both also appear in Needs you. A dropped contributor keeps the ticket open until you choose
+**Exclude**, which keeps it as a reference. **Add link** manages a mission-level Linear issue by default and
+can count a task link toward a ticket the mission manages; link menus change roles explicitly (Manage
+Delivery in This Mission, Count Toward Ticket, Stop Counting Toward Ticket).
+
 Open tasks contributing to a managed Linear issue become **Delegated** when someone else
 is assigned in Linear. Returning the issue to you restores the previous status; unassignment changes
 nothing. A manual status change wins until the assignment changes again. Delegated work is not done
