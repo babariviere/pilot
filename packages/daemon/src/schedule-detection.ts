@@ -77,7 +77,8 @@ export interface ScheduleDetectionOptions {
 	power?: SystemPowerSource;
 	clock?: ScheduleClock;
 	sampleWake?: (signal: AbortSignal) => Promise<WakeSample>;
-	probe?: (signal: AbortSignal) => Promise<boolean>;
+	/** `origins` are provider servers that recently failed; reaching any of them proves the network works. */
+	probe?: (signal: AbortSignal, origins: readonly string[]) => Promise<boolean>;
 	warn?: (message: string) => void;
 }
 const clock: ScheduleClock = {
@@ -120,14 +121,15 @@ export class ScheduleDetection implements ScheduleTriggerSource {
 	private readonly wakeProcesses = new SubprocessPool({ maxThreads: 1, idleMs: 60_000 });
 	private readonly time: ScheduleClock;
 	private readonly sampleWake: (signal: AbortSignal) => Promise<WakeSample>;
-	private readonly probe: (signal: AbortSignal) => Promise<boolean>;
+	private origins: readonly string[] = [];
+	private readonly probe: (signal: AbortSignal, origins: readonly string[]) => Promise<boolean>;
 	private readonly warn: (message: string) => void;
 
 	constructor(options: ScheduleDetectionOptions = {}) {
 		this.time = options.clock ?? clock;
 		this.power = options.power;
 		this.sampleWake = options.sampleWake ?? ((signal) => sampleSystemWake(signal, this.wakeProcesses));
-		this.probe = options.probe ?? probeReachability;
+		this.probe = options.probe ?? ((signal, origins) => probeReachability(signal, undefined, origins));
 		this.warn = options.warn ?? console.warn;
 	}
 	subscribe(listener: (event: ScheduleTriggerEvent) => void): () => void {
@@ -137,6 +139,10 @@ export class ScheduleDetection implements ScheduleTriggerSource {
 	subscribeConnectivity(listener: (state: ConnectivityState) => void): () => void {
 		this.connectivityListeners.add(listener);
 		return () => this.connectivityListeners.delete(listener);
+	}
+	/** Checks include these provider origins until replaced, so a blocked public host cannot fake an outage. */
+	setProbeOrigins(origins: readonly string[]): void {
+		this.origins = origins;
 	}
 	private publishConnectivity(online: boolean, checkedAt = 0): void {
 		for (const listener of this.connectivityListeners) listener({ version: 1, online, checkedAt });
@@ -308,7 +314,7 @@ export class ScheduleDetection implements ScheduleTriggerSource {
 		const work = (async () => {
 			let reachable = false;
 			try {
-				reachable = await Promise.resolve().then(() => this.probe(abort.signal));
+				reachable = await Promise.resolve().then(() => this.probe(abort.signal, this.origins));
 			} catch {
 				// A failed probe means unreachable, not a detector failure or an unhandled rejection.
 			}

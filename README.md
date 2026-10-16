@@ -241,7 +241,8 @@ or a usage limit. The line replaces the working indicator and clears when work r
 If internet connectivity is lost, chats show **Paused offline** rather than exhausting model retries
 into a failure, and resume automatically when connectivity returns, even with the app closed. Pilot
 pauses only on evidence: macOS reports no network for a few seconds, or a model request fails with a
-network error and a check against independent hosts fails too. A failed check alone never pauses
+network error and a check fails too. The check tries independent public hosts and the provider's own
+server, so a network that blocks the public hosts is still seen as online. A failed check alone never pauses
 chats, a stream still receiving data keeps running, and a stream that goes silent triggers a check.
 Chats resume when the network returns, a check passes, or any chat receives model data. Pilot sends
 no periodic checks while things work.

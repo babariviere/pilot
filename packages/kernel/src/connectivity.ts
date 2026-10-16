@@ -1,4 +1,5 @@
 /** Shared daemon reachability and request-only recovery. Never retries a native tool. */
+import { createHash } from "node:crypto";
 import { watch } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { basename, dirname } from "node:path";
@@ -19,28 +20,53 @@ export interface ConnectivityState {
 
 const REACHABILITY_URLS = ["https://www.gstatic.com/generate_204", "https://cp.cloudflare.com/generate_204"] as const;
 
-/** Independent hosts share one deadline. No credentials, redirects or captive-portal success. */
-export async function probeReachability(signal: AbortSignal, url?: string): Promise<boolean> {
+/** HTTPS origin of a provider endpoint. Plain HTTP cannot prove reachability: a portal can answer it. */
+export function providerOrigin(baseUrl: unknown): string | undefined {
+	if (typeof baseUrl !== "string" || baseUrl.length > 2048) return;
+	try {
+		const url = new URL(baseUrl);
+		if (url.protocol === "https:" && !url.username && !url.password) return url.origin;
+	} catch {
+		/* Not a URL, for example a virtual router. */
+	}
+}
+
+/**
+ * Independent hosts and provider origins share one deadline. No credentials or redirects. A public
+ * host must return 204 (not a portal page). A provider origin may return any status: a valid TLS
+ * certificate for that host already proves it was reached, and a portal cannot forge one.
+ */
+export async function probeReachability(
+	signal: AbortSignal,
+	url?: string,
+	origins: readonly string[] = [],
+): Promise<boolean> {
 	const finished = new AbortController();
 	const deadline = AbortSignal.any([signal, finished.signal, AbortSignal.timeout(5_000)]);
 	try {
 		deadline.throwIfAborted();
 		// One blocked host is not a host-wide outage. First validated success wins;
 		// Promise.any consumes losing rejections, including cancellation after success.
-		await Promise.any(
-			(url === undefined ? REACHABILITY_URLS : [url]).map(async (url) => {
-				const response = await fetch(url, {
-					method: "HEAD",
-					redirect: "manual",
-					cache: "no-store",
-					credentials: "omit",
-					headers: { Connection: "close" },
-					signal: deadline,
-				});
+		const request = (url: string) =>
+			fetch(url, {
+				method: "HEAD",
+				redirect: "manual",
+				cache: "no-store",
+				credentials: "omit",
+				headers: { Connection: "close" },
+				signal: deadline,
+			});
+		await Promise.any([
+			...(url === undefined ? REACHABILITY_URLS : [url]).map(async (url) => {
+				const response = await request(url);
 				await response.body?.cancel();
 				if (response.status !== 204) throw new Error("Reachability check did not return 204");
 			}),
-		);
+			...origins.map(async (origin) => {
+				const response = await request(`${origin}/`);
+				await response.body?.cancel();
+			}),
+		]);
 		return !deadline.aborted;
 	} catch {
 		return false;
@@ -95,11 +121,17 @@ export class OfflineGate {
 	readonly stallMs: number;
 	readonly activeMs: number;
 	readonly tickMs: number;
-	private readonly requestCheck: () => Promise<void>;
+	private readonly requestCheck: (origin?: string) => Promise<void>;
 	private readonly reportReachable: () => Promise<void>;
 	constructor(
 		path = process.env.PILOT_CONNECTIVITY_POLICY,
-		requestCheck = () => writeFile(`${path}.check`, "", { mode: 0o600 }),
+		// One file per provider origin, so concurrent kernels never overwrite each other's target.
+		requestCheck = (origin?: string) =>
+			origin
+				? writeFile(`${path}.check.${createHash("sha256").update(origin).digest("hex").slice(0, 16)}`, origin, {
+						mode: 0o600,
+					})
+				: writeFile(`${path}.check`, "", { mode: 0o600 }),
 		timing: OfflineTiming = {},
 		reportReachable = () => writeFile(`${path}.reachable`, "", { mode: 0o600 }),
 	) {
@@ -111,9 +143,9 @@ export class OfflineGate {
 		this.tickMs = timing.tickMs ?? 5_000;
 	}
 
-	/** Ask the daemon for one shared check. Its result alone cannot pause requests. */
-	check(): void {
-		if (this.path) void this.requestCheck().catch(() => {});
+	/** Ask the daemon for one shared check, including the provider's own server. */
+	check(origin?: string): void {
+		if (this.path) void this.requestCheck(origin).catch(() => {});
 	}
 
 	/** Model data arrived while held: the network works, so the daemon can release the hold. */
@@ -182,11 +214,11 @@ export class OfflineGate {
 	}
 
 	/** Confirm a real outage before hiding a model error. A newer daemon probe alone can release it. */
-	async recover(error: unknown, signal?: AbortSignal): Promise<boolean> {
+	async recover(error: unknown, signal?: AbortSignal, origin?: string): Promise<boolean> {
 		if (!this.path || !isTransportFailure(error)) return false;
 		signal?.throwIfAborted();
 		const since = Date.now();
-		await this.requestCheck();
+		await this.requestCheck(origin);
 		const state = await this.observe((state) => state.checkedAt > since, signal);
 		signal?.throwIfAborted();
 		if (state.online) return false;
@@ -202,7 +234,10 @@ export function offlineRequestStream(
 	gate: OfflineGate,
 	signal?: AbortSignal,
 	recoverProviderError?: (error: unknown, signal?: AbortSignal) => Promise<boolean>,
+	/** Base URL of the endpoint actually called, when routing picks a different provider. */
+	baseUrl: () => string | undefined = () => model.baseUrl,
 ): AssistantMessageEventStream {
+	const origin = () => providerOrigin(baseUrl() ?? model.baseUrl);
 	const stream = createAssistantMessageEventStream();
 	void (async () => {
 		try {
@@ -227,7 +262,7 @@ export function offlineRequestStream(
 						}
 					} else if (!checked && now - lastActivity >= gate.stallMs) {
 						checked = true;
-						gate.check();
+						gate.check(origin());
 					}
 				};
 				const received = () => {
@@ -266,7 +301,7 @@ export function offlineRequestStream(
 				} catch (error) {
 					if (offline && !signal?.aborted && !providerFailure(error)) continue;
 					if (await recoverProviderError?.(error, signal)) continue;
-					if (await gate.recover(error, signal)) continue;
+					if (await gate.recover(error, signal, origin())) continue;
 					throw error;
 				} finally {
 					clearInterval(tick);
@@ -280,7 +315,8 @@ export function offlineRequestStream(
 						(message.stopReason === "error" && !providerFailure(message.errorMessage)))
 				)
 					continue;
-				if (message.stopReason === "error" && (await gate.recover(message.errorMessage, signal))) continue;
+				if (message.stopReason === "error" && (await gate.recover(message.errorMessage, signal, origin())))
+					continue;
 				if (message.stopReason === "error" && (await recoverProviderError?.(message.errorMessage, signal)))
 					continue;
 				if (message.stopReason === "error" || message.stopReason === "aborted")
