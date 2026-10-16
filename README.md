@@ -351,7 +351,7 @@ Comments hold actionable discussion. Agents check existing discussions before po
 addressed comments after saving any lasting outcome. Unanswered questions stay open.
 
 Task status icons fill clockwise from the top: empty for To do, one third for In progress and two thirds
-for In review. Both task status menus show the same icons as the rows.
+for In review. Task status menus list the statuses as plain text.
 
 Tasks can belong to ordered phases, each with a name and optional goal. The Tasks tab groups tasks by
 phase, folds finished phases, and lets you add, edit, reorder and delete phases. Drag tasks to reorder them
