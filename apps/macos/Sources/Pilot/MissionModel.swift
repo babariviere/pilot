@@ -80,7 +80,7 @@ extension AppModel {
 
     func needsYou(_ mission: Mission, context: HostViewContext? = nil) -> [MissionNeedsYouItem] {
         let client = context.map { $0.hosts.presentationClient($0.host) } ?? self.client
-        MissionNeedsYou.items(mission: mission, detail: client.missionDetails[mission.id],
+        return MissionNeedsYou.items(mission: mission, detail: client.missionDetails[mission.id],
                               members: members(of: mission, context: context),
                               isUnread: { session in context.map { self.isUnread(session, on: $0.host) } ?? self.attention.isUnread(session) })
     }
