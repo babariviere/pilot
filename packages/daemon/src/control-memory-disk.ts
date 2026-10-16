@@ -310,17 +310,31 @@ export class ControlMemoryDisk {
 		this.db.prepare("UPDATE jobs SET state=2 WHERE id=? AND n=? AND state=1").run(id, n);
 	}
 	/** Raw log reads are paged and never used to reconstruct the persisted view. */
-	message(id: number, offset = 0): { message: Omit<ControlMessage, "text"> & { text: string }; next?: number } {
+	message(
+		id: number,
+		offset = 0,
+	): { message: Omit<ControlMessage, "text" | "input" | "key"> & { text: string }; format?: "json"; next?: number } {
 		range(id, 1);
 		if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("Invalid page offset");
 		const row = this.db.prepare("SELECT payload FROM messages WHERE id=?").get(id);
 		if (!row) throw new Error("Unknown message");
 		const message = JSON.parse(String(row.payload)) as ControlMessage;
-		let end = Math.min(message.text.length, offset + 12_000);
-		if (end < message.text.length && /[\uD800-\uDBFF]/.test(message.text[end - 1]!)) end--;
+		const text =
+			message.kind === "tool"
+				? JSON.stringify({ name: message.name, input: message.input, text: message.text })
+				: message.text;
+		if (
+			offset > text.length ||
+			(offset > 0 && /[\uD800-\uDBFF]/.test(text[offset - 1]!) && /[\uDC00-\uDFFF]/.test(text[offset]!))
+		)
+			throw new Error("Invalid page boundary");
+		let end = Math.min(text.length, offset + 12_000);
+		if (end < text.length && /[\uD800-\uDBFF]/.test(text[end - 1]!)) end--;
+		const { input: _input, key: _key, ...metadata } = message;
 		return {
-			message: { ...message, text: message.text.slice(offset, end) },
-			...(end < message.text.length ? { next: end } : {}),
+			message: { ...metadata, text: text.slice(offset, end) },
+			...(message.kind === "tool" ? { format: "json" as const } : {}),
+			...(end < text.length ? { next: end } : {}),
 		};
 	}
 	children(id: number, n: number): ControlLine[] {
