@@ -8,6 +8,11 @@ export class CriticalReviewStore {
 	private closed = false;
 	private fault?: Error;
 	private readonly clock: () => number;
+	private readonly invalidations = new Set<() => void>();
+	onPrivateInvalidation(listener: () => void): () => void {
+		this.invalidations.add(listener);
+		return () => this.invalidations.delete(listener);
+	}
 	private readonly pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
 	constructor(file: string, clock: () => number = Date.now) {
 		this.clock = clock;
@@ -22,6 +27,8 @@ export class CriticalReviewStore {
 		});
 		const fail = (error: Error) => {
 			this.fault = error;
+			for (const listener of this.invalidations) listener();
+			this.invalidations.clear();
 			for (const waiting of this.pending.values()) waiting.reject(error);
 			this.pending.clear();
 		};
@@ -35,7 +42,14 @@ export class CriticalReviewStore {
 		if (this.pending.size >= 32) return Promise.reject(new Error("Critical review store busy"));
 		return new Promise((resolve, reject) => {
 			const id = ++this.serial;
-			this.pending.set(id, { resolve: (value) => resolve(value as T), reject });
+			this.pending.set(id, {
+				resolve: (value) => {
+					if (method === "eraseSource" || method === "expire")
+						for (const listener of this.invalidations) listener();
+					resolve(value as T);
+				},
+				reject,
+			});
 			this.worker.ref();
 			this.worker.postMessage({ id, method, args: { now: this.clock(), ...args } });
 		});
@@ -52,6 +66,8 @@ export class CriticalReviewStore {
 	}
 	async close(): Promise<void> {
 		if (this.closed) return;
+		for (const listener of this.invalidations) listener();
+		this.invalidations.clear();
 		try {
 			await this.rpc("close");
 		} finally {

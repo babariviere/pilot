@@ -431,6 +431,9 @@ export class ReviewAccounting {
 	constructor(store: CriticalReviewStore) {
 		this.store = store;
 	}
+	onPrivateInvalidation(listener: () => void): () => void {
+		return this.store.onPrivateInvalidation(listener);
+	}
 	grant(approval: CriticalReviewApproval): Promise<CriticalReviewApproval> {
 		return this.store.put(approval);
 	}
