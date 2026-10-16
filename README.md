@@ -435,8 +435,8 @@ If a target is missing, ambiguous or no longer a started state, Pilot leaves the
 a quiet error. Starting work still proceeds. Saved choices are rechecked against the issue's actual team.
 Confirming Start chat or Start mission moves an eligible Linear ticket to that state, or adds an `eyes`
 reaction to a Slack thread's parent message as you. The Slack reaction is attempted once per item,
-counts an existing reaction as success, and is never removed automatically. Failures never block the
-work and appear quietly on the item. These are the only tracking writes, never Slack messages or replies.
+counts an existing reaction as success, and can be removed on Done through the opt-in route below. Failures never
+block the work and appear quietly on the item. These are the only tracking writes, never Slack messages or replies.
 Linear size classification suggests Quick fix, Needs planning or Unknown from a bounded title and description.
 It runs once per issue update, at most eight attempts per poll and 200 per UTC day across projects, with the
 cheapest scoped model and no tools or thinking. Descriptions are transient; failed attempts remain Unknown
@@ -478,8 +478,29 @@ daily Slack budget. A ✅ from anyone marks the item Done with “Done · ✅ in
 that reaction remains present, even if its count changes. Removing it and adding it again is a new reaction.
 When an item with a successful eyes reaction becomes Done (manually, from a merge, or from Slack), Pilot adds ✅
 once. Already reacted counts as success; failures show a quiet row error without changing Done. Reopening never
-writes reactions. The dedicated Slack server has no remove-reaction tool, so eyes stays in place. No alternate
-API, messages or replies are used.
+writes reactions. Adding ✅ always uses the dedicated Slack server. That server has no remove-reaction tool.
+To opt in to removing only the eyes reaction Pilot successfully added, create a local
+`~/.pi/agent/pilot-tracking.json` (or under `PILOT_AGENT_DIR`) with an explicit MCP route:
+
+```json
+{
+  "slackEyesRemoval": {
+    "server": "my-slack-proxy",
+    "tool": "remove_reaction",
+    "dispatcher": { "tool": "dispatch", "nameKey": "name", "argumentsKey": "arguments" }
+  }
+}
+```
+
+Names above are placeholders. Use exact names from your own global `mcp.json`; omit `dispatcher` for a direct tool.
+The inner tool must accept `{channel, ts, name}` (`name` is always `eyes`, without colons) and return JSON
+`{ok: true}` on success, via MCP structured content or one JSON text block. The configured server must use the
+same Slack user as the dedicated server: Slack only lets users remove their own reactions.
+This local file is read afresh for each new Done attempt, never from a repository or replicated project settings.
+Missing/invalid config, unreachable/hidden tools, `no_reaction`, private-channel authorization failures and other
+errors leave eyes in place, do not affect ✅ or local Done, and log one bounded line without retrying or falling
+back to another server. Each item is attempted once, including across restarts; configuring a route does not
+replay old Done items. No Slack messages or replies are sent.
 Slack messages and Linear issue or project links open in their desktop apps when installed, with a
 browser fallback when the app is unavailable. Copied links remain web URLs.
 Slack links without a workspace ID use Slack's active workspace.

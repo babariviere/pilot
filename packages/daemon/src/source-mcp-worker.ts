@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
 import type { LoadedMcpConfig, McpServerEntry, McpTransportFactory } from "@earendil-works/pi-coding-agent";
 import { installCredentialBrokerHooks } from "@pilot/kernel/credential-hooks";
+import { loadSlackRemovalRoute, slackRemovalCall } from "./slack-removal-route.ts";
 import {
 	decodeMcpResult,
 	dedicatedSourceTool,
@@ -73,13 +74,17 @@ let reply: {
 };
 try {
 	const { kind, tool: logicalTool, args } = workerData;
-	const name = dedicatedSourceTool(kind, logicalTool);
 	if (!validSourceArguments(logicalTool, args)) throw new SetupError("Invalid Linear or Slack start update");
-	if (!name) throw new SetupError("Unknown dedicated MCP source tool");
+	const removal = kind === "slack" && logicalTool === "removeSlackEyes";
 	const agentDir = workerData.agentDir ?? paths.getAgentDir();
+	const route = removal
+		? slackRemovalCall(await loadSlackRemovalRoute(agentDir), args.channel_id, args.message_ts)
+		: undefined;
+	const name = route?.tool ?? dedicatedSourceTool(kind, logicalTool);
+	if (!name) throw new SetupError("Unknown dedicated MCP source tool");
 	// Global user config only. A repository cannot execute a new MCP server through tracking settings.
 	const loaded = config.loadMcpConfig({ agentDir, cwd: agentDir, projectTrusted: false });
-	const entry = loaded.servers.find((entry) => entry.name === kind);
+	const entry = loaded.servers.find((entry) => entry.name === (route?.server ?? kind));
 	if (!entry) throw new SetupError("Dedicated MCP server is not configured in pi");
 	if (entry.config.enabled === false) throw new SetupError("MCP server is disabled or hidden");
 	if (config.getMcpToolExposure(entry.config, name) === "hidden") throw new SetupError("MCP tool is hidden");
@@ -100,13 +105,17 @@ try {
 	const tool = connection.tools.find((tool) => tool.name === name);
 	if (
 		!tool ||
-		(logicalTool !== "startIssue" &&
+		(!removal &&
+			logicalTool !== "startIssue" &&
 			logicalTool !== "startSlack" &&
 			logicalTool !== "doneSlack" &&
 			(tool.annotations?.readOnlyHint === false || tool.annotations?.destructiveHint === true))
 	)
 		throw new SetupError("Tracking tool is missing or advertises writes");
-	const result = await connection.callTool(name, args, { signal: controller.signal, timeoutMs: 30_000 });
+	const result = await connection.callTool(name, route?.args ?? args, {
+		signal: controller.signal,
+		timeoutMs: 30_000,
+	});
 	reply = { value: decodeMcpResult(result, logicalTool) };
 } catch (error) {
 	const limited = error instanceof SourceRateLimited ? error : sourceRateLimit(error);

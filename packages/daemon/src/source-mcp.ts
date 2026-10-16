@@ -24,7 +24,7 @@ export function dedicatedSourceTool(kind: TrackedKind, tool: string): string | u
 	return undefined;
 }
 
-/** Start capabilities cannot edit other fields or add any other reaction. */
+/** Write capabilities cannot edit other fields or write any other reaction. */
 export function validSourceArguments(tool: string, args: Record<string, unknown>): boolean {
 	if (tool === "profile") return Object.keys(args).length === 1 && args.response_format === "detailed";
 	if (tool === "mentions" || tool === "mentionsPrivate")
@@ -33,10 +33,10 @@ export function validSourceArguments(tool: string, args: Record<string, unknown>
 			/^in:(?:<#[CG][A-Z0-9]{1,199}>|[a-z0-9_-]{1,200})(?: with:<@[UW][A-Z0-9]{1,39}>)?$/i.test(args.filters) &&
 			(tool !== "mentionsPrivate" || args.channel_types === "public_channel,private_channel")
 		);
-	if (tool === "startSlack" || tool === "doneSlack" || tool === "reactions")
+	if (tool === "startSlack" || tool === "doneSlack" || tool === "removeSlackEyes" || tool === "reactions")
 		return (
 			Object.keys(args).length === (tool === "reactions" ? 2 : 3) &&
-			(tool === "reactions" || args.emoji === (tool === "startSlack" ? "eyes" : "white_check_mark")) &&
+			(tool === "reactions" || args.emoji === (tool === "doneSlack" ? "white_check_mark" : "eyes")) &&
 			typeof args.channel_id === "string" &&
 			/^[CDG][A-Z0-9]{1,199}$/.test(args.channel_id) &&
 			typeof args.message_ts === "string" &&
@@ -190,7 +190,8 @@ export class PiSourceMcpClient implements SourceMcpClient {
 			return Promise.reject(new Error("MCP arguments exceed 256 KiB"));
 		if (this.running.size >= 2) return Promise.reject(new Error("MCP client busy, retry shortly"));
 		if (!validSourceArguments(tool, args)) return Promise.reject(new Error("Invalid Linear or Slack start update"));
-		if (!dedicatedSourceTool(kind, tool)) return Promise.reject(new Error("Unknown dedicated MCP source tool"));
+		if (!dedicatedSourceTool(kind, tool) && !(kind === "slack" && tool === "removeSlackEyes"))
+			return Promise.reject(new Error("Unknown dedicated MCP source tool"));
 		const worker = new Worker(new URL("./source-mcp-worker.ts", import.meta.url), {
 			workerData: { agentDir: this.agentDir, kind, tool, args },
 		});
@@ -261,6 +262,16 @@ export function decodeMcpResult(
 ): TrackingJson {
 	if (tool === "startSlack" || tool === "doneSlack") return decodeSlackReaction(result);
 	if (tool === "reactions") return decodeSlackReactionRead(result);
+	if (tool === "removeSlackEyes") {
+		// Require explicit JSON success. In particular, no_reaction is a failure, not already_reacted.
+		try {
+			const value = decodeMcpResult(result) as { ok?: unknown; error?: unknown } | null;
+			if (value?.ok === true && !value.error) return { ok: true };
+		} catch {
+			/* Never expose proxy response text or identifiers. */
+		}
+		throw new SourceToolError("Couldn't remove Slack eyes reaction");
+	}
 	if (result.isError) throw sourceRateLimit(result) ?? new SourceToolError("MCP tool returned an error");
 	const value =
 		result.structuredContent ??
