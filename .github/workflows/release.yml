@@ -290,9 +290,13 @@ jobs:
       contents: write
     env:
       PILOT_UPDATE_REPOSITORY: ${{ github.repository }}
-      BUNDLE_VERSION: ${{ github.run_number }}.${{ github.run_attempt }}
+      # Renaming the workflow file restarted github.run_number at 1, below the last published
+      # Sparkle build (1061.1). The offset keeps CFBundleVersion increasing; never lower it.
+      BUNDLE_VERSION_OFFSET: '10000'
       RELEASE_TAG: ${{ inputs.release_tag || needs.release-please.outputs.tag_name }}
     steps:
+      - name: Compute monotonic Sparkle build version
+        run: echo "BUNDLE_VERSION=$((GITHUB_RUN_NUMBER + BUNDLE_VERSION_OFFSET)).$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
