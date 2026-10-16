@@ -42,6 +42,7 @@ import { TriageGroomer, workerTriage } from "./triage-grooming.ts";
 import { untrackedStats } from "./untracked-stats.ts";
 import { WatchService } from "./watch-service.ts";
 import { SessionWatchSource } from "./watch-sessions.ts";
+import { PullRequestWatchSource } from "./watch-pull-requests.ts";
 
 const config = loadConfig();
 await mkdir(config.agentDir ?? getAgentDir(), { recursive: true, mode: 0o700 });
@@ -233,6 +234,10 @@ await power?.start();
 await sessions.load(maintenance?.frozen);
 await sessions.ensureControlChat();
 const sessionWatches = new SessionWatchSource(watches, sessions);
+const prWatches = new PullRequestWatchSource(watches, config.home, (target) =>
+	sessions.refreshWatchedPullRequest(target),
+);
+sessions.setWatchPullRequests(prWatches);
 // A reply in a waiting Slack thread resumes the message's latest chat with it, once chats are loaded.
 tracking.slackWaiting = createSlackWaitingWatcher(trackedItems, async (sessionId, message, requestId) => {
 	const chat = sessions.get(sessionId);
@@ -325,6 +330,7 @@ async function stop(): Promise<void> {
 	await Promise.all(completionWrites);
 	await trackedItems.close();
 	await sessionWatches.stop();
+	await prWatches.stop();
 	await watches.close();
 	await power?.stop();
 	await untrackedStats.close();

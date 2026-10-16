@@ -1,7 +1,7 @@
 import { Worker } from "node:worker_threads";
 import { NoticeDispatcher } from "./notice-dispatcher.ts";
-import type { WatchNotice, WatchNoticeSink, WatchObservation } from "./watch-delivery.ts";
-import { validateWatch, type Watch, type WatchInput } from "./watches.ts";
+import type { WatchNotice, WatchNoticeSink, WatchObservation, WatchTransition } from "./watch-delivery.ts";
+import { validateWatch, type Watch, type WatchInput, type WatchTarget } from "./watches.ts";
 
 /** Bounded RPC mailbox. No SQLite connection or unbounded watch cache on the event loop. */
 export class WatchService {
@@ -66,6 +66,14 @@ export class WatchService {
 		}
 		return matched;
 	}
+	async transition(input: WatchTransition): Promise<number> {
+		const matched = await this.rpc<number>("transition", { input, self: this.sink?.sessionId });
+		if (matched) {
+			this.changed();
+			this.dispatcher.schedule();
+		}
+		return matched;
+	}
 	async flush(now = Date.now()): Promise<void> {
 		await this.dispatcher.flush(now);
 	}
@@ -95,6 +103,9 @@ export class WatchService {
 	}
 	list(): Promise<Watch[]> {
 		return this.rpc("list");
+	}
+	targets(kind: WatchTarget["kind"]): Promise<WatchTarget[]> {
+		return this.rpc("targets", kind);
 	}
 	onChange(listener: () => void): () => void {
 		this.listeners.add(listener);

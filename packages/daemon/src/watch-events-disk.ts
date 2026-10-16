@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { noticeDeadline, NOTICE_WINDOW_MS, NOTICE_HOURLY_CAP } from "./notice-dispatcher.ts";
-import type { WatchNotice, WatchObservation } from "./watch-delivery.ts";
+import type { WatchNotice, WatchObservation, WatchTransition } from "./watch-delivery.ts";
 import type { Watch } from "./watches.ts";
 
 /** Called only on the SQLite worker. Match/consume/freeze are transactional. */
@@ -11,6 +11,7 @@ export class WatchEventsDisk {
 		db.exec(`
 			CREATE TABLE IF NOT EXISTS watch_observations (source TEXT PRIMARY KEY, version TEXT NOT NULL, at INTEGER NOT NULL);
 			CREATE TABLE IF NOT EXISTS watch_causes (session_id TEXT PRIMARY KEY, origin TEXT NOT NULL);
+			CREATE TABLE IF NOT EXISTS watch_states (source TEXT PRIMARY KEY, state TEXT NOT NULL, revision INTEGER NOT NULL, at INTEGER NOT NULL);
    CREATE TABLE IF NOT EXISTS watch_pending (
     watch_id TEXT PRIMARY KEY, event_id INTEGER NOT NULL, first_at INTEGER NOT NULL, last_at INTEGER NOT NULL, data TEXT NOT NULL
    );
@@ -33,9 +34,9 @@ export class WatchEventsDisk {
 			throw error;
 		}
 	}
-	observe(events: WatchObservation[], self?: string): number {
+	observe(events: WatchObservation[], self?: string, inside = false): number {
 		if (events.length > 128) throw new Error("Watch observation batch too large");
-		return this.transaction(() => {
+		const apply = () => {
 			let matched = 0;
 			const consumed = new Set<string>();
 			for (const event of events) {
@@ -102,6 +103,25 @@ export class WatchEventsDisk {
 				"DELETE FROM watch_observations WHERE source IN (SELECT source FROM watch_observations ORDER BY at DESC LIMIT -1 OFFSET 50000)",
 			);
 			return matched;
+		};
+		return inside ? apply() : this.transaction(apply);
+	}
+	transition(input: WatchTransition, self?: string): number {
+		return this.transaction(() => {
+			const previous = this.db.prepare("SELECT state, revision FROM watch_states WHERE source=?").get(input.source);
+			if (previous?.state === input.state) return 0;
+			const revision = Number(previous?.revision ?? 0) + 1;
+			this.db
+				.prepare(
+					"INSERT INTO watch_states VALUES(?,?,?,?) ON CONFLICT(source) DO UPDATE SET state=excluded.state,revision=excluded.revision,at=excluded.at",
+				)
+				.run(input.source, input.state, revision, Date.now());
+			this.db.exec(
+				"DELETE FROM watch_states WHERE source IN (SELECT source FROM watch_states ORDER BY at DESC LIMIT -1 OFFSET 50000)",
+			);
+			return previous && input.candidate
+				? this.observe([{ ...input.candidate, version: String(revision) }], self, true)
+				: 0;
 		});
 	}
 	attributeSessionRun(sessionId: string, origin: string): void {

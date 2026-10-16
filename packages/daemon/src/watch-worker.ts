@@ -6,7 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { parentPort, workerData } from "node:worker_threads";
 import { MAX_WATCHES, validateWatch, type Watch, type WatchInput } from "./watches.ts";
 import { WatchEventsDisk } from "./watch-events-disk.ts";
-import type { WatchObservation, WatchNotice } from "./watch-delivery.ts";
+import type { WatchObservation, WatchNotice, WatchTransition } from "./watch-delivery.ts";
 
 const { path } = workerData as { path: string };
 if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -36,6 +36,21 @@ function list(now: number): Watch[] {
 }
 function dispatch(op: string, args: unknown): unknown {
 	const now = Date.now();
+	if (op === "targets") {
+		prune(now);
+		return db
+			.prepare("SELECT DISTINCT target_id, target_scope FROM watches WHERE target_kind=?")
+			.all(String(args))
+			.map((row) => ({
+				kind: String(args),
+				id: String(row.target_id),
+				...(row.target_scope ? { missionId: String(row.target_scope) } : {}),
+			}));
+	}
+	if (op === "transition") {
+		const a = args as { input: WatchTransition; self?: string };
+		return events.transition(a.input, a.self);
+	}
 	if (op === "attribute") {
 		const a = args as { sessionId: string; origin: string };
 		return events.attributeSessionRun(a.sessionId, a.origin);
