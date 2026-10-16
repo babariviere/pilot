@@ -3,6 +3,7 @@ import SwiftUI
 
 /// Resolves on click, never while laying out or streaming message text.
 struct ArtifactLinkView: View {
+    @EndpointClient private var endpoint
     let link: ArtifactLink
     @StateObject private var state = ArtifactLinkViewState()
 
@@ -15,7 +16,7 @@ struct ArtifactLinkView: View {
                     Group {
                         if let error = state.error {
                             EmptyStateView(icon: PilotIcon.warning, title: "Couldn't open this artifact", message: error) {
-                                Button("Retry") { Task { await state.load(link, client: AppModel.shared.client) } }
+                                Button("Retry") { Task { await state.load(link, client: endpoint) } }
                             }
                         } else {
                             ProgressView("Loading artifact…")
@@ -25,7 +26,7 @@ struct ArtifactLinkView: View {
                 }
             }
         }
-        .task(id: link.id) { await state.load(link, client: AppModel.shared.client) }
+        .task(id: link.id) { await state.load(link, client: endpoint) }
     }
 }
 

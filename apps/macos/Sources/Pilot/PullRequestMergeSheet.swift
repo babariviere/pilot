@@ -4,6 +4,7 @@ import SwiftUI
 struct PullRequestMergeTarget: Identifiable {
     let sessionId: String
     let pullRequest: SessionPullRequest
+    var reference: HostResourceRef? = nil
     var id: String { "\(sessionId):\(pullRequest.url)" }
 
     static func candidates(in session: SessionSummary) -> [SessionPullRequest] {
@@ -11,15 +12,16 @@ struct PullRequestMergeTarget: Identifiable {
         return session.linkedPullRequests.filter { $0.state == .open && $0.browserURL != nil }
     }
 
-    static func latest(in session: SessionSummary) -> Self? {
+    static func latest(in session: SessionSummary, reference: HostResourceRef? = nil) -> Self? {
         candidates(in: session).max(by: { $0.number < $1.number }).map {
-            Self(sessionId: session.id, pullRequest: $0)
+            Self(sessionId: session.id, pullRequest: $0, reference: reference)
         }
     }
 }
 
 /// An explicit confirmation, never an agent prompt. Fresh GitHub data fences the final merge to this head.
 struct PullRequestMergeSheet: View {
+    @EndpointClient private var client
     let target: PullRequestMergeTarget
     @EnvironmentObject private var model: AppModel
     @State private var preview: PullRequestMergePreview?
@@ -77,7 +79,7 @@ struct PullRequestMergeSheet: View {
         preview = nil
         defer { loading = false }
         do {
-            let value = try await model.client.previewPullRequestMerge(target.sessionId, url: target.pullRequest.url)
+            let value = try await client.previewPullRequestMerge(target.sessionId, url: target.pullRequest.url)
             guard !Task.isCancelled else { return }
             method = value.methods.first ?? .squash
             preview = value
@@ -93,7 +95,7 @@ struct PullRequestMergeSheet: View {
         Task {
             defer { merging = false }
             do {
-                try await model.client.mergePullRequest(target.sessionId, preview: preview, method: method)
+                try await client.mergePullRequest(target.sessionId, preview: preview, method: method)
                 merged = true
             } catch {
                 // A lost response may follow a successful merge. Re-read before any further confirmation.

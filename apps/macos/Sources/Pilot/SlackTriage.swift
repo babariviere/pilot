@@ -540,7 +540,7 @@ final class SlackExcerptStore: ObservableObject {
 struct SlackTriagePage: View {
     let projectId: String
     @EnvironmentObject private var model: AppModel
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
     @Environment(\.openSettings) private var openSettings
     @StateObject private var triage: SlackTriageModel
     @StateObject private var cases: SlackCasesModel

@@ -238,11 +238,12 @@ struct ScheduleSheet: View {
 
 /// Edits the trigger of a pending item. Only pending items can change; pilotd rejects stale revisions.
 struct EditScheduleSheet: View {
+    @EndpointClient private var endpoint
     let item: ScheduledItem
 
     var body: some View {
         ScheduleSheet(title: "Edit schedule", confirmTitle: "Save", trigger: item.trigger, at: item.at) { when in
-            _ = try await AppModel.shared.client.updateSchedule(
+            _ = try await endpoint.updateSchedule(
                 item.id, SchedulePatch(trigger: when.trigger, at: when.at, expectedRevision: item.revision)
             )
         }
@@ -253,6 +254,7 @@ struct EditScheduleSheet: View {
 /// opens the chat of a failed one; cancel or dismiss is revealed on hover, and every action is also in the
 /// context menu and the accessibility actions.
 struct ScheduledItemRow: View {
+    @EndpointClient private var endpoint
     let item: ScheduledItem
     let detail: String
     var verticalPadding: CGFloat = 7
@@ -322,7 +324,7 @@ struct ScheduledItemRow: View {
 
     private func remove() {
         Task {
-            do { try await AppModel.shared.client.deleteSchedule(item.id) }
+            do { try await endpoint.deleteSchedule(item.id) }
             catch { self.error = error.localizedDescription }
         }
     }
@@ -332,6 +334,7 @@ struct ScheduledItemRow: View {
 /// send ("Scheduled · Tomorrow 9:00 AM"). Hover offers Edit and Cancel. Reads schedules through a publisher, so
 /// schedule and session updates never re-render the transcript.
 struct ScheduledMessages: View {
+    @EndpointClient private var endpoint
     let sessionId: String
     var topPadding: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -347,7 +350,7 @@ struct ScheduledMessages: View {
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(.top, items.isEmpty ? 0 : topPadding)
         .animation(Theme.Motion.standard(reduceMotion: reduceMotion), value: items.map(\.id))
-        .onReceive(AppModel.shared.client.$schedules) { all in
+        .onReceive(endpoint.$schedules) { all in
             let next = ScheduleText.followUps(all, sessionId: sessionId)
             if next.map(\.id) != items.map(\.id) || next.map(\.revision) != items.map(\.revision) { items = next }
         }
@@ -356,6 +359,7 @@ struct ScheduledMessages: View {
 
 /// One scheduled message: the user's bubble, outlined rather than filled because it has not been sent yet.
 private struct ScheduledMessageBubble: View {
+    @EndpointClient private var endpoint
     let item: ScheduledItem
     @Environment(\.pilotFonts) private var fonts
     @State private var hovered = false
@@ -431,7 +435,7 @@ private struct ScheduledMessageBubble: View {
 
     private func cancel() {
         Task {
-            do { try await AppModel.shared.client.deleteSchedule(item.id) }
+            do { try await endpoint.deleteSchedule(item.id) }
             catch { self.error = error.localizedDescription }
         }
     }

@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import PilotCore
 import SwiftUI
 
@@ -41,7 +42,7 @@ struct CommandPaletteCatalog {
     }
 
     func entries() -> [CommandPaletteEntry] {
-        chats() + tasks() + missions() + projects() + pages() + actions() + tracked()
+        chats() + remoteResources() + tasks() + missions() + projects() + pages() + actions() + tracked()
     }
 
     /// Chats by latest activity, then archived chats by archive time. Archived chats are found by search only and
@@ -64,6 +65,29 @@ struct CommandPaletteCatalog {
                 session: session
             ) { [model] in model.reveal(session: session.id) }
         }
+    }
+
+    private func remoteResources() -> [CommandPaletteEntry] {
+        let hosts = model.hosts
+        let chats = hosts.sessions.filter { $0.ref.host != model.localHost }.map { item in
+            let name = HostViewContext(host: item.ref.host, hosts: hosts).name
+            return CommandPaletteEntry(item: CommandPaletteItem(id: "chat:" + item.ref.storageKey, kind: .chat,
+                title: item.value.title, keywords: [name, item.value.branch ?? ""], pullRequestNumbers: item.value.linkedPullRequests.map(\.number)),
+                icon: .message, suffix: name, detail: hosts.available.contains(item.ref.host) ? nil : "Disconnected. Current state unknown.") {
+                    try? model.selectSession(item.ref)
+                }
+        }
+        let projects = hosts.projects.filter { $0.ref.host != model.localHost }.map { item in
+            CommandPaletteEntry(item: CommandPaletteItem(id: "project:" + item.ref.storageKey, kind: .project,
+                title: item.value.name, keywords: [HostViewContext(host: item.ref.host, hosts: hosts).name]), icon: .project,
+                detail: HostViewContext(host: item.ref.host, hosts: hosts).name) { model.navigate(.project, id: item.ref.storageKey) }
+        }
+        let missions = hosts.missions.filter { $0.ref.host != model.localHost }.map { item in
+            CommandPaletteEntry(item: CommandPaletteItem(id: "mission:" + item.ref.storageKey, kind: .mission,
+                title: item.value.title, keywords: [HostViewContext(host: item.ref.host, hosts: hosts).name]), icon: .mission,
+                detail: HostViewContext(host: item.ref.host, hosts: hosts).name) { model.navigate(.mission, id: item.ref.storageKey) }
+        }
+        return chats + projects + missions
     }
 
     /// Tasks of the active missions, open ones first. A task's pull requests are the ones linked to it.
@@ -344,6 +368,7 @@ final class CommandPaletteModel: ObservableObject {
     private var catalog: CommandPaletteCatalog?
     private var loading: Task<Void, Never>?
     private weak var client: PilotClient?
+    private var hostObservation: AnyCancellable?
     /// Slack messages pilotd found for the current query, and the query they answer.
     private var reports: (query: String, items: [TrackedItem]) = ("", [])
     private var searching: Task<Void, Never>?
@@ -361,6 +386,9 @@ final class CommandPaletteModel: ObservableObject {
         catalog = CommandPaletteCatalog(model: model, openSettings: openSettings,
                                         openKeyboardShortcuts: openKeyboardShortcuts)
         client = model.client
+        hostObservation = model.hosts.objectWillChange
+            .debounce(for: .milliseconds(30), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in self?.rebuild() }
         rebuild()
         loading?.cancel()
         loading = Task { [weak self] in
@@ -385,6 +413,7 @@ final class CommandPaletteModel: ObservableObject {
     }
 
     func stop() {
+        hostObservation = nil
         loading?.cancel()
         loading = nil
         searching?.cancel()

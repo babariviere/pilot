@@ -145,6 +145,7 @@ private struct InlineDiagramPreview: View {
 
 /// Only trusted bootstrap/library JavaScript runs. Diagram source is inert data, not HTML.
 struct InlineDiagramWebView: NSViewRepresentable {
+    @EndpointClient private var endpoint
     let kind: MarkdownDiagramKind
     let source: String
     let width: CGFloat
@@ -156,7 +157,7 @@ struct InlineDiagramWebView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> WKWebView {
         Self.makeView(kind: kind, source: source, coordinator: context.coordinator,
-                      client: AppModel.shared.client, expanded: expanded)
+                      client: endpoint, expanded: expanded)
     }
 
     /// Shared with the native renderer integration test.

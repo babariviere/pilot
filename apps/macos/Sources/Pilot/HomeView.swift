@@ -4,6 +4,8 @@ import SwiftUI
 
 @MainActor
 final class NewSessionForm: ObservableObject {
+    @Published var executionHost: HostRef? { didSet { onDraftChanged?() } }
+    var pendingOperationId: String? { didSet { onDraftChanged?() } }
     let branches = BranchSelectorState()
     private(set) var revision = UUID()
     var onDraftChanged: (() -> Void)?
@@ -116,14 +118,14 @@ final class NewSessionForm: ObservableObject {
         return true
     }
 
-    func spawnRequest(in project: Project?, branches: BranchSelectorState? = nil) -> SpawnRequest {
+    func spawnRequest(in project: Project?, branches: BranchSelectorState? = nil, rawAttachments: Bool = false) -> SpawnRequest {
         let branches = branches ?? self.branches
         let scope = BranchSelectorState.scope(project: project, mode: mode, workspace: workspace)
         let model = model.trimmingCharacters(in: .whitespaces)
         return SpawnRequest(
             projectId: mission?.projectId ?? project?.id,
             cwd: mission == nil && project == nil ? folder : nil,
-            message: attachments.message(text: message),
+            message: rawAttachments ? message : attachments.message(text: message),
             model: model.isEmpty ? nil : model,
             baseBranch: branches.selection(for: scope),
             mode: mode,
@@ -146,7 +148,7 @@ enum ComposerTab: Hashable {
 /// Home: a sky band, the task composer, and how every project is doing (`HomeOverview`).
 struct HomeView: View {
     @EnvironmentObject private var app: AppModel
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
 
     var body: some View {
         ScrollView {
@@ -180,7 +182,10 @@ struct HomeView: View {
 /// "New task" composer with a "Running" tab, as on Berth's home.
 struct TaskComposer: View {
     @EnvironmentObject private var app: AppModel
-    @ObservedObject private var client: PilotClient
+    @EndpointClient private var localClient
+    @ObservedObject private var hosts = AppModel.shared.hosts
+    @State private var choosingRepository = false
+    @State private var retryingCreate: DurableOperation?
     @Environment(\.pilotFonts) private var fonts
     @AppStorage("lastProjectId") private var lastProjectId = ""
     @StateObject private var form: NewSessionForm
@@ -191,17 +196,29 @@ struct TaskComposer: View {
         let form = form ?? NewSessionForm()
         _form = StateObject(wrappedValue: form)
         _branches = StateObject(wrappedValue: branches ?? form.branches)
-        _client = ObservedObject(wrappedValue: client ?? AppModel.shared.client)
+        _localClient = EndpointClient(client)
     }
+
+    private var destinationHost: HostRef? { form.executionHost ?? app.localHost }
+    private var remote: Bool { destinationHost != nil && destinationHost != app.localHost }
+    private var client: PilotClient { destinationHost.map { hosts.presentationClient($0) } ?? localClient }
 
     private var project: Project? {
         if let mission = form.mission { return client.project(mission.projectId) }
-        return client.project(app.draftProjectId) ?? (form.folder.isEmpty ? client.project(lastProjectId) ?? client.projects.first : nil)
+        return client.project(app.draftProjectId) ?? (form.folder.isEmpty && !remote ? client.project(lastProjectId) ?? client.projects.first : nil)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 14) {
+                Menu {
+                    if let local = app.localHost { Button("Local") { chooseHost(local) } }
+                    ForEach(hosts.offlineHosts.keys.sorted { $0.hostId < $1.hostId }, id: \.self) { host in
+                        Button(HostViewContext(host: host, hosts: hosts).name) { chooseHost(host) }
+                    }
+                } label: {
+                    ChipLabel(title: destinationHost.map { HostViewContext(host: $0, hosts: hosts).name } ?? "Local", icon: PilotIcon.terminal)
+                }.chipMenuStyle().disabled(form.busy || form.mission != nil || form.trackedItem != nil)
                 TabButton(title: "New chat", selected: form.tab == .newTask) { form.tab = .newTask }
                 TabButton(title: "Running", count: client.workingCount, selected: form.tab == .running) { form.tab = .running }
                 Spacer()
@@ -230,12 +247,35 @@ struct TaskComposer: View {
         .task(id: modelScopeKey) { await loadModels() }
         .task(id: branchLoadKey) { await loadBranches() }
         .onAppear { consumeDraft() }
+        .confirmationDialog("Retry the original chat start?", isPresented: Binding(get: { retryingCreate != nil }, set: { if !$0 { retryingCreate = nil } }), presenting: retryingCreate) { operation in
+            Button("Retry original start") { Task { do { try await hosts.retryOperation(operation) } catch { form.error = error.localizedDescription } } }
+        } message: { _ in Text("Only the original saved request is retried on its original devbox. Your newer draft is not sent.") }
+        .sheet(isPresented: $choosingRepository) {
+            if let host = destinationHost {
+                RepositoryChooser(host: host, hosts: hosts) { selected in
+                    app.draftProjectId = selected.value.id
+                    form.folder = ""
+                    choosingRepository = false
+                }
+            }
+        }
         .onChange(of: app.draftRevision) { _, _ in consumeDraft() }
         .onChange(of: app.draftMessage) { _, message in if message != nil { consumeDraft() } }
     }
 
     private var newTask: some View {
         VStack(alignment: .leading, spacing: 0) {
+            if let id = form.pendingOperationId, let operation = hosts.pendingOperations[id] {
+                HStack {
+                    Text("Chat start needs confirmation. Your draft has been kept.").font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                    Button("Check") { Task { try? await hosts.reconcileOperations(operation.destination) } }
+                    if case let .receipt(receipt)? = hosts.operationDeliveries[id], receipt.state != .pending {
+                        Button("Save result") { start() }
+                    } else if case .unknown? = hosts.operationDeliveries[id] {
+                        Button("Retry original start…") { retryingCreate = operation }
+                    }
+                }.padding(8)
+            }
             VStack(alignment: .leading, spacing: 10) {
                 ImageAttachmentPreviews(attachments: $form.attachments)
                     .disabled(form.busy)
@@ -249,7 +289,7 @@ struct TaskComposer: View {
                     ChatTextEditor(text: $form.message, height: $form.editorHeight, font: fonts.nsBody, minLines: 3, maxLines: 14,
                                    maxWindowFraction: 0.5,
                                    isEditable: !form.busy, onPasteImages: { form.attachments.paste(from: $0) },
-                                   completionDirectory: form.mode == .ask ? nil : project?.path ?? (form.folder.isEmpty ? FileManager.default.homeDirectoryForCurrentUser.path : form.folder)) { _ in
+                                   completionDirectory: form.mode == .ask || remote ? nil : project?.path ?? (form.folder.isEmpty ? FileManager.default.homeDirectoryForCurrentUser.path : form.folder)) { _ in
                         start()
                     }
                     .frame(height: form.editorHeight)
@@ -292,12 +332,13 @@ struct TaskComposer: View {
                         app.chooseChatFolder(FileManager.default.homeDirectoryForCurrentUser.path)
                         lastProjectId = ""
                     case .folder:
+                        if remote { choosingRepository = true; return }
                         if let path = chooseFolder(startingAt: form.folder) {
                             app.chooseChatFolder(path)
                             lastProjectId = ""
                         }
                     case .addProject:
-                        app.addProject()
+                        if remote { choosingRepository = true } else { app.addProject() }
                     }
                 }
                 .disabled(form.busy || form.mission != nil || form.trackedItem != nil)
@@ -327,7 +368,7 @@ struct TaskComposer: View {
                 }
                 Spacer()
                 if form.busy { ProgressView().controlSize(.small) }
-                SendLaterMenu(disabled: !canStart, schedule: scheduleNewChat)
+                if !remote { SendLaterMenu(disabled: !canStart, schedule: scheduleNewChat) }
                 Button(action: start) { PilotSymbol(PilotIcon.send, context: .toolbar) }
                     .buttonStyle(CircleIconButtonStyle())
                     .disabled(!canStart)
@@ -339,14 +380,25 @@ struct TaskComposer: View {
     }
 
     private var canStart: Bool {
-        form.canStart(in: project, branches: branches)
+        form.canStart(in: project, branches: branches) && (!remote || (project != nil && destinationHost.map { hosts.available.contains($0) } == true))
     }
 
     /// Reloads the pi model scope when the project or folder changes.
-    private var modelScopeKey: String { project?.id ?? form.folder }
+    private var modelScopeKey: String { "\(destinationHost.map { HostResourceRef(host: $0, kind: .project, localId: project?.id ?? "").storageKey } ?? "local"):\(project?.id ?? form.folder)" }
 
     private var branchScopeKey: String? {
         BranchSelectorState.scope(project: project, mode: form.mode, workspace: form.workspace)
+    }
+
+    private func chooseHost(_ host: HostRef) {
+        guard destinationHost != host else { return }
+        form.invalidatePendingSubmission()
+        form.executionHost = host
+        form.model = ""; form.models = ModelList(models: [])
+        form.folder = ""; form.workspace = nil; form.pendingBaseBranch = nil
+        form.branches.restoreSelection(scope: nil, branch: nil)
+        app.draftProjectId = nil
+        form.error = hosts.available.contains(host) ? nil : "Disconnected. Reconnect to start a chat here."
     }
 
     private func consumeDraft() {
@@ -354,7 +406,7 @@ struct TaskComposer: View {
         Task { await loadBranches() }
     }
 
-    private var branchLoadKey: String { "\(client.hasProjectSnapshot):\(branchScopeKey ?? form.folder)" }
+    private var branchLoadKey: String { "\(modelScopeKey):\(client.hasProjectSnapshot):\(branchScopeKey ?? form.folder)" }
 
     private func loadBranches() async {
         // An empty catalog during startup is not a change to the restored draft's destination.
@@ -386,8 +438,9 @@ struct TaskComposer: View {
         // Show the last known list at once, then revalidate. Equal results never re-render the form.
         let cached = client.cachedModels(projectId: projectId, cwd: cwd)
         if let cached, form.models != cached { form.models = cached }
+        let key = modelScopeKey
         let fresh = try? await client.models(projectId: projectId, cwd: cwd)
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled, key == modelScopeKey else { return }
         // A failed refresh keeps the cached list; with nothing cached the scope has no known models.
         let next = fresh ?? cached ?? ModelList(models: [])
         if form.models != next { form.models = next }
@@ -402,6 +455,14 @@ struct TaskComposer: View {
         catch {
             form.error = "Could not retain attached images: \(error.localizedDescription)"
             form.busy = false
+            return
+        }
+        if remote, let host = destinationHost, let project {
+            Task {
+                defer { form.busy = false }
+                do { try await app.createHostedChat(form: form, host: host, project: project, revision: revision) }
+                catch { form.error = error.localizedDescription }
+            }
             return
         }
         let request = form.spawnRequest(in: project, branches: branches)

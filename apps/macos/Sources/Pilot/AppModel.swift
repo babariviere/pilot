@@ -42,6 +42,9 @@ final class AppModel: ObservableObject {
     let terminals = TerminalStore()
     let notifier = Notifier()
     private var knownReadyPullRequests = Set<String>()
+    var adoptedOperationIds: Set<String> = []
+    var retiringOperationIds: Set<String> = []
+    var hostAttentionStores: [HostRef: SessionAttention] = [:]
     let attention: SessionAttention
     private lazy var reviewForwarder = SessionReviewForwarder { [weak self] request in
         guard let self else { throw CancellationError() }
@@ -62,11 +65,17 @@ final class AppModel: ObservableObject {
 
     @Published var selectedSessionId: String? {
         didSet {
-            if let id = selectedSessionId, let localHost {
-                hosts.selection = HostResourceRef(host: localHost, kind: .session, localId: id)
+            if let id = selectedSessionId, let ref = resourceRef(id, kind: .session) {
+                hosts.selection = ref
             } else if hosts.selection?.host == localHost { hosts.selection = nil }
             // Leaving a chat lets the results read there regroup (Recent or Ready to merge).
             if oldValue != selectedSessionId, attention.leave(keeping: selectedSessionId) { reviewRevision += 1 }
+            if oldValue != selectedSessionId {
+                let current = selectedSessionId.flatMap { resourceRef($0, kind: .session) }
+                for (host, store) in hostAttentionStores {
+                    if store.leave(keeping: current?.host == host ? current?.localId : nil) { reviewRevision &+= 1 }
+                }
+            }
             guard selectedSessionId != nil else { return }
             if selectedMissionId != nil { selectedMissionId = nil }
             if selectedProjectId != nil { selectedProjectId = nil }
@@ -109,6 +118,8 @@ final class AppModel: ObservableObject {
     /// A task the Tasks tab should scroll to and briefly highlight, set by "Show task" on a link.
     @Published var revealedMissionTaskId: String?
     @Published var missionSheet: MissionSheet?
+    var missionSheetContext: HostViewContext?
+    var artifactLinkContext: HostViewContext?
     @Published var artifactLink: ArtifactLink?
     /// Deletion is confirmed once by the main window, regardless of its entry point.
     @Published var pendingMissionDeletionId: String?
@@ -142,6 +153,8 @@ final class AppModel: ObservableObject {
     /// opens, and never saved.
     @Published var inboxProjectId: String?
     /// nil browses every project's archived chats.
+    @Published var archiveHost: HostRef?
+    @Published var inboxHost: HostRef?
     @Published var archiveProjectId: String?
     /// nil includes chats from every mission, as well as chats without one.
     @Published var archiveMissionId: String?
@@ -190,7 +203,11 @@ final class AppModel: ObservableObject {
     }
 
     var selectedSession: SessionSummary? {
-        selectedSessionId.flatMap { client.session($0) }
+        guard let id = selectedSessionId else { return nil }
+        if let ref = resourceRef(id, kind: .session), ref.host != localHost {
+            return hosts.sessions.first { $0.ref == ref }?.value
+        }
+        return client.session(id)
     }
 
     func composer(for sessionId: String) -> ComposerState {
@@ -237,14 +254,14 @@ final class AppModel: ObservableObject {
         chatComposers = composers
         chatDrafts = drafts
         if let editingComposerId { self.editingComposerId = composerKey(editingComposerId) }
-        if let id = selectedSessionId { hosts.selection = HostResourceRef(host: host, kind: .session, localId: id) }
+        if let id = selectedSessionId { hosts.selection = resourceRef(id, kind: .session) }
         saveDrafts()
     }
 
     func selectSession(_ ref: HostResourceRef) throws {
         guard ref.kind == .session else { throw HostRoutingError.invalidReference }
         hosts.selection = ref
-        selectedSessionId = ref.host == localHost ? ref.localId : nil
+        selectedSessionId = ref.host == localHost ? ref.localId : ref.storageKey
         saveDrafts()
     }
 
@@ -273,15 +290,20 @@ final class AppModel: ObservableObject {
     }
 
     private func restoreDrafts(_ drafts: StoredDrafts, from store: DraftStore) {
+        adoptedOperationIds = Set(drafts.adoptedOperations ?? [])
         localHost = drafts.localHost
         hosts.selection = drafts.selection
+        if let selection = drafts.selection, selection.kind == .session, selection.host != drafts.localHost { selectedSessionId = selection.storageKey }
         for (id, saved) in drafts.chats {
             let composer = composer(for: id)
+            composer.pendingOperationId = saved.pendingOperationId
             composer.draft = saved.text
             composer.attachments = store.restoreAttachments(saved.attachments)
             composer.queueEditing = saved.queueEditing
         }
         let task = drafts.newTask
+        newSessionForm.executionHost = task.executionHost
+        newSessionForm.pendingOperationId = task.pendingOperationId
         newSessionForm.message = task.message
         newSessionForm.attachments = store.restoreAttachments(task.attachments)
         newSessionForm.folder = task.folder
@@ -325,15 +347,16 @@ final class AppModel: ObservableObject {
         var drafts = StoredDrafts()
         drafts.localHost = localHost
         drafts.selection = hosts.selection
+        drafts.adoptedOperations = Array(adoptedOperationIds).sorted()
         for (id, composer) in chatComposers {
             guard !composer.draft.isEmpty || !composer.attachments.items.isEmpty
-                || composer.queueEditing != QueuedMessageEditing() else { continue }
-            drafts.chats[id] = StoredChatDraft(text: composer.draft,
+                || composer.pendingOperationId != nil || composer.queueEditing != QueuedMessageEditing() else { continue }
+            drafts.chats[id] = StoredChatDraft(pendingOperationId: composer.pendingOperationId, text: composer.draft,
                                               attachments: composer.attachments.items.map(StoredImage.init),
                                               queueEditing: composer.queueEditing)
         }
         let form = newSessionForm
-        drafts.newTask = StoredTaskDraft(message: form.message, attachments: form.attachments.items.map(StoredImage.init),
+        drafts.newTask = StoredTaskDraft(executionHost: form.executionHost, pendingOperationId: form.pendingOperationId, message: form.message, attachments: form.attachments.items.map(StoredImage.init),
                                         folder: form.folder, model: form.model, projectId: draftProjectId,
                                         pendingMessage: draftMessage, branchScope: form.branches.scope,
                                         baseBranch: form.branches.selected, runningTab: form.tab == .running,
@@ -357,6 +380,13 @@ final class AppModel: ObservableObject {
     /// Tests that reopen a store immediately must use the same durability boundary.
     func flushDrafts() { draftStore?.flush() }
 
+    /// A conclusive operation is retired only after its draft owner is durable.
+    func persistDrafts() throws {
+        saveDrafts()
+        flushDrafts()
+        if let draftSaveError { throw ClientError(draftSaveError) }
+    }
+
     private func reportDraftError(_ error: Error) {
         let message = "Could not persist message drafts: \(error.localizedDescription) Your current drafts remain in memory."
         if draftSaveError != message { sessionActionError = message }
@@ -373,6 +403,19 @@ final class AppModel: ObservableObject {
         }
         notifier.onOpenSession = { [weak self] id in self?.open(session: id) }
         notifier.requestAuthorization()
+        hosts.onOperationDeliveryChanged = { [weak self] operation, delivery in
+            guard let self, self.adoptedOperationIds.contains(operation.operationId),
+                  case let .receipt(receipt) = delivery, receipt.state != .pending else { return }
+            Task { try? await self.acknowledgeAdopted(operation, receipt: receipt) }
+        }
+        hosts.onRemoteSessionsChanged = { [weak self] host, sessions, snapshot in
+            guard let self else { return }
+            let store = self.attention(on: host)
+            for notice in store.observe(sessions, snapshot: snapshot) {
+                guard sessions.first(where: { $0.id == notice.sessionId })?.isArchived != true else { continue }
+                self.notifier.deliver(notice, reference: HostResourceRef(host: host, kind: .session, localId: notice.sessionId))
+            }
+        }
         client.onSchedulesChanged = { [weak self] items in
             guard let self else { return }
             // Only transitions seen while connected notify; the first list after launch sets the baseline.
@@ -450,7 +493,10 @@ final class AppModel: ObservableObject {
         draftProjectId = nil
     }
 
-    func newSession(in projectId: String?, message: String? = nil) {
+    func newSession(in projectId: String?, message: String? = nil, context: HostViewContext? = nil) {
+        if let context { newSessionForm.executionHost = context.host }
+        else if projectId != nil { newSessionForm.executionHost = localHost }
+        hosts.selection = nil
         showingArchive = false
         showingInbox = false
         if projectId != nil || message != nil { newSessionForm.mission = nil }
@@ -476,16 +522,16 @@ final class AppModel: ObservableObject {
     }
 
     /// Open a dedicated, empty composer. The chat joins on spawn, without claiming a task.
-    func newSession(in mission: Mission) {
+    func newSession(in mission: Mission, context: HostViewContext? = nil) {
         guard mission.status == .active else { return }
-        newSession(in: mission.projectId, message: "")
+        newSession(in: mission.projectId, message: "", context: context)
         newSessionForm.consumeDraft(from: self)
         newSessionForm.mission = mission
     }
 
     /// The new-chat composer, prefilled from a tracked item in Build mode. Nothing starts until the user sends.
-    func startChat(from item: TrackedItem, prefill: TrackedItemPrefill?) {
-        newSession(in: item.projectId, message: TrackedItemText.chatPrompt(item, prefill: prefill))
+    func startChat(from item: TrackedItem, prefill: TrackedItemPrefill?, context: HostViewContext? = nil) {
+        newSession(in: item.projectId, message: TrackedItemText.chatPrompt(item, prefill: prefill), context: context)
         newSessionForm.consumeDraft(from: self)
         newSessionForm.trackedItem = TrackedItemBinding(itemId: item.id, projectId: item.projectId,
                                                         label: TrackedItemText.identifier(item))
@@ -501,7 +547,8 @@ final class AppModel: ObservableObject {
     }
 
     /// An explicit new Build draft. The original Ask session and its history are never changed.
-    func buildWithContext(from session: SessionSummary, rows: [ChatRow]) {
+    func buildWithContext(from session: SessionSummary, rows: [ChatRow], context: HostViewContext? = nil) {
+        let client = context.map { $0.hosts.presentationClient($0.host) } ?? self.client
         guard session.isAsk else { return }
         let rows = rows.flatMap(\.unfolded)
         let discussion = rows.compactMap { row -> String? in
@@ -541,7 +588,7 @@ final class AppModel: ObservableObject {
 
         Build task:
 
-        """)
+        """, context: context)
         // Checkout Ask must not assume its local branch exists on origin.
         draftBaseBranch = session.sourceBranch
         if session.projectId == nil {
@@ -553,7 +600,9 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func debugSession(_ session: SessionSummary) {
+    func debugSession(_ session: SessionSummary, context: HostViewContext? = nil) {
+        if let context { newSessionForm.executionHost = context.host }
+        let client = context.map { $0.hosts.presentationClient($0.host) } ?? self.client
         let projects = client.projects.filter { $0.name.caseInsensitiveCompare("pilot") == .orderedSame }
         guard projects.count == 1, let project = projects.first else {
             sessionActionError = projects.isEmpty
@@ -577,7 +626,7 @@ final class AppModel: ObservableObject {
 
         Issue / reason:
 
-        """)
+        """, context: context)
     }
 
     func isUnread(_ session: SessionSummary) -> Bool { attention.isUnread(session) }
@@ -591,6 +640,8 @@ final class AppModel: ObservableObject {
     }
 
     /// The window closed: no chat is open any more, so every read result regroups.
+    func didReviewHost() { reviewRevision &+= 1 }
+
     func leaveOpenChat() {
         if attention.leave(keeping: nil) { reviewRevision += 1 }
     }
@@ -610,7 +661,9 @@ final class AppModel: ObservableObject {
         if let mission { archiveProjectId = mission.projectId }
     }
 
-    func showArchive(in projectId: String? = nil, missionId: String? = nil) {
+    func showArchive(in projectId: String? = nil, missionId: String? = nil, context: HostViewContext? = nil) {
+        archiveHost = context?.host
+        hosts.selection = nil
         archiveProjectId = projectId
         chooseArchiveMission(missionId)
         showingArchive = true
@@ -622,7 +675,9 @@ final class AppModel: ObservableObject {
 
     /// Shows the Inbox, its project filter preset to `projectId` (from a project's Overview), else to the focused
     /// project (every project when none is focused).
-    func showInbox(for projectId: String? = nil) {
+    func showInbox(for projectId: String? = nil, context: HostViewContext? = nil) {
+        inboxHost = context?.host
+        hosts.selection = nil
         showingArchive = false
         selectedSessionId = nil
         selectedMissionId = nil
@@ -632,7 +687,11 @@ final class AppModel: ObservableObject {
     }
 
     /// Shows a project's page, keeping the sidebar as it is.
-    func openProject(_ id: String) {
+    func openProject(_ id: String, context: HostViewContext? = nil) {
+        if let ref = resourceRef(id, kind: .project, context: context), ref.host != localHost {
+            navigate(.project, id: ref.storageKey); return
+        }
+        hosts.selection = nil
         showingArchive = false
         showingInbox = false
         selectedSessionId = nil
@@ -683,7 +742,12 @@ final class AppModel: ObservableObject {
     }
 
     /// Shows a project's Memory page in place of its page.
-    func openMemory(_ projectId: String) {
+    func openMemory(_ projectId: String, context: HostViewContext? = nil) {
+        if let ref = resourceRef(projectId, kind: .project, context: context), ref.host != localHost {
+            navigate(.project, id: ref.storageKey)
+            memoryProjectId = ref.storageKey
+            return
+        }
         openProject(projectId)
         memoryProjectId = projectId
     }
@@ -750,6 +814,7 @@ final class AppModel: ObservableObject {
 
     /// Home, which always covers every project, whatever the sidebar's scope.
     func openHome() {
+        hosts.selection = nil
         newSession(in: draftProjectId)
     }
 
@@ -761,7 +826,8 @@ final class AppModel: ObservableObject {
 
     /// A new chat in the focused project, or in the last chosen project otherwise.
     func newChatInScope() {
-        newSession(in: focusedProject?.id ?? draftProjectId)
+        let context = focusedProject == nil ? newSessionForm.executionHost.map { HostViewContext(host: $0, hosts: hosts) } : nil
+        newSession(in: focusedProject?.id ?? draftProjectId, context: context)
     }
 
     /// Falls back to every project once the project list shows the focused one is gone.
@@ -808,6 +874,14 @@ final class AppModel: ObservableObject {
     }
 
     func setPinned(_ pinned: Bool, sessionId: String) {
+        if let ref = try? HostResourceRef.decodeKey(sessionId) {
+            Task {
+                do { try await hosts.perform(ref, kind: .session) { client, id in if pinned { try await client.pin(id) } else { try await client.unpin(id) } } }
+                catch { sessionActionError = error.localizedDescription }
+            }
+            return
+        }
+
         guard !pendingSessionActions.contains(sessionId) else { return }
         pendingSessionActions.insert(sessionId)
         Task {
@@ -822,6 +896,14 @@ final class AppModel: ObservableObject {
     }
 
     func renameSession(_ sessionId: String, title: String) {
+        if let ref = try? HostResourceRef.decodeKey(sessionId) {
+            Task {
+                do { try await hosts.perform(ref, kind: .session) { client, id in try await client.rename(id, title: title) } }
+                catch { sessionActionError = error.localizedDescription }
+            }
+            return
+        }
+
         guard !pendingSessionActions.contains(sessionId) else { return }
         pendingSessionActions.insert(sessionId)
         Task {
@@ -832,6 +914,14 @@ final class AppModel: ObservableObject {
     }
 
     func setArchived(_ archived: Bool, sessionId: String) {
+        if let ref = try? HostResourceRef.decodeKey(sessionId) {
+            Task {
+                do { try await hosts.perform(ref, kind: .session) { client, id in if archived { try await client.archive(id) } else { try await client.restore(id) } } }
+                catch { sessionActionError = error.localizedDescription }
+            }
+            return
+        }
+
         guard !pendingSessionActions.contains(sessionId) else { return }
         pendingSessionActions.insert(sessionId)
         Task {
@@ -846,6 +936,19 @@ final class AppModel: ObservableObject {
     }
 
     func stopSession(_ sessionId: String) {
+        if let ref = try? HostResourceRef.decodeKey(sessionId), ref.host != localHost {
+            Task {
+                do {
+                    if let restored = try await hosts.requestStop(ref), !restored.isEmpty {
+                        let composer = try composer(for: ref)
+                        composer.draft = [restored, composer.draft].filter { !$0.isEmpty }.joined(separator: "\n\n")
+                        try persistDrafts()
+                    }
+                } catch { sessionActionError = "Stop requested. Not yet confirmed. " + error.localizedDescription }
+            }
+            return
+        }
+
         guard !pendingSessionActions.contains(sessionId) else { return }
         pendingSessionActions.insert(sessionId)
         Task {
@@ -897,6 +1000,13 @@ final class AppModel: ObservableObject {
     }
 
     func stopSubagent(_ name: String, in sessionId: String) {
+        if let ref = try? HostResourceRef.decodeKey(sessionId) {
+            Task {
+                do { try await hosts.perform(ref, kind: .session) { client, id in try await client.stopSubagent(id, name: name) } }
+                catch { sessionActionError = error.localizedDescription }
+            }
+            return
+        }
         let key = "\(sessionId)/subagent/\(name)"
         guard !pendingSessionActions.contains(key) else { return }
         pendingSessionActions.insert(key)
@@ -912,7 +1022,7 @@ final class AppModel: ObservableObject {
     func toggleInspector(_ tab: InspectorTab) {
         if tab == .mission, let session = selectedSession, session.isMissionCoordinator,
            let missionId = session.missionId {
-            openMission(missionId, tab: .overview)
+            openMission(missionId, tab: .overview, context: hosts.selection.map { HostViewContext(host: $0.host, hosts: hosts) })
             return
         }
         if let session = selectedSession, !tab.isAvailable(for: session) { return }
@@ -933,7 +1043,7 @@ final class AppModel: ObservableObject {
     var latestPullRequestMergeTarget: PullRequestMergeTarget? {
         guard missionSheet == nil, renamingSession == nil, mergingPullRequest == nil, artifactLink == nil,
               let session = selectedSession else { return nil }
-        return PullRequestMergeTarget.latest(in: session)
+        return PullRequestMergeTarget.latest(in: session, reference: hosts.selection)
     }
 
     /// Confirms the open chat's latest open PR (⌘⇧M). Never submits a merge from the shortcut itself.

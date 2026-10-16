@@ -36,10 +36,11 @@ struct MissionTaskStartForm {
 /// (else the project's), Build mode, the remote default branch and the task's saved references.
 /// pilotd validates the request exactly like the coordinator's start.
 struct MissionTaskStartSheet: View {
+    @Environment(\.hostViewContext) private var hostContext
     let task: MissionTask
     let mission: Mission
     @EnvironmentObject private var model: AppModel
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
     @Environment(\.dismiss) private var dismiss
     @StateObject private var branches = BranchSelectorState()
     @State private var form = MissionTaskStartForm()
@@ -47,6 +48,7 @@ struct MissionTaskStartSheet: View {
     @State private var addingLink = false
     @State private var starting = false
     @State private var error: String?
+    @State private var runElsewhere = false
 
     private var project: Project? { client.project(mission.projectId) }
     private var branchScope: String? { BranchSelectorState.scope(project: project, mode: form.mode, workspace: nil) }
@@ -56,6 +58,15 @@ struct MissionTaskStartSheet: View {
                       primary: SheetPrimaryAction(title: starting ? "Starting…" : "Start Chat", key: .commandReturn,
                                                   enabled: canStart, action: start),
                       width: 560) {
+            Picker("Run this task", selection: $runElsewhere) {
+                Text("This project's devbox").tag(false)
+                Text("Another linked devbox").tag(true)
+            }.pickerStyle(.segmented)
+            if runElsewhere, let context = hostContext {
+                SharedTaskPlacementFields(mission: context.ref(.mission, mission.id), task: task, hosts: context.hosts,
+                    onStarted: { ref in try? model.selectSession(ref); dismiss() })
+            }
+            if !runElsewhere {
             if let gating = gatingNote {
                 Label(gating, icon: PilotIcon.privateChannel)
                     .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
@@ -76,12 +87,13 @@ struct MissionTaskStartSheet: View {
             .disabled(starting)
             references
                 .disabled(starting)
+            }
         }
         .task(id: branchScope) { await loadBranches() }
     }
 
     private var canStart: Bool {
-        !starting && !options.loading && mission.status == .active && task.sessionId == nil && task.status.canStart
+        !runElsewhere && !starting && !options.loading && mission.status == .active && task.sessionId == nil && task.status.canStart
     }
 
     /// Phase gating holds the task: starting it is the user's explicit override.
@@ -206,7 +218,7 @@ struct MissionTaskStartSheet: View {
             do {
                 let session = try await client.startMissionTask(mission.id, taskId: task.id, request)
                 dismiss()
-                model.selectedSessionId = session.id
+                model.navigate(.session, id: session.id, context: hostContext)
             } catch { self.error = error.localizedDescription }
         }
     }

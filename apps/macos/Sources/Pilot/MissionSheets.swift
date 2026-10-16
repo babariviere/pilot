@@ -34,12 +34,13 @@ struct MissionSheetView: View {
 
 /// "New mission…" and "Make a mission…". The source chat joins and, by default, coordinates and drafts.
 struct CreateMissionSheet: View {
+    @Environment(\.hostViewContext) private var hostContext
     let projectId: String?
     let sourceSessionId: String?
     /// Prefill from a Linear issue or Slack message. The project is fixed and the mission is linked to it once created.
     var prefill: SourceMissionDraft? = nil
     @EnvironmentObject private var model: AppModel
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
     @State private var form = MissionForm()
     @Environment(\.dismiss) private var dismiss
 
@@ -175,8 +176,8 @@ struct CreateMissionSheet: View {
                 dismiss()
                 // Make a mission keeps the chat in view; it is drafting there.
                 if source == nil {
-                    if let id = detail.mission.coordinatorSessionId { model.selectedSessionId = id }
-                    else { model.openMission(detail.mission.id) }
+                    if let id = detail.mission.coordinatorSessionId { model.navigate(.session, id: id, context: hostContext) }
+                    else { model.openMission(detail.mission.id, context: hostContext) }
                 }
             } catch {
                 form.error = error.localizedDescription
@@ -188,7 +189,7 @@ struct CreateMissionSheet: View {
 /// Joins a chat to an active mission of its project, optionally claiming a task.
 struct AddToMissionSheet: View {
     let sessionId: String
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
     @State private var form = MissionForm()
     @Environment(\.dismiss) private var dismiss
 
@@ -249,7 +250,7 @@ struct AddToMissionSheet: View {
 
 struct EditMissionSheet: View {
     let missionId: String
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
     @State private var form = MissionForm()
     @Environment(\.dismiss) private var dismiss
 

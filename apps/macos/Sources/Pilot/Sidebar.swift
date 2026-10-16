@@ -8,8 +8,10 @@ import SwiftUI
 /// scope switcher and on Home, never a sidebar grouping. Search appears on ⌘F, and the footer only when the
 /// connection to pilotd needs attention. Each chat's state is its dithered corner (`DitherCorner`).
 struct SessionSidebar: View {
+    @Environment(\.hostViewContext) private var hostContext
     @ObservedObject var model: AppModel
     @ObservedObject var client: PilotClient
+    @ObservedObject private var hosts = AppModel.shared.hosts
     @StateObject private var folderEditor = ProjectFolderEditorState()
 
     @FocusState private var searchFocused: Bool
@@ -28,8 +30,13 @@ struct SessionSidebar: View {
         // Archived chats join the list only while searching, below the active ones.
         let archived = searching
             ? ArchiveFilter(projectId: focused?.id).apply(to: client.archivedSessions.filter(matches)) : []
-        List(selection: $model.selectedSessionId) {
-            if let focused {
+        List(selection: Binding(get: { model.selectedSessionId }, set: { key in
+            guard let key else { return }
+            model.navigate(.session, id: key)
+        })) {
+            if !hosts.offlineHosts.isEmpty {
+                unifiedRows
+            } else if let focused {
                 missionsSection(visible: visible, searching: searching, projectId: focused.id)
                 urgencyGroups(visible.filter { $0.projectId == focused.id }, searching: searching,
                               recentListId: focused.id, hasArchivedMatches: !archived.isEmpty)
@@ -48,7 +55,7 @@ struct SessionSidebar: View {
         .scrollContentBackground(.hidden)
         .background(Theme.sidebar)
         .overlay {
-            if client.projects.isEmpty, client.sessions.isEmpty {
+            if client.projects.isEmpty, client.sessions.isEmpty, hosts.projects.isEmpty, hosts.sessions.isEmpty {
                 EmptyStateView(icon: PilotIcon.newProject, title: "No projects yet",
                                message: "Add a project to get started.") {
                     Button("Add Project…") { model.addProject() }
@@ -118,6 +125,56 @@ struct SessionSidebar: View {
                 }
                 folderEditor.presented = false
             }
+        }
+    }
+
+    @ViewBuilder private var unifiedRows: some View {
+        let query = model.sidebarQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let values = hosts.sessions.filter { hosted in
+            (!hosted.value.isArchived || !query.isEmpty) && (query.isEmpty || hosted.value.title.lowercased().contains(query))
+                && (model.sidebarScope == nil || (hosted.ref.host == model.localHost && hosted.value.projectId == model.sidebarScope))
+        }.sorted { $0.value.listActivityAt > $1.value.listActivityAt }
+        let missions = hosts.missions.filter { $0.value.status == .active && (query.isEmpty || $0.value.title.lowercased().contains(query)) }
+        if !missions.isEmpty {
+            Section {
+                ForEach(missions) { item in
+                    Button { model.navigate(.mission, id: item.ref.storageKey) } label: {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(item.value.title).font(.pilot(.body)).lineLimit(1)
+                            Text(HostViewContext(host: item.ref.host, hosts: hosts).name).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                        }
+                    }.rowButtonStyle()
+                }
+            } header: { SidebarSectionHeader(title: "Missions") }
+        }
+        ForEach(["Pinned", "Needs you", "Ready to merge", "Working", "Recent", "Archived"], id: \.self) { title in
+            let rows = values.filter { group($0) == title }
+            if !rows.isEmpty {
+                Section {
+                    ForEach(rows) { item in
+                        let context = HostViewContext(host: item.ref.host, hosts: hosts)
+                        SessionRow(session: item.value, reference: item.ref,
+                            projectName: [hosts.projects.first { $0.ref.host == item.ref.host && $0.value.id == item.value.projectId }?.value.name,
+                                          item.ref.host == model.localHost ? nil : context.name].compactMap { $0 }.joined(separator: " · "),
+                            listFocused: chatListFocused)
+                            .environment(\.hostViewContext, context)
+                            .tag(item.ref.host == model.localHost ? item.ref.localId : item.ref.storageKey)
+                    }
+                } header: { SidebarSectionHeader(title: title) }
+            }
+        }
+    }
+
+    private func group(_ item: Hosted<SessionSummary>) -> String {
+        let value = item.value
+        if value.isArchived { return "Archived" }
+        if value.isPinned { return "Pinned" }
+        let unread = model.isUnread(value, on: item.ref.host)
+        switch value.signal(unread: unread) {
+        case .working: return "Working"
+        case .failed, .needsYou: return "Needs you"
+        case .readyToMerge: return "Ready to merge"
+        case nil: return "Recent"
         }
     }
 
@@ -265,7 +322,7 @@ struct SessionSidebar: View {
                     PilotSymbol(PilotIcon.mission).frame(width: 14)
                     Text("Missions").font(.pilot(.caption, weight: .semibold))
                     Spacer(minLength: 0)
-                    Button { model.missionSheet = .create(projectId: projectId) } label: { PilotSymbol(PilotIcon.add) }
+                    Button { model.presentMissionSheet(.create(projectId: projectId), context: hostContext) } label: { PilotSymbol(PilotIcon.add) }
                         .buttonStyle(.borderless)
                         .frame(width: 16, height: 16)
                         .help("New mission…")
@@ -273,7 +330,7 @@ struct SessionSidebar: View {
                 }
                 .padding(.trailing, Self.missionsAddTrailingInset)
                 .contextMenu {
-                    Button("New Mission…") { model.missionSheet = .create(projectId: projectId) }
+                    Button("New Mission…") { model.presentMissionSheet(.create(projectId: projectId), context: hostContext) }
                 }
             }
         }
@@ -383,6 +440,9 @@ private struct SidebarSectionHeader: View {
 /// appear in its tooltip, with every PR and the full second line.
 struct SessionRow: View {
     let session: SessionSummary
+    var reference: HostResourceRef? = nil
+    @Environment(\.hostViewContext) private var hostContext
+    @EndpointClient private var endpoint
     /// Shown before the repository metadata in lists that mix projects.
     var projectName: String?
     var listFocused = false
@@ -394,19 +454,23 @@ struct SessionRow: View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
             row(now: context.date)
         }
-        .listRowBackground(SidebarSelectionBackground(selected: model.selectedSessionId == session.id,
+        .listRowBackground(SidebarSelectionBackground(selected: model.selectedSessionId == rowKey,
                                                       focused: listFocused))
     }
 
+    private var owner: HostResourceRef? { reference ?? model.resourceRef(session.id, kind: .session, context: hostContext) }
+    private var rowKey: String { owner.map { $0.host == model.localHost ? $0.localId : $0.storageKey } ?? session.id }
+    private var disconnected: Bool { owner.map { $0.host != model.localHost && !model.hosts.available.contains($0.host) } ?? false }
+
     @ViewBuilder private func row(now: Date) -> some View {
-        let unread = model.isUnread(session)
+        let unread = owner.map { model.isUnread(session, on: $0.host) } ?? model.isUnread(session)
         let needsAttention = unread || model.isHeld(session)
         let signal = session.signal(unread: needsAttention)
         let reason = session.needsYouReason(unread: needsAttention)?.label(at: session.outcomeAt ?? session.updatedAt, now: now)
-        let missionTitle = session.missionId.flatMap { model.client.mission($0)?.title }
+        let missionTitle = session.missionId.flatMap { endpoint.mission($0)?.title }
         let coordinatorDetail = session.isMissionCoordinator
             ? MissionCoordinatorStatus.detail(session, unread: needsAttention) : nil
-        let draft = model.chatDraft(session.id)
+        let draft = owner.flatMap { model.chatDraft(for: $0) } ?? model.chatDraft(session.id)
         // Branch-free segments for the label and tooltip; the line itself adds the loaded branch.
         let described = RowLineSegments.described(
             RowLineSegments.session(session, projectName: projectName, missionId: session.missionId,
@@ -436,11 +500,14 @@ struct SessionRow: View {
                 }
                 .revealed(hovered)
             }
+            if disconnected {
+                Text("Disconnected · Current state unknown").font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+            }
             SessionRepositoryMetadata(session: session, hovered: hovered) { branch in
                 RowLine(segments: RowLineSegments.shown(RowLineSegments.session(
                     session, projectName: projectName, missionId: session.missionId, missionTitle: missionTitle,
                     reason: reason, branch: branch, coordinatorDetail: coordinatorDetail), draft: draft)) {
-                    model.openMission($0)
+                    model.openMission($0, context: hostContext)
                 }
             }
             // Fade out before the corner's dense cells.
@@ -448,7 +515,7 @@ struct SessionRow: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 2)
-        .ditherCorner(signal, background: session.isWaitingOnJobs)
+        .ditherCorner(disconnected ? .readyToMerge : signal, background: session.isWaitingOnJobs, monochrome: disconnected)
         .onHover { hovered = $0 }
         .onPreferenceChange(SessionRepositoryHelpKey.self) { repositoryHelp = $0 }
         .animation(Theme.Motion.quick, value: hovered)
@@ -462,7 +529,7 @@ struct SessionRow: View {
             SessionProjectAction(session: session)
             SessionRenameAction(session: session)
             Button {
-                model.setPinned(!session.isPinned, sessionId: session.id)
+                model.setPinned(!session.isPinned, sessionId: owner?.storageKey ?? session.id)
             } label: {
                 Label(session.isPinned ? "Unpin" : "Pin", icon: session.isPinned ? PilotIcon.unpin : PilotIcon.pin)
             }
@@ -474,7 +541,7 @@ struct SessionRow: View {
             SessionMissionActions(session: session)
             Divider()
             if session.isWorking {
-                Button("Stop Session") { model.stopSession(session.id) }
+                Button("Stop Session") { model.stopSession(owner?.storageKey ?? session.id) }
             }
             ForEach(session.linkedPullRequests, id: \.url) { pr in
                 if let url = pr.browserURL {

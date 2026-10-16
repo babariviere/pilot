@@ -14,14 +14,14 @@ final class ArtifactViewState: ObservableObject {
     @Published var error: String?
     @Published var loading = false
 
-    func load(_ reference: ArtifactReference, latest: Bool) async {
+    func load(_ reference: ArtifactReference, latest: Bool, client: PilotClient = AppModel.shared.client) async {
         loading = true
         error = nil
         do {
-            let revision = try await AppModel.shared.client.artifact(reference, latest: latest)
+            let revision = try await client.artifact(reference, latest: latest)
             try Task.checkCancellation()
             self.revision = revision
-            if !latest { ArtifactInlineCache.store(revision, for: reference) }
+            if !latest { ArtifactInlineCache.store(revision, for: reference, host: client.hostIdentity) }
         } catch {
             if !Task.isCancelled { self.error = error.localizedDescription }
         }
@@ -33,19 +33,22 @@ final class ArtifactViewState: ObservableObject {
 /// measured sizes so a recreated card keeps its height instead of reloading from a placeholder.
 @MainActor
 enum ArtifactInlineCache {
-    private static var revisions: [ArtifactReference: ArtifactRevision] = [:]
-    private static var revisionOrder: [ArtifactReference] = []
-    private static var revisionBytes: [ArtifactReference: Int] = [:]
+    private struct Key: Hashable { let host: HostRef?; let reference: ArtifactReference }
+
+    private static var revisions: [Key: ArtifactRevision] = [:]
+    private static var revisionOrder: [Key] = []
+    private static var revisionBytes: [Key: Int] = [:]
     private static var totalBytes = 0
-    private static var sizes: [ArtifactReference: CGSize] = [:]
+    private static var sizes: [Key: CGSize] = [:]
     private static let revisionLimit = 32
     /// Image revisions can each hold 16 MiB or more. Bound memory by size as well as count.
     static let byteLimit = 64 * 1024 * 1024
     private static let sizeLimit = 512
 
-    static func revision(for reference: ArtifactReference) -> ArtifactRevision? { revisions[reference] }
+    static func revision(for reference: ArtifactReference, host: HostRef? = nil) -> ArtifactRevision? { revisions[Key(host: host, reference: reference)] }
 
-    static func store(_ revision: ArtifactRevision, for reference: ArtifactReference) {
+    static func store(_ revision: ArtifactRevision, for artifact: ArtifactReference, host: HostRef? = nil) {
+        let reference = Key(host: host, reference: artifact)
         let bytes = revision.html.utf8.count + revision.source.utf8.count
         // A single oversized revision is not retained; the visible card already holds it.
         guard bytes <= byteLimit else { return }
@@ -65,9 +68,10 @@ enum ArtifactInlineCache {
 
     static var retainedBytes: Int { totalBytes }
 
-    static func contentSize(for reference: ArtifactReference) -> CGSize? { sizes[reference] }
+    static func contentSize(for reference: ArtifactReference, host: HostRef? = nil) -> CGSize? { sizes[Key(host: host, reference: reference)] }
 
-    static func storeContentSize(_ size: CGSize?, for reference: ArtifactReference) {
+    static func storeContentSize(_ size: CGSize?, for artifact: ArtifactReference, host: HostRef? = nil) {
+        let reference = Key(host: host, reference: artifact)
         guard let size else { return }
         if sizes.count >= sizeLimit, sizes[reference] == nil { sizes.removeAll(keepingCapacity: true) }
         sizes[reference] = size
@@ -77,21 +81,23 @@ enum ArtifactInlineCache {
 /// The reference, not the session's current summary, pins this card to its saved revision.
 /// Previews are shown by default and removed when a lazy transcript row leaves the screen.
 struct ArtifactCard: View {
+    @Environment(\.hostViewContext) private var hostContext
+    @EndpointClient private var endpoint
     let reference: ArtifactReference
     @Environment(\.transcriptContentPrepared) private var contentPrepared
     @StateObject private var state: ArtifactViewState
     @StateObject private var render: ArtifactRenderState
 
-    init(reference: ArtifactReference) {
+    init(reference: ArtifactReference, host: HostRef? = nil) {
         self.reference = reference
         _state = StateObject(wrappedValue: {
             let state = ArtifactViewState()
-            state.revision = ArtifactInlineCache.revision(for: reference)
+            state.revision = ArtifactInlineCache.revision(for: reference, host: host)
             return state
         }())
         _render = StateObject(wrappedValue: {
             let render = ArtifactRenderState()
-            render.contentSize = ArtifactInlineCache.contentSize(for: reference)
+            render.contentSize = ArtifactInlineCache.contentSize(for: reference, host: host)
             return render
         }())
     }
@@ -142,7 +148,7 @@ struct ArtifactCard: View {
         .onAppear { state.visible = true }
         .onDisappear { state.visible = false }
         .onChange(of: render.contentSize) { _, size in
-            ArtifactInlineCache.storeContentSize(size, for: reference)
+            ArtifactInlineCache.storeContentSize(size, for: reference, host: hostContext?.host ?? endpoint.hostIdentity)
             contentPrepared?()
         }
         .sheet(isPresented: $state.viewer) { ArtifactViewer(reference: reference, latest: false) }
@@ -189,6 +195,8 @@ struct ArtifactViewer: View {
 }
 
 struct ArtifactViewerHeader: View {
+    @Environment(\.hostViewContext) private var hostContext
+    @EndpointClient private var endpoint
     let reference: ArtifactReference
     let latest: Bool
     var host: HostRef? = nil
@@ -226,7 +234,7 @@ struct ArtifactViewerHeader: View {
             }
             Spacer(minLength: 12)
             if let revision = state.revision {
-                ArtifactShareMenu(revision: revision, host: host, state: state, render: render)
+                ArtifactShareMenu(revision: revision, host: host ?? hostContext?.host ?? endpoint.hostIdentity, state: state, render: render)
             }
         }
         .padding(14)
@@ -234,6 +242,8 @@ struct ArtifactViewerHeader: View {
 }
 
 private struct ArtifactContent: View {
+    @Environment(\.hostViewContext) private var hostContext
+    @EndpointClient private var endpoint
     let reference: ArtifactReference
     let latest: Bool
     var inline = false
@@ -247,7 +257,7 @@ private struct ArtifactContent: View {
                 ProgressView("Loading artifact…").frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let error = state.error {
                 EmptyStateView(icon: PilotIcon.warning, title: "Couldn't load this artifact", message: error) {
-                    Button("Retry") { Task { await state.load(reference, latest: latest) } }
+                    Button("Retry") { Task { await state.load(reference, latest: latest, client: endpoint) } }
                 }
                 .padding().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let revision = state.revision {
@@ -268,14 +278,16 @@ private struct ArtifactContent: View {
             render.error = nil
             // A pinned revision already loaded by this card (or its cache) is immutable.
             if !latest, state.revision != nil, state.error == nil { return }
-            render.contentSize = inline ? ArtifactInlineCache.contentSize(for: reference) : nil
-            await state.load(reference, latest: latest)
+            render.contentSize = inline ? ArtifactInlineCache.contentSize(for: reference, host: hostContext?.host ?? endpoint.hostIdentity) : nil
+            await state.load(reference, latest: latest, client: endpoint)
         }
         .background(inline ? Color.clear : Theme.background)
     }
 }
 
 private struct ArtifactShareMenu: View {
+    @Environment(\.hostViewContext) private var hostContext
+    @EndpointClient private var endpoint
     let revision: ArtifactRevision
     var host: HostRef? = nil
     @ObservedObject var state: ArtifactViewState
@@ -288,14 +300,14 @@ private struct ArtifactShareMenu: View {
                 return "Content copied"
             } }
             Button("Copy full path") { performExport {
-                ArtifactExport.copy(try ArtifactExport.materialize(revision, host: host).path)
+                ArtifactExport.copy(try ArtifactExport.materialize(revision, host: host ?? hostContext?.host ?? endpoint.hostIdentity).path)
                 return "Local file path copied"
             } }
             Button("Save file…") { performExport {
                 try ArtifactExport.save(ArtifactExport.file(for: revision)) ? "File saved" : nil
             } }
             Button("Reveal in Finder") { performExport {
-                NSWorkspace.shared.activateFileViewerSelecting([try ArtifactExport.materialize(revision, host: host)])
+                NSWorkspace.shared.activateFileViewerSelecting([try ArtifactExport.materialize(revision, host: host ?? hostContext?.host ?? endpoint.hostIdentity)])
                 return nil
             } }
             Divider()
@@ -345,12 +357,13 @@ private struct ArtifactShareMenu: View {
 }
 
 private struct ArtifactPreview: View {
+    @EndpointClient private var endpoint
     let revision: ArtifactRevision
     var inline = false
     @ObservedObject var state: ArtifactRenderState
 
     var body: some View {
-        ArtifactWebView(revision: revision, client: AppModel.shared.client, inline: inline, state: state)
+        ArtifactWebView(revision: revision, client: endpoint, inline: inline, state: state)
             .overlay {
                 if let error = state.error {
                     Text(error).font(.callout).foregroundStyle(Theme.mutedForeground).padding()
@@ -459,6 +472,7 @@ private final class ProjectArtifactsState: ObservableObject {
 }
 
 struct ProjectArtifactsBrowser: View {
+    @Environment(\.hostViewContext) private var hostContext
     let project: Project
     @ObservedObject var client: PilotClient
     @StateObject private var state = ProjectArtifactsState()
@@ -495,7 +509,7 @@ struct ProjectArtifactsBrowser: View {
                     }
                 }.buttonStyle(.plain)
                 Button {
-                    AppModel.shared.selectedSessionId = artifact.sessionId
+                    AppModel.shared.navigate(.session, id: artifact.sessionId, context: hostContext)
                     dismiss()
                 } label: {
                     Label(client.session(artifact.sessionId)?.title ?? "Open chat", icon: PilotIcon.message)

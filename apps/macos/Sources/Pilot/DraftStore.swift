@@ -11,15 +11,19 @@ struct StoredDrafts: Codable {
     /// Pins legacy bare-key migration to Local, including while the daemon is unavailable on relaunch.
     var localHost: HostRef? = nil
     var selection: HostResourceRef? = nil
+    var adoptedOperations: [String]? = nil
 }
 
 struct StoredChatDraft: Codable {
+    var pendingOperationId: String? = nil
     var text: String = ""
     var attachments: [StoredImage] = []
     var queueEditing: QueuedMessageEditing = QueuedMessageEditing()
 }
 
 struct StoredTaskDraft: Codable {
+    var executionHost: HostRef? = nil
+    var pendingOperationId: String? = nil
     var message: String = ""
     var attachments: [StoredImage] = []
     var folder: String = ""

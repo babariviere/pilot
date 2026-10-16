@@ -6,7 +6,7 @@ import SwiftUI
 struct MissionInspectorPane: View {
     let session: SessionSummary
     @EnvironmentObject private var model: AppModel
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
 
     var body: some View {
         Group {
@@ -147,7 +147,7 @@ struct MissionInspectorPane: View {
 struct SessionMissionControl: View {
     let session: SessionSummary
     @EnvironmentObject private var model: AppModel
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
 
     var body: some View {
         Button {

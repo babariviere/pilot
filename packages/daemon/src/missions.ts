@@ -1049,8 +1049,17 @@ export class MissionStore {
 		const row = this.one("SELECT value FROM shared_allocations WHERE task_id=?", taskId);
 		return row ? JSON.parse(String(row.value)) : undefined;
 	}
-	reserveSharedGrant(grant: DelegationGrant): void {
+	reserveSharedGrant(grant: DelegationGrant, expectedPreviousEpoch: number): void {
 		this.transaction(() => {
+			const previous = this.one("SELECT epoch,sealed FROM shared_allocations WHERE task_id=?", grant.task.taskId);
+			if (
+				!Number.isSafeInteger(expectedPreviousEpoch) ||
+				expectedPreviousEpoch < 0 ||
+				expectedPreviousEpoch >= Number.MAX_SAFE_INTEGER ||
+				expectedPreviousEpoch !== Number(previous?.epoch ?? 0) ||
+				grant.executionEpoch !== expectedPreviousEpoch + 1
+			)
+				throw new Conflict("Task execution epoch CAS conflict; refresh mission-home inventory");
 			if (this.require(grant.task.mission.missionId).status !== "active")
 				throw new Conflict("Reopen mission before granting execution");
 			if (grant.context.mission !== this.sharedHead())
@@ -1058,9 +1067,7 @@ export class MissionStore {
 			this.prepareTaskStart(grant.task.mission.missionId, [grant.task.taskId]);
 			if (this.sharedDefinitionRevision(grant.task.taskId) !== grant.definitionRevision)
 				throw new Conflict("Task definition changed");
-			const previous = this.one("SELECT epoch,sealed FROM shared_allocations WHERE task_id=?", grant.task.taskId);
-			if (previous && (!previous.sealed || Number(previous.epoch) >= grant.executionEpoch))
-				throw new Conflict("Previous target has not sealed this task");
+			if (previous && !previous.sealed) throw new Conflict("Previous target has not sealed this task");
 			this.run(
 				"INSERT INTO shared_allocations VALUES(?,?,?,?,0,?) ON CONFLICT(task_id) DO UPDATE SET mission_id=excluded.mission_id,delegation_id=excluded.delegation_id,epoch=excluded.epoch,sealed=0,value=excluded.value",
 				grant.task.taskId,

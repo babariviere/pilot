@@ -165,6 +165,8 @@ public struct SharedEntity: Codable, Equatable, Sendable {
     public let id: String
     public let kind: Kind
     public let revision: Int
+    /// Missing in older replicas. Do not substitute the execution-progress revision.
+    public let definitionRevision: Int?
     public let deleted: Bool
     public let value: JSONValue?
     public enum Kind: String, Codable, Sendable {
@@ -181,6 +183,40 @@ public struct SharedMissionSnapshot: Codable, Equatable, Sendable {
     public let sequence: Int
     public let detail: MissionDetail
     public let entities: [SharedEntity]
+}
+public enum SharedReadSource: String, Codable, Sendable { case canonical, replica }
+public struct SharedEntityVersion: Codable, Equatable, Sendable {
+    public let id: String
+    public let kind: SharedEntity.Kind
+    public let revision: Int
+    public let definitionRevision: Int?
+    public let deleted: Bool
+}
+public struct SharedMissionVersions: Codable, Equatable, Sendable {
+    public let bindingId: String
+    public let generation: UInt64
+    public let missionId: String
+    public let authority: OperationHost
+    public let source: SharedReadSource
+    public let sequence: Int
+    public let complete: Bool
+    public let entities: [SharedEntityVersion]
+    /// Pass this offset and the original sequence when requesting the next page.
+    public let next: Int?
+}
+public struct SharedMissionRead: Codable, Equatable, Sendable {
+    public let bindingId: String
+    public let generation: UInt64
+    public let authority: OperationHost
+    public let source: SharedReadSource
+    public let snapshot: SharedMissionSnapshot
+    /// Kept separate from committed detail, including after a conflicting edit.
+    public let proposals: [SharedMissionProposal]
+}
+public struct SharedMemoryTreeRead: Codable, Equatable, Sendable {
+    public let state: SharedMemoryReplicaState
+    public let value: MemoryTree
+    public let proposals: [SharedMemoryProposal]
 }
 public struct SharedMissionProposal: Codable, Equatable, Sendable {
     public let proposalId: String

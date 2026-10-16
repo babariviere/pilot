@@ -31,6 +31,8 @@ final class ComposerState: ObservableObject {
     }
     @Published var attachments = ImageAttachments() { didSet { onDraftChanged?() } }
     @Published var error: String?
+    @Published var delivering = false
+    var pendingOperationId: String? { didSet { onDraftChanged?() } }
     var editorHeight: CGFloat {
         get { draftState.height }
         set { draftState.height = newValue }
@@ -55,7 +57,7 @@ final class ComposerState: ObservableObject {
         messages.filter { !removedQueuedMessages.contains($0.id) }
     }
 
-    func canSend(changingModel: Bool) -> Bool { !changingModel && (!trimmed.isEmpty || !attachments.items.isEmpty) }
+    func canSend(changingModel: Bool) -> Bool { !delivering && !changingModel && (!trimmed.isEmpty || !attachments.items.isEmpty) }
 
     func selectQueuedMessage(_ message: QueuedMessage) {
         guard !mutatingQueue, !removedQueuedMessages.contains(message.id) else { return }
@@ -142,6 +144,8 @@ struct Composer: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var state: ComposerState
     let working: Bool
+    let hostAvailable: Bool
+    let rawAttachments: Bool
     let queuedMessages: [QueuedMessage]
     /// Automatic input waiting in the inbox, in submission order.
     let automaticInputs: [PendingAutomaticInput]
@@ -165,6 +169,8 @@ struct Composer: View {
     init(
         state: ComposerState,
         working: Bool,
+        hostAvailable: Bool = true,
+        rawAttachments: Bool = false,
         queuedMessages: [QueuedMessage],
         automaticInputs: [PendingAutomaticInput] = [],
         completionDirectory: String?,
@@ -178,10 +184,13 @@ struct Composer: View {
         todos: [SessionTodo] = [],
         slashCommands: [SlashCommand]? = nil,
         onSlashCommandsNeeded: (() -> Void)? = nil,
-        onSchedule: ((String, ScheduleWhen) -> Void)? = nil
+        onSchedule: ((String, ScheduleWhen) -> Void)? = nil,
+        context: HostViewContext? = nil
     ) {
         self.state = state
         self.working = working
+        self.hostAvailable = hostAvailable
+        self.rawAttachments = rawAttachments
         self.queuedMessages = queuedMessages
         self.automaticInputs = automaticInputs
         self.completionDirectory = completionDirectory
@@ -196,7 +205,14 @@ struct Composer: View {
         self.slashCommands = slashCommands
         self.onSlashCommandsNeeded = onSlashCommandsNeeded
         self.onSchedule = onSchedule
-        _modelPicker = StateObject(wrappedValue: ChatModelPickerState(cwd: session?.cwd))
+        if let context {
+            _modelPicker = StateObject(wrappedValue: ChatModelPickerState(cwd: session?.cwd,
+                changeModel: { id, request in try await context.perform(.session, id) { client, id in try await client.changeModel(id, model: request.model, thinking: request.thinking) } },
+                cachedModels: { cwd in context.hosts.presentationClient(context.host).cachedModels(projectId: nil, cwd: cwd) },
+                fetchModels: { cwd in try await context.perform(.session, session?.id ?? "") { client, _ in try await client.models(projectId: nil, cwd: cwd) } },
+                continueModel: { id, request in try await context.perform(.session, id) { client, id in try await client.continueModel(id, model: request.model, thinking: request.thinking) } },
+                showContinuedChat: { next in try? AppModel.shared.selectSession(context.ref(.session, next.id)) }))
+        } else { _modelPicker = StateObject(wrappedValue: ChatModelPickerState(cwd: session?.cwd)) }
     }
 
     private var remainingQueuedMessages: [QueuedMessage] { state.remainingQueuedMessages(queuedMessages) }
@@ -350,7 +366,7 @@ struct Composer: View {
             if let session { ContextUsageIndicator(usage: session.usage ?? SessionUsage()) }
             if let onSchedule {
                 ComposerSendLater(state: state, draft: state.draftState, modelPicker: modelPicker) { when in
-                    guard state.canSend(changingModel: modelPicker.changing) else { return }
+                    guard hostAvailable, state.canSend(changingModel: modelPicker.changing) else { return }
                     onSchedule(state.attachments.message(text: state.trimmed), when)
                 }
             }
@@ -362,8 +378,8 @@ struct Composer: View {
     }
 
     private func send(_ mode: DeliveryMode) {
-        let message = state.attachments.message(text: state.trimmed)
-        guard state.canSend(changingModel: modelPicker.changing) else { return }
+        let message = rawAttachments ? state.trimmed : state.attachments.message(text: state.trimmed)
+        guard hostAvailable, state.canSend(changingModel: modelPicker.changing) else { return }
         onSend(message, mode)
     }
 

@@ -41,7 +41,7 @@ struct TrackingSettingsSection: View {
     let project: Project
     @ObservedObject var editor: ProjectEditor
     var channelQuery = ""
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
 
     var body: some View {
         SettingsSection("Linear and Slack", explanation: "Pilot reads Linear and Slack through your pi MCP servers. Confirming Start chat or Start mission applies the In progress mapping, or adds an eyes reaction on Slack. The other Linear mappings are saved only. Pilot never posts messages or comments, and never starts work on its own.") {
@@ -65,12 +65,13 @@ struct TrackingSettingsSection: View {
 /// Linear team picker from list_teams. Attaching a team shows my issues in it (and its sub-teams) and its
 /// current cycle on the project page.
 struct LinearTeamPicker: View {
+    @EndpointClient private var endpoint
     @Binding var selection: TrackedTeamRef?
     @Binding var stateMappings: [String: LinearStateMapping]
     let source: TrackingSource?
     let saved: String?
-    @ObservedObject private var client = AppModel.shared.client
-    @ObservedObject private var signIns = AppModel.shared.client.sourceSignIns
+    @EndpointClient private var client
+    private var signIns: SourceSignInStore { endpoint.sourceSignIns }
     @State private var lookup: TrackingLookup<LinearTeamOption>?
     @State private var loading = false
 
@@ -166,11 +167,12 @@ struct LinearTeamPicker: View {
 /// list so it reads as the next step. Suggestions come from the channels I'm in; typing searches public and private
 /// channels I can read. Group handles only matter for mention-only channels, so they appear once one is filtered.
 struct SlackChannelsEditor: View {
+    @EndpointClient private var endpoint
     @ObservedObject var editor: ProjectEditor
     let source: TrackingSource?
     let saved: Set<String>
-    @ObservedObject private var client = AppModel.shared.client
-    @ObservedObject private var signIns = AppModel.shared.client.sourceSignIns
+    @EndpointClient private var client
+    private var signIns: SourceSignInStore { endpoint.sourceSignIns }
     @State private var query = ""
     @State private var mine: TrackingLookup<SlackChannelOption>?
     @State private var results: TrackingLookup<SlackChannelOption>?
@@ -539,6 +541,7 @@ extension SlackLabelEffect {
 /// were last updated, and Rebuild, which folds the latest corrections in now. Read-only: the rules are untrusted model
 /// output, shown as plain text, and change only through corrections. A saved guide replaces the rows in place.
 struct TriageGuideSection: View {
+    @EndpointClient private var endpoint
     let projectId: String
     let kind: TrackedKind
     @StateObject private var model: TriageGuideModel
@@ -558,8 +561,8 @@ struct TriageGuideSection: View {
             TriageGuideRebuildControl(busy: model.rebuild.isBusy) { model.requestRebuild() }
         }
         .help(TriageGuideText.tooltip(model.guide))
-        .onAppear { model.start(client: AppModel.shared.client, projectId: projectId) }
-        .onChange(of: projectId) { _, id in model.start(client: AppModel.shared.client, projectId: id) }
+        .onAppear { model.start(client: endpoint, projectId: projectId) }
+        .onChange(of: projectId) { _, id in model.start(client: endpoint, projectId: id) }
         .onDisappear { model.stop() }
         if model.guide == nil, model.loadFailed {
             SettingsRow { InlineProblem("Couldn't load the triage guide.") { model.reload() } }
@@ -795,7 +798,7 @@ private struct TriageCorrectionsList: View {
 
     let projectId: String
     let kind: TrackedKind
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
     @State private var corrections: [Row]?
     @State private var failed = false
     @State private var visibleCount = Self.shown
@@ -868,13 +871,14 @@ private struct TriageCorrectionsList: View {
 /// The account a source reads with: Sign in when pilotd needs one, then "Waiting for sign-in in your
 /// browser…" with Cancel, and Sign in again once connected (another account or new access).
 private struct SourceAccountRow: View {
+    @EndpointClient private var endpoint
     let kind: TrackedKind
     let label: String
     let needsSignIn: Bool
     let connected: Bool
     /// Why to sign in, shown when sign-in is required.
     let purpose: String
-    @ObservedObject private var signIns = AppModel.shared.client.sourceSignIns
+    private var signIns: SourceSignInStore { endpoint.sourceSignIns }
 
     var body: some View {
         let state = TrackingAccountText.state(signIns[kind], needsSignIn: needsSignIn, connected: connected,

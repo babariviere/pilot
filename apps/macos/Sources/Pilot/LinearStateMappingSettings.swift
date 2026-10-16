@@ -41,7 +41,7 @@ struct LinearStateMappingSettings: View {
 private struct LinearStateMappingPickers: View {
     let team: String
     @Binding var selections: [String: LinearStateMapping]
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
     @State private var lookup: TrackingLookup<LinearWorkflowStateOption>?
     @State private var loading = false
     @State private var problem: String?

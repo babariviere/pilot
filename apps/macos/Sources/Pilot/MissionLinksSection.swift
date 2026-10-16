@@ -46,7 +46,7 @@ final class MissionLinkGroupsCache: ObservableObject {
 struct MissionLinksSection: View {
     let mission: Mission
     let detail: MissionDetail
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
     @StateObject private var cache = MissionLinkGroupsCache()
     @State private var expanded: Bool
 
@@ -112,7 +112,7 @@ private enum MissionLinkActions {
 
     static func remove(_ link: MissionLink, missionId: String) {
         guard let id = link.resourceIds.first, link.resourceIds.count == 1 else { return }
-        let client = AppModel.shared.client
+        let client = endpoint
         AppModel.shared.missionAction { try await client.deleteMissionResource(missionId, resourceId: id) }
     }
 

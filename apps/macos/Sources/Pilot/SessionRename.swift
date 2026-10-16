@@ -9,12 +9,13 @@ struct SessionRenameTarget: Identifiable, Hashable {
 
 /// Context-menu item that opens the rename sheet for a chat.
 struct SessionRenameAction: View {
+    @Environment(\.hostViewContext) private var hostContext
     let session: SessionSummary
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
         Button {
-            model.renamingSession = SessionRenameTarget(id: session.id, title: session.title)
+            model.renamingSession = SessionRenameTarget(id: hostContext?.ref(.session, session.id).storageKey ?? session.id, title: session.title)
         } label: {
             Label("Rename…", icon: PilotIcon.edit)
         }

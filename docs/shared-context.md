@@ -35,6 +35,16 @@ admission/recovery; the ordinary best-effort memory-wake timeout is not a comple
 
 ## Native page reads
 
+Native placement uses `POST /api/missions/:missionId/tasks/:taskId/delegations` with both
+`expectedRevision` (the current task definition revision) and required `expectedPreviousEpoch`.
+Read the latest task grant from the mission-home inventory across all bindings, including sealed
+grants; send its execution epoch, or `0` only if no grant exists. Both fields are mandatory intent
+fences, not timestamps. The store atomically compares the previous epoch and reserves exactly the
+next one. Missing/invalid/stale epochs fail with 409, including a delayed old POST arriving after
+a later execution has sealed without changing the task definition. There is no implicit-current
+default for HTTP or programmatic callers. A failed or uncertain request requires refreshing the
+home inventory, not blindly retrying it as a newly authorized execution.
+
 The shared pages must use binding-scoped reads, not ordinary execution-project memory routes:
 
 - `GET /api/shared-contexts/:bindingId/memory/wake?lines=96`,

@@ -61,6 +61,7 @@ final class SessionRepositoryModel: ObservableObject {
 /// nothing loads and the branch is nil. The changes, branch and lookup errors go to the row's tooltip through
 /// `SessionRepositoryHelpKey`.
 struct SessionRepositoryMetadata<Content: View>: View {
+    @EndpointClient private var endpoint
     let session: SessionSummary
     var hovered = false
     @ViewBuilder let content: (String?) -> Content
@@ -89,7 +90,7 @@ struct SessionRepositoryMetadata<Content: View>: View {
                     // Refresh on return/activity, but back off idle workspaces. External editor changes
                     // still arrive on the bounded periodic fallback, without polling hidden windows.
                     while !Task.isCancelled {
-                        await model.loadBranch(session, client: app.client)
+                        await model.loadBranch(session, client: endpoint)
                         do { try await Task.sleep(for: .seconds(RepositoryPolling.interval(working: session.isWorking, fullDiff: false))) }
                         catch { return }
                     }
@@ -99,7 +100,7 @@ struct SessionRepositoryMetadata<Content: View>: View {
                     guard summaryKey.enabled else { return }
                     // At most the hovered row scans file/line stats, with the same visibility and cancellation gates.
                     while !Task.isCancelled {
-                        await model.load(session, client: app.client)
+                        await model.load(session, client: endpoint)
                         do { try await Task.sleep(for: .seconds(RepositoryPolling.interval(working: session.isWorking, fullDiff: false))) }
                         catch { return }
                     }

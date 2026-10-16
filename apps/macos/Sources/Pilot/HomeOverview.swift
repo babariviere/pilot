@@ -174,8 +174,10 @@ enum HomeStatus {
 /// the user's folder headings, as in the project picker), Activity, Working now and Missions. What needs the user
 /// lives in the Inbox, so Home lists no Needs you or Ready to merge rows and no diff counts.
 struct HomeOverview: View {
+    @Environment(\.hostViewContext) private var hostContext
     @EnvironmentObject private var app: AppModel
-    @ObservedObject private var client = AppModel.shared.client
+    @ObservedObject private var hosts = AppModel.shared.hosts
+    @EndpointClient private var client
     @State private var allProjects = false
     @State private var allWorking = false
     @State private var allMissions = false
@@ -186,9 +188,27 @@ struct HomeOverview: View {
         }
     }
 
+    private struct RemoteProject: Identifiable {
+        let ref: HostResourceRef
+        let status: HomeProjectStatus
+        var id: HostResourceRef { ref }
+    }
+    private var remoteProjects: [RemoteProject] {
+        Set(hosts.projects.map { $0.ref.host }).filter { $0 != app.localHost }.flatMap { host in
+            let client = hosts.presentationClient(host)
+            return HomeStatus.projects(client.projects, counts: client.projectCounts.projects,
+                sessions: client.sessions, missions: client.missions).map {
+                    RemoteProject(ref: HostResourceRef(host: host, kind: .project, localId: $0.project.id), status: $0)
+                }
+        }.sorted { $0.status.project.name < $1.status.project.name }
+    }
+
     private func content(now: Date) -> some View {
         let rows = HomeStatus.projects(client.projects, counts: client.projectCounts.projects,
                                        sessions: client.sessions, missions: client.missions)
+        let remoteRows = remoteProjects
+        let remoteWorking = hosts.sessions.filter { $0.ref.host != app.localHost && hosts.available.contains($0.ref.host) && $0.value.isWorking && !$0.value.isArchived }
+        let remoteMissions = hosts.missions.filter { $0.ref.host != app.localHost && $0.value.status == .active }
         let working = HomeStatus.working(client.sessions)
         let missions = HomeStatus.missions(client.missions)
         let sessionIds = Set(client.sessions.map(\.id))
@@ -199,7 +219,7 @@ struct HomeOverview: View {
                         .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
                 }
                 if client.hasProjectSnapshot {
-                    Text(HomeStatus.summary(rows))
+                    Text(HomeStatus.summary(rows + remoteRows.map(\.status)))
                         .font(.pilot(.headline)).foregroundStyle(Theme.foreground)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -210,7 +230,7 @@ struct HomeOverview: View {
             }
 
             section {
-                PageSectionHeader(title: "Projects", count: rows.count, linkTitle: "Add project") { app.addProject() }
+                PageSectionHeader(title: "Projects", count: rows.count + remoteRows.count, linkTitle: "Add project") { app.addProject() }
                 if rows.isEmpty {
                     quietLine(client.hasProjectSnapshot ? "Add a project to see how it’s doing." : "Loading projects…")
                 }
@@ -227,7 +247,11 @@ struct HomeOverview: View {
                         projectRow(row, now: now)
                     }
                 }
-                if rows.count > HomeStatus.projectLimit { listToggle(count: rows.count, expanded: $allProjects) }
+                ForEach(allProjects ? remoteRows : Array(remoteRows.prefix(HomeStatus.projectLimit))) { item in
+                    HairlineDivider(leading: 8)
+                    projectRow(item.status, now: now, context: HostViewContext(host: item.ref.host, hosts: hosts))
+                }
+                if rows.count + remoteRows.count > HomeStatus.projectLimit { listToggle(count: rows.count + remoteRows.count, expanded: $allProjects) }
             }
 
             section {
@@ -235,18 +259,22 @@ struct HomeOverview: View {
             }
 
             section {
-                PageSectionHeader(title: "Working now", count: working.count)
-                if working.isEmpty { quietLine("Nothing is running. Start a task above.") }
+                PageSectionHeader(title: "Working now", count: working.count + remoteWorking.count)
+                if working.isEmpty && remoteWorking.isEmpty { quietLine("Nothing is running. Start a task above.") }
                 let shown = allWorking ? working : Array(working.prefix(HomeStatus.previewLimit))
                 ForEach(Array(shown.enumerated()), id: \.element.id) { index, session in
                     if index > 0 { HairlineDivider(leading: 8) }
                     workingRow(session, now: now)
                 }
-                if working.count > HomeStatus.previewLimit { listToggle(count: working.count, expanded: $allWorking) }
+                ForEach(allWorking ? remoteWorking : Array(remoteWorking.prefix(HomeStatus.previewLimit))) { item in
+                    HairlineDivider(leading: 8)
+                    workingRow(item.value, now: now, context: HostViewContext(host: item.ref.host, hosts: hosts))
+                }
+                if working.count + remoteWorking.count > HomeStatus.previewLimit { listToggle(count: working.count + remoteWorking.count, expanded: $allWorking) }
             }
 
             section {
-                PageSectionHeader(title: "Missions", count: missions.count)
+                PageSectionHeader(title: "Missions", count: missions.count + remoteMissions.count)
                 if missions.isEmpty {
                     quietLine(client.hasProjectSnapshot ? "No missions yet." : "Loading missions…")
                 }
@@ -255,7 +283,11 @@ struct HomeOverview: View {
                     if index > 0 { HairlineDivider(leading: 30) }
                     missionRow(mission, sessionIds: sessionIds)
                 }
-                if missions.count > HomeStatus.previewLimit { listToggle(count: missions.count, expanded: $allMissions) }
+                ForEach(allMissions ? remoteMissions : Array(remoteMissions.prefix(HomeStatus.previewLimit))) { item in
+                    HairlineDivider(leading: 30)
+                    missionRow(item.value, sessionIds: Set(hosts.sessions.filter { $0.ref.host == item.ref.host }.map { $0.value.id }), context: HostViewContext(host: item.ref.host, hosts: hosts))
+                }
+                if missions.count + remoteMissions.count > HomeStatus.previewLimit { listToggle(count: missions.count + remoteMissions.count, expanded: $allMissions) }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -276,17 +308,18 @@ struct HomeOverview: View {
             .accessibilityAddTraits(.isHeader)
     }
 
-    private func projectRow(_ row: HomeProjectStatus, now: Date) -> some View {
+    private func projectRow(_ row: HomeProjectStatus, now: Date, context: HostViewContext? = nil) -> some View {
+        let owner = context ?? hostContext
         let activity = row.lastActivity.map { SessionTimeFormatting.relative($0, now: now) }
         let label = [row.project.name, row.countsLine, row.missionLine,
                      activity.map { "last active \($0) ago" }].compactMap { $0 }.joined(separator: ", ")
-        return Button { app.openProject(row.project.id) } label: {
+        return Button { app.openProject(row.project.id, context: owner) } label: {
             HoverRow { _ in
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 1) {
                         Text(row.project.name).font(.pilot(.body, weight: .medium)).foregroundStyle(Theme.foreground)
                             .lineLimit(1)
-                        RowLine(segments: [RowLineSegment(.text(row.countsLine))]
+                        RowLine(segments: [RowLineSegment(.text(context.map { $0.name + " · " + ($0.available ? row.countsLine : "Disconnected") } ?? row.countsLine))]
                             + (row.missionLine.map { [RowLineSegment(.mission(id: nil, title: $0))] } ?? []),
                             maxLines: 2, font: .pilot(.caption))
                     }
@@ -304,16 +337,18 @@ struct HomeOverview: View {
         .help("Open \(row.project.name) Overview")
         .accessibilityLabel(label + ". Open Overview.")
         .contextMenu {
-            Button("Open Overview") { app.openProject(row.project.id) }
-            Button("New Chat") { app.newSession(in: row.project.id) }
+            Button("Open Overview") { app.openProject(row.project.id, context: owner) }
+            Button("New Chat") { app.newSession(in: row.project.id, context: owner) }
         }
     }
 
-    private func workingRow(_ session: SessionSummary, now: Date) -> some View {
+    private func workingRow(_ session: SessionSummary, now: Date, context: HostViewContext? = nil) -> some View {
+        let owner = context ?? hostContext
+        let client = context.map { $0.hosts.presentationClient($0.host) } ?? self.client
         let project = client.project(session.projectId)?.name ?? session.cwd.abbreviatingHome
         let mission = session.missionId.flatMap { id in client.missions.first { $0.id == id }?.title }
         let elapsed = SessionTimeFormatting.relative(session.listActivityAt, now: now)
-        return Button { app.selectedSessionId = session.id } label: {
+        return Button { app.navigate(.session, id: session.id, context: owner) } label: {
             HoverRow { _ in
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 1) {
@@ -335,13 +370,15 @@ struct HomeOverview: View {
         .rowButtonStyle()
         .accessibilityLabel([session.title, project, mission, "working"].compactMap { $0 }.joined(separator: ", "))
         .contextMenu {
-            Button("Open Chat") { app.selectedSessionId = session.id }
-            SessionProjectAction(session: session)
-            Button("Stop Chat") { app.stopSession(session.id) }
+            Button("Open Chat") { app.navigate(.session, id: session.id, context: owner) }
+            SessionProjectAction(session: session).environment(\.hostViewContext, owner)
+            Button("Stop Chat") { app.stopSession(owner?.ref(.session, session.id).storageKey ?? session.id) }
         }
     }
 
-    private func missionRow(_ mission: Mission, sessionIds: Set<String>) -> some View {
+    private func missionRow(_ mission: Mission, sessionIds: Set<String>, context: HostViewContext? = nil) -> some View {
+        let owner = context ?? hostContext
+        let client = context.map { $0.hosts.presentationClient($0.host) } ?? self.client
         let members = client.sessions.filter { $0.missionId == mission.id && !$0.isArchived }
         let progress = mission.status == .active
             ? MissionSidebarSummary.progress(mission: mission, working: members.filter(\.isWorking).count)
@@ -351,7 +388,7 @@ struct HomeOverview: View {
             ? MissionSidebarSummary.signal(mission: mission, members: members, isUnread: app.isUnread) : nil
         return HoverRow { _ in
             HStack(spacing: 10) {
-                Button { app.openMission(mission.id) } label: {
+                Button { app.openMission(mission.id, context: owner) } label: {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         PilotSymbol(PilotIcon.mission, context: .row).foregroundStyle(Theme.mutedForeground)
                             .frame(width: 14).accessibilityHidden(true)
@@ -375,7 +412,7 @@ struct HomeOverview: View {
                             .accessibilityLabel("\(count) questions or blocked tasks need you")
                     }
                     if let coordinator {
-                        Button { app.reveal(session: coordinator) } label: {
+                        Button { app.navigate(.session, id: coordinator, context: owner) } label: {
                             Label("Coordinator", icon: PilotIcon.coordinator)
                                 .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).fixedSize()
                         }

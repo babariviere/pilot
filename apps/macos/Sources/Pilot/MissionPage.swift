@@ -17,9 +17,10 @@ struct MissionInput {
 /// The main detail area for a selected mission. The window toolbar carries the title, the section
 /// picker and the primary actions, like a chat; the page itself starts with content.
 struct MissionPage: View {
+    @Environment(\.hostViewContext) private var hostContext
     let missionId: String
     @EnvironmentObject private var model: AppModel
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
     @State private var width: CGFloat = 1000
 
     var body: some View {
@@ -64,7 +65,7 @@ struct MissionPage: View {
     private func content(_ mission: Mission, detail: MissionDetail?) -> some View {
         if let detail {
             MissionTabContent(mission: mission, detail: detail, selection: model.missionTabSelection,
-                              briefEditor: model.briefEditor(for: mission.id))
+                              briefEditor: model.briefEditor(for: hostContext?.ref(.mission, mission.id).storageKey ?? mission.id))
         } else {
             ProgressView("Loading mission…")
         }
@@ -114,6 +115,7 @@ private struct MissionTabContent: View {
 /// Section picker, New chat and mission actions in the window toolbar.
 /// Toolbar hosts can sit outside the page's environment, so each root receives the model explicitly.
 private struct MissionToolbar: ToolbarContent {
+    @Environment(\.hostViewContext) private var hostContext
     let mission: Mission
     let model: AppModel
     let compactTabs: Bool
@@ -126,13 +128,13 @@ private struct MissionToolbar: ToolbarContent {
         }
         ToolbarItem(placement: .primaryAction) {
             Menu {
-                Button { model.newSession(in: mission) } label: { Label("New Chat", icon: PilotIcon.compose) }
+                Button { model.newSession(in: mission, context: hostContext) } label: { Label("New Chat", icon: PilotIcon.compose) }
                 Menu("Add Existing Chat") { MissionExistingChatItems(mission: mission) }
             } label: {
                 Label("New chat", icon: PilotIcon.compose)
                     .labelStyle(.titleAndIcon)
             } primaryAction: {
-                model.newSession(in: mission)
+                model.newSession(in: mission, context: hostContext)
             }
             .environmentObject(model)
             .disabled(mission.status != .active)
@@ -184,14 +186,14 @@ private struct MissionToolbar: ToolbarContent {
     }
 
     @ViewBuilder private var coordinatorItems: some View {
-        let members = model.members(of: mission).filter { !$0.isArchived }
+        let members = model.members(of: mission, context: hostContext).filter { !$0.isArchived }
         if let coordinator = mission.coordinatorSessionId {
-            Button { model.selectedSessionId = coordinator } label: {
+            Button { model.navigate(.session, id: coordinator, context: hostContext) } label: {
                 Label("Open Coordinator", icon: PilotIcon.coordinator)
             }
-            Button("Coordinate It Yourself") { model.setCoordinator(nil, missionId: mission.id) }
+            Button("Coordinate It Yourself") { model.setCoordinator(nil, missionId: mission.id, context: hostContext) }
         } else {
-            Button { model.missionSheet = .startCoordinator(missionId: mission.id) } label: {
+            Button { model.presentMissionSheet(.startCoordinator(missionId: mission.id), context: hostContext) } label: {
                 Label("Start a Coordinator…", icon: PilotIcon.coordinator)
             }
             .disabled(mission.status != .active)
@@ -200,7 +202,7 @@ private struct MissionToolbar: ToolbarContent {
         if !candidates.isEmpty {
             Menu("Make Coordinator") {
                 ForEach(candidates) { session in
-                    Button(session.title) { model.setCoordinator(session.id, missionId: mission.id) }
+                    Button(session.title) { model.setCoordinator(session.id, missionId: mission.id, context: hostContext) }
                 }
             }
         }
@@ -209,11 +211,12 @@ private struct MissionToolbar: ToolbarContent {
 
 /// Native segmented control for the mission sections; a pop-up button when the window is narrow.
 struct MissionTabPicker: View {
+    @Environment(\.hostViewContext) private var hostContext
     let mission: Mission
     var compact = false
     @ObservedObject var selection: MissionTabSelection
     @EnvironmentObject private var model: AppModel
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
 
     var body: some View {
         let picker = Picker("Mission section", selection: $selection.tab) {
@@ -239,7 +242,7 @@ struct MissionTabPicker: View {
     private func count(_ tab: MissionTab) -> Int? {
         switch tab {
         case .tasks: client.missionDetails[mission.id]?.tasks.filter { !$0.status.isClosed }.count
-        case .chats: model.members(of: mission).filter { !$0.isArchived }.count
+        case .chats: model.members(of: mission, context: hostContext).filter { !$0.isArchived }.count
         default: nil
         }
     }
@@ -282,21 +285,25 @@ struct MissionTaskProgress: View {
 /// The goal, one meta line and per-phase progress (one overall bar without phases), then what needs the user, the
 /// tasks being worked on and the links. Phase task lists live in Tasks and history in Activity.
 struct MissionOverviewTab: View {
+    @Environment(\.hostViewContext) private var hostContext
     let mission: Mission
     let detail: MissionDetail
     @EnvironmentObject private var model: AppModel
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
 
     /// Rows a section shows before its "Show all" line, as on a project's Overview.
     static let rowLimit = 5
 
     var body: some View {
         let counts = MissionTaskCounts(detail.tasks)
-        let needs = model.needsYou(mission)
+        let needs = model.needsYou(mission, context: hostContext)
         let working = MissionTaskOrdering.inFlight(detail.tasks)
         let taskLinks = MissionTaskLinkIndex(detail)
         VStack(alignment: .leading, spacing: 28) {
             summary(counts, working: working.count)
+            if let context = hostContext {
+                SharedMissionPageSection(mission: context.ref(.mission, mission.id), hosts: context.hosts)
+            }
             if drafting {
                 MissionDraftingEvent(mission: mission)
             } else if detail.tasks.isEmpty {
@@ -307,7 +314,7 @@ struct MissionOverviewTab: View {
                     Button("Add a Task") { model.missionTab = .tasks }
                         .buttonStyle(.borderedProminent)
                     if let coordinator = mission.coordinatorSessionId {
-                        Button("Open Coordinator") { model.selectedSessionId = coordinator }
+                        Button("Open Coordinator") { model.navigate(.session, id: coordinator, context: hostContext) }
                     }
                 }
             }
@@ -352,7 +359,7 @@ struct MissionOverviewTab: View {
         let phases = MissionTaskPhases(detail.tasks, phases: MissionPhaseIndex(detail), showDropped: false).progressRows
         VStack(alignment: .leading, spacing: 10) {
             if mission.goal.isEmpty {
-                Button("Add a goal…") { model.missionSheet = .edit(missionId: mission.id) }
+                Button("Add a goal…") { model.presentMissionSheet(.edit(missionId: mission.id), context: hostContext) }
                     .buttonStyle(.plain)
                     .font(.pilot(.headline))
                     .foregroundStyle(Theme.faintForeground)
@@ -394,12 +401,13 @@ struct MissionOverviewTab: View {
 /// One line under the goal: task progress in words, who coordinates and the brief revision. The bar and its legend
 /// follow on their own lines.
 private struct MissionMetaLine: View {
+    @Environment(\.hostViewContext) private var hostContext
     let mission: Mission
     let detail: MissionDetail
     let counts: MissionTaskCounts
     let working: Int
     @EnvironmentObject private var model: AppModel
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
 
     var body: some View {
         HStack(spacing: 5) {
@@ -412,7 +420,7 @@ private struct MissionMetaLine: View {
             Text("·")
             if let coordinator = mission.coordinatorSessionId {
                 MissionCoordinatorIndicator()
-                Button(client.session(coordinator)?.title ?? "Coordinator") { model.selectedSessionId = coordinator }
+                Button(client.session(coordinator)?.title ?? "Coordinator") { model.navigate(.session, id: coordinator, context: hostContext) }
                     .buttonStyle(.plain)
                     .lineLimit(1)
                     .help("Open the coordinator chat")
@@ -421,7 +429,7 @@ private struct MissionMetaLine: View {
                 Text("You coordinate")
                 if mission.status == .active {
                     Text("·")
-                    Button("Start a coordinator…") { model.missionSheet = .startCoordinator(missionId: mission.id) }
+                    Button("Start a coordinator…") { model.presentMissionSheet(.startCoordinator(missionId: mission.id), context: hostContext) }
                         .buttonStyle(.plain)
                 }
             }
@@ -438,9 +446,10 @@ private struct MissionMetaLine: View {
 /// While a new coordinator drafts the goal, brief and tasks: one line with the shared working ellipsis, like a chat's
 /// automatic events, and a quiet link to its chat.
 struct MissionDraftingEvent: View {
+    @Environment(\.hostViewContext) private var hostContext
     let mission: Mission
     @EnvironmentObject private var model: AppModel
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
 
     var body: some View {
         let coordinator = mission.coordinatorSessionId.flatMap { client.session($0) }
@@ -457,7 +466,7 @@ struct MissionDraftingEvent: View {
                 .lineLimit(1)
                 .layoutPriority(1)
             if let id = coordinator?.id {
-                Button("Open chat") { model.selectedSessionId = id }
+                Button("Open chat") { model.navigate(.session, id: id, context: hostContext) }
                     .buttonStyle(.plain)
                     .foregroundStyle(Theme.info)
                     .fixedSize()
@@ -474,6 +483,8 @@ struct MissionDraftingEvent: View {
 /// A mission's Needs you item in the shared `NeedsYouRow`: an unread or failed chat reads like its sidebar row; a
 /// blocked task, comment or proposed decision change shows its reason. The corner carries the state.
 private struct MissionNeedsYouRow: View {
+    @Environment(\.hostViewContext) private var hostContext
+    @EndpointClient private var endpoint
     let item: MissionNeedsYouItem
     @EnvironmentObject private var model: AppModel
 
@@ -486,7 +497,7 @@ private struct MissionNeedsYouRow: View {
     }
 
     private var session: SessionSummary? {
-        if case let .chat(session) = item { return model.client.session(session.id) ?? session }
+        if case let .chat(session) = item { return endpoint.session(session.id) ?? session }
         return nil
     }
 
@@ -515,7 +526,7 @@ private struct MissionNeedsYouRow: View {
 
     private func open() {
         switch item {
-        case let .chat(session): model.selectedSessionId = session.id
+        case let .chat(session): model.navigate(.session, id: session.id, context: hostContext)
         case let .blockedTask(task): model.showMissionTask(task.id)
         case .comment, .decisionProposal: model.missionTab = .brief
         }
@@ -524,11 +535,12 @@ private struct MissionNeedsYouRow: View {
 
 /// A read-only task line: status, number, title and the chat working on it.
 struct CompactTaskRow: View {
+    @Environment(\.hostViewContext) private var hostContext
     let task: MissionTask
     var showsOwner = true
     var resources: [MissionResource] = []
     @EnvironmentObject private var model: AppModel
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
 
     var body: some View {
         HStack(spacing: 8) {
@@ -546,7 +558,7 @@ struct CompactTaskRow: View {
             Spacer(minLength: 8)
             if showsOwner, let sessionId = task.sessionId {
                 let title = client.session(sessionId)?.title
-                Button { model.selectedSessionId = sessionId } label: {
+                Button { model.navigate(.session, id: sessionId, context: hostContext) } label: {
                     Label(MissionTaskOwnerLabel.text(task: task, chatTitle: title), icon: PilotIcon.message)
                         .lineLimit(1).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
                 }
@@ -562,15 +574,16 @@ struct CompactTaskRow: View {
 
 /// Author chat (a link) and health of an activity entry.
 struct MissionEventByline: View {
+    @Environment(\.hostViewContext) private var hostContext
     let event: MissionEvent
     var time: String? = nil
     @EnvironmentObject private var model: AppModel
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
 
     var body: some View {
         HStack(spacing: 5) {
             if let sessionId = event.sessionId {
-                Button(client.session(sessionId)?.title ?? "A chat") { model.selectedSessionId = sessionId }
+                Button(client.session(sessionId)?.title ?? "A chat") { model.navigate(.session, id: sessionId, context: hostContext) }
                     .buttonStyle(.plain).lineLimit(1)
                     .help("Open this chat")
             } else {
@@ -600,7 +613,7 @@ struct MissionLinkChip: View {
     let resource: MissionResource
     let missionId: String
     @EnvironmentObject private var model: AppModel
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
 
     var body: some View {
         let pr = resource.pullRequest ?? client.sessions.flatMap(\.linkedPullRequests).first { $0.url == resource.url }
@@ -670,6 +683,7 @@ struct MissionAddLinkButton: View {
 
 /// URL and optional title for a new mission or task link. Shown in a popover.
 struct MissionAddLinkForm: View {
+    @EndpointClient private var endpoint
     let missionId: String
     var taskId: String? = nil
     var title = "Add a link"
@@ -700,7 +714,7 @@ struct MissionAddLinkForm: View {
         guard !input.busy, URL(string: url)?.scheme != nil else { return }
         let title = input.trimmed(input.secondary)
         input.busy = true
-        model.missionAction { [client = model.client] in
+        model.missionAction { [client = endpoint] in
             defer { input.busy = false }
             try await client.addMissionResource(missionId, MissionResourceWrite(url: url, title: title.isEmpty ? nil : title,
                                                                                 taskId: taskId))

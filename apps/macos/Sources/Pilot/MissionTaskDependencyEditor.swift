@@ -8,7 +8,7 @@ struct MissionTaskDependencyEditor: View {
     let task: MissionTask
     let missionId: String
     let dismiss: () -> Void
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
     @State private var selection: Set<String>
     @State private var query = ""
     @State private var saving = false

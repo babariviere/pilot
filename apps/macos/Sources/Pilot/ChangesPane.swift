@@ -13,13 +13,13 @@ final class ChangesModel: ObservableObject {
 
     init(sessionId: String) { self.sessionId = sessionId }
 
-    func load() async {
+    func load(client: PilotClient) async {
         guard !Task.isCancelled else { return }
         guard !loading else { return }
         loading = true
         defer { loading = false }
         do {
-            let changes = try await AppModel.shared.client.changes(sessionId)
+            let changes = try await client.changes(sessionId)
             try Task.checkCancellation()
             if changes != self.changes {
                 let diffs = await Task.detached(priority: .userInitiated) {
@@ -44,9 +44,12 @@ final class ChangesModel: ObservableObject {
 
 /// What the session changed in its working copy: committed and uncommitted, since it branched.
 struct ChangesPane: View {
+    @Environment(\.hostViewContext) private var hostContext
+    @EndpointClient private var endpoint
     let session: SessionSummary
     var isVisible = true
     @Environment(\.repositoryPollingVisible) private var windowVisible
+    @State private var viewingFile: String?
     @StateObject private var model: ChangesModel
     init(session: SessionSummary, isVisible: Bool = true) {
         self.session = session
@@ -66,10 +69,15 @@ struct ChangesPane: View {
             content
         }
         .background(Theme.background)
+        .sheet(isPresented: Binding(get: { viewingFile != nil }, set: { if !$0 { viewingFile = nil } })) {
+            if let path = viewingFile, let context = hostContext {
+                SessionFileViewer(session: context.ref(.session, session.id), path: path, hosts: context.hosts)
+            }
+        }
         .task(id: pollingKey) {
             guard pollingKey.enabled else { return }
             while !Task.isCancelled {
-                await model.load()
+                await model.load(client: endpoint)
                 do { try await Task.sleep(for: .seconds(RepositoryPolling.interval(working: session.isWorking, fullDiff: true))) }
                 catch { return }
             }
@@ -91,7 +99,7 @@ struct ChangesPane: View {
             }
         }, trailing: {
             if model.loading { ProgressView().controlSize(.mini) }
-            Button { Task { await model.load() } } label: { PilotSymbol(PilotIcon.refresh, context: .toolbar) }
+            Button { Task { await model.load(client: endpoint) } } label: { PilotSymbol(PilotIcon.refresh, context: .toolbar) }
                 .buttonStyle(QuietIconButtonStyle())
                 .help("Refresh")
                 .accessibilityLabel("Refresh changes")
@@ -103,7 +111,7 @@ struct ChangesPane: View {
             ProgressView("Preparing task…").frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let error = model.error, model.changes == nil {
             EmptyStateView(icon: PilotIcon.warning, title: "Couldn't load changes", message: error) {
-                Button("Retry") { Task { await model.load() } }
+                Button("Retry") { Task { await model.load(client: endpoint) } }
             }
             .frame(maxHeight: .infinity)
         } else if let changes = model.changes, changes.files.isEmpty {
@@ -116,6 +124,7 @@ struct ChangesPane: View {
                         FileRow(file: file, expanded: model.expanded.contains(file.path)) {
                             if model.expanded.contains(file.path) { model.expanded.remove(file.path) } else { model.expanded.insert(file.path) }
                         }
+                        .contextMenu { Button("View file") { viewingFile = file.path } }
                         if model.expanded.contains(file.path), let diff = model.diffs[file.path] {
                             DiffView(file: diff)
                                 .padding(.vertical, 4)
@@ -136,6 +145,7 @@ struct ChangesPane: View {
 
 /// Repository context remains available while diffs are loading, empty, or unavailable.
 struct ChangesRepositoryContext: View {
+    @EndpointClient private var endpoint
     let session: SessionSummary
     var changes: SessionChanges?
     @State private var detachConfirmation: DetachConfirmation?
@@ -244,7 +254,7 @@ struct ChangesRepositoryContext: View {
         detachError = nil
         guard let missionId = session.missionId, let number else { return detach(url: url) }
         let sessionId = session.id
-        let client = AppModel.shared.client
+        let client = endpoint
         detaching.insert(url)
         Task { @MainActor in
             let detail: MissionDetail?
@@ -263,7 +273,7 @@ struct ChangesRepositoryContext: View {
         detaching.insert(url)
         Task { @MainActor in
             defer { detaching.remove(url) }
-            do { try await AppModel.shared.client.unbindPullRequest(sessionId, url: url) }
+            do { try await endpoint.unbindPullRequest(sessionId, url: url) }
             catch { detachError = "Couldn't detach the pull request. \(error.localizedDescription)" }
         }
     }
@@ -537,7 +547,7 @@ private struct AttachPullRequestButton: View {
 struct AttachPullRequestForm: View {
     let session: SessionSummary
     let dismiss: () -> Void
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
     @State private var draft = PullRequestAttachDraft()
     @State private var mission: MissionDetail?
     @FocusState private var focused: Bool

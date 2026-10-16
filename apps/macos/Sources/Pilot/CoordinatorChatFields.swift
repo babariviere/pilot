@@ -26,7 +26,7 @@ struct CoordinatorChatFields: View {
     @Binding var form: CoordinatorChatForm
     /// Command-Return in the message field.
     var onSubmit: () -> Void = {}
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
 
     private var option: ModelOption? {
         let id = form.selectedModel ?? projectId.flatMap { client.project($0)?.model } ?? form.models.defaultModel
@@ -89,7 +89,7 @@ struct CoordinatorChatFields: View {
 struct StartCoordinatorSheet: View {
     let missionId: String
     @EnvironmentObject private var model: AppModel
-    @ObservedObject private var client = AppModel.shared.client
+    @EndpointClient private var client
     @Environment(\.dismiss) private var dismiss
     @State private var form = CoordinatorChatForm()
     @State private var saving = false

@@ -97,3 +97,63 @@ import Testing
         #expect(wire["onlineOnlyUrls"]?.array?.compactMap(\.string) == urls)
     }
 }
+
+@Test func sharedTaskVersionsKeepDefinitionChangesSeparateFromProgress() throws {
+    let legacy = try JSONDecoder().decode(SharedEntity.self, from: Data("""
+    {"id":"task","kind":"task","revision":21,"deleted":false,"value":{"title":"Committed task"}}
+    """.utf8))
+    #expect(legacy.definitionRevision == nil)
+    let page = try JSONDecoder().decode(SharedMissionVersions.self, from: Data("""
+    {"bindingId":"binding","generation":3,"missionId":"same",
+     "authority":{"hostId":"daemon","daemonId":"home","lineageId":"history"},
+     "source":"replica","sequence":42,"complete":true,"next":2,
+     "entities":[{"id":"task","kind":"task","revision":21,"definitionRevision":4,"deleted":false},
+                 {"id":"removed","kind":"decision","revision":9,"deleted":true}]}
+    """.utf8))
+    #expect(page.entities[0].revision == 21)
+    #expect(page.entities[0].definitionRevision == 4)
+    #expect(page.entities[1].definitionRevision == nil)
+    #expect(page.entities[1].deleted)
+    #expect(page.source == .replica)
+    #expect(page.sequence == 42 && page.next == 2)
+    #expect(try JSONDecoder().decode(SharedMissionVersions.self, from: JSONEncoder().encode(page)) == page)
+    #expect(try JSONDecoder().decode(SharedEntity.self, from: JSONEncoder().encode(legacy)) == legacy)
+}
+
+@Test func sharedMissionReadKeepsPendingEditsOutsideSavedMission() throws {
+    let read = try JSONDecoder().decode(SharedMissionRead.self, from: Data("""
+    {"bindingId":"binding","generation":3,
+     "authority":{"hostId":"daemon","daemonId":"home","lineageId":"history"},"source":"canonical",
+     "snapshot":{"missionId":"same","sequence":42,
+       "detail":{"mission":{"id":"same","projectId":"project","title":"Saved title","goal":"Goal",
+                            "status":"active","briefRevision":0,"createdAt":0,"updatedAt":0},
+                 "decisions":[],"comments":[],"tasks":[],"artifacts":[],"resources":[],"events":[]},
+       "entities":[{"id":"task","kind":"task","revision":21,"definitionRevision":4,"deleted":false}]},
+     "proposals":[{"proposalId":"proposal","missionId":"same","entityId":"task","expectedRevision":20,
+                    "action":"task","args":{"title":"Proposed title"},"state":"conflict",
+                    "origin":{"host":{"hostId":"daemon","daemonId":"target","lineageId":"target-history"},
+                               "sessionId":"same"}}]}
+    """.utf8))
+    #expect(read.snapshot.detail.mission.title == "Saved title")
+    #expect(read.snapshot.entities[0].definitionRevision == 4)
+    #expect(read.proposals.first?.state == .conflict)
+    #expect(read.proposals.first?.args["title"]?.string == "Proposed title")
+    #expect(try JSONDecoder().decode(SharedMissionRead.self, from: JSONEncoder().encode(read)) == read)
+}
+
+@Test func sharedMemoryTreeReadKeepsPendingNotesAndTruncationVisible() throws {
+    let read = try JSONDecoder().decode(SharedMemoryTreeRead.self, from: Data("""
+    {"state":{"sequence":2,"complete":true,"pendingCount":1,"conflictCount":0,"overlayRevision":5},
+     "value":{"count":2,"nodes":[{"lo":0,"hi":1,"text":"Raw notes","children":[{"lo":0,"hi":0}]}],
+              "truncated":true},
+     "proposals":[{"state":"pending","mutation":{"operationId":"original","payloadHash":"hash",
+                    "noteId":"pending-note","text":"Saved here, not shared yet","replaces":[],
+                    "origin":{"host":{"hostId":"daemon","daemonId":"target","lineageId":"target-history"},
+                               "sessionId":"same"}}}]}
+    """.utf8))
+    #expect(read.value.truncated)
+    #expect(read.value.nodes.first?.children?.count == 1)
+    #expect(read.state.overlayRevision == 5)
+    #expect(read.proposals.first?.mutation.noteId == "pending-note")
+    #expect(try JSONDecoder().decode(SharedMemoryTreeRead.self, from: JSONEncoder().encode(read)) == read)
+}

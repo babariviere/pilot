@@ -21,13 +21,13 @@ struct MenuBarContent: View {
                 ForEach(section.rows) { row in
                     Button {
                         model.openWindowAction = { openWindow(id: MainWindow.id) }
-                        model.open(session: row.session.id)
+                        model.open(session: row.reference?.storageKey ?? row.session.id)
                     } label: {
                         // A static native image: the animated working spinner would refresh the menu on every
                         // frame, which closes an open submenu (pilotd) before it can be used.
-                        Label(row.session.title, menuIcon: row.session.status.icon)
+                        Label(row.session.title + (row.available ? "" : " · Disconnected"), menuIcon: row.session.status.icon)
                     }
-                    .help(row.signal?.label ?? row.session.status.rawValue)
+                    .help(row.available ? row.signal?.label ?? row.session.status.rawValue : "Disconnected. This chat may still be working.")
                     .accessibilityLabel(row.accessibilityLabel)
                 }
             }
