@@ -336,6 +336,21 @@ public struct Project: Codable, Identifiable, Equatable, Hashable, Sendable {
     }
 }
 
+/// GET /api/projects/:id/github. Resolved on demand on the project's host.
+public struct ProjectGitHubRepository: Codable, Equatable, Sendable {
+    public let url: String
+
+    public var browserURL: URL? {
+        guard let parts = URLComponents(string: url), parts.scheme?.lowercased() == "https",
+              let host = parts.host, !host.isEmpty, parts.user == nil, parts.password == nil,
+              parts.query == nil, parts.fragment == nil,
+              parts.path.split(separator: "/").count == 2 else { return nil }
+        return parts.url
+    }
+
+    public init(url: String) { self.url = url }
+}
+
 /// POST /api/projects; PATCH sends only the fields to change (an empty model clears it).
 public struct ProjectRequest: Codable, Sendable {
     public var path: String?

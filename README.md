@@ -176,7 +176,10 @@ The sidebar starts with **Home**, the **Inbox** and the project selector. Home c
 summary, subscription usage (with extra-usage spend when the provider reports it), projects (under their folders),
 work in progress, missions and recent activity.
 The Inbox carries the badge and lists, most urgent first, what **Needs you**, what is **Ready to merge**, and your
-Linear and Slack items. Its toolbar filters it to one project. Focusing a project adds its **Overview**, which
+Linear and Slack items. Its toolbar filters it to one project. Use **Open on GitHub** in a project's Overview
+actions menu or the ⌘K command palette to open its repository in your browser. Pilot resolves the repository
+on demand using GitHub CLI on the project's host, so its remotes and GitHub CLI sign-in must be configured.
+Focusing a project adds its **Overview**, which
 leads with Up next, then work in progress, pull requests, missions, schedules, the current Linear cycle, Slack,
 memory and recent chats. Project folders are managed from the project selector's menu.
 

@@ -65,6 +65,14 @@ struct MainWindow: View {
         } message: {
             Text(model.sessionActionError ?? "")
         }
+        .alert("Project action failed", isPresented: Binding(
+            get: { model.projectActionError != nil },
+            set: { if !$0 { model.projectActionError = nil } }
+        )) {
+            Button("OK") { model.projectActionError = nil }
+        } message: {
+            Text(model.projectActionError ?? "")
+        }
         .confirmationDialog("Delete this mission?", isPresented: Binding(
             get: { model.pendingMissionDeletionId != nil },
             set: { if !$0 { model.pendingMissionDeletionId = nil } }

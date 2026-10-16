@@ -169,6 +169,16 @@ struct CommandPaletteCatalog {
                 icon: .compose, suffix: "in \(project.name)"
             ) { [model] in model.newSession(in: project.id) })
         }
+        let currentProjectId = model.selectedSession?.projectId ?? model.selectedMission?.projectId
+            ?? model.selectedProjectId ?? model.focusedProject?.id
+        for project in model.orderedProjects {
+            entries.append(CommandPaletteEntry(
+                item: CommandPaletteItem(id: "github:\(project.id)", kind: .action, title: "Open on GitHub",
+                                         keywords: [project.name, "repository", "repo"],
+                                         suggested: project.id == currentProjectId),
+                icon: .openExternal, suffix: project.name
+            ) { [model] in model.openProjectOnGitHub(project) })
+        }
         if let session = model.selectedSession { entries += chatActions(session, suggested: true) }
         return entries
     }

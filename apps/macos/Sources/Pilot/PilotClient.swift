@@ -853,6 +853,12 @@ final class PilotClient: ObservableObject {
         return try await get(url)
     }
 
+    func projectGitHubURL(_ projectId: String) async throws -> URL {
+        let repository: ProjectGitHubRepository = try await call(URLRequest(url: artifactURL(["projects", projectId, "github"])))
+        guard let url = repository.browserURL else { throw ClientError("Invalid GitHub repository link") }
+        return url
+    }
+
     var fixtureChanges: SessionChanges?
     var fixtureChangeSummaries: [String: SessionChangeSummary] = [:]
 

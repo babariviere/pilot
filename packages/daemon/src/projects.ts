@@ -4,13 +4,14 @@ import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import type {
 	Project,
+	ProjectGitHubRepository,
 	ProjectRequest,
 	ProjectTrackingConfig,
 	RemoteBranchList,
 	SlackProjectLabel,
 } from "@pilot/protocol";
-import { NotFound } from "./errors.ts";
-import { listRemoteBranches } from "./workspaces.ts";
+import { NotFound, ServiceUnavailable } from "./errors.ts";
+import { listRemoteBranches, type Runner, run } from "./workspaces.ts";
 
 export function expandHome(path: string): string {
 	return resolve(path.replace(/^~(?=$|\/)/, process.env.HOME ?? "~"));
@@ -28,9 +29,11 @@ export class ProjectStore {
 	private saving: Promise<void> = Promise.resolve();
 
 	private readonly home: string;
+	private readonly runner: Runner;
 
-	constructor(home: string) {
+	constructor(home: string, runner: Runner = run) {
 		this.home = home;
+		this.runner = runner;
 	}
 
 	private get file(): string {
@@ -99,6 +102,38 @@ export class ProjectStore {
 	async branches(id: string, includeDirect = false): Promise<RemoteBranchList> {
 		const project = this.require(id);
 		return project.workspace === "direct" && !includeDirect ? { branches: [] } : listRemoteBranches(project.path);
+	}
+
+	/** Only a user click resolves this. No startup scan, polling, or local-client filesystem access. */
+	async github(id: string): Promise<ProjectGitHubRepository> {
+		const project = this.require(id);
+		try {
+			const env = { ...process.env };
+			delete env.GH_REPO; // A launcher-wide override must not select another project's repository.
+			const raw = await this.runner(
+				"gh",
+				["repo", "view", "--json", "url", "--jq", ".url"],
+				project.path,
+				10_000,
+				undefined,
+				env,
+			);
+			const url = new URL(raw.trim());
+			if (
+				url.protocol !== "https:" ||
+				url.username ||
+				url.password ||
+				url.search ||
+				url.hash ||
+				!/^\/[^/]+\/[^/]+\/?$/.test(url.pathname)
+			)
+				throw new Error("Invalid repository URL");
+			return { url: url.href };
+		} catch {
+			throw new ServiceUnavailable(
+				"Couldn't find this project's GitHub repository. Check its remotes and GitHub CLI sign-in.",
+			);
+		}
 	}
 
 	async create(request: ProjectRequest): Promise<Project> {

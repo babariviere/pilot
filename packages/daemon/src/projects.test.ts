@@ -5,6 +5,63 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { ProjectStore } from "./projects.ts";
 
+test("GitHub repository lookup is on demand, host-local, bounded and never opens a browser", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "pilot-project-github-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
+	const previousRepo = process.env.GH_REPO;
+	process.env.GH_REPO = "wrong/project";
+	t.after(() => {
+		if (previousRepo === undefined) delete process.env.GH_REPO;
+		else process.env.GH_REPO = previousRepo;
+	});
+	let calls = 0;
+	let response = "https://github.com/octo/repo\n";
+	const store = new ProjectStore(home, async (file, args, cwd, timeout, _signal, env) => {
+		calls++;
+		assert.equal(file, "gh");
+		assert.deepEqual(args, ["repo", "view", "--json", "url", "--jq", ".url"]);
+		assert.equal(cwd, home);
+		assert.equal(timeout, 10_000);
+		assert.ok(env);
+		assert.equal(Object.hasOwn(env, "GH_REPO"), false);
+		return response;
+	});
+	await store.load();
+	const project = await store.create({ path: home });
+	store.list();
+	assert.equal(calls, 0);
+	assert.deepEqual(await store.github(project.id), { url: "https://github.com/octo/repo" });
+	response = "https://github.acme.test/team/private";
+	assert.deepEqual(await store.github(project.id), { url: response });
+	assert.equal(calls, 2, "clicks resolve fresh remotes instead of retaining stale URLs");
+	await assert.rejects(store.github("missing"), /Unknown project/);
+	assert.equal(calls, 2);
+	for (response of [
+		"",
+		"file:///tmp/repo",
+		"javascript:alert(1)",
+		"https://user:secret@github.com/o/r",
+		"https://github.com/o/r?token=secret",
+		"https://github.com/o/r#x",
+		"https://github.com/o/r/pull/1",
+	]) {
+		await assert.rejects(store.github(project.id), /Check its remotes and GitHub CLI sign-in/);
+	}
+});
+
+test("GitHub lookup failures are actionable and never leak command diagnostics", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "pilot-project-github-failure-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
+	const store = new ProjectStore(home, async () => {
+		throw new Error("private command diagnostics");
+	});
+	await store.load();
+	const project = await store.create({ path: home });
+	await assert.rejects(store.github(project.id), {
+		message: "Couldn't find this project's GitHub repository. Check its remotes and GitHub CLI sign-in.",
+	});
+});
+
 test("creates, updates, persists and removes projects", async () => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-projects-"));
 	try {
