@@ -77,14 +77,22 @@ try {
 	if (!validSourceArguments(logicalTool, args)) throw new SetupError("Invalid Linear or Slack start update");
 	const removal = kind === "slack" && logicalTool === "removeSlackEyes";
 	const agentDir = workerData.agentDir ?? paths.getAgentDir();
-	const route = removal
-		? slackRemovalCall(await loadSlackRemovalRoute(agentDir), args.channel_id, args.message_ts)
-		: undefined;
+	const removalConfig = removal ? await loadSlackRemovalRoute(agentDir) : undefined;
+	if (removalConfig?.enabled === false) throw new SetupError("Slack eyes removal is disabled");
+	const route = removalConfig ? slackRemovalCall(removalConfig, args.channel_id, args.message_ts) : undefined;
 	const name = route?.tool ?? dedicatedSourceTool(kind, logicalTool);
 	if (!name) throw new SetupError("Unknown dedicated MCP source tool");
-	// Global user config only. A repository cannot execute a new MCP server through tracking settings.
-	const loaded = config.loadMcpConfig({ agentDir, cwd: agentDir, projectTrusted: false });
-	const entry = loaded.servers.find((entry) => entry.name === (route?.server ?? kind));
+	// Local user config only. A repository cannot supply an executable removal route.
+	// Removal is entirely daemon-owned: do not load mcp.json or register its tools with agents.
+	const entry: McpServerEntry | undefined = route
+		? {
+				name: "pilot-slack-removal",
+				source: join(agentDir, "pilot-tracking.json"),
+				config: { type: "http", ...route.server },
+			}
+		: config
+				.loadMcpConfig({ agentDir, cwd: agentDir, projectTrusted: false })
+				.servers.find((entry) => entry.name === kind);
 	if (!entry) throw new SetupError("Dedicated MCP server is not configured in pi");
 	if (entry.config.enabled === false) throw new SetupError("MCP server is disabled or hidden");
 	if (config.getMcpToolExposure(entry.config, name) === "hidden") throw new SetupError("MCP tool is hidden");
@@ -94,10 +102,13 @@ try {
 		entry,
 		cwd: agentDir,
 		createTransport: runtime.createDefaultTransport,
-		credentials: new runtime.McpOAuthCredentialStore(
-			new auth.FileAuthStorageBackend(join(agentDir, "mcp-auth.json")),
-			agentDir,
-		),
+		// Explicit Bearer configuration needs no OAuth store and must never fall back to one.
+		credentials: removal
+			? undefined
+			: new runtime.McpOAuthCredentialStore(
+					new auth.FileAuthStorageBackend(join(agentDir, "mcp-auth.json")),
+					agentDir,
+				),
 		onTools: () => {},
 	});
 	if (controller.signal.aborted) throw controller.signal.reason;
