@@ -80,7 +80,7 @@ struct TranscriptKeyboardModifier: ViewModifier {
             .focused($focused)
             .focusEffectDisabled()
             .onKeyPress(keys: [.upArrow, .downArrow, .home, .end, .return, .escape]) { press in
-                guard press.modifiers.isEmpty else { return .ignored }
+                guard press.modifiers.isDisjoint(with: [.command, .control, .option]) else { return .ignored }
                 switch press.key {
                 case .upArrow: move(-1)
                 case .downArrow: move(1)
@@ -94,7 +94,7 @@ struct TranscriptKeyboardModifier: ViewModifier {
                 return .handled
             }
             .onKeyPress(characters: CharacterSet(charactersIn: "eE")) { press in
-                guard press.modifiers.subtracting(.shift).isEmpty else { return .ignored }
+                guard press.modifiers.isDisjoint(with: [.command, .control, .option]) else { return .ignored }
                 return editHighlighted() ? .handled : .ignored
             }
             .onCopyCommand {
