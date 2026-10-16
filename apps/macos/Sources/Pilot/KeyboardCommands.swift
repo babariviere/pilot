@@ -47,6 +47,22 @@ extension AppModel {
 
     var canToggleTerminal: Bool { selectedSessionId != nil && selectedSession?.isAsk != true }
 
+    /// No sheet, confirmation or palette is over the window.
+    var hasNoModal: Bool {
+        missionSheet == nil && renamingSession == nil && mergingPullRequest == nil && artifactLink == nil
+            && !showingCommandPalette && pendingMissionDeletionId == nil
+    }
+
+    /// ⌘.: only the open chat, only while its agent works, and never under a dialog.
+    var canStopSelectedChat: Bool {
+        hasNoModal && selectedSession?.isWorking == true && selectedSession?.isReadOnlyHistory != true
+    }
+
+    func stopSelectedChat() {
+        guard canStopSelectedChat, let id = selectedSessionId else { return }
+        stopSession(id)
+    }
+
     /// The mission on screen: the open mission page, or the open chat's mission.
     var currentMissionId: String? { selectedMissionId ?? selectedSession?.missionId }
 

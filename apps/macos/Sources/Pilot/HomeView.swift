@@ -255,6 +255,7 @@ struct TaskComposer: View {
             editorFocus = UUID()
             return true
         }
+        .composerCommands(revision: commandsRevision) { taskCommandList() }
         .confirmationDialog("Retry the original chat start?", isPresented: Binding(get: { retryingCreate != nil }, set: { if !$0 { retryingCreate = nil } }), presenting: retryingCreate) { operation in
             Button("Retry original start") { Task { do { try await hosts.retryOperation(operation) } catch { form.error = error.localizedDescription } } }
         } message: { _ in Text("Only the original saved request is retried on its original devbox. Your newer draft is not sent.") }
@@ -302,6 +303,7 @@ struct TaskComposer: View {
                     ChatTextEditor(text: $form.message, height: $form.editorHeight, font: fonts.nsBody, minLines: 3, maxLines: 14,
                                    maxWindowFraction: 0.5,
                                    isEditable: !form.busy, focusToken: editorFocus,
+                                   onCancel: { KeyboardFocus.leaveComposer() },
                                    onPasteImages: { form.attachments.paste(from: $0) },
                                    completionDirectory: form.mode == .ask || remote ? nil : project?.path ?? (form.folder.isEmpty ? FileManager.default.homeDirectoryForCurrentUser.path : form.folder)) { _ in
                         start()
@@ -396,6 +398,78 @@ struct TaskComposer: View {
 
     private var canStart: Bool {
         form.canStart(in: project, branches: branches) && (!remote || (project != nil && destinationHost.map { hosts.available.contains($0) } == true))
+    }
+
+    private var commandsRevision: String {
+        [project?.id ?? form.folder, form.mode.rawValue, form.model, branchScopeKey ?? "", "\(form.busy)",
+         "\(form.models.models.count)", "\(branches.list.branches.count)", "\(form.mission != nil)",
+         "\(form.trackedItem != nil)", "\(pendingCreate != nil)", destinationHost?.hostId ?? ""].joined(separator: "|")
+    }
+
+    /// The new-chat controls for ⌘K: the same choices as the chips, locked in the same cases. None starts the chat.
+    private func taskCommandList() -> [ComposerCommand] {
+        guard !form.busy else { return [] }
+        var commands: [ComposerCommand] = []
+        for mode in [ChatMode.build, .ask] {
+            commands.append(ComposerCommand(id: "mode:\(mode.rawValue)", title: mode == .build ? "Mode: Build" : "Mode: Ask",
+                                            keywords: ["mode", "build", "ask", "read-only"],
+                                            icon: mode == .build ? .buildMode : .askMode, current: form.mode == mode) {
+                form.chooseMode(mode)
+            })
+        }
+        let locked = pendingCreate != nil || form.mission != nil || form.trackedItem != nil
+        if !locked {
+            for candidate in client.projects {
+                commands.append(ComposerCommand(id: "project:\(candidate.id)", title: "Project: \(candidate.name)",
+                                                keywords: ["project", "repository"], icon: .project,
+                                                current: candidate.id == project?.id) {
+                    form.pendingBaseBranch = nil
+                    app.draftProjectId = candidate.id
+                    form.folder = ""
+                })
+            }
+            if !remote {
+                commands.append(ComposerCommand(id: "folder", title: "Choose folder…", keywords: ["folder", "directory"],
+                                                icon: .chatFolder) {
+                    if let path = chooseFolder(startingAt: form.folder) {
+                        app.chooseChatFolder(path)
+                        lastProjectId = ""
+                    }
+                })
+            }
+        }
+        if let scope = branchScopeKey, branches.scope == scope {
+            let selected = branches.selection(for: scope)
+            commands.append(ComposerCommand(id: "branch:default", title: "Base branch: Default",
+                                            keywords: ["branch", "base"], icon: .branch, current: selected == nil) {
+                branches.select(nil, for: scope)
+                form.chooseBaseBranch(nil)
+            })
+            for branch in branches.list.branches {
+                commands.append(ComposerCommand(id: "branch:\(branch)", title: "Base branch: \(branch)",
+                                                keywords: ["branch", "base"], icon: .branch, current: selected == branch) {
+                    branches.select(branch, for: scope)
+                    form.chooseBaseBranch(branch)
+                })
+            }
+        }
+        commands.append(ComposerCommand(id: "model:default", title: "Model: Project default", keywords: ["model"],
+                                        icon: .model, current: form.model.isEmpty) { form.model = "" })
+        commands += ComposerCommandText.modelCommands(form.models.models, current: form.model) { form.model = $0 }
+        if form.mode == .build, project != nil {
+            let choices: [(String, WorkspaceMode?)] = [("Project default", nil), ("Isolated workspace", .clone),
+                                                       ("Current checkout", .direct)]
+            for (title, workspace) in choices {
+                commands.append(ComposerCommand(id: "workspace:\(title)", title: "Workspace: \(title)",
+                                                keywords: ["workspace", "clone", "checkout"], icon: .isolatedWorkspace,
+                                                current: form.workspace == workspace) { form.workspace = workspace })
+            }
+        }
+        if !remote {
+            commands += ComposerCommandText.sendLater { scheduleNewChat($0) }
+        }
+        commands.append(ComposerCommandText.pasteImage { _ = form.attachments.paste(from: .general) })
+        return commands
     }
 
     /// Reloads the pi model scope when the project or folder changes.

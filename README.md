@@ -56,6 +56,10 @@ has separate storage and transport contracts; it does not change chat-result rea
   destination) focuses it, arrows or J/K move the highlight, Return opens the row as a click would, and ⌘K lists
   the highlighted chat's actions under its name.
   ⌘[ and ⌘] go Back and Forward too, and lists return to the row you had highlighted.
+  In a composer, ⌘K also finds its controls by name (model, thinking, Build/Ask, project, folder, base branch,
+  workspace, send later, attach image from the clipboard); choosing one never sends the draft. ⌘. stops the open
+  chat's agent while it works. Escape, after closing any picker or queued-message edit, leaves the composer for the
+  page with the draft kept.
 - **Let the display rest while agents work.** Keep the Mac awake without keeping the display on.
   Optional closed-lid work requires power and Wi-Fi; without both, agents pause and resume on the next
   full wake with connectivity. Screen locking is left to macOS. See [agent-aware sleep](docs/agent-sleep.md) for
