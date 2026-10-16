@@ -6,7 +6,7 @@ import SwiftUI
 /// page at its foot. Rendered off the main actor once per size and cached. Falls back to the procedural
 /// `DitherSky` when the image is missing.
 ///
-/// Use it for a large, restful moment: the coast for an empty Inbox, the day/night ocean for Home.
+/// Use it for a large, restful moment: the coast for an empty Inbox, the day/evening clouds for Home.
 struct DitherScene: View {
     var source: DitherSceneSource = .coast
     /// The coast's default is finer than the Home sky, so the painting keeps its detail while its pixels stay hard.
@@ -44,7 +44,7 @@ struct DitherScene: View {
 enum DitherSceneSource: String, Hashable, Sendable {
     /// A painted calm coast (`Resources/CoastScene.png`), in full colour. The empty Inbox.
     case coast = "CoastScene"
-    /// Clouds over the daytime ocean. Resolves to a separate moonlit image in dark appearance.
+    /// White clouds and blue sky. Resolves to a separate evening seascape in dark appearance.
     case homeSky = "HomeSky"
     case homeSkyNight = "HomeSkyNight"
 
@@ -55,8 +55,8 @@ enum DitherSceneSource: String, Hashable, Sendable {
     var tone: DitherSceneTone {
         switch self {
         case .coast: DitherSceneTone()
-        // Keep both ocean images' own colours, including the night image's moon and reflection.
-        case .homeSky, .homeSkyNight: DitherSceneTone(levels: 12, dimsInDark: false)
+        // Keep the bright blue daytime sky and the evening image's pink/violet cloud light.
+        case .homeSky, .homeSkyNight: DitherSceneTone(levels: 10, dimsInDark: false)
         }
     }
 }

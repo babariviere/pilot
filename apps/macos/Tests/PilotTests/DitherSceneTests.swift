@@ -39,8 +39,11 @@ func homeOceanImagesShipAndKeepTheirOwnColours(scene: DitherSceneSource) throws 
     let url = try #require(DitherSceneRenderer.sourceURL(scene, main: buildDirectory))
     #expect(url.standardizedFileURL == bundled.standardizedFileURL)
     let source = try #require(DitherSceneRenderer.loadSource(url: url))
-    #expect(source.width == 1280 && source.height == 720)
+    // Keep the original aspect ratios so the centered crop matches the approved preview.
+    #expect(source.width == 1280)
+    #expect(abs(Double(source.width) / Double(source.height) - 1.5) < 0.01)
     #expect(scene.tone.saturation == 1 && scene.tone.lift == 0)
+    #expect(scene.tone.levels == 10)
     #expect(!scene.tone.dimsInDark)
     let light = try #require(DitherSceneRenderer.render(source, width: 160, height: 60, fade: 0.45,
                                                         tone: scene.tone))
