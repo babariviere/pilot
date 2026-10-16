@@ -39,7 +39,8 @@ and never changes plain `pnpm test` into a host-dependent subset. Running the ma
 fails instead of silently losing native coverage (listing it is allowed). Renderer-dependent tests
 keep their existing optional-browser and `PILOT_SWIFTUI_TESTS=1` guards.
 
-The default is two test files concurrently, including in CI. `PILOT_TEST_CONCURRENCY=4 pnpm test`
+The default is two test files concurrently. The Linux `node` CI job uses four, matching its runner's
+cores; the macOS lane keeps the default. `PILOT_TEST_CONCURRENCY=4 pnpm test`
 is useful on an otherwise quiet machine with headroom, but more Git/jj and compiler processes can make
 individual tests slower. The runner starts known expensive workspace groups early to avoid a long tail.
 Reported file durations exclude imports/startup and overlap, so do not sum them as wall time.
