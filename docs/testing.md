@@ -147,6 +147,13 @@ usage polling, daemon first-request latency or live GUI responsiveness. No GUI/s
 Repository-wide lint still reports pre-existing assignment-expression errors in `jobs.ts` and
 `system-events-helper.ts`; the new bundled-profile implementation, integration tests and benchmark lint cleanly.
 
+## Provider error recovery
+
+`anthropic-tool-errors.test.ts` covers text-only error payloads without dropping partial images or
+changing successful results. The model integration fixture persists a codemode image-then-error,
+reopens the failed chat and completes through the real Anthropic serializer with offline SSE,
+checking that history, request hooks and already-committed tool effects remain intact.
+
 ## Daemon activity hot path
 
 ```sh
