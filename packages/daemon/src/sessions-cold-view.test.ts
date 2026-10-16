@@ -4,17 +4,17 @@ import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test, type TestContext } from "node:test";
+import { type TestContext, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import type { KernelCommand, PersistedSessionView } from "@pilot/kernel";
 import type { AgentEvent, SessionCompletion, SessionSummary } from "@pilot/protocol";
-import { ProjectStore } from "./projects.ts";
-import { type SessionFactories, SessionManager, type SessionWorker } from "./sessions.ts";
 import { AttentionDoc } from "../../kernel/src/attention.ts";
 import { openSessionStorage } from "../../kernel/src/storage.ts";
+import { ProjectStore } from "./projects.ts";
+import { type SessionFactories, SessionManager, type SessionWorker } from "./sessions.ts";
 
 const cold: AgentEvent = {
 	type: "snapshot",
@@ -73,7 +73,12 @@ async function until(check: () => boolean) {
 	}
 }
 
-async function fixture(t: TestContext, extra: Record<string, unknown> = {}, snapshot?: SessionFactories["snapshot"]) {
+async function fixture(
+	t: TestContext,
+	extra: Record<string, unknown> = {},
+	snapshot?: SessionFactories["snapshot"],
+	ready = Promise.resolve(),
+) {
 	const home = await mkdtemp(join(tmpdir(), "pilot-cold-view-"));
 	const id = randomUUID();
 	const dir = join(home, "sessions", id);
@@ -87,7 +92,7 @@ async function fixture(t: TestContext, extra: Record<string, unknown> = {}, snap
 	const managers: SessionManager[] = [];
 	const worker: SessionFactories["worker"] = (_spec, onPacket, onExit) => {
 		const value: SessionWorker & { sent: KernelCommand[] } = {
-			ready: Promise.resolve(),
+			ready,
 			state: "idle",
 			busy: false,
 			sent: [],
@@ -190,6 +195,135 @@ test("daemon restart normalizes legacy persisted attention without the worker or
 	assert.equal(manager.get(f.id)?.outcome, "done");
 	assert.equal(manager.get(f.id)?.outcomeAt, 1234);
 	assert.equal(manager.get(f.id)?.outcomeReason, undefined);
+});
+
+test("failed startup still reads committed history after restart without retrying or clearing the failure", async (t) => {
+	const failure = "Session startup: Credential broker busy";
+	const f = await fixture(t, { failure, outcome: "failed", outcomeAt: 2000 });
+	const owned = await openSessionStorage(join(f.home, "sessions", f.id, "durable"));
+	const harness = await Harness.open(owned.storage, { models: createModels(), registry: createRegistry() }, context);
+	try {
+		const root = await harness.root(context);
+		await root.commit(async (tx) => {
+			const entry = await tx.appendEntry(root.id, {
+				kind: "pi.user",
+				model: [{ role: "user", content: "Keep my saved conversation", timestamp: 1234 }],
+			});
+			(await tx.doc(AttentionDoc, root.id)).completion = {
+				input: entry.id,
+				entry: entry.id,
+				outcome: "done",
+				outcomeAt: 1234,
+			};
+		}, context);
+	} finally {
+		await harness.close(context);
+		owned.release();
+	}
+	const first = await f.open();
+	await first.shutdown();
+	const manager = await f.open();
+	const before = await readFile(f.file, "utf8");
+	assert.deepEqual(manager.prepareUpdate(), { ready: true });
+	const batches: AgentEvent[][] = [];
+	manager.subscribe(f.id, (events) => batches.push(events));
+	await until(() => batches.length === 1 && manager["coldWatches"].size === 0);
+	const snapshot = batches[0]![0]!;
+	assert.equal(snapshot.type, "snapshot");
+	if (snapshot.type === "snapshot") {
+		assert.equal(snapshot.entries.length, 1);
+		assert.equal(snapshot.entries[0]?.model?.[0]?.content, "Keep my saved conversation");
+	}
+	assert.equal(f.workers.length, 0);
+	assert.equal(manager.get(f.id)?.state, "failed");
+	assert.equal(manager.get(f.id)?.error, failure);
+	assert.equal(manager.get(f.id)?.outcome, "failed", "an old completion cannot clear a startup failure");
+	assert.equal(manager.get(f.id)?.outcomeAt, 2000);
+	assert.equal(await readFile(f.file, "utf8"), before, "viewing never rewrites failed session metadata");
+});
+
+test("startup failure restores history for existing viewers and viewers arriving before the failed worker exits", async (t) => {
+	const ready = deferred<void>();
+	t.after(() => ready.resolve());
+	const f = await fixture(t, {}, async () => ({ events: [cold] }), ready.promise);
+	const manager = await f.open();
+	const batches: AgentEvent[][] = [];
+	manager.subscribe(f.id, (events) => batches.push(events));
+	await until(() => batches.length === 1);
+	const reentrant: AgentEvent[][] = [];
+	let subscribed = false;
+	manager.onChange((summary) => {
+		if (summary.error?.includes("Credential broker busy") && !subscribed) {
+			subscribed = true;
+			manager.subscribe(f.id, (events) => reentrant.push(events));
+		}
+	});
+	const sending = manager.send(f.id, "resume");
+	const rejected = assert.rejects(sending, /Credential broker busy/);
+	await until(() => f.workers.length === 1);
+	ready.reject(new Error("Credential broker busy"));
+	await rejected;
+	await until(() => batches.length === 3);
+	assert.deepEqual(batches, [[cold], [live], [cold]], "the failure must not erase already saved history");
+	assert.deepEqual(reentrant, [[cold]], "failure publication must not deliver a replaced cold watch twice");
+	const arriving: AgentEvent[][] = [];
+	manager.subscribe(f.id, (events) => arriving.push(events));
+	await until(() => arriving.length === 1);
+	assert.deepEqual(arriving, [[cold]]);
+	assert.equal(f.workers.length, 1, "viewing must not create a replacement worker");
+});
+
+test("failed history reads coalesce, cancel on last departure and do not notify departed viewers", async (t) => {
+	const f = await fixture(t, { failure: "Session startup: unavailable" });
+	const manager = await f.open();
+	const { reads, finish } = controlledReads(t, manager);
+	const first = manager.subscribe(f.id, () => assert.fail("departed viewer received failed history"));
+	const second = manager.subscribe(f.id, () => assert.fail("departed viewer received failed history"));
+	assert.equal(reads.length, 1);
+	first();
+	assert.equal(reads[0].queued, true);
+	second();
+	assert.equal(reads[0].queued, false);
+	assert.equal(manager["coldWatches"].size, 0);
+	const batches: AgentEvent[][] = [];
+	manager.subscribe(f.id, (events) => batches.push(events));
+	assert.equal(reads.length, 2);
+	finish(1);
+	await until(() => batches.length === 1 && manager["coldConsumers"].size === 0);
+	assert.deepEqual(batches, [[cold]]);
+	assert.equal(f.workers.length, 0);
+});
+
+test("failed history hides stale live checkpoints without changing storage or the cached snapshot", async (t) => {
+	const interrupted: AgentEvent = {
+		...cold,
+		run: { inputs: [] },
+		generation: { attempt: 1, retry: { at: 1234, error: "Retrying old generation" } },
+	};
+	const f = await fixture(t, { failure: "Session startup: unavailable" }, async () => ({ events: [interrupted] }));
+	const manager = await f.open();
+	const batches: AgentEvent[][] = [];
+	manager.subscribe(f.id, (events) => batches.push(events));
+	await until(() => batches.length === 1);
+	assert.deepEqual(batches, [[cold]]);
+	assert.ok(interrupted.run);
+	assert.ok(interrupted.generation);
+	const cached = await manager["coldSnapshot"](manager["metas"].get(f.id)!);
+	assert.deepEqual(cached.events, [interrupted], "the read-only failure projection must not alter recovery state");
+});
+
+test("retry startup wins over a delayed failed-history read even after the replacement exits", async (t) => {
+	const gate = deferred<PersistedSessionView>();
+	const f = await fixture(t, { failure: "Session startup: unavailable" }, () => gate.promise);
+	const manager = await f.open();
+	const batches: AgentEvent[][] = [];
+	manager.subscribe(f.id, (events) => batches.push(events));
+	assert.equal(batches.length, 0);
+	await manager.retryStartup(f.id);
+	await f.workers[0]!.close();
+	gate.resolve({ events: [cold] });
+	await until(() => manager["coldWatches"].size === 0);
+	assert.deepEqual(batches, [[live]], "stale failure history cannot overwrite a fresh worker snapshot");
 });
 
 test("legacy injected cold views publish done without an obsolete reason or metadata writes", async (t) => {

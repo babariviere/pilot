@@ -1666,7 +1666,10 @@ for (const failure of ["clone", "factory", "ready"] as const) {
 		releaseFailureSave.resolve();
 		await snapshotDelivered.promise;
 		assert.equal(batches.length, beforeFailureSnapshot.length + 1);
-		assert.deepEqual(batches.at(-1), [snapshot]);
+		assert.deepEqual(
+			batches.at(-1)?.filter((event) => event.type === "snapshot"),
+			[snapshot],
+		);
 		assert.equal((await f.stored(created.id)).pending.length, 1);
 		await assert.rejects(sessions.send(created.id, "retry"), /unavailable/);
 		await sessions.stop(created.id);
@@ -1681,7 +1684,11 @@ for (const failure of ["clone", "factory", "ready"] as const) {
 		assert.equal(reopened.get(created.id)?.state, "failed");
 		const recoveredBatches: AgentEvent[][] = [];
 		reopened.subscribe(created.id, (events) => recoveredBatches.push(events));
-		assert.deepEqual(recoveredBatches, [[snapshot]]);
+		await until(() => recoveredBatches.length === 1);
+		assert.deepEqual(
+			recoveredBatches.flat().filter((event) => event.type === "snapshot"),
+			[snapshot],
+		);
 		assert.equal(f.workers.length, count);
 		assert.equal(reopened.get(created.id)?.canRetryStartup, failure === "clone" ? undefined : true);
 		const pending = (await f.stored(created.id)).pending;

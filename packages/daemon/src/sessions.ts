@@ -864,6 +864,7 @@ export class SessionManager {
 	private readonly workers = new Map<string, SessionWorker>();
 	/** sessionId -> watchId -> listener */
 	private readonly watchers = new Map<string, Map<string, EventListener>>();
+	private readonly coldWatches = new Map<string, () => void>();
 	private readonly changeListeners = new Set<(session: SessionSummary) => void>();
 	private internetOnline?: boolean;
 
@@ -4501,26 +4502,9 @@ export class SessionManager {
 			this.watchers.set(id, watchers);
 		}
 		watchers.set(watchId, listener);
-		let coldRead: Promise<PersistedSessionView> | undefined;
-		const releaseColdRead = (cancel: boolean) => {
-			if (!coldRead) return;
-			const read = coldRead;
-			coldRead = undefined;
-			const remaining = (this.coldConsumers.get(read) ?? 1) - 1;
-			if (remaining > 0) this.coldConsumers.set(read, remaining);
-			else {
-				this.coldConsumers.delete(read);
-				if (cancel && this.coldReader.cancel(read)) {
-					// Remove immediately so a same-turn resubscription starts fresh. Old promise
-					// settlement must not evict a newer flight. Active reads remain cacheable.
-					if (this.coldLoading.get(id) === read) this.coldLoading.delete(id);
-					if (this.coldSnapshots.get(id)?.promise === read) this.coldSnapshots.delete(id);
-				}
-			}
-		};
 		this.lastUse.set(id, Date.now());
-		if (meta.failure || (meta.preparing && meta.cancelled)) listener([emptySnapshot]);
-		if (worker) worker.send({ type: "watch", watchId });
+		if (meta.preparing && meta.cancelled) listener([emptySnapshot]);
+		if (worker && !meta.failure) worker.send({ type: "watch", watchId });
 		else if (
 			!this.sleepPause &&
 			!meta.failure &&
@@ -4546,53 +4530,83 @@ export class SessionManager {
 					() => undefined,
 				)
 				.catch(() => undefined);
-		else if (!meta.failure && !(meta.preparing && meta.cancelled)) {
-			const generation = this.workerGenerations.get(id);
-			coldRead = this.coldSnapshot(meta);
-			this.coldConsumers.set(coldRead, (this.coldConsumers.get(coldRead) ?? 0) + 1);
-			void coldRead
-				.then((view) => {
-					// An unsubscribe or a live worker attachment wins over an in-flight disk read,
-					// even if that worker has already exited again. Never replace fresh live state.
-					if (
-						this.closing ||
-						meta.failure ||
-						(meta.preparing && meta.cancelled) ||
-						watchers.get(watchId) !== listener ||
-						this.workers.has(id) ||
-						this.workerGenerations.get(id) !== generation
-					)
-						return;
-					listener(structuredClone(view.events));
-					// Recover a committed attention version without treating viewing as activity,
-					// writing durable state, or fabricating a new completion timestamp.
-					if (
-						!this.sleepPause &&
-						view.completion &&
-						applyActivity(meta, false, view.completion, this.backgroundWorking(meta))
-					)
-						this.emit(meta);
-				})
-				.catch((error: unknown) => {
-					if (error instanceof Error && error.name === "AbortError") return;
-					if (!this.closing) console.warn(`pilotd: could not read session ${id}: ${error}`);
-					if (
-						!this.closing &&
-						watchers.get(watchId) === listener &&
-						!this.workers.has(id) &&
-						this.workerGenerations.get(id) === generation
-					)
-						listener([emptySnapshot]);
-				})
-				.finally(() => releaseColdRead(false));
-		}
+		else if (!(meta.preparing && meta.cancelled)) this.watchColdHistory(meta, watchId, listener);
 		return () => {
 			watchers.delete(watchId);
-			releaseColdRead(true);
+			this.coldWatches.get(watchId)?.();
 			// The inactivity clock starts when the last viewer leaves.
 			this.lastUse.set(id, Date.now());
 			this.workers.get(id)?.send({ type: "unwatch", watchId });
 		};
+	}
+
+	/** Startup failures disable execution, not read-only access to committed history. */
+	private watchColdHistory(meta: SessionMeta, watchId: string, listener: EventListener): void {
+		this.coldWatches.get(watchId)?.();
+		const id = meta.id;
+		const generation = this.workerGenerations.get(id);
+		const failure = meta.failure;
+		const worker = this.workers.get(id);
+		const current = () =>
+			!this.closing &&
+			this.coldWatches.get(watchId) === cancelRead &&
+			meta.failure === failure &&
+			!(meta.preparing && meta.cancelled) &&
+			this.watchers.get(id)?.get(watchId) === listener &&
+			(!this.workers.has(id) || (!!failure && this.workers.get(id) === worker)) &&
+			this.workerGenerations.get(id) === generation;
+		const read = this.coldSnapshot(meta);
+		this.coldConsumers.set(read, (this.coldConsumers.get(read) ?? 0) + 1);
+		const release = (cancel: boolean) => {
+			if (this.coldWatches.get(watchId) !== cancelRead) return;
+			this.coldWatches.delete(watchId);
+			const remaining = (this.coldConsumers.get(read) ?? 1) - 1;
+			if (remaining > 0) this.coldConsumers.set(read, remaining);
+			else {
+				this.coldConsumers.delete(read);
+				if (cancel && this.coldReader.cancel(read)) {
+					// A same-turn resubscription must not share a cancelled queued read.
+					if (this.coldLoading.get(id) === read) this.coldLoading.delete(id);
+					if (this.coldSnapshots.get(id)?.promise === read) this.coldSnapshots.delete(id);
+				}
+			}
+		};
+		const cancelRead = () => release(true);
+		this.coldWatches.set(watchId, cancelRead);
+		void read
+			.then((view) => {
+				// An unsubscribe or a live worker attachment wins over an in-flight disk read,
+				// even if that worker has already exited again. Never replace fresh live state.
+				if (!current()) return;
+				const events = structuredClone(view.events);
+				if (failure) {
+					// Interrupted durable work may still have live checkpoints. It is not running
+					// while startup is blocked, and must not paint a stale streaming response.
+					for (const event of events) {
+						if (event.type !== "snapshot") continue;
+						delete event.run;
+						delete event.generation;
+						event.tools = [];
+						event.compactions = [];
+					}
+				}
+				listener(events);
+				// Recover a committed attention version without treating viewing as activity,
+				// writing durable state, or fabricating a new completion timestamp.
+				if (
+					!this.sleepPause &&
+					!meta.failure &&
+					view.completion &&
+					applyActivity(meta, false, view.completion, this.backgroundWorking(meta))
+				)
+					this.emit(meta);
+			})
+			.catch((error: unknown) => {
+				if (error instanceof Error && error.name === "AbortError") return;
+				if (!this.closing) console.warn(`pilotd: could not read session ${id}: ${error}`);
+				if (current()) listener([emptySnapshot]);
+			})
+			.finally(() => release(false));
 	}
 
 	private coldSnapshot(meta: SessionMeta): Promise<PersistedSessionView> {
@@ -5038,7 +5052,8 @@ export class SessionManager {
 				meta.updatedAt = now;
 				await this.save(meta);
 				this.emit(meta);
-				for (const listener of this.watchers.get(id)?.values() ?? []) listener([emptySnapshot]);
+				for (const [watchId, listener] of this.watchers.get(id) ?? [])
+					this.watchColdHistory(meta, watchId, listener);
 			}
 		};
 		// Publish the drain before factories/listeners can reenter prepareUpdate.
