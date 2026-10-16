@@ -160,7 +160,7 @@ private func message(_ id: String, _ type: SlackMessageType = .bug, _ severity: 
     #expect(TrackedItemText.subtitle(question, now: now) == "#bugs · Question · High severity · 1h ago")
     #expect(TrackedItemText.subtitle(message("u", .unknown, .low), now: now) == "#bugs · Low severity · 1h ago")
     #expect(TrackedItemText.chatPrompt(question, prefill: nil).hasPrefix("Please look into this Slack message"))
-    #expect(TrackedItemText.chatPrompt(question, prefill: nil).contains(#""type": "question""#))
+    #expect(TrackedItemText.chatPrompt(question, prefill: nil).contains("\n- Type: question\n"))
     #expect(TrackedItemText.chatPrompt(message("b"), prefill: nil).hasPrefix("Please investigate and fix this bug"))
     #expect(TrackedItemText.missionDraft(question, prefill: nil).goal == "Follow up on the message in #bugs: Message q")
     #expect(TrackedItemText.missionDraft(message("b"), prefill: nil).goal == "Fix the bug reported in #bugs: Message b")

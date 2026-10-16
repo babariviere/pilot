@@ -11,6 +11,9 @@ struct ChatTextEditor: NSViewRepresentable {
     var font: NSFont
     var minLines = 1
     var maxLines = 10
+    /// Lets a long draft grow past maxLines up to this share of the window's content height, so composers
+    /// use the room a tall window has. maxLines stays the floor for short windows. Nil keeps the fixed cap.
+    var maxWindowFraction: CGFloat?
     var focusOnAppear = true
     var isEditable = true
     var returnInsertsNewline = false
@@ -170,13 +173,17 @@ struct ChatTextEditor: NSViewRepresentable {
         private func measure(_ textView: NSTextView) {
             guard let layout = textView.layoutManager, let container = textView.textContainer,
                   container.size.width.isFinite, container.size.width > 0 else { return }
+            let line = layout.defaultLineHeight(for: parent.font)
+            var maxLines = max(parent.minLines, parent.maxLines, 1)
+            if let fraction = parent.maxWindowFraction, let window = textView.window, line > 0 {
+                maxLines = max(maxLines, Int(window.contentLayoutRect.height * fraction / line))
+            }
             let key = MeasurementKey(revision: revision, width: container.size.width, font: parent.font,
-                                     minLines: parent.minLines, maxLines: parent.maxLines)
+                                     minLines: parent.minLines, maxLines: maxLines)
             guard key != lastMeasurement else { return }
             lastMeasurement = key
-            let line = layout.defaultLineHeight(for: parent.font)
             let minimum = line * CGFloat(max(1, parent.minLines))
-            let maximum = line * CGFloat(max(parent.minLines, parent.maxLines, 1))
+            let maximum = line * CGFloat(maxLines)
             // Do not lay out an entire pasted document just to discover that it exceeds
             // the height cap. AppKit remains responsible for layout while scrolling.
             layout.ensureLayout(forBoundingRect: CGRect(x: 0, y: 0, width: container.size.width,
@@ -193,11 +200,33 @@ final class SubmitTextView: NSTextView {
     var onLayoutWidthChange: ((NSTextView) -> Void)?
     var onFocusChange: ((Bool) -> Void)?
     private var hasFocus = false
+    private var windowResizeObserver: NSObjectProtocol?
 
     override func setFrameSize(_ newSize: NSSize) {
         let widthChanged = frame.width != newSize.width
         super.setFrameSize(newSize)
         if widthChanged { onLayoutWidthChange?(self) }
+    }
+
+    /// A window-relative height cap (maxWindowFraction) changes with the window height, not the text width.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let windowResizeObserver { NotificationCenter.default.removeObserver(windowResizeObserver) }
+        windowResizeObserver = nil
+        guard let window else { return }
+        windowResizeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResizeNotification, object: window, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.onLayoutWidthChange?(self)
+            }
+        }
+        onLayoutWidthChange?(self)
+    }
+
+    deinit {
+        if let windowResizeObserver { NotificationCenter.default.removeObserver(windowResizeObserver) }
     }
 
     var onSubmit: ((NSEvent.ModifierFlags) -> Void)?

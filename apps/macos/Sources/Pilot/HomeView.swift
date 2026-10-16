@@ -247,6 +247,7 @@ struct TaskComposer: View {
                             .allowsHitTesting(false)
                     }
                     ChatTextEditor(text: $form.message, height: $form.editorHeight, font: fonts.nsBody, minLines: 3, maxLines: 14,
+                                   maxWindowFraction: 0.5,
                                    isEditable: !form.busy, onPasteImages: { form.attachments.paste(from: $0) },
                                    completionDirectory: form.mode == .ask ? nil : project?.path ?? (form.folder.isEmpty ? FileManager.default.homeDirectoryForCurrentUser.path : form.folder)) { _ in
                         start()
