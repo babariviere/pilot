@@ -73,9 +73,10 @@ private func message(_ id: String, _ type: SlackMessageType = .bug, _ severity: 
     let items = [message("a"), message("b", status: .inProgress), message("c", status: .done),
                  message("d", status: .dismissed)]
     let board = SlackTriageText.board(items, showDismissed: false)
-    #expect(board.map(\.status) == [.open, .inProgress, .done])
-    #expect(board.map { $0.items.map(\.id) } == [["a"], ["b"], ["c"]])
-    #expect(SlackTriageText.board(items, showDismissed: true).map(\.status) == [.open, .inProgress, .done, .dismissed])
+    #expect(board.map(\.status) == [.open, .inProgress, .waiting, .done])
+    #expect(board.map { $0.items.map(\.id) } == [["a"], ["b"], [], ["c"]])
+    #expect(SlackTriageText.board(items, showDismissed: true).map(\.status)
+        == [.open, .inProgress, .waiting, .done, .dismissed])
     #expect(SlackTriageText.keyColumns(items, layout: .table, showDismissed: false) == [["a", "b", "c", "d"]])
 }
 

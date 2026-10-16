@@ -694,14 +694,16 @@ final class AppModel: ObservableObject {
 
     /// Shows a project's page, keeping the sidebar as it is.
     func openProject(_ id: String, context: HostViewContext? = nil) {
-        if let ref = resourceRef(id, kind: .project, context: context), ref.host != localHost {
+        let ref = resourceRef(id, kind: .project, context: context)
+        if let ref, ref.host != localHost {
             navigate(.project, id: ref.storageKey); return
         }
         hosts.selection = nil
         showingArchive = false
         showingInbox = false
         selectedSessionId = nil
-        selectedProjectId = id
+        // Local pages select the plain project id, even when given a qualified key.
+        selectedProjectId = ref?.localId ?? id
         slackTriageProjectId = nil
         slackTriageCaseId = nil
         slackTriageAdd = nil
@@ -838,8 +840,8 @@ final class AppModel: ObservableObject {
 
     /// The focused project's Overview, the first row of a focused sidebar.
     func openOverview() {
-        guard let ref = focusedProjectRef else { return }
-        openProject(ref.storageKey)
+        guard let scope = sidebarScope else { return }
+        openProject(scope)
     }
 
     /// A new chat in the focused project, or in the last chosen project otherwise.
