@@ -23,11 +23,9 @@ struct MenuBarContent: View {
                         model.openWindowAction = { openWindow(id: MainWindow.id) }
                         model.open(session: row.session.id)
                     } label: {
-                        Label {
-                            Text(row.session.title)
-                        } icon: {
-                            SessionStatusIcon(status: row.session.status)
-                        }
+                        // A static native image: the animated working spinner would refresh the menu on every
+                        // frame, which closes an open submenu (pilotd) before it can be used.
+                        Label(row.session.title, menuIcon: row.session.status.icon)
                     }
                     .help(row.signal?.label ?? row.session.status.rawValue)
                     .accessibilityLabel(row.accessibilityLabel)

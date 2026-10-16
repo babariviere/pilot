@@ -123,3 +123,14 @@ private func drainMenuUpdates() async {
     // async blocks. No source emits while waiting, so the final snapshot is stable.
     try? await Task.sleep(for: .milliseconds(20))
 }
+
+/// Chat rows use static native images. A live spinner would refresh the menu every frame and close the pilotd submenu.
+@Test @MainActor func menuBarChatIconsAreStaticTemplates() {
+    let statuses: [SessionStatus] = [.working, .question, .done, .failed, .stopped, .idle, .paused, .usagePaused,
+                                     .offlinePaused]
+    for status in statuses {
+        let image = status.icon.menuImage
+        #expect(image.isTemplate)
+        #expect(image.size.width > 0 && image.size.height > 0, "Empty menu icon for \(status.rawValue)")
+    }
+}
