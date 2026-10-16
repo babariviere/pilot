@@ -301,6 +301,12 @@ starting point, while tasks record ownership, dependencies and progress. You can
 yourself or use a coordinator chat, and review linked pull requests and artifacts in one place.
 The mission's Overview shows a compact progress bar for each phase, or one overall bar for work without phases.
 
+The brief stays a spec of scope and requirements, not a progress log or decision ledger. Tasks hold
+progress, blockers and follow-up work; decisions record agreed choices, not completion updates.
+Agents use comments for actionable questions and feedback, check for existing questions before posting,
+and resolve addressed comments after saving their outcome in the task, decision or spec. Unanswered
+questions stay open. Routine status updates, reminders and acknowledgements do not belong in comments.
+
 Task status icons fill clockwise from the top: empty for To do, one third for In progress and two thirds
 for In review. Both task status menus show the same icons as the rows.
 
