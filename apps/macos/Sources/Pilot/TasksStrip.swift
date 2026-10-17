@@ -27,11 +27,14 @@ struct TasksStrip: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let todos: [SessionTodo]
     let sessionId: String
+    /// Bumped by the composer's ⌘K command to fold or unfold the list, as clicking its summary does.
+    var toggleRequest = 0
     @State private var expanded: Bool
 
-    init(todos: [SessionTodo], sessionId: String) {
+    init(todos: [SessionTodo], sessionId: String, toggleRequest: Int = 0) {
         self.todos = todos
         self.sessionId = sessionId
+        self.toggleRequest = toggleRequest
         _expanded = State(initialValue: todos.contains { !$0.isClosed })
     }
 
@@ -51,6 +54,7 @@ struct TasksStrip: View {
         .onChange(of: allDone) { _, value in
             withAnimation(Theme.Motion.standard(reduceMotion: reduceMotion)) { expanded = !value }
         }
+        .onChange(of: toggleRequest) { _, _ in toggle() }
     }
 
     private func summary(ordered: [SessionTodo], done: Int) -> some View {
@@ -152,4 +156,3 @@ private struct TaskRow: View {
         }
     }
 }
-

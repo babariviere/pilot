@@ -181,6 +181,18 @@ final class KeyboardFocus: ObservableObject {
 
     func removeComposerProvider(_ id: UUID) { composerProviders.removeAll { $0.id == id } }
 
+    private(set) var selectionProviders: [(id: UUID, provide: @MainActor () -> (title: String, commands: [ComposerCommand])?)] = []
+
+    func setSelectionProvider(_ id: UUID, _ provide: @escaping @MainActor () -> (title: String, commands: [ComposerCommand])?) {
+        if let index = selectionProviders.firstIndex(where: { $0.id == id }) {
+            selectionProviders[index].provide = provide
+        } else {
+            selectionProviders.append((id, provide))
+        }
+    }
+
+    func removeSelectionProvider(_ id: UUID) { selectionProviders.removeAll { $0.id == id } }
+
     /// Escape after any picker, marked text or queue edit: leave the composer for the page, keeping the draft.
     static func leaveComposer() {
         let focus = AppModel.shared.keyboard

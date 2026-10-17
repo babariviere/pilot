@@ -187,6 +187,8 @@ struct TaskComposer: View {
     @FocusState private var focused: Bool
     /// Bumped by ⌘L and region focus to move the caret into the message editor.
     @State private var editorFocus: UUID?
+    /// Bumped by ⌘K's "Send later: At a time…".
+    @State private var scheduleAtTime = 0
 
     @MainActor init(branches: BranchSelectorState? = nil, form: NewSessionForm? = nil, client: PilotClient? = nil) {
         let form = form ?? NewSessionForm()
@@ -387,7 +389,7 @@ struct TaskComposer: View {
                 }
                 Spacer()
                 if form.busy { ProgressView().controlSize(.small) }
-                if !remote { SendLaterMenu(disabled: !canStart, schedule: scheduleNewChat) }
+                if !remote { SendLaterMenu(disabled: !canStart, schedule: scheduleNewChat, atTimeRequest: scheduleAtTime) }
                 Button(action: start) { PilotSymbol(PilotIcon.send, context: .toolbar) }
                     .buttonStyle(CircleIconButtonStyle())
                     .disabled(!canStart)
@@ -499,6 +501,7 @@ struct TaskComposer: View {
         }
         if !remote {
             commands += ComposerCommandText.sendLater { scheduleNewChat($0) }
+            commands.append(ComposerCommandText.sendLaterAtTime { scheduleAtTime += 1 })
         }
         commands.append(ComposerCommandText.pasteImage { _ = form.attachments.paste(from: .general) })
         return commands

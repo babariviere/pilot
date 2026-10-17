@@ -83,6 +83,8 @@ has separate storage and transport contracts; it does not change chat-result rea
   Settings opens with its sidebar focused: arrows or J/K move between pages and projects. ⌘K also opens any
   Settings page by name ("Energy settings", "Project settings"). Controls inside a page follow macOS: Tab reaches
   text fields, and toggles, pickers and buttons too when **Keyboard navigation** is on in System Settings.
+  The composer's task and subagent lists, "Send later: At a time…", Start chat or mission on Linear and Slack rows,
+  and the selected Slack triage message's type, label, dismiss and start actions are all in ⌘K as well.
   Slack triage and Memory take the page's focus from ⌃⇥ or G S like other pages and keep their own keys (arrows,
   Return, T/L/D in triage). Typing in their search fields never triggers those keys, and Escape in the memory
   search clears it, then returns to the tree.

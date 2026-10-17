@@ -19,6 +19,9 @@ struct ComposerCommand {
 extension KeyboardFocus {
     /// The composer on screen offering its controls to the palette. The most recently shown one wins.
     var composerCommands: [ComposerCommand] { composerProviders.last?.provide() ?? [] }
+
+    /// A board's selected item and its actions, such as Slack triage's message, for ⌘K's labeled group.
+    var selectionCommands: (title: String, commands: [ComposerCommand])? { selectionProviders.last?.provide() }
 }
 
 extension View {
@@ -27,6 +30,25 @@ extension View {
     func composerCommands(revision: some Hashable,
                           _ provide: @escaping @MainActor () -> [ComposerCommand]) -> some View {
         modifier(ComposerCommandsModifier(revision: AnyHashable(revision), provide: provide))
+    }
+
+    /// Offers the selected item's actions to ⌘K while this view is on screen. Nil when nothing is selected.
+    func selectionCommands(revision: some Hashable,
+                           _ provide: @escaping @MainActor () -> (title: String, commands: [ComposerCommand])?) -> some View {
+        modifier(SelectionCommandsModifier(revision: AnyHashable(revision), provide: provide))
+    }
+}
+
+private struct SelectionCommandsModifier: ViewModifier {
+    let revision: AnyHashable
+    let provide: @MainActor () -> (title: String, commands: [ComposerCommand])?
+    @State private var id = UUID()
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear { AppModel.shared.keyboard.setSelectionProvider(id, provide) }
+            .onChange(of: revision) { AppModel.shared.keyboard.setSelectionProvider(id, provide) }
+            .onDisappear { AppModel.shared.keyboard.removeSelectionProvider(id) }
     }
 }
 
@@ -76,5 +98,11 @@ enum ComposerCommandText {
     static func pasteImage(_ paste: @escaping @MainActor () -> Void) -> ComposerCommand {
         ComposerCommand(id: "paste-image", title: "Attach image from clipboard", keywords: ["image", "paste", "attach"],
                         icon: .image, perform: paste)
+    }
+
+    /// Opens the composer's own "At a time…" sheet, where the time is chosen and confirmed.
+    static func sendLaterAtTime(_ open: @escaping @MainActor () -> Void) -> ComposerCommand {
+        ComposerCommand(id: "schedule:at", title: "Send later: At a time…", keywords: ["schedule", "later", "time", "date"],
+                        icon: .scheduled, perform: open)
     }
 }

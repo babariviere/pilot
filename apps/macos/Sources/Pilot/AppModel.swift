@@ -200,6 +200,8 @@ final class AppModel: ObservableObject {
     var pendingPaletteQuery: String?
     /// Keyboard and palette requests to the mission task row that shows a task.
     let missionTaskRequests = MissionTaskRequests()
+    /// ⌘K requests to the Linear or Slack row that shows an item.
+    let trackedItemRequests = TrackedItemRequests()
     /// A project page presents this tracked-items list when it appears, as for the Linear queue jump.
     @Published var pendingTrackedSheet: PendingTrackedSheet?
 

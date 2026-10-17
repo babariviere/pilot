@@ -104,6 +104,8 @@ enum KeyboardShortcuts {
             Entry(title: "Confirm a form with a multiline editor", keys: "⌘↩"),
             Entry(title: "Confirm a single-line form or palette choice", keys: "↩"),
             Entry(title: "Close a dialog or command palette", keys: "esc"),
+            Entry(title: "Reach toggles, pickers and buttons in Settings and dialogs",
+                  keys: "⇥ with Keyboard navigation on"),
             Entry(title: "Close window", keys: "⌘W"),
             Entry(title: "Quit Pilot (agents keep running)", keys: "⌘Q"),
         ]),

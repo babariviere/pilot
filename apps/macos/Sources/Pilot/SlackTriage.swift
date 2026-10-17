@@ -770,6 +770,9 @@ struct SlackTriagePage: View {
                         key(press, columns: columns, labels: labels)
                     }
                     .modifier(TriageListFocus(focused: $listFocused))
+                    .selectionCommands(revision: "\(selection ?? "")|\(selected?.updatedAt ?? 0)|\(selected?.dismissed == true)|\(columns.count)") {
+                        selected.map { triageCommands($0, columns: columns, labels: labels) }
+                    }
                 Rectangle().fill(Theme.border).frame(width: 1)
                 SlackTriageInspector(item: selected, labels: labels, now: now, actions: actions,
                                      error: selected.flatMap { triage.errors[$0.id] },
@@ -1013,6 +1016,36 @@ struct SlackTriagePage: View {
             selection = SlackTriageText.successor(of: item.id, in: columns)
         }
         triage.update(item, change)
+    }
+
+    /// The selected message's actions for ⌘K: the same changes as Return, T, L and D and the inspector, by name.
+    private func triageCommands(_ item: TrackedItem, columns: [[String]],
+                                labels: [SlackProjectLabel]) -> (title: String, commands: [ComposerCommand]) {
+        let current = SlackTriageText.triage(item)
+        var commands = [ComposerCommand(id: "triage-chat", title: "Start chat", keywords: ["start", "chat"], icon: .compose) {
+            actions.startChat(item, app: model)
+        }]
+        for type in [SlackMessageType.bug, .question, .request] {
+            commands.append(ComposerCommand(id: "triage-type-\(type.rawValue)", title: "Type: \(type.rawValue.capitalized)",
+                                            keywords: ["type", "triage"], icon: .status, current: current.type == type) {
+                update(item, SlackOverrides(type: type), columns: columns)
+            })
+        }
+        if let change = SlackTriageText.nextLabel(current.label, names: labels.map(\.name)) {
+            commands.append(ComposerCommand(id: "triage-label", title: "Next label", keywords: ["label", "triage"],
+                                            icon: .filter, detail: "As L does") {
+                update(item, change, columns: columns)
+            })
+        }
+        commands.append(ComposerCommand(id: "triage-dismiss", title: item.dismissed ? "Restore" : "Dismiss",
+                                        keywords: ["dismiss", "restore", "done"], icon: .dismiss) {
+            toggleDismissed(item, columns: columns)
+        })
+        if let url = trackedBrowserURL(item.url) {
+            commands.append(ComposerCommand(id: "triage-open", title: "Open in Slack", keywords: ["slack", "open"],
+                                            icon: .openExternal) { BrowserLinkOpener.shared.open(url) })
+        }
+        return (item.title, commands)
     }
 
     private func toggleDismissed(_ item: TrackedItem, columns: [[String]]) {

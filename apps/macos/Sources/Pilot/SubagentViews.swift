@@ -168,12 +168,15 @@ final class SubagentFeeds {
 struct SubagentsStrip: View {
     @Environment(\.hostViewContext) private var hostContext
     let session: SessionSummary
+    /// Bumped by the composer's ⌘K command to fold or unfold the list, as clicking its summary does.
+    var toggleRequest = 0
     @EnvironmentObject private var model: AppModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded: Bool
 
-    init(session: SessionSummary) {
+    init(session: SessionSummary, toggleRequest: Int = 0) {
         self.session = session
+        self.toggleRequest = toggleRequest
         _expanded = State(initialValue: (session.subagents ?? []).contains(where: \.isWorking))
     }
 
@@ -203,6 +206,7 @@ struct SubagentsStrip: View {
                 withAnimation(Theme.Motion.standard(reduceMotion: reduceMotion)) { expanded = true }
             }
         }
+        .onChange(of: toggleRequest) { _, _ in toggle() }
     }
 
     private func summary(states: [SubagentDisplayState], working: Bool) -> some View {
