@@ -666,7 +666,6 @@ test("chat sockets stream one session each, isolate overload and resume only the
 	const sessions = new SessionManager("/unused", projects);
 	const snapshot: AgentEvent = {
 		type: "snapshot",
-		historyCount: 0,
 		entries: [],
 		tools: [],
 		nestedTools: [],
@@ -720,13 +719,13 @@ test("chat sockets stream one session each, isolate overload and resume only the
 	assert.deepEqual(await a.until((m) => m.type === "events"), {
 		type: "events",
 		sessionId: "session-a",
-		events: [snapshot],
+		events: [{ ...snapshot, historyCount: 0 }],
 		seq: 1,
 	});
 	assert.deepEqual(await b.until((m) => m.type === "events"), {
 		type: "events",
 		sessionId: "session b",
-		events: [snapshot],
+		events: [{ ...snapshot, historyCount: 0 }],
 		seq: 1,
 	});
 	assert.deepEqual(await a.until((m) => m.type === "artifacts"), {

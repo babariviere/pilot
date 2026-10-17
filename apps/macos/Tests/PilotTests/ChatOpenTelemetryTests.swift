@@ -4,7 +4,7 @@ import PilotTelemetry
 import Testing
 @testable import Pilot
 
-@Test func chatOpenHistoryBucketsStayBoundedAndContentFree() {
+@MainActor @Test func chatOpenHistoryBucketsStayBoundedAndContentFree() {
     #expect(ChatOpenTelemetry.historyBucket(entryCount: 0) == .empty)
     #expect(ChatOpenTelemetry.historyBucket(entryCount: 100) == .small)
     #expect(ChatOpenTelemetry.historyBucket(entryCount: 101) == .medium)
@@ -18,7 +18,7 @@ import Testing
     #expect(ChatOpenTelemetry.historyBucket(events: [event]) == .large)
 }
 
-@Test func chatSocketHandshakeCarriesOnlyAValidTraceparent() {
+@MainActor @Test func chatSocketHandshakeCarriesOnlyAValidTraceparent() {
     let value = "00-11111111111111111111111111111111-2222222222222222-01"
     let task = StreamSocket.task(URL(string: "ws://127.0.0.1/chat")!, traceparent: value)
     #expect(task.originalRequest?.value(forHTTPHeaderField: "traceparent") == value)
