@@ -68,6 +68,7 @@ import { DatabaseService, type DatabaseState, decideDatabaseRequest, declineData
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
 import { githubRepository, linkedPullRequest, type PullRequestProblems } from "./github.ts";
+import { LifecycleDiagnostics } from "./lifecycle-diagnostics.ts";
 import { LongJobTimers, longJobAttention } from "./long-jobs.ts";
 import { forkMainViewWorker, MainViewStore } from "./main-view.ts";
 import { McpChatAttention, type McpStatusSource } from "./mcp-attention.ts";
@@ -1115,6 +1116,7 @@ export class SessionManager {
 	}
 
 	private readonly home: string;
+	private readonly lifecycle: LifecycleDiagnostics;
 	private readonly autoRebase: PullRequestAutoRebase;
 	/** A handoff must not relinquish the workspace in the middle of a daemon-owned rebase. */
 	private readonly rebasingWorkspaces = new Set<string>();
@@ -1260,6 +1262,7 @@ export class SessionManager {
 			options.subscriptionUsage?.(onUsage) ??
 			(factories.worker ? undefined : new SubscriptionUsageCache(onUsage, { agentDir }));
 		this.home = home;
+		this.lifecycle = new LifecycleDiagnostics(home);
 		this.projects = projects;
 		this.agentDir = agentDir;
 		this.factories = factories;
@@ -3718,6 +3721,7 @@ export class SessionManager {
 			this.updatePausing.set(worker, pause);
 			const meta = this.require(sessionId);
 			meta.updatePaused = true;
+			this.observeLifecycle(meta);
 			void this.save(meta).catch((error) => {
 				pause.error = String(error);
 			});
@@ -3767,6 +3771,7 @@ export class SessionManager {
 			if (!meta.updatePaused) continue;
 			if (this.workers.has(meta.id)) {
 				delete meta.updatePaused;
+				this.observeLifecycle(meta);
 				void this.save(meta).catch((error) => console.warn("pilotd: could not clear update pause", error));
 			} else if (!this.closing && !meta.failure && meta.archivedAt === undefined) void this.start(meta.id);
 		}
@@ -5152,6 +5157,7 @@ export class SessionManager {
 					this.backgroundWorking(meta, worker)
 				)
 					meta.sleepPaused = true;
+				this.observeLifecycle(meta);
 				this.parked.add(worker);
 				this.workers.delete(id);
 				this.lastUse.delete(id);
@@ -5300,6 +5306,7 @@ export class SessionManager {
 		await this.archiveSweep;
 		await Promise.allSettled([...this.archiveTransitions.values()].map((transition) => transition.promise));
 		await Promise.all([...this.saving.values()]);
+		await this.lifecycle.close();
 	}
 
 	/** One initializer/outbox drain per session. Save before IPC; remove only after acknowledgement. */
@@ -5397,6 +5404,7 @@ export class SessionManager {
 				delete meta.sleepPaused;
 				if (meta.updatePaused) {
 					delete meta.updatePaused;
+					this.observeLifecycle(meta);
 					await this.save(meta);
 				}
 				while (!this.closing && !this.sleepPause && meta.prActivities?.length) {
@@ -7121,12 +7129,28 @@ export class SessionManager {
 
 	private emit(meta: SessionMeta, worker?: SessionWorker): void {
 		const summary = this.summary(meta, worker ?? this.workers.get(meta.id));
+		if (!this.closing) this.observeLifecycle(meta, summary);
 		if (!this.closing)
 			this.longJobTimers.update(meta.id, meta.archivedAt === undefined ? (summary.runningJobs ?? []) : [], () => {
 				const current = this.metas.get(meta.id);
 				if (!this.closing && current) this.emit(current);
 			});
 		for (const listener of this.changeListeners) listener(summary);
+	}
+
+	private observeLifecycle(meta: SessionMeta, summary = this.summary(meta)): void {
+		const subscriptionPause = summary.subscriptionPause;
+		this.lifecycle.observe(meta.id, {
+			state: summary.state,
+			working: summary.working === true,
+			sleepPaused: summary.sleepPaused === true,
+			offlinePaused: summary.offlinePaused === true,
+			quotaPaused: subscriptionPause !== undefined && subscriptionPause.forced !== true,
+			updatePaused: meta.updatePaused === true,
+			recoveryPending: meta.kernelRestartPending === true,
+			recoveryStopped: meta.recoveryStopped === true,
+			startupFailed: summary.canRetryStartup === true || (meta.failure !== undefined && summary.state === "failed"),
+		});
 	}
 
 	/** The live kernel's physical provider (resolving virtual routers), else the pinned model's. */

@@ -119,6 +119,8 @@ Every lifecycle event is a JSON object with only these fields:
   "id": "opaque-owner-sequence",
   "at": "2026-10-17T08:00:00.000Z",
   "source": "daemon",
+  "release": "1.45.1",
+  "hostKind": "local",
   "kind": "pause.changed",
   "reason": "quota",
   "state": "paused",
@@ -128,10 +130,13 @@ Every lifecycle event is a JSON object with only these fields:
 }
 ```
 
-`source` is `app`, `daemon`, `kernel` or `os`. `kind`, `reason` and `state` are closed enums. The first v1 kinds are
+`source` is `app`, `daemon`, `kernel` or `os`. `release` is a numeric Pilot release and `hostKind` is `local` or
+`devbox`; the qualified host identity remains in the response envelope rather than every event. `kind`, `reason`
+and `state` are closed enums. The first v1 kinds are
 `worker.start.requested`, `worker.started`, `worker.start.failed`, `worker.parked`, `worker.recovery.started`,
 `worker.recovery.completed`, `worker.recovery.failed`, `pause.changed`, `quota.changed`, `connectivity.changed`,
-`request.slow`, `event_loop.stall`, `native.crash` and `native.hang`. Unknown future values are decoded as
+`execution.started`, `execution.completed`, `request.slow`, `event_loop.stall`, `native.crash` and `native.hang`.
+Unknown future values are decoded as
 `unknown`, not displayed as raw strings.
 
 Optional numeric fields must be finite and nonnegative. `traceId` is exactly 32 lowercase hexadecimal characters.
