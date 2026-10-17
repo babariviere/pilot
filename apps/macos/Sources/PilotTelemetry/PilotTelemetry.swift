@@ -561,7 +561,7 @@ public final class PilotTelemetry: @unchecked Sendable {
             throw PilotTelemetryConfigurationError.invalidHostID
         }
         if let analyticsID = configuration.analyticsID,
-           analyticsID.count != 22 ||
+           analyticsID == configuration.hostID || analyticsID.count != 22 ||
            !analyticsID.allSatisfy({ $0.isLowercase || $0.isNumber || $0 == "_" || $0 == "-" }) {
             throw PilotTelemetryConfigurationError.invalidAnalyticsID
         }
