@@ -68,7 +68,11 @@ import Testing
 
     secondField.focusRingType = .exterior
     #expect(window.makeFirstResponder(secondField))
+    window.update()
     #expect(secondField.focusRingType == .none, "fields sharing the same native editor must both suppress their rings")
+    secondField.focusRingType = .exterior
+    window.update()
+    #expect(secondField.focusRingType == .none, "a native refresh must not restore a focused control's ring")
     button.focusRingType = .exterior
     #expect(window.makeFirstResponder(button))
     window.update()
