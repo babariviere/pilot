@@ -258,6 +258,8 @@ export interface SessionSummary {
 	control?: boolean;
 	/** On-demand operational specialist. Its runtime exposes only bounded diagnostics. */
 	role?: SessionRole;
+	/** Exact chat this specialist may inspect. Present only for diagnostics specialists. */
+	diagnosticTargetId?: string;
 	/** Fresh provider-safe chat which continues this readable, permanently read-only chat. */
 	continuedTo?: string;
 	/** Original chat whose workspace and task ownership this fresh chat continues. */
@@ -1274,6 +1276,8 @@ export interface SpawnRequest {
 	missionId?: string;
 	/** Diagnostics is a host-enforced read-only profile, not a prompt convention. */
 	role?: SessionRole;
+	/** Required with role=diagnostics. pilotd derives scope from this chat without waking it. */
+	diagnosticTargetId?: string;
 	/** Omitted means Build. */
 	mode?: ChatMode;
 	/** Per-chat Build override. Omitted uses project settings; cwd-only cannot request a clone. */

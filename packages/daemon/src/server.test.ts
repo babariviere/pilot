@@ -1,13 +1,20 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import type { AgentEvent, DaemonHello, ServerMessage, SessionDiagnostics, SessionSummary } from "@pilot/protocol";
+import type {
+	AgentEvent,
+	DaemonHello,
+	ServerMessage,
+	SessionDiagnostics,
+	SessionSummary,
+	SpawnRequest,
+} from "@pilot/protocol";
 import { WebSocket } from "ws";
 import { RepositoryChanges } from "./changes.ts";
 import { Conflict, ServiceUnavailable } from "./errors.ts";
@@ -204,6 +211,93 @@ test("diagnostics GET requires the pinned host identity and remains read-only", 
 		handoffBody,
 		{ host: { hostId: "local", daemonId: "daemon", lineageId: "lineage" } },
 	]);
+});
+
+test("dedicated diagnostics and repair operations admit only their matching chat profiles", async (t) => {
+	const home = mkdtempSync(join(tmpdir(), "pilot-diagnostic-operations-"));
+	t.after(() => rmSync(home, { recursive: true, force: true }));
+	const projects = new ProjectStore(home);
+	const sessions = new SessionManager(home, projects);
+	const spawned = t.mock.method(
+		sessions,
+		"spawnDurable",
+		async (request: SpawnRequest, targetId: string) =>
+			({ id: targetId, role: request.role, mode: request.mode ?? "build" }) as SessionSummary,
+	);
+	const hello: DaemonHello = {
+		daemonId: "daemon",
+		lineageId: "lineage",
+		daemonVersion: "1.0.0",
+		protocolVersion: 1,
+		minimumClientProtocolVersion: 1,
+		platform: "darwin",
+		arch: "arm64",
+		capabilities: {
+			powerManagement: false,
+			systemSleepEvents: false,
+			swiftUIArtifacts: true,
+			coordinatorIsolation: true,
+			independentExecution: true,
+		},
+	};
+	const terminals = new TerminalManager();
+	const server = createDaemonServer(
+		{ home, host: "127.0.0.1", port: 0 },
+		sessions,
+		projects,
+		new ModelCatalog(home),
+		terminals,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		hello,
+	);
+	t.after(async () => {
+		terminals.shutdown();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/operations`;
+	const operation = (kind: string, body: object, sequence: number) => {
+		const payload = JSON.stringify(body);
+		return {
+			schemaVersion: 1,
+			operationId: randomUUID(),
+			producerId: randomUUID(),
+			sequence,
+			origin: { hostId: "origin", daemonId: "origin-daemon", lineageId: "origin-lineage" },
+			destination: { hostId: "local", daemonId: "daemon", lineageId: "lineage" },
+			kind,
+			targetId: randomUUID(),
+			payload,
+			payloadHash: createHash("sha256").update(payload).digest("hex"),
+		};
+	};
+	for (const op of [
+		operation("diagnostics-create", { message: "Diagnose", role: "diagnostics", diagnosticTargetId: "target" }, 1),
+		operation("repair-create", { message: "Repair", mode: "build" }, 2),
+	]) {
+		const response = await fetch(base, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(op),
+		});
+		assert.equal(response.status, 200);
+		assert.equal((await response.json()).state, "accepted");
+	}
+	const rejected = operation("diagnostics-create", { message: "Ordinary", mode: "build" }, 3);
+	const response = await fetch(base, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify(rejected),
+	});
+	assert.equal((await response.json()).state, "rejected");
+	assert.equal(spawned.mock.callCount(), 2);
 });
 
 test("jobs stop POST stops one running job and routes missing jobs", async (t) => {

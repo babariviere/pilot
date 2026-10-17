@@ -723,12 +723,8 @@ enum Snapshot {
                 ChatView(session: session, feed: feed)
             },
             size: size,
-            to: directory.appending(path: "session-debug-button.png")
+            to: directory.appending(path: "session-diagnose-action.png")
         )
-        model.debugSession(session)
-        model.draftMessage? += "The tool call stopped returning output. Investigate why and fix the issue."
-        await render(Frame(title: "Pilot", subtitle: nil) { HomeView() }, size: size,
-                     to: directory.appending(path: "session-debug-draft.png"), scrollEditorToEnd: true)
         model.selectedSessionId = session.id
         await render(
             Frame(title: session.title, subtitle: "pilot", session: session) {

@@ -137,6 +137,9 @@ struct MainWindow: View {
             PullRequestMergeSheet(target: target).environmentObject(model)
                 .environment(\.hostViewContext, target.reference.map { HostViewContext(host: $0.host, hosts: hosts) } ?? hostContext)
         }
+        .sheet(item: $model.diagnosticRepairTarget) { target in
+            DiagnosticRepairSheet(target: target).environmentObject(model)
+        }
         .sheet(isPresented: $model.showingCommandPalette, onDismiss: {
             let action = model.commandPaletteAction
             model.commandPaletteAction = nil
@@ -298,8 +301,16 @@ struct SessionMoreActions: View {
                 }
             }
             Divider()
-            Button { model.debugSession(session, context: hostContext) } label: {
-                Label("Debug Chat", icon: PilotIcon.bug)
+            if session.isDiagnosticsSpecialist {
+                Button { model.prepareDiagnosticRepair(session, context: hostContext) } label: {
+                    Label("Start a repair…", icon: PilotIcon.handoff)
+                }
+                .disabled(!model.canPrepareDiagnosticRepair(session, context: hostContext))
+            } else {
+                Button { model.diagnose(session, context: hostContext) } label: {
+                    Label(session.isControl ? "Ask about Pilot" : "Diagnose this chat", icon: PilotIcon.bug)
+                }
+                .disabled(model.isDiagnosing(session, context: hostContext))
             }
         } label: {
             PilotSymbol(PilotIcon.more, context: .toolbar)

@@ -173,6 +173,9 @@ final class AppModel: ObservableObject {
     /// nil includes chats from every mission, as well as chats without one.
     @Published var archiveMissionId: String?
     @Published var sessionActionError: String?
+    /// Target-scoped diagnostics starts. Keys are host-qualified so local and devbox chats never collide.
+    @Published var diagnosingSessions: Set<String> = []
+    @Published var diagnosticRepairTarget: DiagnosticRepairTarget?
     @Published var projectActionError: String?
     @Published private(set) var openingGitHubProjectId: String?
     @Published var pendingSessionActions: Set<String> = []
@@ -646,35 +649,6 @@ final class AppModel: ObservableObject {
         if session.sourceBranch != nil, client.project(session.projectId)?.usesPrivateClones == false {
             draftWorkspace = .clone
         }
-    }
-
-    func debugSession(_ session: SessionSummary, context: HostViewContext? = nil) {
-        if let context { newSessionForm.executionHost = context.host }
-        let client = context.map { $0.hosts.presentationClient($0.host) } ?? self.client
-        let projects = client.projects.filter { $0.name.caseInsensitiveCompare("pilot") == .orderedSame }
-        guard projects.count == 1, let project = projects.first else {
-            sessionActionError = projects.isEmpty
-                ? "Add a project named pilot before debugging a session."
-                : "More than one project is named pilot. Rename the others before debugging a session."
-            return
-        }
-        guard let path = session.sessionPath, !path.isEmpty else {
-            sessionActionError = "The daemon has not provided this session's data path. Update or restart pilotd and try again."
-            return
-        }
-        newSession(in: project.id, message: """
-        Investigate and fix a Pilot issue in the referenced session.
-
-        Session: \(session.title)
-        Session ID: \(session.id)
-        Session data path: \(path)
-        Session working directory: \(session.cwd)
-
-        Read the session history, tool calls, and logs to diagnose the issue, then fix the underlying problem in Pilot. Treat the original session's data and workspace as read-only.
-
-        Issue / reason:
-
-        """, context: context)
     }
 
     func isUnread(_ session: SessionSummary) -> Bool { attention.isUnread(session) }

@@ -46,6 +46,8 @@ final class PilotClient: ObservableObject {
     private var fixtureDashboards = false
     private var fixtureMissions = false
     private var fixtureSessions = false
+    private(set) var fixtureSpawnRequests: [SpawnRequest] = []
+    var fixtureDiagnostics: [String: SessionDiagnostics] = [:]
     /// Static previews/test snapshots do not start background network reconciliation.
     var sharedContextTransportEnabled: Bool { !fixtureSessions }
     @Published private(set) var connected = false
@@ -513,6 +515,18 @@ final class PilotClient: ObservableObject {
     }
 
     func spawn(_ request: SpawnRequest) async throws -> SessionSummary {
+        if fixtureSessions {
+            fixtureSpawnRequests.append(request)
+            let now = Date().timeIntervalSince1970 * 1_000
+            let session = SessionSummary(
+                id: "fixture-spawn-\(fixtureSpawnRequests.count)", title: request.title ?? "New chat",
+                cwd: request.cwd ?? project(request.projectId)?.path ?? "/tmp", projectId: request.projectId,
+                createdAt: now, updatedAt: now, state: "working", mode: request.mode, role: request.role,
+                diagnosticTargetId: request.diagnosticTargetId
+            )
+            update(session)
+            return session
+        }
         let session: SessionSummary = try await call("api/sessions", body: request)
         // REST can win the race with the list stream. Navigation needs the session immediately,
         // but must not overwrite a newer state already received over the WebSocket.
@@ -571,6 +585,7 @@ final class PilotClient: ObservableObject {
     /// Reads content-free evidence without opening or subscribing to the target chat.
     func diagnostics(_ sessionId: String, limit: Int = 128) async throws -> SessionDiagnostics {
         guard (1 ... 128).contains(limit) else { throw ClientError("Diagnostic limit must be between 1 and 128") }
+        if let fixture = fixtureDiagnostics[sessionId] { return fixture }
         guard let baseURL, let host = hostIdentity,
               var components = URLComponents(
                   url: baseURL.appending(path: "api/sessions/\(sessionId)/diagnostics"),

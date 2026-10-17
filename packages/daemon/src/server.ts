@@ -388,10 +388,19 @@ export function createDaemonServer(
 				: "";
 			payload = { ...body.request, message: body.request.message + suffix };
 		}
-		if (op.kind === "chat-create" || op.kind === "chat-create-attached") {
+		if (
+			op.kind === "chat-create" ||
+			op.kind === "chat-create-attached" ||
+			op.kind === "diagnostics-create" ||
+			op.kind === "repair-create"
+		) {
 			const request = payload as SpawnRequest;
 			if (typeof request.message !== "string" || !request.message.trim())
 				throw new OperationRejected("message is required");
+			if (op.kind === "diagnostics-create" && request.role !== "diagnostics")
+				throw new OperationRejected("diagnostics-create requires a diagnostics specialist");
+			if (op.kind === "repair-create" && (request.role !== undefined || request.mode !== "build"))
+				throw new OperationRejected("repair-create requires an ordinary Build chat");
 			const session = await sessions.spawnDurable(request, op.targetId, op.operationId);
 			return { sessionId: session.id };
 		}

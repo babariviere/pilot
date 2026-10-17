@@ -456,7 +456,7 @@ export class KernelSession {
 				subagents,
 				hostTools: [
 					...(spec.role === "diagnostics" && hooks.callDiagnostics
-						? [createDiagnosticsTool(hooks.callDiagnostics, spec.sessionId)]
+						? [createDiagnosticsTool(hooks.callDiagnostics, spec.diagnosticTargetId ?? spec.sessionId)]
 						: []),
 					...(spec.control && hooks.callMemory ? createMemoryTools(hooks.callMemory, spec.sessionId, true) : []),
 					...(spec.control && hooks.callPilot ? [createPilotTool(hooks.callPilot)] : []),

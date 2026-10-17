@@ -10,8 +10,9 @@ personal or project extensions, skills, MCP, codemode, shell, file, job, memory,
 subagent tools. A tool-dispatch allowlist is reapplied after reload and the daemon independently rejects diagnostic
 IPC from a session whose persisted role is not `diagnostics`. These are runtime boundaries, not prompt conventions.
 
-Omitting `sessionId` selects the specialist itself. A specialist may inspect another chat only when both are in the
-same project on the same qualified host. Tool results contain a qualified host identity, collection time, source
+The app admits one exact target chat when it creates the specialist. The tool has no target selector, and the daemon
+rejects every other ID even when another chat shares the project. This lets project-less and control-chat
+diagnostics keep the same qualified-host boundary. Tool results contain a qualified host identity, collection time, source
 freshness and availability, queue/resource summaries, stable evidence references and explicit truncation/drop
 counts. The specialist cannot restart, retry, replay, wake or mutate the target.
 
@@ -33,11 +34,13 @@ A repair is a separate ordinary coding chat. After reviewing a diagnosis, an exp
 POST /api/sessions/:specialistId/diagnostics/handoff?hostId=…&daemonId=…&lineageId=…
 ```
 
-The request selects 1 to 16 evidence refs from one same-project target and supplies bounded likely-cause and
+The request selects 1 to 16 evidence refs from the admitted target and supplies bounded likely-cause and
 regression-test guidance. The daemon re-reads local diagnostics and returns only those exact structured evidence
 items plus the two bounded guidance fields. It rejects stale or invented refs. Preparing the handoff never creates,
 starts, subscribes to, wakes or changes either chat. The specialist cannot call this endpoint as a tool; the app
-must obtain user authorization and pass the returned material when it separately creates the coding chat. That chat
+must obtain user authorization and pass the returned material when it separately creates the coding chat. Pilot's
+repair sheet makes that selection explicit and states that the action does not retry, restart, replay or change the
+diagnosed chat. The resulting chat
 does not inherit the specialist role or diagnostics authority. The normal Ask “Start a Build chat with this
 context” path is unavailable for diagnostics specialists, so an unbounded transcript cannot substitute for this
 handoff.

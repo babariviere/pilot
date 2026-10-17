@@ -41,20 +41,20 @@ const result = {
 	},
 } satisfies SessionDiagnostics;
 
-test("diagnostics is declared read-only and defaults to the current chat", async () => {
+test("diagnostics is declared read-only and fixed to the admitted target chat", async () => {
 	const calls: Array<[string, number | undefined]> = [];
 	const tool = createDiagnosticsTool(async (sessionId, limit) => {
 		calls.push([sessionId, limit]);
 		return { ...result, sessionId };
-	}, "current");
+	}, "target");
 	assert.equal(tool.name, DIAGNOSTICS_TOOL);
 	assert.equal(tool.annotations?.readOnlyHint, true);
 	assert.equal(tool.annotations?.destructiveHint, false);
 	const first = await tool.execute("call-1", {} as never, undefined, undefined, {} as never);
-	await tool.execute("call-2", { sessionId: "other", limit: 12 } as never, undefined, undefined, {} as never);
+	await tool.execute("call-2", { limit: 12 } as never, undefined, undefined, {} as never);
 	assert.deepEqual(calls, [
-		["current", undefined],
-		["other", 12],
+		["target", undefined],
+		["target", 12],
 	]);
-	assert.equal(JSON.parse((first.content[0] as { text: string }).text).sessionId, "current");
+	assert.equal(JSON.parse((first.content[0] as { text: string }).text).sessionId, "target");
 });

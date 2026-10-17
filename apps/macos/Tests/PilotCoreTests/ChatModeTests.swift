@@ -22,11 +22,13 @@ import Testing
 }
 
 @Test func diagnosticsRoleAndBoundedHandoffProtocolRoundTrip() throws {
-    let request = SpawnRequest(projectId: "p", message: "Diagnose", mode: .ask, role: .diagnostics)
+    let request = SpawnRequest(projectId: "p", message: "Diagnose", mode: .ask, role: .diagnostics,
+                               diagnosticTargetId: "target")
     let decoded = try JSONDecoder().decode(SpawnRequest.self, from: JSONEncoder().encode(request))
     #expect(decoded.role == .diagnostics)
+    #expect(decoded.diagnosticTargetId == "target")
     let session = SessionSummary(id: "d", title: "Diagnose", cwd: "/tmp", createdAt: 1, updatedAt: 2,
-                                 state: "idle", mode: .ask, role: .diagnostics)
+                                 state: "idle", mode: .ask, role: .diagnostics, diagnosticTargetId: "target")
     #expect(session.isDiagnosticsSpecialist)
     #expect(try JSONDecoder().decode(SessionSummary.self, from: JSONEncoder().encode(session)) == session)
     let handoff = DiagnosticsHandoffRequest(targetSessionId: "target",

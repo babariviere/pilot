@@ -62,7 +62,7 @@ struct PilotApp: App {
             }
             SidebarScopeCommands(model: model, client: model.client)
             KeyboardNavigationCommands(model: model)
-            KeyboardShortcutsCommands()
+            KeyboardShortcutsCommands(model: model)
         }
 
         Window("Keyboard Shortcuts", id: KeyboardShortcuts.windowID) {
