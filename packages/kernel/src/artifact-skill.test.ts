@@ -52,6 +52,9 @@ test("bundled artifact skill is valid and retains detailed authoring guidance ou
 		"workspace/credential access",
 		"ImageRenderer",
 		"Do not install or request a browser",
+		"mainImage",
+		"omit `#version`",
+		"iMouse",
 	])
 		assert.ok(source.includes(guidance), `missing ${guidance}`);
 	for (const name of Object.keys(artifactLibraries)) assert.ok(source.includes(`\`${name}\``), name);

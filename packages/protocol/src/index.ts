@@ -499,7 +499,7 @@ export interface RemoteBranchList {
 
 /** Offline libraries available inside the artifact sandbox. */
 export type ArtifactLibrary = "react" | "react-dom" | "mermaid" | "echarts" | "motion" | "d3" | "three";
-export type ArtifactKind = "html" | "react" | "image" | "swiftui";
+export type ArtifactKind = "html" | "react" | "image" | "swiftui" | "shader";
 
 /** GET /api/artifacts/:id resolves an unpinned artifact link to its owning session and latest metadata. */
 export interface ArtifactSummary {

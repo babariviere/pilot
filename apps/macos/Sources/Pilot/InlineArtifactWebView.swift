@@ -2,19 +2,28 @@ import AppKit
 import PilotCore
 import WebKit
 
-/// An inline HTML or React artifact the reader uses in place: clicks, hover and typing reach the page.
+/// An inline HTML, React or shader artifact the reader uses in place: clicks, hover and typing reach the page.
 /// Scrolling is shared with the chat (`ArtifactScrollRouter`): the scroll state under the pointer is
 /// read from the page in an isolated script world while the pointer moves, never on the scroll path.
 final class InlineArtifactWebView: WKWebView {
     var onEscape: (() -> Void)?
     /// Clicks and typing that may change the page's height.
     var onInteraction: (() -> Void)?
+    /// Shaders animate only while part of the view is inside the chat's visible area. WebKit pauses
+    /// hidden windows itself, but not a view scrolled out of an enclosing NSScrollView. The flag is a
+    /// one-way DOM attribute (`data-pilot-host-visible`) written from an isolated script world.
+    var reportsHostVisibility = false {
+        didSet { observeHostGeometry() }
+    }
     private var router = ArtifactScrollRouter()
     private var held: [NSEvent] = []
     private var scrollState: ArtifactScrollState?
     private var probeTask: Task<Void, Never>?
     private var probePoint: CGPoint?
     private var probeAgain = false
+    private weak var observedScrollView: NSScrollView?
+    private weak var observedDocument: NSView?
+    private var hostVisible: Bool?
 
     override func scrollWheel(with event: NSEvent) {
         let phase = Self.phase(event)
@@ -59,6 +68,52 @@ final class InlineArtifactWebView: WKWebView {
         held.removeAll()
         onEscape = nil
         onInteraction = nil
+        reportsHostVisibility = false
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        observeHostGeometry()
+    }
+
+    /// Scrolling, resizing and transcript layout can move the view in or out of sight.
+    private func observeHostGeometry() {
+        let scroll = reportsHostVisibility && window != nil ? enclosingScrollView : nil
+        if scroll !== observedScrollView || scroll?.documentView !== observedDocument {
+            let center = NotificationCenter.default
+            center.removeObserver(self, name: NSView.boundsDidChangeNotification, object: nil)
+            center.removeObserver(self, name: NSView.frameDidChangeNotification, object: nil)
+            observedScrollView = scroll
+            observedDocument = scroll?.documentView
+            if let scroll {
+                scroll.contentView.postsBoundsChangedNotifications = true
+                scroll.contentView.postsFrameChangedNotifications = true
+                center.addObserver(self, selector: #selector(hostGeometryChanged), name: NSView.boundsDidChangeNotification,
+                                   object: scroll.contentView)
+                center.addObserver(self, selector: #selector(hostGeometryChanged), name: NSView.frameDidChangeNotification,
+                                   object: scroll.contentView)
+                if let document = scroll.documentView {
+                    document.postsFrameChangedNotifications = true
+                    center.addObserver(self, selector: #selector(hostGeometryChanged), name: NSView.frameDidChangeNotification,
+                                       object: document)
+                }
+            }
+        }
+        updateHostVisibility()
+    }
+
+    @objc private func hostGeometryChanged(_ notification: Notification) {
+        updateHostVisibility()
+    }
+
+    /// Writes only on a change (or for a newly loaded document), never per scroll event.
+    func updateHostVisibility(force: Bool = false) {
+        guard reportsHostVisibility else { return }
+        let visible = window != nil && !isHiddenOrHasHiddenAncestor && !visibleRect.isEmpty
+        guard force || visible != hostVisible else { return }
+        hostVisible = visible
+        evaluateJavaScript("document.documentElement.dataset.pilotHostVisible = '\(visible)'", in: nil, in: .defaultClient,
+                           completionHandler: nil)
     }
 
     static func phase(_ event: NSEvent) -> ArtifactScrollPhase {

@@ -15,7 +15,7 @@ private func exportRevision(kind: ArtifactKind, source: String, revision: Int = 
 }
 
 @Test func artifactExportsKeepEditableSourceAndUseSafeFilenames() throws {
-    for (kind, ext) in [(ArtifactKind.html, "html"), (.react, "tsx"), (.swiftui, "swift")] {
+    for (kind, ext) in [(ArtifactKind.html, "html"), (.react, "tsx"), (.swiftui, "swift"), (.shader, "frag")] {
         let source = "Editable source, not the compiled preview 🐦"
         let file = try ArtifactExport.file(for: exportRevision(kind: kind, source: source))
         #expect(file.name == "Saved _ artifact.\(ext)")

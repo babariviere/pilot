@@ -22,6 +22,8 @@ enum ArtifactExport {
         case .react: return File(name: "\(name).tsx", data: Data(revision.source.utf8),
                                  type: UTType(filenameExtension: "tsx") ?? .data)
         case .swiftui: return File(name: "\(name).swift", data: Data(revision.source.utf8), type: .swiftSource)
+        case .shader: return File(name: "\(name).frag", data: Data(revision.source.utf8),
+                                  type: UTType(filenameExtension: "frag") ?? .plainText)
         case .image:
             let formats: [(String, String, UTType)] = [
                 ("png", "png", .png), ("jpeg", "jpg", .jpeg), ("gif", "gif", .gif), ("webp", "webp", .webP)

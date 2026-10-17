@@ -32,6 +32,15 @@ private let artifactJSON = #"{"id":"a","sessionId":"s","title":"Chart","revision
     #expect(ArtifactListMessage.parse(update)?.artifacts.first?.kind == .image)
 }
 
+@Test func shaderArtifactProtocolRetainsGLSLSource() throws {
+    let json = #"{"id":"a","sessionId":"s","title":"Plasma","kind":"shader","revision":1,"createdAt":1,"updatedAt":2,"source":"void mainImage(out vec4 c, in vec2 p) { c = vec4(1.0); }","html":"<canvas id='pilot-shader'></canvas>","libraries":[]}"#
+    let revision = try JSONDecoder().decode(ArtifactRevision.self, from: Data(json.utf8))
+    #expect(revision.kind == .shader)
+    #expect(revision.kind.sourceLanguage == "glsl")
+    #expect(revision.source.hasPrefix("void mainImage"))
+    #expect(try JSONDecoder().decode(ArtifactRevision.self, from: JSONEncoder().encode(revision)) == revision)
+}
+
 @Test func expandedArtifactViewerUsesMostOfTheScreenAndFitsSmallerDisplays() {
     let large = ArtifactViewerLayout.size(available: CGSize(width: 1440, height: 900))
     #expect(large == CGSize(width: 1296, height: 810))

@@ -1,6 +1,6 @@
 # Artifacts
 
-Session-owned, project-indexed images, HTML/JavaScript, React/JSX and standalone SwiftUI documents.
+Session-owned, project-indexed images, HTML/JavaScript, React/JSX, GLSL shaders and standalone SwiftUI documents.
 This package owns preparation, offline libraries, revision storage and agent-side previews. Generated
 JavaScript never runs in Node; SwiftUI runs only in disposable native sandbox processes.
 
@@ -100,6 +100,28 @@ React and ReactDOM are not bundled into each revision. The compiled module impor
 `react` and `react-dom` library scripts, which are added to the revision's libraries automatically (a
 trivial component is about 3 KB instead of about 290 KB). Other imports, such as `motion/react`, are
 bundled and share the same React globals.
+
+### Shaders
+
+Publish a Shadertoy-style GLSL fragment shader as `kind: "shader"`. The source defines
+`void mainImage(out vec4 fragColor, in vec2 fragCoord)` and omits `#version`; Pilot compiles it as GLSL ES 3.00
+with `iResolution`, `iTime`, `iTimeDelta`, `iFrame` and `iMouse` declared, and a `#line 1` directive so
+compiler lines match the source. Libraries, textures and `iChannel` inputs are not supported.
+
+Publication compiles the shader with [glslang](https://github.com/KhronosGroup/glslang), the Khronos reference
+compiler, built as WebAssembly (`glslang-wasm-validator`, pinned). No browser, GPU or native compiler is needed,
+so this works on every host. The check runs in a worker thread with a 10-second limit and is terminated on
+abort. A shader with errors is not saved; the tool result lists up to ten errors as `line N: message` with
+the offending source line. If the checker itself cannot start, publication continues and the viewer shows
+WebKit's own compile log instead.
+
+The prepared page holds a small WebGL2 player (about 5 KB) and the source as an escaped JSON string. The canvas
+is 16:9, fills the column up to 960 CSS pixels, and is capped at 2.4 million drawing-buffer pixels. The page and
+canvas are transparent and alpha is straight (not premultiplied). The player draws at display rate only while the
+page is visible, the canvas intersects the page viewport, and the host has not marked the view off-screen: the
+app writes `data-pilot-host-visible` on the root element from an isolated script world when an inline shader
+scrolls out of the chat. Pausing freezes `iTime`, so it resumes without a jump. Under Reduce Motion it draws
+a still frame at `iTime` 0, redrawn on resize and pointer input. WebGL context loss and restoration are handled.
 
 ### SwiftUI
 

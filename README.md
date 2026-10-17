@@ -108,8 +108,9 @@ has separate storage and transport contracts; it does not change chat-result rea
   unsuccessful compaction retries without discarding source notes. Each project's Memory page shows the
   notes and their summaries as a searchable tree. Pi skills, prompt templates, packages and compatible
   extensions are available in Build sessions.
-- **Get more than text back.** Agents can publish images, interactive HTML and React previews, diagrams and
-  static SwiftUI renders. Artifacts stay attached to their chat and can be linked to missions and tasks.
+- **Get more than text back.** Agents can publish images, interactive HTML and React previews, diagrams,
+  animated GLSL shaders and static SwiftUI renders. Artifacts stay attached to their chat and can be linked to
+  missions and tasks.
 - **Query your databases.** Give a project's chats read-only or read-write Postgres access per environment,
   granted up front or when you answer the agent's request. See [Databases](#databases).
 - **Bring work into Pilot.** Track Linear issues and Slack messages from configured sources, triage Slack
@@ -563,6 +564,7 @@ retained: a chat card opens the revision sent there, while the sidebar opens the
 Inline `artifact://<id>` links open the latest revision directly in the artifact popup, with an artifact
 icon beside the label. They work across chats, including archived artifact owners.
 SwiftUI artifacts are static renders, not live app views.
+Shader artifacts are Shadertoy-style GLSL, checked when published and animated only while visible.
 
 Pilot bundles a pinned subset of [pi-extensions](https://github.com/babariviere/pi-extensions): sandbox,
 patch editing, web, browser, subscription usage, background jobs and persistent subagents.

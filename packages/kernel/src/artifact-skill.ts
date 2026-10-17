@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 export const ARTIFACT_SKILL_PATH = fileURLToPath(new URL("../skills/pilot-artifacts/SKILL.md", import.meta.url));
 
 /** Per-kind references SKILL.md routes to, so agents read only the part a task needs. */
-export const ARTIFACT_SKILL_REFERENCES = ["web.md", "swiftui.md", "images.md"].map((name) =>
+export const ARTIFACT_SKILL_REFERENCES = ["web.md", "swiftui.md", "images.md", "shaders.md"].map((name) =>
 	fileURLToPath(new URL(`../skills/pilot-artifacts/references/${name}`, import.meta.url)),
 );
 
