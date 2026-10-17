@@ -310,6 +310,9 @@ importers:
       '@pilot/protocol':
         specifier: workspace:*
         version: link:../protocol
+      jiti:
+        specifier: 2.7.0
+        version: 2.7.0
 
   packages/protocol:
     dependencies:

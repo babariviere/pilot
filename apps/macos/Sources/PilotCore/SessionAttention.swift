@@ -41,6 +41,9 @@ public enum SessionStatus: String, Sendable {
 }
 
 extension SessionSummary {
+    /// Failed startup can still have durable child work. Stop must remain reachable without retrying it.
+    public var canStop: Bool { !isReadOnlyHistory && (isWorking || canRetryStartup == true) }
+
     /// One live line in the conversation, replacing the working indicator while work is held.
     /// This is display state, not a transcript entry or a message that can wake the agent.
     public var pauseNoticeText: String? {

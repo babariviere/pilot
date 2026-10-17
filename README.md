@@ -210,6 +210,10 @@ choose **Retry Startup** below the error. Pilot reloads the worker with the orig
 keeping its history and workspace. Saved messages remain readable even while startup is failing.
 Workspace preparation failures cannot use this action.
 You can also archive a failed startup without discarding its queued messages. Restore it before retrying.
+Saved subagent activity never hides these recovery controls. **Stop Chat** cancels failed recovery and its
+subagents without signing in or restarting the worker, clears the failure, and keeps history and workspace files.
+It stays stopped across viewing, sleep and daemon restart. Your next explicit message starts fresh work;
+the previous run is cancelled before it can recover.
 
 ## Working with Pilot
 

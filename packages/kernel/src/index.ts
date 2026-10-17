@@ -22,6 +22,10 @@ export const workerEntry = new URL("./worker-entry.ts", import.meta.url);
 /** A one-shot cold reader with no agent initialization. */
 export const snapshotWorkerEntry = new URL("./snapshot-worker.ts", import.meta.url);
 
+/** Credential-free, writer-leased cancellation of failed child recovery. */
+export const stopRecoveryWorkerEntry = new URL("./stop-recovery-worker.ts", import.meta.url);
+export type { RecoveryStop } from "./stop-recovery.ts";
+
 /** A long-lived, read-only watcher for one subagent transcript. */
 export const subagentWatchWorkerEntry = new URL("./subagent-watch-worker.ts", import.meta.url);
 export type { SystemMessageStateEvent } from "./held-inputs.ts";

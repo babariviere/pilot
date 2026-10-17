@@ -1679,9 +1679,9 @@ for (const failure of ["clone", "factory", "ready"] as const) {
 		);
 		assert.equal((await f.stored(created.id)).pending.length, 1);
 		await assert.rejects(sessions.send(created.id, "retry"), /unavailable/);
-		await sessions.stop(created.id);
 		sessions.subscribe(created.id, () => {});
 		if (failure === "clone") {
+			await sessions.stop(created.id);
 			assert.equal(f.workers.length, 0);
 			assert.throws(() => sessions.changeBase(created.id), /still preparing/);
 		}
@@ -1800,6 +1800,125 @@ test("retry startup failures retain original input, show the new diagnostic and 
 	f.workers[2]!.open();
 	assert.equal((await recovered).state, "working");
 	assert.deepEqual(f.workers[2]!.requests, pending);
+});
+
+test("a failed restart with working children exposes Retry Startup without losing recovery metadata", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager({ worker: f.workerFactory(false) });
+	const created = await sessions.spawn({ cwd: f.source, message: "original" });
+	await until(() => f.workers.length === 1);
+	const meta = sessions["require"](created.id);
+	const children: KernelSubagent[] = ["implementation", "review"].map((name) => ({
+		name,
+		state: "working",
+		task: "Unfinished",
+		createdAt: 1,
+		cwd: f.source,
+		storage: join(f.home, name),
+	}));
+	meta.subagents = children;
+	meta.updatePaused = true;
+	meta.kernelRestartPending = true;
+	f.workers[0]!.gate.reject(new Error("Credential broker busy"));
+	await sessions["starting"].get(created.id);
+	const failed = sessions.get(created.id)!;
+	assert.equal(failed.state, "failed");
+	assert.equal(failed.working, false, "stale child flags must not hide the failure banner and its Retry action");
+	assert.equal(failed.canRetryStartup, true);
+	assert.equal(failed.outcome, "failed");
+	assert.ok(
+		failed.subagents?.every((child) => child.state === "idle" && child.error?.includes("Credential broker busy")),
+	);
+	assert.deepEqual(meta.subagents, children, "display projection must not cancel durable child recovery");
+	await sessions.shutdown();
+	const reopened = await f.manager();
+	assert.equal(reopened.get(created.id)?.working, false);
+	assert.equal(reopened.get(created.id)?.canRetryStartup, true);
+	assert.deepEqual(reopened["require"](created.id).subagents, children);
+	assert.equal(f.workers.length, 1, "viewing a failed restart cannot start its children");
+});
+
+test("Stop cancels failed child recovery without credentials and stays stopped across viewing, sleep and restart", async (t) => {
+	const f = await fixture(t);
+	const closing = deferred();
+	t.after(() => closing.resolve());
+	const cancelled: string[] = [];
+	const sessions = await f.manager({
+		worker: f.workerFactory(false),
+		stopRecovery: async (spec) => {
+			cancelled.push(spec.sessionId);
+			return [];
+		},
+	});
+	const created = await sessions.spawn({ cwd: f.source, message: "undelivered" });
+	await until(() => f.workers.length === 1);
+	f.workers[0]!.gate.reject(new Error("Credential broker busy"));
+	await sessions["starting"].get(created.id);
+	f.workers[0]!.closeGate = closing.promise;
+	const stop = sessions.stop(created.id);
+	await until(() => f.workers[0]!.closed);
+	assert.deepEqual(cancelled, [], "wait for the old storage owner to exit");
+	await assert.rejects(sessions.retryStartup(created.id), /changing configuration/);
+	closing.resolve();
+	assert.deepEqual(await stop, { ok: true, draft: "undelivered" });
+	assert.deepEqual(cancelled, [created.id]);
+	const stopped = sessions.get(created.id)!;
+	assert.equal(stopped.state, "parked");
+	assert.equal(stopped.working, false);
+	assert.equal(stopped.error, undefined);
+	assert.equal(stopped.outcome, undefined);
+	assert.equal(sessions["require"](created.id).recoveryStopped, true);
+	assert.deepEqual(
+		(await f.stored(created.id)).pending.map((command) => command.type),
+		["abort"],
+	);
+	assert.equal(f.workers.length, 1, "Stop never starts a model or credential-dependent worker");
+	await sessions.shutdown();
+	const reopened = await f.manager();
+	const batches: AgentEvent[][] = [];
+	reopened.subscribe(created.id, (events) => batches.push(events));
+	await until(() => batches.length > 0);
+	await reopened.pauseForSleep("sleep:stopped");
+	await reopened.resumeAfterSleep();
+	await Promise.all(reopened["starting"].values());
+	assert.equal(reopened.get(created.id)?.working, false);
+	assert.equal(reopened.get(created.id)?.outcome, undefined, "cold history cannot resurrect the old completion");
+	assert.equal(f.workers.length, 1, "restart, subscription and wake must not reopen stopped recovery");
+	assert.deepEqual(await reopened.stop(created.id), { ok: true });
+	await until(() => reopened.prepareUpdate().ready);
+	reopened["resumeAfterUpdate"]();
+	await assert.rejects(reopened["ensureWorker"](created.id), /Recovery is stopped/);
+	await reopened.send(created.id, "new explicit work", "followUp", "new-work");
+	assert.equal(f.workers.length, 2);
+	assert.equal(f.workers[1]!.spec.stopOnOpen, true, "cancel the old run before resuming the Harness");
+	assert.deepEqual(
+		f.workers[1]!.requests.map((command) => command.type),
+		["abort", "input"],
+	);
+	assert.equal(f.workers[1]!.requests[1]?.requestId, "new-work");
+});
+
+test("failed cancellation preserves its failure, outbox and retryable Stop intent", async (t) => {
+	const f = await fixture(t);
+	let attempts = 0;
+	const sessions = await f.manager({
+		worker: f.workerFactory(false),
+		stopRecovery: async () => {
+			if (++attempts === 1) throw new Error("Child journal is busy");
+			return [];
+		},
+	});
+	const created = await sessions.spawn({ cwd: f.source, message: "keep my draft" });
+	await until(() => f.workers.length === 1);
+	f.workers[0]!.gate.reject(new Error("Startup failed"));
+	await sessions["starting"].get(created.id);
+	await assert.rejects(sessions.stop(created.id), /Child journal is busy/);
+	assert.equal(sessions.get(created.id)?.canRetryStartup, true);
+	assert.equal(sessions["require"](created.id).recoveryStopped, true);
+	assert.equal((await f.stored(created.id)).pending[1]?.type, "input");
+	assert.deepEqual(await sessions.stop(created.id), { ok: true, draft: "keep my draft" });
+	assert.equal(sessions.get(created.id)?.error, undefined);
+	assert.equal(attempts, 2);
 });
 
 test("retry startup honors the update lease and resumes the durable outbox after interrupted recovery", async (t) => {
