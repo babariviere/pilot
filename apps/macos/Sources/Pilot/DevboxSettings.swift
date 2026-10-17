@@ -65,7 +65,7 @@ struct DevboxSettingsContent: View {
                 SettingsRow("Saved identity", detail: "Installation \(host.daemonId) · history \(host.lineageId)") { EmptyView() }
             }
             DevboxMachineSection(host: host, hosts: hosts).id(host)
-            TelemetrySettingsSection(client: hosts.presentationClient(host), localApp: false).id("telemetry-\(host.storageKey)")
+            TelemetrySettingsSection(client: hosts.presentationClient(host), localApp: false).id(host)
             DevboxProviderSetup(host: host, hosts: hosts).id(host)
             DevboxUpdateSection(host: host, hosts: hosts, loadPackage: loadPackage, navigate: navigate).id(host)
         }
