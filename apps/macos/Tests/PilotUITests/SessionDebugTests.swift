@@ -1,61 +1,71 @@
+import Foundation
 import PilotCore
 import Testing
 @testable import Pilot
 
-private func debugSource(path: String? = "/custom/pilot/sessions/source", archived: Bool = false) -> SessionSummary {
-    SessionSummary(id: "source", title: "Broken tool call", cwd: "/projects/unrelated", projectId: "other",
-                   createdAt: 1, updatedAt: 2, state: "failed", archivedAt: archived ? 3 : nil, sessionPath: path)
+private let localHost = HostRef(hostId: "local", daemonId: "daemon", lineageId: "lineage")
+private let project = Project(id: "project", name: "Project", path: "/projects/source", createdAt: 1)
+
+private func sourceSession(control: Bool? = nil) -> SessionSummary {
+    SessionSummary(id: control == true ? "control" : "source", title: "Sleeping target", cwd: "/projects/source",
+                   projectId: control == true ? nil : project.id, createdAt: 1, updatedAt: 2,
+                   state: "idle", mode: .ask)
 }
 
-private let pilotProject = Project(id: "pilot", name: "Pilot", path: "/projects/pilot", createdAt: 1)
-private let otherProject = Project(id: "other", name: "Other", path: "/projects/unrelated", createdAt: 1)
-
-@Test @MainActor func debugSessionPrefillsPilotWithoutStartingWork() {
+@Test @MainActor func diagnoseStartsOnlyATargetScopedSpecialist() async throws {
     let app = AppModel()
-    let source = debugSource(archived: true)
-    app.client.loadFixture(projects: [otherProject, pilotProject], sessions: [source])
+    try app.registerLocal(localHost)
+    let source = sourceSession()
+    app.client.loadFixture(projects: [project], sessions: [source])
     app.selectedSessionId = source.id
-    app.showingArchive = true
-    app.debugSession(source)
 
-    #expect(app.selectedSessionId == nil)
-    #expect(!app.showingArchive)
-    #expect(app.draftProjectId == pilotProject.id)
-    #expect(app.draftMessage?.contains("Session ID: source") == true)
-    #expect(app.draftMessage?.contains("Session data path: /custom/pilot/sessions/source") == true)
-    #expect(app.draftMessage?.contains("Session working directory: /projects/unrelated") == true)
-    #expect(app.draftMessage?.contains("Issue / reason:") == true)
-    #expect(app.sessionActionError == nil)
-    #expect(app.client.sessions == [source])
+    app.diagnose(source)
+    for _ in 0..<100 where app.client.fixtureSpawnRequests.isEmpty { await Task.yield() }
+
+    let request = try #require(app.client.fixtureSpawnRequests.first)
+    #expect(request.role == .diagnostics)
+    #expect(request.mode == .ask)
+    #expect(request.diagnosticTargetId == source.id)
+    #expect(request.projectId == nil)
+    #expect(request.cwd == nil)
+    #expect(request.message.contains(source.title) == false)
+    #expect(app.client.session(source.id) == source, "diagnosis does not mutate or replace the target")
+    #expect(app.selectedSession?.isDiagnosticsSpecialist == true)
 }
 
-@Test @MainActor func debugSessionReportsMissingOrAmbiguousPilotProject() {
+@Test @MainActor func askAboutPilotUsesTheControlChatAsAnExplicitTarget() async throws {
     let app = AppModel()
-    let source = debugSource()
-    app.client.loadFixture(projects: [otherProject], sessions: [source])
-    app.selectedSessionId = source.id
-    app.debugSession(source)
-    #expect(app.selectedSessionId == source.id)
-    #expect(app.draftMessage == nil)
-    #expect(app.sessionActionError?.contains("Add a project named pilot") == true)
+    try app.registerLocal(localHost)
+    var control = sourceSession(control: true)
+    control.control = true
+    app.client.loadFixture(projects: [], sessions: [control])
 
-    let duplicate = Project(id: "duplicate", name: "pilot", path: "/another/pilot", createdAt: 1)
-    app.client.loadFixture(projects: [pilotProject, duplicate], sessions: [source])
-    app.debugSession(source)
-    #expect(app.selectedSessionId == source.id)
-    #expect(app.draftMessage == nil)
-    #expect(app.sessionActionError?.contains("More than one") == true)
+    app.askAboutPilot()
+    for _ in 0..<100 where app.client.fixtureSpawnRequests.isEmpty { await Task.yield() }
+
+    let request = try #require(app.client.fixtureSpawnRequests.first)
+    #expect(request.title == "Ask about Pilot")
+    #expect(request.role == .diagnostics)
+    #expect(request.diagnosticTargetId == control.id)
 }
 
-@Test @MainActor func debugSessionDoesNotGuessDataPathFromWorkingDirectory() {
-    let app = AppModel()
-    let source = debugSource(path: nil)
-    app.client.loadFixture(projects: [pilotProject], sessions: [source])
-    app.selectedSessionId = source.id
-    app.debugSession(source)
-    #expect(app.selectedSessionId == source.id)
-    #expect(app.draftMessage == nil)
-    #expect(app.sessionActionError?.contains("data path") == true)
+@Test @MainActor func repairRequiresASeparateExplicitHandoffAndOrdinaryBuildRequest() throws {
+    let evidenceRef = "diagnostic:v1:lifecycle:1"
+    let handoff = try JSONDecoder().decode(DiagnosticsHandoff.self, from: Data("""
+    {"schemaVersion":1,"host":{"hostId":"local","daemonId":"daemon","lineageId":"lineage"},
+    "targetSessionId":"target","projectId":"project","evidence":[{"ref":"\(evidenceRef)",
+    "source":"lifecycle","at":"2026-01-01T00:00:00.000Z","kind":"kernel.exit",
+    "reason":"process_exit","state":"failed"}],"likelyCause":"Worker exited.",
+    "regressionTestGuidance":"Cover supervised exit."}
+    """.utf8))
+    let request = try DiagnosticRepair.spawnRequest(handoff: handoff, fallbackCwd: "/not-used")
+    #expect(request.mode == .build)
+    #expect(request.role == nil)
+    #expect(request.diagnosticTargetId == nil)
+    #expect(request.projectId == project.id)
+    #expect(request.cwd == nil)
+    #expect(request.message.contains(evidenceRef))
+    #expect(request.message.contains("do not retry, restart, replay") == true)
 }
 
 @Test @MainActor func newSessionPrefillIsConsumedOnceWithoutErasingOrdinaryDrafts() {
@@ -65,25 +75,12 @@ private let otherProject = Project(id: "other", name: "Other", path: "/projects/
     form.model = "previous/model"
     form.tab = .running
     form.error = "Old error"
-    app.newSession(in: pilotProject.id, message: "Debug this session")
+    app.newSession(in: project.id, message: "Debug this session")
     form.consumeDraft(from: app)
     #expect(form.message == "Debug this session")
     #expect(form.folder.isEmpty)
     #expect(form.model.isEmpty)
     #expect(form.tab == .newTask)
     #expect(form.error == nil)
-    #expect(app.draftMessage == nil)
-
-    form.message += " because the tool failed"
-    form.consumeDraft(from: app)
-    #expect(form.message == "Debug this session because the tool failed")
-    app.newSession(in: otherProject.id)
-    form.consumeDraft(from: app)
-    #expect(form.message == "Debug this session because the tool failed")
-    #expect(app.draftMessage == nil)
-
-    // Navigating away before the prefill mounts must not leak it into an ordinary task.
-    app.newSession(in: pilotProject.id, message: "Stale prefill")
-    app.newSession(in: otherProject.id)
     #expect(app.draftMessage == nil)
 }

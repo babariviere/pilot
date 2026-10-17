@@ -932,7 +932,9 @@ They stay outside the transcript, have bounded private storage, and are never ex
 connectivity, recovery and parking transitions without waking parked workers.
 [Agent diagnostics](docs/agent-diagnostics.md) combine those records with request timings and daemon health in an
 on-demand, runtime-restricted specialist and host-qualified read-only API that never opens a target transcript or
-wakes a parked worker. Repair remains a separate user-authorized coding-agent handoff with bounded cited evidence.
+wakes a parked worker. Use **Diagnose this chat** from a chat's More menu, or **Ask about Pilot** from Help, to open
+that specialist. Repair remains a separate user-authorized coding-agent handoff with explicitly selected bounded
+cited evidence.
 The [diagnostics and telemetry contract](docs/telemetry-contract.md) defines the versioned privacy, identity,
 correlation, retention and resource budgets for local diagnostics and opt-in OpenTelemetry export. Remote export and
 product analytics are disabled by default, and no telemetry backend is selected by the repository.

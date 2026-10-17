@@ -296,6 +296,8 @@ interface SessionMeta extends OutcomeMeta {
 	control?: boolean;
 	/** Runtime-enforced specialist profile. Omitted for ordinary chats. */
 	role?: "diagnostics";
+	/** Exact host-local chat admitted for this specialist. */
+	diagnosticTargetId?: string;
 	executionEvidence?: import("@pilot/kernel").ExecutionEvidence;
 	/** Durable execution-ownership fence. Never cleared by reconnect, restart or a fresh input. */
 	delegationFenced?: boolean;
@@ -3609,8 +3611,15 @@ export class SessionManager {
 		}
 		if (meta.mode !== undefined && meta.mode !== "build" && meta.mode !== "ask")
 			throw new Error("Invalid session mode");
-		if (meta.role === "diagnostics" && (meta.mode !== "ask" || !meta.projectId))
+		if (
+			meta.role === "diagnostics" &&
+			(meta.mode !== "ask" ||
+				(meta.diagnosticTargetId !== undefined &&
+					(typeof meta.diagnosticTargetId !== "string" || !meta.diagnosticTargetId)))
+		)
 			throw new Error("Invalid diagnostics specialist metadata");
+		if (meta.role !== "diagnostics" && meta.diagnosticTargetId !== undefined)
+			throw new Error("Diagnostic target requires a diagnostics specialist");
 		if (meta.mode !== "ask") {
 			if (meta.ask !== undefined) throw new Error("Ask context requires Ask mode");
 			return;
@@ -3883,11 +3892,25 @@ export class SessionManager {
 			(request.mode === "build" ||
 				request.missionId !== undefined ||
 				request.workspace !== undefined ||
-				request.baseBranch !== undefined)
+				request.baseBranch !== undefined ||
+				request.cwd !== undefined)
 		)
-			throw new Error("Diagnostics specialists require a project-scoped read-only session");
+			throw new Error("Diagnostics specialists require a target-scoped read-only session");
+		if (request.role !== "diagnostics" && request.diagnosticTargetId !== undefined)
+			throw new Error("diagnosticTargetId requires role=diagnostics");
 		const mode = request.role === "diagnostics" ? "ask" : (request.mode ?? "build");
 		let projectId = request.projectId;
+		let diagnosticTarget: SessionMeta | undefined;
+		if (request.role === "diagnostics") {
+			if (typeof request.diagnosticTargetId !== "string" || !request.diagnosticTargetId.trim())
+				throw new Error("Diagnostics specialists require a target chat");
+			diagnosticTarget = this.require(request.diagnosticTargetId);
+			if (diagnosticTarget.role === "diagnostics")
+				throw new Conflict("A diagnostics specialist cannot target another specialist");
+			if (projectId !== undefined && projectId !== diagnosticTarget.projectId)
+				throw new Conflict("Diagnostics target is outside the requested project");
+			projectId = diagnosticTarget.projectId;
+		}
 		if (request.missionId !== undefined) {
 			if (typeof request.missionId !== "string" || !request.missionId.trim())
 				throw new Error("missionId must be a non-empty string");
@@ -3899,7 +3922,6 @@ export class SessionManager {
 			projectId = missionProject;
 		}
 		const project = projectId ? this.projects.require(projectId) : undefined;
-		if (request.role === "diagnostics" && !project) throw new Error("Diagnostics specialists require a project");
 		if (request.workspace !== undefined && (mode === "ask" || !project || request.cwd !== undefined))
 			throw new Error("workspace override requires a Build project without a cwd override");
 		const direct = (request.workspace ?? project?.workspace) === "direct";
@@ -3912,7 +3934,11 @@ export class SessionManager {
 				);
 			await validateBaseBranch(request.baseBranch, project.path);
 		}
-		const directory = request.cwd?.trim() || project?.path;
+		// A target clone may still be preparing and its private cwd may not exist. Specialists have no file tools, so
+		// use the stable project root for kernel configuration while keeping the exact target as the only capability.
+		const directory = diagnosticTarget
+			? (project?.path ?? diagnosticTarget.cwd)
+			: request.cwd?.trim() || project?.path;
 		if (!directory) throw new Error("projectId or cwd is required");
 		if (this.closing) throw new Error("pilotd is shutting down");
 		let cwd = await requireDirectory(directory);
@@ -3941,6 +3967,7 @@ export class SessionManager {
 		const meta: SessionMeta = {
 			id,
 			...(request.role ? { role: request.role } : {}),
+			...(diagnosticTarget ? { diagnosticTargetId: diagnosticTarget.id } : {}),
 			...(admission ? { createOperationId: admission.operationId } : {}),
 			...(admission && request.missionId ? { createMissionId: request.missionId } : {}),
 			mode,
@@ -4703,8 +4730,8 @@ export class SessionManager {
 		if (!request || typeof request.targetSessionId !== "string" || request.targetSessionId === specialistId)
 			throw new Conflict("A separate target chat is required");
 		const target = this.require(request.targetSessionId);
-		if (!specialist.projectId || target.projectId !== specialist.projectId)
-			throw new Conflict("Diagnostics handoff is limited to the specialist's project");
+		if (target.id !== specialist.diagnosticTargetId)
+			throw new Conflict("Diagnostics handoff is limited to the host-admitted target chat");
 		if (
 			!Array.isArray(request.evidenceRefs) ||
 			request.evidenceRefs.length < 1 ||
@@ -4731,7 +4758,7 @@ export class SessionManager {
 			schemaVersion: 1,
 			host: diagnostics.host,
 			targetSessionId: target.id,
-			projectId: specialist.projectId,
+			...(specialist.projectId ? { projectId: specialist.projectId } : {}),
 			evidence: evidence as DiagnosticsHandoff["evidence"],
 			likelyCause,
 			regressionTestGuidance,
@@ -5914,6 +5941,7 @@ export class SessionManager {
 				sessionId: id,
 				...(meta.control ? { control: true } : {}),
 				...(meta.role ? { role: meta.role } : {}),
+				...(meta.diagnosticTargetId ? { diagnosticTargetId: meta.diagnosticTargetId } : {}),
 				...(meta.projectId ? { projectId: meta.projectId } : {}),
 				storageDir: join(this.dir(id), "durable"),
 				subscriptionPolicy: join(this.dir(id), "subscription-policy.json"),
@@ -6212,8 +6240,8 @@ export class SessionManager {
 					if (meta.role !== "diagnostics")
 						throw new Error("Only an admitted diagnostics specialist may read agent diagnostics");
 					const target = this.require(packet.sessionId);
-					if (target.id !== meta.id && (!meta.projectId || target.projectId !== meta.projectId))
-						throw new Error("Diagnostics are limited to this chat or another chat in the same project");
+					if (target.id !== (meta.diagnosticTargetId ?? meta.id))
+						throw new Error("Diagnostics are limited to the host-admitted target chat");
 					return this.diagnostics(target.id, {
 						...(packet.limit === undefined ? {} : { limit: packet.limit }),
 					});
@@ -6648,6 +6676,7 @@ export class SessionManager {
 			id: meta.id,
 			...(meta.control ? { control: true } : {}),
 			...(meta.role ? { role: meta.role } : {}),
+			...(meta.diagnosticTargetId ? { diagnosticTargetId: meta.diagnosticTargetId } : {}),
 			...(meta.continuationOf ? { continuationOf: meta.continuationOf } : {}),
 			...(meta.continuedTo ? { continuedTo: meta.continuedTo } : {}),
 			mode: meta.mode === "ask" ? "ask" : "build",

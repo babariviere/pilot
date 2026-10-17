@@ -93,6 +93,23 @@ extension AppModel {
         try await adoptCreatedChat(operation, receipt: receipt, form: form, revision: revision)
     }
 
+    /// A deterministic, draft-free create. The outbox reuses the exact intent after an uncertain delivery.
+    func createHostedSession(_ request: SpawnRequest, on host: HostRef) async throws -> HostResourceRef {
+        guard let origin = localHost else { throw HostRoutingError.invalidReference }
+        _ = try hosts.endpoint(host)
+        let kind = request.role == .diagnostics ? "diagnostics-create" : "repair-create"
+        let (operation, delivery) = try await hosts.deliver(host: host, kind: kind, targetId: nil,
+                                                            payload: request, origin: origin)
+        guard case let .receipt(receipt) = delivery, receipt.state != .pending else {
+            throw ClientError("Delivery is still being checked. Reconnect, then choose the action again.")
+        }
+        try receipt.validate(operation)
+        try await acknowledgeAdopted(operation, receipt: receipt)
+        guard receipt.state == .accepted else { throw ClientError("The chat was not started.") }
+        return HostResourceRef(host: host, kind: .session,
+                               localId: receipt.result?["sessionId"]?.string ?? operation.targetId)
+    }
+
     func adoptCreatedChat(_ operation: DurableOperation, receipt: OperationReceipt, form: NewSessionForm, revision: UUID) async throws {
         try receipt.validate(operation)
         let host = operation.destination

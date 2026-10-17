@@ -127,9 +127,12 @@ enum KeyboardShortcuts {
 
 struct KeyboardShortcutsCommands: Commands {
     @Environment(\.openWindow) private var openWindow
+    let model: AppModel
 
     var body: some Commands {
         CommandGroup(replacing: .help) {
+            Button("Ask about Pilot") { model.askAboutPilot() }
+            Divider()
             Button("Keyboard Shortcuts") { openWindow(id: KeyboardShortcuts.windowID) }
                 .keyboardShortcut(KeyboardShortcuts.key, modifiers: KeyboardShortcuts.modifiers)
         }

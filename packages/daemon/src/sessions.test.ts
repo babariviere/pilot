@@ -1111,7 +1111,7 @@ test("diagnostics reads a parked session without opening its worker or transcrip
 	assert.equal(reads.mock.callCount(), 0);
 });
 
-test("only a diagnostics specialist can inspect a parked project peer, never another project", async (t) => {
+test("only a diagnostics specialist can inspect its parked admitted target", async (t) => {
 	const f = await fixture(t);
 	const sessions = await f.manager(
 		{},
@@ -1119,13 +1119,13 @@ test("only a diagnostics specialist can inspect a parked project peer, never ano
 			diagnosticHost: { hostId: "local", daemonId: "daemon", lineageId: "lineage" },
 		},
 	);
+	const peer = await sessions.spawn({ cwd: f.source, projectId: f.project.id, message: "Peer" });
 	const caller = await sessions.spawn({
-		cwd: f.source,
 		projectId: f.project.id,
 		message: "Caller",
 		role: "diagnostics",
+		diagnosticTargetId: peer.id,
 	});
-	const peer = await sessions.spawn({ cwd: f.source, projectId: f.project.id, message: "Peer" });
 	await Promise.all([sessions["starting"].get(caller.id), sessions["starting"].get(peer.id)]);
 	const callerWorker = sessions["workers"].get(caller.id)! as FakeWorker;
 	const peerWorker = sessions["workers"].get(peer.id)! as FakeWorker;
@@ -1156,24 +1156,40 @@ test("only a diagnostics specialist can inspect a parked project peer, never ano
 	assert.equal(allowed.result.sessionId, peer.id);
 	assert.equal(f.workers.length, 2, "reading the parked peer never constructs a worker");
 
-	const otherSource = join(f.root, "other-source");
-	await mkdir(otherSource);
-	const otherProject = await f.projects.create({ path: otherSource });
-	const other = await sessions.spawn({ cwd: otherSource, projectId: otherProject.id, message: "Other" });
+	const other = await sessions.spawn({ projectId: f.project.id, message: "Other same-project chat" });
 	await sessions["starting"].get(other.id);
 	sessions["onPacket"](sessions["metas"].get(caller.id)!, callerWorker, {
 		type: "diagnostics.call",
-		callId: "cross-project",
+		callId: "cross-target",
 		sessionId: other.id,
 	});
 	await until(() =>
-		callerWorker.sent.some((command) => command.type === "diagnostics.result" && command.callId === "cross-project"),
+		callerWorker.sent.some((command) => command.type === "diagnostics.result" && command.callId === "cross-target"),
 	);
 	const denied = callerWorker.sent.find(
 		(command): command is Extract<KernelCommand, { type: "diagnostics.result" }> =>
-			command.type === "diagnostics.result" && command.callId === "cross-project",
+			command.type === "diagnostics.result" && command.callId === "cross-target",
 	);
-	assert.match(denied?.error ?? "", /same project/);
+	assert.match(denied?.error ?? "", /host-admitted target/);
+});
+
+test("spawning target-scoped diagnostics does not wake or change a parked target", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager();
+	const target = await sessions.spawn({ projectId: f.project.id, message: "Target" });
+	await sessions["starting"].get(target.id);
+	const before = sessions.get(target.id)!;
+	sessions["workers"].delete(target.id);
+	const createdWorkers = f.workers.length;
+	const specialist = await sessions.spawn({
+		message: "Diagnose",
+		role: "diagnostics",
+		diagnosticTargetId: target.id,
+	});
+	await sessions["starting"].get(specialist.id);
+	assert.equal(sessions["workers"].has(target.id), false);
+	assert.equal(f.workers.length, createdWorkers + 1, "only the specialist kernel starts");
+	assert.deepEqual(sessions.get(target.id), before);
 });
 
 test("diagnostics role survives reopen and prepares only a bounded read-only handoff", async (t) => {
@@ -1183,23 +1199,31 @@ test("diagnostics role survives reopen and prepares only a bounded read-only han
 		{ diagnosticHost: { hostId: "local", daemonId: "daemon", lineageId: "lineage" } },
 	);
 	await assert.rejects(
-		sessions.spawn({ cwd: f.source, message: "Unscoped", role: "diagnostics" }),
-		/requires? a project/i,
+		sessions.spawn({ projectId: f.project.id, message: "Unscoped", role: "diagnostics" }),
+		/requires? a target chat/i,
 	);
+	const target = await sessions.spawn({ projectId: f.project.id, message: "Target" });
 	await assert.rejects(
-		sessions.spawn({ projectId: f.project.id, message: "Writable", mode: "build", role: "diagnostics" }),
+		sessions.spawn({
+			projectId: f.project.id,
+			message: "Writable",
+			mode: "build",
+			role: "diagnostics",
+			diagnosticTargetId: target.id,
+		}),
 		/read-only session/,
 	);
 	const specialist = await sessions.spawn({
 		projectId: f.project.id,
 		message: "Diagnose the target",
 		role: "diagnostics",
+		diagnosticTargetId: target.id,
 	});
-	const target = await sessions.spawn({ projectId: f.project.id, message: "Target" });
 	await Promise.all([sessions["starting"].get(specialist.id), sessions["starting"].get(target.id)]);
 	assert.equal(specialist.role, "diagnostics");
 	assert.equal(specialist.mode, "ask");
-	assert.equal(f.workers[0]?.spec.role, "diagnostics");
+	assert.equal(f.workers.find((worker) => worker.spec.sessionId === specialist.id)?.spec.role, "diagnostics");
+	assert.equal(specialist.diagnosticTargetId, target.id);
 	const evidence = {
 		ref: "diagnostic:v1:lifecycle:bounded",
 		source: "lifecycle",
@@ -1257,6 +1281,17 @@ test("diagnostics role survives reopen and prepares only a bounded read-only han
 	assert.deepEqual(handoff.evidence, [evidence]);
 	assert.equal(handoff.targetSessionId, target.id);
 	assert.equal(f.workers.length, workerCount, "handoff preparation never starts another worker");
+	const sibling = await sessions.spawn({ projectId: f.project.id, message: "Same-project sibling" });
+	await sessions["starting"].get(sibling.id);
+	await assert.rejects(
+		sessions.diagnosticsHandoff(specialist.id, {
+			targetSessionId: sibling.id,
+			evidenceRefs: [evidence.ref],
+			likelyCause: "Cause",
+			regressionTestGuidance: "Test",
+		}),
+		/host-admitted target/,
+	);
 	await assert.rejects(
 		sessions.diagnosticsHandoff(target.id, {
 			targetSessionId: specialist.id,
@@ -1270,6 +1305,7 @@ test("diagnostics role survives reopen and prepares only a bounded read-only han
 	const reopened = await f.manager();
 	assert.equal(reopened.get(specialist.id)?.role, "diagnostics");
 	assert.equal(reopened["metas"].get(specialist.id)?.role, "diagnostics");
+	assert.equal(reopened.get(specialist.id)?.diagnosticTargetId, target.id);
 });
 
 test("large restart recovery keeps the daemon responsive and bounds cold starts without losing input IDs", async (t) => {
