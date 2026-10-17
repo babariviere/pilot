@@ -1,7 +1,8 @@
 # Agent diagnostics
 
 Pilot exposes a bounded, read-only diagnostic snapshot to agents and native clients. It combines the current daemon
-projection with retained lifecycle transitions, request timings, event-loop stalls and delayed native OS evidence.
+projection with retained lifecycle transitions, request timings, [tool-call evidence](tool-call-diagnostics.md),
+event-loop stalls and delayed native OS evidence.
 Native crash/hang items are host-level observation windows, not events attributed to the selected chat. Reading it never starts,
 subscribes to or mutates the target session and never opens transcript storage.
 
@@ -15,7 +16,8 @@ The app admits one exact target chat when it creates the specialist. The tool ha
 rejects every other ID even when another chat shares the project. This lets project-less and control-chat
 diagnostics keep the same qualified-host boundary. Tool results contain a qualified host identity, collection time, source
 freshness and availability, queue/resource summaries, stable evidence references and explicit truncation/drop
-counts. The specialist cannot restart, retry, replay, wake or mutate the target.
+counts. In-flight tool evidence separates elapsed time, useful-progress age, liveness age and cancellation wait; it
+does not claim that silence proves a stall. The specialist cannot restart, retry, replay, wake or mutate the target.
 
 Native clients call:
 

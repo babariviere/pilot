@@ -16,6 +16,7 @@ import type { MissionContext, WorkspaceContext } from "./policy.ts";
 import type { KernelCommand, KernelPacket } from "./protocol.ts";
 import { KernelSession } from "./session.ts";
 import type { SlackStatusCall } from "./slack-status-tool.ts";
+import { prepareToolActivityClear, setToolActivityCollectionEnabled } from "./tool-activity.ts";
 
 const errorText = formatFailure;
 
@@ -148,6 +149,7 @@ export function runKernelWorker(): void {
 	let pendingSlackLinked: boolean | undefined;
 	const configureTelemetry = (configuration: import("./protocol.ts").KernelTelemetryConfiguration) => {
 		setPerformanceCollectionEnabled(configuration.localDiagnostics);
+		setToolActivityCollectionEnabled(configuration.localDiagnostics);
 		configureNodeTelemetry({
 			enabled: configuration.enabled,
 			serviceName: "pilot.kernel",
@@ -416,10 +418,11 @@ export function runKernelWorker(): void {
 		}
 		if (command.type === "diagnostics.configure") {
 			setPerformanceCollectionEnabled(command.enabled);
+			setToolActivityCollectionEnabled(command.enabled);
 			return;
 		}
 		if (command.type === "diagnostics.clear.prepare") {
-			void preparePerformanceClear()
+			void Promise.all([preparePerformanceClear(), prepareToolActivityClear()])
 				.then(() => send({ type: "accepted", requestId: command.requestId }))
 				.catch(() =>
 					send({ type: "error", requestId: command.requestId, message: "Could not prepare diagnostics" }),
@@ -463,6 +466,7 @@ export function runKernelWorker(): void {
 						}),
 					onCompacting: (compacting) => notify({ type: "compacting", compacting }),
 					onJobsChanged: (jobs) => notify({ type: "jobs.changed", jobs }),
+					onToolActivity: (activity) => notify({ type: "tool.activity", activity }),
 					onTodosChanged: (openCount) => notify({ type: "todos.changed", openCount }),
 					onUsageChanged: (usage) => notify({ type: "usage", usage }),
 					reportSubscriptionLimit: (limit) =>

@@ -16,6 +16,12 @@ export type {
 } from "./protocol.ts";
 export type { EarlierEntriesRead, PersistedSessionView, SubagentTranscriptRead } from "./snapshot.ts";
 export { subagentStorageSignature } from "./subagent-watch.ts";
+export type { ToolActivityRecord } from "./tool-activity.ts";
+export {
+	MAX_TOOL_ACTIVITY_FILE_BYTES,
+	parseToolActivityRecord,
+	TOOL_ACTIVITY_FILE,
+} from "./tool-activity.ts";
 
 /** Absolute path of the worker entry, for `child_process.fork`. Plain Node runs it: no loader is needed. */
 export const workerEntry = new URL("./worker-entry.ts", import.meta.url);

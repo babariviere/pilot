@@ -79,6 +79,7 @@ import { type PerformanceSink, type PreparationMark, RequestTiming } from "./per
 import type { AskContext } from "./policy.ts";
 import type { SubagentBridge } from "./subagents.ts";
 import { type ReportSubscriptionLimit, subscriptionRecovery } from "./subscription-limit.ts";
+import { ToolActivityTracker, toolActivityExtension } from "./tool-activity.ts";
 import { contextUsage, type KernelUsage, UsageTracker } from "./usage.ts";
 
 type LoaderOptions = ConstructorParameters<typeof DefaultResourceLoader>[0];
@@ -133,6 +134,8 @@ export interface NativeAdapterOptions {
 	onUsageChanged?: (usage: KernelUsage) => void;
 	/** Host-owned, local-only content-free timings. Omitted for standalone SDK callers. */
 	performance?: PerformanceSink;
+	/** Host-owned bounded tool lifecycle projection and local log. */
+	toolActivity?: { file: string; publish(snapshot: import("@pilot/protocol").ToolActivitySnapshot): void };
 	/** Host observers, also applied to nested native tool calls. Build sessions only. */
 	hostExtensions?: ExtensionFactory[];
 	/** Receives pi-extensions subagents host events. */
@@ -272,7 +275,9 @@ export class NativeAdapter {
 	#requestNumber = 0;
 	#pendingPreparation?: PreparationMark;
 	#nextInteraction?: { requestId: string; trace: TraceCarrier };
+	#currentInteraction?: { requestId: string; trace: TraceCarrier };
 	#toolFinished?: number;
+	readonly #toolActivity?: ToolActivityTracker;
 	readonly #preparations = new WeakMap<AbortSignal, PreparationMark>();
 	readonly #subscriptionGate: SubscriptionGate;
 	readonly #offlineGate: OfflineGate;
@@ -294,6 +299,7 @@ export class NativeAdapter {
 		reportSubscriptionLimit?: ReportSubscriptionLimit,
 		allowedTools: readonly string[] = ASK_TOOL_NAMES,
 		control = false,
+		toolActivity?: ToolActivityTracker,
 	) {
 		this.#subscriptionGate = new SubscriptionGate(subscriptionPolicy);
 		this.#reportSubscriptionLimit = reportSubscriptionLimit;
@@ -305,6 +311,7 @@ export class NativeAdapter {
 		this.#allowedTools = allowedTools;
 		this.#control = control;
 		this.#performance = timings;
+		this.#toolActivity = toolActivity;
 		// Bind every ordinary Models operation to its native runtime. In particular, getAuth and
 		// stream never snapshot credentials. No second credential store or auth-resolution layer.
 		this.models = new Proxy(session.modelRuntime, {
@@ -422,6 +429,14 @@ export class NativeAdapter {
 		const usage = new UsageTracker(options.onUsageChanged);
 		const infrastructure = new InfrastructureChildren();
 		const mcp = createTrackedMcpExtension(infrastructure);
+		let adapter: NativeAdapter | undefined;
+		const toolActivity = options.toolActivity
+			? new ToolActivityTracker({
+					...options.toolActivity,
+					parent: () => adapter?.toolTrace(),
+				})
+			: undefined;
+		const toolActivityFactories = toolActivity ? [toolActivityExtension(toolActivity)] : [];
 		const capture: ExtensionFactory = (pi) => {
 			registerHostTool = (tool) => {
 				hostTools.set(tool.name, tool);
@@ -471,8 +486,8 @@ export class NativeAdapter {
 								: "You are a source analysis assistant in Pilot Ask mode. The repository is read-only. Use codemode for all tool calls: read, find, grep and ls, web when available, and session-local artifacts with their sandboxed previews. Never execute arbitrary commands or change repository files. Repository implementation requires an explicit new Build session.",
 						appendSystemPrompt: [],
 						extensionFactories: diagnostics
-							? [capture]
-							: [createCodemodeExtension({ models: false, mode: "only" }), capture],
+							? [...toolActivityFactories, capture]
+							: [createCodemodeExtension({ models: false, mode: "only" }), ...toolActivityFactories, capture],
 					}
 				: {
 						...options.loaderOptions,
@@ -490,16 +505,25 @@ export class NativeAdapter {
 							{ name: "mcp", builtin: true, replaceable: true, factory: mcp },
 							...(options.loaderOptions?.extensionFactories ?? []),
 							...(options.hostExtensions ?? []),
+							...toolActivityFactories,
 							capture,
 						],
 					},
 			projectTrusted,
 			!readOnly && options.bundledExtensions !== false,
 		);
-		await loader.reload();
+		const failOpen = async (error: unknown): Promise<never> => {
+			await toolActivity?.close();
+			throw error;
+		};
+		try {
+			await loader.reload();
+		} catch (error) {
+			return failOpen(error);
+		}
 		const failures = loader.getExtensions().errors;
 		if (failures.length)
-			throw new Error(`Native extension loading failed: ${failures.map((e) => e.error).join("; ")}`);
+			return failOpen(new Error(`Native extension loading failed: ${failures.map((e) => e.error).join("; ")}`));
 		const sessionConfig = {
 			...options.sessionOptions,
 			...(readOnly
@@ -523,14 +547,19 @@ export class NativeAdapter {
 			resourceLoader: loader,
 			sessionManager: nativeSessionManager(cwd, options),
 		};
-		const session = readOnly
-			? await createAskSession({
-					...sessionConfig,
-					tools: allowedTools,
-					customTools: sessionConfig.customTools ?? [],
-				})
-			: (await createAgentSession(sessionConfig)).session;
-		const adapter = new NativeAdapter(
+		let session: AgentSession;
+		try {
+			session = readOnly
+				? await createAskSession({
+						...sessionConfig,
+						tools: allowedTools,
+						customTools: sessionConfig.customTools ?? [],
+					})
+				: (await createAgentSession(sessionConfig)).session;
+		} catch (error) {
+			return failOpen(error);
+		}
+		adapter = new NativeAdapter(
 			session,
 			usage,
 			readOnly,
@@ -541,6 +570,7 @@ export class NativeAdapter {
 			options.reportSubscriptionLimit,
 			allowedTools,
 			!!options.control,
+			toolActivity,
 		);
 		// The SDK loop never runs here. Its default getter would report idle throughout
 		// Harness model/tool work, causing extensions (notably jobs) to notify too early.
@@ -662,7 +692,10 @@ export class NativeAdapter {
 		this.#activity = activity;
 		let notifiedVersion = activity.settledVersion;
 		activity.start(async () => {
-			if (activity.idle) this.#toolFinished = undefined;
+			if (activity.idle) {
+				this.#toolFinished = undefined;
+				this.#currentInteraction = undefined;
+			}
 			// Coalescing or a slow handler must not announce an obsolete idle frame.
 			// The cursor tracks notifications, not a separately mutable busy state.
 			if (this.#closed || !this.session.isIdle || notifiedVersion === activity.settledVersion) return;
@@ -1126,11 +1159,17 @@ export class NativeAdapter {
 	beginInteraction(requestId: string, trace: TraceCarrier): boolean {
 		if (!this.#performance || this.working || this.#nextInteraction) return false;
 		this.#nextInteraction = { requestId, trace };
+		this.#currentInteraction = { requestId, trace };
 		return true;
+	}
+
+	private toolTrace(): TraceCarrier | undefined {
+		return this.#currentInteraction?.trace;
 	}
 
 	cancelInteraction(requestId: string): void {
 		if (this.#nextInteraction?.requestId === requestId) this.#nextInteraction = undefined;
+		if (this.#currentInteraction?.requestId === requestId) this.#currentInteraction = undefined;
 	}
 
 	waitForSubscription(signal?: AbortSignal): Promise<void> {
@@ -1379,6 +1418,7 @@ export class NativeAdapter {
 			this.session.dispose();
 			// Best-effort logging is independent from the model and durable history.
 			try {
+				await this.#toolActivity?.close();
 				await this.#performance?.close?.();
 			} catch {
 				// A failed diagnostics flush must not fail session shutdown.

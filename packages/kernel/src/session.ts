@@ -104,6 +104,7 @@ import {
 	todosUpdate,
 	validateTodoArgs,
 } from "./todos.ts";
+import { TOOL_ACTIVITY_FILE } from "./tool-activity.ts";
 import type { KernelUsage } from "./usage.ts";
 
 const context: Context = BACKGROUND_CONTEXT;
@@ -144,6 +145,7 @@ export interface KernelSessionHooks {
 	/** A compaction started or ended. Not a turn: it never changes the completion. */
 	onCompacting?(compacting: boolean): void;
 	onJobsChanged?(jobs: SessionJob[]): void;
+	onToolActivity?(activity: import("@pilot/protocol").ToolActivitySnapshot): void;
 	onTodosChanged?(openCount: number): void;
 	onUsageChanged?(usage: KernelUsage): void;
 	/** Called after an artifact revision has been committed to the session store. */
@@ -446,6 +448,10 @@ export class KernelSession {
 				sessionFile: join(spec.storageDir, "native.session"),
 				onUsageChanged: hooks.onUsageChanged,
 				performance: performanceLog,
+				toolActivity: {
+					file: join(spec.storageDir, TOOL_ACTIVITY_FILE),
+					publish: (activity) => hooks.onToolActivity?.(activity),
+				},
 				hostExtensions: [
 					jobs.native,
 					...(provenance ? [provenance.native] : []),

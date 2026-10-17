@@ -2,7 +2,9 @@ import Foundation
 
 /// Mirrors packages/protocol/src/diagnostics.ts. Diagnostic payloads contain only bounded operational fields.
 public enum DiagnosticFreshness: String, Codable, Sendable { case fresh, stale, unavailable }
-public enum DiagnosticSource: String, Codable, Sendable { case lifecycle, requestTiming = "request_timing", daemon, os }
+public enum DiagnosticSource: String, Codable, Sendable {
+    case lifecycle, requestTiming = "request_timing", tool, daemon, os
+}
 public enum DiagnosticPauseReason: String, Codable, Sendable { case sleep, update, quota, connectivity, user }
 public enum DiagnosticErrorCode: String, Codable, Sendable {
     case startupFailure = "startup_failure"
@@ -21,7 +23,7 @@ public struct DiagnosticSourceStatus: Codable, Sendable {
     public let truncated: Bool
 }
 
-/// Closed fields shared by lifecycle, request-timing, daemon-stall and native OS evidence.
+/// Closed fields shared by lifecycle, request-timing, tool, daemon-stall and native OS evidence.
 public struct DiagnosticEvidence: Codable, Sendable {
     public let ref: String
     public let source: DiagnosticSource
@@ -49,6 +51,13 @@ public struct DiagnosticEvidence: Codable, Sendable {
     public let releaseRelation: String?
     public let durationMs: Double?
     public let cpuMs: Double?
+    public let category: String?
+    public let nested: Bool?
+    public let progressAgeMs: Double?
+    public let livenessAgeMs: Double?
+    public let dispatchMs: Double?
+    public let executionMs: Double?
+    public let cancellationWaitMs: Double?
 }
 
 /// Content-free metadata delivered by macOS MetricKit. No report body or call stack is represented.

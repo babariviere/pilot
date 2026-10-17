@@ -59,6 +59,7 @@ import type {
 	StopResponse,
 	SubagentTranscript,
 	SubscriptionPause,
+	ToolActivitySnapshot,
 	UpdatePreparation,
 } from "@pilot/protocol";
 import { nodeTelemetry, type TraceCarrier } from "@pilot/telemetry";
@@ -236,6 +237,7 @@ export interface SessionWorker {
 	/** Stop one running job for the user. The kernel tells the agent, whose follow-up turn ends the wait. */
 	stopJob?(jobId: string): Promise<void>;
 	runningJobs?: SessionJob[];
+	toolActivity?: ToolActivitySnapshot;
 	/** Committed chat todo count, supplied on ready and after every mutation. */
 	openTodoCount?: number;
 	/** Live-worker work continues between the last job ending and its result turn completing. */
@@ -574,6 +576,7 @@ export class Worker implements SessionWorker {
 	/** Ephemeral context estimate and physical provider, reported by the live kernel. */
 	usage?: KernelUsage;
 	runningJobs?: SessionJob[];
+	toolActivity?: ToolActivitySnapshot;
 	openTodoCount?: number;
 	awaitingJobFollowUp?: boolean;
 	compacting = false;
@@ -652,6 +655,8 @@ export class Worker implements SessionWorker {
 				markReady();
 			} else if (packet.type === "todos.changed") {
 				this.openTodoCount = packet.openCount;
+			} else if (packet.type === "tool.activity") {
+				this.toolActivity = packet.activity;
 			} else if (packet.type === "compacting") {
 				this.compacting = packet.compacting;
 			} else if (packet.type === "usage") {
@@ -1032,7 +1037,14 @@ export class SessionManager {
 			await this.nativeDiagnostics.clear();
 			await Promise.all(
 				[...this.metas.keys()].flatMap((id) =>
-					["lifecycle.jsonl", "lifecycle.jsonl.1", "performance.jsonl", "performance.jsonl.1"].flatMap((file) => [
+					[
+						"lifecycle.jsonl",
+						"lifecycle.jsonl.1",
+						"performance.jsonl",
+						"performance.jsonl.1",
+						"tool-activity.jsonl",
+						"tool-activity.jsonl.1",
+					].flatMap((file) => [
 						rm(join(this.dir(id), file), { force: true }),
 						rm(join(this.dir(id), "durable", file), { force: true }),
 					]),
@@ -4726,6 +4738,7 @@ export class SessionManager {
 					: { observedAt: new Date(this.internetObservedAt).toISOString() }),
 			},
 			performance: daemonPerformance(),
+			toolActivity: worker?.toolActivity,
 			...(options.limit === undefined ? {} : { limit: options.limit }),
 		});
 	}
@@ -6513,6 +6526,10 @@ export class SessionManager {
 				if (applyActivity(meta, Boolean(meta.working), undefined, true)) void this.save(meta);
 			}
 			this.emit(meta, worker);
+			return;
+		}
+		if (packet.type === "tool.activity") {
+			if (this.workers.get(meta.id) === worker) worker.toolActivity = packet.activity;
 			return;
 		}
 		if (packet.type === "subagents") {

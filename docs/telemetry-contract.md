@@ -149,6 +149,12 @@ freshness (`fresh`, `stale`, `unavailable`), source availability, current state,
 counts and truncation metadata. A source is stale after 30 seconds for live counters or after its owner disconnects.
 Historical lifecycle evidence remains historical and is labeled with its observation window, not marked current.
 
+Tool evidence is a separate closed local source. In-flight `tool.in_flight` items contain an opaque ref, closed tool
+category, nested flag, `dispatching`/`running`/`cancelling` state, elapsed duration, useful-progress age, liveness age
+and optional cancellation-wait age. Completed `tool.call` items add a reviewed outcome and observed
+dispatch/execution/cancellation-wait durations. Raw call IDs, tool/server names, arguments, results, commands and
+errors are never schema fields. A liveness update is not useful progress, and neither age proves a deadlock.
+
 Agent-facing access is limited to an explicitly admitted diagnostics session role. That runtime profile exposes only
 the bounded diagnostic read tool, is bound to one exact chat on its qualified host, and has no shell, source,
 transcript, write, restart, retry, replay or child-agent authority. A user-authorized repair handoff selects at most
@@ -165,13 +171,17 @@ Allowed span names are closed and low-cardinality:
   `publication` and `first_visible`.
 - `pilot.chat.open`, with child phases `api`, `history_read`, `reduction`, `publication` and `first_transcript`.
 - `pilot.daemon.request`, `pilot.kernel.request` and `pilot.event_loop.stall` for existing diagnostic seams.
+- `pilot.tool.call` and `pilot.tool.cancel_wait` for completed tool execution and observed cancellation wait.
 - `pilot.feature` for a cataloged analytics event.
 
 Allowed span attributes are booleans, bounded numbers or enums: `pilot.operation`, `pilot.phase`, `pilot.outcome`,
 `pilot.reason`, `pilot.cold`, `pilot.recovered`, `pilot.retry_count` (0...8), `pilot.queue_depth` (0...512),
 `pilot.history_bucket` (`0`, `1-100`, `101-1000`, `1001+`), `pilot.progress_kind` (`thinking`, `text`, `tool`,
 `none`), `pilot.frame_observation` (`available`, `occluded`, `asleep`, `unsupported`) and cataloged
-`pilot.feature.*` fields. HTTP route is a normalized allowlisted route template, never a URL.
+`pilot.feature.*` fields. Tool spans additionally allow `pilot.tool.category` (`shell`, `filesystem`, `network`,
+`background`, `codemode`, `mcp`, `orchestration`, `other`), `pilot.tool.nested` and bounded observed
+`pilot.tool.dispatch_ms` / `pilot.tool.execution_ms`. HTTP route is a normalized allowlisted route template, never
+a URL.
 
 The initial `pilot.feature.*` allowlist is [feature-adoption catalog v1](feature-adoption.md). Its three feature
 names, four stages and closed availability/outcome reasons are part of contract v1; producers cannot add another
@@ -215,6 +225,7 @@ rejected value.
 | Local lifecycle event | 1 KiB encoded | Drop event |
 | Per-session lifecycle writer queue | 64 events plus active write | Drop newest, report `droppedBefore` later |
 | Per-session lifecycle storage | 2 x 256 KiB, 256 events visible, 7-day read window | Rotate/compact |
+| Per-session tool evidence | 32 active calls, 64 queued writes, 2 x 256 KiB, 64 completed items visible | Drop newest/rotate and report loss |
 | Native crash/hang archive | 32 items, 32 KiB, 7-day read window | Drop oldest, report count |
 | Diagnostic API | 128 evidence items, 64 KiB encoded | Truncate oldest detail, report counts/window |
 | Node spans | 512 queued per process, batches of 128, 5 s schedule, 3 s export timeout | Drop newest; never await from product path |
