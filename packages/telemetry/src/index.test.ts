@@ -74,6 +74,24 @@ test("exports only reviewed span and resource fields", async () => {
 	await telemetry.shutdown();
 });
 
+test("end preserves an explicitly recorded outcome", async () => {
+	const exporter = new MemoryExporter();
+	const observed: TelemetryInFlightEvent[] = [];
+	const telemetry = new NodeTelemetry({
+		...options(exporter),
+		observeInFlight: (event) => observed.push(event),
+	});
+	telemetry.recordSpan("pilot.kernel.request", 5, {
+		"pilot.operation": "kernel.request",
+		"pilot.outcome": "failure",
+	});
+	await telemetry.forceFlush();
+	assert.equal(exporter.spans[0]?.attributes["pilot.outcome"], "failure");
+	assert.equal(observed.at(-1)?.kind, "finished");
+	assert.equal(observed.at(-1)?.outcome, "failed");
+	await telemetry.shutdown();
+});
+
 test("rejects arbitrary fields and malformed trace carriers before recording", async () => {
 	const exporter = new MemoryExporter();
 	const telemetry = new NodeTelemetry(options(exporter));

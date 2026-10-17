@@ -129,7 +129,13 @@ export interface TelemetrySpan {
 	finish(outcome: TelemetryLifecycleOutcome, at?: Date): void;
 }
 
-export type TelemetryLifecycleOutcome = "completed" | "failed" | "timeout" | "cancelled" | "interrupted";
+export type TelemetryLifecycleOutcome =
+	| "completed"
+	| "failed"
+	| "timeout"
+	| "cancelled"
+	| "interrupted"
+	| "unavailable";
 export type TelemetryInFlightEvent =
 	| {
 			kind: "started" | "progress" | "heartbeat";
@@ -268,18 +274,21 @@ class WrappedSpan implements TelemetrySpan {
 	private readonly service: TelemetryServiceName;
 	private readonly name: TelemetrySpanName;
 	private readonly observe?: (event: TelemetryInFlightEvent) => void;
+	private readonly defaultOutcome: TelemetryLifecycleOutcome;
 	constructor(
 		span: Span | undefined,
 		spanContext: Context,
 		service: TelemetryServiceName,
 		name: TelemetrySpanName,
 		observe?: (event: TelemetryInFlightEvent) => void,
+		defaultOutcome: TelemetryLifecycleOutcome = "completed",
 	) {
 		this.span = span;
 		this.spanContext = spanContext;
 		this.service = service;
 		this.name = name;
 		this.observe = observe;
+		this.defaultOutcome = defaultOutcome;
 		const context = trace.getSpanContext(spanContext);
 		this.traceId = context?.traceId ?? "";
 		this.spanId = context?.spanId ?? "";
@@ -297,7 +306,7 @@ class WrappedSpan implements TelemetrySpan {
 		if (!this.ended) this.emit("heartbeat");
 	}
 	end(at?: Date): void {
-		this.finish("completed", at);
+		this.finish(this.defaultOutcome, at);
 	}
 	finish(outcome: TelemetryLifecycleOutcome, at?: Date): void {
 		if (this.ended) return;
@@ -310,7 +319,9 @@ class WrappedSpan implements TelemetrySpan {
 					? "cancelled"
 					: outcome === "timeout"
 						? "timeout"
-						: "failure",
+						: outcome === "unavailable"
+							? "unavailable"
+							: "failure",
 		);
 		if (outcome === "failed" || outcome === "interrupted" || outcome === "timeout")
 			this.span?.setStatus({ code: SpanStatusCode.ERROR });
@@ -551,7 +562,15 @@ export class NodeTelemetry {
 					isRemote: false,
 				});
 		this.stats.started++;
-		return new WrappedSpan(span, spanContext, this.service, name, this.observe);
+		const defaultOutcome =
+			safe["pilot.outcome"] === "failure"
+				? "failed"
+				: safe["pilot.outcome"] === "cancelled" ||
+						safe["pilot.outcome"] === "timeout" ||
+						safe["pilot.outcome"] === "unavailable"
+					? safe["pilot.outcome"]
+					: "completed";
+		return new WrappedSpan(span, spanContext, this.service, name, this.observe, defaultOutcome);
 	}
 
 	recordSpan(name: TelemetrySpanName, durationMs: number, attributes: TelemetryAttributes = {}): void {
