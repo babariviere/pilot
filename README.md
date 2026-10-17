@@ -75,6 +75,9 @@ has separate storage and transport contracts; it does not change chat-result rea
   sheet), E edits its title (Return saves, Escape cancels), ⌥↑/⌥↓ reorders it within its phase, and ⌘K lists its
   status, phase, model, dependency and link actions. The highlighted row shows its status and actions menus
   without hovering. Chats and Artifacts tabs are keyboard lists too, and ⌘K reaches every mission tab.
+  Settings opens with its sidebar focused: arrows or J/K move between pages and projects. ⌘K also opens any
+  Settings page by name ("Energy settings", "Project settings"). Controls inside a page follow macOS: Tab reaches
+  text fields, and toggles, pickers and buttons too when **Keyboard navigation** is on in System Settings.
 - **Let the display rest while agents work.** Keep the Mac awake without keeping the display on.
   Optional closed-lid work requires power and Wi-Fi; without both, agents pause and resume on the next
   full wake with connectivity. Screen locking is left to macOS. See [agent-aware sleep](docs/agent-sleep.md) for
