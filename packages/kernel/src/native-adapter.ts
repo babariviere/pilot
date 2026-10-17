@@ -932,7 +932,7 @@ export class NativeAdapter {
 		}
 		const tools: ToolRegistration[] = this.session.agent.state.tools
 			// Codemode-only hides direct tools, then budgets its listing cheapest-first. Memory
-			// must stay declared even when that listing drops the longer note schema (or all tools).
+			// must stay declared even when that listing drops its schema (or all tools).
 			.filter((tool) => !hidden.has(tool.name) || MEMORY_TOOL_NAMES.includes(tool.name))
 			.filter((tool) => !this.#ask || this.#allowedTools.includes(tool.name))
 			.map((tool) => ({
