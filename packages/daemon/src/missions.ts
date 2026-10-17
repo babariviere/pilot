@@ -48,7 +48,7 @@ import {
 } from "./mission-linear-state.ts";
 import { MissionReplica } from "./mission-replica.ts";
 import { reasonLine } from "./needs-you-reason.ts";
-import { NOTICE_HOURLY_CAP, NOTICE_WINDOW_MS, noticeDeadline } from "./notice-dispatcher.ts";
+import { NOTICE_HOURLY_CAP, NOTICE_WINDOW_MS, noticeDeadline, noticeInvolvesSession } from "./notice-dispatcher.ts";
 import type { PullRequestBinding } from "./sessions.ts";
 
 /** Who changed mission state. Omitted sessionId means the user (or pilotd itself). */
@@ -1358,28 +1358,45 @@ export class MissionStore {
 				actor.sessionId,
 				missionId,
 			);
-		if (extra.wake && (!actor.sessionId || actor.sessionId !== this.require(missionId).coordinatorSessionId)) {
-			this.run(
-				"INSERT INTO pending_notices (event_id, mission_id, at, text) VALUES (?, ?, ?, ?)",
-				eventId,
+		if (extra.wake) {
+			const coordinator = this.one(
+				"SELECT coordinator_session_id FROM missions WHERE id = ?",
 				missionId,
-				at,
-				extra.noticeText ?? eventText,
-			);
+			)?.coordinator_session_id;
+			const recipient = typeof coordinator === "string" ? coordinator : undefined;
+			const taskSession = extra.taskId
+				? this.one("SELECT session_id FROM tasks WHERE id = ?", extra.taskId)?.session_id
+				: undefined;
+			const taskSubject = typeof taskSession === "string" ? taskSession : undefined;
 			const summaries = extra.noticeSummaries ?? [
 				{
 					key: extra.taskId ? `task:${extra.taskId}` : `note:${actor.sessionId ?? "user"}`,
 					text: extra.noticeText ?? eventText,
 				},
 			];
-			for (const summary of summaries)
+			const remaining = summaries.filter(
+				(summary) => !noticeInvolvesSession(recipient, ...this.noticeSummarySubjects(missionId, summary.key)),
+			);
+			if (
+				!noticeInvolvesSession(recipient, actor.sessionId, actor.proposedBySessionId, taskSubject) &&
+				remaining.length
+			) {
 				this.run(
-					"INSERT INTO pending_notice_summaries (event_id, group_key, text, state) VALUES (?, ?, ?, ?)",
+					"INSERT INTO pending_notices (event_id, mission_id, at, text) VALUES (?, ?, ?, ?)",
 					eventId,
-					summary.key,
-					summary.text,
-					summary.state ?? null,
+					missionId,
+					at,
+					extra.noticeText ?? eventText,
 				);
+				for (const summary of remaining)
+					this.run(
+						"INSERT INTO pending_notice_summaries (event_id, group_key, text, state) VALUES (?, ?, ?, ?)",
+						eventId,
+						summary.key,
+						summary.text,
+						summary.state ?? null,
+					);
+			}
 		}
 		return {
 			id: eventId,
@@ -1390,6 +1407,36 @@ export class MissionStore {
 			...(extra.health ? { health: extra.health } : {}),
 			at,
 		};
+	}
+
+	/** Resolve chat subjects encoded by durable notice grouping keys. */
+	private noticeSummarySubjects(missionId: string, key: string): string[] {
+		const separator = key.indexOf(":");
+		if (separator < 0) return [];
+		const kind = key.slice(0, separator);
+		const subject = key.slice(separator + 1);
+		if (kind === "chat") return [subject];
+		if (kind === "message") return [subject.split(":", 1)[0]!];
+		if (kind === "task") {
+			const row = this.one("SELECT session_id FROM tasks WHERE mission_id = ? AND id = ?", missionId, subject);
+			return typeof row?.session_id === "string" ? [row.session_id] : [];
+		}
+		if (kind === "pr")
+			return this.all(
+				`SELECT DISTINCT t.session_id FROM resources r JOIN tasks t ON t.id = r.task_id
+				WHERE r.mission_id = ? AND r.url = ? COLLATE NOCASE AND t.session_id IS NOT NULL`,
+				missionId,
+				subject,
+			).flatMap((row) => (typeof row.session_id === "string" ? [row.session_id] : []));
+		if (kind === "proposal") {
+			const row = this.one(
+				"SELECT author_session_id FROM decision_proposals WHERE id = ? AND mission_id = ?",
+				subject,
+				missionId,
+			);
+			return typeof row?.author_session_id === "string" ? [row.author_session_id] : [];
+		}
+		return [];
 	}
 
 	// Missions

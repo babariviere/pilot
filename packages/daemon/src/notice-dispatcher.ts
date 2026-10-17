@@ -4,6 +4,11 @@ export const NOTICE_MAX_DELAY_MS = 30 * 60_000;
 export const NOTICE_WINDOW_MS = 3_600_000;
 export const NOTICE_HOURLY_CAP = 20;
 
+/** Shared notice policy: never send an event when its actor or subject is the recipient. */
+export function noticeInvolvesSession(recipient: string | undefined, ...participants: (string | undefined)[]): boolean {
+	return !!recipient && participants.some((sessionId) => sessionId === recipient);
+}
+
 export function noticeDeadline(
 	input: {
 		firstAt: number;

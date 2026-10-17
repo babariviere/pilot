@@ -75,6 +75,24 @@ test("indexed matching, outcome filter, batching, once consumption and self supp
 			]),
 			0,
 		);
+		assert.equal(
+			await s.observe([
+				{
+					...event("4"),
+					source: "control",
+					targets: [{ kind: "project", id: "p" }],
+				},
+			]),
+			0,
+			"a chat event whose subject is the recipient is suppressed even without a chat target",
+		);
+		assert.equal(
+			await s.observe([{ ...event("5"), source: "another-chat", targets: [{ kind: "project", id: "p" }] }]),
+			1,
+		);
+		await s.flush(at + 122_000);
+		assert.equal(sent.length, 2);
+		assert.match(sent[1]!.items[0]!.text, /Untrusted chat title/);
 	} finally {
 		await s.close();
 	}
