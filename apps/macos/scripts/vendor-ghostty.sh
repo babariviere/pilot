@@ -22,3 +22,4 @@ fi
 
 # Apply local patches even when the pinned checkout is already cached.
 python3 "$here/scripts/patch-ghostty-resources.py" "$target"
+python3 "$here/scripts/patch-ghostty-layout.py" "$target"
