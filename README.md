@@ -945,6 +945,8 @@ product analytics are disabled by default, and no telemetry backend is selected 
 local in-flight hooks that keep useful progress separate from liveness heartbeats.
 [Swift telemetry](docs/swift-telemetry.md) documents the native trace module, strict propagation, bounded background
 export, sleep handling and packaged dependency notices.
+[Feature-adoption catalog](docs/feature-adoption.md) defines the closed, content-free eligibility, exposure, attempt
+and outcome events and the limits on funnel and repeat-use interpretation.
 [Telemetry controls](docs/telemetry-settings.md) documents independent local, operational and analytics consent,
 per-host OTLP endpoints, revocation and private pseudonymous identity.
 [Message send tracing](docs/message-send-tracing.md) explains the correlated app/daemon/kernel phases, thinking versus

@@ -173,6 +173,10 @@ Allowed span attributes are booleans, bounded numbers or enums: `pilot.operation
 `none`), `pilot.frame_observation` (`available`, `occluded`, `asleep`, `unsupported`) and cataloged
 `pilot.feature.*` fields. HTTP route is a normalized allowlisted route template, never a URL.
 
+The initial `pilot.feature.*` allowlist is [feature-adoption catalog v1](feature-adoption.md). Its three feature
+names, four stages and closed availability/outcome reasons are part of contract v1; producers cannot add another
+feature or field without the change process below.
+
 Exceptions are not recorded through automatic SDK exception helpers. Failures use reviewed outcome/reason enums.
 Stack traces, exception messages and raw HTTP status text are forbidden.
 

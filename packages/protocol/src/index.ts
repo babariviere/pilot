@@ -1570,6 +1570,7 @@ export type {
 	WatchInput,
 	WatchTarget,
 } from "./control.ts";
+export * from "./feature-events.ts";
 export type { DaemonCapabilities, DaemonHello } from "./hello.ts";
 export { DAEMON_PROTOCOL_VERSION, MINIMUM_CLIENT_PROTOCOL_VERSION } from "./hello.ts";
 export type * from "./inbox.ts";
