@@ -666,6 +666,7 @@ test("chat sockets stream one session each, isolate overload and resume only the
 	const sessions = new SessionManager("/unused", projects);
 	const snapshot: AgentEvent = {
 		type: "snapshot",
+		historyCount: 0,
 		entries: [],
 		tools: [],
 		nestedTools: [],
