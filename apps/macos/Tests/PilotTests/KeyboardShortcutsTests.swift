@@ -13,6 +13,8 @@ import Testing
     let keys = Dictionary(uniqueKeysWithValues: entries.map { ($0.title, $0.keys) })
     #expect(keys["Show keyboard shortcuts"] == KeyboardShortcuts.hint)
     #expect(keys["Open command palette"] == "⌘K")
+    #expect(keys["Back"] == "⌘←")
+    #expect(keys["Forward"] == "⌘→")
     #expect(keys["Queue a follow-up"] == "⌥↩")
     #expect(keys["Toggle terminal"] == "⌘J")
     #expect(KeyboardShortcuts.key.character == "?")

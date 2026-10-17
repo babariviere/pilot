@@ -29,6 +29,13 @@ struct PilotApp: App {
                     .keyboardShortcut("o", modifiers: [.command, .shift])
             }
             CommandGroup(after: .toolbar) {
+                Button("Back") { model.goBack() }
+                    .keyboardShortcut(.leftArrow, modifiers: .command)
+                    .disabled(!model.navigationHistory.canGoBack)
+                Button("Forward") { model.goForward() }
+                    .keyboardShortcut(.rightArrow, modifiers: .command)
+                    .disabled(!model.navigationHistory.canGoForward)
+                Divider()
                 Button("Toggle Changes") { model.toggleInspector(.changes) }
                     .keyboardShortcut("d", modifiers: [.command, .shift])
                     .disabled(model.selectedSessionId == nil || model.selectedSession?.isAsk == true)
