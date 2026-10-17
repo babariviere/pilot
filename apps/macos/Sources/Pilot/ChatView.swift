@@ -73,22 +73,15 @@ final class SessionFeed: ObservableObject {
     }
 
     func start() {
-        if let context = hostedContext {
-            guard releaseHosted == nil else { return }
-            loading = presentation.rows.isEmpty && context.available
-            hasSnapshot = false
-            releaseHosted = try? context.hosts.subscribe(context.ref(.session, sessionId)) { [weak self] events in
-                self?.enqueue(events)
-            }
-            return
-        }
-        guard let client, token == nil else { return }
+        guard !isSubscribed, hostedContext != nil || client != nil else { return }
+        // Every new subscription gets a new reducer and revision namespace, including qualified
+        // Local/devbox feeds. Otherwise a cached revision 1 can hide the new idle snapshot's revision 1.
         generation = UUID()
         clearStaged()
         processor = TranscriptProcessor()
         processorRevision = 0
         // Cached rows can paint immediately, but stale queue/status must not drive actions or review.
-        loading = presentation.rows.isEmpty
+        loading = presentation.rows.isEmpty && (hostedContext?.available ?? true)
         hasSnapshot = false
         var cached = presentation
         cached.queuedMessages = []
@@ -100,8 +93,14 @@ final class SessionFeed: ObservableObject {
         cached.compacting = false
         cached.error = nil
         presentation = cached
-        token = client.subscribe(sessionId) { [weak self] events in
-            self?.enqueue(events)
+        if let context = hostedContext {
+            releaseHosted = try? context.hosts.subscribe(context.ref(.session, sessionId)) { [weak self] events in
+                self?.enqueue(events)
+            }
+        } else if let client {
+            token = client.subscribe(sessionId) { [weak self] events in
+                self?.enqueue(events)
+            }
         }
     }
 
