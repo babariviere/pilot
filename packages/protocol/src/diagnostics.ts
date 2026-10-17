@@ -3,7 +3,7 @@ import type { OperationHost } from "./operations.ts";
 export const DIAGNOSTIC_SCHEMA_VERSION = 1 as const;
 
 export type DiagnosticFreshness = "fresh" | "stale" | "unavailable";
-export type DiagnosticSource = "lifecycle" | "request_timing" | "daemon";
+export type DiagnosticSource = "lifecycle" | "request_timing" | "daemon" | "os";
 export type DiagnosticPauseReason = "sleep" | "update" | "quota" | "connectivity" | "user";
 export type DiagnosticErrorCode =
 	| "startup_failure"
@@ -65,10 +65,31 @@ export interface StallDiagnosticEvidence {
 	cpuMs?: number;
 }
 
+/** Content-free metadata delivered by macOS MetricKit. Report bodies and call stacks never enter Pilot. */
+export interface NativeDiagnosticEvidence {
+	ref: string;
+	source: "os";
+	at: string;
+	kind: "native.crash" | "native.hang";
+	reason: "process_exit" | "unresponsive";
+	/** MetricKit payload observation window ending at `at`; this is not an exact incident timestamp. */
+	windowMs: number;
+	releaseRelation: "current" | "other_or_unknown";
+	durationMs?: number;
+}
+
 export type DiagnosticEvidence =
 	| LifecycleDiagnosticEvidence
 	| RequestTimingDiagnosticEvidence
-	| StallDiagnosticEvidence;
+	| StallDiagnosticEvidence
+	| NativeDiagnosticEvidence;
+
+/** PUT /api/diagnostics/native. Full bounded replacement from the local native app. */
+export interface NativeDiagnosticsBatch {
+	schemaVersion: typeof DIAGNOSTIC_SCHEMA_VERSION;
+	evidence: NativeDiagnosticEvidence[];
+	dropped: number;
+}
 
 export interface SessionDiagnosticCurrent {
 	state: "parked" | "starting" | "idle" | "working" | "failed";

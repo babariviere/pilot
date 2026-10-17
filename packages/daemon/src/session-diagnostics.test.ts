@@ -97,6 +97,26 @@ test("diagnostics combine strict local sources without exposing retained content
 			prompt: "conversation secret",
 		})}\nnot-json\n`,
 	);
+	const native = join(root, "native-diagnostics.json");
+	await writeFile(
+		native,
+		JSON.stringify({
+			schemaVersion: 1,
+			evidence: [
+				{
+					ref: "diagnostic:v1:native:0123456789abcdef01234567",
+					source: "os",
+					at: "2026-01-02T00:00:08.000Z",
+					kind: "native.hang",
+					reason: "unresponsive",
+					windowMs: 86_400_000,
+					releaseRelation: "current",
+					durationMs: 2_000,
+				},
+			],
+			dropped: 0,
+		}),
+	);
 	const result = await readSessionDiagnostics({
 		host,
 		sessionId: "session",
@@ -104,12 +124,13 @@ test("diagnostics combine strict local sources without exposing retained content
 		current,
 		connectivity: { state: "online", observedAt: "2026-01-02T00:00:09.000Z" },
 		performance: performance(now - 3_000),
+		nativeDiagnosticsPath: native,
 		now,
 	});
 	assert.equal(result.freshness, "fresh");
 	assert.deepEqual(
 		result.evidence.map((item) => item.source),
-		["daemon", "request_timing", "lifecycle"],
+		["os", "daemon", "request_timing", "lifecycle"],
 	);
 	assert.equal(result.sources.find((source) => source.source === "lifecycle")?.invalid, 1);
 	assert.equal(result.sources.find((source) => source.source === "request_timing")?.invalid, 1);

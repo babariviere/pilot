@@ -434,6 +434,10 @@ final class AppModel: ObservableObject {
     func start() {
         guard !started else { return }
         started = true
+        NativeDiagnostics.shared.onChange { [weak self] in
+            Task { @MainActor in await self?.synchronizeNativeDiagnostics() }
+        }
+        NativeDiagnostics.shared.start()
         // Snapshot/test modes never start the live app, so they cannot overwrite real drafts.
         if draftStore == nil {
             draftStore = DraftStore()
@@ -531,6 +535,13 @@ final class AppModel: ObservableObject {
         guard client.hostIdentity?.hostId == "local",
               let settings = try? await client.telemetrySettings() else { return }
         NativeTelemetrySettings.apply(settings)
+        if settings.localDiagnostics { await synchronizeNativeDiagnostics() }
+    }
+
+    private func synchronizeNativeDiagnostics() async {
+        guard client.connected, client.hostIdentity?.hostId == "local", NativeDiagnostics.shared.isEnabled,
+              let batch = try? await NativeDiagnostics.shared.snapshot() else { return }
+        try? await client.replaceNativeDiagnostics(batch)
     }
 
     /// A folder is a remembered chat destination, not a registered project.

@@ -6,6 +6,7 @@ import SwiftUI
 @MainActor
 enum NativeTelemetrySettings {
     static func apply(_ settings: TelemetrySettings) {
+        NativeDiagnostics.shared.setEnabled(settings.localDiagnostics)
         guard settings.hostKind == .local, settings.remoteOperational,
               let endpoint = settings.endpoint.flatMap(URL.init(string:)) else {
             try? PilotTelemetry.shared.configure(.disabled)
@@ -56,7 +57,7 @@ struct TelemetrySettingsSection: View {
                     SettingsRow { HStack(spacing: 8) { ProgressView().controlSize(.small); SettingsNote("Loading this host’s settings…") } }
                 }
             } else {
-                SettingsToggle("Local operational diagnostics", detail: "Keep bounded lifecycle and timing evidence on this host for Diagnose this. On by default.", isOn: $localDiagnostics)
+                SettingsToggle("Local operational diagnostics", detail: "Keep bounded lifecycle, timing and native crash/hang evidence on this host for Diagnose this. On by default.", isOn: $localDiagnostics)
                 SettingsToggle("Remote operational reporting", detail: "Send allowlisted traces to the OTLP collector below. Off by default.", isOn: $remoteOperational)
                 SettingsToggle("Product analytics", detail: "Allow only cataloged feature events. This remains separate and requires remote reporting to have any effect.", isOn: $productAnalytics)
                 SettingsRow("OTLP/HTTP endpoint", detail: "HTTPS, or literal loopback HTTP. Credentials, query parameters and custom headers are not accepted.") {
@@ -83,7 +84,7 @@ struct TelemetrySettingsSection: View {
             Button("Clear diagnostics", role: .destructive) { Task { await clear() } }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This removes retained lifecycle and timing evidence without deleting chats or changing remote reporting.")
+            Text("This removes retained lifecycle, timing and native crash/hang evidence without deleting chats or changing remote reporting.")
         }
     }
 
@@ -128,7 +129,14 @@ struct TelemetrySettingsSection: View {
         guard !clearing else { return }
         clearing = true
         defer { clearing = false }
-        do { try await client.clearDiagnostics(); problem = nil }
+        let nativeWasEnabled = NativeDiagnostics.shared.isEnabled
+        if localApp { NativeDiagnostics.shared.setEnabled(false) }
+        defer { if localApp { NativeDiagnostics.shared.setEnabled(nativeWasEnabled) } }
+        do {
+            try await client.clearDiagnostics()
+            if localApp { try await NativeDiagnostics.shared.clear() }
+            problem = nil
+        }
         catch { problem = "Could not clear this host’s local diagnostic files. No chat was changed or started." }
     }
 }

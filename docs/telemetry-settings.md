@@ -2,8 +2,8 @@
 
 Pilot keeps three host-scoped controls separate:
 
-- **Local operational diagnostics** are on by default. They retain bounded lifecycle and request-timing evidence on
-  that host only. Turning this off stops new local records; **Clear local diagnostics** removes retained diagnostic
+- **Local operational diagnostics** are on by default. They retain bounded lifecycle, request-timing and native
+  MetricKit crash/hang evidence on that host only. Turning this off stops new local records; **Clear local diagnostics** removes retained diagnostic
   segments without deleting or starting chats.
 - **Remote operational reporting** is off by default. Enabling it requires an OTLP/HTTP endpoint and affects only
   the selected host's app, daemon and kernel traces.

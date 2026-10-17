@@ -11,7 +11,7 @@ export function createDiagnosticsTool(call: DiagnosticsCall, defaultSessionId: s
 		name: DIAGNOSTICS_TOOL,
 		label: "Diagnostics",
 		description:
-			"Read bounded operational evidence for the host-admitted target chat. This never starts or changes the target and never returns conversation history, prompts, tool data, paths, credentials or raw errors. Check host, freshness, source availability and truncation before drawing conclusions; cite evidence refs when reporting findings.",
+			"Read bounded operational evidence for the host-admitted target chat. This never starts or changes the target and never returns conversation history, prompts, tool data, paths, credentials or raw errors. OS native crash/hang evidence is host-level and must not be attributed to the target without other evidence. Check host, freshness, source availability and truncation before drawing conclusions; cite evidence refs when reporting findings.",
 		promptSnippet: "Inspect bounded local lifecycle and performance evidence",
 		parameters: Type.Object({
 			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 128, description: "Maximum evidence items." })),

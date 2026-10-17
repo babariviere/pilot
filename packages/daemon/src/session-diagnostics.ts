@@ -6,6 +6,7 @@ import type {
 	DiagnosticEvidence,
 	DiagnosticFreshness,
 	DiagnosticSourceStatus,
+	NativeDiagnosticsBatch,
 	OperationHost,
 	RequestTimingDiagnosticEvidence,
 	SessionDiagnosticCurrent,
@@ -14,6 +15,7 @@ import type {
 import release from "../../../package.json" with { type: "json" };
 import type { DaemonPerformance } from "./event-loop-watchdog.ts";
 import { LIFECYCLE_FILE, MAX_LIFECYCLE_FILE_BYTES, parseLifecycleDiagnostic } from "./lifecycle-diagnostics.ts";
+import { MAX_NATIVE_DIAGNOSTIC_BYTES, parseNativeDiagnostics } from "./native-diagnostics.ts";
 
 export const MAX_DIAGNOSTIC_ITEMS = 128;
 export const MAX_DIAGNOSTIC_BYTES = 64 * 1024;
@@ -45,6 +47,7 @@ export interface SessionDiagnosticInput {
 	current: SessionDiagnosticCurrent;
 	connectivity: SessionDiagnostics["connectivity"];
 	performance?: DaemonPerformance;
+	nativeDiagnosticsPath?: string;
 	limit?: number;
 	now?: number;
 }
@@ -248,18 +251,46 @@ function daemonEvidence(performance: DaemonPerformance | undefined, now: number)
 	};
 }
 
+async function native(path: string | undefined): Promise<SourceRead<DiagnosticEvidence>> {
+	if (!path) return { items: [], available: 0, invalid: 0, dropped: 0, truncated: false };
+	const data = await tail(path, MAX_NATIVE_DIAGNOSTIC_BYTES);
+	if (!data.available) return { items: [], available: 0, invalid: 0, dropped: 0, truncated: false };
+	try {
+		const batch = parseNativeDiagnostics(JSON.parse(data.lines.join("\n"))) as NativeDiagnosticsBatch;
+		const items: DiagnosticEvidence[] = batch.evidence;
+		return {
+			items,
+			available: items.length,
+			invalid: 0,
+			dropped: batch.dropped,
+			truncated: data.truncated || batch.dropped > 0,
+			...(items[0]?.at
+				? {
+						newestAt: items
+							.map((item) => item.at)
+							.sort()
+							.at(-1),
+					}
+				: {}),
+		};
+	} catch {
+		return { items: [], available: 0, invalid: 1, dropped: 0, truncated: data.truncated };
+	}
+}
+
 /** Build a content-free snapshot. Evidence is newest-first and bounded by both item count and encoded size. */
 export async function readSessionDiagnostics(input: SessionDiagnosticInput): Promise<SessionDiagnostics> {
 	const now = input.now ?? Date.now();
 	const requestedLimit =
 		typeof input.limit === "number" && Number.isSafeInteger(input.limit) ? input.limit : MAX_DIAGNOSTIC_ITEMS;
 	const limit = Math.max(1, Math.min(MAX_DIAGNOSTIC_ITEMS, requestedLimit));
-	const [lifecycleRead, timingRead] = await Promise.all([
+	const [lifecycleRead, timingRead, nativeRead] = await Promise.all([
 		lifecycle(input.storageDir),
 		timings(join(input.storageDir, "durable")),
+		native(input.nativeDiagnosticsPath),
 	]);
 	const daemonRead = daemonEvidence(input.performance, now);
-	const reads = [lifecycleRead, timingRead, daemonRead];
+	const reads = [lifecycleRead, timingRead, daemonRead, nativeRead];
 	const available = reads.reduce((sum, read) => sum + read.available, 0);
 	const dropped = reads.reduce((sum, read) => sum + read.dropped, 0);
 	const invalid = reads.reduce((sum, read) => sum + read.invalid, 0);
@@ -271,6 +302,7 @@ export async function readSessionDiagnostics(input: SessionDiagnosticInput): Pro
 		sourceStatus("lifecycle", lifecycleRead, now),
 		sourceStatus("request_timing", timingRead, now),
 		sourceStatus("daemon", daemonRead, now),
+		sourceStatus("os", nativeRead, now),
 	];
 	const resources = input.performance
 		? {

@@ -150,7 +150,7 @@ counts and truncation metadata. A source is stale after 30 seconds for live coun
 Historical lifecycle evidence remains historical and is labeled with its observation window, not marked current.
 
 Agent-facing access is limited to an explicitly admitted diagnostics session role. That runtime profile exposes only
-the bounded diagnostic read tool, may target same-project chats on its qualified host, and has no shell, source,
+the bounded diagnostic read tool, is bound to one exact chat on its qualified host, and has no shell, source,
 transcript, write, restart, retry, replay or child-agent authority. A user-authorized repair handoff selects at most
 16 currently available evidence refs and bounded cause/test guidance for a separate ordinary coding agent; creating
 the handoff itself performs no target or repair-chat mutation.
@@ -211,6 +211,7 @@ rejected value.
 | Local lifecycle event | 1 KiB encoded | Drop event |
 | Per-session lifecycle writer queue | 64 events plus active write | Drop newest, report `droppedBefore` later |
 | Per-session lifecycle storage | 2 x 256 KiB, 256 events visible, 7-day read window | Rotate/compact |
+| Native crash/hang archive | 32 items, 32 KiB, 7-day read window | Drop oldest, report count |
 | Diagnostic API | 128 evidence items, 64 KiB encoded | Truncate oldest detail, report counts/window |
 | Node spans | 512 queued per process, batches of 128, 5 s schedule, 3 s export timeout | Drop newest; never await from product path |
 | Swift spans | 256 queued, batches of 64, 5 s schedule, 3 s export timeout | Drop newest; serial utility queue, never main actor |

@@ -2,7 +2,7 @@ import Foundation
 
 /// Mirrors packages/protocol/src/diagnostics.ts. Diagnostic payloads contain only bounded operational fields.
 public enum DiagnosticFreshness: String, Codable, Sendable { case fresh, stale, unavailable }
-public enum DiagnosticSource: String, Codable, Sendable { case lifecycle, requestTiming = "request_timing", daemon }
+public enum DiagnosticSource: String, Codable, Sendable { case lifecycle, requestTiming = "request_timing", daemon, os }
 public enum DiagnosticPauseReason: String, Codable, Sendable { case sleep, update, quota, connectivity, user }
 public enum DiagnosticErrorCode: String, Codable, Sendable {
     case startupFailure = "startup_failure"
@@ -21,7 +21,7 @@ public struct DiagnosticSourceStatus: Codable, Sendable {
     public let truncated: Bool
 }
 
-/// Closed fields shared by lifecycle, request-timing and daemon-stall evidence.
+/// Closed fields shared by lifecycle, request-timing, daemon-stall and native OS evidence.
 public struct DiagnosticEvidence: Codable, Sendable {
     public let ref: String
     public let source: DiagnosticSource
@@ -45,8 +45,46 @@ public struct DiagnosticEvidence: Codable, Sendable {
     public let firstTextMs: Double?
     public let firstToolCallMs: Double?
     public let httpAttempts: Int?
+    public let windowMs: Double?
+    public let releaseRelation: String?
     public let durationMs: Double?
     public let cpuMs: Double?
+}
+
+/// Content-free metadata delivered by macOS MetricKit. No report body or call stack is represented.
+public struct NativeDiagnosticEvidence: Codable, Equatable, Sendable {
+    public let ref: String
+    public let source: DiagnosticSource
+    public let at: String
+    public let kind: String
+    public let reason: String
+    public let windowMs: Double
+    public let releaseRelation: String
+    public let durationMs: Double?
+
+    public init(ref: String, at: String, kind: String, reason: String, windowMs: Double, releaseRelation: String,
+                durationMs: Double? = nil) {
+        self.ref = ref
+        source = .os
+        self.at = at
+        self.kind = kind
+        self.reason = reason
+        self.windowMs = windowMs
+        self.releaseRelation = releaseRelation
+        self.durationMs = durationMs
+    }
+}
+
+public struct NativeDiagnosticsBatch: Codable, Equatable, Sendable {
+    public let schemaVersion: Int
+    public let evidence: [NativeDiagnosticEvidence]
+    public let dropped: Int
+
+    public init(evidence: [NativeDiagnosticEvidence], dropped: Int) {
+        schemaVersion = 1
+        self.evidence = evidence
+        self.dropped = dropped
+    }
 }
 
 public struct SessionDiagnosticQueue: Codable, Sendable {
