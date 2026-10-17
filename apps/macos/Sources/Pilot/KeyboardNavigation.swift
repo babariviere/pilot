@@ -601,6 +601,8 @@ enum GoDestination: String, CaseIterable {
     case tasks
     case brief
     case archive
+    case slack
+    case linear
 
     var key: Character {
         switch self {
@@ -611,6 +613,8 @@ enum GoDestination: String, CaseIterable {
         case .tasks: "t"
         case .brief: "b"
         case .archive: "a"
+        case .slack: "s"
+        case .linear: "l"
         }
     }
 
@@ -623,6 +627,8 @@ enum GoDestination: String, CaseIterable {
         case .tasks: "Tasks"
         case .brief: "Brief"
         case .archive: "Archive"
+        case .slack: "Slack triage"
+        case .linear: "Linear queue"
         }
     }
 
