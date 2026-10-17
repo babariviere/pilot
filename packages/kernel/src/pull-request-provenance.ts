@@ -291,36 +291,43 @@ type Result = {
 	structuredContent?: unknown;
 };
 
-/** A successful creation call must return its one bare HTTPS pull URL, not an arbitrary mentioned link. */
-export function createdPullRequest(result: Result): string | undefined {
-	if (result.toolName !== "bash" || result.isError) return undefined;
-	const input = result.input as { command?: unknown } | undefined;
-	if (!createsPullRequest(input?.command)) return undefined;
+function outputPullRequestUrls(result: Result, splitText = false): string[] {
 	const structured = result.structuredContent as { exit_code?: number; output?: string } | undefined;
-	if (structured?.exit_code !== undefined && structured.exit_code !== 0) return undefined;
 	const output =
 		structured?.output ??
 		result.content
 			?.filter((c) => c.type === "text")
 			.map((c) => c.text)
 			.join("\n");
-	if (typeof output !== "string") return undefined;
-	const urls = (typeof structured?.output === "string" ? output.split(/\r?\n/) : [output])
+	if (typeof output !== "string") return [];
+	return (splitText || typeof structured?.output === "string" ? output.split(/\r?\n/) : [output])
 		.map((line) => line.trim())
 		.filter((line) => /^https:\/\/[a-z\d.-]+\/[\w.-]+\/[\w.-]+\/pull\/[1-9]\d*\/?$/i.test(line));
+}
+
+/** A successful creation call must return its one bare HTTPS pull URL, not an arbitrary mentioned link. */
+export function createdPullRequest(result: Result): string | undefined {
+	if (result.toolName !== "bash" || result.isError) return undefined;
+	const input = result.input as { command?: unknown } | undefined;
+	if (!createsPullRequest(input?.command)) return undefined;
+	const structured = result.structuredContent as { exit_code?: number } | undefined;
+	if (structured?.exit_code !== undefined && structured.exit_code !== 0) return undefined;
+	const urls = outputPullRequestUrls(result);
 	return urls.length === 1 ? urls[0]!.replace(/\/$/, "") : undefined;
 }
 
-/** A confirmed creation, or an attempt that did not visibly fail but whose PR URL could not be confirmed. */
+/** A confirmed creation, or an attempt requiring the daemon's branch/time/ownership reconciliation. */
 export function pullRequestCreation(result: Result): { url: string } | { attempted: true } | undefined {
 	const url = createdPullRequest(result);
 	if (url) return { url };
-	if (result.toolName !== "bash" || result.isError) return undefined;
+	if (result.toolName !== "bash" || !attemptsPullRequest((result.input as { command?: unknown } | undefined)?.command))
+		return undefined;
 	const exitCode = (result.structuredContent as { exit_code?: unknown } | undefined)?.exit_code;
-	if (exitCode !== undefined && exitCode !== 0) return undefined;
-	return attemptsPullRequest((result.input as { command?: unknown } | undefined)?.command)
-		? { attempted: true }
-		: undefined;
+	// A later shell command can fail after gh created the PR. Its bare URL warrants reconciliation,
+	// never direct ownership: output alone cannot prove which command produced it.
+	if ((result.isError || (exitCode !== undefined && exitCode !== 0)) && !outputPullRequestUrls(result, true).length)
+		return undefined;
+	return { attempted: true };
 }
 
 /** Native nested results are observed at execution time, even if codemode discards them or later fails. */

@@ -161,7 +161,7 @@ test("heredoc bodies, stderr merges, env prefixes, gh pr new and pipefail-guarde
 		assert.equal(createsPullRequest(command), false, command);
 });
 
-test("an unconfirmed gh PR creation is an attempt, unless it visibly failed or only asked for help", () => {
+test("an unconfirmed gh PR creation is an attempt, except help or failures without a PR URL", () => {
 	const bash = (command: string, structuredContent?: unknown) => ({
 		toolName: "bash",
 		input: { command },
@@ -186,7 +186,10 @@ test("an unconfirmed gh PR creation is an attempt, unless it visibly failed or o
 		"a confirmed command whose output has no URL",
 	);
 	assert.equal(pullRequestCreation(bash("gh pr create --fill | tail -1", { exit_code: 1, output: "" })), undefined);
-	assert.equal(pullRequestCreation({ ...bash("gh pr create --fill | tail -1"), isError: true }), undefined);
+	assert.equal(
+		pullRequestCreation({ ...bash("gh pr create --fill | tail -1", { output: "creation failed" }), isError: true }),
+		undefined,
+	);
 	assert.equal(pullRequestCreation({ ...bash("gh pr create --fill | tail -1"), toolName: "read" }), undefined);
 	for (const command of [
 		"gh pr view 12",
@@ -197,4 +200,26 @@ test("an unconfirmed gh PR creation is an attempt, unless it visibly failed or o
 		"echo gh pr creates",
 	])
 		assert.equal(attemptsPullRequest(command), false, command);
+});
+
+test("a failed shell with a creation command and bare PR URL requests reconciliation, never claims ownership", () => {
+	const command = "gh pr create --head fix/pr --fill; gh pr view --head fix/pr --json number";
+	const output = `${url}\nunknown flag: --head\nUsage: gh pr view [flags]\n`;
+	for (const failure of [
+		{ structuredContent: { exit_code: 1, output } },
+		{ isError: true, structuredContent: { exit_code: 1, output } },
+		{ isError: true, content: [{ type: "text", text: output }] },
+	]) {
+		const failed = { ...result, input: { command }, ...failure };
+		assert.equal(createdPullRequest(failed), undefined);
+		assert.deepEqual(pullRequestCreation(failed), { attempted: true });
+		for (const unrelated of ["gh pr view 12", "gh pr create --help", "gh pr create --dry-run"])
+			assert.equal(pullRequestCreation({ ...failed, input: { command: unrelated } }), undefined);
+		assert.equal(pullRequestCreation({ ...failed, toolName: "read" }), undefined);
+	}
+	for (const output of ["creation failed", `See ${url}`, url.replace("/pull/", "/issues/"), `${url}?query=1`])
+		assert.equal(
+			pullRequestCreation({ ...result, input: { command }, structuredContent: { exit_code: 1, output } }),
+			undefined,
+		);
 });
