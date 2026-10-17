@@ -100,8 +100,11 @@ private func items(_ ids: [String], opened: @escaping (String) -> Void = { _ in 
     anchor.focus = focus
     root.addSubview(anchor)
     let table = NSTableView(frame: NSRect(x: 0, y: 0, width: 200, height: 400))
+    // A table without columns refuses first responder, unlike the sidebar's outline.
+    table.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("title")))
     root.addSubview(table)
     #expect(window.makeFirstResponder(table))
+    #expect(window.firstResponder === table)
     #expect(!focus.isBrowsingList, "a click into the list is not browsing")
 
     let router = KeyboardRouter()
