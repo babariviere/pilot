@@ -181,10 +181,32 @@ actor MarkdownRenderer {
 }
 
 @MainActor
+final class CodeRenderState: ObservableObject {
+    private struct Prepared {
+        let source: String
+        let language: String?
+        let text: AttributedString
+    }
+    @Published private var prepared: Prepared?
+
+    /// A tool input can finish streaming before its highlighting finishes. Never let an older
+    /// highlighted prefix hide the current source, including if preparation gets cancelled.
+    func text(for source: String, language: String?) -> AttributedString {
+        if let prepared, prepared.source == source, prepared.language == language { return prepared.text }
+        return AttributedString(source)
+    }
+
+    func prepare(_ source: String, language: String?) async throws {
+        let text = try await MarkdownRenderer.shared.prepareCode(source, language: language)
+        try Task.checkCancellation()
+        prepared = Prepared(source: source, language: language, text: text)
+    }
+}
+
+@MainActor
 final class MarkdownRenderState: ObservableObject {
     let selection = MessageTextSelection()
     @Published var blocks: [PreparedMarkdownBlock] = []
-    @Published var highlighted: AttributedString?
     var source: String?
     /// Blocks present when this message was first shown. Blocks after them appeared while it streamed, so their
     /// first text fades in as well.
