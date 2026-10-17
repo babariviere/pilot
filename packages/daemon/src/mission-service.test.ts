@@ -3047,6 +3047,8 @@ for (const change of ["claimed", "deleted"] as const) {
 		const owner = await f.spawn();
 		const { mission } = await f.service.create({ projectId: f.project.id, title: "M", tasks: [{ title: "Auth" }] });
 		const task = f.store.resolveTask(mission.id, "1");
+		const lifecycle = f.sessions["lifecycle"];
+		const flush = t.mock.method(lifecycle, "flush", lifecycle.flush.bind(lifecycle));
 		let prepared!: () => void;
 		const preparing = new Promise<void>((resolve) => {
 			prepared = resolve;
@@ -3065,6 +3067,11 @@ for (const change of ["claimed", "deleted"] as const) {
 		if (change === "claimed") f.service.join(owner.id, { missionId: mission.id, taskId: task.id });
 		else f.store.removeTask(mission.id, task.id);
 		await pending;
+		assert.equal(
+			flush.mock.calls.length,
+			1,
+			"rejected admission drains lifecycle writes before removing its directory",
+		);
 		mock.mock.restore();
 		assert.deepEqual(
 			f.sessions.list({ archived: "all" }).map((session) => session.id),

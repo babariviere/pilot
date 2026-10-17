@@ -3896,6 +3896,9 @@ export class SessionManager {
 			if (saving) await saving.catch(() => undefined);
 			this.metas.delete(id);
 			this.workspaceCleanupBackoff.delete(id);
+			// Membership notifications can queue lifecycle evidence before admission fails.
+			// Finish those writes too, so they cannot recreate a file during recursive removal.
+			await this.lifecycle.flush();
 			await rm(this.dir(id), { recursive: true, force: true });
 			throw error;
 		}
