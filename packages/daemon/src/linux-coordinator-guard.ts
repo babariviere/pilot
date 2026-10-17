@@ -41,6 +41,9 @@ const mounts = readFileSync("/proc/self/mountinfo", "utf8")
 	});
 // mountinfo also lists lower mounts covered by our new /proc and /dev. Resolve the actual
 // accessible mount ID with O_PATH (Linux ABI), without opening devices or reading file contents.
+// EACCES means the sandboxed user cannot traverse to this mount point (for example Docker's
+// overlay mounts below root-only /var/lib/docker), so it is unreachable like a covered mount.
+// Each alias of a mount has its own mountinfo entry and is checked separately.
 function mountId(path: string): string | undefined {
 	let fd: number | undefined;
 	try {
@@ -49,7 +52,7 @@ function mountId(path: string): string | undefined {
 		assert.ok(id, `No mount ID for ${path}`);
 		return id;
 	} catch (error) {
-		if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return undefined;
+		if (["ENOENT", "ENOTDIR", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? "")) return undefined;
 		throw error;
 	} finally {
 		if (fd !== undefined) closeSync(fd);
