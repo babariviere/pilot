@@ -7,6 +7,7 @@ import {
 	copyFile,
 	lstat,
 	mkdir,
+	mkdtemp,
 	open,
 	readdir,
 	readFile,
@@ -15,6 +16,7 @@ import {
 	rm,
 	writeFile,
 } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { SessionPullRequest } from "@pilot/protocol";
@@ -154,9 +156,12 @@ async function safeFile(root: string, path: string): Promise<boolean> {
 
 export class SharedWorkspaceStore {
 	private readonly home: string;
+	/** Unwrapped runner, for the one Git check that needs its own GIT_INDEX_FILE. */
+	private readonly baseRunner: Runner;
 	private readonly runner: Runner;
 	constructor(home: string, runner: Runner = run) {
 		this.home = home;
+		this.baseRunner = runner;
 		this.runner = (file, args, cwd, timeout, signal, env) =>
 			runner(
 				file,
@@ -1251,8 +1256,15 @@ export class SharedWorkspaceStore {
 				await atomicJson(this.bindingPath(shared), binding);
 				return;
 			}
-			if (!(await this.registered(shared)))
-				throw new Error("Workspace was unregistered but its directory remains; partial removal needs review");
+			if (!(await this.registered(shared))) {
+				// Only a removal this store started and verified may be finished without jj.
+				if (binding.state !== "removing")
+					throw new Error("Workspace was unregistered but its directory remains; partial removal needs review");
+				await this.finishRemoval(cwd, shared, recovery);
+				binding.state = "removed";
+				await atomicJson(this.bindingPath(shared), binding);
+				return;
+			}
 			await this.snapshotChild(cwd, shared);
 			if ((await this.ids(cwd)).commitId !== recovery.commitId)
 				throw new Error("Workspace changed since recovery snapshot");
@@ -1262,10 +1274,79 @@ export class SharedWorkspaceStore {
 			await atomicJson(this.bindingPath(shared), binding);
 			await this.jj(["workspace", "remove", shared.name], await this.control(shared.repository));
 			if (await stat(cwd))
-				throw new Error("jj did not remove the workspace directory; partial removal needs review");
+				await this.finishRemoval(cwd, shared, recovery, "jj did not remove the workspace directory");
 			binding.state = "removed";
 			await atomicJson(this.bindingPath(shared), binding);
 		});
+	}
+
+	/**
+	 * `jj workspace remove` unregisters the workspace before deleting its files, so a timeout or crash can leave
+	 * part of the tree behind. Delete the remnant only when it is still part of the verified recovery snapshot:
+	 * jj metadata for this repository, tracked files unchanged or already deleted, and nothing else unignored.
+	 */
+	private async finishRemoval(
+		cwd: string,
+		shared: SharedWorkspace,
+		recovery: WorkspaceRecovery,
+		context = "Workspace was unregistered but its directory remains",
+	) {
+		const review = (reason: string) => new Error(`${context}: ${reason}; partial removal needs review`);
+		const jjDirectory = await stat(join(cwd, ".jj"));
+		if (jjDirectory && !jjDirectory.isDirectory()) throw review("unsafe jj metadata");
+		if (await stat(join(cwd, ".jj/repo"))) {
+			if (!(await safeFile(cwd, ".jj/repo"))) throw review("unsafe jj metadata");
+			const repository = (await readFile(join(cwd, ".jj/repo"), "utf8")).trim();
+			if (
+				(await realpath(resolve(cwd, ".jj", repository)).catch(() => "")) !== join(shared.repository, ".jj", "repo")
+			)
+				throw review("it points to a different jj repository");
+		}
+		const worktrees = join(shared.repository, ".git", "worktrees");
+		for (const marker of [".git", PARKED_GIT]) {
+			if (!(await stat(join(cwd, marker)))) continue;
+			if (!(await safeFile(cwd, marker))) throw review("unsafe Git metadata");
+			const gitDir = resolve(cwd, (await readFile(join(cwd, marker), "utf8")).trim().replace(/^gitdir: /, ""));
+			if ((await realpath(dirname(gitDir)).catch(() => dirname(gitDir))) !== worktrees)
+				throw review("it points to a different Git repository");
+		}
+		const scratch = await mkdtemp(join(tmpdir(), "pilot-remnant-"));
+		try {
+			const env = { ...workspaceEnvironment(), GIT_INDEX_FILE: join(scratch, "index") };
+			const git = (args: string[]) =>
+				this.baseRunner(
+					"git",
+					[
+						"-c",
+						"core.hooksPath=/dev/null",
+						`--git-dir=${join(shared.repository, ".git")}`,
+						`--work-tree=${cwd}`,
+						...args,
+					],
+					cwd,
+					undefined,
+					undefined,
+					env,
+				);
+			const paths = (output: string) => output.split("\0").filter(Boolean);
+			await git(["read-tree", recovery.commitId]);
+			// Ignore rules are read from the work tree. Restore deleted ones so ignored build output stays ignored.
+			const rules = paths(await git(["ls-files", "--deleted", "-z"])).filter(
+				(path) => path === ".gitignore" || path.endsWith("/.gitignore"),
+			);
+			if (rules.length) await git(["checkout-index", "--", ...rules]);
+			await git(["update-index", "-q", "--refresh"]);
+			const changes = paths(await git(["diff-files", "--name-status", "-z"]));
+			for (let index = 0; index + 1 < changes.length; index += 2)
+				if (changes[index] !== "D") throw review(`${changes[index + 1]} changed since the recovery snapshot`);
+			const untracked = paths(
+				await git(["ls-files", "--others", "--exclude-standard", "--directory", "--no-empty-directory", "-z"]),
+			).filter((path) => path !== ".jj/" && !path.startsWith(".jj/"));
+			if (untracked.length) throw review(`${untracked[0]} is not in the recovery snapshot`);
+		} finally {
+			await rm(scratch, { recursive: true, force: true });
+		}
+		await rm(cwd, { recursive: true });
 	}
 
 	async restore(
