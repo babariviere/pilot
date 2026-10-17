@@ -31,6 +31,7 @@ done
 isolated=artifactHeightRespectsNestedClippingWhileKeepingVisibleOverflow
 devbox=addDevboxPresentsSetupSheetAfterCancelAndReopen
 terminal=terminalOpeningAndResizingDoNotFeedNativeFittingSizeBackIntoWindowConstraints
+stops='localStopNormalizesQualifiedRowsAndRestoresWithdrawnMessages|remoteStopKeepsCollidingLocalChatAndDraftUntouched|unavailableStopNeverFallsBackToCurrentLocalHost'
 partition=1
 reuse=(--skip-build)
 for argument in "$@"; do
@@ -44,15 +45,22 @@ run_tests() {
 	local required="$1"
 	shift
 	local guards=()
-	if [ -n "$required" ]; then guards=(--require-test "$required"); fi
+	local required_tests=()
+	local name
+	if [ -n "$required" ]; then
+		IFS='|' read -r -a required_tests <<< "$required"
+		for name in "${required_tests[@]}"; do guards+=(--require-test "$name"); done
+	fi
 	swift test --package-path "$here" ${jobs[@]+"${jobs[@]}"} -Xswiftc -plugin-path -Xswiftc "$plugins" "$@" 2>&1 \
 		| python3 "$here/scripts/check-test-output.py" ${guards[@]+"${guards[@]}"}
 }
 if [ "$partition" = 1 ]; then
-	run_tests "" "$@" --skip "$isolated|$devbox|$terminal"
+	run_tests "" "$@" --skip "$isolated|$devbox|$terminal|$stops"
 	run_tests "$isolated" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$isolated"
 	run_tests "$devbox" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$devbox"
 	run_tests "$terminal" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$terminal"
+	# Stop's async MainActor tasks keep their deadlines without competing with UI run loops.
+	run_tests "$stops" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$stops"
 else
 	# Explicit selection/listing is the caller's scope. Do not append another filter.
 	run_tests "" "$@"
