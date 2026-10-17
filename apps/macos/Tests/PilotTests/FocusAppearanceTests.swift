@@ -34,6 +34,11 @@ import Testing
     #expect(field.isEnabled)
     #expect(window.makeFirstResponder(field), "ring suppression must not disable keyboard focus")
     #expect(field.currentEditor() is NSTextView)
+    // Force the older-macOS state even on systems where SwiftUI already suppresses this ring.
+    field.focusRingType = .exterior
+    // Headless windows do not get the normal AppKit update after changing first responder.
+    // Drive that lifecycle event so the native fallback runs before checking the drawn focus policy.
+    window.update()
     #expect(field.focusRingType == .none)
 }
 
