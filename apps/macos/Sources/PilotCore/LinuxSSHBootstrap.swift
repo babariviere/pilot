@@ -156,8 +156,17 @@ public enum LinuxSSHBootstrap {
         }
     }
 
-    static func scriptSource() throws -> String {
-        guard let url = Bundle.module.url(forResource: "LinuxSSHBootstrap", withExtension: "py") else {
+    /// Loads the helper without executing SSH, also used by the relocated-app packaging check.
+    public static func scriptSource(main: Bundle = .main) throws -> String {
+        let bundle: Bundle?
+        if main.bundleURL.pathExtension == "app" {
+            // SwiftPM's generated accessor checks the app root, not Contents/Resources, then
+            // traps if the build checkout is gone. An installed app must use only its own assets.
+            bundle = main.resourceURL.flatMap { Bundle(url: $0.appendingPathComponent("PilotMac_PilotCore.bundle")) }
+        } else {
+            bundle = .module
+        }
+        guard let url = bundle?.url(forResource: "LinuxSSHBootstrap", withExtension: "py") else {
             throw LinuxBootstrapFailure("assets", "The app is missing its SSH setup helper. Reinstall the trusted app bundle.")
         }
         return try String(contentsOf: url, encoding: .utf8)

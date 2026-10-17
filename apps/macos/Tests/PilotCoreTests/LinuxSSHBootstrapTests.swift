@@ -4,6 +4,53 @@ import Testing
 @testable import PilotCore
 
 struct LinuxSSHBootstrapTests {
+    private func appFixture(at directory: URL) throws -> Bundle {
+        let app = directory.appendingPathComponent("Relocated Pilot.app")
+        let contents = app.appendingPathComponent("Contents")
+        try FileManager.default.createDirectory(at: contents.appendingPathComponent("Resources"),
+                                               withIntermediateDirectories: true)
+        let info = ["CFBundleIdentifier": "dev.pilot.bootstrap-fixture", "CFBundlePackageType": "APPL"]
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+            .write(to: contents.appendingPathComponent("Info.plist"))
+        return try #require(Bundle(url: app))
+    }
+
+    @Test(arguments: [false, true])
+    func packagedHelperLoadsFromResources(nested: Bool) throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let app = try appFixture(at: directory)
+        let resources = try #require(app.resourceURL)
+        let bundle = resources.appendingPathComponent("PilotMac_PilotCore.bundle")
+        let helperDirectory = nested ? bundle.appendingPathComponent("Contents/Resources") : bundle
+        try FileManager.default.createDirectory(at: helperDirectory, withIntermediateDirectories: true)
+        let script = "# helper from this relocated app only\n"
+        try Data(script.utf8).write(to: helperDirectory.appendingPathComponent("LinuxSSHBootstrap.py"))
+        #expect(try LinuxSSHBootstrap.scriptSource(main: app) == script)
+    }
+
+    @Test(arguments: [false, true])
+    func missingPackagedHelperThrowsWithoutBuildOrAppRootFallback(emptyBundle: Bool) throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let app = try appFixture(at: directory)
+        if emptyBundle {
+            let resources = try #require(app.resourceURL)
+            try FileManager.default.createDirectory(at: resources.appendingPathComponent("PilotMac_PilotCore.bundle"),
+                                                   withIntermediateDirectories: false)
+        }
+        // A decoy in SwiftPM's app-root location must not hide an incomplete installed app.
+        let decoy = app.bundleURL.appendingPathComponent("PilotMac_PilotCore.bundle")
+        try FileManager.default.createDirectory(at: decoy, withIntermediateDirectories: false)
+        try Data("# wrong helper\n".utf8).write(to: decoy.appendingPathComponent("LinuxSSHBootstrap.py"))
+        do {
+            _ = try LinuxSSHBootstrap.scriptSource(main: app)
+            Issue.record("An incomplete installed app must not load an app-root or build-checkout helper")
+        } catch let error as LinuxBootstrapFailure {
+            #expect(error.code == "assets")
+        }
+    }
+
     private func package(at url: URL) async throws -> LinuxRuntimePackage {
         let bytes = Data("archive".utf8)
         try bytes.write(to: url)

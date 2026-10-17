@@ -52,11 +52,18 @@ exit ${exitCode}
 		mkdirSync(join(resources, resource), { recursive: true });
 		writeFileSync(join(resources, resource, "fixture"), "bundled resource\n");
 	}
+	const coreBundle = join(contents, "Resources/PilotMac_PilotCore.bundle");
+	const coreResources = layout === "flat" ? coreBundle : join(coreBundle, "Contents/Resources");
+	mkdirSync(coreResources, { recursive: true });
+	const sshHelper = join(coreResources, "LinuxSSHBootstrap.py");
+	writeFileSync(sshHelper, "# bundled SSH helper\n");
 	if (missing) {
 		const path =
 			missing === "Pilot" ? executable :
 			missing === "PilotPower" ? powerHelper :
-			missing === "bundle" ? bundle : join(resources, missing);
+			missing === "bundle" ? bundle :
+			missing === "coreBundle" ? coreBundle :
+			missing === "sshHelper" ? sshHelper : join(resources, missing);
 		rmSync(path, { recursive: true });
 	}
 	if (sign && missing !== "Pilot") {
@@ -103,12 +110,12 @@ for (const layout of ["flat", "macOS"]) {
 	});
 }
 
-for (const missing of ["Pilot", "PilotPower", "bundle", "Ghostty", "terminfo"]) {
+for (const missing of ["Pilot", "PilotPower", "bundle", "Ghostty", "terminfo", "coreBundle", "sshHelper"]) {
 	test(`rejects missing ${missing}`, macOS, (t) => {
 		const { log, scratch, run } = fixture(t, { missing });
 		const result = run();
 		assert.notEqual(result.status, 0);
-		assert.match(result.stderr, /Missing (executable|resource bundle|resource directory)/);
+		assert.match(result.stderr, /Missing (executable|resource bundle|resource directory|resource file)/);
 		assert.equal(existsSync(log), false);
 		assert.deepEqual(readdirSync(scratch), []);
 	});
