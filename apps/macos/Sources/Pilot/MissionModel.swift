@@ -64,6 +64,8 @@ extension AppModel {
     }
 
     func openMission(_ id: String, tab: MissionTab? = nil, context: HostViewContext? = nil) {
+        beginNavigation()
+        defer { endNavigation() }
         if let ref = resourceRef(id, kind: .mission, context: context), ref.host != localHost {
             if let tab { missionTab = tab }; navigate(.mission, id: ref.storageKey); return
         }

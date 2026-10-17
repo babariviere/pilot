@@ -62,9 +62,14 @@ final class AppModel: ObservableObject {
     var missionBriefEditors: [String: BriefEditorState] = [:]
     private var knownScheduleStates: [String: ScheduleState] = [:]
     @Published private(set) var reviewRevision = 0
+    @Published private(set) var navigationHistory = NavigationHistory(NavigationLocation())
+    private var navigationDepth = 0
+    private var restoringNavigation = false
 
     @Published var selectedSessionId: String? {
         didSet {
+            beginNavigation()
+            defer { endNavigation() }
             if let id = selectedSessionId, let ref = resourceRef(id, kind: .session) {
                 hosts.selection = ref
             } else if hosts.selection?.host == localHost { hosts.selection = nil }
@@ -83,11 +88,17 @@ final class AppModel: ObservableObject {
     }
     /// The mission page shown in the detail area when no chat is selected.
     @Published var selectedMissionId: String? {
-        didSet { if selectedMissionId != nil, selectedProjectId != nil { selectedProjectId = nil } }
+        didSet {
+            beginNavigation()
+            defer { endNavigation() }
+            if selectedMissionId != nil, selectedProjectId != nil { selectedProjectId = nil }
+        }
     }
     /// The project page shown in the detail area when no chat or mission is selected.
     @Published var selectedProjectId: String? {
         didSet {
+            beginNavigation()
+            defer { endNavigation() }
             if selectedProjectId != nil, selectedMissionId != nil { selectedMissionId = nil }
             if selectedProjectId != slackTriageProjectId, slackTriageProjectId != nil { slackTriageProjectId = nil }
             if selectedProjectId != memoryProjectId, memoryProjectId != nil { memoryProjectId = nil }
@@ -261,6 +272,8 @@ final class AppModel: ObservableObject {
     }
 
     func selectSession(_ ref: HostResourceRef) throws {
+        beginNavigation()
+        defer { endNavigation() }
         guard ref.kind == .session else { throw HostRoutingError.invalidReference }
         hosts.selection = ref
         selectedSessionId = ref.host == localHost ? ref.localId : ref.storageKey
@@ -496,6 +509,8 @@ final class AppModel: ObservableObject {
     }
 
     func newSession(in projectId: String?, message: String? = nil, context: HostViewContext? = nil) {
+        beginNavigation()
+        defer { endNavigation() }
         if let context { newSessionForm.executionHost = context.host }
         else if projectId != nil { newSessionForm.executionHost = localHost }
         hosts.selection = nil
@@ -664,6 +679,8 @@ final class AppModel: ObservableObject {
     }
 
     func showArchive(in projectId: String? = nil, missionId: String? = nil, context: HostViewContext? = nil) {
+        beginNavigation()
+        defer { endNavigation() }
         archiveHost = context?.host
         hosts.selection = nil
         archiveProjectId = projectId
@@ -678,6 +695,8 @@ final class AppModel: ObservableObject {
     /// Shows the Inbox, its project filter preset to `projectId` (from a project's Overview), else to the focused
     /// project (every project when none is focused).
     func showInbox(for projectId: String? = nil, context: HostViewContext? = nil) {
+        beginNavigation()
+        defer { endNavigation() }
         inboxHost = context?.host ?? focusedProjectRef?.host
         hosts.selection = nil
         showingArchive = false
@@ -696,6 +715,8 @@ final class AppModel: ObservableObject {
 
     /// Shows a project's page, keeping the sidebar as it is.
     func openProject(_ id: String, context: HostViewContext? = nil) {
+        beginNavigation()
+        defer { endNavigation() }
         let ref = resourceRef(id, kind: .project, context: context)
         if let ref, ref.host != localHost {
             navigate(.project, id: ref.storageKey); return
@@ -714,6 +735,8 @@ final class AppModel: ObservableObject {
 
     /// Shows a project's Slack triage view in place of its page, optionally on one common case.
     func openSlackTriage(_ projectId: String, caseId: String? = nil, context: HostViewContext? = nil) {
+        beginNavigation()
+        defer { endNavigation() }
         openProject(projectId, context: context)
         slackTriageCaseId = caseId
         slackTriageProjectId = context.map { $0.ref(.project, projectId).storageKey } ?? projectId
@@ -753,6 +776,8 @@ final class AppModel: ObservableObject {
 
     /// Shows a project's Memory page in place of its page.
     func openMemory(_ projectId: String, context: HostViewContext? = nil) {
+        beginNavigation()
+        defer { endNavigation() }
         if let ref = resourceRef(projectId, kind: .project, context: context), ref.host != localHost {
             navigate(.project, id: ref.storageKey)
             memoryProjectId = ref.storageKey
@@ -814,6 +839,8 @@ final class AppModel: ObservableObject {
     /// left and restores the last selection of the new scope; a project seen for the first time opens its
     /// Overview. Home and the Inbox stay open.
     func focus(on projectId: String?) {
+        beginNavigation()
+        defer { endNavigation() }
         if let projectId, let ref = try? HostResourceRef.decodeKey(projectId), ref.host != localHost {
             guard ref.kind == .project, hosts.projects.contains(where: { $0.ref == ref }), sidebarScope != projectId else { return }
             scopeSelections[SidebarSelection.scopeKey(sidebarScope)] = currentSelection
@@ -1140,6 +1167,8 @@ final class AppModel: ObservableObject {
 
     /// Selects a chat from outside the sidebar, such as a notification or the menu bar.
     func reveal(session id: String) {
+        beginNavigation()
+        defer { endNavigation() }
         // Notifications stay global: a chat outside the focused project widens the sidebar to all projects.
         if let scope = sidebarScope, let session = client.session(id), session.projectId != scope {
             focus(on: nil)
@@ -1154,6 +1183,115 @@ final class AppModel: ObservableObject {
             window.makeKeyAndOrderFront(nil)
         } else {
             openWindowAction?()
+        }
+    }
+}
+
+extension AppModel {
+    /// Coalesce nested routing and selection cleanup into one visited destination.
+    func beginNavigation() { navigationDepth += 1 }
+
+    func endNavigation() {
+        navigationDepth -= 1
+        guard navigationDepth == 0, !restoringNavigation else { return }
+        recordNavigation()
+    }
+
+    private var navigationLocation: NavigationLocation {
+        var location = NavigationLocation(scope: sidebarScope, selection: currentSelection)
+        switch currentSelection {
+        case let .project(id):
+            if memoryProjectId == id { location.projectPage = .memory }
+            else if slackTriageProjectId == id { location.projectPage = .slack(caseId: slackTriageCaseId) }
+        case .archive:
+            location.filterHost = archiveHost
+        case .inbox:
+            location.filterHost = inboxHost
+            location.inboxProjectId = inboxProjectId
+        default: break
+        }
+        return location
+    }
+
+    private func recordNavigation() {
+        let location = navigationLocation
+        // Avoid publishing for selection cleanup that leaves the destination unchanged.
+        if navigationHistory.current != location { navigationHistory.record(location) }
+    }
+
+    func goBack() { moveThroughHistory(-1) }
+    func goForward() { moveThroughHistory(1) }
+
+    private func moveThroughHistory(_ offset: Int) {
+        // Filters can change without opening another page. Keep the visible location up to date.
+        recordNavigation()
+        guard let location = navigationHistory.move(offset, accepting: { self.canRestoreNavigation($0) }) else { return }
+        restoringNavigation = true
+        defer { restoringNavigation = false }
+        scopeSelections[SidebarSelection.scopeKey(sidebarScope)] = currentSelection
+        sidebarScope = location.scope
+        saveSidebarScope()
+        hosts.selection = nil
+        showingArchive = false
+        showingInbox = false
+        selectedSessionId = nil
+        selectedMissionId = nil
+        selectedProjectId = nil
+        clearProjectSubpage()
+        slackTriageAdd = nil
+        let context = location.filterHost.map { HostViewContext(host: $0, hosts: hosts) }
+        switch location.selection {
+        case .home: break // Return to the retained draft without resetting or submitting it.
+        case let .session(id): selectedSessionId = id
+        case let .mission(id): openMission(id)
+        case let .project(id):
+            switch location.projectPage {
+            case .overview: openProject(id)
+            case .memory: openMemory(id)
+            case let .slack(caseId): openSlackTriage(id, caseId: caseId)
+            }
+        case let .archive(projectId, missionId):
+            // Restore the saved filters directly, including cached remote filters while disconnected.
+            archiveHost = location.filterHost
+            archiveProjectId = projectId
+            archiveMissionId = missionId
+            showingArchive = true
+        case .inbox:
+            showInbox(for: location.inboxProjectId, context: context)
+            inboxProjectId = location.inboxProjectId
+            inboxHost = location.filterHost
+        }
+        saveDrafts()
+    }
+
+    private func canRestoreNavigation(_ location: NavigationLocation) -> Bool {
+        if let scope = location.scope, !navigationResourceExists(scope, kind: .project) { return false }
+        switch location.selection {
+        case let .session(id): return navigationResourceExists(id, kind: .session)
+        case let .mission(id): return navigationResourceExists(id, kind: .mission)
+        case let .project(id): return navigationResourceExists(id, kind: .project)
+        case .home, .inbox, .archive: return true
+        }
+    }
+
+    private func navigationResourceExists(_ id: String, kind: HostResourceKind) -> Bool {
+        if id.hasPrefix("hostref1:") {
+            guard let ref = resourceRef(id, kind: kind) else { return false }
+            if ref.host != localHost {
+                switch kind {
+                case .session: return hosts.sessions.contains { $0.ref == ref }
+                case .project: return hosts.projects.contains { $0.ref == ref }
+                case .mission: return hosts.missions.contains { $0.ref == ref }
+                default: return false
+                }
+            }
+            return navigationResourceExists(ref.localId, kind: kind)
+        }
+        switch kind {
+        case .session: return client.session(id) != nil
+        case .project: return client.project(id) != nil
+        case .mission: return client.mission(id) != nil
+        default: return false
         }
     }
 }

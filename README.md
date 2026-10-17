@@ -46,7 +46,8 @@ has separate storage and transport contracts; it does not change chat-result rea
   chat's latest open PR. ⌘⇧P opens the open chat's latest pull request (the newest open one, else the newest). Paste
   a Slack message link to find its report, or to add it to a project's Slack triage: Pilot reads and sorts the
   message, then opens triage on it. ⌘? (Command-Shift-/ on a US keyboard) opens the keyboard-shortcuts reference,
-  also available from **Help → Keyboard Shortcuts** or by searching for shortcuts in ⌘K.
+  also available from **Help → Keyboard Shortcuts** or by searching for shortcuts in ⌘K. ⌘← and ⌘→ go back
+  and forward through visited chats and pages, restoring their sidebar scope.
 - **Let the display rest while agents work.** Keep the Mac awake without keeping the display on.
   Optional closed-lid work requires power and Wi-Fi; without both, agents pause and resume on the next
   full wake with connectivity. Screen locking is left to macOS. See [agent-aware sleep](docs/agent-sleep.md) for

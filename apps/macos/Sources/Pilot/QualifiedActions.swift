@@ -125,6 +125,8 @@ extension AppModel {
     }
 
     func navigate(_ kind: HostResourceKind, id: String, context: HostViewContext? = nil) {
+        beginNavigation()
+        defer { endNavigation() }
         guard let ref = resourceRef(id, kind: kind, context: context) else { return }
         showingArchive = false
         showingInbox = false

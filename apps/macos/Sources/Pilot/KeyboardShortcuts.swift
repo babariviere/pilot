@@ -24,6 +24,8 @@ enum KeyboardShortcuts {
             Entry(title: "Show keyboard shortcuts", keys: hint),
             Entry(title: "Open command palette", keys: "⌘K"),
             Entry(title: "Search chats", keys: "⌘F"),
+            Entry(title: "Back", keys: "⌘←"),
+            Entry(title: "Forward", keys: "⌘→"),
             Entry(title: "Show all projects", keys: "⌘0"),
             Entry(title: "Switch to project 1–9", keys: "⌘1–9"),
             Entry(title: "Add project", keys: "⇧⌘O"),
