@@ -17,6 +17,16 @@ for resource in Ghostty terminfo; do
 	[ -d "$resources/$resource" ] || { echo "Missing resource directory: $resources/$resource" >&2; exit 1; }
 done
 
+core="$app/Contents/Resources/PilotMac_PilotCore.bundle"
+[ -d "$core" ] || { echo "Missing resource bundle: $core" >&2; exit 1; }
+core_resources="$core"
+if [ -d "$core/Contents/Resources" ]; then
+	core_resources="$core/Contents/Resources"
+fi
+[ -f "$core_resources/LinuxSSHBootstrap.py" ] || {
+	echo "Missing resource file: $core_resources/LinuxSSHBootstrap.py" >&2; exit 1;
+}
+
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/pilot app check.XXXXXX")"
 trap 'rm -rf "$scratch"' EXIT
 trap 'exit 1' HUP INT TERM
