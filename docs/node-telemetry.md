@@ -3,6 +3,7 @@
 Pilot's daemon and kernel workers share a strict OpenTelemetry helper in `packages/telemetry`. It uses W3C
 `traceparent` propagation and OTLP/HTTP protobuf without auto-instrumentation. Remote export is disabled by default;
 the foundation does not read generic `OTEL_*` exporter settings or add HTTP, exception, host or process attributes.
+Explicit per-host consent and endpoints are described in [Telemetry controls](telemetry-settings.md).
 
 Only span names, attributes and resource fields in [the telemetry contract](telemetry-contract.md) are accepted.
 An unknown field rejects the whole observation before it reaches the SDK. Prompts, responses, tool traffic, paths,

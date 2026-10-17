@@ -136,6 +136,17 @@ test("disabled telemetry creates no spans or exporter work", async () => {
 	assert.deepEqual(telemetry.stats, { started: 0, invalid: 0, queued: 0, dropped: 0, exportFailures: 0 });
 });
 
+test("revocation drops queued spans without exporting them", async () => {
+	const exporter = new MemoryExporter();
+	const telemetry = new NodeTelemetry(options(exporter));
+	telemetry.startSpan("pilot.daemon.request").end();
+	assert.equal(telemetry.stats.queued, 1);
+	await telemetry.revoke();
+	assert.equal(telemetry.stats.queued, 0);
+	assert.equal(telemetry.stats.dropped, 1);
+	assert.equal(exporter.spans.length, 0);
+});
+
 test("sheds new spans at the process queue bound", async () => {
 	const exporter = new BlockingExporter();
 	const telemetry = new NodeTelemetry(options(exporter));

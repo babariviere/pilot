@@ -195,6 +195,7 @@ export class LifecycleDiagnostics {
 	private sequence = 0;
 	private writing?: Promise<void>;
 	private closed = false;
+	private enabled = true;
 	private readonly maxBytes: number;
 	private readonly maxPendingPerSession: number;
 	private readonly hostKind: LifecycleEvent["hostKind"];
@@ -219,7 +220,7 @@ export class LifecycleDiagnostics {
 
 	/** Observe a content-free projection. The first parked/idle snapshot is a baseline, not a fabricated transition. */
 	observe(sessionId: string, current: LifecycleObservation): void {
-		if (this.closed || !SESSION_ID.test(sessionId)) return;
+		if (!this.enabled || this.closed || !SESSION_ID.test(sessionId)) return;
 		const previous = this.previous.get(sessionId);
 		this.previous.set(sessionId, { ...current });
 		if (!previous) {
@@ -363,6 +364,17 @@ export class LifecycleDiagnostics {
 
 	async flush(): Promise<void> {
 		while (this.writing) await this.writing;
+	}
+
+	setEnabled(enabled: boolean): void {
+		if (this.enabled === enabled) return;
+		this.enabled = enabled;
+		this.previous.clear();
+		if (!enabled) {
+			this.pending.length = 0;
+			this.pendingBySession.clear();
+			this.droppedBySession.clear();
+		}
 	}
 
 	async close(): Promise<void> {

@@ -160,10 +160,10 @@ extension EnvironmentValues {
 
 /// A page of the settings window. General pages come first in the sidebar, then one page per project.
 enum SettingsTab: Hashable {
-    case appearance, notifications, connections, energy, terminal, updates, devboxes
+    case appearance, notifications, connections, diagnostics, energy, terminal, updates, devboxes
     case project(String)
 
-    static let general: [SettingsTab] = [.appearance, .notifications, .connections, .energy, .terminal, .updates, .devboxes]
+    static let general: [SettingsTab] = [.appearance, .notifications, .connections, .diagnostics, .energy, .terminal, .updates, .devboxes]
 
     /// The sidebar's order: general pages, then projects.
     static func ordered(projects: [Project]) -> [SettingsTab] { general + projects.map { .project($0.id) } }
@@ -179,6 +179,7 @@ enum SettingsTab: Hashable {
         case .appearance: "Appearance"
         case .notifications: "Notifications"
         case .connections: "Connections"
+        case .diagnostics: "Diagnostics"
         case .energy: "Energy"
         case .terminal: "Terminal"
         case .devboxes: "Devboxes"
@@ -192,6 +193,7 @@ enum SettingsTab: Hashable {
         case .appearance: PilotIcon.appearance
         case .notifications: PilotIcon.notifications
         case .connections: PilotIcon.connections
+        case .diagnostics: PilotIcon.activity
         case .energy: PilotIcon.energy
         case .terminal: PilotIcon.terminal
         case .devboxes: PilotIcon.terminal
@@ -248,6 +250,8 @@ struct SettingsView: View {
             } content: {
                 ConnectionSettings()
             }
+        case .diagnostics:
+            TelemetrySettingsPage()
         case .energy:
             SettingsPage("Energy", subtitle: "Keep work moving. Let the display rest.") { EnergySettings() }
         case .terminal:

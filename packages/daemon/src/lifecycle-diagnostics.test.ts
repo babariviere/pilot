@@ -141,3 +141,23 @@ test("rotates private files, reports overload and isolates a symlink failure", a
 	await f.log.flush();
 	assert.ok((await events(f.home)).some((row) => row.reason === "update"));
 });
+
+test("local consent stops collection and resumes from a fresh baseline", async (t) => {
+	const f = await fixture();
+	t.after(async () => {
+		await f.log.close();
+		await rm(f.home, { recursive: true, force: true });
+	});
+	f.log.setEnabled(false);
+	f.log.observe(sessionId, { ...baseline, state: "starting" });
+	await f.log.flush();
+	await assert.rejects(readFile(join(f.home, "sessions", sessionId, LIFECYCLE_FILE)), { code: "ENOENT" });
+	f.log.setEnabled(true);
+	f.log.observe(sessionId, baseline);
+	f.log.observe(sessionId, { ...baseline, sleepPaused: true });
+	await f.log.flush();
+	assert.deepEqual(
+		(await events(f.home)).map((event) => event.reason),
+		["sleep"],
+	);
+});

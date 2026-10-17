@@ -451,6 +451,10 @@ final class AppModel: ObservableObject {
                 self.notifier.deliver(notice, reference: HostResourceRef(host: host, kind: .session, localId: notice.sessionId))
             }
         }
+        client.onConnected = { [weak self] in
+            guard let self, self.client.hostIdentity?.hostId == "local" else { return }
+            Task { await self.refreshNativeTelemetry() }
+        }
         client.onSchedulesChanged = { [weak self] items in
             guard let self else { return }
             // Only transitions seen while connected notify; the first list after launch sets the baseline.
@@ -514,9 +518,16 @@ final class AppModel: ObservableObject {
                 do {
                     try registerLocal(host)
                     try hosts.install(client, host: host)
+                    await refreshNativeTelemetry()
                 } catch { reportDraftError(error) }
             }
         }
+    }
+
+    private func refreshNativeTelemetry() async {
+        guard client.hostIdentity?.hostId == "local",
+              let settings = try? await client.telemetrySettings() else { return }
+        NativeTelemetrySettings.apply(settings)
     }
 
     /// A folder is a remembered chat destination, not a registered project.

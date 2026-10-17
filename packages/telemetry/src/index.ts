@@ -406,18 +406,24 @@ function withoutOtelEnvironment<T>(run: () => T): T {
 class CountedExporter implements SpanExporter {
 	private readonly sink: SpanExporter;
 	private readonly stats: TelemetryStats;
+	private revoked = false;
 	constructor(sink: SpanExporter, stats: TelemetryStats) {
 		this.sink = sink;
 		this.stats = stats;
 	}
 	export(spans: ReadableSpan[], callback: (result: ExportResult) => void): void {
+		if (this.revoked) {
+			this.stats.queued = Math.max(0, this.stats.queued - spans.length);
+			callback({ code: ExportResultCode.SUCCESS });
+			return;
+		}
 		let settled = false;
 		const finish = (result: ExportResult) => {
 			if (settled) return;
 			settled = true;
 			clearTimeout(timer);
 			this.stats.queued = Math.max(0, this.stats.queued - spans.length);
-			if (result.code !== ExportResultCode.SUCCESS) {
+			if (result.code !== ExportResultCode.SUCCESS && !this.revoked) {
 				this.stats.dropped += spans.length;
 				this.stats.exportFailures++;
 			}
@@ -436,6 +442,12 @@ class CountedExporter implements SpanExporter {
 	}
 	shutdown(): Promise<void> {
 		return this.sink.shutdown();
+	}
+	revoke(): void {
+		if (this.revoked) return;
+		this.revoked = true;
+		this.stats.dropped += this.stats.queued;
+		this.stats.queued = 0;
 	}
 }
 
@@ -472,6 +484,7 @@ export class NodeTelemetry {
 	private readonly exportEnabled: boolean;
 	private readonly service: TelemetryServiceName;
 	private readonly observe?: (event: TelemetryInFlightEvent) => void;
+	private readonly counted?: CountedExporter;
 
 	constructor(options: NodeTelemetryOptions) {
 		this.service = options.serviceName;
@@ -482,7 +495,8 @@ export class NodeTelemetry {
 		if (!/^\d+(?:\.\d+){1,3}$/.test(options.serviceVersion)) throw new Error("Invalid telemetry service version");
 		if (options.hostId !== undefined && !/^[a-z0-9_-]{22}$/.test(options.hostId))
 			throw new Error("Invalid pseudonymous telemetry host id");
-		const processor = new BatchSpanProcessor(new CountedExporter(sink, this.stats), {
+		this.counted = new CountedExporter(sink, this.stats);
+		const processor = new BatchSpanProcessor(this.counted, {
 			maxQueueSize: NODE_SPAN_QUEUE_LIMIT,
 			maxExportBatchSize: NODE_SPAN_BATCH_LIMIT,
 			scheduledDelayMillis: NODE_SPAN_SCHEDULE_MS,
@@ -604,6 +618,12 @@ export class NodeTelemetry {
 		]);
 		clearTimeout(timer);
 	}
+
+	/** Stop new export and discard every batch not already inside an SDK network attempt. */
+	async revoke(timeoutMs = 1_000): Promise<void> {
+		this.counted?.revoke();
+		await this.shutdown(timeoutMs);
+	}
 }
 
 let current = new NodeTelemetry({
@@ -618,7 +638,7 @@ let current = new NodeTelemetry({
 export function configureNodeTelemetry(options: NodeTelemetryOptions): NodeTelemetry {
 	const previous = current;
 	current = new NodeTelemetry(options);
-	void previous.shutdown();
+	void previous.revoke();
 	return current;
 }
 
