@@ -402,10 +402,13 @@ final class KeyboardFocus: ObservableObject {
 final class KeyboardRouter {
     static let shared = KeyboardRouter()
     private var monitor: Any?
+    private var pointerMonitor: Any?
     private var resignObserver: NSObjectProtocol?
     /// Performs an app action for a route. Returns false to deliver the key normally.
     var perform: ((KeyboardRoute) -> Bool)?
     var focus: KeyboardFocus?
+    /// Shows keyboard-only decoration after navigation keys and hides it on clicks, in every window.
+    var cue: KeyboardCue = .shared
 
     func install(focus: KeyboardFocus, perform: @escaping (KeyboardRoute) -> Bool) {
         self.focus = focus
@@ -415,6 +418,11 @@ final class KeyboardRouter {
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             self?.handle(event) ?? event
         }
+        // Clicks only hide keyboard decoration; the event is delivered unchanged.
+        pointerMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) {
+            [weak self] event in
+            self?.handlePointer(event) ?? event
+        }
         // A sequence never survives the window losing focus.
         resignObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didResignKeyNotification, object: nil, queue: .main
@@ -423,6 +431,12 @@ final class KeyboardRouter {
 
     /// The event to deliver, or nil when a route consumed it.
     func handle(_ event: NSEvent) -> NSEvent? {
+        if let window = event.window {
+            // Before delivery, so focus that the key moves arrives with the cue already shown.
+            let responder = window.firstResponder
+            cue.note(KeyboardChord(event), context: KeyboardInputGuard.context(for: responder),
+                     fieldEditor: (responder as? NSTextView)?.isFieldEditor == true)
+        }
         guard let focus, let window = event.window else { return event }
         if window !== focus.window || window.attachedSheet != nil {
             // Sheets and other windows (an artifact viewer, a link preview) keep every key, except that ⌃⇥ always
@@ -459,6 +473,12 @@ final class KeyboardRouter {
         default:
             return perform?(route) == true ? nil : event
         }
+    }
+
+    /// A mouse button went down: hide keyboard-only decoration, including for focus the click moves later.
+    func handlePointer(_ event: NSEvent) -> NSEvent {
+        cue.notePointer()
+        return event
     }
 
     static func arrowEvent(down: Bool, like event: NSEvent) -> NSEvent? {

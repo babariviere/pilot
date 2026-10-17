@@ -824,8 +824,9 @@ struct MissionTaskRow: View {
     var body: some View {
         let _ = Self.bodyEvaluations &+= 1
         let waiting = dependencies.isWaiting || gating != nil
-        // The keyboard-highlighted row builds its menus too, so they never need hovering.
-        let keyboardActive = keyboardHighlight.focused && keyboardHighlight.id == task.id
+        // The keyboard-highlighted row builds its menus too, so they never need hovering. A click hides them again
+        // until the next navigation key.
+        let keyboardActive = keyboardHighlight.decorates(task.id)
         HoverRow(verticalPadding: 7) { hovered in
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 // Menus are AppKit pop-up buttons and costly to create, so rows build them only on hover.

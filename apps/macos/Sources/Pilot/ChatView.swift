@@ -909,6 +909,7 @@ struct RowView: View, Equatable {
     var body: some View {
         content
             .frame(maxWidth: Theme.column, alignment: .leading)
+            .background(TranscriptRowHighlight(id: row.id))
             .frame(maxWidth: .infinity)
     }
 
