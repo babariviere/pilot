@@ -164,19 +164,51 @@ cadence; 10, 50 and 100 deltas/s are stress cases for per-update cost and for fu
 infrequent chunks are also why newly streamed text needs a short fade-in to look smooth.
 
 Numbers depend on the Mac, its display and load. Run every branch on the same Mac, plugged in, with the window on
-the built-in display and other apps idle, and compare medians of at least three runs. The baseline below comes from
-`main` before the streaming work; later changes add their before/after rows.
+the built-in display and other apps idle, and compare medians of at least three runs.
 
-| Case (release, `main`) | CPU | Main thread | Footprint peak | Hitches / dropped | Body evals | After completion |
-| --- | --- | --- | --- | --- | --- | --- |
-| 4/s, 100 chars | pending | | | | | |
-| 10/s, 12 chars | pending | | | | | |
-| 50/s, 12 chars | pending | | | | | |
-| 100/s, 12 chars | pending | | | | | |
+**Results (2026-10-17).** Release builds on an 11-core M3 Pro on AC power, load about 3, three runs per case
+(median shown). *Before* is the benchmark commit on `main` (`perf/streaming-benchmark`), *after* is the top of the
+streaming stack (`perf/receding-corners-core-animation`). The fixture has 1,000 history rows and twelve working
+sessions in the sidebar. The display was asleep, so the window was occluded: no display-link frames were counted,
+AppKit skipped drawing, and Core Animation loops were paused. CPU is therefore process and main-thread work without
+drawing or compositing, comparable between the two builds but lower than with the window on screen.
 
-The Swift app is only built in CI, so these numbers have to come from a local run of
-`apps/macos/scripts/bench-streaming.sh`.
-+
+| Case | CPU before → after | Main thread | Footprint peak | `ChatView` bodies | After completion |
+| --- | --- | --- | --- | --- | --- |
+| 4/s, 100 chars (pilotd's cadence) | 12.8% → 7.4% | 12.1% → 7.1% | 213 → 104 MiB | 81 → 3 | 2.4% → 0.0% |
+| 10/s, 12 chars | 15.7% → 8.5% | 15.0% → 8.1% | 215 → 103 MiB | 201 → 3 | 2.5% → 0.0% |
+| 50/s, 12 chars | 84.2% → 45.0% | 78.8% → 43.4% | 223 → 110 MiB | 999 → 3 | 2.3% → 0.0% |
+| 100/s, 12 chars | 105.6% → 73.6% | 96.0% → 71.4% | 237 → 120 MiB | 1,419 → 3 | 2.4% → 0.0% |
+
+Where the time went, per run at 4 updates/s: Markdown preparation 26 → 7 ms (0.65 → 0.09 ms per call, now off
+the critical path), text measurement 69 → 45 ms; at 100/s the transcript reducer's mean apply dropped from 10 ms to
+1–1.4 ms because the main actor no longer starves it. Row work now happens in `TranscriptRowsSection` (two
+evaluations per published update; the chat around it stays at three, for the start and end of the run). The physical
+footprint peak halves because streaming prefixes no longer fill the Markdown caches. *After completion* is the idle
+cost of the fixture's working sessions once the reply ends: the sidebar corners and spinners now play on Core
+Animation, so the process itself does nothing.
+
+`Pilot --performance-check --working` (twelve working sessions, idle chat, three runs):
+
+| Build | CPU | Main thread |
+| --- | --- | --- |
+| Before (`perf/streaming-benchmark`) | 3.3–3.8% | 3.1–3.6% |
+| Spinners and composer corner on Core Animation (`feat/tool-title-shimmer`) | 2.4–2.9% | 2.3–2.8% |
+| Receding sidebar corners too (`perf/receding-corners-core-animation`) | 0.1% | 0.0% |
+
+The render server still composites the loops while the window is visible; that cost is outside the process and
+was not measured here. `Pilot --performance-check --scrolling --rich` on the top of the stack: 600 live-scroll
+frames through 750 rich rows, p50 1.2–1.3 ms, p95 7.3 ms, max 11–14 ms, none over 16 ms (27–28% of a core while
+scrolling).
+
+**Is a reused-cell transcript (NSTableView/NSCollectionView with cached heights) still needed?** Not for streaming
+or scrolling at today's sizes. At pilotd's real cadence a streaming reply costs about 7% of a core on the main
+thread, the chat around the rows is no longer re-evaluated, and scroll frames stay under the 8.3 ms budget of a
+120 Hz display at p95. What remains per update is SwiftUI's own diff and layout of the live tail and about ten
+size probes of its text views, which a table view would still pay. Revisit it if `--scrolling --rich` p95 exceeds
+8.3 ms on long histories, if opening very long chats regresses (`--transcript-opening-check`), or once hitches
+are measured with the window on screen and show dropped frames during streaming.
+
 **Incremental Markdown.** A streaming reply was parsed and styled again in full on every update, so its cost
 grew with the reply. `MarkdownStream` (PilotCore) keeps the blocks before the last boundary (a blank line, closing
 fence, heading or rule outside a code fence) and parses only the text after it; `MarkdownRenderer` keeps their
@@ -196,7 +228,7 @@ xcrun swiftc -O -parse-as-library apps/macos/scripts/bench-markdown.swift \
 
 The full parse is the mean over the reply; near its end a single update cost about 4 ms off the main thread.
 Whole-app numbers come from the streaming benchmark above.
-+
+
 **Narrow invalidation.** Every streamed batch used to republish `SessionFeed`, so `ChatView`'s whole body (including
 the composer, the working line and scheduled messages) was evaluated once per update. Rows now publish through
 `SessionFeed.rows`, observed only by `TranscriptRowsSection`; the feed publishes `TranscriptStatus`, which changes
@@ -205,7 +237,7 @@ the current frame (`DisplayFramePacer`, a paused `CADisplayLink` that runs only 
 per-revision `scrollTo` is gone: while following, `TranscriptScrollObserver` already pins the bottom in the layout
 pass that grows the document. The benchmark's `chat body evaluations` should stay near zero while streaming, and
 `transcript rows evaluations` counts the row updates instead.
-+
+
 **Appending streamed text.** The streaming block's `NSTextView` replaced its whole storage per update, so TextKit laid
 out every line again on the main thread. It now edits only from the first changed character or style
 (`MessageSelectionTextView.replaceChangedTail`), so the layout before it is kept, and size probes at another width
@@ -222,7 +254,7 @@ xcrun swiftc -O -parse-as-library apps/macos/scripts/bench-text-append.swift -o 
 | 2 KB, 100-character deltas | 0.39 ms | 0.12 ms |
 | 8 KB, 12-character deltas | 1.42 ms | 0.13 ms |
 | 8 KB, 100-character deltas | 1.44 ms | 0.16 ms |
-+
+
 **Spinners and the composer corner on Core Animation.** `EllipsisSpinner` (the working line, running tool steps
 and other working marks) and moving corners that never recede (the composer's working corner, the question tray)
 used to redraw through SwiftUI on every tick of the shared 12 fps `DitherCornerClock`. They now play on layers
