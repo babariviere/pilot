@@ -162,7 +162,7 @@ jobs:
             ~/Library/Caches/org.swift.swiftpm/repositories
             ~/Library/Caches/org.swift.swiftpm/artifacts
             apps/macos/Vendor/libghostty-spm
-          key: swift-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.resolved', 'apps/macos/Package.swift', 'apps/macos/scripts/vendor-ghostty.sh', 'apps/macos/scripts/patch-ghostty-resources.py') }}
+          key: swift-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.resolved', 'apps/macos/Package.swift', 'apps/macos/scripts/vendor-ghostty.sh', 'apps/macos/scripts/patch-ghostty-resources.py', 'apps/macos/scripts/patch-ghostty-layout.py') }}
       - name: Swift tests
         id: swift-test
         if: ${{ !cancelled() && steps.swift-toolchain.outcome == 'success' }}
@@ -243,7 +243,7 @@ jobs:
             ~/Library/Caches/org.swift.swiftpm/repositories
             ~/Library/Caches/org.swift.swiftpm/artifacts
             apps/macos/Vendor/libghostty-spm
-          key: swift-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.resolved', 'apps/macos/Package.swift', 'apps/macos/scripts/vendor-ghostty.sh', 'apps/macos/scripts/patch-ghostty-resources.py') }}
+          key: swift-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.resolved', 'apps/macos/Package.swift', 'apps/macos/scripts/vendor-ghostty.sh', 'apps/macos/scripts/patch-ghostty-resources.py', 'apps/macos/scripts/patch-ghostty-layout.py') }}
       - name: Load current release packaging tools
         if: inputs.release_tag != ''
         uses: actions/checkout@v4
