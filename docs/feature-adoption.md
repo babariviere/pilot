@@ -49,7 +49,7 @@ analytics identity, intentionally ending longitudinal linkage.
 The macOS app emits these events as `pilot.feature` spans only after both remote operational reporting and the
 separate Product analytics setting are enabled on Local. Feature spans use an isolated tracer resource containing
 `pilot.analytics.id`; they never contain `pilot.host.id` and never inherit an operational trace parent. Operational
-spans never contain the analytics identity.
+spans never contain the analytics identity, and each tracer gets an independent `service.instance.id`.
 
 The closed event fields map to `pilot.feature.catalog_version`, `pilot.feature.name`, `pilot.feature.stage`, and the
 stage-specific `pilot.feature.availability`, `pilot.feature.outcome` and `pilot.feature.reason` attributes. The app
