@@ -126,6 +126,13 @@ private func configuration(exporter: any SpanExporter) -> PilotTelemetryConfigur
             analyticsID: "invalid", exporter: MemorySpanExporter()
         ))
     }
+    #expect(throws: PilotTelemetryConfigurationError.invalidAnalyticsID) {
+        try telemetry.configure(PilotTelemetryConfiguration(
+            enabled: true, serviceVersion: "1.45.1", environment: .test, hostKind: .local,
+            hostID: "host_id_12345678901234", analyticsID: "host_id_12345678901234",
+            exporter: MemorySpanExporter()
+        ))
+    }
 }
 
 @Test func featureEventsRespectTheProcessRateCap() async {
