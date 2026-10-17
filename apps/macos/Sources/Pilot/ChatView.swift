@@ -358,25 +358,32 @@ struct ChatView: View {
                             .frame(maxWidth: Theme.column, alignment: .leading)
                             .frame(maxWidth: .infinity)
                     }
-                    if let error = transcript.failureBannerText(for: session) {
+                    if transcript.failureBannerText(for: session) != nil || session.canRetryStartup == true {
                         VStack(alignment: .leading, spacing: 8) {
-                            ErrorRow(text: error)
+                            if let error = transcript.failureBannerText(for: session) { ErrorRow(text: error) }
                             if session.canRetryStartup == true, !session.isReadOnlyHistory {
-                                Button {
-                                    retryingStartup = true
-                                    composer.error = nil
-                                    Task {
-                                        defer { retryingStartup = false }
-                                        do { try await perform { client, id in try await client.retryStartup(id) } }
-                                        catch { composer.error = error.localizedDescription }
+                                HStack(spacing: 8) {
+                                    Button {
+                                        retryingStartup = true
+                                        composer.error = nil
+                                        Task {
+                                            defer { retryingStartup = false }
+                                            do { try await perform { client, id in try await client.retryStartup(id) } }
+                                            catch { composer.error = error.localizedDescription }
+                                        }
+                                    } label: {
+                                        Label("Retry Startup", icon: PilotIcon.refresh)
                                     }
-                                } label: {
-                                    Label("Retry Startup", icon: PilotIcon.refresh)
+                                    .controlSize(.small)
+                                    .accessibilityIdentifier("retry-startup")
+                                    .disabled(retryingStartup)
+                                    .help("Reload extensions and continue with the original queued messages. History and workspace files stay as they are.")
+                                    Button("Stop Chat", action: stop)
+                                        .controlSize(.small)
+                                        .accessibilityIdentifier("stop-failed-recovery")
+                                        .disabled(retryingStartup || model.pendingSessionActions.contains(session.id))
+                                        .help("Cancel this chat and its saved subagent work without restarting the worker. History and workspace files stay as they are.")
                                 }
-                                .controlSize(.small)
-                                .accessibilityIdentifier("retry-startup")
-                                .disabled(retryingStartup)
-                                .help("Reload extensions and continue with the original queued messages. History and workspace files stay as they are.")
                             }
                         }
                         .frame(maxWidth: Theme.column, alignment: .leading)

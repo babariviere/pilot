@@ -234,7 +234,7 @@ struct CommandPaletteCatalog {
         if session.status == .failed {
             add("retry", "Retry", .refresh) { model.retry(session, context: context) }
         }
-        if session.isWorking {
+        if session.canStop {
             add("stop", "Stop agent", .stop) { model.stopSession(id) }
         }
         let pullRequests = session.linkedPullRequests.filter { !$0.isTerminal }

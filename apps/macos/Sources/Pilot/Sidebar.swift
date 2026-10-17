@@ -544,7 +544,7 @@ struct SessionRow: View {
             Divider()
             SessionMissionActions(session: session)
             Divider()
-            if session.isWorking {
+            if session.canStop {
                 Button("Stop Session") { model.stopSession(owner?.storageKey ?? session.id) }
             }
             ForEach(session.linkedPullRequests, id: \.url) { pr in

@@ -17,6 +17,7 @@ import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { configureBundledChildren } from "./bundled-extensions.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import { KernelSession } from "./session.ts";
+import { stopRecoveryChildren } from "./stop-recovery.ts";
 
 async function until(check: () => boolean | Promise<boolean>) {
 	const deadline = performance.now() + 20_000;
@@ -43,7 +44,7 @@ export default pi => {
 		const results = request.messages.filter(message => message.role === "toolResult");
 		if (results.length === 0) return fauxAssistantMessage(
 			mode === "update" ? [call(1), call(2)] : [call(1)], {stopReason: "toolUse"});
-		if (results.length === 1 && (mode === "sleep" || mode === "offline")) {
+		if (results.length === 1 && (mode === "sleep" || mode === "offline" || mode === "stop")) {
 			if (!existsSync(join(root, "model-blocked"))) {
 				writeFileSync(join(root, "model-blocked"), "ready");
 				await new Promise((_, reject) => {
@@ -84,8 +85,8 @@ export default pi => {
 };`;
 }
 
-for (const mode of ["update", "sleep", "offline"] as const) {
-	test(`real child survives ${mode} replacement and its answer reaches an idle parent exactly once`, {
+for (const mode of ["update", "sleep", "offline", "stop"] as const) {
+	test(`real child ${mode === "stop" ? "cancellation precedes" : "survives"} ${mode} replacement`, {
 		timeout: 60_000,
 	}, async (t) => {
 		const root = await mkdtemp(join(tmpdir(), "pilot-child-pause-"));
@@ -222,6 +223,25 @@ for (const mode of ["update", "sleep", "offline"] as const) {
 		}
 		await session.close();
 		assert.equal(await readFile(join(root, "effects"), "utf8"), "1");
+		if (mode === "stop") {
+			const stopped = await stopRecoveryChildren({
+				directory: spec.storageDir,
+				cwd: root,
+				sessionId: spec.sessionId,
+			});
+			assert.equal(stopped[0]?.state, "idle");
+			assert.equal(stopped[0]?.conversationId, identity);
+			session = await open();
+			await session.subagentCommand({ action: "stop", name: "implementation" });
+			assert.equal(
+				await readFile(join(root, "effects"), "utf8"),
+				"1",
+				"cancellation cannot run the recovered child's next tool",
+			);
+			assert.equal(faux.state.callCount, 2, "cancellation cannot wake the idle parent");
+			assert.equal(session.subagentList[0]?.state, "idle");
+			return;
+		}
 		session = await open();
 		if (mode === "offline") {
 			await delay(50);

@@ -55,9 +55,9 @@ import type {
 import { prepareAskSnapshot } from "./ask-snapshots.ts";
 import { chatTitleContext } from "./chat-title.ts";
 import { ColdViewReader } from "./cold-view-reader.ts";
+import { ControlActions } from "./control-actions.ts";
 import { ControlChat } from "./control-chat.ts";
 import type { ControlPilot } from "./control-pilot.ts";
-import { ControlActions } from "./control-actions.ts";
 import { ControlProjectMemory } from "./control-project-memory.ts";
 import { coordinatorTrust } from "./coordinator-trust.ts";
 import type { CredentialBroker } from "./credential-broker.ts";
@@ -84,6 +84,7 @@ import {
 	sessionPullRequests,
 	workspaceChangeIds,
 } from "./pull-requests.ts";
+import { RecoveryStops } from "./recovery-stops.ts";
 import { continuationAnswer, continuationHandoff, continuationQueuedInputs } from "./session-continuation.ts";
 import {
 	applyActivity,
@@ -251,6 +252,8 @@ export interface SessionManagerOptions {
 }
 
 export interface SessionFactories {
+	/** Credential-free cancellation, after the failed storage owner has closed. */
+	stopRecovery?: (spec: import("@pilot/kernel").RecoveryStop) => Promise<KernelSubagent[]>;
 	/** Read-only persisted view, independent of the worker/SDK factory. */
 	snapshot?: (directory: string, cwd: string, includeTodos?: boolean) => Promise<PersistedSessionView>;
 	/** Read-only subagent transcript events from a child's private storage directory. */
@@ -348,6 +351,8 @@ interface SessionMeta extends OutcomeMeta {
 	pending?: PendingCommand[];
 	/** A stopped, unopened workspace has no conversation history to load yet. */
 	cancelled?: boolean;
+	/** Explicit Stop after startup failure. Keep the abort outbox, but never automatically reopen it. */
+	recoveryStopped?: boolean;
 	/** A recoverable input/admission error, not a failed worker initialization. */
 	inputError?: string;
 	failure?: string;
@@ -1026,6 +1031,7 @@ export class SessionManager {
 	private readonly unpublishedChecks = new Map<string, { at: number; promise?: Promise<boolean> }>();
 	private readonly pool?: WorkerPool;
 	private readonly workerStarts = new WorkerStarts<SessionWorker>();
+	private readonly recoveryStops = new RecoveryStops();
 	private readonly subscriptionUsage?: SubscriptionUsageSource;
 	private readonly idleParkMs: number;
 	private readonly prFollowUpCooldownMs: number;
@@ -1436,7 +1442,7 @@ export class SessionManager {
 					(meta.working || meta.initializing || meta.pending?.length || this.backgroundWorking(meta))
 				)
 					meta.sleepPaused = true;
-				const childWork = this.backgroundWorking(meta);
+				const childWork = !meta.failure && !meta.recoveryStopped && this.backgroundWorking(meta);
 				if (childWork) applyActivity(meta, Boolean(meta.working), undefined, true);
 				this.metas.set(meta.id, meta);
 				if (legacyRefresh || childWork) await this.save(meta);
@@ -1480,6 +1486,7 @@ export class SessionManager {
 			if (
 				meta.archivedAt === undefined &&
 				!meta.failure &&
+				!meta.recoveryStopped &&
 				(meta.initializing ||
 					meta.pending?.length ||
 					meta.working ||
@@ -1515,7 +1522,10 @@ export class SessionManager {
 	/** Child admissions are durable even when the parent has already ended its own run. */
 	private backgroundWorking(meta: SessionMeta, worker = this.workers.get(meta.id)): boolean {
 		return !!(
-			(meta.archivedAt === undefined && meta.subagents?.some((child) => child.state === "working")) ||
+			(meta.archivedAt === undefined &&
+				!meta.failure &&
+				!meta.recoveryStopped &&
+				meta.subagents?.some((child) => child.state === "working")) ||
 			worker?.runningJobs?.length ||
 			worker?.awaitingJobFollowUp
 		);
@@ -3640,6 +3650,7 @@ export class SessionManager {
 					// Terminal initialization failure cannot replay these commands. Uncertain admission
 					// uses inputError instead, so its durable outbox continues to block an update.
 					(!meta.failure &&
+						!meta.recoveryStopped &&
 						(meta.preparing || meta.initializing || meta.pending?.length || meta.kernelRestartPending)),
 			) ||
 			[...this.workers.values()].some(
@@ -4085,6 +4096,7 @@ export class SessionManager {
 			if (this.closing) throw new Error("pilotd is shutting down");
 			if (meta.failure) throw new Error(meta.failure);
 			delete meta.cancelled;
+			delete meta.recoveryStopped;
 			// Pending duplicates retain their original payload; accepted retries are deduped by the kernel.
 			if (!meta.pending?.some((command) => command.requestId === requestId)) {
 				meta.pending ??= [];
@@ -4154,6 +4166,14 @@ export class SessionManager {
 				await this.unparked(id);
 			}
 			if (this.closing) throw new Error("pilotd is shutting down");
+			if (meta.recoveryStopped) {
+				meta.subagents = await (this.factories.stopRecovery ?? ((spec) => this.recoveryStops.stop(spec)))({
+					directory: join(this.dir(id), "durable"),
+					cwd: meta.coordinatorView?.scratch ?? meta.cwd,
+					sessionId: id,
+				});
+				delete meta.recoveryStopped;
+			}
 			delete meta.failure;
 			delete meta.inputError;
 			this.kernelErrors.delete(id);
@@ -4189,7 +4209,8 @@ export class SessionManager {
 		this.assertNotContinued(meta, true);
 		if (this.changingModels.has(id)) throw new Conflict("Session is changing its model or conversation");
 		if (this.closing) throw new Error("pilotd is shutting down");
-		if (meta.failure) return { ok: true };
+		if (this.canRetryStartup(meta)) return this.stopFailedRecovery(meta);
+		if (meta.failure || meta.recoveryStopped) return { ok: true };
 		if (
 			!meta.initializing &&
 			!this.workers.has(id) &&
@@ -4269,6 +4290,75 @@ export class SessionManager {
 		}
 	}
 
+	/** Stop failed recovery without signing in, starting a model, or discarding durable history. */
+	private async stopFailedRecovery(meta: SessionMeta): Promise<StopResponse> {
+		const end = this.updateGate.begin();
+		const id = meta.id;
+		let release!: () => void;
+		this.changingModels.set(
+			id,
+			new Promise<void>((resolve) => {
+				release = resolve;
+			}),
+		);
+		try {
+			await this.starting.get(id);
+			await this.unparked(id);
+			const worker = this.workers.get(id);
+			if (worker) {
+				this.workers.delete(id);
+				this.lastUse.delete(id);
+				this.parked.add(worker);
+				const closing = worker.close().finally(() => {
+					if (this.parking.get(id) === closing) this.parking.delete(id);
+				});
+				this.parking.set(id, closing);
+				await this.unparked(id);
+			}
+			if (this.closing) throw new Error("pilotd is shutting down");
+			const unsent = (meta.pending ?? []).flatMap((command) =>
+				command.type === "input" && !command.onlyIfIdle && !inputOrigin(command.requestId) && command.content.trim()
+					? [command.content]
+					: [],
+			);
+			const automatic = (meta.pending ?? [])
+				.filter((command) => command.type === "input" && inputOrigin(command.requestId))
+				.map((command) => ({ ...command, onlyIfIdle: false }));
+			meta.pending = [
+				{ type: "abort", requestId: randomUUID() },
+				...(meta.pending ?? []).filter((command) => command.type !== "abort"),
+			];
+			meta.recoveryStopped = true;
+			// Keep the failure until the cancellation journal commits. A crash or error stays retryable.
+			await this.save(meta, undefined, undefined, true);
+			meta.subagents = await (this.factories.stopRecovery ?? ((spec) => this.recoveryStops.stop(spec)))({
+				directory: join(this.dir(id), "durable"),
+				cwd: meta.coordinatorView?.scratch ?? meta.cwd,
+				sessionId: id,
+			});
+			meta.pending = [meta.pending[0]!, ...automatic];
+			delete meta.failure;
+			delete meta.inputError;
+			delete meta.initializing;
+			delete meta.kernelRestartPending;
+			delete meta.updatePaused;
+			delete meta.sleepPaused;
+			meta.working = false;
+			this.kernelErrors.delete(id);
+			clearOutcome(meta);
+			meta.updatedAt = Date.now();
+			await this.save(meta, undefined, undefined, true);
+			this.emit(meta);
+			for (const [watchId, listener] of this.watchers.get(id) ?? []) this.watchColdHistory(meta, watchId, listener);
+			const draft = unsent.join("\n\n");
+			return draft ? { ok: true, draft } : { ok: true };
+		} finally {
+			this.changingModels.delete(id);
+			release();
+			end();
+		}
+	}
+
 	/**
 	 * Send one pending command. Input stays marked as delivering while its admission is in flight, and after a lost
 	 * acknowledgement, so Stop leaves it to the kernel instead of also restoring it to the composer.
@@ -4326,7 +4416,14 @@ export class SessionManager {
 		const cached = this.commandLists.get(id);
 		if (cached) return cached;
 		const meta = this.require(id);
-		if (meta.archivedAt !== undefined || meta.preparing || meta.workspaceRecovery || meta.failure) return [];
+		if (
+			meta.archivedAt !== undefined ||
+			meta.preparing ||
+			meta.workspaceRecovery ||
+			meta.failure ||
+			meta.recoveryStopped
+		)
+			return [];
 		const end = this.updateGate.begin();
 		try {
 			if (this.closing) throw new Error("pilotd is shutting down");
@@ -4805,7 +4902,7 @@ export class SessionManager {
 		const worker = this.workers.get(id);
 		// Preserve the update lease guard before registering a new cold subscription. Existing
 		// live subscriptions and terminal failed-session snapshots do not start new work.
-		if (!worker && !meta.failure) this.updateGate.assertOpen();
+		if (!worker && !meta.failure && !meta.recoveryStopped) this.updateGate.assertOpen();
 		const watchId = randomUUID();
 		let watchers = this.watchers.get(id);
 		if (!watchers) {
@@ -4819,6 +4916,7 @@ export class SessionManager {
 		else if (
 			!this.sleepPause &&
 			!meta.failure &&
+			!meta.recoveryStopped &&
 			meta.archivedAt === undefined &&
 			!(meta.preparing && meta.cancelled) &&
 			(meta.preparing || meta.initializing || meta.pending?.length || meta.working)
@@ -4857,11 +4955,13 @@ export class SessionManager {
 		const id = meta.id;
 		const generation = this.workerGenerations.get(id);
 		const failure = meta.failure;
+		const stopped = meta.recoveryStopped;
 		const worker = this.workers.get(id);
 		const current = () =>
 			!this.closing &&
 			this.coldWatches.get(watchId) === cancelRead &&
 			meta.failure === failure &&
+			meta.recoveryStopped === stopped &&
 			!(meta.preparing && meta.cancelled) &&
 			this.watchers.get(id)?.get(watchId) === listener &&
 			(!this.workers.has(id) || (!!failure && this.workers.get(id) === worker)) &&
@@ -4890,7 +4990,7 @@ export class SessionManager {
 				// even if that worker has already exited again. Never replace fresh live state.
 				if (!current()) return;
 				const events = structuredClone(view.events);
-				if (failure) {
+				if (failure || stopped) {
 					// Interrupted durable work may still have live checkpoints. It is not running
 					// while startup is blocked, and must not paint a stale streaming response.
 					for (const event of events) {
@@ -4899,6 +4999,7 @@ export class SessionManager {
 						delete event.generation;
 						event.tools = [];
 						event.compactions = [];
+						if (stopped) event.inbox = [];
 					}
 				}
 				listener(events);
@@ -4907,6 +5008,7 @@ export class SessionManager {
 				if (
 					!this.sleepPause &&
 					!meta.failure &&
+					!meta.recoveryStopped &&
 					view.completion &&
 					applyActivity(meta, false, view.completion, this.backgroundWorking(meta))
 				)
@@ -5116,6 +5218,7 @@ export class SessionManager {
 	async shutdown(): Promise<void> {
 		this.closing = true;
 		this.workerStarts.close();
+		this.recoveryStops.close();
 		this.longJobTimers.close();
 		clearTimeout(this.updatePauseTimer);
 		for (const timer of this.kernelRestarts.values()) clearTimeout(timer);
@@ -5167,7 +5270,7 @@ export class SessionManager {
 			return Promise.resolve(new Map());
 		if (meta.continuedTo || meta.continuationPending || (!admitted && this.changingModels.has(id)))
 			return Promise.resolve(new Map());
-		if (this.closing || this.sleepPause || meta.failure) return Promise.resolve(new Map());
+		if (this.closing || this.sleepPause || meta.failure || meta.recoveryStopped) return Promise.resolve(new Map());
 		// An existing drain owns its admission. Do not recheck its gate after any await.
 		if (!admitted && !this.workers.has(id)) this.updateGate.assertOpen();
 		const rejected = new Map<string, Error>();
@@ -5415,6 +5518,7 @@ export class SessionManager {
 		this.assertNotContinued(meta);
 		if (meta.archivedAt !== undefined) throw new Conflict("Restore the archived session before starting its worker");
 		if (meta.failure) throw new Conflict("Retry startup before starting its worker");
+		if (meta.recoveryStopped) throw new Conflict("Recovery is stopped. Send a new message to continue.");
 		if (meta.preparing) throw new Error("Session workspace is still preparing");
 		if (meta.workspaceRecovery) throw new Conflict("Restore the archived session before starting its worker");
 		if (this.isMissionCoordinator(id) !== !!meta.coordinatorView)
@@ -6083,6 +6187,7 @@ export class SessionManager {
 			!!this.sleepPause &&
 			meta.archivedAt === undefined &&
 			!meta.failure &&
+			!meta.recoveryStopped &&
 			!!(
 				meta.sleepPaused ||
 				meta.working ||
@@ -6101,15 +6206,18 @@ export class SessionManager {
 					window.provider === this.subscriptionProviderOf(meta, worker) &&
 					!meta.subscriptionPolicy?.forced.includes(subscriptionWindowKey(window)),
 			);
-		const kernelState = paused
-			? "parked"
-			: meta.failure
-				? "failed"
-				: meta.initializing
-					? "starting"
-					: meta.inputError && (!meta.working || !worker)
+		const kernelState =
+			meta.recoveryStopped && !meta.failure
+				? "parked"
+				: paused
+					? "parked"
+					: meta.failure
 						? "failed"
-						: (worker?.state ?? "parked");
+						: meta.initializing
+							? "starting"
+							: meta.inputError && (!meta.working || !worker)
+								? "failed"
+								: (worker?.state ?? "parked");
 		const childrenWorking =
 			meta.archivedAt === undefined && (meta.subagents?.some((child) => child.state === "working") ?? false);
 		const runnableChildren =
@@ -6134,12 +6242,16 @@ export class SessionManager {
 			this.internetOnline === false &&
 			meta.archivedAt === undefined &&
 			!meta.failure &&
+			!meta.recoveryStopped &&
 			(mainBusy || childrenWorking);
 		const working =
+			!meta.failure &&
+			!meta.recoveryStopped &&
 			!paused &&
 			!offlinePaused &&
 			((!mainQuotaPaused && mainBusy) || runnableChildren || !!worker?.runningJobs?.length);
-		const heldAtQuota = quotaPaused && !working && (mainBusy || childrenWorking);
+		const heldAtQuota =
+			!meta.failure && !meta.recoveryStopped && quotaPaused && !working && (mainBusy || childrenWorking);
 		const state = heldAtQuota && kernelState !== "failed" ? "working" : kernelState;
 		const longJob = meta.archivedAt === undefined ? longJobAttention(worker?.runningJobs ?? []) : undefined;
 		const sourceBranch =
@@ -6192,7 +6304,17 @@ export class SessionManager {
 			...(meta.thinking ? { thinking: meta.thinking } : {}),
 			...(usage ? { usage } : {}),
 			...(subscriptionPause ? { subscriptionPause } : {}),
-			...(meta.subagents?.length ? { subagents: meta.subagents.map(publicSubagent) } : {}),
+			...(meta.subagents?.length
+				? {
+						subagents: meta.subagents.map((child) =>
+							publicSubagent(
+								meta.failure && child.state === "working"
+									? { ...child, state: "idle", error: safeFailureText(meta.failure) }
+									: child,
+							),
+						),
+					}
+				: {}),
 			...(!working && !heldAtQuota && !offlinePaused && meta.outcome ? { outcome: meta.outcome } : {}),
 			...(!working && !heldAtQuota && !offlinePaused && meta.outcomeAt !== undefined
 				? { outcomeAt: meta.outcomeAt }
