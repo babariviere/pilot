@@ -7,7 +7,7 @@ used again. It does not record content or infer intent from absence.
 | --- | --- | --- | --- | --- |
 | `diagnose_chat` | A non-diagnostics chat and its qualified host are available | The chat More menu shows **Diagnose this chat** | The user invokes it | The specialist is created, creation fails, is cancelled, or the host became unavailable |
 | `devbox_chat` | A devbox is configured and connected; other states are reported explicitly | The new-chat destination presents the devbox | The user submits a chat for that devbox | Remote creation succeeds, fails, is cancelled, or becomes unavailable |
-| `slack_triage` | Slack triage is configured and connected; other states are reported explicitly | The Slack triage board is opened | The user invokes a cataloged triage action | The action succeeds, fails, is cancelled, or becomes unavailable |
+| `slack_triage` | Slack triage is configured and connected; other states are reported explicitly | The Slack triage board is opened | The user changes a local type, label, severity or status override | The change succeeds, fails, is cancelled, or becomes unavailable |
 
 Every event has only `catalogVersion`, `feature` and `stage`, plus the fields required by that stage:
 
@@ -43,3 +43,15 @@ Raw analytics retention is a collector policy, not an app promise. A conservativ
 events for at most 30 days and derived aggregate cohorts for at most 90 days, then delete them. This recommendation
 does not configure or deploy a backend. Revoking analytics immediately drops queued events and rotates the local
 analytics identity, intentionally ending longitudinal linkage.
+
+## OpenTelemetry mapping
+
+The macOS app emits these events as `pilot.feature` spans only after both remote operational reporting and the
+separate Product analytics setting are enabled on Local. Feature spans use an isolated tracer resource containing
+`pilot.analytics.id`; they never contain `pilot.host.id` and never inherit an operational trace parent. Operational
+spans never contain the analytics identity.
+
+The closed event fields map to `pilot.feature.catalog_version`, `pilot.feature.name`, `pilot.feature.stage`, and the
+stage-specific `pilot.feature.availability`, `pilot.feature.outcome` and `pilot.feature.reason` attributes. The app
+has no raw-event API. Revocation replaces both tracers, marks their bounded queues revoked before asynchronous
+shutdown, and gets a rotated identity from the daemon before analytics can be enabled again.

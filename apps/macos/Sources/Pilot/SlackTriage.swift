@@ -1,5 +1,6 @@
 import AppKit
 import PilotCore
+import PilotTelemetry
 import SwiftUI
 
 // Slack triage: a project's classified Slack messages as a table or a board by status, with an inspector to
@@ -438,6 +439,7 @@ final class SlackTriageModel: ObservableObject {
     /// Shows a change at once, then saves it as an override. A failure restores pilotd's values.
     func update(_ item: TrackedItem, _ change: SlackOverrides) {
         guard let client, let index = items.firstIndex(where: { $0.id == item.id }) else { return }
+        PilotTelemetry.shared.recordFeature(.attempt(.slackTriage))
         let next = SlackTriageText.applying(change, to: SlackTriageText.triage(items[index]))
         pending[item.id] = next
         items[index] = items[index].withTriage(next)
@@ -445,10 +447,17 @@ final class SlackTriageModel: ObservableObject {
         Task {
             do {
                 let saved = try await client.updateTrackedItem(item.id, TrackedItemPatch(slack: change))
+                if let event = FeatureEvent.outcome(.slackTriage, .success, reason: .none) {
+                    PilotTelemetry.shared.recordFeature(event)
+                }
                 guard pending[item.id] == next else { return }
                 pending[item.id] = nil
                 if let index = items.firstIndex(where: { $0.id == saved.id }), items[index] != saved { items[index] = saved }
             } catch {
+                let event = client.connected
+                    ? FeatureEvent.outcome(.slackTriage, .failure, reason: .unknown)
+                    : FeatureEvent.outcome(.slackTriage, .unavailable, reason: .disconnected)
+                if let event { PilotTelemetry.shared.recordFeature(event) }
                 guard pending[item.id] == next else { return }
                 pending[item.id] = nil
                 errors[item.id] = "Couldn't save the change: \(error.localizedDescription)"
@@ -601,7 +610,9 @@ struct SlackTriagePage: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.background)
+        .task(id: slackFeatureEligibilityKey) { recordSlackFeatureEligibility() }
         .onAppear {
+            PilotTelemetry.shared.recordFeature(.exposure(.slackTriage))
             if openCase != nil { layout = .cases }
             if !fixture {
                 triage.start(client: client)
@@ -624,6 +635,19 @@ struct SlackTriagePage: View {
         } message: { merge in
             Text("Its \(SlackCaseText.messages(merge.source.count)) join “\(merge.target.name)”, and Pilot learns from the change.")
         }
+    }
+
+    private var slackFeatureEligibilityKey: String {
+        let channels = client.project(projectId)?.tracking?.slackChannels.count ?? 0
+        return "\(client.connected):\(channels)"
+    }
+
+    private func recordSlackFeatureEligibility() {
+        let availability: FeatureAvailability
+        if !client.connected { availability = .disconnected }
+        else if (client.project(projectId)?.tracking?.slackChannels ?? []).isEmpty { availability = .notConfigured }
+        else { availability = .available }
+        PilotTelemetry.shared.recordFeature(.eligibility(.slackTriage, availability))
     }
 
     @ToolbarContentBuilder

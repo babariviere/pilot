@@ -1,5 +1,6 @@
 import AppKit
 import PilotCore
+import PilotTelemetry
 import SwiftUI
 
 @MainActor
@@ -220,6 +221,7 @@ struct TaskComposer: View {
                     if let local = app.localHost { Button("Local") { chooseHost(local) } }
                     ForEach(hosts.offlineHosts.keys.sorted { $0.hostId < $1.hostId }, id: \.self) { host in
                         Button(HostViewContext(host: host, hosts: hosts).name) { chooseHost(host) }
+                            .onAppear { PilotTelemetry.shared.recordFeature(.exposure(.devboxChat)) }
                     }
                 } label: {
                     ChipLabel(title: destinationHost.map { HostViewContext(host: $0, hosts: hosts).name } ?? "Local", icon: PilotIcon.terminal)
@@ -251,6 +253,7 @@ struct TaskComposer: View {
         .overlay(RoundedRectangle(cornerRadius: Theme.Radius.tray).strokeBorder(Theme.border))
         .task(id: modelScopeKey) { await loadModels() }
         .task(id: branchLoadKey) { await loadBranches() }
+        .task(id: devboxFeatureEligibilityKey) { recordDevboxFeatureEligibility() }
         .onAppear { consumeDraft() }
         .keyboardRegion(.composer) {
             // A new editor focuses itself on appear; an existing one takes the token.
@@ -399,6 +402,21 @@ struct TaskComposer: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 8)
         }
+    }
+
+    private var devboxFeatureEligibilityKey: String {
+        let configured = hosts.offlineHosts.keys.map(\.hostId).sorted().joined(separator: ",")
+        let available = hosts.available.map(\.hostId).sorted().joined(separator: ",")
+        return "\(configured):\(available)"
+    }
+
+    private func recordDevboxFeatureEligibility() {
+        let devboxes = hosts.offlineHosts.keys
+        let availability: FeatureAvailability
+        if devboxes.isEmpty { availability = .notConfigured }
+        else if devboxes.contains(where: { hosts.available.contains($0) }) { availability = .available }
+        else { availability = .disconnected }
+        PilotTelemetry.shared.recordFeature(.eligibility(.devboxChat, availability))
     }
 
     private var canStart: Bool {
@@ -584,10 +602,21 @@ struct TaskComposer: View {
             return
         }
         if remote, let host = destinationHost, let project {
+            PilotTelemetry.shared.recordFeature(.attempt(.devboxChat))
             Task {
                 defer { form.busy = false }
-                do { try await app.createHostedChat(form: form, host: host, project: project, revision: revision) }
-                catch { form.error = error.localizedDescription }
+                do {
+                    try await app.createHostedChat(form: form, host: host, project: project, revision: revision)
+                    if let event = FeatureEvent.outcome(.devboxChat, .success, reason: .none) {
+                        PilotTelemetry.shared.recordFeature(event)
+                    }
+                } catch {
+                    let event = hosts.available.contains(host)
+                        ? FeatureEvent.outcome(.devboxChat, .failure, reason: .unknown)
+                        : FeatureEvent.outcome(.devboxChat, .unavailable, reason: .disconnected)
+                    if let event { PilotTelemetry.shared.recordFeature(event) }
+                    form.error = error.localizedDescription
+                }
             }
             return
         }
