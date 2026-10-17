@@ -430,8 +430,11 @@ extension Theme {
     /// - standard: items entering, leaving or reflowing a list, such as queued messages.
     enum Motion {
         static let quick = Animation.easeOut(duration: 0.15)
-        /// Newly streamed text fades in over this long, ease-out (Core Animation, opacity only).
-        static let streamedTextFade: CFTimeInterval = 0.24
+        /// Newly streamed text fades in (Core Animation, opacity only): a chunk's word runs start fading one after
+        /// another over `streamedTextPacing`, a little less than pilotd's 250 ms checkpoint interval, and each run
+        /// fades over `streamedSegmentFade`, ease-out.
+        static let streamedTextPacing: CFTimeInterval = 0.2
+        static let streamedSegmentFade: CFTimeInterval = 0.18
         /// Running tool titles: one sweep of the shimmer band and its rest, and the background veil's opacity, which
         /// turns `foreground` text into `mutedForeground` outside the band in both appearances.
         static let shimmerLoop: CFTimeInterval = 1.8
