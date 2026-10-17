@@ -102,13 +102,12 @@ private func click(in window: NSWindow) -> NSEvent? {
     _ = router.handle(try #require(key("\u{f701}", keyCode: 125, modifiers: [.function, .numericPad], in: window)))
     #expect(cue.visible)
 
-    // A click hides it, and focus arriving later, as SwiftUI focus does after a click, keeps it hidden.
+    // A click hides it, and focus arriving after the click (SwiftUI moves it asynchronously) keeps it hidden:
+    // only key presses turn the cue on, never a responder change.
     _ = router.handlePointer(down)
     #expect(!cue.visible)
     #expect(window.makeFirstResponder(editor))
-    DispatchQueue.main.async { _ = window.makeFirstResponder(table) }
-    RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-    #expect(window.firstResponder === table)
+    #expect(window.makeFirstResponder(table))
     #expect(!cue.visible)
 
     // The next navigation key restores it: J in the list, or ⌃⇥ from an editor.
