@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import Testing
 @testable import PilotCore
 
@@ -20,7 +21,7 @@ import Testing
     }
 }
 
-@Test func ghTokenCommandCapturesOnlySuccessfulStdout() async throws {
+@Test(.timeLimit(.minutes(1))) func ghTokenCommandCapturesOnlySuccessfulStdout() async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: "pilot-gh-test-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -29,21 +30,37 @@ import Testing
         ("[ \"$*\" = 'auth token --hostname github.com' ] || exit 1\nprintf 'diagnostic\\n' >&2\nprintf 'fixture-cli-token\\n'", "fixture-cli-token"),
         ("printf 'fixture-rejected-token\\n'; exit 1", nil),
         ("printf 'fixture-token extra-output\\n'", nil),
-        ("exec /bin/sleep 30", nil),
-        ("trap '' TERM; exec /bin/sleep 30", nil),
-        ("exec 1>&-; exec /bin/sleep 30", nil),
-        ("(/bin/sleep 0.5; printf 'late-fixture-token') & exit 0", nil),
     ] as [(String, String?)] {
         try "#!/bin/sh\n\(script)\n".write(to: executable, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
-        let started = ProcessInfo.processInfo.systemUptime
-        // Allow scheduling headroom for normal commands; only deliberate hangs use a short deadline.
-        let timeout: TimeInterval = script.contains("/bin/sleep") ? 0.25 : 2
-        let token = await GitHubTokenCommand.read(executable: executable, path: "/usr/bin:/bin", timeout: timeout)
+        let token = await GitHubTokenCommand.read(executable: executable, path: "/usr/bin:/bin", timeout: 2)
         #expect(token == expected)
-        #expect(ProcessInfo.processInfo.systemUptime - started < 3)
     }
     try "#!/bin/sh\nprintf 'fixture-too-long'\n".write(to: executable, atomically: true, encoding: .utf8)
     #expect(await UpdateCommand.output(executable: executable, arguments: [], path: "/usr/bin:/bin", timeout: 1, maxBytes: 4) == nil)
     #expect(await GitHubTokenCommand.read(executable: directory.appending(path: "missing-gh"), path: "/usr/bin:/bin") == nil)
+}
+
+@Test(.timeLimit(.minutes(1)), arguments: [
+    "exec /bin/sleep 120",
+    "trap '' TERM; exec /bin/sleep 120",
+    "exec 1>&-; exec /bin/sleep 120",
+    "printf 'fixture-cli-token'; /bin/sleep 120 & printf '%s' \"$!\" > child.pid; exit 0",
+]) func ghTokenCommandTimesOutWithoutWaitingForExitOrInheritedStdout(script: String) async throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: "pilot-gh-timeout-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let executable = directory.appending(path: "gh")
+    let childPID = directory.appending(path: "child.pid")
+    defer {
+        if let text = try? String(contentsOf: childPID, encoding: .utf8), let pid = Int32(text) {
+            Darwin.kill(pid, SIGKILL)
+        }
+        try? FileManager.default.removeItem(at: directory)
+    }
+    // The child cannot finish before the test's deadline. Returning nil therefore proves
+    // timeout handling without measuring wall time across a contended executor.
+    // Keep the inherited pipe open until cleanup instead of racing a half-second sleep.
+    try "#!/bin/sh\ncd '\(directory.path)' || exit 1\nprintf '%s' \"$$\" > child.pid\n\(script)\n".write(to: executable, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+    #expect(await GitHubTokenCommand.read(executable: executable, path: "/usr/bin:/bin", timeout: 2) == nil)
 }
