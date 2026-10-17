@@ -73,6 +73,29 @@ initial text scan, retained caches are estimates rather than hard allocator limi
 generation still needs content reads. This audit does not claim that all filesystem operations,
 third-party extensions, subprocesses or device traffic are eliminated or globally bounded.
 
+### Streaming smoothness against checkpoint writes (2026-10-17)
+
+A shorter model checkpoint would stream more evenly in the app. The end-to-end fixture streams one reply from a
+faux model at a steady token rate through the Harness on SQLite (1,000 history entries, 15 s), watches the agent
+events a client receives, and alternates 250 ms and 100 ms:
+
+```sh
+cd packages/kernel && node scripts/bench-streaming-checkpoints.ts 15 100   # seconds, tokens per second
+```
+
+| 100 tokens/s | 250 ms (current) | 100 ms |
+| --- | --- | --- |
+| `message_update` per second | 3.3 | 8.0 |
+| Gap between updates (p50) | 290 ms | 124 ms |
+| Characters per update | 112 | 48 |
+| WAL bytes per second | 75 KiB | 150 KiB |
+| Kernel CPU | 0.6–0.9% | 1.2–1.8% |
+
+At 40 tokens/s, WAL grew from 72 to 99 KiB/s and updates from 3.2 to 4.8 per second. Gaps exceed the interval by
+the commit time, because the next timer starts after the previous commit. 100 ms looks clearly smoother, but it
+doubles durable writes while text streams, and Pilot's processes already reach macOS's daily disk-write budget
+([pilotd event-loop stalls](daemon-stalls.md)). The interval stays at 250 ms; the app fades each chunk in instead.
+
 ## Checks
 
 Focused regressions cover Git numstat parity, constant command count, endpoint metadata sharing,
