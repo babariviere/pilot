@@ -1402,7 +1402,7 @@ export function createDaemonServer(
 		for (const ws of setupWss.clients) ws.terminate();
 		setupWss.close();
 	});
-	const chatStreams = new ChatStreams((sessionId, listener) => sessions.subscribe(sessionId, listener));
+	const chatStreams = new ChatStreams((sessionId, listener, trace) => sessions.subscribe(sessionId, listener, trace));
 	server.on("close", () => chatStreams.close());
 	server.on("upgrade", (req, socket, head) => {
 		const url = new URL(req.url ?? "/", "http://localhost");
@@ -1462,7 +1462,7 @@ export function createDaemonServer(
 			return;
 		}
 		(route.kind === "terminal" ? terminalWss : streamWss).handleUpgrade(req, socket, head, (ws) => {
-			if (route.kind === "chat") openChat(ws, route.sessionId, url.searchParams);
+			if (route.kind === "chat") openChat(ws, route.sessionId, url.searchParams, req.headers.traceparent);
 			else if (route.kind === "terminal") openTerminal(ws, route.sessionId, url.searchParams);
 			else openSubagent(ws, route.sessionId, route.name);
 		});
@@ -1766,7 +1766,12 @@ export function createDaemonServer(
 	 * Stream one session's transcript on its own socket. A new stream starts with a snapshot; a resume with
 	 * `?stream=&after=` replays only the missed batches.
 	 */
-	function openChat(ws: WebSocket, sessionId: string, params: URLSearchParams): void {
+	function openChat(
+		ws: WebSocket,
+		sessionId: string,
+		params: URLSearchParams,
+		traceparent: string | string[] | undefined,
+	): void {
 		const sendData = boundedSender(ws);
 		const send = (message: ServerMessage) => sendData(JSON.stringify(message));
 		let detach: (() => void) | undefined;
@@ -1781,9 +1786,32 @@ export function createDaemonServer(
 		});
 		const streamId = params.get("stream");
 		const after = Number(params.get("after"));
+		const parent = traceCarrier({ traceparent });
+		const apiSpan = nodeTelemetry().startSpan(
+			"pilot.chat.open",
+			{ "pilot.operation": "chat.open", "pilot.phase": "api" },
+			{ ...(parent ? { parent } : {}) },
+		);
+		const historyTrace = apiSpan.carrier() ?? parent;
 		try {
-			detach = chatStreams.attach(sessionId, sendData, streamId ? { streamId, after } : undefined).detach;
+			const attachment = chatStreams.attach(
+				sessionId,
+				sendData,
+				streamId ? { streamId, after } : undefined,
+				historyTrace,
+			);
+			detach = attachment.detach;
+			if (attachment.resumed && historyTrace) {
+				const history = nodeTelemetry().startSpan(
+					"pilot.chat.open",
+					{ "pilot.operation": "chat.open", "pilot.phase": "history_read", "pilot.cold": false },
+					{ parent: historyTrace },
+				);
+				history.end();
+			}
+			apiSpan.end();
 		} catch (error) {
+			apiSpan.finish("failed");
 			refuse(ws, (message) => send({ type: "error", sessionId, message }), error);
 			return;
 		}

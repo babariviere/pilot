@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { AgentEvent, ChatServerMessage } from "@pilot/protocol";
+import type { TraceCarrier } from "@pilot/telemetry";
 import { ChatStreams } from "./chat-streams.ts";
 
 type Listener = (events: AgentEvent[]) => void;
@@ -65,6 +66,20 @@ test("a new stream sends its hello before the synchronously delivered snapshot, 
 		],
 	);
 	assert.deepEqual(a.frames[0], { type: "chat.stream", sessionId: "s1", streamId: attached.streamId, resumed: false });
+});
+
+test("a new stream forwards trace context to its history subscription without retaining it for resumes", () => {
+	const trace: TraceCarrier = { traceparent: `00-${"1".repeat(32)}-${"2".repeat(16)}-01` };
+	const observed: Array<TraceCarrier | undefined> = [];
+	const streams = new ChatStreams((_id, listener, carrier) => {
+		observed.push(carrier);
+		listener([snapshot(1)]);
+		return () => undefined;
+	});
+	const first = streams.attach("s1", () => undefined, undefined, trace);
+	first.detach();
+	assert.equal(streams.attach("s1", () => undefined, { streamId: first.streamId, after: 1 }, trace).resumed, true);
+	assert.deepEqual(observed, [trace]);
 });
 
 test("a resume replays only the missed batches and keeps the subscription", () => {
@@ -146,6 +161,7 @@ test("long snapshots arrive newest first, then the older entries in a snapshot_p
 	const head = tail!.events[0] as Extract<AgentEvent, { type: "snapshot" }> & { prefixPending?: boolean };
 	assert.equal(head.type, "snapshot");
 	assert.equal(head.prefixPending, true);
+	assert.equal((head as typeof head & { historyCount?: number }).historyCount, 100);
 	assert.deepEqual(
 		head.entries.map((entry) => Number(entry.id)),
 		Array.from({ length: 10 }, (_, i) => i + 91),

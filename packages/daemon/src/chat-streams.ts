@@ -6,8 +6,9 @@
  */
 import { randomUUID } from "node:crypto";
 import type { AgentEvent, ChatServerMessage } from "@pilot/protocol";
+import type { TraceCarrier } from "@pilot/telemetry";
 
-type Subscribe = (sessionId: string, listener: (events: AgentEvent[]) => void) => () => void;
+type Subscribe = (sessionId: string, listener: (events: AgentEvent[]) => void, trace?: TraceCarrier) => () => void;
 type Snapshot = Extract<AgentEvent, { type: "snapshot" }>;
 
 export interface ChatStreamOptions {
@@ -78,6 +79,7 @@ export class ChatStreams {
 		sessionId: string,
 		sink: (data: string) => void,
 		resume?: { streamId: string; after: number },
+		trace?: TraceCarrier,
 	): ChatAttachment {
 		const previous = resume ? this.streams.get(resume.streamId) : undefined;
 		// A reconnect can arrive before pilotd notices the old socket closed. The new socket takes the stream over.
@@ -105,7 +107,7 @@ export class ChatStreams {
 		};
 		this.streams.set(stream.id, stream);
 		try {
-			stream.unsubscribe = this.subscribe(sessionId, (events) => this.push(stream, events));
+			stream.unsubscribe = this.subscribe(sessionId, (events) => this.push(stream, events), trace);
 		} catch (error) {
 			this.streams.delete(stream.id);
 			throw error;
@@ -180,7 +182,10 @@ export class ChatStreams {
 		if (index < 0 || events.some((event, i) => i > index && event.type === "snapshot")) return [events];
 		const snapshot = events[index] as Snapshot;
 		const entries = snapshot.entries;
-		if (entries.length <= this.tailEntries) return [events];
+		const counted = { ...snapshot, historyCount: entries.length } as Snapshot;
+		if (entries.length <= this.tailEntries) {
+			return [[...events.slice(0, index), counted, ...events.slice(index + 1)]];
+		}
 		let start = entries.length;
 		let bytes = 0;
 		while (start > 0 && entries.length - start < this.tailEntries) {
@@ -190,7 +195,7 @@ export class ChatStreams {
 			bytes += size;
 			start--;
 		}
-		const tail = { ...snapshot, entries: entries.slice(start), prefixPending: true } as Snapshot;
+		const tail = { ...counted, entries: entries.slice(start), prefixPending: true } as Snapshot;
 		const prefix: AgentEvent = { type: "snapshot_prefix", entries: entries.slice(0, start) };
 		return [[...events.slice(0, index), tail, ...events.slice(index + 1)], [prefix]];
 	}
