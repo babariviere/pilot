@@ -43,10 +43,12 @@ import Testing
                 settle()
                 #expect(surface.frame.size == initialSize)
             }
-            window.setContentSize(NSSize(width: 1500, height: 800))
+            // Shrink within the CI display's bounds. AppKit can clamp a taller window to
+            // the screen's visible frame, which would not actually resize the surface.
+            window.setContentSize(NSSize(width: 1000, height: 400))
             settle()
             #expect(abs(surface.frame.width - 340) <= 1)
-            #expect(surface.frame.height > initialSize.height)
+            #expect(surface.frame.height < initialSize.height)
             state.showsTerminal = false
             settle()
             window.setContentSize(NSSize(width: 1231, height: 700))
