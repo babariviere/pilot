@@ -16,6 +16,53 @@ private func waitUntil(_ check: @MainActor () -> Bool) async {
     var value = 0
 }
 
+@Test(arguments: ["direct", "local", "box"])
+@MainActor func reopenedFeedAppliesItsFirstSnapshotAfterStopping(route: String) async throws {
+    let client = PilotClient()
+    let hosts = HostClients()
+    let feed: SessionFeed
+    if route == "direct" {
+        feed = SessionFeed(sessionId: "s", client: client)
+    } else {
+        let host = HostRef(hostId: route, daemonId: "daemon", lineageId: "history")
+        try hosts.install(client, host: host)
+        feed = SessionFeed(ref: HostResourceRef(host: host, kind: .session, localId: "s"), hosts: hosts)
+    }
+    defer { feed.stop(); client.disconnect() }
+    let cache = SessionFeedCache()
+    cache.retain(feed, sessionId: "s")
+    feed.start()
+    client.handle(.events(sessionId: "s", events: [try feedEvent(
+        #"{"type":"snapshot","entries":[{"id":1,"kind":"pi.user","model":[{"role":"user","content":"Start"}]}],"run":{}}"#
+    )], seq: nil))
+    await waitUntil { feed.hasSnapshot && feed.status.working }
+    #expect(feed.status.working)
+    let workingRevision = feed.presentation.revision
+    feed.stop()
+    #expect(cache.contains("s"))
+
+    // The run ends while no view is subscribed. Reopening uses the cached feed and a new reducer,
+    // whose first revision is 1 again. The previous reducer's revision must not suppress it.
+    feed.start()
+    #expect(!feed.hasSnapshot && !feed.status.working)
+    client.handle(.events(sessionId: "s", events: [try feedEvent(
+        #"{"type":"snapshot","entries":[{"id":1,"kind":"pi.user","model":[{"role":"user","content":"Start"}]},{"id":2,"kind":"pi.assistant","model":[{"role":"assistant","content":"Finished"}]}]}"#
+    )], seq: nil))
+    await waitUntil { feed.hasSnapshot }
+    #expect(feed.hasSnapshot && !feed.status.working)
+    #expect(feed.presentation.revision > workingRevision)
+    #expect(feed.presentation.rows.last == .text(id: "2-0-0", text: "Finished", timestamp: nil))
+
+    // Starting an already subscribed feed must not reset its live reducer or status.
+    client.handle(.events(sessionId: "s", events: [try feedEvent(#"{"type":"run_start","inputs":[]}"#)], seq: nil))
+    await waitUntil { feed.status.working }
+    feed.start()
+    #expect(feed.hasSnapshot && feed.status.working)
+    client.handle(.events(sessionId: "s", events: [try feedEvent(#"{"type":"run_end","inputs":[]}"#)], seq: nil))
+    await waitUntil { !feed.status.working }
+    #expect(!feed.status.working)
+}
+
 @Test @MainActor func streamedTextPublishesRowsWithoutRepublishingTheChatAroundThem() async throws {
     let feed = SessionFeed(sessionId: "s", transcript: Transcript())
     feed.applyFixtureEvents([
