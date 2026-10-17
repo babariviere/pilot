@@ -45,6 +45,7 @@ import {
 	wrapRegisteredTool,
 } from "@earendil-works/pi-coding-agent";
 import {
+	type ContextView,
 	type ConversationId,
 	defineDoc,
 	type Extension,
@@ -260,6 +261,8 @@ export class NativeAdapter {
 	readonly #allowedTools: readonly string[];
 	controlCacheBlock?: string;
 	controlRequestReady = false;
+	/** Control-only run mapping. Never use the retained transcript for SDK compatibility. */
+	controlContext?: (context: TaskContext) => Promise<ContextView>;
 	readonly #control: boolean;
 	readonly #performance?: PerformanceSink;
 	#requestNumber = 0;
@@ -653,7 +656,7 @@ export class NativeAdapter {
 		if (this.#closed || !this.#harness || !this.#conversationId) return;
 		const conversation = await this.#harness.conversation(this.#conversationId, context);
 		if (!conversation) return;
-		const view = await conversation.context(context);
+		const view = await this.readContext(context, () => conversation.context(context));
 		let model = this.session.model;
 		if (model?.api === "pi-virtual") {
 			const latest = view.messages.findLast(
@@ -673,12 +676,17 @@ export class NativeAdapter {
 	private assertOpen(): void {
 		if (this.#closed) throw new Error("Native adapter is closed");
 	}
+	private readContext(context: TaskContext, ordinary: () => Promise<ContextView>): Promise<ContextView> {
+		if (!this.#control) return ordinary();
+		if (!this.controlContext) throw new Error("Control run context is not bound");
+		return this.controlContext(context);
+	}
 	private async sync(context: TaskContext): Promise<readonly Message[]> {
 		this.assertOpen();
 		if (!this.#harness || !this.#conversationId) throw new Error("Native adapter must bindHarness before execution");
 		const conversation = await this.#harness.conversation(this.#conversationId, context);
 		if (!conversation) throw new Error("Native adapter conversation is missing");
-		const view = await conversation.context(context);
+		const view = await this.readContext(context, () => conversation.context(context));
 		// Entry identity survives model retries and worker replacement. Native startup hooks
 		// run once per admitted input, not once per model/tool round.
 		this.#inputKey = String(view.head?.id ?? 0);
