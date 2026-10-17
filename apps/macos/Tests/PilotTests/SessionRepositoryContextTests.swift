@@ -13,6 +13,13 @@ import Testing
     }
 }
 
+@Test @MainActor func controlSubtitleNamesItsScopeInsteadOfAPlaceOrSource() {
+    var control = SessionSummary(id: "control", title: "Control", cwd: "", createdAt: 1, updatedAt: 1, state: "idle",
+                                 mode: .ask, sourceBranch: "main", pinned: true)
+    control.control = true
+    #expect(SessionHeaderContext.subtitle(for: control, place: "~") == ControlChatIdentity.scope)
+}
+
 @Test @MainActor func changesRepositoryContextListsEveryBranchWithItsPullRequest() throws {
     let prs = [8, 7].map { number in
         SessionPullRequest(number: number, url: "https://github.com/example/repo/pull/\(number)", title: "Change",

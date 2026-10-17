@@ -1185,6 +1185,8 @@ export class SessionManager {
 	}
 	private creatingControl?: Promise<SessionSummary>;
 	static readonly CONTROL_ID = "00000000-0000-4000-8000-000000000001";
+	/** The control chat's name, shown as-is by every client. The only place it is spelled. */
+	static readonly CONTROL_TITLE = "Control";
 	isControlSession(id: string): boolean {
 		return id === SessionManager.CONTROL_ID && this.metas.get(id)?.control === true;
 	}
@@ -1201,7 +1203,7 @@ export class SessionManager {
 			const meta: SessionMeta = {
 				id: SessionManager.CONTROL_ID,
 				control: true,
-				title: "Control",
+				title: SessionManager.CONTROL_TITLE,
 				mode: "ask",
 				cwd: this.home,
 				pinned: true,

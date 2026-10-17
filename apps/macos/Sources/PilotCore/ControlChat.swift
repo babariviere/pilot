@@ -1,5 +1,15 @@
 import Foundation
 
+/// How the app presents the global control chat. Its title comes from pilotd (`SessionSummary.title`), so a
+/// rename only changes the daemon's one constant; these are the words around it.
+public enum ControlChatIdentity {
+    /// Its scope, where other chats name their project: the second line of its row and the window subtitle.
+    public static let scope = "All projects"
+    /// The header above its transcript: what it can see and do, in one sentence.
+    public static let summary = "Sees every chat, project and mission. Starts and messages chats, keeps project memory "
+        + "and acts on the events it watches. It works only through its tools and never edits files."
+}
+
 /// Mirrors the control-chat HTTP contract in packages/protocol/src/control.ts.
 public enum WatchEvent: String, Codable, CaseIterable, Sendable {
     case chatSettled = "chat.settled", chatFailed = "chat.failed"

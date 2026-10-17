@@ -150,6 +150,12 @@ public enum RowLineSegments {
         pullRequest: DashboardPullRequest? = nil
     ) -> [RowLineSegment] {
         var segments: [RowLineSegment] = []
+        // The control chat spans every project and has no workspace: its scope, then its reason, nothing else.
+        if let session, session.isControl {
+            segments.append(RowLineSegment(.text(ControlChatIdentity.scope)))
+            if let reason, !reason.isEmpty { segments.append(RowLineSegment(.reason(reason))) }
+            return segments
+        }
         if let projectName, !projectName.isEmpty { segments.append(RowLineSegment(.project(projectName))) }
         if let coordinatorDetail {
             segments.append(RowLineSegment(.coordinator))

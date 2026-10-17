@@ -255,8 +255,10 @@ struct CommandPaletteCatalog {
                 }
             }
         }
-        add("pin", session.isPinned ? "Unpin" : "Pin", session.isPinned ? .unpin : .pin) {
-            model.setPinned(!session.isPinned, sessionId: id)
+        if session.canChangePin {
+            add("pin", session.isPinned ? "Unpin" : "Pin", session.isPinned ? .unpin : .pin) {
+                model.setPinned(!session.isPinned, sessionId: id)
+            }
         }
         if session.canArchive {
             add("archive", "Archive", .archive) { model.setArchived(true, sessionId: id) }

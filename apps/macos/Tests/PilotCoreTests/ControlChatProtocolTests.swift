@@ -81,4 +81,30 @@ struct ControlChatProtocolTests {
         #expect(summary?.kind == "watch_notice")
         #expect(summary?.text == "Watch fired")
     }
+
+    @Test func controlChatListsApartWithoutArchiveOrPinActions() throws {
+        let source = #"{"id":"c","title":"Control","cwd":"","mode":"ask","pinned":true,"control":true,"createdAt":1,"updatedAt":5,"state":"parked","outcome":"done","outcomeAt":5}"#
+        let control = try JSONDecoder().decode(SessionSummary.self, from: Data(source.utf8))
+        #expect(control.isControl)
+        #expect(!control.canArchive)
+        #expect(!control.canChangePin)
+        let pinned = SessionSummary(id: "p", title: "Pinned", cwd: "/tmp", projectId: "x", createdAt: 1, updatedAt: 4,
+                                    state: "parked", mode: .ask, pinned: true)
+        #expect(!pinned.isControl)
+        #expect(pinned.canArchive)
+        #expect(pinned.canChangePin)
+
+        let groups = SidebarUrgency.groups([control, pinned], unread: { _ in true })
+        #expect(groups.control == control)
+        #expect(groups.pinned == [pinned])
+        #expect(groups.needsYou.isEmpty)
+        // Counts that must match pilotd's still include it by state.
+        let counted = SidebarUrgency.groups([control, pinned], unread: { _ in true }, separatingPinned: false)
+        #expect(counted.control == nil)
+        #expect(counted.needsYou.map(\.id) == ["c", "p"])
+
+        // Its scope, then its reason. No Ask source, project, PR or branch.
+        let segments = RowLineSegments.session(control, projectName: "pilot", reason: "Read result", branch: "main")
+        #expect(segments.map(\.kind) == [.text(ControlChatIdentity.scope), .reason("Read result")])
+    }
 }
