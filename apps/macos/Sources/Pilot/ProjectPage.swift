@@ -58,6 +58,8 @@ struct ProjectPage: View {
                         }
                         .task { await loadFullList(projectId: project.id) }
                     }
+                    .onAppear { presentPendingTrackedSheet() }
+                    .onChange(of: model.pendingTrackedSheet) { _, _ in presentPendingTrackedSheet() }
             } else if client.hasProjectSnapshot {
                 EmptyStateView(icon: PilotIcon.project, title: "This project no longer exists",
                                message: "It was removed from Pilot. Its folder is unchanged.")
@@ -143,6 +145,13 @@ struct ProjectPage: View {
         fullListDashboard = nil
         fullListError = nil
         fullList = section
+    }
+
+    /// The Linear queue jump: this project's Linear list, presented once, then forgotten.
+    private func presentPendingTrackedSheet() {
+        guard let pending = model.pendingTrackedSheet, pending.projectId == projectId else { return }
+        model.pendingTrackedSheet = nil
+        trackedSheet = .only(pending.kind)
     }
 
     private func openProjectSettings(_ project: Project) {

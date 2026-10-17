@@ -51,8 +51,11 @@ has separate storage and transport contracts; it does not change chat-result rea
   ⌃⇥ and ⌃⇧⇥ move focus between the sidebar, the page, the composer and the inspector, and ⌘L focuses the
   composer (or the open question), including from the terminal or an artifact. Outside text fields, G then a letter
   goes to a page (G H Home, G I Inbox, G P the focused project's Overview, G M/T/B the current mission's Overview,
-  Tasks or Brief, G A Archive), J and K move through lists, and ? opens the shortcut reference. The **Go** menu
-  lists the same destinations. Home, Overview, Inbox and Archive each have one keyboard list: ⌃⇥ (or a G
+  Tasks or Brief, G A Archive, G S Slack triage, G L the Linear queue), J and K move through lists, and ? opens
+  the shortcut reference. The **Go** menu lists the same destinations. G S and G L open the board or queue of the
+  project in view (or the only project tracking it); otherwise ⌘K lists one "Slack triage" or "Linear queue" per
+  project ("Linear triage" finds it too). The Linear queue is the project's Linear list in Pilot, not the Linear
+  app. Home, Overview, Inbox and Archive each have one keyboard list: ⌃⇥ (or a G
   destination) focuses it, arrows or J/K move the highlight, Return opens the row as a click would, and ⌘K lists
   the highlighted chat's actions under its name.
   ⌘[ and ⌘] go Back and Forward too, and lists return to the row you had highlighted.

@@ -44,7 +44,7 @@ struct CommandPaletteCatalog {
 
     func entries() -> [CommandPaletteEntry] {
         chats() + remoteResources() + tasks() + missions() + projects() + pages() + actions() + composerEntries()
-            + focusCommands() + tracked()
+            + focusCommands() + tracked() + triageJumps()
     }
 
     /// The on-screen composer's controls (model, thinking, mode, project, branch, workspace, send later), found by

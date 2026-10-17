@@ -88,7 +88,7 @@ extension AppModel {
     /// Whether a G destination applies here. Unavailable ones never guess a project or mission.
     func canGo(to destination: GoDestination) -> Bool {
         switch destination {
-        case .home, .inbox, .archive: true
+        case .home, .inbox, .archive, .slack, .linear: true
         case .overview: sidebarScope != nil
         case .mission, .tasks, .brief: currentMissionId != nil
         }
@@ -101,6 +101,8 @@ extension AppModel {
         case .inbox: showInbox()
         case .overview: openOverview()
         case .archive: showArchive(in: focusedProject?.id)
+        case .slack: jump(to: .slack)
+        case .linear: jump(to: .linear)
         case .mission, .tasks, .brief:
             guard let missionId = currentMissionId else { return }
             let tab: MissionTab = destination == .tasks ? .tasks : destination == .brief ? .brief : .overview
@@ -159,6 +161,8 @@ extension GoDestination {
         case .tasks: "Mission Tasks"
         case .brief: "Mission Brief"
         case .archive: "Archive"
+        case .slack: "Slack Triage"
+        case .linear: "Linear Queue"
         }
     }
 
