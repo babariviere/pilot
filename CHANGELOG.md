@@ -1,5 +1,57 @@
 # Changelog
 
+## [1.46.0](https://github.com/babariviere/pilot/compare/v1.45.1...v1.46.0) (2026-10-17)
+
+
+### Features
+
+* **artifacts:** add GLSL shader artifact kind ([fbb2e9d](https://github.com/babariviere/pilot/commit/fbb2e9dab0fc237b2770db6f3d15d21c01c07fe3))
+* **control:** connect watch delivery and client contracts ([55e54ce](https://github.com/babariviere/pilot/commit/55e54cebbd76ab205f5c0f4dd50661d15f7318ea))
+* **diagnostics:** expose bounded agent evidence ([a6aa6b2](https://github.com/babariviere/pilot/commit/a6aa6b2454a3a4919896c12b6b6861eac99f78ab))
+* **diagnostics:** record bounded lifecycle evidence ([36164a0](https://github.com/babariviere/pilot/commit/36164a0b985d4f2d5adf679539a7c7aa226980c2))
+* **macos:** add ⌘[ and ⌘] for Back and Forward and restore list highlights ([c4eb1ec](https://github.com/babariviere/pilot/commit/c4eb1ec6cc777c69e4474eb7a61b47b1e7888e14))
+* **macos:** add command-arrow navigation history ([4bc18f0](https://github.com/babariviere/pilot/commit/4bc18f0dfb603056247d69cd740d0def23989830))
+* **macos:** add keyboard lists to Home, Overview, Inbox and Archive ([8528dbd](https://github.com/babariviere/pilot/commit/8528dbde22721aefb2e1d3bb27567446d9eaf9af))
+* **macos:** add keyboard navigation to mission pages ([ed99205](https://github.com/babariviere/pilot/commit/ed992056f954afb7420ef0771a22883faac85a4d))
+* **macos:** add keyboard regions, focus keys and Go navigation ([90a0a27](https://github.com/babariviere/pilot/commit/90a0a27d95c18d0a252b3c1c6602cb1cb245621b))
+* **macos:** add quick jumps to Slack triage and the Linear queue ([b45735d](https://github.com/babariviere/pilot/commit/b45735d8089484f5ddb7ed36863155751ff31924))
+* **macos:** add slash commands that open existing controls ([fee218f](https://github.com/babariviere/pilot/commit/fee218f10fa1db53305835ad410192e49135744c))
+* **macos:** draw Mermaid diagrams natively in chat ([ba3b89d](https://github.com/babariviere/pilot/commit/ba3b89dc73bdbdf936aaf830d6b2faf091450d43))
+* **macos:** give Slack triage and memory the page focus ([71d57eb](https://github.com/babariviere/pilot/commit/71d57eb3ffa032b1cad9edae795ea5c54653dd73))
+* **macos:** give the control chat its own identity ([647d189](https://github.com/babariviere/pilot/commit/647d189764eec24a30d60ccfd6f636cda78aac97))
+* **macos:** lead the palette with places and make shortcuts searchable ([c0d3cb6](https://github.com/babariviere/pilot/commit/c0d3cb6869210c94e25e8e4387bbbe4edd23ecb1))
+* **macos:** make inline artifacts interactive in chat ([c55844c](https://github.com/babariviere/pilot/commit/c55844c822f2ed32f799bb48ff3189b4e9edf831))
+* **macos:** make terminal and artifact focus safe to leave ([098ab7b](https://github.com/babariviere/pilot/commit/098ab7b3485982cb97fdd0047c78f5d6a9e1bf5e))
+* **macos:** navigate Settings pages from the keyboard ([86608f6](https://github.com/babariviere/pilot/commit/86608f6096ff9090b6c3e4be83709f92a3b1504b))
+* **macos:** navigate transcript messages and inspector lists with the keyboard ([91ba34e](https://github.com/babariviere/pilot/commit/91ba34e363106a1a92b0f9f5a71d8537f3930c13))
+* **macos:** pace streamed text fade-in by word run ([2de1fb0](https://github.com/babariviere/pilot/commit/2de1fb0bc19e469aabedc4631f82c0e8d7ad60bd))
+* **macos:** reach composer controls and stop from the keyboard ([7012fe6](https://github.com/babariviere/pilot/commit/7012fe62fb9cd106cb27f10ad4235096eed95002))
+* **macos:** reach tray lists, timed scheduling and row actions from the keyboard ([4e25c94](https://github.com/babariviere/pilot/commit/4e25c9449506f262f1da84d56eea37773e916de8))
+* **macos:** show the control chat's watches and actions ([873eb12](https://github.com/babariviere/pilot/commit/873eb12394fb5187a725e3704243f974e3096256))
+* **macos:** show the working line above the composer ([ad3ae26](https://github.com/babariviere/pilot/commit/ad3ae268f920bfb5cbafe9347cbf386ca99abbfe))
+
+
+### Bug Fixes
+
+* **chat:** reset cached qualified feeds when reopening ([8ba8d1c](https://github.com/babariviere/pilot/commit/8ba8d1cef7fc63a26cdb1fbaea87c217984715bc))
+* **chat:** show complete tool code before highlighting finishes ([019169d](https://github.com/babariviere/pilot/commit/019169d134fb09820ffdd215107cb52272b3aaf3))
+* **daemon:** don't stall mission store shutdown when its saver can't open the file ([a969886](https://github.com/babariviere/pilot/commit/a96988653283b2157414dbf6777ea22a72a5cd07))
+* **daemon:** drain lifecycle writes before spawn rollback ([73b39ab](https://github.com/babariviere/pilot/commit/73b39ab6148b48d2484911617dc9d9ed051ce6d3))
+* **daemon:** preserve proposal outcome notices ([5e91830](https://github.com/babariviere/pilot/commit/5e91830c86673cb5f8d0d0215ae78032a05dd075))
+* **daemon:** suppress self-directed notices ([0e8ccf2](https://github.com/babariviere/pilot/commit/0e8ccf23d73b0087c88b37261c3dea293ef114e3))
+* **devbox:** load SSH helper from packaged resources ([e3e5d54](https://github.com/babariviere/pilot/commit/e3e5d5413cfa53973dca71a55234b80e4e02b34e))
+* **macos:** accept arrow keys that carry keypad flags in keyboard lists ([6b6c56c](https://github.com/babariviere/pilot/commit/6b6c56c83dd561600c159f078468b1c55b0196ba))
+* **macos:** accept arrow keys that carry keypad flags in the transcript ([db602dd](https://github.com/babariviere/pilot/commit/db602dd39067b9bff65b43b6cae1a966f10d2962))
+* **macos:** keep daemon cwd outside replaceable app bundle ([b2c872c](https://github.com/babariviere/pilot/commit/b2c872cea43408ff62b90230fee77f22f79a7c3d))
+* **macos:** keep diagrams at natural size and remember artifact sizes ([d7f73e0](https://github.com/babariviere/pilot/commit/d7f73e0091050a7979629ef6a79b0de80029b78a))
+* **macos:** keep the chat pinned while replies stream fast ([88880e4](https://github.com/babariviere/pilot/commit/88880e4b7ffc949627d56486f8b2be8f3d318fea))
+* **sessions:** show chats as working during compaction ([60a9c7c](https://github.com/babariviere/pilot/commit/60a9c7cc817705556677b535034e67e03048b896))
+
+
+### Performance Improvements
+
+* **control:** bound retained transcript preparation ([2167802](https://github.com/babariviere/pilot/commit/216780298b9231c7d4d10bccb1cd01e0c5b271df))
+
 ## [1.45.1](https://github.com/babariviere/pilot/compare/v1.45.0...v1.45.1) (2026-10-17)
 
 
