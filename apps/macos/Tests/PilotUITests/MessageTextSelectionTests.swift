@@ -339,7 +339,7 @@ struct MessageTextSelectionTests {
         view.fadeIn(NSRange(location: 60, length: text.utf16.count - 60), from: .white)
         #expect(view.fadingVeilCount == 0, "veils wait for the draw that shows the new glyphs")
         view.display()
-        #expect(view.fadingVeilCount > 1, "one veil per line the new text covers")
+        #expect(view.fadingVeilCount > 1, "one veil per word run and line the new text covers")
         #expect(view.string == text)
         view.invalidateMeasurements()
         #expect(view.measure(width: 320, unwrapped: false) == before)

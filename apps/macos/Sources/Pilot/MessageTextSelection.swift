@@ -408,9 +408,13 @@ final class MessageSelectionTextView: NSTextView {
     /// Ranges waiting for their first draw, when their glyphs have their final place.
     private var pendingFades: [(range: NSRange, color: NSColor)] = []
     private var veil: StreamVeilView?
+    /// When this view last started a fade, so a faster stream gets a shorter pace.
+    private var lastFadeStart: CFTimeInterval?
 
-    /// Fades `range` in from `color`, the opaque background behind this text: a layer of that colour covers the new
-    /// glyphs and Core Animation fades it out. Text, layout and height are untouched; nothing redraws per frame.
+    /// Fades `range` in from `color`, the opaque background behind this text: layers of that colour cover the new
+    /// glyphs and Core Animation fades them out, word run by word run across about one checkpoint interval
+    /// (`StreamPacing`), so a chunk reads as flowing text. Text, layout and height are untouched; nothing redraws
+    /// per frame.
     func fadeIn(_ range: NSRange, from color: NSColor) {
         guard range.length > 0 else { return }
         pendingFades.append((range, color))
@@ -439,8 +443,11 @@ final class MessageSelectionTextView: NSTextView {
         }()
         veil.frame = bounds
         guard let host = veil.layer else { return }
-        var covers: [CALayer] = []
+        var covers: [(layer: CALayer, delay: CFTimeInterval)] = []
         let origin = textContainerOrigin
+        let now = CACurrentMediaTime()
+        let pacing = StreamPacing.pacing(sinceLastFade: lastFadeStart.map { now - $0 })
+        lastFadeStart = now
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         for fade in fades {
@@ -448,27 +455,34 @@ final class MessageSelectionTextView: NSTextView {
             guard range.length > 0 else { continue }
             var color = fade.color.cgColor
             effectiveAppearance.performAsCurrentDrawingAppearance { color = fade.color.cgColor }
-            let glyphs = layout.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
-            layout.enumerateEnclosingRects(forGlyphRange: glyphs, withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
-                                           in: container) { rect, _ in
-                let cover = CALayer()
-                // A point of overlap hides antialiased edges of the new glyphs.
-                cover.frame = veil.convert(rect.offsetBy(dx: origin.x, dy: origin.y), from: self).insetBy(dx: -1, dy: 0)
-                cover.backgroundColor = color
-                host.addSublayer(cover)
-                covers.append(cover)
+            let segments = StreamPacing.segments(of: storage.string as NSString, in: range)
+            let delays = StreamPacing.delays(count: segments.count, pacing: pacing)
+            for (segment, delay) in zip(segments, delays) {
+                let glyphs = layout.glyphRange(forCharacterRange: segment, actualCharacterRange: nil)
+                layout.enumerateEnclosingRects(forGlyphRange: glyphs, withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+                                               in: container) { rect, _ in
+                    let cover = CALayer()
+                    // A point of overlap hides antialiased edges of the new glyphs.
+                    cover.frame = veil.convert(rect.offsetBy(dx: origin.x, dy: origin.y), from: self).insetBy(dx: -1, dy: 0)
+                    cover.backgroundColor = color
+                    host.addSublayer(cover)
+                    covers.append((cover, delay))
+                }
             }
         }
         CATransaction.commit()
         guard !covers.isEmpty else { return }
         CATransaction.begin()
-        CATransaction.setCompletionBlock { covers.forEach { $0.removeFromSuperlayer() } }
-        for cover in covers {
+        CATransaction.setCompletionBlock { covers.forEach { $0.layer.removeFromSuperlayer() } }
+        for (cover, delay) in covers {
             let animation = CABasicAnimation(keyPath: "opacity")
             animation.fromValue = 1
             animation.toValue = 0
-            animation.duration = Theme.Motion.streamedTextFade
+            animation.duration = Theme.Motion.streamedSegmentFade
             animation.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            // Opaque until its turn, then fades: later word runs appear after earlier ones.
+            animation.beginTime = cover.convertTime(now, from: nil) + delay
+            animation.fillMode = .backwards
             cover.opacity = 0
             cover.add(animation, forKey: "fade")
         }
@@ -687,6 +701,61 @@ final class MessageSelectionTextView: NSTextView {
         let range = selectedRange()
         selectionOwner?.select(from: .init(key: selectionKey, offset: range.location),
                                to: .init(key: selectionKey, offset: NSMaxRange(range)))
+    }
+}
+
+/// How a streamed chunk is revealed: split into word runs whose fades start one after another across about one
+/// checkpoint interval (pilotd delivers a chunk every ~250 ms), so 100 characters arriving at once read like a
+/// steady stream. A stream that updates faster gets a proportionally shorter pace, so fades never pile up.
+enum StreamPacing {
+    /// At most this many word runs per chunk, which bounds the veil layers per update.
+    static let maxSegments = 16
+    /// Characters per word run, about one or two words.
+    static let segmentLength = 8
+
+    /// Spread of one chunk's fades: `Theme.Motion.streamedTextPacing`, or less when the previous chunk of this
+    /// block arrived sooner than that.
+    static func pacing(sinceLastFade: CFTimeInterval?) -> CFTimeInterval {
+        guard let sinceLastFade else { return Theme.Motion.streamedTextPacing }
+        return max(0, min(Theme.Motion.streamedTextPacing, sinceLastFade * 0.8))
+    }
+
+    /// Start delays of `count` word runs, evenly over `pacing`, the first at once.
+    static func delays(count: Int, pacing: CFTimeInterval) -> [CFTimeInterval] {
+        guard count > 1 else { return Array(repeating: 0, count: max(0, count)) }
+        return (0 ..< count).map { pacing * Double($0) / Double(count) }
+    }
+
+    /// Contiguous ranges covering `range` exactly, each starting at a word (except the first, which starts at the
+    /// range) and holding about `segmentLength` characters, at most `maxSegments` of them.
+    static func segments(of string: NSString, in range: NSRange) -> [NSRange] {
+        guard range.length > 0 else { return [] }
+        var starts: [Int] = []
+        string.enumerateSubstrings(in: range, options: [.byWords, .substringNotRequired]) { _, word, _, _ in
+            if word.location > range.location { starts.append(word.location) }
+        }
+        let wanted = min(maxSegments, max(1, range.length / segmentLength), starts.count + 1)
+        var cuts: [Int] = []
+        if wanted > 1 {
+            // Evenly spaced cuts by position, each moved to the next word start that is not taken yet.
+            var next = 0
+            for index in 1 ..< wanted {
+                let target = range.location + range.length * index / wanted
+                while next < starts.count, starts[next] < target || (cuts.last.map { starts[next] <= $0 } ?? false) {
+                    next += 1
+                }
+                guard next < starts.count else { break }
+                cuts.append(starts[next])
+                next += 1
+            }
+        }
+        var segments: [NSRange] = []
+        var start = range.location
+        for cut in cuts + [NSMaxRange(range)] where cut > start {
+            segments.append(NSRange(location: start, length: cut - start))
+            start = cut
+        }
+        return segments
     }
 }
 

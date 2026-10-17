@@ -277,6 +277,24 @@ layout and the row height never change and nothing redraws per frame. Restored h
 (M3 Pro): 0.09 → 0.12 ms per update for a 2 KB block and 0.14–0.15 → 0.16–0.20 ms for 8 KB with 12-character
 deltas; 0.12–0.14 → 0.17–0.21 ms and 0.17 → 0.22 ms with 100-character deltas.
 
+**Pacing the fade by word run.** pilotd delivers a chunk about every 250 ms, so even faded chunks arrived as
+visible steps of about 100 characters. Each chunk is now split into up to 16 word runs (`StreamPacing`) whose
+veils start fading one after another over 200 ms (`Theme.Motion.streamedTextPacing`), each over 180 ms; a block
+that updates faster than that gets a proportionally shorter spread, so fades never pile up. The checkpoint interval
+stays at 250 ms (see [I/O amplification audit](io-performance-check.md)). The text benchmark's paced column, main
+thread per update (M3 Pro, two runs):
+
+| Streaming block | Veils at once | Paced by word run |
+| --- | --- | --- |
+| 2 KB, 12-character deltas | 0.12 ms | 0.15–0.16 ms |
+| 2 KB, 100-character deltas | 0.17 ms | 0.25 ms |
+| 8 KB, 12-character deltas | 0.16 ms | 0.19–0.20 ms |
+| 8 KB, 100-character deltas | 0.22 ms | 0.30 ms |
+
+At pilotd's four updates a second that is about 0.3 ms of main-thread work per second. The whole-app benchmark does
+not exercise veils when the window is not on screen (they are added when the new text is drawn), so it shows no
+difference from this change with the display asleep.
+
 **Tool rows.** Opening a step, a thinking block, grouped reads or a turn's work line used to animate the inserted
 content's height for 150 ms (`withAnimation`), relaying out the eager live tail of the transcript on every frame.
 Content now takes its full height in one layout and a background-coloured cover shrinks and fades over it on Core
