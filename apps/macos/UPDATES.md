@@ -152,6 +152,8 @@ it does not sign out of `gh` or disable automatic checks.
   because Sparkle's helper may still install on termination. Retry from Settings; if pilotd was already
   stopped for installation, it stays stopped until the update is resumed or you restart it explicitly.
 - An ordinary quit with no pending update still leaves pilotd and agents running.
+- The launch agent uses the user's home as its working directory and an absolute daemon entry point.
+  Removing an old app bundle must not invalidate the daemon's or warm workers' current directory.
 
 ## Local development
 
