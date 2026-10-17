@@ -147,12 +147,19 @@ async function fixture(t: TestContext) {
 							outputSchema: Type.Object({ output: Type.String(), exit_code: Type.Number() }),
 							execute: async (_id, { command }) => {
 								calls.push(command);
-								const output = url(Number(command.match(/--id (\d+)/)?.[1] ?? 1));
+								let output = url(Number(command.match(/--id (\d+)/)?.[1] ?? 1));
 								if (command.includes("--throw")) throw new Error(`failed ${output}`);
+								const followUpFailed = command.includes("; gh pr view --head");
+								if (followUpFailed) output += "\nunknown flag: --head\nUsage: gh pr view [flags]";
+								else if (command.includes("--fail")) output = "PR creation failed";
 								return {
 									content: [{ type: "text", text: "Structured output is authoritative" }],
 									details: undefined,
-									structuredContent: { output, exit_code: command.includes("--fail") ? 1 : 0 },
+									isError: followUpFailed,
+									structuredContent: {
+										output,
+										exit_code: followUpFailed || command.includes("--fail") ? 1 : 0,
+									},
 								};
 							},
 						});
@@ -286,6 +293,29 @@ throw new Error("The script failed after creation; the external effect still hap
 	adapter.refreshTools();
 	await f.run(session, "reinstalled", "bash", { command: "gh pr create --id 5" });
 	assert.deepEqual(created, [url(4), url(5)], "dynamic extension replacement keeps provenance wrapping");
+});
+
+test("creation followed by a failing shell command reconciles direct and nested results without claiming URLs", {
+	timeout: 20_000,
+}, async (t) => {
+	const f = await fixture(t);
+	const created: string[] = [];
+	let attempts = 0;
+	const session = await f.open({
+		onPullRequestCreated: (value) => created.push(value),
+		onPullRequestAttempted: () => attempts++,
+	});
+	const command = "gh pr create --id 10 --head fix/pr --fill; gh pr view --head fix/pr --json number";
+	await f.run(session, "direct-partial-success", "bash", { command });
+	assert.equal(attempts, 1);
+	await f.run(session, "nested-partial-success", "codemode", {
+		code: `await tools.bash(${JSON.stringify({ command })}); throw new Error("outer script also failed");`,
+	});
+	assert.equal(attempts, 2, "observe the executed bash result even when codemode fails");
+	await f.run(session, "failed-create", "bash", { command: "gh pr create --id 11 --fail" });
+	assert.equal(attempts, 2, "failure without a bare URL does not trigger reconciliation");
+	assert.deepEqual(created, [], "the daemon must verify branch, creation time and existing ownership");
+	assert.equal(await session.harness.snapshot(PullRequestsDoc, session.conversation.id, context), undefined);
 });
 
 test("a lost creation notification is replayed from its durable commit without rerunning gh", {
