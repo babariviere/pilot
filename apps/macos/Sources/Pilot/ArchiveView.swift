@@ -217,8 +217,13 @@ struct SessionArchiveAction: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
+        // pilotd never archives the control chat, so it can never be deleted either.
+        if !session.isControl { button }
+    }
+
+    private var button: some View {
         let pending = model.pendingSessionActions.contains(session.id)
-        Button {
+        return Button {
             model.setArchived(!session.isArchived, sessionId: hostContext?.ref(.session, session.id).storageKey ?? session.id)
         } label: {
             Label(title(pending: pending), icon: session.isArchived ? PilotIcon.restore : PilotIcon.archive)

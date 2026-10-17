@@ -185,8 +185,9 @@ work. Devbox setup/selection and disconnected-state presentation remain separate
 
 ### Start your first chat
 
-The daemon keeps one project-less Control chat, pinned and never archived. Its fresh turns use a persisted
-summary view, with `zoom` and `date` for the original messages. It has no workspace or filesystem tools.
+The daemon keeps one project-less Control chat, pinned and never archived. The app lists it in its own row at
+the top of All projects, apart from Ask chats. Its fresh turns use a persisted summary view, with `zoom` and
+`date` for the original messages. It has no workspace or filesystem tools.
 It can read global status, start or message requested work, create or attach missions with your approval,
 and append memory across registered projects. Changes have a durable audit and timeline record.
 See [control chat internals](docs/control-chat.md) for storage, compaction and recovery details.

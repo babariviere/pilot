@@ -53,8 +53,8 @@ public enum WorkspaceStorage: String, Codable, Sendable {
 
 /// Mirrors packages/protocol. Keep both sides in sync.
 public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendable {
-	/// The single project-less control chat. Its tools, not a workspace, perform orchestration.
-	public var control: Bool? = nil
+    /// The single project-less control chat. Its tools, not a workspace, perform orchestration.
+    public var control: Bool? = nil
     public let id: String
     public let title: String
     public let cwd: String
@@ -180,6 +180,10 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     }
     public var isArchived: Bool { archivedAt != nil }
     public var isPinned: Bool { pinned ?? false }
+    /// The one global control chat (`ControlChatIdentity`). It lists apart from other chats and stays pinned.
+    public var isControl: Bool { control ?? false }
+    /// pilotd keeps the control chat pinned and rejects unpinning it.
+    public var canChangePin: Bool { !isControl }
     public var isMissionCoordinator: Bool { missionCoordinator ?? isActiveMissionCoordinator }
     public var supportsChanges: Bool { !isAsk && !isMissionCoordinator }
     public var isActiveMissionCoordinator: Bool { activeMissionCoordinator ?? false }
@@ -193,7 +197,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     }
     public var hasUnpublishedWork: Bool { unpublishedWork ?? false }
     /// Visible state eligibility. The daemon also rejects un-stopped durable work after a failure.
-    public var canArchive: Bool { !isArchived && !isWorking }
+    /// The control chat is never archived, so it can never be deleted either.
+    public var canArchive: Bool { !isControl && !isArchived && !isWorking }
 
     public init(
         id: String, title: String, cwd: String, projectId: String? = nil, branch: String? = nil, createdAt: Double,

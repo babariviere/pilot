@@ -2,9 +2,10 @@ import AppKit
 import PilotCore
 import SwiftUI
 
-/// Missions first, then chats by urgency (Pinned, Needs you, Ready to merge, Working, Recent), each in PR status and
-/// stable activity order. The scope switcher at the top lists every project (the default) or focuses on one, which
-/// then shows only that project's missions and chats, without project names. Project folders are headings in the
+/// The control chat's own row first (All projects only), then missions, then chats by urgency (Pinned, Needs you,
+/// Ready to merge, Working, Recent), each in PR status and stable activity order. The scope switcher at the top lists
+/// every project (the default) or focuses on one, which then shows only that project's missions and chats, without
+/// project names; the control chat belongs to no project, so it never shows there. Project folders are headings in the
 /// scope switcher and on Home, never a sidebar grouping. Search appears on ⌘F, and the footer only when the
 /// connection to pilotd needs attention. Each chat's state is its dithered corner (`DitherCorner`).
 struct SessionSidebar: View {
@@ -42,6 +43,7 @@ struct SessionSidebar: View {
                               recentListId: focused.id, hasArchivedMatches: !archived.isEmpty)
                 archivedMatches(archived)
             } else {
+                controlSection(visible)
                 missionsSection(visible: visible, searching: searching)
                 let names = Dictionary(client.projects.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
                 urgencyGroups(visible, searching: searching, recentListId: Self.recentListId,
@@ -134,6 +136,18 @@ struct SessionSidebar: View {
             (!hosted.value.isArchived || !query.isEmpty) && (query.isEmpty || hosted.value.title.lowercased().contains(query))
                 && (model.focusedProjectRef == nil || (hosted.ref.host == model.focusedProjectRef?.host && hosted.value.projectId == model.focusedProjectRef?.localId))
         }.sorted { $0.value.listActivityAt > $1.value.listActivityAt }
+        // Each host's control chat, the local one first, in its own section without a header.
+        let controls = values.filter(\.value.isControl)
+            .sorted { ($0.ref.host == model.localHost ? 0 : 1) < ($1.ref.host == model.localHost ? 0 : 1) }
+        if !controls.isEmpty {
+            Section {
+                ForEach(controls) { item in
+                    SessionRow(session: item.value, reference: item.ref, listFocused: chatListFocused)
+                        .environment(\.hostViewContext, HostViewContext(host: item.ref.host, hosts: hosts))
+                        .tag(item.ref.host == model.localHost ? item.ref.localId : item.ref.storageKey)
+                }
+            }
+        }
         let missions = hosts.missions.filter {
             $0.value.status == .active && (query.isEmpty || $0.value.title.lowercased().contains(query))
                 && (model.focusedProjectRef == nil || ($0.ref.host == model.focusedProjectRef?.host && $0.value.projectId == model.focusedProjectRef?.localId))
@@ -151,7 +165,7 @@ struct SessionSidebar: View {
             } header: { SidebarSectionHeader(title: "Missions") }
         }
         ForEach(["Pinned", "Needs you", "Ready to merge", "Working", "Recent", "Archived"], id: \.self) { title in
-            let rows = values.filter { group($0) == title }
+            let rows = values.filter { !$0.value.isControl && group($0) == title }
             if !rows.isEmpty {
                 Section {
                     ForEach(rows) { item in
@@ -203,6 +217,18 @@ struct SessionSidebar: View {
     private var inboxSelected: Bool {
         model.showingInbox && model.selectedSessionId == nil && model.selectedMissionId == nil
             && model.selectedProjectId == nil
+    }
+
+    /// The control chat's own row at the top of All projects, without a header: like Home, it is a place rather
+    /// than one chat among others. It is in no urgency group; its corner still shows its state.
+    @ViewBuilder
+    private func controlSection(_ sessions: [SessionSummary]) -> some View {
+        if let control = sessions.first(where: \.isControl) {
+            Section {
+                SessionRow(session: control, listFocused: chatListFocused)
+                    .tag(control.id)
+            }
+        }
     }
 
     /// Chats by urgency, pinned chats first in their own group. Mission chats are listed like any chat, their
@@ -437,7 +463,9 @@ private struct SidebarSectionHeader: View {
 
 /// One chat: its title, then one `RowLine` with its project (when the list is not grouped by project), what kind
 /// of chat it is, its reason, PRs, mission and branch. An active coordinator's second line says "Coordinator" and
-/// its state instead. The dithered corner carries the chat's state, so the row needs no status column. Time and
+/// its state instead. The control chat leads its title with its own symbol, says "All projects" where others name
+/// their project, and offers no pin, archive or mission actions. The dithered corner carries the chat's state, so
+/// the row needs no status column. Time and
 /// pin marks show under the pointer, in space the row always reserves, so hovering never reflows the title; the
 /// corner recedes to make room for them. The mission label opens its mission. Diff counts stay out of the row and
 /// appear in its tooltip, with every PR and the full second line.
@@ -481,6 +509,11 @@ struct SessionRow: View {
             draft: draft)
         VStack(alignment: .leading, spacing: 3) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
+                if session.isControl {
+                    PilotSymbol(PilotIcon.controlChat)
+                        .foregroundStyle(Theme.foreground)
+                        .accessibilityHidden(true)
+                }
                 Text(session.title)
                     .font(.pilot(.body, weight: unread ? .semibold : .regular))
                     .foregroundStyle(Theme.foreground)
@@ -488,7 +521,8 @@ struct SessionRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 RemoteChatBadge(context: owner.map { HostViewContext(host: $0.host, hosts: model.hosts) })
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    if session.isPinned {
+                    // The control chat is always pinned and always first, so the mark would say nothing.
+                    if session.isPinned, !session.isControl {
                         PilotSymbol(PilotIcon.pin, filled: true)
                             .foregroundStyle(Theme.foreground)
                             .help("Pinned chat. Automatic archiving is disabled until unpinned.")
@@ -532,14 +566,16 @@ struct SessionRow: View {
         .contextMenu {
             SessionProjectAction(session: session)
             SessionRenameAction(session: session)
-            Button {
-                model.setPinned(!session.isPinned, sessionId: owner?.storageKey ?? session.id)
-            } label: {
-                Label(session.isPinned ? "Unpin" : "Pin", icon: session.isPinned ? PilotIcon.unpin : PilotIcon.pin)
+            if session.canChangePin {
+                Button {
+                    model.setPinned(!session.isPinned, sessionId: owner?.storageKey ?? session.id)
+                } label: {
+                    Label(session.isPinned ? "Unpin" : "Pin", icon: session.isPinned ? PilotIcon.unpin : PilotIcon.pin)
+                }
+                .disabled(model.pendingSessionActions.contains(session.id))
+                .help(session.isPinned ? "Return this chat to its usual list position and allow automatic archiving" :
+                      "Keep this chat first and prevent automatic archiving")
             }
-            .disabled(model.pendingSessionActions.contains(session.id))
-            .help(session.isPinned ? "Return this chat to its usual list position and allow automatic archiving" :
-                  "Keep this chat first and prevent automatic archiving")
             SessionArchiveAction(session: session)
             Divider()
             SessionMissionActions(session: session)

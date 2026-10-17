@@ -194,8 +194,10 @@ struct SessionDetail: View {
 
     @ToolbarContentBuilder
     private var contextToolbarItem: some ToolbarContent {
+        // The control chat is Ask underneath, but it acts through its tools, so the Ask badge would mislead.
+        let showsAsk = session.isAsk && !session.isControl
         if RemoteChatBadgeText(context: context) != nil
-            || (context.map { model.isUnread(session, on: $0.host) } ?? model.isUnread(session)) || session.isAsk
+            || (context.map { model.isUnread(session, on: $0.host) } ?? model.isUnread(session)) || showsAsk
             || AttemptsMenu.label(for: session.attempts ?? []) != nil {
             ToolbarItem(placement: .primaryAction) {
                 HStack(spacing: 8) {
@@ -203,7 +205,7 @@ struct SessionDetail: View {
                     if (context.map { model.isUnread(session, on: $0.host) } ?? model.isUnread(session)) { UnreadBadge() }
                     AttemptsMenu(session: session)
                     // Ask has no Changes pane, so its read-only boundary stays visible here.
-                    if session.isAsk { SessionContextBadge(session: session) }
+                    if showsAsk { SessionContextBadge(session: session) }
                 }
             }
         }
@@ -223,7 +225,9 @@ enum SessionHeaderContext {
     }
 
     static func subtitle(for session: SessionSummary, place: String) -> String {
-        [place, source(for: session)].compactMap { $0 }.joined(separator: " · ")
+        // The control chat has no project, checkout or source: it spans them all.
+        if session.isControl { return ControlChatIdentity.scope }
+        return [place, source(for: session)].compactMap { $0 }.joined(separator: " · ")
     }
 }
 

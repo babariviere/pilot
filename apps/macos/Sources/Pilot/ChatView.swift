@@ -315,6 +315,11 @@ struct ChatView: View {
                 // treats the entire history as one estimated row, which can put the
                 // bottom marker beyond every realized message on opening or resizing.
                 VStack(alignment: .leading, spacing: 16) {
+                    if session.isControl {
+                        ControlChatHeader(title: session.title)
+                            .frame(maxWidth: Theme.column, alignment: .leading)
+                            .frame(maxWidth: .infinity)
+                    }
                     if let origin = session.continuationOf {
                         ContinuedFromRow(originId: origin)
                             .frame(maxWidth: Theme.column, alignment: .leading)
@@ -435,7 +440,8 @@ struct ChatView: View {
                         adopt: { operation in try await model.adoptPendingMessage(operation, composer: composer) })
                         .padding(.horizontal, 24)
                 }
-                if session.isAsk {
+                // The control chat works through its tools rather than handing context to a Build chat.
+                if session.isAsk, !session.isControl {
                     // Matches the other rows above the composer, such as the queued-messages header.
                     HStack {
                         Button {

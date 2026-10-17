@@ -52,10 +52,13 @@ extension SessionSummary {
     }
 }
 
-/// The sidebar's chat groups by urgency, for All projects and a focused project alike. Pinned chats lead in their own
-/// group, above Needs you.
+/// The sidebar's chat groups by urgency, for All projects and a focused project alike. The control chat stands apart
+/// at the top, then pinned chats lead in their own group, above Needs you.
 public enum SidebarUrgency {
     public struct Groups: Equatable, Sendable {
+        /// The global control chat, listed in its own row above everything else and in no other group. Not part of
+        /// `isEmpty`, which says whether the list has any ordinary chats.
+        public var control: SessionSummary?
         /// Pinned chats in list order, whatever their state. A pinned chat is listed only here; its corner still
         /// shows its state.
         public var pinned: [SessionSummary] = []
@@ -85,7 +88,7 @@ public enum SidebarUrgency {
     /// One pass over `sessions`, which are already in sidebar list order. `held` keeps a result read in the open
     /// chat under Needs you until the user leaves it (`SessionAttention.isHeld`), unless its PR is ready to merge.
     /// Working wins over a ready PR, so a chat still pushing to its PR stays under Working. With `separatingPinned`
-    /// false, pinned chats join the group of their state, for counts that must match pilotd's.
+    /// false, pinned chats and the control chat join the group of their state, for counts that must match pilotd's.
     public static func groups(_ sessions: [SessionSummary], unread: (SessionSummary) -> Bool,
                               held: (SessionSummary) -> Bool = { _ in false },
                               separatingPinned: Bool = true) -> Groups {
@@ -94,6 +97,10 @@ public enum SidebarUrgency {
         var waiting: [SessionSummary] = []
         var groups = Groups()
         for session in sessions {
+            if separatingPinned, session.isControl {
+                groups.control = session
+                continue
+            }
             if separatingPinned, session.isPinned {
                 groups.pinned.append(session)
                 continue

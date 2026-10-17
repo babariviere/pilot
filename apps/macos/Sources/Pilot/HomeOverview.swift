@@ -335,7 +335,8 @@ struct HomeOverview: View {
     private func workingRow(_ session: SessionSummary, now: Date, context: HostViewContext? = nil) -> some View {
         let owner = context ?? hostContext
         let client = context.map { $0.hosts.presentationClient($0.host) } ?? self.client
-        let project = client.project(session.projectId)?.name ?? session.cwd.abbreviatingHome
+        let project = session.isControl ? ControlChatIdentity.scope
+            : client.project(session.projectId)?.name ?? session.cwd.abbreviatingHome
         let mission = session.missionId.flatMap { id in client.missions.first { $0.id == id }?.title }
         let elapsed = SessionTimeFormatting.relative(session.listActivityAt, now: now)
         return Button { app.navigate(.session, id: session.id, context: owner) } label: {
