@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.47.1](https://github.com/babariviere/pilot/compare/v1.47.0...v1.47.1) (2026-10-17)
+
+
+### Bug Fixes
+
+* **macos:** keep the grey selection on highlighted chat rows ([725b77f](https://github.com/babariviere/pilot/commit/725b77f67c643f7a27ccc93d1c3d33ab778e6399))
+* **macos:** show keyboard highlights only during keyboard navigation ([f1eca3e](https://github.com/babariviere/pilot/commit/f1eca3e1ba1ee06e70409a040c287f16560d746e))
+
 ## [1.47.0](https://github.com/babariviere/pilot/compare/v1.46.0...v1.47.0) (2026-10-17)
 
 
