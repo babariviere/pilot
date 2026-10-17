@@ -40,6 +40,7 @@ final class SessionFeed: ObservableObject {
     private var staged: TranscriptPresentation?
     private var stagedSnapshot = false
     private var stagedLoaded = false
+    private var messageSendTelemetry: MessageSendTelemetry?
     private lazy var pacer = DisplayFramePacer { [weak self] in self?.publishStaged() }
     var onPresentationChanged: (() -> Void)?
     var onEventsApplied: (([JSONValue]) -> Void)?
@@ -160,6 +161,7 @@ final class SessionFeed: ObservableObject {
                     onPresentationChanged?()
                     // Same transaction as the rows: the committed message replaces its stand-in in one frame.
                     reconcileOutgoing()
+                    if messageSendTelemetry?.published(next.rows) == true { messageSendTelemetry = nil }
                 }
                 if snapshot { hasSnapshot = true }
                 if loaded { loading = false }
@@ -175,6 +177,8 @@ final class SessionFeed: ObservableObject {
     }
 
     func stop() {
+        messageSendTelemetry?.cancel(.unavailable, reason: .unknown)
+        messageSendTelemetry = nil
         releaseHosted?(); releaseHosted = nil
         if let token { client?.unsubscribe(sessionId, token: token) }
         token = nil
@@ -211,6 +215,13 @@ final class SessionFeed: ObservableObject {
         guard !outgoing.isEmpty else { return }
         outgoing.removeAll()
         scheduleOutgoingExpiry()
+    }
+
+    func beginMessageSend(expectsVisibleResponse: Bool) -> MessageSendTelemetry {
+        messageSendTelemetry?.cancel(.unavailable, reason: .waiting)
+        let telemetry = MessageSendTelemetry(rows: presentation.rows, expectsVisibleResponse: expectsVisibleResponse)
+        messageSendTelemetry = telemetry
+        return telemetry
     }
 
     private func reconcileOutgoing() {
@@ -627,9 +638,14 @@ struct ChatView: View {
             return
         }
         if let context, context.host != model.localHost {
+            let telemetry = feed.beginMessageSend(expectsVisibleResponse: !feed.presentation.working)
             Task {
-                do { try await model.deliverMessage(context.ref(.session, session.id), text: composer.trimmed, mode: mode, composer: composer) }
-                catch { composer.error = error.localizedDescription }
+                do {
+                    try await telemetry.performAPI {
+                        try await model.deliverMessage(context.ref(.session, session.id), text: composer.trimmed,
+                                                       mode: mode, composer: composer)
+                    }
+                } catch { composer.error = error.localizedDescription }
             }
             return
         }
@@ -643,9 +659,12 @@ struct ChatView: View {
         composer.draft = ""
         composer.attachments = ImageAttachments()
         let outgoing = withAnimation(Theme.Motion.standard(reduceMotion: reduceMotion)) { feed.addOutgoing(message) }
+        let telemetry = feed.beginMessageSend(expectsVisibleResponse: outgoing != nil)
         Task {
             do {
-                try await perform { client, id in try await client.send(id, message: message, mode: mode) }
+                try await telemetry.performAPI {
+                    try await perform { client, id in try await client.send(id, message: message, mode: mode) }
+                }
                 if let outgoing { feed.acceptOutgoing(outgoing) }
             } catch {
                 if let outgoing { feed.removeOutgoing(outgoing) }

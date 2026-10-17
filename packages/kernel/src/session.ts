@@ -41,6 +41,7 @@ import type {
 	SessionCompletion,
 	SessionJob,
 } from "@pilot/protocol";
+import type { TraceCarrier } from "@pilot/telemetry";
 import { watchActivity } from "./activity.ts";
 import { type ArtifactToolOptions, createArtifactTools } from "./artifact-tools.ts";
 import {
@@ -1047,12 +1048,15 @@ export class KernelSession {
 		onlyIfIdle = false,
 		reportDelivery = false,
 		event?: import("@pilot/protocol").ChatEventSummary,
+		trace?: TraceCarrier,
 	): Promise<{ delivery: "delivered" | "queued" | "not_started"; reason?: string } | undefined> {
 		// Reserve admission before serialization yields, so model changes and idle-only sends cannot race preparation.
 		if (this.#closing || this.#changingModel || this.#moving || (onlyIfIdle && this.#admissions))
 			return Promise.reject(new ConversationBusy(this.conversation.id));
 		this.#admissions++;
-		return this.serializeInput(() => this.submitInput(requestId, content, mode, onlyIfIdle, reportDelivery, event));
+		return this.serializeInput(() =>
+			this.submitInput(requestId, content, mode, onlyIfIdle, reportDelivery, event, trace),
+		);
 	}
 
 	private async submitInput(
@@ -1062,7 +1066,9 @@ export class KernelSession {
 		onlyIfIdle = false,
 		reportDelivery = false,
 		event?: import("@pilot/protocol").ChatEventSummary,
+		trace?: TraceCarrier,
 	): Promise<{ delivery: "delivered" | "queued" | "not_started"; reason?: string } | undefined> {
+		const traced = trace ? this.adapter.beginInteraction(requestId, trace) : false;
 		try {
 			if (this.#closing || this.#changingModel || this.#moving) throw new ConversationBusy(this.conversation.id);
 			// Native input handlers (prompt templates, skill commands) expand the text first.
@@ -1081,11 +1087,13 @@ export class KernelSession {
 				if (heldAdmission.held) return { delivery: "queued" };
 				const submission = heldAdmission.id ? await this.harness.submission(heldAdmission.id, context) : undefined;
 				const status = await submission?.status(context);
-				if (status?.status === "unanswered")
+				if (status?.status === "unanswered") {
+					if (traced) this.adapter.cancelInteraction(requestId);
 					return {
 						delivery: "not_started",
 						reason: status.reason === "aborted" || status.reason === "reset" ? "stopped" : "failed",
 					};
+				}
 				return { delivery: status?.status === "queued" ? "queued" : "delivered" };
 			}
 			if (onlyIfIdle) {
@@ -1100,12 +1108,17 @@ export class KernelSession {
 			if (!reportDelivery) return;
 			const status = await submission.status(context);
 			if (status.status === "queued") return { delivery: "queued" };
-			if (status.status === "unanswered")
+			if (status.status === "unanswered") {
+				if (traced) this.adapter.cancelInteraction(requestId);
 				return {
 					delivery: "not_started",
 					reason: status.reason === "aborted" || status.reason === "reset" ? "stopped" : "failed",
 				};
+			}
 			return { delivery: "delivered" };
+		} catch (error) {
+			if (traced) this.adapter.cancelInteraction(requestId);
+			throw error;
 		} finally {
 			this.#admissions--;
 		}

@@ -941,6 +941,8 @@ local in-flight hooks that keep useful progress separate from liveness heartbeat
 export, sleep handling and packaged dependency notices.
 [Telemetry controls](docs/telemetry-settings.md) documents independent local, operational and analytics consent,
 per-host OTLP endpoints, revocation and private pseudonymous identity.
+[Message send tracing](docs/message-send-tracing.md) explains the correlated app/daemon/kernel phases, thinking versus
+visible text, and why queued, restarted or unobservable milestones are reported as unavailable rather than guessed.
 
 - **Keep the daemon local.** It binds to `127.0.0.1`, rejects requests with an `Origin` header and has no
   authentication. Do not expose it to a network.

@@ -587,10 +587,18 @@ export class NodeTelemetry {
 		return new WrappedSpan(span, spanContext, this.service, name, this.observe, defaultOutcome);
 	}
 
-	recordSpan(name: TelemetrySpanName, durationMs: number, attributes: TelemetryAttributes = {}): void {
+	recordSpan(
+		name: TelemetrySpanName,
+		durationMs: number,
+		attributes: TelemetryAttributes = {},
+		options: { parent?: TraceCarrier; endTime?: Date } = {},
+	): void {
 		if ((!this.exportEnabled && !this.observe) || !Number.isFinite(durationMs) || durationMs < 0) return;
-		const endedAt = Date.now();
-		const span = this.startSpan(name, attributes, { startTime: new Date(endedAt - durationMs) });
+		const endedAt = options.endTime?.getTime() ?? Date.now();
+		const span = this.startSpan(name, attributes, {
+			...(options.parent ? { parent: options.parent } : {}),
+			startTime: new Date(endedAt - durationMs),
+		});
 		span.end(new Date(endedAt));
 	}
 
