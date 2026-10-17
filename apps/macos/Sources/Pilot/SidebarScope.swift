@@ -215,6 +215,8 @@ struct SidebarNavRow<Accessory: View>: View {
     let selected: Bool
     var help: String?
     var accessibilityDetail: String?
+    /// Non-nil when a parent list owns keyboard focus. Only its selected row draws a ring; buttons are not extra Tab stops.
+    var parentFocused: Bool? = nil
     let action: () -> Void
     @ViewBuilder var accessory: () -> Accessory
     @State private var hovered = false
@@ -235,7 +237,8 @@ struct SidebarNavRow<Accessory: View>: View {
                 .frame(maxHeight: .infinity)
                 .contentShape(Rectangle())
             }
-            .rowButtonStyle(outset: 2)
+            .rowButtonStyle(outset: 2, focused: parentFocused.map { _ in false })
+            .focusable(parentFocused == nil)
             .help(help ?? "")
             .accessibilityLabel([title, accessibilityDetail].compactMap { $0 }.joined(separator: ", "))
             .accessibilityAddTraits(selected ? .isSelected : [])
@@ -245,6 +248,7 @@ struct SidebarNavRow<Accessory: View>: View {
         .padding(.trailing, 2)
         .frame(height: 28)
         .background(RoundedRectangle(cornerRadius: Theme.Radius.row).fill(selected || hovered ? Theme.selected : .clear))
+        .focusRing(parentFocused == true && selected)
         .onHover { hovered = $0 }
         .animation(Theme.Motion.quick, value: hovered)
     }

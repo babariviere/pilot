@@ -363,10 +363,10 @@ private struct SettingsSidebar: View {
     }
 
     private func row(_ title: String, icon: PilotIcon, tab: SettingsTab, help: String? = nil) -> some View {
-        SidebarNavRow(title: title, icon: icon, selected: selection == tab, help: help, action: { selection = tab }) {
+        SidebarNavRow(title: title, icon: icon, selected: selection == tab, help: help,
+                      parentFocused: focused, action: { selection = tab; focused = true }) {
             if tab == .connections { ConnectionsTabBadge() }
         }
-        .focusRing(focused && selection == tab)
     }
 }
 
