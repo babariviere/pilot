@@ -165,6 +165,15 @@ enum SettingsTab: Hashable {
 
     static let general: [SettingsTab] = [.appearance, .notifications, .connections, .energy, .terminal, .updates, .devboxes]
 
+    /// The sidebar's order: general pages, then projects.
+    static func ordered(projects: [Project]) -> [SettingsTab] { general + projects.map { .project($0.id) } }
+
+    /// The page arrow keys move to, stopping at either end.
+    static func moving(from tab: SettingsTab, by offset: Int, in order: [SettingsTab]) -> SettingsTab {
+        guard let index = order.firstIndex(of: tab) else { return order.first ?? tab }
+        return order[min(max(index + offset, 0), order.count - 1)]
+    }
+
     var title: String {
         switch self {
         case .appearance: "Appearance"
@@ -286,6 +295,8 @@ private struct SettingsSidebar: View {
     @Binding var selection: SettingsTab
     let projects: [Project]
     let addProject: () -> Void
+    /// The sidebar takes focus when Settings opens: arrows or J/K move between pages, as in the main sidebar.
+    @FocusState private var focused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -311,6 +322,25 @@ private struct SettingsSidebar: View {
                     }
                 }
                 .padding(10)
+                .focusable()
+                .focused($focused)
+                .focusEffectDisabled()
+                .onKeyPress(keys: [.upArrow, .downArrow, .home, .end]) { press in
+                    guard press.modifiers.isDisjoint(with: [.command, .control, .option]) else { return .ignored }
+                    let order = SettingsTab.ordered(projects: projects)
+                    switch press.key {
+                    case .home: selection = order.first ?? selection
+                    case .end: selection = order.last ?? selection
+                    default: selection = SettingsTab.moving(from: selection, by: press.key == .upArrow ? -1 : 1, in: order)
+                    }
+                    return .handled
+                }
+                .onKeyPress(characters: CharacterSet(charactersIn: "jk")) { press in
+                    guard press.modifiers.isDisjoint(with: [.command, .control, .option]) else { return .ignored }
+                    selection = SettingsTab.moving(from: selection, by: press.characters == "k" ? -1 : 1,
+                                                   in: SettingsTab.ordered(projects: projects))
+                    return .handled
+                }
             }
             HairlineDivider()
             Button(action: addProject) {
@@ -325,12 +355,14 @@ private struct SettingsSidebar: View {
             .padding(.vertical, 9)
         }
         .background(Theme.sidebar)
+        .onAppear { DispatchQueue.main.async { focused = true } }
     }
 
     private func row(_ title: String, icon: PilotIcon, tab: SettingsTab, help: String? = nil) -> some View {
         SidebarNavRow(title: title, icon: icon, selected: selection == tab, help: help, action: { selection = tab }) {
             if tab == .connections { ConnectionsTabBadge() }
         }
+        .focusRing(focused && selection == tab)
     }
 }
 

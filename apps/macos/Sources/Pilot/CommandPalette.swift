@@ -224,6 +224,26 @@ struct CommandPaletteCatalog {
                                            icon: .archive) { [model] in model.showArchive(in: model.focusedProject?.id) })
         entries.append(CommandPaletteEntry(item: CommandPaletteItem(id: "page:settings", kind: .page, title: "Settings"),
                                            icon: .settings, shortcut: "⌘,", perform: openSettings))
+        // Each Settings page by name, so none needs the Settings sidebar.
+        let openSettings = openSettings
+        for tab in SettingsTab.general {
+            entries.append(CommandPaletteEntry(
+                item: CommandPaletteItem(id: "page:settings:\(tab.title)", kind: .page, title: "\(tab.title) settings",
+                                         keywords: ["settings", "preferences"]),
+                icon: tab.icon) { [model] in
+                    model.settingsTab = tab
+                    openSettings()
+                })
+        }
+        for project in model.orderedProjects {
+            entries.append(CommandPaletteEntry(
+                item: CommandPaletteItem(id: "page:settings:project:\(project.id)", kind: .page, title: "Project settings",
+                                         keywords: [project.name, "settings", "preferences"]),
+                icon: .settings, suffix: project.name) { [model] in
+                    model.settingsTab = .project(project.id)
+                    openSettings()
+                })
+        }
         entries.append(CommandPaletteEntry(
             item: CommandPaletteItem(id: "page:shortcuts", kind: .page, title: "Keyboard shortcuts",
                                      keywords: ["help", "hotkeys", "keys"]),
