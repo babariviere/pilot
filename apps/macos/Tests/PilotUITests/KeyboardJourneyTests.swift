@@ -33,8 +33,11 @@ private final class Journey {
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: MainWindow().environmentObject(model)
             .environment(\.pilotFonts, model.settings.fonts))
-        window.setFrameOrigin(NSPoint(x: -10000, y: -10000))
-        window.orderFrontRegardless()
+        // SwiftUI moves keyboard focus only in the key window of an active app, so the journey takes both. That would
+        // take focus from whoever runs the tests on their own Mac, hence CI only (see the tests' traits).
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
         // The window's views register their regions with this fixture's keyboard state, not the app's.
         let keyboard = model.keyboard
         router.focus = keyboard
@@ -49,6 +52,7 @@ private final class Journey {
     }
 
     func close() {
+        window.orderOut(nil)
         window.contentView = nil
         window.close()
     }
@@ -84,7 +88,8 @@ private final class Journey {
 }
 
 // A busy CI runner makes hosted windows slow to settle; each step still waits at most three seconds.
-@Test(.timeLimit(.minutes(3))) @MainActor
+@Test(.enabled(if: ProcessInfo.processInfo.environment["CI"] != nil, "activates the test app"),
+      .timeLimit(.minutes(3))) @MainActor
 func keyboardOnlyStartSwitchTypeAndReturn() throws {
     let journey = try Journey()
     defer { journey.close() }
@@ -94,8 +99,10 @@ func keyboardOnlyStartSwitchTypeAndReturn() throws {
             "Home shows the sidebar, page and new-chat composer regions")
     #expect(model.currentRoute == .home)
 
-    // ⌃⇥ walks the regions in order: sidebar, page, composer.
-    journey.press("\t", keyCode: 48, .control)
+    #expect(journey.wait { journey.window.isKeyWindow }, "the journey needs the key window")
+    // ⌃⇥ walks the regions in order: sidebar, page, composer. The sidebar list may hold focus at launch, so the
+    // walk starts wherever focus is and must reach the sidebar within one round.
+    for _ in 0..<4 where !(journey.responder is NSTableView) { journey.press("\t", keyCode: 48, .control) }
     #expect(journey.wait { journey.responder is NSTableView }, "the sidebar's outline takes focus")
     #expect(keyboard.currentRegion() == .sidebar)
     journey.press("\t", keyCode: 48, .control)
@@ -128,14 +135,16 @@ func keyboardOnlyStartSwitchTypeAndReturn() throws {
 }
 
 // A busy CI runner makes hosted windows slow to settle; each step still waits at most three seconds.
-@Test(.timeLimit(.minutes(3))) @MainActor
+@Test(.enabled(if: ProcessInfo.processInfo.environment["CI"] != nil, "activates the test app"),
+      .timeLimit(.minutes(3))) @MainActor
 func keyboardOnlySidebarBrowsingKeepsFocusInTheSidebar() throws {
     let journey = try Journey()
     defer { journey.close() }
     let model = journey.model
     let keyboard = model.keyboard
     #expect(journey.wait { keyboard.visibleRegions.contains(.sidebar) })
-    journey.press("\t", keyCode: 48, .control)
+    #expect(journey.wait { journey.window.isKeyWindow }, "the journey needs the key window")
+    for _ in 0..<4 where !(journey.responder is NSTableView) { journey.press("\t", keyCode: 48, .control) }
     #expect(journey.wait { journey.responder is NSTableView })
     // J moves like Down; arrowing onto a chat opens it, and its composer does not take the focus.
     for _ in 0..<3 where model.selectedSessionId == nil { journey.press("j", keyCode: 38) }
