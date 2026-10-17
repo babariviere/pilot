@@ -183,6 +183,12 @@ final class PilotClient: ObservableObject {
         let _: TelemetryClearResponse = try await call("api/diagnostics", method: "DELETE")
     }
 
+    func replaceNativeDiagnostics(_ batch: NativeDiagnosticsBatch) async throws {
+        struct Response: Decodable { let accepted: Bool }
+        let response: Response = try await call("api/diagnostics/native", method: "PUT", body: batch)
+        guard response.accepted else { throw ClientError("Native diagnostics were not accepted") }
+    }
+
     // MARK: Shared context. No app outbox or new operation IDs are created here.
 
     func sharedContexts() async throws -> [SharedContextSummary] {

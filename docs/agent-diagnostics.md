@@ -1,7 +1,8 @@
 # Agent diagnostics
 
 Pilot exposes a bounded, read-only diagnostic snapshot to agents and native clients. It combines the current daemon
-projection with retained lifecycle transitions, request timings and event-loop stalls. Reading it never starts,
+projection with retained lifecycle transitions, request timings, event-loop stalls and delayed native OS evidence.
+Native crash/hang items are host-level observation windows, not events attributed to the selected chat. Reading it never starts,
 subscribes to or mutates the target session and never opens transcript storage.
 
 Only an on-demand diagnostics specialist gets the `diagnostics` tool. The app admits that persistent session role

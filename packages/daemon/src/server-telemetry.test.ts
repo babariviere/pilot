@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -70,6 +70,35 @@ test("telemetry API keeps controls host-scoped, validates mutations and clears w
 	const initial = await fetch(`${origin}/api/telemetry`);
 	assert.equal(initial.status, 200);
 	assert.equal(((await initial.json()) as TelemetrySettings).remoteOperational, false);
+	const native = {
+		schemaVersion: 1,
+		evidence: [
+			{
+				ref: "diagnostic:v1:native:0123456789abcdef01234567",
+				source: "os",
+				at: "2026-10-17T08:00:00.000Z",
+				kind: "native.crash",
+				reason: "process_exit",
+				windowMs: 86_400_000,
+				releaseRelation: "current",
+			},
+		],
+		dropped: 0,
+	};
+	const nativeAccepted = await fetch(`${origin}/api/diagnostics/native`, {
+		method: "PUT",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify(native),
+	});
+	assert.equal(nativeAccepted.status, 200);
+	assert.equal(JSON.parse(await readFile(join(home, "native-diagnostics.json"), "utf8")).evidence.length, 1);
+	const oversizedNative = await fetch(`${origin}/api/diagnostics/native`, {
+		method: "PUT",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ ...native, padding: "x".repeat(33 * 1024) }),
+	});
+	assert.equal(oversizedNative.status, 413);
+	await oversizedNative.arrayBuffer();
 	const configured = await fetch(`${origin}/api/telemetry`, {
 		method: "PUT",
 		headers: { "content-type": "application/json" },
@@ -82,6 +111,13 @@ test("telemetry API keeps controls host-scoped, validates mutations and clears w
 	});
 	assert.equal(configured.status, 200);
 	assert.equal(((await configured.json()) as TelemetrySettings).endpoint, "http://127.0.0.1:4318/v1/traces");
+	const ignoredWhileDisabled = await fetch(`${origin}/api/diagnostics/native`, {
+		method: "PUT",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ schemaVersion: 1, evidence: [], dropped: 0 }),
+	});
+	assert.equal(ignoredWhileDisabled.status, 200);
+	assert.equal(JSON.parse(await readFile(join(home, "native-diagnostics.json"), "utf8")).evidence.length, 1);
 	const unsafe = await fetch(`${origin}/api/telemetry`, {
 		method: "PUT",
 		headers: { "content-type": "application/json" },
@@ -97,5 +133,6 @@ test("telemetry API keeps controls host-scoped, validates mutations and clears w
 	const cleared = await fetch(`${origin}/api/diagnostics`, { method: "DELETE" });
 	assert.equal(cleared.status, 200);
 	assert.deepEqual(await cleared.json(), { cleared: true });
+	await assert.rejects(stat(join(home, "native-diagnostics.json")));
 	assert.equal(sessions.list().length, 0);
 });

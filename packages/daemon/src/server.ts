@@ -33,6 +33,7 @@ import type {
 	MissionResourceUpdate,
 	MissionResourceWrite,
 	MissionTaskWrite,
+	NativeDiagnosticsBatch,
 	OperationHost,
 	ProjectRequest,
 	RenameSessionRequest,
@@ -71,6 +72,7 @@ import { type McpStatusService, SignInUnavailable } from "./mcp-status.ts";
 import type { MissionService } from "./mission-service.ts";
 import type { MissionStore } from "./missions.ts";
 import type { ModelCatalog } from "./models.ts";
+import { MAX_NATIVE_DIAGNOSTIC_BYTES } from "./native-diagnostics.ts";
 import { OperationJournal, OperationRejected } from "./operation-journal.ts";
 import { isAllowedOrigin } from "./origin.ts";
 import type { PowerService } from "./power.ts";
@@ -168,14 +170,14 @@ function jsonText(res: ServerResponse, status: number, body: string): void {
 	res.end(body);
 }
 
-async function readJson<T>(req: IncomingMessage): Promise<T> {
+async function readJson<T>(req: IncomingMessage, maxBytes = MAX_BODY): Promise<T> {
 	if (!req.headers["content-type"]?.startsWith("application/json"))
 		throw new HttpError(415, "Expected application/json");
 	let size = 0;
 	const chunks: Buffer[] = [];
 	for await (const chunk of req) {
 		size += (chunk as Buffer).length;
-		if (size > MAX_BODY) throw new HttpError(413, "Request body too large");
+		if (size > maxBytes) throw new HttpError(413, "Request body too large");
 		chunks.push(chunk as Buffer);
 	}
 	try {
@@ -894,6 +896,12 @@ export function createDaemonServer(
 					throw new HttpError(400, "Invalid telemetry settings");
 				}
 			}
+		}
+		if (parts[1] === "diagnostics" && parts[2] === "native" && parts.length === 3 && req.method === "PUT") {
+			await sessions.replaceNativeDiagnostics(
+				await readJson<NativeDiagnosticsBatch>(req, MAX_NATIVE_DIAGNOSTIC_BYTES),
+			);
+			return json(res, 200, { accepted: true });
 		}
 		if (parts[1] === "diagnostics" && parts.length === 2 && req.method === "DELETE") {
 			await sessions.clearDiagnostics();

@@ -81,6 +81,7 @@ import { LongJobTimers, longJobAttention } from "./long-jobs.ts";
 import { forkMainViewWorker, MainViewStore } from "./main-view.ts";
 import { McpChatAttention, type McpStatusSource } from "./mcp-attention.ts";
 import { ModelCatalog } from "./models.ts";
+import { NativeDiagnosticsStore } from "./native-diagnostics.ts";
 import { stuckPullRequestReason } from "./needs-you-reason.ts";
 import { PullRequestAutoRebase } from "./pr-auto-rebase.ts";
 import type { ProjectMemoryService } from "./project-memory.ts";
@@ -1002,6 +1003,7 @@ export class SessionManager {
 		const previous = this.telemetry;
 		this.telemetry = { ...configuration };
 		this.lifecycle.setEnabled(configuration.localDiagnostics);
+		this.nativeDiagnostics.setEnabled(configuration.localDiagnostics);
 		const exportChanged =
 			!previous ||
 			previous.enabled !== configuration.enabled ||
@@ -1017,6 +1019,7 @@ export class SessionManager {
 	async clearDiagnostics(): Promise<void> {
 		const enabled = this.telemetry?.localDiagnostics ?? true;
 		this.lifecycle.setEnabled(false);
+		this.nativeDiagnostics.setEnabled(false);
 		try {
 			const prepared = await Promise.allSettled(
 				[...this.workers.values()].map((worker) =>
@@ -1026,6 +1029,7 @@ export class SessionManager {
 			if (prepared.some((result) => result.status === "rejected"))
 				throw new ServiceUnavailable("Could not prepare local diagnostics for deletion");
 			await this.lifecycle.flush();
+			await this.nativeDiagnostics.clear();
 			await Promise.all(
 				[...this.metas.keys()].flatMap((id) =>
 					["lifecycle.jsonl", "lifecycle.jsonl.1", "performance.jsonl", "performance.jsonl.1"].flatMap((file) => [
@@ -1036,8 +1040,14 @@ export class SessionManager {
 			);
 		} finally {
 			this.lifecycle.setEnabled(enabled);
+			this.nativeDiagnostics.setEnabled(enabled);
 			for (const worker of this.workers.values()) worker.send({ type: "diagnostics.configure", enabled });
 		}
+	}
+
+	/** Full bounded replacement from the local native app. The validator rejects report bodies and open fields. */
+	async replaceNativeDiagnostics(value: unknown): Promise<void> {
+		await this.nativeDiagnostics.replace(value);
 	}
 
 	/** Display only. The shared admission file gates requests without stopping tools or resubmitting input. */
@@ -1199,6 +1209,7 @@ export class SessionManager {
 	private readonly home: string;
 	private readonly diagnosticHost?: OperationHost;
 	private readonly lifecycle: LifecycleDiagnostics;
+	private readonly nativeDiagnostics: NativeDiagnosticsStore;
 	private readonly autoRebase: PullRequestAutoRebase;
 	/** A handoff must not relinquish the workspace in the middle of a daemon-owned rebase. */
 	private readonly rebasingWorkspaces = new Set<string>();
@@ -1348,8 +1359,10 @@ export class SessionManager {
 		this.home = home;
 		this.diagnosticHost = options.diagnosticHost;
 		this.lifecycle = new LifecycleDiagnostics(home);
+		this.nativeDiagnostics = new NativeDiagnosticsStore(home);
 		this.telemetry = options.telemetry ? { ...options.telemetry } : undefined;
 		this.lifecycle.setEnabled(options.telemetry?.localDiagnostics ?? true);
+		this.nativeDiagnostics.setEnabled(options.telemetry?.localDiagnostics ?? true);
 		this.projects = projects;
 		this.agentDir = agentDir;
 		this.factories = factories;
@@ -4689,6 +4702,7 @@ export class SessionManager {
 			host,
 			sessionId: id,
 			storageDir: this.dir(id),
+			nativeDiagnosticsPath: this.nativeDiagnostics.file,
 			current: {
 				state: summary.state,
 				working: summary.working === true,

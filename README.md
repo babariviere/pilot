@@ -935,6 +935,9 @@ on-demand, runtime-restricted specialist and host-qualified read-only API that n
 wakes a parked worker. Use **Diagnose this chat** from a chat's More menu, or **Ask about Pilot** from Help, to open
 that specialist. Repair remains a separate user-authorized coding-agent handoff with explicitly selected bounded
 cited evidence.
+[Native crash and hang diagnostics](docs/native-diagnostics.md) use Apple's delayed MetricKit delivery and retain
+only bounded content-free incident metadata locally. Pilot does not ingest stacks or report bodies, upload to a
+crash vendor, or treat historical hang evidence as a live restart signal.
 The [diagnostics and telemetry contract](docs/telemetry-contract.md) defines the versioned privacy, identity,
 correlation, retention and resource budgets for local diagnostics and opt-in OpenTelemetry export. Remote export and
 product analytics are disabled by default, and no telemetry backend is selected by the repository.
