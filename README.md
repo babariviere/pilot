@@ -947,6 +947,9 @@ local in-flight hooks that keep useful progress separate from liveness heartbeat
 export, sleep handling and packaged dependency notices.
 [Feature-adoption catalog](docs/feature-adoption.md) defines the closed, content-free eligibility, exposure, attempt
 and outcome events and the limits on funnel and repeat-use interpretation.
+The [local OTLP Collector example](examples/otel-collector/README.md) and
+[starter queries](docs/telemetry-starter-queries.md) provide bounded vendor-neutral evaluation without provisioning
+a hosted backend or enabling upload automatically.
 [Telemetry controls](docs/telemetry-settings.md) documents independent local, operational and analytics consent,
 per-host OTLP endpoints, revocation and private pseudonymous identity.
 [Message send tracing](docs/message-send-tracing.md) explains the correlated app/daemon/kernel phases, thinking versus
