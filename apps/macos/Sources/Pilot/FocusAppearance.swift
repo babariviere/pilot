@@ -11,6 +11,7 @@ struct NativeFocusRingSuppression: NSViewRepresentable {
 final class FocusRingSuppressionView: NSView {
     private var observers: [NSObjectProtocol] = []
     private weak var lastResponder: NSResponder?
+    private weak var lastEditorOwner: NSView?
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -23,7 +24,7 @@ final class FocusRingSuppressionView: NSView {
                 self.suppressFocusedRing()
             }
         })
-        // Editing starts synchronously, before AppKit can draw the field's first focus ring.
+        // Suppress editing rings synchronously; window updates also cover focus before typing begins.
         observers.append(center.addObserver(forName: NSControl.textDidBeginEditingNotification, object: nil, queue: .main) { [weak self] notice in
             MainActor.assumeIsolated {
                 guard let self, let window = self.window, let control = notice.object as? NSView, control.window === window else { return }
@@ -42,15 +43,22 @@ final class FocusRingSuppressionView: NSView {
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
         observers.removeAll()
         lastResponder = nil
+        lastEditorOwner = nil
     }
 
     func suppressFocusedRing() {
-        guard let responder = window?.firstResponder, responder !== lastResponder else { return }
+        guard let responder = window?.firstResponder else { return }
+        let view = responder as? NSView
+        let editor = responder as? NSTextView
+        let owner = editor?.isFieldEditor == true ? editor?.delegate as? NSView : nil
+        // AppKit reuses one field editor for different controls. Track its owner as well as the responder,
+        // and reapply if SwiftUI refreshed a native control's ring setting without moving focus.
+        guard responder !== lastResponder || owner !== lastEditorOwner
+            || view.map({ $0.focusRingType != .none }) == true || owner.map({ $0.focusRingType != .none }) == true else { return }
         lastResponder = responder
-        if let view = responder as? NSView { suppressRing(on: view) }
-        if let editor = responder as? NSTextView, editor.isFieldEditor, let control = editor.delegate as? NSView {
-            suppressRing(on: control)
-        }
+        lastEditorOwner = owner
+        if let view { suppressRing(on: view) }
+        if let owner { suppressRing(on: owner) }
     }
 
     private func suppressRing(on view: NSView) {
