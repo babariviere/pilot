@@ -32,8 +32,11 @@ import type {
 	AgentEvent,
 	ArtifactRevision,
 	ArtifactSummary,
+	DiagnosticErrorCode,
+	DiagnosticPauseReason,
 	DeliveryMode,
 	MergePullRequestRequest,
+	OperationHost,
 	PullRequestBindingResult,
 	PullRequestMergePreview,
 	RewindAction,
@@ -41,6 +44,7 @@ import type {
 	SessionAttempt,
 	SessionCommand,
 	SessionHistoryPage,
+	SessionDiagnostics,
 	SessionJob,
 	SessionListQuery,
 	SessionPullRequest,
@@ -66,7 +70,7 @@ import { coordinatorTrust } from "./coordinator-trust.ts";
 import type { CredentialBroker } from "./credential-broker.ts";
 import { DatabaseService, type DatabaseState, decideDatabaseRequest, declineDatabaseRequest } from "./databases.ts";
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
-import { operations } from "./event-loop-watchdog.ts";
+import { daemonPerformance, operations } from "./event-loop-watchdog.ts";
 import { githubRepository, linkedPullRequest, type PullRequestProblems } from "./github.ts";
 import { LifecycleDiagnostics } from "./lifecycle-diagnostics.ts";
 import { LongJobTimers, longJobAttention } from "./long-jobs.ts";
@@ -90,6 +94,7 @@ import {
 } from "./pull-requests.ts";
 import { RecoveryStops } from "./recovery-stops.ts";
 import { continuationAnswer, continuationHandoff, continuationQueuedInputs } from "./session-continuation.ts";
+import { readSessionDiagnostics } from "./session-diagnostics.ts";
 import {
 	applyActivity,
 	applyFailure,
@@ -254,6 +259,8 @@ export interface SessionManagerOptions {
 	kernelRestartBackoffMs?: number;
 	/** Shared with the HTTP API so model lists, model changes and titles reuse one runtime and cache. */
 	models?: ModelCatalog;
+	/** Immutable identity returned by agent-local diagnostic reads. */
+	diagnosticHost?: OperationHost;
 }
 
 export interface SessionFactories {
@@ -959,11 +966,13 @@ export class SessionManager {
 	private readonly coldWatches = new Map<string, () => void>();
 	private readonly changeListeners = new Set<(session: SessionSummary) => void>();
 	private internetOnline?: boolean;
+	private internetObservedAt?: number;
 
 	/** Display only. The shared admission file gates requests without stopping tools or resubmitting input. */
 	setConnectivity(online: boolean): void {
 		if (this.internetOnline === online) return;
 		this.internetOnline = online;
+		this.internetObservedAt = Date.now();
 		for (const meta of this.metas.values()) {
 			const worker = this.workers.get(meta.id);
 			// Quiet history is unaffected. Do not rebuild/broadcast thousands of idle summaries on each edge.
@@ -1116,6 +1125,7 @@ export class SessionManager {
 	}
 
 	private readonly home: string;
+	private readonly diagnosticHost?: OperationHost;
 	private readonly lifecycle: LifecycleDiagnostics;
 	private readonly autoRebase: PullRequestAutoRebase;
 	/** A handoff must not relinquish the workspace in the middle of a daemon-owned rebase. */
@@ -1262,6 +1272,7 @@ export class SessionManager {
 			options.subscriptionUsage?.(onUsage) ??
 			(factories.worker ? undefined : new SubscriptionUsageCache(onUsage, { agentDir }));
 		this.home = home;
+		this.diagnosticHost = options.diagnosticHost;
 		this.lifecycle = new LifecycleDiagnostics(home);
 		this.projects = projects;
 		this.agentDir = agentDir;
@@ -4491,6 +4502,56 @@ export class SessionManager {
 		return (await worker.jobs?.()) ?? [];
 	}
 
+	/** Content-free local evidence. Reading a parked or archived chat never starts, subscribes to or mutates it. */
+	async diagnostics(id: string, options: { host?: OperationHost; limit?: number } = {}): Promise<SessionDiagnostics> {
+		const meta = this.require(id);
+		const host = options.host ?? this.diagnosticHost;
+		if (!host) throw new ServiceUnavailable("Diagnostic host identity is unavailable");
+		const worker = this.workers.get(id);
+		const summary = this.summary(meta, worker);
+		const pauses: DiagnosticPauseReason[] = [];
+		if (summary.sleepPaused) pauses.push("sleep");
+		if (meta.updatePaused) pauses.push("update");
+		if (summary.subscriptionPause && !summary.subscriptionPause.forced) pauses.push("quota");
+		if (summary.offlinePaused) pauses.push("connectivity");
+		if (meta.recoveryStopped) pauses.push("user");
+		let errorCode: DiagnosticErrorCode | undefined;
+		if (meta.failure) errorCode = "startup_failure";
+		else if (meta.inputError) errorCode = "admission_uncertain";
+		else if (this.kernelErrors.has(id)) errorCode = "worker_failure";
+		else if (meta.kernelRestartPending) errorCode = "recovery_pending";
+		else if (summary.state === "failed") errorCode = "unknown";
+		return readSessionDiagnostics({
+			host,
+			sessionId: id,
+			storageDir: this.dir(id),
+			current: {
+				state: summary.state,
+				working: summary.working === true,
+				pauses,
+				recovery: meta.recoveryStopped ? "stopped" : meta.kernelRestartPending ? "pending" : "none",
+				hasError: errorCode !== undefined,
+				...(errorCode ? { errorCode } : {}),
+				queue: {
+					pendingInputs: meta.pending?.length ?? 0,
+					starting: this.starting.has(id) || worker?.state === "starting",
+					parking: this.parking.has(id),
+					workspacePreparing: Boolean(meta.preparing || this.workspaceRefreshes.has(id)),
+					runningJobs: worker?.runningJobs?.length ?? 0,
+					workingSubagents: meta.subagents?.filter((child) => child.state === "working").length ?? 0,
+				},
+			},
+			connectivity: {
+				state: this.internetOnline === undefined ? "unknown" : this.internetOnline ? "online" : "offline",
+				...(this.internetObservedAt === undefined
+					? {}
+					: { observedAt: new Date(this.internetObservedAt).toISOString() }),
+			},
+			performance: daemonPerformance(),
+			...(options.limit === undefined ? {} : { limit: options.limit }),
+		});
+	}
+
 	/** Cheap committed TODO count. Never starts an agent or reads transcript entries/bodies. */
 	async openTodoCount(id: string): Promise<number> {
 		const meta = this.require(id);
@@ -5918,6 +5979,36 @@ export class SessionManager {
 								type: "pilot.result",
 								callId: packet.callId,
 								error: formatFailure(error, "Tool pilot"),
+							});
+					},
+				);
+			return;
+		}
+		if (packet.type === "diagnostics.call") {
+			void Promise.resolve()
+				.then(() => {
+					const target = this.require(packet.sessionId);
+					if (
+						target.id !== meta.id &&
+						!this.isControlSession(meta.id) &&
+						(!meta.projectId || target.projectId !== meta.projectId)
+					)
+						throw new Error("Diagnostics are limited to this chat or another chat in the same project");
+					return this.diagnostics(target.id, {
+						...(packet.limit === undefined ? {} : { limit: packet.limit }),
+					});
+				})
+				.then(
+					(result) => {
+						if (this.workers.get(meta.id) === worker)
+							worker.send({ type: "diagnostics.result", callId: packet.callId, result });
+					},
+					(error) => {
+						if (this.workers.get(meta.id) === worker)
+							worker.send({
+								type: "diagnostics.result",
+								callId: packet.callId,
+								error: formatFailure(error, "Tool diagnostics"),
 							});
 					},
 				);

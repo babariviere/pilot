@@ -150,6 +150,14 @@ export function lifecycleLine(event: LifecycleEvent): string | undefined {
 	return Buffer.byteLength(line) <= MAX_LIFECYCLE_EVENT_BYTES ? line : undefined;
 }
 
+/** Parse one retained line through the writer's closed schema. */
+export function parseLifecycleDiagnostic(value: unknown): LifecycleEvent | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return;
+	const line = lifecycleLine(value as LifecycleEvent);
+	if (!line) return;
+	return JSON.parse(line) as LifecycleEvent;
+}
+
 function pauseReason(observation: LifecycleObservation): LifecycleReason {
 	if (observation.sleepPaused) return "sleep";
 	if (observation.updatePaused) return "update";

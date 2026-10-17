@@ -7,7 +7,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import type { AgentEvent, ServerMessage, SessionSummary } from "@pilot/protocol";
+import type { AgentEvent, DaemonHello, ServerMessage, SessionDiagnostics, SessionSummary } from "@pilot/protocol";
 import { WebSocket } from "ws";
 import { RepositoryChanges } from "./changes.ts";
 import { Conflict, ServiceUnavailable } from "./errors.ts";
@@ -59,6 +59,115 @@ test("jobs GET returns the session's read-only running list and routes missing s
 		await response.arrayBuffer();
 	}
 	assert.equal(reads.mock.callCount(), 3);
+});
+
+test("diagnostics GET requires the pinned host identity and remains read-only", async (t) => {
+	const projects = new ProjectStore("/unused");
+	const sessions = new SessionManager("/unused", projects);
+	const hello: DaemonHello = {
+		daemonId: "daemon",
+		lineageId: "lineage",
+		daemonVersion: "1.0.0",
+		protocolVersion: 1,
+		minimumClientProtocolVersion: 1,
+		platform: "darwin",
+		arch: "arm64",
+		capabilities: {
+			powerManagement: false,
+			systemSleepEvents: false,
+			swiftUIArtifacts: true,
+			coordinatorIsolation: true,
+			independentExecution: true,
+		},
+	};
+	const diagnostic: SessionDiagnostics = {
+		schemaVersion: 1,
+		host: { hostId: "local", daemonId: "daemon", lineageId: "lineage" },
+		sessionId: "parked",
+		release: "1.0.0",
+		collectedAt: "2026-01-01T00:00:00.000Z",
+		freshness: "fresh",
+		connectivity: { state: "unknown" },
+		current: {
+			state: "parked",
+			working: false,
+			pauses: [],
+			recovery: "none",
+			hasError: false,
+			queue: {
+				pendingInputs: 0,
+				starting: false,
+				parking: false,
+				workspacePreparing: false,
+				runningJobs: 0,
+				workingSubagents: 0,
+			},
+		},
+		resources: {},
+		sources: [],
+		evidence: [],
+		truncation: {
+			truncated: false,
+			returned: 0,
+			available: 0,
+			dropped: 0,
+			invalid: 0,
+			encodedBytes: 0,
+			maxItems: 12,
+			maxBytes: 65_536,
+		},
+	};
+	const reads = t.mock.method(
+		sessions,
+		"diagnostics",
+		async (id: string, options: NonNullable<Parameters<SessionManager["diagnostics"]>[1]>) => ({
+			...diagnostic,
+			sessionId: id,
+			host: options.host!,
+		}),
+	);
+	const terminals = new TerminalManager();
+	const server = createDaemonServer(
+		{ home: "/unused", host: "127.0.0.1", port: 0 },
+		sessions,
+		projects,
+		new ModelCatalog("/unused"),
+		terminals,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		hello,
+	);
+	t.after(async () => {
+		terminals.shutdown();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/sessions/parked/diagnostics`;
+	const response = await fetch(`${base}?hostId=local&daemonId=daemon&lineageId=lineage&limit=12`);
+	assert.equal(response.status, 200);
+	assert.equal(response.headers.get("cache-control"), "no-store");
+	assert.deepEqual(((await response.json()) as SessionDiagnostics).host, diagnostic.host);
+	for (const [query, status] of [
+		["", 400],
+		["?hostId=local&daemonId=old&lineageId=lineage", 409],
+		["?hostId=local&daemonId=daemon&lineageId=old", 409],
+		["?hostId=local&daemonId=daemon&lineageId=lineage&limit=129", 400],
+	] as const) {
+		const denied = await fetch(`${base}${query}`);
+		assert.equal(denied.status, status, query);
+		await denied.arrayBuffer();
+	}
+	assert.equal(reads.mock.callCount(), 1);
+	assert.deepEqual(reads.mock.calls[0]!.arguments, [
+		"parked",
+		{ host: { hostId: "local", daemonId: "daemon", lineageId: "lineage" }, limit: 12 },
+	]);
 });
 
 test("jobs stop POST stops one running job and routes missing jobs", async (t) => {

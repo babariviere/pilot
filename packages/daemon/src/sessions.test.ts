@@ -1075,6 +1075,88 @@ test("todo count uses the live cache, ignores retired workers, and cold-reads wi
 	assert.equal(f.workers.length, 1, "counting never reopens a parked agent");
 });
 
+test("diagnostics reads a parked session without opening its worker or transcript", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager(
+		{},
+		{
+			diagnosticHost: { hostId: "local", daemonId: "daemon", lineageId: "lineage" },
+		},
+	);
+	const created = await sessions.spawn({ cwd: f.source, message: "Start" });
+	await sessions["starting"].get(created.id);
+	f.workers[0]!.finish({ outcome: "done", outcomeAt: Date.now() });
+	sessions["workers"].delete(created.id);
+	const reads = t.mock.method(sessions["coldReader"], "read", async () => {
+		throw new Error("transcript must not be read");
+	});
+	const meta = sessions["metas"].get(created.id)!;
+	meta.working = true;
+	sessions.setConnectivity(false);
+	const offline = await sessions.diagnostics(created.id);
+	assert.equal(offline.host.daemonId, "daemon");
+	assert.equal(offline.current.state, "parked");
+	assert.deepEqual(offline.current.pauses, ["connectivity"]);
+	assert.equal(offline.connectivity.state, "offline");
+	meta.working = false;
+	meta.failure = "raw startup error with a secret";
+	const failed = await sessions.diagnostics(created.id);
+	assert.equal(failed.current.state, "failed");
+	assert.equal(failed.current.errorCode, "startup_failure");
+	assert.equal(failed.sessionId, created.id);
+	assert.equal(JSON.stringify(failed).includes("raw startup error"), false);
+	assert.equal(f.workers.length, 1, "diagnostics never constructs a replacement worker");
+	assert.equal(reads.mock.callCount(), 0);
+});
+
+test("agent diagnostics can inspect a parked project peer but not another project", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager(
+		{},
+		{
+			diagnosticHost: { hostId: "local", daemonId: "daemon", lineageId: "lineage" },
+		},
+	);
+	const caller = await sessions.spawn({ cwd: f.source, projectId: f.project.id, message: "Caller" });
+	const peer = await sessions.spawn({ cwd: f.source, projectId: f.project.id, message: "Peer" });
+	await Promise.all([sessions["starting"].get(caller.id), sessions["starting"].get(peer.id)]);
+	const callerWorker = sessions["workers"].get(caller.id)! as FakeWorker;
+	sessions["workers"].delete(peer.id);
+	sessions["onPacket"](sessions["metas"].get(caller.id)!, callerWorker, {
+		type: "diagnostics.call",
+		callId: "peer-read",
+		sessionId: peer.id,
+		limit: 4,
+	});
+	await until(() => callerWorker.sent.some((command) => command.type === "diagnostics.result"));
+	const allowed = callerWorker.sent.find(
+		(command): command is Extract<KernelCommand, { type: "diagnostics.result" }> =>
+			command.type === "diagnostics.result" && command.callId === "peer-read",
+	);
+	assert.ok(allowed?.result, allowed?.error);
+	assert.equal(allowed.result.sessionId, peer.id);
+	assert.equal(f.workers.length, 2, "reading the parked peer never constructs a worker");
+
+	const otherSource = join(f.root, "other-source");
+	await mkdir(otherSource);
+	const otherProject = await f.projects.create({ path: otherSource });
+	const other = await sessions.spawn({ cwd: otherSource, projectId: otherProject.id, message: "Other" });
+	await sessions["starting"].get(other.id);
+	sessions["onPacket"](sessions["metas"].get(caller.id)!, callerWorker, {
+		type: "diagnostics.call",
+		callId: "cross-project",
+		sessionId: other.id,
+	});
+	await until(() =>
+		callerWorker.sent.some((command) => command.type === "diagnostics.result" && command.callId === "cross-project"),
+	);
+	const denied = callerWorker.sent.find(
+		(command): command is Extract<KernelCommand, { type: "diagnostics.result" }> =>
+			command.type === "diagnostics.result" && command.callId === "cross-project",
+	);
+	assert.match(denied?.error ?? "", /same project/);
+});
+
 test("large restart recovery keeps the daemon responsive and bounds cold starts without losing input IDs", async (t) => {
 	const f = await fixture(t);
 	const ids = Array.from({ length: 150 }, () => randomUUID());

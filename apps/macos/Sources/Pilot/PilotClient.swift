@@ -549,6 +549,26 @@ final class PilotClient: ObservableObject {
         return response.commands
     }
 
+    /// Reads content-free evidence without opening or subscribing to the target chat.
+    func diagnostics(_ sessionId: String, limit: Int = 128) async throws -> SessionDiagnostics {
+        guard (1 ... 128).contains(limit) else { throw ClientError("Diagnostic limit must be between 1 and 128") }
+        guard let baseURL, let host = hostIdentity,
+              var components = URLComponents(
+                  url: baseURL.appending(path: "api/sessions/\(sessionId)/diagnostics"),
+                  resolvingAgainstBaseURL: false
+              ) else { throw HostRoutingError.disconnected }
+        components.queryItems = [
+            URLQueryItem(name: "hostId", value: host.hostId),
+            URLQueryItem(name: "daemonId", value: host.daemonId),
+            URLQueryItem(name: "lineageId", value: host.lineageId),
+            URLQueryItem(name: "limit", value: String(limit)),
+        ]
+        guard let url = components.url else { throw HostRoutingError.invalidReference }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        return try await call(request)
+    }
+
     /// Stops one running job. The session summary drops it once the worker reports its jobs again.
     func stopJob(_ sessionId: String, jobId: String) async throws {
         var allowed = CharacterSet.urlPathAllowed

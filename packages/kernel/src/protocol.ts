@@ -123,6 +123,12 @@ export type KernelCommand =
 	| { type: "watch.run.result"; callId: string; error?: string }
 	| { type: "database.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "slack.result"; callId: string; result?: JsonValue; error?: string }
+	| {
+			type: "diagnostics.result";
+			callId: string;
+			result?: import("@pilot/protocol").SessionDiagnostics;
+			error?: string;
+	  }
 	/** Whether the chat is attached to a Slack triage message, which declares or withdraws `slack_status`. */
 	| { type: "slack.linked"; linked: boolean }
 	| { type: "subscription.limit.result"; callId: string; error?: string }
@@ -185,6 +191,8 @@ export type KernelPacket =
 	| { type: "database.call"; callId: string; action: DatabaseAction; args: Record<string, JsonValue> }
 	/** A `slack_status` tool call, answered by `slack.result`. Applies only to Slack messages linked to this chat. */
 	| { type: "slack.call"; callId: string; args: Record<string, JsonValue> }
+	/** Content-free diagnostic read. Caller identity is derived from this supervised worker. */
+	| { type: "diagnostics.call"; callId: string; sessionId: string; limit?: number }
 	/** Read-only linked source lookup. Caller identity comes from the supervised worker, not this packet. */
 	| { type: "artifact.reference.get"; callId: string; id: string; revision?: number }
 	/** The kernel is awaiting its first prompt preparation. No model or tools are running. */
