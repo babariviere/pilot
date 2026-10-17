@@ -56,6 +56,7 @@ import type {
 	UnbindPullRequestRequest,
 	UpdateMissionRequest,
 } from "@pilot/protocol";
+import { nodeTelemetry, traceCarrier } from "@pilot/telemetry";
 import { type WebSocket, WebSocketServer } from "ws";
 import { AttachmentStore } from "./attachment-store.ts";
 import { boundedSender } from "./backpressure.ts";
@@ -1192,9 +1193,21 @@ export function createDaemonServer(
 				);
 			}
 			if (parts[3] === "messages") {
-				const body = await readJson<SendRequest>(req);
-				await sessions.send(id, body.message, body.mode, body.requestId);
-				return json(res, 202, { ok: true });
+				const parent = traceCarrier({ traceparent: req.headers.traceparent });
+				const span = nodeTelemetry().startSpan(
+					"pilot.message.send",
+					{ "pilot.operation": "message.send", "pilot.phase": "api" },
+					{ ...(parent ? { parent } : {}) },
+				);
+				try {
+					const body = await readJson<SendRequest>(req);
+					await sessions.send(id, body.message, body.mode, body.requestId, span.carrier() ?? parent);
+					span.end();
+					return json(res, 202, { ok: true });
+				} catch (error) {
+					span.finish("failed");
+					throw error;
+				}
 			}
 			if (parts[3] === "database-access") {
 				const body = await readJson<DatabaseAccessDecision | null>(req);

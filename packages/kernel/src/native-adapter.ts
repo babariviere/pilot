@@ -61,6 +61,7 @@ import {
 	type UserInput,
 } from "@earendil-works/pi-durable";
 import type { DeliveryMode, SessionCommand, SessionJob } from "@pilot/protocol";
+import type { TraceCarrier } from "@pilot/telemetry";
 import { type ActivityStream, InfrastructureChildren, inspectChildren, watchActivity } from "./activity.ts";
 import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
 import { type ArtifactToolOptions, createArtifactTools } from "./artifact-tools.ts";
@@ -267,6 +268,7 @@ export class NativeAdapter {
 	readonly #performance?: PerformanceSink;
 	#requestNumber = 0;
 	#pendingPreparation?: PreparationMark;
+	#nextInteraction?: { requestId: string; trace: TraceCarrier };
 	#toolFinished?: number;
 	readonly #preparations = new WeakMap<AbortSignal, PreparationMark>();
 	readonly #subscriptionGate: SubscriptionGate;
@@ -1086,15 +1088,29 @@ export class NativeAdapter {
 	#diagnosticTools = new WeakSet<ToolDefinition>();
 
 	private preparationMark(): PreparationMark {
+		const interaction = this.#nextInteraction;
+		this.#nextInteraction = undefined;
 		return {
 			started: performance.now(),
 			at: Date.now(),
+			...(interaction ? { trace: interaction.trace } : {}),
 			...(this.#toolFinished === undefined
 				? {}
 				: {
 						toolFinished: this.#toolFinished,
 					}),
 		};
+	}
+
+	/** Associate only an idle admission with the next generation. Busy steering/queues remain explicitly uncorrelated. */
+	beginInteraction(requestId: string, trace: TraceCarrier): boolean {
+		if (!this.#performance || this.working || this.#nextInteraction) return false;
+		this.#nextInteraction = { requestId, trace };
+		return true;
+	}
+
+	cancelInteraction(requestId: string): void {
+		if (this.#nextInteraction?.requestId === requestId) this.#nextInteraction = undefined;
 	}
 
 	waitForSubscription(signal?: AbortSignal): Promise<void> {

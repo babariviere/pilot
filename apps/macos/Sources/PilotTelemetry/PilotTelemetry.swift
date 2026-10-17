@@ -36,7 +36,7 @@ public enum PilotTelemetryPhase: String, Sendable {
     case firstTranscript = "first_transcript"
 }
 
-public enum PilotTelemetryOutcome: String, Sendable {
+public enum PilotTelemetryOutcome: String, Equatable, Sendable {
     case completed, failed, timeout, cancelled, interrupted, unavailable
 
     fileprivate var exported: String {
@@ -63,7 +63,7 @@ public enum PilotTelemetryReason: String, Sendable {
 }
 
 public enum PilotHistoryBucket: String, Sendable { case empty = "0", small = "1-100", medium = "101-1000", large = "1001+" }
-public enum PilotProgressKind: String, Sendable { case thinking, text, tool, none }
+public enum PilotProgressKind: String, Equatable, Sendable { case thinking, text, tool, none }
 public enum PilotFrameObservation: String, Sendable { case available, occluded, asleep, unsupported }
 
 /// Closed attributes only. Adding a case requires updating the reviewed telemetry contract and privacy fixtures.

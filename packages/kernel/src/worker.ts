@@ -284,6 +284,13 @@ export function runKernelWorker(): void {
 							{ parent: command.trace },
 						)
 					: undefined;
+				const admissionSpan = command.trace
+					? nodeTelemetry().startSpan(
+							"pilot.message.send",
+							{ "pilot.operation": "message.send", "pilot.phase": "admission" },
+							{ parent: requestSpan?.carrier() ?? command.trace },
+						)
+					: undefined;
 				try {
 					const delivery = await session.submit(
 						command.requestId,
@@ -292,8 +299,14 @@ export function runKernelWorker(): void {
 						command.onlyIfIdle,
 						command.reportDelivery,
 						command.event,
+						admissionSpan?.carrier() ?? command.trace,
 					);
 					await send({ type: "accepted", requestId: command.requestId, ...delivery });
+					admissionSpan?.end();
+				} catch (error) {
+					admissionSpan?.finish("failed");
+					requestSpan?.finish("failed");
+					throw error;
 				} finally {
 					requestSpan?.end();
 				}

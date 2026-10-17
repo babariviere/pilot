@@ -2,7 +2,7 @@
 import { constants } from "node:fs";
 import { open, rename } from "node:fs/promises";
 import { performance } from "node:perf_hooks";
-import { nodeTelemetry } from "@pilot/telemetry";
+import { nodeTelemetry, type TraceCarrier } from "@pilot/telemetry";
 
 export interface PerformanceRecord {
 	v: 1;
@@ -34,6 +34,8 @@ export interface PreparationMark {
 	started: number;
 	at: number;
 	toolFinished?: number;
+	/** Ephemeral interaction context. It is never serialized with the local timing record. */
+	trace?: TraceCarrier;
 }
 
 type Milestone =
@@ -86,6 +88,7 @@ export class RequestTiming {
 		if (this.finished) return;
 		this.finished = true;
 		const end = this.now();
+		const reachedProvider = this.providerStarted !== undefined;
 		const providerStart = this.providerStarted ?? end;
 		try {
 			const record: PerformanceRecord = {
@@ -110,6 +113,44 @@ export class RequestTiming {
 				"pilot.operation": "kernel.request",
 				"pilot.outcome": outcome === "completed" ? "success" : outcome === "aborted" ? "cancelled" : "failure",
 			});
+			if (this.start.trace) {
+				const exportedOutcome =
+					outcome === "completed" ? "success" : outcome === "aborted" ? "cancelled" : "failure";
+				nodeTelemetry().recordSpan(
+					"pilot.message.send",
+					record.preparationMs,
+					{
+						"pilot.operation": "message.send",
+						"pilot.phase": "preparation",
+						"pilot.outcome": reachedProvider ? "success" : exportedOutcome,
+						"pilot.progress_kind": "none",
+					},
+					{ parent: this.start.trace, endTime: new Date(record.at + record.preparationMs) },
+				);
+				if (reachedProvider) {
+					const progress = (
+						[
+							[record.firstThinkingMs, "thinking"],
+							[record.firstTextMs, "text"],
+							[record.firstToolCallMs, "tool"],
+						] as const
+					)
+						.filter((value): value is readonly [number, "thinking" | "text" | "tool"] => value[0] !== undefined)
+						.sort((left, right) => left[0] - right[0])[0]?.[1];
+					nodeTelemetry().recordSpan(
+						"pilot.message.send",
+						record.providerMs,
+						{
+							"pilot.operation": "message.send",
+							"pilot.phase": "provider",
+							"pilot.outcome": exportedOutcome,
+							"pilot.progress_kind": progress ?? "none",
+							"pilot.retry_count": Math.max(0, Math.min(8, record.httpAttempts - 1)),
+						},
+						{ parent: this.start.trace, endTime: new Date(record.at + record.totalMs) },
+					);
+				}
+			}
 		} catch {
 			// Diagnostics cannot change success, abort, replay or retry behavior.
 		}

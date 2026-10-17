@@ -59,6 +59,7 @@ import type {
 	SubscriptionPause,
 	UpdatePreparation,
 } from "@pilot/protocol";
+import { nodeTelemetry, type TraceCarrier } from "@pilot/telemetry";
 import { prepareAskSnapshot } from "./ask-snapshots.ts";
 import { chatTitleContext } from "./chat-title.ts";
 import { ColdViewReader } from "./cold-view-reader.ts";
@@ -977,6 +978,19 @@ export class SessionManager {
 	private internetOnline?: boolean;
 	private internetObservedAt?: number;
 	private telemetry?: KernelTelemetryConfiguration;
+	/** Ephemeral input contexts. Never written into session metadata; bounded loss after restart is intentional. */
+	private readonly inputTraces = new Map<string, TraceCarrier>();
+
+	private inputTraceKey(sessionId: string, requestId: string): string {
+		return `${sessionId}\0${requestId}`;
+	}
+
+	private rememberInputTrace(sessionId: string, requestId: string, trace: TraceCarrier): void {
+		const key = this.inputTraceKey(sessionId, requestId);
+		this.inputTraces.delete(key);
+		this.inputTraces.set(key, trace);
+		while (this.inputTraces.size > 512) this.inputTraces.delete(this.inputTraces.keys().next().value!);
+	}
 
 	configureTelemetry(configuration: KernelTelemetryConfiguration): void {
 		const previous = this.telemetry;
@@ -4148,6 +4162,7 @@ export class SessionManager {
 		message: string,
 		mode: DeliveryMode = "followUp",
 		requestId: string = randomUUID(),
+		trace?: TraceCarrier,
 	): Promise<void> {
 		const end = this.updateGate.begin();
 		try {
@@ -4155,7 +4170,7 @@ export class SessionManager {
 			const meta = this.metas.get(id);
 			const databases = meta ? declineDatabaseRequest(meta.databases) : undefined;
 			if (meta && databases) meta.databases = databases;
-			await this.sendAdmitted(id, message, mode, requestId);
+			await this.sendAdmitted(id, message, mode, requestId, false, false, trace);
 		} finally {
 			end();
 		}
@@ -4197,6 +4212,7 @@ export class SessionManager {
 		requestId: string,
 		report = false,
 		durable = false,
+		trace?: TraceCarrier,
 	): Promise<void> {
 		const meta = this.require(id);
 		this.assertNotContinued(meta);
@@ -4206,6 +4222,20 @@ export class SessionManager {
 		if (meta.archivedAt !== undefined) throw new Conflict("Restore the archived session before sending a message");
 		if (this.changingModels.has(id)) throw new Conflict("Session is changing its model or conversation");
 		this.sending.set(id, (this.sending.get(id) ?? 0) + 1);
+		const admissionSpan = trace
+			? nodeTelemetry().startSpan(
+					"pilot.message.send",
+					{
+						"pilot.operation": "message.send",
+						"pilot.phase": "admission",
+						"pilot.cold": !this.workers.has(id),
+						"pilot.recovered": meta.inputError !== undefined,
+						"pilot.queue_depth": Math.min(512, meta.pending?.length ?? 0),
+					},
+					{ parent: trace },
+				)
+			: undefined;
+		let admissionFinished = false;
 		try {
 			if (this.closing) throw new Error("pilotd is shutting down");
 			if (meta.failure) throw new Error(meta.failure);
@@ -4234,14 +4264,38 @@ export class SessionManager {
 				meta.prFollowUp = { attempts: 0, nextAttemptAt: 0, generation: (meta.prFollowUp?.generation ?? 0) + 1 };
 			}
 			await this.save(meta, undefined, undefined, durable);
+			admissionSpan?.progress();
+			admissionSpan?.end();
+			admissionFinished = true;
 			this.emit(meta);
 			const starting = meta.initializing;
+			const startupSpan = trace
+				? nodeTelemetry().startSpan(
+						"pilot.message.send",
+						{
+							"pilot.operation": "message.send",
+							"pilot.phase": "startup_wait",
+							"pilot.cold": !this.workers.has(id),
+							"pilot.recovered": meta.inputError !== undefined,
+						},
+						{ parent: admissionSpan?.carrier() ?? trace },
+					)
+				: undefined;
+			const workerTrace = startupSpan?.carrier() ?? admissionSpan?.carrier() ?? trace;
+			if (workerTrace) this.rememberInputTrace(id, requestId, workerTrace);
 			const admission = this.start(id, true);
+			void admission.then(
+				() => startupSpan?.end(),
+				() => startupSpan?.finish("failed"),
+			);
 			if (!starting || report) {
 				const rejected = await admission;
 				if (rejected.has(requestId)) throw rejected.get(requestId);
 				if (meta.failure) throw new Error(meta.failure);
 			}
+		} catch (error) {
+			if (!admissionFinished) admissionSpan?.finish("failed");
+			throw error;
 		} finally {
 			const count = (this.sending.get(id) ?? 1) - 1;
 			if (count) this.sending.set(id, count);
@@ -4482,15 +4536,20 @@ export class SessionManager {
 	private async deliver(id: string, worker: SessionWorker, command: PendingCommand): Promise<void> {
 		if (command.type !== "input") return worker.request(command);
 		this.delivering.set(id, command.requestId);
+		const traceKey = this.inputTraceKey(id, command.requestId);
+		const trace = this.inputTraces.get(traceKey);
 		let settled = false;
 		try {
-			await worker.request(command);
+			await worker.request(trace ? { ...command, trace } : command);
 			settled = true;
 		} catch (error) {
 			settled = error instanceof CommandRejected;
 			throw error;
 		} finally {
-			if (settled && this.delivering.get(id) === command.requestId) this.delivering.delete(id);
+			if (settled) {
+				this.inputTraces.delete(traceKey);
+				if (this.delivering.get(id) === command.requestId) this.delivering.delete(id);
+			}
 		}
 	}
 

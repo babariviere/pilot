@@ -5,6 +5,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import {
+	configureNodeTelemetry,
+	ExportResultCode,
+	nodeTelemetry,
+	type ReadableSpan,
+	type SpanExporter,
+} from "@pilot/telemetry";
+import {
 	PerformanceLog,
 	type PerformanceRecord,
 	performanceLine,
@@ -209,4 +216,70 @@ test("local consent and clear preparation stop records without blocking callers"
 	log.record(record(2));
 	await log.close();
 	assert.equal(JSON.parse((await readFile(file, "utf8")).trim()).request, 2);
+});
+
+test("interaction timing emits correlated preparation and provider phases without content", async (t) => {
+	const spans: ReadableSpan[] = [];
+	const exporter: SpanExporter = {
+		export(batch, callback) {
+			spans.push(...batch);
+			callback({ code: ExportResultCode.SUCCESS });
+		},
+		forceFlush: async () => undefined,
+		shutdown: async () => undefined,
+	};
+	configureNodeTelemetry({
+		enabled: true,
+		serviceName: "pilot.kernel",
+		serviceVersion: "1.45.1",
+		environment: "test",
+		hostKind: "local",
+		exporter,
+	});
+	t.after(() =>
+		configureNodeTelemetry({
+			enabled: false,
+			serviceName: "pilot.kernel",
+			serviceVersion: "1.45.1",
+			environment: "test",
+			hostKind: "local",
+		}),
+	);
+	const root = nodeTelemetry().startSpan("pilot.message.send", { "pilot.operation": "message.send" });
+	const records: PerformanceRecord[] = [];
+	const moments = [10, 20, 30, 40, 50, 60];
+	const timing = new RequestTiming(
+		{ record: (value) => records.push(value) },
+		1,
+		"generation",
+		{ started: 0, at: 1_000, trace: root.carrier()! },
+		() => moments.shift() ?? 40,
+	);
+	timing.providerStart();
+	timing.mark("httpDispatchMs");
+	timing.mark("httpDispatchMs");
+	timing.mark("firstThinkingMs");
+	timing.mark("firstTextMs");
+	timing.finish("completed");
+	root.end();
+	await nodeTelemetry().forceFlush();
+	assert.equal(records.length, 1);
+	const phases = spans.filter((span) => span.name === "pilot.message.send");
+	assert.equal(phases.length, 3);
+	assert.equal(new Set(phases.map((span) => span.spanContext().traceId)).size, 1);
+	assert.deepEqual(
+		phases.flatMap((span) => {
+			const phase = span.attributes["pilot.phase"];
+			return typeof phase === "string" ? [phase] : [];
+		}),
+		["preparation", "provider"],
+	);
+	assert.equal(
+		phases.find((span) => span.attributes["pilot.phase"] === "provider")?.attributes["pilot.progress_kind"],
+		"thinking",
+	);
+	assert.equal(
+		phases.find((span) => span.attributes["pilot.phase"] === "provider")?.attributes["pilot.retry_count"],
+		1,
+	);
 });
