@@ -507,6 +507,7 @@ export class KernelSession {
 				);
 			};
 			const registry = createRegistry();
+			if (control) adapter.controlContext = (context) => control.context(context);
 			let serializeCompaction = (work: () => Promise<boolean>) => work();
 			const compaction = createManualCompaction(async (id, requestId, context) => {
 				return serializeCompaction(async () => {
@@ -526,7 +527,7 @@ export class KernelSession {
 				owned.storage,
 				{
 					models: adapter.models,
-					registry,
+					registry: control ? control.registry(registry) : registry,
 					settings: {
 						...(spec.control ? { compaction: { enabled: false } } : {}),
 						toolExecution: "sequential",

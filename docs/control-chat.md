@@ -79,8 +79,72 @@ not action arguments. A recovered daemon defaults to notice restrictions until t
 Faux-provider tests check fresh calls, unchanged tool rounds, absent filesystem tools, thought exclusion,
 restart deduplication, next-turn model selection and failed projections. No UI views are changed here;
 the control-specific sidebar and Watching list are separate work. No visual check was performed.
-The native adapter still mirrors the retained Harness transcript for SDK compatibility; the provider
-request and log drain are bounded, but very-long-chat mirror cost is an unverified performance risk.
+
+### Retained transcript and run-only compatibility context
+
+Control uses a `RegistryReader` mapping around Pi 1.3's built-in `GenerationTask`. Only its
+runtime context reader changes. All phase handlers, durable checkpoints, tool tasks,
+retry, cancellation, deferred responses and recovery still belong to the same built-in state machine.
+Ordinary chats use the original registry and adapter path. The phase map is exhaustive, so an
+upstream phase addition must explicitly receive the bounded runtime too. This also covers a
+deferred response that returns tool calls while polling, not just ordinary prepare/request phases.
+
+The mapping reads from the first placed input of the live run, with a maximum of 4,096 entries.
+Request preparation respects its committed cutoff. The native SDK mirror and usage refresh use the
+same run reader, not `conversation.context()`. Failed/aborted/deferred assistant attempts do not
+contribute model messages. An oversized run or an unexpected in-run context edit/head marker fails
+closed, rather than falling back to retained history. The native SDK model loop remains disabled.
+
+The journal separately persists the latest mirror anchor, so idle usage reads remain bounded even
+if preparation failed before saving a turn view. It does not move the saved-view anchor or rebuild
+that view. An idle rewound fork whose copied journal points beyond its visible transcript has no
+compatibility context until its next run. Public conversation context, transcript watches, cold reads,
+the append-only log and persisted summary view are unchanged. Retained transcript storage/display
+still grows with history; this removes repeated model/SDK materialization, not the transcript itself.
+
+`control-history.test.ts` seeds 20,001 separate SQLite entries, rejects unbounded scans during
+preparation/tool hooks/recovery/usage, interrupts a request after a committed codemode result, and
+reopens the same run without repeating that tool. It also checks full transcript/display preservation,
+saved-view reuse, rewound idle forks, overflow and unexpected-edit rejection. The existing control
+session fixture retains fresh-turn, thought-exclusion, model-switch and projection-failure coverage.
+
+Run the offline, fresh-process comparison with:
+
+```sh
+node packages/kernel/src/control-history.bench.ts 3
+```
+
+The probe alternates ordinary, retained-control (the original full-history preparation/mirror path)
+and bounded-control samples at zero and 20,001 individual entries of about 1 KiB each. Both control
+variants use the same synthetic persisted view of about 116 KB. Each sample executes three real
+native codemode tool rounds and four streamed 16,384-character faux responses. Rate-limited chunks
+exercise durable streaming checkpoints. Seeding, the initial log drain, imports and adapter startup
+are outside the CPU/latency interval; a final usage refresh is included. Results report first-request
+latency, total elapsed/CPU, whole-process RSS before/after, process-lifetime peak RSS, partial events
+and SDK mirror message count. Samples do not overlap, and inherited `PILOT_*` variables are removed.
+
+On 2026-10-17, macOS arm64 / Node 24.21.0, three fresh-process samples per cell gave these
+medians (RSS is decimal MB, measured before cleanup):
+
+| Path | Retained entries | First request | Whole turn | CPU | RSS after / lifetime peak |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Ordinary | 0 | 15 ms | 3,406 ms | 1,991 ms | 420 / 440 MB |
+| Retained control | 0 | 15 ms | 3,750 ms | 2,320 ms | 421 / 437 MB |
+| Bounded control | 0 | 19 ms | 3,713 ms | 2,191 ms | 409 / 425 MB |
+| Ordinary | 20,001 | 564 ms | 6,854 ms | 6,807 ms | 1,486 / 1,487 MB |
+| Retained control | 20,001 | 670 ms | 6,869 ms | 6,875 ms | 1,366 / 1,486 MB |
+| Bounded control | 20,001 | 14 ms | 3,413 ms | 1,986 ms | 559 / 571 MB |
+
+At 20,001 entries, control's SDK mirror held 9 messages instead of 20,010. Every sample delivered
+13 durable partial events and successfully executed all three tools. First-request ranges were
+522–861 ms for retained control and 14–15 ms for bounded control. Small-history elapsed results
+were noisier (bounded control 3.59–5.47 s); these are local samples on a shared machine, not latency
+guarantees. The retained path scales materially; the bounded path removes that scaling in this probe.
+
+This isolates Harness/native-adapter retained-history costs. It does not measure a real provider,
+daemon responsiveness, GUI rendering, disk-cold recovery, summary-model work, or application-defined
+codemode `store()` growth. RSS includes imports, SQLite, the retained display transcript and the
+codemode runtime; it is not memory exclusively owned by the mirror.
 
 ## Global reads
 
