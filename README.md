@@ -81,6 +81,9 @@ has separate storage and transport contracts; it does not change chat-result rea
   Settings opens with its sidebar focused: arrows or J/K move between pages and projects. ⌘K also opens any
   Settings page by name ("Energy settings", "Project settings"). Controls inside a page follow macOS: Tab reaches
   text fields, and toggles, pickers and buttons too when **Keyboard navigation** is on in System Settings.
+  Slack triage and Memory take the page's focus from ⌃⇥ or G S like other pages and keep their own keys (arrows,
+  Return, T/L/D in triage). Typing in their search fields never triggers those keys, and Escape in the memory
+  search clears it, then returns to the tree.
 - **Let the display rest while agents work.** Keep the Mac awake without keeping the display on.
   Optional closed-lid work requires power and Wi-Fi; without both, agents pause and resume on the next
   full wake with connectivity. Screen locking is left to macOS. See [agent-aware sleep](docs/agent-sleep.md) for

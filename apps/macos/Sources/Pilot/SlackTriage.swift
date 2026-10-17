@@ -769,6 +769,7 @@ struct SlackTriagePage: View {
                     .onKeyPress(characters: CharacterSet(charactersIn: "tTlLdD")) { press in
                         key(press, columns: columns, labels: labels)
                     }
+                    .modifier(TriageListFocus(focused: $listFocused))
                 Rectangle().fill(Theme.border).frame(width: 1)
                 SlackTriageInspector(item: selected, labels: labels, now: now, actions: actions,
                                      error: selected.flatMap { triage.errors[$0.id] },
@@ -837,6 +838,7 @@ struct SlackTriagePage: View {
                     .onKeyPress(keys: [.upArrow, .downArrow, .return]) { press in
                         caseKey(press, visible: visible, actions: caseActions)
                     }
+                    .modifier(TriageListFocus(focused: $listFocused))
                 Rectangle().fill(Theme.border).frame(width: 1)
                 SlackCaseInspector(entry: selected, cases: all, hidden: hidden, window: SlackCaseText.window(cases.list),
                                    now: now, error: selected.flatMap { cases.errors[$0.id] }, actions: caseActions)
