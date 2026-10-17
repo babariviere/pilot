@@ -37,7 +37,7 @@ import Testing
 }
 
 @Test(arguments: [0, 1, 2, 3], [ColorScheme.light, .dark])
-@MainActor func settingsNavigationDrawsOneRingOnlyWhileItsParentIsFocused(selection: Int, scheme: ColorScheme) throws {
+@MainActor func settingsNavigationKeepsNeutralSelectionWithoutFocusOutlines(selection: Int, scheme: ColorScheme) throws {
     let titles = ["Appearance", "Notifications", "pilot", "dotfiles"]
     func render(focused: Bool) throws -> NSBitmapImageRep {
         let renderer = ImageRenderer(content: VStack(spacing: 1) {
@@ -61,16 +61,11 @@ import Testing
     #expect(quiet.pixelsHigh == focused.pixelsHigh)
     for index in titles.indices {
         var changed = 0
-        // Sample each row's sides, clear of neighbouring rings' vertical outsets.
-        for y in (13 + index * 29)..<(35 + index * 29) {
+        for y in (8 + index * 29)..<(10 + index * 29 + 30) {
             for x in 0..<quiet.pixelsWide {
                 if quiet.colorAt(x: x, y: y) != focused.colorAt(x: x, y: y) { changed += 1 }
             }
         }
-        if index == selection {
-            #expect(changed > 100, "the selected row needs a visible keyboard focus ring")
-        } else {
-            #expect(changed == 0, "unselected rows must not inherit their parent's focus ring")
-        }
+        #expect(changed == 0, "focus must not add an outline to any row")
     }
 }

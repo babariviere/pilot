@@ -224,7 +224,7 @@ struct SlackChannelsEditor: View {
             .padding(.vertical, 5)
             .background(RoundedRectangle(cornerRadius: Theme.Radius.control).fill(Theme.card))
             .overlay(RoundedRectangle(cornerRadius: Theme.Radius.control)
-                .strokeBorder(focused ? Theme.focusRing : Theme.border))
+                .strokeBorder(Theme.border))
             .contentShape(Rectangle())
             .onTapGesture { focused = true }
         }
@@ -447,7 +447,7 @@ struct SlackLabelsSection: View {
                         .font(.pilot(.label))
                         .contentShape(Rectangle())
                 }
-                .rowButtonStyle(outset: 2)
+                .rowButtonStyle()
                 .foregroundStyle(Theme.mutedForeground)
                 .disabled(editor.slackLabels.count >= 50)
             }
@@ -846,7 +846,7 @@ private struct TriageCorrectionsList: View {
                 .foregroundStyle(Theme.mutedForeground)
                 .contentShape(Rectangle())
         }
-        .rowButtonStyle(outset: 2)
+        .rowButtonStyle()
     }
 
     private func load() async {

@@ -848,7 +848,6 @@ struct RowView: View, Equatable {
         content
             .frame(maxWidth: Theme.column, alignment: .leading)
             .frame(maxWidth: .infinity)
-            .overlay(TranscriptRowHighlight(id: row.id))
     }
 
     @ViewBuilder private var content: some View {

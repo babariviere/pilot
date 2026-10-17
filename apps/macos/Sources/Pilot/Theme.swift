@@ -47,8 +47,6 @@ enum Theme {
         static let thickness: CGFloat = 1
         static let baselineOffset: CGFloat = 5
     }
-    /// Keyboard focus ring on rows and row buttons (`focusRing(_:radius:outset:)`). Follows the system accent.
-    static let focusRing = Color(nsColor: .keyboardFocusIndicatorColor)
     /// The insertion line while a dragged row hovers over a list, such as tasks in a mission's Tasks tab. Follows the
     /// system accent like native list drops.
     static let dropIndicator = Color(nsColor: .controlAccentColor)
@@ -554,8 +552,8 @@ struct QuietIconButtonStyle: ButtonStyle {
 
 /// Fill-less icon button for actions inside rows, such as a revealed edit, remove or ⋯ menu. The glyph goes from
 /// muted to `hoverTint` (for example destructive) under the pointer or keyboard focus and draws no background, so
-/// the row's selection stays its only fill. Apply it with `rowIconButtonStyle(hoverTint:)`, which also replaces the
-/// system focus effect with the row focus ring. Always add an accessibility label.
+/// the row's selection stays its only fill. Apply it with `rowIconButtonStyle(hoverTint:)`, which suppresses the
+/// system focus effect. Always add an accessibility label.
 struct RowIconButtonStyle: ButtonStyle {
     var hoverTint: Color = Theme.foreground
     var size: CGFloat = 20
@@ -580,7 +578,6 @@ struct RowIconButtonStyle: ButtonStyle {
                 .frame(width: size, height: size)
                 .opacity(isEnabled ? (configuration.isPressed ? 0.6 : 1) : 0.4)
                 .contentShape(Rectangle())
-                .focusRing(isFocused)
                 .onHover { isHovered = $0 }
                 .animation(Theme.Motion.quick, value: isHovered)
         }
@@ -588,37 +585,18 @@ struct RowIconButtonStyle: ButtonStyle {
 }
 
 /// Plain style for a button that is a whole row, or a row's main area, such as a sidebar or Inbox row. It adds
-/// nothing at rest (the row draws its own hover and selection) and draws the focus ring around the label under
-/// keyboard focus. Apply it with `rowButtonStyle(radius:outset:)`.
+/// nothing at rest (the row draws its own hover and neutral selection), with no keyboard focus outline.
+/// Apply it with `rowButtonStyle()`.
 struct RowButtonStyle: ButtonStyle {
-    var radius: CGFloat = Theme.Radius.row
-    var outset: CGFloat = 0
-    /// A list that owns focus supplies the highlighted row's state instead of inheriting its own focus on every button.
-    var focused: Bool? = nil
-
     func makeBody(configuration: Configuration) -> some View {
-        RowButton(configuration: configuration, radius: radius, outset: outset, focused: focused)
-    }
-
-    private struct RowButton: View {
-        let configuration: ButtonStyleConfiguration
-        let radius: CGFloat
-        let outset: CGFloat
-        let focused: Bool?
-        @Environment(\.isFocused) private var isFocused
-
-        var body: some View {
-            configuration.label
-                .opacity(configuration.isPressed ? 0.75 : 1)
-                .focusRing(focused ?? isFocused, radius: radius, outset: outset)
-        }
+        configuration.label.opacity(configuration.isPressed ? 0.75 : 1)
     }
 }
 
 /// Outlined red button for a destructive action that ends a page, such as Remove Project in project settings: red
 /// label (the text-weight `Theme.error`), a red hairline outline and no fill at rest, a soft red fill while pressed.
 /// Keep it away from the page's primary action, beside one line saying what it does, and confirm before acting.
-/// Apply it with `destructiveOutlineButtonStyle()`, which also draws the keyboard focus ring.
+/// Apply it with `destructiveOutlineButtonStyle()`, which suppresses the system focus effect.
 struct DestructiveOutlineButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         DestructiveOutlineButton(configuration: configuration)
@@ -627,7 +605,6 @@ struct DestructiveOutlineButtonStyle: ButtonStyle {
     private struct DestructiveOutlineButton: View {
         let configuration: ButtonStyleConfiguration
         @Environment(\.isEnabled) private var isEnabled
-        @Environment(\.isFocused) private var isFocused
 
         var body: some View {
             let shape = RoundedRectangle(cornerRadius: Theme.Radius.row)
@@ -640,7 +617,6 @@ struct DestructiveOutlineButtonStyle: ButtonStyle {
                 .overlay(shape.strokeBorder(Theme.destructive.opacity(0.55), lineWidth: 1))
                 .opacity(isEnabled ? 1 : 0.4)
                 .contentShape(shape)
-                .focusRing(isFocused, outset: 2)
         }
     }
 }
@@ -656,22 +632,14 @@ extension View {
         buttonStyle(DestructiveOutlineButtonStyle()).focusEffectDisabled()
     }
 
-    /// A whole-row button with the row focus ring. A parent list may supply `focused` instead of button focus.
-    func rowButtonStyle(radius: CGFloat = Theme.Radius.row, outset: CGFloat = 0, focused: Bool? = nil) -> some View {
-        buttonStyle(RowButtonStyle(radius: radius, outset: outset, focused: focused)).focusEffectDisabled()
+    /// A whole-row button whose selection stays neutral, without a focus outline.
+    func rowButtonStyle() -> some View {
+        buttonStyle(RowButtonStyle()).focusEffectDisabled()
     }
 
-    /// Keyboard focus ring for rows and row buttons: a 2 pt ring in the system focus colour, `outset` points outside
-    /// the view so it can follow a row's padding. Only shown while `focused`, so pointer use never sees it.
-    func focusRing(_ focused: Bool, radius: CGFloat = Theme.Radius.row, outset: CGFloat = 0) -> some View {
-        overlay {
-            if focused {
-                RoundedRectangle(cornerRadius: radius + outset)
-                    .strokeBorder(Theme.focusRing, lineWidth: 2)
-                    .padding(-outset)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-            }
-        }
+    /// App-wide focus appearance: keep keyboard focus and native editing, but never draw focus rings.
+    /// Apply at each scene root so native fields, controls and presented sheets inherit it too.
+    func quietFocus() -> some View {
+        focusEffectDisabled()
     }
 }

@@ -12,6 +12,7 @@ struct PilotApp: App {
     var body: some Scene {
         Window("Pilot", id: MainWindow.id) {
             MainWindow()
+                .quietFocus()
                 .environmentObject(model)
                 .environment(\.openURL, BrowserLinkOpener.action)
                 .environment(\.pilotFonts, settings.fonts)
@@ -66,12 +67,14 @@ struct PilotApp: App {
 
         Window("Keyboard Shortcuts", id: KeyboardShortcuts.windowID) {
             KeyboardShortcutsView()
+                .quietFocus()
                 .environment(\.pilotFonts, settings.fonts)
         }
         .windowResizability(.contentSize)
 
         Settings {
             SettingsView()
+                .quietFocus()
                 .environmentObject(model)
         }
         .defaultSize(width: 780, height: 580)
@@ -79,6 +82,7 @@ struct PilotApp: App {
 
         MenuBarExtra {
             MenuBarContent(model: model)
+                .quietFocus()
         } label: {
             Image(nsImage: PlaneImage.menuBar)
         }

@@ -165,7 +165,7 @@ terminal or artifact, are read before the focused view. Every other shortcut is 
 focused view keeps its own first. Highlight, focus and editing stay distinct: moving through a list never opens,
 edits or submits.
 Long pages use `keyboardList()` on their column and `keyboardListItem(_:target:activate:)` on rows (`KeyboardList.swift`):
-one focus stop, a neutral selected fill plus focus ring on the highlighted row, Return for the row's click action,
+one focus stop, a neutral selected fill on the highlighted row, Return for the row's click action,
 and the highlight kept by row id through refreshes (the nearest row takes over when it leaves). Arrowing through
 sidebar chats keeps focus in the sidebar; the composer of the chat it opens waits for ⌘L, ⌃⇥ or a click.
 
@@ -183,10 +183,11 @@ as "1 needs you · 2 working". pilotd's controls sit in their own submenu.
 - Chrome text uses `.pilot` type roles and shapes use `Theme.Radius`; `apps/macos/scripts/check-font-roles.py`
   (run by the Swift test step) rejects new fixed font sizes and SwiftUI text styles.
 - A row's selection is its only fill. Actions inside rows use `rowIconButtonStyle` (no background) and whole-row
-  buttons `rowButtonStyle`, which both draw the keyboard focus ring; `QuietIconButtonStyle` is for standalone
+  buttons `rowButtonStyle`, neither of which draws a focus outline; `QuietIconButtonStyle` is for standalone
   toolbar and composer buttons.
   Sidebar chat selection stays neutral grey whether or not the list has focus, keeping the normal text and
-  status colours. A focus ring on the selected row shows when keyboard navigation belongs to the list.
+  status colours. Focus never adds a blue ring: rows keep their neutral selection, text controls keep their caret,
+  and native focus effects are disabled at every scene root with `quietFocus()`. Keyboard navigation stays enabled.
 - Follow existing layouts, terminology and visual hierarchy. Pages such as missions and projects share one
   reading column, section headers and hairline rows (`PageComponents.swift`).
 - Settings pages use the same reading column: `SettingsSection` (heading, explanation above the rows) and
