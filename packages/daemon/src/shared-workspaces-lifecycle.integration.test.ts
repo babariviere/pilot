@@ -444,3 +444,53 @@ test("successful jj removal with leftover directory is not falsely reported as r
 		f.close();
 	}
 });
+
+test("removal interrupted after jj unregistered the workspace finishes only an unchanged remnant", async () => {
+	let interrupt = true;
+	let path = "";
+	const runner: Runner = async (file, args, cwd, ...rest) => {
+		if (file === "jj" && args.includes("remove") && interrupt) {
+			interrupt = false;
+			// jj commits the unregistration first, then a timeout kills it partway through deleting files.
+			await run(
+				file,
+				args.map((arg) => (arg === "remove" ? "forget" : arg)),
+				cwd,
+				...rest,
+			);
+			rmSync(join(path, ".gitignore"));
+			rmSync(join(path, ".git"), { force: true });
+			throw new Error(`Workspace command timed out: jj ${args.join(" ")}`);
+		}
+		return run(file, args, cwd, ...rest);
+	};
+	const f = fixture(runner);
+	try {
+		const w = await f.store.create(f.source, f.path());
+		path = w.path;
+		mkdirSync(join(w.path, "node_modules/pkg"), { recursive: true });
+		writeFileSync(join(w.path, "node_modules/pkg/index.js"), "generated\n");
+		const recovery = await f.store.snapshot(w.path, w.shared!, f.recovery);
+		await assert.rejects(f.store.remove(w.path, w.shared!, recovery), /timed out/);
+
+		writeFileSync(join(w.path, "a.txt"), "edited after the snapshot\n");
+		await assert.rejects(
+			f.store.remove(w.path, w.shared!, recovery),
+			/a\.txt changed since the recovery snapshot; partial removal needs review/,
+		);
+		assert.equal(readFileSync(join(w.path, "a.txt"), "utf8"), "edited after the snapshot\n");
+		writeFileSync(join(w.path, "a.txt"), "base\n");
+		writeFileSync(join(w.path, "notes.txt"), "keep\n");
+		await assert.rejects(f.store.remove(w.path, w.shared!, recovery), /notes\.txt is not in the recovery snapshot/);
+		assert.equal(readFileSync(join(w.path, "notes.txt"), "utf8"), "keep\n");
+		rmSync(join(w.path, "notes.txt"));
+
+		await f.store.remove(w.path, w.shared!, recovery);
+		assert.equal(existsSync(w.path), false);
+		await f.store.restore(w.path, w.shared!, recovery, f.recovery);
+		assert.equal(readFileSync(join(w.path, "a.txt"), "utf8"), "base\n");
+		assert.equal(existsSync(join(w.path, "node_modules")), false);
+	} finally {
+		f.close();
+	}
+});
