@@ -65,11 +65,12 @@ struct ArtifactWebView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> WKWebView {
         let libraries = ArtifactLibraryHandler(libraries: Set(revision.libraries), client: client)
-        let interactive = inline && (revision.kind == .html || revision.kind == .react)
+        let interactive = inline && (revision.kind == .html || revision.kind == .react || revision.kind == .shader)
         let view = Self.makeSandboxView(coordinator: context.coordinator, libraries: libraries, inline: inline,
                                         interactive: interactive)
         if let page = view as? InlineArtifactWebView {
             page.onEscape = onEscape
+            page.reportsHostVisibility = revision.kind == .shader
             // Clicks and typing can expand or collapse content: measure again promptly.
             page.onInteraction = { [weak coordinator = context.coordinator, weak page] in
                 guard let coordinator, let page else { return }
@@ -184,6 +185,8 @@ struct ArtifactWebView: NSViewRepresentable {
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             if let onLoad { onLoad(webView) } else { state.loading = false }
+            // The loaded document starts without the host's visibility flag.
+            (webView as? InlineArtifactWebView)?.updateHostVisibility(force: true)
             startMeasuring(webView)
         }
 

@@ -204,6 +204,9 @@ importers:
       esbuild:
         specifier: 0.28.2
         version: 0.28.2
+      glslang-wasm-validator:
+        specifier: 0.1.0
+        version: 0.1.0
       mermaid:
         specifier: 12.2.0
         version: 12.2.0
@@ -1319,6 +1322,11 @@ packages:
   get-east-asian-width@1.6.0:
     resolution: {integrity: sha512-QRbvDIbx6YklUe6RxeTeleMR0yv3cYH6PsPZHcnVn7xv7zO1BHN8r0XETu8n6Ye3Q+ahtSarc3WgtNWmehIBfA==}
     engines: {node: '>=18'}
+
+  glslang-wasm-validator@0.1.0:
+    resolution: {integrity: sha512-AMWebbgKnrjL6yXkS+dYWXbeQ8V8WqG3wcsxyjWDxYhM3KBPi0c2oMLAopjt7MKBhkrGxHi9pgGuNvb7lgdwXQ==}
+    engines: {node: '>=18'}
+    hasBin: true
 
   google-auth-library@10.9.1:
     resolution: {integrity: sha512-i1ydyHrqcIxXkWh/uBmVkzCvIuq5yiK2ATndIe5XxKholrG/MTYP9xGYka4sQhrbIAgGjL2B6NOE7rFaiF3fXw==}
@@ -2917,6 +2925,8 @@ snapshots:
       - supports-color
 
   get-east-asian-width@1.6.0: {}
+
+  glslang-wasm-validator@0.1.0: {}
 
   google-auth-library@10.9.1:
     dependencies:

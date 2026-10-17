@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import type { JsonValue } from "@earendil-works/chord";
 import { validateToolArguments } from "@earendil-works/pi-ai";
 import type { ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { ArtifactNotFound, isArtifactPreviewAvailable } from "@pilot/artifacts";
+import { ArtifactNotFound, ArtifactStore, isArtifactPreviewAvailable } from "@pilot/artifacts";
 import type { ArtifactRevision, ArtifactWrite } from "@pilot/protocol";
 import { type ArtifactToolOptions, createArtifactTools } from "./artifact-tools.ts";
 import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
@@ -606,6 +609,27 @@ test("publication reports runtime errors as non-blocking warnings, only for brow
 		source: 'struct ArtifactView: View { var body: some View { Text("x") } }',
 	});
 	assert.equal(diagnosed.length, 1);
+});
+
+test("shader publication returns compile errors with source lines and saves nothing", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-shader-artifact-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const store = new ArtifactStore(root, { sessionId: "shader-session" });
+	const f = fixture({ store });
+	const broken =
+		"void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n\tfloat glow = 1;\n\tfragColor = vec4(glow);\n}";
+	await assert.rejects(
+		f.call("create", { title: "Glow", kind: "shader", source: broken }),
+		/line 2: .*float glow = 1;/s,
+	);
+	assert.deepEqual(await store.list(), []);
+	assert.equal(f.notifications, 0);
+	const created = await f.call("create", { title: "Glow", kind: "shader", source: broken.replace("= 1;", "= 1.0;") });
+	const { artifact } = created.structuredContent as { artifact: { id: string } };
+	const saved = await store.get(artifact.id);
+	assert.equal(saved.kind, "shader");
+	assert.match(saved.html, /pilot-shader/);
+	assert.equal(f.notifications, 1);
 });
 
 test("updates without expectedRevision succeed with a warning", async () => {

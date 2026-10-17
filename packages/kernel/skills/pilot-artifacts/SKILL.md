@@ -1,6 +1,6 @@
 ---
 name: pilot-artifacts
-description: Author offline HTML, React, image and SwiftUI artifacts. Use before creating, updating or previewing an artifact with the artifact tool.
+description: Author offline HTML, React, image, shader and SwiftUI artifacts. Use before creating, updating or previewing an artifact with the artifact tool.
 ---
 
 # Pilot artifacts
@@ -10,6 +10,7 @@ The `artifact` tool publishes session-local, offline artifacts. Pass source dire
 - HTML, React, charts and Mermaid diagrams: [references/web.md](references/web.md)
 - Native SwiftUI layouts and UI previews: [references/swiftui.md](references/swiftui.md)
 - PNG, JPEG, GIF or WebP images: [references/images.md](references/images.md)
+- Animated GLSL shaders (Shadertoy-style `mainImage`): [references/shaders.md](references/shaders.md)
 
 ## Sandbox and Ask mode
 

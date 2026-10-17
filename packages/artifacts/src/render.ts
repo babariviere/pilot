@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import type { ArtifactLibrary, ArtifactWrite } from "@pilot/protocol";
 import { type BuildOptions, build, version as esbuildVersion, type Plugin, stop } from "esbuild";
 import { MAX_IMAGE_SOURCE_BYTES, validateImageSource } from "./image.ts";
+import { assertShaderCompiles, shaderDocumentBody, validateShaderSource } from "./shader.ts";
 import { previewSwiftUI } from "./swiftui.ts";
 
 const require = createRequire(import.meta.url);
@@ -54,21 +55,29 @@ export function validateArtifact(write: ArtifactWrite): ArtifactWrite & { librar
 	if (!write || typeof write !== "object") throw new Error("Expected an artifact document");
 	if (typeof write.title !== "string" || !write.title.trim() || write.title.length > 160)
 		throw new Error("Artifact title must contain 1-160 characters");
-	if (write.kind !== "html" && write.kind !== "react" && write.kind !== "image" && write.kind !== "swiftui")
-		throw new Error("Artifact kind must be html, react, image or swiftui");
+	if (
+		write.kind !== "html" &&
+		write.kind !== "react" &&
+		write.kind !== "image" &&
+		write.kind !== "swiftui" &&
+		write.kind !== "shader"
+	)
+		throw new Error("Artifact kind must be html, react, image, swiftui or shader");
 	const maxBytes = write.kind === "image" ? MAX_IMAGE_SOURCE_BYTES : MAX_SOURCE_BYTES;
 	if (typeof write.source !== "string" || !write.source.trim() || Buffer.byteLength(write.source) > maxBytes)
 		throw new Error(
 			write.kind === "image"
 				? "Artifact image exceeds 16 MiB or is empty"
-				: "Artifact source must contain 1-512 KiB of HTML, JSX/TSX or SwiftUI",
+				: "Artifact source must contain 1-512 KiB of HTML, JSX/TSX, GLSL or SwiftUI",
 		);
 	if (write.kind === "image") validateImageSource(write.source);
+	if (write.kind === "shader") validateShaderSource(write.source);
 	if (write.libraries !== undefined && (!Array.isArray(write.libraries) || !write.libraries.every(isArtifactLibrary)))
 		throw new Error("Unknown artifact library. Use the bundled library names only");
 	const libraries = [...new Set(write.libraries ?? [])];
 	if (write.kind === "image" && libraries.length) throw new Error("Image artifacts do not use libraries");
 	if (write.kind === "swiftui" && libraries.length) throw new Error("SwiftUI artifacts do not use libraries");
+	if (write.kind === "shader" && libraries.length) throw new Error("Shader artifacts do not use libraries");
 	if (libraries.includes("react-dom")) {
 		const reactIndex = libraries.indexOf("react");
 		if (reactIndex !== -1) libraries.splice(reactIndex, 1);
@@ -285,6 +294,8 @@ export async function prepareArtifact(
 		// previews display at 1× layout size while retaining 2× pixels for Retina screens.
 		nativeImageAttributes = ` data-pilot-scale="2" style="--pilot-image-width:${preview.screenshot.width / 2}px;--pilot-image-height:${preview.screenshot.height / 2}px"`;
 	}
+	// Publication fails with line-numbered compiler errors instead of saving a blank canvas.
+	if (write.kind === "shader") await assertShaderCompiles(write.source, options.signal);
 	// The policy is the first node, before any untrusted source. Nested full HTML documents are parsed
 	// as body content, which is intentional: generated source cannot precede the policy in the head.
 	const libraries = write.libraries
@@ -293,9 +304,11 @@ export async function prepareArtifact(
 	const body =
 		write.kind === "react"
 			? `<div id="artifact-root"></div>${compiledScript(await compileReact(write.source))}`
-			: imageSource !== undefined
-				? `<style>body{padding:0;min-height:100vh;display:grid;place-items:center}img{display:block;width:auto;height:auto;max-width:${write.kind === "swiftui" ? "min(100vw,var(--pilot-image-width))" : "100vw"};max-height:${write.kind === "swiftui" ? "min(100vh,var(--pilot-image-height))" : "100vh"};object-fit:contain}</style><img alt="Artifact image"${nativeImageAttributes} src="${imageSource}">`
-				: write.source;
+			: write.kind === "shader"
+				? shaderDocumentBody(write.source)
+				: imageSource !== undefined
+					? `<style>body{padding:0;min-height:100vh;display:grid;place-items:center}img{display:block;width:auto;height:auto;max-width:${write.kind === "swiftui" ? "min(100vw,var(--pilot-image-width))" : "100vw"};max-height:${write.kind === "swiftui" ? "min(100vh,var(--pilot-image-height))" : "100vh"};object-fit:contain}</style><img alt="Artifact image"${nativeImageAttributes} src="${imageSource}">`
+					: write.source;
 	const html = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}"><meta http-equiv="x-dns-prefetch-control" content="off"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><script>${ARTIFACT_RUNTIME_GUARD}</script><style>${styles}</style>${libraries}</head><body>${body}</body></html>`;
 	if (Buffer.byteLength(html) > 25 * 1024 * 1024) throw new Error("Prepared artifact exceeds 25 MiB");
 	return { html, libraries: write.libraries };

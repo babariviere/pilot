@@ -16,14 +16,14 @@ import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
 
 const MAX_SOURCE_BYTES = 512 * 1024;
 const library = StringEnum(["react", "react-dom", "mermaid", "echarts", "motion", "d3", "three"] as const);
-const kind = StringEnum(["html", "react", "image", "swiftui"] as const);
+const kind = StringEnum(["html", "react", "image", "swiftui", "shader"] as const);
 const writeProperties = {
 	title: Type.String({ minLength: 1, maxLength: 160, description: "Short human-readable artifact title." }),
 	kind,
 	source: Type.String({
 		maxLength: MAX_IMAGE_SOURCE_BYTES,
 		description:
-			"HTML, JSX/TSX or standalone SwiftUI (512 KiB UTF-8 max), or for image: a local file path or base64 image data URL (16 MiB decoded max).",
+			"HTML, JSX/TSX, GLSL mainImage or standalone SwiftUI (512 KiB UTF-8 max), or for image: a local file path or base64 image data URL (16 MiB decoded max).",
 	}),
 	libraries: Type.Optional(
 		Type.Array(library, { description: "Offline libraries to include, especially for HTML script globals." }),
@@ -65,7 +65,7 @@ export interface ArtifactToolOptions {
 	preview?: typeof previewArtifact | false;
 	/** Ask permits session-local artifacts and sandboxed previews, but never arbitrary image-path reads. */
 	ask?: boolean;
-	/** After publishing HTML/React, render once to report runtime errors as non-blocking warnings.
+	/** After publishing HTML/React/shaders, render once to report runtime errors as non-blocking warnings.
 	 * Defaults to the installed browser renderer; tests inject or disable it. */
 	diagnose?: ArtifactDiagnose | false;
 }
@@ -143,7 +143,7 @@ export function createArtifactTools(options: ArtifactToolOptions): ToolDefinitio
 		return dataResult(warnings.length ? { artifact, warnings } : { artifact });
 	};
 	const runtimeWarnings = async (write: ArtifactWrite, signal?: AbortSignal): Promise<string[]> => {
-		if (!diagnose || (write.kind !== "html" && write.kind !== "react")) return [];
+		if (!diagnose || write.kind === "image" || write.kind === "swiftui") return [];
 		try {
 			const warnings = await diagnose(write, signal);
 			return warnings.length
@@ -161,7 +161,7 @@ export function createArtifactTools(options: ArtifactToolOptions): ToolDefinitio
 			namespace: {
 				name: "artifacts",
 				description:
-					"Publish and inspect HTML, React, images and SwiftUI with tools.artifact. Read the pilot-artifacts skill before authoring.",
+					"Publish and inspect HTML, React, shaders, images and SwiftUI with tools.artifact. Read the pilot-artifacts skill before authoring.",
 				instructions: `Read the bundled pilot-artifacts skill at ${ARTIFACT_SKILL_PATH} before authoring.`,
 			},
 			description: `Publish and inspect session-local offline artifacts. Read the pilot-artifacts skill before authoring.
@@ -172,8 +172,9 @@ export function createArtifactTools(options: ArtifactToolOptions): ToolDefinitio
 ${previewDescription}Source must be self-contained and offline. Text source: 512 KiB UTF-8 max; images: 16 MiB decoded max.
 ${options.ask ? "Ask images accept only inline base64 data:image/... URLs, never file paths." : "Images accept local PNG, JPEG, GIF or WebP paths, or inline data URLs; never remote URLs."}
 SwiftUI requires the macOS Swift toolchain and renders a static screenshot, not project views. Publication does not require the Pilot app to be running.
+Shaders are Shadertoy-style GLSL (mainImage); publication fails with line-numbered compile errors.
 Get the current source before updating, and pass its revision as expectedRevision.`,
-			promptSnippet: "Publish and inspect offline HTML, React, image or native SwiftUI artifacts",
+			promptSnippet: "Publish and inspect offline HTML, React, shader, image or native SwiftUI artifacts",
 			executionMode: "sequential",
 			annotations: { openWorldHint: false, destructiveHint: false },
 			parameters: Type.Object({
@@ -186,7 +187,7 @@ Get the current source before updating, and pass its revision as expectedRevisio
 						? Type.String({
 								maxLength: MAX_IMAGE_SOURCE_BYTES,
 								description:
-									"HTML, JSX/TSX or standalone SwiftUI (512 KiB UTF-8 max), or inline base64 image data URL (16 MiB decoded max). Image file paths are not allowed in Ask.",
+									"HTML, JSX/TSX, GLSL mainImage or standalone SwiftUI (512 KiB UTF-8 max), or inline base64 image data URL (16 MiB decoded max). Image file paths are not allowed in Ask.",
 							})
 						: writeProperties.source,
 				),

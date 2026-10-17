@@ -1,13 +1,14 @@
 import Foundation
 
 public enum ArtifactKind: String, Codable, Hashable, Sendable {
-    case html, react, image, swiftui
+    case html, react, image, swiftui, shader
 
     public var sourceLanguage: String {
         switch self {
         case .html, .image: return "html"
         case .react: return "jsx"
         case .swiftui: return "swift"
+        case .shader: return "glsl"
         }
     }
 }
