@@ -504,8 +504,8 @@ struct ChatView: View {
                         adopt: { operation in try await model.adoptPendingMessage(operation, composer: composer) })
                         .padding(.horizontal, 24)
                 }
-                // The control chat works through its tools rather than handing context to a Build chat.
-                if session.isAsk, !session.isControl {
+                // Control and diagnostics chats cannot transfer their privileged context to Build.
+                if session.isAsk, !session.isControl, !session.isDiagnosticsSpecialist {
                     // Matches the other rows above the composer, such as the queued-messages header.
                     HStack {
                         Button {

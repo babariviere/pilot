@@ -15,6 +15,7 @@ import type {
 	AgentEvent,
 	McpStatus,
 	SessionCompletion,
+	SessionDiagnostics,
 	SessionPullRequest,
 	SessionState,
 	SessionSummary,
@@ -1050,6 +1051,7 @@ async function fixture(t: TestContext) {
 		inputError?: string;
 		failure?: string;
 		working?: boolean;
+		role?: "diagnostics";
 	}> => JSON.parse(await readFile(join(home, "sessions", id, "meta.json"), "utf8"));
 	t.after(async () => {
 		await Promise.all(managers.map((sessions) => sessions.shutdown()));
@@ -1109,7 +1111,7 @@ test("diagnostics reads a parked session without opening its worker or transcrip
 	assert.equal(reads.mock.callCount(), 0);
 });
 
-test("agent diagnostics can inspect a parked project peer but not another project", async (t) => {
+test("only a diagnostics specialist can inspect a parked project peer, never another project", async (t) => {
 	const f = await fixture(t);
 	const sessions = await f.manager(
 		{},
@@ -1117,10 +1119,27 @@ test("agent diagnostics can inspect a parked project peer but not another projec
 			diagnosticHost: { hostId: "local", daemonId: "daemon", lineageId: "lineage" },
 		},
 	);
-	const caller = await sessions.spawn({ cwd: f.source, projectId: f.project.id, message: "Caller" });
+	const caller = await sessions.spawn({
+		cwd: f.source,
+		projectId: f.project.id,
+		message: "Caller",
+		role: "diagnostics",
+	});
 	const peer = await sessions.spawn({ cwd: f.source, projectId: f.project.id, message: "Peer" });
 	await Promise.all([sessions["starting"].get(caller.id), sessions["starting"].get(peer.id)]);
 	const callerWorker = sessions["workers"].get(caller.id)! as FakeWorker;
+	const peerWorker = sessions["workers"].get(peer.id)! as FakeWorker;
+	sessions["onPacket"](sessions["metas"].get(peer.id)!, peerWorker, {
+		type: "diagnostics.call",
+		callId: "ordinary-read",
+		sessionId: peer.id,
+	});
+	await until(() => peerWorker.sent.some((command) => command.type === "diagnostics.result"));
+	const ordinary = peerWorker.sent.find(
+		(command): command is Extract<KernelCommand, { type: "diagnostics.result" }> =>
+			command.type === "diagnostics.result" && command.callId === "ordinary-read",
+	);
+	assert.match(ordinary?.error ?? "", /Only an admitted diagnostics specialist/);
 	sessions["workers"].delete(peer.id);
 	sessions["onPacket"](sessions["metas"].get(caller.id)!, callerWorker, {
 		type: "diagnostics.call",
@@ -1155,6 +1174,102 @@ test("agent diagnostics can inspect a parked project peer but not another projec
 			command.type === "diagnostics.result" && command.callId === "cross-project",
 	);
 	assert.match(denied?.error ?? "", /same project/);
+});
+
+test("diagnostics role survives reopen and prepares only a bounded read-only handoff", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager(
+		{},
+		{ diagnosticHost: { hostId: "local", daemonId: "daemon", lineageId: "lineage" } },
+	);
+	await assert.rejects(
+		sessions.spawn({ cwd: f.source, message: "Unscoped", role: "diagnostics" }),
+		/requires? a project/i,
+	);
+	await assert.rejects(
+		sessions.spawn({ projectId: f.project.id, message: "Writable", mode: "build", role: "diagnostics" }),
+		/read-only session/,
+	);
+	const specialist = await sessions.spawn({
+		projectId: f.project.id,
+		message: "Diagnose the target",
+		role: "diagnostics",
+	});
+	const target = await sessions.spawn({ projectId: f.project.id, message: "Target" });
+	await Promise.all([sessions["starting"].get(specialist.id), sessions["starting"].get(target.id)]);
+	assert.equal(specialist.role, "diagnostics");
+	assert.equal(specialist.mode, "ask");
+	assert.equal(f.workers[0]?.spec.role, "diagnostics");
+	const evidence = {
+		ref: "diagnostic:v1:lifecycle:bounded",
+		source: "lifecycle",
+		at: "2026-01-01T00:00:00.000Z",
+		kind: "kernel.exit",
+		reason: "process_exit",
+		state: "failed",
+	} as const;
+	const diagnostic: SessionDiagnostics = {
+		schemaVersion: 1,
+		host: { hostId: "local", daemonId: "daemon", lineageId: "lineage" },
+		sessionId: target.id,
+		release: "1.0.0",
+		collectedAt: "2026-01-01T00:00:01.000Z",
+		freshness: "fresh",
+		connectivity: { state: "unknown" },
+		current: {
+			state: "failed",
+			working: false,
+			pauses: [],
+			recovery: "none",
+			hasError: true,
+			errorCode: "worker_failure",
+			queue: {
+				pendingInputs: 0,
+				starting: false,
+				parking: false,
+				workspacePreparing: false,
+				runningJobs: 0,
+				workingSubagents: 0,
+			},
+		},
+		resources: {},
+		sources: [],
+		evidence: [evidence],
+		truncation: {
+			truncated: false,
+			returned: 1,
+			available: 1,
+			dropped: 0,
+			invalid: 0,
+			encodedBytes: 256,
+			maxItems: 128,
+			maxBytes: 65_536,
+		},
+	};
+	t.mock.method(sessions, "diagnostics", async () => diagnostic);
+	const workerCount = f.workers.length;
+	const handoff = await sessions.diagnosticsHandoff(specialist.id, {
+		targetSessionId: target.id,
+		evidenceRefs: [evidence.ref],
+		likelyCause: "The worker exited before durable completion.",
+		regressionTestGuidance: "Cover the supervised exit boundary with a deterministic fixture.",
+	});
+	assert.deepEqual(handoff.evidence, [evidence]);
+	assert.equal(handoff.targetSessionId, target.id);
+	assert.equal(f.workers.length, workerCount, "handoff preparation never starts another worker");
+	await assert.rejects(
+		sessions.diagnosticsHandoff(target.id, {
+			targetSessionId: specialist.id,
+			evidenceRefs: [evidence.ref],
+			likelyCause: "Cause",
+			regressionTestGuidance: "Test",
+		}),
+		/Only a diagnostics specialist/,
+	);
+	await sessions.shutdown();
+	const reopened = await f.manager();
+	assert.equal(reopened.get(specialist.id)?.role, "diagnostics");
+	assert.equal(reopened["metas"].get(specialist.id)?.role, "diagnostics");
 });
 
 test("large restart recovery keeps the daemon responsive and bounds cold starts without losing input IDs", async (t) => {

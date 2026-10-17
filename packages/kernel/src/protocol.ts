@@ -40,6 +40,8 @@ export interface KernelSubagent extends SessionSubagent {
 
 export interface KernelSpec {
 	control?: boolean;
+	/** Runtime-enforced specialist profile. Omitted for ordinary Build and Ask sessions. */
+	role?: "diagnostics";
 	/** Ephemeral capability, never stored in session metadata or transcripts. Inherited by descendants. */
 	credentials?: CredentialEndpoint;
 	/** Host-resolved trust for read-only Linux configuration; never a writable trust-store exception. */

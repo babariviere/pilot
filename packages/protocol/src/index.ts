@@ -256,6 +256,8 @@ export interface UpdatePreparation {
 export interface SessionSummary {
 	/** The one project-less, pinned orchestration chat. */
 	control?: boolean;
+	/** On-demand operational specialist. Its runtime exposes only bounded diagnostics. */
+	role?: SessionRole;
 	/** Fresh provider-safe chat which continues this readable, permanently read-only chat. */
 	continuedTo?: string;
 	/** Original chat whose workspace and task ownership this fresh chat continues. */
@@ -488,6 +490,8 @@ export interface ProjectGitHubRepository {
 
 /** Build may modify its workspace; Ask is read-only. Omitted mode defaults to Build. */
 export type ChatMode = "build" | "ask";
+/** Runtime-enforced specialist profile. Omitted means an ordinary chat. */
+export type SessionRole = "diagnostics";
 
 /** GET /api/projects/:id/branches. Live origin heads only; mode=ask or workspace=clone also allows direct projects. */
 export interface RemoteBranchList {
@@ -1268,6 +1272,8 @@ export interface ModelList {
 export interface SpawnRequest {
 	/** Join an active mission before the first turn. Uses its project; cwd overrides are not allowed. */
 	missionId?: string;
+	/** Diagnostics is a host-enforced read-only profile, not a prompt convention. */
+	role?: SessionRole;
 	/** Omitted means Build. */
 	mode?: ChatMode;
 	/** Per-chat Build override. Omitted uses project settings; cwd-only cannot request a clone. */

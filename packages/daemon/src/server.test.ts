@@ -126,6 +126,23 @@ test("diagnostics GET requires the pinned host identity and remains read-only", 
 			host: options.host!,
 		}),
 	);
+	const handoffs = t.mock.method(
+		sessions,
+		"diagnosticsHandoff",
+		async (
+			_specialistId: string,
+			request: Parameters<SessionManager["diagnosticsHandoff"]>[1],
+			options: NonNullable<Parameters<SessionManager["diagnosticsHandoff"]>[2]>,
+		) => ({
+			schemaVersion: 1 as const,
+			host: options.host!,
+			targetSessionId: request.targetSessionId,
+			projectId: "project",
+			evidence: [],
+			likelyCause: request.likelyCause,
+			regressionTestGuidance: request.regressionTestGuidance,
+		}),
+	);
 	const terminals = new TerminalManager();
 	const server = createDaemonServer(
 		{ home: "/unused", host: "127.0.0.1", port: 0 },
@@ -167,6 +184,25 @@ test("diagnostics GET requires the pinned host identity and remains read-only", 
 	assert.deepEqual(reads.mock.calls[0]!.arguments, [
 		"parked",
 		{ host: { hostId: "local", daemonId: "daemon", lineageId: "lineage" }, limit: 12 },
+	]);
+	const handoffBody = {
+		targetSessionId: "target",
+		evidenceRefs: ["diagnostic:v1:lifecycle:1"],
+		likelyCause: "Likely cause",
+		regressionTestGuidance: "Regression guidance",
+	};
+	const handoff = await fetch(`${base}/handoff?hostId=local&daemonId=daemon&lineageId=lineage`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify(handoffBody),
+	});
+	assert.equal(handoff.status, 200);
+	assert.equal(handoff.headers.get("cache-control"), "no-store");
+	assert.equal(((await handoff.json()) as { targetSessionId: string }).targetSessionId, "target");
+	assert.deepEqual(handoffs.mock.calls[0]!.arguments, [
+		"parked",
+		handoffBody,
+		{ host: { hostId: "local", daemonId: "daemon", lineageId: "lineage" } },
 	]);
 });
 

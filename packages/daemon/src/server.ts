@@ -14,6 +14,7 @@ import type {
 	DaemonHello,
 	DatabaseAccessDecision,
 	DetachBranchRequest,
+	DiagnosticsHandoffRequest,
 	DurableOperation,
 	EditQueuedMessageRequest,
 	Inbox,
@@ -1043,6 +1044,22 @@ export function createDaemonServer(
 				await sessions.diagnostics(parts[2]!, {
 					host: requestedDiagnosticHost(url, hello),
 					...(rawLimit === null ? {} : { limit: Number(rawLimit) }),
+				}),
+			);
+		}
+		if (
+			parts[1] === "sessions" &&
+			parts.length === 5 &&
+			parts[3] === "diagnostics" &&
+			parts[4] === "handoff" &&
+			req.method === "POST"
+		) {
+			res.setHeader("cache-control", "no-store");
+			return json(
+				res,
+				200,
+				await sessions.diagnosticsHandoff(parts[2]!, await readJson<DiagnosticsHandoffRequest>(req), {
+					host: requestedDiagnosticHost(url, hello),
 				}),
 			);
 		}

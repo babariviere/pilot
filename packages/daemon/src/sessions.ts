@@ -36,6 +36,8 @@ import type {
 	DeliveryMode,
 	DiagnosticErrorCode,
 	DiagnosticPauseReason,
+	DiagnosticsHandoff,
+	DiagnosticsHandoffRequest,
 	MergePullRequestRequest,
 	OperationHost,
 	PullRequestBindingResult,
@@ -292,6 +294,8 @@ export interface SessionFactories {
 
 interface SessionMeta extends OutcomeMeta {
 	control?: boolean;
+	/** Runtime-enforced specialist profile. Omitted for ordinary chats. */
+	role?: "diagnostics";
 	executionEvidence?: import("@pilot/kernel").ExecutionEvidence;
 	/** Durable execution-ownership fence. Never cleared by reconnect, restart or a fresh input. */
 	delegationFenced?: boolean;
@@ -3587,6 +3591,7 @@ export class SessionManager {
 
 	/** Corrupt metadata must never silently reopen an Ask chat as an unrestricted Build kernel. */
 	private validateMode(meta: SessionMeta, prepared = false): void {
+		if (meta.role !== undefined && meta.role !== "diagnostics") throw new Error("Invalid session role");
 		if (meta.control) {
 			if (
 				meta.id !== SessionManager.CONTROL_ID ||
@@ -3596,13 +3601,16 @@ export class SessionManager {
 				meta.workspace ||
 				meta.preparing ||
 				meta.archivedAt ||
-				!meta.pinned
+				!meta.pinned ||
+				meta.role !== undefined
 			)
 				throw new Error("Invalid control chat metadata");
 			return;
 		}
 		if (meta.mode !== undefined && meta.mode !== "build" && meta.mode !== "ask")
 			throw new Error("Invalid session mode");
+		if (meta.role === "diagnostics" && (meta.mode !== "ask" || !meta.projectId))
+			throw new Error("Invalid diagnostics specialist metadata");
 		if (meta.mode !== "ask") {
 			if (meta.ask !== undefined) throw new Error("Ask context requires Ask mode");
 			return;
@@ -3865,11 +3873,20 @@ export class SessionManager {
 		admission?: { targetId: string; operationId: string },
 	): Promise<SessionSummary> {
 		if (typeof request.message !== "string" || !request.message.trim()) throw new Error("message is required");
+		if (request.role !== undefined && request.role !== "diagnostics") throw new Error("Unknown session role");
 		if (request.mode !== undefined && request.mode !== "build" && request.mode !== "ask")
 			throw new Error("mode must be build or ask");
 		if (request.workspace !== undefined && request.workspace !== "clone" && request.workspace !== "direct")
 			throw new Error("workspace must be clone or direct");
-		const mode = request.mode ?? "build";
+		if (
+			request.role === "diagnostics" &&
+			(request.mode === "build" ||
+				request.missionId !== undefined ||
+				request.workspace !== undefined ||
+				request.baseBranch !== undefined)
+		)
+			throw new Error("Diagnostics specialists require a project-scoped read-only session");
+		const mode = request.role === "diagnostics" ? "ask" : (request.mode ?? "build");
 		let projectId = request.projectId;
 		if (request.missionId !== undefined) {
 			if (typeof request.missionId !== "string" || !request.missionId.trim())
@@ -3882,6 +3899,7 @@ export class SessionManager {
 			projectId = missionProject;
 		}
 		const project = projectId ? this.projects.require(projectId) : undefined;
+		if (request.role === "diagnostics" && !project) throw new Error("Diagnostics specialists require a project");
 		if (request.workspace !== undefined && (mode === "ask" || !project || request.cwd !== undefined))
 			throw new Error("workspace override requires a Build project without a cwd override");
 		const direct = (request.workspace ?? project?.workspace) === "direct";
@@ -3922,6 +3940,7 @@ export class SessionManager {
 		}
 		const meta: SessionMeta = {
 			id,
+			...(request.role ? { role: request.role } : {}),
 			...(admission ? { createOperationId: admission.operationId } : {}),
 			...(admission && request.missionId ? { createMissionId: request.missionId } : {}),
 			mode,
@@ -4668,6 +4687,55 @@ export class SessionManager {
 			performance: daemonPerformance(),
 			...(options.limit === undefined ? {} : { limit: options.limit }),
 		});
+	}
+
+	/**
+	 * Prepare bounded evidence for an explicit app handoff. This is read-only: it never creates a repair chat or
+	 * gives the eventual coding agent diagnostic authority.
+	 */
+	async diagnosticsHandoff(
+		specialistId: string,
+		request: DiagnosticsHandoffRequest,
+		options: { host?: OperationHost } = {},
+	): Promise<DiagnosticsHandoff> {
+		const specialist = this.require(specialistId);
+		if (specialist.role !== "diagnostics") throw new Conflict("Only a diagnostics specialist can prepare a handoff");
+		if (!request || typeof request.targetSessionId !== "string" || request.targetSessionId === specialistId)
+			throw new Conflict("A separate target chat is required");
+		const target = this.require(request.targetSessionId);
+		if (!specialist.projectId || target.projectId !== specialist.projectId)
+			throw new Conflict("Diagnostics handoff is limited to the specialist's project");
+		if (
+			!Array.isArray(request.evidenceRefs) ||
+			request.evidenceRefs.length < 1 ||
+			request.evidenceRefs.length > 16 ||
+			request.evidenceRefs.some(
+				(ref) => typeof ref !== "string" || !ref.startsWith("diagnostic:v1:") || ref.length > 256,
+			) ||
+			new Set(request.evidenceRefs).size !== request.evidenceRefs.length
+		)
+			throw new Conflict("Select between 1 and 16 unique diagnostic evidence refs");
+		const boundedText = (value: unknown, label: string): string => {
+			if (typeof value !== "string" || !value.trim() || value.length > 2_000 || Buffer.byteLength(value) > 4_000)
+				throw new Conflict(`${label} must be non-empty and at most 4 KiB`);
+			return value.trim();
+		};
+		const likelyCause = boundedText(request.likelyCause, "Likely cause");
+		const regressionTestGuidance = boundedText(request.regressionTestGuidance, "Regression-test guidance");
+		const diagnostics = await this.diagnostics(target.id, { ...options, limit: 128 });
+		const byRef = new Map(diagnostics.evidence.map((evidence) => [evidence.ref, evidence]));
+		const evidence = request.evidenceRefs.map((ref) => byRef.get(ref));
+		if (evidence.some((item) => item === undefined))
+			throw new Conflict("Selected diagnostic evidence is no longer available");
+		return {
+			schemaVersion: 1,
+			host: diagnostics.host,
+			targetSessionId: target.id,
+			projectId: specialist.projectId,
+			evidence: evidence as DiagnosticsHandoff["evidence"],
+			likelyCause,
+			regressionTestGuidance,
+		};
 	}
 
 	/** Cheap committed TODO count. Never starts an agent or reads transcript entries/bodies. */
@@ -5845,6 +5913,7 @@ export class SessionManager {
 			{
 				sessionId: id,
 				...(meta.control ? { control: true } : {}),
+				...(meta.role ? { role: meta.role } : {}),
 				...(meta.projectId ? { projectId: meta.projectId } : {}),
 				storageDir: join(this.dir(id), "durable"),
 				subscriptionPolicy: join(this.dir(id), "subscription-policy.json"),
@@ -5858,6 +5927,7 @@ export class SessionManager {
 				agentDir: this.agentDir,
 				...(meta.workspace ? { trustDirectory: meta.workspace.source } : {}),
 				pilot: {
+					...(meta.role ? { role: meta.role } : {}),
 					...(meta.ask ? { ask: meta.ask } : {}),
 					...(meta.workspace ? { workspace: meta.workspace } : {}),
 					...(meta.coordinatorView
@@ -6139,12 +6209,10 @@ export class SessionManager {
 		if (packet.type === "diagnostics.call") {
 			void Promise.resolve()
 				.then(() => {
+					if (meta.role !== "diagnostics")
+						throw new Error("Only an admitted diagnostics specialist may read agent diagnostics");
 					const target = this.require(packet.sessionId);
-					if (
-						target.id !== meta.id &&
-						!this.isControlSession(meta.id) &&
-						(!meta.projectId || target.projectId !== meta.projectId)
-					)
+					if (target.id !== meta.id && (!meta.projectId || target.projectId !== meta.projectId))
 						throw new Error("Diagnostics are limited to this chat or another chat in the same project");
 					return this.diagnostics(target.id, {
 						...(packet.limit === undefined ? {} : { limit: packet.limit }),
@@ -6579,6 +6647,7 @@ export class SessionManager {
 		return {
 			id: meta.id,
 			...(meta.control ? { control: true } : {}),
+			...(meta.role ? { role: meta.role } : {}),
 			...(meta.continuationOf ? { continuationOf: meta.continuationOf } : {}),
 			...(meta.continuedTo ? { continuedTo: meta.continuedTo } : {}),
 			mode: meta.mode === "ask" ? "ask" : "build",

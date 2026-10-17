@@ -71,6 +71,7 @@ import { bundledAskTools, bundledResourceLoader } from "./bundled-extensions.ts"
 import { OfflineGate, offlineRequestStream } from "./connectivity.ts";
 import { CONTROL_SYSTEM_PROMPT, markControlCache } from "./control-context.ts";
 import { installCredentialBrokerHooks } from "./credential-hooks.ts";
+import { DIAGNOSTICS_TOOL } from "./diagnostics-tool.ts";
 import { diagnosticFetch, formatFailure, safeFailureText, toolFailureStep } from "./failure.ts";
 import { runningJobs } from "./jobs.ts";
 import { MEMORY_TOOL_NAMES } from "./memory-tools.ts";
@@ -93,6 +94,8 @@ export interface ExtensionInput {
 export interface NativeAdapterOptions {
 	/** Project-less read-only control profile. No filesystem or personal extensions. */
 	control?: boolean;
+	/** Operational-read-only profile. Personal resources and every tool except diagnostics are unavailable. */
+	diagnostics?: boolean;
 	subscriptionPolicy?: string;
 	reportSubscriptionLimit?: ReportSubscriptionLimit;
 	connectivityPolicy?: string;
@@ -384,22 +387,26 @@ export class NativeAdapter {
 
 	static async open(options: NativeAdapterOptions): Promise<NativeAdapter> {
 		await installCredentialBrokerHooks({ descendants: true });
-		const readOnly = !!options.ask || !!options.control;
+		const diagnostics = !!options.diagnostics;
+		const readOnly = !!options.ask || !!options.control || diagnostics;
 		const allowedTools = options.control
 			? ["codemode", ...(options.hostTools ?? []).map((tool) => tool.name)]
-			: ASK_TOOL_NAMES;
+			: diagnostics
+				? [DIAGNOSTICS_TOOL]
+				: ASK_TOOL_NAMES;
 		const cwd = options.cwd;
-		const hasArtifacts = options.ask
-			? !!options.askArtifacts
-			: !!options.sessionOptions?.customTools?.some((tool) => tool.name === "artifact");
+		const hasArtifacts = diagnostics
+			? false
+			: options.ask
+				? !!options.askArtifacts
+				: !!options.sessionOptions?.customTools?.some((tool) => tool.name === "artifact");
 		const artifactSkillPaths = hasArtifacts ? [ARTIFACT_SKILL_PATH] : [];
 		const agentDir = options.agentDir ?? getAgentDir();
 		const originalSettings = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
 		const settingsManager = readOnly ? askSettings(originalSettings) : originalSettings;
 		// Ask borrows only the bundled web definition, never runs arbitrary personal factories.
-		const askExtensionTools = options.ask
-			? (options.askExtensionTools ?? (await bundledAskTools(cwd, agentDir)))
-			: [];
+		const askExtensionTools =
+			options.ask && !diagnostics ? (options.askExtensionTools ?? (await bundledAskTools(cwd, agentDir))) : [];
 		const projectTrusted = readOnly
 			? false
 			: (options.projectTrusted ?? resolveProjectTrust(options.trustDirectory ?? cwd, agentDir, settingsManager));
@@ -425,7 +432,12 @@ export class NativeAdapter {
 				// Covers nested codemode execution too, not just model declarations.
 				pi.on("tool_call", (event) => {
 					if (!allowedTools.includes(event.toolName))
-						return { block: true, reason: `Ask mode denies tool: ${event.toolName}` };
+						return {
+							block: true,
+							reason: diagnostics
+								? `Diagnostics specialist denies tool: ${event.toolName}`
+								: `Ask mode denies tool: ${event.toolName}`,
+						};
 				});
 			}
 			if (!readOnly) options.subagents?.attach(pi.events);
@@ -452,11 +464,15 @@ export class NativeAdapter {
 						noThemes: true,
 						noContextFiles: true,
 						// Do not spread loaderOptions: explicit CLI paths and inline factories bypass noExtensions.
-						systemPrompt: options.control
-							? CONTROL_SYSTEM_PROMPT
-							: "You are a source analysis assistant in Pilot Ask mode. The repository is read-only. Use codemode for all tool calls: read, find, grep and ls, web when available, and session-local artifacts with their sandboxed previews. Never execute arbitrary commands or change repository files. Repository implementation requires an explicit new Build session.",
+						systemPrompt: diagnostics
+							? "You are Pilot's operational diagnostics specialist. Use only the diagnostics tool, cite bounded evidence refs, and distinguish observations from likely causes. You cannot access source, files, shell, child agents, mutation tools, restarts, retries, replay or repairs."
+							: options.control
+								? CONTROL_SYSTEM_PROMPT
+								: "You are a source analysis assistant in Pilot Ask mode. The repository is read-only. Use codemode for all tool calls: read, find, grep and ls, web when available, and session-local artifacts with their sandboxed previews. Never execute arbitrary commands or change repository files. Repository implementation requires an explicit new Build session.",
 						appendSystemPrompt: [],
-						extensionFactories: [createCodemodeExtension({ models: false, mode: "only" }), capture],
+						extensionFactories: diagnostics
+							? [capture]
+							: [createCodemodeExtension({ models: false, mode: "only" }), capture],
 					}
 				: {
 						...options.loaderOptions,
@@ -490,9 +506,13 @@ export class NativeAdapter {
 				? {
 						tools: allowedTools,
 						customTools: [
-							...(options.ask ? await createAskTools(options.ask, { artifactSkill: hasArtifacts }) : []),
-							...(options.askArtifacts ? createArtifactTools({ ...options.askArtifacts, ask: true }) : []),
-							...(options.askTools ?? []),
+							...(options.ask && !diagnostics
+								? await createAskTools(options.ask, { artifactSkill: hasArtifacts })
+								: []),
+							...(options.askArtifacts && !diagnostics
+								? createArtifactTools({ ...options.askArtifacts, ask: true })
+								: []),
+							...(!diagnostics ? (options.askTools ?? []) : []),
 							...askExtensionTools,
 						],
 					}

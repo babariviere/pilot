@@ -149,6 +149,12 @@ freshness (`fresh`, `stale`, `unavailable`), source availability, current state,
 counts and truncation metadata. A source is stale after 30 seconds for live counters or after its owner disconnects.
 Historical lifecycle evidence remains historical and is labeled with its observation window, not marked current.
 
+Agent-facing access is limited to an explicitly admitted diagnostics session role. That runtime profile exposes only
+the bounded diagnostic read tool, may target same-project chats on its qualified host, and has no shell, source,
+transcript, write, restart, retry, replay or child-agent authority. A user-authorized repair handoff selects at most
+16 currently available evidence refs and bounded cause/test guidance for a separate ordinary coding agent; creating
+the handoff itself performs no target or repair-chat mutation.
+
 ## OpenTelemetry signal schema v1
 
 ### Spans

@@ -42,6 +42,10 @@ public enum ChatMode: String, Codable, Hashable, Sendable {
     case ask
 }
 
+public enum SessionRole: String, Codable, Hashable, Sendable {
+    case diagnostics
+}
+
 public enum WorkspaceMode: String, Codable, Hashable, Sendable {
     case clone
     case direct
@@ -55,6 +59,8 @@ public enum WorkspaceStorage: String, Codable, Sendable {
 public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendable {
     /// The single project-less control chat. Its tools, not a workspace, perform orchestration.
     public var control: Bool? = nil
+    /// On-demand operational specialist with a runtime-enforced read-only tool profile.
+    public var role: SessionRole? = nil
     public let id: String
     public let title: String
     public let cwd: String
@@ -142,6 +148,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public var isWorking: Bool { sleepPaused != true && offlinePaused != true && (working ?? (state == "working" || state == "starting" || !(runningJobs ?? []).isEmpty)) }
     public var effectiveMode: ChatMode { mode ?? .build }
     public var isAsk: Bool { effectiveMode == .ask }
+    public var isDiagnosticsSpecialist: Bool { role == .diagnostics }
     public var workspaceLabel: String {
         if isMissionCoordinator { return "Read-only main view" }
         if isAsk { return "Read-only · no isolated workspace" }
@@ -215,9 +222,11 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         branches: [String]? = nil, missionCoordinator: Bool? = nil, activeMissionCoordinator: Bool? = nil, attempts: [SessionAttempt]? = nil,
         unpublishedWork: Bool? = nil, workspaceBase: String? = nil, workspaceUpdatedAt: Double? = nil,
         workspaceBehind: String? = nil, runningJobs: [SessionJob]? = nil, canRetryStartup: Bool? = nil,
-        working: Bool? = nil, attentionReason: NeedsYouReason? = nil, attentionAt: Double? = nil
+        working: Bool? = nil, attentionReason: NeedsYouReason? = nil, attentionAt: Double? = nil,
+        role: SessionRole? = nil
     ) {
         self.id = id
+        self.role = role
         self.title = title
         self.cwd = cwd
         self.sessionPath = sessionPath
@@ -461,6 +470,8 @@ public struct RemoteBranchList: Codable, Equatable, Sendable {
 public struct SpawnRequest: Codable, Sendable {
     /// Join before the first turn, using the mission's project with no cwd override.
     public var missionId: String?
+    /// A host-enforced specialist profile. Omitted for ordinary Build and Ask chats.
+    public var role: SessionRole?
     public var projectId: String?
     public var cwd: String?
     public var message: String
@@ -475,9 +486,10 @@ public struct SpawnRequest: Codable, Sendable {
     public init(
         projectId: String? = nil, cwd: String? = nil, message: String, title: String? = nil, model: String? = nil,
         thinking: String? = nil, baseBranch: String? = nil, mode: ChatMode? = nil, workspace: WorkspaceMode? = nil,
-        missionId: String? = nil
+        missionId: String? = nil, role: SessionRole? = nil
     ) {
         self.missionId = missionId
+        self.role = role
         self.projectId = projectId
         self.cwd = cwd
         self.message = message

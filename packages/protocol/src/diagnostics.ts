@@ -122,3 +122,22 @@ export interface SessionDiagnostics {
 	evidence: DiagnosticEvidence[];
 	truncation: SessionDiagnosticTruncation;
 }
+
+/** Explicit app action that selects a bounded specialist finding for a separate repair chat. */
+export interface DiagnosticsHandoffRequest {
+	targetSessionId: string;
+	evidenceRefs: string[];
+	likelyCause: string;
+	regressionTestGuidance: string;
+}
+
+/** Read-only handoff material. Creating this never starts, retries or changes either chat. */
+export interface DiagnosticsHandoff {
+	schemaVersion: typeof DIAGNOSTIC_SCHEMA_VERSION;
+	host: OperationHost;
+	targetSessionId: string;
+	projectId?: string;
+	evidence: DiagnosticEvidence[];
+	likelyCause: string;
+	regressionTestGuidance: string;
+}
