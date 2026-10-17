@@ -627,8 +627,9 @@ struct TrackedItemRow: View {
         let size = actions.size(of: item)
         let shownSize = TrackedItemText.shownSize(size, item: item)
         let suggestsMission = TrackedItemText.suggestsMission(size, item: item)
-        // The keyboard-highlighted row shows its start and more buttons too, so they never need hovering.
-        let keyboardActive = keyboardHighlight.focused && keyboardHighlight.id == "tracked:" + item.id
+        // The keyboard-highlighted row shows its start and more buttons too, so they never need hovering. A click
+        // hides them again until the next navigation key.
+        let keyboardActive = keyboardHighlight.decorates("tracked:" + item.id)
         HoverRow(verticalPadding: 6) { hovered in
             HStack(spacing: 10) {
                 Button(action: openInApp) {

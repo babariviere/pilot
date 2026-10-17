@@ -13,6 +13,7 @@ struct PilotApp: App {
         Window("Pilot", id: MainWindow.id) {
             MainWindow()
                 .quietFocus()
+                .keyboardCueSource()
                 .environmentObject(model)
                 .environment(\.openURL, BrowserLinkOpener.action)
                 .environment(\.pilotFonts, settings.fonts)
@@ -68,6 +69,7 @@ struct PilotApp: App {
         Window("Keyboard Shortcuts", id: KeyboardShortcuts.windowID) {
             KeyboardShortcutsView()
                 .quietFocus()
+                .keyboardCueSource()
                 .environment(\.pilotFonts, settings.fonts)
         }
         .windowResizability(.contentSize)
@@ -75,6 +77,7 @@ struct PilotApp: App {
         Settings {
             SettingsView()
                 .quietFocus()
+                .keyboardCueSource()
                 .environmentObject(model)
         }
         .defaultSize(width: 780, height: 580)

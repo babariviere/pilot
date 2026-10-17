@@ -24,10 +24,16 @@ struct KeyboardListItemsKey: PreferenceKey {
     }
 }
 
-/// The highlighted row, and whether its list owns keyboard focus (which reveals the row's actions).
+/// The highlighted row, whether its list owns keyboard focus, and whether keyboard-only decoration shows: the row's
+/// quiet fill and its revealed actions. A click hides the decoration but keeps the highlighted row as the target.
 struct KeyboardListHighlight: Equatable {
     var id: String?
     var focused = false
+    /// The list has focus and the keyboard is navigating (`KeyboardCue`).
+    var showsCue = false
+
+    /// True for the highlighted row while keyboard-only decoration shows.
+    func decorates(_ id: String) -> Bool { showsCue && self.id == id }
 }
 
 private struct KeyboardListHighlightKey: EnvironmentKey {
@@ -151,17 +157,11 @@ private struct KeyboardListItemModifier: ViewModifier {
     @Environment(\.keyboardListHighlight) private var highlight
 
     func body(content: Content) -> some View {
-        let highlighted = highlight.id == item.id
         content
-            .background {
-                if highlighted {
-                    RoundedRectangle(cornerRadius: Theme.Radius.row).fill(Theme.selected)
-                        .allowsHitTesting(false)
-                }
-            }
+            .keyboardHighlight(highlight.decorates(item.id))
             .id(item.id)
             .preference(key: KeyboardListItemsKey.self, value: [item])
-            .accessibilityAddTraits(highlighted ? .isSelected : [])
+            .accessibilityAddTraits(highlight.id == item.id ? .isSelected : [])
     }
 }
 
@@ -212,13 +212,15 @@ private struct KeyboardListBody<Content: View>: View {
     let onCommand: ((String, KeyboardListCommand) -> Void)?
     var focused: FocusState<Bool>.Binding
     @Environment(\.keyboardFocus) private var keyboard
+    @Environment(\.keyboardCue) private var cue
     /// The page this list belongs to, for restoring its highlight after Back.
     @State private var routeKey: String?
 
     var body: some View {
         ScrollViewReader { proxy in
             content
-                .environment(\.keyboardListHighlight, KeyboardListHighlight(id: list.highlighted, focused: focused.wrappedValue))
+                .environment(\.keyboardListHighlight, KeyboardListHighlight(
+                    id: list.highlighted, focused: focused.wrappedValue, showsCue: focused.wrappedValue && cue))
                 .onPreferenceChange(KeyboardListItemsKey.self) { rows in
                     MainActor.assumeIsolated { if !suppliesRows { list.update(rows) } }
                 }

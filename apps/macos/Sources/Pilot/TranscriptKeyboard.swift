@@ -29,6 +29,36 @@ final class TranscriptKeyboard: ObservableObject {
     }
 }
 
+struct TranscriptHighlight: Equatable {
+    var id: String?
+    /// The transcript has focus and the keyboard is navigating (`KeyboardCue`).
+    var showsCue = false
+}
+
+private struct TranscriptHighlightKey: EnvironmentKey {
+    static let defaultValue = TranscriptHighlight()
+}
+
+extension EnvironmentValues {
+    var transcriptHighlight: TranscriptHighlight {
+        get { self[TranscriptHighlightKey.self] }
+        set { self[TranscriptHighlightKey.self] = newValue }
+    }
+}
+
+/// The highlighted row's quiet fill, behind the message, while the keyboard is navigating. Only this small view
+/// reads the highlight, so moving it or clicking never re-evaluates message bodies.
+struct TranscriptRowHighlight: View {
+    let id: String
+    @Environment(\.transcriptHighlight) private var highlight
+
+    var body: some View {
+        if highlight.showsCue, highlight.id == id {
+            KeyboardHighlightFill(radius: Theme.Radius.card, outset: 6)
+        }
+    }
+}
+
 struct TranscriptKeyboardModifier: ViewModifier {
     @ObservedObject var keyboard: TranscriptKeyboard
     let proxy: ScrollViewProxy
@@ -40,9 +70,11 @@ struct TranscriptKeyboardModifier: ViewModifier {
     let pauseFollowing: () -> Void
     @FocusState private var focused: Bool
     @Environment(\.keyboardFocus) private var keyboardFocus
+    @Environment(\.keyboardCue) private var cue
 
     func body(content: Content) -> some View {
         content
+            .environment(\.transcriptHighlight, TranscriptHighlight(id: keyboard.highlighted, showsCue: focused && cue))
             .focusable()
             .focused($focused)
             .focusEffectDisabled()

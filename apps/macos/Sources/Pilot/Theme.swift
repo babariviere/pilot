@@ -25,6 +25,10 @@ enum Theme {
     static let border = Color(light: .black.withAlphaComponent(0.08), dark: .white.withAlphaComponent(0.08))
     static let muted = Color(light: .black.withAlphaComponent(0.04), dark: .white.withAlphaComponent(0.05))
     static let selected = Color(light: .black.withAlphaComponent(0.06), dark: .white.withAlphaComponent(0.08))
+    /// Quiet fill on a custom keyboard target, such as a page list's highlighted row or the transcript's highlighted
+    /// message (`keyboardHighlight(_:)`). Fainter than hover and `selected`, never an outline, and shown only while
+    /// the keyboard is navigating (`KeyboardCue`), so it never reads as selection or appears after a click.
+    static let keyboardHighlight = Color(light: .black.withAlphaComponent(0.03), dark: .white.withAlphaComponent(0.04))
     static let card = Color(light: 0xFFFFFF, dark: 0x303030)
     /// Opaque tray behind composers. Holds the editor card and its controls.
     static let tray = Color(light: 0xF5F5F5, dark: 0x2C2C2C)
