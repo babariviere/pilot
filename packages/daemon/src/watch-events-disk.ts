@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { NOTICE_HOURLY_CAP, NOTICE_WINDOW_MS, noticeDeadline } from "./notice-dispatcher.ts";
+import { NOTICE_HOURLY_CAP, NOTICE_WINDOW_MS, noticeDeadline, noticeInvolvesSession } from "./notice-dispatcher.ts";
 import type { WatchNotice, WatchObservation, WatchTransition } from "./watch-delivery.ts";
 import type { Watch } from "./watches.ts";
 
@@ -62,11 +62,15 @@ export class WatchEventsDisk {
 						}
 					}
 				}
-				if (event.originSessionId && event.originSessionId === self) {
-					record();
-					continue;
-				}
-				if (event.targets.some((t) => t.kind === "chat" && t.id === self)) {
+				const chatSubjects = event.targets.filter((target) => target.kind === "chat").map((target) => target.id);
+				if (
+					noticeInvolvesSession(
+						self,
+						event.originSessionId,
+						...(event.event.startsWith("chat.") ? [event.source] : []),
+						...chatSubjects,
+					)
+				) {
 					record();
 					continue;
 				}

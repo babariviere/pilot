@@ -133,6 +133,52 @@ function jobDelivery(store: MissionStore, id: string) {
 	};
 }
 
+test("mission notices omit events about the coordinator chat but retain other chats", async (t) => {
+	t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
+	const { store, id } = setup();
+	const ownTask = store.addTask(id, { title: "Coordinator task" });
+	store.claimTask(id, ownTask.id, "lead");
+	const memberTask = store.addTask(id, { title: "Member task" });
+	store.claimTask(id, memberTask.id, "member");
+	const lead = { ...completion(undefined, 0), id: "lead", missionId: id };
+	const member = { ...completion(undefined, 0), missionId: id };
+	const sent: string[] = [];
+	let delivery!: MissionNotices;
+	const sessions = {
+		list: () => [lead, member],
+		get: (sessionId: string) => (sessionId === "lead" ? lead : member),
+		onChange: () => () => {},
+		canSendNotice: () => true,
+		sendNotice: async (_sessionId: string, content: string, requestId: string) => {
+			assert.equal(delivery.allowed("lead", requestId), true);
+			sent.push(content);
+			return true;
+		},
+	} as unknown as SessionManager;
+	delivery = new MissionNotices(store, sessions);
+	const sharedFact = (taskId: string, eventId: string) =>
+		store.recordSharedFact(
+			{ task: { mission: { missionId: id }, taskId } } as Parameters<MissionStore["recordSharedFact"]>[0],
+			{ eventId, delegationId: eventId, executionEpoch: 1, sequence: 1, kind: "question", payload: {} },
+			true,
+		);
+	try {
+		delivery.start();
+		sharedFact(ownTask.id, "coordinator-question");
+		assert.deepEqual(store.noticeDeadlines(Date.now()), [], "the coordinator's own task does not queue a notice");
+		sharedFact(memberTask.id, "member-question");
+		assert.equal(store.noticeDeadlines(Date.now()).length, 1);
+		t.mock.timers.tick(30_000);
+		await delivery.flush();
+		assert.equal(sent.length, 1);
+		assert.match(sent[0]!, /member-question/);
+		assert.doesNotMatch(sent[0]!, /coordinator-question/);
+	} finally {
+		await delivery.stop();
+		store.close();
+	}
+});
+
 test("turn end with a job holds completion, then one final notice includes the follow-up PR", async (t) => {
 	t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
 	const { store, id } = setup();
