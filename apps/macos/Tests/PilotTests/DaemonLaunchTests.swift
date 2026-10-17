@@ -53,7 +53,9 @@ import Testing
     process.waitUntilExit()
     let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
     #expect(process.terminationStatus == 0, "\(text)")
-    #expect(text.trimmingCharacters(in: .whitespacesAndNewlines) == home.resolvingSymlinksInPath().path)
+    // macOS reports /private/var from getcwd while Foundation can canonicalize it to /var.
+    let cwd = URL(filePath: text.trimmingCharacters(in: .whitespacesAndNewlines))
+    #expect(cwd.resolvingSymlinksInPath().path == home.resolvingSymlinksInPath().path)
     #expect(!files.fileExists(atPath: bundle.path))
     #expect(!files.fileExists(atPath: oldBundle.path))
 }
