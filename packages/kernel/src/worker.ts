@@ -6,6 +6,7 @@ import type { JsonValue } from "@earendil-works/chord";
 import { ConversationBusy } from "@earendil-works/pi-durable";
 import { closePreviewBrowser } from "@pilot/artifacts";
 import type { DatabaseCall } from "./database-tool.ts";
+import type { DiagnosticsCall } from "./diagnostics-tool.ts";
 import { formatFailure } from "./failure.ts";
 import type { MissionCall } from "./mission-tools.ts";
 import type { MissionContext, WorkspaceContext } from "./policy.ts";
@@ -198,6 +199,13 @@ export function runKernelWorker(): void {
 		callDaemon<JsonValue>((callId) => ({ type: "database.call", callId, action, args }));
 	const callSlackStatus: SlackStatusCall = (args) =>
 		callDaemon<JsonValue>((callId) => ({ type: "slack.call", callId, args }));
+	const callDiagnostics: DiagnosticsCall = (sessionId, limit) =>
+		callDaemon((callId) => ({
+			type: "diagnostics.call",
+			callId,
+			sessionId,
+			...(limit === undefined ? {} : { limit }),
+		}));
 
 	async function shutdown(code = 0): Promise<void> {
 		if (exiting) return;
@@ -329,6 +337,7 @@ export function runKernelWorker(): void {
 			command.type === "watch.run.result" ||
 			command.type === "database.result" ||
 			command.type === "slack.result" ||
+			command.type === "diagnostics.result" ||
 			command.type === "subscription.limit.result" ||
 			command.type === "artifact.reference.result"
 		) {
@@ -404,6 +413,7 @@ export function runKernelWorker(): void {
 					callPilot,
 					callDatabase,
 					callSlackStatus,
+					callDiagnostics,
 					readArtifactReference: (id, revision) =>
 						callDaemon((callId) => ({ type: "artifact.reference.get", callId, id, revision })),
 					prepareWorkspace,

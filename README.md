@@ -885,6 +885,8 @@ for machine-wide limits and queue diagnostics.
 They stay outside the transcript, have bounded private storage, and are never exported.
 [Local lifecycle diagnostics](docs/lifecycle-diagnostics.md) retain bounded, content-free startup, pause, quota,
 connectivity, recovery and parking transitions without waking parked workers.
+[Agent diagnostics](docs/agent-diagnostics.md) combine those records with request timings and daemon health in a
+host-qualified, read-only tool and API that never opens a target transcript or wakes a parked worker.
 The [diagnostics and telemetry contract](docs/telemetry-contract.md) defines the versioned privacy, identity,
 correlation, retention and resource budgets for local diagnostics and opt-in OpenTelemetry export. Remote export and
 product analytics are disabled by default, and no telemetry backend is selected by the repository.

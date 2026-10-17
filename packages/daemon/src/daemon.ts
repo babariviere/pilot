@@ -123,6 +123,7 @@ const sessions = new SessionManager(
 		workspaceRetentionMs: config.workspaceRetentionMs,
 		models,
 		credentials,
+		diagnosticHost: { hostId: "daemon", daemonId: hello.daemonId, lineageId: hello.lineageId },
 	},
 );
 const maintenance = process.platform === "linux" ? new RuntimeMaintenance(config.home, hello, sessions) : undefined;

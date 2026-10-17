@@ -59,6 +59,7 @@ import { chatEvents, compactionEvents } from "./chat-events.ts";
 import { createControlMemoryTools } from "./control-memory-tools.ts";
 import { type ControlCall, ControlTurn } from "./control-turn.ts";
 import { createDatabaseTool, type DatabaseCall } from "./database-tool.ts";
+import { createDiagnosticsTool, type DiagnosticsCall } from "./diagnostics-tool.ts";
 import { detectGhStack } from "./gh-stack.ts";
 import { appendGitHubAction, GitHubActionsDoc, githubActions } from "./github-actions.ts";
 import { admitWithHeld, discardHeld, HeldInputsDoc, holdOnStop, type SystemMessageStateEvent } from "./held-inputs.ts";
@@ -164,6 +165,8 @@ export interface KernelSessionHooks {
 	callDatabase?: DatabaseCall;
 	/** Executes a `slack_status` tool call in pilotd. The tool is declared only while the chat has a Slack message. */
 	callSlackStatus?: SlackStatusCall;
+	/** Reads bounded host-local diagnostics through pilotd without touching target workers or transcripts. */
+	callDiagnostics?: DiagnosticsCall;
 	/** Read-only artifact references, authorized by pilotd on every call. */
 	readArtifactReference?: ArtifactToolOptions["readReference"];
 	prepareWorkspace?(): Promise<WorkspaceContext | undefined>;
@@ -441,6 +444,7 @@ export class KernelSession {
 				],
 				subagents,
 				hostTools: [
+					...(hooks.callDiagnostics ? [createDiagnosticsTool(hooks.callDiagnostics, spec.sessionId)] : []),
 					...(spec.control && hooks.callMemory ? createMemoryTools(hooks.callMemory, spec.sessionId, true) : []),
 					...(spec.control && hooks.callPilot ? [createPilotTool(hooks.callPilot)] : []),
 					...createControlMemoryTools(!!spec.control, (action, args) => hooks.callControl!(action, args)),

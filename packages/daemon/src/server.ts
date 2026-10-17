@@ -32,6 +32,7 @@ import type {
 	MissionResourceUpdate,
 	MissionResourceWrite,
 	MissionTaskWrite,
+	OperationHost,
 	ProjectRequest,
 	RenameSessionRequest,
 	RepositorySelection,
@@ -94,6 +95,18 @@ const HISTORY_PAGE_MAX = 500;
 const REVIEW_MARKS_MAX = 1000;
 /** Dashboards are recomputed at most this often after changes, and only pushed when their content differs. */
 const DASHBOARD_DEBOUNCE_MS = 250;
+
+function requestedDiagnosticHost(url: URL, hello: DaemonHello | undefined): OperationHost {
+	if (!hello?.lineageId) throw new ServiceUnavailable("Diagnostic host identity is unavailable");
+	const hostId = url.searchParams.get("hostId");
+	const daemonId = url.searchParams.get("daemonId");
+	const lineageId = url.searchParams.get("lineageId");
+	if (!hostId || hostId.length > 128 || !daemonId || !lineageId)
+		throw new HttpError(400, "hostId, daemonId and lineageId are required");
+	if (daemonId !== hello.daemonId || lineageId !== hello.lineageId)
+		throw new HttpError(409, "Host identity changed; reconnect before reading diagnostics");
+	return { hostId, daemonId, lineageId };
+}
 
 /** Telemetry and generated titles are not evidence of a changed working copy. */
 function repositoryVersion(session: SessionSummary): string {
@@ -1000,6 +1013,20 @@ export function createDaemonServer(
 			const session = sessions.get(parts[2]!);
 			if (!session) throw new HttpError(404, "Unknown session");
 			return json(res, 200, session);
+		}
+		if (parts[1] === "sessions" && parts.length === 4 && parts[3] === "diagnostics" && req.method === "GET") {
+			const rawLimit = url.searchParams.get("limit");
+			if (rawLimit !== null && (!/^\d+$/.test(rawLimit) || Number(rawLimit) < 1 || Number(rawLimit) > 128))
+				throw new HttpError(400, "limit must be between 1 and 128");
+			res.setHeader("cache-control", "no-store");
+			return json(
+				res,
+				200,
+				await sessions.diagnostics(parts[2]!, {
+					host: requestedDiagnosticHost(url, hello),
+					...(rawLimit === null ? {} : { limit: Number(rawLimit) }),
+				}),
+			);
 		}
 		if (parts[1] === "sessions" && parts.length === 4 && parts[3] === "changes" && req.method === "GET") {
 			const { cwd, base, baseBranch, branch } = sessions.changeBase(parts[2]!);

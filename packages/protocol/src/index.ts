@@ -11,6 +11,7 @@ export type {
 	ToolSlot,
 } from "@earendil-works/pi-durable";
 export type * from "./critical-review.ts";
+export type * from "./diagnostics.ts";
 
 /** Lifecycle as seen by the daemon. "parked" means no worker is running; the session resumes on demand. */
 export type SessionState = "parked" | "starting" | "idle" | "working" | "failed";
