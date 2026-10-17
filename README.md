@@ -36,8 +36,10 @@ has separate storage and transport contracts; it does not change chat-result rea
   that need you (each with a short reason), pull requests ready to merge, and Linear and Slack items, across
   projects or filtered to one. Each project has an Overview that starts with what is next for it.
   Right-click a chat and choose **Go to project** to open its project's Overview.
-- **Jump anywhere from the keyboard.** ⌘K opens a command palette over chats, archived ones included (by title,
-  branch, project or pull request number), pages, missions and tasks (`#25`), project scopes, Linear Inbox items,
+- **Jump anywhere from the keyboard.** ⌘K opens a command palette that leads with places: pages, Slack triage and
+  the Linear queue, missions, tasks and projects, then a few recent chats. It searches chats, archived ones
+  included (by title, branch, project or pull request number), pages, missions and tasks (`#25`), project scopes,
+  Settings pages, every keyboard shortcut, Linear Inbox items,
   Slack reports in triage (by summary, channel or message text, newest first, resolved ones included), and actions
   such as new chat, pin, archive, stop, retry, opening the pull request on GitHub or **Merge PR…** for the open chat
   (also available after searching a PR number). Merging asks you to confirm the fresh PR head, target branch and a

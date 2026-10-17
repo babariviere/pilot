@@ -1,3 +1,4 @@
+import PilotCore
 import SwiftUI
 
 /// A small, static reference. Opening it never loads projects, chats or daemon data.
@@ -107,6 +108,19 @@ enum KeyboardShortcuts {
             Entry(title: "Quit Pilot (agents keep running)", keys: "⌘Q"),
         ]),
     ]
+
+    /// Groups with the entries whose title, keys or group match every word of `query`. Empty lists everything.
+    static func filtered(_ query: String, in groups: [Group] = groups) -> [Group] {
+        let tokens = CommandPalette.tokens(query)
+        guard !tokens.isEmpty else { return groups }
+        return groups.compactMap { group in
+            let entries = group.entries.filter { entry in
+                let text = CommandPalette.tokens([group.title, entry.title, entry.keys].joined(separator: " ")).joined(separator: " ")
+                return tokens.allSatisfy(text.contains)
+            }
+            return entries.isEmpty ? nil : Group(title: group.title, entries: entries)
+        }
+    }
 }
 
 struct KeyboardShortcutsCommands: Commands {
@@ -122,28 +136,47 @@ struct KeyboardShortcutsCommands: Commands {
 
 struct KeyboardShortcutsView: View {
     @Environment(\.dismissWindow) private var dismissWindow
+    @State private var query = ""
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
         SheetScaffold("Keyboard shortcuts", subtitle: "Shortcuts apply when their action is available.",
                       cancel: { dismissWindow(id: KeyboardShortcuts.windowID) }, width: 540, fillsHeight: true) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    ForEach(KeyboardShortcuts.groups) { group in
-                        VStack(alignment: .leading, spacing: 8) {
-                            PageSectionHeader(title: group.title)
-                            VStack(spacing: 0) {
-                                ForEach(group.entries) { entry in
-                                    HStack(spacing: 16) {
-                                        Text(entry.title)
-                                            .font(.pilot(.body))
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                        KeyCap(key: entry.keys)
+            VStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    PilotSymbol(PilotIcon.search).foregroundStyle(Theme.faintForeground)
+                    TextField("Search shortcuts", text: $query)
+                        .textFieldStyle(.plain)
+                        .font(.pilot(.body))
+                        .focused($searchFocused)
+                        .accessibilityLabel("Search shortcuts")
+                }
+                .padding(.horizontal, 8).padding(.vertical, 6)
+                .background(RoundedRectangle(cornerRadius: Theme.Radius.control).strokeBorder(Theme.border))
+                .padding(.bottom, 12)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 24) {
+                        let groups = KeyboardShortcuts.filtered(query)
+                        if groups.isEmpty {
+                            Text("No shortcuts match.").font(.pilot(.body)).foregroundStyle(Theme.mutedForeground)
+                        }
+                        ForEach(groups) { group in
+                            VStack(alignment: .leading, spacing: 8) {
+                                PageSectionHeader(title: group.title)
+                                VStack(spacing: 0) {
+                                    ForEach(group.entries) { entry in
+                                        HStack(spacing: 16) {
+                                            Text(entry.title)
+                                                .font(.pilot(.body))
+                                                .frame(maxWidth: .infinity, alignment: .leading)
+                                            KeyCap(key: entry.keys)
+                                        }
+                                        .foregroundStyle(Theme.foreground)
+                                        .padding(.vertical, 8)
+                                        .accessibilityElement(children: .ignore)
+                                        .accessibilityLabel("\(entry.title), \(entry.keys)")
+                                        HairlineDivider()
                                     }
-                                    .foregroundStyle(Theme.foreground)
-                                    .padding(.vertical, 8)
-                                    .accessibilityElement(children: .ignore)
-                                    .accessibilityLabel("\(entry.title), \(entry.keys)")
-                                    HairlineDivider()
                                 }
                             }
                         }
@@ -152,5 +185,6 @@ struct KeyboardShortcutsView: View {
             }
         }
         .frame(height: 620)
+        .onAppear { searchFocused = true }
     }
 }

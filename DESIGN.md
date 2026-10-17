@@ -152,6 +152,9 @@ keys, Return and Escape throughout. Rows are hairline-divided, show their menu s
 keep their sidebar line and corner. The palette's only colour is the amber of Needs you: working and ready-to-merge
 corners turn grey there (`ditherCorner(_:monochrome:)`).
 Archived chats are never suggested; a search finds them after active ones, marked "Archived".
+The palette is for jumping to places first: with an empty field, pages and resources lead and only a few recent
+chats follow. When a search matches a resource and a chat equally well, the resource leads; an exact chat title
+stays first. The highlighted list row's actions sit in their own labeled group, after the places.
 
 Keyboard navigation (`KeyboardNavigation.swift`) has one owner at a time. The window has four regions, in ⌃⇥
 order: sidebar, page, composer and inspector, skipping those not on screen. A region marks itself with
