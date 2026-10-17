@@ -82,6 +82,27 @@ import Testing
     #expect(view.layer?.sublayers?.first?.contents != nil)
 }
 
+@Test @MainActor func recedingCornersCrossfadeTheirRestingAndRecededLoops() {
+    let row = DitherCornerLoopView.Loop(signal: .working, recedes: true)
+    let receded = DitherCornerLoopView.frames(row, receded: true)
+    #expect(receded.count == DitherCorner.frameCount)
+    // The receded loop is the renderer's cached fully receded frames, the pixels the clocked corner showed on hover.
+    #expect(receded[7] === DitherCornerRenderer.image(for: DitherCornerRequest(signal: .working, previous: nil, frame: 7, recede: 1)))
+    let view = DitherCornerLoopView(frame: NSRect(x: 0, y: 0, width: 104, height: 48))
+    view.loop = row
+    let layers = view.layer?.sublayers ?? []
+    #expect(layers.count == 2)
+    #expect(layers[1].contents != nil, "a receding row also holds its receded frame")
+    view.setReceded(true, animated: false)
+    #expect(view.receded && layers[0].opacity == 0 && layers[1].opacity == 1)
+    view.setReceded(false, animated: false)
+    #expect(layers[0].opacity == 1 && layers[1].opacity == 0)
+    // Corners that never recede keep no receded frames.
+    let composer = DitherCornerLoopView(frame: .zero)
+    composer.loop = DitherCornerLoopView.Loop(signal: .working, extent: ComposerCorner.extent)
+    #expect(composer.layer?.sublayers?[1].contents == nil)
+}
+
 @Test func onlyWorkingAndNeedsYouCornersMove() {
     #expect(DitherCorner.animates(.working))
     #expect(DitherCorner.animates(.needsYou))

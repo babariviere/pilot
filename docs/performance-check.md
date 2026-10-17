@@ -233,6 +233,11 @@ from the wall clock, are removed while the window is occluded, and Reduce Motion
 corners, which recede on hover, still use the clock. Compare `Pilot --performance-check --working` (twelve working
 sessions) before and after.
 
+**Receding corners on Core Animation.** Sidebar row corners now play on layers too: a moving row corner plays its
+resting loop and its fully receded loop in step on two layers, and hovering crossfades them in 0.3 s (opacity only)
+instead of SwiftUI rendering mid-recession frames. The shared 12 fps clock now runs only while a corner dissolves
+between states. Still corners (failed, ready to merge, Reduce Motion) keep their single image.
+
 **Streamed text fade-in.** Newly appended text in a streaming block fades in over 240 ms, ease-out: a layer of the
 opaque background colour covers the new glyphs' line rectangles and Core Animation fades it out, so the text, its
 layout and the row height never change and nothing redraws per frame. Restored history, Reduce Motion and tables
