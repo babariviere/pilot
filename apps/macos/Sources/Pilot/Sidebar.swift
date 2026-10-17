@@ -150,7 +150,7 @@ struct SessionSidebar: View {
         if !controls.isEmpty {
             Section {
                 ForEach(controls) { item in
-                    SessionRow(session: item.value, reference: item.ref, listFocused: chatListFocused)
+                    SessionRow(session: item.value, reference: item.ref)
                         .environment(\.hostViewContext, HostViewContext(host: item.ref.host, hosts: hosts))
                         .tag(item.ref.host == model.localHost ? item.ref.localId : item.ref.storageKey)
                 }
@@ -180,8 +180,7 @@ struct SessionSidebar: View {
                         let context = HostViewContext(host: item.ref.host, hosts: hosts)
                         SessionRow(session: item.value, reference: item.ref,
                             projectName: [hosts.projects.first { $0.ref.host == item.ref.host && $0.value.id == item.value.projectId }?.value.name,
-                                          item.ref.host == model.localHost ? nil : context.name].compactMap { $0 }.joined(separator: " · "),
-                            listFocused: chatListFocused)
+                                          item.ref.host == model.localHost ? nil : context.name].compactMap { $0 }.joined(separator: " · "))
                             .environment(\.hostViewContext, context)
                             .tag(item.ref.host == model.localHost ? item.ref.localId : item.ref.storageKey)
                     }
@@ -233,7 +232,7 @@ struct SessionSidebar: View {
     private func controlSection(_ sessions: [SessionSummary]) -> some View {
         if let control = sessions.first(where: \.isControl) {
             Section {
-                SessionRow(session: control, listFocused: chatListFocused)
+                SessionRow(session: control)
                     .tag(control.id)
             }
         }
@@ -251,7 +250,7 @@ struct SessionSidebar: View {
         if !groups.pinned.isEmpty {
             Section {
                 ForEach(groups.pinned) { session in
-                    SessionRow(session: session, projectName: projectName(session, names), listFocused: chatListFocused)
+                    SessionRow(session: session, projectName: projectName(session, names))
                         .tag(session.id)
                 }
             } header: {
@@ -261,7 +260,7 @@ struct SessionSidebar: View {
         if !groups.needsYou.isEmpty {
             Section {
                 ForEach(groups.needsYou) { session in
-                    SessionRow(session: session, projectName: projectName(session, names), listFocused: chatListFocused)
+                    SessionRow(session: session, projectName: projectName(session, names))
                         .tag(session.id)
                 }
             } header: {
@@ -271,7 +270,7 @@ struct SessionSidebar: View {
         if !groups.readyToMerge.isEmpty {
             Section {
                 ForEach(groups.readyToMerge) { session in
-                    SessionRow(session: session, projectName: projectName(session, names), listFocused: chatListFocused)
+                    SessionRow(session: session, projectName: projectName(session, names))
                         .tag(session.id)
                 }
             } header: {
@@ -281,7 +280,7 @@ struct SessionSidebar: View {
         if !groups.working.isEmpty {
             Section {
                 ForEach(groups.working) { session in
-                    SessionRow(session: session, projectName: projectName(session, names), listFocused: chatListFocused)
+                    SessionRow(session: session, projectName: projectName(session, names))
                         .tag(session.id)
                 }
             } header: {
@@ -308,7 +307,7 @@ struct SessionSidebar: View {
         if !sessions.isEmpty {
             Section {
                 ForEach(sessions) { session in
-                    SessionRow(session: session, projectName: projectName(session, names), listFocused: chatListFocused)
+                    SessionRow(session: session, projectName: projectName(session, names))
                         .tag(session.id)
                 }
             } header: {
@@ -397,7 +396,7 @@ struct SessionSidebar: View {
         }
         let list = showingAll ? (shown: sessions, hidden: 0) : collapsed
         ForEach(list.shown) { session in
-            SessionRow(session: session, projectName: projectName(session, projectNames), listFocused: chatListFocused)
+            SessionRow(session: session, projectName: projectName(session, projectNames))
                 .tag(session.id)
         }
         if sessions.isEmpty {
@@ -446,7 +445,7 @@ struct SidebarDisclosureRow: View {
             .foregroundStyle(Theme.mutedForeground)
             .contentShape(Rectangle())
         }
-        .rowButtonStyle(outset: 2)
+        .rowButtonStyle()
         .accessibilityLabel(title)
     }
 }
@@ -484,7 +483,6 @@ struct SessionRow: View {
     @EndpointClient private var endpoint
     /// Shown before the repository metadata in lists that mix projects.
     var projectName: String?
-    var listFocused = false
     @EnvironmentObject private var model: AppModel
     @State private var hovered = false
     @State private var repositoryHelp: String?
@@ -493,8 +491,7 @@ struct SessionRow: View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
             row(now: context.date)
         }
-        .listRowBackground(SidebarSelectionBackground(selected: model.selectedSessionId == rowKey,
-                                                      focused: listFocused))
+        .listRowBackground(SidebarSelectionBackground(selected: model.selectedSessionId == rowKey))
     }
 
     private var owner: HostResourceRef? { reference ?? model.resourceRef(session.id, kind: .session, context: hostContext) }

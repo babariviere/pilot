@@ -24,7 +24,7 @@ struct KeyboardListItemsKey: PreferenceKey {
     }
 }
 
-/// The highlighted row, and whether its list owns keyboard focus (which shows the focus ring).
+/// The highlighted row, and whether its list owns keyboard focus (which reveals the row's actions).
 struct KeyboardListHighlight: Equatable {
     var id: String?
     var focused = false
@@ -159,7 +159,6 @@ private struct KeyboardListItemModifier: ViewModifier {
                         .allowsHitTesting(false)
                 }
             }
-            .focusRing(highlighted && highlight.focused)
             .id(item.id)
             .preference(key: KeyboardListItemsKey.self, value: [item])
             .accessibilityAddTraits(highlighted ? .isSelected : [])

@@ -29,39 +29,6 @@ final class TranscriptKeyboard: ObservableObject {
     }
 }
 
-struct TranscriptHighlight: Equatable {
-    var id: String?
-    var focused = false
-}
-
-private struct TranscriptHighlightKey: EnvironmentKey {
-    static let defaultValue = TranscriptHighlight()
-}
-
-extension EnvironmentValues {
-    var transcriptHighlight: TranscriptHighlight {
-        get { self[TranscriptHighlightKey.self] }
-        set { self[TranscriptHighlightKey.self] = newValue }
-    }
-}
-
-/// The focus ring on the highlighted row. Only this small view reads the highlight, so moving it never
-/// re-evaluates message bodies.
-struct TranscriptRowHighlight: View {
-    let id: String
-    @Environment(\.transcriptHighlight) private var highlight
-
-    var body: some View {
-        if highlight.focused, highlight.id == id {
-            RoundedRectangle(cornerRadius: Theme.Radius.card)
-                .strokeBorder(Theme.focusRing, lineWidth: 2)
-                .padding(-6)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-        }
-    }
-}
-
 struct TranscriptKeyboardModifier: ViewModifier {
     @ObservedObject var keyboard: TranscriptKeyboard
     let proxy: ScrollViewProxy
@@ -76,7 +43,6 @@ struct TranscriptKeyboardModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .environment(\.transcriptHighlight, TranscriptHighlight(id: keyboard.highlighted, focused: focused))
             .focusable()
             .focused($focused)
             .focusEffectDisabled()

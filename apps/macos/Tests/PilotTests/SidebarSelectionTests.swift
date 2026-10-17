@@ -3,9 +3,9 @@ import SwiftUI
 import Testing
 @testable import Pilot
 
-@Test @MainActor func sidebarSelectionKeepsItsNeutralFillAndSeparatesFocus() throws {
-    func render(selected: Bool, focused: Bool, active: Bool = true) throws -> NSBitmapImageRep {
-        let renderer = ImageRenderer(content: SidebarSelectionBackground(selected: selected, focused: focused)
+@Test @MainActor func sidebarSelectionKeepsItsNeutralFillWithoutFocusOutlines() throws {
+    func render(selected: Bool, active: Bool = true) throws -> NSBitmapImageRep {
+        let renderer = ImageRenderer(content: SidebarSelectionBackground(selected: selected)
             .environment(\.controlActiveState, active ? .active : .inactive)
             .frame(width: 300, height: 40))
         return NSBitmapImageRep(cgImage: try #require(renderer.cgImage))
@@ -14,18 +14,15 @@ import Testing
         try #require(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
     }
 
-    let quiet = try render(selected: false, focused: false)
-    let selected = try render(selected: true, focused: false)
-    let focused = try render(selected: true, focused: true)
-    let inactive = try render(selected: true, focused: true, active: false)
+    let quiet = try render(selected: false)
+    let selected = try render(selected: true)
+    let inactive = try render(selected: true, active: false)
     let plainCentre = try colour(quiet, x: 150, y: 20)
     let centre = try colour(selected, x: 150, y: 20)
     #expect(centre.redComponent < plainCentre.redComponent - 0.04)
     #expect(abs(centre.redComponent - centre.blueComponent) < 0.01)
-    #expect(try colour(focused, x: 150, y: 20) == centre)
     #expect(try colour(inactive, x: 150, y: 20) == centre)
-    // Focus changes the outline, not the fill. Inactive windows never retain that outline.
-    #expect(try colour(focused, x: 11, y: 20) != colour(selected, x: 11, y: 20))
+    // Selection keeps the same neutral edges regardless of window activity.
     #expect(try colour(inactive, x: 11, y: 20) == colour(selected, x: 11, y: 20))
     // Even beyond the rounded selection, the surface must be opaque to hide the native highlight.
     #expect(try colour(selected, x: 0, y: 0).alphaComponent == 1)
@@ -48,9 +45,9 @@ private struct SidebarSelectionTestList: View {
                     Text("Project · Coordinator · Idle").font(.pilot(.small)).foregroundStyle(Theme.blocked)
                 }
                 .tag(id)
-                .listRowBackground(SidebarSelectionBackground(selected: fixture.selection == id, focused: focused)
-                    // The separate rendering test covers the outline. Here no blue may remain, even when the
-                    // native table row is emphasized (the case that previously drew the solid blue selection).
+                .listRowBackground(SidebarSelectionBackground(selected: fixture.selection == id)
+                    // No blue may remain, even when the native table row is emphasized
+                    // (the case that previously drew the solid blue selection).
                     .environment(\.controlActiveState, .inactive))
             }
         }

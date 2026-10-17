@@ -273,7 +273,7 @@ struct MemoryPage: View {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(state.rows) { row in
                     if row.startsGroup { HairlineDivider() }
-                    MemoryTreeRowView(row: row, selected: state.selection == row.id, focused: treeFocused,
+                    MemoryTreeRowView(row: row, selected: state.selection == row.id,
                                       matches: state.matches?[row.id],
                                       toggle: { Task { await state.toggle(row.id) } },
                                       select: {
@@ -316,7 +316,6 @@ private struct MemoryTreeRowView: View {
     @Environment(\.sharedMemoryReadOnly) private var sharedReadOnly
     let row: MemoryTreeRow
     let selected: Bool
-    let focused: Bool
     let matches: Int?
     let toggle: () -> Void
     let select: () -> Void
@@ -371,9 +370,6 @@ private struct MemoryTreeRowView: View {
         .background {
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: Theme.Radius.row).fill(selected ? Theme.selected : .clear)
-                if selected, focused {
-                    RoundedRectangle(cornerRadius: Theme.Radius.row).strokeBorder(Theme.focusRing.opacity(0.5), lineWidth: 2)
-                }
                 MemoryTreeGuides(row: row)
             }
         }
