@@ -1,27 +1,24 @@
+import type { ControlAuditEntry } from "@pilot/protocol";
+
+export type { ControlAuditEntry } from "@pilot/protocol";
+
 import type { ControlMemory } from "./control-memory.ts";
-export interface ControlAuditEntry {
-	seq: number;
-	operationId: string;
-	action: string;
-	phase: "requested" | "succeeded" | "failed";
-	at: number;
-	caller: string;
-	args: Record<string, unknown>;
-	result?: unknown;
-}
 export class ControlActions {
 	private readonly memory: ControlMemory;
 	private readonly isControl: (id: string) => boolean;
 	private readonly publish: (entry: ControlAuditEntry) => Promise<void>;
+	private readonly changed: () => void;
 	private readonly running = new Map<string, { payload: string; task: Promise<unknown> }>();
 	constructor(
 		memory: ControlMemory,
 		isControl: (id: string) => boolean,
 		publish: (entry: ControlAuditEntry) => Promise<void>,
+		changed: () => void = () => {},
 	) {
 		this.memory = memory;
 		this.isControl = isControl;
 		this.publish = publish;
+		this.changed = changed;
 	}
 	perform<T>(
 		caller: string,
@@ -52,6 +49,7 @@ export class ControlActions {
 				);
 			}
 			await this.memory.auditAppend({ operationId: key, action, phase: "requested", at: Date.now(), caller, args });
+			this.changed();
 			let result: T;
 			try {
 				if (!this.isControl(caller)) throw new Error("Control role changed");
@@ -66,6 +64,7 @@ export class ControlActions {
 					args,
 					result: { error: error instanceof Error ? error.message.slice(0, 500) : "Action failed" },
 				});
+				this.changed();
 				await this.publish(entry).catch(() => {});
 				throw error;
 			}
@@ -79,6 +78,7 @@ export class ControlActions {
 				args,
 				result,
 			});
+			this.changed();
 			await this.publish(entry).catch(() => {});
 			return result;
 		})().finally(() => {

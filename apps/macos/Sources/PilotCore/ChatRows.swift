@@ -209,10 +209,10 @@ extension Transcript {
                     let id = "\(entry.id)-\(index)"
                     switch message.role {
                     case "user":
-                        if entry.origin == .mission {
+                        if entry.origin == .mission || entry.origin == .watch {
                             let summary = entry.eventSummary
-                            append(.event(ChatEvent(id: id, kind: summary?.kind ?? "mission_updated",
-                                                   text: summary?.text ?? "Mission updated",
+                            append(.event(ChatEvent(id: id, kind: summary?.kind ?? (entry.origin == .watch ? "watch_notice" : "mission_updated"),
+                                                   text: summary?.text ?? (entry.origin == .watch ? "Watch fired" : "Mission updated"),
                                                    timestamp: message.timestamp, detail: message.text)))
                         } else if let origin = entry.origin {
                             append(.automatic(id: id, text: message.text, origin: origin, timestamp: message.timestamp))

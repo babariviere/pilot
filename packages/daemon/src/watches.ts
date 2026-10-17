@@ -1,5 +1,7 @@
-/** Internal watch contract. Wire protocol/tool exposure separately from storage. */
-export const WATCH_EVENTS = [
+import type { WatchEvent, WatchInput, WatchTarget } from "@pilot/protocol";
+
+export type { Watch, WatchEvent, WatchInput, WatchTarget } from "@pilot/protocol";
+export const WATCH_EVENTS: readonly WatchEvent[] = [
 	"chat.settled",
 	"chat.failed",
 	"pr.merged",
@@ -8,25 +10,7 @@ export const WATCH_EVENTS = [
 	"linear.done",
 	"mission.task_done",
 	"mission.done",
-] as const;
-export type WatchEvent = (typeof WATCH_EVENTS)[number];
-export type WatchTarget = {
-	kind: "chat" | "project" | "mission" | "pr" | "chat_prs" | "linear" | "task";
-	id: string;
-	missionId?: string;
-};
-export interface WatchInput {
-	event: WatchEvent;
-	target: WatchTarget;
-	filter?: { outcome?: "done" | "failed" | "stopped" };
-	mode: "once" | "persistent";
-	note: string;
-	expiresAt?: number;
-}
-export interface Watch extends WatchInput {
-	id: string;
-	createdAt: number;
-}
+];
 export const MAX_WATCHES = 10_000;
 
 export function validateWatch(value: WatchInput, now = Date.now()): WatchInput {

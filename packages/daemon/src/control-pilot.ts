@@ -10,8 +10,11 @@ import type {
 } from "@pilot/protocol";
 import type { ControlActions } from "./control-actions.ts";
 import type { SessionManager } from "./sessions.ts";
+import type { WatchService } from "./watch-service.ts";
+import { validateWatch, type WatchInput } from "./watches.ts";
 
 export interface ControlPilotOptions {
+	watches?: Pick<WatchService, "add" | "remove" | "page">;
 	isControl: (id: string) => boolean;
 	sessions: Pick<SessionManager, "list" | "get" | "history">;
 	/** Cached projections only. These callbacks must not perform storage or network reads. */
@@ -46,6 +49,13 @@ export class ControlPilot {
 		if (!this.options.isControl(caller)) throw new Error("Only the control chat may call pilot");
 		if (action === "status") return this.status(args);
 		if (action === "read") return this.read(args);
+		if (action === "watch" || action === "unwatch" || action === "watches") {
+			const watches = this.options.watches;
+			if (!watches) throw new Error("Watches unavailable");
+			if (action === "watches") return watches.page(string(args, "after"), args.limit as number | undefined);
+			if (action === "unwatch") return { removed: await watches.remove(string(args, "watchId", true)!) };
+			return watches.add(validateWatch(args as unknown as WatchInput));
+		}
 		if (action === "mission_create") return this.createMission(caller, args, operationId);
 		if (action === "mission_attach") {
 			this.assertOrganize(args, true);

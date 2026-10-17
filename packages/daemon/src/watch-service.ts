@@ -124,6 +124,13 @@ export class WatchService {
 	list(): Promise<Watch[]> {
 		return this.rpc("list");
 	}
+	page(after?: string, limit = 40): Promise<import("@pilot/protocol").WatchesResponse> {
+		if (after !== undefined && (typeof after !== "string" || !/^[a-f0-9-]{36}$/.test(after)))
+			return Promise.reject(new Error("Invalid watch cursor"));
+		if (!Number.isInteger(limit) || limit < 1 || limit > 100)
+			return Promise.reject(new Error("limit must be 1..100"));
+		return this.rpc("page", { after, limit });
+	}
 	targets(kind: WatchTarget["kind"]): Promise<WatchTarget[]> {
 		return this.rpc("targets", kind);
 	}

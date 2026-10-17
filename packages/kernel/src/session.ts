@@ -131,6 +131,7 @@ async function pinnedAgent(
 }
 
 export interface KernelSessionHooks {
+	onRunAdmitted?(controlCaused: boolean): Promise<void>;
 	reportSubscriptionLimit?: import("./subscription-limit.ts").ReportSubscriptionLimit;
 	onSystemMessageState?(event: SystemMessageStateEvent): void;
 	onWorking(
@@ -633,6 +634,12 @@ export class KernelSession {
 				let working = session.#reportedWorking;
 				let completion = session.#completion;
 				for (const event of events) {
+					const inputs =
+						event.type === "run_start" ? event.inputs : event.type === "snapshot" ? event.run?.inputs : undefined;
+					if (inputs?.length && hooks.onRunAdmitted) {
+						const first = await owned.storage.submission(inputs[0]!, deliveryContext);
+						await hooks.onRunAdmitted(first?.requestId?.startsWith("control:") ?? false);
+					}
 					working =
 						event.type === "snapshot"
 							? event.run !== undefined

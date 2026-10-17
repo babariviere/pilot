@@ -288,6 +288,7 @@ export function createDaemonServer(
 	setup?: SetupService,
 	sharing?: import("./shared-context.ts").SharedContextService,
 	maintenance?: RuntimeMaintenance,
+	watches?: import("./watch-service.ts").WatchService,
 ): Server & { runtimeResources: RuntimeResources } {
 	sessions.setWorkspaceProcessGuard((id) => terminals.isRunning(id));
 	const machine = new MachineInformationReader(_config.home, hello?.daemonVersion ?? "unknown");
@@ -949,8 +950,24 @@ export function createDaemonServer(
 						(url.searchParams.get("mode") === "build" && url.searchParams.get("workspace") === "clone"),
 				),
 			);
-		if (parts[1] === "control-chat" && parts.length === 2 && req.method === "POST")
+		if (parts[1] === "control-chat" && parts.length === 2 && (req.method === "POST" || req.method === "GET"))
 			return json(res, 200, await sessions.ensureControlChat());
+		if (parts[1] === "control-chat" && parts[2] === "watches") {
+			if (!watches) throw new HttpError(503, "Watches unavailable");
+			if (parts.length === 3 && req.method === "GET")
+				return json(
+					res,
+					200,
+					await watches.page(
+						url.searchParams.get("after") ?? undefined,
+						url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : undefined,
+					),
+				);
+			if (parts.length === 4 && req.method === "DELETE")
+				return json(res, 200, {
+					removed: await watches.remove(parts[3]!),
+				} satisfies import("@pilot/protocol").CancelWatchResponse);
+		}
 		if (parts[1] === "control-chat" && parts[2] === "audit" && parts.length === 3 && req.method === "GET")
 			return json(
 				res,
@@ -1412,6 +1429,16 @@ export function createDaemonServer(
 		for (const send of clients.values()) send(data);
 	};
 	let sharingInvalidationScheduled = false;
+	let watchInvalidationScheduled = false;
+	const stopWatches = watches?.onChange(() => {
+		if (watchInvalidationScheduled) return;
+		watchInvalidationScheduled = true;
+		queueMicrotask(() => {
+			watchInvalidationScheduled = false;
+			broadcast({ type: "watches.changed" });
+		});
+	});
+	const stopControlAudit = sessions.onControlAudit(() => broadcast({ type: "control-audit.changed" }));
 	const invalidateSharing = () => {
 		if (sharingInvalidationScheduled) return;
 		sharingInvalidationScheduled = true;
@@ -1438,6 +1465,8 @@ export function createDaemonServer(
 	});
 	server.on("close", () => {
 		stopSharingWatch?.();
+		stopWatches?.();
+		stopControlAudit();
 		stopSharingReceipts?.();
 	});
 	const stopPowerWatch = power?.onChange(() => broadcast({ type: "power", power: power.status() }));

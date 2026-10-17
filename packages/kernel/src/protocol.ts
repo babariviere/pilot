@@ -120,6 +120,7 @@ export type KernelCommand =
 	| { type: "memory.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "control.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "pilot.result"; callId: string; result?: JsonValue; error?: string }
+	| { type: "watch.run.result"; callId: string; error?: string }
 	| { type: "database.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "slack.result"; callId: string; result?: JsonValue; error?: string }
 	/** Whether the chat is attached to a Slack triage message, which declares or withdraws `slack_status`. */
@@ -132,6 +133,8 @@ export type KernelCommand =
 	| { type: "shutdown" };
 
 export type KernelPacket =
+	/** Lifecycle admission, never mere queue placement. Acknowledged before publishing completion. */
+	| { type: "watch.run"; callId: string; controlCaused: boolean }
 	| { type: "update.paused"; id: string; error?: string }
 	| { type: "systemMessageState"; event: import("./held-inputs.ts").SystemMessageStateEvent }
 	| {

@@ -159,8 +159,22 @@ test("control turns are fresh, tool rounds stay intact, log excludes thoughts an
 			return fauxAssistantMessage("third reply");
 		},
 	]);
-	await session.submit("third", "third request", "followUp");
+	await session.submit("watch-notice:1", "third request", "followUp", true, false, {
+		kind: "watch_notice",
+		text: "Watch fired",
+	});
 	await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
+	await session.close();
+	session = await KernelSession.open(
+		{ sessionId: "control", cwd: root, storageDir: join(root, "durable"), control: true },
+		hooks,
+	);
+	await session.submit("watch-notice:1", "third request", "followUp", true, false, {
+		kind: "watch_notice",
+		text: "Watch fired",
+	});
+	await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
+	assert.equal(log.filter((m) => m.kind === "event" && m.text === "third request").length, 1);
 	assert.equal(session.model, "control-faux/second");
 	assert.ok(log.length >= before);
 	assert.equal(new Set(log.map((m) => m.key)).size, log.length);
@@ -169,4 +183,67 @@ test("control turns are fresh, tool rounds stay intact, log excludes thoughts an
 	await session.submit("failure", "must fail closed", "followUp");
 	await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
 	assert.equal(checked, 4);
+});
+
+test("control run attribution follows admitted runs, not busy-chat queue placement", { timeout: 30_000 }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "watch-run-origin-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const runtime = await ModelRuntime.create({
+		credentials: new InMemoryCredentialStore(),
+		modelsPath: null,
+		modelsStore: new InMemoryModelsStore(),
+		refreshOnCreate: false,
+		allowModelNetwork: false,
+	});
+	const faux = fauxProvider({ provider: "watch-faux", models: [{ id: "test" }] });
+	runtime.registerNativeProvider(faux.provider);
+	const open = NativeAdapter.open;
+	t.mock.method(NativeAdapter, "open", async (options: NativeAdapterOptions) =>
+		open.call(NativeAdapter, {
+			...options,
+			settingsManager: SettingsManager.inMemory({ defaultTools: [] }),
+			sessionOptions: { modelRuntime: runtime, model: faux.getModel("test") },
+		}),
+	);
+	let markStarted!: () => void, finishFirst!: () => void, markAdmitted!: () => void;
+	const started = new Promise<void>((resolve) => {
+		markStarted = resolve;
+	});
+	const release = new Promise<void>((resolve) => {
+		finishFirst = resolve;
+	});
+	const admitted = new Promise<void>((resolve) => {
+		markAdmitted = resolve;
+	});
+	const origins: boolean[] = [];
+	const session = await KernelSession.open(
+		{ sessionId: "target", cwd: root, storageDir: join(root, "durable") },
+		{
+			onWorking: () => {},
+			onRunAdmitted: async (origin) => {
+				origins.push(origin);
+				if (origin) markAdmitted();
+			},
+		},
+	);
+	t.after(async () => {
+		finishFirst();
+		await session.close();
+	});
+	faux.setResponses([
+		async () => {
+			markStarted();
+			await release;
+			return fauxAssistantMessage("First complete");
+		},
+		fauxAssistantMessage("Control follow-up complete"),
+	]);
+	await session.submit("typed", "User run", "followUp");
+	await started;
+	await session.submit("control:send:call-1", "Queued control follow-up", "followUp");
+	assert.ok(!origins.includes(true), "a queued follow-up must not suppress the user's current completion");
+	finishFirst();
+	await admitted;
+	await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
+	assert.deepEqual(origins, [false, true]);
 });

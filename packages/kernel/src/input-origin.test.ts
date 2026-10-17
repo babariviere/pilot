@@ -14,6 +14,9 @@ test("request IDs map to automatic origins, and user input has none", () => {
 	assert.equal(inputOrigin("mission:send:abc"), "coordinator");
 	assert.equal(inputOrigin("mission:draft:abc"), "mission");
 	assert.equal(inputOrigin("mission-notice:4"), "mission");
+	assert.equal(inputOrigin("watch-notice:4"), "watch");
+	assert.equal(inputOrigin("control:send:call"), "control");
+	assert.equal(inputOrigin("control:start:call"), "control");
 	assert.equal(inputOrigin("pr-follow-up:abc"), "pullRequest");
 });
 
