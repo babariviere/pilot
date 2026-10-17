@@ -72,7 +72,8 @@ jobs:
           jj --version
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
-      - run: pnpm test -- --lane=portable
+      # --timings lists the slowest test files, which decide how long this job takes.
+      - run: pnpm test -- --lane=portable --timings
 
   # One macOS job per run: native Node and packaging tests, then Swift tests. The free plan runs only a few
   # macOS jobs at once, so separate jobs mostly waited in the queue. PRs reuse the Swift test build for the
