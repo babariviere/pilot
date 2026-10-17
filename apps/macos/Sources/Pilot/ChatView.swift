@@ -411,6 +411,7 @@ struct ChatView: View {
                 .background(TranscriptScrollObserver(state: scroll, bottomPadding: bottomPadding))
             }
             .environment(\.transcriptContentPrepared, preparedAction.callback)
+            .environment(\.transcriptComposer, session.isReadOnlyHistory ? nil : composer)
             .environment(\.transcriptMessageToggled, scroll.messageToggled)
             .environment(\.transcriptRewind, session.isReadOnlyHistory ? nil : rewind)
             // New rows need no scroll request: while following, the native observer pins the bottom when the

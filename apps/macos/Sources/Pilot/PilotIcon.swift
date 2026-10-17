@@ -28,8 +28,8 @@ enum PilotIcon: String, CaseIterable {
 
     // MARK: Actions
 
-    case compose, add, addTo, remove, delete, dismiss, clearField, more, edit, copy, share, openExternal, refresh,
-        send, stop, pin, unpin, newProject
+    case compose, add, addTo, remove, delete, dismiss, clearField, more, edit, copy, share, openExternal, expand,
+        refresh, send, stop, pin, unpin, newProject
 
     // MARK: Disclosure and selection
 
@@ -90,6 +90,7 @@ extension PilotIcon {
         case .copy: "doc.on.doc"
         case .share: "square.and.arrow.up"
         case .openExternal: "arrow.up.right"
+        case .expand: "arrow.up.left.and.arrow.down.right"
         case .refresh: "arrow.clockwise"
         case .send: "arrow.up"
         case .stop: "stop.fill"
@@ -252,6 +253,7 @@ extension PilotIcon {
         case .copy: "Copy to the pasteboard. Swap to done while confirming."
         case .share: "Share or export."
         case .openExternal: "Open in the browser or another app."
+        case .expand: "Open inline content, such as an artifact, in its larger viewer."
         case .refresh: "Reload, or retry a failed step."
         case .send: "Send a message or post, inside the circular composer button."
         case .stop: "Stop the running agent, inside the circular composer button. Filled because it sits on a filled control."

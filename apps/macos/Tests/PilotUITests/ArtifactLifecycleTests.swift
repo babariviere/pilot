@@ -42,15 +42,17 @@ import WebKit
         // bringing it into view again and repeating the teardown/re-expansion cycle.
         scroll.contentView.scroll(to: NSPoint(x: 0, y: 1400))
         scroll.reflectScrolledClipView(scroll.contentView)
+        // Taller than the inline ceiling, the page scrolls inside the card, so a classic scroller can
+        // narrow its measured width. Card width comes from the reading column; only height moves the row.
         for _ in 0..<30 {
             try await Task.sleep(for: .milliseconds(50))
-            #expect(ArtifactInlineCache.contentSize(for: reference) == retained)
+            #expect(ArtifactInlineCache.contentSize(for: reference)?.height == retained.height)
         }
         if artifactDescendant(WKWebView.self, in: host) != nil { mounts += 1 }
         scroll.contentView.scroll(to: .zero)
         scroll.reflectScrolledClipView(scroll.contentView)
         try await Task.sleep(for: .milliseconds(150))
-        #expect(ArtifactInlineCache.contentSize(for: reference) == retained)
+        #expect(ArtifactInlineCache.contentSize(for: reference)?.height == retained.height)
     }
     #expect(mounts == 3, "Exercise live WebKit mounts, not just cached placeholders")
 }

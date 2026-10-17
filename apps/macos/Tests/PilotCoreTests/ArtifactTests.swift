@@ -110,21 +110,28 @@ private let artifactJSON = #"{"id":"a","sessionId":"s","title":"Chart","revision
     }
 }
 
-@Test func inlineArtifactPreviewsGrowWithChatWidthAndStayBounded() {
+@Test func inlineArtifactPreviewsFillTheReadingColumnAndStayBounded() {
+    #expect(ArtifactViewerLayout.inlineColumnWidth == 760)
     #expect(ArtifactViewerLayout.inlineSize(availableWidth: 760) == CGSize(width: 760, height: 570))
-    #expect(ArtifactViewerLayout.inlineSize(availableWidth: 1200) == CGSize(width: 1200, height: 720))
-    #expect(ArtifactViewerLayout.inlineSize(availableWidth: 1800) == CGSize(width: 1200, height: 720))
+    // Never wider than the reading column, however wide the window.
+    #expect(ArtifactViewerLayout.inlineSize(availableWidth: 1200) == CGSize(width: 760, height: 570))
+    #expect(ArtifactViewerLayout.inlineSize(availableWidth: 1800) == CGSize(width: 760, height: 570))
+    #expect(ArtifactViewerLayout.inlineSize(availableWidth: CGFloat.infinity) == CGSize(width: 760, height: 570))
     #expect(ArtifactViewerLayout.inlineSize(availableWidth: 320) == CGSize(width: 320, height: 360))
     #expect(ArtifactViewerLayout.inlineSize(availableWidth: 0) == CGSize(width: 0, height: 360))
 }
 
-@Test func inlineArtifactsGrowForTallAndWideContentWithoutTakingUnavailableSpace() {
-    let tall = CGSize(width: 1000, height: 1400)
-    #expect(ArtifactViewerLayout.inlineSize(availableWidth: 1000, contentSize: tall) == tall)
-    #expect(ArtifactViewerLayout.inlineSize(availableWidth: 1800, contentSize: CGSize(width: 1650, height: 900))
-            == CGSize(width: 1650, height: 900))
+@Test func inlineArtifactsHugContentHeightButNeverWidenPastTheColumn() {
+    #expect(ArtifactViewerLayout.inlineSize(availableWidth: 760, contentSize: CGSize(width: 760, height: 700))
+            == CGSize(width: 760, height: 700))
+    // Wide content reflows to the column (or scrolls sideways inside); it never widens the card.
+    #expect(ArtifactViewerLayout.inlineSize(availableWidth: 1800, contentSize: CGSize(width: 1650, height: 600))
+            == CGSize(width: 760, height: 600))
+    // Taller content stops at the 720 pt ceiling and scrolls inside the card.
+    #expect(ArtifactViewerLayout.inlineSize(availableWidth: 1000, contentSize: CGSize(width: 1000, height: 1400))
+            == CGSize(width: 760, height: 720))
     #expect(ArtifactViewerLayout.inlineSize(availableWidth: 760, contentSize: CGSize(width: 5000, height: 9000))
-            == CGSize(width: 760, height: 1600))
+            == CGSize(width: 760, height: 720))
     #expect(ArtifactViewerLayout.inlineSize(availableWidth: 760, contentSize: CGSize(width: CGFloat.infinity, height: CGFloat.nan))
             == ArtifactViewerLayout.inlineSize(availableWidth: 760))
 }
@@ -136,7 +143,7 @@ private let artifactJSON = #"{"id":"a","sessionId":"s","title":"Chart","revision
         for height: CGFloat in [1, 48, 120, 240, 1600, 9000] {
             let measured = ArtifactViewerLayout.inlineSize(availableWidth: width, contentSize: CGSize(width: 240, height: height))
             #expect(measured.width == fallback.width)
-            #expect(measured.height == min(1600, max(48, height)))
+            #expect(measured.height == min(720, max(48, height)))
         }
         for invalid in [CGSize.zero, CGSize(width: 240, height: -1), CGSize(width: CGFloat.nan, height: 120)] {
             #expect(ArtifactViewerLayout.inlineSize(availableWidth: width, contentSize: invalid) == fallback)
@@ -144,12 +151,13 @@ private let artifactJSON = #"{"id":"a","sessionId":"s","title":"Chart","revision
     }
 }
 
-@Test func onlyMeasuredHTMLTallerThanTheInlineCeilingIsClipped() {
-    #expect(!ArtifactViewerLayout.inlineClipsHeight(contentSize: nil))
-    #expect(!ArtifactViewerLayout.inlineClipsHeight(contentSize: CGSize(width: 760, height: 1600)))
-    #expect(ArtifactViewerLayout.inlineClipsHeight(contentSize: CGSize(width: 760, height: 1601)))
-    #expect(!ArtifactViewerLayout.inlineClipsHeight(contentSize: CGSize(width: 760, height: CGFloat.nan)))
-    #expect(!ArtifactViewerLayout.inlineClipsHeight(contentSize: CGSize(width: 760, height: 9000), image: true))
+@Test func onlyMeasuredHTMLTallerThanTheInlineCeilingScrollsInside() {
+    #expect(ArtifactViewerLayout.inlineMaxHeight == 720)
+    #expect(!ArtifactViewerLayout.inlineScrollsInside(contentSize: nil))
+    #expect(!ArtifactViewerLayout.inlineScrollsInside(contentSize: CGSize(width: 760, height: 720)))
+    #expect(ArtifactViewerLayout.inlineScrollsInside(contentSize: CGSize(width: 760, height: 721)))
+    #expect(!ArtifactViewerLayout.inlineScrollsInside(contentSize: CGSize(width: 760, height: CGFloat.nan)))
+    #expect(!ArtifactViewerLayout.inlineScrollsInside(contentSize: CGSize(width: 760, height: 9000), image: true))
 }
 
 @Test func compactMeasurementsAcceptShrinkingContentAndIgnoreHostOnlyChanges() {
@@ -170,11 +178,13 @@ private let artifactJSON = #"{"id":"a","sessionId":"s","title":"Chart","revision
             == CGSize(width: 360, height: 720))
     #expect(ArtifactViewerLayout.inlineSize(availableWidth: 760, contentSize: CGSize(width: 2000, height: 6000), image: true)
             == CGSize(width: 240, height: 720))
-    // Wide images are bounded by the chat width.
+    // Wide images are bounded by the reading column.
     #expect(ArtifactViewerLayout.inlineSize(availableWidth: 800, contentSize: CGSize(width: 1600, height: 1000), image: true)
-            == CGSize(width: 800, height: 500))
+            == CGSize(width: 760, height: 475))
     #expect(ArtifactViewerLayout.inlineSize(availableWidth: 1800, contentSize: CGSize(width: 1600, height: 1000), image: true)
-            == CGSize(width: 1152, height: 720))
+            == CGSize(width: 760, height: 475))
+    #expect(ArtifactViewerLayout.inlineSize(availableWidth: 600, contentSize: CGSize(width: 1600, height: 1000), image: true)
+            == CGSize(width: 600, height: 375))
     // Small images keep their natural size, with a clickable minimum.
     #expect(ArtifactViewerLayout.inlineSize(availableWidth: 1800, contentSize: CGSize(width: 200, height: 100), image: true)
             == CGSize(width: 200, height: 100))

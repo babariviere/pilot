@@ -73,7 +73,7 @@ func artifactHeightRespectsNestedClippingWhileKeepingVisibleOverflow(kind: Artif
                 let sample = try await coordinator.readContentSize(view, kind: kind)
                 let measured = try #require(sample)
                 #expect(measured.height == 120, "\(kind) inline=\(inline) overflow=\(overflow)")
-                #expect(!ArtifactViewerLayout.inlineClipsHeight(contentSize: measured))
+                #expect(!ArtifactViewerLayout.inlineScrollsInside(contentSize: measured))
                 let fitted = ArtifactViewerLayout.inlineSize(availableWidth: width, contentSize: measured)
                 #expect(fitted == CGSize(width: width, height: 120))
                 view.setFrameSize(fitted)

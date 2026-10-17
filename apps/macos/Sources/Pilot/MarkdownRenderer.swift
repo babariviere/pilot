@@ -261,3 +261,15 @@ extension EnvironmentValues {
         set { self[TranscriptContentPreparedKey.self] = newValue }
     }
 }
+
+private struct TranscriptComposerKey: EnvironmentKey {
+    static let defaultValue: ComposerState? = nil
+}
+
+extension EnvironmentValues {
+    /// The chat's composer, for content that hands keyboard focus back to it (Escape in an inline artifact).
+    var transcriptComposer: ComposerState? {
+        get { self[TranscriptComposerKey.self] }
+        set { self[TranscriptComposerKey.self] = newValue }
+    }
+}
