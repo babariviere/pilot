@@ -139,6 +139,50 @@ test("trailing Thread, Reactions and Files lines are metadata in any order; atta
 		SlackFormatChanged,
 	);
 });
+test("forwarded messages and app notifications after metadata are attachment content", () => {
+	const messages = `Channel: #bugs (C000000002)
+
+=== Message from Sam Rivera <sam.rivera@example.test> (U000000011) at 2026-10-14 09:12:40 CEST ===
+Message TS: 1791961960.000201
+
+Can someone answer this?
+Thread: 2 replies (latest: 2026-10-14 09:30:02 CEST)
+Reactions: white_check_mark (1)
+Forwarded message from Alex Chen (https://example.slack.com/archives/C000000003/p1791961000000100)
+
+
+=== Message from Alex Chen <alex.chen@example.test> (U000000012) at 2026-10-14 09:05:00 CEST ===
+Message TS: 1791961500.000202
+
+Heads up on this change.
+Thread: 1 replies (latest: 2026-10-14 09:06:00 CEST)
+Reactions: eyes (2)
+App notification from App (https://github.com/example/repo/pull/7)
+
+The sync now batches writes.
+
+*Changes*
+
+• Smaller batches
+
+`;
+	const page = parseSlackPage({ messages, pagination_info: "There are no more messages available.\n" }, 8);
+	assert.deepEqual(
+		page.messages.map(({ ts, replies, text }) => ({ ts, replies, text })),
+		[
+			{
+				ts: "1791961960.000201",
+				replies: 2,
+				text: "Can someone answer this?\nForwarded message from Alex Chen (https://example.slack.com/archives/C000000003/p1791961000000100)",
+			},
+			{
+				ts: "1791961500.000202",
+				replies: 1,
+				text: "Heads up on this change.\nApp notification from App (https://github.com/example/repo/pull/7)\n\nThe sync now batches writes.\n\n*Changes*\n\n• Smaller batches",
+			},
+		],
+	);
+});
 test("thread messages drop trailing Reactions and Files lines and may be file only", () => {
 	const thread = parseSlackThread(slackMetadataThreadFixture, "1791961960.000201", 30);
 	assert.deepEqual(

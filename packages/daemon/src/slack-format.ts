@@ -26,6 +26,9 @@ const TS = /^\d{1,12}\.\d{6}$/;
 export const SLACK_SEARCH_CHARS = 8000;
 const METADATA = /^(Thread|Reactions|Files): /;
 const THREAD = /^Thread: (\d+) repl(?:y|ies)(?: \(latest: [^\n]+\))?[ \t]*$/;
+/** First line of an attachment block: bot attachments, forwarded messages and app notifications (for example a
+ * GitHub pull request posted by an app). */
+const ATTACHMENT = /^(?:Attachment: |(?:Forwarded message|App notification) from [^\n]+$)/;
 export function slackTimestamp(value: unknown): value is string {
 	return typeof value === "string" && TS.test(value);
 }
@@ -50,8 +53,8 @@ export function parseSlackMessageLink(value: unknown): { channel: string; ts: st
 }
 
 /** Messages end with known metadata lines (Thread, Reactions, Files) in any order, at most once each.
- * Bot attachments follow them as "Attachment: …" blocks; those are message content and stay in the text.
- * Returns undefined for a malformed Thread line. */
+ * Attachment blocks ("Attachment: …", "Forwarded message from …", "App notification from …") follow them; those
+ * are message content and stay in the text. Returns undefined for a malformed Thread line. */
 function splitMetadata(body: string, thread: boolean): { text: string; replies: number } | undefined {
 	const lines = body.split("\n");
 	const seen = new Set<string>();
@@ -78,7 +81,7 @@ function splitMetadata(body: string, thread: boolean): { text: string; replies: 
 		}
 		return start;
 	};
-	let attachments = lines.findIndex((line) => line.startsWith("Attachment: "));
+	let attachments = lines.findIndex((line) => ATTACHMENT.test(line));
 	if (attachments < 0) attachments = lines.length;
 	const tail = strip(attachments, lines.length);
 	const head = strip(0, attachments);
