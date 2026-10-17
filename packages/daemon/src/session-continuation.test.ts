@@ -106,6 +106,7 @@ async function fixture(t: TestContext) {
 	}));
 	const workers: FakeWorker[] = [];
 	const managers: SessionManager[] = [];
+	const stores: MissionStore[] = [];
 	const manager = async (bridge?: SessionMissionBridge) => {
 		const sessions = new SessionManager(
 			home,
@@ -153,9 +154,17 @@ async function fixture(t: TestContext) {
 	const sessions = await manager();
 	t.after(async () => {
 		for (const entry of managers) await entry.shutdown();
+		// Close disk owners before deleting their home, not in a later t.after hook.
+		for (const store of stores) {
+			try {
+				await store.durable();
+			} finally {
+				store.close();
+			}
+		}
 		await rm(home, { recursive: true, force: true });
 	});
-	return { home, id, dir, sessions, workers, projects, models, manager };
+	return { home, id, dir, sessions, workers, projects, models, manager, stores };
 }
 
 test("handoff is bounded plain visible text, excludes compacted context, thinking and tool metadata", () => {
@@ -339,7 +348,7 @@ for (const phase of ["target-metadata", "mission-transaction", "after-mission-tr
 	test(`journal rolls forward after ${phase} crash before either worker may reopen`, async (t) => {
 		const f = await fixture(t);
 		const store = new MissionStore(join(f.home, "missions.sqlite"));
-		t.after(() => store.close());
+		f.stores.push(store);
 		const mission = store.create({ projectId: "p", title: "Work", tasks: [{ title: "One" }, { title: "Two" }] });
 		store.join(f.id, mission.id);
 		store.claimStartTasks(mission.id, ["1", "2"], f.id);

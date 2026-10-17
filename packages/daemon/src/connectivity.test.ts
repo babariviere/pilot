@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { EventEmitter, once } from "node:events";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -98,23 +99,32 @@ test("a failed check alone never pauses agents; a failed request confirmed by a 
 	});
 	const detector = new ScheduleDetection();
 	const published: boolean[] = [];
-	const service = new ConnectivityService(file, detector, (online) => published.push(online));
+	const publications = new EventEmitter();
+	const service = new ConnectivityService(file, detector, (online) => {
+		published.push(online);
+		publications.emit(online ? "online" : "offline");
+	});
 	t.after(async () => {
 		await service.stop();
 		await rm(root, { recursive: true, force: true });
 	});
 	const state = async () => JSON.parse(await readFile(file, "utf8")) as ConnectivityState;
 	await service.start();
+	assert.equal(await detector.refreshOnline(), true, "finish the startup check before simulating an outage");
 	connected = false;
-	await detector.refreshOnline();
-	await delay(20);
+	assert.equal(await detector.refreshOnline(), false);
 	assert.equal((await state()).online, true, "blocked check hosts without a failed request change nothing");
+	const paused = once(publications, "offline");
 	await writeFile(`${file}.check`, "");
-	await until(async () => !(await state()).online);
+	// The atomic rename can be visible to readFile before save() calls publish(). Await both consumers.
+	await paused;
+	assert.equal((await state()).online, false);
 	assert.equal(published.at(-1), false);
+	const resumed = once(publications, "online");
 	connected = true;
 	await detector.refreshOnline();
-	await until(async () => (await state()).online);
+	await resumed;
+	assert.equal((await state()).online, true);
 	assert.equal(published.at(-1), true);
 });
 
