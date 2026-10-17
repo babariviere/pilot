@@ -612,6 +612,7 @@ struct TrackedItemRow: View {
     /// Called after a dismiss or link, so lists can refresh.
     var changed: () -> Void = {}
     @EnvironmentObject private var model: AppModel
+    @Environment(\.keyboardListHighlight) private var keyboardHighlight
 
     var body: some View {
         let client = endpoint
@@ -626,6 +627,8 @@ struct TrackedItemRow: View {
         let size = actions.size(of: item)
         let shownSize = TrackedItemText.shownSize(size, item: item)
         let suggestsMission = TrackedItemText.suggestsMission(size, item: item)
+        // The keyboard-highlighted row shows its start and more buttons too, so they never need hovering.
+        let keyboardActive = keyboardHighlight.focused && keyboardHighlight.id == "tracked:" + item.id
         HoverRow(verticalPadding: 6) { hovered in
             HStack(spacing: 10) {
                 Button(action: openInApp) {
@@ -663,12 +666,23 @@ struct TrackedItemRow: View {
                     LinearSizeChip(size: shownSize, setByUser: actions.sizeSetByUser(item),
                                    saving: actions.isSavingSize(item)) { correctSize($0) }
                 }
-                trailing(link: link, hovered: hovered, busy: busy, suggestsMission: suggestsMission,
+                trailing(link: link, hovered: hovered || keyboardActive, busy: busy, suggestsMission: suggestsMission,
                          sized: shownSize != nil)
             }
         }
         .contextMenu { menu(link: link, suggestsMission: suggestsMission) }
-        .keyboardListItem("tracked:" + item.id) { openInApp() }
+        .keyboardListItem("tracked:" + item.id,
+                          target: .trackedItem(id: item.id, title: "\(TrackedItemText.identifier(item)) \(item.title)",
+                                               linked: link != nil)) { openInApp() }
+        .onReceive(model.trackedItemRequests.$latest) { request in
+            guard let command = model.trackedItemRequests.take(request, for: item.id) else { return }
+            switch command {
+            case .startChat: actions.startChat(item, app: model, context: hostContext)
+            case .startMission: actions.startMission(item, app: model, context: hostContext)
+            case .openLinked: if let link { openLink(link.target) }
+            case .toggleDismissed: actions.setDismissed(item, !item.dismissed, client: endpoint, done: changed)
+            }
+        }
         .onChange(of: item.linearSizeOverride) { actions.settleSize(item) }
         // The suggested start comes first.
         .accessibilityAction(named: suggestsMission ? "Start mission" : "Start chat") { start(mission: suggestsMission) }
@@ -1211,6 +1225,9 @@ struct TrackedInboxSheet: View {
                         }
                     }
                     .padding(.vertical, 4)
+                    // Opened by G L or Linear and Slack…: arrows move, Return opens; the highlighted row shows its
+                    // Start and actions buttons. ⌘K offers the same rows' actions on the Inbox and Overview.
+                    .keyboardList(region: nil, focusOnAppear: true)
                 }
             }
         }

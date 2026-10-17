@@ -47,6 +47,10 @@ final class ComposerState: ObservableObject {
     @Published var queueEditorHeight: CGFloat = 18
     @Published var queueFocus = UUID()
     @Published var composerFocus = UUID()
+    /// Keyboard requests from ⌘K: fold or unfold the tray's task and subagent lists, or open "At a time…".
+    @Published var tasksToggle = 0
+    @Published var subagentsToggle = 0
+    @Published var scheduleAtTime = 0
 
     var trimmed: String { draftState.trimmed }
     var mutatingQueue: Bool { savingQueueEdit || removingQueuedMessage != nil }
@@ -142,6 +146,7 @@ final class ComposerState: ObservableObject {
 /// (`ComposerCorner`): the same ripple, fainter and half as fast while only background jobs run, nothing when idle.
 struct Composer: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.hostViewContext) private var hostContext
     @ObservedObject var state: ComposerState
     let working: Bool
     let hostAvailable: Bool
@@ -254,11 +259,11 @@ struct Composer: View {
                 if showsStatusLines || !systemMessages.isEmpty {
                     VStack(spacing: 2) {
                         if let session, !todos.isEmpty {
-                            TasksStrip(todos: todos, sessionId: session.id)
+                            TasksStrip(todos: todos, sessionId: session.id, toggleRequest: state.tasksToggle)
                         }
                         if showsSubagents, let session {
                             if !todos.isEmpty { trayDivider }
-                            SubagentsStrip(session: session)
+                            SubagentsStrip(session: session, toggleRequest: state.subagentsToggle)
                         }
                         if !systemMessages.isEmpty {
                             if showsStatusLines { trayDivider }
@@ -400,7 +405,8 @@ struct Composer: View {
     /// What the palette's composer commands read, so they re-register when it changes.
     private var commandsRevision: String {
         [session?.id, session?.model, session?.thinking, session?.state, "\(working)", "\(queuedMessages.count)",
-         "\(session?.isSubscriptionPaused == true)", "\(modelPicker.models.models.count)", "\(hostAvailable)"]
+         "\(session?.isSubscriptionPaused == true)", "\(modelPicker.models.models.count)", "\(hostAvailable)",
+         "\(todos.count)", (session?.subagents ?? []).map(\.name).joined(separator: ",")]
             .map { $0 ?? "" }.joined(separator: "|")
     }
 
@@ -422,6 +428,27 @@ struct Composer: View {
                 // Checked when chosen: the draft may have changed since the palette opened.
                 guard hostAvailable, state.canSend(changingModel: modelPicker.changing) else { return }
                 onSchedule(state.attachments.message(text: state.trimmed), when)
+            }
+            commands.append(ComposerCommandText.sendLaterAtTime { state.scheduleAtTime += 1 })
+        }
+        if session != nil, !todos.isEmpty {
+            commands.append(ComposerCommand(id: "tray-tasks", title: "Show or hide the task list",
+                                            keywords: ["todo", "tasks", "tray", "progress"], icon: .tasks) {
+                state.tasksToggle += 1
+            })
+        }
+        if showsSubagents, let session {
+            commands.append(ComposerCommand(id: "tray-subagents", title: "Show or hide the subagent list",
+                                            keywords: ["subagents", "agents", "tray"], icon: .subagents) {
+                state.subagentsToggle += 1
+            })
+            // As the tray rows do: the Agents tab on that subagent's transcript.
+            let reference = hostContext?.ref(.session, session.id).storageKey ?? session.id
+            for subagent in session.subagents ?? [] {
+                commands.append(ComposerCommand(id: "subagent:\(subagent.name)", title: "Open subagent: \(subagent.name)",
+                                                keywords: ["subagent", "agent", subagent.task], icon: .subagents) {
+                    AppModel.shared.openSubagent(subagent.name, in: reference)
+                })
             }
         }
         commands.append(ComposerCommandText.pasteImage { _ = state.attachments.paste(from: .general) })
@@ -525,7 +552,8 @@ private struct ComposerSendLater: View {
     let schedule: (ScheduleWhen) -> Void
 
     var body: some View {
-        SendLaterMenu(disabled: !state.canSend(changingModel: modelPicker.changing), schedule: schedule)
+        SendLaterMenu(disabled: !state.canSend(changingModel: modelPicker.changing), schedule: schedule,
+                      atTimeRequest: state.scheduleAtTime)
     }
 }
 

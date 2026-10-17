@@ -126,6 +126,8 @@ struct ScheduleStateIcon: View {
 struct SendLaterMenu: View {
     var disabled = false
     let schedule: (ScheduleWhen) -> Void
+    /// Bumped from ⌘K to open "At a time…" without the menu.
+    var atTimeRequest = 0
     @State private var choosing: ScheduleTrigger?
 
     var body: some View {
@@ -145,6 +147,7 @@ struct SendLaterMenu: View {
         .disabled(disabled)
         .help("Send later")
         .accessibilityLabel("Send later")
+        .onChange(of: atTimeRequest) { _, _ in if !disabled { choosing = .at } }
         .sheet(isPresented: Binding(get: { choosing != nil }, set: { if !$0 { choosing = nil } })) {
             ScheduleSheet(title: "Send later", confirmTitle: "Schedule", trigger: choosing ?? .at) { when in schedule(when) }
         }

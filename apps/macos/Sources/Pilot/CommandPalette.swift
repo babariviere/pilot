@@ -95,6 +95,18 @@ struct CommandPaletteCatalog {
         if case let .missionTask(missionId, taskId) = model.keyboardTarget {
             return missionTaskActions(missionId: missionId, taskId: taskId)
         }
+        if case let .trackedItem(id, title, linked) = model.keyboardTarget {
+            return trackedItemActions(id: id, title: title, linked: linked)
+        }
+        if let selection = model.keyboard.selectionCommands, !selection.commands.isEmpty {
+            // A board's selection, such as the Slack triage message, when no list row is highlighted.
+            return ("Selected: \(selection.title)", selection.commands.map { command in
+                CommandPaletteEntry(item: CommandPaletteItem(id: "target:selection:\(command.id)", kind: .action,
+                                                             title: command.title, keywords: command.keywords),
+                                    icon: command.icon, suffix: command.current ? "Current" : nil,
+                                    detail: command.detail, perform: command.perform)
+            })
+        }
         guard let target = model.keyboardTargetSession, target.session.id != model.selectedSession?.id else { return nil }
         let model = model
         let entries = chatActions(target.session, reference: target.reference).map { entry in

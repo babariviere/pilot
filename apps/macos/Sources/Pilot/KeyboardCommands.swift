@@ -6,6 +6,8 @@ import SwiftUI
 enum KeyboardTarget: Equatable {
     case session(id: String, reference: HostResourceRef?)
     case missionTask(missionId: String, taskId: String)
+    /// A Linear ticket or Slack message row, named for the palette's label.
+    case trackedItem(id: String, title: String, linked: Bool)
 }
 
 extension AppModel {
