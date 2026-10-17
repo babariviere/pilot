@@ -197,12 +197,26 @@ final class DaemonController: ObservableObject {
         for key in ["PILOT_HOME", "PILOT_AGENT_DIR"] {
             if let value = ProcessInfo.processInfo.environment[key] { variables[key] = value }
         }
-        let plist: [String: Any] = [
+        let plist = Self.launchAgentDefinition(node: node, daemonDirectory: daemonDir, home: home,
+                                               logURL: logURL, environment: variables)
+        let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+        if (try? Data(contentsOf: plistURL)) != data {
+            // A changed definition only applies after reloading the agent.
+            _ = try? await run("/bin/launchctl", ["bootout", "\(domain)/\(Self.label)"])
+            try data.write(to: plistURL, options: .atomic)
+        }
+    }
+
+    static func launchAgentDefinition(node: String, daemonDirectory: URL, home: URL,
+                                      logURL: URL, environment: [String: String]) -> [String: Any] {
+        [
             "Label": Self.label,
             // Node strips pilotd's erasable TypeScript natively; a loader hook would slow every import.
-            "ProgramArguments": [node, "src/main.ts"],
-            "WorkingDirectory": daemonDir.path,
-            "EnvironmentVariables": variables,
+            "ProgramArguments": [node, daemonDirectory.appending(path: "src/main.ts").path],
+            // Sparkle moves and removes the old bundle. Neither pilotd nor its warm workers may
+            // inherit a cwd inside it, even when the replacement exists at the original path.
+            "WorkingDirectory": home.path,
+            "EnvironmentVariables": environment,
             "RunAtLoad": true,
             "KeepAlive": true,
             "ThrottleInterval": 10,
@@ -212,12 +226,6 @@ final class DaemonController: ObservableObject {
             "StandardOutPath": logURL.path,
             "StandardErrorPath": logURL.path,
         ]
-        let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
-        if (try? Data(contentsOf: plistURL)) != data {
-            // A changed definition only applies after reloading the agent.
-            _ = try? await run("/bin/launchctl", ["bootout", "\(domain)/\(Self.label)"])
-            try data.write(to: plistURL, options: .atomic)
-        }
     }
 
     /// GUI apps get launchd's minimal PATH, so ask login shells for the user's PATH. Try the user's
