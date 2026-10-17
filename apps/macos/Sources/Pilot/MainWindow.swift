@@ -1,5 +1,6 @@
 import AppKit
 import PilotCore
+import PilotTelemetry
 import SwiftUI
 
 struct MainWindow: View {
@@ -311,6 +312,13 @@ struct SessionMoreActions: View {
                     Label(session.isControl ? "Ask about Pilot" : "Diagnose this chat", icon: PilotIcon.bug)
                 }
                 .disabled(model.isDiagnosing(session, context: hostContext))
+                .onAppear {
+                    guard !session.isControl else { return }
+                    let availability: FeatureAvailability = (hostContext?.available ?? model.client.connected)
+                        ? .available : .disconnected
+                    PilotTelemetry.shared.recordFeature(.eligibility(.diagnoseChat, availability))
+                    PilotTelemetry.shared.recordFeature(.exposure(.diagnoseChat))
+                }
             }
         } label: {
             PilotSymbol(PilotIcon.more, context: .toolbar)

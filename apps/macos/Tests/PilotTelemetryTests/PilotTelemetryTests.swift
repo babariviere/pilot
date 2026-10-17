@@ -1,6 +1,7 @@
 import Foundation
 import OpenTelemetryProtocolExporterHttp
 import OpenTelemetrySdk
+import PilotCore
 import PilotTelemetry
 import Testing
 
@@ -75,6 +76,80 @@ private func configuration(exporter: any SpanExporter) -> PilotTelemetryConfigur
     #expect(recorded?.resource.attributes["service.name"] == .string("pilot.app"))
     #expect(recorded?.resource.attributes["pilot.schema.version"] == .int(1))
     #expect(recorded?.resource.attributes["host.name"] == nil)
+    await telemetry.shutdown()
+}
+
+@Test func featureEventsRequireAnalyticsConsentAndUseAnIsolatedIdentity() async throws {
+    let exporter = MemorySpanExporter()
+    let telemetry = PilotTelemetry(configuration: PilotTelemetryConfiguration(
+        enabled: true, serviceVersion: "1.45.1", environment: .test, hostKind: .local,
+        hostID: "host_id_12345678901234", analyticsID: "analytics_123456789012",
+        exporter: exporter
+    ))
+    telemetry.startSpan(.chatOpen).finish()
+    telemetry.recordFeature(.eligibility(.diagnoseChat, .available))
+    telemetry.recordFeature(.eligibility(.diagnoseChat, .available))
+    telemetry.recordFeature(.exposure(.diagnoseChat))
+    telemetry.recordFeature(.exposure(.diagnoseChat))
+    telemetry.recordFeature(.attempt(.diagnoseChat))
+    let success = try #require(FeatureEvent.outcome(.diagnoseChat, .success, reason: .none))
+    telemetry.recordFeature(success)
+    await telemetry.flush()
+
+    let operational = try #require(exporter.spans.first(where: { $0.name == "pilot.chat.open" }))
+    #expect(operational.resource.attributes["pilot.host.id"] == .string("host_id_12345678901234"))
+    #expect(operational.resource.attributes["pilot.analytics.id"] == nil)
+    let features = exporter.spans.filter { $0.name == "pilot.feature" }
+    #expect(features.count == 4)
+    #expect(features.allSatisfy { $0.resource.attributes["pilot.analytics.id"] == .string("analytics_123456789012") })
+    #expect(features.allSatisfy { $0.resource.attributes["pilot.host.id"] == nil })
+    #expect(features.allSatisfy {
+        $0.resource.attributes["service.instance.id"] != operational.resource.attributes["service.instance.id"]
+    })
+    #expect(features.contains { $0.attributes["pilot.feature.stage"] == .string("outcome") &&
+        $0.attributes["pilot.feature.outcome"] == .string("success") })
+    await telemetry.shutdown()
+
+    let withoutConsent = MemorySpanExporter()
+    let disabled = PilotTelemetry(configuration: configuration(exporter: withoutConsent))
+    disabled.recordFeature(.exposure(.slackTriage))
+    await disabled.flush()
+    #expect(withoutConsent.spans.isEmpty)
+    await disabled.shutdown()
+}
+
+@Test func invalidAnalyticsIdentityFailsClosed() throws {
+    let telemetry = PilotTelemetry()
+    #expect(throws: PilotTelemetryConfigurationError.invalidAnalyticsID) {
+        try telemetry.configure(PilotTelemetryConfiguration(
+            enabled: true, serviceVersion: "1.45.1", environment: .test, hostKind: .local,
+            analyticsID: "invalid", exporter: MemorySpanExporter()
+        ))
+    }
+}
+
+@Test func featureEventsRespectTheProcessRateCap() async {
+    let exporter = MemorySpanExporter()
+    let telemetry = PilotTelemetry(configuration: PilotTelemetryConfiguration(
+        enabled: true, serviceVersion: "1.45.1", environment: .test, hostKind: .local,
+        analyticsID: "analytics_123456789012", exporter: exporter
+    ))
+    for _ in 0 ..< featureEventProcessLimit + 2 { telemetry.recordFeature(.attempt(.slackTriage)) }
+    #expect(telemetry.stats.dropped == 2)
+    await telemetry.flush()
+    #expect(exporter.spans.filter { $0.name == "pilot.feature" }.count == featureEventProcessLimit)
+    await telemetry.shutdown()
+}
+
+@Test func consentRevocationRejectsLateSpanCompletion() async throws {
+    let exporter = MemorySpanExporter()
+    let telemetry = PilotTelemetry(configuration: configuration(exporter: exporter))
+    let active = telemetry.startSpan(.chatOpen)
+    try telemetry.configure(.disabled)
+    active.finish()
+    await Task.yield()
+    #expect(telemetry.stats.queued == 0)
+    #expect(exporter.spans.isEmpty)
     await telemetry.shutdown()
 }
 

@@ -1,5 +1,6 @@
 import Foundation
 import PilotCore
+import PilotTelemetry
 import SwiftUI
 
 struct DiagnosticRepairTarget: Identifiable {
@@ -30,7 +31,12 @@ extension AppModel {
         guard !session.isDiagnosticsSpecialist,
               let target = resourceRef(session.id, kind: .session, context: context),
               !diagnosingSessions.contains(target.storageKey) else { return }
+        let tracksFeature = !askingAboutPilot && !session.isControl
+        if tracksFeature { PilotTelemetry.shared.recordFeature(.attempt(.diagnoseChat)) }
         if let context, !context.available {
+            if tracksFeature, let event = FeatureEvent.outcome(.diagnoseChat, .unavailable, reason: .disconnected) {
+                PilotTelemetry.shared.recordFeature(event)
+            }
             sessionActionError = "Reconnect to this devbox before starting diagnostics."
             return
         }
@@ -46,6 +52,7 @@ extension AppModel {
         )
         Task {
             defer { diagnosingSessions.remove(target.storageKey) }
+            var createdSpecialist = false
             do {
                 let created: HostResourceRef
                 if target.host == localHost {
@@ -55,8 +62,21 @@ extension AppModel {
                 } else {
                     created = try await createHostedSession(request, on: target.host)
                 }
+                createdSpecialist = true
+                if tracksFeature, let event = FeatureEvent.outcome(.diagnoseChat, .success, reason: .none) {
+                    PilotTelemetry.shared.recordFeature(event)
+                }
                 try selectSession(created)
-            } catch { sessionActionError = error.localizedDescription }
+            } catch {
+                if tracksFeature, !createdSpecialist {
+                    let disconnected = target.host != localHost && !hosts.available.contains(target.host)
+                    let event = disconnected
+                        ? FeatureEvent.outcome(.diagnoseChat, .unavailable, reason: .disconnected)
+                        : FeatureEvent.outcome(.diagnoseChat, .failure, reason: .unknown)
+                    if let event { PilotTelemetry.shared.recordFeature(event) }
+                }
+                sessionActionError = error.localizedDescription
+            }
         }
     }
 

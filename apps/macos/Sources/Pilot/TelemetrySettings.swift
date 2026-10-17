@@ -25,6 +25,7 @@ enum NativeTelemetrySettings {
             environment: Bundle.main.bundleIdentifier == nil ? .development : .release,
             hostKind: .local,
             hostID: settings.hostId,
+            analyticsID: settings.productAnalytics ? settings.analyticsId : nil,
             endpoint: endpoint
         ))
     }

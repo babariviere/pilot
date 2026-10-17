@@ -28,6 +28,7 @@ let package = Package(
         .target(
             name: "PilotTelemetry",
             dependencies: [
+                "PilotCore",
                 .product(name: "OpenTelemetryApi", package: "opentelemetry-swift-core"),
                 .product(name: "OpenTelemetrySdk", package: "opentelemetry-swift-core"),
                 .product(name: "OpenTelemetryProtocolExporterHTTP", package: "opentelemetry-swift"),
@@ -60,6 +61,7 @@ let package = Package(
         .testTarget(
             name: "PilotTelemetryTests",
             dependencies: [
+                "PilotCore",
                 "PilotTelemetry",
                 .product(name: "OpenTelemetrySdk", package: "opentelemetry-swift-core"),
                 .product(name: "OpenTelemetryProtocolExporterHTTP", package: "opentelemetry-swift"),

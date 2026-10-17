@@ -3,6 +3,7 @@ import OpenTelemetryApi
 import OpenTelemetryProtocolExporterCommon
 import OpenTelemetryProtocolExporterHttp
 import OpenTelemetrySdk
+import PilotCore
 
 public let pilotSwiftSpanQueueLimit = 256
 public let pilotSwiftSpanBatchLimit = 64
@@ -17,7 +18,6 @@ public enum PilotTelemetrySpanName: String, Sendable {
     case daemonRequest = "pilot.daemon.request"
     case kernelRequest = "pilot.kernel.request"
     case eventLoopStall = "pilot.event_loop.stall"
-    case feature = "pilot.feature"
 }
 
 public enum PilotTelemetryOperation: String, Sendable {
@@ -140,18 +140,22 @@ public struct PilotTelemetryConfiguration {
     public let environment: PilotTelemetryEnvironment
     public let hostKind: PilotTelemetryHostKind
     public let hostID: String?
+    /// Independent consent-scoped identifier. Present only for the isolated feature tracer.
+    public let analyticsID: String?
     public let endpoint: URL?
     public let exporter: (any SpanExporter)?
     public let httpClient: (any HTTPClient)?
 
     public init(enabled: Bool, serviceVersion: String, environment: PilotTelemetryEnvironment,
-                hostKind: PilotTelemetryHostKind, hostID: String? = nil, endpoint: URL? = nil,
+                hostKind: PilotTelemetryHostKind, hostID: String? = nil, analyticsID: String? = nil,
+                endpoint: URL? = nil,
                 exporter: (any SpanExporter)? = nil, httpClient: (any HTTPClient)? = nil) {
         self.enabled = enabled
         self.serviceVersion = serviceVersion
         self.environment = environment
         self.hostKind = hostKind
         self.hostID = hostID
+        self.analyticsID = analyticsID
         self.endpoint = endpoint
         self.exporter = exporter
         self.httpClient = httpClient
@@ -163,7 +167,7 @@ public struct PilotTelemetryConfiguration {
 }
 
 public enum PilotTelemetryConfigurationError: Error, Equatable {
-    case invalidServiceVersion, invalidHostID, unsafeEndpoint
+    case invalidServiceVersion, invalidHostID, invalidAnalyticsID, unsafeEndpoint
 }
 
 private final class TelemetryCounters: @unchecked Sendable {
@@ -176,6 +180,7 @@ private final class TelemetryCounters: @unchecked Sendable {
 
     func recordStarted() { lock.withLock { started += 1 } }
     func recordInvalid() { lock.withLock { invalid += 1 } }
+    func recordDropped() { lock.withLock { dropped += 1 } }
     func enqueue() -> Bool {
         lock.withLock {
             guard queued < pilotSwiftSpanQueueLimit else { dropped += 1; return false }
@@ -236,6 +241,8 @@ private final class BoundedSpanProcessor: SpanProcessor, @unchecked Sendable {
     private var batch: BatchSpanProcessor
     private let counters: TelemetryCounters
     private let exporter: CountedSpanExporter
+    private let lock = NSLock()
+    private var revoked = false
 
     init(exporter: any SpanExporter, counters: TelemetryCounters) {
         self.counters = counters
@@ -253,24 +260,47 @@ private final class BoundedSpanProcessor: SpanProcessor, @unchecked Sendable {
     let isEndRequired = true
     func onStart(parentContext _: SpanContext?, span _: ReadableSpan) {}
     func onEnd(span: ReadableSpan) {
-        guard counters.enqueue() else { return }
-        batch.onEnd(span: span)
+        lock.withLock {
+            guard !revoked, counters.enqueue() else { return }
+            batch.onEnd(span: span)
+        }
     }
     func shutdown(explicitTimeout: TimeInterval?) { batch.shutdown(explicitTimeout: explicitTimeout) }
     func forceFlush(timeout: TimeInterval?) { batch.forceFlush(timeout: timeout) }
-    func revoke() { exporter.revoke() }
+    func revoke() {
+        lock.withLock {
+            guard !revoked else { return }
+            revoked = true
+            exporter.revoke()
+        }
+    }
 }
 
 private final class TelemetryRuntime: @unchecked Sendable {
     let provider: TracerProviderSdk
     let tracer: any Tracer
     let processor: BoundedSpanProcessor
+    let analyticsProvider: TracerProviderSdk?
+    let analyticsTracer: (any Tracer)?
+    let analyticsProcessor: BoundedSpanProcessor?
 
-    init(provider: TracerProviderSdk, tracer: any Tracer, processor: BoundedSpanProcessor) {
+    init(provider: TracerProviderSdk, tracer: any Tracer, processor: BoundedSpanProcessor,
+         analyticsProvider: TracerProviderSdk?, analyticsTracer: (any Tracer)?,
+         analyticsProcessor: BoundedSpanProcessor?) {
         self.provider = provider
         self.tracer = tracer
         self.processor = processor
+        self.analyticsProvider = analyticsProvider
+        self.analyticsTracer = analyticsTracer
+        self.analyticsProcessor = analyticsProcessor
     }
+
+    func revoke() { processor.revoke(); analyticsProcessor?.revoke() }
+    func forceFlush(timeout: TimeInterval) {
+        provider.forceFlush(timeout: timeout)
+        analyticsProvider?.forceFlush(timeout: timeout)
+    }
+    func shutdown() { provider.shutdown(); analyticsProvider?.shutdown() }
 }
 
 private struct TraceSetter: Setter {
@@ -341,6 +371,8 @@ public final class PilotTelemetry: @unchecked Sendable {
     private let counters = TelemetryCounters()
     private var runtime: TelemetryRuntime?
     private var active: [UUID: PilotTelemetrySpan] = [:]
+    private var featureEvents = 0
+    private var featureDedupe: Set<String> = []
     private var sleeping = false
     private let propagator = W3CTraceContextPropagator()
 
@@ -350,10 +382,15 @@ public final class PilotTelemetry: @unchecked Sendable {
 
     public func configure(_ configuration: PilotTelemetryConfiguration) throws {
         let next = try Self.makeRuntime(configuration, counters: counters)
-        let previous = lock.withLock { let value = runtime; runtime = next; return value }
+        let previous = lock.withLock {
+            let value = runtime
+            runtime = nil
+            value?.revoke()
+            runtime = next
+            return value
+        }
         if let previous {
-            previous.processor.revoke()
-            DispatchQueue.global(qos: .utility).async { previous.provider.shutdown() }
+            DispatchQueue.global(qos: .utility).async { previous.shutdown() }
         }
     }
 
@@ -410,6 +447,33 @@ public final class PilotTelemetry: @unchecked Sendable {
         }
     }
 
+    /// Emits one cataloged, content-free feature event only when the isolated analytics tracer is configured.
+    public func recordFeature(_ event: FeatureEvent) {
+        guard let values = featureAttributes(event) else { counters.recordInvalid(); return }
+        var capped = false
+        let tracer = lock.withLock { () -> (any Tracer)? in
+            guard !sleeping, let tracer = runtime?.analyticsTracer else { return nil }
+            guard featureEvents < featureEventProcessLimit else { capped = true; return nil }
+            let dedupe: String?
+            switch event.stage {
+            case .eligibility:
+                dedupe = "\(event.feature.rawValue):eligibility"
+            case .exposure: dedupe = "\(event.feature.rawValue):exposure"
+            case .attempt, .outcome: dedupe = nil
+            }
+            if let dedupe, !featureDedupe.insert(dedupe).inserted { return nil }
+            featureEvents += 1
+            return tracer
+        }
+        if capped { counters.recordDropped() }
+        guard let tracer else { return }
+        let builder = tracer.spanBuilder(spanName: "pilot.feature").setNoParent()
+        for (key, value) in values { builder.setAttribute(key: key, value: value) }
+        let span = builder.startSpan()
+        counters.recordStarted()
+        span.end()
+    }
+
     /// Ends interaction spans before system sleep so wall-clock suspension is never reported as active work.
     public func applicationWillSleep() {
         let spans = lock.withLock { sleeping = true; return Array(active.values) }
@@ -420,7 +484,7 @@ public final class PilotTelemetry: @unchecked Sendable {
 
     public func flush(timeout: TimeInterval = 1) async {
         guard let runtime = lock.withLock({ runtime }) else { return }
-        await Self.runBounded(timeout: timeout) { runtime.provider.forceFlush(timeout: timeout) }
+        await Self.runBounded(timeout: timeout) { runtime.forceFlush(timeout: timeout) }
     }
 
     public func shutdown(timeout: TimeInterval = 1) async {
@@ -432,7 +496,7 @@ public final class PilotTelemetry: @unchecked Sendable {
         }
         for span in state.1 { span.finish(.interrupted, reason: .processExit) }
         guard let runtime = state.0 else { return }
-        await Self.runBounded(timeout: timeout) { runtime.provider.shutdown() }
+        await Self.runBounded(timeout: timeout) { runtime.shutdown() }
     }
 
     public static func validatedEndpoint(_ endpoint: URL) throws -> URL {
@@ -461,6 +525,31 @@ public final class PilotTelemetry: @unchecked Sendable {
         return result
     }
 
+    private func featureAttributes(_ event: FeatureEvent) -> [String: AttributeValue]? {
+        guard event.catalogVersion == featureCatalogVersion else { return nil }
+        var result: [String: AttributeValue] = [
+            "pilot.feature.catalog_version": .int(event.catalogVersion),
+            "pilot.feature.name": .string(event.feature.rawValue),
+            "pilot.feature.stage": .string(event.stage.rawValue),
+        ]
+        switch event.stage {
+        case .eligibility:
+            guard let availability = event.availability, event.outcome == nil,
+                  let reason = event.reason,
+                  reason.rawValue == (availability == .available ? "none" : availability.rawValue) else { return nil }
+            result["pilot.feature.availability"] = .string(availability.rawValue)
+            result["pilot.feature.reason"] = .string(reason.rawValue)
+        case .exposure, .attempt:
+            guard event.availability == nil, event.outcome == nil, event.reason == nil else { return nil }
+        case .outcome:
+            guard event.availability == nil, let outcome = event.outcome, let reason = event.reason,
+                  FeatureEvent.outcome(event.feature, outcome, reason: reason) != nil else { return nil }
+            result["pilot.feature.outcome"] = .string(outcome.rawValue)
+            result["pilot.feature.reason"] = .string(reason.rawValue)
+        }
+        return result
+    }
+
     private static func makeRuntime(_ configuration: PilotTelemetryConfiguration,
                                     counters: TelemetryCounters) throws -> TelemetryRuntime? {
         guard configuration.enabled else { return nil }
@@ -471,26 +560,27 @@ public final class PilotTelemetry: @unchecked Sendable {
            hostID.count != 22 || !hostID.allSatisfy({ $0.isLowercase || $0.isNumber || $0 == "_" || $0 == "-" }) {
             throw PilotTelemetryConfigurationError.invalidHostID
         }
-        let sink: any SpanExporter
-        if let exporter = configuration.exporter {
-            sink = exporter
-        } else if let endpoint = configuration.endpoint {
-            sink = OtlpHttpTraceExporter(
-                endpoint: try validatedEndpoint(endpoint),
+        if let analyticsID = configuration.analyticsID,
+           analyticsID.count != 22 ||
+           !analyticsID.allSatisfy({ $0.isLowercase || $0.isNumber || $0 == "_" || $0 == "-" }) {
+            throw PilotTelemetryConfigurationError.invalidAnalyticsID
+        }
+        guard configuration.exporter != nil || configuration.endpoint != nil else { return nil }
+        func exporter() throws -> any SpanExporter {
+            if let exporter = configuration.exporter { return exporter }
+            return OtlpHttpTraceExporter(
+                endpoint: try validatedEndpoint(configuration.endpoint!),
                 config: OtlpConfiguration(timeout: pilotSwiftSpanExportTimeout, compression: .none,
                                           headers: nil, exportAsJson: false),
-                httpClient: configuration.httpClient ?? BaseHTTPClient(),
-                envVarHeaders: nil,
-                requeueOnFailure: false
+                httpClient: configuration.httpClient ?? BaseHTTPClient(), envVarHeaders: nil, requeueOnFailure: false
             )
-        } else {
-            return nil
         }
+        let instanceID = UUID().uuidString.lowercased()
         var resource: [String: AttributeValue] = [
             "service.namespace": .string("com.babariviere.pilot"),
             "service.name": .string("pilot.app"),
             "service.version": .string(configuration.serviceVersion),
-            "service.instance.id": .string(UUID().uuidString.lowercased()),
+            "service.instance.id": .string(instanceID),
             "deployment.environment.name": .string(configuration.environment.rawValue),
             "os.type": .string("darwin"),
             "process.runtime.name": .string("swift"),
@@ -506,16 +596,34 @@ public final class PilotTelemetry: @unchecked Sendable {
             .settingAttributePerEventCountLimit(0)
             .settingLinkCountLimit(0)
             .settingAttributePerLinkCountLimit(0)
-        let processor = BoundedSpanProcessor(exporter: sink, counters: counters)
+        let processor = BoundedSpanProcessor(exporter: try exporter(), counters: counters)
         let provider = TracerProviderSdk(
             resource: Resource(attributes: resource), spanLimits: limits, sampler: Samplers.alwaysOn,
             spanProcessors: [processor]
         )
-        return TelemetryRuntime(
-            provider: provider,
-            tracer: provider.get(instrumentationName: "pilot.app", instrumentationVersion: configuration.serviceVersion),
-            processor: processor
-        )
+        var analyticsProvider: TracerProviderSdk?
+        var analyticsTracer: (any Tracer)?
+        var analyticsProcessor: BoundedSpanProcessor?
+        if let analyticsID = configuration.analyticsID {
+            var analyticsResource = resource
+            analyticsResource["pilot.host.id"] = nil
+            analyticsResource["pilot.analytics.id"] = .string(analyticsID)
+            analyticsResource["service.instance.id"] = .string(UUID().uuidString.lowercased())
+            let featureProcessor = BoundedSpanProcessor(exporter: try exporter(), counters: counters)
+            let featureProvider = TracerProviderSdk(
+                resource: Resource(attributes: analyticsResource), spanLimits: limits, sampler: Samplers.alwaysOn,
+                spanProcessors: [featureProcessor]
+            )
+            analyticsProvider = featureProvider
+            analyticsTracer = featureProvider.get(instrumentationName: "pilot.app.features",
+                                                    instrumentationVersion: configuration.serviceVersion)
+            analyticsProcessor = featureProcessor
+        }
+        return TelemetryRuntime(provider: provider,
+                                tracer: provider.get(instrumentationName: "pilot.app",
+                                                     instrumentationVersion: configuration.serviceVersion),
+                                processor: processor, analyticsProvider: analyticsProvider,
+                                analyticsTracer: analyticsTracer, analyticsProcessor: analyticsProcessor)
     }
 
     private static func numericVersion(_ value: String) -> Bool {
