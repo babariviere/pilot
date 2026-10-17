@@ -153,7 +153,7 @@ struct CodeBlock: View {
     let language: String?
     let text: String
     var prepared: AttributedString? = nil
-    @StateObject private var state = MarkdownRenderState()
+    @StateObject private var state = CodeRenderState()
     @Environment(\.transcriptContentPrepared) private var contentPrepared
 
     var body: some View {
@@ -169,10 +169,10 @@ struct CodeBlock: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 Group {
                     if selection != nil {
-                        SelectableMessageText(text: prepared ?? state.highlighted ?? AttributedString(text),
+                        SelectableMessageText(text: prepared ?? state.text(for: text, language: language),
                                               font: fonts.nsMono, monoFont: fonts.nsMono, lineSpacing: 0, unwrapped: true)
                     } else {
-                        Text(prepared ?? state.highlighted ?? AttributedString(text))
+                        Text(prepared ?? state.text(for: text, language: language))
                             .font(fonts.mono)
                             .textSelection(.enabled)
                             .fixedSize(horizontal: true, vertical: false)
@@ -186,9 +186,7 @@ struct CodeBlock: View {
         .task(id: CodeRenderKey(text: text, language: language)) {
             guard prepared == nil else { return }
             do {
-                let highlighted = try await MarkdownRenderer.shared.prepareCode(text, language: language)
-                try Task.checkCancellation()
-                state.highlighted = highlighted
+                try await state.prepare(text, language: language)
                 contentPrepared?()
             } catch { /* Cancelled by a newer source or collapsed tool row. */ }
         }
