@@ -1,5 +1,53 @@
 # Changelog
 
+## [1.45.0](https://github.com/babariviere/pilot/compare/v1.44.0...v1.45.0) (2026-10-17)
+
+
+### Features
+
+* **control:** add zoom and date memory tools ([4b69f45](https://github.com/babariviere/pilot/commit/4b69f45f13d26558ea7add6588cbf87e2fa7116a))
+* **control:** attach accepted idle chats to missions ([e38914c](https://github.com/babariviere/pilot/commit/e38914ce4b5611e1633e1d560068845eeadc9eaf))
+* **control:** compact chat memory in the background ([246c86e](https://github.com/babariviere/pilot/commit/246c86e79aabfb75ad6d82168f6221e5310a19b4))
+* **control:** create requested missions and start their lead ([fbd5da1](https://github.com/babariviere/pilot/commit/fbd5da1ca5037f32494a8818616a340ca2606279))
+* **control:** persist chat log, summary tree and view ([19cf17f](https://github.com/babariviere/pilot/commit/19cf17ff26d0af0586de6adc10892859d63995ea))
+* **control:** read and append memory across projects ([9ac2ec7](https://github.com/babariviere/pilot/commit/9ac2ec760cfb1501760c6b7c719b22ebd12ef068))
+* **control:** read global status and quoted chat results ([8de3adb](https://github.com/babariviere/pilot/commit/8de3adb470292bf058b7d31fe934550da9226aa0))
+* **control:** run project-less turns from saved memory ([60307e3](https://github.com/babariviere/pilot/commit/60307e3876f2d55d46716298dd10df13ffd6df15))
+* **control:** start and send work with durable audit records ([fb433e6](https://github.com/babariviere/pilot/commit/fb433e696a19f63bbec2376588850f27ce44e793))
+* **devboxes:** show machine state and specifications ([215070c](https://github.com/babariviere/pilot/commit/215070c9506a11dfd577c5199d862b674be908aa))
+* **inspection:** add separate versioned analysis records ([d3bc8ad](https://github.com/babariviere/pilot/commit/d3bc8adfde79e78ed9d2772749918d64fe64a3e7))
+* **inspection:** enforce retention and linked erasure ([9c08439](https://github.com/babariviere/pilot/commit/9c08439d84dde46a76b261690d076d62ee868f32))
+* **inspection:** reserve durable consent and usage ([25236d3](https://github.com/babariviere/pilot/commit/25236d34d9e9e504d84799863780f0cbf83fb417))
+* **inspection:** restrict analysis to sealed evidence tools ([5a0d74a](https://github.com/babariviere/pilot/commit/5a0d74a631920d3efee54a1263cbbd6121f540be))
+* **inspection:** seal private immutable evidence ([cfa9432](https://github.com/babariviere/pilot/commit/cfa9432d46865107238c6d7ace2b0a6b0ff8decd))
+* **macos:** fade in newly streamed text ([b35c7ac](https://github.com/babariviere/pilot/commit/b35c7ac23d37ed020882d281a92474c798f361dd))
+* **macos:** shimmer running tool titles and reveal opened steps ([e488186](https://github.com/babariviere/pilot/commit/e4881866ca3b0f72efed3fe7f4e74370eff5ab81))
+* **watches:** add bounded off-thread subscription storage ([a2c04ee](https://github.com/babariviere/pilot/commit/a2c04ee34097c106d12186242b37f60c3f61b650))
+* **watches:** consume durable task and mission completions ([279f49c](https://github.com/babariviere/pilot/commit/279f49ce756ea4a08e14d1aa771f239a891a4064))
+* **watches:** deliver durable chat lifecycle notices ([af227fa](https://github.com/babariviere/pilot/commit/af227fa8c747a05065239f463b6ea84d036db5da))
+* **watches:** observe completed Linear issues ([9e9e1f5](https://github.com/babariviere/pilot/commit/9e9e1f5f3a00d13549175c59b99fd3b0185539ba))
+* **watches:** observe pull request state transitions ([e33ccd8](https://github.com/babariviere/pilot/commit/e33ccd8e321c007bad8781ad566df5b341360429))
+
+
+### Bug Fixes
+
+* **deps:** update Pi SDK to 1.3.0 ([eccc315](https://github.com/babariviere/pilot/commit/eccc3152c2ade0f026e7e93ae9da76f1f7dd55b6))
+* **macos:** anchor Add devbox sheet to its settings section ([066de40](https://github.com/babariviere/pilot/commit/066de4093c86db6a9fdd29c802c86e49fe23d0c8))
+* **macos:** initialize the default client on the main actor ([fdafcaa](https://github.com/babariviere/pilot/commit/fdafcaa9bdec0fc1115d1e4f74f145865d66cf12))
+* **macos:** stop local chats from qualified references ([9aa3f7f](https://github.com/babariviere/pilot/commit/9aa3f7f0de70bdbb85b328458e7cd06f8c2a6889))
+* **notices:** preserve authoritative idle admission ([fa51ed1](https://github.com/babariviere/pilot/commit/fa51ed14f0be3a9f83d877f9db4d13055d7f3afa))
+* **watches:** separate frozen and later event batches ([b6d25ba](https://github.com/babariviere/pilot/commit/b6d25ba2d02b5007fcde083cf11c65fcb9bb5f44))
+
+
+### Performance Improvements
+
+* **macos:** add a release streaming benchmark with signposts ([021da76](https://github.com/babariviere/pilot/commit/021da764ddf787172b3e77befb216ad5ca0e15c0))
+* **macos:** append streamed text without re-laying out its block ([c856330](https://github.com/babariviere/pilot/commit/c85633084c1f73890216943d3ac35eb927c7c2a0))
+* **macos:** play receding sidebar corners on Core Animation ([b91f9c8](https://github.com/babariviere/pilot/commit/b91f9c8ee577d8cb6aba4aaa31db5b5ad7bad195))
+* **macos:** play spinners and the composer corner on Core Animation ([927f87b](https://github.com/babariviere/pilot/commit/927f87b46f7d323ac4b114913c52b82aee39122b))
+* **macos:** prepare only the newest Markdown blocks while streaming ([8642c39](https://github.com/babariviere/pilot/commit/8642c398d147ba0d37de937afeaea648b25c9910))
+* **macos:** re-evaluate only transcript rows per streamed update ([cc7470b](https://github.com/babariviere/pilot/commit/cc7470b0e3b77eb05d3a86d59ce9dcae1bded1d6))
+
 ## [1.44.0](https://github.com/babariviere/pilot/compare/v1.43.0...v1.44.0) (2026-10-16)
 
 
