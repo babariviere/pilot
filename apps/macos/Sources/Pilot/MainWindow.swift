@@ -252,6 +252,9 @@ struct SessionInspectorControls: View {
         if session.missionId != nil {
             SessionMissionControl(session: session)
         }
+        if session.isControl {
+            InspectorToggle(tab: .watching, icon: PilotIcon.watch, help: "Watching and actions")
+        }
         if session.supportsChanges {
             InspectorToggle(tab: .changes, icon: PilotIcon.changes, help: "Changes (⇧⌘D)")
             InspectorToggle(tab: .terminal, icon: PilotIcon.terminal, help: "Terminal (⌘J)")
@@ -370,6 +373,10 @@ struct Inspector: View {
             }
             if model.inspectorTab == .links {
                 SessionLinksPane(feed: feed ?? context.map { model.feeds.feed(ref: $0.ref(.session, session.id), hosts: $0.hosts) } ?? model.feeds.feed(sessionId: session.id, client: model.client))
+                    .id(session.id)
+            }
+            if model.inspectorTab == .watching, session.isControl {
+                ControlDetailsPane(client: endpoint, context: context)
                     .id(session.id)
             }
         }
