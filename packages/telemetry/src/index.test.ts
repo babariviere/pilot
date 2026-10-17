@@ -87,8 +87,9 @@ test("end preserves an explicitly recorded outcome", async () => {
 	});
 	await telemetry.forceFlush();
 	assert.equal(exporter.spans[0]?.attributes["pilot.outcome"], "failure");
-	assert.equal(observed.at(-1)?.kind, "finished");
-	assert.equal(observed.at(-1)?.outcome, "failed");
+	const finished = observed.at(-1);
+	assert.equal(finished?.kind, "finished");
+	assert.equal(finished?.kind === "finished" ? finished.outcome : undefined, "failed");
 	await telemetry.shutdown();
 });
 
