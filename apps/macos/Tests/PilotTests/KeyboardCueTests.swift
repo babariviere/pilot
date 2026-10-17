@@ -148,6 +148,20 @@ private func centre(_ view: some View) throws -> NSColor {
     #expect(!KeyboardListHighlight(id: "a", focused: true, showsCue: false).decorates("a"))
 }
 
+@Test @MainActor func chatRowsKeepTheirGreySelectionAfterAClick() throws {
+    func chat(_ highlight: KeyboardListHighlight) -> some View {
+        Color.clear.keyboardListItem("a", target: .session(id: "a", reference: nil)) {}
+            .environment(\.keyboardListHighlight, highlight)
+    }
+    let plain = try centre(chat(KeyboardListHighlight()))
+    let selected = try centre(Color.clear.background(Theme.selected))
+    // Highlighted by a click (no keyboard cue), by the keyboard, or kept while the list is unfocused: the same grey.
+    #expect(try centre(chat(KeyboardListHighlight(id: "a", focused: true, showsCue: false))) == selected)
+    #expect(try centre(chat(KeyboardListHighlight(id: "a", focused: true, showsCue: true))) == selected)
+    #expect(try centre(chat(KeyboardListHighlight(id: "a", focused: false, showsCue: false))) == selected)
+    #expect(try centre(chat(KeyboardListHighlight(id: "b", focused: true, showsCue: true))) == plain)
+}
+
 @Test @MainActor func transcriptHighlightIsAQuietFillOnlyWithTheCue() throws {
     func message(_ highlight: TranscriptHighlight) -> some View {
         Color.clear.background(TranscriptRowHighlight(id: "m")).environment(\.transcriptHighlight, highlight)

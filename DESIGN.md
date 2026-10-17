@@ -172,6 +172,7 @@ Keyboard targets are shown only while the keyboard navigates (`KeyboardCue.swift
 transcript message gets `Theme.keyboardHighlight`, a very faint neutral fill with no outline, and list rows reveal
 their hover actions. Navigation keys outside text, ⌃⇥, and Tab or Escape out of a field turn it on; typing never
 does. Any click hides it, including when focus arrives later, while the target, selection and ⌘K actions stay.
+Chat rows are the exception: their highlight is a selection and keeps the grey `Theme.selected` fill after clicks.
 
 The menu bar follows the same urgency order (Needs you, Ready to merge, Working, Recent) under a one-line heading such
 as "1 needs you · 2 working". pilotd's controls sit in their own submenu.
