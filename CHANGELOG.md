@@ -1,5 +1,37 @@
 # Changelog
 
+## [1.47.0](https://github.com/babariviere/pilot/compare/v1.46.0...v1.47.0) (2026-10-17)
+
+
+### Features
+
+* **analytics:** define feature adoption catalog ([25237a6](https://github.com/babariviere/pilot/commit/25237a6955b10c50f77671e0b6be7afb9916110b))
+* **analytics:** instrument approved adoption journeys ([6953802](https://github.com/babariviere/pilot/commit/695380242112c5d6cda227bc4500590c2ce2be09))
+* **diagnostics:** add native crash and hang evidence ([29e2204](https://github.com/babariviere/pilot/commit/29e2204e60c7b8c82ac1b56334f6326aba936c53))
+* **diagnostics:** add target-scoped diagnosis actions ([758954b](https://github.com/babariviere/pilot/commit/758954b4c03fc70d933a1a7d830889b0df39d451))
+* **diagnostics:** isolate specialist repair handoffs ([afff2e6](https://github.com/babariviere/pilot/commit/afff2e6cb9e266410e2ec694ab8032d3ae675b41))
+* **telemetry:** add consent and export settings ([4ea9862](https://github.com/babariviere/pilot/commit/4ea9862fcc6b6189b1ca14303f4f33aadc325bee))
+* **telemetry:** add Node OpenTelemetry foundation ([111c21b](https://github.com/babariviere/pilot/commit/111c21bc7fd6056d58fe4c42a2e00864ac6c02c0))
+* **telemetry:** add Swift OpenTelemetry foundation ([5abaed3](https://github.com/babariviere/pilot/commit/5abaed339709f4362a4800f0b6bf7b29c681d7f8))
+* **telemetry:** trace chat opening latency ([211d96a](https://github.com/babariviere/pilot/commit/211d96ae0593f5863a60a3ef067507b38fef1077))
+* **telemetry:** trace message response latency ([618b92d](https://github.com/babariviere/pilot/commit/618b92df4ac4b79c78ac5bf3ee66a6b271116a78))
+
+
+### Bug Fixes
+
+* **analytics:** reject linked telemetry identities ([68287c8](https://github.com/babariviere/pilot/commit/68287c89354d679605100dc1b67261829d367493))
+* **daemon:** finish workspace removals interrupted after jj unregistered them ([01ab4c9](https://github.com/babariviere/pilot/commit/01ab4c9ef225a543135b1def0df949a7254d9e8e))
+* **daemon:** refresh bound primary PR from by-number results ([b0acfaf](https://github.com/babariviere/pilot/commit/b0acfafbfc89e0d21c4e129229ab251ff6a3433a))
+* **daemon:** skip unreachable mounts in Linux isolation guard ([6a3dbba](https://github.com/babariviere/pilot/commit/6a3dbbadd9fc1b3aa4712c6577402c293e415214))
+* **diagnostics:** use existing secondary text token ([342dd30](https://github.com/babariviere/pilot/commit/342dd30fc366e599bfc9120440c3a64e6dcce729))
+* **settings:** show focus only on the selected sidebar row ([60a1e77](https://github.com/babariviere/pilot/commit/60a1e777a31d502e26200b36b1d98e18f1a4e7dd))
+* **slack:** read forwarded messages and app notifications as attachments ([001efae](https://github.com/babariviere/pilot/commit/001efaed348fbea1a392e071345b8e2e8f791ec9))
+* **telemetry:** key remote settings by host identity ([bdca6be](https://github.com/babariviere/pilot/commit/bdca6be8a0a2e8a603c30ba760fb35fafa0893a4))
+* **telemetry:** preserve explicit span outcomes ([ccd0938](https://github.com/babariviere/pilot/commit/ccd093817856c9010aac50304576d6a4830eab1b))
+* **ui:** remove focus outlines throughout Pilot ([db02736](https://github.com/babariviere/pilot/commit/db02736e391e0b828655c4412021699f3f4a4b9a))
+* **ui:** suppress native focus rings across macOS versions ([615fa13](https://github.com/babariviere/pilot/commit/615fa13e7c70f89f1a485ed21ef981fb5b219862))
+* **ui:** track native field editor ownership during focus changes ([2f5d704](https://github.com/babariviere/pilot/commit/2f5d7042c25ebc763b23b6b4c3333fd1fdbfe6d5))
+
 ## [1.46.0](https://github.com/babariviere/pilot/compare/v1.45.1...v1.46.0) (2026-10-17)
 
 
