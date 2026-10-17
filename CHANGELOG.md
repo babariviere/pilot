@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.45.1](https://github.com/babariviere/pilot/compare/v1.45.0...v1.45.1) (2026-10-17)
+
+
+### Bug Fixes
+
+* **macos:** prevent terminal layout feedback loops ([03b5a39](https://github.com/babariviere/pilot/commit/03b5a39326441cdddb42538936768b5120219419))
+* **pr:** detect creation before a later shell failure ([6d32684](https://github.com/babariviere/pilot/commit/6d32684339257a6d74b5621822226430d00cfd34))
+* **sessions:** allow stopping failed subagent recovery ([c95be86](https://github.com/babariviere/pilot/commit/c95be863631eacb1e33a2e162f31587c989f5828))
+* **sessions:** keep automatic input behind recovery Stop ([c66276e](https://github.com/babariviere/pilot/commit/c66276e93e0bf3d423fc4d0bb600e330f0afaa29))
+* **sessions:** type the stopped admission rejection ([a161f46](https://github.com/babariviere/pilot/commit/a161f46ea593a110c2208e2b5207cf5e00f27f21))
+
 ## [1.45.0](https://github.com/babariviere/pilot/compare/v1.44.0...v1.45.0) (2026-10-17)
 
 
