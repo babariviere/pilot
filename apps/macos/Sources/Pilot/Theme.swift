@@ -641,5 +641,6 @@ extension View {
     /// Apply at each scene root so native fields, controls and presented sheets inherit it too.
     func quietFocus() -> some View {
         focusEffectDisabled()
+            .background(NativeFocusRingSuppression().frame(width: 0, height: 0))
     }
 }
