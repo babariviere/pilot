@@ -84,7 +84,10 @@ enum PerformanceCheck {
                 return String(reply[start ..< min(reply.count, start + chunk)])
             }
             let frames = FrameMonitor()
-            if streaming, let view = window.contentView { frames.start(on: view) }
+            if streaming, let view = window.contentView {
+                frames.transcript = findTranscript(view)
+                frames.start(on: view)
+            }
             StreamingTrace.reset()
             StreamingTrace.collecting = streaming
             var footprintPeak = physicalFootprint()
@@ -366,6 +369,7 @@ private final class FrameMonitor: NSObject {
     }
 
     @objc private func tick(_ link: CADisplayLink) {
+        sampleNewestRow()
         let duration = link.targetTimestamp - link.timestamp
         if duration > 0 { frameDuration = duration }
         defer { last = link.timestamp }
@@ -383,5 +387,37 @@ private final class FrameMonitor: NSObject {
         guard frameDuration > 0 else { return "display frames=unavailable (window not on screen)" }
         return "display \(Int((1 / frameDuration).rounded())) Hz frames=\(frames) hitches=\(hitches) dropped frames=\(dropped) "
             + "longest frame gap=\(String(format: "%.1fms", longest * 1000))"
+            + ", newest row moved down=\(reversals) times (\(String(format: "%.0f", reversed)) pt, largest \(String(format: "%.0f", largestReversal)) pt)"
+            + ", bottom gap changes=\(gapChanges)"
+    }
+
+    // MARK: Jumps
+
+    /// While the transcript follows a streaming reply, the newest row may only move up on screen as it grows.
+    /// Each frame where it moves down is a visible jump.
+    weak var transcript: NSScrollView?
+    private var newestTop: (row: String, y: CGFloat)?
+    private var reversals = 0
+    private var reversed: CGFloat = 0
+    private var largestReversal: CGFloat = 0
+    private var bottomGap: CGFloat?
+    private var gapChanges = 0
+
+    private func sampleNewestRow() {
+        guard let scroll = transcript, let document = scroll.documentView else { return }
+        let rows = TranscriptRowAnchorView.rows.allObjects.filter { $0.window != nil && $0.enclosingScrollView === scroll }
+        // Window coordinates grow upward, so the newest row is the lowest, and moving down lowers its top.
+        guard let newest = rows.min(by: { $0.convert($0.bounds, to: nil).maxY < $1.convert($1.bounds, to: nil).maxY }) else { return }
+        let top = newest.convert(newest.bounds, to: nil).maxY
+        let visible = scroll.contentView.bounds
+        if let previous = newestTop, previous.row == newest.rowID, top < previous.y - 0.5 {
+            reversals += 1
+            reversed += previous.y - top
+            largestReversal = max(largestReversal, previous.y - top)
+        }
+        newestTop = (newest.rowID, top)
+        let gap = document.isFlipped ? document.bounds.maxY - visible.maxY : visible.minY - document.bounds.minY
+        if let bottomGap, abs(gap - bottomGap) > 0.5 { gapChanges += 1 }
+        bottomGap = gap
     }
 }
