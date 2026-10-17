@@ -184,9 +184,9 @@ export interface SessionMissionBridge {
 
 /** An explicit kernel rejection, unlike a disconnect with uncertain durable admission. */
 export class CommandRejected extends Error {
-	readonly code?: "busy";
+	readonly code?: "busy" | "stopped";
 
-	constructor(message: string, code?: "busy") {
+	constructor(message: string, code?: "busy" | "stopped") {
 		super(message);
 		if (code) this.code = code;
 	}
