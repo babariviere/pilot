@@ -155,6 +155,37 @@ private final class FlippedScrollDocument: NSView {
     }
 }
 
+/// SwiftUI's scroll view can restore an offset it recorded before the native pins, during its own layout, while a
+/// reply streams. While following, that is undone before the frame is drawn; once the document is idle, keyboard and
+/// programmatic scrolls still move freely.
+@Test @MainActor func followingUndoesForeignScrollsWhileTheDocumentGrows() async throws {
+    let window = testWindow()
+    defer { window.close() }
+    let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+    let document = FlippedScrollDocument(frame: NSRect(x: 0, y: 0, width: 600, height: 1600))
+    scroll.documentView = document
+    let state = TranscriptScrollState()
+    let observer = ScrollObserverView(frame: document.bounds)
+    observer.state = state
+    document.addSubview(observer)
+    window.contentView = scroll
+    scroll.layoutSubtreeIfNeeded()
+    try await Task.sleep(for: .milliseconds(50))
+
+    document.setFrameSize(NSSize(width: 600, height: 2000))
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(scroll.contentView.bounds.minY == 1600)
+    // Streaming continues; something other than the reader moves the viewport up.
+    document.setFrameSize(NSSize(width: 600, height: 2040))
+    scroll.contentView.scroll(to: NSPoint(x: 0, y: 300))
+    #expect(scroll.contentView.bounds.minY == 1640, "pinned again within the same pass")
+    #expect(state.follow.shouldScrollToBottom)
+
+    try await Task.sleep(for: .milliseconds(600))
+    scroll.contentView.scroll(to: NSPoint(x: 0, y: 300))
+    #expect(scroll.contentView.bounds.minY == 300, "idle documents leave keyboard scrolling alone")
+}
+
 @Test @MainActor func transcriptPendingLayoutScrollDoesNotOutliveItsView() async throws {
     let window = testWindow()
     defer { window.close() }

@@ -10,6 +10,10 @@ final class TranscriptScrollState: ObservableObject {
     private var renderedScroll: Task<Void, Never>?
     /// Set by the native observer, so an expanding row keeps its own top edge in place.
     var onMessageToggled: (() -> Void)?
+    /// Set by the native observer: scrolls to the document's real bottom after the current layout pass.
+    /// SwiftUI's scrollTo can target an estimated position in the lazy history instead, thousands of points
+    /// away, so following never uses it while content streams.
+    var pinBottom: (() -> Void)?
     lazy var messageToggled: () -> Void = { [weak self] in
         self?.follow.pauseFollowing()
         self?.onMessageToggled?()
@@ -67,7 +71,9 @@ final class ScrollObserverView: NSView {
         didSet {
             guard state !== oldValue else { return }
             oldValue?.onMessageToggled = nil
+            oldValue?.pinBottom = nil
             state?.onMessageToggled = { [weak self] in self?.captureAnchor(containing: true) }
+            state?.pinBottom = { [weak self] in self?.scheduleLayoutScroll() }
         }
     }
     var bottomPadding: CGFloat = 0
@@ -126,10 +132,15 @@ final class ScrollObserverView: NSView {
     /// Restore within the layout pass that moved the rows, so a shifted frame is never drawn,
     /// and settle again once the pass is complete.
     @objc private func layoutChanged(_ notification: Notification) {
+        lastLayoutChange = CACurrentMediaTime()
         settleAnchor(recapture: false)
         scheduleAnchorSettle()
         scheduleLayoutScroll()
     }
+
+    /// When the document or viewport last changed size: while content streams, every frame or so.
+    private var lastLayoutChange: CFTimeInterval = 0
+    private var recentlyGrew: Bool { CACurrentMediaTime() - lastLayoutChange < 0.5 }
 
     /// A row can move without the document changing size, for example when one row above
     /// shrinks while another grows. Only the anchored rows matter.
@@ -144,8 +155,24 @@ final class ScrollObserverView: NSView {
     /// layout pass, when a SwiftUI offset change and the rows it accompanies are both applied.
     @objc private func boundsChanged(_ notification: Notification) {
         guard !restoringAnchor else { return }
+        // SwiftUI's scroll view sometimes restores an offset it recorded before the native pins, during its own
+        // layout, thousands of points above the streaming reply's end. While following, undo that within the
+        // same pass, so the frame is never drawn. Only while the document is changing size: keyboard scrolling
+        // has no live-scroll notification either, and stays free to leave the bottom of an idle chat.
+        if following, recentlyGrew, let scroll = scrollView {
+            let away = scroll.contentView.bounds.origin
+            pinBottomNow()
+            // A legacy mouse wheel scrolls without a live-scroll session: its didLiveScroll notification follows
+            // in the same call, and returns the viewport to where the reader put it (see scrolled).
+            undoablePin = away
+            DispatchQueue.main.async { [weak self] in self?.undoablePin = nil }
+            return
+        }
         scheduleAnchorSettle()
     }
+
+    /// Where the viewport was before the last foreign-scroll pin, until the run loop turns.
+    private var undoablePin: NSPoint?
 
     private func scheduleAnchorSettle() {
         guard anchorSettle == nil, !following else { return }
@@ -284,20 +311,26 @@ final class ScrollObserverView: NSView {
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.layoutScroll = nil
-            guard self.state?.follow.shouldScrollToBottom == true,
-                  let scroll = self.scrollView, let document = scroll.documentView else { return }
-            let visible = scroll.contentView.bounds
-            let y = document.isFlipped
-                ? max(document.bounds.minY - scroll.contentInsets.top,
-                      document.bounds.maxY - visible.height + scroll.contentInsets.bottom - self.bottomPadding)
-                : min(document.bounds.maxY - visible.height + scroll.contentInsets.top,
-                      document.bounds.minY - scroll.contentInsets.bottom + self.bottomPadding)
-            guard abs(visible.minY - y) > 0.5 else { return }
-            scroll.contentView.scroll(to: NSPoint(x: visible.minX, y: y))
-            scroll.reflectScrolledClipView(scroll.contentView)
+            self.pinBottomNow()
         }
         layoutScroll = work
         DispatchQueue.main.async(execute: work)
+    }
+
+    private func pinBottomNow() {
+        guard !restoringAnchor, state?.follow.shouldScrollToBottom == true,
+              let scroll = scrollView, let document = scroll.documentView else { return }
+        let visible = scroll.contentView.bounds
+        let y = document.isFlipped
+            ? max(document.bounds.minY - scroll.contentInsets.top,
+                  document.bounds.maxY - visible.height + scroll.contentInsets.bottom - bottomPadding)
+            : min(document.bounds.maxY - visible.height + scroll.contentInsets.top,
+                  document.bounds.minY - scroll.contentInsets.bottom + bottomPadding)
+        guard abs(visible.minY - y) > 0.5 else { return }
+        restoringAnchor = true
+        scroll.contentView.scroll(to: NSPoint(x: visible.minX, y: y))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        restoringAnchor = false
     }
 
     private var distanceToBottom: Double {
@@ -322,6 +355,13 @@ final class ScrollObserverView: NSView {
         // scroll that compensation itself performs. The anchor is not recaptured until that
         // scroll returns, so a nested pass would apply the same shift again, without end.
         guard !restoringAnchor else { return }
+        if let away = undoablePin, let scroll = scrollView {
+            undoablePin = nil
+            restoringAnchor = true
+            scroll.contentView.scroll(to: away)
+            scroll.reflectScrolledClipView(scroll.contentView)
+            restoringAnchor = false
+        }
         state?.follow.userScrolled(distanceToBottom: distanceToBottom)
         compensateDuringScroll()
         captureAnchor()

@@ -416,7 +416,11 @@ struct ChatView: View {
             }
             .onAppear {
                 let state = scroll
-                preparedAction.action = { state.contentPrepared { proxy.scrollTo("bottom", anchor: .bottom) } }
+                preparedAction.action = {
+                    state.contentPrepared {
+                        if let pin = state.pinBottom { pin() } else { proxy.scrollTo("bottom", anchor: .bottom) }
+                    }
+                }
                 proxy.scrollTo("bottom", anchor: .bottom)
             }
         }

@@ -295,6 +295,22 @@ At pilotd's four updates a second that is about 0.3 ms of main-thread work per s
 not exercise veils when the window is not on screen (they are added when the new text is drawn), so it shows no
 difference from this change with the display asleep.
 
+**Jumps while following a fast stream.** At high delta rates the transcript jumped thousands of points up, to the
+top of the streaming reply, and back down a frame later. SwiftUI's scroll view sometimes restores an offset it
+recorded before the native bottom pins, from its own layout (`HostingScrollView.updateContext`), and the pin
+followed only on the next turn of the run loop. Markdown preparation also scrolled with `proxy.scrollTo("bottom")`,
+which can resolve against estimated lazy-row geometry. Now the observer pins again within the same pass when
+anything other than the reader moves the viewport while the document is growing, and preparation uses the native
+pin. The streaming benchmark counts frames where the newest row moved down on screen while following (M3 Pro,
+120 Hz, two runs each, before → after):
+
+| Case | Newest row moved down | Main thread | Dropped frames |
+| --- | --- | --- | --- |
+| 4/s, 100-character chunks | 0–1 (6 pt) → 0 | 11.0–13.0% → 10.2–10.9% | 71–82 → 66–70 |
+| 10/s | 0 → 0 | 14.7–15.5% → 13.5–15.8% | 36–47 → 42–93 |
+| 50/s | 0–16 (28,337 pt) → 0 | 73.4–77.4% → 61.2–68.6% | 271–390 → 232–317 |
+| 100/s | 29–50 (up to 127,130 pt) → 0–1 (4 pt) | 93.7–94.7% → 92.8–93.9% | 680–732 → 630–684 |
+
 **Tool rows.** Opening a step, a thinking block, grouped reads or a turn's work line used to animate the inserted
 content's height for 150 ms (`withAnimation`), relaying out the eager live tail of the transcript on every frame.
 Content now takes its full height in one layout and a background-coloured cover shrinks and fades over it on Core
