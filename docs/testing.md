@@ -433,6 +433,10 @@ fixtures from consuming its one-minute budget. All clipping, resize, visible-ove
 remain enabled. The output guard requires that the isolated test actually starts, so a stale filter cannot
 silently drop coverage. Explicit `--filter`, `--skip` and listing requests remain a single scoped invocation.
 
+The timed Stop-routing tests also run in a separate process. This keeps unrelated UI fixtures' nested
+MainActor run loops from consuming their two-minute deadlines. Every selected Stop function must start;
+their assertions and time limits are unchanged.
+
 CI runs native Node, packaging and Swift tests in one `macos` job, because the free plan runs only a few
 macOS jobs at once. PRs skip the Swift steps when they change nothing under `apps/macos/`, the release
 workflow, `package.json` or the verification-slot script. PRs that run Swift package the debug binaries from
