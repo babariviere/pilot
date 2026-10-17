@@ -1377,10 +1377,7 @@ export class MissionStore {
 			const remaining = summaries.filter(
 				(summary) => !noticeInvolvesSession(recipient, ...this.noticeSummarySubjects(missionId, summary.key)),
 			);
-			if (
-				!noticeInvolvesSession(recipient, actor.sessionId, actor.proposedBySessionId, taskSubject) &&
-				remaining.length
-			) {
+			if (!noticeInvolvesSession(recipient, actor.sessionId, taskSubject) && remaining.length) {
 				this.run(
 					"INSERT INTO pending_notices (event_id, mission_id, at, text) VALUES (?, ?, ?, ?)",
 					eventId,
@@ -1428,14 +1425,6 @@ export class MissionStore {
 				missionId,
 				subject,
 			).flatMap((row) => (typeof row.session_id === "string" ? [row.session_id] : []));
-		if (kind === "proposal") {
-			const row = this.one(
-				"SELECT author_session_id FROM decision_proposals WHERE id = ? AND mission_id = ?",
-				subject,
-				missionId,
-			);
-			return typeof row?.author_session_id === "string" ? [row.author_session_id] : [];
-		}
 		return [];
 	}
 
