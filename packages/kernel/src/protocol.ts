@@ -12,6 +12,7 @@ import type {
 	SessionJob,
 	SessionSubagent,
 } from "@pilot/protocol";
+import type { TraceCarrier } from "@pilot/telemetry";
 import type { ControlCall } from "./control-turn.ts";
 import type { CredentialEndpoint } from "./credential-rpc.ts";
 import type { DatabaseAction } from "./database-tool.ts";
@@ -81,6 +82,8 @@ export type KernelCommand =
 			mode: DeliveryMode;
 			onlyIfIdle?: boolean;
 			reportDelivery?: boolean;
+			/** Ephemeral W3C parent context from pilotd. Never contains baggage or conversation data. */
+			trace?: TraceCarrier;
 			event?: import("@pilot/protocol").ChatEventSummary;
 	  }
 	/** Passive, display-only daemon activity. Never schedules a model turn. */

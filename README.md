@@ -934,6 +934,8 @@ host-qualified, read-only tool and API that never opens a target transcript or w
 The [diagnostics and telemetry contract](docs/telemetry-contract.md) defines the versioned privacy, identity,
 correlation, retention and resource budgets for local diagnostics and opt-in OpenTelemetry export. Remote export and
 product analytics are disabled by default, and no telemetry backend is selected by the repository.
+[Node telemetry](docs/node-telemetry.md) documents the daemon/kernel OpenTelemetry helper, bounded OTLP behavior and
+local in-flight hooks that keep useful progress separate from liveness heartbeats.
 
 - **Keep the daemon local.** It binds to `127.0.0.1`, rejects requests with an `Origin` header and has no
   authentication. Do not expose it to a network.

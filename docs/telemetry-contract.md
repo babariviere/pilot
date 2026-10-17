@@ -260,7 +260,7 @@ failures and lifecycle anomalies, and analytics has a separate rate cap. Local d
 The evaluated baseline is compatible with Pilot's Node 24 and macOS 14 minimums:
 
 - **Node:** `@opentelemetry/api` 1.9.1, `@opentelemetry/sdk-trace-node` 2.12.0,
-  `@opentelemetry/resources` 2.12.0 and `@opentelemetry/exporter-trace-otlp-http` 0.223.0 support Node 24. The SDK
+  `@opentelemetry/resources` 2.12.0 and `@opentelemetry/exporter-trace-otlp-proto` 0.223.0 support Node 24. The SDK
   exposes W3C propagation, `BatchSpanProcessor`, injectable exporters and OTLP/HTTP. Pilot should install only the
   trace/resource packages it uses rather than the broad auto-instrumentation bundle.
 - **Swift:** `open-telemetry/opentelemetry-swift` 2.6.0 and `opentelemetry-swift-core` 2.6.0 use Swift tools 6.0,

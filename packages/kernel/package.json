@@ -26,6 +26,7 @@
 		"@gotgenes/pi-anthropic-auth": "3.4.2",
 		"@pilot/artifacts": "workspace:*",
 		"@pilot/protocol": "workspace:*",
+		"@pilot/telemetry": "workspace:*",
 		"jiti": "2.7.0"
 	}
 }
