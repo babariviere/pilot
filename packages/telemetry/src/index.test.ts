@@ -108,6 +108,36 @@ test("rejects arbitrary fields and malformed trace carriers before recording", a
 	await telemetry.shutdown();
 });
 
+test("tool spans accept only reviewed categories and never arbitrary tool names", async () => {
+	const exporter = new MemoryExporter();
+	const telemetry = new NodeTelemetry(options(exporter));
+	telemetry.recordSpan("pilot.tool.call", 25, {
+		"pilot.operation": "tool.call",
+		"pilot.outcome": "success",
+		"pilot.tool.category": "mcp",
+		"pilot.tool.nested": true,
+		"pilot.tool.dispatch_ms": 5,
+		"pilot.tool.execution_ms": 20,
+	});
+	const invalid = telemetry.startSpan("pilot.tool.call", {
+		"pilot.operation": "tool.call",
+		"pilot.tool.category": "customer-private-server",
+		"pilot.tool.name": "mcp__customer__secret",
+	} as never);
+	assert.equal(invalid.recording, false);
+	assert.equal(await telemetry.forceFlush(), true);
+	assert.deepEqual(exporter.spans[0]?.attributes, {
+		"pilot.operation": "tool.call",
+		"pilot.outcome": "success",
+		"pilot.tool.category": "mcp",
+		"pilot.tool.nested": true,
+		"pilot.tool.dispatch_ms": 5,
+		"pilot.tool.execution_ms": 20,
+	});
+	assert.equal(JSON.stringify(exporter.spans.map((span) => span.attributes)).includes("customer"), false);
+	await telemetry.shutdown();
+});
+
 test("propagates W3C traceparent without baggage or tracestate", async () => {
 	const exporter = new MemoryExporter();
 	const telemetry = new NodeTelemetry(options(exporter));

@@ -22,7 +22,7 @@ only the allowlisted span name, service, trace/span IDs and timestamps. It canno
 arguments, output or remote tool/server names. Hook failures are ignored and cannot affect the observed work.
 
 The hook deliberately distinguishes a heartbeat from useful progress. A live process may still be nonprogressing,
-and age or silence is evidence of a suspected stall rather than proof of deadlock. The bounded persistence,
-tool-category mapping and conservative stall policy are implemented by the tool-call reliability slices; this
-foundation only supplies correlation and nonblocking lifecycle hooks. It does not restart, retry, replay or change
-timeouts.
+and age or silence is evidence of a suspected stall rather than proof of deadlock. The bounded persistence and
+closed category mapping are described in [Tool-call diagnostics](tool-call-diagnostics.md). Completed calls emit
+`pilot.tool.call`; cancellation waits emit `pilot.tool.cancel_wait`. Neither signal contains a raw tool or MCP
+server name. The helper and observer do not restart, retry, replay or change timeouts.

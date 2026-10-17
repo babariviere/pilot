@@ -44,7 +44,19 @@ export type TelemetrySpanName =
 	| "pilot.daemon.request"
 	| "pilot.kernel.request"
 	| "pilot.event_loop.stall"
+	| "pilot.tool.call"
+	| "pilot.tool.cancel_wait"
 	| "pilot.feature";
+
+export type TelemetryToolCategory =
+	| "shell"
+	| "filesystem"
+	| "network"
+	| "background"
+	| "codemode"
+	| "mcp"
+	| "orchestration"
+	| "other";
 
 export type TelemetryPhase =
 	| "api"
@@ -57,7 +69,7 @@ export type TelemetryPhase =
 	| "history_read"
 	| "reduction"
 	| "first_transcript";
-export type TelemetryOutcome = "success" | "failure" | "cancelled" | "timeout" | "unavailable";
+export type TelemetryOutcome = "success" | "failure" | "cancelled" | "timeout" | "interrupted" | "unavailable";
 export type TelemetryReason =
 	| "none"
 	| "user"
@@ -75,7 +87,14 @@ export type TelemetryReason =
 	| "unknown";
 
 export interface TelemetryAttributes {
-	"pilot.operation"?: "message.send" | "chat.open" | "daemon.request" | "kernel.request" | "event_loop.stall";
+	"pilot.operation"?:
+		| "message.send"
+		| "chat.open"
+		| "daemon.request"
+		| "kernel.request"
+		| "event_loop.stall"
+		| "tool.call"
+		| "tool.cancel_wait";
 	"pilot.phase"?: TelemetryPhase;
 	"pilot.outcome"?: TelemetryOutcome;
 	"pilot.reason"?: TelemetryReason;
@@ -86,6 +105,10 @@ export interface TelemetryAttributes {
 	"pilot.history_bucket"?: "0" | "1-100" | "101-1000" | "1001+";
 	"pilot.progress_kind"?: "thinking" | "text" | "tool" | "none";
 	"pilot.frame_observation"?: "available" | "occluded" | "asleep" | "unsupported";
+	"pilot.tool.category"?: TelemetryToolCategory;
+	"pilot.tool.nested"?: boolean;
+	"pilot.tool.dispatch_ms"?: number;
+	"pilot.tool.execution_ms"?: number;
 }
 
 /** The only daemon/kernel propagation format. Baggage and tracestate are deliberately absent. */
@@ -163,9 +186,19 @@ const SPAN_NAMES = new Set<TelemetrySpanName>([
 	"pilot.daemon.request",
 	"pilot.kernel.request",
 	"pilot.event_loop.stall",
+	"pilot.tool.call",
+	"pilot.tool.cancel_wait",
 	"pilot.feature",
 ]);
-const OPERATIONS = new Set(["message.send", "chat.open", "daemon.request", "kernel.request", "event_loop.stall"]);
+const OPERATIONS = new Set([
+	"message.send",
+	"chat.open",
+	"daemon.request",
+	"kernel.request",
+	"event_loop.stall",
+	"tool.call",
+	"tool.cancel_wait",
+]);
 const PHASES = new Set<TelemetryPhase>([
 	"api",
 	"admission",
@@ -178,7 +211,14 @@ const PHASES = new Set<TelemetryPhase>([
 	"reduction",
 	"first_transcript",
 ]);
-const OUTCOMES = new Set<TelemetryOutcome>(["success", "failure", "cancelled", "timeout", "unavailable"]);
+const OUTCOMES = new Set<TelemetryOutcome>([
+	"success",
+	"failure",
+	"cancelled",
+	"timeout",
+	"interrupted",
+	"unavailable",
+]);
 const REASONS = new Set<TelemetryReason>([
 	"none",
 	"user",
@@ -198,6 +238,16 @@ const REASONS = new Set<TelemetryReason>([
 const HISTORY_BUCKETS = new Set(["0", "1-100", "101-1000", "1001+"]);
 const PROGRESS_KINDS = new Set(["thinking", "text", "tool", "none"]);
 const FRAME_OBSERVATIONS = new Set(["available", "occluded", "asleep", "unsupported"]);
+const TOOL_CATEGORIES = new Set<TelemetryToolCategory>([
+	"shell",
+	"filesystem",
+	"network",
+	"background",
+	"codemode",
+	"mcp",
+	"orchestration",
+	"other",
+]);
 const TRACEPARENT = /^00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]$/;
 const setter: TextMapSetter<TraceCarrier> = {
 	set(carrier, key, value) {
@@ -236,6 +286,16 @@ export function telemetryAttributes(value: TelemetryAttributes): TelemetryAttrib
 		if (key === "pilot.history_bucket" && closedString(field, HISTORY_BUCKETS)) continue;
 		if (key === "pilot.progress_kind" && closedString(field, PROGRESS_KINDS)) continue;
 		if (key === "pilot.frame_observation" && closedString(field, FRAME_OBSERVATIONS)) continue;
+		if (key === "pilot.tool.category" && closedString(field, TOOL_CATEGORIES)) continue;
+		if (key === "pilot.tool.nested" && typeof field === "boolean") continue;
+		if (
+			(key === "pilot.tool.dispatch_ms" || key === "pilot.tool.execution_ms") &&
+			typeof field === "number" &&
+			Number.isFinite(field) &&
+			field >= 0 &&
+			field <= 604_800_000
+		)
+			continue;
 		return;
 	}
 	return Object.fromEntries(entries) as TelemetryAttributes;
@@ -319,9 +379,11 @@ class WrappedSpan implements TelemetrySpan {
 					? "cancelled"
 					: outcome === "timeout"
 						? "timeout"
-						: outcome === "unavailable"
-							? "unavailable"
-							: "failure",
+						: outcome === "interrupted"
+							? "interrupted"
+							: outcome === "unavailable"
+								? "unavailable"
+								: "failure",
 		);
 		if (outcome === "failed" || outcome === "interrupted" || outcome === "timeout")
 			this.span?.setStatus({ code: SpanStatusCode.ERROR });
@@ -579,11 +641,13 @@ export class NodeTelemetry {
 		const defaultOutcome =
 			safe["pilot.outcome"] === "failure"
 				? "failed"
-				: safe["pilot.outcome"] === "cancelled" ||
-						safe["pilot.outcome"] === "timeout" ||
-						safe["pilot.outcome"] === "unavailable"
-					? safe["pilot.outcome"]
-					: "completed";
+				: safe["pilot.outcome"] === "interrupted"
+					? "interrupted"
+					: safe["pilot.outcome"] === "cancelled" ||
+							safe["pilot.outcome"] === "timeout" ||
+							safe["pilot.outcome"] === "unavailable"
+						? safe["pilot.outcome"]
+						: "completed";
 		return new WrappedSpan(span, spanContext, this.service, name, this.observe, defaultOutcome);
 	}
 

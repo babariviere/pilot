@@ -2,6 +2,12 @@
 import { constants } from "node:fs";
 import { type FileHandle, open } from "node:fs/promises";
 import { join } from "node:path";
+import {
+	MAX_TOOL_ACTIVITY_FILE_BYTES,
+	parseToolActivityRecord,
+	TOOL_ACTIVITY_FILE,
+	type ToolActivityRecord,
+} from "@pilot/kernel";
 import type {
 	DiagnosticEvidence,
 	DiagnosticFreshness,
@@ -11,6 +17,10 @@ import type {
 	RequestTimingDiagnosticEvidence,
 	SessionDiagnosticCurrent,
 	SessionDiagnostics,
+	ToolActivitySnapshot,
+	ToolCallDiagnosticEvidence,
+	ToolDiagnosticCategory,
+	ToolInFlightDiagnosticEvidence,
 } from "@pilot/protocol";
 import release from "../../../package.json" with { type: "json" };
 import type { DaemonPerformance } from "./event-loop-watchdog.ts";
@@ -21,7 +31,9 @@ export const MAX_DIAGNOSTIC_ITEMS = 128;
 export const MAX_DIAGNOSTIC_BYTES = 64 * 1024;
 const MAX_TIMING_ITEMS = 32;
 const MAX_LIFECYCLE_ITEMS = 96;
+const MAX_TOOL_ITEMS = 64;
 const SOURCE_STALE_MS = 30_000;
+const MAX_DATE_MS = 8_640_000_000_000_000;
 const PERFORMANCE_FILE = "performance.jsonl";
 const MAX_PERFORMANCE_FILE_BYTES = 256 * 1024;
 
@@ -47,6 +59,7 @@ export interface SessionDiagnosticInput {
 	current: SessionDiagnosticCurrent;
 	connectivity: SessionDiagnostics["connectivity"];
 	performance?: DaemonPerformance;
+	toolActivity?: ToolActivitySnapshot;
 	nativeDiagnosticsPath?: string;
 	limit?: number;
 	now?: number;
@@ -54,6 +67,10 @@ export interface SessionDiagnosticInput {
 
 function finite(value: unknown): value is number {
 	return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function timestamp(value: unknown): value is number {
+	return finite(value) && value <= MAX_DATE_MS;
 }
 
 /** Read at most maxBytes from a regular, non-symlink file. Oversized files expose only their tail. */
@@ -225,6 +242,163 @@ async function timings(storageDir: string): Promise<SourceRead<DiagnosticEvidenc
 	};
 }
 
+const TOOL_CATEGORIES = new Set<ToolDiagnosticCategory>([
+	"shell",
+	"filesystem",
+	"network",
+	"background",
+	"codemode",
+	"mcp",
+	"orchestration",
+	"other",
+]);
+const TOOL_STATES = new Set(["dispatching", "running", "cancelling"]);
+const TOOL_REF = /^[0-9a-f]{12}-[1-9][0-9]{0,8}$/;
+
+interface OpenToolRecord {
+	start: Extract<ToolActivityRecord, { kind: "started" }>;
+	lastAt: number;
+	cancelAt?: number;
+}
+
+function completedTool(record: Extract<ToolActivityRecord, { kind: "finished" }>): ToolCallDiagnosticEvidence {
+	return {
+		ref: `diagnostic:v1:tool:${record.ref}`,
+		source: "tool",
+		at: new Date(record.at).toISOString(),
+		kind: "tool.call",
+		category: record.category,
+		nested: record.nested,
+		outcome: record.outcome,
+		durationMs: record.durationMs,
+		...(record.dispatchMs === undefined ? {} : { dispatchMs: record.dispatchMs }),
+		...(record.executionMs === undefined ? {} : { executionMs: record.executionMs }),
+		...(record.cancellationWaitMs === undefined ? {} : { cancellationWaitMs: record.cancellationWaitMs }),
+		...(record.droppedBefore ? { droppedBefore: record.droppedBefore } : {}),
+	};
+}
+
+function liveTools(snapshot: ToolActivitySnapshot | undefined, now: number): SourceRead<DiagnosticEvidence> {
+	if (
+		!snapshot ||
+		typeof snapshot.enabled !== "boolean" ||
+		!timestamp(snapshot.observedAt) ||
+		!Array.isArray(snapshot.calls) ||
+		!finite(snapshot.dropped)
+	)
+		return { items: [], available: 0, invalid: snapshot ? 1 : 0, dropped: 0, truncated: false };
+	if (!snapshot.enabled) return { items: [], available: 0, invalid: 0, dropped: 0, truncated: false };
+	const items: ToolInFlightDiagnosticEvidence[] = [];
+	let invalid = 0;
+	for (const call of snapshot.calls.slice(0, 32)) {
+		if (
+			!call ||
+			!TOOL_REF.test(call.ref) ||
+			!TOOL_CATEGORIES.has(call.category) ||
+			typeof call.nested !== "boolean" ||
+			!TOOL_STATES.has(call.state) ||
+			!timestamp(call.startedAt) ||
+			!timestamp(call.progressAt) ||
+			!timestamp(call.livenessAt) ||
+			(call.cancelRequestedAt !== undefined && !timestamp(call.cancelRequestedAt))
+		) {
+			invalid++;
+			continue;
+		}
+		items.push({
+			ref: `diagnostic:v1:tool:${call.ref}`,
+			source: "tool",
+			at: new Date(snapshot.observedAt).toISOString(),
+			kind: "tool.in_flight",
+			category: call.category,
+			nested: call.nested,
+			state: call.state,
+			durationMs: Math.max(0, now - call.startedAt),
+			progressAgeMs: Math.max(0, now - call.progressAt),
+			livenessAgeMs: Math.max(0, now - call.livenessAt),
+			...(call.cancelRequestedAt === undefined
+				? {}
+				: { cancellationWaitMs: Math.max(0, now - call.cancelRequestedAt) }),
+		});
+	}
+	return {
+		items,
+		available: snapshot.calls.length,
+		invalid: invalid + Math.max(0, snapshot.calls.length - 32),
+		dropped: Math.floor(snapshot.dropped),
+		truncated: snapshot.calls.length > 32 || snapshot.dropped > 0,
+		newestAt: new Date(snapshot.observedAt).toISOString(),
+	};
+}
+
+async function tools(
+	storageDir: string,
+	snapshot: ToolActivitySnapshot | undefined,
+	now: number,
+): Promise<SourceRead<DiagnosticEvidence>> {
+	const data = await segments(join(storageDir, TOOL_ACTIVITY_FILE), MAX_TOOL_ACTIVITY_FILE_BYTES);
+	const activeRefs = new Set(snapshot?.enabled ? snapshot.calls.map((call) => call.ref) : []);
+	const liveObservationDisabled = snapshot?.enabled === false;
+	const openCalls = new Map<string, OpenToolRecord>();
+	const items: ToolCallDiagnosticEvidence[] = [];
+	let invalid = 0;
+	let dropped = 0;
+	for (const line of data.lines) {
+		try {
+			const record = parseToolActivityRecord(JSON.parse(line));
+			if (!record) {
+				invalid++;
+				continue;
+			}
+			dropped += record.droppedBefore ?? 0;
+			if (record.kind === "started") {
+				openCalls.set(record.ref, { start: record, lastAt: record.at });
+			} else if (record.kind === "progress" || record.kind === "cancel_requested") {
+				const active = openCalls.get(record.ref);
+				if (active) {
+					active.lastAt = Math.max(active.lastAt, record.at);
+					if (record.kind === "cancel_requested") active.cancelAt = record.at;
+				}
+			} else {
+				openCalls.delete(record.ref);
+				items.push(completedTool(record));
+			}
+		} catch {
+			invalid++;
+		}
+	}
+	for (const [ref, active] of openCalls) {
+		if (activeRefs.has(ref) || liveObservationDisabled) continue;
+		items.push({
+			ref: `diagnostic:v1:tool:${ref}`,
+			source: "tool",
+			at: new Date(active.lastAt).toISOString(),
+			kind: "tool.call",
+			category: active.start.category,
+			nested: active.start.nested,
+			outcome: "interrupted",
+			durationMs: Math.max(0, active.lastAt - active.start.at),
+			...(active.cancelAt === undefined ? {} : { cancellationWaitMs: Math.max(0, active.lastAt - active.cancelAt) }),
+		});
+	}
+	const persistedAvailable = items.length;
+	if (items.length > MAX_TOOL_ITEMS) items.splice(0, items.length - MAX_TOOL_ITEMS);
+	const live = liveTools(snapshot, now);
+	const combined = [...items, ...live.items];
+	const newestAt = combined
+		.map((item) => item.at)
+		.sort()
+		.at(-1);
+	return {
+		items: combined,
+		available: persistedAvailable + live.available,
+		invalid: invalid + live.invalid,
+		dropped: dropped + live.dropped,
+		truncated: data.truncated || items.length < persistedAvailable || live.truncated,
+		...(newestAt ? { newestAt } : {}),
+	};
+}
+
 function daemonEvidence(performance: DaemonPerformance | undefined, now: number): SourceRead<DiagnosticEvidence> {
 	if (!performance) return { items: [], available: 0, invalid: 0, dropped: 0, truncated: false };
 	const items: DiagnosticEvidence[] = performance.stalls.recent.map((stall, index) => ({
@@ -284,13 +458,14 @@ export async function readSessionDiagnostics(input: SessionDiagnosticInput): Pro
 	const requestedLimit =
 		typeof input.limit === "number" && Number.isSafeInteger(input.limit) ? input.limit : MAX_DIAGNOSTIC_ITEMS;
 	const limit = Math.max(1, Math.min(MAX_DIAGNOSTIC_ITEMS, requestedLimit));
-	const [lifecycleRead, timingRead, nativeRead] = await Promise.all([
+	const [lifecycleRead, timingRead, toolRead, nativeRead] = await Promise.all([
 		lifecycle(input.storageDir),
 		timings(join(input.storageDir, "durable")),
+		tools(join(input.storageDir, "durable"), input.toolActivity, now),
 		native(input.nativeDiagnosticsPath),
 	]);
 	const daemonRead = daemonEvidence(input.performance, now);
-	const reads = [lifecycleRead, timingRead, daemonRead, nativeRead];
+	const reads = [lifecycleRead, timingRead, toolRead, daemonRead, nativeRead];
 	const available = reads.reduce((sum, read) => sum + read.available, 0);
 	const dropped = reads.reduce((sum, read) => sum + read.dropped, 0);
 	const invalid = reads.reduce((sum, read) => sum + read.invalid, 0);
@@ -301,6 +476,7 @@ export async function readSessionDiagnostics(input: SessionDiagnosticInput): Pro
 	const sources = [
 		sourceStatus("lifecycle", lifecycleRead, now),
 		sourceStatus("request_timing", timingRead, now),
+		sourceStatus("tool", toolRead, now),
 		sourceStatus("daemon", daemonRead, now),
 		sourceStatus("os", nativeRead, now),
 	];

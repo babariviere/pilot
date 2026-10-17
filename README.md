@@ -937,6 +937,10 @@ on-demand, runtime-restricted specialist and host-qualified read-only API that n
 wakes a parked worker. Use **Diagnose this chat** from a chat's More menu, or **Ask about Pilot** from Help, to open
 that specialist. Repair remains a separate user-authorized coding-agent handoff with explicitly selected bounded
 cited evidence.
+[Tool-call diagnostics](docs/tool-call-diagnostics.md) add bounded in-flight and completed lifecycle evidence for
+built-ins, MCP and nested `codemode` calls while keeping raw names, arguments, output and commands out of diagnostics
+and opt-in telemetry. Liveness and useful progress remain separate observations; Pilot does not automatically retry,
+restart or replay a suspected call.
 [Native crash and hang diagnostics](docs/native-diagnostics.md) use Apple's delayed MetricKit delivery and retain
 only bounded content-free incident metadata locally. Pilot does not ingest stacks or report bodies, upload to a
 crash vendor, or treat historical hang evidence as a live restart signal.

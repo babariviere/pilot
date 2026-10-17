@@ -3,7 +3,37 @@ import type { OperationHost } from "./operations.ts";
 export const DIAGNOSTIC_SCHEMA_VERSION = 1 as const;
 
 export type DiagnosticFreshness = "fresh" | "stale" | "unavailable";
-export type DiagnosticSource = "lifecycle" | "request_timing" | "daemon" | "os";
+export type DiagnosticSource = "lifecycle" | "request_timing" | "tool" | "daemon" | "os";
+export type ToolDiagnosticCategory =
+	| "shell"
+	| "filesystem"
+	| "network"
+	| "background"
+	| "codemode"
+	| "mcp"
+	| "orchestration"
+	| "other";
+export type ToolActivityState = "dispatching" | "running" | "cancelling";
+export type ToolActivityOutcome = "success" | "failure" | "timeout" | "cancelled" | "interrupted";
+
+/** Sanitized live kernel state. Raw call IDs, tool names, arguments and results never cross IPC. */
+export interface ToolActivityCall {
+	ref: string;
+	category: ToolDiagnosticCategory;
+	nested: boolean;
+	state: ToolActivityState;
+	startedAt: number;
+	progressAt: number;
+	livenessAt: number;
+	cancelRequestedAt?: number;
+}
+
+export interface ToolActivitySnapshot {
+	enabled: boolean;
+	observedAt: number;
+	calls: ToolActivityCall[];
+	dropped: number;
+}
 export type DiagnosticPauseReason = "sleep" | "update" | "quota" | "connectivity" | "user";
 export type DiagnosticErrorCode =
 	| "startup_failure"
@@ -65,6 +95,35 @@ export interface StallDiagnosticEvidence {
 	cpuMs?: number;
 }
 
+export interface ToolInFlightDiagnosticEvidence {
+	ref: string;
+	source: "tool";
+	at: string;
+	kind: "tool.in_flight";
+	category: ToolDiagnosticCategory;
+	nested: boolean;
+	state: ToolActivityState;
+	durationMs: number;
+	progressAgeMs: number;
+	livenessAgeMs: number;
+	cancellationWaitMs?: number;
+}
+
+export interface ToolCallDiagnosticEvidence {
+	ref: string;
+	source: "tool";
+	at: string;
+	kind: "tool.call";
+	category: ToolDiagnosticCategory;
+	nested: boolean;
+	outcome: ToolActivityOutcome;
+	durationMs: number;
+	dispatchMs?: number;
+	executionMs?: number;
+	cancellationWaitMs?: number;
+	droppedBefore?: number;
+}
+
 /** Content-free metadata delivered by macOS MetricKit. Report bodies and call stacks never enter Pilot. */
 export interface NativeDiagnosticEvidence {
 	ref: string;
@@ -81,6 +140,8 @@ export interface NativeDiagnosticEvidence {
 export type DiagnosticEvidence =
 	| LifecycleDiagnosticEvidence
 	| RequestTimingDiagnosticEvidence
+	| ToolInFlightDiagnosticEvidence
+	| ToolCallDiagnosticEvidence
 	| StallDiagnosticEvidence
 	| NativeDiagnosticEvidence;
 

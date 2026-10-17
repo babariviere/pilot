@@ -11,6 +11,7 @@ import type {
 	SessionCompletion,
 	SessionJob,
 	SessionSubagent,
+	ToolActivitySnapshot,
 } from "@pilot/protocol";
 import type { TraceCarrier } from "@pilot/telemetry";
 import type { ControlCall } from "./control-turn.ts";
@@ -183,6 +184,7 @@ export type KernelPacket =
 			attempts?: SessionAttempt[];
 	  }
 	| { type: "jobs.changed"; jobs: SessionJob[] }
+	| { type: "tool.activity"; activity: ToolActivitySnapshot }
 	| { type: "todos.changed"; openCount: number }
 	| { type: "usage"; usage: KernelUsage }
 	/** Confirm a provider-reported usage hold before retrying only its pending request. */

@@ -187,3 +187,132 @@ test("diagnostics treat symlinked evidence as unavailable", async (t) => {
 	assert.equal(result.evidence.length, 0);
 	assert.equal(result.sources[0]?.freshness, "unavailable");
 });
+
+test("diagnostics combine live tool progress with completed and interrupted evidence", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-diagnostics-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	await mkdir(join(root, "durable"));
+	const now = 20_000;
+	const lines = [
+		{
+			v: 1,
+			kind: "started",
+			ref: "abcdef012345-1",
+			at: 10_000,
+			category: "mcp",
+			nested: true,
+		},
+		{
+			v: 1,
+			kind: "started",
+			ref: "abcdef012345-2",
+			at: 11_000,
+			category: "shell",
+			nested: false,
+		},
+		{
+			v: 1,
+			kind: "finished",
+			ref: "abcdef012345-3",
+			at: 19_000,
+			startedAt: 17_000,
+			category: "filesystem",
+			nested: false,
+			outcome: "success",
+			durationMs: 2_000,
+			dispatchMs: 100,
+			executionMs: 1_900,
+		},
+	]
+		.map((record) => `${JSON.stringify(record)}\n`)
+		.join("");
+	await writeFile(join(root, "durable", "tool-activity.jsonl"), lines);
+	const result = await readSessionDiagnostics({
+		host,
+		sessionId: "session",
+		storageDir: root,
+		current,
+		connectivity: { state: "online" },
+		toolActivity: {
+			enabled: true,
+			observedAt: 19_900,
+			dropped: 0,
+			calls: [
+				{
+					ref: "abcdef012345-1",
+					category: "mcp",
+					nested: true,
+					state: "running",
+					startedAt: 10_000,
+					progressAt: 15_000,
+					livenessAt: 19_000,
+				},
+			],
+		},
+		now,
+	});
+	const toolEvidence = result.evidence.filter((item) => item.source === "tool");
+	assert.deepEqual(
+		toolEvidence.map((item) => [item.kind, "outcome" in item ? item.outcome : undefined, item.category]),
+		[
+			["tool.in_flight", undefined, "mcp"],
+			["tool.call", "success", "filesystem"],
+			["tool.call", "interrupted", "shell"],
+		],
+	);
+	const active = toolEvidence.find((item) => item.kind === "tool.in_flight");
+	assert.equal(active?.durationMs, 10_000);
+	assert.equal(active?.progressAgeMs, 5_000);
+	assert.equal(active?.livenessAgeMs, 1_000);
+	assert.equal(result.sources.find((source) => source.source === "tool")?.available, 3);
+	assert.equal(JSON.stringify(result).includes("mcp__slack"), false, "raw tool names are never exposed");
+});
+
+test("diagnostics distinguish an idle live observer from disabled collection", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-diagnostics-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	await mkdir(join(root, "durable"));
+	await writeFile(
+		join(root, "durable", "tool-activity.jsonl"),
+		`${JSON.stringify({
+			v: 1,
+			kind: "started",
+			ref: "abcdef012345-1",
+			at: 10_000,
+			category: "mcp",
+			nested: true,
+		})}\n`,
+	);
+
+	const live = await readSessionDiagnostics({
+		host,
+		sessionId: "session",
+		storageDir: root,
+		current,
+		connectivity: { state: "online" },
+		toolActivity: { enabled: true, observedAt: 20_000, calls: [], dropped: 0 },
+		now: 20_000,
+	});
+	assert.equal(live.sources.find((source) => source.source === "tool")?.freshness, "fresh");
+	assert.equal(
+		live.evidence.some((item) => item.kind === "tool.call" && "outcome" in item && item.outcome === "interrupted"),
+		true,
+	);
+
+	const disabled = await readSessionDiagnostics({
+		host,
+		sessionId: "session",
+		storageDir: root,
+		current,
+		connectivity: { state: "online" },
+		toolActivity: { enabled: false, observedAt: 20_000, calls: [], dropped: 1 },
+		now: 20_000,
+	});
+	assert.equal(disabled.sources.find((source) => source.source === "tool")?.freshness, "unavailable");
+	assert.equal(
+		disabled.evidence.some(
+			(item) => item.kind === "tool.call" && "outcome" in item && item.outcome === "interrupted",
+		),
+		false,
+	);
+});
