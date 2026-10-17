@@ -163,7 +163,12 @@ async function unfrozenInspectionFixture(t: TestContext) {
 	await until(() => !f.maintenance.frozen);
 	// Isolate inspection's own error handling. Otherwise the watcher can independently
 	// acquire a hold and hide a fail-open inspection path behind an already-frozen owner.
-	(f.maintenance as unknown as { watcher: { close(): void } }).watcher.close();
+	const internal = f.maintenance as unknown as { watcher: { close(): void }; refreshing?: Promise<void> };
+	internal.watcher.close();
+	// Closing fs.watch does not cancel a refresh already reading the waiting journal.
+	// Drain it before mutating the file, or its stale read can release inspect's new fence.
+	await internal.refreshing;
+	assert.equal(f.maintenance.frozen, false);
 	return f;
 }
 
