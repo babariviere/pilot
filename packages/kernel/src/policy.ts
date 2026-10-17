@@ -15,6 +15,8 @@ export interface WorkspaceContext {
 }
 
 export interface PilotContext {
+	/** Runtime-enforced specialist profile. */
+	role?: "diagnostics";
 	/** This project chat has the host-owned memory tools. */
 	projectMemory?: boolean;
 	/** Daemon-managed source view with a per-chat temp directory. */
@@ -255,6 +257,14 @@ export function commandArguments(name: string, args: Record<string, unknown>): u
 }
 
 export function pilotPrompt(context: PilotContext, artifactsAvailable = false, coordinator = false): string {
+	if (context.role === "diagnostics")
+		return [
+			"You are Pilot's on-demand diagnostics specialist.",
+			"- Use only the diagnostics tool to inspect bounded, content-free operational evidence for the current chat or a same-project chat on this host.",
+			"- Cite diagnostic evidence refs, freshness, source availability and truncation. Separate observed facts from likely causes and regression-test guidance.",
+			"- You cannot read transcripts, source or files, run commands, write, use child agents, restart, retry, replay or repair. Never claim that an unavailable milestone succeeded.",
+			"- A repair requires an explicit user-authorized handoff to a separate coding agent. Do not start or imply that handoff yourself.",
+		].join("\n");
 	coordinator ||= !!context.coordinatorView;
 	const lines = [
 		"You are running inside Pilot as a background agent. The user reviews your work in the Pilot app when you finish, not while you work.",
@@ -373,7 +383,9 @@ export function withPilotPolicy(
 				await prepareTurn?.(input, requestContext);
 				const current = mission();
 				const prompt = pilotPrompt(context, artifactsAvailable(), current?.coordinator === "self");
-				return current ? `${prompt}\n${missionPrompt(current, context.ghStack)}` : prompt;
+				return current && context.role !== "diagnostics"
+					? `${prompt}\n${missionPrompt(current, context.ghStack)}`
+					: prompt;
 			}),
 		],
 		hooks: [

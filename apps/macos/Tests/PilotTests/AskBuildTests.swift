@@ -69,6 +69,16 @@ private let askProject = Project(id: "ask-project", name: "Code", path: "/tmp/co
     #expect(app.draftBaseBranch == nil && app.draftWorkspace == nil && app.draftCwd == nil)
 }
 
+@Test @MainActor func diagnosticsSpecialistCannotCopyItsTranscriptIntoABuildDraft() {
+    let app = AppModel()
+    let specialist = SessionSummary(id: "d", title: "Diagnosis", cwd: askProject.path,
+                                    projectId: askProject.id, createdAt: 1, updatedAt: 2,
+                                    state: "idle", mode: .ask, role: .diagnostics)
+    app.buildWithContext(from: specialist, rows: [.text(id: "a", text: "Unbounded diagnosis")])
+    #expect(app.draftMessage == nil)
+    #expect(app.draftProjectId == nil)
+}
+
 @Test @MainActor func checkoutHandoffAndFreshChatsDefaultToBuildWithoutOriginGuess() {
     let app = AppModel()
     let checkout = SessionSummary(id: "a", title: "Checkout", cwd: "/tmp/local", createdAt: 1, updatedAt: 2,

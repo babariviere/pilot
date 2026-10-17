@@ -588,6 +588,27 @@ final class PilotClient: ObservableObject {
         return try await call(request)
     }
 
+    /// Prepares bounded evidence for a separate repair chat. This call never starts or changes a chat.
+    func diagnosticsHandoff(_ specialistId: String,
+                            request body: DiagnosticsHandoffRequest) async throws -> DiagnosticsHandoff {
+        guard let baseURL, let host = hostIdentity,
+              var components = URLComponents(
+                  url: baseURL.appending(path: "api/sessions/\(specialistId)/diagnostics/handoff"),
+                  resolvingAgainstBaseURL: false
+              ) else { throw HostRoutingError.disconnected }
+        components.queryItems = [
+            URLQueryItem(name: "hostId", value: host.hostId),
+            URLQueryItem(name: "daemonId", value: host.daemonId),
+            URLQueryItem(name: "lineageId", value: host.lineageId),
+        ]
+        guard let url = components.url else { throw HostRoutingError.invalidReference }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(body)
+        return try await call(request)
+    }
+
     /// Stops one running job. The session summary drops it once the worker reports its jobs again.
     func stopJob(_ sessionId: String, jobId: String) async throws {
         var allowed = CharacterSet.urlPathAllowed

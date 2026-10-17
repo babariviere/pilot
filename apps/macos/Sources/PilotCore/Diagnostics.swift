@@ -107,3 +107,29 @@ public struct SessionDiagnostics: Codable, Sendable {
     public let evidence: [DiagnosticEvidence]
     public let truncation: SessionDiagnosticTruncation
 }
+
+public struct DiagnosticsHandoffRequest: Codable, Sendable {
+    public let targetSessionId: String
+    public let evidenceRefs: [String]
+    public let likelyCause: String
+    public let regressionTestGuidance: String
+
+    public init(targetSessionId: String, evidenceRefs: [String], likelyCause: String,
+                regressionTestGuidance: String) {
+        self.targetSessionId = targetSessionId
+        self.evidenceRefs = evidenceRefs
+        self.likelyCause = likelyCause
+        self.regressionTestGuidance = regressionTestGuidance
+    }
+}
+
+/// Bounded material for a user-authorized repair chat. Producing it never starts or changes a chat.
+public struct DiagnosticsHandoff: Codable, Sendable {
+    public let schemaVersion: Int
+    public let host: OperationHost
+    public let targetSessionId: String
+    public let projectId: String?
+    public let evidence: [DiagnosticEvidence]
+    public let likelyCause: String
+    public let regressionTestGuidance: String
+}

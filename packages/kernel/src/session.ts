@@ -393,9 +393,14 @@ export class KernelSession {
 			const active = await activeConversation(owned.storage, context);
 			const [pinned, ghStack] = await Promise.all([
 				pinnedAgent(owned.storage, active),
-				spec.control ? Promise.resolve(false) : detectGhStack(spec.cwd),
+				spec.control || spec.role === "diagnostics" ? Promise.resolve(false) : detectGhStack(spec.cwd),
 			]);
-			const pilot = { ...spec.pilot, ghStack, projectMemory: !!spec.projectId && !!hooks.callMemory };
+			const pilot = {
+				...spec.pilot,
+				...(spec.role ? { role: spec.role } : {}),
+				ghStack,
+				projectMemory: spec.role !== "diagnostics" && !!spec.projectId && !!hooks.callMemory,
+			};
 			const refreshWorkspace = hooks.prepareWorkspace;
 			const prepareWorkspace = refreshWorkspace
 				? async () => {
@@ -433,6 +438,7 @@ export class KernelSession {
 				cwd: spec.cwd,
 				control: spec.control,
 				ask: spec.pilot?.ask,
+				diagnostics: spec.role === "diagnostics",
 				agentDir: spec.agentDir,
 				trustDirectory: spec.trustDirectory,
 				projectTrusted: spec.projectTrusted,
@@ -449,7 +455,9 @@ export class KernelSession {
 				],
 				subagents,
 				hostTools: [
-					...(hooks.callDiagnostics ? [createDiagnosticsTool(hooks.callDiagnostics, spec.sessionId)] : []),
+					...(spec.role === "diagnostics" && hooks.callDiagnostics
+						? [createDiagnosticsTool(hooks.callDiagnostics, spec.sessionId)]
+						: []),
 					...(spec.control && hooks.callMemory ? createMemoryTools(hooks.callMemory, spec.sessionId, true) : []),
 					...(spec.control && hooks.callPilot ? [createPilotTool(hooks.callPilot)] : []),
 					...createControlMemoryTools(!!spec.control, (action, args) => hooks.callControl!(action, args)),
@@ -460,7 +468,7 @@ export class KernelSession {
 						? [createSlackStatusTool(hooks.callSlackStatus)]
 						: []),
 				],
-				...(spec.control
+				...(spec.control || spec.role === "diagnostics"
 					? {}
 					: spec.pilot?.ask
 						? { askArtifacts: artifactOptions }

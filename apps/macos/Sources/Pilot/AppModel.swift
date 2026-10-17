@@ -597,7 +597,7 @@ final class AppModel: ObservableObject {
     /// An explicit new Build draft. The original Ask session and its history are never changed.
     func buildWithContext(from session: SessionSummary, rows: [ChatRow], context: HostViewContext? = nil) {
         let client = context.map { $0.hosts.presentationClient($0.host) } ?? self.client
-        guard session.isAsk else { return }
+        guard session.isAsk, !session.isDiagnosticsSpecialist else { return }
         let rows = rows.flatMap(\.unfolded)
         let discussion = rows.compactMap { row -> String? in
             switch row {

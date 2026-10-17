@@ -6,17 +6,36 @@ import Testing
     let legacy = Data(#"{"id":"old","title":"Old chat","cwd":"/tmp","createdAt":1,"updatedAt":2,"state":"parked"}"#.utf8)
     let session = try JSONDecoder().decode(SessionSummary.self, from: legacy)
     #expect(session.mode == nil)
+    #expect(session.role == nil)
     #expect(session.effectiveMode == .build)
     #expect(!session.isAsk)
     #expect(session.workspaceLabel == "Build workspace")
     let request = try JSONDecoder().decode(SpawnRequest.self, from: Data(#"{"cwd":"/tmp","message":"hello"}"#.utf8))
     #expect(request.mode == nil)
+    #expect(request.role == nil)
     #expect(request.workspace == nil)
     #expect(request.baseBranch == nil)
     let wire = try JSONValue.decode(JSONEncoder().encode(request))
     #expect(wire["mode"] == nil)
     #expect(wire["workspace"] == nil)
     #expect(wire["baseBranch"] == nil)
+}
+
+@Test func diagnosticsRoleAndBoundedHandoffProtocolRoundTrip() throws {
+    let request = SpawnRequest(projectId: "p", message: "Diagnose", mode: .ask, role: .diagnostics)
+    let decoded = try JSONDecoder().decode(SpawnRequest.self, from: JSONEncoder().encode(request))
+    #expect(decoded.role == .diagnostics)
+    let session = SessionSummary(id: "d", title: "Diagnose", cwd: "/tmp", createdAt: 1, updatedAt: 2,
+                                 state: "idle", mode: .ask, role: .diagnostics)
+    #expect(session.isDiagnosticsSpecialist)
+    #expect(try JSONDecoder().decode(SessionSummary.self, from: JSONEncoder().encode(session)) == session)
+    let handoff = DiagnosticsHandoffRequest(targetSessionId: "target",
+                                            evidenceRefs: ["diagnostic:v1:lifecycle:1"],
+                                            likelyCause: "Likely cause",
+                                            regressionTestGuidance: "Regression guidance")
+    let handoffWire = try JSONValue.decode(JSONEncoder().encode(handoff))
+    #expect(handoffWire["targetSessionId"]?.string == "target")
+    #expect(handoffWire["evidenceRefs"]?.array?.count == 1)
 }
 
 @Test func askAndBuildProtocolRoundTripsExactBranchAndWorkspace() throws {

@@ -680,3 +680,17 @@ test("Ask overrides Build delivery policy and requires an explicit new Build han
 	}
 	assert.match(pilotPrompt({ ask: { source: "/source" } }), /current checkout, including its uncommitted changes/);
 });
+
+test("diagnostics specialist prompt grants no repair or repository authority", () => {
+	const prompt = pilotPrompt({
+		role: "diagnostics",
+		ask: { source: "/source" },
+		workspace: { source: "/source", base: "main", jj: true },
+		requirePullRequest: true,
+	});
+	assert.match(prompt, /diagnostics specialist/);
+	assert.match(prompt, /Use only the diagnostics tool/);
+	assert.match(prompt, /cannot read transcripts, source or files/);
+	assert.match(prompt, /explicit user-authorized handoff/);
+	assert.doesNotMatch(prompt, /gh pr create|git push|read, find, grep|subagents/);
+});
