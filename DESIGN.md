@@ -128,6 +128,8 @@ All projects starts with the Control chat's own row, without a header: its anten
 projects" as its line, never Ask, a branch or a pin mark. It belongs to no project, so a focused project never lists
 it, and it offers no pin, archive or mission actions. Its window subtitle is "All projects" and its transcript opens
 with a one-sentence header on what it can see and do; the Ask badge and the Build-handoff row stay hidden.
+Its inspector adds a Watching pane: active watches (target, "When … · Once/Every time", the saved note) with Cancel
+under the pointer, then Actions, its audited starts, messages, missions and memory notes, one row per operation.
 
 Below that, both scopes use the same order: Missions, then chats grouped only by urgency (Pinned, Needs you, Ready to
 merge, Working, Recent). All projects names each row's project; a focused project leaves it out. Missions never sit in

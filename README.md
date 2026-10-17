@@ -862,7 +862,8 @@ the PR tracker; out-of-scope Linear watches use at most 25 rotating `list_issues
 The control chat manages these subscriptions with `pilot` actions `watch`, `unwatch` and `watches`.
 Saved watch instructions run automatically as event turns. Event summaries remain quoted, untrusted
 data, and notice turns cannot create or attach missions. The control chat's own activity and work
-it starts or sends do not wake it again. The Watching UI is a separate integration.
+it starts or sends do not wake it again. In the app, the control chat's Watching pane (binoculars in its
+toolbar) lists active watches with Cancel, then its audited actions, newest first.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |

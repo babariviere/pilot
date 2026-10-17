@@ -18,6 +18,8 @@ final class PilotClient: ObservableObject {
     /// Invalidation only, per project. Inbox views refresh a bounded page; project pages already get
     /// dashboard updates. Observers register with observeTrackedItems.
     private var trackedObservers: [UUID: (String) -> Void] = [:]
+    /// Control-chat details invalidations (watches or audit). Installed only while those details are shown.
+    private var controlObservers: [UUID: (ControlDetailsChange) -> Void] = [:]
     /// Snapshot fixtures for tracked items and the settings pickers. Never set in the live app.
     var fixtureTracking: TrackingFixture?
     @Published private(set) var hasProjectSnapshot = false
@@ -945,6 +947,45 @@ final class PilotClient: ObservableObject {
 
     func stopObservingTrackedItems(_ id: UUID) {
         trackedObservers[id] = nil
+    }
+
+    // MARK: Control chat details
+
+    /// One bounded page of active watches, in ID order. `after` is the previous page's `next`.
+    func controlWatches(after: String? = nil, limit: Int = 40) async throws -> WatchesResponse {
+        guard let baseURL else { throw HostRoutingError.disconnected }
+        var url = URLComponents(url: baseURL.appending(path: "api/control-chat/watches"), resolvingAgainstBaseURL: false)!
+        url.queryItems = [URLQueryItem(name: "limit", value: String(limit))]
+            + (after.map { [URLQueryItem(name: "after", value: $0)] } ?? [])
+        return try await get(url.url!)
+    }
+
+    /// Idempotent: false when the watch already fired, expired or was cancelled.
+    func cancelWatch(_ id: String) async throws -> Bool {
+        // One path segment; pilotd's IDs never need escaping.
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_.:"))
+        guard !id.isEmpty, id.unicodeScalars.allSatisfy(allowed.contains) else { throw HostRoutingError.invalidReference }
+        let response: CancelWatchResponse = try await call("api/control-chat/watches/\(id)", method: "DELETE")
+        return response.removed
+    }
+
+    /// One bounded page of the control audit, newest first. `before` is the oldest loaded sequence.
+    func controlAudit(before: Int? = nil, limit: Int = 50) async throws -> ControlAuditResponse {
+        guard let baseURL else { throw HostRoutingError.disconnected }
+        var url = URLComponents(url: baseURL.appending(path: "api/control-chat/audit"), resolvingAgainstBaseURL: false)!
+        url.queryItems = [URLQueryItem(name: "limit", value: String(limit))]
+            + (before.map { [URLQueryItem(name: "before", value: String($0))] } ?? [])
+        return try await get(url.url!)
+    }
+
+    func observeControlDetails(_ handler: @escaping (ControlDetailsChange) -> Void) -> UUID {
+        let id = UUID()
+        controlObservers[id] = handler
+        return id
+    }
+
+    func stopObservingControlDetails(_ id: UUID) {
+        controlObservers[id] = nil
     }
 
     func loadTrackingFixture(_ fixture: TrackingFixture) {
@@ -2069,8 +2110,10 @@ final class PilotClient: ObservableObject {
             for observer in trackedObservers.values { observer(projectId) }
         case .sharedContextsChanged:
             onSharedContextsChanged?()
-        case .watchesChanged, .controlAuditChanged:
-            break // Control detail subscriptions are installed by the control-chat UI.
+        case .watchesChanged:
+            for observer in controlObservers.values { observer(.watches) }
+        case .controlAuditChanged:
+            for observer in controlObservers.values { observer(.audit) }
         case let .projects(list):
             projects = list
             hasProjectSnapshot = true

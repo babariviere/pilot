@@ -9,8 +9,11 @@ enum InspectorTab: Hashable {
     case agents
     case mission
     case links
+    /// The control chat's watches and audited actions.
+    case watching
 
     func isAvailable(for session: SessionSummary) -> Bool {
+        if self == .watching { return session.isControl }
         if self == .changes || self == .terminal { return session.supportsChanges }
         if self == .mission { return session.missionId != nil && !session.isMissionCoordinator }
         return !session.isAsk || self == .artifacts || self == .links

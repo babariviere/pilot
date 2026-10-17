@@ -48,6 +48,7 @@ enum PilotIcon: String, CaseIterable {
     // MARK: Agents, tools and workspaces
 
     case askMode, buildMode, subagents, model, thinking, memory, memoryEntry, command, code, web, extensionTool, tool, terminal,
+        watch,
         changes, link, document, isolatedWorkspace, sharedWorkspace, compaction, reset, push, pullRequest, branch, bug
 
     // MARK: Services and settings
@@ -150,6 +151,7 @@ extension PilotIcon {
         case .extensionTool: "puzzlepiece.extension"
         case .tool: "wrench.and.screwdriver"
         case .terminal: "terminal"
+        case .watch: "binoculars"
         case .changes: "plusminus"
         case .link: "link"
         case .document: "doc.text"
@@ -315,6 +317,7 @@ extension PilotIcon {
         case .extensionTool: "An MCP or extension tool."
         case .tool: "Any other tool call."
         case .terminal: "The terminal, shell commands and background jobs."
+        case .watch: "A watch the control chat keeps on an event, its Watching list and that list's inspector toggle."
         case .changes: "The Changes inspector."
         case .link: "A generic link. Known services use PilotMark."
         case .document: "A file, the mission brief or a read tool."
