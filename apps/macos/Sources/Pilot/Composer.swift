@@ -147,6 +147,7 @@ final class ComposerState: ObservableObject {
 struct Composer: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.hostViewContext) private var hostContext
+    @Environment(\.keyboardFocus) private var keyboard
     @ObservedObject var state: ComposerState
     let working: Bool
     let hostAvailable: Bool
@@ -352,7 +353,7 @@ struct Composer: View {
             ComposerDraftEditor(
                 state: state.draftState, working: working, focusToken: state.composerFocus,
                 onNavigateQueue: { state.navigateQueue($0, messages: remainingQueuedMessages) },
-                onCancel: cancelQueueEditAction ?? { KeyboardFocus.leaveComposer() },
+                onCancel: cancelQueueEditAction ?? { [keyboard] in KeyboardFocus.leaveComposer(keyboard) },
                 onPasteImages: { state.attachments.paste(from: $0) },
                 completionDirectory: completionDirectory,
                 slashCommands: slashCommands,

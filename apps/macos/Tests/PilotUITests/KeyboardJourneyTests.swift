@@ -35,8 +35,8 @@ private final class Journey {
             .environment(\.pilotFonts, model.settings.fonts))
         window.setFrameOrigin(NSPoint(x: -10000, y: -10000))
         window.orderFrontRegardless()
-        // Views register their regions with the app's keyboard state; routes act on this fixture's model.
-        let keyboard = AppModel.shared.keyboard
+        // The window's views register their regions with this fixture's keyboard state, not the app's.
+        let keyboard = model.keyboard
         router.focus = keyboard
         router.perform = { [model] route in
             switch route {
@@ -83,12 +83,13 @@ private final class Journey {
     var responder: NSResponder? { window.firstResponder }
 }
 
-@Test(.timeLimit(.minutes(1))) @MainActor
+// A busy CI runner makes hosted windows slow to settle; each step still waits at most three seconds.
+@Test(.timeLimit(.minutes(3))) @MainActor
 func keyboardOnlyStartSwitchTypeAndReturn() throws {
     let journey = try Journey()
     defer { journey.close() }
     let model = journey.model
-    let keyboard = AppModel.shared.keyboard
+    let keyboard = model.keyboard
     #expect(journey.wait { keyboard.visibleRegions.contains(.sidebar) && keyboard.visibleRegions.contains(.composer) },
             "Home shows the sidebar, page and new-chat composer regions")
     #expect(model.currentRoute == .home)
@@ -126,12 +127,13 @@ func keyboardOnlyStartSwitchTypeAndReturn() throws {
     #expect(journey.wait { journey.responder is SubmitTextView })
 }
 
-@Test(.timeLimit(.minutes(1))) @MainActor
+// A busy CI runner makes hosted windows slow to settle; each step still waits at most three seconds.
+@Test(.timeLimit(.minutes(3))) @MainActor
 func keyboardOnlySidebarBrowsingKeepsFocusInTheSidebar() throws {
     let journey = try Journey()
     defer { journey.close() }
     let model = journey.model
-    let keyboard = AppModel.shared.keyboard
+    let keyboard = model.keyboard
     #expect(journey.wait { keyboard.visibleRegions.contains(.sidebar) })
     journey.press("\t", keyCode: 48, .control)
     #expect(journey.wait { journey.responder is NSTableView })

@@ -212,6 +212,7 @@ private struct KeyboardListBody<Content: View>: View {
     let onEscape: (() -> Void)?
     let onCommand: ((String, KeyboardListCommand) -> Void)?
     var focused: FocusState<Bool>.Binding
+    @Environment(\.keyboardFocus) private var keyboard
     /// The page this list belongs to, for restoring its highlight after Back.
     @State private var routeKey: String?
 
@@ -257,7 +258,7 @@ private struct KeyboardListBody<Content: View>: View {
                 }
                 .onChange(of: focused.wrappedValue) { _, isFocused in
                     guard isFocused else { return }
-                    if let region { AppModel.shared.keyboard.noteFocused(region) }
+                    if let region { keyboard.noteFocused(region) }
                     list.highlightFirstIfNeeded()
                     AppModel.shared.keyboardTarget = list.highlightedItem?.target
                 }

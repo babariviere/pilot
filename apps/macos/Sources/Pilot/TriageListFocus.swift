@@ -4,6 +4,7 @@ import SwiftUI
 /// its own keys, such as Slack triage's arrows and T/L/D or the memory tree's arrows.
 struct TriageListFocus: ViewModifier {
     var focused: FocusState<Bool>.Binding
+    @Environment(\.keyboardFocus) private var keyboard
 
     func body(content: Content) -> some View {
         content
@@ -12,7 +13,7 @@ struct TriageListFocus: ViewModifier {
                 return true
             }
             .onChange(of: focused.wrappedValue) { _, isFocused in
-                if isFocused { AppModel.shared.keyboard.noteFocused(.content) }
+                if isFocused { keyboard.noteFocused(.content) }
             }
     }
 }

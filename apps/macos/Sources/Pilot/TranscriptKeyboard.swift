@@ -72,6 +72,7 @@ struct TranscriptKeyboardModifier: ViewModifier {
     let loadEarlier: (() -> Void)?
     let pauseFollowing: () -> Void
     @FocusState private var focused: Bool
+    @Environment(\.keyboardFocus) private var keyboardFocus
 
     func body(content: Content) -> some View {
         content
@@ -89,7 +90,7 @@ struct TranscriptKeyboardModifier: ViewModifier {
                 case .return: toggleHighlighted()
                 default:
                     // Back to the composer, draft and caret as they were.
-                    _ = AppModel.shared.focusComposer()
+                    _ = keyboardFocus.focus(.composer)
                 }
                 return .handled
             }
@@ -103,7 +104,7 @@ struct TranscriptKeyboardModifier: ViewModifier {
             }
             .onChange(of: focused) { _, isFocused in
                 guard isFocused else { return }
-                AppModel.shared.keyboard.noteFocused(.content)
+                keyboardFocus.noteFocused(.content)
                 if keyboard.highlighted == nil || highlightedRow == nil { select(rows().last?.id) }
             }
             .keyboardFocusHandler(.content) {

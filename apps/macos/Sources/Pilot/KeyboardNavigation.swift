@@ -194,8 +194,7 @@ final class KeyboardFocus: ObservableObject {
     func removeSelectionProvider(_ id: UUID) { selectionProviders.removeAll { $0.id == id } }
 
     /// Escape after any picker, marked text or queue edit: leave the composer for the page, keeping the draft.
-    static func leaveComposer() {
-        let focus = AppModel.shared.keyboard
+    static func leaveComposer(_ focus: KeyboardFocus = AppModel.shared.keyboard) {
         if !focus.focus(.content) {
             NSApp.keyWindow?.makeFirstResponder(nil)
             focus.noteFocused(.content)
@@ -503,10 +502,11 @@ extension View {
 private struct KeyboardRegionModifier: ViewModifier {
     let region: KeyboardRegion
     let onFocus: (() -> Bool)?
+    @Environment(\.keyboardFocus) private var keyboard
 
     func body(content: Content) -> some View {
         content
-            .background(KeyboardRegionAnchor(region: region, focus: AppModel.shared.keyboard))
+            .background(KeyboardRegionAnchor(region: region, focus: keyboard))
             .modifier(OptionalFocusHandler(region: region, perform: onFocus))
     }
 }
@@ -528,11 +528,12 @@ private struct KeyboardFocusHandlerModifier: ViewModifier {
     let region: KeyboardRegion
     let perform: () -> Bool
     @State private var id = UUID()
+    @Environment(\.keyboardFocus) private var keyboard
 
     func body(content: Content) -> some View {
         content
-            .onAppear { AppModel.shared.keyboard.addHandler(id, for: region, perform: perform) }
-            .onDisappear { AppModel.shared.keyboard.removeHandler(id) }
+            .onAppear { keyboard.addHandler(id, for: region, perform: perform) }
+            .onDisappear { keyboard.removeHandler(id) }
     }
 }
 
@@ -647,5 +648,17 @@ enum GoDestination: String, CaseIterable {
     init?(key: Character) {
         guard let match = Self.allCases.first(where: { $0.key == Character(key.lowercased()) }) else { return nil }
         self = match
+    }
+}
+
+/// The keyboard state views register their regions, handlers and commands with: the app's, or a fixture window's.
+private struct KeyboardFocusKey: EnvironmentKey {
+    static var defaultValue: KeyboardFocus { MainActor.assumeIsolated { AppModel.shared.keyboard } }
+}
+
+extension EnvironmentValues {
+    var keyboardFocus: KeyboardFocus {
+        get { self[KeyboardFocusKey.self] }
+        set { self[KeyboardFocusKey.self] = newValue }
     }
 }

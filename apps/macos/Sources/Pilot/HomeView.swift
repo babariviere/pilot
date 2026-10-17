@@ -185,6 +185,7 @@ struct TaskComposer: View {
     @StateObject private var form: NewSessionForm
     @StateObject private var branches: BranchSelectorState
     @FocusState private var focused: Bool
+    @Environment(\.keyboardFocus) private var keyboard
     /// Bumped by ⌘L and region focus to move the caret into the message editor.
     @State private var editorFocus: UUID?
     /// Bumped by ⌘K's "Send later: At a time…".
@@ -305,7 +306,7 @@ struct TaskComposer: View {
                     ChatTextEditor(text: $form.message, height: $form.editorHeight, font: fonts.nsBody, minLines: 3, maxLines: 14,
                                    maxWindowFraction: 0.5,
                                    isEditable: !form.busy, focusToken: editorFocus,
-                                   onCancel: { KeyboardFocus.leaveComposer() },
+                                   onCancel: { [keyboard] in KeyboardFocus.leaveComposer(keyboard) },
                                    onPasteImages: { form.attachments.paste(from: $0) },
                                    completionDirectory: form.mode == .ask || remote ? nil : project?.path ?? (form.folder.isEmpty ? FileManager.default.homeDirectoryForCurrentUser.path : form.folder),
                                    slashCommands: SlashCommands.newChatAppCommands,

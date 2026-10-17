@@ -796,6 +796,7 @@ struct MissionTaskRow: View {
     @StateObject private var artifacts = MissionArtifactsState()
     @Environment(\.keyboardListHighlight) private var keyboardHighlight
     @FocusState private var titleFocused: Bool
+    @Environment(\.keyboardFocus) private var keyboardFocus
     /// Rows built, so the tab-switch check can confirm the list stays lazy.
     static var bodyEvaluations = 0
 
@@ -1064,7 +1065,7 @@ struct MissionTaskRow: View {
     /// Leaves the title field for the task list, so arrows move between tasks again.
     private func finishEditing() {
         titleFocused = false
-        DispatchQueue.main.async { AppModel.shared.keyboard.focus(.content) }
+        DispatchQueue.main.async { [keyboard = keyboardFocus] in keyboard.focus(.content) }
     }
 
     private func saveTitle() {
