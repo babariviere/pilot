@@ -1,0 +1,37 @@
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 128
+    spike_limit_mib: 32
+  batch:
+    timeout: 1s
+    send_batch_size: 256
+    send_batch_max_size: 512
+
+exporters:
+  # Basic prints counts, not detailed span attributes or payloads.
+  debug:
+    verbosity: basic
+  file:
+    path: /var/lib/otel/pilot-traces.json
+    format: json
+    rotation:
+      max_megabytes: 10
+      max_days: 7
+      max_backups: 3
+
+service:
+  telemetry:
+    logs:
+      level: warn
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [debug, file]

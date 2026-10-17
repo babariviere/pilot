@@ -1,0 +1,17 @@
+services:
+  collector:
+    image: otel/opentelemetry-collector-contrib:0.162.0
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:4318:4318"
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+      - pilot-otel-data:/var/lib/otel
+    deploy:
+      resources:
+        limits:
+          memory: 192M
+
+volumes:
+  pilot-otel-data:
