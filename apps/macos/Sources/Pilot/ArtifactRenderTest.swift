@@ -386,13 +386,22 @@ enum ArtifactRenderTest {
             view.frame.size = size
             try await Task.sleep(for: .milliseconds(1200))
             if name == "tall-wide" {
-                guard size == CGSize(width: 1650, height: 1350) else { throw ClientError("Content did not grow: \(size)") }
+                // Wider than the column and taller than the inline ceiling: the card keeps the column and
+                // stops at the ceiling, and the page scrolls inside.
+                guard size == CGSize(width: ArtifactViewerLayout.inlineColumnWidth, height: ArtifactViewerLayout.inlineMaxHeight) else {
+                    throw ClientError("Content did not grow: \(size)")
+                }
                 _ = try await view.evaluateJavaScript("document.getElementById('content').style.height='1500px'")
                 try await wait("Dynamic content measurement") { state.contentSize?.height == 1500 }
                 view.frame.size = ArtifactViewerLayout.inlineSize(availableWidth: 1800, contentSize: state.contentSize)
             } else if name == "svg" {
-                guard size.width == 1650 else { throw ClientError("SVG did not request its natural width: \(size)") }
-                try await wait("SVG height after widening") { state.contentSize?.height == 1350 }
+                // The drawing reports its natural width, but the card stays in the column and the SVG reflows.
+                guard state.contentSize?.width == 1650, size.width == ArtifactViewerLayout.inlineColumnWidth else {
+                    throw ClientError("SVG width: content \(String(describing: state.contentSize)), card \(size)")
+                }
+                try await wait("SVG height in the column") {
+                    state.contentSize.map { abs($0.height - (1350 * ArtifactViewerLayout.inlineColumnWidth / 1650).rounded(.up)) <= 1 } == true
+                }
                 view.frame.size = ArtifactViewerLayout.inlineSize(availableWidth: 1800, contentSize: state.contentSize)
             } else {
                 guard state.contentSize?.height == size.height, size.height < 800 else {

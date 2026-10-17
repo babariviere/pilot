@@ -149,9 +149,9 @@ struct ArtifactCard: View {
         VStack(alignment: .leading, spacing: 0) {
             if state.preview {
                 let image = state.revision?.kind == .image || state.revision?.kind == .swiftui
-                let clipped = ArtifactViewerLayout.inlineClipsHeight(contentSize: render.contentSize, image: image)
                 // Reserve the measured size while offscreen, so the web view coming and going
                 // never changes the row height under the user's scroll position.
+                // Pages taller than the inline ceiling scroll inside the card.
                 InlineArtifactLayout(contentSize: render.contentSize, image: image) {
                     if state.visible {
                         ArtifactContent(reference: reference, latest: false, inline: true, onOpen: { state.viewer = true },
@@ -163,20 +163,6 @@ struct ArtifactCard: View {
                 // Artifacts are light documents. In dark, transparent inline ones sit on light paper to stay readable.
                 .background(RoundedRectangle(cornerRadius: Theme.Radius.control).fill(state.visible ? Theme.artifactPaper : .clear))
                 .clipped()
-                // Like a folded message: content taller than the inline ceiling fades out over a
-                // soft shadow, so the cut reads as "more inside" (click opens the full viewer).
-                // Overlays only, so the web view keeps its identity when measurement changes.
-                .overlay(alignment: .bottom) {
-                    if clipped {
-                        LinearGradient(colors: [Theme.background.opacity(0), Theme.background],
-                                       startPoint: .top, endPoint: .bottom)
-                            .frame(height: 96)
-                            .allowsHitTesting(false)
-                    }
-                }
-                .background(alignment: .bottom) {
-                    if clipped { Rectangle().fill(Theme.background).frame(height: 1).foldedShadow() }
-                }
                 // Share prose's leading edge. Small images keep their natural size, without a card.
                 .frame(maxWidth: .infinity, alignment: .leading)
             } else {
@@ -286,6 +272,7 @@ struct ArtifactViewerHeader: View {
 
 private struct ArtifactContent: View {
     @Environment(\.hostViewContext) private var hostContext
+    @Environment(\.transcriptComposer) private var composer
     @EndpointClient private var endpoint
     let reference: ArtifactReference
     let latest: Bool
@@ -304,14 +291,31 @@ private struct ArtifactContent: View {
                 }
                 .padding().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let revision = state.revision {
-                ArtifactPreview(revision: revision, inline: inline, state: render).id("\(revision.id)-\(revision.revision)")
-                    .allowsHitTesting(!inline)
-                    .accessibilityHidden(inline)
+                // Pages are used in place; snapshots (images, SwiftUI) open the viewer on click.
+                let interactive = !inline || revision.kind == .html || revision.kind == .react
+                ArtifactPreview(revision: revision, inline: inline, state: render,
+                                onEscape: inline ? { [weak composer] in composer?.composerFocus = UUID() } : nil)
+                    .id("\(revision.id)-\(revision.revision)")
+                    .allowsHitTesting(interactive)
+                    .accessibilityHidden(!interactive)
                     .overlay {
-                        if inline {
+                        if !interactive {
                             EmbeddedPreviewButton(title: "Open \(reference.title)",
-                                help: revision.kind == .react ? "Click to interact" : "Click to expand",
-                                open: { onOpen?() })
+                                help: "Click to expand", open: { onOpen?() })
+                        }
+                    }
+                    .overlay(alignment: .topTrailing) {
+                        if inline && interactive {
+                            Button { onOpen?() } label: {
+                                PilotSymbol(PilotIcon.expand, context: .row)
+                                    .padding(6)
+                                    .background(Circle().fill(Theme.card))
+                                    .overlay(Circle().stroke(Theme.border))
+                            }
+                            .buttonStyle(.plain)
+                            .padding(8)
+                            .help("Open in the viewer")
+                            .accessibilityLabel("Open \(reference.title) in the viewer")
                         }
                     }
             }
@@ -404,9 +408,10 @@ private struct ArtifactPreview: View {
     let revision: ArtifactRevision
     var inline = false
     @ObservedObject var state: ArtifactRenderState
+    var onEscape: (() -> Void)? = nil
 
     var body: some View {
-        ArtifactWebView(revision: revision, client: endpoint, inline: inline, state: state)
+        ArtifactWebView(revision: revision, client: endpoint, inline: inline, state: state, onEscape: onEscape)
             .overlay {
                 if let error = state.error {
                     Text(error).font(.callout).foregroundStyle(Theme.mutedForeground).padding()

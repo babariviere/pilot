@@ -4,26 +4,31 @@ import SwiftUI
 import Testing
 @testable import Pilot
 
-@Test @MainActor func inlineArtifactLayoutUsesTheAvailableWidthWhenResized() {
+@Test @MainActor func inlineArtifactLayoutKeepsTheReadingColumnWhenResized() {
     _ = NSApplication.shared
     for width: CGFloat in [320, 760, 1000, 1200] {
+        var proposed: CGFloat?
         let view = NSHostingView(rootView: InlineArtifactLayout {
-            Color.blue
+            GeometryReader { geometry in Color.blue.onAppear { proposed = geometry.size.width } }
         }.fixedSize(horizontal: false, vertical: true).frame(width: width))
         view.frame = NSRect(x: 0, y: 0, width: width, height: 900)
         view.layoutSubtreeIfNeeded()
-        #expect(view.fittingSize == ArtifactViewerLayout.inlineSize(availableWidth: width))
+        let expected = ArtifactViewerLayout.inlineSize(availableWidth: width)
+        #expect(expected.width == min(width, 760))
+        #expect(view.fittingSize.height == expected.height)
+        // The card's content is laid out at the column width, never wider.
+        if let proposed { #expect(proposed == expected.width) }
     }
 }
 
 @Test @MainActor func inlineArtifactLayoutHonorsContentInBothDirections() {
     _ = NSApplication.shared
-    let view = NSHostingView(rootView: InlineArtifactLayout(contentSize: CGSize(width: 1650, height: 1400)) {
+    let view = NSHostingView(rootView: InlineArtifactLayout(contentSize: CGSize(width: 1650, height: 700)) {
         Color.blue
     }.fixedSize(horizontal: false, vertical: true).frame(width: 1800))
     view.frame = NSRect(x: 0, y: 0, width: 1800, height: 1600)
     view.layoutSubtreeIfNeeded()
-    #expect(view.fittingSize == CGSize(width: 1800, height: 1400))
+    #expect(view.fittingSize == CGSize(width: 1800, height: 700))
 }
 
 @Test @MainActor func artifactRowsUseTheSameReadableColumnAsText() {
@@ -49,7 +54,7 @@ import Testing
             }.fixedSize(horizontal: false, vertical: true).frame(width: width))
             view.frame = NSRect(x: 0, y: 0, width: width, height: 1800)
             view.layoutSubtreeIfNeeded()
-            #expect(view.fittingSize == CGSize(width: width, height: min(1600, max(48, height))))
+            #expect(view.fittingSize == CGSize(width: width, height: min(720, max(48, height))))
         }
     }
 }

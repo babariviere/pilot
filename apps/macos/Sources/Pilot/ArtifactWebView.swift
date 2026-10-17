@@ -58,12 +58,24 @@ struct ArtifactWebView: NSViewRepresentable {
     let client: PilotClient
     var inline = false
     @ObservedObject var state: ArtifactRenderState
+    /// Inline pages hand keyboard focus back to the chat when Escape is pressed.
+    var onEscape: (() -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(state: state) }
 
     func makeNSView(context: Context) -> WKWebView {
         let libraries = ArtifactLibraryHandler(libraries: Set(revision.libraries), client: client)
-        let view = Self.makeSandboxView(coordinator: context.coordinator, libraries: libraries, inline: inline)
+        let interactive = inline && (revision.kind == .html || revision.kind == .react)
+        let view = Self.makeSandboxView(coordinator: context.coordinator, libraries: libraries, inline: inline,
+                                        interactive: interactive)
+        if let page = view as? InlineArtifactWebView {
+            page.onEscape = onEscape
+            // Clicks and typing can expand or collapse content: measure again promptly.
+            page.onInteraction = { [weak coordinator = context.coordinator, weak page] in
+                guard let coordinator, let page else { return }
+                coordinator.startMeasuring(page)
+            }
+        }
         context.coordinator.measurementKind = revision.kind
         context.coordinator.awaitingMermaid = revision.libraries.contains(.mermaid)
         context.coordinator.install(in: view, document: ArtifactPreviewDocument.document(revision, inline: inline))
@@ -71,7 +83,8 @@ struct ArtifactWebView: NSViewRepresentable {
     }
 
     /// Also used by the native integration test, so it exercises the real configuration.
-    static func makeSandboxView(coordinator: Coordinator, libraries: ArtifactLibraryHandler, inline: Bool = false) -> WKWebView {
+    static func makeSandboxView(coordinator: Coordinator, libraries: ArtifactLibraryHandler, inline: Bool = false,
+                                interactive: Bool = false) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.userContentController = WKUserContentController()
@@ -82,7 +95,8 @@ struct ArtifactWebView: NSViewRepresentable {
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         configuration.mediaTypesRequiringUserActionForPlayback = .all
         configuration.setURLSchemeHandler(libraries, forURLScheme: "pilot-artifact")
-        let view = WKWebView(frame: .zero, configuration: configuration)
+        let view = interactive ? InlineArtifactWebView(frame: .zero, configuration: configuration)
+            : WKWebView(frame: .zero, configuration: configuration)
         // Artifacts are light documents (`color-scheme: light`), so their scrollbars and form controls stay light too.
         view.appearance = NSAppearance(named: .aqua)
         if inline { view.setValue(false, forKey: "drawsBackground") }
@@ -100,11 +114,14 @@ struct ArtifactWebView: NSViewRepresentable {
         return view
     }
 
-    func updateNSView(_ view: WKWebView, context: Context) {}
+    func updateNSView(_ view: WKWebView, context: Context) {
+        (view as? InlineArtifactWebView)?.onEscape = onEscape
+    }
 
     static func dismantleNSView(_ view: WKWebView, coordinator: Coordinator) {
         coordinator.active = false
         coordinator.measurementTask?.cancel()
+        (view as? InlineArtifactWebView)?.tearDown()
         if coordinator.state.webView === view { coordinator.state.webView = nil }
         coordinator.libraries?.dispose()
         view.stopLoading()

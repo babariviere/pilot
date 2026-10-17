@@ -76,6 +76,10 @@ Native SwiftUI client for pilotd, with a libghostty terminal per session.
   button or View > Toggle Artifacts to show it. Each project retains a Browse artifacts button in
   the navigation sidebar across its sessions.
   Both views offer Source and loading/error states. Offscreen inline previews are disposed.
+  Inline HTML and React previews are interactive in place (click, hover, type, scroll); the corner
+  button opens the viewer and Escape returns focus to the composer. They stay in the reading column,
+  hug their content up to 720 pt and scroll inside beyond it. Vertical scrolling moves the chat unless
+  something under the pointer can still scroll that way; horizontal scrolling goes to the artifact.
   Standalone `swiftui` artifacts show a saved native screenshot and syntax-highlighted Swift source.
   They are static previews, not interactive or project-aware builds. Rendering requires macOS 14+
   and Swift Command Line Tools on the daemon host; opening a saved revision needs neither compilation

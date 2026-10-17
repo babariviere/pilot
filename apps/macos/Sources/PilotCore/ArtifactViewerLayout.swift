@@ -2,8 +2,11 @@ import Foundation
 
 /// Expanded previews should fill most of the display, rather than use the sheet's minimum size.
 public enum ArtifactViewerLayout {
-    public static let inlineDefaultMaxWidth: CGFloat = 1200
-    public static let inlineMaxHeight: CGFloat = 1600
+    /// Inline artifacts stay in the chat's reading column (Theme.column), narrower with the window.
+    /// Pages reflow to it and are never scaled; wider content belongs in the expanded viewer.
+    public static let inlineColumnWidth: CGFloat = 760
+    /// Inline HTML/React cards hug their content up to this height; taller pages scroll inside the card.
+    public static let inlineMaxHeight: CGFloat = 720
     /// Keep compact HTML/React previews usable without imposing a viewport-sized floor.
     public static let inlineMinHeight: CGFloat = 48
     /// Images are scaled to fit, so a tall screenshot stays readable at a glance instead of
@@ -15,10 +18,11 @@ public enum ArtifactViewerLayout {
     /// displays 90% leaves most of the sheet empty; wider content still requests more room.
     public static let viewerDefaultMaxWidth: CGFloat = 1600
 
-    /// A bounded 4:3 fallback until measurement, then hug content height within the limits.
+    /// A bounded 4:3 fallback until measurement, then hug content height within the limits, always
+    /// within the reading column.
     /// Measured images instead hug their aspect-fitted size, so the card has no empty bands.
     public static func inlineSize(availableWidth: CGFloat, contentSize: CGSize? = nil, image: Bool = false) -> CGSize {
-        let available = availableWidth.isFinite ? max(0, availableWidth) : inlineDefaultMaxWidth
+        let available = availableWidth.isFinite ? min(inlineColumnWidth, max(0, availableWidth)) : inlineColumnWidth
         let content = contentSize.flatMap { size in
             size.width.isFinite && size.height.isFinite && size.width > 0 && size.height > 0 ? size : nil
         }
@@ -28,15 +32,15 @@ public enum ArtifactViewerLayout {
             return CGSize(width: min(available, max(inlineImageMinSide, (content.width * scale).rounded())),
                           height: max(inlineImageMinSide, (content.height * scale).rounded()))
         }
-        let width = min(available, max(inlineDefaultMaxWidth, content?.width ?? 0))
+        let width = available
         let defaultHeight = min(720, max(360, width * 0.75))
         let height = content.map { max(inlineMinHeight, $0.height) } ?? defaultHeight
         return CGSize(width: width, height: min(inlineMaxHeight, height))
     }
 
-    /// Measured HTML/React content taller than the inline ceiling is cut off at the card's
-    /// bottom edge. Images and SwiftUI snapshots scale to fit instead, so they never are.
-    public static func inlineClipsHeight(contentSize: CGSize?, image: Bool = false) -> Bool {
+    /// Measured HTML/React content taller than the inline ceiling scrolls inside the card.
+    /// Images and SwiftUI snapshots scale to fit instead, so they never do.
+    public static func inlineScrollsInside(contentSize: CGSize?, image: Bool = false) -> Bool {
         guard !image, let height = contentSize?.height, height.isFinite else { return false }
         return height > inlineMaxHeight
     }
