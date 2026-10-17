@@ -1304,6 +1304,7 @@ export class SessionManager {
 	async sharedContextNotice(id: string, requestId: string, text: string): Promise<void> {
 		const meta = this.require(id);
 		if (meta.delegationFenced) return;
+		if (meta.recoveryStopped) throw new Conflict("Chat recovery is stopped. Send a new message to continue.");
 		// Passive durable input identity, admitted through the same kernel dedupe as other notices.
 		await this.sendDurable(id, text, "steer", requestId);
 	}
@@ -4095,6 +4096,8 @@ export class SessionManager {
 		try {
 			if (this.closing) throw new Error("pilotd is shutting down");
 			if (meta.failure) throw new Error(meta.failure);
+			if (meta.recoveryStopped && (report || inputOrigin(requestId)))
+				throw new CommandRejected("Chat recovery is stopped. Send a new message to continue.", "stopped");
 			delete meta.cancelled;
 			delete meta.recoveryStopped;
 			// Pending duplicates retain their original payload; accepted retries are deduped by the kernel.

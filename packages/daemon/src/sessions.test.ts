@@ -1885,6 +1885,17 @@ test("Stop cancels failed child recovery without credentials and stays stopped a
 	assert.equal(reopened.get(created.id)?.outcome, undefined, "cold history cannot resurrect the old completion");
 	assert.equal(f.workers.length, 1, "restart, subscription and wake must not reopen stopped recovery");
 	assert.deepEqual(await reopened.stop(created.id), { ok: true });
+	assert.deepEqual(await reopened.sendReported(created.id, "automatic follow-up", "mission:send:stopped"), {
+		delivery: "rejected",
+		mode: "followUp",
+		reason: "stopped",
+		error: "Chat recovery is stopped. Send a new message to continue.",
+	});
+	await assert.rejects(
+		reopened.sharedContextNotice(created.id, "shared-context:stopped", "Shared context changed"),
+		/recovery is stopped/,
+	);
+	assert.equal(f.workers.length, 1, "automatic and agent follow-ups cannot release the user's Stop fence");
 	await until(() => reopened.prepareUpdate().ready);
 	reopened["resumeAfterUpdate"]();
 	await assert.rejects(reopened["ensureWorker"](created.id), /Recovery is stopped/);
