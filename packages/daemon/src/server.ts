@@ -85,6 +85,7 @@ import { NotFound, type SessionManager } from "./sessions.ts";
 import { SetupError, type SetupService } from "./setup.ts";
 import { parseSlackMessageLink } from "./slack-format.ts";
 import type { SourceRegistry } from "./sources.ts";
+import type { TelemetrySettingsService } from "./telemetry-settings.ts";
 import { terminalSender } from "./terminal-output.ts";
 import type { TerminalManager } from "./terminals.ts";
 import { validatePatch } from "./tracked-items.ts";
@@ -302,6 +303,7 @@ export function createDaemonServer(
 	sharing?: import("./shared-context.ts").SharedContextService,
 	maintenance?: RuntimeMaintenance,
 	watches?: import("./watch-service.ts").WatchService,
+	telemetry?: TelemetrySettingsService,
 ): Server & { runtimeResources: RuntimeResources } {
 	sessions.setWorkspaceProcessGuard((id) => terminals.isRunning(id));
 	const machine = new MachineInformationReader(_config.home, hello?.daemonVersion ?? "unknown");
@@ -870,6 +872,21 @@ export function createDaemonServer(
 			const performance = daemonPerformance();
 			if (!performance) throw new ServiceUnavailable("Performance diagnostics are not running");
 			return json(res, 200, performance);
+		}
+		if (parts[1] === "telemetry" && parts.length === 2) {
+			if (!telemetry) throw new ServiceUnavailable("Telemetry settings are unavailable");
+			if (req.method === "GET") return json(res, 200, telemetry.settings());
+			if (req.method === "PUT") {
+				try {
+					return json(res, 200, await telemetry.update(await readJson(req)));
+				} catch {
+					throw new HttpError(400, "Invalid telemetry settings");
+				}
+			}
+		}
+		if (parts[1] === "diagnostics" && parts.length === 2 && req.method === "DELETE") {
+			await sessions.clearDiagnostics();
+			return json(res, 200, { cleared: true });
 		}
 		if (parts[1] === "update" && parts[2] === "prepare" && parts.length === 3 && req.method === "POST")
 			return json(res, 200, sessions.prepareUpdate());

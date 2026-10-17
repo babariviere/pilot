@@ -11,6 +11,7 @@ export type {
 	KernelPacket,
 	KernelSpec,
 	KernelSubagent,
+	KernelTelemetryConfiguration,
 	KernelUsage,
 } from "./protocol.ts";
 export type { EarlierEntriesRead, PersistedSessionView, SubagentTranscriptRead } from "./snapshot.ts";

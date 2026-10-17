@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test, type TestContext } from "node:test";
-import { PerformanceLog, type PerformanceRecord, performanceLine, RequestTiming } from "./performance.ts";
+import { type TestContext, test } from "node:test";
+import {
+	PerformanceLog,
+	type PerformanceRecord,
+	performanceLine,
+	preparePerformanceClear,
+	RequestTiming,
+	setPerformanceCollectionEnabled,
+} from "./performance.ts";
 
 function record(request = 1): PerformanceRecord {
 	return {
@@ -187,4 +194,19 @@ test("a FIFO log path cannot hang the asynchronous writer or shutdown", { timeou
 	log.record(record());
 	await log.close();
 	assert.ok((await stat(file)).isFIFO());
+});
+
+test("local consent and clear preparation stop records without blocking callers", async (t) => {
+	const dir = await directory(t);
+	t.after(() => setPerformanceCollectionEnabled(true));
+	const file = join(dir, "performance.jsonl");
+	const log = new PerformanceLog(file);
+	setPerformanceCollectionEnabled(false);
+	log.record(record(1));
+	await preparePerformanceClear();
+	await assert.rejects(readFile(file), { code: "ENOENT" });
+	setPerformanceCollectionEnabled(true);
+	log.record(record(2));
+	await log.close();
+	assert.equal(JSON.parse((await readFile(file, "utf8")).trim()).request, 2);
 });

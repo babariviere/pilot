@@ -11,6 +11,7 @@ import type { DatabaseCall } from "./database-tool.ts";
 import type { DiagnosticsCall } from "./diagnostics-tool.ts";
 import { formatFailure } from "./failure.ts";
 import type { MissionCall } from "./mission-tools.ts";
+import { preparePerformanceClear, setPerformanceCollectionEnabled } from "./performance.ts";
 import type { MissionContext, WorkspaceContext } from "./policy.ts";
 import type { KernelCommand, KernelPacket } from "./protocol.ts";
 import { KernelSession } from "./session.ts";
@@ -145,6 +146,18 @@ export function runKernelWorker(): void {
 	/** Latest context sent while the kernel was still starting. */
 	let pendingMission: { context?: MissionContext } | undefined;
 	let pendingSlackLinked: boolean | undefined;
+	const configureTelemetry = (configuration: import("./protocol.ts").KernelTelemetryConfiguration) => {
+		setPerformanceCollectionEnabled(configuration.localDiagnostics);
+		configureNodeTelemetry({
+			enabled: configuration.enabled,
+			serviceName: "pilot.kernel",
+			serviceVersion: configuration.serviceVersion,
+			environment: configuration.environment,
+			hostKind: configuration.hostKind,
+			hostId: configuration.hostId,
+			...(configuration.endpoint ? { endpoint: configuration.endpoint } : {}),
+		});
+	};
 	const daemonCalls = new Map<string, { resolve(value: unknown): void; reject(error: Error): void }>();
 	const workspaceCalls = new Map<string, (workspace?: WorkspaceContext) => void>();
 	const prepareWorkspace = () =>
@@ -384,6 +397,22 @@ export function runKernelWorker(): void {
 			else pendingMission = { ...(command.context ? { context: command.context } : {}) };
 			return;
 		}
+		if (command.type === "telemetry.configure") {
+			configureTelemetry(command.configuration);
+			return;
+		}
+		if (command.type === "diagnostics.configure") {
+			setPerformanceCollectionEnabled(command.enabled);
+			return;
+		}
+		if (command.type === "diagnostics.clear.prepare") {
+			void preparePerformanceClear()
+				.then(() => send({ type: "accepted", requestId: command.requestId }))
+				.catch(() =>
+					send({ type: "error", requestId: command.requestId, message: "Could not prepare diagnostics" }),
+				);
+			return;
+		}
 		if (command.type === "slack.linked") {
 			if (session) session.setSlackLinked(command.linked);
 			else pendingSlackLinked = command.linked;
@@ -392,6 +421,7 @@ export function runKernelWorker(): void {
 		if (command.type === "start") {
 			if (initialization) return;
 			initialization = (async () => {
+				if (command.spec.telemetry) configureTelemetry(command.spec.telemetry);
 				const { credentialEnvironment } = await import("./credential-client.ts");
 				for (const [key, value] of Object.entries(credentialEnvironment(command.spec.credentials))) {
 					if (value === undefined) delete process.env[key];

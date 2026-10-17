@@ -54,6 +54,7 @@ final class PilotClient: ObservableObject {
     /// Includes full snapshots on initial connection and reconnect, not just deltas.
     var onSessionsChanged: (([SessionSummary], Bool) -> Void)?
     var onSchedulesChanged: (([ScheduledItem]) -> Void)?
+    var onConnected: (() -> Void)?
     /// Invalidation only. The courier fetches bounded daemon-owned exchange pages.
     var onSharedContextsChanged: (() -> Void)?
 
@@ -166,6 +167,18 @@ final class PilotClient: ObservableObject {
         let receipt = try response.decode(OperationReceipt.self)
         try receipt.validate(operation)
         return .receipt(receipt)
+    }
+
+    func telemetrySettings() async throws -> TelemetrySettings {
+        try await call("api/telemetry", method: "GET")
+    }
+
+    func updateTelemetrySettings(_ settings: TelemetrySettingsPatch) async throws -> TelemetrySettings {
+        try await call("api/telemetry", method: "PUT", body: settings)
+    }
+
+    func clearDiagnostics() async throws {
+        let _: TelemetryClearResponse = try await call("api/diagnostics", method: "DELETE")
     }
 
     // MARK: Shared context. No app outbox or new operation IDs are created here.
@@ -2071,6 +2084,7 @@ final class PilotClient: ObservableObject {
     private func didConnect() {
         connected = true
         retry = 0
+        onConnected?()
         // The daemon sends a fresh snapshot per subscription, so reconnects resync.
         for id in missionRefs.keys { post(["type": .string("mission.subscribe"), "missionId": .string(id)]) }
         for id in dashboardRefs.keys { post(["type": .string("dashboard.subscribe"), "projectId": .string(id)]) }

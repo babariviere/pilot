@@ -37,6 +37,7 @@ import { createSlackWaitingWatcher } from "./slack-waiting.ts";
 import { PiSourceMcpClient } from "./source-mcp.ts";
 import { SourceRegistry } from "./sources.ts";
 import { SystemEventsDetection } from "./system-events-detection.ts";
+import { TelemetrySettingsService } from "./telemetry-settings.ts";
 import { TerminalManager } from "./terminals.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
 import { TriageGroomer, workerTriage } from "./triage-grooming.ts";
@@ -56,15 +57,8 @@ await installCredentialBrokerHooks();
 const capabilities = await detectPlatformCapabilities();
 const hello = await daemonHello(config.home, capabilities);
 if (!hello.lineageId) throw new Error("Storage lineage is required for sharing");
-// Export remains off until the user explicitly opts in through telemetry settings.
-configureNodeTelemetry({
-	enabled: false,
-	serviceName: "pilot.daemon",
-	serviceVersion: hello.daemonVersion,
-	environment:
-		process.env.NODE_ENV === "test" ? "test" : process.env.NODE_ENV === "production" ? "release" : "development",
-	hostKind: process.platform === "linux" ? "devbox" : "local",
-});
+const telemetry = await TelemetrySettingsService.open(config.home, hello);
+configureNodeTelemetry(telemetry.nodeOptions("pilot.daemon"));
 // Log long timer delays with context, without assuming sleep or descheduling is synchronous CPU work.
 const watchdog = new EventLoopWatchdog({ histogram: true });
 watchdog.start();
@@ -134,8 +128,18 @@ const sessions = new SessionManager(
 		models,
 		credentials,
 		diagnosticHost: { hostId: "daemon", daemonId: hello.daemonId, lineageId: hello.lineageId },
+		telemetry: telemetry.kernelSettings(),
 	},
 );
+let appliedTelemetry = telemetry.settings();
+telemetry.onChange((settings) => {
+	const exportChanged =
+		settings.remoteOperational !== appliedTelemetry.remoteOperational ||
+		settings.endpoint !== appliedTelemetry.endpoint;
+	appliedTelemetry = settings;
+	if (exportChanged) configureNodeTelemetry(telemetry.nodeOptions("pilot.daemon"));
+	sessions.configureTelemetry(telemetry.kernelSettings());
+});
 const maintenance = process.platform === "linux" ? new RuntimeMaintenance(config.home, hello, sessions) : undefined;
 await maintenance?.load();
 sessions.setProjectMemory(memory);
@@ -316,6 +320,7 @@ const server = createDaemonServer(
 	sharing,
 	maintenance,
 	watches,
+	telemetry,
 );
 server.listen(config.port, config.host, () => {
 	console.log(`pilotd listening on http://${config.host}:${config.port} (data: ${config.home})`);

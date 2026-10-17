@@ -189,6 +189,9 @@ private final class TelemetryCounters: @unchecked Sendable {
             if !success { dropped += count; failures += 1 }
         }
     }
+    func revoke() {
+        lock.withLock { dropped += queued; queued = 0 }
+    }
     func snapshot(active: Int) -> PilotTelemetryStats {
         lock.withLock {
             PilotTelemetryStats(started: started, invalid: invalid, queued: queued, dropped: dropped,
@@ -200,6 +203,8 @@ private final class TelemetryCounters: @unchecked Sendable {
 private final class CountedSpanExporter: SpanExporter, @unchecked Sendable {
     private let sink: any SpanExporter
     private let counters: TelemetryCounters
+    private let lock = NSLock()
+    private var revoked = false
 
     init(sink: any SpanExporter, counters: TelemetryCounters) {
         self.sink = sink
@@ -207,28 +212,36 @@ private final class CountedSpanExporter: SpanExporter, @unchecked Sendable {
     }
 
     func export(spans: [SpanData], explicitTimeout: TimeInterval?) -> SpanExporterResultCode {
+        if lock.withLock({ revoked }) { return .success }
         let result = sink.export(spans: spans, explicitTimeout: explicitTimeout)
-        counters.exported(spans.count, success: result == .success)
+        if !lock.withLock({ revoked }) { counters.exported(spans.count, success: result == .success) }
         return result
     }
 
     func flush(explicitTimeout: TimeInterval?) -> SpanExporterResultCode {
-        sink.flush(explicitTimeout: explicitTimeout)
+        lock.withLock({ revoked }) ? .success : sink.flush(explicitTimeout: explicitTimeout)
     }
 
     func shutdown(explicitTimeout: TimeInterval?) {
         sink.shutdown(explicitTimeout: explicitTimeout)
+    }
+
+    func revoke() {
+        let changed = lock.withLock { guard !revoked else { return false }; revoked = true; return true }
+        if changed { counters.revoke() }
     }
 }
 
 private final class BoundedSpanProcessor: SpanProcessor, @unchecked Sendable {
     private var batch: BatchSpanProcessor
     private let counters: TelemetryCounters
+    private let exporter: CountedSpanExporter
 
     init(exporter: any SpanExporter, counters: TelemetryCounters) {
         self.counters = counters
+        self.exporter = CountedSpanExporter(sink: exporter, counters: counters)
         batch = BatchSpanProcessor(
-            spanExporter: CountedSpanExporter(sink: exporter, counters: counters),
+            spanExporter: self.exporter,
             scheduleDelay: pilotSwiftSpanScheduleDelay,
             exportTimeout: pilotSwiftSpanExportTimeout,
             maxQueueSize: pilotSwiftSpanQueueLimit,
@@ -245,15 +258,18 @@ private final class BoundedSpanProcessor: SpanProcessor, @unchecked Sendable {
     }
     func shutdown(explicitTimeout: TimeInterval?) { batch.shutdown(explicitTimeout: explicitTimeout) }
     func forceFlush(timeout: TimeInterval?) { batch.forceFlush(timeout: timeout) }
+    func revoke() { exporter.revoke() }
 }
 
 private final class TelemetryRuntime: @unchecked Sendable {
     let provider: TracerProviderSdk
     let tracer: any Tracer
+    let processor: BoundedSpanProcessor
 
-    init(provider: TracerProviderSdk, tracer: any Tracer) {
+    init(provider: TracerProviderSdk, tracer: any Tracer, processor: BoundedSpanProcessor) {
         self.provider = provider
         self.tracer = tracer
+        self.processor = processor
     }
 }
 
@@ -329,7 +345,10 @@ public final class PilotTelemetry: @unchecked Sendable {
     public func configure(_ configuration: PilotTelemetryConfiguration) throws {
         let next = try Self.makeRuntime(configuration, counters: counters)
         let previous = lock.withLock { let value = runtime; runtime = next; return value }
-        if let previous { DispatchQueue.global(qos: .utility).async { previous.provider.shutdown() } }
+        if let previous {
+            previous.processor.revoke()
+            DispatchQueue.global(qos: .utility).async { previous.provider.shutdown() }
+        }
     }
 
     public var stats: PilotTelemetryStats {
@@ -481,13 +500,15 @@ public final class PilotTelemetry: @unchecked Sendable {
             .settingAttributePerEventCountLimit(0)
             .settingLinkCountLimit(0)
             .settingAttributePerLinkCountLimit(0)
+        let processor = BoundedSpanProcessor(exporter: sink, counters: counters)
         let provider = TracerProviderSdk(
             resource: Resource(attributes: resource), spanLimits: limits, sampler: Samplers.alwaysOn,
-            spanProcessors: [BoundedSpanProcessor(exporter: sink, counters: counters)]
+            spanProcessors: [processor]
         )
         return TelemetryRuntime(
             provider: provider,
-            tracer: provider.get(instrumentationName: "pilot.app", instrumentationVersion: configuration.serviceVersion)
+            tracer: provider.get(instrumentationName: "pilot.app", instrumentationVersion: configuration.serviceVersion),
+            processor: processor
         )
     }
 

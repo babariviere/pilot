@@ -136,6 +136,17 @@ const NUMBERS = [
 const MAX_LINE_BYTES = 2048;
 const MAX_FILE_BYTES = 256 * 1024;
 const MAX_PENDING = 64;
+let collectionEnabled = true;
+const activeLogs = new Set<PerformanceLog>();
+
+export function setPerformanceCollectionEnabled(enabled: boolean): void {
+	collectionEnabled = enabled;
+}
+
+export async function preparePerformanceClear(): Promise<void> {
+	collectionEnabled = false;
+	await Promise.all([...activeLogs].map((log) => log.flush()));
+}
 
 /** A strict whitelist, even if a caller passes extra fields at runtime. */
 export function performanceLine(record: PerformanceRecord): string | undefined {
@@ -169,10 +180,11 @@ export class PerformanceLog implements PerformanceSink {
 		this.file = file;
 		this.maxBytes = Math.max(MAX_LINE_BYTES, Math.min(MAX_FILE_BYTES, options.maxBytes ?? MAX_FILE_BYTES));
 		this.maxPending = Math.max(1, Math.min(MAX_PENDING, options.maxPending ?? MAX_PENDING));
+		activeLogs.add(this);
 	}
 
 	record(record: PerformanceRecord): void {
-		if (this.closed || this.disabled) return;
+		if (!collectionEnabled || this.closed || this.disabled) return;
 		if (this.queue.length >= this.maxPending) {
 			this.dropped++;
 			return;
@@ -245,5 +257,6 @@ export class PerformanceLog implements PerformanceSink {
 	async close(): Promise<void> {
 		this.closed = true;
 		await this.flush();
+		activeLogs.delete(this);
 	}
 }

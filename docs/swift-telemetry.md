@@ -8,6 +8,8 @@ interaction spans can correlate native, daemon and kernel work without putting c
 Remote export is disabled by default. In that state no SDK provider, exporter, worker, timer or queue exists. When
 explicitly configured, the module accepts only span, resource and attribute enums from the
 [telemetry contract](telemetry-contract.md), samples those reviewed spans, and keeps at most 256 spans in memory.
+The native app follows the verified local daemon's [host-scoped telemetry controls](telemetry-settings.md); it never
+inherits a devbox setting.
 It exports batches of at most 64 every five seconds on the SDK's serial background worker, with a three-second
 attempt timeout and no Pilot retry or disk spool. Export and shutdown never run on the main actor; shutdown waits at
 most one second before allowing the export worker to finish independently.

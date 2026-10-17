@@ -71,6 +71,18 @@ export interface KernelSpec {
 	mission?: MissionContext;
 	/** pilotd has a database config; register the `db` tool. Connection details stay in pilotd. */
 	databases?: boolean;
+	/** Host-owned export consent. No credential, arbitrary header or analytics identity crosses IPC. */
+	telemetry?: KernelTelemetryConfiguration;
+}
+
+export interface KernelTelemetryConfiguration {
+	enabled: boolean;
+	endpoint?: string;
+	serviceVersion: string;
+	environment: "release" | "development" | "test";
+	hostKind: "local" | "devbox";
+	hostId: string;
+	localDiagnostics: boolean;
 }
 
 export type KernelCommand =
@@ -139,6 +151,9 @@ export type KernelCommand =
 	| { type: "workspace.prepared"; callId: string; workspace?: WorkspaceContext }
 	| { type: "update.pause"; id: string }
 	| { type: "update.resume" }
+	| { type: "telemetry.configure"; configuration: KernelTelemetryConfiguration }
+	| { type: "diagnostics.configure"; enabled: boolean }
+	| { type: "diagnostics.clear.prepare"; requestId: string }
 	| { type: "shutdown" };
 
 export type KernelPacket =

@@ -17,6 +17,7 @@ import {
 	type KernelCommand,
 	type KernelPacket,
 	type KernelSubagent,
+	type KernelTelemetryConfiguration,
 	type KernelUsage,
 	type MissionContext,
 	type PersistedSessionView,
@@ -32,9 +33,9 @@ import type {
 	AgentEvent,
 	ArtifactRevision,
 	ArtifactSummary,
+	DeliveryMode,
 	DiagnosticErrorCode,
 	DiagnosticPauseReason,
-	DeliveryMode,
 	MergePullRequestRequest,
 	OperationHost,
 	PullRequestBindingResult,
@@ -43,8 +44,8 @@ import type {
 	RewindResponse,
 	SessionAttempt,
 	SessionCommand,
-	SessionHistoryPage,
 	SessionDiagnostics,
+	SessionHistoryPage,
 	SessionJob,
 	SessionListQuery,
 	SessionPullRequest,
@@ -263,6 +264,8 @@ export interface SessionManagerOptions {
 	models?: ModelCatalog;
 	/** Immutable identity returned by agent-local diagnostic reads. */
 	diagnosticHost?: OperationHost;
+	/** Host-owned consent and export settings inherited by every worker. */
+	telemetry?: KernelTelemetryConfiguration;
 }
 
 export interface SessionFactories {
@@ -973,6 +976,49 @@ export class SessionManager {
 	private readonly changeListeners = new Set<(session: SessionSummary) => void>();
 	private internetOnline?: boolean;
 	private internetObservedAt?: number;
+	private telemetry?: KernelTelemetryConfiguration;
+
+	configureTelemetry(configuration: KernelTelemetryConfiguration): void {
+		const previous = this.telemetry;
+		this.telemetry = { ...configuration };
+		this.lifecycle.setEnabled(configuration.localDiagnostics);
+		const exportChanged =
+			!previous ||
+			previous.enabled !== configuration.enabled ||
+			previous.endpoint !== configuration.endpoint ||
+			previous.serviceVersion !== configuration.serviceVersion ||
+			previous.hostId !== configuration.hostId;
+		for (const worker of this.workers.values()) {
+			worker.send({ type: "diagnostics.configure", enabled: configuration.localDiagnostics });
+			if (exportChanged) worker.send({ type: "telemetry.configure", configuration });
+		}
+	}
+
+	async clearDiagnostics(): Promise<void> {
+		const enabled = this.telemetry?.localDiagnostics ?? true;
+		this.lifecycle.setEnabled(false);
+		try {
+			const prepared = await Promise.allSettled(
+				[...this.workers.values()].map((worker) =>
+					worker.request({ type: "diagnostics.clear.prepare", requestId: randomUUID() }),
+				),
+			);
+			if (prepared.some((result) => result.status === "rejected"))
+				throw new ServiceUnavailable("Could not prepare local diagnostics for deletion");
+			await this.lifecycle.flush();
+			await Promise.all(
+				[...this.metas.keys()].flatMap((id) =>
+					["lifecycle.jsonl", "lifecycle.jsonl.1", "performance.jsonl", "performance.jsonl.1"].flatMap((file) => [
+						rm(join(this.dir(id), file), { force: true }),
+						rm(join(this.dir(id), "durable", file), { force: true }),
+					]),
+				),
+			);
+		} finally {
+			this.lifecycle.setEnabled(enabled);
+			for (const worker of this.workers.values()) worker.send({ type: "diagnostics.configure", enabled });
+		}
+	}
 
 	/** Display only. The shared admission file gates requests without stopping tools or resubmitting input. */
 	setConnectivity(online: boolean): void {
@@ -1282,6 +1328,8 @@ export class SessionManager {
 		this.home = home;
 		this.diagnosticHost = options.diagnosticHost;
 		this.lifecycle = new LifecycleDiagnostics(home);
+		this.telemetry = options.telemetry ? { ...options.telemetry } : undefined;
+		this.lifecycle.setEnabled(options.telemetry?.localDiagnostics ?? true);
 		this.projects = projects;
 		this.agentDir = agentDir;
 		this.factories = factories;
@@ -5709,6 +5757,7 @@ export class SessionManager {
 				storageDir: join(this.dir(id), "durable"),
 				subscriptionPolicy: join(this.dir(id), "subscription-policy.json"),
 				...(this.internetOnline !== undefined ? { connectivityPolicy: join(this.home, "connectivity.json") } : {}),
+				...(this.telemetry ? { telemetry: this.telemetry } : {}),
 				cwd: meta.coordinatorView?.scratch ?? meta.cwd,
 				model: meta.model,
 				thinking: meta.thinking,
