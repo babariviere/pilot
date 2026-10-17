@@ -41,11 +41,30 @@ final class SessionFeed: ObservableObject {
     private var stagedSnapshot = false
     private var stagedLoaded = false
     private var messageSendTelemetry: MessageSendTelemetry?
+    private var openPrepared = false
+    private var openTelemetry: ChatOpenTelemetry?
     private lazy var pacer = DisplayFramePacer { [weak self] in self?.publishStaged() }
     var onPresentationChanged: (() -> Void)?
     var onEventsApplied: (([JSONValue]) -> Void)?
     var isSubscribed: Bool { token != nil || releaseHosted != nil }
     var cachedByteCount: Int { presentation.cachedByteCount }
+
+    /// Begins at chat selection/view construction, before prepared rows can be published by SwiftUI.
+    func beginOpen() {
+        guard !openPrepared, !isSubscribed else { return }
+        openPrepared = true
+        openTelemetry = ChatOpenTelemetry(
+            cachedRowCount: presentation.historyRows.count + presentation.liveRows.count
+        )
+    }
+
+    /// `onAppear` is the closest honest boundary for an already-prepared transcript. Display remains unobserved.
+    func openedView() {
+        guard !presentation.historyRows.isEmpty || !presentation.liveRows.isEmpty else { return }
+        if openTelemetry?.published(loaded: true, failed: presentation.error != nil) == true {
+            openTelemetry = nil
+        }
+    }
 
     init(sessionId: String, client: PilotClient, initialPresentation: TranscriptPresentation = TranscriptPresentation()) {
         self.sessionId = sessionId
@@ -74,7 +93,9 @@ final class SessionFeed: ObservableObject {
     }
 
     func start() {
+        if !openPrepared { beginOpen() }
         guard !isSubscribed, hostedContext != nil || client != nil else { return }
+        let trace = openTelemetry?.beginAPI()
         // Every new subscription gets a new reducer and revision namespace, including qualified
         // Local/devbox feeds. Otherwise a cached revision 1 can hide the new idle snapshot's revision 1.
         generation = UUID()
@@ -95,11 +116,18 @@ final class SessionFeed: ObservableObject {
         cached.error = nil
         presentation = cached
         if let context = hostedContext {
-            releaseHosted = try? context.hosts.subscribe(context.ref(.session, sessionId)) { [weak self] events in
-                self?.enqueue(events)
+            do {
+                releaseHosted = try context.hosts.subscribe(
+                    context.ref(.session, sessionId), trace: trace
+                ) { [weak self] events in self?.enqueue(events) }
+            } catch {
+                loading = false
+                presentation.error = error.localizedDescription
+                openTelemetry?.cancel(.failed)
+                openTelemetry = nil
             }
         } else if let client {
-            token = client.subscribe(sessionId) { [weak self] events in
+            token = client.subscribe(sessionId, trace: trace) { [weak self] events in
                 self?.enqueue(events)
             }
         }
@@ -112,6 +140,7 @@ final class SessionFeed: ObservableObject {
     }
 
     private func enqueue(_ events: [JSONValue]) {
+        openTelemetry?.received(events)
         pending.append(events)
         guard processing == nil else { return }
         let generation = generation
@@ -123,6 +152,8 @@ final class SessionFeed: ObservableObject {
                 guard let presentation = try? await StreamingTrace.measureAsync(.transcriptApply, {
                     try await processor.apply(events)
                 }) else {
+                    self.openTelemetry?.reduced(.failed)
+                    self.openTelemetry = nil
                     if self.generation == generation { self.processing = nil }
                     return
                 }
@@ -136,6 +167,7 @@ final class SessionFeed: ObservableObject {
                 if events.contains(where: { ["snapshot", "task_failed"].contains($0["type"]?.string ?? "") }) {
                     self.stagedLoaded = true
                 }
+                self.openTelemetry?.reduced()
                 self.pacer.request()
             }
             if let self, self.generation == generation { self.processing = nil }
@@ -165,6 +197,9 @@ final class SessionFeed: ObservableObject {
                 }
                 if snapshot { hasSnapshot = true }
                 if loaded { loading = false }
+                if openTelemetry?.published(loaded: loaded, failed: next?.error != nil) == true {
+                    openTelemetry = nil
+                }
             }
         }
     }
@@ -179,6 +214,9 @@ final class SessionFeed: ObservableObject {
     func stop() {
         messageSendTelemetry?.cancel(.unavailable, reason: .unknown)
         messageSendTelemetry = nil
+        openTelemetry?.cancel(.cancelled, reason: .user)
+        openTelemetry = nil
+        openPrepared = false
         releaseHosted?(); releaseHosted = nil
         if let token { client?.unsubscribe(sessionId, token: token) }
         token = nil
@@ -308,7 +346,11 @@ struct ChatView: View {
     init(session: SessionSummary, feed: SessionFeed? = nil, composer: ComposerState? = nil, context: HostViewContext? = nil) {
         self.context = context
         self.session = session
-        _feed = StateObject(wrappedValue: feed ?? context.map { AppModel.shared.feeds.feed(ref: $0.ref(.session, session.id), hosts: $0.hosts) } ?? AppModel.shared.feeds.feed(sessionId: session.id, client: AppModel.shared.client))
+        let selectedFeed = feed ?? context.map {
+            AppModel.shared.feeds.feed(ref: $0.ref(.session, session.id), hosts: $0.hosts)
+        } ?? AppModel.shared.feeds.feed(sessionId: session.id, client: AppModel.shared.client)
+        selectedFeed.beginOpen()
+        _feed = StateObject(wrappedValue: selectedFeed)
         _composerOwner = StateObject(wrappedValue: ChatComposerOwner(composer ?? context.flatMap { try? AppModel.shared.composer(for: $0.ref(.session, session.id)) } ?? AppModel.shared.composer(for: session.id)))
     }
 
@@ -547,6 +589,7 @@ struct ChatView: View {
         .background(Theme.background)
         .onAppear {
             feed.onEventsApplied = { [messageExpansions] in messageExpansions.applyMessageEvents($0) }
+            feed.openedView()
             feed.start()
         }
         .modifier(TranscriptRewindHost(

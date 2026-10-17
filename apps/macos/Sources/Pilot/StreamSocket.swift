@@ -1,5 +1,6 @@
 import Foundation
 import PilotCore
+import PilotTelemetry
 
 /// A reconnecting dedicated WebSocket for one stream: a chat, a terminal or a subagent transcript. Each stream
 /// has its own connection, reader and backoff, so a large or slow stream never delays another.
@@ -13,8 +14,12 @@ final class StreamSocket {
     }()
 
     /// A new task for `url`. Snapshots of long transcripts exceed the 1 MiB default message size.
-    static func task(_ url: URL) -> URLSessionWebSocketTask {
-        let task = session.webSocketTask(with: url)
+    static func task(_ url: URL, traceparent: String? = nil) -> URLSessionWebSocketTask {
+        var request = URLRequest(url: url)
+        if let traceparent, PilotTraceCarrier(traceparent: traceparent) != nil {
+            request.setValue(traceparent, forHTTPHeaderField: "traceparent")
+        }
+        let task = session.webSocketTask(with: request)
         task.maximumMessageSize = 64 * 1024 * 1024
         return task
     }
@@ -32,16 +37,20 @@ final class StreamSocket {
     private var pendingBytes = 0
     private var sending = false
     private var readsPaused = false
+    /// Consumed by the first handshake only. A later reconnect is not the original open journey.
+    private var traceparent: String?
 
     /// `url` is read on every connection, so it can carry resume state. `willConnect` runs just before.
     init(
         url: @escaping @MainActor () -> URL?,
+        traceparent: String? = nil,
         willConnect: @escaping @MainActor () -> Void = {},
         terminalBudget: Bool = false,
         unavailable: @escaping @MainActor () -> Void = {},
         receive: @escaping @MainActor ([ServerUpdate]) -> Void
     ) {
         self.url = url
+        self.traceparent = traceparent
         self.willConnect = willConnect
         self.receive = receive
         self.terminalBudget = terminalBudget
@@ -56,7 +65,8 @@ final class StreamSocket {
         clearSends()
         guard !closed, let url = url() else { return }
         willConnect()
-        let task = Self.task(url)
+        let task = Self.task(url, traceparent: traceparent)
+        traceparent = nil
         if terminalBudget { task.maximumMessageSize = 128 * 1024 }
         let reader = SocketReader(
             task: task, label: "pilot.stream-socket", boundedDelivery: terminalBudget,

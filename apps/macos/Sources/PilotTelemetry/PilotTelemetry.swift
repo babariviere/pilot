@@ -311,6 +311,12 @@ public final class PilotTelemetrySpan: @unchecked Sendable {
         self.didFinish = didFinish
     }
 
+    /// Add one reviewed attribute while the span is active. Arbitrary keys and values remain impossible.
+    public func setAttribute(_ attribute: PilotTelemetryAttribute) {
+        guard let (key, value) = attribute.pair, lock.withLock({ !ended }) else { return }
+        span?.setAttribute(key: key, value: value)
+    }
+
     public func finish(_ outcome: PilotTelemetryOutcome = .completed,
                        reason: PilotTelemetryReason? = nil, at: Date? = nil) {
         let shouldFinish = lock.withLock {

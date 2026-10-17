@@ -5114,7 +5114,7 @@ export class SessionManager {
 	}
 
 	/** View parked history without waking the kernel; attach live if work starts later. */
-	subscribe(id: string, listener: EventListener): () => void {
+	subscribe(id: string, listener: EventListener, trace?: TraceCarrier): () => void {
 		const meta = this.require(id);
 		if (this.closing) throw new Error("pilotd is shutting down");
 		try {
@@ -5125,6 +5125,38 @@ export class SessionManager {
 			this.emit(meta);
 		}
 		const worker = this.workers.get(id);
+		const historyStartedAt = Date.now();
+		let historyObserved = false;
+		const finishHistory = (events: AgentEvent[] | undefined, outcome: "completed" | "unavailable") => {
+			if (!trace || historyObserved) return;
+			historyObserved = true;
+			const count = events?.find(
+				(event): event is Extract<AgentEvent, { type: "snapshot" }> => event.type === "snapshot",
+			)?.entries.length;
+			let bucket: "0" | "1-100" | "101-1000" | "1001+" | undefined;
+			if (count === 0) bucket = "0";
+			else if (count !== undefined && count <= 100) bucket = "1-100";
+			else if (count !== undefined && count <= 1_000) bucket = "101-1000";
+			else if (count !== undefined) bucket = "1001+";
+			const span = nodeTelemetry().startSpan(
+				"pilot.chat.open",
+				{
+					"pilot.operation": "chat.open",
+					"pilot.phase": "history_read",
+					"pilot.cold": !worker,
+					"pilot.recovered": meta.failure !== undefined || meta.recoveryStopped === true,
+					...(bucket ? { "pilot.history_bucket": bucket } : {}),
+				},
+				{ parent: trace, startTime: new Date(historyStartedAt) },
+			);
+			span.finish(outcome, new Date());
+		};
+		const observedListener: EventListener = trace
+			? (events) => {
+					finishHistory(events, "completed");
+					listener(events);
+				}
+			: listener;
 		// Preserve the update lease guard before registering a new cold subscription. Existing
 		// live subscriptions and terminal failed-session snapshots do not start new work.
 		if (!worker && !meta.failure && !meta.recoveryStopped) this.updateGate.assertOpen();
@@ -5134,9 +5166,9 @@ export class SessionManager {
 			watchers = new Map();
 			this.watchers.set(id, watchers);
 		}
-		watchers.set(watchId, listener);
+		watchers.set(watchId, observedListener);
 		this.lastUse.set(id, Date.now());
-		if (meta.preparing && meta.cancelled) listener([emptySnapshot]);
+		if (meta.preparing && meta.cancelled) observedListener([emptySnapshot]);
 		if (worker && !meta.failure) worker.send({ type: "watch", watchId });
 		else if (
 			!this.sleepPause &&
@@ -5164,8 +5196,9 @@ export class SessionManager {
 					() => undefined,
 				)
 				.catch(() => undefined);
-		else if (!(meta.preparing && meta.cancelled)) this.watchColdHistory(meta, watchId, listener);
+		else if (!(meta.preparing && meta.cancelled)) this.watchColdHistory(meta, watchId, observedListener);
 		return () => {
+			finishHistory(undefined, "unavailable");
 			watchers.delete(watchId);
 			this.coldWatches.get(watchId)?.();
 			// The inactivity clock starts when the last viewer leaves.

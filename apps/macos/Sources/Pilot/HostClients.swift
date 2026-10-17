@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import PilotCore
+import PilotTelemetry
 
 /// The only lifecycle operations exposed to the app are on owned local forwards.
 protocol HostTunnel: AnyObject, Sendable {
@@ -256,10 +257,11 @@ final class HostClients: ObservableObject {
     @MainActor private final class Subscription {
         let ref: HostResourceRef
         let listener: ([JSONValue]) -> Void
+        var trace: PilotTraceCarrier?
         var client: PilotClient?
         var token: UUID?
-        init(ref: HostResourceRef, listener: @escaping ([JSONValue]) -> Void) {
-            self.ref = ref; self.listener = listener
+        init(ref: HostResourceRef, trace: PilotTraceCarrier?, listener: @escaping ([JSONValue]) -> Void) {
+            self.ref = ref; self.trace = trace; self.listener = listener
         }
         func detach() {
             if let client, let token { client.unsubscribe(ref.localId, token: token) }
@@ -752,10 +754,11 @@ final class HostClients: ObservableObject {
                                  payload: SendRequest(message: message, mode: mode), origin: origin)
     }
 
-    func subscribe(_ session: HostResourceRef, listener: @escaping ([JSONValue]) -> Void) throws -> () -> Void {
+    func subscribe(_ session: HostResourceRef, trace: PilotTraceCarrier? = nil,
+                   listener: @escaping ([JSONValue]) -> Void) throws -> () -> Void {
         guard session.kind == .session, subscriptions.count < 256 else { throw HostRoutingError.invalidReference }
         let id = UUID()
-        let subscription = Subscription(ref: session, listener: listener)
+        let subscription = Subscription(ref: session, trace: trace, listener: listener)
         subscriptions[id] = subscription
         attach(subscription)
         return { [weak self] in self?.subscriptions.removeValue(forKey: id)?.detach() }
@@ -766,7 +769,11 @@ final class HostClients: ObservableObject {
         guard let entry = entries[subscription.ref.host] else { return }
         let endpointToken = entry.token
         subscription.client = entry.client
-        subscription.token = entry.client.subscribe(subscription.ref.localId) { [weak self, weak subscription] events in
+        let trace = subscription.trace
+        subscription.trace = nil
+        subscription.token = entry.client.subscribe(
+            subscription.ref.localId, trace: trace
+        ) { [weak self, weak subscription] events in
             guard let self, let subscription, self.entries[subscription.ref.host]?.token == endpointToken else { return }
             subscription.listener(events)
         }

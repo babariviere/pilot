@@ -1814,11 +1814,12 @@ final class PilotClient: ObservableObject {
 
     /// The first batch delivered is always a snapshot, including after reconnects. Each subscribed chat has
     /// its own socket, so a large or slow chat never delays another.
-    func subscribe(_ sessionId: String, _ listener: @escaping ([JSONValue]) -> Void) -> UUID {
+    func subscribe(_ sessionId: String, trace: PilotTraceCarrier? = nil,
+                   _ listener: @escaping ([JSONValue]) -> Void) -> UUID {
         let token = UUID()
         let first = listeners[sessionId]?.isEmpty ?? true
         listeners[sessionId, default: [:]][token] = listener
-        if first { openChat(sessionId) }
+        if first { openChat(sessionId, trace: trace) }
         return token
     }
 
@@ -1830,7 +1831,7 @@ final class PilotClient: ObservableObject {
         }
     }
 
-    private func openChat(_ sessionId: String) {
+    private func openChat(_ sessionId: String, trace: PilotTraceCarrier? = nil) {
         guard chats[sessionId] == nil else { return }
         let chat = ChatStream()
         chat.socket = StreamSocket(
@@ -1842,7 +1843,7 @@ final class PilotClient: ObservableObject {
                     query = [URLQueryItem(name: "stream", value: stream), URLQueryItem(name: "after", value: String(chat.seq))]
                 }
                 return self.socketURL("/api/sessions/\(Self.pathSegment(sessionId))/ws", query: query)
-            },
+            }, traceparent: trace?.traceparent,
             receive: { [weak self, weak chat] updates in
                 guard let self, let chat, self.chats[sessionId] === chat else { return }
                 // Only this chat's stream and artifact index travel on its socket.
