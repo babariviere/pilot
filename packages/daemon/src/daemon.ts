@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { credentialEnvironment } from "@pilot/kernel/credential-client";
 import { installCredentialBrokerHooks } from "@pilot/kernel/credential-hooks";
+import { configureNodeTelemetry, nodeTelemetry } from "@pilot/telemetry";
 import { loadConfig } from "./config.ts";
 import { ConnectivityService } from "./connectivity.ts";
 import { CredentialBroker } from "./credential-broker.ts";
@@ -55,6 +56,15 @@ await installCredentialBrokerHooks();
 const capabilities = await detectPlatformCapabilities();
 const hello = await daemonHello(config.home, capabilities);
 if (!hello.lineageId) throw new Error("Storage lineage is required for sharing");
+// Export remains off until the user explicitly opts in through telemetry settings.
+configureNodeTelemetry({
+	enabled: false,
+	serviceName: "pilot.daemon",
+	serviceVersion: hello.daemonVersion,
+	environment:
+		process.env.NODE_ENV === "test" ? "test" : process.env.NODE_ENV === "production" ? "release" : "development",
+	hostKind: process.platform === "linux" ? "devbox" : "local",
+});
 // Log long timer delays with context, without assuming sleep or descheduling is synchronous CPU work.
 const watchdog = new EventLoopWatchdog({ histogram: true });
 watchdog.start();
@@ -348,6 +358,7 @@ async function stop(): Promise<void> {
 	await watches.close();
 	await power?.stop();
 	await untrackedStats.close();
+	await nodeTelemetry().shutdown();
 	missionStore.close();
 	process.exit(0);
 }

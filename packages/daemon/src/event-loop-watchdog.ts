@@ -1,5 +1,6 @@
 /** Event-loop stall diagnostics. Cheap enough to run always: one unref'd timer and bounded bookkeeping. */
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
+import { nodeTelemetry } from "@pilot/telemetry";
 
 const MAX_IN_FLIGHT = 512;
 const MAX_SLOW = 16;
@@ -209,6 +210,11 @@ export class EventLoopWatchdog {
 		if (kind !== "sleep") {
 			this.totals.ms += blocked;
 			this.totals.cpuMs += cpuMs;
+			nodeTelemetry().recordSpan("pilot.event_loop.stall", blocked, {
+				"pilot.operation": "event_loop.stall",
+				"pilot.outcome": "success",
+				"pilot.reason": kind === "busy" ? "synchronous_work" : "waiting",
+			});
 		}
 		this.stalls.push({ at: Date.now(), ms: rounded(blocked), cpuMs: rounded(cpuMs), context });
 		if (this.stalls.length > MAX_STALLS) this.stalls.shift();

@@ -2,6 +2,7 @@
 import { constants } from "node:fs";
 import { open, rename } from "node:fs/promises";
 import { performance } from "node:perf_hooks";
+import { nodeTelemetry } from "@pilot/telemetry";
 
 export interface PerformanceRecord {
 	v: 1;
@@ -87,7 +88,7 @@ export class RequestTiming {
 		const end = this.now();
 		const providerStart = this.providerStarted ?? end;
 		try {
-			this.sink.record({
+			const record: PerformanceRecord = {
 				v: 1,
 				request: this.request,
 				at: this.start.at,
@@ -103,6 +104,11 @@ export class RequestTiming {
 						}),
 				...this.milestones,
 				httpAttempts: this.httpAttempts,
+			};
+			this.sink.record(record);
+			nodeTelemetry().recordSpan("pilot.kernel.request", record.totalMs, {
+				"pilot.operation": "kernel.request",
+				"pilot.outcome": outcome === "completed" ? "success" : outcome === "aborted" ? "cancelled" : "failure",
 			});
 		} catch {
 			// Diagnostics cannot change success, abort, replay or retry behavior.

@@ -5,6 +5,8 @@ import { serialize } from "node:v8";
 import type { JsonValue } from "@earendil-works/chord";
 import { ConversationBusy } from "@earendil-works/pi-durable";
 import { closePreviewBrowser } from "@pilot/artifacts";
+import { configureNodeTelemetry, nodeTelemetry } from "@pilot/telemetry";
+import release from "../../../package.json" with { type: "json" };
 import type { DatabaseCall } from "./database-tool.ts";
 import type { DiagnosticsCall } from "./diagnostics-tool.ts";
 import { formatFailure } from "./failure.ts";
@@ -127,6 +129,15 @@ export class IpcSender {
 
 /** Explicit invocation keeps sender tests from installing process handlers or starting a kernel. */
 export function runKernelWorker(): void {
+	// Export remains off until the user explicitly opts in through telemetry settings.
+	configureNodeTelemetry({
+		enabled: false,
+		serviceName: "pilot.kernel",
+		serviceVersion: release.version,
+		environment:
+			process.env.NODE_ENV === "test" ? "test" : process.env.NODE_ENV === "production" ? "release" : "development",
+		hostKind: process.platform === "linux" ? "devbox" : "local",
+	});
 	let session: KernelSession | undefined;
 	let initialization: Promise<void> | undefined;
 	let commands: Promise<void> = Promise.resolve();
@@ -219,6 +230,7 @@ export function runKernelWorker(): void {
 			await session?.close();
 			// The warm artifact preview browser would otherwise outlive a graceful exit until Playwright's exit hook.
 			await closePreviewBrowser();
+			await nodeTelemetry().shutdown();
 		} catch (error) {
 			await send({ type: "error", message: `Shutdown failed: ${errorText(error)}` }).catch(() => undefined);
 			code = 1;
@@ -252,15 +264,26 @@ export function runKernelWorker(): void {
 				await send({ type: "accepted", requestId: command.requestId });
 				break;
 			case "input": {
-				const delivery = await session.submit(
-					command.requestId,
-					command.content,
-					command.mode,
-					command.onlyIfIdle,
-					command.reportDelivery,
-					command.event,
-				);
-				await send({ type: "accepted", requestId: command.requestId, ...delivery });
+				const requestSpan = command.trace
+					? nodeTelemetry().startSpan(
+							"pilot.kernel.request",
+							{ "pilot.operation": "kernel.request" },
+							{ parent: command.trace },
+						)
+					: undefined;
+				try {
+					const delivery = await session.submit(
+						command.requestId,
+						command.content,
+						command.mode,
+						command.onlyIfIdle,
+						command.reportDelivery,
+						command.event,
+					);
+					await send({ type: "accepted", requestId: command.requestId, ...delivery });
+				} finally {
+					requestSpan?.end();
+				}
 				break;
 			}
 			case "abort": {
