@@ -207,8 +207,9 @@ A chat reads as a conversation, not a log.
   and running items sort first; a subagent row opens its transcript. A finished subagent is just done: its answer goes
   to the parent chat, so it never asks for the user's attention.
 - **The working line** ("Working… · 2 jobs", "Waiting on 2 jobs…") carries live work and opens the jobs panel when
-  jobs run. Nothing else stacks above the composer except a subscription notice, shown only past 80% or when limited.
-  The context gauge lives in the composer bar.
+  jobs run. It sits directly above the composer, not at the transcript's end, so it stays still while replies stream
+  and the transcript scrolls behind it; a pause notice takes its place. Nothing else stacks above the composer except
+  a subscription notice, shown only past 80% or when limited. The context gauge lives in the composer bar.
 
 ## Sheets
 
