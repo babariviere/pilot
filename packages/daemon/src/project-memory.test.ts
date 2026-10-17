@@ -120,6 +120,8 @@ test("wake is bounded when summaries are missing; zoom reports pending children"
 	assert.equal(wake.nodes.length, 8);
 	assert.equal(wake.omittedBefore, 92);
 	assert.match(wake.text, /Older memories #0-91 omitted/);
+	assert.match(wake.text, /memory\(\{action: 'recall', \.\.\.\}\)/);
+	assert.match(wake.text, /memory\(\{action: 'zoom', \.\.\.\}\)/);
 	assert.deepEqual(
 		(await service.zoom("p", 0, 7)).map((n) => n.pending),
 		[true, true],

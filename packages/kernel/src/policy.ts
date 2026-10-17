@@ -272,7 +272,7 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false, c
 	}
 	if (context.projectMemory && !context.ask) {
 		lines.push(
-			"- Use memory_note for lasting decisions, user preferences/corrections, non-obvious facts and hard-won outcomes; never task status, secrets or what memory already says.",
+			"- Use memory({action: 'note', ...}) for lasting decisions, user preferences/corrections, non-obvious facts and hard-won outcomes; never task status, secrets or what memory already says.",
 			"- Before finishing a turn that ends a task, consider whether you learned anything lasting worth saving.",
 		);
 	}

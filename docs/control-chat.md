@@ -120,7 +120,7 @@ waits for durable membership and records the target, optional claim and outcome 
 
 ## Cross-project memory
 
-Control declares `memory_wake`, `memory_recall`, `memory_zoom` and `memory_note`, each with a required
+Control declares `memory({action: "wake" | "recall" | "zoom" | "note", ...})`, with a required
 registered `projectId`. Ordinary chats retain their implicit project and cannot supply a project
 override. The daemon checks the live caller role and registered project on every control call.
 Read results are quoted as untrusted. Notes always use the supervised control chat as origin,

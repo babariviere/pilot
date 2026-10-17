@@ -23,25 +23,25 @@ import type {
 	MemoryTree,
 	MemoryTreeNode,
 	MemoryView,
+	OperationHost,
 	ProjectMemorySummary,
-	SharedMemoryMutation,
-	SharedMemoryCommitOutcome,
+	SharedMemoryChangePage,
 	SharedMemoryCheckpointManifest,
 	SharedMemoryCheckpointPage,
-	SharedMemoryChangePage,
-	OperationHost,
+	SharedMemoryCommitOutcome,
+	SharedMemoryMutation,
 } from "@pilot/protocol";
 import type { MemoryCompactionTrace } from "./memory-compaction.ts";
 import { cover } from "./memory-cover.ts";
 import {
+	checkMemoryExport,
 	checkMutation,
 	digestMemory,
-	memoryFingerprint,
 	MEMORY_PAGE_BYTES,
 	MEMORY_PAGE_LIMIT,
-	rawMemoryEntry,
+	memoryFingerprint,
 	memoryId,
-	checkMemoryExport,
+	rawMemoryEntry,
 } from "./shared-memory-common.ts";
 export const RECORD_BYTES = 2048;
 /** Summaries this size or smaller are written from their notes, so the browsing tree lists the notes under them. */
@@ -589,7 +589,7 @@ export class MemoryDisk {
 			omittedBefore,
 			text:
 				(omittedBefore
-					? `[Older memories #0-${omittedBefore - 1} omitted while compaction is pending. Use memory_recall or memory_zoom.]\n`
+					? `[Older memories #0-${omittedBefore - 1} omitted while compaction is pending. Use memory({action: 'recall', ...}) or memory({action: 'zoom', ...}).]\n`
 					: "") + text,
 		};
 	}

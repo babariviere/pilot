@@ -395,17 +395,17 @@ for (const mode of ["on", "only", "off"] as const) {
 					await Promise.all(usageRefreshes);
 				};
 				assert.ok(adapter);
-				const expected = chat === "project" ? ["memory_note", "memory_recall", "memory_zoom"] : [];
+				const expected = chat === "project" ? ["memory"] : [];
 				assert.deepEqual(
 					adapter.session
 						.getCallableToolNames()
-						.filter((name) => name.startsWith("memory_"))
+						.filter((name) => name === "memory")
 						.sort(),
 					expected,
 				);
 				if (chat === "project" && mode === "only" && inlineBudget === 0) {
 					const codemode = adapter.extension.tools!.find((tool) => tool.name === "codemode")!;
-					assert.doesNotMatch(codemode.description, /### `memory_/);
+					assert.doesNotMatch(codemode.description, /### `memory`/);
 					assert.ok(!adapter.extension.tools!.some((tool) => tool.name === "artifact"));
 				}
 				let requests = 0;
@@ -414,7 +414,7 @@ for (const mode of ["on", "only", "off"] as const) {
 					assert.deepEqual(
 						getCurrentTools(transcript.messages)
 							.map((tool) => tool.name)
-							.filter((name) => name.startsWith("memory_"))
+							.filter((name) => name === "memory")
 							.sort(),
 						expected,
 					);
@@ -424,10 +424,10 @@ for (const mode of ["on", "only", "off"] as const) {
 						.join("\n");
 					if (chat === "project") {
 						assert.match(prompt, /#0-1: durable project fact/);
-						assert.match(prompt, /Use memory_note for lasting decisions/);
+						assert.match(prompt, /Use memory\(\{action: 'note', \.\.\.\}\) for lasting decisions/);
 						assert.match(prompt, /Before finishing a turn that ends a task/);
 					} else {
-						assert.doesNotMatch(prompt, /Project memory|memory_note|anything lasting worth saving/);
+						assert.doesNotMatch(prompt, /Project memory|memory\(|anything lasting worth saving/);
 					}
 				};
 				f.faux.setResponses([
@@ -447,9 +447,9 @@ for (const mode of ["on", "only", "off"] as const) {
 							return fauxAssistantMessage(
 								mode === "only" && inlineBudget === undefined
 									? fauxToolCall("codemode", {
-											code: 'text(await tools.memory_note({text:"A lasting correction"}));',
+											code: 'text(await tools.memory({action:"note",text:"A lasting correction"}));',
 										})
-									: fauxToolCall("memory_note", { text: "A lasting correction" }),
+									: fauxToolCall("memory", { action: "note", text: "A lasting correction" }),
 								{ stopReason: "toolUse" },
 							);
 						},

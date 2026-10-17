@@ -84,8 +84,7 @@ test("control turns are fresh, tool rounds stay intact, log excludes thoughts an
 	t.after(() => session.close());
 	assert.ok(adapter.session.getCallableToolNames().includes("zoom"));
 	assert.ok(adapter.session.getCallableToolNames().includes("pilot"));
-	for (const name of ["memory_wake", "memory_note", "memory_recall", "memory_zoom"])
-		assert.ok(adapter.session.getCallableToolNames().includes(name));
+	assert.ok(adapter.session.getCallableToolNames().includes("memory"));
 	for (const denied of ["bash", "read", "find", "grep", "ls", "mission", "db", "todo", "slack_status"])
 		assert.ok(!adapter.session.getCallableToolNames().includes(denied), denied);
 	let checked = 0;
@@ -108,7 +107,7 @@ test("control turns are fresh, tool rounds stay intact, log excludes thoughts an
 			assert.match(contentText(ctx.messages[1]!.content), /first reply/);
 			assert.equal(contentText(ctx.messages.at(-1)!.content), "second request");
 			assert.ok(getCurrentTools(ctx.messages).some((tool) => tool.name === "codemode"));
-			assert.ok(getCurrentTools(ctx.messages).some((tool) => tool.name === "memory_wake"));
+			assert.ok(getCurrentTools(ctx.messages).some((tool) => tool.name === "memory"));
 			checked++;
 			return fauxAssistantMessage(
 				{
