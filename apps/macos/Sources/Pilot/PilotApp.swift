@@ -1,4 +1,5 @@
 import AppKit
+import PilotTelemetry
 import SwiftUI
 
 @main
@@ -86,6 +87,7 @@ struct PilotApp: App {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var terminationTask: Task<Void, Never>?
+    private var telemetryObservers: [NSObjectProtocol] = []
     private var finishedTermination = false
     /// Closing the window keeps Pilot in the menu bar. Quitting Pilot never stops pilotd:
     /// the daemon is a launchd agent, so agents keep working with no app running.
@@ -95,6 +97,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_: Notification) {
         AppSettings.shared.applyAppearance()
+        let workspace = NSWorkspace.shared.notificationCenter
+        telemetryObservers = [
+            workspace.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { _ in
+                PilotTelemetry.shared.applicationWillSleep()
+            },
+            workspace.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
+                PilotTelemetry.shared.applicationDidWake()
+            },
+        ]
         if Bundle.main.bundleIdentifier == nil, let icon = PlaneImage.developmentIcon {
             NSApp.applicationIconImage = icon
         }
@@ -114,6 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if terminationTask == nil {
             terminationTask = Task { @MainActor in
                 await AppModel.shared.hosts.disconnectAll()
+                await PilotTelemetry.shared.shutdown()
                 finishedTermination = true
                 NSApp.reply(toApplicationShouldTerminate: true)
             }

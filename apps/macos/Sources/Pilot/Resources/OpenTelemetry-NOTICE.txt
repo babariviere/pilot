@@ -1,0 +1,14 @@
+OpenTelemetry-Swift
+Copyright 2025 OpenTelemetry Authors
+
+This product includes portions derived from "DataCompression"
+Copyright © 2016 Markus Wanke
+Licensed under the Apache License, Version 2.0
+https://github.com/mw99/DataCompression
+
+The SwiftLog Project
+Copyright 2018, 2019 The SwiftLog Project
+
+SwiftLog contains a derivation of the lock implementation and various scripts from SwiftNIO.
+SwiftLog, SwiftNIO, SwiftProtobuf, OpenTelemetry-Swift and OpenTelemetry-Swift-Core are licensed under the Apache
+License, Version 2.0, reproduced in OpenTelemetry-LICENSE.txt.

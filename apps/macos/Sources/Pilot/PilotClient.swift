@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import PilotCore
+import PilotTelemetry
 
 /// pilotd client: REST commands, one reconnecting control WebSocket for lists, dashboards and missions, and one
 /// reconnecting WebSocket per open chat, terminal and subagent transcript.
@@ -340,6 +341,7 @@ final class PilotClient: ObservableObject {
         var request = URLRequest(url: try missionURL(["shared-contexts"] + path, query: query))
         request.httpMethod = method; request.httpBody = body
         if body != nil { request.setValue("application/json", forHTTPHeaderField: "content-type") }
+        PilotTraceContext.injectCurrent(into: &request)
         let (data, response) = try await BoundedHTTPData.read(request, maximumBytes: maximumBytes,
                                                             configuration: commandConfiguration)
         guard connected, !disconnected, generation == connectionGeneration else { throw HostRoutingError.staleGeneration }
@@ -366,6 +368,7 @@ final class PilotClient: ObservableObject {
         var request = URLRequest(url: try missionURL(path, query: query))
         request.httpMethod = method; request.httpBody = body
         if body != nil { request.setValue("application/json", forHTTPHeaderField: "content-type") }
+        PilotTraceContext.injectCurrent(into: &request)
         let (data, response) = try await BoundedHTTPData.read(request, maximumBytes: maximumBytes, configuration: commandConfiguration)
         guard connected, !disconnected, connectionGeneration == fence else { throw HostRoutingError.staleGeneration }
         guard (200..<300).contains(response.statusCode) else {
@@ -385,6 +388,7 @@ final class PilotClient: ObservableObject {
         request.setValue("image/png", forHTTPHeaderField: "Content-Type")
         request.setValue(String(metadata.bytes), forHTTPHeaderField: "Content-Length")
         request.setValue(try JSONEncoder().encode(metadata).base64EncodedString(), forHTTPHeaderField: "X-Pilot-Attachment")
+        PilotTraceContext.injectCurrent(into: &request)
         let (data, response) = try await BoundedHTTPData.read(request, maximumBytes: 4096,
                                                             configuration: commandConfiguration, uploadFile: file)
         guard !disconnected, generation == connectionGeneration else { throw HostRoutingError.staleGeneration }
@@ -1289,7 +1293,9 @@ final class PilotClient: ObservableObject {
         activeReads += 1
         defer { activeReads -= 1 }
         let generation = connectionGeneration
-        let (data, response) = try await BoundedHTTPData.read(URLRequest(url: url), maximumBytes: 48 * 1024 * 1024,
+        var request = URLRequest(url: url)
+        PilotTraceContext.injectCurrent(into: &request)
+        let (data, response) = try await BoundedHTTPData.read(request, maximumBytes: 48 * 1024 * 1024,
                                                             configuration: artifactSession.configuration)
         guard generation == connectionGeneration, !disconnected else { throw HostRoutingError.staleGeneration }
         let status = response.statusCode
@@ -1340,9 +1346,11 @@ final class PilotClient: ObservableObject {
         return try await call(request)
     }
 
-    private func call<Response: Decodable>(_ request: URLRequest) async throws -> Response {
+    private func call<Response: Decodable>(_ originalRequest: URLRequest) async throws -> Response {
         guard !disconnected else { throw HostRoutingError.disconnected }
         let generation = connectionGeneration
+        var request = originalRequest
+        PilotTraceContext.injectCurrent(into: &request)
         let (data, response) = try await BoundedHTTPData.read(request, maximumBytes: 4 * 1024 * 1024,
                                                             configuration: commandConfiguration)
         guard generation == connectionGeneration, !disconnected else { throw HostRoutingError.staleGeneration }
