@@ -5,18 +5,43 @@
 import { constants, DatabaseSync } from "node:sqlite";
 import { parentPort, workerData } from "node:worker_threads";
 
-/** [0]: last saved sequence number; [1]: 1 once the connection is closed. */
+/** [0]: last saved sequence number; [1]: 1 once the connection is closed or could not be opened. */
 const { file, applied } = workerData as { file: string; applied: Int32Array };
-const db = new DatabaseSync(file);
-// Changesets already contain the primary's trigger effects. SQLite applyChangeset also runs
-// destination triggers, so retaining these would double revisions/changefeed entries. Startup
-// migration reinstalls them before loading the next in-memory primary; only the disk mirror
-// drops them. This worker is never a canonical writer.
-for (const row of db.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'shared_%'").all()) {
-	db.exec(`DROP TRIGGER "${String(row.name).replaceAll('"', '""')}"`);
+
+function open(): DatabaseSync {
+	const db = new DatabaseSync(file);
+	try {
+		// Changesets already contain the primary's trigger effects. SQLite applyChangeset also runs
+		// destination triggers, so retaining these would double revisions/changefeed entries. Startup
+		// migration reinstalls them before loading the next in-memory primary; only the disk mirror
+		// drops them. This worker is never a canonical writer.
+		for (const row of db
+			.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'shared_%'")
+			.all()) {
+			db.exec(`DROP TRIGGER "${String(row.name).replaceAll('"', '""')}"`);
+		}
+		// pilotd's in-memory primary already enforced foreign keys; its changesets include cascaded changes.
+		db.exec(
+			"PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = OFF;",
+		);
+		return db;
+	} catch (error) {
+		db.close();
+		throw error;
+	}
 }
-// pilotd's in-memory primary already enforced foreign keys; its changesets include cascaded changes.
-db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = OFF;");
+
+let db: DatabaseSync;
+try {
+	db = open();
+} catch (error) {
+	// close() may already be blocking pilotd's thread, which can't see the worker's error event. The file is
+	// not held, so report it released and wake both waits rather than letting close() sit out its timeout.
+	Atomics.store(applied, 1, 1);
+	Atomics.notify(applied, 1);
+	Atomics.notify(applied, 0);
+	throw error;
+}
 
 const queue: { seq: number; changes: Uint8Array }[] = [];
 let scheduled = false;

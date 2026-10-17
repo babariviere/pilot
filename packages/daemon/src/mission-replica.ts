@@ -71,7 +71,8 @@ export class MissionReplica {
 			const applied = Atomics.load(this.applied, 0);
 			if (applied >= this.requested) break;
 			const left = deadline - Date.now();
-			if (left <= 0) {
+			// [1] set before every commit is saved means the worker could not open the file at all.
+			if (left <= 0 || Atomics.load(this.applied, 1)) {
 				console.warn(`pilotd: mission store closed with ${this.requested - applied} unsaved changes`);
 				break;
 			}
