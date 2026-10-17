@@ -66,7 +66,8 @@ enum DitherCorner {
     /// in to about 40 pt from the trailing edge; up, it leaves a row's first line, where revealed buttons sit.
     static let recededReach = (x: 0.45, y: 0.55)
     /// Quiet: about as long as a row's other hover changes.
-    static var recedeAnimation: Animation { .easeOut(duration: 0.3) }
+    static let recedeDuration: CFTimeInterval = 0.3
+    static var recedeAnimation: Animation { .easeOut(duration: recedeDuration) }
 
     static func animates(_ signal: SessionSignal?) -> Bool {
         signal == .working || signal == .needsYou
@@ -133,7 +134,7 @@ private struct DitherCornerModifier: ViewModifier {
                             DitherCornerClocked(signal: shown, background: background && shown == .working,
                                                 previous: previous, mix: mix, recede: recedes && hovered ? 1 : 0,
                                                 still: reduceMotion, extent: extent, monochrome: monochrome,
-                                                onLayer: !recedes)
+                                                recedes: recedes)
                         }
                         .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
                         .padding(outset)
@@ -163,9 +164,9 @@ private struct DitherCornerModifier: ViewModifier {
     }
 }
 
-/// Observes the shared clock only while something on the corner moves. Corners that never recede (the composer's
-/// working corner, the question tray) play their settled loop on Core Animation instead, and use the clock only
-/// while they dissolve between states.
+/// A settled moving corner plays its loop on Core Animation; a receding one crossfades between its resting and
+/// receded loops on hover. The shared clock runs only while a corner dissolves between states, and still corners
+/// (failed, ready to merge, Reduce Motion) draw one image whose recession SwiftUI animates on hover.
 private struct DitherCornerClocked: View {
     let signal: SessionSignal?
     let background: Bool
@@ -175,14 +176,15 @@ private struct DitherCornerClocked: View {
     let still: Bool
     let extent: Double
     let monochrome: Bool
-    var onLayer = false
+    var recedes = false
 
     var body: some View {
         let moving = !still && (DitherCorner.animates(signal) || (mix < 1 && DitherCorner.animates(previous)))
-        if moving, onLayer, mix >= 1, let signal {
+        if moving, mix >= 1, let signal {
             let grid = DitherCorner.grid(extent: extent)
             DitherCornerLoop(loop: DitherCornerLoopView.Loop(signal: signal, background: background, extent: extent,
-                                                             monochrome: monochrome))
+                                                             monochrome: monochrome, recedes: recedes),
+                             receded: recede >= 1)
                 .frame(width: CGFloat(grid.columns) * DitherCorner.cell, height: CGFloat(grid.rows) * DitherCorner.cell)
         } else if moving {
             DitherCornerTicking { frame in layer(frame: frame) }
@@ -250,35 +252,40 @@ private struct DitherCornerLayer: View, Animatable {
 
 private struct DitherCornerLoop: NSViewRepresentable {
     let loop: DitherCornerLoopView.Loop
+    let receded: Bool
 
     func makeNSView(context: Context) -> DitherCornerLoopView {
         let view = DitherCornerLoopView(frame: .zero)
         view.loop = loop
+        view.setReceded(receded, animated: false)
         return view
     }
 
     func updateNSView(_ view: DitherCornerLoopView, context: Context) {
         view.loop = loop
+        view.setReceded(receded, animated: true)
     }
 }
 
 /// A settled, moving corner as a discrete `contents` animation over its cached 12 fps frames: the same pixels as
 /// the clocked corner, played by the render server. Frames are rendered once per loop and kept by
-/// `DitherCornerRenderer`'s cache.
+/// `DitherCornerRenderer`'s cache. A row's corner, which recedes under the pointer, also plays its fully receded
+/// loop in step on a second layer, and hovering crossfades the two (opacity only, `DitherCorner.recedeDuration`).
 final class DitherCornerLoopView: LoopingLayerView {
     struct Loop: Equatable {
         var signal: SessionSignal
         var background = false
         var extent = 1.0
         var monochrome = false
+        var recedes = false
 
         /// The working ripple's background loop is twice as long; every other loop is `DitherCorner.frameCount`.
         var frameCount: Int { background ? DitherCorner.backgroundFrameCount : DitherCorner.frameCount }
         var duration: CFTimeInterval { Double(frameCount) * DitherCorner.frameInterval }
 
-        func request(frame: Int) -> DitherCornerRequest {
-            DitherCornerRequest(signal: signal, previous: nil, frame: frame, extent: extent, background: background,
-                                monochrome: monochrome)
+        func request(frame: Int, receded: Bool = false) -> DitherCornerRequest {
+            DitherCornerRequest(signal: signal, previous: nil, frame: frame, recede: receded ? 1 : 0, extent: extent,
+                                background: background, monochrome: monochrome)
         }
     }
 
@@ -288,17 +295,23 @@ final class DitherCornerLoopView: LoopingLayerView {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             image.contents = loop.flatMap { DitherCornerRenderer.image(for: $0.request(frame: 0)) }
+            recededImage.contents = loop.flatMap { $0.recedes ? DitherCornerRenderer.image(for: $0.request(frame: 0, receded: true)) : nil }
             CATransaction.commit()
             refreshAnimations()
         }
     }
     private let image = CALayer()
+    private let recededImage = CALayer()
+    private(set) var receded = false
 
     override init(frame: NSRect) {
         super.init(frame: frame)
-        image.magnificationFilter = .nearest
-        image.contentsGravity = .resize
-        layer?.addSublayer(image)
+        for layer in [image, recededImage] {
+            layer.magnificationFilter = .nearest
+            layer.contentsGravity = .resize
+            self.layer?.addSublayer(layer)
+        }
+        recededImage.opacity = 0
     }
 
     override func layout() {
@@ -306,23 +319,46 @@ final class DitherCornerLoopView: LoopingLayerView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         image.frame = bounds
+        recededImage.frame = bounds
+        CATransaction.commit()
+    }
+
+    /// Shows the receded loop instead of the resting one, crossfading when `animated`.
+    func setReceded(_ receded: Bool, animated: Bool) {
+        guard receded != self.receded else { return }
+        self.receded = receded
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(DitherCorner.recedeDuration)
+        CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
+        CATransaction.setDisableActions(!animated)
+        image.opacity = receded ? 0 : 1
+        recededImage.opacity = receded ? 1 : 0
         CATransaction.commit()
     }
 
     /// The loop's frames, in order.
-    static func frames(_ loop: Loop) -> [CGImage] {
-        (0 ..< loop.frameCount).compactMap { DitherCornerRenderer.image(for: loop.request(frame: $0)) }
+    static func frames(_ loop: Loop, receded: Bool = false) -> [CGImage] {
+        (0 ..< loop.frameCount).compactMap { DitherCornerRenderer.image(for: loop.request(frame: $0, receded: receded)) }
     }
 
     override func addLoops() {
         guard let loop else { return }
         let frames = Self.frames(loop)
         guard frames.count > 1 else { return }
-        image.add(Self.loop("contents", values: frames, duration: loop.duration, discrete: true), forKey: "dither")
+        let resting = Self.loop("contents", values: frames, duration: loop.duration, discrete: true)
+        image.add(resting, forKey: "dither")
+        if loop.recedes {
+            // Same begin time and length, so both loops stay on the same frame and the crossfade never jumps.
+            let receded = Self.loop("contents", values: Self.frames(loop, receded: true), duration: loop.duration,
+                                    discrete: true)
+            receded.beginTime = resting.beginTime
+            recededImage.add(receded, forKey: "dither")
+        }
     }
 
     override func removeLoops() {
         image.removeAnimation(forKey: "dither")
+        recededImage.removeAnimation(forKey: "dither")
     }
 }
 
