@@ -15,6 +15,13 @@ struct KeyboardListItem: Equatable {
     static func == (lhs: KeyboardListItem, rhs: KeyboardListItem) -> Bool {
         lhs.id == rhs.id && lhs.target == rhs.target
     }
+
+    /// A chat row keeps the grey selection fill on its highlight, whether a click or a key put it there. Other rows
+    /// show only the keyboard cue.
+    var isChat: Bool {
+        if case .session = target { return true }
+        return false
+    }
 }
 
 struct KeyboardListItemsKey: PreferenceKey {
@@ -157,11 +164,19 @@ private struct KeyboardListItemModifier: ViewModifier {
     @Environment(\.keyboardListHighlight) private var highlight
 
     func body(content: Content) -> some View {
+        let highlighted = highlight.id == item.id
         content
-            .keyboardHighlight(highlight.decorates(item.id))
+            .background {
+                // A chat row's highlight is its selection: the grey `Theme.selected` fill, after clicks too.
+                if highlighted, item.isChat {
+                    RoundedRectangle(cornerRadius: Theme.Radius.row).fill(Theme.selected)
+                        .allowsHitTesting(false)
+                }
+            }
+            .keyboardHighlight(!item.isChat && highlight.decorates(item.id))
             .id(item.id)
             .preference(key: KeyboardListItemsKey.self, value: [item])
-            .accessibilityAddTraits(highlight.id == item.id ? .isSelected : [])
+            .accessibilityAddTraits(highlighted ? .isSelected : [])
     }
 }
 

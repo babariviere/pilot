@@ -61,8 +61,8 @@ has separate storage and transport contracts; it does not change chat-result rea
   destination) focuses it, arrows or J/K move the highlight, Return opens the row as a click would, and ⌘K lists
   the highlighted chat's actions under its name.
   ⌘[ and ⌘] go Back and Forward too, and lists return to the row you had highlighted.
-  The highlighted row shows as a faint grey fill only while you navigate with the keyboard; a click hides it and
-  the next arrow, J/K or ⌃⇥ brings it back.
+  A highlighted chat keeps its grey selection. Other highlighted rows and messages show a faint grey fill only
+  while you navigate with the keyboard; a click hides it and the next arrow, J/K or ⌃⇥ brings it back.
   In a composer, ⌘K also finds its controls by name (model, thinking, Build/Ask, project, folder, base branch,
   workspace, send later, attach image from the clipboard); choosing one never sends the draft. ⌘. stops the open
   chat's agent while it works. Escape, after closing any picker or queued-message edit, leaves the composer for the
