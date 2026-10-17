@@ -880,6 +880,8 @@ for machine-wide limits and queue diagnostics.
 
 [Local request timings](docs/request-timings.md) separate preparation, provider waiting and streaming.
 They stay outside the transcript, have bounded private storage, and are never exported.
+[Local lifecycle diagnostics](docs/lifecycle-diagnostics.md) retain bounded, content-free startup, pause, quota,
+connectivity, recovery and parking transitions without waking parked workers.
 The [diagnostics and telemetry contract](docs/telemetry-contract.md) defines the versioned privacy, identity,
 correlation, retention and resource budgets for local diagnostics and opt-in OpenTelemetry export. Remote export and
 product analytics are disabled by default, and no telemetry backend is selected by the repository.
