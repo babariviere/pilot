@@ -19,6 +19,21 @@ public struct CommandPaletteItem: Identifiable, Equatable, Sendable {
             case .slack: "Slack"
             }
         }
+
+        /// Resources before chats, then actions: the order of suggestions and of equally good groups. Jumping to a
+        /// page, mission, task or project is the palette's first purpose; chats stay searchable below them.
+        public var rank: Int {
+            switch self {
+            case .page: 0
+            case .mission: 1
+            case .task: 2
+            case .project: 3
+            case .linear: 4
+            case .slack: 5
+            case .chat: 6
+            case .action: 7
+            }
+        }
     }
 
     public let id: String
@@ -61,13 +76,15 @@ public struct CommandPaletteSection: Identifiable, Equatable, Sendable {
 
 /// Search and ranking for the ⌘K palette, kept apart from views so they can be tested.
 ///
-/// - An empty field lists the suggested items: recent chats, then pages, then actions for the open chat.
+/// - An empty field lists the suggested items resources first: pages (and triage jumps), missions, tasks and
+///   projects, then a few recent chats, then actions.
 /// - A number ("406" or "#406") first lists the chat that owns that pull request, then that chat's actions. With no
 ///   owning chat, the mission tasks linked to the pull request take its place. Tasks numbered 406 come next.
 /// - Words match titles and keywords, case- and accent-insensitively. Every word must match. A match at the start
 ///   of a title ranks above one at the start of a word, which ranks above one inside a word, and titles count
-///   twice as much as keywords. Groups follow their best match, ties in Kind order, and rows keep the given order
-///   (recency for chats) among equal scores.
+///   twice as much as keywords. Groups follow their best match, ties in `Kind.rank` order (resources before chats),
+///   and rows keep the given order (recency for chats) among equal scores. A chat group gives way to an equally
+///   good resource group unless a chat's title is the exact query, so exact titles stay first.
 public enum CommandPalette {
     /// Rows per group.
     public static let limit = 6
@@ -138,14 +155,22 @@ public enum CommandPalette {
             (kind: kind, rows: rows.sorted { $0.score != $1.score ? $0.score > $1.score : $0.index < $1.index })
         }
         .sorted { lhs, rhs in
-            let left = lhs.rows[0].score, right = rhs.rows[0].score
-            return left != right ? left > right : lhs.kind.rawValue < rhs.kind.rawValue
+            let left = groupScore(lhs.kind, lhs.rows[0], tokens: tokens)
+            let right = groupScore(rhs.kind, rhs.rows[0], tokens: tokens)
+            return left != right ? left > right : lhs.kind.rank < rhs.kind.rank
         }
         for group in ranked {
             sections.append(CommandPaletteSection(id: "kind-\(group.kind.rawValue)", title: group.kind.title,
                                                   items: group.rows.prefix(limit).map(\.item)))
         }
         return sections
+    }
+
+    /// A group's place: its best score, with chats a point behind resources unless the chat's title is the query.
+    static func groupScore(_ kind: CommandPaletteItem.Kind, _ best: (item: CommandPaletteItem, score: Int, index: Int),
+                           tokens: [String]) -> Int {
+        guard kind == .chat, best.score != Int.max else { return best.score }
+        return normalized(best.item.title) == tokens.joined(separator: " ") ? best.score : best.score - 1
     }
 
     /// How well every token matches an item, or nil when one does not.
@@ -192,7 +217,7 @@ public enum CommandPalette {
 
     private static func suggestions(_ items: [CommandPaletteItem], limit: Int) -> [CommandPaletteSection] {
         let suggested = items.filter(\.suggested)
-        return CommandPaletteItem.Kind.allCases.compactMap { kind in
+        return CommandPaletteItem.Kind.allCases.sorted { $0.rank < $1.rank }.compactMap { kind in
             let rows = suggested.filter { $0.kind == kind }
             guard !rows.isEmpty else { return nil }
             return CommandPaletteSection(id: "kind-\(kind.rawValue)", title: kind == .chat ? "Recent chats" : kind.title,

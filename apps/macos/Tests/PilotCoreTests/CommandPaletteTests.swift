@@ -83,7 +83,7 @@ private func ids(_ sections: [CommandPaletteSection]) -> [[String]] {
     #expect(ids(sections) == [["a", "b"]])
 }
 
-@Test func emptyFieldListsSuggestionsInGroupOrder() {
+@Test func emptyFieldListsResourcesBeforeRecentChats() {
     let items = [
         CommandPaletteItem(id: "new", kind: .action, title: "New chat", suggested: true),
         chat("a", "Inbox project filter", suggested: true),
@@ -92,8 +92,8 @@ private func ids(_ sections: [CommandPaletteSection]) -> [[String]] {
         chat("b", "Home subscription bars", suggested: true),
     ]
     let sections = CommandPalette.results(for: "  ", items: items)
-    #expect(sections.map(\.title) == ["Recent chats", "Pages", "Actions"])
-    #expect(ids(sections) == [["a", "b"], ["home"], ["new"]])
+    #expect(sections.map(\.title) == ["Pages", "Recent chats", "Actions"])
+    #expect(ids(sections) == [["home"], ["a", "b"], ["new"]])
 }
 
 @Test func titleStartRanksAboveWordStartAboveInsideAWord() {
@@ -132,9 +132,23 @@ private func ids(_ sections: [CommandPaletteSection]) -> [[String]] {
                            keywords: ["ENG-1412", "acme-api"]),
     ]
     let sections = CommandPalette.results(for: "acme", items: items)
-    // The project's title holds the word; the others match it only as a keyword, then tie in group order.
-    #expect(sections.map(\.title) == ["Projects", "Chats", "Pages", "Linear"])
+    // The project's title holds the word; the others match it only as a keyword, then resources lead chats.
+    #expect(sections.map(\.title) == ["Projects", "Pages", "Linear", "Chats"])
     #expect(ids(CommandPalette.results(for: "eng-1412", items: items)) == [["linear"]])
+}
+
+@Test func comparableResourcesLeadChatsButExactChatTitlesStayFirst() {
+    let items = [
+        chat("chat", "Billing export"),
+        CommandPaletteItem(id: "mission", kind: .mission, title: "Billing export rewrite"),
+    ]
+    // Both titles start with the word: the mission leads.
+    #expect(CommandPalette.results(for: "billing", items: items).map(\.title) == ["Missions", "Chats"])
+    // The chat's exact title stays first.
+    #expect(CommandPalette.results(for: "billing export", items: items).map(\.title) == ["Chats", "Missions"])
+    // A clearly better chat match still wins: the title start beats a word inside the mission title.
+    let better = [chat("chat", "Export"), CommandPaletteItem(id: "mission", kind: .mission, title: "Billing export")]
+    #expect(CommandPalette.results(for: "export", items: better).map(\.title) == ["Chats", "Missions"])
 }
 
 @Test func equalScoresKeepTheGivenOrderAndGroupsAreCapped() {

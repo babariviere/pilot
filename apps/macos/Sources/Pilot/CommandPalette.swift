@@ -33,8 +33,10 @@ struct CommandPaletteCatalog {
     let openSettings: () -> Void
     let openKeyboardShortcuts: () -> Void
 
-    /// Recent chats listed while the field is empty.
-    static let recentChats = 5
+    /// Recent chats listed while the field is empty, below the resources. Every chat stays searchable.
+    static let recentChats = 3
+    /// Active missions suggested while the field is empty.
+    static let suggestedMissions = 3
 
     init(model: AppModel, openSettings: @escaping () -> Void, openKeyboardShortcuts: @escaping () -> Void) {
         self.model = model
@@ -44,7 +46,20 @@ struct CommandPaletteCatalog {
 
     func entries() -> [CommandPaletteEntry] {
         chats() + remoteResources() + tasks() + missions() + projects() + pages() + actions() + composerEntries()
-            + focusCommands() + tracked() + triageJumps()
+            + focusCommands() + tracked() + triageJumps() + shortcutHelp()
+    }
+
+    /// Every entry of the shortcut reference, found by what it does ("queue", "edit title") or its keys. Choosing one
+    /// opens the reference.
+    private func shortcutHelp() -> [CommandPaletteEntry] {
+        KeyboardShortcuts.groups.flatMap { group in
+            group.entries.map { entry in
+                CommandPaletteEntry(
+                    item: CommandPaletteItem(id: "help:\(group.title):\(entry.title)", kind: .action, title: entry.title,
+                                             keywords: [group.title, entry.keys, "shortcut", "keys", "help"]),
+                    icon: .command, suffix: group.title, shortcut: entry.keys, perform: openKeyboardShortcuts)
+            }
+        }
     }
 
     /// The on-screen composer's controls (model, thinking, mode, project, branch, workspace, send later), found by
@@ -162,14 +177,17 @@ struct CommandPaletteCatalog {
         let missions = model.client.missions.filter { $0.status != .archived }.sorted { lhs, rhs in
             lhs.status == rhs.status ? lhs.updatedAt > rhs.updatedAt : lhs.status == .active
         }
+        var suggested = 0
         return missions.map { mission in
             let project = model.client.project(mission.projectId)?.name
+            let suggest = mission.status == .active && suggested < Self.suggestedMissions
+            if suggest { suggested += 1 }
             let progress = mission.tasksTotal.flatMap { total in
                 total > 0 ? "\(mission.tasksDone ?? 0) of \(total) tasks done" : nil
             }
             return CommandPaletteEntry(
                 item: CommandPaletteItem(id: "mission:\(mission.id)", kind: .mission, title: mission.title,
-                                         keywords: [project].compactMap { $0 }),
+                                         keywords: [project].compactMap { $0 }, suggested: suggest),
                 icon: .mission,
                 detail: [project, mission.status == .done ? "Done" : nil, progress].compactMap { $0 }
                     .joined(separator: " · ")
@@ -630,7 +648,8 @@ struct CommandPaletteView: View {
     private var field: some View {
         HStack(spacing: 10) {
             PilotSymbol(PilotIcon.search).foregroundStyle(Theme.faintForeground)
-            TextField("Search chats, pages, missions and Slack reports, or paste a Slack link", text: $palette.query)
+            TextField("Jump to a page, mission, task, project or chat, find a shortcut, or paste a Slack link",
+                      text: $palette.query)
                 .textFieldStyle(.plain)
                 .font(.pilot(.headline))
                 .focused($fieldFocused)
