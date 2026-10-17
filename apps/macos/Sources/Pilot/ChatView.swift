@@ -342,21 +342,6 @@ struct ChatView: View {
                             .frame(maxWidth: .infinity)
                             .transition(Theme.Motion.sent(reduceMotion: reduceMotion))
                     }
-                    if let pauseNotice = session.pauseNoticeText {
-                        Label(pauseNotice, icon: .paused)
-                            .font(.pilot(.caption))
-                            .foregroundStyle(Theme.mutedForeground)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: Theme.column, alignment: .leading)
-                            .frame(maxWidth: .infinity)
-                    } else if showsWorkingIndicator(transcript) {
-                        WorkingIndicator(retry: transcript.retry, compacting: transcript.compacting,
-                                         agentWorking: transcript.working || session.state == "starting"
-                                             || !feed.outgoing.isEmpty,
-                                         jobs: runningJobs, showJobs: { showingJobs.toggle() })
-                            .frame(maxWidth: Theme.column, alignment: .leading)
-                            .frame(maxWidth: .infinity)
-                    }
                     if transcript.failureBannerText(for: session) != nil || session.canRetryStartup == true {
                         VStack(alignment: .leading, spacing: 8) {
                             if let error = transcript.failureBannerText(for: session) { ErrorRow(text: error) }
@@ -429,6 +414,26 @@ struct ChatView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
+                // Attached to the composer rather than the transcript's end, so it stays still while replies
+                // stream and the transcript scrolls behind it.
+                Group {
+                    if let pauseNotice = session.pauseNoticeText {
+                        Label(pauseNotice, icon: .paused)
+                            .font(.pilot(.caption))
+                            .foregroundStyle(Theme.mutedForeground)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else if showsWorkingIndicator(transcript) {
+                        WorkingIndicator(retry: transcript.retry, compacting: transcript.compacting,
+                                         agentWorking: transcript.working || session.state == "starting"
+                                             || !feed.outgoing.isEmpty,
+                                         jobs: runningJobs, showJobs: { showingJobs.toggle() })
+                    }
+                }
+                // Matches the other rows above the composer, such as the Ask row below.
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+                .frame(maxWidth: Theme.column, alignment: .leading)
+                .padding(.horizontal, 24)
                 if let context, context.host != model.localHost {
                     OperationDeliveryNotice(ref: context.ref(.session, session.id), hosts: context.hosts,
                         adopt: { operation in try await model.adoptPendingMessage(operation, composer: composer) })
@@ -546,7 +551,7 @@ struct ChatView: View {
         }
     }
 
-    /// "Working…" stays under the transcript for the whole run, including while text streams
+    /// "Working…" stays above the composer for the whole run, including while text streams
     /// and tools run, so activity never looks like it stopped. A manual compaction can run
     /// while idle, so it shows too. A starting session shows it once the loading spinner is gone.
     /// Background jobs keep it after the agent's turn ends ("Waiting on 2 jobs · Tests 4m").
