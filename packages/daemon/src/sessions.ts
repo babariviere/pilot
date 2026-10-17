@@ -1,4 +1,6 @@
 /** Session registry and kernel worker supervision. */
+
+import { AsyncLocalStorage } from "node:async_hooks";
 import { type ChildProcess, fork } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -59,6 +61,7 @@ import { ControlActions } from "./control-actions.ts";
 import { ControlChat } from "./control-chat.ts";
 import type { ControlPilot } from "./control-pilot.ts";
 import { ControlProjectMemory } from "./control-project-memory.ts";
+import { ControlWatchSink } from "./control-watches.ts";
 import { coordinatorTrust } from "./coordinator-trust.ts";
 import type { CredentialBroker } from "./credential-broker.ts";
 import { DatabaseService, type DatabaseState, decideDatabaseRequest, declineDatabaseRequest } from "./databases.ts";
@@ -113,6 +116,7 @@ import {
 } from "./subscription-usage.ts";
 import { hasUnpublishedWork } from "./unpublished-work.ts";
 import { UpdateGate } from "./update-gate.ts";
+import type { WatchService } from "./watch-service.ts";
 import { WorkerActivity } from "./worker-activity.ts";
 import { WorkerStarts } from "./worker-starts.ts";
 import {
@@ -1120,6 +1124,29 @@ export class SessionManager {
 	private pilot?: ControlPilot;
 	private controlActions?: ControlActions;
 	private controlProjectMemory?: ControlProjectMemory;
+	private watches?: WatchService;
+	private readonly controlStartOrigin = new AsyncLocalStorage<boolean>();
+	/** Propagates only across the explicit start path, never unrelated concurrent user work. */
+	controlStart<T>(work: () => Promise<T>): Promise<T> {
+		return this.controlStartOrigin.run(true, work);
+	}
+	setWatches(watches: WatchService): () => void {
+		this.watches = watches;
+		watches.bindSink(new ControlWatchSink(SessionManager.CONTROL_ID, this));
+		const stop = this.onChange((chat) => {
+			if (chat.control) watches.sinkChanged();
+		});
+		return () => {
+			stop();
+			watches.bindSink(undefined);
+			this.watches = undefined;
+		};
+	}
+	private readonly controlAuditListeners = new Set<() => void>();
+	onControlAudit(listener: () => void): () => void {
+		this.controlAuditListeners.add(listener);
+		return () => this.controlAuditListeners.delete(listener);
+	}
 	controlAudit(): ControlActions {
 		this.controlActions ??= new ControlActions(
 			this.controlService().memory,
@@ -1134,6 +1161,9 @@ export class SessionManager {
 				});
 				await this.save(meta);
 				if (this.workers.has(meta.id)) void this.start(meta.id, true);
+			},
+			() => {
+				for (const listener of this.controlAuditListeners) listener();
 			},
 		);
 		return this.controlActions;
@@ -3819,7 +3849,9 @@ export class SessionManager {
 			pending: [
 				{
 					type: "input",
-					requestId: admission?.operationId ?? randomUUID(),
+					requestId:
+						admission?.operationId ??
+						(this.controlStartOrigin.getStore() ? `control:start:${randomUUID()}` : randomUUID()),
 					content: request.message,
 					mode: "followUp",
 				},
@@ -3947,7 +3979,13 @@ export class SessionManager {
 		requestId: string,
 		event?: import("@pilot/protocol").ChatEventSummary,
 	): Promise<boolean> {
-		if (!this.canSendNotice(id, requestId) || !this.missions?.noticeAllowed?.(id, requestId)) return false;
+		if (
+			!this.canSendNotice(id, requestId) ||
+			(requestId.startsWith("watch-notice:")
+				? !this.isControlSession(id)
+				: !this.missions?.noticeAllowed?.(id, requestId))
+		)
+			return false;
 		const end = this.updateGate.begin();
 		const meta = this.require(id);
 		this.sending.set(id, 1);
@@ -5381,9 +5419,11 @@ export class SessionManager {
 						if (
 							command.type === "input" &&
 							command.onlyIfIdle &&
-							((command.requestId.startsWith("mission-notice:")
-								? !this.missions?.noticeAllowed?.(id, command.requestId) || meta.archivedAt !== undefined
-								: meta.prFollowUp?.requestId !== command.requestId) ||
+							((command.requestId.startsWith("watch-notice:")
+								? !this.isControlSession(id) || meta.archivedAt !== undefined
+								: command.requestId.startsWith("mission-notice:")
+									? !this.missions?.noticeAllowed?.(id, command.requestId) || meta.archivedAt !== undefined
+									: meta.prFollowUp?.requestId !== command.requestId) ||
 								meta.pending.some((pending) => pending !== command))
 						) {
 							rejected.set(
@@ -5728,6 +5768,22 @@ export class SessionManager {
 		// Parking already detached this worker. Cleanup errors and late packets belong
 		// to its shutdown, not the session's completed work or a replacement worker.
 		if (this.parked.has(worker)) return;
+		if (packet.type === "watch.run") {
+			if (this.workers.get(meta.id) !== worker) return;
+			void (
+				this.watches?.attributeSessionRun(meta.id, packet.controlCaused ? SessionManager.CONTROL_ID : meta.id) ??
+				Promise.resolve()
+			).then(
+				() => worker.send({ type: "watch.run.result", callId: packet.callId }),
+				(error: unknown) =>
+					worker.send({
+						type: "watch.run.result",
+						callId: packet.callId,
+						error: formatFailure(error, "Watch run attribution"),
+					}),
+			);
+			return;
+		}
 		if (packet.type === "systemMessageState") {
 			try {
 				if (!this.missions?.systemMessageState) return;

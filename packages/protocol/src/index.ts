@@ -133,7 +133,16 @@ export type DeliveryMode = "steer" | "followUp";
  * omit it. `coordinator` is a message from the mission coordinator; `mission` covers other mission input; `slack`
  * carries new replies in a Slack thread the chat was waiting on.
  */
-export type InputOrigin = "job" | "subagent" | "extension" | "coordinator" | "mission" | "pullRequest" | "slack";
+export type InputOrigin =
+	| "job"
+	| "subagent"
+	| "extension"
+	| "coordinator"
+	| "mission"
+	| "pullRequest"
+	| "slack"
+	| "control"
+	| "watch";
 
 /** Durable user input waiting to join a run, in submission order. Passive writes are not messages. */
 export interface QueuedMessage {
@@ -217,7 +226,12 @@ export type GitHubAction = {
 };
 /** User-facing automatic event. The full agent-facing message remains on the entry. */
 export interface ChatEventSummary {
-	kind: "mission_updated" | "mission_decisions_changed" | "mission_task_done" | "mission_member_finished";
+	kind:
+		| "mission_updated"
+		| "mission_decisions_changed"
+		| "mission_task_done"
+		| "mission_member_finished"
+		| "watch_notice";
 	text: string;
 }
 export interface GitHubActionsUpdateEvent {
@@ -1271,7 +1285,9 @@ export interface SpawnRequest {
 	thinking?: string;
 }
 
-/** POST /api/sessions/:id/model. Sets model and optional thinking; only idle, non-archived chats may change. */
+/** POST /api/sessions/:id/model. Returns ChangeModelResponse. Incompatible provider context is
+ * rebuilt automatically from durable history in a restorable attempt (reason=model).
+ * Only idle, non-archived chats may change. Control changes apply on the next turn. */
 export interface ChangeModelRequest {
 	/** Exact "provider/modelId" from the scoped model catalog. */
 	model: string;
@@ -1457,6 +1473,7 @@ export type ClientMessage =
 
 /** Daemon to client, over /api/ws and the dedicated sockets below (see their message types). */
 export type ServerMessage =
+	| import("./control.ts").ControlMessage
 	| { type: "shared-contexts.changed" }
 	| { type: "power"; power: import("./power.ts").PowerStatus }
 	| { type: "mcp"; mcp: import("./mcp.ts").McpStatus }
@@ -1529,6 +1546,19 @@ export type TerminalSocketMessage =
 export type SubagentServerMessage = Extract<ServerMessage, { type: "subagent.events" | "error" }>;
 
 export const DEFAULT_PORT = 4319;
+export type {
+	CancelWatchResponse,
+	ChangeModelResponse,
+	ControlAuditEntry,
+	ControlAuditResponse,
+	ControlChatResponse,
+	ControlMessage,
+	Watch,
+	WatchEvent,
+	WatchesResponse,
+	WatchInput,
+	WatchTarget,
+} from "./control.ts";
 export type { DaemonCapabilities, DaemonHello } from "./hello.ts";
 export { DAEMON_PROTOCOL_VERSION, MINIMUM_CLIENT_PROTOCOL_VERSION } from "./hello.ts";
 export type * from "./inbox.ts";

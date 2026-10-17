@@ -326,6 +326,7 @@ export function runKernelWorker(): void {
 			command.type === "memory.result" ||
 			command.type === "control.result" ||
 			command.type === "pilot.result" ||
+			command.type === "watch.run.result" ||
 			command.type === "database.result" ||
 			command.type === "slack.result" ||
 			command.type === "subscription.limit.result" ||
@@ -376,6 +377,8 @@ export function runKernelWorker(): void {
 					onSystemMessageState: (event) => {
 						void send({ type: "systemMessageState", event });
 					},
+					onRunAdmitted: (controlCaused) =>
+						callDaemon<void>((callId) => ({ type: "watch.run", callId, controlCaused })),
 					onWorking: (working, completion, execution) =>
 						notify({
 							type: "working",

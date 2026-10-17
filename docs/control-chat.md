@@ -126,3 +126,31 @@ override. The daemon checks the live caller role and registered project on every
 Read results are quoted as untrusted. Notes always use the supervised control chat as origin,
 ignoring any supplied author, and use the same durable audit/timeline path as orchestration actions.
 No forget operation is exposed. Corrections append new notes; existing log records remain intact.
+
+## Watches and client contract
+
+The control-only `pilot` tool exposes `watch(event, target, mode, note, filter?, expiresAt?)`,
+`unwatch(watchId)` and `watches(after?, limit?)` over the shared worker-backed WatchService.
+The saved note is an instruction authorized when the watch was requested; source event text is
+separately quoted as untrusted data. A frozen notice uses its durable `watch-notice:<lastEventId>`
+identity for idle-only input admission. The Harness deduplicates that identity across retries and
+worker replacement. The event summary keeps the notice visible in the transcript, and the
+OptChat drain logs it as an `event`, not a user request. It starts a fresh control turn.
+Mission creation and attachment remain forbidden for the whole notice turn, including tool rounds.
+
+The daemon binds the singleton sink before session recovery and reschedules it on lifecycle changes.
+Control starts carry a durable input identity, as do explicit sends. The kernel reports origin only
+when that input's run actually starts (or recovers), not when a busy chat queues it. It waits for the
+watch worker's durable attribution acknowledgement before publishing completion. A subsequent
+user-caused run replaces the attribution, so its result can wake the control chat normally.
+
+Client wire types live in `packages/protocol/src/control.ts`, mirrored in `PilotCore/ControlChat.swift`.
+`GET/POST /api/control-chat` return the existing SessionSummary shape (`control: true`);
+ordinary session WebSocket frames carry its changes. `GET /api/control-chat/watches` pages in ID order
+with `after` and `limit` (default 40, at most 100); `next` is omitted at the end.
+`DELETE /api/control-chat/watches/:id` returns `{removed}`, including false for already-fired or
+cancelled watches. Audit reads retain their newest-first sequence paging.
+`watches.changed` and `control-audit.changed` on the shared socket invalidate those HTTP pages.
+Clients refetch on reconnect rather than treating invalidations as a durable event stream.
+Model changes use the existing session response and `reason: "model"` attempt shape, including
+automatic cross-provider context rebuilds; no separate model-switch WebSocket channel is needed.

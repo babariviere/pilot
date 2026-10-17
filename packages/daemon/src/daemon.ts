@@ -173,6 +173,7 @@ const { ControlPilot } = await import("./control-pilot.ts");
 sessions.setPilot(
 	new ControlPilot({
 		isControl: (id) => sessions.isControlSession(id),
+		watches,
 		sessions,
 		projects: () => projects.list(),
 		missions: () => [...controlMissions.values()],
@@ -200,9 +201,10 @@ sessions.setPilot(
 					request.model ?? project.model,
 					request.thinking,
 				);
-				return sessions.spawn({ ...request, ...selection });
+				return sessions.controlStart(() => sessions.spawn({ ...request, ...selection }));
 			},
-			startTask: (missionId, taskId, request) => missionService.startTask(missionId, taskId, request, "coordinator"),
+			startTask: (missionId, taskId, request) =>
+				sessions.controlStart(() => missionService.startTask(missionId, taskId, request, "coordinator")),
 			send: sessions.sendReported.bind(sessions),
 		},
 	}),
@@ -237,6 +239,7 @@ await connectivity.start();
 power?.onNetworkPath((path) => connectivity.setPath(path));
 // Recover global sleep overrides before any interrupted agent can reopen.
 await power?.start();
+const stopControlWatches = sessions.setWatches(watches);
 await sessions.load(maintenance?.frozen);
 await sessions.ensureControlChat();
 const sessionWatches = new SessionWatchSource(watches, sessions);
@@ -301,6 +304,7 @@ const server = createDaemonServer(
 	setup,
 	sharing,
 	maintenance,
+	watches,
 );
 server.listen(config.port, config.host, () => {
 	console.log(`pilotd listening on http://${config.host}:${config.port} (data: ${config.home})`);
@@ -314,6 +318,7 @@ async function stop(): Promise<void> {
 	watchdog.stop();
 	maintenance?.close();
 	server.close();
+	stopControlWatches();
 	await sharing.stop();
 	await schedules.stop();
 	await connectivity.stop();

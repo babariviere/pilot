@@ -12,6 +12,8 @@ extension InputOrigin {
         case .mission: "Mission"
         case .pullRequest: "PR follow-up"
         case .slack: "Slack reply"
+        case .control: "Control chat"
+        case .watch: "Watch"
         }
     }
 
@@ -24,6 +26,8 @@ extension InputOrigin {
         case .mission: PilotIcon.mission
         case .pullRequest: PilotIcon.pullRequest
         case .slack: PilotIcon.message
+        case .control: PilotIcon.coordinator
+        case .watch: PilotIcon.message
         }
     }
 }

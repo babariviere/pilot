@@ -82,6 +82,13 @@ function dispatch(op: string, args: unknown): unknown {
 		return events.acknowledge(a.notice, a.now);
 	}
 	if (op === "list") return list(now);
+	if (op === "page") {
+		prune(now);
+		const { after, limit } = args as { after?: string; limit: number };
+		const rows = db.prepare("SELECT data FROM watches WHERE id > ? ORDER BY id LIMIT ?").all(after ?? "", limit + 1);
+		const watches: Watch[] = rows.slice(0, limit).map((row) => JSON.parse(String(row.data)));
+		return { watches, ...(rows.length > limit ? { next: watches.at(-1)!.id } : {}) };
+	}
 	if (op === "add") {
 		const input = validateWatch(args as WatchInput, now);
 		prune(now);

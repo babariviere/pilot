@@ -858,8 +858,10 @@ The daemon also has an internal event-watch service backed by `watches.sqlite`. 
 pending-notice writes run on a worker. Chat, PR, Linear Done and mission completion sources feed durable,
 idempotent batches through the same settle/rate policy as mission notices. Standalone PR watches reuse
 the PR tracker; out-of-scope Linear watches use at most 25 rotating `list_issues` reads per five minutes.
-The control-chat tool, event-log sink and Watching UI are separate integrations, not exposed by this
-backend alone.
+The control chat manages these subscriptions with `pilot` actions `watch`, `unwatch` and `watches`.
+Saved watch instructions run automatically as event turns. Event summaries remain quoted, untrusted
+data, and notice turns cannot create or attach missions. The control chat's own activity and work
+it starts or sends do not wake it again. The Watching UI is a separate integration.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |

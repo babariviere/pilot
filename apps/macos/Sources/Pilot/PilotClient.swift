@@ -2069,6 +2069,8 @@ final class PilotClient: ObservableObject {
             for observer in trackedObservers.values { observer(projectId) }
         case .sharedContextsChanged:
             onSharedContextsChanged?()
+        case .watchesChanged, .controlAuditChanged:
+            break // Control detail subscriptions are installed by the control-chat UI.
         case let .projects(list):
             projects = list
             hasProjectSnapshot = true
