@@ -854,6 +854,9 @@ and other transport settings stay local. See [catalog tests and measurements](do
 
 ### Configuration and boundaries
 
+See [tool access by role](docs/tool-access-by-role.md) and
+[system prompts by role](docs/system-prompts-by-role.md) for capability boundaries and prompt composition.
+
 The daemon also has an internal event-watch service backed by `watches.sqlite`. SQLite matching and
 pending-notice writes run on a worker. Chat, PR, Linear Done and mission completion sources feed durable,
 idempotent batches through the same settle/rate policy as mission notices. Standalone PR watches reuse
