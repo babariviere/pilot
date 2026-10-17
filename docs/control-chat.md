@@ -57,6 +57,10 @@ selection, concurrency, parent readiness, failure recovery, cache blocks and shu
 
 ## Session and turns
 
+The control-only `history({action: "zoom" | "date", id, ...})` tool reads chat history. Zoom requires
+an aligned `n`; `n=1` reads a whole message with optional paging. Date returns a message's timestamp.
+The daemon rechecks the supervised caller's control role on every read.
+
 `SessionManager.ensureControlChat()` creates one reserved identity, without starting a worker or
 spending on a greeting. Production calls it after metadata load; `POST /api/control-chat` also returns
 the same chat. It is Ask, project-less, permanently pinned and cannot be archived. Its internal

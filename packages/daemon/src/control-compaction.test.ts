@@ -44,7 +44,9 @@ function answer(text: string): AssistantMessage {
 		timestamp: 0,
 	};
 }
-const tools: Tool[] = [{ name: "zoom", description: "Open a line.", parameters: { type: "object", properties: {} } }];
+const tools: Tool[] = [
+	{ name: "history", description: "Read chat history.", parameters: { type: "object", properties: {} } },
+];
 const job: ControlJob = { id: 0, n: 1, source: `user: ${"x".repeat(600)}` };
 async function fixture(t: TestContext) {
 	const home = await mkdtemp(join(tmpdir(), "control-compact-")),
@@ -108,7 +110,7 @@ test("at most five corrections, no truncation or tool execution", async () => {
 				completeSimple: async () => ({
 					...answer(""),
 					stopReason: "toolUse",
-					content: [{ type: "toolCall", id: "x", name: "zoom", arguments: {} }],
+					content: [{ type: "toolCall", id: "x", name: "history", arguments: { action: "zoom", id: 0, n: 1 } }],
 				}),
 			},
 			model,

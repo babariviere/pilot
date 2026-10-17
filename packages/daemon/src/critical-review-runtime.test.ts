@@ -16,12 +16,12 @@ test("fake provider sees sealed evidence only; injection and follow-ups cannot a
 				assert.equal(JSON.stringify(input).includes(f.home), false);
 				assert.deepEqual(
 					input.tools.map((tool) => tool.name),
-					["evidence_list", "evidence_read", "evidence_search"],
+					["evidence"],
 				);
 				turn++;
 				if (turn === 1)
 					return {
-						toolCalls: [{ name: "evidence_read", args: { blobId: f.manifest.entries[0]!.blobId } }],
+						toolCalls: [{ name: "evidence", args: { action: "read", blobId: f.manifest.entries[0]!.blobId } }],
 						usage: { inputTokens: 100, generatedTokens: 10, durationMs: 10 },
 					};
 				if (turn === 2) {
@@ -29,7 +29,7 @@ test("fake provider sees sealed evidence only; injection and follow-ups cannot a
 					return {
 						toolCalls: [
 							{ name: "bash", args: { command: "touch /tmp/escape" } },
-							{ name: "evidence_read", args: { blobId: "other", manifestId: "other" } },
+							{ name: "evidence", args: { action: "read", blobId: "other", manifestId: "other" } },
 						],
 						usage: { inputTokens: 100, generatedTokens: 10, durationMs: 10 },
 					};

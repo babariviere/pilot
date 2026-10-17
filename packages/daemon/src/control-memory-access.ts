@@ -12,7 +12,8 @@ export class ControlMemoryAccess {
 		if (!this.isControl(sessionId)) throw new Error("Only the control chat can read its memory");
 		if (typeof args.id !== "number") throw new Error("Message id is required");
 		if (action === "date") return { id: args.id, at: await this.memory.date(args.id) };
-		if (action !== "zoom" || typeof args.n !== "number") throw new Error("Expected zoom(id,n) or date(id)");
+		if (action !== "zoom" || typeof args.n !== "number")
+			throw new Error("Expected history action zoom (id,n) or date (id)");
 		if (args.n !== 1) {
 			if (args.offset !== undefined) throw new Error("Only whole messages have pages");
 			return { untrusted: true, lines: await this.memory.children(args.id, args.n) };

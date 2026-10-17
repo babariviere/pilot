@@ -82,10 +82,10 @@ test("control turns are fresh, tool rounds stay intact, log excludes thoughts an
 		hooks,
 	);
 	t.after(() => session.close());
-	assert.ok(adapter.session.getCallableToolNames().includes("zoom"));
+	assert.ok(adapter.session.getCallableToolNames().includes("history"));
 	assert.ok(adapter.session.getCallableToolNames().includes("pilot"));
 	assert.ok(adapter.session.getCallableToolNames().includes("memory"));
-	for (const denied of ["bash", "read", "find", "grep", "ls", "mission", "db", "todo", "slack_status"])
+	for (const denied of ["zoom", "date", "bash", "read", "find", "grep", "ls", "mission", "db", "todo", "slack_status"])
 		assert.ok(!adapter.session.getCallableToolNames().includes(denied), denied);
 	let checked = 0;
 	faux.setResponses([
@@ -114,7 +114,7 @@ test("control turns are fresh, tool rounds stay intact, log excludes thoughts an
 					type: "toolCall",
 					id: "date",
 					name: "codemode",
-					arguments: { code: "text(await tools.date({id:0}));" },
+					arguments: { code: 'text(await tools.history({action:"date",id:0}));' },
 				},
 				{ stopReason: "toolUse" },
 			);

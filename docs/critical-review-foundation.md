@@ -68,8 +68,8 @@ erasure, so deletion cannot reset budgets. No private transcript/context text en
 
 ## Restricted capability qualification
 
-`kernel/review-boundary.ts` constructs only `evidence_list`, `evidence_read` and bounded literal
-`evidence_search`. The manifest is fixed by a host closure. Tool names/arguments are checked in
+`kernel/review-boundary.ts` constructs only `evidence({action: "list" | "read" | "search", ...})`;
+search is bounded and literal. The manifest is fixed by a host closure. Tool names/actions/arguments are checked in
 host code on every invocation, including follow-ups. There is no executable tool, generic codemode,
 MCP/discovery, network tool, live workspace, memory/mission mutation, delegation or GitHub capability.
 The module imports no SDK resource loader, Build/Ask session, settings, packages, extensions or hooks.
