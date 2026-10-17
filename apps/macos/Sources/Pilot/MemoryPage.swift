@@ -226,7 +226,10 @@ struct MemoryPage: View {
                 .textFieldStyle(.plain)
                 .font(.pilot(.body))
                 .focused($searchFocused)
-                .onExitCommand { state.query = "" }
+                // Escape clears the search, then a second Escape returns to the tree.
+                .onExitCommand {
+                    if state.query.isEmpty { treeFocused = true } else { state.query = "" }
+                }
                 .accessibilityLabel("Search project memories")
             if !state.query.isEmpty {
                 Button { state.query = "" } label: {
@@ -284,6 +287,7 @@ struct MemoryPage: View {
             .focusable()
             .focused($treeFocused)
             .focusEffectDisabled()
+            .modifier(TriageListFocus(focused: $treeFocused))
             .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow]) { press in
                 guard press.modifiers.isDisjoint(with: [.command, .control, .option]) else { return .ignored }
                 switch press.key {

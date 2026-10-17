@@ -86,6 +86,18 @@ enum KeyboardShortcuts {
             Entry(title: "Move the task up or down in its phase", keys: "⌥↑ / ⌥↓"),
             Entry(title: "Status, phase, model, dependencies and links", keys: "⌘K"),
         ]),
+        Group(title: "Slack triage", entries: [
+            Entry(title: "Move between messages and columns", keys: "↑ ↓ ← → or J / K"),
+            Entry(title: "Start a chat from the message", keys: "↩"),
+            Entry(title: "Change type", keys: "T"),
+            Entry(title: "Change label", keys: "L"),
+            Entry(title: "Dismiss or restore", keys: "D"),
+        ]),
+        Group(title: "Memory", entries: [
+            Entry(title: "Move through the tree", keys: "↑ / ↓ or J / K"),
+            Entry(title: "Fold or unfold", keys: "← / →"),
+            Entry(title: "Clear the search, then return to the tree", keys: "esc"),
+        ]),
         Group(title: "Editors and dialogs", entries: [
             Entry(title: "Save mission brief while editing", keys: "⌘S"),
             Entry(title: "Confirm a form with a multiline editor", keys: "⌘↩"),
