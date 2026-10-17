@@ -410,6 +410,20 @@ test("binding returns after the local commit without waiting for blocked GitHub 
 	});
 });
 
+test("a bound primary PR refreshed by number replaces its cached open status when merged", async () => {
+	await fixture(async (f) => {
+		await f.manager.bindPullRequest(f.ids[0], url);
+		await f.settle();
+		assert.equal(f.manager.get(f.ids[0])?.pullRequest?.state, "open");
+		f.controls.state = "MERGED";
+		await f.manager["pullRequests"].refresh(f.meta());
+		await f.settle();
+		assert.equal(f.manager.get(f.ids[0])?.pullRequest?.state, "merged");
+		assert.equal(f.manager.get(f.ids[0])?.pullRequests?.length, 1);
+		assert.equal((await f.saved()).pullRequest?.state, "merged");
+	});
+});
+
 test("a merged bound PR archives direct chats even with a closed primary, using persisted status after restart", async (t) => {
 	let now = 1_800_000_000_000;
 	t.mock.method(Date, "now", () => now);

@@ -6676,7 +6676,12 @@ export class SessionManager {
 			current = undefined;
 		}
 		if (next) current = next;
-		for (const pr of result.others ?? []) others = [pr, ...others.filter((other) => other.url !== pr.url)];
+		for (const pr of result.others ?? []) {
+			others = [pr, ...others.filter((other) => other.url !== pr.url)];
+			// A bound PR outside the current head (for example on the chat's base branch) is refreshed by number and
+			// arrives here. Its fresh copy replaces the cached primary, or a merge would never show.
+			if (current?.url === pr.url) current = pr;
+		}
 		if (current && !attached(current)) current = undefined;
 		others = others.filter(attached);
 		if (!current) {
