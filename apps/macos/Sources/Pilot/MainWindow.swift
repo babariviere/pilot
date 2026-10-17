@@ -88,6 +88,7 @@ struct MainWindow: View {
             .keyboardRegion(.content)
         }
         .overlay(alignment: .bottom) { KeyboardSequenceHint(focus: model.keyboard) }
+        .environment(\.keyboardFocus, model.keyboard)
         .environment(\.hostViewContext, model.localHost.map { HostViewContext(host: $0, hosts: hosts) })
         .environment(\.repositoryPollingVisible, repositoryPollingVisible)
         .background(RepositoryWindowVisibility { visible in

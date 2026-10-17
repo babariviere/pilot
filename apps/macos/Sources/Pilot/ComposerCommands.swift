@@ -43,12 +43,13 @@ private struct SelectionCommandsModifier: ViewModifier {
     let revision: AnyHashable
     let provide: @MainActor () -> (title: String, commands: [ComposerCommand])?
     @State private var id = UUID()
+    @Environment(\.keyboardFocus) private var keyboard
 
     func body(content: Content) -> some View {
         content
-            .onAppear { AppModel.shared.keyboard.setSelectionProvider(id, provide) }
-            .onChange(of: revision) { AppModel.shared.keyboard.setSelectionProvider(id, provide) }
-            .onDisappear { AppModel.shared.keyboard.removeSelectionProvider(id) }
+            .onAppear { keyboard.setSelectionProvider(id, provide) }
+            .onChange(of: revision) { keyboard.setSelectionProvider(id, provide) }
+            .onDisappear { keyboard.removeSelectionProvider(id) }
     }
 }
 
@@ -56,12 +57,13 @@ private struct ComposerCommandsModifier: ViewModifier {
     let revision: AnyHashable
     let provide: @MainActor () -> [ComposerCommand]
     @State private var id = UUID()
+    @Environment(\.keyboardFocus) private var keyboard
 
     func body(content: Content) -> some View {
         content
-            .onAppear { AppModel.shared.keyboard.setComposerProvider(id, provide) }
-            .onChange(of: revision) { AppModel.shared.keyboard.setComposerProvider(id, provide) }
-            .onDisappear { AppModel.shared.keyboard.removeComposerProvider(id) }
+            .onAppear { keyboard.setComposerProvider(id, provide) }
+            .onChange(of: revision) { keyboard.setComposerProvider(id, provide) }
+            .onDisappear { keyboard.removeComposerProvider(id) }
     }
 }
 
