@@ -121,7 +121,7 @@ struct DiagnosticRepairSheet: View {
                 }
                 if let error { Text(error).foregroundStyle(Theme.destructive) }
                 Text("Starting a repair does not retry, restart, replay, or otherwise change the diagnosed chat.")
-                    .font(.pilot(.caption)).foregroundStyle(Theme.secondaryForeground)
+                    .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
             }
         }
         .task { await load() }
