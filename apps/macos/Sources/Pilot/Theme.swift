@@ -593,21 +593,24 @@ struct RowIconButtonStyle: ButtonStyle {
 struct RowButtonStyle: ButtonStyle {
     var radius: CGFloat = Theme.Radius.row
     var outset: CGFloat = 0
+    /// A list that owns focus supplies the highlighted row's state instead of inheriting its own focus on every button.
+    var focused: Bool? = nil
 
     func makeBody(configuration: Configuration) -> some View {
-        RowButton(configuration: configuration, radius: radius, outset: outset)
+        RowButton(configuration: configuration, radius: radius, outset: outset, focused: focused)
     }
 
     private struct RowButton: View {
         let configuration: ButtonStyleConfiguration
         let radius: CGFloat
         let outset: CGFloat
+        let focused: Bool?
         @Environment(\.isFocused) private var isFocused
 
         var body: some View {
             configuration.label
                 .opacity(configuration.isPressed ? 0.75 : 1)
-                .focusRing(isFocused, radius: radius, outset: outset)
+                .focusRing(focused ?? isFocused, radius: radius, outset: outset)
         }
     }
 }
@@ -653,9 +656,9 @@ extension View {
         buttonStyle(DestructiveOutlineButtonStyle()).focusEffectDisabled()
     }
 
-    /// A whole-row button with the row focus ring. See `RowButtonStyle`.
-    func rowButtonStyle(radius: CGFloat = Theme.Radius.row, outset: CGFloat = 0) -> some View {
-        buttonStyle(RowButtonStyle(radius: radius, outset: outset)).focusEffectDisabled()
+    /// A whole-row button with the row focus ring. A parent list may supply `focused` instead of button focus.
+    func rowButtonStyle(radius: CGFloat = Theme.Radius.row, outset: CGFloat = 0, focused: Bool? = nil) -> some View {
+        buttonStyle(RowButtonStyle(radius: radius, outset: outset, focused: focused)).focusEffectDisabled()
     }
 
     /// Keyboard focus ring for rows and row buttons: a 2 pt ring in the system focus colour, `outset` points outside
