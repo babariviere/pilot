@@ -87,7 +87,27 @@ import Testing
     }
 }
 
+private final class InboxRowMeasurements {
+    var sizes: [String: CGSize] = [:]
+}
+
+/// Record actual placement, not a bitmap's inferred colour or an intermediate layout proposal.
+private struct InboxRowMeasurement: Layout {
+    let name: String
+    let measurements: InboxRowMeasurements
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        subviews[0].sizeThatFits(proposal)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        measurements.sizes[name] = bounds.size
+        subviews[0].place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(bounds.size))
+    }
+}
+
 private struct InboxGutterFixture: View {
+    let measurements: InboxRowMeasurements
     let decorated: Bool
     let highlighted: Bool
     let height: CGFloat
@@ -95,23 +115,25 @@ private struct InboxGutterFixture: View {
 
     private var label: some View {
         HoverRow(verticalPadding: 7) { _ in
-            InboxRowLabel(title: "") {
-                Color.clear.frame(height: 10)
-            } trailing: {
-                // A marker in the actual action slot lets the test measure its trailing inset, without
-                // depending on text rasterization or SF Symbol metrics on a particular macOS release.
-                Color(red: 1, green: 0, blue: 0).frame(width: 8, height: 8)
+            InboxRowMeasurement(name: "content", measurements: measurements) {
+                InboxRowLabel(title: "A project") {
+                    Text("Metadata").font(.pilot(.caption))
+                } trailing: {
+                    Color.clear.frame(width: 8, height: 8)
+                }
             }
         }
     }
 
     private var row: some View {
-        // Render the real label and selection tree without a Button's native focus drawing. Home decorates
-        // inside its selection; Inbox decorates outside. Neither ordering may leave the gutter unselected.
-        Group {
-            if decorated, home { label.inboxCorner(nil) } else { label }
+        // Home decorates inside its selection; Inbox decorates outside. Measure the surface whose bounds
+        // keyboardListItem uses for its selection, which must include the row's entire trailing gutter.
+        InboxRowMeasurement(name: "selection", measurements: measurements) {
+            Group {
+                if decorated, home { label.inboxCorner(nil) } else { label }
+            }
+            .frame(height: height)
         }
-        .frame(height: height)
         .keyboardListItem("row", target: .session(id: "row", reference: nil)) {}
         .environment(\.keyboardListHighlight, KeyboardListHighlight(id: highlighted ? "row" : nil))
     }
@@ -123,33 +145,32 @@ private struct InboxGutterFixture: View {
 
 @Test(arguments: [false, true]) @MainActor
 func inboxAndHomeGutterStaysInsideSelectionAndDoesNotMoveTrailingContent(home: Bool) throws {
-    let width = 280
-    let margin = 12
-    for height in [40, 64] {
+    _ = NSApplication.shared
+    let width: CGFloat = 280
+    for height in [40.0, 64.0] {
         for decorated in [false, true] {
             for highlighted in [false, true] {
-                let renderer = ImageRenderer(content: InboxGutterFixture(decorated: decorated, highlighted: highlighted,
-                                                                         height: CGFloat(height), home: home)
-                    .frame(width: CGFloat(width)).background(Color.white)
-                    .padding(CGFloat(margin)).environment(\.colorScheme, .light))
-                let image = try #require(renderer.cgImage)
-                #expect(image.width == width + 2 * margin)
-                #expect(image.height == height + 2 * margin)
-                let pixels = NSBitmapImageRep(cgImage: image)
-                var actionRight = 0
-                // The marker is vertically centered. One scanline is enough; avoid thousands of unnecessary
-                // AppKit color conversions on the main actor while the rest of the UI suite is running.
-                for x in 0 ..< image.width {
-                    guard let color = pixels.colorAt(x: x, y: image.height / 2)?.usingColorSpace(.deviceRGB),
-                          color.alphaComponent > 0.9, color.redComponent > 0.9,
-                          color.greenComponent < 0.1, color.blueComponent < 0.1 else { continue }
-                    actionRight = max(actionRight, x + 1)
+                let measurements = InboxRowMeasurements()
+                let hosting = NSHostingView(rootView: InboxGutterFixture(measurements: measurements, decorated: decorated,
+                    highlighted: highlighted, height: height, home: home).frame(width: width, height: height))
+                let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: height),
+                                      styleMask: .borderless, backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                defer { window.close() }
+                window.contentView = hosting
+                window.setFrameOrigin(NSPoint(x: -10000, y: -10000))
+                window.orderFrontRegardless()
+                for _ in 0..<4 {
+                    hosting.layoutSubtreeIfNeeded()
+                    RunLoop.main.run(until: Date().addingTimeInterval(0.01))
                 }
-                // Only 24 pt beyond HoverRow's ordinary 8 pt inset, not a whole bitmap's worth of space.
-                #expect(actionRight == margin + width - 8 - (decorated ? 24 : 0))
-                let gutter = try #require(pixels.colorAt(x: margin + width - 12, y: margin + height / 2)?.usingColorSpace(.deviceRGB))
-                #expect((gutter.redComponent < 0.98) == highlighted,
-                        "Selection must cover the gutter too; it is not padding outside the button")
+                let selection = try #require(measurements.sizes["selection"])
+                let content = try #require(measurements.sizes["content"])
+                #expect(abs(selection.width - width) < 0.5, "The gutter must remain inside the selection")
+                #expect(abs(selection.height - height) < 0.5)
+                // Two ordinary 8 pt insets, plus just 24 pt of trailing room on decorated rows. The same
+                // content width when highlighted keeps the action/timestamp aligned instead of moving it.
+                #expect(abs(content.width - (width - 16 - (decorated ? 24 : 0))) < 0.5)
             }
         }
     }
