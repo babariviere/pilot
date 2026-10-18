@@ -231,35 +231,63 @@ private final class RecoveryHTTPStub: URLProtocol {
         form.pendingOperationId = operation.operationId
         _ = NSApplication.shared
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 460),
-                              styleMask: .borderless, backing: .buffered, defer: false)
+                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close() }
         let hosting = NSHostingView(rootView: TaskComposer(form: form, client: client, hosts: hosts).environmentObject(app))
         window.contentView = hosting
+        window.setFrameOrigin(NSPoint(x: -10000, y: -10000))
+        window.orderFrontRegardless()
         window.update()
         hosting.layoutSubtreeIfNeeded()
-        func find(_ element: Any, title: String, depth: Int = 0) -> NSAccessibilityProtocol? {
-            guard depth < 40, let accessible = element as? NSAccessibilityProtocol else { return nil }
-            if accessible.accessibilityRole() == .button,
-               [accessible.accessibilityTitle(), accessible.accessibilityLabel()].contains(title) { return accessible }
-            for child in accessible.accessibilityChildren() ?? [] {
-                if let button = find(child, title: title, depth: depth + 1) { return button }
-            }
-            return nil
+        func controls<V: NSView>(_ view: NSView, of type: V.Type) -> [V] {
+            (view as? V).map { [$0] } ?? view.subviews.flatMap { controls($0, of: type) }
         }
-        let check = try #require(find(hosting, title: "Check"))
-        RecoveryHTTPStub.setMode(.pendingThenAccepted)
-        #expect(check.accessibilityPerformPress())
+        func recoveryButton() -> NSButton? {
+            guard let editor = controls(hosting, of: NSTextView.self).first else { return nil }
+            let editorTop = editor.convert(editor.visibleRect, to: nil).maxY
+            // The pending recovery row has exactly one button, immediately above the editor.
+            // SwiftUI's hosted Text labels are not NSButton titles in the CI in-process runner.
+            return controls(hosting, of: NSButton.self).filter {
+                !$0.isHidden && !$0.bounds.isEmpty && $0.convert($0.bounds, to: nil).minY >= editorTop
+            }.min { $0.convert($0.bounds, to: nil).midY < $1.convert($1.bounds, to: nil).midY }
+        }
+        let mountDeadline = ContinuousClock.now.advanced(by: .seconds(10))
+        while recoveryButton() == nil, ContinuousClock.now < mountDeadline {
+            hosting.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let check = try #require(recoveryButton(), "The real recovery row must mount its native Check control")
+        try #require(check.isEnabled)
+        RecoveryHTTPStub.setMode(.heldLookup)
+        defer { RecoveryHTTPStub.releaseLookups() }
+        let location = check.convert(NSPoint(x: check.bounds.midX, y: check.bounds.midY), to: nil)
+        func event(_ type: NSEvent.EventType) throws -> NSEvent {
+            try #require(NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
+        }
+        NSApp.postEvent(try event(.leftMouseUp), atStart: false)
+        window.sendEvent(try event(.leftMouseDown))
+        if let up = NSApp.nextEvent(matching: .leftMouseUp, until: Date(), inMode: .default, dequeue: true) {
+            window.sendEvent(up)
+        }
         let deadline = ContinuousClock.now.advanced(by: .seconds(5))
-        while !form.checkingStart, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
+        while RecoveryHTTPStub.heldCount == 0, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(RecoveryHTTPStub.heldCount == 1)
         #expect(form.checkingStart)
-        hosting.layoutSubtreeIfNeeded()
-        #expect(find(hosting, title: "Checking…") != nil, "The real button visibly enters its progress state")
+        while check.isEnabled, form.checkingStart, ContinuousClock.now < deadline {
+            hosting.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(!check.isEnabled, "The mounted Check control is visibly disabled while checking")
+        RecoveryHTTPStub.setMode(.accepted)
+        RecoveryHTTPStub.releaseLookups()
         while form.checkingStart, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
         #expect(!form.checkingStart && form.error == nil)
         #expect(form.pendingOperationId == nil && form.message.isEmpty)
         #expect(app.selectedSession?.id == operation.targetId)
-        #expect(RecoveryHTTPStub.requests.filter { $0.path == "/api/operations/receipt" }.count == 3)
+        #expect(RecoveryHTTPStub.requests.filter { $0.path == "/api/operations/receipt" }.count == 2)
         #expect(RecoveryHTTPStub.requests.filter { $0.path == "/api/operations" }.isEmpty)
         await hosts.disconnect(target)
     }
