@@ -63,6 +63,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public var role: SessionRole? = nil
     /// Exact chat this specialist may inspect without waking or changing it.
     public var diagnosticTargetId: String? = nil
+    /// Canonical host-qualified form of the admitted target.
+    public var diagnosticTarget: DiagnosticTargetReference? = nil
     public let id: String
     public let title: String
     public let cwd: String
@@ -225,11 +227,13 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         unpublishedWork: Bool? = nil, workspaceBase: String? = nil, workspaceUpdatedAt: Double? = nil,
         workspaceBehind: String? = nil, runningJobs: [SessionJob]? = nil, canRetryStartup: Bool? = nil,
         working: Bool? = nil, attentionReason: NeedsYouReason? = nil, attentionAt: Double? = nil,
-        role: SessionRole? = nil, diagnosticTargetId: String? = nil
+        role: SessionRole? = nil, diagnosticTargetId: String? = nil,
+        diagnosticTarget: DiagnosticTargetReference? = nil
     ) {
         self.id = id
         self.role = role
         self.diagnosticTargetId = diagnosticTargetId
+        self.diagnosticTarget = diagnosticTarget
         self.title = title
         self.cwd = cwd
         self.sessionPath = sessionPath
@@ -581,7 +585,7 @@ public struct SpawnRequest: Codable, Sendable {
     /// A host-enforced specialist profile. Omitted for ordinary Build and Ask chats.
     public var role: SessionRole?
     /// Required for diagnostics. The daemon derives the specialist scope from this sleeping target.
-    public var diagnosticTargetId: String?
+    public var diagnosticTarget: DiagnosticTargetReference?
     public var projectId: String?
     public var cwd: String?
     public var message: String
@@ -596,11 +600,11 @@ public struct SpawnRequest: Codable, Sendable {
     public init(
         projectId: String? = nil, cwd: String? = nil, message: String, title: String? = nil, model: String? = nil,
         thinking: String? = nil, baseBranch: String? = nil, mode: ChatMode? = nil, workspace: WorkspaceMode? = nil,
-        missionId: String? = nil, role: SessionRole? = nil, diagnosticTargetId: String? = nil
+        missionId: String? = nil, role: SessionRole? = nil, diagnosticTarget: DiagnosticTargetReference? = nil
     ) {
         self.missionId = missionId
         self.role = role
-        self.diagnosticTargetId = diagnosticTargetId
+        self.diagnosticTarget = diagnosticTarget
         self.projectId = projectId
         self.cwd = cwd
         self.message = message

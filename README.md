@@ -957,7 +957,10 @@ connectivity, recovery and parking transitions without waking parked workers.
 [Agent diagnostics](docs/agent-diagnostics.md) combine those records with request timings and daemon health in an
 on-demand, runtime-restricted specialist and host-qualified read-only API that never opens a target transcript or
 wakes a parked worker. Use **Diagnose this chat** from a chat's More menu, or **Ask about Pilot** from Help, to open
-that specialist. Repair remains a separate user-authorized coding-agent handoff with explicitly selected bounded
+an explicit setup sheet, verify or paste a known `pilot://chat/<UUID>` link, and choose the specialist's model and
+thinking level before creation. The created chat is visibly labeled **Diagnostics specialist** with its admitted
+host-qualified target. Cancel creates nothing, and unavailable, missing or ambiguous targets fail without falling
+back to Local. Repair remains a separate user-authorized coding-agent handoff with explicitly selected bounded
 cited evidence.
 [Tool-call diagnostics](docs/tool-call-diagnostics.md) add bounded in-flight and completed lifecycle evidence for
 built-ins, MCP and nested `codemode` calls while keeping raw names, arguments, output and commands out of diagnostics

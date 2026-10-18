@@ -375,6 +375,12 @@ struct ChatView: View {
                             .frame(maxWidth: Theme.column, alignment: .leading)
                             .frame(maxWidth: .infinity)
                     }
+                    if session.isDiagnosticsSpecialist {
+                        DiagnosticSpecialistHeader(target: session.diagnosticTarget,
+                                                   fallbackTargetId: session.diagnosticTargetId)
+                            .frame(maxWidth: Theme.column, alignment: .leading)
+                            .frame(maxWidth: .infinity)
+                    }
                     if let origin = session.continuationOf {
                         ContinuedFromRow(originId: origin)
                             .frame(maxWidth: Theme.column, alignment: .leading)

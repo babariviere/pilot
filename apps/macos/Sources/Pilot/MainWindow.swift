@@ -143,6 +143,9 @@ struct MainWindow: View {
         .sheet(item: $model.diagnosticRepairTarget) { target in
             DiagnosticRepairSheet(target: target).environmentObject(model)
         }
+        .sheet(item: $model.diagnosticSetupTarget) { target in
+            DiagnosticSetupSheet(setup: target).environmentObject(model)
+        }
         .sheet(isPresented: $model.showingCommandPalette, onDismiss: {
             let action = model.commandPaletteAction
             model.commandPaletteAction = nil

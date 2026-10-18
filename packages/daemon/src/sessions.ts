@@ -39,6 +39,7 @@ import type {
 	DiagnosticPauseReason,
 	DiagnosticsHandoff,
 	DiagnosticsHandoffRequest,
+	DiagnosticTargetReference,
 	MergePullRequestRequest,
 	OperationHost,
 	PullRequestBindingResult,
@@ -306,6 +307,8 @@ interface SessionMeta extends OutcomeMeta {
 	role?: "diagnostics";
 	/** Exact host-local chat admitted for this specialist. */
 	diagnosticTargetId?: string;
+	/** Canonical host-qualified target persisted for worker recovery and user-visible context. */
+	diagnosticTarget?: DiagnosticTargetReference;
 	executionEvidence?: import("@pilot/kernel").ExecutionEvidence;
 	/** Durable execution-ownership fence. Never cleared by reconnect, restart or a fresh input. */
 	delegationFenced?: boolean;
@@ -3713,10 +3716,12 @@ export class SessionManager {
 			meta.role === "diagnostics" &&
 			(meta.mode !== "ask" ||
 				(meta.diagnosticTargetId !== undefined &&
-					(typeof meta.diagnosticTargetId !== "string" || !meta.diagnosticTargetId)))
+					(typeof meta.diagnosticTargetId !== "string" || !meta.diagnosticTargetId)) ||
+				(meta.diagnosticTarget !== undefined &&
+					this.admittedDiagnosticTarget(meta.diagnosticTarget).sessionId !== meta.diagnosticTargetId))
 		)
 			throw new Error("Invalid diagnostics specialist metadata");
-		if (meta.role !== "diagnostics" && meta.diagnosticTargetId !== undefined)
+		if (meta.role !== "diagnostics" && (meta.diagnosticTargetId !== undefined || meta.diagnosticTarget !== undefined))
 			throw new Error("Diagnostic target requires a diagnostics specialist");
 		if (meta.mode !== "ask") {
 			if (meta.ask !== undefined) throw new Error("Ask context requires Ask mode");
@@ -3973,6 +3978,44 @@ export class SessionManager {
 		}
 	}
 
+	private admittedDiagnosticTarget(value: unknown): DiagnosticTargetReference {
+		const expected = this.diagnosticHost;
+		if (!expected || !value || typeof value !== "object" || Array.isArray(value))
+			throw new Conflict("Diagnostics require a host-qualified target chat");
+		const record = value as Record<string, unknown>;
+		const host = record.host as Record<string, unknown> | undefined;
+		if (
+			Object.keys(record).sort().join(",") !== "chatUrl,host,sessionId" ||
+			!host ||
+			typeof host !== "object" ||
+			Array.isArray(host) ||
+			Object.keys(host).sort().join(",") !== "daemonId,hostId,lineageId" ||
+			typeof host.hostId !== "string" ||
+			!/^[a-zA-Z0-9._-]{1,128}$/.test(host.hostId) ||
+			host.daemonId !== expected.daemonId ||
+			host.lineageId !== expected.lineageId ||
+			typeof record.sessionId !== "string" ||
+			!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(record.sessionId) ||
+			record.chatUrl !== `pilot://chat/${record.sessionId}`
+		)
+			throw new Conflict("Diagnostics target host or canonical chat link does not match this daemon");
+		return {
+			host: { hostId: host.hostId, daemonId: expected.daemonId, lineageId: expected.lineageId },
+			sessionId: record.sessionId,
+			chatUrl: record.chatUrl,
+		};
+	}
+
+	private diagnosticReference(meta: SessionMeta): DiagnosticTargetReference | undefined {
+		if (meta.diagnosticTarget) return meta.diagnosticTarget;
+		if (!meta.diagnosticTargetId || !this.diagnosticHost) return undefined;
+		return {
+			host: this.diagnosticHost,
+			sessionId: meta.diagnosticTargetId,
+			chatUrl: `pilot://chat/${meta.diagnosticTargetId}`,
+		};
+	}
+
 	private async spawnAdmitted(
 		request: SpawnRequest,
 		coordinator: boolean,
@@ -3994,15 +4037,15 @@ export class SessionManager {
 				request.cwd !== undefined)
 		)
 			throw new Error("Diagnostics specialists require a target-scoped read-only session");
-		if (request.role !== "diagnostics" && request.diagnosticTargetId !== undefined)
-			throw new Error("diagnosticTargetId requires role=diagnostics");
+		if (request.role !== "diagnostics" && request.diagnosticTarget !== undefined)
+			throw new Error("diagnosticTarget requires role=diagnostics");
 		const mode = request.role === "diagnostics" ? "ask" : (request.mode ?? "build");
 		let projectId = request.projectId;
 		let diagnosticTarget: SessionMeta | undefined;
+		let diagnosticReference: DiagnosticTargetReference | undefined;
 		if (request.role === "diagnostics") {
-			if (typeof request.diagnosticTargetId !== "string" || !request.diagnosticTargetId.trim())
-				throw new Error("Diagnostics specialists require a target chat");
-			diagnosticTarget = this.require(request.diagnosticTargetId);
+			diagnosticReference = this.admittedDiagnosticTarget(request.diagnosticTarget);
+			diagnosticTarget = this.require(diagnosticReference.sessionId);
 			if (diagnosticTarget.role === "diagnostics")
 				throw new Conflict("A diagnostics specialist cannot target another specialist");
 			if (projectId !== undefined && projectId !== diagnosticTarget.projectId)
@@ -4065,7 +4108,9 @@ export class SessionManager {
 		const meta: SessionMeta = {
 			id,
 			...(request.role ? { role: request.role } : {}),
-			...(diagnosticTarget ? { diagnosticTargetId: diagnosticTarget.id } : {}),
+			...(diagnosticTarget && diagnosticReference
+				? { diagnosticTargetId: diagnosticTarget.id, diagnosticTarget: diagnosticReference }
+				: {}),
 			...(admission ? { createOperationId: admission.operationId } : {}),
 			...(admission && request.missionId ? { createMissionId: request.missionId } : {}),
 			mode,
@@ -6077,6 +6122,7 @@ export class SessionManager {
 				}
 			});
 		const mission = this.missions?.context(id);
+		const diagnosticTarget = this.diagnosticReference(meta);
 		let published: SessionWorker | undefined;
 		const earlyPackets: KernelPacket[] = [];
 		let overflow = false;
@@ -6085,7 +6131,7 @@ export class SessionManager {
 				sessionId: id,
 				...(meta.control ? { control: true } : {}),
 				...(meta.role ? { role: meta.role } : {}),
-				...(meta.diagnosticTargetId ? { diagnosticTargetId: meta.diagnosticTargetId } : {}),
+				...(diagnosticTarget ? { diagnosticTarget } : {}),
 				...(meta.projectId ? { projectId: meta.projectId } : {}),
 				storageDir: join(this.dir(id), "durable"),
 				subscriptionPolicy: join(this.dir(id), "subscription-policy.json"),
@@ -6100,6 +6146,7 @@ export class SessionManager {
 				...(meta.workspace ? { trustDirectory: meta.workspace.source } : {}),
 				pilot: {
 					...(meta.role ? { role: meta.role } : {}),
+					...(diagnosticTarget ? { diagnosticTarget } : {}),
 					...(meta.ask ? { ask: meta.ask } : {}),
 					...(meta.workspace ? { workspace: meta.workspace } : {}),
 					...(meta.coordinatorView
@@ -6395,7 +6442,7 @@ export class SessionManager {
 					if (meta.role !== "diagnostics")
 						throw new Error("Only an admitted diagnostics specialist may read agent diagnostics");
 					const target = this.require(packet.sessionId);
-					if (target.id !== (meta.diagnosticTargetId ?? meta.id))
+					if (target.id !== (this.diagnosticReference(meta)?.sessionId ?? meta.id))
 						throw new Error("Diagnostics are limited to the host-admitted target chat");
 					return this.diagnostics(target.id, {
 						...(packet.limit === undefined ? {} : { limit: packet.limit }),
@@ -6873,6 +6920,7 @@ export class SessionManager {
 			...(meta.control ? { control: true } : {}),
 			...(meta.role ? { role: meta.role } : {}),
 			...(meta.diagnosticTargetId ? { diagnosticTargetId: meta.diagnosticTargetId } : {}),
+			...(this.diagnosticReference(meta) ? { diagnosticTarget: this.diagnosticReference(meta) } : {}),
 			...(meta.continuationOf ? { continuationOf: meta.continuationOf } : {}),
 			...(meta.continuedTo ? { continuedTo: meta.continuedTo } : {}),
 			mode: meta.mode === "ask" ? "ask" : "build",

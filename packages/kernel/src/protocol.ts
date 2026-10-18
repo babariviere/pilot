@@ -5,6 +5,7 @@ import type {
 	AgentEvent,
 	ArtifactRevision,
 	DeliveryMode,
+	DiagnosticTargetReference,
 	RewindAction,
 	SessionAttempt,
 	SessionCommand,
@@ -44,7 +45,7 @@ export interface KernelSpec {
 	/** Runtime-enforced specialist profile. Omitted for ordinary Build and Ask sessions. */
 	role?: "diagnostics";
 	/** Host-admitted chat that a diagnostics specialist may inspect. */
-	diagnosticTargetId?: string;
+	diagnosticTarget?: DiagnosticTargetReference;
 	/** Ephemeral capability, never stored in session metadata or transcripts. Inherited by descendants. */
 	credentials?: CredentialEndpoint;
 	/** Host-resolved trust for read-only Linux configuration; never a writable trust-store exception. */

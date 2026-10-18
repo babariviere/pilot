@@ -697,12 +697,20 @@ test("Ask overrides Build delivery policy and requires an explicit new Build han
 test("diagnostics specialist prompt grants no repair or repository authority", () => {
 	const prompt = pilotPrompt({
 		role: "diagnostics",
+		diagnosticTarget: {
+			host: { hostId: "remote-box", daemonId: "daemon", lineageId: "lineage" },
+			sessionId: "01234567-89ab-4cde-8fab-0123456789ab",
+			chatUrl: "pilot://chat/01234567-89ab-4cde-8fab-0123456789ab",
+		},
 		ask: { source: "/source" },
 		workspace: { source: "/source", base: "main", jj: true },
 		requirePullRequest: true,
 	});
 	assert.match(prompt, /diagnostics specialist/);
 	assert.match(prompt, /Use only the diagnostics tool/);
+	assert.match(prompt, /pilot:\/\/chat\/01234567-89ab-4cde-8fab-0123456789ab/);
+	assert.match(prompt, /remote-box.*daemon.*lineage/);
+	assert.match(prompt, /without asking the user/);
 	assert.match(prompt, /cannot read transcripts, source or files/);
 	assert.match(prompt, /explicit user-authorized handoff/);
 	assert.doesNotMatch(prompt, /gh pr create|git push|read, find, grep|subagents/);
