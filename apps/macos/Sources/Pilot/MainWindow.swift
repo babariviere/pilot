@@ -297,6 +297,7 @@ struct SessionMoreActions: View {
         Menu {
             SessionProjectAction(session: session)
             SessionRenameAction(session: session)
+            SessionClipboardActions(session: session)
             Divider()
             SessionMissionActions(session: session)
             Divider()

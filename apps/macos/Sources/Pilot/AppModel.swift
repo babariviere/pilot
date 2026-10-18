@@ -1203,13 +1203,28 @@ final class AppModel: ObservableObject {
         showMainWindow()
     }
 
-    /// A reply's chat link is navigation only. Missing chats leave the current conversation visible.
+    /// A chat link resolves across known host-qualified inventories without waking or reconnecting a target.
+    /// Colliding IDs fail closed rather than selecting Local or whichever host happened to publish first.
     func reveal(chat link: ChatDestination) {
-        guard client.session(link.sessionId) != nil else {
+        var matches = hosts.sessions.filter { $0.value.id == link.sessionId }.map(\.ref)
+        if let localHost, client.session(link.sessionId) != nil {
+            let local = HostResourceRef(host: localHost, kind: .session, localId: link.sessionId)
+            if !matches.contains(local) { matches.append(local) }
+        }
+        if matches.isEmpty, localHost == nil, client.session(link.sessionId) != nil {
+            reveal(session: link.sessionId)
+            return
+        }
+        guard matches.count == 1, let match = matches.first else {
+            if matches.count > 1 {
+                sessionActionError = "This link matches chats on more than one host. Open the intended host first."
+                return
+            }
             sessionActionError = "This chat is no longer available."
             return
         }
-        reveal(session: link.sessionId)
+        do { try selectSession(match) }
+        catch { sessionActionError = "This chat is no longer available." }
     }
 
     /// Selects a chat from outside the sidebar, such as a notification or the menu bar.

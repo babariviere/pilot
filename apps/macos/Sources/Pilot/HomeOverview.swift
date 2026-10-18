@@ -374,6 +374,7 @@ struct HomeOverview: View {
         .contextMenu {
             Button("Open Chat") { app.navigate(.session, id: session.id, context: owner) }
             SessionProjectAction(session: session).environment(\.hostViewContext, owner)
+            SessionClipboardActions(session: session).environment(\.hostViewContext, owner)
             Button("Stop Chat") { app.stopSession(owner?.ref(.session, session.id).storageKey ?? session.id) }
         }
     }
