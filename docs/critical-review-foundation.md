@@ -1,5 +1,8 @@
 # Critical review foundation (disabled)
 
+The separate [code and verification capture seam](code-evidence-capture.md) complements the
+transcript-only session adapter below. Both remain unwired and synthetic-only.
+
 The critical-review namespace is separate from `reviews.json` and `/api/reviews`, which still
 only track whether chat results were read. Version 1 transport models are mirrored in
 `PilotCore/CriticalReviews.swift`. Records are host-owned, immutable and idempotent by ID;
