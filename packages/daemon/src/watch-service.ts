@@ -1,4 +1,5 @@
 import { Worker } from "node:worker_threads";
+import type { ControlAuthorizationNeeded, ControlFollowUp } from "@pilot/protocol";
 import { NoticeDispatcher } from "./notice-dispatcher.ts";
 import type {
 	WatchNotice,
@@ -23,9 +24,23 @@ export class WatchService {
 	private expiryUpdate?: Promise<void>;
 	private expiryDirty = false;
 	private closing = false;
-	private dashboardCache: { watches: Watch[]; total: number } = { watches: [], total: 0 };
+	private dashboardCache: {
+		watches: Watch[];
+		total: number;
+		followUps: ControlFollowUp[];
+		followUpsTotal: number;
+		authorizationNeeded: ControlAuthorizationNeeded[];
+		authorizationNeededTotal: number;
+	} = {
+		watches: [],
+		total: 0,
+		followUps: [],
+		followUpsTotal: 0,
+		authorizationNeeded: [],
+		authorizationNeededTotal: 0,
+	};
 	/** Memory only. Refreshed by watch changes, never by a dashboard request. */
-	dashboard(): { watches: Watch[]; total: number } {
+	dashboard() {
 		return this.dashboardCache;
 	}
 	ready(): Promise<void> {
@@ -48,7 +63,10 @@ export class WatchService {
 				if (!sink.canSend(retry?.requestId)) return;
 				const notice = await this.rpc<WatchNotice | undefined>("prepare", now);
 				if (!notice || sink !== this.sink || !sink.canSend(notice.requestId)) return;
-				if (await sink.deliver(notice)) await this.rpc("acknowledge", { notice, now });
+				if (await sink.deliver(notice)) {
+					await this.rpc("acknowledge", { notice, now });
+					await this.changed();
+				}
 			},
 		});
 		this.worker = new Worker(new URL("./watch-worker.ts", import.meta.url), { workerData: { path } });
@@ -114,8 +132,39 @@ export class WatchService {
 		await this.dispatcher.flush(now);
 	}
 	/** Tag an admitted start/send before its completion can publish. Suppressed once, durably. */
-	attributeSessionRun(sessionId: string, origin: string): Promise<void> {
-		return this.rpc("attribute", { sessionId, origin });
+	async attributeSessionRun(
+		sessionId: string,
+		origin: string,
+		requestIds: string[] = [],
+		recoveredOnly = false,
+	): Promise<void> {
+		await this.rpc("attribute", { sessionId, origin, requestIds, recoveredOnly });
+		if (requestIds.some((id) => id.startsWith("control:"))) await this.changed();
+	}
+	async followThrough(requestId: string, authorizationId: string, sessionId?: string): Promise<void> {
+		await this.rpc("followThrough", { requestId, authorizationId, sessionId });
+		await this.changed();
+	}
+	/** A newly created chat has no older run. Arm before startup can fail, without generic run attribution. */
+	async followThroughCreated(sessionId: string, requestId: string): Promise<void> {
+		await this.rpc("followThroughCreated", { sessionId, requestId });
+		await this.changed();
+	}
+	async cancelFollowThrough(requestId: string, onlyQueued = false): Promise<void> {
+		await this.rpc("cancelFollowThrough", { requestId, onlyQueued });
+		await this.changed();
+	}
+	followThroughActive(requestId: string): Promise<boolean> {
+		return this.rpc("followThroughActive", requestId);
+	}
+	async authorizationNeeded(item: ControlAuthorizationNeeded): Promise<void> {
+		await this.rpc("authorizationNeeded", item);
+		await this.changed();
+	}
+	async resolveAuthorization(id: string): Promise<boolean> {
+		const resolved = await this.rpc<boolean>("resolveAuthorization", id);
+		if (resolved) await this.changed();
+		return resolved;
 	}
 	protected rpc<T>(op: string, args?: unknown): Promise<T> {
 		if (this.closed || this.broken) return Promise.reject(this.broken ?? new Error("Watch service closed"));
@@ -142,10 +191,9 @@ export class WatchService {
 	}
 	async removeTarget(kind: "chat" | "mission", id: string, reason: WatchRemoval["reason"]): Promise<number> {
 		const removed = await this.rpc<number>("removeTarget", { kind, id, reason });
-		if (removed) {
-			this.changed();
-			this.dispatcher.schedule();
-		}
+		// Implicit result watches can be removed even when the explicit-watch count is zero.
+		await this.changed();
+		this.dispatcher.schedule();
 		await this.flushRemovalAudit();
 		return removed;
 	}

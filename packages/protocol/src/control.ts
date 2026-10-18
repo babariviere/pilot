@@ -212,6 +212,21 @@ export interface ControlDashboardSharedTask {
  * At most 24,000 encoded bytes, 100 rows per list (200 projects, 50 missions/replicaMissions); totals precede clipping.
  * Text is untrusted. Next contains global active watches with saved instructions, even for scoped requests.
  */
+export interface ControlFollowUp {
+	requestId: string;
+	authorizationId: string;
+	sessionId?: string;
+	state: "queued" | "running" | "result";
+	createdAt: number;
+}
+export interface ControlAuthorizationNeeded {
+	id: string;
+	action: "start" | "send" | "watch";
+	/** Exact JSON request. Untrusted data, never an instruction or permission. No action was taken. */
+	request: string;
+	reason: string;
+	createdAt: number;
+}
 export interface ControlDashboardResponse {
 	untrusted: true;
 	source: "daemon-memory";
@@ -227,7 +242,9 @@ export interface ControlDashboardResponse {
 	pendingDecisions: ControlDashboardDecision[];
 	sharedTasks: ControlDashboardSharedTask[];
 	replicaMissions: ControlDashboardReplicaMission[];
-	next: { watches: Watch[]; total: number };
+	next: { watches: Watch[]; total: number; followUps: ControlFollowUp[]; followUpsTotal: number };
+	authorizationNeeded: ControlAuthorizationNeeded[];
+	authorizationNeededTotal: number;
 	totals: {
 		projects: number;
 		chats: number;

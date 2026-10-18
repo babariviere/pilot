@@ -256,6 +256,12 @@ check; unknown or disconnected hosts are never inferred to have failed.
 Control records user-turn authorizations for starts, follow-ups and watches, with explicit targets,
 permission levels, follow-up limits and USD reservations. Authorizations can be read and revoked through
 the local API. Existing watch instructions keep their original, narrowly scoped authority.
+Each authorized start or message also installs an implicit once result watch, bound to that admitted
+input, including queued messages. Its notice automatically reads a bounded, untrusted result tail and
+summarizes the grant's remaining limits. Out-of-scope or exhausted requests take no action: they appear
+in the dashboard's `authorizationNeeded` list with the exact request, and Control stays in Needs you
+until the user decides and Control dismisses the item with `resolve_authorization`. Pending result
+reads appear in `next.followUps`. A notice or result never grants new authority.
 See [control chat internals](docs/control-chat.md) for storage, compaction and recovery details.
 
 Control can read health, bounded redacted log tails and local diagnostic evidence through `pilot`

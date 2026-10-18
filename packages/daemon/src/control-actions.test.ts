@@ -8,11 +8,14 @@ import { ControlActions, type ControlAuditEntry } from "./control-actions.ts";
 import { createAuthorization } from "./control-authorizations.ts";
 import { ControlMemory } from "./control-memory.ts";
 import { ControlPilot } from "./control-pilot.ts";
+import { WatchService } from "./watch-service.ts";
 
 test("start/send use existing admissions, route mission members and durably audit intent/outcome", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "control-actions-")),
-		memory = new ControlMemory(home);
+		memory = new ControlMemory(home),
+		watches = new WatchService(":memory:");
 	t.after(async () => {
+		await watches.close();
 		await memory.stop();
 		await rm(home, { recursive: true, force: true });
 	});
@@ -41,6 +44,7 @@ test("start/send use existing admissions, route mission members and durably audi
 	);
 	const authorized = { authorizationId: "approval", budgetUsd: 1 };
 	const service = new ControlPilot({
+		watches,
 		isControl: (id) => id === "control",
 		authorizations: () => memory,
 		sessions: {
@@ -81,7 +85,7 @@ test("start/send use existing admissions, route mission members and durably audi
 		"direct",
 	);
 	assert.deepEqual(calls.slice(1), [
-		["task", "m", "2", {}],
+		["task", "m", "2", {}, "control:start:task"],
 		["send", "lead", "next", "control:send:send", "followUp"],
 		["send", "member", "direct", "control:send:direct", "followUp"],
 	]);

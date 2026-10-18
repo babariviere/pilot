@@ -170,7 +170,7 @@ export type KernelCommand =
 
 export type KernelPacket =
 	/** Lifecycle admission, never mere queue placement. Acknowledged before publishing completion. */
-	| { type: "watch.run"; callId: string; controlCaused: boolean }
+	| { type: "watch.run"; callId: string; controlCaused: boolean; requestIds?: string[]; recoveredOnly?: boolean }
 	| { type: "update.paused"; id: string; error?: string }
 	| { type: "systemMessageState"; event: import("./held-inputs.ts").SystemMessageStateEvent }
 	| {

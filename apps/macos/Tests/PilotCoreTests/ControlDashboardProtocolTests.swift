@@ -20,7 +20,8 @@ struct ControlDashboardProtocolTests {
          "sharedTasks":[{"id":"grant:g","bindingId":"b","projectId":"p","missionId":"m","missionHome":{"hostId":"daemon","daemonId":"mac","lineageId":"mac-lineage"},"source":"mission-home","consistency":"committed","taskId":"t","taskNumber":3,"title":"Remote build","status":"in_progress","delegationId":"g","executionHost":{"hostId":"daemon","daemonId":"devbox","lineageId":"devbox-lineage"},"executionEpoch":7,"grantState":"accepted","running":true},
          {"id":"proposal:pending","bindingId":"remote","projectId":"p","missionId":"rm","missionHome":{"hostId":"daemon","daemonId":"devbox","lineageId":"devbox-lineage"},"source":"replica","consistency":"provisional","proposalId":"pending","proposalState":"pending","title":"Proposed work","replicaSyncedAt":1000,"replicaAgeMs":4000}],
          "replicaMissions":[{"id":"replica:remote:rm","bindingId":"remote","projectId":"p","missionId":"rm","missionHome":{"hostId":"daemon","daemonId":"devbox","lineageId":"devbox-lineage"},"title":"Remote home","status":"active","complete":true,"sequence":10,"consistency":"committed","replicaSyncedAt":1000,"replicaAgeMs":4000}],
-         "next":{"watches":[{"id":"w","createdAt":100,"event":"chat.settled","target":{"kind":"chat","id":"c"},"mode":"once","note":"Read the result and report it"}],"total":1,"followThrough":[]},
+         "next":{"watches":[{"id":"w","createdAt":100,"event":"chat.settled","target":{"kind":"chat","id":"c"},"mode":"once","note":"Read the result and report it"}],"total":1,"followUps":[{"requestId":"control:send:1","authorizationId":"approval","sessionId":"c","state":"running","createdAt":100}],"followUpsTotal":1},
+         "authorizationNeeded":[{"id":"needed","action":"send","request":"{\\"message\\":\\"publish\\"}","reason":"Outside authorization level","createdAt":200}],"authorizationNeededTotal":1,
          "totals":{"projects":1,"chats":1,"missions":1,"pullRequests":1,"linear":1,"runningAgents":1,"activeMissions":1,"blockers":4,"pendingDecisions":1,"sharedTasks":2,"replicaMissions":1},"truncated":false}
         """
         let value = try JSONDecoder().decode(ControlDashboardResponse.self, from: Data(source.utf8))
@@ -43,6 +44,10 @@ struct ControlDashboardProtocolTests {
         #expect(value.totals.sharedTasks == 2 && value.totals.replicaMissions == 1)
         #expect(value.next.watches.first?.note == "Read the result and report it")
         #expect(value.next.total == 1 && value.totals.blockers == 4)
+        #expect(value.next.followUps?.first?.authorizationId == "approval")
+        #expect(value.next.followUpsTotal == 1)
+        #expect(value.authorizationNeeded?.first?.request == #"{"message":"publish"}"#)
+        #expect(value.authorizationNeededTotal == 1)
         let roundTrip = try JSONDecoder().decode(ControlDashboardResponse.self, from: JSONEncoder().encode(value))
         #expect(roundTrip == value)
     }
@@ -53,6 +58,7 @@ struct ControlDashboardProtocolTests {
         #expect(value.truncated && value.runningAgents.isEmpty && value.totals.runningAgents == 500)
         #expect(value.next.total == 200)
         #expect(value.sharedTasks == nil && value.replicaMissions == nil)
+        #expect(value.next.followUps == nil && value.authorizationNeeded == nil)
         guard case .dashboardChanged = try ServerUpdate.decode(Data(#"{"type":"dashboard.changed"}"#.utf8)) else {
             Issue.record("Missing dashboard invalidation"); return
         }

@@ -28,6 +28,7 @@ export class ControlActions {
 		operationId: string,
 		work: () => Promise<T>,
 		admission?: ControlAuthorizationUse,
+		onDenied?: (error: unknown) => Promise<void>,
 	): Promise<T> {
 		if (!this.isControl(caller)) return Promise.reject(new Error("Only the control chat may perform global actions"));
 		if (typeof operationId !== "string" || !operationId || operationId.length > 256)
@@ -64,6 +65,7 @@ export class ControlActions {
 				else await this.memory.auditAppend(requested);
 			} catch (error) {
 				// Denied requests have no reservation/effect, but their rejection remains inspectable.
+				await onDenied?.(error);
 				if (admission) {
 					const entry = await this.memory.auditAppend({
 						...requested,

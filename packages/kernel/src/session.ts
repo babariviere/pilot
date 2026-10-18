@@ -135,7 +135,7 @@ async function pinnedAgent(
 }
 
 export interface KernelSessionHooks {
-	onRunAdmitted?(controlCaused: boolean): Promise<void>;
+	onRunAdmitted?(controlCaused: boolean, requestIds: string[], recoveredOnly?: boolean): Promise<void>;
 	reportSubscriptionLimit?: import("./subscription-limit.ts").ReportSubscriptionLimit;
 	onSystemMessageState?(event: SystemMessageStateEvent): void;
 	onWorking(
@@ -660,8 +660,29 @@ export class KernelSession {
 			session.#cwd = spec.cwd;
 			session.#storage = owned.storage;
 			session.#attempts = publicAttempts(await harness.snapshot(AttemptsDoc, context));
+			const recoverFollowThrough = async (
+				records: readonly import("@earendil-works/pi-durable").SubmissionRecord[],
+			) => {
+				const requestIds = records
+					.filter(
+						(record) =>
+							record.type === "input" &&
+							record.entry !== undefined &&
+							(record.status === "done" || record.status === "unanswered") &&
+							record.requestId?.startsWith("control:"),
+					)
+					.map((record) => record.requestId!);
+				if (requestIds.length) await hooks.onRunAdmitted?.(false, requestIds, true);
+			};
 			if (!session.#reportedWorking) {
-				session.#completion = await reconcileCompletion(owned.storage, harness, conversation, context);
+				session.#completion = await reconcileCompletion(
+					owned.storage,
+					harness,
+					conversation,
+					context,
+					undefined,
+					recoverFollowThrough,
+				);
 				if (control && adapter.session.model) await control.reportFailure(context, adapter.session.model);
 			}
 			status.start(async (events, deliveryContext) => {
@@ -673,7 +694,13 @@ export class KernelSession {
 						event.type === "run_start" ? event.inputs : event.type === "snapshot" ? event.run?.inputs : undefined;
 					if (inputs?.length && hooks.onRunAdmitted) {
 						const first = await owned.storage.submission(inputs[0]!, deliveryContext);
-						await hooks.onRunAdmitted(first?.requestId?.startsWith("control:") ?? false);
+						const requestIds: string[] = [];
+						for (const input of inputs) {
+							const submission =
+								input === inputs[0] ? first : await owned.storage.submission(input, deliveryContext);
+							if (submission?.requestId?.startsWith("control:")) requestIds.push(submission.requestId);
+						}
+						await hooks.onRunAdmitted(first?.requestId?.startsWith("control:") ?? false, requestIds);
 					}
 					if (event.type === "snapshot") {
 						session.#compactions.clear();
@@ -695,6 +722,7 @@ export class KernelSession {
 							conversation,
 							context,
 							event.type === "run_end" ? event.inputs : undefined,
+							recoverFollowThrough,
 						);
 						if (control && adapter!.session.model)
 							await control.reportFailure(deliveryContext, adapter!.session.model);

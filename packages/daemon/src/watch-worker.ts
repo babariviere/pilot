@@ -42,6 +42,22 @@ function list(now: number): Watch[] {
 function dispatch(op: string, args: unknown): unknown {
 	const now = Date.now();
 	if (op === "self") return events.setControl(String(args));
+	if (op === "followThrough") {
+		const a = args as { requestId: string; authorizationId: string; sessionId?: string };
+		return events.followThrough.arm(a.requestId, a.authorizationId, a.sessionId);
+	}
+	if (op === "followThroughCreated") {
+		const a = args as { requestId: string; sessionId: string };
+		return events.followThrough.bind(a.sessionId, [a.requestId], true);
+	}
+	if (op === "cancelFollowThrough") {
+		const a = args as { requestId: string; onlyQueued?: boolean };
+		return events.followThrough.remove(a.requestId, a.onlyQueued);
+	}
+	if (op === "followThroughActive") return events.followThrough.active(String(args));
+	if (op === "authorizationNeeded")
+		return events.followThrough.need(args as import("@pilot/protocol").ControlAuthorizationNeeded);
+	if (op === "resolveAuthorization") return events.followThrough.resolve(String(args));
 	if (op === "removeTarget") {
 		const a = args as { kind: "chat" | "mission"; id: string; reason: WatchRemoval["reason"] };
 		return events.removeTarget(a.kind, a.id, a.reason);
@@ -70,8 +86,10 @@ function dispatch(op: string, args: unknown): unknown {
 	if (op === "targets") {
 		prune(now);
 		return db
-			.prepare("SELECT DISTINCT target_id, target_scope FROM watches WHERE target_kind=?")
-			.all(String(args))
+			.prepare(
+				"SELECT DISTINCT target_id, target_scope FROM watches WHERE target_kind=? UNION SELECT DISTINCT session_id AS target_id,'' AS target_scope FROM control_follow_ups WHERE ?='chat' AND session_id IS NOT NULL",
+			)
+			.all(String(args), String(args))
 			.map((row) => ({
 				kind: String(args),
 				id: String(row.target_id),
@@ -83,8 +101,10 @@ function dispatch(op: string, args: unknown): unknown {
 		return events.transition(a.input, a.self);
 	}
 	if (op === "attribute") {
-		const a = args as { sessionId: string; origin: string };
-		return events.attributeSessionRun(a.sessionId, a.origin);
+		const a = args as { sessionId: string; origin: string; requestIds?: string[]; recoveredOnly?: boolean };
+		return a.recoveredOnly
+			? events.followThrough.bind(a.sessionId, a.requestIds ?? [], true)
+			: events.attributeSessionRun(a.sessionId, a.origin, a.requestIds);
 	}
 	if (op === "observe") {
 		const input = args as { events: WatchObservation[]; self?: string };
@@ -105,6 +125,7 @@ function dispatch(op: string, args: unknown): unknown {
 	if (op === "dashboard") {
 		prune(now);
 		return {
+			...events.followThrough.dashboard(),
 			watches: db
 				.prepare("SELECT data FROM watches ORDER BY id LIMIT 100")
 				.all()

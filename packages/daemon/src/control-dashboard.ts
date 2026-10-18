@@ -1,11 +1,13 @@
 /** Shared by the local dashboard and pilot status. Providers are cached, never worker/history reads. */
 import type {
+	ControlAuthorizationNeeded,
 	ControlDashboardBlocker,
 	ControlDashboardChat,
 	ControlDashboardDecision,
 	ControlDashboardReplicaMission,
 	ControlDashboardResponse,
 	ControlDashboardSharedTask,
+	ControlFollowUp,
 	DashboardTrackedItem,
 	Mission,
 	Project,
@@ -41,7 +43,14 @@ export interface ControlDashboardSources {
 	/** Optional cache invalidations, e.g. exact-head checks fetched by a separate diagnostic action. */
 	onDashboardChange?: (listener: () => void) => () => void;
 	/** Bounded change-driven cache. Next is global even when the resource lists are scoped. */
-	nextWatches?: () => { watches: Watch[]; total: number };
+	nextWatches?: () => {
+		watches: Watch[];
+		total: number;
+		followUps?: ControlFollowUp[];
+		followUpsTotal?: number;
+		authorizationNeeded?: ControlAuthorizationNeeded[];
+		authorizationNeededTotal?: number;
+	};
 }
 const short = (text: string | undefined, n = 160) => text?.replace(/[\r\n]/g, " ").slice(0, n);
 const working = (chat: SessionSummary) =>
@@ -95,7 +104,9 @@ export function buildControlDashboard(
 		pendingDecisions: [],
 		sharedTasks: [],
 		replicaMissions: [],
-		next: { watches: [], total: 0 },
+		next: { watches: [], total: 0, followUps: [], followUpsTotal: 0 },
+		authorizationNeeded: [],
+		authorizationNeededTotal: 0,
 		totals: {
 			projects: ps.length,
 			chats: chats.length,
@@ -234,8 +245,15 @@ export function buildControlDashboard(
 		}
 	const next = sources.nextWatches?.() ?? { watches: [], total: 0 };
 	data.next.total = next.total;
+	data.next.followUpsTotal = next.followUpsTotal ?? 0;
+	data.authorizationNeededTotal = next.authorizationNeededTotal ?? 0;
+	for (const item of next.followUps ?? []) append(data.next.followUps, () => item);
+	for (const item of next.authorizationNeeded ?? []) append(data.authorizationNeeded, () => item);
 	for (const watch of next.watches) append(data.next.watches, () => watch);
 	data.truncated ||= next.total > data.next.watches.length;
+	data.truncated ||=
+		data.next.followUpsTotal > data.next.followUps.length ||
+		data.authorizationNeededTotal > data.authorizationNeeded.length;
 	// One linear byte-budget pass, not repeated serialization/shrinking of the entire response.
 	const lists: unknown[][] = [
 		data.runningAgents,
@@ -244,6 +262,8 @@ export function buildControlDashboard(
 		data.pendingDecisions,
 		data.sharedTasks,
 		data.replicaMissions,
+		data.authorizationNeeded,
+		data.next.followUps,
 		data.next.watches,
 		data.projects,
 		data.chats,

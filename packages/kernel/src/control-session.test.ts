@@ -250,12 +250,24 @@ test("control run attribution follows admitted runs, not busy-chat queue placeme
 		markAdmitted = resolve;
 	});
 	const origins: boolean[] = [];
+	const admittedInputs: string[][] = [];
+	const completedInputs: string[] = [];
+	let markCompleted!: () => void;
+	const completed = new Promise<void>((resolve) => {
+		markCompleted = resolve;
+	});
 	const session = await KernelSession.open(
 		{ sessionId: "target", cwd: root, storageDir: join(root, "durable") },
 		{
 			onWorking: () => {},
-			onRunAdmitted: async (origin) => {
+			onRunAdmitted: async (origin, requestIds, recoveredOnly) => {
+				if (recoveredOnly) {
+					completedInputs.push(...requestIds);
+					if (requestIds.includes("control:send:call-1")) markCompleted();
+					return;
+				}
 				origins.push(origin);
+				admittedInputs.push(requestIds);
 				if (origin) markAdmitted();
 			},
 		},
@@ -279,7 +291,26 @@ test("control run attribution follows admitted runs, not busy-chat queue placeme
 	finishFirst();
 	await admitted;
 	await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
+	await completed;
 	assert.deepEqual(origins, [false, true]);
+	assert.deepEqual(admittedInputs, [[], ["control:send:call-1"]]);
+	assert.ok(completedInputs.includes("control:send:call-1"), "run-end point reads can also repair a missing binding");
+	await session.close();
+	const recovered: string[] = [];
+	const reopened = await KernelSession.open(
+		{ sessionId: "target", cwd: root, storageDir: join(root, "durable") },
+		{
+			onWorking: () => {},
+			onRunAdmitted: async (_origin, requestIds, recoveredOnly) => {
+				if (recoveredOnly) recovered.push(...requestIds);
+			},
+		},
+	);
+	t.after(() => reopened.close());
+	assert.ok(
+		recovered.includes("control:send:call-1"),
+		"idle recovery rebinds completed Control inputs without another history scan",
+	);
 });
 
 for (const reopened of [false, true])

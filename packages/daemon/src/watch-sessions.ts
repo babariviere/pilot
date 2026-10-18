@@ -3,6 +3,32 @@ import type { SessionManager } from "./sessions.ts";
 import type { WatchObservation } from "./watch-delivery.ts";
 import type { WatchService } from "./watch-service.ts";
 
+/** Also used to replay an unchanged completion after recovering an implicit result binding. */
+export function settledSessionEvents(s: SessionSummary): WatchObservation[] {
+	const outcome = s.state === "failed" ? "failed" : s.outcome;
+	if (
+		s.working ||
+		s.state === "working" ||
+		s.state === "starting" ||
+		s.runningJobs?.length ||
+		!["done", "failed", "stopped"].includes(outcome ?? "")
+	)
+		return [];
+	const targets: WatchObservation["targets"] = [{ kind: "chat", id: s.id }];
+	if (s.projectId) targets.push({ kind: "project", id: s.projectId });
+	if (s.missionId) targets.push({ kind: "mission", id: s.missionId });
+	const event: WatchObservation = {
+		source: s.id,
+		version: JSON.stringify([s.state === "failed" ? s.updatedAt : (s.outcomeAt ?? s.updatedAt), outcome]),
+		event: "chat.settled",
+		targets,
+		at: s.state === "failed" ? s.updatedAt : (s.outcomeAt ?? Date.now()),
+		text: `Chat ${s.title ?? s.id} ${outcome}`,
+		outcome: outcome as "done" | "failed" | "stopped",
+	};
+	return outcome === "failed" ? [event, { ...event, event: "chat.failed" }] : [event];
+}
+
 /** Lifecycle-only projection. Token streaming never sends RPCs or scans subscriptions. */
 export class SessionWatchSource {
 	private readonly seen = new Map<string, string>();
@@ -27,33 +53,14 @@ export class SessionWatchSource {
 		this.seen.delete(s.id);
 		this.seen.set(s.id, version);
 		if (this.seen.size > 50000) this.seen.delete(this.seen.keys().next().value!);
-		const outcome = s.state === "failed" ? "failed" : s.outcome;
-		if (
-			s.working ||
-			s.state === "working" ||
-			s.state === "starting" ||
-			s.runningJobs?.length ||
-			!["done", "failed", "stopped"].includes(outcome ?? "")
-		)
-			return;
-		const targets: WatchObservation["targets"] = [{ kind: "chat", id: s.id }];
-		if (s.projectId) targets.push({ kind: "project", id: s.projectId });
-		if (s.missionId) targets.push({ kind: "mission", id: s.missionId });
-		const event: WatchObservation = {
-			source: s.id,
-			version: JSON.stringify([s.state === "failed" ? s.updatedAt : (s.outcomeAt ?? s.updatedAt), outcome]),
-			event: "chat.settled",
-			targets,
-			at: s.state === "failed" ? s.updatedAt : (s.outcomeAt ?? Date.now()),
-			text: `Chat ${s.title ?? s.id} ${outcome}`,
-			outcome: outcome as "done" | "failed" | "stopped",
-		};
-		const key = `${s.id}:${event.version}`;
+		const events = settledSessionEvents(s);
+		if (!events.length) return;
+		const key = `${s.id}:${events[0]!.version}`;
 		if (this.pending.size >= 50000 && !this.pending.has(key)) {
 			console.warn("pilotd: watch session queue full");
 			return;
 		}
-		this.pending.set(key, outcome === "failed" ? [event, { ...event, event: "chat.failed" }] : [event]);
+		this.pending.set(key, events);
 		this.drain();
 	}
 	private drain(): void {
