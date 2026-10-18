@@ -3,7 +3,7 @@ import { test } from "node:test";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 import { estimateMessageTokens } from "@earendil-works/pi-ai/utils/estimate";
 import { type ContextView, type EntryId, type EntryRecord, ROOT_CONVERSATION_ID } from "@earendil-works/pi-durable";
-import { contextUsage, type KernelUsage, UsageTracker } from "./usage.ts";
+import { aiUsageConversation, contextUsage, type KernelUsage, UsageTracker } from "./usage.ts";
 
 function assistant(totalTokens = 100): AssistantMessage {
 	return {
@@ -87,4 +87,108 @@ test("usage tracker deduplicates, clears and protects reports from mutation", ()
 	tracker.set(undefined, undefined);
 	assert.deepEqual(tracker.current, {});
 	assert.equal(changes.length, 3);
+});
+
+test("AI accounting aggregates authoritative ledgers without provider or model dimensions", () => {
+	const success = assistant();
+	const failure = { ...assistant(), stopReason: "error" as const };
+	const child: Message = {
+		role: "toolResult",
+		toolCallId: "call",
+		toolName: "subagent-private-name",
+		content: [],
+		isError: false,
+		timestamp: 2,
+		usage: {
+			input: 5,
+			output: 3,
+			cacheRead: 2,
+			cacheWrite: 0,
+			totalTokens: 10,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+	};
+	const report = aiUsageConversation(
+		view([success, failure, child]),
+		ROOT_CONVERSATION_ID,
+		{
+			models: {
+				"secret-provider/secret-model": {
+					input: 40,
+					output: 20,
+					cacheRead: 120,
+					cacheWrite: 20,
+					reasoning: 5,
+					totalTokens: 200,
+					cost: { input: 0.01, output: 0.02, cacheRead: 0.003, cacheWrite: 0.004, total: 0.037 },
+				},
+				"tokenless-priced-operation": {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					reasoning: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.05 },
+				},
+			},
+			tools: {
+				"subagent-private-name": child.usage!,
+			},
+		},
+		"boot-private",
+		{
+			direct: { providerAttemptsObserved: 3, elapsedMsObserved: 500, activeMsObserved: 400 },
+			child: { providerAttemptsObserved: 1, elapsedMsObserved: 100, activeMsObserved: 80 },
+		},
+		10_000,
+	);
+	assert.deepEqual(report.direct.tokens, {
+		input: 40,
+		output: 20,
+		cacheRead: 120,
+		cacheWrite: 20,
+		reasoning: 5,
+		reasoningStatus: "reported",
+	});
+	assert.equal(report.direct.activity.count, 2);
+	assert.equal(report.direct.activity.success, 1);
+	assert.equal(report.direct.activity.failure, 1);
+	assert.equal(report.direct.activity.providerAttemptsObserved, 3);
+	assert.equal(report.direct.cost.estimateStatus, "catalog_estimate");
+	assert.equal(report.direct.cost.estimatedUsdMicros, 87_000);
+	assert.equal(report.direct.cost.billedStatus, "unavailable");
+	assert.equal(report.child.activity.kind, "child_operations");
+	assert.equal(report.child.activity.count, 1);
+	assert.equal(report.child.cost.estimateStatus, "unavailable", "zero cannot imply free or subscription-covered");
+	assert.equal(report.child.cost.estimatedUsdMicros, undefined);
+	assert.equal(report.child.cost.subscriptionCoverage, "unknown");
+	assert.doesNotMatch(JSON.stringify(report), /secret-provider|secret-model|subagent-private-name|tokenless-priced/);
+});
+
+test("request timing remains explicitly partial and deduplicates unchanged publications", () => {
+	const changes: KernelUsage[] = [];
+	const tracker = new UsageTracker((usage) => changes.push(usage));
+	tracker.set(undefined, undefined, {
+		conversationId: ROOT_CONVERSATION_ID,
+		observedAt: 1,
+		view: view([]),
+		state: { models: {}, tools: {} },
+	});
+	tracker.recordRequest({
+		v: 1,
+		request: 1,
+		at: 1,
+		source: "generation",
+		outcome: "aborted",
+		preparationMs: 20,
+		providerMs: 80,
+		totalMs: 100,
+		httpAttempts: 2,
+	});
+	assert.equal(tracker.current.accounting?.direct.activity.providerAttemptsObserved, 2);
+	assert.equal(tracker.current.accounting?.direct.activity.elapsedMsObserved, 100);
+	assert.equal(tracker.current.accounting?.direct.activity.activeMsObserved, 80);
+	assert.equal(tracker.current.accounting?.direct.activity.timingCoverage, "partial");
+	assert.equal(changes.length, 2);
 });

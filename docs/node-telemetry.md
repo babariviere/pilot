@@ -26,3 +26,11 @@ and age or silence is evidence of a suspected stall rather than proof of deadloc
 closed category mapping are described in [Tool-call diagnostics](tool-call-diagnostics.md). Completed calls emit
 `pilot.tool.call`; cancellation waits emit `pilot.tool.cancel_wait`. Neither signal contains a raw tool or MCP
 server name. The helper and observer do not restart, retry, replay or change timeouts.
+
+## AI usage deltas
+
+After the daemon durably checkpoints a new aggregate usage snapshot, it may emit `pilot.ai.usage`. The span carries
+only direct/child token scopes or session timing scope, separate provider-reported token-class deltas, bounded request/outcome counts and explicit
+catalog-estimate, billed-spend and subscription-coverage statuses. Provider/model/tool keys and chat or attempt IDs
+are rejected. Missing prices remain unavailable; catalog estimates are versioned by `service.version` and never
+presented as billed or exact marginal subscription spend. See [AI usage accounting](ai-usage-accounting.md).

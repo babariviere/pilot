@@ -2267,7 +2267,7 @@ test("stopped preparation stays cancelled across restart and immediately clears 
 	assert.equal(f.workers[0]!.requests[0]!.type, "abort");
 });
 
-test("worker context updates reach summaries and are dropped when the worker exits", async (t) => {
+test("worker context is live-only while aggregate AI accounting survives worker and daemon restarts", async (t) => {
 	const f = await fixture(t);
 	const sessions = await f.manager();
 	const created = await sessions.spawn({ cwd: f.source, message: "usage" });
@@ -2275,12 +2275,48 @@ test("worker context updates reach summaries and are dropped when the worker exi
 	const changes: SessionSummary[] = [];
 	sessions.onChange((session) => changes.push(session));
 	const context = { tokens: 100, contextWindow: 200_000, percent: 0.05 };
-	f.workers[0]!.reportUsage({ context, provider: "faux" });
-	assert.deepEqual(sessions.get(created.id)?.usage, { context });
-	assert.deepEqual(changes.at(-1)?.usage, { context });
+	const scope = (kind: "model_requests" | "child_operations", input: number) => ({
+		tokens: { input, output: 10, cacheRead: 5, cacheWrite: 0, reasoningStatus: "unavailable" as const },
+		cost: {
+			estimateStatus: "unavailable" as const,
+			billedStatus: "unavailable" as const,
+			subscriptionCoverage: "unknown" as const,
+		},
+		activity: {
+			kind,
+			count: 1,
+			success: 1,
+			failure: 0,
+			cancelled: 0,
+			usageReports: 1,
+			providerAttemptsObserved: 1,
+			elapsedMsObserved: 100,
+			activeMsObserved: 80,
+			outcomeCoverage: "partial" as const,
+			timingCoverage: "partial" as const,
+		},
+	});
+	f.workers[0]!.reportUsage({
+		context,
+		provider: "faux",
+		accounting: {
+			conversationId: "0",
+			timingBoot: "00000000-0000-4000-8000-000000000001",
+			activityEpoch: "initial",
+			observedAt: Date.now(),
+			direct: scope("model_requests", 100),
+			child: scope("child_operations", 20),
+		},
+	});
+	assert.deepEqual(sessions.get(created.id)?.usage?.context, context);
+	assert.equal(sessions.get(created.id)?.usage?.ai?.direct.tokens.input, 100);
+	assert.equal(changes.at(-1)?.usage?.ai?.child.tokens.input, 20);
 	await f.workers[0]!.close();
-	assert.equal(sessions.get(created.id)?.usage, undefined);
-	assert.equal(changes.at(-1)?.usage, undefined);
+	assert.equal(sessions.get(created.id)?.usage?.context, undefined);
+	assert.equal(sessions.get(created.id)?.usage?.ai?.direct.tokens.input, 100);
+	await sessions.shutdown();
+	const reopened = await f.manager();
+	assert.equal(reopened.get(created.id)?.usage?.ai?.direct.tokens.input, 100);
 });
 
 test("history reads entries hidden by compaction from the session's durable storage", async (t) => {

@@ -106,6 +106,92 @@ extension ContextUsage {
     }
 }
 
+extension AIUsageAccounting {
+    private var scopes: [AIUsageScope] { [direct, child] }
+    private var input: Double { scopes.reduce(0) { $0 + $1.tokens.input } }
+    private var output: Double { scopes.reduce(0) { $0 + $1.tokens.output } }
+    private var cacheRead: Double { scopes.reduce(0) { $0 + $1.tokens.cacheRead } }
+    private var cacheWrite: Double { scopes.reduce(0) { $0 + $1.tokens.cacheWrite } }
+    private var tokenTotal: Double { input + output + cacheRead + cacheWrite }
+    private var relevantScopes: [AIUsageScope] {
+        scopes.filter {
+            $0.tokens.input + $0.tokens.output + $0.tokens.cacheRead + $0.tokens.cacheWrite > 0 ||
+                $0.activity.usageReports > 0 || $0.cost.estimatedUsdMicros != nil || $0.cost.billedUsdMicros != nil
+        }
+    }
+
+    public var totalTokenLabel: String { UsageFormatting.tokens(tokenTotal) + " tokens" }
+
+    public var helpText: String {
+        var lines = [
+            "AI usage for this chat",
+            "Input: \(UsageFormatting.tokens(input))",
+            "Output: \(UsageFormatting.tokens(output))",
+            "Cache read: \(UsageFormatting.tokens(cacheRead))",
+            "Cache write: \(UsageFormatting.tokens(cacheWrite))",
+        ]
+        let reasoningScopes = scopes.filter { $0.tokens.reasoningStatus != "unavailable" }
+        if !reasoningScopes.isEmpty {
+            let reasoning = reasoningScopes.reduce(0) { $0 + ($1.tokens.reasoning ?? 0) }
+            let partial = reasoningScopes.count < scopes.filter { $0.tokens.output > 0 }.count ||
+                reasoningScopes.contains { $0.tokens.reasoningStatus == "partial" }
+            lines.append("Reasoning: \(UsageFormatting.tokens(reasoning)) (included in output\(partial ? ", partial reporting" : ""))")
+        } else {
+            lines.append("Reasoning: Unavailable")
+        }
+        lines.append("Direct requests observed: \(integer(direct.activity.count)) " +
+            "(\(integer(direct.activity.failure)) failed, \(integer(direct.activity.cancelled)) cancelled)")
+        lines.append("Child operations observed: \(integer(child.activity.count))")
+        lines.append("Usage reports observed: \(integer(direct.activity.usageReports + child.activity.usageReports)) (partial)")
+        lines.append("Provider attempts observed: \(integer(direct.activity.providerAttemptsObserved + child.activity.providerAttemptsObserved)) (partial)")
+        lines.append(estimatedCostLine)
+        lines.append(billedCostLine)
+        let coverage = Set(relevantScopes.map(\.cost.subscriptionCoverage))
+        lines.append("Subscription coverage: " + (coverage == Set(["covered"]) ? "Covered"
+            : coverage == Set(["not_covered"]) ? "Not covered" : "Unknown"))
+        lines.append("Observed time: \(duration(time.elapsedMs)) " +
+            "(active \(duration(time.activeMs)), paused \(duration(time.pausedMs)), idle \(duration(time.idleMs)))")
+        lines.append("Token counts are provider-reported. Cost estimates are not billed or marginal subscription spend.")
+        return lines.joined(separator: "\n")
+    }
+
+    private var estimatedCostLine: String {
+        let priced = scopes.filter { $0.cost.estimatedUsdMicros != nil }
+        guard !priced.isEmpty else { return "Estimated cost: Unavailable" }
+        let amount = priced.reduce(0) { $0 + ($1.cost.estimatedUsdMicros ?? 0) }
+        let partial = priced.count < relevantScopes.count || priced.contains { $0.cost.estimateStatus != "catalog_estimate" }
+        let revisions = Set(priced.compactMap(\.cost.pricingRevision))
+        let revision = revisions.count == 1 ? " · \(revisions.first!)" : ""
+        return partial ? "Estimated cost: At least \(money(amount)) (partial catalog estimate\(revision))"
+            : "Estimated cost: \(money(amount)) (catalog estimate\(revision))"
+    }
+
+    private var billedCostLine: String {
+        let billed = relevantScopes.filter { $0.cost.billedStatus == "known" }
+        guard !billed.isEmpty, billed.count == relevantScopes.count else { return "Billed spend: Unavailable" }
+        return "Billed spend: \(money(billed.reduce(0) { $0 + ($1.cost.billedUsdMicros ?? 0) }))"
+    }
+
+    private func integer(_ value: Double) -> String { String(format: "%.0f", value) }
+
+    private func money(_ micros: Double) -> String {
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.numberStyle = .currency
+        formatter.currencyCode = "USD"
+        formatter.minimumFractionDigits = 2
+        formatter.maximumFractionDigits = 6
+        return formatter.string(from: NSNumber(value: micros / 1_000_000)) ?? "Unavailable"
+    }
+
+    private func duration(_ milliseconds: Double) -> String {
+        let seconds = max(0, Int(milliseconds / 1_000))
+        if seconds >= 3_600 { return "\(seconds / 3_600)h \((seconds % 3_600) / 60)m" }
+        if seconds >= 60 { return "\(seconds / 60)m \(seconds % 60)s" }
+        return "\(seconds)s"
+    }
+}
+
 extension SubscriptionProvider {
     public var displayName: String {
         switch self {

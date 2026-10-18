@@ -49,21 +49,33 @@ final class ComposerUsageState: ObservableObject {
 struct ContextUsageIndicator: View {
     let usage: SessionUsage
     @StateObject private var state = ComposerUsageState()
+    @State private var showingAIUsage = false
 
     var body: some View {
-        if let context = state.display(usage: usage).context {
-            HStack(spacing: 4) {
-                UsageGauge(fraction: context.fraction, percent: context.percent)
-                Text(context.label)
+        HStack(spacing: 5) {
+            if let context = state.display(usage: usage).context {
+                HStack(spacing: 4) {
+                    UsageGauge(fraction: context.fraction, percent: context.percent)
+                    Text(context.label)
+                }
+                .help(context.help)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(context.help)
             }
-            .font(.system(size: 11))
-            .monospacedDigit()
-            .foregroundStyle(Theme.mutedForeground)
-            .fixedSize()
-            .help(context.help)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(context.help)
+            if let ai = usage.ai {
+                if state.display(usage: usage).context != nil { Text("·").foregroundStyle(Theme.faintForeground) }
+                Button(ai.totalTokenLabel) { showingAIUsage.toggle() }
+                    .buttonStyle(.plain)
+                    .help(ai.helpText)
+                    .popover(isPresented: $showingAIUsage) {
+                        Text(ai.helpText).font(.callout).textSelection(.enabled).padding(16)
+                            .frame(width: 360, alignment: .leading)
+                    }
+                    .accessibilityLabel("AI usage: \(ai.totalTokenLabel)")
+                    .accessibilityHint("Show token and cost accounting")
+            }
         }
+        .font(.system(size: 11)).monospacedDigit().foregroundStyle(Theme.mutedForeground).fixedSize()
     }
 }
 

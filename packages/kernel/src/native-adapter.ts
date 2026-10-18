@@ -58,6 +58,7 @@ import {
 	type ToolExecutionResult,
 	type ToolRegistration,
 	ToolTask,
+	UsageDoc,
 	type UserInput,
 } from "@earendil-works/pi-durable";
 import type { DeliveryMode, SessionCommand, SessionJob } from "@pilot/protocol";
@@ -310,7 +311,15 @@ export class NativeAdapter {
 		this.#ask = ask;
 		this.#allowedTools = allowedTools;
 		this.#control = control;
-		this.#performance = timings;
+		this.#performance = timings
+			? {
+					record: (record) => {
+						timings.record(record);
+						usage.recordRequest(record);
+					},
+					...(timings.close ? { close: () => timings.close!() } : {}),
+				}
+			: undefined;
 		this.#toolActivity = toolActivity;
 		// Bind every ordinary Models operation to its native runtime. In particular, getAuth and
 		// stream never snapshot credentials. No second credential store or auth-resolution layer.
@@ -712,6 +721,7 @@ export class NativeAdapter {
 		const conversation = await this.#harness.conversation(this.#conversationId, context);
 		if (!conversation) return;
 		const view = await this.readContext(context, () => conversation.context(context));
+		const accounting = await this.#harness.snapshot(UsageDoc, this.#conversationId, context);
 		let model = this.session.model;
 		if (model?.api === "pi-virtual") {
 			const latest = view.messages.findLast(
@@ -726,6 +736,12 @@ export class NativeAdapter {
 			this.session.model?.api === "pi-virtual"
 				? (this.#physicalSubscriptionProvider ?? model?.provider)
 				: model?.provider,
+			{
+				conversationId: this.#conversationId,
+				observedAt: Date.now(),
+				view,
+				state: accounting,
+			},
 		);
 	}
 	private assertOpen(): void {

@@ -68,7 +68,7 @@ test("exports only reviewed span and resource fields", async () => {
 	});
 	assert.equal(recorded?.resource.attributes["service.namespace"], "com.babariviere.pilot");
 	assert.equal(recorded?.resource.attributes["service.name"], "pilot.daemon");
-	assert.equal(recorded?.resource.attributes["pilot.schema.version"], 1);
+	assert.equal(recorded?.resource.attributes["pilot.schema.version"], 2);
 	assert.equal(typeof recorded?.resource.attributes["service.instance.id"], "string");
 	assert.equal(recorded?.resource.attributes["host.name"], undefined);
 	await telemetry.shutdown();
@@ -135,6 +135,61 @@ test("tool spans accept only reviewed categories and never arbitrary tool names"
 		"pilot.tool.execution_ms": 20,
 	});
 	assert.equal(JSON.stringify(exporter.spans.map((span) => span.attributes)).includes("customer"), false);
+	await telemetry.shutdown();
+});
+
+test("AI usage spans accept accounting classes but reject identity and false spend semantics", async () => {
+	const exporter = new MemoryExporter();
+	const telemetry = new NodeTelemetry(options(exporter));
+	telemetry.recordSpan("pilot.ai.usage", 0, {
+		"pilot.operation": "ai.usage",
+		"pilot.ai.scope": "direct",
+		"pilot.ai.input_tokens": 100,
+		"pilot.ai.output_tokens": 20,
+		"pilot.ai.cache_read_tokens": 80,
+		"pilot.ai.reasoning_tokens": 5,
+		"pilot.ai.reasoning_status": "reported",
+		"pilot.ai.activity_count": 1,
+		"pilot.ai.success_count": 1,
+		"pilot.ai.failure_count": 0,
+		"pilot.ai.cancelled_count": 0,
+		"pilot.ai.usage_report_count": 1,
+		"pilot.ai.provider_attempt_count": 2,
+		"pilot.ai.estimate_status": "catalog_estimate",
+		"pilot.ai.estimated_usd_micros": 1234,
+		"pilot.ai.pricing_source": "pi_catalog",
+		"pilot.ai.billed_status": "known",
+		"pilot.ai.billed_usd_micros": 4321,
+		"pilot.ai.subscription_coverage": "unknown",
+	});
+	telemetry.recordSpan("pilot.ai.usage", 0, {
+		"pilot.operation": "ai.usage",
+		"pilot.ai.scope": "session",
+		"pilot.ai.elapsed_ms": 1200,
+		"pilot.ai.active_ms": 900,
+		"pilot.ai.paused_ms": 200,
+		"pilot.ai.idle_ms": 100,
+	});
+	assert.equal(
+		telemetry.startSpan("pilot.ai.usage", {
+			"pilot.operation": "ai.usage",
+			"pilot.ai.estimate_status": "unavailable",
+			"pilot.ai.estimated_usd_micros": 0,
+		}).recording,
+		false,
+	);
+	assert.equal(
+		telemetry.startSpan("pilot.ai.usage", {
+			"pilot.operation": "ai.usage",
+			"pilot.ai.scope": "direct",
+			"pilot.ai.provider": "private-provider",
+			"pilot.ai.model": "private-model",
+		} as never).recording,
+		false,
+	);
+	await telemetry.forceFlush();
+	assert.equal(exporter.spans.length, 2);
+	assert.doesNotMatch(JSON.stringify(exporter.spans[0]?.attributes), /private-provider|private-model/);
 	await telemetry.shutdown();
 });
 
@@ -269,12 +324,23 @@ test("uses OTLP HTTP protobuf against a local receiver", async (context) => {
 	});
 	context.after(() => telemetry.shutdown());
 	telemetry.startSpan("pilot.event_loop.stall", { "pilot.operation": "event_loop.stall" }).end();
+	telemetry.recordSpan("pilot.ai.usage", 0, {
+		"pilot.operation": "ai.usage",
+		"pilot.ai.scope": "session",
+		"pilot.ai.elapsed_ms": 10,
+		"pilot.ai.active_ms": 10,
+		"pilot.ai.paused_ms": 0,
+		"pilot.ai.idle_ms": 0,
+	});
 	assert.equal(await telemetry.forceFlush(), true);
 	assert.match(contentType ?? "", /^application\/x-protobuf/);
 	assert.equal(authorization, undefined);
 	assert.ok(body.length > 0);
 	assert.equal(body.includes(Buffer.from("pilot.event_loop.stall")), true);
+	assert.equal(body.includes(Buffer.from("pilot.ai.usage")), true);
+	assert.equal(body.includes(Buffer.from("pilot.ai.active_ms")), true);
 	assert.equal(body.includes(Buffer.from("com.babariviere.pilot")), true);
+	assert.equal(body.includes(Buffer.from("private")), false);
 });
 
 test("OTLP endpoints reject unsafe transports and URL secrets", () => {

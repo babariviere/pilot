@@ -406,9 +406,68 @@ export interface SubscriptionUsage {
 	error?: string;
 }
 
+/** Provider-reported token classes. Reasoning is a subset of output and must not be added again. */
+export interface AIUsageTokens {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	reasoning?: number;
+	reasoningStatus: "reported" | "partial" | "unavailable";
+}
+
+/** Cost semantics are explicit: catalog estimates are never presented as billed or marginal subscription spend. */
+export interface AIUsageCost {
+	estimateStatus: "catalog_estimate" | "partial_catalog_estimate" | "unavailable";
+	estimatedUsdMicros?: number;
+	/** The model catalog version that produced an estimate. */
+	pricingRevision?: string;
+	billedStatus: "known" | "unavailable";
+	billedUsdMicros?: number;
+	subscriptionCoverage: "covered" | "not_covered" | "unknown";
+}
+
+export interface AIUsageActivity {
+	/** Direct model requests, or usage-bearing child/tool operations as identified by `kind`. */
+	kind: "model_requests" | "child_operations";
+	count: number;
+	success: number;
+	failure: number;
+	cancelled: number;
+	usageReports: number;
+	/** Physical HTTP attempts observed in this process family. May omit a crash before publication. */
+	providerAttemptsObserved: number;
+	elapsedMsObserved: number;
+	activeMsObserved: number;
+	outcomeCoverage: "partial";
+	timingCoverage: "partial";
+}
+
+export interface AIUsageScope {
+	tokens: AIUsageTokens;
+	cost: AIUsageCost;
+	activity: AIUsageActivity;
+}
+
+/** Durable, bounded, content-free accounting for one chat across its attempts and worker restarts. */
+export interface AIUsageAccounting {
+	observedAt: number;
+	direct: AIUsageScope;
+	child: AIUsageScope;
+	/** Daemon-observed lifecycle time. Gaps while pilotd was not running are not invented. */
+	time: {
+		elapsedMs: number;
+		activeMs: number;
+		pausedMs: number;
+		idleMs: number;
+		coverage: "daemon_observed_partial";
+	};
+}
+
 export interface SessionUsage {
 	context?: ContextUsage;
 	subscription?: SubscriptionUsage;
+	ai?: AIUsageAccounting;
 }
 
 export interface SubscriptionPauseWindow {

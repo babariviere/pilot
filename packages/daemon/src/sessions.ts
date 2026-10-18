@@ -63,6 +63,7 @@ import type {
 	UpdatePreparation,
 } from "@pilot/protocol";
 import { nodeTelemetry, type TraceCarrier } from "@pilot/telemetry";
+import { AIUsageLedger } from "./ai-usage.ts";
 import { prepareAskSnapshot } from "./ask-snapshots.ts";
 import { chatTitleContext } from "./chat-title.ts";
 import { ColdViewReader } from "./cold-view-reader.ts";
@@ -1227,6 +1228,7 @@ export class SessionManager {
 	private readonly diagnosticHost?: OperationHost;
 	private readonly lifecycle: LifecycleDiagnostics;
 	private readonly nativeDiagnostics: NativeDiagnosticsStore;
+	private readonly aiUsage: AIUsageLedger;
 	private readonly autoRebase: PullRequestAutoRebase;
 	/** A handoff must not relinquish the workspace in the middle of a daemon-owned rebase. */
 	private readonly rebasingWorkspaces = new Set<string>();
@@ -1434,6 +1436,7 @@ export class SessionManager {
 		this.diagnosticHost = options.diagnosticHost;
 		this.lifecycle = new LifecycleDiagnostics(home);
 		this.nativeDiagnostics = new NativeDiagnosticsStore(home);
+		this.aiUsage = new AIUsageLedger(home);
 		this.telemetry = options.telemetry ? { ...options.telemetry } : undefined;
 		this.lifecycle.setEnabled(options.telemetry?.localDiagnostics ?? true);
 		this.nativeDiagnostics.setEnabled(options.telemetry?.localDiagnostics ?? true);
@@ -1661,6 +1664,7 @@ export class SessionManager {
 		for (const meta of this.metas.values())
 			for (const url of meta.boundPullRequests ?? [])
 				if (!this.excludedPullRequest(meta, url)) this.boundPullRequestOwners.set(url.toLowerCase(), meta.id);
+		await this.aiUsage.load(this.metas.keys());
 		for (const meta of this.metas.values()) {
 			if (!meta.createMissionId) continue;
 			try {
@@ -5740,6 +5744,7 @@ export class SessionManager {
 		await this.archiveSweep;
 		await Promise.allSettled([...this.archiveTransitions.values()].map((transition) => transition.promise));
 		await Promise.all([...this.saving.values()]);
+		await this.aiUsage.close();
 		await this.lifecycle.close();
 	}
 
@@ -6217,6 +6222,11 @@ export class SessionManager {
 		// Parking already detached this worker. Cleanup errors and late packets belong
 		// to its shutdown, not the session's completed work or a replacement worker.
 		if (this.parked.has(worker)) return;
+		if (
+			this.workers.get(meta.id) === worker &&
+			(packet.type === "ready" || packet.type === "usage" || packet.type === "modelChanged")
+		)
+			this.aiUsage.observeUsage(meta.id, packet.usage.accounting);
 		if (packet.type === "watch.run") {
 			if (this.workers.get(meta.id) !== worker) return;
 			void (
@@ -7674,7 +7684,7 @@ export class SessionManager {
 
 	private observeLifecycle(meta: SessionMeta, summary = this.summary(meta)): void {
 		const subscriptionPause = summary.subscriptionPause;
-		this.lifecycle.observe(meta.id, {
+		const observation = {
 			state: summary.state,
 			working: summary.working === true,
 			sleepPaused: summary.sleepPaused === true,
@@ -7684,6 +7694,16 @@ export class SessionManager {
 			recoveryPending: meta.kernelRestartPending === true,
 			recoveryStopped: meta.recoveryStopped === true,
 			startupFailed: summary.canRetryStartup === true || (meta.failure !== undefined && summary.state === "failed"),
+		};
+		this.lifecycle.observe(meta.id, observation);
+		this.aiUsage.observeState(meta.id, {
+			working: observation.working,
+			paused:
+				observation.sleepPaused ||
+				observation.offlinePaused ||
+				observation.quotaPaused ||
+				observation.updatePaused ||
+				observation.recoveryStopped,
 		});
 	}
 
@@ -7840,8 +7860,9 @@ export class SessionManager {
 		const context = worker?.usage?.context;
 		const provider = this.subscriptionProviderOf(meta, worker);
 		const subscription = provider ? this.subscriptionUsage?.get(provider) : undefined;
-		if (!context && !subscription) return undefined;
-		return { ...(context ? { context } : {}), ...(subscription ? { subscription } : {}) };
+		const ai = this.aiUsage.summary(meta.id);
+		if (!context && !subscription && !ai) return undefined;
+		return { ...(context ? { context } : {}), ...(subscription ? { subscription } : {}), ...(ai ? { ai } : {}) };
 	}
 
 	private subscriptionUsageChanged(provider: SubscriptionProvider): void {
