@@ -9,7 +9,8 @@ private let logicalHome = HostRef(hostId: "local", daemonId: "home", lineageId: 
 private let logicalBox = HostRef(hostId: "box", daemonId: "box", lineageId: "b1")
 
 private func logicalDashboard(replicas: [[String: Any]] = [], tasks: [[String: Any]] = [],
-                              logical: [ControlLogicalMission]? = nil, truncated: Bool = false) throws -> ControlDashboardResponse {
+                              logical: [ControlLogicalMission]? = nil, logicalTotal: Int? = nil,
+                              truncated: Bool = false) throws -> ControlDashboardResponse {
     var object: [String: Any] = ["untrusted": true, "source": "fixture", "projects": [], "chats": [],
         "missions": [], "pullRequests": [], "linear": [], "runningAgents": [], "activeMissions": [],
         "blockers": [], "pendingDecisions": [], "next": ["watches": [], "total": 0],
@@ -17,6 +18,9 @@ private func logicalDashboard(replicas: [[String: Any]] = [], tasks: [[String: A
         "totals": ["projects": 0, "chats": 0, "missions": 0, "pullRequests": 0, "linear": 0,
                    "runningAgents": 0, "activeMissions": 0, "blockers": 0, "pendingDecisions": 0]]
     if let logical { object["logicalMissions"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(logical)) }
+    if let logicalTotal, var totals = object["totals"] as? [String: Any] {
+        totals["logicalMissions"] = logicalTotal; object["totals"] = totals
+    }
     return try JSONDecoder().decode(ControlDashboardResponse.self, from: JSONSerialization.data(withJSONObject: object))
 }
 
@@ -111,6 +115,61 @@ private func logicalMission(_ id: String = "same", title: String = "Canonical", 
             try logicalDashboard(replicas: [logicalReplica(3)], truncated: true))
         let result = try LogicalMissionCatalog.normalize([source])
         #expect(result.total == nil && result.rows.count == 1 && result.truncated)
+    }
+
+    @Test func clippedDashboardDoesNotHideMissionsFromTheFullHomeFeed() throws {
+        // Reproduce a busy dashboard: 15 stored missions, but only six fit its shared byte budget.
+        let missions = (0..<15).map { logicalMission("mission-\($0)", title: "Mission \($0)",
+            status: $0 == 14 ? .archived : $0 == 13 ? .done : .active, done: $0, total: 20) }
+        let full = try LogicalMissionCatalog.normalize([.init(host: logicalHome, missions: missions, dashboard: nil)])
+        let clipped = try logicalDashboard(logical: Array(full.rows.prefix(6)), logicalTotal: 15, truncated: true)
+        let source = LogicalMissionCatalog.Source(host: logicalHome, missions: missions, dashboard: clipped)
+        let result = try LogicalMissionCatalog.normalize([source])
+        #expect(result.rows == full.rows)
+        #expect(result.total == 15 && result.truncated)
+        #expect(result.conflicts.isEmpty)
+        // Repeated observations/reconnects cannot create duplicate mission rows.
+        #expect(try LogicalMissionCatalog.normalize([source, source]).rows == full.rows)
+    }
+
+    @Test func clippedRecoveryKeepsPublishedFieldsAndHomeQualifiedIdentities() throws {
+        let published = try LogicalMissionCatalog.normalize([.init(host: logicalHome,
+            missions: [logicalMission("same", title: "Published", status: .archived)], dashboard: nil)])
+        let dashboard = try logicalDashboard(replicas: [logicalReplica(100, title: "Ignore legacy")],
+            logical: published.rows, logicalTotal: 3, truncated: true)
+        let result = try LogicalMissionCatalog.normalize([.init(host: logicalHome,
+            missions: [logicalMission("same", title: "Stale"), logicalMission("missing")], dashboard: dashboard),
+            .init(host: logicalBox, missions: [logicalMission("same", title: "Different home")], dashboard: nil)])
+        #expect(result.rows.count == 3)
+        #expect(result.rows.contains { $0.title == "Published" && $0.status == .archived })
+        #expect(result.rows.contains { $0.mission.missionId == "missing" && $0.mission.home.daemonId == logicalHome.daemonId })
+        #expect(result.rows.contains { $0.title == "Different home" })
+        #expect(result.total == nil && result.conflicts.isEmpty)
+    }
+
+    @Test func emptyClippedMissionsRecoverButCompleteEmptyListStillWins() throws {
+        let missions = [logicalMission()]
+        let clipped = try logicalDashboard(logical: [], logicalTotal: 1, truncated: true)
+        #expect(try LogicalMissionCatalog.normalize([.init(host: logicalHome, missions: missions,
+            dashboard: clipped)]).rows.count == 1)
+        // Unrelated chat/watch clipping must not revive a deleted mission.
+        let complete = try logicalDashboard(logical: [], logicalTotal: 0, truncated: true)
+        #expect(try LogicalMissionCatalog.normalize([.init(host: logicalHome, missions: missions,
+            dashboard: complete)]).rows.isEmpty)
+        let unknownCount = try logicalDashboard(logical: [], truncated: true)
+        let unknown = try LogicalMissionCatalog.normalize([.init(host: logicalHome, missions: missions, dashboard: unknownCount)])
+        #expect(unknown.rows.count == 1 && unknown.total == nil)
+    }
+
+    @Test func aPublishedReplicaWithTheSameIdCannotSuppressAMissingHomeMission() throws {
+        let remote = try LogicalMissionCatalog.normalize([.init(host: logicalBox,
+            missions: [logicalMission(title: "Other home")], dashboard: nil)])
+        let dashboard = try logicalDashboard(logical: remote.rows, logicalTotal: 2, truncated: true)
+        let result = try LogicalMissionCatalog.normalize([.init(host: logicalHome,
+            missions: [logicalMission()], dashboard: dashboard)])
+        #expect(result.rows.count == 2 && result.total == 2)
+        #expect(result.rows.contains { $0.title == "Canonical" && $0.mission.home.daemonId == logicalHome.daemonId })
+        #expect(result.rows.contains { $0.title == "Other home" && $0.mission.home.daemonId == logicalBox.daemonId })
     }
 }
 
@@ -216,8 +275,18 @@ private struct LogicalProducerFixture: Decodable {
     #expect(fixture.cases.count == 10)
     for sample in fixture.cases {
         let published = try LogicalMissionCatalog.normalize([.init(host: fixture.sourcePin,
-            missions: sample.definitions + [logicalMission("must-not-augment-published")], dashboard: sample.dashboard)])
+            missions: sample.definitions + (sample.name == "clipped" ? [] : [logicalMission("must-not-augment-published")]),
+            dashboard: sample.dashboard)])
         let wire = try #require(sample.dashboard.logicalMissions)
+        if sample.name == "clipped" {
+            #expect(published.total == 70 && published.truncated && published.rows.count <= 50)
+            #expect(published.rows.contains { row in !wire.contains { $0.id == row.id } },
+                "Clipped producer rows must be supplemented from the full home feed")
+            let legacy = try LogicalMissionCatalog.normalize([.init(host: fixture.sourcePin,
+                missions: sample.definitions, dashboard: sample.legacy())])
+            #expect(legacy.total == nil && legacy.truncated, "Do not sum clipped compatibility arrays")
+            continue
+        }
         #expect(Set(published.rows.map(\.id)) == Set(wire.map(\.id)), "Published collection is the only mission input: \(sample.name)")
         for row in published.rows {
             let source = try #require(wire.first { $0.id == row.id })
@@ -228,11 +297,6 @@ private struct LogicalProducerFixture: Decodable {
         }
         let legacy = try LogicalMissionCatalog.normalize([.init(host: fixture.sourcePin,
             missions: sample.definitions, dashboard: sample.legacy())])
-        if sample.name == "clipped" {
-            #expect(published.total == 70 && published.truncated && published.rows.count <= 50)
-            #expect(legacy.total == nil && legacy.truncated, "Do not sum clipped compatibility arrays")
-            continue
-        }
         #expect(Set(legacy.rows.map(\.id)) == Set(wire.map(\.id)), "\(sample.name)")
         for row in legacy.rows {
             let source = try #require(wire.first { $0.id == row.id })
