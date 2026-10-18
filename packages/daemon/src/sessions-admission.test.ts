@@ -32,6 +32,44 @@ test("spawn is counted synchronously before metadata exists, and failures releas
 	}
 });
 
+test("Control start budgets persist before startup, survive reload and never leak into concurrent user starts", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "control-start-budget-"));
+	const projects = new ProjectStore(home);
+	const sessions = new SessionManager(home, projects, undefined, {
+		title: async () => undefined,
+		worker: () => {
+			throw new Error("Offline fixture startup failure");
+		},
+	});
+	const reloaded = new SessionManager(home, projects);
+	t.after(async () => {
+		await sessions.shutdown();
+		await reloaded.shutdown();
+		await rm(home, { recursive: true, force: true });
+	});
+	const budget = { authorizationId: "explicit-user-approval", budgetUsd: 2.5 };
+	const [started, user] = await Promise.all([
+		sessions.controlStart(
+			() => sessions.spawn({ cwd: home, message: "Authorized work", model: "test/model" }),
+			{ authorizationId: budget.authorizationId, level: "implement" },
+			"control:start:approved",
+			budget,
+		),
+		sessions.spawn({ cwd: home, message: "User work", ...{ controlStart: budget } }),
+	]);
+	assert.deepEqual(started.controlStart, budget);
+	assert.equal(user.controlStart, undefined, "public arguments cannot mint Control provenance");
+	const saved = JSON.parse(await readFile(join(home, "sessions", started.id, "meta.json"), "utf8"));
+	assert.deepEqual(saved.controlStart, budget);
+	started.controlStart!.budgetUsd = 999;
+	assert.deepEqual(sessions.get(started.id)?.controlStart, budget, "summary consumers cannot mutate metadata");
+	await until(() => sessions.get(started.id)?.state === "failed" && sessions.get(user.id)?.state === "failed");
+	await sessions.shutdown();
+	await reloaded.load();
+	assert.deepEqual(reloaded.get(started.id)?.controlStart, budget);
+	assert.equal(reloaded.get(user.id)?.controlStart, undefined);
+});
+
 test("a lease rejects spawn, send, queued mutations and subscription reopening before side effects", async () => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-quiescence-"));
 	try {

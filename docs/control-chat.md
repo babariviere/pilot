@@ -333,6 +333,9 @@ child operations. Its catalog estimates and known billed costs retain the ledger
 and partial coverage; missing usage is not a known zero bill. Start attribution is saved before
 startup and retained across restart/continuation. Older unattributed chats are outside this coverage.
 Dashboard/status chat and running-agent rows also include `controlStart` attribution and `spend`.
+Every start requires an explicit project or mission task and a `model`, checked by the existing
+project-scoped, price-capped model admission rather than a project/pi default. Missing scope, model
+or authorization makes Control ask the user. The start result also includes model and attribution.
 The optional `controlStart.budgetUsd` is only a reservation, never a required cap or actual spend.
 Local-app-only
 `DELETE /api/control-chat/authorizations/:id` appends a revocation and returns `{revoked}`;

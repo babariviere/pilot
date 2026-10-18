@@ -248,6 +248,7 @@ test("cross-provider continuation creates only a fresh handoff and fences all ol
 	meta.unboundPullRequests = ["https://github.com/octo/repo/pull/2"];
 	meta.subscriptionPolicy = { version: 1, windows: [], forced: ["OLD FORCE"] };
 	meta.controlPermission = { authorizationId: "grant", level: "implement" };
+	meta.controlStart = { authorizationId: "approved-start", budgetUsd: 2.5 };
 	await f.sessions["save"](meta);
 	const source = (await f.sessions["ensureWorker"](f.id)) as FakeWorker;
 	meta.subagents = [
@@ -266,6 +267,7 @@ test("cross-provider continuation creates only a fresh handoff and fences all ol
 	assert.notEqual(changed.id, f.id);
 	assert.equal(changed.continuationOf, f.id);
 	assert.equal(changed.cwd, cwd, "never relocate a jj/Git workspace");
+	assert.deepEqual(changed.controlStart, meta.controlStart);
 	assert.equal(f.sessions.get(f.id)?.continuedTo, changed.id);
 	assert.equal(source.closed, true);
 	assert.equal(f.sessions.pullRequestOwner(pr), changed.id);
@@ -308,6 +310,7 @@ test("cross-provider continuation creates only a fresh handoff and fences all ol
 	const reopened = await f.manager();
 	assert.equal(reopened.get(f.id)?.continuedTo, changed.id);
 	assert.equal(reopened.pullRequestOwner(pr), changed.id);
+	assert.deepEqual(reopened.get(changed.id)?.controlStart, meta.controlStart);
 	assert.ok(f.workers.slice(before).every((worker) => worker.spec.sessionId !== f.id));
 	await assert.rejects(reopened.send(f.id, "still no"), Conflict);
 });

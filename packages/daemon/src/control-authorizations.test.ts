@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { type TestContext, test } from "node:test";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { ControlTurnOrigin } from "@pilot/kernel";
-import type { ControlAuthorization, Mission, SessionSummary, Watch } from "@pilot/protocol";
+import type { ControlAuthorization, Mission, Project, SessionSummary, Watch } from "@pilot/protocol";
 import { ControlActions, ControlPreAdmissionError } from "./control-actions.ts";
 import {
 	CONTROL_DEFAULT_AUTHORIZATION_TTL_MS,
@@ -14,6 +15,8 @@ import {
 } from "./control-authorizations.ts";
 import { ControlMemory } from "./control-memory.ts";
 import { ControlPilot } from "./control-pilot.ts";
+import { ModelCatalog } from "./models.ts";
+import { requiredAuthRegistration } from "./testing/required-auth.ts";
 import type { WatchNotice } from "./watch-delivery.ts";
 import { WatchService } from "./watch-service.ts";
 
@@ -24,7 +27,7 @@ const approval = {
 	targets: [{ kind: "project", id: "p" }],
 	limits: { followUps: 2, budgetUsd: 3 },
 };
-async function fixture(t: TestContext) {
+async function fixture(t: TestContext, selectModel?: (model?: string) => Promise<unknown>) {
 	const home = await mkdtemp(join(tmpdir(), "control-authorizations-"));
 	let memory = new ControlMemory(home);
 	const watches = new WatchService(join(home, "watches.sqlite"));
@@ -60,17 +63,26 @@ async function fixture(t: TestContext) {
 				get: (id) => chats.get(id),
 				history: async () => ({ entries: [], more: false }),
 			},
-			projects: () => [],
+			projects: () => [{ id: "p", name: "Project" }] as Project[],
 			missions: () => [{ id: "m", projectId: "p", coordinatorSessionId: "lead" }] as Mission[],
 			linear: () => [],
 			mutations: {
 				audit: () => audit,
 				startProject: async (request, permission, requestId, provenance) => {
 					if (startError) throw startError;
+					await selectModel?.(request.model);
 					effects.push(["start", request, permission, requestId, provenance]);
-					return { id: "new" } as SessionSummary;
+					const chat = {
+						id: "new",
+						projectId: "p",
+						model: request.model,
+						controlStart: provenance,
+					} as SessionSummary;
+					chats.set(chat.id, chat);
+					return chat;
 				},
 				startTask: async (...args) => {
+					await selectModel?.(args[2].model);
 					effects.push(["task", ...args]);
 					return { id: "new" } as SessionSummary;
 				},
@@ -399,7 +411,12 @@ test("budgets are diagnostic by default, optional on start/send, and do not bypa
 		},
 		"watch-first",
 	);
-	await f.service.call("control", "start", { authorizationId: record.id, projectId: "p", message: "work" }, "start");
+	await f.service.call(
+		"control",
+		"start",
+		{ authorizationId: record.id, projectId: "p", message: "work", model: "test/model" },
+		"start",
+	);
 	await f.service.call(
 		"control",
 		"send",
@@ -413,7 +430,12 @@ test("budgets are diagnostic by default, optional on start/send, and do not bypa
 		"send",
 	);
 	await assert.rejects(
-		f.service.call("control", "start", { authorizationId: record.id, projectId: "p", message: "again" }, "again"),
+		f.service.call(
+			"control",
+			"start",
+			{ authorizationId: record.id, projectId: "p", message: "again", model: "test/model" },
+			"again",
+		),
 		/follow-up limit/,
 	);
 	const stored = (await f.memory.authorizationGet(record.id))!;
@@ -425,7 +447,7 @@ test("budgets are diagnostic by default, optional on start/send, and do not bypa
 test("invalid start/send arguments consume no use or reservation; corrected retry succeeds", async (t) => {
 	const f = await fixture(t);
 	const record = await f.authorize({ ...approval, limits: { followUps: 0, budgetUsd: 15 } });
-	const args = { authorizationId: record.id, projectId: "p", budgetUsd: 15 };
+	const args = { authorizationId: record.id, projectId: "p", budgetUsd: 15, model: "test/model" };
 	for (const [i, invalid] of [
 		{},
 		{ message: "" },
@@ -461,7 +483,7 @@ test("invalid start/send arguments consume no use or reservation; corrected retr
 test("proven pre-admission failure appends a release, frees the initial action, and never replays; uncertainty does not refund", async (t) => {
 	const f = await fixture(t);
 	const record = await f.authorize({ ...approval, limits: { followUps: 0, budgetUsd: 15 } });
-	const args = { authorizationId: record.id, projectId: "p", message: "work", budgetUsd: 15 };
+	const args = { authorizationId: record.id, projectId: "p", message: "work", budgetUsd: 15, model: "test/model" };
 	f.setStartError(new ControlPreAdmissionError("Model unavailable before spawn"));
 	await assert.rejects(f.service.call("control", "start", args, "failed"), /Model unavailable/);
 	let stored = (await f.memory.authorizationGet(record.id))!;
@@ -545,10 +567,99 @@ test("a routing race after reservation releases follow-up and USD accounting bef
 test("only the initial start is free of follow-up accounting; repeated starts cannot bypass the limit", async (t) => {
 	const f = await fixture(t),
 		record = await f.authorize({ ...approval, limits: { followUps: 0, budgetUsd: 10 } });
-	const args = { authorizationId: record.id, projectId: "p", message: "work" };
+	const args = { authorizationId: record.id, projectId: "p", message: "work", model: "test/model" };
 	await f.service.call("control", "start", args, "first");
 	await f.restart();
 	await assert.rejects(f.service.call("control", "start", args, "second"), /follow-up limit/);
+	assert.equal(f.effects.length, 1);
+});
+test("starts require explicit scope, authorization and model, honoring only explicit budget limits", async (t) => {
+	const f = await fixture(t),
+		record = await f.authorize();
+	const args = { authorizationId: record.id, budgetUsd: 1, projectId: "p", message: "work", model: "test/model" };
+	for (const [key, pattern] of [
+		["authorizationId", /authorizationId/],
+		["projectId", /projectId/],
+		["model", /explicit model/],
+	] as const) {
+		await assert.rejects(
+			f.service.call("control", "start", { ...args, [key]: undefined }, `missing-${key}`),
+			pattern,
+		);
+	}
+	for (const budgetUsd of [0, -1, NaN, Infinity])
+		await assert.rejects(f.service.call("control", "start", { ...args, budgetUsd }, `bad-${budgetUsd}`), /positive/);
+	await assert.rejects(
+		f.service.call("control", "start", { ...args, budgetUsd: 4 }, "over-budget"),
+		/budget exceeded/,
+	);
+	assert.equal(f.effects.length, 0);
+	assert.deepEqual((await f.memory.authorizationGet(record.id))?.usage, { followUps: 0, budgetUsd: 0 });
+	const result = (await f.service.call("control", "start", args, "valid")) as {
+		model: string;
+		budgetUsd: number;
+		authorizationId: string;
+	};
+	assert.equal(result.model, args.model);
+	assert.equal(result.budgetUsd, 1);
+	assert.equal(result.authorizationId, record.id);
+	const row = f.service.dashboard().chats.find((chat) => chat.id === "new")!;
+	assert.equal(row.model, args.model);
+	assert.deepEqual(row.controlStart, { authorizationId: record.id, budgetUsd: 1 });
+	const noBudget = await f.authorize({ ...approval, limits: { followUps: 2 } }, "no-start-budget");
+	const budgetless = (await f.service.call(
+		"control",
+		"start",
+		{ ...args, authorizationId: noBudget.id, budgetUsd: undefined },
+		"no-budget-start",
+	)) as { authorizationId: string; budgetUsd?: number };
+	assert.equal(budgetless.authorizationId, noBudget.id);
+	assert.equal(budgetless.budgetUsd, undefined);
+});
+test("Control starts retain the real project's scoped and price-capped model admission", async (t) => {
+	let catalog: ModelCatalog;
+	const f = await fixture(t, (model) => catalog.selectTaskModel(f.home, model));
+	const model = (id: string, input: number) => ({
+		id,
+		name: id,
+		provider: "test",
+		api: "openai-completions" as const,
+		baseUrl: "http://unused",
+		input: ["text" as const],
+		reasoning: false,
+		contextWindow: 32000,
+		maxTokens: 4096,
+		cost: { input, output: input, cacheRead: 0, cacheWrite: 0 },
+	});
+	const models = [model("small", 0.1), model("claude-opus-5-5", 4), model("over-price", 100), model("outside", 0.1)];
+	t.mock.method(
+		ModelRuntime,
+		"create",
+		async () =>
+			({
+				...requiredAuthRegistration,
+				getAvailable: async () => models,
+				getModel: (provider: string, id: string) => models.find((m) => m.provider === provider && m.id === id),
+			}) as unknown as ModelRuntime,
+	);
+	await mkdir(join(f.home, ".pi"));
+	await writeFile(
+		join(f.home, ".pi/settings.json"),
+		JSON.stringify({ enabledModels: ["test/small", "test/claude-opus-5-5", "test/over-price"] }),
+	);
+	catalog = new ModelCatalog(f.home);
+	const record = await f.authorize();
+	const args = { authorizationId: record.id, budgetUsd: 0.5, projectId: "p", message: "work" };
+	await assert.rejects(
+		f.service.call("control", "start", { ...args, model: "test/outside" }, "outside"),
+		/not available in the project's scope/,
+	);
+	await assert.rejects(
+		f.service.call("control", "start", { ...args, model: "test/over-price", missionId: "m", taskId: "2" }, "price"),
+		/price cap/,
+	);
+	assert.equal(f.effects.length, 0);
+	await f.service.call("control", "start", { ...args, model: "test/small" }, "allowed");
 	assert.equal(f.effects.length, 1);
 });
 test("reservation and requested audit are atomic; uncertain effects never replay or refund after restart", async (t) => {
@@ -611,7 +722,7 @@ test("revocation, expiry and completed task scopes fail closed and survive resta
 	assert.equal(await f.memory.authorizationRevoke(record.id), false);
 	assert.equal(await f.memory.authorizationRevoke("missing"), false);
 	await f.restart();
-	const args = { authorizationId: record.id, budgetUsd: 1, projectId: "p", message: "work" };
+	const args = { authorizationId: record.id, budgetUsd: 1, projectId: "p", message: "work", model: "test/model" };
 	await assert.rejects(f.service.call("control", "start", args, "revoked"), /revoked/);
 	const defaults = await f.authorize(
 		{ scope: "work", level: "implement", targets: [{ kind: "project", id: "p" }] },
@@ -781,6 +892,15 @@ test("legacy watches retain note-and-target authority only in their actual deliv
 	const args = { authorizationId: `watch:${watch.id}`, sessionId: "member", direct: true, message: watch.note };
 	await assert.rejects(f.service.call("control", "send", args, "not-delivery"), /active delivery/);
 	f.setTurn({ requestId: notice.requestId });
+	await assert.rejects(
+		f.service.call(
+			"control",
+			"start",
+			{ ...args, projectId: "p", model: "test/model", budgetUsd: 1 },
+			"legacy-start",
+		),
+		/targets/,
+	);
 	await assert.rejects(
 		f.service.call("control", "send", { ...args, message: "unrelated work" }, "different-note"),
 		/exact saved note/,

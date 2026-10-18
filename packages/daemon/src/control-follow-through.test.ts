@@ -147,7 +147,7 @@ test("authorized start installs a once result watch, auto-reads untrusted bounde
 	await f.pilot.call(
 		"control",
 		"start",
-		{ projectId: "p", message: "Investigate", authorizationId: "approval", budgetUsd: 1 },
+		{ projectId: "p", message: "Investigate", authorizationId: "approval", budgetUsd: 1, model: "test/model" },
 		"start-1",
 	);
 	const next = f.pilot.dashboard().next;
@@ -370,7 +370,13 @@ test("large exact requests stay byte-bounded in the change-driven cache and dash
 test("failed pre-admission starts drop only unbound watches; uncertain created chats remain observable", async (t) => {
 	const f = await fixture(t);
 	const pilot = f.pilot;
-	const args = { projectId: "p", message: "Investigate", authorizationId: "approval", budgetUsd: 1 };
+	const args = {
+		projectId: "p",
+		message: "Investigate",
+		authorizationId: "approval",
+		budgetUsd: 1,
+		model: "test/model",
+	};
 	const noWatches = new ControlPilot({ ...pilot.options, watches: undefined });
 	await assert.rejects(noWatches.call("control", "start", args, "no-watches"), /Result watches unavailable/);
 	pilot.options.mutations!.startProject = async () => {

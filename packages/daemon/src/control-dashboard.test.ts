@@ -152,6 +152,7 @@ function fixture(): { sources: ControlDashboardSources; chats: SessionSummary[] 
 			working: true,
 			lastUserMessageAt: 1000,
 			model: "test/model",
+			controlStart: { authorizationId: "approved-start", budgetUsd: 2.5 },
 			outcome: "question",
 		}),
 		chat("starting", { state: "starting" }),
@@ -257,6 +258,10 @@ test("shared snapshot reports running work, active progress, open blockers, deci
 	assert.equal(data.runningAgents[0]!.startedAt, 1000);
 	assert.equal(data.runningAgents[0]!.elapsedMs, 4000);
 	assert.equal(data.runningAgents[1]!.elapsedMs, 4900);
+	assert.equal(data.runningAgents[0]!.model, "test/model");
+	assert.deepEqual(data.runningAgents[0]!.controlStart, { authorizationId: "approved-start", budgetUsd: 2.5 });
+	assert.deepEqual(data.chats[0]!.controlStart, data.runningAgents[0]!.controlStart);
+	assert.equal(data.chats[1]!.controlStart, undefined);
 	assert.equal(data.activeMissions.length, 1);
 	assert.equal(data.activeMissions[0]!.tasksDone, 2);
 	assert.deepEqual(
