@@ -71,7 +71,8 @@ test("Swift verification and bundle jobs cache only pinned dependencies with too
 		assert.match(cached, /Vendor\/libghostty-spm/);
 		assert.match(cached, /Vendor\/MermaidKit/);
 		assert.ok(!cached.includes(".build") && !cached.includes("build/") && !cached.includes("sign"));
-		assert.ok(job.indexOf("uses: actions/cache@v4") < job.indexOf("run: apps/macos/scripts/"));
+		const build = job.indexOf(`run: apps/macos/scripts/${name === "macos" ? "test" : "bundle"}.sh`);
+		assert.ok(build >= 0 && job.indexOf("uses: actions/cache@v4") < build);
 	}
 });
 
@@ -127,6 +128,16 @@ test("PRs use one macOS job, skip Swift only when the app is untouched, and smok
 	assert.match(script, /Release bundles always compile from source/);
 	const guard = script.indexOf('if [ "$prebuilt" = 1 ] && [ "$runtime" = 1 ]');
 	assert.ok(guard >= 0 && guard < script.indexOf("swift build --package-path"));
+});
+
+test("SwiftLint is a strict standalone macOS gate even when Swift compilation is skipped", () => {
+	const workflow = readFileSync(new URL("../../../../.github/workflows/release.yml", import.meta.url), "utf8");
+	const macos = workflow.split("\n  macos:\n")[1].split(/\n  [a-z-]+:\n/)[0];
+	assert.match(macos, /- name: SwiftLint\n        if: \$\{\{ !cancelled\(\) \}\}\n        run: apps\/macos\/scripts\/lint\.sh/);
+	assert.ok(macos.indexOf("run: apps/macos/scripts/lint.sh") < macos.indexOf("run: apps/macos/scripts/test.sh"));
+	const script = readFileSync(new URL("../lint.sh", import.meta.url), "utf8");
+	assert.match(script, /--strict --force-exclude --no-cache/);
+	assert.doesNotMatch(script, /swift (build|test)|--fix|--baseline|--lenient/);
 });
 
 test("only main saves and only PRs reuse a cached Swift test build, with content-derived timestamps", () => {

@@ -120,6 +120,8 @@ final class ScrollObserverView: NSView {
     }
 
     func stopObserving() {
+        // The view can move between scroll views before deinit; detach the previous scroll view now.
+        // swiftlint:disable:next notification_center_detachment
         NotificationCenter.default.removeObserver(self)
         layoutScroll?.cancel()
         layoutScroll = nil

@@ -1,0 +1,27 @@
+# Correctness checks only. Keep formatting, naming and size limits out of this gate.
+# Explicit opt-in prevents a SwiftLint update from silently enabling new rules.
+only_rules:
+  - discarded_notification_center_observer
+  - duplicate_conditions
+  - duplicate_enum_cases
+  - duplicate_imports
+  - duplicated_key_in_dictionary_literal
+  - identical_operands
+  - invalid_swiftlint_command
+  - notification_center_detachment
+  - prohibited_super_call
+  - self_in_property_initialization
+  - unused_control_flow_label
+  - unused_enumerated
+  - weak_delegate
+
+included:
+  - Package.swift
+  - Sources
+  - Tests
+excluded:
+  - Vendor
+  - .build
+  - build
+
+check_for_updates: false

@@ -53,6 +53,20 @@ To run just affected files without importing every file in a group:
 node --test --test-force-exit --test-concurrency=2 packages/daemon/src/github.test.ts
 ```
 
+### Swift linting
+
+Run `apps/macos/scripts/lint.sh` for the same strict SwiftLint gate used by macOS CI.
+It checks first-party sources, tests and `Package.swift`, excluding vendored code and build output.
+`apps/macos/.swiftlint.yml` opts into a small set of correctness rules, not formatting, naming or
+file-size limits. There is no baseline hiding existing violations; every finding fails the gate.
+
+The wrapper uses SwiftLint 0.65.1. It reuses an installed matching version, or downloads the official
+portable binary into a temporary directory and verifies its pinned SHA-256 before extracting it.
+Set `SWIFTLINT_BIN` to an absolute path to reuse a local binary; a version mismatch fails rather than
+changing the rules.
+The check needs no Swift build or package resolution, so it does not take the Swift verification slot.
+Formatting (`swift format`) and unused-code analysis (Periphery) remain separate, optional tools.
+
 ### Shared heavy-verification slots
 
 Iterate with affected test files. Run the relevant full suites once before publishing, not after each

@@ -132,6 +132,9 @@ jobs:
           jj --version
       - run: pnpm install --frozen-lockfile
       - run: pnpm test -- --lane=macos
+      - name: SwiftLint
+        if: ${{ !cancelled() }}
+        run: apps/macos/scripts/lint.sh
       - name: Packaging and release metadata tests
         run: |
           for script in apps/macos/scripts/*.sh; do bash -n "$script"; done
