@@ -36,7 +36,7 @@ callbacks='localStopNormalizesQualifiedRowsAndRestoresWithdrawnMessages|remoteSt
 # starving unrelated timed tests. They run only on CI, so only CI requires them to start.
 journeys='keyboardOnlyStartSwitchTypeAndReturn|keyboardOnlySidebarBrowsingKeepsFocusInTheSidebar'
 # These native approval controls also own AppKit mouse tracking. Run each alone, keeping its deadline.
-github='githubKeySheetRequiresNativeConfirmationAndCancelDoesNotRegister'
+github='githubKeySheetRequiresNativeConfirmationAndCancelDoesNotRegister|githubExistingCheckoutRequiresExplicitNativeReuseConfirmation|githubImportNativeCloneActionStaysDisabledUntilHostDestinationPreview'
 partition=1
 reuse=(--skip-build)
 for argument in "$@"; do

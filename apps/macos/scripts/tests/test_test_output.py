@@ -31,7 +31,9 @@ CALLBACKS = ["localStopNormalizesQualifiedRowsAndRestoresWithdrawnMessages",
 CALLBACKS_OUTPUT = STARTED + "".join(f"◇ Test {name}() started.\n" for name in CALLBACKS) + PASSED
 JOURNEYS = ["keyboardOnlyStartSwitchTypeAndReturn", "keyboardOnlySidebarBrowsingKeepsFocusInTheSidebar"]
 JOURNEYS_OUTPUT = STARTED + "".join(f"◇ Test {name}() started.\n" for name in JOURNEYS) + PASSED
-GITHUB = ["githubKeySheetRequiresNativeConfirmationAndCancelDoesNotRegister"]
+GITHUB = ["githubKeySheetRequiresNativeConfirmationAndCancelDoesNotRegister",
+          "githubExistingCheckoutRequiresExplicitNativeReuseConfirmation",
+          "githubImportNativeCloneActionStaysDisabledUntilHostDestinationPreview"]
 GITHUB_OUTPUTS = [STARTED + f"◇ Test {name}() started.\n" + PASSED for name in GITHUB]
 
 
