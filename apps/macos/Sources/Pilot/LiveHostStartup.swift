@@ -6,6 +6,7 @@ extension AppModel {
     /// never awaits SSH attempts. restoreOffline itself remains a read-only metadata operation.
     func startHostConnections(offlineStore: OfflineHostStore,
                               localStart: @MainActor () async -> Void) async {
+        hosts.startScopedModels()
         do {
             try await hosts.restoreOffline(from: offlineStore)
             hosts.startSavedConnections()

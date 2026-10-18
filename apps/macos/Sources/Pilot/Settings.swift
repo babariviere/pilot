@@ -160,10 +160,10 @@ extension EnvironmentValues {
 
 /// A page of the settings window. General pages come first in the sidebar, then one page per project.
 enum SettingsTab: Hashable {
-    case appearance, notifications, connections, diagnostics, energy, terminal, updates, devboxes
+    case appearance, notifications, connections, models, diagnostics, energy, terminal, updates, devboxes
     case project(String)
 
-    static let general: [SettingsTab] = [.appearance, .notifications, .connections, .diagnostics, .energy, .terminal, .updates, .devboxes]
+    static let general: [SettingsTab] = [.appearance, .notifications, .connections, .models, .diagnostics, .energy, .terminal, .updates, .devboxes]
 
     /// The sidebar's order: general pages, then projects.
     static func ordered(projects: [Project]) -> [SettingsTab] { general + projects.map { .project($0.id) } }
@@ -179,6 +179,7 @@ enum SettingsTab: Hashable {
         case .appearance: "Appearance"
         case .notifications: "Notifications"
         case .connections: "Connections"
+        case .models: "Scoped models"
         case .diagnostics: "Diagnostics"
         case .energy: "Energy"
         case .terminal: "Terminal"
@@ -193,6 +194,7 @@ enum SettingsTab: Hashable {
         case .appearance: PilotIcon.appearance
         case .notifications: PilotIcon.notifications
         case .connections: PilotIcon.connections
+        case .models: PilotIcon.model
         case .diagnostics: PilotIcon.activity
         case .energy: PilotIcon.energy
         case .terminal: PilotIcon.terminal
@@ -250,6 +252,8 @@ struct SettingsView: View {
             } content: {
                 ConnectionSettings()
             }
+        case .models:
+            ScopedModelsSettings(hosts: model.hosts, localHost: model.localHost)
         case .diagnostics:
             TelemetrySettingsPage()
         case .energy:

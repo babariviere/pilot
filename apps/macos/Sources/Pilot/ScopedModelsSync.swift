@@ -48,6 +48,8 @@ struct ScopedModelsObservation: Sendable {
     private var ready = false
     private var loading = false
     private var stopped = false
+    private var startup: Task<Void, Never>?
+    var isIdle: Bool { pending.isEmpty && tasks.isEmpty && !loading && startup == nil }
 
     init(store: ScopedModelsStore) { self.store = store }
 
@@ -56,7 +58,9 @@ struct ScopedModelsObservation: Sendable {
         loading = true
         defer { loading = false }
         do {
-            publish(try await store.load())
+            let saved = try await store.load()
+            guard !stopped else { return }
+            publish(saved)
             ready = true
             pending.formUnion(endpoints.keys)
             drain()
@@ -74,7 +78,14 @@ struct ScopedModelsObservation: Sendable {
         endpoints = values
         pending.formIntersection(values.keys)
         pending.formUnion(changed)
-        if ready { drain() } else { Task { await start() } }
+        if ready { drain() }
+        else if startup == nil {
+            startup = Task { [weak self] in
+                guard let self else { return }
+                await self.start()
+                self.startup = nil
+            }
+        }
     }
 
     func refresh(_ host: HostRef) { pending.insert(host); drain() }
@@ -140,6 +151,13 @@ struct ScopedModelsObservation: Sendable {
     func stop() {
         stopped = true; pending.removeAll(); endpoints.removeAll()
         for task in tasks.values { task.cancel() }
+    }
+
+    func stopAndWait() async {
+        stop()
+        await startup?.value
+        for task in tasks.values { await task.value }
+        await store.settled()
     }
 
     private func publish(_ value: ScopedModelsState) {
@@ -255,6 +273,8 @@ struct ScopedModelsObservation: Sendable {
                 return
             } catch ScopedModelsFailure.unsupported { throw ScopedModelsFailure.unsupported
             } catch ScopedModelsFailure.readOnly { throw ScopedModelsFailure.readOnly
+            } catch ScopedModelsFailure.nativeActionRequired { throw ScopedModelsFailure.nativeActionRequired
+            } catch ScopedModelsFailure.invalidSelection { throw ScopedModelsFailure.invalidSelection
             } catch {
                 // Lost acknowledgment: lookup before any bounded retry. Never use a new hash.
                 guard current(endpoint) else { return }
@@ -280,6 +300,8 @@ struct ScopedModelsObservation: Sendable {
             switch error {
             case ScopedModelsFailure.unsupported: status = .unsupported
             case ScopedModelsFailure.readOnly: status = .readOnly
+            case ScopedModelsFailure.nativeActionRequired: status = .authorizationRequired
+            case ScopedModelsFailure.settingsUnreadable: status = .settingsUnreadable
             default: status = .failed
             }
             do {

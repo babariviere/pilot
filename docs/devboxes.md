@@ -47,6 +47,17 @@ and refuses unknown formats or a running app. Relaunch and choose the Local proj
 
 ## Host-local model scope API
 
+**Settings → Scoped models** selects the global Pi model list. Use All authenticated models or search
+and check specific models; existing wildcards and thinking suffixes stay under Advanced patterns.
+Save persists the Mac intent before applying it to Local and participating devboxes. A new devbox needs
+an explicit Join saved list review with its current baseline. Opening Settings never writes Pi settings.
+
+Per-host results distinguish Synced (literal readback), Pending while offline, changed/conflicting values,
+read-only/unsupported hosts and unreadable settings. Resolve a conflict by overwriting only that host,
+using its list as a new saved Mac revision, or leaving it visibly divergent. Leave as is persists across
+restarts. Startup and verified reconnect reconcile saved work outside Settings, without polling or
+blindly rebasing conflicts. Credentials, defaults, project overrides and running chats are never changed.
+
 Native settings/sync clients use `GET /api/model-scope` for the host's **global** Pi
 `enabledModels`. The `ModelScope` DTO returns `enabledModels: string[] | null`, `allModels`,
 `scopeHash`, `resolution` and `candidates`. A missing file/key returns null; Pi's existing `[]`

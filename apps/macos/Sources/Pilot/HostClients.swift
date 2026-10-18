@@ -168,10 +168,14 @@ final class HostClients: ObservableObject {
     private let connectionAdmission = HostConnectionAdmission()
     /// Read-only, generation-fenced hello/version evidence for lifecycle consumers outside Settings.
     let remoteRuntimes = VerifiedRemoteRuntimes()
+    /// One owner for live lifecycle fan-out and Settings. Construction performs no I/O.
+    let scopedModels: ScopedModelsSync
+    private let readScopedModelCapability: @MainActor (HostRef, SSHConnectionConfiguration?) async throws -> String
+    private var scopedModelsStarted = false
     private var liveConnectionsStarted = false
     private var enrollingHosts: Set<HostRef> = []
     var startupConnectionsIdle: Bool {
-        savedStartup.isIdle && connectionJobs.isEmpty && connectionCleanup.isEmpty && remoteRuntimes.isIdle
+        savedStartup.isIdle && connectionJobs.isEmpty && connectionCleanup.isEmpty && remoteRuntimes.isIdle && scopedModels.isIdle
     }
     private let makeTunnel: (SSHConnectionConfiguration, HostRef) -> any HostTunnel
     private let makeClient: @MainActor () -> PilotClient
@@ -197,12 +201,21 @@ final class HostClients: ObservableObject {
              return PilotClient(commandConfiguration: configuration)
          },
          connectClient: @escaping @MainActor (PilotClient, URL) -> Void = { $0.connect(to: $1) },
+         scopedModelsStore: ScopedModelsStore? = nil,
+         readScopedModelCapability: @escaping @MainActor (HostRef, SSHConnectionConfiguration?) async throws -> String = {
+             try await GitHubNativeAccess.read(host: $0, configuration: $1)
+         },
          readRuntimeHello: @escaping @MainActor (PilotClient, HostRef) async throws -> DaemonHello = { client, _ in
              try await client.hello()
          }) {
         self.makeTunnel = makeTunnel; self.makeClient = makeClient
         self.connectClient = connectClient
         self.readRuntimeHello = readRuntimeHello
+        self.readScopedModelCapability = readScopedModelCapability
+        scopedModels = ScopedModelsSync(store: scopedModelsStore ?? ScopedModelsStore(directory:
+            operationDirectory?.appendingPathComponent("scoped-models", isDirectory: true) ??
+                FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                    .appendingPathComponent("Pilot/ScopedModels", isDirectory: true)))
         operations = OperationOutbox(directory: operationDirectory ?? FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Pilot/Operations"))
     }
@@ -267,6 +280,34 @@ final class HostClients: ObservableObject {
             try Task.checkCancellation()
             try await self.connect(host: request.host, configuration: request.configuration)
         }
+    }
+
+    /// Explicit live admission only. restoreOffline, init and Settings rendering remain inert.
+    func startScopedModels() {
+        guard !shuttingDown else { return }
+        scopedModelsStarted = true
+        refreshScopedModelEndpoints()
+    }
+
+    private func refreshScopedModelEndpoints() {
+        guard scopedModelsStarted, !shuttingDown else { return }
+        scopedModels.update(entries.filter { $0.value.client.connected }.mapValues { entry in
+            let client = entry.client, host = entry.token.host
+            let token = HostConnectionToken(host: host, generation: client.connectionGeneration)
+            return ScopedModelsTransport(client: client, token: token, validate: { [weak self, weak client] in
+                guard let self, let client, !self.shuttingDown, self.entries[host]?.client === client,
+                      client.hostIdentity == host else { throw HostRoutingError.staleGeneration }
+                try self.validate(token)
+            }, capability: { [weak self] in
+                guard let self else { throw HostRoutingError.disconnected }
+                try self.validate(token)
+                let configuration = self.offlineHosts[host]?.configuration
+                guard host.hostId == "local" || configuration != nil else { throw HostRoutingError.invalidReference }
+                let value = try await self.readScopedModelCapability(host, configuration)
+                try self.validate(token)
+                return value
+            }).endpoint()
+        })
     }
 
     private func refreshRuntimeEndpoints() {
@@ -739,6 +780,7 @@ final class HostClients: ObservableObject {
         shuttingDown = true
         savedStartup.stop()
         remoteRuntimes.stop()
+        scopedModels.stop()
         for job in connectionJobs.values { job.task.cancel() }
         connectionJobs.removeAll()
         sharedContextCourier.stop()
@@ -748,6 +790,7 @@ final class HostClients: ObservableObject {
             if let entry = entries[host] { refresh(host, token: entry.token) }
         }
         for host in Set(tunnels.keys).union(connectionCleanup.keys) { await disconnect(host) }
+        await scopedModels.stopAndWait()
         do { try await flushOffline() }
         catch { persistenceError = "Could not save offline host metadata before quitting." }
     }
@@ -768,6 +811,7 @@ final class HostClients: ObservableObject {
         refreshSharedContextEndpoints()
         available.remove(host)
         refreshRuntimeEndpoints()
+        refreshScopedModelEndpoints()
     }
 
     func endpoint(_ ref: HostResourceRef, kind: HostResourceKind) throws -> PilotClient {
@@ -1023,6 +1067,7 @@ final class HostClients: ObservableObject {
             sharedContextGenerations[host] = sharedGeneration
             refreshSharedContextEndpoints()
             refreshRuntimeEndpoints()
+            refreshScopedModelEndpoints()
         }
         if entry.client.connected {
             available.insert(host)

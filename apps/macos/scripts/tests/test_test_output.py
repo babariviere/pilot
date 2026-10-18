@@ -50,8 +50,11 @@ SCOPED_MODELS = [
     "scopedModelsConflictConsentCannotFollowNewIntentOrConnection",
     "scopedModelsReadFailureCannotErasePersistedLeaveAsIs"
 ]
+SCOPED_MODEL_TRANSPORT = ["modelScopeLiveOwnerSyncsLocalAndTwoDevboxesAcrossOfflineReconnectAndRelaunch", "modelScopeLiveConflictAndLeaveRemainDivergentAfterColdLaunch", "modelScopeWirePreservesAllAndDecodesBothPutArmsWithoutCapabilityReadsOnGet", "modelScopeWireRejectsStaleCapabilityAcquisitionBeforeSending", "modelScopeWireExposesTypedReadFailuresWithoutTreatingThemAsAbsent", "modelScopeWireReconcilesCommitted503WithLiteralReadbackWithoutRepeatingPut"]
+SCOPED_MODELS += SCOPED_MODEL_TRANSPORT
 SCOPED_MODEL_NATIVE = ["scopedModelsNativeSavePersistsAndDispatchesExplicitAllOnlyAfterClick",
-                       "scopedModelsNativeSelectorPreservesAdvancedPatterns"]
+                       "scopedModelsNativeSelectorPreservesAdvancedPatterns",
+                       "scopedModelsNativeSaveUsesHostOwnerCapabilityHttpAndLiteralReadback"]
 SCOPED_MODEL_OUTPUTS = [STARTED + "".join(f"◇ Test {name}() started.\n" for name in SCOPED_MODELS) + PASSED]
 SCOPED_MODEL_OUTPUTS += [STARTED + f"◇ Test {name}() started.\n" + PASSED for name in SCOPED_MODEL_NATIVE]
 
@@ -60,7 +63,9 @@ class TestOutputTests(unittest.TestCase):
     def test_scoped_model_partitions_cover_the_production_fixtures(self):
         scheduler = SCRIPTS.parent / "Tests/PilotTests/ScopedModelsSyncTests.swift"
         native = SCRIPTS.parent / "Tests/PilotUITests/ScopedModelsInteractionTests.swift"
-        self.assertEqual(re.findall(r"func (scopedModels\w+)\(", scheduler.read_text()), SCOPED_MODELS)
+        transport = SCRIPTS.parent / "Tests/PilotTests/ScopedModelsTransportTests.swift"
+        self.assertEqual(re.findall(r"func (scopedModels\w+)\(", scheduler.read_text()) +
+                         re.findall(r"func (modelScope\w+)\(", transport.read_text()), SCOPED_MODELS)
         self.assertEqual(re.findall(r"func (scopedModels\w+)\(", native.read_text()), SCOPED_MODEL_NATIVE)
 
     def test_summaries_not_warning_prose(self):

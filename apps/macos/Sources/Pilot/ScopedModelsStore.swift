@@ -10,6 +10,9 @@ actor ScopedModelsStore {
 
     init(directory: URL) { self.directory = directory }
 
+    /// Actor barrier only, without loading user files for an owner that was never started.
+    func settled() {}
+
     func load() throws -> ScopedModelsState {
         if let failure { throw failure }
         if let cached { return cached }
