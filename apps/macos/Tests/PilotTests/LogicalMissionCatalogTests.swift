@@ -59,7 +59,7 @@ private func logicalMission(_ id: String = "same", title: String = "Canonical", 
             try logicalDashboard(replicas: [logicalReplica(3, title: "Other", binding: "other", time: 99999)]))
         let tied = try LogicalMissionCatalog.normalize([source, conflict])
         #expect(tied.rows.first?.title == nil)
-        #expect(tied.rows.first?.status == .active)
+        #expect(tied.rows.first?.status == nil)
         #expect(tied.conflicts == Set(tied.rows.map(\.id)))
         #expect(try LogicalMissionCatalog.normalize([conflict, source]).rows == tied.rows)
     }
@@ -195,4 +195,103 @@ private func logicalMission(_ id: String = "same", title: String = "Canonical", 
     #expect(reference.host.daemonId == "unavailable-home" && reference.host.lineageId == "original")
     #expect(reference.localId == "same" && reference.kind == .mission)
     #expect(model.newSessionForm.executionHost == logicalBox)
+}
+
+private struct LogicalProducerFixture: Decodable {
+    let sourcePin: HostRef
+    let cases: [Case]
+    struct Case: Decodable {
+        let name: String
+        let definitions: [Mission]
+        let dashboard: ControlDashboardResponse
+        /// Captured compatibility arrays, with only the additive projection fields absent.
+        func legacy() throws -> ControlDashboardResponse {
+            var value = try JSONDecoder().decode([String: JSONValue].self, from: JSONEncoder().encode(dashboard))
+            value["logicalMissions"] = nil
+            if case .object(var totals) = value["totals"] {
+                totals["logicalMissions"] = nil; value["totals"] = .object(totals)
+            }
+            return try JSONDecoder().decode(ControlDashboardResponse.self, from: JSONEncoder().encode(value))
+        }
+    }
+    static func read() throws -> Self {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/logical-mission-producer.json")
+        return try JSONDecoder().decode(Self.self, from: Data(contentsOf: url))
+    }
+}
+
+@Test func actualHttpProducerPayloadAndLegacyCompatibilityHaveTheSameCanonicalDefinitions() throws {
+    let fixture = try LogicalProducerFixture.read()
+    #expect(fixture.cases.count == 10)
+    for sample in fixture.cases {
+        let published = try LogicalMissionCatalog.normalize([.init(host: fixture.sourcePin,
+            missions: sample.definitions + [logicalMission("must-not-augment-published")], dashboard: sample.dashboard)])
+        let wire = try #require(sample.dashboard.logicalMissions)
+        #expect(Set(published.rows.map(\.id)) == Set(wire.map(\.id)), "Published collection is the only mission input: \(sample.name)")
+        for row in published.rows {
+            let source = try #require(wire.first { $0.id == row.id })
+            #expect(row.title == source.title && row.status == source.status, "\(sample.name)")
+            #expect(row.tasksDone == source.tasksDone && row.tasksTotal == source.tasksTotal)
+            #expect(row.coordinator == source.coordinator)
+            #expect(row.id == LogicalMissionCatalog.identity(home: source.mission.home, missionId: source.mission.missionId))
+        }
+        let legacy = try LogicalMissionCatalog.normalize([.init(host: fixture.sourcePin,
+            missions: sample.definitions, dashboard: sample.legacy())])
+        if sample.name == "clipped" {
+            #expect(published.total == 70 && published.truncated && published.rows.count <= 50)
+            #expect(legacy.total == nil && legacy.truncated, "Do not sum clipped compatibility arrays")
+            continue
+        }
+        #expect(Set(legacy.rows.map(\.id)) == Set(wire.map(\.id)), "\(sample.name)")
+        for row in legacy.rows {
+            let source = try #require(wire.first { $0.id == row.id })
+            #expect(row.title == source.title && row.status == source.status, "\(sample.name)")
+            #expect(row.tasksDone == source.tasksDone && row.tasksTotal == source.tasksTotal)
+            #expect(row.coordinator == source.coordinator)
+        }
+        if sample.name == "equal-sequence-conflict" { #expect(!legacy.conflicts.isEmpty) }
+        if sample.name == "provenance-cap" {
+            #expect(legacy.rows.first?.provenance.count == 16)
+            #expect(legacy.rows.first?.provenance.contains { $0.sequence == 19 } == true)
+        }
+        if sample.name == "task-only-provisional" {
+            #expect(!published.provisional.isEmpty && published.provisional == legacy.provisional)
+            #expect(published.rows.first?.tasksTotal == nil && legacy.rows.first?.tasksTotal == nil)
+        }
+    }
+}
+
+@Test func authoritativeCollectionsAreExclusivePerResponseAcrossMixedVersionSources() throws {
+    let fixture = try LogicalProducerFixture.read()
+    let sample = try #require(fixture.cases.first { $0.name == "greatest-complete" })
+    let other = HostRef(hostId: "older-devbox", daemonId: "independent", lineageId: "independent-lineage")
+    let result = try LogicalMissionCatalog.normalize([
+        .init(host: fixture.sourcePin, missions: [logicalMission("discard-me")], dashboard: sample.dashboard),
+        .init(host: logicalBox, missions: [logicalMission("discard-empty")], dashboard: logicalDashboard(logical: [])),
+        .init(host: other, missions: [logicalMission("keep-legacy")], dashboard: nil),
+    ])
+    #expect(result.rows.count == 2)
+    #expect(result.rows.contains { $0.mission.missionId == "keep-legacy" && $0.mission.home.daemonId == other.daemonId })
+    #expect(!result.rows.contains { $0.mission.missionId.hasPrefix("discard") })
+}
+
+@Test @MainActor func publishedAliasHomeNavigatesByCanonicalPinWithoutWeakeningAuthorizationMatching() throws {
+    let fixture = try LogicalProducerFixture.read()
+    let sample = try #require(fixture.cases.first { $0.name == "greatest-complete" })
+    let values = try #require(sample.dashboard.logicalMissions)
+    let row = try #require(values.first)
+    let pin = HostRef(hostId: "saved-devbox", daemonId: row.mission.home.daemonId, lineageId: row.mission.home.lineageId)
+    #expect(LogicalMissionCatalog.matches(row.mission.home, pin: pin))
+    #expect(!row.mission.home.matches(pin), "Do not loosen the shared authorization helper")
+    let model = AppModel()
+    try model.registerLocal(fixture.sourcePin)
+    let client = PilotClient()
+    client.loadFixture(projects: [], sessions: [])
+    client.handle(.missions([logicalMission()]))
+    try model.hosts.install(client, host: pin)
+    model.openLogicalMission(row)
+    #expect(model.hosts.selection?.host == pin)
+    #expect(model.hosts.selection?.localId == row.mission.missionId)
 }

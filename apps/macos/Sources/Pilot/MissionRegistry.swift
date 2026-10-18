@@ -154,12 +154,12 @@ final class MissionRegistry: ObservableObject {
     }
 
     func row(for reference: HostResourceRef) -> ControlLogicalMission? {
-        rows.first { $0.mission.home.matches(reference.host) && $0.mission.missionId == reference.localId }
+        rows.first { LogicalMissionCatalog.matches($0.mission.home, pin: reference.host) && $0.mission.missionId == reference.localId }
     }
 
     func destination(_ row: ControlLogicalMission, model: AppModel) -> HostResourceRef {
         let matches = Set(model.hosts.offlineHosts.keys).union(model.hosts.missions.map { $0.ref.host })
-            .union(model.localHost.map { [$0] } ?? []).filter { row.mission.home.matches($0) }
+            .union(model.localHost.map { [$0] } ?? []).filter { LogicalMissionCatalog.matches(row.mission.home, pin: $0) }
         // Unknown or ambiguous enrollment never selects an execution host as a substitute home.
         let host = matches.count == 1 ? matches.first! : row.mission.home.envelopeIdentity
         return HostResourceRef(host: host, kind: .mission, localId: row.mission.missionId)
