@@ -12,13 +12,14 @@ import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/
 import { getAgentDir, ModelRuntime, resolveModelScopeWithDiagnostics } from "@earendil-works/pi-coding-agent";
 import { installBundledAnthropicAuth } from "@pilot/kernel";
 import { installCredentialBrokerHooks } from "@pilot/kernel/credential-hooks";
-import type { ModelList, ModelOption } from "@pilot/protocol";
+import type { ModelList, ModelOption, ModelScope, ModelScopePatternResolution } from "@pilot/protocol";
 import { TITLE_CONTEXT_LIMIT } from "./chat-title.ts";
 import { compactControlNode } from "./control-compaction.ts";
 import type { ControlJob } from "./control-memory-disk.ts";
 import type { ControlLine } from "./control-view.ts";
 import { ServiceUnavailable } from "./errors.ts";
 import { compactMemory, type MemoryCompactionObserver } from "./memory-compaction.ts";
+import { modelScopeHash, modelScopeUpdate, scopePatterns, writeModelScope } from "./model-scope.ts";
 import { readModelSettings } from "./model-settings.ts";
 import {
 	parseSlackClassification,
@@ -236,11 +237,64 @@ export class ModelCatalog {
 		}
 	}
 
+	/** Host-local settings only. Resolution returns identifiers/codes, never runtime models or auth errors. */
+	async scope(cwd: string, writable = true): Promise<ModelScope> {
+		const [settings, available, runtime] = await Promise.all([
+			readModelSettings(cwd, this.agentDir),
+			this.available(),
+			this.getRuntime(),
+		]);
+		if (settings.drainErrors().some((entry) => entry.scope === "global"))
+			throw new Error("Cannot read malformed global model settings");
+		const enabledModels = scopePatterns(settings.getGlobalSettings().enabledModels);
+		const projectOverride = scopePatterns(settings.getProjectSettings().enabledModels);
+		const resolve = async (patterns: string[] | null): Promise<ModelScopePatternResolution[]> => {
+			if (!patterns?.length) return [];
+			const source = (models: readonly ChatModel[]) => ({ getAvailable: async () => models }) as ModelRuntime;
+			// Resolve each pattern independently so overlapping patterns retain their own matches/diagnostics.
+			const results: ModelScopePatternResolution[] = [];
+			for (const pattern of patterns) {
+				const resolved = await resolveModelScopeWithDiagnostics([pattern], source(available));
+				const matchedModelIds = resolved.scopedModels.map(({ model }) => `${model.provider}/${model.id}`);
+				let unresolvedReason: ModelScopePatternResolution["unresolvedReason"] = null;
+				if (!matchedModelIds.length) {
+					const known = await resolveModelScopeWithDiagnostics([pattern], source(runtime.getModelsOfType("chat")));
+					unresolvedReason = known.scopedModels.length ? "provider-not-logged-in" : "unknown";
+				}
+				results.push({
+					pattern,
+					matchedModelIds,
+					unresolvedReason,
+					diagnostics: resolved.diagnostics.map((diagnostic) => diagnostic.code),
+				});
+			}
+			return results;
+		};
+		return {
+			enabledModels,
+			contentHash: modelScopeHash(enabledModels),
+			projectOverride,
+			resolution: await resolve(enabledModels),
+			projectResolution: projectOverride === null ? null : await resolve(projectOverride),
+			writable,
+		};
+	}
+
+	async updateScope(cwd: string, input: unknown): Promise<ModelScope> {
+		await writeModelScope(this.agentDir, modelScopeUpdate(input));
+		// Settled lists already re-read settings. Detach pre-write in-flight snapshots too, so a new
+		// request cannot join one of them. Do not refresh model runtimes or mutate active sessions.
+		this.lists.clear();
+		return this.scope(cwd);
+	}
+
 	private pendingList(cwd: string) {
 		const existing = this.lists.get(cwd);
 		if (existing) return existing;
 		if (this.lists.size >= MAX_PENDING_LISTS) throw new ServiceUnavailable("Model catalog is busy. Retry shortly.");
-		const snapshot = this.load(cwd).finally(() => this.lists.delete(cwd));
+		const snapshot = this.load(cwd).finally(() => {
+			if (this.lists.get(cwd)?.snapshot === snapshot) this.lists.delete(cwd);
+		});
 		const entry = { snapshot, list: snapshot.then(({ list }) => list) };
 		this.lists.set(cwd, entry);
 		return entry;

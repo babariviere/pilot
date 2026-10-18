@@ -1,4 +1,4 @@
-/** Read-only SDK settings snapshots. Lock waits and file I/O must never busy-spin the daemon. */
+/** SDK settings snapshots. Lock waits and file I/O must never busy-spin the daemon. */
 import { readFile, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
@@ -23,10 +23,46 @@ function onCompromised(error: Error): void {
 	console.warn(`pilotd: settings lock compromised during read: ${error.message}`);
 }
 
-function settingsPath(path: string): string {
+export function settingsPath(path: string): string {
 	if (path === "~") return homedir();
 	if (path.startsWith("~/")) return resolve(homedir(), path.slice(2));
 	return resolve(path.startsWith("file://") ? fileURLToPath(path) : path);
+}
+
+/** Same lock path/version/retry policy as FileSettingsStorage, without its synchronous busy wait. */
+export async function withModelSettingsLock<T>(
+	path: string,
+	work: (assertOwned: () => void) => Promise<T>,
+	signal?: AbortSignal,
+	write = false,
+): Promise<T> {
+	let release: (() => Promise<void>) | undefined;
+	let compromised: Error | undefined;
+	for (let attempt = 1; attempt <= 10; attempt++) {
+		signal?.throwIfAborted();
+		try {
+			release = await lockfile.lock(path, {
+				realpath: false,
+				onCompromised: (error) => {
+					compromised = error;
+					if (!write) onCompromised(error);
+				},
+			});
+			break;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ELOCKED" || attempt === 10) throw error;
+			await delay(20, undefined, { signal });
+		}
+	}
+	const assertOwned = () => {
+		signal?.throwIfAborted();
+		if (write && compromised) throw new Error("Settings write lock was lost");
+	};
+	try {
+		return await work(assertOwned);
+	} finally {
+		await release?.().catch(() => undefined);
+	}
 }
 
 async function snapshot(path: string, signal?: AbortSignal): Promise<string | undefined> {
@@ -37,24 +73,7 @@ async function snapshot(path: string, signal?: AbortSignal): Promise<string | un
 			if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
 			throw error;
 		}
-		let release: (() => Promise<void>) | undefined;
-		// Exactly the SDK's ten lock attempts, but replace its 20 ms spin with an abortable async wait.
-		for (let attempt = 1; attempt <= 10; attempt++) {
-			signal?.throwIfAborted();
-			try {
-				release = await lockfile.lock(path, { realpath: false, onCompromised });
-				break;
-			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code !== "ELOCKED" || attempt === 10) throw error;
-				await delay(20, undefined, { signal });
-			}
-		}
-		try {
-			return await readFile(path, { encoding: "utf8", signal });
-		} finally {
-			// A compromised lock is already released; its release error must not discard the snapshot.
-			await release?.().catch(() => undefined);
-		}
+		return await withModelSettingsLock(path, () => readFile(path, { encoding: "utf8", signal }), signal);
 	} catch (error) {
 		// Do not let the SDK's per-scope fallback turn transient I/O/lock failures into
 		// empty settings, which would silently expand the user's enabled model scope.
