@@ -61,6 +61,7 @@ export interface SessionDiagnosticInput {
 	connectivity: SessionDiagnostics["connectivity"];
 	performance?: DaemonPerformance;
 	ai?: SessionDiagnostics["ai"];
+	aiBudget?: SessionDiagnostics["aiBudget"];
 	toolActivity?: ToolActivitySnapshot;
 	nativeDiagnosticsPath?: string;
 	limit?: number;
@@ -543,6 +544,7 @@ export async function readSessionDiagnostics(input: SessionDiagnosticInput): Pro
 		current: input.current,
 		resources,
 		...(input.ai ? { ai: input.ai } : {}),
+		...(input.aiBudget ? { aiBudget: input.aiBudget } : {}),
 		sources,
 	};
 	const truncation = {

@@ -10,6 +10,12 @@ Pilot keeps three host-scoped controls separate:
 - **Product analytics** is off by default. Consent does not turn remote reporting on; cataloged analytics can leave
   the host only while both controls are enabled.
 
+Each host can also keep an optional **Informational AI cost budget**. Empty means unset; Pilot invents no monetary
+default. The setting chooses catalog estimate or billed spend and compares that basis with the bounded accounting
+retained for each chat. It is diagnostic only and never gates, pauses, stops or changes agent execution. See
+[AI usage and cost accounting](ai-usage-accounting.md#informational-budgets) for partial, missing, subscription and
+comparison semantics.
+
 Settings live in `telemetry.json` under that daemon's private Pilot home with mode `0600`. Local and devbox daemons
 therefore never inherit one another's consent. A disconnected devbox reports settings as unavailable. The app
 refreshes its local effective setting after verified connection and reconnect rather than assuming that remote or
@@ -28,3 +34,6 @@ never copied to a devbox.
 Each host keeps a private random HMAC key and exports only a truncated pseudonymous host correlation value, never
 its raw daemon, lineage or app routing identity. The settings API returns only effective controls and reviewed
 pseudonymous identifiers. It never returns either private key.
+
+The optional budget is stored only in that private host settings file and returned to the host settings UI. It is
+not an OTLP resource/attribute, analytics event, kernel setting or account/provider configuration.

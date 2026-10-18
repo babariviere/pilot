@@ -7,6 +7,9 @@ It also includes the local app's bounded devbox setup timeline, including attemp
 The AI summary exposes explicit cache denominators, latest context headroom, paired compaction observations and closed
 worker-launch reasons with partial coverage. It contains no provider/model identity or transcript content, and
 missing timing, relaunch cost or adjacent context remains unavailable rather than inferred.
+When this host has an explicitly configured informational cost budget, the snapshot also derives a retained-chat
+comparison with basis, coverage and subscription semantics. No setting means no comparison; the result is evidence,
+not authority to pause or alter the target.
 Native crash/hang items are host-level observation windows, not events attributed to the selected chat. Reading it never starts,
 subscribes to or mutates the target session and never opens transcript storage.
 Devbox setup stages keep local daemon health, SSH/remote bootstrap and verified remote handshake as independent

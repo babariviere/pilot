@@ -1002,7 +1002,9 @@ worker-liveness and cancellation delay from explicit waits, background jobs and 
 Chats also expose durable, content-free AI usage accounting from committed provider reports, keeping token classes,
 catalog estimates, billed-spend availability and subscription coverage semantically distinct. Observed context
 headroom, cache denominators, compaction pairs, request retries and worker relaunch reasons help diagnose efficiency
-without changing model, context, compaction, retry or restart behavior.
+without changing model, context, compaction, retry or restart behavior. Diagnostics settings can optionally compare
+retained per-chat catalog estimates or authoritative billed spend with an explicitly entered USD budget. No budget
+exists by default, missing or partial data is not zero-filled, and the result never gates or changes execution.
 [Native and devbox setup diagnostics](docs/native-diagnostics.md) use Apple's delayed MetricKit delivery for crash
 and hang observations and a closed app-owned timeline for setup stages through verified remote handshake. They
 retain only bounded content-free metadata locally. Pilot does not ingest stacks, report bodies, SSH output, aliases
