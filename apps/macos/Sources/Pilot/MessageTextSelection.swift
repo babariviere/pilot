@@ -76,6 +76,33 @@ final class MessageTextSelection: ObservableObject {
         }
     }
 
+    /// Whether one of this message's regions is its window's first responder, key or not.
+    private var hasFocusedRegion: Bool {
+        regions.values.contains { region in
+            guard let view = region.view, let window = view.window else { return false }
+            return window.firstResponder === view
+        }
+    }
+
+    /// A region gave up focus. AppKit sets the next first responder only after this returns, so check once the
+    /// change completes.
+    func regionResigned(_ view: MessageSelectionTextView) {
+        guard hasSelection else { return }
+        DispatchQueue.main.async { [weak self, weak view] in
+            guard let view else { return }
+            self?.clearUnlessFocused(after: view)
+        }
+    }
+
+    /// Like web content, a reply drops its selection once focus moves elsewhere in the window, rather than
+    /// leaving an inactive highlight behind. Moving between this message's regions keeps it, and so does a region
+    /// leaving its window (scrolled out of a lazy list). Deactivating the window does not resign focus, so the
+    /// selection stays there, drawn inactive, as in other apps.
+    func clearUnlessFocused(after view: MessageSelectionTextView) {
+        guard view.window != nil, hasSelection, !hasFocusedRegion else { return }
+        clear()
+    }
+
     func focusChanged() {
         for region in regions.values {
             guard let view = region.view, view.selectedRange().length > 0 else { continue }
@@ -577,7 +604,10 @@ final class MessageSelectionTextView: NSTextView {
 
     override func resignFirstResponder() -> Bool {
         let accepted = super.resignFirstResponder()
-        if accepted { selectionOwner?.focusChanged() }
+        if accepted {
+            selectionOwner?.focusChanged()
+            selectionOwner?.regionResigned(self)
+        }
         return accepted
     }
 

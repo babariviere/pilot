@@ -388,6 +388,40 @@ struct MessageTextSelectionTests {
         #expect(owner.isActive == window.isKeyWindow)
     }
 
+    @Test func selectionClearsWhenFocusLeavesTheMessage() {
+        let owner = MessageTextSelection(), other = MessageTextSelection()
+        let first = region("First region", block: 0, owner: owner)
+        let second = region("Second region", block: 1, owner: owner)
+        let elsewhere = region("Another message", block: 0, owner: other)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 200),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
+        for view in [first, second, elsewhere] { window.contentView?.addSubview(view) }
+        window.makeFirstResponder(first)
+        owner.select(from: .init(key: first.selectionKey, offset: 0), to: .init(key: second.selectionKey, offset: 6))
+
+        // Moving between regions of the same message keeps its selection.
+        window.makeFirstResponder(second)
+        owner.clearUnlessFocused(after: first)
+        #expect(owner.hasSelection)
+        #expect(first.selectedRange().length == first.string.utf16.count)
+
+        // A region leaving the window, as when scrolled out of a lazy list, keeps it too.
+        second.removeFromSuperview()
+        owner.clearUnlessFocused(after: second)
+        #expect(owner.hasSelection)
+        window.contentView?.addSubview(second)
+
+        // Focus elsewhere drops it, so no inactive highlight stays behind.
+        window.makeFirstResponder(elsewhere)
+        owner.clearUnlessFocused(after: second)
+        #expect(!owner.hasSelection)
+        #expect(first.selectedRange().length == 0)
+        #expect(second.selectedRange().length == 0)
+    }
+
     @Test func renderedReplyKeepsLayoutAndWholeMessageSelection() async throws {
         let source = """
         ## Selection across a full reply
