@@ -224,12 +224,27 @@ public struct ControlUserMessageRef: Codable, Equatable, Sendable {
 }
 public struct ControlAuthorizationLimits: Codable, Equatable, Sendable {
     public let followUps: Int
-    /// Missing means paid delegation is not authorized, not unlimited.
+    /// Optional user-set reservation limit. Missing means diagnostic-only, not a runtime cap.
     public let budgetUsd: Double?
 }
 public struct ControlAuthorizationUsage: Codable, Equatable, Sendable {
     public let followUps: Int
     public let budgetUsd: Double
+}
+public struct ControlStartBudget: Codable, Equatable, Hashable, Sendable {
+    public let authorizationId: String
+    /// Optional reservation, never measured spend or a runtime cap.
+    public let budgetUsd: Double?
+}
+public struct ControlSpend: Codable, Equatable, Sendable {
+    public let sessions: Int
+    public let observedSessions: Int
+    public let cost: AIUsageCost
+    public let coverage: String
+}
+public struct ControlAuthorizationBudget: Codable, Equatable, Sendable {
+    public let reservedUsd: Double
+    public let releasedUsd: Double
 }
 public struct ControlAuthorization: Codable, Identifiable, Equatable, Sendable {
     public let id: String
@@ -245,6 +260,8 @@ public struct ControlAuthorization: Codable, Identifiable, Equatable, Sendable {
     public let expiresAt: Double?
     public let revokedAt: Double?
     public let usage: ControlAuthorizationUsage
+    public let budget: ControlAuthorizationBudget?
+    public let spend: ControlSpend?
 }
 /// GET /api/control-chat/authorizations?after=<id>&limit=40. Includes expired and revoked records.
 public struct ControlAuthorizationsResponse: Codable, Equatable, Sendable {

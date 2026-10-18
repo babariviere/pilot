@@ -10,6 +10,7 @@ import { mock, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import type { KernelCommand, KernelPacket } from "@pilot/kernel";
 import type { AgentEvent } from "@pilot/protocol";
+import { ControlPreAdmissionError } from "./control-actions.ts";
 import { ServiceUnavailable } from "./errors.ts";
 import { ProjectStore } from "./projects.ts";
 import { SessionManager } from "./sessions.ts";
@@ -71,6 +72,55 @@ async function until(check: () => boolean | Promise<boolean>): Promise<void> {
 		await delay(1);
 	}
 }
+test("Control start attribution is trusted, budgetless, and durable; only preparation failures are releasable", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "control-start-provenance-"));
+	const projects = new ProjectStore(home);
+	const sessions = new SessionManager(home, projects, undefined, {
+		worker: () => {
+			throw new Error("Offline test worker");
+		},
+		title: async () => undefined,
+	});
+	const reopened = new SessionManager(home, projects);
+	t.after(async () => {
+		await sessions.shutdown();
+		await reopened.shutdown();
+		await rm(home, { recursive: true, force: true });
+	});
+	const provenance = { authorizationId: "approved" };
+	const started = await sessions.controlStart(
+		() => sessions.spawn({ cwd: home, message: "work", model: "test/model" }),
+		"control:start:1",
+		provenance,
+	);
+	const ordinary = await sessions.spawn({ cwd: home, message: "user", ...{ controlStart: provenance } });
+	assert.deepEqual(started.controlStart, provenance);
+	assert.equal(ordinary.controlStart, undefined);
+	started.controlStart!.authorizationId = "forged";
+	assert.deepEqual(sessions.get(started.id)?.controlStart, provenance);
+	await until(() => sessions.get(started.id)?.state === "failed" && sessions.get(ordinary.id)?.state === "failed");
+	await sessions.shutdown();
+	await reopened.load();
+	assert.deepEqual(reopened.get(started.id)?.controlStart, provenance);
+	assert.equal(reopened.get(ordinary.id)?.controlStart, undefined);
+	await assert.rejects(
+		reopened.controlStart(() => reopened.spawn({ cwd: join(home, "missing"), message: "work" })),
+		ControlPreAdmissionError,
+	);
+	await assert.rejects(
+		reopened.controlStart(async () => {
+			throw new Error("Invalid model");
+		}),
+		ControlPreAdmissionError,
+	);
+	await assert.rejects(
+		reopened.controlStart(async () => {
+			reopened.controlStartSideEffect();
+			throw new Error("Uncertain");
+		}),
+		(error) => error instanceof Error && !(error instanceof ControlPreAdmissionError),
+	);
+});
 
 test("real Worker blocks accepted-before-working and queued inbox gaps until a fresh idle snapshot", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-worker-activity-"));

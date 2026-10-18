@@ -3,6 +3,23 @@ import PilotCore
 import Testing
 
 struct ControlChatProtocolTests {
+    @Test func diagnosticBudgetsKeepReservationsSeparateFromLedgerCosts() throws {
+        let source = """
+        {"authorizations":[{"id":"a","scope":"Work","level":"implement","targets":[],"limits":{"followUps":2},"createdAt":1,"usage":{"followUps":0,"budgetUsd":0},"budget":{"reservedUsd":15,"releasedUsd":15},"spend":{"sessions":1,"observedSessions":1,"cost":{"estimateStatus":"catalog_estimate","estimatedUsdMicros":250000,"pricingRevision":"pi-ai@1.3.0","billedStatus":"unavailable","subscriptionCoverage":"unknown"},"coverage":"ledger_observed_partial"}}]}
+        """
+        let page = try JSONDecoder().decode(ControlAuthorizationsResponse.self, from: Data(source.utf8))
+        let record = try #require(page.authorizations.first)
+        #expect(record.limits.budgetUsd == nil)
+        #expect(record.budget?.reservedUsd == 15)
+        #expect(record.budget?.releasedUsd == 15)
+        #expect(record.usage.budgetUsd == 0)
+        #expect(record.spend?.cost.estimatedUsdMicros == 250000)
+        #expect(record.spend?.cost.billedUsdMicros == nil)
+        let provenance = try JSONDecoder().decode(ControlStartBudget.self, from: Data(#"{"authorizationId":"a"}"#.utf8))
+        #expect(provenance.budgetUsd == nil)
+        let roundTrip = try JSONDecoder().decode(ControlAuthorizationsResponse.self, from: JSONEncoder().encode(page))
+        #expect(roundTrip == page)
+    }
     @Test func authorizationRecordsRoundTripIncludingRevokedAndLegacyWatches() throws {
         for level in ControlAuthorizationLevel.allCases {
             let source = """

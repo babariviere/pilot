@@ -4,6 +4,18 @@ export type { ControlAuditEntry } from "@pilot/protocol";
 
 import type { ControlAuthorizationUse } from "./control-authorizations.ts";
 import type { ControlMemory } from "./control-memory.ts";
+/** Trusted boundary marker. Never infer safety from arbitrary backend errors or their text. */
+export class ControlPreAdmissionError extends Error {}
+
+export async function controlPreAdmission<T>(work: () => Promise<T>): Promise<T> {
+	try {
+		return await work();
+	} catch (error) {
+		throw new ControlPreAdmissionError(error instanceof Error ? error.message : "Pre-admission failed", {
+			cause: error,
+		});
+	}
+}
 export class ControlActions {
 	private readonly memory: ControlMemory;
 	private readonly isControl: (id: string) => boolean;
@@ -80,19 +92,26 @@ export class ControlActions {
 			this.changed();
 			let result: T;
 			try {
-				if (!this.isControl(caller)) throw new Error("Control role changed");
+				if (!this.isControl(caller)) throw new ControlPreAdmissionError("Control role changed");
 				result = await work();
 			} catch (error) {
-				const entry = await this.memory.auditAppend({
+				const failure = {
 					operationId: key,
 					action,
-					phase: "failed",
+					phase: "failed" as const,
 					at: Date.now(),
 					caller,
 					args,
 					...(requested.authorizationId ? { authorizationId: requested.authorizationId } : {}),
-					result: { error: error instanceof Error ? error.message.slice(0, 500) : "Action failed" },
-				});
+					result: {
+						error: error instanceof Error ? error.message.slice(0, 500) : "Action failed",
+						...(admission && error instanceof ControlPreAdmissionError ? { reservationReleased: true } : {}),
+					},
+				};
+				const entry =
+					admission && error instanceof ControlPreAdmissionError
+						? await this.memory.authorizationRelease(failure)
+						: await this.memory.auditAppend(failure);
 				this.changed();
 				await this.publish(entry).catch(() => {});
 				throw error;

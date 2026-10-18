@@ -258,6 +258,7 @@ export interface UpdatePreparation {
 }
 
 export interface SessionSummary {
+	controlStart?: import("./control.ts").ControlStartBudget;
 	/** The one project-less, pinned orchestration chat. */
 	control?: boolean;
 	/** On-demand operational specialist. Its runtime exposes only bounded diagnostics. */
@@ -1803,7 +1804,9 @@ export type {
 	ControlRoleFence,
 	ControlRunOperationPayload,
 	ControlSendOperationPayload,
+	ControlSpend,
 	ControlStagedRole,
+	ControlStartBudget,
 	ControlStartOperationPayload,
 	ControlStartTarget,
 	ControlUnpairRequest,

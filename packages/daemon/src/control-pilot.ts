@@ -12,7 +12,7 @@ import type {
 	StartMissionTaskRequest,
 	WatchTarget,
 } from "@pilot/protocol";
-import type { ControlActions } from "./control-actions.ts";
+import { type ControlActions, ControlPreAdmissionError } from "./control-actions.ts";
 import {
 	authorizationLevel,
 	type ControlAuthorizationUse,
@@ -53,12 +53,17 @@ export interface ControlPilotOptions extends ControlDashboardSources {
 	checks?: (pr: string, includeStale: boolean) => Promise<unknown>;
 	mutations?: {
 		audit: () => ControlActions;
-		startProject: (request: SpawnRequest, requestId?: string) => Promise<SessionSummary>;
+		startProject: (
+			request: SpawnRequest,
+			requestId?: string,
+			provenance?: { authorizationId: string; budgetUsd?: number },
+		) => Promise<SessionSummary>;
 		startTask: (
 			missionId: string,
 			taskId: string,
 			request: StartMissionTaskRequest,
 			requestId?: string,
+			provenance?: { authorizationId: string; budgetUsd?: number },
 		) => Promise<SessionSummary>;
 		send: SessionManager["sendReported"];
 		organizeAllowed?: () => boolean;
@@ -164,6 +169,8 @@ export class ControlPilot {
 		if (action === "start" || action === "send") {
 			if (!this.options.mutations) throw new Error("Control actions unavailable");
 			if (!this.options.watches) throw new Error("Result watches unavailable; no action taken");
+			if (action === "start") this.validateStart(args);
+			else this.validateSend(args);
 			const targets = action === "send" ? this.sendTargets(args) : this.startTargets(args);
 			const use = await this.authorizationOrNeed(caller, args, action, targets, operationId);
 			return this.options.mutations.audit().perform<unknown>(
@@ -172,9 +179,17 @@ export class ControlPilot {
 				args,
 				operationId,
 				async () => {
-					const current = action === "send" ? this.sendTargets(args) : this.startTargets(args);
-					if (JSON.stringify(current) !== JSON.stringify(targets))
-						throw new Error("Control action target changed during admission");
+					try {
+						if (action === "start") this.validateStart(args);
+						else this.validateSend(args);
+						const current = action === "send" ? this.sendTargets(args) : this.startTargets(args);
+						if (JSON.stringify(current) !== JSON.stringify(targets))
+							throw new Error("Control action target changed during admission");
+					} catch (error) {
+						throw new ControlPreAdmissionError(error instanceof Error ? error.message : "Invalid action", {
+							cause: error,
+						});
+					}
 					try {
 						return action === "start" ? await this.start(args, operationId) : await this.send(args, operationId);
 					} catch (error) {
@@ -271,11 +286,11 @@ export class ControlPilot {
 			}
 		const budgetUsd = action === "watch" ? 0 : args.budgetUsd;
 		if (
-			!legacyWatch &&
 			action !== "watch" &&
-			(typeof budgetUsd !== "number" || !Number.isFinite(budgetUsd) || budgetUsd <= 0)
+			budgetUsd !== undefined &&
+			(typeof budgetUsd !== "number" || !Number.isFinite(budgetUsd) || budgetUsd <= 0 || budgetUsd > 10_000)
 		)
-			throw new Error("start/send require an explicit positive budgetUsd reservation");
+			throw new Error("budgetUsd must be positive and at most 10000 when supplied");
 		return {
 			authorizationId,
 			level: level as ControlAuthorizationLevel,
@@ -388,7 +403,7 @@ export class ControlPilot {
 			);
 		return { ...created, coordinator };
 	}
-	private async start(args: Record<string, unknown>, operationId: string) {
+	private validateStart(args: Record<string, unknown>) {
 		const projectId = string(args, "projectId"),
 			missionId = string(args, "missionId"),
 			taskId = string(args, "taskId");
@@ -405,30 +420,42 @@ export class ControlPilot {
 			...(args.model ? { model: args.model as string } : {}),
 			...(args.thinking ? { thinking: args.thinking as string } : {}),
 		};
-		let chat: SessionSummary;
-		const requestId = `control:start:${operationId}`;
 		if (missionId) {
 			const mission = this.options.missions().find((m) => m.id === missionId);
 			if (!mission) throw new Error("Unknown mission");
 			if (projectId && projectId !== mission.projectId) throw new Error("Mission belongs to another project");
 			if (!taskId) throw new Error("A mission start requires taskId");
+		} else if (!projectId || !message || taskId) {
+			throw new Error("Project starts require projectId and message, without taskId");
+		}
+		return { projectId, missionId, taskId, message: message as string | undefined, choice };
+	}
+	private async start(args: Record<string, unknown>, operationId: string) {
+		const { projectId, missionId, taskId, message, choice } = this.validateStart(args);
+		const provenance = {
+			authorizationId: args.authorizationId as string,
+			...(typeof args.budgetUsd === "number" ? { budgetUsd: args.budgetUsd } : {}),
+		};
+		let chat: SessionSummary;
+		const requestId = `control:start:${operationId}`;
+		if (missionId) {
 			await this.options.watches!.followThrough(requestId, args.authorizationId as string);
 			chat = await this.options.mutations!.startTask(
 				missionId,
-				taskId,
+				taskId!,
 				{
 					...choice,
 					...(message ? { message: message as string } : {}),
 				},
 				requestId,
+				provenance,
 			);
 		} else {
-			if (!projectId || !message || taskId)
-				throw new Error("Project starts require projectId and message, without taskId");
 			await this.options.watches!.followThrough(requestId, args.authorizationId as string);
 			chat = await this.options.mutations!.startProject(
 				{ projectId, message: message as string, ...choice },
 				requestId,
+				provenance,
 			);
 		}
 		return {
@@ -440,7 +467,7 @@ export class ControlPilot {
 			model: chat.model,
 		};
 	}
-	private async send(args: Record<string, unknown>, operationId: string) {
+	private validateSend(args: Record<string, unknown>) {
 		const id = string(args, "sessionId", true)!;
 		if (typeof args.message !== "string" || !args.message.trim() || args.message.length > 4000)
 			throw new Error("message must be 1..4000 characters");
@@ -455,13 +482,12 @@ export class ControlPilot {
 				throw new Error("This mission has no coordinator; choose direct=true for a member");
 			target = mission.coordinatorSessionId;
 		}
+		return { id, target, message: args.message };
+	}
+	private async send(args: Record<string, unknown>, operationId: string) {
+		const { id, target, message } = this.validateSend(args);
 		await this.options.watches!.followThrough(`control:send:${operationId}`, args.authorizationId as string, target);
-		const result = await this.options.mutations!.send(
-			target,
-			args.message,
-			`control:send:${operationId}`,
-			"followUp",
-		);
+		const result = await this.options.mutations!.send(target, message, `control:send:${operationId}`, "followUp");
 		if (result.delivery === "rejected")
 			await this.options.watches?.cancelFollowThrough?.(`control:send:${operationId}`);
 		return { ...result, sessionId: target, requestedSessionId: id, chatUrl: `pilot://chat/${target}` };

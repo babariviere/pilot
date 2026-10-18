@@ -103,7 +103,9 @@ export class ControlWatchSink implements WatchNoticeSink {
 						targetsTruncated:
 							record.targets.length > 8 || record.targets.some((target) => target.id.length > 128),
 						remainingFollowUps: Math.max(0, record.limits.followUps - record.usage.followUps),
-						remainingBudgetUsd: Math.max(0, (record.limits.budgetUsd ?? 0) - record.usage.budgetUsd),
+						...(record.limits.budgetUsd === undefined
+							? {}
+							: { remainingReservationUsd: Math.max(0, record.limits.budgetUsd - record.usage.budgetUsd) }),
 						expiresAt: record.expiresAt,
 						revokedAt: record.revokedAt,
 					}

@@ -274,21 +274,34 @@ rechecks routing after admission so a changed coordinator cannot escape the chec
 
 Records, revocations and usage reservations are append-only SQLite tables in the existing control
 memory worker. A requested audit row and its usage reservation commit atomically before any effect.
-Successful retries return the original result without another charge. Failed/uncertain actions
-retain their reservation, never automatically refund or replay. Audit phases link `authorizationId`.
+Successful retries return the original result without another charge. Start/send argument validation
+runs before admission. Proven failures before any delegation effect append a release in the same
+transaction as the failure audit. Uncertain outcomes retain their reservation and never replay.
+Audit phases link `authorizationId`.
 The first start is initial work; later starts and all sends consume follow-ups. Concurrent actions
 share the same durable counters, including after daemon replacement.
 
-Provisional defaults are named constants: two follow-ups, no default USD budget (ask the user),
+Provisional defaults are named constants: two follow-ups, diagnostic-only USD accounting,
 24-hour expiry or earlier on use of an already-completed task scope, and publish separate from
-implement. Starts/sends require an explicit positive `budgetUsd` reservation from that total.
-These are **Control admission reservations**, not measured child-runtime spend caps. Enforcing
+implement. Starts/sends need no `budgetUsd`. Control must never invent a USD limit or ask for one
+as a prerequisite to delegation. Only an explicitly user-chosen `limits.budgetUsd` limits optional
+reservations; absent limits never deny on USD. These are **Control admission reservations**, not
+measured child-runtime spend caps. Opt-in runtime enforcement is separate work. Enforcing
 child tool permissions and per-chat runtime budgets is separate work; these records do not add
 a sandbox or change the current Build profile. Scope text is retained intent, not an automated
 semantic classifier for the delegated message.
 
 `GET /api/control-chat/authorizations?after&limit` returns bounded ID-ordered pages (default 40,
-maximum 100), including expired/revoked records and current usage. Local-app-only
+maximum 100), including expired/revoked records and current usage. These
+pages distinguish `limits.budgetUsd` (optional user-set limit), `budget.reservedUsd` (gross),
+`budget.releasedUsd`, and `usage.budgetUsd` (outstanding reservations, never spend). `spend`
+comes from the loaded AI usage ledger for attributed started chats, including archived chats and
+child operations. Its catalog estimates and known billed costs retain the ledger's distinct labels
+and partial coverage; missing usage is not a known zero bill. Start attribution is saved before
+startup and retained across restart/continuation. Older unattributed chats are outside this coverage.
+Dashboard/status chat and running-agent rows also include `controlStart` attribution and `spend`.
+The optional `controlStart.budgetUsd` is only a reservation, never a required cap or actual spend.
+Local-app-only
 `DELETE /api/control-chat/authorizations/:id` appends a revocation and returns `{revoked}`;
 repeated calls return false. There is no tool action to edit, delete or revoke records.
 This uses the same loopback/local-origin boundary as the existing app API, not a new

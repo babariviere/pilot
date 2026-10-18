@@ -178,6 +178,21 @@ export class ControlMemoryDisk {
 			for (const record of records) this.authorizations.create(record);
 		});
 	}
+	authorizationRelease(entry: Omit<ControlAuditEntry, "seq">): ControlAuditEntry {
+		return this.transaction(() => {
+			const prior = this.auditOperation(entry.operationId);
+			if (
+				entry.phase !== "failed" ||
+				prior?.phase !== "requested" ||
+				prior.authorizationId !== entry.authorizationId ||
+				prior.action !== entry.action ||
+				JSON.stringify(prior.args) !== JSON.stringify(entry.args)
+			)
+				throw new Error("Invalid authorization release");
+			this.authorizations.release(entry.operationId, JSON.stringify(entry.result));
+			return this.auditAppend(entry);
+		});
+	}
 	auditOperation(operationId: string): ControlAuditEntry | undefined {
 		const row = this.db
 			.prepare("SELECT seq,payload FROM audit WHERE operation=? ORDER BY seq DESC LIMIT 1")

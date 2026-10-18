@@ -92,6 +92,9 @@ export class ControlMemory {
 	authorizationAdmit(entry: Omit<ControlAuditEntry, "seq">, use: ControlAuthorizationUse): Promise<ControlAuditEntry> {
 		return this.rpc("authorizationAdmit", { entry, use });
 	}
+	authorizationRelease(entry: Omit<ControlAuditEntry, "seq">): Promise<ControlAuditEntry> {
+		return this.rpc("authorizationRelease", { entry });
+	}
 	auditOperation(operationId: string): Promise<ControlAuditEntry | undefined> {
 		return this.rpc("auditOperation", { operationId });
 	}
