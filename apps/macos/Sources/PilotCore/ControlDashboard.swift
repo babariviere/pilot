@@ -37,6 +37,8 @@ public struct ControlDashboardResponse: Codable, Equatable, Sendable {
         public let activeMissions: Int
         public let blockers: Int
         public let pendingDecisions: Int
+        public let sharedTasks: Int?
+        public let replicaMissions: Int?
     }
     public let untrusted: Bool
     public let source: String
@@ -49,6 +51,9 @@ public struct ControlDashboardResponse: Codable, Equatable, Sendable {
     public let activeMissions: [ControlDashboardMission]
     public let blockers: [ControlDashboardBlocker]
     public let pendingDecisions: [ControlDashboardDecision]
+    /// Optional for compatibility with daemons predating shared-context status.
+    public let sharedTasks: [ControlDashboardSharedTask]?
+    public let replicaMissions: [ControlDashboardReplicaMission]?
     public let next: Next
     public let totals: Totals
     public let truncated: Bool
@@ -121,4 +126,43 @@ public struct ControlDashboardDecision: Codable, Identifiable, Equatable, Sendab
     public let reason: String
     public let authorSessionId: String
     public let createdAt: Double
+}
+
+public struct ControlDashboardReplicaMission: Codable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let bindingId: String
+    public let projectId: String
+    public let missionId: String
+    public let missionHome: OperationHost
+    public let title: String?
+    public let status: MissionStatus?
+    public let complete: Bool
+    public let sequence: Int
+    public let consistency: String
+    public let replicaSyncedAt: Double?
+    /// Unknown for legacy or missing replicas. Age does not imply execution failure.
+    public let replicaAgeMs: Double?
+}
+
+public struct ControlDashboardSharedTask: Codable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let bindingId: String
+    public let projectId: String
+    public let missionId: String
+    public let missionHome: OperationHost
+    public let source: String
+    public let consistency: String
+    public let taskId: String?
+    public let taskNumber: Int?
+    public let title: String?
+    public let status: MissionTaskStatus?
+    public let proposalId: String?
+    public let proposalState: String?
+    public let delegationId: String?
+    public let executionHost: OperationHost?
+    public let executionEpoch: Int?
+    public let grantState: String?
+    public let running: Bool?
+    public let replicaSyncedAt: Double?
+    public let replicaAgeMs: Double?
 }

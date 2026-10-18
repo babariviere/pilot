@@ -17,8 +17,11 @@ struct ControlDashboardProtocolTests {
          {"id":"chat:q","kind":"question","sessionId":"q","title":"Question","detail":"Which environment?","at":200},
          {"id":"check:1","kind":"failing_checks","url":"https://github.com/example/repo/pull/1","headSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","title":"PR","detail":"Tests failed","at":400}],
          "pendingDecisions":[{"id":"proposal","projectId":"p","missionId":"m","decisionId":"d","kind":"edit","text":"New rule","reason":"Requirements changed","authorSessionId":"lead","createdAt":300}],
+         "sharedTasks":[{"id":"grant:g","bindingId":"b","projectId":"p","missionId":"m","missionHome":{"hostId":"daemon","daemonId":"mac","lineageId":"mac-lineage"},"source":"mission-home","consistency":"committed","taskId":"t","taskNumber":3,"title":"Remote build","status":"in_progress","delegationId":"g","executionHost":{"hostId":"daemon","daemonId":"devbox","lineageId":"devbox-lineage"},"executionEpoch":7,"grantState":"accepted","running":true},
+         {"id":"proposal:pending","bindingId":"remote","projectId":"p","missionId":"rm","missionHome":{"hostId":"daemon","daemonId":"devbox","lineageId":"devbox-lineage"},"source":"replica","consistency":"provisional","proposalId":"pending","proposalState":"pending","title":"Proposed work","replicaSyncedAt":1000,"replicaAgeMs":4000}],
+         "replicaMissions":[{"id":"replica:remote:rm","bindingId":"remote","projectId":"p","missionId":"rm","missionHome":{"hostId":"daemon","daemonId":"devbox","lineageId":"devbox-lineage"},"title":"Remote home","status":"active","complete":true,"sequence":10,"consistency":"committed","replicaSyncedAt":1000,"replicaAgeMs":4000}],
          "next":{"watches":[{"id":"w","createdAt":100,"event":"chat.settled","target":{"kind":"chat","id":"c"},"mode":"once","note":"Read the result and report it"}],"total":1,"followThrough":[]},
-         "totals":{"projects":1,"chats":1,"missions":1,"pullRequests":1,"linear":1,"runningAgents":1,"activeMissions":1,"blockers":4,"pendingDecisions":1},"truncated":false}
+         "totals":{"projects":1,"chats":1,"missions":1,"pullRequests":1,"linear":1,"runningAgents":1,"activeMissions":1,"blockers":4,"pendingDecisions":1,"sharedTasks":2,"replicaMissions":1},"truncated":false}
         """
         let value = try JSONDecoder().decode(ControlDashboardResponse.self, from: Data(source.utf8))
         #expect(value.untrusted)
@@ -30,6 +33,14 @@ struct ControlDashboardProtocolTests {
         #expect(value.blockers.map(\.kind) == [.blockedTask, .failedChat, .question, .failingChecks])
         #expect(value.blockers.last?.headSha == String(repeating: "a", count: 40))
         #expect(value.pendingDecisions.first?.kind == .edit)
+        #expect(value.sharedTasks?.first?.executionHost?.daemonId == "devbox")
+        #expect(value.sharedTasks?.first?.executionEpoch == 7)
+        #expect(value.sharedTasks?.first?.grantState == "accepted")
+        #expect(value.sharedTasks?.first?.running == true)
+        #expect(value.sharedTasks?.last?.consistency == "provisional")
+        #expect(value.sharedTasks?.last?.taskNumber == nil)
+        #expect(value.replicaMissions?.first?.replicaAgeMs == 4000)
+        #expect(value.totals.sharedTasks == 2 && value.totals.replicaMissions == 1)
         #expect(value.next.watches.first?.note == "Read the result and report it")
         #expect(value.next.total == 1 && value.totals.blockers == 4)
         let roundTrip = try JSONDecoder().decode(ControlDashboardResponse.self, from: JSONEncoder().encode(value))
@@ -41,6 +52,7 @@ struct ControlDashboardProtocolTests {
         let value = try JSONDecoder().decode(ControlDashboardResponse.self, from: Data(source.utf8))
         #expect(value.truncated && value.runningAgents.isEmpty && value.totals.runningAgents == 500)
         #expect(value.next.total == 200)
+        #expect(value.sharedTasks == nil && value.replicaMissions == nil)
         guard case .dashboardChanged = try ServerUpdate.decode(Data(#"{"type":"dashboard.changed"}"#.utf8)) else {
             Issue.record("Missing dashboard invalidation"); return
         }

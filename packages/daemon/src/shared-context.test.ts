@@ -361,6 +361,25 @@ test("repeated partitions keep one accepted execution and import lost-ack provis
 	}
 });
 
+test("Control replica freshness tracks mission checkpoint/delta imports, not later memory sync", async (t) => {
+	let now = 1000;
+	t.mock.method(Date, "now", () => now);
+	const { home, target, mission, binding } = await enrolled(t);
+	await reconcile(home, target, binding);
+	const read = () => target.store.controlSharedContext(target.host).find((g) => g.missionId === mission.id)!.replica!;
+	assert.equal(read().complete, true);
+	assert.equal(read().replicaSyncedAt, 1000);
+	now = 2000;
+	home.store.writeBrief(mission.id, "Canonical update", 0);
+	await reconcile(home, target, binding);
+	assert.equal(read().replicaSyncedAt, 2000);
+	now = 3000;
+	await home.memory.note(home.project.id, "Memory-only update", "author");
+	await reconcile(home, target, binding);
+	assert.equal(read().replicaSyncedAt, 2000);
+	assert.equal((await target.sharing.summaries())[0]!.freshness.lastSyncedAt, 3000);
+});
+
 test("cancel before delayed offer retains an epoch tombstone and only target acknowledgment releases home", async (t) => {
 	const { home, target, mission, binding, task, grant } = await enrolled(t);
 	const offer = (await home.sharing.exchange(binding.bindingId, target.host)).operations.find(

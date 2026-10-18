@@ -166,9 +166,50 @@ export interface ControlDashboardDecision {
 	authorSessionId: string;
 	createdAt: number;
 }
+/** A remote-home mission from an enrolled local replica, never a writable local mission. */
+export interface ControlDashboardReplicaMission {
+	id: string;
+	bindingId: string;
+	projectId: string;
+	missionId: string;
+	missionHome: import("./operations.ts").OperationHost;
+	title?: string;
+	status?: import("./index.ts").MissionStatus;
+	complete: boolean;
+	sequence: number;
+	consistency: "committed";
+	replicaSyncedAt?: number;
+	/** null means unknown (including replicas imported before timestamp recording). */
+	replicaAgeMs: number | null;
+}
+/** Last committed task facts and separate provisional task proposals. No connectivity-derived outcomes. */
+export interface ControlDashboardSharedTask {
+	id: string;
+	bindingId: string;
+	/** Local execution project for replicas, canonical project for mission-home grants. */
+	projectId: string;
+	missionId: string;
+	missionHome: import("./operations.ts").OperationHost;
+	source: "mission-home" | "replica";
+	consistency: "committed" | "provisional";
+	taskId?: string;
+	taskNumber?: number;
+	title?: string;
+	status?: import("./index.ts").MissionTaskStatus;
+	proposalId?: string;
+	proposalState?: "pending" | "conflict" | "rejected";
+	delegationId?: string;
+	executionHost?: import("./operations.ts").OperationHost;
+	executionEpoch?: number;
+	grantState?: import("./shared-context.ts").DelegationGrant["state"];
+	/** Last imported working fact, not a liveness probe. Sealed grants are never running. */
+	running?: boolean;
+	replicaSyncedAt?: number;
+	replicaAgeMs?: number | null;
+}
 /** GET /api/control-chat/dashboard?projectId&missionId. Same snapshot as pilot status.
  * Local user only, daemon memory only, no worker starts. Unknown/duplicate parameters are 400.
- * At most 24,000 encoded bytes, 100 rows per list (200 projects, 50 missions); totals precede clipping.
+ * At most 24,000 encoded bytes, 100 rows per list (200 projects, 50 missions/replicaMissions); totals precede clipping.
  * Text is untrusted. Next contains global active watches with saved instructions, even for scoped requests.
  */
 export interface ControlDashboardResponse {
@@ -184,6 +225,8 @@ export interface ControlDashboardResponse {
 	activeMissions: ControlDashboardMission[];
 	blockers: ControlDashboardBlocker[];
 	pendingDecisions: ControlDashboardDecision[];
+	sharedTasks: ControlDashboardSharedTask[];
+	replicaMissions: ControlDashboardReplicaMission[];
 	next: { watches: Watch[]; total: number };
 	totals: {
 		projects: number;
@@ -195,6 +238,8 @@ export interface ControlDashboardResponse {
 		activeMissions: number;
 		blockers: number;
 		pendingDecisions: number;
+		sharedTasks: number;
+		replicaMissions: number;
 	};
 	truncated: boolean;
 }

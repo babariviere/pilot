@@ -195,6 +195,20 @@ const stopControlMissions = missionStore.onChange((id) => {
 	if (mission?.status === "active") controlAttention.set(id, missionStore.controlAttention(mission));
 	else controlAttention.delete(id);
 });
+const sharing = new SharedContextService(
+	{ hostId: "daemon", daemonId: hello.daemonId, lineageId: hello.lineageId },
+	missionStore,
+	memory,
+	projects,
+	sessions,
+	missionService,
+);
+sessions.setSharedContext(sharing);
+missionService.setSharedContext(sharing);
+let controlSharedContext = missionStore.controlSharedContext(sharing.host);
+const stopControlSharedContext = sharing.onChange(() => {
+	controlSharedContext = missionStore.controlSharedContext(sharing.host);
+});
 const { ControlPilot } = await import("./control-pilot.ts");
 sessions.setPilot(
 	new ControlPilot({
@@ -233,6 +247,8 @@ sessions.setPilot(
 		projects: () => projects.list(),
 		missions: () => [...controlMissions.values()],
 		missionAttention: (id) => controlAttention.get(id),
+		sharedContext: () => controlSharedContext,
+		onDashboardChange: (listener) => sharing.onChange(listener),
 		nextWatches: () => watches.dashboard(),
 		linear: (id) => trackedItems.preview(id, "linear").items,
 		mutations: {
@@ -274,16 +290,6 @@ const linearPrChecks = new MissionLinearPrChecks(
 	(projectId) => projects.get(projectId)?.path,
 );
 linearPrChecks.start();
-const sharing = new SharedContextService(
-	{ hostId: "daemon", daemonId: hello.daemonId, lineageId: hello.lineageId },
-	missionStore,
-	memory,
-	projects,
-	sessions,
-	missionService,
-);
-sessions.setSharedContext(sharing);
-missionService.setSharedContext(sharing);
 const power = capabilities.powerManagement ? new PowerService(config.home, sessions) : undefined;
 const systemEventsDetection = capabilities.systemSleepEvents ? new SystemEventsDetection() : undefined;
 const scheduleDetection = new ScheduleDetection({ power: systemEventsDetection });
@@ -383,6 +389,7 @@ async function stop(): Promise<void> {
 	maintenance?.close();
 	server.close();
 	stopControlWatches();
+	stopControlSharedContext();
 	await sharing.stop();
 	await schedules.stop();
 	await connectivity.stop();

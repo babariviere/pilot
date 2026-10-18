@@ -244,6 +244,10 @@ actions, and memory health, read-only.
 `GET /api/control-chat/dashboard` and its `pilot status` tool share one bounded, cached snapshot of
 running chats, mission progress, blockers, proposed decisions and active watch instructions. Reading it
 does not wake chat workers or fetch external services.
+Its shared-context sections include mission-home delegation grants (execution host, epoch, acknowledged
+state and last-known running fact) and enrolled remote-home mission replicas. Committed tasks and
+provisional task proposals stay separate. Replica age is the last mission import, not a connectivity
+check; unknown or disconnected hosts are never inferred to have failed.
 Control records user-turn authorizations for starts, follow-ups and watches, with explicit targets,
 permission levels, follow-up limits and USD reservations. Authorizations can be read and revoked through
 the local API. Existing watch instructions keep their original, narrowly scoped authority.

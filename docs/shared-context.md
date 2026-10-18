@@ -75,6 +75,25 @@ selectors and mutations are not accepted. Incomplete replicas, disabled memory s
 bindings fail closed. Revocation is rechecked after asynchronous reads. Read responses use the same
 secret-like export refusal as synchronization. `conflicts` continues returning `SharedMissionProposal[]`.
 
+## Control status reads
+
+`pilot status` and `GET /api/control-chat/dashboard` share a change-driven, read-only projection:
+`sharedTasks` contains mission-home grants and remote-home committed/provisional task rows;
+`replicaMissions` contains enrolled remote-home mission summaries (separate from local writable missions).
+Rows carry the pinned mission-home identity and binding. Grants carry the execution host, execution
+epoch, reserved/accepted/cancel-requested/sealed state and any eligible last imported working fact.
+Cancel requested does not mean stopped; sealed means not running. Missing or old facts never imply failure.
+Project filters use the local enrolled execution project for replicas. Mission IDs may match multiple
+authorities; rows retain their qualified host/binding identities, never merge their state.
+
+Replica summaries report completeness, sequence, last mission import time and age. Memory imports do
+not refresh mission age. Legacy/missing timestamps have unknown (`null`) age. Incomplete replicas expose
+no committed task rows. Provisional task proposals retain pending/conflict/rejected labels and never
+overwrite committed status or receive invented task numbers. Revoked replicas are excluded; home grants
+remain visible even after binding revocation or sealing. The cache retains at most 100 thin task rows per enrolled mission
+scope, with pre-clipping totals. Dashboard row and 24,000-byte limits still apply. No worker, remote read,
+new transport, connectivity lease or reassignment is involved.
+
 ## Performance evidence and remaining risk
 
 The initial #555 CI fixture reported 127 operations, one complete reassembly, about 762 ms wall
