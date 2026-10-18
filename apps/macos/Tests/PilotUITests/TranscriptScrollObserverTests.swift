@@ -241,6 +241,42 @@ private final class FlippedScrollDocument: NSView {
     observer.stopObserving()
 }
 
+@Test @MainActor func readingAnchorIgnoresRowsTheLayoutPassHasNotMovedYet() async throws {
+    let window = testWindow()
+    defer { window.close() }
+    let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+    let document = FlippedScrollDocument(frame: NSRect(x: 0, y: 0, width: 600, height: 1080))
+    scroll.documentView = document
+    let reading = TranscriptRowAnchorView(frame: NSRect(x: 0, y: 54, width: 600, height: 67))
+    reading.rowID = "reading"
+    let lower = TranscriptRowAnchorView(frame: NSRect(x: 0, y: 386, width: 600, height: 67))
+    lower.rowID = "lower"
+    document.addSubview(reading)
+    document.addSubview(lower)
+    let state = TranscriptScrollState()
+    state.follow.pauseFollowing()
+    let observer = ScrollObserverView(frame: document.bounds)
+    observer.state = state
+    document.addSubview(observer)
+    window.contentView = scroll
+    scroll.layoutSubtreeIfNeeded()
+    scroll.contentView.scroll(to: .zero)
+    observer.captureAnchor()
+    try await Task.sleep(for: .milliseconds(30))
+    let before = reading.convert(reading.bounds, to: nil).minY
+
+    // An earlier page is prepended: the document grows first, then SwiftUI moves each row in turn.
+    // After the reading row settles, the lower row is visible at its old offset until it moves too.
+    document.setFrameSize(NSSize(width: 600, height: 1465))
+    reading.setFrameOrigin(NSPoint(x: 0, y: 439))
+    #expect(abs(scroll.contentView.bounds.minY - 385) <= 0.5)
+    lower.setFrameOrigin(NSPoint(x: 0, y: 771))
+    #expect(abs(scroll.contentView.bounds.minY - 385) <= 0.5, "a row moved later in the pass is not a second shift")
+    try await Task.sleep(for: .milliseconds(30))
+    #expect(abs(reading.convert(reading.bounds, to: nil).minY - before) <= 0.5)
+    observer.stopObserving()
+}
+
 @Test @MainActor func nativeUserScrollingPausesFollowButLayoutChangesDoNot() {
     let window = testWindow()
     defer { window.close() }

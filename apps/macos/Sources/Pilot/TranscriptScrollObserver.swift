@@ -288,12 +288,18 @@ final class ScrollObserverView: NSView {
         }
         let current = viewportTop(scroll, document)
         let target = moved - (anchors[index].edge - anchorViewportTop)
-        guard abs(target - current) > 0.5 else {
+        if abs(target - current) > 0.5 { scrollViewport(to: target) }
+        guard !recapture else {
             captureAnchor()
             return
         }
-        scrollViewport(to: target)
-        captureAnchor()
+        // Within a layout pass SwiftUI moves rows one at a time. A full recapture here would record rows it has
+        // not moved yet at their old offsets, and their later moves would shift the viewport again. Keep only
+        // the row just settled, with the same offset from the viewport top, until the pass completes.
+        var anchor = anchors[index]
+        anchor.edge = moved
+        replaceAnchors([anchor])
+        anchorViewportTop = target
     }
 
     /// SwiftUI can realize lazy rows synchronously while the clip view scrolls, before the live-scroll
