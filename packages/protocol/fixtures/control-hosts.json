@@ -1205,7 +1205,13 @@
 					"acceptance": {
 						"suite": "control-hosts-two-daemon-v1",
 						"homeBuildId": "fixture-build-home",
-						"executorBuildId": "fixture-build-executor"
+						"executorBuildId": "fixture-build-executor",
+						"daemonProofId": "fixture-daemon-proof",
+						"realCourier": {
+							"suite": "control-hosts-real-courier-v1",
+							"appBuildId": "fixture-app-build",
+							"proofId": "fixture-courier-proof"
+						}
 					}
 				},
 				"roleFence": {
@@ -1802,7 +1808,13 @@
 			"acceptance": {
 				"suite": "control-hosts-two-daemon-v1",
 				"homeBuildId": "fixture-build-home",
-				"executorBuildId": "fixture-build-executor"
+				"executorBuildId": "fixture-build-executor",
+				"daemonProofId": "fixture-daemon-proof",
+				"realCourier": {
+					"suite": "control-hosts-real-courier-v1",
+					"appBuildId": "fixture-app-build",
+					"proofId": "fixture-courier-proof"
+				}
 			}
 		},
 		{
@@ -1835,7 +1847,13 @@
 			"acceptance": {
 				"suite": "control-hosts-two-daemon-v1",
 				"homeBuildId": "fixture-build-home",
-				"executorBuildId": "fixture-build-executor"
+				"executorBuildId": "fixture-build-executor",
+				"daemonProofId": "fixture-daemon-proof",
+				"realCourier": {
+					"suite": "control-hosts-real-courier-v1",
+					"appBuildId": "fixture-app-build",
+					"proofId": "fixture-courier-proof"
+				}
 			}
 		}
 	],
@@ -2069,7 +2087,27 @@
 					"controlSessionId": "control",
 					"roleEpoch": 1
 				}
-			}
+			},
+			"roleAcknowledgments": [
+				{
+					"contractVersion": 1,
+					"bindingId": "control:binding:1",
+					"generation": 1,
+					"home": {
+						"hostId": "daemon",
+						"daemonId": "home-daemon",
+						"lineageId": "home-lineage"
+					},
+					"host": {
+						"hostId": "daemon",
+						"daemonId": "executor-daemon",
+						"lineageId": "executor-lineage"
+					},
+					"role": "executor",
+					"roleEpoch": 2,
+					"intentId": "approval:enroll:0"
+				}
+			]
 		},
 		{
 			"configuration": {
@@ -2167,9 +2205,53 @@
 				"acceptance": {
 					"suite": "control-hosts-two-daemon-v1",
 					"homeBuildId": "fixture-build-home",
-					"executorBuildId": "fixture-build-executor"
+					"executorBuildId": "fixture-build-executor",
+					"daemonProofId": "fixture-daemon-proof",
+					"realCourier": {
+						"suite": "control-hosts-real-courier-v1",
+						"appBuildId": "fixture-app-build",
+						"proofId": "fixture-courier-proof"
+					}
 				}
-			}
+			},
+			"roleAcknowledgments": [
+				{
+					"contractVersion": 1,
+					"bindingId": "control:binding:1",
+					"generation": 1,
+					"home": {
+						"hostId": "daemon",
+						"daemonId": "home-daemon",
+						"lineageId": "home-lineage"
+					},
+					"host": {
+						"hostId": "daemon",
+						"daemonId": "home-daemon",
+						"lineageId": "home-lineage"
+					},
+					"role": "home",
+					"roleEpoch": 1,
+					"intentId": "approval:enroll:1"
+				},
+				{
+					"contractVersion": 1,
+					"bindingId": "control:binding:1",
+					"generation": 1,
+					"home": {
+						"hostId": "daemon",
+						"daemonId": "home-daemon",
+						"lineageId": "home-lineage"
+					},
+					"host": {
+						"hostId": "daemon",
+						"daemonId": "executor-daemon",
+						"lineageId": "executor-lineage"
+					},
+					"role": "executor",
+					"roleEpoch": 2,
+					"intentId": "approval:enroll:0"
+				}
+			]
 		},
 		{
 			"configuration": {
@@ -2270,9 +2352,37 @@
 				"acceptance": {
 					"suite": "control-hosts-two-daemon-v1",
 					"homeBuildId": "fixture-build-home",
-					"executorBuildId": "fixture-build-executor"
+					"executorBuildId": "fixture-build-executor",
+					"daemonProofId": "fixture-daemon-proof",
+					"realCourier": {
+						"suite": "control-hosts-real-courier-v1",
+						"appBuildId": "fixture-app-build",
+						"proofId": "fixture-courier-proof"
+					}
 				}
-			}
+			},
+			"roleAcknowledgments": [
+				{
+					"contractVersion": 1,
+					"bindingId": "control:binding:1",
+					"generation": 1,
+					"home": {
+						"hostId": "daemon",
+						"daemonId": "home-daemon",
+						"lineageId": "home-lineage"
+					},
+					"host": {
+						"hostId": "daemon",
+						"daemonId": "executor-daemon",
+						"lineageId": "executor-lineage"
+					},
+					"role": "archived-control",
+					"roleEpoch": 3,
+					"intentId": "archive:1",
+					"sessionId": "old-control",
+					"archivedAt": 2000
+				}
+			]
 		}
 	],
 	"archiveRequest": {
@@ -2300,7 +2410,7 @@
 			},
 			"kind": "control.archive",
 			"targetId": "old-control",
-			"payload": "{\"idempotencyKey\":\"archive:1\",\"sessionId\":\"old-control\",\"readiness\":{\"bindingId\":\"control:binding:1\",\"generation\":1,\"contractVersion\":1,\"home\":{\"hostId\":\"daemon\",\"daemonId\":\"home-daemon\",\"lineageId\":\"home-lineage\"},\"executor\":{\"hostId\":\"daemon\",\"daemonId\":\"executor-daemon\",\"lineageId\":\"executor-lineage\"},\"state\":\"ready\",\"homeReady\":true,\"executorEnrolled\":true,\"actionReceiptOperationId\":\"operation:1\",\"watchEventId\":\"event:1\",\"taskSnapshotId\":\"snapshot:1\",\"updatedAt\":5000,\"roleFence\":{\"home\":1,\"executor\":2},\"compatibleRoutes\":true,\"archiveReady\":true,\"acceptance\":{\"suite\":\"control-hosts-two-daemon-v1\",\"homeBuildId\":\"fixture-build-home\",\"executorBuildId\":\"fixture-build-executor\"}},\"roleFence\":{\"home\":1,\"executor\":2}}",
+			"payload": "{\"idempotencyKey\":\"archive:1\",\"sessionId\":\"old-control\",\"readiness\":{\"bindingId\":\"control:binding:1\",\"generation\":1,\"contractVersion\":1,\"home\":{\"hostId\":\"daemon\",\"daemonId\":\"home-daemon\",\"lineageId\":\"home-lineage\"},\"executor\":{\"hostId\":\"daemon\",\"daemonId\":\"executor-daemon\",\"lineageId\":\"executor-lineage\"},\"state\":\"ready\",\"homeReady\":true,\"executorEnrolled\":true,\"actionReceiptOperationId\":\"operation:1\",\"watchEventId\":\"event:1\",\"taskSnapshotId\":\"snapshot:1\",\"updatedAt\":5000,\"roleFence\":{\"home\":1,\"executor\":2},\"compatibleRoutes\":true,\"archiveReady\":true,\"acceptance\":{\"suite\":\"control-hosts-two-daemon-v1\",\"homeBuildId\":\"fixture-build-home\",\"executorBuildId\":\"fixture-build-executor\",\"daemonProofId\":\"fixture-daemon-proof\",\"realCourier\":{\"suite\":\"control-hosts-real-courier-v1\",\"appBuildId\":\"fixture-app-build\",\"proofId\":\"fixture-courier-proof\"}}},\"roleFence\":{\"home\":1,\"executor\":2}}",
 			"payloadHash": "fixture-sha256-not-for-admission",
 			"bindingId": "control:binding:1",
 			"bindingGeneration": 1
@@ -2357,8 +2467,34 @@
 			"acceptance": {
 				"suite": "control-hosts-two-daemon-v1",
 				"homeBuildId": "fixture-build-home",
-				"executorBuildId": "fixture-build-executor"
+				"executorBuildId": "fixture-build-executor",
+				"daemonProofId": "fixture-daemon-proof",
+				"realCourier": {
+					"suite": "control-hosts-real-courier-v1",
+					"appBuildId": "fixture-app-build",
+					"proofId": "fixture-courier-proof"
+				}
 			}
+		},
+		"roleAcknowledgment": {
+			"contractVersion": 1,
+			"bindingId": "control:binding:1",
+			"generation": 1,
+			"home": {
+				"hostId": "daemon",
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage"
+			},
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"role": "archived-control",
+			"roleEpoch": 3,
+			"intentId": "archive:1",
+			"sessionId": "old-control",
+			"archivedAt": 2000
 		}
 	},
 	"archiveAcknowledgments": [
@@ -2380,7 +2516,7 @@
 				},
 				"kind": "control.archive",
 				"targetId": "old-control",
-				"payload": "{\"idempotencyKey\":\"archive:1\",\"sessionId\":\"old-control\",\"readiness\":{\"bindingId\":\"control:binding:1\",\"generation\":1,\"contractVersion\":1,\"home\":{\"hostId\":\"daemon\",\"daemonId\":\"home-daemon\",\"lineageId\":\"home-lineage\"},\"executor\":{\"hostId\":\"daemon\",\"daemonId\":\"executor-daemon\",\"lineageId\":\"executor-lineage\"},\"state\":\"ready\",\"homeReady\":true,\"executorEnrolled\":true,\"actionReceiptOperationId\":\"operation:1\",\"watchEventId\":\"event:1\",\"taskSnapshotId\":\"snapshot:1\",\"updatedAt\":5000,\"roleFence\":{\"home\":1,\"executor\":2},\"compatibleRoutes\":true,\"archiveReady\":true,\"acceptance\":{\"suite\":\"control-hosts-two-daemon-v1\",\"homeBuildId\":\"fixture-build-home\",\"executorBuildId\":\"fixture-build-executor\"}},\"roleFence\":{\"home\":1,\"executor\":2}}",
+				"payload": "{\"idempotencyKey\":\"archive:1\",\"sessionId\":\"old-control\",\"readiness\":{\"bindingId\":\"control:binding:1\",\"generation\":1,\"contractVersion\":1,\"home\":{\"hostId\":\"daemon\",\"daemonId\":\"home-daemon\",\"lineageId\":\"home-lineage\"},\"executor\":{\"hostId\":\"daemon\",\"daemonId\":\"executor-daemon\",\"lineageId\":\"executor-lineage\"},\"state\":\"ready\",\"homeReady\":true,\"executorEnrolled\":true,\"actionReceiptOperationId\":\"operation:1\",\"watchEventId\":\"event:1\",\"taskSnapshotId\":\"snapshot:1\",\"updatedAt\":5000,\"roleFence\":{\"home\":1,\"executor\":2},\"compatibleRoutes\":true,\"archiveReady\":true,\"acceptance\":{\"suite\":\"control-hosts-two-daemon-v1\",\"homeBuildId\":\"fixture-build-home\",\"executorBuildId\":\"fixture-build-executor\",\"daemonProofId\":\"fixture-daemon-proof\",\"realCourier\":{\"suite\":\"control-hosts-real-courier-v1\",\"appBuildId\":\"fixture-app-build\",\"proofId\":\"fixture-courier-proof\"}}},\"roleFence\":{\"home\":1,\"executor\":2}}",
 				"payloadHash": "fixture-sha256-not-for-admission",
 				"bindingId": "control:binding:1",
 				"bindingGeneration": 1
@@ -2415,7 +2551,7 @@
 				},
 				"kind": "control.archive",
 				"targetId": "old-control",
-				"payload": "{\"idempotencyKey\":\"archive:1\",\"sessionId\":\"old-control\",\"readiness\":{\"bindingId\":\"control:binding:1\",\"generation\":1,\"contractVersion\":1,\"home\":{\"hostId\":\"daemon\",\"daemonId\":\"home-daemon\",\"lineageId\":\"home-lineage\"},\"executor\":{\"hostId\":\"daemon\",\"daemonId\":\"executor-daemon\",\"lineageId\":\"executor-lineage\"},\"state\":\"ready\",\"homeReady\":true,\"executorEnrolled\":true,\"actionReceiptOperationId\":\"operation:1\",\"watchEventId\":\"event:1\",\"taskSnapshotId\":\"snapshot:1\",\"updatedAt\":5000,\"roleFence\":{\"home\":1,\"executor\":2},\"compatibleRoutes\":true,\"archiveReady\":true,\"acceptance\":{\"suite\":\"control-hosts-two-daemon-v1\",\"homeBuildId\":\"fixture-build-home\",\"executorBuildId\":\"fixture-build-executor\"}},\"roleFence\":{\"home\":1,\"executor\":2}}",
+				"payload": "{\"idempotencyKey\":\"archive:1\",\"sessionId\":\"old-control\",\"readiness\":{\"bindingId\":\"control:binding:1\",\"generation\":1,\"contractVersion\":1,\"home\":{\"hostId\":\"daemon\",\"daemonId\":\"home-daemon\",\"lineageId\":\"home-lineage\"},\"executor\":{\"hostId\":\"daemon\",\"daemonId\":\"executor-daemon\",\"lineageId\":\"executor-lineage\"},\"state\":\"ready\",\"homeReady\":true,\"executorEnrolled\":true,\"actionReceiptOperationId\":\"operation:1\",\"watchEventId\":\"event:1\",\"taskSnapshotId\":\"snapshot:1\",\"updatedAt\":5000,\"roleFence\":{\"home\":1,\"executor\":2},\"compatibleRoutes\":true,\"archiveReady\":true,\"acceptance\":{\"suite\":\"control-hosts-two-daemon-v1\",\"homeBuildId\":\"fixture-build-home\",\"executorBuildId\":\"fixture-build-executor\",\"daemonProofId\":\"fixture-daemon-proof\",\"realCourier\":{\"suite\":\"control-hosts-real-courier-v1\",\"appBuildId\":\"fixture-app-build\",\"proofId\":\"fixture-courier-proof\"}}},\"roleFence\":{\"home\":1,\"executor\":2}}",
 				"payloadHash": "fixture-sha256-not-for-admission",
 				"bindingId": "control:binding:1",
 				"bindingGeneration": 1
@@ -2481,8 +2617,34 @@
 						"acceptance": {
 							"suite": "control-hosts-two-daemon-v1",
 							"homeBuildId": "fixture-build-home",
-							"executorBuildId": "fixture-build-executor"
+							"executorBuildId": "fixture-build-executor",
+							"daemonProofId": "fixture-daemon-proof",
+							"realCourier": {
+								"suite": "control-hosts-real-courier-v1",
+								"appBuildId": "fixture-app-build",
+								"proofId": "fixture-courier-proof"
+							}
 						}
+					},
+					"roleAcknowledgment": {
+						"contractVersion": 1,
+						"bindingId": "control:binding:1",
+						"generation": 1,
+						"home": {
+							"hostId": "daemon",
+							"daemonId": "home-daemon",
+							"lineageId": "home-lineage"
+						},
+						"host": {
+							"hostId": "daemon",
+							"daemonId": "executor-daemon",
+							"lineageId": "executor-lineage"
+						},
+						"role": "archived-control",
+						"roleEpoch": 3,
+						"intentId": "archive:1",
+						"sessionId": "old-control",
+						"archivedAt": 2000
 					}
 				}
 			}
@@ -2505,7 +2667,7 @@
 				},
 				"kind": "control.archive",
 				"targetId": "old-control",
-				"payload": "{\"idempotencyKey\":\"archive:1\",\"sessionId\":\"old-control\",\"readiness\":{\"bindingId\":\"control:binding:1\",\"generation\":1,\"contractVersion\":1,\"home\":{\"hostId\":\"daemon\",\"daemonId\":\"home-daemon\",\"lineageId\":\"home-lineage\"},\"executor\":{\"hostId\":\"daemon\",\"daemonId\":\"executor-daemon\",\"lineageId\":\"executor-lineage\"},\"state\":\"ready\",\"homeReady\":true,\"executorEnrolled\":true,\"actionReceiptOperationId\":\"operation:1\",\"watchEventId\":\"event:1\",\"taskSnapshotId\":\"snapshot:1\",\"updatedAt\":5000,\"roleFence\":{\"home\":1,\"executor\":2},\"compatibleRoutes\":true,\"archiveReady\":true,\"acceptance\":{\"suite\":\"control-hosts-two-daemon-v1\",\"homeBuildId\":\"fixture-build-home\",\"executorBuildId\":\"fixture-build-executor\"}},\"roleFence\":{\"home\":1,\"executor\":2}}",
+				"payload": "{\"idempotencyKey\":\"archive:1\",\"sessionId\":\"old-control\",\"readiness\":{\"bindingId\":\"control:binding:1\",\"generation\":1,\"contractVersion\":1,\"home\":{\"hostId\":\"daemon\",\"daemonId\":\"home-daemon\",\"lineageId\":\"home-lineage\"},\"executor\":{\"hostId\":\"daemon\",\"daemonId\":\"executor-daemon\",\"lineageId\":\"executor-lineage\"},\"state\":\"ready\",\"homeReady\":true,\"executorEnrolled\":true,\"actionReceiptOperationId\":\"operation:1\",\"watchEventId\":\"event:1\",\"taskSnapshotId\":\"snapshot:1\",\"updatedAt\":5000,\"roleFence\":{\"home\":1,\"executor\":2},\"compatibleRoutes\":true,\"archiveReady\":true,\"acceptance\":{\"suite\":\"control-hosts-two-daemon-v1\",\"homeBuildId\":\"fixture-build-home\",\"executorBuildId\":\"fixture-build-executor\",\"daemonProofId\":\"fixture-daemon-proof\",\"realCourier\":{\"suite\":\"control-hosts-real-courier-v1\",\"appBuildId\":\"fixture-app-build\",\"proofId\":\"fixture-courier-proof\"}}},\"roleFence\":{\"home\":1,\"executor\":2}}",
 				"payloadHash": "fixture-sha256-not-for-admission",
 				"bindingId": "control:binding:1",
 				"bindingGeneration": 1
@@ -2577,7 +2739,7 @@
 					},
 					"kind": "control.archive",
 					"targetId": "old-control",
-					"payload": "{\"idempotencyKey\":\"archive:1\",\"sessionId\":\"old-control\",\"readiness\":{\"bindingId\":\"control:binding:1\",\"generation\":1,\"contractVersion\":1,\"home\":{\"hostId\":\"daemon\",\"daemonId\":\"home-daemon\",\"lineageId\":\"home-lineage\"},\"executor\":{\"hostId\":\"daemon\",\"daemonId\":\"executor-daemon\",\"lineageId\":\"executor-lineage\"},\"state\":\"ready\",\"homeReady\":true,\"executorEnrolled\":true,\"actionReceiptOperationId\":\"operation:1\",\"watchEventId\":\"event:1\",\"taskSnapshotId\":\"snapshot:1\",\"updatedAt\":5000,\"roleFence\":{\"home\":1,\"executor\":2},\"compatibleRoutes\":true,\"archiveReady\":true,\"acceptance\":{\"suite\":\"control-hosts-two-daemon-v1\",\"homeBuildId\":\"fixture-build-home\",\"executorBuildId\":\"fixture-build-executor\"}},\"roleFence\":{\"home\":1,\"executor\":2}}",
+					"payload": "{\"idempotencyKey\":\"archive:1\",\"sessionId\":\"old-control\",\"readiness\":{\"bindingId\":\"control:binding:1\",\"generation\":1,\"contractVersion\":1,\"home\":{\"hostId\":\"daemon\",\"daemonId\":\"home-daemon\",\"lineageId\":\"home-lineage\"},\"executor\":{\"hostId\":\"daemon\",\"daemonId\":\"executor-daemon\",\"lineageId\":\"executor-lineage\"},\"state\":\"ready\",\"homeReady\":true,\"executorEnrolled\":true,\"actionReceiptOperationId\":\"operation:1\",\"watchEventId\":\"event:1\",\"taskSnapshotId\":\"snapshot:1\",\"updatedAt\":5000,\"roleFence\":{\"home\":1,\"executor\":2},\"compatibleRoutes\":true,\"archiveReady\":true,\"acceptance\":{\"suite\":\"control-hosts-two-daemon-v1\",\"homeBuildId\":\"fixture-build-home\",\"executorBuildId\":\"fixture-build-executor\",\"daemonProofId\":\"fixture-daemon-proof\",\"realCourier\":{\"suite\":\"control-hosts-real-courier-v1\",\"appBuildId\":\"fixture-app-build\",\"proofId\":\"fixture-courier-proof\"}}},\"roleFence\":{\"home\":1,\"executor\":2}}",
 					"payloadHash": "fixture-sha256-not-for-admission",
 					"bindingId": "control:binding:1",
 					"bindingGeneration": 1
@@ -3634,6 +3796,69 @@
 					}
 				]
 			}
+		},
+		"watches": {
+			"archive": {
+				"source": {
+					"host": {
+						"hostId": "daemon",
+						"daemonId": "executor-daemon",
+						"lineageId": "executor-lineage"
+					},
+					"sessionId": "old-control"
+				},
+				"archivedAt": 2000,
+				"roleEpoch": 3,
+				"readOnly": true
+			},
+			"value": {
+				"watches": [
+					{
+						"watch": {
+							"authorizationId": "auth:1",
+							"event": "chat.settled",
+							"target": {
+								"host": {
+									"hostId": "daemon",
+									"daemonId": "executor-daemon",
+									"lineageId": "executor-lineage"
+								},
+								"kind": "chat",
+								"id": "chat:1"
+							},
+							"mode": "once",
+							"note": "Read the result",
+							"expiresAt": 10000,
+							"id": "watch:1",
+							"createdAt": 1000
+						},
+						"disposition": "stopped",
+						"stoppedAt": 2000,
+						"auditReason": "legacy-control-frozen"
+					},
+					{
+						"watch": {
+							"authorizationId": "auth:1",
+							"event": "chat.settled",
+							"target": {
+								"host": {
+									"hostId": "daemon",
+									"daemonId": "executor-daemon",
+									"lineageId": "executor-lineage"
+								},
+								"kind": "chat",
+								"id": "chat:1"
+							},
+							"mode": "once",
+							"note": "Read the result",
+							"expiresAt": 10000,
+							"id": "fired:1",
+							"createdAt": 1000
+						},
+						"disposition": "fired"
+					}
+				]
+			}
 		}
 	},
 	"lifecycles": [
@@ -3975,5 +4200,286 @@
 			}
 		],
 		"more": false
+	},
+	"roleAcknowledgments": [
+		{
+			"contractVersion": 1,
+			"bindingId": "control:binding:1",
+			"generation": 1,
+			"home": {
+				"hostId": "daemon",
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage"
+			},
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage"
+			},
+			"role": "home",
+			"roleEpoch": 1,
+			"intentId": "approval:enroll:1"
+		},
+		{
+			"contractVersion": 1,
+			"bindingId": "control:binding:1",
+			"generation": 1,
+			"home": {
+				"hostId": "daemon",
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage"
+			},
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"role": "executor",
+			"roleEpoch": 2,
+			"intentId": "approval:enroll:0"
+		},
+		{
+			"contractVersion": 1,
+			"bindingId": "control:binding:1",
+			"generation": 1,
+			"home": {
+				"hostId": "daemon",
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage"
+			},
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"role": "archived-control",
+			"roleEpoch": 3,
+			"intentId": "archive:1",
+			"sessionId": "old-control",
+			"archivedAt": 2000
+		}
+	],
+	"proofs": [
+		{
+			"suite": "control-hosts-two-daemon-v1",
+			"homeBuildId": "fixture-build-home",
+			"executorBuildId": "fixture-build-executor",
+			"daemonProofId": "fixture-daemon-proof"
+		},
+		{
+			"suite": "control-hosts-two-daemon-v1",
+			"homeBuildId": "fixture-build-home",
+			"executorBuildId": "fixture-build-executor",
+			"daemonProofId": "fixture-daemon-proof",
+			"realCourier": {
+				"suite": "control-hosts-real-courier-v1",
+				"appBuildId": "fixture-app-build",
+				"proofId": "fixture-courier-proof"
+			}
+		}
+	],
+	"preparingProofCutover": {
+		"bindingId": "control:binding:1",
+		"generation": 1,
+		"contractVersion": 1,
+		"home": {
+			"hostId": "daemon",
+			"daemonId": "home-daemon",
+			"lineageId": "home-lineage"
+		},
+		"executor": {
+			"hostId": "daemon",
+			"daemonId": "executor-daemon",
+			"lineageId": "executor-lineage"
+		},
+		"state": "preparing",
+		"homeReady": true,
+		"executorEnrolled": true,
+		"updatedAt": 5000,
+		"roleFence": {
+			"home": 1,
+			"executor": 2
+		},
+		"compatibleRoutes": true,
+		"archiveReady": false,
+		"acceptance": {
+			"suite": "control-hosts-two-daemon-v1",
+			"homeBuildId": "fixture-build-home",
+			"executorBuildId": "fixture-build-executor",
+			"daemonProofId": "fixture-daemon-proof"
+		}
+	},
+	"activatedHomeState": {
+		"configuration": {
+			"schemaVersion": 1,
+			"home": {
+				"hostId": "daemon",
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage"
+			},
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage"
+			},
+			"role": "home",
+			"controlSessionId": "control",
+			"roleEpoch": 1
+		},
+		"enrollment": {
+			"schemaVersion": 1,
+			"bindingId": "control:binding:1",
+			"generation": 1,
+			"home": {
+				"hostId": "daemon",
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage"
+			},
+			"executor": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"state": "active"
+		},
+		"peerHello": {
+			"daemonId": "executor-daemon",
+			"lineageId": "executor-lineage",
+			"daemonVersion": "fixture",
+			"protocolVersion": 1,
+			"minimumClientProtocolVersion": 1,
+			"platform": "fixture",
+			"arch": "fixture",
+			"capabilities": {
+				"powerManagement": false,
+				"systemSleepEvents": false,
+				"swiftUIArtifacts": false,
+				"coordinatorIsolation": true,
+				"independentExecution": true,
+				"controlHosts": 1
+			},
+			"controlHost": {
+				"schemaVersion": 1,
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"host": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"role": "archived-control",
+				"archive": {
+					"sessionId": "old-control",
+					"archivedAt": 2000
+				},
+				"roleEpoch": 3
+			}
+		},
+		"cutover": {
+			"bindingId": "control:binding:1",
+			"generation": 1,
+			"contractVersion": 1,
+			"home": {
+				"hostId": "daemon",
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage"
+			},
+			"executor": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"state": "archived",
+			"homeReady": true,
+			"executorEnrolled": true,
+			"actionReceiptOperationId": "operation:1",
+			"watchEventId": "event:1",
+			"taskSnapshotId": "snapshot:1",
+			"updatedAt": 5000,
+			"roleFence": {
+				"home": 1,
+				"executor": 3
+			},
+			"compatibleRoutes": true,
+			"archiveReady": true,
+			"acceptance": {
+				"suite": "control-hosts-two-daemon-v1",
+				"homeBuildId": "fixture-build-home",
+				"executorBuildId": "fixture-build-executor",
+				"daemonProofId": "fixture-daemon-proof",
+				"realCourier": {
+					"suite": "control-hosts-real-courier-v1",
+					"appBuildId": "fixture-app-build",
+					"proofId": "fixture-courier-proof"
+				}
+			}
+		},
+		"roleAcknowledgments": [
+			{
+				"contractVersion": 1,
+				"bindingId": "control:binding:1",
+				"generation": 1,
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"host": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"role": "home",
+				"roleEpoch": 1,
+				"intentId": "approval:enroll:1"
+			},
+			{
+				"contractVersion": 1,
+				"bindingId": "control:binding:1",
+				"generation": 1,
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"host": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"role": "archived-control",
+				"roleEpoch": 3,
+				"intentId": "archive:1",
+				"sessionId": "old-control",
+				"archivedAt": 2000
+			}
+		]
+	},
+	"archiveAdoption": {
+		"operationId": "archive:1",
+		"state": "accepted",
+		"roleAcknowledgment": {
+			"contractVersion": 1,
+			"bindingId": "control:binding:1",
+			"generation": 1,
+			"home": {
+				"hostId": "daemon",
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage"
+			},
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"role": "archived-control",
+			"roleEpoch": 3,
+			"intentId": "archive:1",
+			"sessionId": "old-control",
+			"archivedAt": 2000
+		}
 	}
 }

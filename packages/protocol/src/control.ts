@@ -372,6 +372,8 @@ export interface ControlHostStateResponse {
 	peerHello: import("./hello.ts").DaemonHello;
 	/** Home-issued evidence, never readiness booleans supplied by the app/model. */
 	cutover?: ControlHostCutover;
+	/** At most the two persisted home/executor acknowledgments; no client-invented activation flags. */
+	roleAcknowledgments?: ControlRoleAcknowledgment[];
 }
 /** POST /api/control-hosts/:bindingId/archive on home. App rollout only, not a pilot action. */
 export interface ControlArchiveRequest {
@@ -399,6 +401,7 @@ export interface ControlArchiveResult {
 	kind: "control.archive";
 	configuration: ControlHostConfiguration;
 	cutover: ControlHostCutover;
+	roleAcknowledgment: ControlRoleAcknowledgment;
 }
 export type ControlPilotAction =
 	| "status"
@@ -515,6 +518,8 @@ export interface ControlOperationAcknowledgment {
 export interface ControlReceiptAdoptionResponse {
 	operationId: string;
 	state: "accepted" | "rejected";
+	/** Present after accepted archive's role acknowledgment is durably adopted. */
+	roleAcknowledgment?: ControlRoleAcknowledgment;
 }
 export interface ControlUntrustedResultTail {
 	untrusted: true;
@@ -675,6 +680,37 @@ export interface ControlAcceptanceProof {
 	suite: "control-hosts-two-daemon-v1";
 	homeBuildId: string;
 	executorBuildId: string;
+	daemonProofId: string;
+	/** May be absent while preparing; required, verified and build-matched before ready/activation. */
+	realCourier?: ControlRealCourierProof;
+}
+export interface ControlRealCourierProof {
+	suite: "control-hosts-real-courier-v1";
+	appBuildId: string;
+	proofId: string;
+}
+export interface ControlRoleAcknowledgment {
+	contractVersion: 1;
+	bindingId: string;
+	generation: number;
+	home: OperationHost;
+	host: OperationHost;
+	role: ControlDaemonRole;
+	roleEpoch: number;
+	/** Enrollment's consumed native approval ID, or archive's original operationId. */
+	intentId: string;
+	sessionId?: string;
+	archivedAt?: number;
+}
+export interface ControlArchivedWatch {
+	watch: Watch;
+	disposition: "stopped" | "fired";
+	stoppedAt?: number;
+	auditReason?: string;
+}
+export interface ControlArchivedWatchesResponse {
+	watches: ControlArchivedWatch[];
+	next?: string;
 }
 export type ControlHostAvailability = "available" | "disconnected" | "unknown";
 export interface ControlHostObservation {

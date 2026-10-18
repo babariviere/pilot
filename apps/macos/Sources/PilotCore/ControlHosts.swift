@@ -90,6 +90,7 @@ public struct ControlHostStateResponse: Codable, Equatable, Sendable {
     public let enrollment: ControlHomeEnrollment
     public let peerHello: DaemonHello
     public let cutover: ControlHostCutover?
+    public let roleAcknowledgments: [ControlRoleAcknowledgment]?
 }
 public struct ControlArchiveRequest: Codable, Equatable, Sendable {
     public let approvalRequestId: String
@@ -118,6 +119,7 @@ public struct ControlArchiveResult: Codable, Equatable, Sendable {
     public let kind: Kind
     public let configuration: ControlHostConfiguration
     public let cutover: ControlHostCutover
+    public let roleAcknowledgment: ControlRoleAcknowledgment
 }
 public enum ControlPilotAction: String, Codable, CaseIterable, Sendable {
     case status, health, logs, telemetry, read, checks, authorize, authorizations, revoke
@@ -302,6 +304,7 @@ public struct ControlReceiptAdoptionResponse: Codable, Equatable, Sendable {
     public enum State: String, Codable, Sendable { case accepted, rejected }
     public let operationId: String
     public let state: State
+    public let roleAcknowledgment: ControlRoleAcknowledgment?
 }
 public struct ControlUntrustedResultTail: Codable, Equatable, Sendable {
     public let untrusted: Bool
@@ -393,6 +396,36 @@ public struct ControlAcceptanceProof: Codable, Equatable, Sendable {
     public let suite: String
     public let homeBuildId: String
     public let executorBuildId: String
+    public let daemonProofId: String
+    public let realCourier: ControlRealCourierProof?
+}
+public struct ControlRealCourierProof: Codable, Equatable, Sendable {
+    public let suite: String
+    public let appBuildId: String
+    public let proofId: String
+}
+public struct ControlRoleAcknowledgment: Codable, Equatable, Sendable {
+    public let contractVersion: Int
+    public let bindingId: String
+    public let generation: UInt64
+    public let home: OperationHost
+    public let host: OperationHost
+    public let role: ControlDaemonRole
+    public let roleEpoch: Int
+    public let intentId: String
+    public let sessionId: String?
+    public let archivedAt: Double?
+}
+public struct ControlArchivedWatch: Codable, Equatable, Sendable {
+    public enum Disposition: String, Codable, Sendable { case stopped, fired }
+    public let watch: Watch
+    public let disposition: Disposition
+    public let stoppedAt: Double?
+    public let auditReason: String?
+}
+public struct ControlArchivedWatchesResponse: Codable, Equatable, Sendable {
+    public let watches: [ControlArchivedWatch]
+    public let next: String?
 }
 public struct ControlHostInvalidation: Codable, Equatable, Sendable {
     public enum Change: String, Codable, Sendable { case outbox, receipts, events, status, enrollment, readiness, archive }
