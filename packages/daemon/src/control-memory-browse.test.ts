@@ -111,7 +111,7 @@ test("stats and view lines flag unsummarized ranges", async (t) => {
 	stats = memory.stats();
 	assert.equal(stats.pendingJobs, 0);
 	assert.equal(stats.failedJobs, 1);
-	memory.retry();
+	memory.retry(Number.MAX_SAFE_INTEGER);
 	memory.put(memory.next()!.id, 1, "long text summary");
 	assert.deepEqual(memory.childLines(0, 2), [
 		{ id: 0, n: 1, text: "user: short" },

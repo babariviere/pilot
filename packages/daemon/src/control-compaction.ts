@@ -6,12 +6,22 @@ import type { ControlJob, ControlMessageInput } from "./control-memory-disk.ts";
 import type { ControlLine } from "./control-view.ts";
 
 export type ControlCompletion = (job: ControlJob, lines: ControlLine[], signal: AbortSignal) => Promise<string>;
+/** Hard line limit, and the lower target the model is asked for: models miscount bytes and cut too little. */
+export const CONTROL_LINE_BYTES = 512;
+export const CONTROL_LINE_TARGET_BYTES = 400;
+function cutFor(bytes: number): string {
+	const cut = bytes - CONTROL_LINE_TARGET_BYTES;
+	return `at least ${cut} bytes (about ${Math.ceil((cut / bytes) * 100)}%)`;
+}
 export function controlCompactionTask(job: ControlJob): string {
 	const task =
 		job.n === 1
 			? `compress message ${job.id} into one line`
 			: `merge lines ${job.id}+${job.n / 2} and ${job.id + job.n / 2}+${job.n / 2}, adjacent, into one line`;
-	return `Compaction: ${task} of at most 512 bytes (about 70 words), the length of this ruler:\n${"-".repeat(512)}\n${job.n > 1 ? `<chat> may hold messages ${job.id} to ${job.id + job.n - 1} in more detail: take details of them from there too.\n` : ""}<input>\n${job.source}\n</input>`;
+	const bytes = Buffer.byteLength(job.source);
+	const cut =
+		bytes > CONTROL_LINE_TARGET_BYTES ? ` The input is ${bytes} bytes, so cut ${cutFor(bytes)}; never copy it.` : "";
+	return `Compaction: ${task} of about ${CONTROL_LINE_TARGET_BYTES} bytes (55 words) or less; ${CONTROL_LINE_BYTES} bytes is the hard limit.${cut} Keep decisions, outcomes, blockers, open items and exact identifiers; drop narration, repetition and minor detail.\n${job.n > 1 ? `<chat> may hold messages ${job.id} to ${job.id + job.n - 1} in more detail: take details of them from there too.\n` : ""}<input>\n${job.source}\n</input>`;
 }
 function firstBytes(text: string, limit: number): string {
 	const bytes = Buffer.from(text);
@@ -34,7 +44,9 @@ export async function compactControlNode(
 		signal.throwIfAborted();
 		const result = await runtime.completeSimple(model, context, {
 			signal,
-			maxRetries: 0,
+			// Transient provider failures (429, 5xx, network) retry inside the call; the 60 s job timeout bounds them.
+			maxRetries: 2,
+			maxRetryDelayMs: 10_000,
 			maxTokens: 1024,
 			reasoning: undefined,
 			toolChoice: "none",
@@ -54,13 +66,14 @@ export async function compactControlNode(
 			.trim();
 		if (!text || text.includes("\0")) throw new Error("Control compaction returned an empty or invalid line");
 		if (shortest === undefined || Buffer.byteLength(text) < Buffer.byteLength(shortest)) shortest = text;
-		if (Buffer.byteLength(shortest) <= 512) return shortest;
+		if (Buffer.byteLength(shortest) <= CONTROL_LINE_BYTES) return shortest;
 		// Do not retain thoughts/signatures or provider-specific hidden state in the correction loop.
 		context.messages.push({ ...result, content: [{ type: "text", text }] });
+		const bytes = Buffer.byteLength(text);
 		context.messages.push({
 			role: "user",
 			timestamp: 0,
-			content: `Too long: your line is ${Buffer.byteLength(text)} bytes, over the 512-byte limit. Write the whole line again for the same <input>, cutting just enough of the least valuable items to fit before this cut:\n${firstBytes(text, 512)}| ← LIMIT`,
+			content: `Too long: your line is ${bytes} bytes, over the ${CONTROL_LINE_BYTES}-byte limit. Write the whole line again for the same <input> in about ${CONTROL_LINE_TARGET_BYTES} bytes: cut ${cutFor(bytes)} by dropping the least valuable items whole, not just words. The limit falls here:\n${firstBytes(text, CONTROL_LINE_BYTES)}| ← LIMIT`,
 		});
 	}
 	// Never truncate a semantic summary. Keep the original job for retry on the next message.
@@ -173,16 +186,24 @@ export class ControlCompactor {
 			if (onAbort) controller.signal.removeEventListener("abort", onAbort);
 		}
 	}
-	/** Only the service owner closes storage, after all compactor calls have drained. */
-	async settled(): Promise<void> {
+	/** Only the service owner closes storage, after all compactor calls have drained. With `timeoutMs`, resolves
+	 * at the latest after that delay, whether or not calls are still running. */
+	async settled(timeoutMs?: number): Promise<void> {
 		if (!this.pumping && !this.running.size) return;
 		await new Promise<void>((resolve) => {
+			let timer: ReturnType<typeof setTimeout> | undefined;
 			const remove = this.onChange(() => {
 				if (!this.pumping && !this.running.size) {
+					clearTimeout(timer);
 					remove();
 					resolve();
 				}
 			});
+			if (timeoutMs !== undefined)
+				timer = setTimeout(() => {
+					remove();
+					resolve();
+				}, timeoutMs);
 		});
 	}
 	async stop(): Promise<void> {

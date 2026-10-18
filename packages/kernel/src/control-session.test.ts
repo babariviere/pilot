@@ -350,7 +350,7 @@ for (const reopened of [false, true])
 			callPilot: async () => null,
 			callControl: async (action: string) => {
 				if (action !== "prepare") return null;
-				if (fail) throw new Error("Earlier chat messages could not be summarized; retry with your next message");
+				if (fail) throw new Error("Control memory busy, retry shortly");
 				return { lines: [] };
 			},
 		};
