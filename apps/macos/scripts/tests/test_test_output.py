@@ -29,6 +29,8 @@ CALLBACKS = ["localStopNormalizesQualifiedRowsAndRestoresWithdrawnMessages",
          "unavailableStopNeverFallsBackToCurrentLocalHost",
              "missionTaskDragLoadsItsPlainTextOnTheMainActor"]
 CALLBACKS_OUTPUT = STARTED + "".join(f"◇ Test {name}() started.\n" for name in CALLBACKS) + PASSED
+JOURNEYS = ["keyboardOnlyStartSwitchTypeAndReturn", "keyboardOnlySidebarBrowsingKeepsFocusInTheSidebar"]
+JOURNEYS_OUTPUT = STARTED + "".join(f"◇ Test {name}() started.\n" for name in JOURNEYS) + PASSED
 
 
 class TestOutputTests(unittest.TestCase):
@@ -46,7 +48,11 @@ class TestOutputTests(unittest.TestCase):
                     second_output=None, second_status=0, all_calls=False,
                     third_output=DEVBOX_OUTPUT, third_status=0,
                     fourth_output=TERMINAL_OUTPUT, fourth_status=0,
-                    fifth_output=CALLBACKS_OUTPUT, fifth_status=0):
+                    fifth_output=CALLBACKS_OUTPUT, fifth_status=0,
+                    sixth_output=None, sixth_status=0, extra_env=None):
+        if sixth_output is None:
+            sixth_output = JOURNEYS_OUTPUT
+        extra_env = extra_env or {}
         # Exercise the actual shell wrapper without downloading/building the app.
         with tempfile.TemporaryDirectory(prefix="swift wrapper ") as directory:
             root = Path(directory)
@@ -63,36 +69,27 @@ class TestOutputTests(unittest.TestCase):
                 (scripts / name).chmod(0o755)
             (root / "xcrun").write_text('#!/bin/sh\nprintf "%s\\n" "$FAKE_SWIFT"\n')
             (root / "xcrun").chmod(0o755)
+            # The Nth swift call prints OUTPUT_N and exits with STATUS_N.
             (root / "swift").write_text(
                 '#!/bin/sh\nprintf "__SWIFT_CALL__\\n" >> "$ARGUMENTS"\n'
                 'printf "%s\\n" "$@" >> "$ARGUMENTS"\n'
-                'if [ -e "$CALLED" ]; then\n'
-                '  if [ -e "$SECOND_CALLED" ]; then\n'
-                '    if [ -e "$THIRD_CALLED" ]; then\n'
-                '      if [ -e "$FOURTH_CALLED" ]; then\n'
-                '        printf "%s" "$FIFTH_OUTPUT" >&2\nexit "$FIFTH_STATUS"\nfi\n'
-                '      touch "$FOURTH_CALLED"\n'
-                '      printf "%s" "$FOURTH_OUTPUT" >&2\nexit "$FOURTH_STATUS"\nfi\n'
-                '    touch "$THIRD_CALLED"\n'
-                '    printf "%s" "$THIRD_OUTPUT" >&2\nexit "$THIRD_STATUS"\nfi\n'
-                '  touch "$SECOND_CALLED"\n'
-                '  printf "%s" "$SECOND_OUTPUT" >&2\nexit "$SECOND_STATUS"\nfi\n'
-                'touch "$CALLED"\nprintf "%s" "$TEST_OUTPUT" >&2\nexit "$TEST_STATUS"\n')
+                'n=$(($(cat "$COUNTER" 2>/dev/null || echo 0) + 1))\necho "$n" > "$COUNTER"\n'
+                'eval "output=\\${OUTPUT_$n-}"\neval "status=\\${STATUS_$n-0}"\n'
+                'printf "%s" "$output" >&2\nexit "$status"\n')
             (root / "swift").chmod(0o755)
             marker = root / "continued"
             arguments = root / "arguments"
-            env = {**os.environ, "PATH": f"{root}:{os.environ['PATH']}",
-                   "FAKE_SWIFT": str(root / "swift"), "TEST_OUTPUT": output,
-                   "TEST_STATUS": str(status), "ARGUMENTS": str(arguments), "PILOT_SWIFT_JOBS": "2",
-                   "CALLED": str(root / "called"), "SECOND_OUTPUT": ISOLATED_OUTPUT if second_output is None else second_output,
-                   "SECOND_STATUS": str(second_status),
-                   "SECOND_CALLED": str(root / "second-called"), "THIRD_OUTPUT": third_output,
-                   "THIRD_STATUS": str(third_status),
-                   "THIRD_CALLED": str(root / "third-called"), "FOURTH_OUTPUT": fourth_output,
-                   "FOURTH_STATUS": str(fourth_status),
-                   "FOURTH_CALLED": str(root / "fourth-called"), "FIFTH_OUTPUT": fifth_output,
-                   "FIFTH_STATUS": str(fifth_status),
-                   "PILOT_HOME": str(root / "home"), "BUNDLE_RUNTIME": "0"}
+            outputs = [(output, status), (ISOLATED_OUTPUT if second_output is None else second_output, second_status),
+                       (third_output, third_status), (fourth_output, fourth_status), (fifth_output, fifth_status),
+                       (sixth_output, sixth_status)]
+            env = {**{key: value for key, value in os.environ.items() if key != "CI"},
+                   "PATH": f"{root}:{os.environ['PATH']}",
+                   "FAKE_SWIFT": str(root / "swift"), "ARGUMENTS": str(arguments), "PILOT_SWIFT_JOBS": "2",
+                   "COUNTER": str(root / "swift-calls"),
+                   "PILOT_HOME": str(root / "home"), "BUNDLE_RUNTIME": "0", **extra_env}
+            for index, (text, code) in enumerate(outputs, start=1):
+                env[f"OUTPUT_{index}"] = text
+                env[f"STATUS_{index}"] = str(code)
             # Use macOS's Bash 3.2, not a newer Homebrew bash picked by env.
             result = subprocess.run(
                 ["/bin/bash", "-c", '/bin/bash "$@" && touch "$CONTINUED"', "test", str(scripts / wrapper), *args],
@@ -105,8 +102,9 @@ class TestOutputTests(unittest.TestCase):
         result, continued, calls = self.run_wrapper(PASSED, all_calls=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(continued)
-        self.assertEqual(len(calls), 5)
-        self.assertEqual(calls[0][-2:], ["--skip", f"{ISOLATED}|{DEVBOX}|{TERMINAL}|{'|'.join(CALLBACKS)}"])
+        self.assertEqual(len(calls), 6)
+        self.assertEqual(calls[0][-2:],
+                         ["--skip", f"{ISOLATED}|{DEVBOX}|{TERMINAL}|{'|'.join(CALLBACKS)}|{'|'.join(JOURNEYS)}"])
         self.assertNotIn("--skip-build", calls[0])
         self.assertIn("--skip-build", calls[1])
         self.assertEqual(calls[1][-2:], ["--filter", ISOLATED])
@@ -116,8 +114,29 @@ class TestOutputTests(unittest.TestCase):
         self.assertEqual(calls[3][-2:], ["--filter", TERMINAL])
         self.assertIn("--skip-build", calls[4])
         self.assertEqual(calls[4][-2:], ["--filter", "|".join(CALLBACKS)])
+        self.assertIn("--skip-build", calls[5])
+        self.assertEqual(calls[5][-2:], ["--filter", "|".join(JOURNEYS)])
         self.assertEqual(result.stderr.count("acquired slot 1/1"), 1)
-        self.assertEqual(result.stdout, PASSED + ISOLATED_OUTPUT + DEVBOX_OUTPUT + TERMINAL_OUTPUT + CALLBACKS_OUTPUT)
+        self.assertEqual(result.stdout, PASSED + ISOLATED_OUTPUT + DEVBOX_OUTPUT + TERMINAL_OUTPUT + CALLBACKS_OUTPUT
+                         + JOURNEYS_OUTPUT)
+
+    def test_isolated_journeys_are_required_only_on_ci(self):
+        # Outside CI the journeys are disabled, so an empty run passes.
+        result, continued, calls = self.run_wrapper(PASSED, sixth_output=PASSED, all_calls=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(continued)
+        self.assertEqual(len(calls), 6)
+        outputs = [(PASSED, 0), (JOURNEYS_OUTPUT + FAILED, 0), (JOURNEYS_OUTPUT, 42)]
+        for name in JOURNEYS:
+            outputs.append((JOURNEYS_OUTPUT.replace(f"◇ Test {name}() started.\n", ""), 0))
+        for output, status in outputs:
+            result, continued, _ = self.run_wrapper(PASSED, sixth_output=output, sixth_status=status,
+                                                    extra_env={"CI": "true"})
+            self.assertNotEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(continued)
+        result, continued, _ = self.run_wrapper(PASSED, extra_env={"CI": "true"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(continued)
 
     def test_isolated_callbacks_require_every_test_and_preserve_failures(self):
         outputs = [("", 0), (PASSED, 0), (CALLBACKS_OUTPUT + FAILED, 0), (CALLBACKS_OUTPUT, 42)]
@@ -193,7 +212,7 @@ class TestOutputTests(unittest.TestCase):
     def test_explicit_build_options_still_partition_full_suite(self):
         result, _, calls = self.run_wrapper(PASSED, args=("--jobs=1", "--skip-build"), all_calls=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(len(calls), 5)
+        self.assertEqual(len(calls), 6)
         for call in calls:
             self.assertIn("--jobs=1", call)
             self.assertNotIn("--jobs", call)

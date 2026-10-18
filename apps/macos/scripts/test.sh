@@ -32,6 +32,9 @@ isolated=artifactHeightRespectsNestedClippingWhileKeepingVisibleOverflow
 devbox=addDevboxPresentsSetupSheetAfterCancelAndReopen
 terminal=terminalOpeningAndResizingDoNotFeedNativeFittingSizeBackIntoWindowConstraints
 callbacks='localStopNormalizesQualifiedRowsAndRestoresWithdrawnMessages|remoteStopKeepsCollidingLocalChatAndDraftUntouched|unavailableStopNeverFallsBackToCurrentLocalHost|missionTaskDragLoadsItsPlainTextOnTheMainActor'
+# Keyboard journeys block the MainActor in nested run loops for minutes when a runner grants no key window,
+# starving unrelated timed tests. They run only on CI, so only CI requires them to start.
+journeys='keyboardOnlyStartSwitchTypeAndReturn|keyboardOnlySidebarBrowsingKeepsFocusInTheSidebar'
 partition=1
 reuse=(--skip-build)
 for argument in "$@"; do
@@ -55,12 +58,13 @@ run_tests() {
 		| python3 "$here/scripts/check-test-output.py" ${guards[@]+"${guards[@]}"}
 }
 if [ "$partition" = 1 ]; then
-	run_tests "" "$@" --skip "$isolated|$devbox|$terminal|$callbacks"
+	run_tests "" "$@" --skip "$isolated|$devbox|$terminal|$callbacks|$journeys"
 	run_tests "$isolated" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$isolated"
 	run_tests "$devbox" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$devbox"
 	run_tests "$terminal" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$terminal"
 	# Stop and drag-data callbacks keep their MainActor deadlines without competing with UI run loops.
 	run_tests "$callbacks" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$callbacks"
+	run_tests "${CI:+$journeys}" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$journeys"
 else
 	# Explicit selection/listing is the caller's scope. Do not append another filter.
 	run_tests "" "$@"
