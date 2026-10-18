@@ -5,7 +5,7 @@ import SwiftUI
 /// Existing native views use their immutable surface owner, not a process-wide selected backend.
 /// The source forwards only that endpoint's changes and follows verified client replacement.
 @propertyWrapper @MainActor
-struct EndpointClient: DynamicProperty {
+struct EndpointClient: @MainActor DynamicProperty {
     @Environment(\.hostViewContext) private var context
     @StateObject private var source = EndpointClientSource()
     private var explicit: PilotClient?

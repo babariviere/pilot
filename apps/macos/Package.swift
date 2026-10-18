@@ -73,3 +73,9 @@ let package = Package(
     ],
     swiftLanguageModes: [.v5]
 )
+
+// Enforce clean diagnostics for every first-party target, including tests and helpers,
+// without changing the warning policy of third-party packages.
+for target in package.targets {
+    target.swiftSettings = (target.swiftSettings ?? []) + [.unsafeFlags(["-warnings-as-errors"])]
+}

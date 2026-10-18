@@ -112,7 +112,7 @@ func keyboardOnlyStartSwitchTypeAndReturn() throws {
             "Home shows the sidebar, page and new-chat composer regions")
     #expect(model.currentRoute == .home)
 
-    try journey.run {
+    journey.run {
         // ⌃⇥ walks the regions in order: sidebar, page, composer. The sidebar list may hold focus at launch, so the
         // walk starts wherever focus is and must reach the sidebar within one round.
         for _ in 0..<4 where !(journey.responder is NSTableView) { journey.press("\t", keyCode: 48, .control) }
@@ -157,7 +157,7 @@ func keyboardOnlySidebarBrowsingKeepsFocusInTheSidebar() throws {
     let model = journey.model
     let keyboard = model.keyboard
     #expect(journey.wait { keyboard.visibleRegions.contains(.sidebar) })
-    try journey.run {
+    journey.run {
         for _ in 0..<4 where !(journey.responder is NSTableView) { journey.press("\t", keyCode: 48, .control) }
         #expect(journey.wait { journey.responder is NSTableView })
         // J moves like Down; arrowing onto a chat opens it, and its composer does not take the focus.

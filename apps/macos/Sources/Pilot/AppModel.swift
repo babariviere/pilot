@@ -966,7 +966,7 @@ final class AppModel: ObservableObject {
     func setPinned(_ pinned: Bool, sessionId: String) {
         if let ref = try? HostResourceRef.decodeKey(sessionId) {
             Task {
-                do { try await hosts.perform(ref, kind: .session) { client, id in if pinned { try await client.pin(id) } else { try await client.unpin(id) } } }
+                do { _ = try await hosts.perform(ref, kind: .session) { client, id in if pinned { try await client.pin(id) } else { try await client.unpin(id) } } }
                 catch { sessionActionError = error.localizedDescription }
             }
             return
@@ -988,7 +988,7 @@ final class AppModel: ObservableObject {
     func renameSession(_ sessionId: String, title: String) {
         if let ref = try? HostResourceRef.decodeKey(sessionId) {
             Task {
-                do { try await hosts.perform(ref, kind: .session) { client, id in try await client.rename(id, title: title) } }
+                do { _ = try await hosts.perform(ref, kind: .session) { client, id in try await client.rename(id, title: title) } }
                 catch { sessionActionError = error.localizedDescription }
             }
             return
@@ -1006,7 +1006,7 @@ final class AppModel: ObservableObject {
     func setArchived(_ archived: Bool, sessionId: String) {
         if let ref = try? HostResourceRef.decodeKey(sessionId) {
             Task {
-                do { try await hosts.perform(ref, kind: .session) { client, id in if archived { try await client.archive(id) } else { try await client.restore(id) } } }
+                do { _ = try await hosts.perform(ref, kind: .session) { client, id in if archived { try await client.archive(id) } else { try await client.restore(id) } } }
                 catch { sessionActionError = error.localizedDescription }
             }
             return

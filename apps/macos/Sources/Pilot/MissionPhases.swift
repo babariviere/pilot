@@ -271,7 +271,7 @@ enum MissionTaskDrag {
     static func provider(_ taskId: String) -> NSItemProvider {
         let provider = NSItemProvider()
         provider.registerDataRepresentation(forTypeIdentifier: UTType.utf8PlainText.identifier, visibility: .ownProcess) { done in
-            done(Data(taskId.utf8), nil)
+            Task { @MainActor in done(Data(taskId.utf8), nil) }
             return nil
         }
         return provider

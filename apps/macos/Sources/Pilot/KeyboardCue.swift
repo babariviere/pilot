@@ -77,8 +77,8 @@ private struct KeyboardCueSource: ViewModifier {
 
 extension View {
     /// Publishes `KeyboardCue` to a scene. Only views reading `keyboardCue` update when it changes.
-    func keyboardCueSource(_ cue: KeyboardCue = .shared) -> some View {
-        modifier(KeyboardCueSource(cue: cue))
+    @MainActor func keyboardCueSource(_ cue: KeyboardCue? = nil) -> some View {
+        modifier(KeyboardCueSource(cue: cue ?? .shared))
     }
 
     /// The keyboard target's quiet fill (`Theme.keyboardHighlight`), behind the view while `shown`. Callers pass
