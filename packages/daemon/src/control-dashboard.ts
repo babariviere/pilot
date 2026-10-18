@@ -3,7 +3,9 @@ import type {
 	ControlDashboardBlocker,
 	ControlDashboardChat,
 	ControlDashboardDecision,
+	ControlDashboardReplicaMission,
 	ControlDashboardResponse,
+	ControlDashboardSharedTask,
 	DashboardTrackedItem,
 	Mission,
 	Project,
@@ -18,12 +20,22 @@ export interface ControlMissionAttention {
 	blockedTotal: number;
 	decisionsTotal: number;
 }
+/** Each enrolled mission retains at most 100 thin task rows; totals are before clipping. */
+export interface ControlSharedMissionGroup {
+	projectId: string;
+	missionId: string;
+	replica?: ControlDashboardReplicaMission;
+	tasks: ControlDashboardSharedTask[];
+	tasksTotal: number;
+}
 export interface ControlDashboardSources {
 	sessions: Pick<SessionManager, "list">;
 	projects: () => Project[];
 	missions: () => Mission[];
 	linear: (projectId: string) => DashboardTrackedItem[];
 	missionAttention?: (missionId: string) => ControlMissionAttention | undefined;
+	/** Change-driven thin projection of grants and local replicas. No SQL or remote reads here. */
+	sharedContext?: () => ControlSharedMissionGroup[];
 	/** Only failures verified against the current PR head. Legacy readiness is not exact-head evidence. */
 	failingChecks?: () => Array<ControlDashboardBlocker & { kind: "failing_checks"; headSha: string }>;
 	/** Optional cache invalidations, e.g. exact-head checks fetched by a separate diagnostic action. */
@@ -52,12 +64,16 @@ export function buildControlDashboard(
 	const projectId = id("projectId"),
 		missionId = id("missionId");
 	const projects = sources.projects(),
-		missions = sources.missions();
+		missions = sources.missions(),
+		shared = sources.sharedContext?.() ?? [];
 	if (projectId && !projects.some((p) => p.id === projectId)) throw new Error("Unknown project");
 	const mission = missionId ? missions.find((m) => m.id === missionId) : undefined;
-	if (missionId && !mission) throw new Error("Unknown mission");
-	if (projectId && mission && mission.projectId !== projectId) throw new Error("Mission belongs to another project");
-	const selected = projectId ?? mission?.projectId;
+	const remote = shared.filter((group) => group.missionId === missionId);
+	if (missionId && !mission && !remote.length) throw new Error("Unknown mission");
+	if (projectId && missionId && mission?.projectId !== projectId && !remote.some((g) => g.projectId === projectId))
+		throw new Error("Mission belongs to another project");
+	const scopeProjects = new Set([...(mission ? [mission.projectId] : []), ...remote.map((g) => g.projectId)]);
+	const selected = projectId ?? (scopeProjects.size === 1 ? [...scopeProjects][0] : undefined);
 	const chats = sources.sessions.list({
 		archived: "false",
 		...(selected ? { projectId: selected } : {}),
@@ -77,6 +93,8 @@ export function buildControlDashboard(
 		activeMissions: [],
 		blockers: [],
 		pendingDecisions: [],
+		sharedTasks: [],
+		replicaMissions: [],
 		next: { watches: [], total: 0 },
 		totals: {
 			projects: ps.length,
@@ -88,6 +106,8 @@ export function buildControlDashboard(
 			activeMissions: 0,
 			blockers: 0,
 			pendingDecisions: 0,
+			sharedTasks: 0,
+			replicaMissions: 0,
 		},
 		truncated: false,
 	};
@@ -178,6 +198,27 @@ export function buildControlDashboard(
 			url: check.url?.slice(0, 2048),
 		}));
 	}
+	for (const group of shared) {
+		if ((selected && group.projectId !== selected) || (missionId && group.missionId !== missionId)) continue;
+		const age = (at: number | undefined) => (at === undefined ? null : Math.max(0, now - at));
+		const replica = group.replica;
+		if (replica) {
+			data.totals.replicaMissions++;
+			append(
+				data.replicaMissions,
+				() => ({ ...replica, title: short(replica.title), replicaAgeMs: age(replica.replicaSyncedAt) }),
+				50,
+			);
+		}
+		data.totals.sharedTasks += group.tasksTotal;
+		for (const task of group.tasks)
+			append(data.sharedTasks, () => ({
+				...task,
+				title: short(task.title),
+				...(task.source === "replica" ? { replicaAgeMs: age(task.replicaSyncedAt) } : {}),
+			}));
+		data.truncated ||= group.tasksTotal > group.tasks.length;
+	}
 	for (const project of ps.slice(0, 200))
 		for (const item of sources.linear(project.id)) {
 			if (missionId && item.missionId !== missionId && !item.missionIds?.includes(missionId)) continue;
@@ -201,6 +242,8 @@ export function buildControlDashboard(
 		data.activeMissions,
 		data.blockers,
 		data.pendingDecisions,
+		data.sharedTasks,
+		data.replicaMissions,
 		data.next.watches,
 		data.projects,
 		data.chats,

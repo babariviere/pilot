@@ -4,8 +4,16 @@ import { mkdtemp, rm } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
-import type { Mission, Project, SessionSummary, Watch } from "@pilot/protocol";
+import { type TestContext, test } from "node:test";
+import type {
+	DelegationGrant,
+	Mission,
+	OperationHost,
+	Project,
+	SessionSummary,
+	SharedContextBinding,
+	Watch,
+} from "@pilot/protocol";
 import { WebSocket } from "ws";
 import { buildControlDashboard, type ControlDashboardSources } from "./control-dashboard.ts";
 import { ControlPilot } from "./control-pilot.ts";
@@ -36,6 +44,80 @@ const watch: Watch = {
 	mode: "once",
 	note: "Read the result and report it",
 };
+function sharedFixture(t: TestContext) {
+	const store = new MissionStore(":memory:"),
+		authority = new MissionStore(":memory:");
+	t.after(async () => {
+		await store.close();
+		await authority.close();
+	});
+	const host: OperationHost = { hostId: "daemon", daemonId: "local", lineageId: "local-lineage" };
+	const remote: OperationHost = { hostId: "daemon", daemonId: "devbox", lineageId: "remote-lineage" };
+	const mission = store.create({ projectId: "p", title: "Home", tasks: [{ title: "Remote build" }] });
+	store.shareMission(mission.id);
+	const task = store.tasks(mission.id)[0]!;
+	const grant: DelegationGrant = {
+		delegationId: "grant",
+		task: { mission: { home: host, missionId: mission.id }, taskId: task.id },
+		executionEpoch: 1,
+		bindingId: "outgoing",
+		bindingGeneration: 1,
+		target: { host: remote, projectId: "remote-project" },
+		session: { host: remote, sessionId: "remote-chat" },
+		definitionRevision: store.sharedDefinitionRevision(task.id),
+		context: { memory: 0, mission: store.sharedHead() },
+		manifestId: "manifest",
+		references: [],
+		request: { projectId: "remote-project", message: "Do work", model: "test/model" },
+		state: "reserved",
+	};
+	store.reserveSharedGrant(grant, 0);
+	const remoteMission = authority.create({
+		projectId: "remote-project",
+		title: "Remote home",
+		tasks: [{ title: "Committed title" }],
+	});
+	authority.shareMission(remoteMission.id);
+	const snapshot = authority.sharedSnapshot(remoteMission.id);
+	const binding: SharedContextBinding = {
+		schemaVersion: 1,
+		bindingId: "incoming",
+		generation: 1,
+		logicalProjectId: "logical",
+		memoryHome: { host: remote, projectId: "remote-project" },
+		missionHome: remote,
+		executionProject: { host, projectId: "p" },
+		missionIds: [remoteMission.id],
+		shareMemory: false,
+		state: "active",
+	};
+	store.sharingPut("binding", binding.bindingId, binding);
+	const replica = {
+		sequence: snapshot.sequence,
+		complete: true,
+		syncedAt: 1000,
+		missions: { [remoteMission.id]: snapshot },
+	};
+	store.sharingPut("replica", binding.bindingId, replica);
+	const remoteTask = snapshot.detail.tasks[0]!;
+	for (const [proposalId, state] of [
+		["pending", "pending"],
+		["conflict", "conflict"],
+		["rejected", "rejected"],
+		["applied", "committed"],
+	])
+		store.sharingPut(`proposal:${binding.bindingId}`, proposalId!, {
+			proposalId,
+			missionId: remoteMission.id,
+			entityId: remoteTask.id,
+			expectedRevision: 1,
+			action: "task",
+			args: { id: remoteTask.id, title: "Proposed title", status: "done" },
+			origin: { host, sessionId: "local-chat" },
+			state,
+		});
+	return { store, host, remote, mission, task, grant, remoteMission, remoteTask, binding, replica };
+}
 function fixture(): { sources: ControlDashboardSources; chats: SessionSummary[] } {
 	const chats = [
 		chat("run", {
@@ -252,12 +334,207 @@ test("mission attention cache reads thin bounded rows, excludes resolved proposa
 	assert.equal(cached.blockedTasks.length, 100);
 });
 
+test("mission-home grants retain host, epoch and acknowledged state without inferring failure from disconnection", (t) => {
+	const { store, host, remote, grant, mission, task } = sharedFixture(t);
+	const { sources } = fixture();
+	sources.missions = () => [mission];
+	let cache = store.controlSharedContext(host);
+	sources.sharedContext = () => cache;
+	const read = () => buildControlDashboard(sources, { missionId: mission.id }, 5000);
+	let row = read().sharedTasks[0]!;
+	assert.deepEqual(row.executionHost, remote);
+	assert.equal(row.executionEpoch, 1);
+	assert.equal(row.grantState, "reserved");
+	assert.equal(row.running, undefined);
+	assert.equal(row.consistency, "committed");
+	assert.equal(row.taskId, task.id);
+	grant.state = "accepted";
+	store.updateSharedGrant(grant);
+	store.sharingPut("remote-projection", grant.delegationId, {
+		eligible: true,
+		event: { delegationId: grant.delegationId, executionEpoch: 1, payload: { working: true } },
+	});
+	cache = store.controlSharedContext(host);
+	row = read().sharedTasks[0]!;
+	assert.equal(row.grantState, "accepted");
+	assert.equal(row.running, true);
+	// No newer facts arrive while disconnected. Old age alone cannot change accepted/running into failed.
+	const disconnected = buildControlDashboard(sources, { missionId: mission.id }, 10 ** 12);
+	assert.deepEqual(disconnected.sharedTasks, read().sharedTasks);
+	assert.equal(
+		disconnected.blockers.some((b) => b.kind === "failed_chat"),
+		false,
+	);
+	assert.equal(store.sharedAllocation(task.id)?.executionEpoch, 1);
+	grant.state = "cancel_requested";
+	store.updateSharedGrant(grant);
+	cache = store.controlSharedContext(host);
+	assert.equal(read().sharedTasks[0]!.grantState, "cancel_requested");
+	assert.equal(read().sharedTasks[0]!.running, true, "cancel is not a stopped acknowledgment");
+	grant.state = "sealed";
+	store.updateSharedGrant(grant);
+	cache = store.controlSharedContext(host);
+	assert.equal(read().sharedTasks[0]!.grantState, "sealed");
+	assert.equal(read().sharedTasks[0]!.running, false);
+	store.reserveSharedGrant({ ...grant, delegationId: "next-grant", executionEpoch: 2, state: "reserved" }, 1);
+	store.sharingPut("remote-projection", "next-grant", {
+		eligible: true,
+		event: { delegationId: "next-grant", executionEpoch: 1, payload: { working: true } },
+	});
+	cache = store.controlSharedContext(host);
+	assert.equal(read().sharedTasks[0]!.executionEpoch, 2);
+	assert.equal(read().sharedTasks[0]!.running, undefined, "old epoch facts do not describe a new grant");
+});
+
+test("remote-home replicas separate committed tasks from provisional proposals, with mission-only age and scoped identity", (t) => {
+	const { store, host, remote, remoteMission, remoteTask, binding, replica } = sharedFixture(t);
+	const { sources } = fixture();
+	store.sharingPut("freshness", binding.bindingId, { lastSyncedAt: 4999 }); // newer memory sync is not mission freshness
+	sources.sharedContext = () => cache;
+	let cache = store.controlSharedContext(host);
+	const replicaGroup = cache.find((g) => g.replica)!;
+	store.sharingPut("freshness", binding.bindingId, { lastSyncedAt: 5000 });
+	assert.equal(
+		store.controlSharedContext(host).find((g) => g.replica),
+		replicaGroup,
+		"memory-only invalidations reuse the replica projection",
+	);
+	for (const method of ["detail", "tasks", "sharingGet", "sharedGrants"] as const)
+		t.mock.method(store, method, () => {
+			throw new Error("No full hydration or tool-time store read");
+		});
+	const data = buildControlDashboard(sources, { missionId: remoteMission.id }, 5000);
+	assert.equal(data.missions.length, 0, "replicas are not writable local missions");
+	assert.equal(data.replicaMissions.length, 1);
+	assert.deepEqual(data.replicaMissions[0]!.missionHome, remote);
+	assert.equal(data.replicaMissions[0]!.projectId, "p", "filters use the enrolled execution project");
+	assert.equal(data.replicaMissions[0]!.replicaAgeMs, 4000);
+	assert.equal(data.replicaMissions[0]!.consistency, "committed");
+	assert.equal(data.sharedTasks.length, 4);
+	const committed = data.sharedTasks.find((r) => r.consistency === "committed")!;
+	assert.equal(committed.taskId, remoteTask.id);
+	assert.equal(committed.title, "Committed title");
+	assert.equal(committed.status, "todo", "proposed completion is not committed completion");
+	assert.equal(committed.replicaAgeMs, 4000);
+	assert.deepEqual(
+		data.sharedTasks
+			.filter((r) => r.consistency === "provisional")
+			.map((r) => r.proposalState)
+			.sort(),
+		["conflict", "pending", "rejected"],
+	);
+	assert.equal(data.blockers.length, 0);
+	assert.equal(buildControlDashboard(sources, { projectId: "q" }).totals.sharedTasks, 0);
+	assert.throws(
+		() => buildControlDashboard(sources, { projectId: "q", missionId: remoteMission.id }),
+		/another project/,
+	);
+	const later = buildControlDashboard(sources, { missionId: remoteMission.id }, 9000);
+	assert.equal(later.replicaMissions[0]!.replicaAgeMs, 8000);
+	assert.equal(later.replicaMissions[0]!.status, "active");
+	assert.equal(later.blockers.length, 0, "disconnected replica age is not an execution failure");
+	assert.equal(buildControlDashboard(sources, { missionId: remoteMission.id }, 0).replicaMissions[0]!.replicaAgeMs, 0);
+	store.sharingPut(`proposal:${binding.bindingId}`, "new-task", {
+		proposalId: "new-task",
+		missionId: remoteMission.id,
+		entityId: "uncommitted-entity",
+		expectedRevision: 0,
+		action: "task",
+		args: { title: "Proposed new task" },
+		origin: { host, sessionId: "local-chat" },
+		state: "pending",
+	});
+	cache = store.controlSharedContext(host);
+	const newTask = buildControlDashboard(sources, { missionId: remoteMission.id }).sharedTasks.find(
+		(r) => r.proposalId === "new-task",
+	)!;
+	assert.equal(newTask.consistency, "provisional");
+	assert.equal(newTask.taskId, undefined);
+	assert.equal(newTask.taskNumber, undefined, "new proposals have no invented canonical number");
+	// Identical raw mission/task IDs on another authority stay separate, including project filtering.
+	const otherBinding = {
+		...binding,
+		bindingId: "second",
+		missionHome: { ...remote, lineageId: "second-lineage" },
+		executionProject: { host, projectId: "q" },
+	};
+	store.sharingPut("binding", otherBinding.bindingId, otherBinding);
+	store.sharingPut("replica", otherBinding.bindingId, replica);
+	cache = store.controlSharedContext(host);
+	const both = buildControlDashboard(sources, { missionId: remoteMission.id });
+	assert.equal(both.replicaMissions.length, 2);
+	assert.equal(new Set(both.sharedTasks.map((r) => r.id)).size, both.sharedTasks.length);
+	assert.equal(
+		buildControlDashboard(sources, { projectId: "p", missionId: remoteMission.id }).replicaMissions.length,
+		1,
+	);
+	store.sharingPut("binding", otherBinding.bindingId, { ...otherBinding, state: "revoked" });
+	const { syncedAt: _, ...legacy } = replica;
+	store.sharingPut("replica", binding.bindingId, legacy);
+	cache = store.controlSharedContext(host);
+	assert.equal(buildControlDashboard(sources, { missionId: remoteMission.id }).replicaMissions[0]!.replicaAgeMs, null);
+	store.sharingPut("replica", binding.bindingId, { ...replica, complete: false });
+	cache = store.controlSharedContext(host);
+	const incomplete = buildControlDashboard(sources, { missionId: remoteMission.id });
+	assert.equal(incomplete.replicaMissions[0]!.complete, false);
+	assert.equal(incomplete.sharedTasks.length, 0, "incomplete replica tasks are not advertised as committed");
+	store.sharingPut("binding", binding.bindingId, { ...binding, state: "revoked" });
+	cache = store.controlSharedContext(host);
+	assert.throws(() => buildControlDashboard(sources, { missionId: remoteMission.id }), /Unknown mission/);
+});
+
+test("shared-context projections stay thin and bounded before dashboard byte clipping", (t) => {
+	const { store, host, binding, replica, remoteMission, remoteTask } = sharedFixture(t);
+	const snapshot = replica.missions[remoteMission.id]!;
+	snapshot.detail.tasks = Array.from({ length: 150 }, (_, i) => ({
+		...remoteTask,
+		id: `large-${i}`,
+		title: "😀".repeat(1000),
+		body: "x".repeat(1000),
+	}));
+	store.sharingPut("replica", binding.bindingId, replica);
+	const projectionStarted = performance.now();
+	const cache = store.controlSharedContext(host);
+	t.diagnostic(`150-task replica thin projection: ${(performance.now() - projectionStarted).toFixed(2)} ms`);
+	const group = cache.find((g) => g.replica)!;
+	assert.equal(group.tasksTotal, 153);
+	assert.equal(group.tasks.length, 100);
+	assert.equal(JSON.stringify(group).includes('"body"'), false);
+	const { sources } = fixture();
+	sources.sharedContext = () => cache;
+	const data = buildControlDashboard(sources, { missionId: remoteMission.id });
+	assert.equal(data.totals.sharedTasks, 153);
+	assert.equal(data.totals.replicaMissions, 1);
+	assert.equal(data.truncated, true);
+	assert.ok(data.sharedTasks.length <= 100);
+	assert.ok(Buffer.byteLength(JSON.stringify(data)) <= 24_000);
+	const chats = Array.from({ length: 10_000 }, (_, i) => chat(`stream-${i}`, { state: "working", working: true }));
+	sources.sessions = { list: () => chats };
+	const samples: number[][] = [[], []];
+	for (let i = 0; i < 6; i++) {
+		chats[0]!.title += " streaming append";
+		for (const variant of i % 2 ? [1, 0] : [0, 1]) {
+			sources.sharedContext = variant ? () => cache : undefined;
+			const start = performance.now();
+			buildControlDashboard(sources);
+			if (i) samples[variant]!.push(performance.now() - start);
+		}
+	}
+	const median = (values: number[]) => values.sort((a, b) => a - b)[2]!.toFixed(2);
+	t.diagnostic(
+		`10,000 working-chat snapshot median: existing ${median(samples[0]!)} ms; shared-context ${median(samples[1]!)} ms (synthetic appends, 5 alternating samples)`,
+	);
+});
+
 test("HTTP and pilot status agree on the identical fixture; bad params are 400 and reads never wake workers", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "control-dashboard-"));
 	const projects = new ProjectStore(home),
 		sessions = new SessionManager(home, projects),
 		terminals = new TerminalManager();
 	const { sources } = fixture();
+	const shared = sharedFixture(t);
+	const sharedCache = shared.store.controlSharedContext(shared.host);
+	sources.sharedContext = () => sharedCache;
 	t.mock.method(sessions, "list", sources.sessions.list);
 	t.mock.method(projects, "list", sources.projects);
 	const history = t.mock.method(sessions, "history", async () => {
@@ -285,10 +562,13 @@ test("HTTP and pilot status agree on the identical fixture; bad params are 400 a
 	await once(server, "listening");
 	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/control-chat/dashboard`;
 	t.mock.method(Date, "now", () => 5000);
-	for (const args of [{}, { projectId: "p" }, { missionId: "m" }, { projectId: "p", missionId: "m" }] as Record<
-		string,
-		string
-	>[]) {
+	for (const args of [
+		{},
+		{ projectId: "p" },
+		{ missionId: "m" },
+		{ projectId: "p", missionId: "m" },
+		{ missionId: shared.remoteMission.id },
+	] as Record<string, string>[]) {
 		const response = await fetch(`${base}?${new URLSearchParams(args)}`);
 		assert.equal(response.status, 200);
 		assert.deepEqual(
@@ -354,7 +634,7 @@ test("watch dashboard is change-driven, bounded, restored at startup and drops f
 	assert.ok(!watches.dashboard().watches.some((w) => w.target.id === "chat0"));
 });
 
-test("dashboard.changed coalesces session and watch bursts and only invalidates, never builds a snapshot", async (t) => {
+test("dashboard.changed coalesces session, watch and shared-context bursts without building a snapshot", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "control-dashboard-ws-"));
 	const projects = new ProjectStore(home),
 		sessions = new SessionManager(home, projects),
@@ -362,6 +642,21 @@ test("dashboard.changed coalesces session and watch bursts and only invalidates,
 		watches = new WatchService(":memory:");
 	await watches.ready();
 	const listeners = new Set<(chat: SessionSummary) => void>();
+	const sharedListeners = new Set<() => void>();
+	const { sources } = fixture();
+	sessions.setPilot(
+		new ControlPilot({
+			...sources,
+			sessions,
+			isControl: () => true,
+			onDashboardChange: (listener) => {
+				sharedListeners.add(listener);
+				return () => {
+					sharedListeners.delete(listener);
+				};
+			},
+		}),
+	);
 	t.mock.method(sessions, "onChange", (listener: (chat: SessionSummary) => void) => {
 		listeners.add(listener);
 		return () => {
@@ -415,6 +710,8 @@ test("dashboard.changed coalesces session and watch bursts and only invalidates,
 		});
 	});
 	for (let i = 0; i < 20; i++) for (const listener of listeners) listener(chat("run", { state: "working" }));
+	assert.ok(sharedListeners.size > 0);
+	for (let i = 0; i < 20; i++) for (const listener of sharedListeners) listener();
 	await Promise.all(Array.from({ length: 10 }, () => watches.add(watch)));
 	await invalidation;
 	assert.equal(count, 1);

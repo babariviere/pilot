@@ -5,6 +5,7 @@ import { dirname } from "node:path";
 import { DatabaseSync, type Session, type SQLInputValue } from "node:sqlite";
 import type {
 	ArtifactKind,
+	ControlDashboardSharedTask,
 	DelegationGrant,
 	GitHubAction,
 	Mission,
@@ -31,13 +32,16 @@ import type {
 	MissionTask,
 	MissionTaskStatus,
 	MissionTaskWrite,
+	OperationHost,
 	SessionPullRequest,
 	SessionSummary,
+	SharedContextBinding,
 	SharedEntity,
 	SharedMissionChange,
 	SharedMissionSnapshot,
 	UpdateMissionRequest,
 } from "@pilot/protocol";
+import type { ControlSharedMissionGroup } from "./control-dashboard.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
 import {
@@ -479,6 +483,8 @@ export function parseResourceUrl(raw: string): { url: string; kind: MissionResou
 }
 
 export class MissionStore {
+	/** Replica projections are reused across unrelated mission/memory invalidations. At most one per binding. */
+	private readonly controlReplicaCache = new Map<string, ControlSharedMissionGroup[]>();
 	private db: DatabaseSync;
 	private readonly listeners = new Set<(missionId: string) => void>();
 	private readonly linearSyncListeners = new Set<() => void>();
@@ -994,6 +1000,8 @@ export class MissionStore {
 			id,
 			serialized,
 		);
+		if (namespace === "binding" || namespace === "replica") this.controlReplicaCache.delete(id);
+		else if (namespace.startsWith("proposal:")) this.controlReplicaCache.delete(namespace.slice("proposal:".length));
 	}
 	sharingTransaction<T>(work: () => T): T {
 		return this.batchChanges(work);
@@ -1932,6 +1940,136 @@ export class MissionStore {
 				createdAt: num(row.created_at!),
 			})),
 		};
+	}
+
+	/** Thin, bounded per-scope projection for the change-driven Control cache, never a tool-time read.
+	 * SQL extracts only display fields, not grant requests, replica bodies, events or proposal arguments.
+	 * Connectivity is deliberately absent: missing facts cannot fail a task or release a grant.
+	 */
+	controlSharedContext(host: OperationHost): ControlSharedMissionGroup[] {
+		const groups: ControlSharedMissionGroup[] = [];
+		const parseTask = (row: Row): ControlDashboardSharedTask => {
+			const value = JSON.parse(str(row.value!));
+			for (const key of Object.keys(value)) if (value[key] === null) delete value[key];
+			return value;
+		};
+		for (const mission of this.all(
+			`SELECT DISTINCT m.id, m.project_id FROM shared_allocations a JOIN missions m ON m.id=a.mission_id
+			WHERE json_extract(a.value,'$.task.mission.home.daemonId')=?
+			AND json_extract(a.value,'$.task.mission.home.lineageId')=? ORDER BY m.id`,
+			host.daemonId,
+			host.lineageId,
+		)) {
+			const rows = this.all(
+				`SELECT COUNT(*) OVER() AS total, json_object(
+				'id', 'grant:' || a.delegation_id, 'bindingId', json_extract(a.value,'$.bindingId'),
+				'projectId', ?, 'missionId', a.mission_id, 'missionHome', json_extract(a.value,'$.task.mission.home'),
+				'source', 'mission-home', 'consistency', 'committed', 'taskId', a.task_id,
+				'taskNumber', t.number, 'title', substr(t.title,1,160), 'status', t.status,
+				'delegationId', a.delegation_id, 'executionEpoch', a.epoch,
+				'executionHost', json_extract(a.value,'$.target.host'), 'grantState', json_extract(a.value,'$.state'),
+				'running', CASE WHEN a.sealed=1 THEN json('false')
+				WHEN json_extract(p.value,'$.eligible')=1
+				AND json_extract(p.value,'$.event.delegationId')=a.delegation_id
+				AND json_extract(p.value,'$.event.executionEpoch')=a.epoch
+				THEN json(CASE json_extract(p.value,'$.event.payload.working') WHEN 1 THEN 'true' WHEN 0 THEN 'false' ELSE 'null' END)
+				ELSE NULL END) AS value
+				FROM shared_allocations a LEFT JOIN tasks t ON t.id=a.task_id
+				LEFT JOIN shared_records p ON p.namespace='remote-projection' AND p.id=a.delegation_id
+				WHERE a.mission_id=? ORDER BY a.task_id LIMIT 100`,
+				mission.project_id!,
+				mission.id!,
+			);
+			groups.push({
+				projectId: str(mission.project_id!),
+				missionId: str(mission.id!),
+				tasks: rows.map(parseTask),
+				tasksTotal: Number(rows[0]?.total ?? 0),
+			});
+		}
+		for (const binding of this.sharingList<SharedContextBinding>("binding")) {
+			if (
+				binding.state !== "active" ||
+				(binding.missionHome.daemonId === host.daemonId && binding.missionHome.lineageId === host.lineageId) ||
+				binding.executionProject.host.daemonId !== host.daemonId ||
+				binding.executionProject.host.lineageId !== host.lineageId
+			)
+				continue;
+			const cached = this.controlReplicaCache.get(binding.bindingId);
+			if (cached) {
+				groups.push(...cached);
+				continue;
+			}
+			const bindingGroups: ControlSharedMissionGroup[] = [];
+			for (const missionId of binding.missionIds) {
+				// json_each avoids loading the full replica object in JavaScript, even for a large brief/history.
+				const snapshot = this.one(
+					`SELECT json_extract(r.value,'$.complete') AS complete, json_extract(r.value,'$.sequence') AS sequence,
+					json_extract(r.value,'$.syncedAt') AS synced_at, substr(json_extract(s.value,'$.detail.mission.title'),1,160) AS title,
+					json_extract(s.value,'$.detail.mission.status') AS status
+					FROM shared_records r LEFT JOIN json_each(r.value,'$.missions') s ON s.key=?
+					WHERE r.namespace='replica' AND r.id=?`,
+					missionId,
+					binding.bindingId,
+				);
+				const projectId = binding.executionProject.projectId;
+				const syncedAt = snapshot?.synced_at == null ? undefined : Number(snapshot.synced_at);
+				const complete = snapshot?.complete === 1 && snapshot?.title != null;
+				const base = {
+					bindingId: binding.bindingId,
+					projectId,
+					missionId,
+					missionHome: binding.missionHome,
+					source: "replica" as const,
+					replicaSyncedAt: syncedAt,
+					replicaAgeMs: null,
+				};
+				const rows = complete
+					? this.all(
+							`WITH display AS (
+					SELECT 0 AS kind, json_extract(t.value,'$.id') AS sort, json_object(
+					'id', 'replica:' || ? || ':' || ? || ':' || json_extract(t.value,'$.id'),
+					'consistency','committed','taskId',json_extract(t.value,'$.id'),'taskNumber',json_extract(t.value,'$.number'),
+					'title',substr(json_extract(t.value,'$.title'),1,160),'status',json_extract(t.value,'$.status')) AS value
+					FROM shared_records r, json_each(r.value,'$.missions') s, json_each(s.value,'$.detail.tasks') t
+					WHERE r.namespace='replica' AND r.id=? AND s.key=?
+					UNION ALL SELECT 1, p.id, json_object('id','proposal:' || ? || ':' || p.id,
+					'consistency','provisional','proposalId',p.id,'proposalState',json_extract(p.value,'$.state'),
+					'taskId',CASE WHEN json_extract(p.value,'$.args.id') IS NOT NULL THEN json_extract(p.value,'$.entityId') END,
+					'title',substr(json_extract(p.value,'$.args.title'),1,160),'status',json_extract(p.value,'$.args.status'))
+					FROM shared_records p WHERE p.namespace=? AND json_extract(p.value,'$.missionId')=?
+					AND json_extract(p.value,'$.action')='task' AND json_extract(p.value,'$.state')!='committed')
+					SELECT COUNT(*) OVER() AS total, value FROM display ORDER BY kind, sort LIMIT 100`,
+							binding.bindingId,
+							missionId,
+							binding.bindingId,
+							missionId,
+							binding.bindingId,
+							`proposal:${binding.bindingId}`,
+							missionId,
+						)
+					: [];
+				bindingGroups.push({
+					projectId,
+					missionId,
+					replica: {
+						id: `replica:${binding.bindingId}:${missionId}`,
+						...base,
+						consistency: "committed",
+						complete,
+						sequence: Number(snapshot?.sequence ?? 0),
+						...(complete
+							? { title: str(snapshot!.title!), status: str(snapshot!.status!) as MissionStatus }
+							: {}),
+					},
+					tasks: rows.map((row) => ({ ...base, ...parseTask(row) })),
+					tasksTotal: Number(rows[0]?.total ?? 0),
+				});
+			}
+			this.controlReplicaCache.set(binding.bindingId, bindingGroups);
+			groups.push(...bindingGroups);
+		}
+		return groups;
 	}
 
 	/** Lifecycle listeners need no task counts or attention projection. */

@@ -110,6 +110,8 @@ interface Outgoing {
 }
 interface Replica {
 	sequence: number;
+	/** Local mission import time, not a memory sync or connectivity timestamp. */
+	syncedAt?: number;
 	complete: boolean;
 	missions: Record<string, SharedMissionSnapshot>;
 }
@@ -1056,6 +1058,7 @@ export class SharedContextService {
 				throw new OperationRejected("Incomplete or rolled-back mission checkpoint");
 			this.store.sharingPut("replica", binding.bindingId, {
 				sequence: payload.head,
+				syncedAt: Date.now(),
 				complete: true,
 				missions: Object.fromEntries(snapshots.map((snapshot) => [snapshot.missionId, snapshot])),
 			});
@@ -1093,6 +1096,7 @@ export class SharedContextService {
 				snapshot.sequence = change.sequence;
 			}
 			replica.sequence = payload.through;
+			replica.syncedAt = Date.now();
 			this.store.sharingPut("replica", binding.bindingId, replica);
 			this.rememberSync(binding, { mission: payload.head ?? payload.through });
 			await this.contextChanged(binding);
