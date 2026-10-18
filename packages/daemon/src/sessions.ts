@@ -455,7 +455,7 @@ const emptySnapshot: AgentEvent = {
 	usage: { models: {}, tools: {} },
 };
 
-const ID_PATTERN = /^[0-9a-f-]{36}$/;
+const ID_PATTERN = /^[0-9a-f-]{36}$/i;
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
 function reviewThreadKey(url: string, id: string, commentId: string): string {
@@ -3834,12 +3834,30 @@ export class SessionManager {
 		}
 	}
 
+	// Serialize exact replays and reject case aliases before asynchronous directory/metadata work.
+	// IDs on disk and in receipts retain their original bytes on both case-sensitive and APFS hosts.
+	private readonly durableCreateAdmissions = new Map<
+		string,
+		{ targetId: string; operationId: string; result: Promise<SessionSummary> }
+	>();
+	private readonly newSessionAdmissions = new Set<string>();
+
 	/** Called only after durable operation reservation. Crash recovery uses this exact target/input ID. */
 	async spawnDurable(request: SpawnRequest, targetId: string, operationId: string): Promise<SessionSummary> {
 		this.sharing?.assertCreate(targetId, operationId);
 		if (!ID_PATTERN.test(targetId)) throw new Conflict("Invalid reserved session ID");
+		const key = targetId.toLowerCase();
+		const active = this.durableCreateAdmissions.get(key);
+		if (active) {
+			if (active.targetId !== targetId || active.operationId !== operationId)
+				throw new Conflict("Reserved session ID aliases another admission");
+			return active.result;
+		}
+		for (const id of this.metas.keys())
+			if (id !== targetId && id.toLowerCase() === key)
+				throw new Conflict("Reserved session ID aliases an existing session");
 		const end = this.updateGate.begin();
-		try {
+		const result = (async () => {
 			const existing = this.metas.get(targetId);
 			if (existing) {
 				if (existing.createOperationId !== operationId)
@@ -3852,7 +3870,12 @@ export class SessionManager {
 				return this.summary(existing);
 			}
 			return await this.spawnAdmitted(request, false, undefined, { targetId, operationId });
+		})();
+		this.durableCreateAdmissions.set(key, { targetId, operationId, result });
+		try {
+			return await result;
 		} finally {
+			this.durableCreateAdmissions.delete(key);
 			end();
 		}
 	}
@@ -4157,9 +4180,22 @@ export class SessionManager {
 		const model = request.model?.trim() || project?.model;
 		const now = Date.now();
 		const id = admission?.targetId ?? randomUUID();
+		const folded = id.toLowerCase();
+		for (const existing of this.metas.keys())
+			if (existing.toLowerCase() === folded) throw new Conflict("New session ID aliases an existing session");
+		const reserved = this.durableCreateAdmissions.get(folded);
+		if (reserved && (reserved.targetId !== id || reserved.operationId !== admission?.operationId))
+			throw new Conflict("New session ID aliases another admission");
+		if (this.newSessionAdmissions.has(folded)) throw new Conflict("New session ID aliases an active creation");
 		const title = request.title?.trim() || titleFrom(request.message);
 		const titlePending = request.title?.trim() ? undefined : { cwd, message: request.message };
-		await mkdir(this.dir(id), { recursive: true, mode: 0o700 });
+		this.newSessionAdmissions.add(folded);
+		try {
+			await mkdir(this.dir(id), { recursive: true, mode: 0o700 });
+		} catch (error) {
+			this.newSessionAdmissions.delete(folded);
+			throw error;
+		}
 		// Persist the clone recipe and destination, never a runnable source-project cwd.
 		let preparing: SessionMeta["preparing"];
 		let ask: AskContext | undefined;
@@ -4230,6 +4266,8 @@ export class SessionManager {
 			await this.aiUsage.discard(id);
 			await rm(this.dir(id), { recursive: true, force: true });
 			throw error;
+		} finally {
+			this.newSessionAdmissions.delete(folded);
 		}
 		const summary = this.summary(meta);
 		this.emit(meta);

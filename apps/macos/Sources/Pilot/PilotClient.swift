@@ -165,7 +165,15 @@ final class PilotClient: ObservableObject {
     }
 
     func operation(_ operation: DurableOperation, lookup: Bool) async throws -> OperationDelivery {
-        let response: JSONValue = try await call(lookup ? "api/operations/receipt" : "api/operations", body: operation)
+        guard let baseURL else { throw HostRoutingError.disconnected }
+        var request = URLRequest(url: baseURL.appending(path: lookup ? "api/operations/receipt" : "api/operations"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(operation)
+        // Receipt reads are small and should leave Check usable even if the endpoint stalls.
+        // The mutation keeps its normal command timeout; a timeout is never proof of failure.
+        if lookup { request.timeoutInterval = 5 }
+        let response: JSONValue = try await call(request, maximumDuration: lookup ? 5 : nil)
         if response["state"]?.string == "unknown" { return .unknown }
         let receipt = try response.decode(OperationReceipt.self)
         try receipt.validate(operation)
@@ -542,6 +550,18 @@ final class PilotClient: ObservableObject {
             update(session)
         }
         return session
+    }
+
+    /// A receipt may arrive before the session-list stream, including after reconnect.
+    /// Read the exact existing chat, never create a replacement to make navigation work.
+    func createdSession(_ id: String) async throws -> SessionSummary {
+        if let existing = session(id) { return existing }
+        let value: SessionSummary = try await call("api/sessions/\(id)", method: "GET")
+        guard value.id == id else { throw HostRoutingError.invalidReference }
+        if let existing = session(id) { return existing }
+        awaitingList[id] = value
+        update(value)
+        return value
     }
 
     func createSchedule(_ request: ScheduleRequest) async throws -> ScheduledItem {
@@ -1455,13 +1475,19 @@ final class PilotClient: ObservableObject {
         return try await call(request)
     }
 
-    private func call<Response: Decodable>(_ originalRequest: URLRequest) async throws -> Response {
+    private func call<Response: Decodable>(_ originalRequest: URLRequest, maximumDuration: TimeInterval? = nil) async throws -> Response {
         guard !disconnected else { throw HostRoutingError.disconnected }
         let generation = connectionGeneration
         var request = originalRequest
         PilotTraceContext.injectCurrent(into: &request)
+        let configuration: URLSessionConfiguration
+        if let maximumDuration, let bounded = commandConfiguration.copy() as? URLSessionConfiguration {
+            bounded.timeoutIntervalForRequest = maximumDuration
+            bounded.timeoutIntervalForResource = maximumDuration
+            configuration = bounded
+        } else { configuration = commandConfiguration }
         let (data, response) = try await BoundedHTTPData.read(request, maximumBytes: 4 * 1024 * 1024,
-                                                            configuration: commandConfiguration)
+                                                            configuration: configuration)
         guard generation == connectionGeneration, !disconnected else { throw HostRoutingError.staleGeneration }
         let status = response.statusCode
         guard (200 ..< 300).contains(status) else {

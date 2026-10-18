@@ -37,7 +37,7 @@ final class AppModel: ObservableObject {
     let daemon = DaemonController()
     let client: PilotClient
     /// Host-qualified facade for remote surfaces. The existing client remains Local only.
-    let hosts = HostClients()
+    let hosts: HostClients
     @Published private(set) var localHost: HostRef?
     let feeds = SessionFeedCache()
     let subagentFeeds = SubagentFeeds()
@@ -224,7 +224,8 @@ final class AppModel: ObservableObject {
 
     /// A nil store keeps fixtures and previews isolated from the user's persisted drafts.
     init(projectFolderDefaults: UserDefaults = .standard, draftStore: DraftStore? = nil,
-         client: PilotClient? = nil) {
+         client: PilotClient? = nil, hosts: HostClients? = nil) {
+        self.hosts = hosts ?? HostClients()
         self.client = client ?? PilotClient()
         self.projectFolderDefaults = projectFolderDefaults
         // The sidebar always groups chats by urgency now; drop the old choice.
