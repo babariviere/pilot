@@ -100,17 +100,17 @@ private struct InboxGutterFixture: View {
             } trailing: {
                 // A marker in the actual action slot lets the test measure its trailing inset, without
                 // depending on text rasterization or SF Symbol metrics on a particular macOS release.
-                Color.red.frame(width: 8, height: 8)
+                Color(red: 1, green: 0, blue: 0).frame(width: 8, height: 8)
             }
         }
     }
 
     private var row: some View {
-        Button {} label: {
-            // Home decorates its button label; Inbox decorates outside the button and keyboard selection.
+        // Render the real label and selection tree without a Button's native focus drawing. Home decorates
+        // inside its selection; Inbox decorates outside. Neither ordering may leave the gutter unselected.
+        Group {
             if decorated, home { label.inboxCorner(nil) } else { label }
         }
-        .rowButtonStyle()
         .frame(height: height)
         .keyboardListItem("row", target: .session(id: "row", reference: nil)) {}
         .environment(\.keyboardListHighlight, KeyboardListHighlight(id: highlighted ? "row" : nil))
@@ -130,7 +130,8 @@ func inboxAndHomeGutterStaysInsideSelectionAndDoesNotMoveTrailingContent(home: B
             for highlighted in [false, true] {
                 let renderer = ImageRenderer(content: InboxGutterFixture(decorated: decorated, highlighted: highlighted,
                                                                          height: CGFloat(height), home: home)
-                    .frame(width: CGFloat(width)).padding(CGFloat(margin)).environment(\.colorScheme, .light))
+                    .frame(width: CGFloat(width)).background(Color.white)
+                    .padding(CGFloat(margin)).environment(\.colorScheme, .light))
                 let image = try #require(renderer.cgImage)
                 #expect(image.width == width + 2 * margin)
                 #expect(image.height == height + 2 * margin)
@@ -146,8 +147,8 @@ func inboxAndHomeGutterStaysInsideSelectionAndDoesNotMoveTrailingContent(home: B
                 }
                 // Only 24 pt beyond HoverRow's ordinary 8 pt inset, not a whole bitmap's worth of space.
                 #expect(actionRight == margin + width - 8 - (decorated ? 24 : 0))
-                let gutter = try #require(pixels.colorAt(x: margin + width - 12, y: margin + height / 2))
-                #expect((gutter.alphaComponent > 0.9) == highlighted,
+                let gutter = try #require(pixels.colorAt(x: margin + width - 12, y: margin + height / 2)?.usingColorSpace(.deviceRGB))
+                #expect((gutter.redComponent < 0.98) == highlighted,
                         "Selection must cover the gutter too; it is not padding outside the button")
             }
         }
