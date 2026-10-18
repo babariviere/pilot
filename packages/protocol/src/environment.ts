@@ -128,6 +128,78 @@ export interface ProjectEnvironmentOverrideUpdateRequest {
 	expectedRevision: number;
 }
 
+/** Where a finding was read. excerpt is at most 120 characters of the cited line. */
+export interface EnvironmentFindingSource {
+	path: string;
+	line: number;
+	excerpt: string;
+	sha256: string;
+}
+
+export type EnvironmentFindingKind = "exact" | "minimum" | "range" | "major" | "hint" | "unknown";
+
+/** One declaration read from a repository file. Discovery never executes anything. */
+export interface EnvironmentFinding {
+	/** Normalized: "go", "golangci-lint", "node", "pnpm", "postgres". */
+	subject: string;
+	kind: EnvironmentFindingKind;
+	/** Normalized: "go1.23.4" and "v1.23.4" become "1.23.4". Ranges keep their text, for example ">=20". */
+	value?: string;
+	source: EnvironmentFindingSource;
+	/** For example "provided by go tool" or "alias lts/*". */
+	note?: string;
+}
+
+/**
+ * proposed: exact findings agree and satisfy every constraint (services: a major version).
+ * conflict: exact findings disagree or violate a constraint; the user picks one or enters a version.
+ * needs_version: only constraints or unknown values; the user enters a version. Pilot never picks "latest".
+ * hint_only: only README or CI mentions, which never choose a version.
+ */
+export type EnvironmentSubjectStatus = "proposed" | "conflict" | "needs_version" | "hint_only";
+
+export interface EnvironmentSubject {
+	subject: string;
+	category: "tool" | "service";
+	status: EnvironmentSubjectStatus;
+	/** The proposed version (exact for tools, major for services). */
+	value?: string;
+	/** The finding the proposed value came from. */
+	from?: { path: string; line: number };
+	findings: EnvironmentFinding[];
+	/** Hints that disagree with the proposal, and constraints that could not be checked. */
+	notes: string[];
+	/** Declared as a go.mod tool directive: `go tool <name>` provides it at the module version. */
+	goTool?: boolean;
+}
+
+/** A setup step or post-run check proposed from a Makefile or justfile target. Never run by discovery. */
+export interface EnvironmentStepCandidate {
+	id: string;
+	title: string;
+	run: { argv: string[] };
+	purpose: "setup" | "check";
+	/** The single suggested setup step, when there is an obvious one. */
+	proposed: boolean;
+	source: EnvironmentFindingSource;
+}
+
+/** GET /api/projects/:id/environment/discovery. Read-only and bounded; never runs repository content. */
+export interface EnvironmentDiscovery {
+	projectId: string;
+	computedAt: number;
+	subjects: EnvironmentSubject[];
+	steps: EnvironmentStepCandidate[];
+	/** Every file read, with its hash, for confirmedSources. */
+	sources: EnvironmentSourcePin[];
+	/** Files skipped because of bounds, links or non-regular files. */
+	skipped: { path: string; reason: "too_large" | "not_regular" | "limit" | "unreadable" }[];
+	/** A file, total-byte or count bound was hit; findings may be incomplete. */
+	truncated: boolean;
+	/** Root .env and .env.* files that Git ignores, by name only (never opened): suggestions for copyFiles. */
+	localFiles: string[];
+}
+
 /** The daemon that computed a plan or raised an error. Clients add the display name they know. */
 export interface EnvironmentHostRef {
 	daemonId: string;

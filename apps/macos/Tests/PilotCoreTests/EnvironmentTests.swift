@@ -140,3 +140,25 @@ let goServiceProfileJSON = """
         environment: ProjectEnvironment(copyFiles: [".env.local"]), expectedRevision: 0))
     #expect(String(decoding: request, as: UTF8.self).contains(#""copyFiles":[".env.local"]"#))
 }
+
+@Test func environmentDiscoveryDecodesDaemonOutput() throws {
+    let discovery = try JSONDecoder().decode(EnvironmentDiscovery.self, from: Data("""
+    {"projectId":"p","computedAt":1,"truncated":false,"skipped":[{"path":"go.sum","reason":"too_large"}],"localFiles":[".env"],
+     "sources":[{"path":"go.mod","sha256":"aa"}],
+     "subjects":[
+       {"subject":"go","category":"tool","status":"proposed","value":"1.23.4","from":{"path":"go.mod","line":5},
+        "notes":[],"findings":[{"subject":"go","kind":"exact","value":"1.23.4",
+          "source":{"path":"go.mod","line":5,"excerpt":"toolchain go1.23.4","sha256":"aa"}}]},
+       {"subject":"golangci-lint","category":"tool","status":"conflict","notes":[],"goTool":true,"findings":[]},
+       {"subject":"postgres","category":"service","status":"needs_version","notes":["x"],"findings":[]},
+       {"subject":"python","category":"tool","status":"hint_only","notes":[],"findings":[]}],
+     "steps":[{"id":"setup","title":"make setup","run":{"argv":["make","setup"]},"purpose":"setup","proposed":true,
+               "source":{"path":"Makefile","line":4,"excerpt":"setup:","sha256":"bb"}}]}
+    """.utf8))
+    #expect(discovery.subjects.map(\.status) == [.proposed, .conflict, .needsVersion, .hintOnly])
+    #expect(discovery.subjects[0].findings[0].source.citation == "go.mod:5")
+    #expect(discovery.subjects[1].goTool == true)
+    #expect(discovery.steps.first?.proposed == true)
+    #expect(discovery.localFiles == [".env"])
+    #expect(try JSONDecoder().decode(EnvironmentDiscovery.self, from: JSONEncoder().encode(discovery)) == discovery)
+}
