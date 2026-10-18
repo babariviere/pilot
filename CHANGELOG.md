@@ -1,5 +1,48 @@
 # Changelog
 
+## [1.50.0](https://github.com/babariviere/pilot/compare/v1.49.0...v1.50.0) (2026-10-18)
+
+
+### Features
+
+* **control:** add authorized chat run controls ([cef73aa](https://github.com/babariviere/pilot/commit/cef73aaf2d028157986f19cb809006188e02d655))
+* **control:** add bounded local text and image reads ([6e46f38](https://github.com/babariviere/pilot/commit/6e46f38e2d4f479573a894f664627ba29ac423cc))
+* **control:** add durable executor admission and enrollment ([1313ca3](https://github.com/babariviere/pilot/commit/1313ca37ce097083ec82b02c85635359edfe37a2))
+* **control:** enforce started chat permission levels ([50fc10c](https://github.com/babariviere/pilot/commit/50fc10cba563e2117f3950a1d5e23c22f429a8ee))
+* **control:** require explicit authorized start choices ([25b60c8](https://github.com/babariviere/pilot/commit/25b60c8c00cca51abe1b9d2df0818fd0ce2bd3b3))
+* **control:** unify logical missions in status ([ca0668b](https://github.com/babariviere/pilot/commit/ca0668b2675c913b4112acaa5e0a2051a4acd27d))
+* **diagnostics:** accept questions in Ask about Pilot ([5df8475](https://github.com/babariviere/pilot/commit/5df8475dd4f2f822e62942fd52d5038fc1b758a8))
+* **diagnostics:** add informational usage budgets ([533654f](https://github.com/babariviere/pilot/commit/533654ff9ca08311ecf6f24591a512b015570fb7))
+* **diagnostics:** restore scoped target history ([bc4ba0a](https://github.com/babariviere/pilot/commit/bc4ba0ac6ce93442088a6eca892b1429154cfa30))
+* **macos:** add scoped-model selector and sync foundation ([09696dc](https://github.com/babariviere/pilot/commit/09696dcb65affa948876e2cadb0b3bfbcf729ae1))
+* **macos:** automatically update compatible devbox runtimes ([91b6db9](https://github.com/babariviere/pilot/commit/91b6db96091b8204ce4f5caee16b6921cf92f1b3))
+* **macos:** reconnect saved devboxes at startup ([f7a4762](https://github.com/babariviere/pilot/commit/f7a4762ac9afedd77b5c3de27bf48786defea6de))
+* **macos:** wire scoped-model settings and live host sync ([bbf8e88](https://github.com/babariviere/pilot/commit/bbf8e88cee71c2bb3943ec506f26b349e6ed6c13))
+* **models:** add host-local scoped-model settings API ([129f06e](https://github.com/babariviere/pilot/commit/129f06e35079bfd313c466104707755334a56708))
+
+
+### Bug Fixes
+
+* **chat:** isolate Local drafts from pending devbox starts ([ec83eb5](https://github.com/babariviere/pilot/commit/ec83eb5b8586abe7ed3f9cbd5a18796aab800695))
+* **control:** keep start tool description within budget ([4d90f7e](https://github.com/babariviere/pilot/commit/4d90f7e455542ced883fd70fcc93287eb42e6305))
+* **control:** keep the tool description compact ([8eb6028](https://github.com/babariviere/pilot/commit/8eb6028133ebf57e72f2831ab733889413a17743))
+* **control:** make budgets diagnostic and release safe failures ([ec55f97](https://github.com/babariviere/pilot/commit/ec55f973695fd05c2887dbc97a13b79af54a8623))
+* **control:** make history summaries reliable and never fail a turn on them ([e931d6c](https://github.com/babariviere/pilot/commit/e931d6c5ddfa883debbaed6bc323919b61d480e6))
+* **control:** recover turns while history compaction is behind ([aa7d1b4](https://github.com/babariviere/pilot/commit/aa7d1b489832b09b1b8aa0a9859c7fcd5e7251e7))
+* **control:** report correlated request preparation failures ([31b1d5b](https://github.com/babariviere/pilot/commit/31b1d5b5b15deb8b8792cd56170027aee5ed4f77))
+* **control:** revoke archived watch authorizations ([0b4f98c](https://github.com/babariviere/pilot/commit/0b4f98cd01268b3a8e1866f3bac2e5699f7ea860))
+* **daemon:** repeat PR follow-ups only after an agent push attempt ([029864a](https://github.com/babariviere/pilot/commit/029864a65f5d4ef5539ea3e745f66863498999e7))
+* **devbox:** recover durable chat starts and make Check actionable ([8415b3a](https://github.com/babariviere/pilot/commit/8415b3aa498b3a68d11426a07591020feec49a9f))
+* **macos:** build with Swift 6.4 diagnostics ([5b8886f](https://github.com/babariviere/pilot/commit/5b8886f06f75ea5b110d01719c1528bc57b6271e))
+* **macos:** clear message text selection when focus leaves the reply ([aba664e](https://github.com/babariviere/pilot/commit/aba664ea2c1ce003f311e97677ab364db326ae3f))
+* **macos:** fence scoped-model conflict consent ([ac78937](https://github.com/babariviere/pilot/commit/ac789376214a662307bc913d1f060bd29f2bb954))
+* **macos:** offer runtime update when setup finds an older unsaved devbox ([d9a44cb](https://github.com/babariviere/pilot/commit/d9a44cbb56fe70502ad7fe5bffaf19be677c1bcf))
+* **macos:** unify mission navigation across devboxes ([d23bb4f](https://github.com/babariviere/pilot/commit/d23bb4f930f0b6839940b036c38d914ac659501e))
+* **missions:** align native catalog with logical producer ([89e6041](https://github.com/babariviere/pilot/commit/89e6041bc3cfa522218caf2e5fcbeaab9c8ab087))
+* **models:** align scoped-model settings wire contract ([962dd3e](https://github.com/babariviere/pilot/commit/962dd3eb3271fa5e1f3c71ce0a5532d124a4396a))
+* restore main CI after concurrent merges ([de89c3c](https://github.com/babariviere/pilot/commit/de89c3c63c1370392f78efca62313733808c3be1))
+* **transcript:** preserve coordinator message provenance ([a45ff07](https://github.com/babariviere/pilot/commit/a45ff075ca7af54cf283c237f11bc6da6da903de))
+
 ## [1.49.0](https://github.com/babariviere/pilot/compare/v1.48.0...v1.49.0) (2026-10-18)
 
 
