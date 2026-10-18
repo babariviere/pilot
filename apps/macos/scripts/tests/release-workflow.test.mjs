@@ -365,22 +365,6 @@ test("one serialized job publishes the complete draft after both platforms uploa
 	assert.doesNotMatch(script, /--draft=false/);
 });
 
-test("DMG workflow is manual-only and limited to trusted main", () => {
-	const workflow = read("macos-dmg.yml");
-	assert.match(workflow, /on:\n  workflow_dispatch:\n\n/);
-	const condition = workflow.match(/^    if: (.+)$/m)[1];
-	const evaluate = new Function("github", `return ${condition}`);
-	const github = { ref: "refs/heads/main", event: { repository: { fork: false } } };
-	assert.equal(evaluate(github), true);
-	github.ref = "refs/heads/other";
-	assert.equal(evaluate(github), false);
-	github.ref = "refs/heads/main";
-	github.event.repository.fork = true;
-	assert.equal(evaluate(github), false);
-	assert.match(workflow, /run: bash apps\/macos\/scripts\/publish-dmg\.sh/);
-	assert.ok(!workflow.includes("SPARKLE_PRIVATE_KEY"));
-});
-
 test("release jobs apply current packaging helpers without changing tagged application source", () => {
 	const job = jobOf(read("release.yaml"));
 	for (const name of ["macos-app", "macos-publish"]) {

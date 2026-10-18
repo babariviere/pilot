@@ -9,8 +9,9 @@ authentication (with a manual Keychain-token fallback), and uses Sparkle 2.8.1 t
 Node 24, pilotd, the kernel and their production dependencies. Your checkout is not needed at runtime.
 
 No Apple account or developer membership is required. These are **ad-hoc signed, not notarized**
-personal builds. macOS may block the first downloaded app; use System Settings > Privacy & Security >
-Open Anyway only after verifying that it came from your own repository. Keychain may request approval
+personal builds. macOS may block the first downloaded app. Only after verifying that it came from your own
+repository, run `xattr -d com.apple.quarantine /Applications/Pilot.app` (or use System Settings > Privacy &
+Security > Open Anyway). Sparkle updates do not need this again. Keychain may request approval
 again after an ad-hoc signed update when using a manually saved token. GitHub macOS runner usage counts toward private-repository Actions
 minutes and may incur charges. No App Store or Developer ID distribution is configured here.
 
@@ -70,12 +71,6 @@ preserving executable code, resources, licenses and SDK documentation. This redu
 without pruning the checkout's dependencies; bundled dependency stack traces no longer use those maps.
 Existing dev releases are left untouched and are not offered through automatic updates.
 
-For an optional installer, run **macOS DMG installer** (`.github/workflows/macos-dmg.yml`) manually.
-It takes no tag input, captures the latest published stable release tag once, downloads that release's
-ZIP, extracts the already built app, verifies its code signature, and builds `Pilot-arm64.dmg`.
-It attaches the DMG to that same release without rebuilding or signing the app, changing `appcast.xml`,
-or moving the latest release. An existing DMG causes an error instead of being overwritten.
-
 `fix:` commits bump the patch version, `feat:` commits bump the minor version, and breaking-change
 commits (`feat!:` or `BREAKING CHANGE:`) use Release Please's semantic-version rules (including its
 pre-1.0 rules). Release notes are generated from conventional commits. The manifest starts at `0.1.0`;
@@ -101,10 +96,10 @@ but do not publish them. No workflow deletes existing releases.
 ## One-time app setup
 
 1. Download **`Pilot-arm64.zip`**, extract it, and move **Pilot.app** to `/Applications` (or
-   `~/Applications` for a per-user install). The ZIP is the default first-time installer and is also
-   used by Sparkle updates. If a DMG was manually generated, you can instead open **`Pilot-arm64.dmg`**,
-   drag **Pilot.app** onto the **Applications** shortcut, and eject the disk image. Open the installed
-   app, not a copy on the disk image or in a transient download folder.
+   `~/Applications` for a per-user install). The ZIP is the first-time installer and is also
+   used by Sparkle updates. If macOS refuses to open it, run
+   `xattr -d com.apple.quarantine /Applications/Pilot.app` once. Open the installed app, not a copy in a
+   transient download folder.
 2. When migrating from a checkout-based Pilot, wait for agents to finish, then choose **pilotd > Restart pilotd**
    in the new app's menu bar. This switches the launch agent to the bundled runtime. Terminal shells
    close on that initial restart. Your projects, sessions and pi configuration stay in their existing
@@ -165,12 +160,6 @@ To reproduce a self-contained bundle locally without publishing:
 BUNDLE_RUNTIME=1 BUNDLE_VERSION=100.1 \
 PILOT_UPDATE_REPOSITORY=owner/repo SPARKLE_PUBLIC_KEY='<your public key>' \
 apps/macos/scripts/bundle.sh
-```
-
-To create a drag-and-drop installer from a built app:
-
-```sh
-apps/macos/scripts/create-dmg.sh apps/macos/build/Pilot.app apps/macos/build/Pilot-arm64.dmg
 ```
 
 Do not distribute a local build with a version higher than CI's next release, or it will not be offered
