@@ -508,6 +508,10 @@ after recovery.
 Ignored content does not block jj workspace reclamation and is discarded, except for bounded regular
 mise local configs saved for recovery. Track any other files you need to retain.
 
+Reproducible project environments (pinned toolchains, a built-in Postgres database on any host and reviewed
+setup scripts, set up when a workspace is created or restored) are a design proposal, not yet implemented: see
+[project environment setup](docs/environment-setup.md).
+
 ### Missions
 
 Use a mission when one goal needs several chats. Its shared brief and decisions give agents a common
