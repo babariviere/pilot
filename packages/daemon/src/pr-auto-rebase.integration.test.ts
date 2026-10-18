@@ -413,6 +413,7 @@ test("failed base admissions survive metadata reload and never retry that base",
 		const saved = JSON.parse(readFileSync(join(f.root, "daemon", "sessions", f.meta.id, "meta.json"), "utf8"));
 		assert.equal(saved.prAutoRebases.length, 1);
 		saved.prFollowUp.nextAttemptAt = 0;
+		saved.agentPushedAt = Date.now();
 		f.manager["metas"].set(f.meta.id, saved);
 		await f.manager["followUpPullRequests"](saved, "fix/feature", 0, [
 			{

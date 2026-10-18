@@ -356,6 +356,10 @@ async function setup(cooldownMs?: number) {
 			return manager["metas"].get(id)!;
 		},
 		worker: async () => (await manager["ensureWorker"](id)) as SessionWorker & { busy: boolean | undefined },
+		/** The agent attempted a push, which makes the next follow-up eligible. */
+		pushed: () => {
+			manager["metas"].get(id)!.agentPushedAt = Date.now();
+		},
 		// Follow-up delivery runs detached from the PR sync. Wait for it too.
 		refresh: async () => {
 			await manager["pullRequests"].refresh(manager["metas"].get(id)!);
@@ -401,6 +405,7 @@ test("unchanged review feedback is reported once across cooldowns, restarts and 
 		assert.match(f.inputs[0]!.content, /New or updated review thread IDs: \["thread-1"\]/);
 		assert.equal(Object.keys((await f.saved()).prReportedReviewThreads ?? {}).length, 1);
 		f.meta.prFollowUp!.nextAttemptAt = 0;
+		f.pushed();
 		await f.refresh();
 		assert.equal(f.inputs.length, 1, "leaving a declined thread unresolved is not new work");
 		assert.equal(f.meta.prFollowUp!.attempts, 1, "duplicates do not spend attempts");
@@ -417,6 +422,7 @@ test("unchanged review feedback is reported once across cooldowns, restarts and 
 		await f.refresh();
 		assert.equal(f.inputs.length, 3, "a new reply or latest-comment edit is fresh feedback");
 		f.meta.prFollowUp!.nextAttemptAt = 0;
+		f.pushed();
 		await f.refresh();
 		assert.equal(f.inputs.length, 3);
 		f.controls.reviewId = "thread-2";
@@ -432,6 +438,7 @@ test("resolved then reopened feedback stays reported, but a new reply at the sam
 		await f.refresh();
 		assert.equal(f.inputs.length, 1);
 		f.meta.prFollowUp!.nextAttemptAt = 0;
+		f.pushed();
 		f.controls.reviews = false;
 		await f.refresh();
 		f.controls.reviews = true;
@@ -441,6 +448,7 @@ test("resolved then reopened feedback stays reported, but a new reply at the sam
 		await f.refresh();
 		assert.equal(f.inputs.length, 2, "comment identity distinguishes replies within the same timestamp");
 		f.meta.prFollowUp!.nextAttemptAt = 0;
+		f.pushed();
 		f.controls.reviewCommentId = "comment-1";
 		await f.refresh();
 		assert.equal(f.inputs.length, 2, "deleting a reply cannot re-report an earlier comment");
@@ -451,6 +459,7 @@ test("CI retries do not repeat already-reported review threads", async () => {
 	await fixture(async (f) => {
 		await f.refresh();
 		f.meta.prFollowUp!.nextAttemptAt = 0;
+		f.pushed();
 		await f.refresh();
 		assert.equal(f.inputs.length, 2);
 		assert.match(f.inputs[1]!.content, /Failed CI checks/);
@@ -521,7 +530,7 @@ test("owned open and draft PRs reopen parked workers with one durable idle-only 
 			assert.match(input.content, /GitHub's BEHIND status alone is not enough/);
 			assert.doesNotMatch(input.content, /Wait for fresh CI after rebasing/);
 			assert.match(input.content, /After pushing or rebasing, report and finish/);
-			assert.match(input.content, /Pilot monitors fresh CI and sends another follow-up if needed/);
+			assert.match(input.content, /Pilot monitors fresh CI and sends another follow-up only after a push/);
 			assert.match(
 				input.content,
 				/Do not wait for CI with jobs, polling loops, gh pr checks --watch or gh run watch/,
@@ -568,6 +577,7 @@ test("all PR problems share three attempts, and the cooldown starts after worker
 			now += cooldown * 2;
 			await f.refresh();
 			assert.equal(f.inputs.length, index + 1, "long-running fixes do not admit another input");
+			f.pushed();
 			f.working(false);
 			await f.settle();
 			assert.equal(f.meta.prFollowUp?.nextAttemptAt, now + cooldown);
@@ -795,6 +805,7 @@ test("closed-current stacks keep polling across restart without bypassing cooldo
 		assert.equal(f.inputs.length, 1, "restart preserves the cooldown");
 		for (let attempt = 2; attempt <= 3; attempt++) {
 			now += cooldown;
+			f.pushed();
 			await f.refresh();
 			assert.equal(f.inputs.length, attempt);
 			assert.equal(f.meta.prFollowUp?.attempts, attempt);
@@ -904,7 +915,10 @@ test("accepted user request retries cannot replenish the PR budget, including ol
 		for (let attempt = 1; attempt <= 3; attempt++) {
 			await f.refresh();
 			assert.equal(f.meta.prFollowUp?.attempts, attempt);
-			if (attempt < 3) now += cooldown;
+			if (attempt < 3) {
+				f.pushed();
+				now += cooldown;
+			}
 		}
 		const exhausted = structuredClone(f.meta.prFollowUp);
 		assert.equal(exhausted?.generation, 1);
@@ -960,6 +974,7 @@ test("the default five-minute cooldown and ownership persist across restart", as
 		assert.equal(f.manager["workers"].size, 0);
 		assert.equal(f.meta.prFollowUp?.nextAttemptAt, nextAttemptAt);
 		now = nextAttemptAt - 1;
+		f.pushed();
 		await f.refresh();
 		assert.equal(f.inputs.length, 1);
 		now++;
@@ -1464,6 +1479,7 @@ test("uncertain admission retains its durable request ID and retries idempotentl
 		assert.equal(f.meta.inputError, undefined);
 		assert.deepEqual(activity(f.meta), before);
 		f.working(true);
+		f.pushed();
 		f.working(false);
 		await f.settle();
 		now += cooldown;
@@ -1496,5 +1512,66 @@ test("failed follow-up persistence rolls back its reservation and never admits a
 		await f.refresh();
 		assert.equal(f.inputs.length, 1);
 		assert.equal((await f.saved()).prFollowUp?.attempts, 1);
+	});
+});
+test("another follow-up waits for an agent push attempt after the previous one", async (t) => {
+	let now = 1_800_000_000_000;
+	t.mock.method(Date, "now", () => now);
+	await fixture(async (f) => {
+		await f.refresh();
+		assert.equal(f.inputs.length, 1);
+		const deliveredAt = f.meta.prFollowUp?.deliveredAt;
+		assert.equal(deliveredAt, now);
+		f.working(true);
+		f.working(false);
+		await f.settle();
+		now += cooldown;
+		await f.refresh();
+		assert.equal(f.inputs.length, 1, "an agent that did not push gets no repeat of the same report");
+		assert.equal(f.manager.get(f.id)?.attentionReason?.kind, "pr_stuck", "the user decides what happens next");
+		const worker = f.manager["workers"].get(f.id)!;
+		const push = (at: number, id: string) =>
+			f.manager["onPacket"](f.meta, worker, {
+				type: "github.action",
+				action: { id, kind: "push", summary: "jj git push", description: "pushed branches", at, exitCode: 1 },
+			});
+		push(deliveredAt! - 1, "replayed");
+		await f.refresh();
+		assert.equal(f.inputs.length, 1, "a replayed push from before the follow-up does not count");
+		now++;
+		push(now, "failed-push");
+		assert.equal(f.meta.agentPushedAt, now);
+		assert.equal(f.manager.get(f.id)?.attentionReason, undefined);
+		await f.refresh();
+		assert.equal(f.inputs.length, 2, "a failed push attempt still earns another follow-up");
+		assert.equal(f.meta.prFollowUp?.attempts, 2);
+		assert.equal(f.meta.prFollowUp?.deliveredAt, now);
+		assert.equal((await f.saved()).agentPushedAt, now);
+		await f.manager.send(f.id, "Try again", "followUp", "push-gate-reset");
+		await f.refresh();
+		assert.equal(f.meta.prFollowUp?.attempts, 1, "user input resets the gate with the budget");
+	});
+});
+
+test("a refunded follow-up keeps waiting for a push after the last delivered one", async (t) => {
+	let now = 1_800_000_000_000;
+	t.mock.method(Date, "now", () => now);
+	await fixture(async (f) => {
+		await f.refresh();
+		const deliveredAt = f.meta.prFollowUp!.deliveredAt!;
+		now += cooldown;
+		f.pushed();
+		f.controls.request = async () => {
+			throw new CommandRejected("busy", "busy");
+		};
+		await f.refresh();
+		assert.equal(f.inputs.length, 2);
+		assert.equal(f.meta.prFollowUp?.attempts, 1, "the busy rejection refunds its attempt");
+		assert.equal(f.meta.prFollowUp?.deliveredAt, deliveredAt);
+		f.controls.request = undefined;
+		f.meta.prFollowUp!.nextAttemptAt = 0;
+		await f.refresh();
+		assert.equal(f.inputs.length, 3, "the earlier push still counts for the retry");
+		assert.equal(f.meta.prFollowUp?.attempts, 2);
 	});
 });
