@@ -222,6 +222,11 @@ final class AppModel: ObservableObject {
     private var draftSaveError: String?
     private let draftImages = DraftImageRetention()
     private var draftSaveRevision = 0
+    private struct ParkedTaskDraft {
+        let value: StoredTaskDraft
+        let attachments: ImageAttachments
+    }
+    private var parkedTaskDrafts: [HostRef: ParkedTaskDraft] = [:]
 
     /// A nil store keeps fixtures and previews isolated from the user's persisted drafts.
     init(projectFolderDefaults: UserDefaults = .standard, draftStore: DraftStore? = nil,
@@ -344,11 +349,25 @@ final class AppModel: ObservableObject {
             composer.attachments = store.restoreAttachments(saved.attachments)
             composer.queueEditing = saved.queueEditing
         }
-        let task = drafts.newTask
+        for task in drafts.parkedNewTasks ?? [] {
+            if let host = task.executionHost {
+                parkedTaskDrafts[host] = ParkedTaskDraft(value: task, attachments: store.restoreAttachments(task.attachments))
+            }
+        }
+        restoreTaskDraft(drafts.newTask, attachments: store.restoreAttachments(drafts.newTask.attachments))
+        draftImages.restore(currentDraftImages())
+    }
+
+    private func restoreTaskDraft(_ task: StoredTaskDraft, attachments: ImageAttachments) {
+        newSessionForm.invalidatePendingSubmission()
+        newSessionForm.startCheckId = nil
+        newSessionForm.checkingStart = false
+        newSessionForm.startRecoveryMessage = nil
+        newSessionForm.error = nil
         newSessionForm.executionHost = task.executionHost
         newSessionForm.pendingOperationId = task.pendingOperationId
         newSessionForm.message = task.message
-        newSessionForm.attachments = store.restoreAttachments(task.attachments)
+        newSessionForm.attachments = attachments
         newSessionForm.folder = task.folder
         newSessionForm.model = task.model
         newSessionForm.tab = task.runningTab ? .running : .newTask
@@ -363,11 +382,11 @@ final class AppModel: ObservableObject {
         draftBaseBranch = task.pendingMessage == nil ? nil : task.pendingBaseBranch
         draftCwd = task.pendingCwd
         draftWorkspace = task.pendingWorkspace
-        draftImages.restore(currentDraftImages())
     }
 
     private func currentDraftImages() -> [UUID: PastedImage] {
         let images = chatComposers.values.flatMap { $0.attachments.items } + newSessionForm.attachments.items
+            + parkedTaskDrafts.values.flatMap { $0.attachments.items }
         return images.reduce(into: [:]) { $0[$1.id] = $1 }
     }
 
@@ -398,15 +417,10 @@ final class AppModel: ObservableObject {
                                               attachments: composer.attachments.items.map(StoredImage.init),
                                               queueEditing: composer.queueEditing)
         }
-        let form = newSessionForm
-        drafts.newTask = StoredTaskDraft(executionHost: form.executionHost, pendingOperationId: form.pendingOperationId, message: form.message, attachments: form.attachments.items.map(StoredImage.init),
-                                        folder: form.folder, model: form.model, projectId: draftProjectId,
-                                        pendingMessage: draftMessage, branchScope: form.branches.scope,
-                                        baseBranch: form.branches.selected, runningTab: form.tab == .running,
-                                        mode: form.mode, workspace: form.workspace,
-                                        pendingBaseBranch: draftMessage == nil ? form.pendingBaseBranch : draftBaseBranch,
-                                        pendingCwd: draftCwd, pendingWorkspace: draftWorkspace, mission: form.mission,
-                                        trackedItem: form.trackedItem)
+        drafts.newTask = taskDraftSnapshot()
+        drafts.parkedNewTasks = parkedTaskDrafts.sorted {
+            ($0.key.hostId, $0.key.daemonId, $0.key.lineageId) < ($1.key.hostId, $1.key.daemonId, $1.key.lineageId)
+        }.map { $0.value.value }
         do {
             try draftStore.scheduleSave(drafts) { [weak self, draftImages] result in
                 switch result {
@@ -417,6 +431,93 @@ final class AppModel: ObservableObject {
                 }
             }
         } catch { reportDraftError(error) }
+    }
+
+    private func taskDraftSnapshot() -> StoredTaskDraft {
+        let form = newSessionForm
+        return StoredTaskDraft(executionHost: form.executionHost ?? localHost, pendingOperationId: form.pendingOperationId, message: form.message, attachments: form.attachments.items.map(StoredImage.init),
+                                        folder: form.folder, model: form.model, projectId: draftProjectId,
+                                        pendingMessage: draftMessage, branchScope: form.branches.scope,
+                                        baseBranch: form.branches.selected, runningTab: form.tab == .running,
+                                        mode: form.mode, workspace: form.workspace,
+                                        pendingBaseBranch: draftMessage == nil ? form.pendingBaseBranch : draftBaseBranch,
+                                        pendingCwd: draftCwd, pendingWorkspace: draftWorkspace, mission: form.mission,
+                                        trackedItem: form.trackedItem)
+    }
+
+    /// The pointer and fallback must both belong to this execution host, never a previous draft.
+    func pendingChatCreate(on host: HostRef?, operationId: String? = nil) -> DurableOperation? {
+        guard let host else { return nil }
+        let candidates = hosts.pendingOperations.values.filter {
+            $0.destination == host && ($0.kind == "chat-create" || $0.kind == "chat-create-attached")
+        }
+        if let operationId { return candidates.first { $0.operationId == operationId } }
+        return candidates.min { $0.sequence < $1.sequence }
+    }
+
+    /// Host changes never retarget an uncertain start. Park its entire newer draft and restore
+    /// the chosen destination independently, in the same private draft file and image lifetime.
+    @discardableResult
+    func chooseNewChatHost(_ host: HostRef, independent: Bool = false) -> Bool {
+        let form = newSessionForm
+        guard independent ? !form.busy : form.canChooseExecutionHost,
+              let previous = form.executionHost ?? localHost, previous != host else { return false }
+        let pending = form.pendingOperationId != nil || pendingChatCreate(on: previous) != nil
+        if pending || !parkedTaskDrafts.isEmpty || pendingChatCreate(on: host) != nil {
+            let original = ParkedTaskDraft(value: taskDraftSnapshot(), attachments: form.attachments)
+            let oldParked = parkedTaskDrafts
+            var next = parkedTaskDrafts
+            let destination = next.removeValue(forKey: host)
+            guard next.count < 32 else {
+                form.error = "Too many retained chat drafts. Your current draft and pending starts have been kept."
+                return false
+            }
+            next[previous] = original
+            // No debounced writer may capture an intermediate host/pointer combination.
+            restoringDrafts = true
+            parkedTaskDrafts = next
+            restoreTaskDraft(destination?.value ?? StoredTaskDraft(executionHost: host),
+                             attachments: destination?.attachments ?? ImageAttachments())
+            restoringDrafts = false
+            do { try persistDrafts() }
+            catch {
+                restoringDrafts = true
+                parkedTaskDrafts = oldParked
+                restoreTaskDraft(original.value, attachments: original.attachments)
+                restoringDrafts = false
+                form.error = error.localizedDescription
+                return false
+            }
+        } else {
+            // Preserve the ordinary nonpending host-picker behavior, including text/images/mode.
+            restoringDrafts = true
+            form.invalidatePendingSubmission()
+            form.executionHost = host
+            form.folder = ""; form.workspace = nil; form.pendingBaseBranch = nil
+            form.branches.restoreSelection(scope: nil, branch: nil)
+            form.model = ""
+            draftProjectId = nil
+            draftMessage = nil; draftBaseBranch = nil; draftCwd = nil; draftWorkspace = nil
+            restoringDrafts = false
+            saveDrafts()
+        }
+        form.models = ModelList(models: [])
+        form.error = hosts.available.contains(host) ? nil : "Disconnected. Reconnect to start a chat here."
+        return true
+    }
+
+    /// Explicitly opens Local without treating an unresolved devbox request as the global draft.
+    @discardableResult
+    func newLocalChatWhileRemoteStartPending() -> Bool {
+        guard let localHost, let host = newSessionForm.executionHost, host != localHost,
+              newSessionForm.pendingOperationId != nil || pendingChatCreate(on: host) != nil,
+              chooseNewChatHost(localHost, independent: true) else { return false }
+        beginNavigation()
+        defer { endNavigation() }
+        hosts.selection = nil
+        showingArchive = false; showingInbox = false; showingControl = false
+        selectedSessionId = nil; selectedMissionId = nil; selectedProjectId = nil
+        return true
     }
 
     /// Window close, app deactivation and quit flush the latest snapshot, including image removals.
@@ -554,7 +655,18 @@ final class AppModel: ObservableObject {
         draftProjectId = nil
     }
 
-    func newSession(in projectId: String?, message: String? = nil, context: HostViewContext? = nil) {
+    @discardableResult
+    func newSession(in projectId: String?, message: String? = nil, context: HostViewContext? = nil) -> Bool {
+        let host = newSessionForm.executionHost ?? localHost
+        if newSessionForm.pendingOperationId != nil || pendingChatCreate(on: host) != nil {
+            let destination = context?.host ?? (projectId == nil ? nil : localHost)
+            if let destination, destination != host {
+                guard chooseNewChatHost(destination, independent: true) else { return false }
+            } else if message != nil || (projectId != nil && projectId != draftProjectId) {
+                newSessionForm.error = "This host still has a pending chat start. Check it, or choose New Local chat; its draft will be kept."
+                return false
+            }
+        }
         beginNavigation()
         defer { endNavigation() }
         if let context { newSessionForm.executionHost = context.host }
@@ -583,19 +695,20 @@ final class AppModel: ObservableObject {
         selectedSessionId = nil
         selectedMissionId = nil
         selectedProjectId = nil
+        return true
     }
 
     /// Open a dedicated, empty composer. The chat joins on spawn, without claiming a task.
     func newSession(in mission: Mission, context: HostViewContext? = nil) {
         guard mission.status == .active else { return }
-        newSession(in: mission.projectId, message: "", context: context)
+        guard newSession(in: mission.projectId, message: "", context: context) else { return }
         newSessionForm.consumeDraft(from: self)
         newSessionForm.mission = mission
     }
 
     /// The new-chat composer, prefilled from a tracked item in Build mode. Nothing starts until the user sends.
     func startChat(from item: TrackedItem, prefill: TrackedItemPrefill?, context: HostViewContext? = nil) {
-        newSession(in: item.projectId, message: TrackedItemText.chatPrompt(item, prefill: prefill), context: context)
+        guard newSession(in: item.projectId, message: TrackedItemText.chatPrompt(item, prefill: prefill), context: context) else { return }
         newSessionForm.consumeDraft(from: self)
         newSessionForm.trackedItem = TrackedItemBinding(itemId: item.id, projectId: item.projectId,
                                                         label: TrackedItemText.identifier(item))
@@ -910,6 +1023,7 @@ final class AppModel: ObservableObject {
 
     /// A new chat in the focused project, or in the last chosen project otherwise.
     func newChatInScope() {
+        if newLocalChatWhileRemoteStartPending() { return }
         if newSessionForm.hasUnsubmittedDraft { newSession(in: nil); return }
         let context = (focusedProjectRef?.host ?? newSessionForm.executionHost).map { HostViewContext(host: $0, hosts: hosts) }
         newSession(in: focusedProject?.id ?? draftProjectId, context: context)

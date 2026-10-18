@@ -53,21 +53,37 @@ extension AppModel {
         if attention(on: host).review(session, chatVisible: chatVisible, appActive: NSApp.isActive) { didReviewHost() }
     }
 
+    /// The Local composer action uses only the Local client, never a pending remote operation.
+    func createLocalChat(_ request: SpawnRequest, form: NewSessionForm, revision: UUID,
+                         tracked: TrackedItemBinding? = nil) async throws -> SessionSummary {
+        guard form.revision == revision, (form.executionHost ?? localHost) == localHost,
+              form.pendingOperationId == nil, pendingChatCreate(on: localHost) == nil else {
+            throw HostRoutingError.invalidReference
+        }
+        let session = try await client.spawn(request)
+        if let tracked { await bindTrackedItem(tracked.itemId, label: tracked.label, sessionId: session.id) }
+        if (form.executionHost ?? localHost) == localHost, form.completeSubmission(revision: revision) {
+            selectedSessionId = session.id
+        }
+        return session
+    }
+
     func createHostedChat(form: NewSessionForm, host: HostRef, project: Project, revision: UUID) async throws {
         guard let origin = localHost else { throw HostRoutingError.invalidReference }
+        func ownsDraft() -> Bool { form.revision == revision && (form.executionHost ?? localHost) == host }
+        guard ownsDraft() else { throw HostRoutingError.invalidReference }
         _ = try hosts.endpoint(host)
         let fence = try hosts.token(for: host)
         let images = form.attachments.items
         // Freeze the submitted draft before any suspension. A later edit is not part of this intent.
         let request = form.spawnRequest(in: project, rawAttachments: true)
         try await finishAdopted(on: host)
+        guard ownsDraft() else { return }
         try hosts.validate(fence)
         let operation: DurableOperation
         let receipt: OperationReceipt
         if form.pendingOperationId == nil {
-            form.pendingOperationId = hosts.pendingOperations.values.first {
-                $0.destination == host && ($0.kind == "chat-create" || $0.kind == "chat-create-attached")
-            }?.operationId
+            form.pendingOperationId = pendingChatCreate(on: host)?.operationId
         }
         if let id = form.pendingOperationId, let pending = hosts.pendingOperations[id] {
             guard pending.destination == host,
@@ -80,6 +96,7 @@ extension AppModel {
             var staged: [HostedAttachment] = []
             for image in images {
                 staged.append(try await hosts.upload(image, host: host, origin: origin))
+                guard ownsDraft() else { return }
                 try hosts.validate(fence)
             }
             let result: (DurableOperation, OperationDelivery)
@@ -89,6 +106,8 @@ extension AppModel {
                 result = try await hosts.deliverAttached(host: host, kind: "chat-create-attached", targetId: nil,
                     request: request, attachments: staged, origin: origin)
             }
+            // A host switch while delivery was in flight must not bind the new draft to this intent.
+            guard ownsDraft() else { return }
             form.pendingOperationId = result.0.operationId
             try persistDrafts()
             guard case let .receipt(known) = result.1, known.state != .pending else {
@@ -104,12 +123,17 @@ extension AppModel {
     func checkHostedChat(_ operation: DurableOperation, form: NewSessionForm, retryOriginal: Bool = false,
                          openConfirmed: Bool = false, attempts: Int = 3,
                          delay: Duration = .milliseconds(500)) async {
-        guard !form.checkingStart, !form.busy else { return }
+        let revision = form.revision
+        guard !form.checkingStart, !form.busy,
+              ownsChatStart(operation, form: form, revision: revision) else { return }
+        let checkId = UUID()
+        form.startCheckId = checkId
         form.checkingStart = true
         form.error = nil
         form.startRecoveryMessage = nil
-        let revision = form.revision
-        defer { form.checkingStart = false }
+        defer {
+            if form.startCheckId == checkId { form.startCheckId = nil; form.checkingStart = false }
+        }
         do {
             guard operation.kind == "chat-create" || operation.kind == "chat-create-attached",
                   form.pendingOperationId == nil || form.pendingOperationId == operation.operationId else {
@@ -118,7 +142,9 @@ extension AppModel {
             form.pendingOperationId = operation.operationId
             try persistDrafts()
             if retryOriginal { try await hosts.retryOperation(operation) }
+            guard ownsChatStart(operation, form: form, revision: revision), form.startCheckId == checkId else { return }
             let delivery = try await hosts.checkOperation(operation, attempts: attempts, delay: delay)
+            guard ownsChatStart(operation, form: form, revision: revision), form.startCheckId == checkId else { return }
             switch delivery {
             case let .receipt(receipt) where receipt.state != .pending:
                 try await adoptCreatedChat(operation, receipt: receipt, form: form, revision: revision,
@@ -129,6 +155,7 @@ extension AppModel {
                 form.startRecoveryMessage = "No receipt was found on the original devbox. This does not prove the chat failed. Check again, or retry only the saved original start."
             }
         } catch {
+            guard ownsChatStart(operation, form: form, revision: revision), form.startCheckId == checkId else { return }
             if case let .receipt(receipt)? = hosts.operationDeliveries[operation.operationId], receipt.state == .accepted {
                 form.error = "Chat start was confirmed, but the existing chat could not be opened: \(error.localizedDescription) Reconnect and choose Open chat. Do not resend. Your draft is kept."
             } else {
@@ -158,6 +185,7 @@ extension AppModel {
     func adoptCreatedChat(_ operation: DurableOperation, receipt: OperationReceipt, form: NewSessionForm, revision: UUID,
                           openWhenDraftChanged: Bool = false) async throws {
         try receipt.validate(operation)
+        guard ownsChatStart(operation, form: form, revision: revision) else { return }
         guard receipt.state != .pending else { throw ClientError("Chat start is still unconfirmed. Check again shortly.") }
         let host = operation.destination
         if receipt.state == .accepted {
@@ -165,6 +193,7 @@ extension AppModel {
                 throw HostRoutingError.identityChanged
             }
             try await hosts.createdSession(operation)
+            guard ownsChatStart(operation, form: form, revision: revision) else { return }
             let payload = try JSONDecoder().decode(JSONValue.self, from: Data(operation.payload.utf8))
             let request = payload["request"] ?? payload
             let imageIDs = Set((payload["attachments"]?.array ?? []).compactMap { $0["uploadId"]?.string })
@@ -190,6 +219,11 @@ extension AppModel {
         if receipt.state == .rejected {
             throw ClientError("The devbox rejected the chat start: \(receipt.reason ?? "request not accepted"). Your draft has been kept. You can edit it and start again.")
         }
+    }
+
+    private func ownsChatStart(_ operation: DurableOperation, form: NewSessionForm, revision: UUID) -> Bool {
+        form.revision == revision && (form.executionHost ?? localHost) == operation.destination
+            && (form.pendingOperationId == nil || form.pendingOperationId == operation.operationId)
     }
 
     func resourceRef(_ id: String, kind: HostResourceKind, context: HostViewContext? = nil) -> HostResourceRef? {

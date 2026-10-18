@@ -12,6 +12,8 @@ struct StoredDrafts: Codable {
     var localHost: HostRef? = nil
     var selection: HostResourceRef? = nil
     var adoptedOperations: [String]? = nil
+    /// Only used after a pending start needs an independent destination. Legacy files omit it.
+    var parkedNewTasks: [StoredTaskDraft]? = nil
 }
 
 struct StoredChatDraft: Codable {
@@ -104,6 +106,12 @@ final class DraftStore {
             let drafts = try JSONDecoder().decode(StoredDrafts.self, from: data)
             guard drafts.version == 1 else {
                 throw StoreError.unsupportedVersion(drafts.version)
+            }
+            let parked = drafts.parkedNewTasks ?? []
+            let hosts = parked.compactMap(\.executionHost)
+            guard parked.count <= 32, hosts.count == parked.count, Set(hosts).count == hosts.count,
+                  !hosts.contains(where: { $0 == (drafts.newTask.executionHost ?? drafts.localHost) }) else {
+                throw HostRoutingError.invalidReference
             }
             for key in drafts.chats.keys where key.hasPrefix("hostref1:") {
                 let ref = try HostResourceRef.decodeKey(key)
