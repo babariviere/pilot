@@ -851,6 +851,7 @@ pnpm fmt:check
 pnpm typecheck
 pnpm test:fast                    # quick unit and offline feedback
 pnpm test                         # full gate, including integration and stress tests
+apps/macos/scripts/lint.sh        # pinned SwiftLint correctness checks, no build needed
 apps/macos/scripts/test.sh        # Swift tests
 apps/macos/scripts/build.sh       # native app build
 ```

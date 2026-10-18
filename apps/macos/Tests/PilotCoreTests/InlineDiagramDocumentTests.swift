@@ -61,8 +61,9 @@ private func bootstrapNonce(_ document: String) -> String? {
         #expect(!document.contains("blob:"))
         if kind == .svg { #expect(!document.contains("pilot-artifact:")) }
     }
-    #expect(bootstrapNonce(InlineDiagramDocument.document(kind: .svg, source: "")) !=
-            bootstrapNonce(InlineDiagramDocument.document(kind: .svg, source: "")))
+    let firstNonce = bootstrapNonce(InlineDiagramDocument.document(kind: .svg, source: ""))
+    let secondNonce = bootstrapNonce(InlineDiagramDocument.document(kind: .svg, source: ""))
+    #expect(firstNonce != secondNonce)
 }
 
 @Test func svgValidationIsDetachedAndDisplaysOnlyImageData() {
