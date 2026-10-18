@@ -1,6 +1,7 @@
 export { installBundledAnthropicAuth } from "./bundled-extensions.ts";
 export type { ConnectivityState } from "./connectivity.ts";
 export { probeReachability, providerOrigin } from "./connectivity.ts";
+export { parseControlPreparationRecord } from "./control-preparation.ts";
 export type { ControlTurnOrigin } from "./control-turn-origin.ts";
 export { formatFailure, safeFailureText } from "./failure.ts";
 export { inputOrigin } from "./input-origin.ts";

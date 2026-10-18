@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import type { OperationHost, SessionDiagnosticCurrent } from "@pilot/protocol";
+import { performanceLine } from "../../kernel/src/performance.ts";
 import type { DaemonPerformance } from "./event-loop-watchdog.ts";
 import { type LifecycleEvent, lifecycleLine } from "./lifecycle-diagnostics.ts";
 import { MAX_DIAGNOSTIC_BYTES, MAX_DIAGNOSTIC_ITEMS, readSessionDiagnostics } from "./session-diagnostics.ts";
@@ -151,6 +152,77 @@ test("diagnostics combine strict local sources without exposing retained content
 	assert.equal(JSON.stringify(result).includes("conversation secret"), false);
 	assert.equal(JSON.stringify(result).includes("secret route"), false);
 	assert.ok(result.truncation.encodedBytes <= MAX_DIAGNOSTIC_BYTES);
+});
+
+test("Control preparation evidence is correlated and explicit, never inferred from parked_idle completion", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "control-preparation-evidence-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	await mkdir(join(root, "durable"));
+	const at = Date.parse("2026-01-02T00:00:05.000Z");
+	const attemptRef = "diagnostic:v1:control-preparation:00000000-0000-4000-8000-000000000002";
+	const failed = {
+		v: 1 as const,
+		source: "control_preparation" as const,
+		at,
+		attemptRef,
+		stage: "history_summarization" as const,
+		outcome: "failed" as const,
+		reason: "preparation_failure" as const,
+		durationMs: 3,
+	};
+	await writeFile(
+		join(root, "durable", "performance.jsonl"),
+		performanceLine(failed)! +
+			performanceLine({
+				...failed,
+				at: at + 1,
+				attemptRef: attemptRef.replace(/2$/, "3"),
+				stage: "request_projection",
+				outcome: "prepared",
+				reason: undefined,
+			})! +
+			`${JSON.stringify({ ...failed, stage: "PRIVATE_MESSAGE_CONTENT" })}\n`,
+	);
+	await writeFile(
+		join(root, "lifecycle.jsonl"),
+		lifecycleLine({
+			...event(1, new Date(at + 2).toISOString()),
+			kind: "execution.completed",
+			reason: "parked_idle",
+			state: "completed",
+		})!,
+	);
+	const result = await readSessionDiagnostics({
+		host,
+		sessionId: "synthetic",
+		storageDir: root,
+		current,
+		connectivity: { state: "online", observedAt: new Date(at).toISOString() },
+		now: at + 3,
+	});
+	const preparation = result.evidence.filter(
+		(item) => item.source === "request_timing" && item.kind === "control.request.preparation",
+	);
+	assert.equal(preparation.length, 2);
+	assert.deepEqual(
+		preparation.map((item) => item.outcome),
+		["prepared", "failed"],
+	);
+	assert.deepEqual(preparation[1], {
+		ref: attemptRef,
+		source: "request_timing",
+		at: new Date(at).toISOString(),
+		kind: "control.request.preparation",
+		attemptRef,
+		stage: "history_summarization",
+		outcome: "failed",
+		reason: "preparation_failure",
+		durationMs: 3,
+	});
+	assert.equal(result.current.working, false);
+	assert.equal(result.evidence[0]?.kind, "execution.completed");
+	assert.equal(result.sources.find((source) => source.source === "request_timing")?.invalid, 1);
+	assert.doesNotMatch(JSON.stringify(result), /PRIVATE|"outcome":"done"|"outcome":"success"/);
 });
 
 test("a healthy local daemon keeps failed remote setup evidence separate and marks old setup evidence stale", async (t) => {

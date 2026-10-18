@@ -57,6 +57,15 @@ The immutable daemon and lineage values must match the connected host. A stale i
 falling back to another host. Responses are `no-store`, contain at most 128 evidence items and 64 KiB, and report
 missing or stale sources instead of manufacturing evidence.
 
+Control request preparation also contributes `control.request.preparation` items to the request-timing source.
+They identify only a closed stage (`history_record`, `history_summarization` or `request_projection`), timestamp,
+duration, random opaque attempt reference and `prepared`, `failed` or `cancelled` outcome. Failures use the fixed
+`preparation_failure` category, not raw errors or message content; the failed chat outcome carries the same
+reference. These records share request-timing consent, bounded queues and two capped local log segments.
+`prepared` means only that a request projection was built, not that an action ran or a task succeeded.
+Likewise, lifecycle `execution.completed` with `parked_idle` is not a task-success signal. Reporting never retries
+or replays an action, changes the summarization algorithm or rewrites retained history.
+
 ## Specialist-authored repair proposal and authorized handoff
 
 A specialist has no repair or spawn tool. When the user asks for a suggestion, its host-owned `repair_proposal` tool

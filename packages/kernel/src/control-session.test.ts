@@ -197,7 +197,7 @@ test("control turns are fresh, tool rounds stay intact, log excludes thoughts an
 	assert.equal(errors.length, 1, "a pre-provider fault must be visible in the transcript");
 	assert.match(
 		errors[0]!.role === "assistant" ? (errors[0].errorMessage ?? "") : "",
-		/summary unavailable.*retry|summary unavailable.*send/i,
+		/preparation failed at history_summarization.*retry/i,
 	);
 	await session.close();
 	session = await KernelSession.open(
@@ -366,7 +366,7 @@ for (const reopened of [false, true])
 		await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
 		await published;
 		assert.equal(faux.state.callCount, 0);
-		assert.match(session.completion?.outcomeReason ?? "", /could not be summarized/);
+		assert.match(session.completion?.outcomeReason ?? "", /preparation failed at history_summarization/);
 		const errors = async () =>
 			(await session.conversation.context(BACKGROUND_CONTEXT)).entries
 				.flatMap((entry) => entry.model ?? [])

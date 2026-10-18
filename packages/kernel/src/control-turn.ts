@@ -1,4 +1,6 @@
 /** A fresh request projection, not a second model loop or a rewrite of Harness history. */
+import { randomUUID } from "node:crypto";
+import { performance } from "node:perf_hooks";
 import type { Context, JsonValue } from "@earendil-works/chord";
 import { type Api, contentText, getCurrentTools, type Message } from "@earendil-works/pi-ai";
 import {
@@ -19,6 +21,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { AttentionDoc } from "./attention.ts";
 import { CONTROL_SYSTEM_PROMPT, type ControlContextLine, controlBlocks } from "./control-context.ts";
+import type { ControlPreparationRecord } from "./control-preparation.ts";
 import { safeFailureText } from "./failure.ts";
 
 const FailureDoc = defineDoc<{ input?: number }>({
@@ -78,11 +81,19 @@ export class ControlTurn {
 	private readonly storage: Storage;
 	private readonly conversationId: () => ConversationId;
 	private serial: Promise<unknown> = Promise.resolve();
-	constructor(call: ControlCall, host: () => Harness, storage: Storage, conversationId: () => ConversationId) {
+	private readonly report?: (record: ControlPreparationRecord) => void;
+	constructor(
+		call: ControlCall,
+		host: () => Harness,
+		storage: Storage,
+		conversationId: () => ConversationId,
+		report?: (record: ControlPreparationRecord) => void,
+	) {
 		this.call = call;
 		this.host = host;
 		this.storage = storage;
 		this.conversationId = conversationId;
+		this.report = report;
 	}
 	/** Only the current run is an SDK/model context. The durable transcript is never cut or rewritten. */
 	async context(context: Context, at?: EntryId): Promise<ContextView> {
@@ -238,45 +249,78 @@ export class ControlTurn {
 				...(extension.hooks ?? []),
 				hook(GenerationTask, {
 					beforeRequest: async (request, _api, context) => {
-						const harness = this.host(),
-							id = this.conversationId(),
-							live = await harness.snapshot(LiveDoc, id, context);
-						const first = live?.run?.inputs[0];
-						const submission = first ? await this.storage.submission(first, context) : undefined;
-						if (!submission?.entry) throw new Error("Control turn requires a committed input");
-						const anchor = Number(submission.entry);
-						await this.record(context, anchor - 1);
-						let state = await harness.snapshot(JournalDoc, id, context);
-						const result = (await this.call("prepare", {
-							key: String(anchor),
-							requestId: submission.requestId ?? "",
-							tools: JSON.parse(JSON.stringify(getCurrentTools(request.messages))) as JsonValue,
-						})) as { lines: ControlContextLine[] };
-						if (state?.anchor !== anchor) {
-							await harness.commit(async (tx) => {
-								const state = await tx.doc(JournalDoc, id);
-								state.anchor = anchor;
-								state.lines = result.lines;
-							}, context);
-							state = await harness.snapshot(JournalDoc, id, context);
+						const attemptRef = `diagnostic:v1:control-preparation:${randomUUID()}`;
+						const started = performance.now();
+						let stage: ControlPreparationRecord["stage"] = "history_record";
+						let outcome: ControlPreparationRecord["outcome"] = "failed";
+						try {
+							const harness = this.host(),
+								id = this.conversationId(),
+								live = await harness.snapshot(LiveDoc, id, context);
+							const first = live?.run?.inputs[0];
+							const submission = first ? await this.storage.submission(first, context) : undefined;
+							if (!submission?.entry) throw new Error("Control turn requires a committed input");
+							const anchor = Number(submission.entry);
+							await this.record(context, anchor - 1);
+							let state = await harness.snapshot(JournalDoc, id, context);
+							stage = "history_summarization";
+							const result = (await this.call("prepare", {
+								key: String(anchor),
+								requestId: submission.requestId ?? "",
+								tools: JSON.parse(JSON.stringify(getCurrentTools(request.messages))) as JsonValue,
+							})) as { lines: ControlContextLine[] };
+							stage = "request_projection";
+							if (state?.anchor !== anchor) {
+								await harness.commit(async (tx) => {
+									const state = await tx.doc(JournalDoc, id);
+									state.anchor = anchor;
+									state.lines = result.lines;
+								}, context);
+								state = await harness.snapshot(JournalDoc, id, context);
+							}
+							stage = "history_record";
+							await this.record(context);
+							stage = "request_projection";
+							const messages = (await this.context(context)).messages.filter(
+								(message) => message.role !== "system",
+							);
+							const { blocks, lastWhole } = controlBlocks(state?.lines ?? []);
+							const projected: Message[] = [
+								{
+									role: "system",
+									content: CONTROL_SYSTEM_PROMPT,
+									toolsAdded: getCurrentTools(request.messages),
+									timestamp: 0,
+								},
+								{ role: "user", content: blocks.map((text) => ({ type: "text", text })), timestamp: 0 },
+								...messages,
+							];
+							prepared(projected, lastWhole ?? "");
+							outcome = "prepared";
+							return { messages: projected };
+						} catch (error) {
+							if (context.abortSignal?.aborted) {
+								outcome = "cancelled";
+								throw error; // Preserve the Harness's existing abort/close handling.
+							}
+							// The boundary knows the stage, not the underlying cause. Never retain raw errors.
+							throw new Error(`Control request preparation failed at ${stage} (${attemptRef})`);
+						} finally {
+							try {
+								this.report?.({
+									v: 1,
+									source: "control_preparation",
+									at: Date.now(),
+									attemptRef,
+									stage,
+									outcome,
+									durationMs: Math.max(0, performance.now() - started),
+									...(outcome === "failed" ? { reason: "preparation_failure" as const } : {}),
+								});
+							} catch {
+								// Diagnostics cannot change dispatch, completion, retry or replay semantics.
+							}
 						}
-						await this.record(context);
-						const messages = (await this.context(context)).messages.filter(
-							(message) => message.role !== "system",
-						);
-						const { blocks, lastWhole } = controlBlocks(state?.lines ?? []);
-						const projected: Message[] = [
-							{
-								role: "system",
-								content: CONTROL_SYSTEM_PROMPT,
-								toolsAdded: getCurrentTools(request.messages),
-								timestamp: 0,
-							},
-							{ role: "user", content: blocks.map((text) => ({ type: "text", text })), timestamp: 0 },
-							...messages,
-						];
-						prepared(projected, lastWhole ?? "");
-						return { messages: projected };
 					},
 				}),
 			],

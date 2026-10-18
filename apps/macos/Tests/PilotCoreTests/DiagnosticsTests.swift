@@ -2,6 +2,25 @@ import Foundation
 import Testing
 import PilotCore
 
+@Test(arguments: ["failed", "prepared", "cancelled"])
+func controlPreparationEvidenceDecodesWithoutInferringTaskSuccess(outcome: String) throws {
+    let reference = "diagnostic:v1:control-preparation:00000000-0000-4000-8000-000000000002"
+    let data = Data(#"""
+    {"ref":"\#(reference)","attemptRef":"\#(reference)","source":"request_timing",
+     "at":"2026-01-01T00:00:00.000Z","kind":"control.request.preparation",
+     "outcome":"\#(outcome)","stage":"history_summarization","durationMs":2}
+    """#.utf8)
+    let evidence = try JSONDecoder().decode(DiagnosticEvidence.self, from: data)
+    #expect(evidence.source == .requestTiming)
+    #expect(evidence.kind == "control.request.preparation")
+    #expect(evidence.outcome == outcome)
+    #expect(evidence.attemptRef == reference)
+    #expect(evidence.stage == "history_summarization")
+    #expect(evidence.durationMs == 2)
+    #expect(evidence.state == nil)
+    #expect(evidence.requestSource == nil)
+}
+
 @Test func diagnosticProtocolDecodesBoundedEvidenceAndHostIdentity() throws {
     let data = Data(#"""
     {

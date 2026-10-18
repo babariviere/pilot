@@ -11,6 +11,7 @@ import {
 	type ReadableSpan,
 	type SpanExporter,
 } from "@pilot/telemetry";
+import type { ControlPreparationRecord } from "./control-preparation.ts";
 import {
 	PerformanceLog,
 	type PerformanceRecord,
@@ -133,6 +134,39 @@ test("serialization whitelists numeric timings and enums, never labels, content,
 	assert.equal(performanceLine({ ...record(), source: "private source" as "stream" }), undefined);
 	assert.equal(performanceLine({ ...record(), outcome: "private error" as "error" }), undefined);
 	assert.ok(Number.isFinite(JSON.parse(performanceLine({ ...record(), totalMs: Number.MAX_VALUE })!).totalMs));
+});
+
+test("control preparation records allow only bounded stages, categories and opaque correlation refs", () => {
+	const event: ControlPreparationRecord = {
+		v: 1,
+		source: "control_preparation",
+		at: 1000,
+		attemptRef: "diagnostic:v1:control-preparation:00000000-0000-4000-8000-000000000002",
+		stage: "history_summarization",
+		outcome: "failed",
+		reason: "preparation_failure",
+		durationMs: 2,
+	};
+	const line = performanceLine({
+		...event,
+		error: "private error",
+		message: "private content",
+	} as ControlPreparationRecord)!;
+	assert.deepEqual(JSON.parse(line), event);
+	assert.doesNotMatch(line, /private|message|error/);
+	for (const invalid of [
+		{ stage: "private stage" },
+		{ reason: "private error" },
+		{ attemptRef: "private request id" },
+		{ outcome: "done" },
+		{ at: Infinity },
+		{ at: 9e15 },
+		{ durationMs: -1 },
+		{ droppedBefore: 0.5 },
+		{ outcome: "prepared" },
+	])
+		assert.equal(performanceLine({ ...event, ...invalid } as ControlPreparationRecord), undefined);
+	assert.ok(performanceLine({ ...event, outcome: "prepared", reason: undefined }));
 });
 
 test("local logs rotate to two private capped segments and survive reopening", async (t) => {
