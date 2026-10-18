@@ -150,6 +150,25 @@ private func pr(_ state: PullRequestState = .open, url: String = "https://github
     #expect(session([numbered(4, .open), unsafe]).latestPullRequest?.number == 4)
 }
 
+@Test func compactPullRequestsKeepAFewOpenOnesFirstAndCountTheRest() {
+    func numbered(_ number: Int, _ state: PullRequestState) -> SessionPullRequest {
+        SessionPullRequest(number: number, url: "https://github.com/example/repo/pull/\(number)", title: "PR",
+                           state: state, checkedAt: 1)
+    }
+    func session(_ prs: [SessionPullRequest]) -> SessionSummary {
+        SessionSummary(id: "s", title: "Task", cwd: "/tmp", createdAt: 1, updatedAt: 2, state: "idle",
+                       pullRequest: prs.first, pullRequests: prs)
+    }
+    let few = session([numbered(2, .merged), numbered(1, .open)]).compactPullRequests()
+    #expect(few.shown.map(\.number) == [1, 2])
+    #expect(few.hidden == 0)
+    // A long-lived chat with 26 merged PRs and one open one: the open one first, then two merged, 24 counted.
+    let many = session((1...26).reversed().map { numbered($0, .merged) } + [numbered(30, .open)]).compactPullRequests()
+    #expect(many.shown.map(\.number) == [30, 26, 25])
+    #expect(many.hidden == 24)
+    #expect(session([]).compactPullRequests().shown.isEmpty)
+}
+
 @Test func pullRequestBrowserURLsAllowEnterpriseButNotOtherSchemes() {
     for url in ["https://github.com/example/repo/pull/7", "https://github.acme.test/team/repo/pull/7",
                 "http://github.local/team/repo/pull/7", "HTTPS://github.acme.test/team/repo/pull/7"] {

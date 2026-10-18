@@ -155,6 +155,15 @@ extension SessionSummary {
         return prs.filter { !$0.isTerminal }.max { $0.number < $1.number } ?? prs.max { $0.number < $1.number }
     }
 
+    /// The PRs a compact badge row shows, open ones first, and how many it leaves out. A long-lived chat can link
+    /// dozens of PRs; drawn whole, they would set the width of the row and of the column holding it.
+    public func compactPullRequests(limit: Int = 3) -> (shown: [SessionPullRequest], hidden: Int) {
+        let prs = linkedPullRequests
+        let ordered = prs.filter { !$0.isTerminal } + prs.filter(\.isTerminal)
+        let shown = Array(ordered.prefix(max(0, limit)))
+        return (shown, prs.count - shown.count)
+    }
+
     /// Every session branch paired with its PR, the current branch first. PRs without a known head branch
     /// (older daemons) attach to the current branch when it has none, otherwise they follow without a name.
     public func branchLinks(current: String? = nil) -> [SessionBranchLink] {
