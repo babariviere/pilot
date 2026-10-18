@@ -13,6 +13,21 @@ port, daemon ID and storage lineage. Changed identities fail closed, never silen
 `connect(host:configuration:)` also requires that enrolled pin/configuration. Bootstrap retains its
 signed-package/service/coordinator gates; reconnect never installs, updates or starts a service.
 
+The live app explicitly calls `startHostConnections` after launch. Successful offline inventory restore
+admits `startSavedConnections`: at most two saved, previously trusted devboxes connect in the background,
+using the existing noninteractive SSH transport. Local startup never waits for those SSH attempts.
+Duplicate launch calls and manual reconnects share in-flight ownership. Each saved host gets one launch
+admission with the tunnel's existing finite retry budget, not a polling loop. Explicit Disconnect (also the
+barrier for removal), changed saved coordinates and shutdown synchronously fence queued/in-flight work;
+late success cannot install a client or undo the user's choice. An explicit later Reconnect remains allowed.
+
+After each verified remote client generation, `HostClients.remoteRuntimes` reads the existing hello once,
+with at most two reads in flight. Its observations contain the exact `HostConnectionToken` and `DaemonHello`,
+including version/capabilities, and disappear on disconnect/replacement/quit. Failed, empty-version or
+wrong-identity reads remain unknown, never inferred as an older runtime. This lifecycle evidence is available
+outside Settings for the automatic updater; it is not an install/restart permission or another updater.
+Version comparison and signed update/drain ownership remain with the runtime update lifecycle.
+
 Each connection consumes `tunnel.states()`. Losing the forward detaches subscriptions, invalidates
 response fences and discards that endpoint client, preserving summaries. Each newly verified forward
 creates a fresh client, including when the port changes. Host-qualified subscriptions/retained views
@@ -29,7 +44,9 @@ a coordinator.
 
 ## Private offline index
 
-Production startup reads `Application Support/Pilot/Hosts/hosts.json` without SSH or agent actions.
+Offline restoration reads `Application Support/Pilot/Hosts/hosts.json` without SSH or agent actions.
+The generic `restoreOffline` operation and all constructors stay read-only; only the explicit live-launch
+hook above admits subsequent connections. Fixtures and previews do not opt in merely by restoring metadata.
 The private directory/file use 0700/0600, atomic replacement and file/directory fsync. Encoding,
 decoding, whitelist projection and filesystem work run on a separate actor. Streaming saves coalesce
 for 500 ms; revision fences prevent older saves replacing a later quit flush. Corrupt/unknown schemas
