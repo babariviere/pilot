@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.52.0](https://github.com/babariviere/pilot/compare/v1.51.0...v1.52.0) (2026-10-18)
+
+
+### Features
+
+* **diagnostics:** identify specialist chats and suggest repairs ([0483d7d](https://github.com/babariviere/pilot/commit/0483d7db2be301f43ef55987405bba844d611c32))
+* **diagnostics:** surface repair proposal prompts ([a3eb39b](https://github.com/babariviere/pilot/commit/a3eb39bf232f87e30ac1fff9b655899f7efb0c30))
+
+
+### Bug Fixes
+
+* **devbox:** authorize GitHub setup with key-management scopes ([f931bbf](https://github.com/babariviere/pilot/commit/f931bbf8c57f3ba8adb353f9c74c764bf6d7bb90))
+* **macos:** order diagnostics test arguments ([6d1d7cd](https://github.com/babariviere/pilot/commit/6d1d7cdddc0eac9dd5f67faaf994ec5888ff3bc2))
+* **macos:** restore diagnostics CI compilation ([b1783aa](https://github.com/babariviere/pilot/commit/b1783aa9bfb124e29b3be5e3532d16eba3a8f519))
+* **macos:** retain missions when dashboard summaries are clipped ([e0ca964](https://github.com/babariviere/pilot/commit/e0ca964fa5a0f07864cd5fd8d99b738f17800429))
+
 ## [1.51.0](https://github.com/babariviere/pilot/compare/v1.50.0...v1.51.0) (2026-10-18)
 
 
