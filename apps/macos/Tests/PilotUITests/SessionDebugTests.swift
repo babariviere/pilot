@@ -7,7 +7,8 @@ private let localHost = HostRef(hostId: "local", daemonId: "daemon", lineageId: 
 private let project = Project(id: "project", name: "Project", path: "/projects/source", createdAt: 1)
 
 private func sourceSession(control: Bool? = nil) -> SessionSummary {
-    SessionSummary(id: control == true ? "control" : "source", title: "Sleeping target", cwd: "/projects/source",
+    SessionSummary(id: control == true ? "00000000-0000-4000-8000-000000000001" : "01234567-89ab-4cde-8fab-0123456789ab",
+                   title: "Sleeping target", cwd: "/projects/source",
                    projectId: control == true ? nil : project.id, createdAt: 1, updatedAt: 2,
                    state: "idle", mode: .ask)
 }
@@ -20,12 +21,19 @@ private func sourceSession(control: Bool? = nil) -> SessionSummary {
     app.selectedSessionId = source.id
 
     app.diagnose(source)
-    for _ in 0..<100 where app.client.fixtureSpawnRequests.isEmpty { await Task.yield() }
+    let setup = try #require(app.diagnosticSetupTarget)
+    #expect(app.client.fixtureSpawnRequests.isEmpty, "opening setup does not spawn")
+    let resolved = try DiagnosticSetup.resolve(DiagnosticSetup.link(source.id), setup: setup,
+                                               localHost: app.localHost, local: app.client.sessions, hosted: [])
+    let prepared = try DiagnosticSetup.spawnRequest(target: resolved, model: "test/diagnostic",
+                                                    thinking: "high", askingAboutPilot: false)
+    let created = try await app.spawnDiagnostics(prepared, target: resolved.reference, tracksFeature: false)
+    try app.selectSession(created)
 
     let request = try #require(app.client.fixtureSpawnRequests.first)
     #expect(request.role == .diagnostics)
     #expect(request.mode == .ask)
-    #expect(request.diagnosticTargetId == source.id)
+    #expect(request.diagnosticTarget?.sessionId == source.id)
     #expect(request.projectId == nil)
     #expect(request.cwd == nil)
     #expect(request.message.contains(source.title) == false)
@@ -41,12 +49,18 @@ private func sourceSession(control: Bool? = nil) -> SessionSummary {
     app.client.loadFixture(projects: [], sessions: [control])
 
     app.askAboutPilot()
-    for _ in 0..<100 where app.client.fixtureSpawnRequests.isEmpty { await Task.yield() }
+    let setup = try #require(app.diagnosticSetupTarget)
+    #expect(app.client.fixtureSpawnRequests.isEmpty, "opening setup does not spawn")
+    let resolved = try DiagnosticSetup.resolve("", setup: setup, localHost: app.localHost,
+                                               local: app.client.sessions, hosted: [])
+    let prepared = try DiagnosticSetup.spawnRequest(target: resolved, model: "test/diagnostic",
+                                                    thinking: "medium", askingAboutPilot: true)
+    _ = try await app.spawnDiagnostics(prepared, target: resolved.reference, tracksFeature: false)
 
     let request = try #require(app.client.fixtureSpawnRequests.first)
-    #expect(request.title == "Ask about Pilot")
+    #expect(request.title == "Pilot diagnostics")
     #expect(request.role == .diagnostics)
-    #expect(request.diagnosticTargetId == control.id)
+    #expect(request.diagnosticTarget?.sessionId == control.id)
 }
 
 @Test @MainActor func repairRequiresASeparateExplicitHandoffAndOrdinaryBuildRequest() throws {

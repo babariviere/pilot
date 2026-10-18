@@ -22,13 +22,17 @@ import Testing
 }
 
 @Test func diagnosticsRoleAndBoundedHandoffProtocolRoundTrip() throws {
+    let host = HostRef(hostId: "remote-box", daemonId: "daemon", lineageId: "lineage")
+    let targetId = "01234567-89ab-4cde-8fab-0123456789ab"
+    let target = try #require(DiagnosticTargetReference(host: host, sessionId: targetId))
     let request = SpawnRequest(projectId: "p", message: "Diagnose", mode: .ask, role: .diagnostics,
-                               diagnosticTargetId: "target")
+                               diagnosticTarget: target)
     let decoded = try JSONDecoder().decode(SpawnRequest.self, from: JSONEncoder().encode(request))
     #expect(decoded.role == .diagnostics)
-    #expect(decoded.diagnosticTargetId == "target")
+    #expect(decoded.diagnosticTarget == target)
     let session = SessionSummary(id: "d", title: "Diagnose", cwd: "/tmp", createdAt: 1, updatedAt: 2,
-                                 state: "idle", mode: .ask, role: .diagnostics, diagnosticTargetId: "target")
+                                 state: "idle", mode: .ask, role: .diagnostics, diagnosticTargetId: targetId,
+                                 diagnosticTarget: target)
     #expect(session.isDiagnosticsSpecialist)
     #expect(try JSONDecoder().decode(SessionSummary.self, from: JSONEncoder().encode(session)) == session)
     let handoff = DiagnosticsHandoffRequest(targetSessionId: "target",
@@ -38,6 +42,8 @@ import Testing
     let handoffWire = try JSONValue.decode(JSONEncoder().encode(handoff))
     #expect(handoffWire["targetSessionId"]?.string == "target")
     #expect(handoffWire["evidenceRefs"]?.array?.count == 1)
+    let wrongLink = Data(#"{"host":{"hostId":"remote-box","daemonId":"daemon","lineageId":"lineage"},"sessionId":"01234567-89ab-4cde-8fab-0123456789ab","chatUrl":"pilot://chat/00000000-0000-4000-8000-000000000001"}"#.utf8)
+    #expect(throws: DecodingError.self) { try JSONDecoder().decode(DiagnosticTargetReference.self, from: wrongLink) }
 }
 
 @Test func askAndBuildProtocolRoundTripsExactBranchAndWorkspace() throws {

@@ -40,6 +40,15 @@ import type { TerminalManager } from "./terminals.ts";
 
 type Command = Extract<KernelCommand, { type: "input" | "abort" }>;
 type Spec = Extract<KernelCommand, { type: "start" }>["spec"];
+const diagnosticHost = { hostId: "local", daemonId: "daemon", lineageId: "lineage" } as const;
+const diagnosticTarget = (
+	sessionId: string,
+	host: { hostId: string; daemonId: string; lineageId: string } = diagnosticHost,
+) => ({
+	host,
+	sessionId,
+	chatUrl: `pilot://chat/${sessionId}`,
+});
 
 class IpcProcess extends EventEmitter {
 	connected = true;
@@ -1082,7 +1091,7 @@ test("diagnostics reads a parked session without opening its worker or transcrip
 	const sessions = await f.manager(
 		{},
 		{
-			diagnosticHost: { hostId: "local", daemonId: "daemon", lineageId: "lineage" },
+			diagnosticHost,
 		},
 	);
 	const created = await sessions.spawn({ cwd: f.source, message: "Start" });
@@ -1123,7 +1132,7 @@ test("only a diagnostics specialist can inspect its parked admitted target", asy
 	const sessions = await f.manager(
 		{},
 		{
-			diagnosticHost: { hostId: "local", daemonId: "daemon", lineageId: "lineage" },
+			diagnosticHost,
 		},
 	);
 	const peer = await sessions.spawn({ cwd: f.source, projectId: f.project.id, message: "Peer" });
@@ -1131,7 +1140,7 @@ test("only a diagnostics specialist can inspect its parked admitted target", asy
 		projectId: f.project.id,
 		message: "Caller",
 		role: "diagnostics",
-		diagnosticTargetId: peer.id,
+		diagnosticTarget: diagnosticTarget(peer.id),
 	});
 	await Promise.all([sessions["starting"].get(caller.id), sessions["starting"].get(peer.id)]);
 	const callerWorker = sessions["workers"].get(caller.id)! as FakeWorker;
@@ -1182,7 +1191,7 @@ test("only a diagnostics specialist can inspect its parked admitted target", asy
 
 test("spawning target-scoped diagnostics does not wake or change a parked target", async (t) => {
 	const f = await fixture(t);
-	const sessions = await f.manager();
+	const sessions = await f.manager({}, { diagnosticHost });
 	const target = await sessions.spawn({ projectId: f.project.id, message: "Target" });
 	await sessions["starting"].get(target.id);
 	const before = sessions.get(target.id)!;
@@ -1191,7 +1200,7 @@ test("spawning target-scoped diagnostics does not wake or change a parked target
 	const specialist = await sessions.spawn({
 		message: "Diagnose",
 		role: "diagnostics",
-		diagnosticTargetId: target.id,
+		diagnosticTarget: diagnosticTarget(target.id),
 	});
 	await sessions["starting"].get(specialist.id);
 	assert.equal(sessions["workers"].has(target.id), false);
@@ -1201,22 +1210,41 @@ test("spawning target-scoped diagnostics does not wake or change a parked target
 
 test("diagnostics role survives reopen and prepares only a bounded read-only handoff", async (t) => {
 	const f = await fixture(t);
-	const sessions = await f.manager(
-		{},
-		{ diagnosticHost: { hostId: "local", daemonId: "daemon", lineageId: "lineage" } },
-	);
+	const sessions = await f.manager({}, { diagnosticHost });
 	await assert.rejects(
 		sessions.spawn({ projectId: f.project.id, message: "Unscoped", role: "diagnostics" }),
-		/requires? a target chat/i,
+		/host-qualified target chat/i,
 	);
 	const target = await sessions.spawn({ projectId: f.project.id, message: "Target" });
+	const remoteTarget = diagnosticTarget(target.id, { ...diagnosticHost, hostId: "remote-box" });
+	await assert.rejects(
+		sessions.spawn({
+			message: "Wrong host",
+			role: "diagnostics",
+			diagnosticTarget: diagnosticTarget(target.id, { ...diagnosticHost, daemonId: "other" }),
+		}),
+		/does not match this daemon/i,
+	);
+	await assert.rejects(
+		sessions.spawn({
+			message: "Malformed link",
+			role: "diagnostics",
+			diagnosticTarget: { ...remoteTarget, chatUrl: `pilot://chat/${randomUUID()}` },
+		}),
+		/canonical chat link/i,
+	);
+	const missingId = randomUUID();
+	await assert.rejects(
+		sessions.spawn({ message: "Missing target", role: "diagnostics", diagnosticTarget: diagnosticTarget(missingId) }),
+		/Unknown session/i,
+	);
 	await assert.rejects(
 		sessions.spawn({
 			projectId: f.project.id,
 			message: "Writable",
 			mode: "build",
 			role: "diagnostics",
-			diagnosticTargetId: target.id,
+			diagnosticTarget: remoteTarget,
 		}),
 		/read-only session/,
 	);
@@ -1224,13 +1252,22 @@ test("diagnostics role survives reopen and prepares only a bounded read-only han
 		projectId: f.project.id,
 		message: "Diagnose the target",
 		role: "diagnostics",
-		diagnosticTargetId: target.id,
+		diagnosticTarget: remoteTarget,
+		model: "test/diagnostic",
+		thinking: "high",
 	});
 	await Promise.all([sessions["starting"].get(specialist.id), sessions["starting"].get(target.id)]);
 	assert.equal(specialist.role, "diagnostics");
 	assert.equal(specialist.mode, "ask");
 	assert.equal(f.workers.find((worker) => worker.spec.sessionId === specialist.id)?.spec.role, "diagnostics");
+	assert.deepEqual(
+		f.workers.find((worker) => worker.spec.sessionId === specialist.id)?.spec.diagnosticTarget,
+		remoteTarget,
+	);
+	assert.equal(f.workers.find((worker) => worker.spec.sessionId === specialist.id)?.spec.model, "test/diagnostic");
+	assert.equal(f.workers.find((worker) => worker.spec.sessionId === specialist.id)?.spec.thinking, "high");
 	assert.equal(specialist.diagnosticTargetId, target.id);
+	assert.deepEqual(specialist.diagnosticTarget, remoteTarget);
 	const evidence = {
 		ref: "diagnostic:v1:lifecycle:bounded",
 		source: "lifecycle",
@@ -1309,10 +1346,11 @@ test("diagnostics role survives reopen and prepares only a bounded read-only han
 		/Only a diagnostics specialist/,
 	);
 	await sessions.shutdown();
-	const reopened = await f.manager();
+	const reopened = await f.manager({}, { diagnosticHost });
 	assert.equal(reopened.get(specialist.id)?.role, "diagnostics");
 	assert.equal(reopened["metas"].get(specialist.id)?.role, "diagnostics");
 	assert.equal(reopened.get(specialist.id)?.diagnosticTargetId, target.id);
+	assert.deepEqual(reopened.get(specialist.id)?.diagnosticTarget, remoteTarget);
 });
 
 test("large restart recovery keeps the daemon responsive and bounds cold starts without losing input IDs", async (t) => {

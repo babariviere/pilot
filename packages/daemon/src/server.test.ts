@@ -279,7 +279,19 @@ test("dedicated diagnostics and repair operations admit only their matching chat
 		};
 	};
 	for (const op of [
-		operation("diagnostics-create", { message: "Diagnose", role: "diagnostics", diagnosticTargetId: "target" }, 1),
+		operation(
+			"diagnostics-create",
+			{
+				message: "Diagnose",
+				role: "diagnostics",
+				diagnosticTarget: {
+					host: { hostId: "local", daemonId: "daemon", lineageId: "lineage" },
+					sessionId: "00000000-0000-4000-8000-000000000001",
+					chatUrl: "pilot://chat/00000000-0000-4000-8000-000000000001",
+				},
+			},
+			1,
+		),
 		operation("repair-create", { message: "Repair", mode: "build" }, 2),
 	]) {
 		const response = await fetch(base, {

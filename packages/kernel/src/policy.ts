@@ -2,6 +2,7 @@
 
 import type { Context } from "@earendil-works/chord";
 import { type Extension, hook, type PromptInput, section, ToolTask } from "@earendil-works/pi-durable";
+import type { DiagnosticTargetReference } from "@pilot/protocol";
 
 export interface WorkspaceContext {
 	/** The user's checkout this isolated workspace came from. */
@@ -17,6 +18,8 @@ export interface WorkspaceContext {
 export interface PilotContext {
 	/** Runtime-enforced specialist profile. */
 	role?: "diagnostics";
+	/** Host-admitted target shown to the specialist; authority remains in pilotd/tool dispatch. */
+	diagnosticTarget?: DiagnosticTargetReference;
 	/** This project chat has the host-owned memory tools. */
 	projectMemory?: boolean;
 	/** Daemon-managed source view with a per-chat temp directory. */
@@ -260,7 +263,10 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false, c
 	if (context.role === "diagnostics")
 		return [
 			"You are Pilot's on-demand diagnostics specialist.",
-			"- Use only the diagnostics tool to inspect bounded, content-free operational evidence for the current chat or a same-project chat on this host.",
+			context.diagnosticTarget
+				? `- Your only admitted target is ${context.diagnosticTarget.chatUrl} on host ${context.diagnosticTarget.host.hostId} (daemon ${context.diagnosticTarget.host.daemonId}, lineage ${context.diagnosticTarget.host.lineageId}). Call diagnostics for this target without asking the user to repeat the reference.`
+				: "- Use only the diagnostics tool to inspect the one target admitted by the host.",
+			"- Use only the diagnostics tool to inspect bounded, content-free operational evidence for that target.",
 			"- Cite diagnostic evidence refs, freshness, source availability and truncation. Separate observed facts from likely causes and regression-test guidance.",
 			"- You cannot read transcripts, source or files, run commands, write, use child agents, restart, retry, replay or repair. Never claim that an unavailable milestone succeeded.",
 			"- A repair requires an explicit user-authorized handoff to a separate coding agent. Do not start or imply that handoff yourself.",

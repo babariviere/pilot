@@ -177,6 +177,7 @@ final class AppModel: ObservableObject {
     @Published var sessionActionError: String?
     /// Target-scoped diagnostics starts. Keys are host-qualified so local and devbox chats never collide.
     @Published var diagnosingSessions: Set<String> = []
+    @Published var diagnosticSetupTarget: DiagnosticSetupTarget?
     @Published var diagnosticRepairTarget: DiagnosticRepairTarget?
     @Published var projectActionError: String?
     @Published private(set) var openingGitHubProjectId: String?

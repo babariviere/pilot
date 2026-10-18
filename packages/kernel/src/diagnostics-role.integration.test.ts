@@ -38,46 +38,53 @@ export default (pi) => {
 	const faux = fauxProvider({ provider: "pilot-diagnostics-test", models: [{ id: "offline" }] });
 	runtime.registerNativeProvider(faux.provider);
 	const calls: string[] = [];
-	const diagnostic = createDiagnosticsTool(async (sessionId) => {
-		calls.push(sessionId);
-		return {
-			schemaVersion: 1,
-			host: { hostId: "local", daemonId: "daemon", lineageId: "lineage" },
-			sessionId,
-			release: "1.0.0",
-			collectedAt: "2026-01-01T00:00:00.000Z",
-			freshness: "fresh",
-			connectivity: { state: "unknown" },
-			current: {
-				state: "idle",
-				working: false,
-				pauses: [],
-				recovery: "none",
-				hasError: false,
-				queue: {
-					pendingInputs: 0,
-					starting: false,
-					parking: false,
-					workspacePreparing: false,
-					runningJobs: 0,
-					workingSubagents: 0,
+	const diagnostic = createDiagnosticsTool(
+		async (sessionId) => {
+			calls.push(sessionId);
+			return {
+				schemaVersion: 1,
+				host: { hostId: "local", daemonId: "daemon", lineageId: "lineage" },
+				sessionId,
+				release: "1.0.0",
+				collectedAt: "2026-01-01T00:00:00.000Z",
+				freshness: "fresh",
+				connectivity: { state: "unknown" },
+				current: {
+					state: "idle",
+					working: false,
+					pauses: [],
+					recovery: "none",
+					hasError: false,
+					queue: {
+						pendingInputs: 0,
+						starting: false,
+						parking: false,
+						workspacePreparing: false,
+						runningJobs: 0,
+						workingSubagents: 0,
+					},
 				},
-			},
-			resources: {},
-			sources: [],
-			evidence: [],
-			truncation: {
-				truncated: false,
-				returned: 0,
-				available: 0,
-				dropped: 0,
-				invalid: 0,
-				encodedBytes: 0,
-				maxItems: 128,
-				maxBytes: 65_536,
-			},
-		};
-	}, "specialist");
+				resources: {},
+				sources: [],
+				evidence: [],
+				truncation: {
+					truncated: false,
+					returned: 0,
+					available: 0,
+					dropped: 0,
+					invalid: 0,
+					encodedBytes: 0,
+					maxItems: 128,
+					maxBytes: 65_536,
+				},
+			};
+		},
+		{
+			host: { hostId: "remote-box", daemonId: "daemon", lineageId: "lineage" },
+			sessionId: "01234567-89ab-4cde-8fab-0123456789ab",
+			chatUrl: "pilot://chat/01234567-89ab-4cde-8fab-0123456789ab",
+		},
+	);
 	const adapter = await NativeAdapter.open({
 		cwd: source,
 		agentDir,
@@ -136,5 +143,5 @@ export default (pi) => {
 	assert.ok(callable);
 	const result = await callable.execute("call", {}, undefined, undefined, {} as never);
 	assert.notEqual(result.isError, true);
-	assert.deepEqual(calls, ["specialist"]);
+	assert.deepEqual(calls, ["01234567-89ab-4cde-8fab-0123456789ab"]);
 });

@@ -18,6 +18,34 @@ public struct HostRef: Codable, Hashable, Sendable {
     }
 }
 
+/// A canonical chat link paired with the immutable host identity that owns it.
+public struct DiagnosticTargetReference: Codable, Hashable, Sendable {
+    public let host: HostRef
+    public let sessionId: String
+    public let chatURL: String
+
+    enum CodingKeys: String, CodingKey { case host, sessionId, chatURL = "chatUrl" }
+
+    public init?(host: HostRef, sessionId: String) {
+        guard let id = UUID(uuidString: sessionId) else { return nil }
+        self.host = host
+        self.sessionId = id.uuidString.lowercased()
+        chatURL = "pilot://chat/\(self.sessionId)"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        let host = try values.decode(HostRef.self, forKey: .host)
+        let sessionId = try values.decode(String.self, forKey: .sessionId)
+        let chatURL = try values.decode(String.self, forKey: .chatURL)
+        guard let canonical = Self(host: host, sessionId: sessionId), canonical.chatURL == chatURL else {
+            throw DecodingError.dataCorruptedError(forKey: .chatURL, in: values,
+                                                    debugDescription: "Invalid diagnostic target reference")
+        }
+        self = canonical
+    }
+}
+
 public enum HostResourceKind: String, Codable, Sendable { case session, project, mission, artifact, schedule }
 
 public struct HostResourceRef: Codable, Hashable, Identifiable, Sendable {

@@ -1,6 +1,7 @@
 /** Wire protocol between pilotd and its clients. Types only, safe to import from the browser. */
 import type { UserMessage } from "@earendil-works/pi-ai";
 import type { AgentEvent as DurableAgentEvent, EntryRecord } from "@earendil-works/pi-durable";
+import type { OperationHost } from "./operations.ts";
 import type { ProjectTrackingConfig, TrackingSource } from "./tracking.ts";
 
 export type { AssistantMessage, Message, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
@@ -260,6 +261,8 @@ export interface SessionSummary {
 	role?: SessionRole;
 	/** Exact chat this specialist may inspect. Present only for diagnostics specialists. */
 	diagnosticTargetId?: string;
+	/** Canonical host-qualified form of the admitted target, for display and reopen verification. */
+	diagnosticTarget?: DiagnosticTargetReference;
 	/** Fresh provider-safe chat which continues this readable, permanently read-only chat. */
 	continuedTo?: string;
 	/** Original chat whose workspace and task ownership this fresh chat continues. */
@@ -609,6 +612,13 @@ export interface ProjectGitHubRepository {
 export type ChatMode = "build" | "ask";
 /** Runtime-enforced specialist profile. Omitted means an ordinary chat. */
 export type SessionRole = "diagnostics";
+
+/** Canonical chat link plus the immutable host identity that owns it. */
+export interface DiagnosticTargetReference {
+	host: OperationHost;
+	sessionId: string;
+	chatUrl: string;
+}
 
 /** GET /api/projects/:id/branches. Live origin heads only; mode=ask or workspace=clone also allows direct projects. */
 export interface RemoteBranchList {
@@ -1394,8 +1404,8 @@ export interface SpawnRequest {
 	missionId?: string;
 	/** Diagnostics is a host-enforced read-only profile, not a prompt convention. */
 	role?: SessionRole;
-	/** Required with role=diagnostics. pilotd derives scope from this chat without waking it. */
-	diagnosticTargetId?: string;
+	/** Required with role=diagnostics. pilotd verifies this host-qualified reference without waking the target. */
+	diagnosticTarget?: DiagnosticTargetReference;
 	/** Omitted means Build. */
 	mode?: ChatMode;
 	/** Per-chat Build override. Omitted uses project settings; cwd-only cannot request a clone. */
