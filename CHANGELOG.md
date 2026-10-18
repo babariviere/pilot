@@ -1,5 +1,30 @@
 # Changelog
 
+## [1.49.0](https://github.com/babariviere/pilot/compare/v1.48.0...v1.49.0) (2026-10-18)
+
+
+### Features
+
+* **control:** follow through on authorized chat work ([b214c7e](https://github.com/babariviere/pilot/commit/b214c7e3ba88fb689ddfa6c718654f9766b59186))
+* **control:** include delegated tasks and remote mission replicas ([cd0adee](https://github.com/babariviere/pilot/commit/cd0adee069ea80850ddb778f246ccc335e17b971))
+* **control:** record and enforce action authorizations ([e0660f8](https://github.com/babariviere/pilot/commit/e0660f88147b26bf250e657853f5b2df9ea51370))
+* **devbox:** add independent GitHub connection setup ([9bf7e14](https://github.com/babariviere/pilot/commit/9bf7e149c368aeb57ea5c1f101cea8a878dd7bdf))
+* **diagnostics:** add reviewed repair proposals ([101cb9b](https://github.com/babariviere/pilot/commit/101cb9bfb49372c750b7b7e9001ede03739d24d3))
+* **diagnostics:** add specialist setup context ([c2a76d9](https://github.com/babariviere/pilot/commit/c2a76d9c63ae643b995ff0f025237f990b23d40f))
+* **diagnostics:** expose devbox setup stages ([91d79bc](https://github.com/babariviere/pilot/commit/91d79bc37b357c0414d95665de57ef8c5b52c4b6))
+* **diagnostics:** measure context efficiency and relaunches ([846d795](https://github.com/babariviere/pilot/commit/846d7954b7450cd79fc8fd90039b61bd4a0776b4))
+* **macos:** copy session paths and links ([57a0a57](https://github.com/babariviere/pilot/commit/57a0a57e7aded56aa40dae6f420858ebeef41f7b))
+* **projects:** import GitHub repositories onto a chosen host ([bf304a4](https://github.com/babariviere/pilot/commit/bf304a4f2300885ed29b978dd18fcbcda5ae59a4))
+* **telemetry:** account for AI usage and estimated cost ([e50fc02](https://github.com/babariviere/pilot/commit/e50fc02dd2e92fb65c3176b98fd7016ce185f566))
+
+
+### Bug Fixes
+
+* **daemon:** settle AI usage writes before removing a rolled-back session ([d92a5c8](https://github.com/babariviere/pilot/commit/d92a5c8cc07e609982c6ba55b1ecc44a53e1caa1))
+* **kernel:** isolate Control requests and surface preparation faults ([23cb6f2](https://github.com/babariviere/pilot/commit/23cb6f26e28cc5622a2ed9a40fe2ec57d1256d39))
+* **macos:** import Foundation in GitHub import model ([d048e0a](https://github.com/babariviere/pilot/commit/d048e0a6b8f39864cd97cf9bf087933d94836c6e))
+* **macos:** use design-system role for usage details ([f06c713](https://github.com/babariviere/pilot/commit/f06c713f97fe3f688c7d043de67cb1d55e2ff709))
+
 ## [1.48.0](https://github.com/babariviere/pilot/compare/v1.47.0...v1.48.0) (2026-10-18)
 
 
