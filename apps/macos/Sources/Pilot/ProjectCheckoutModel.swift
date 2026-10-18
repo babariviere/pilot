@@ -8,6 +8,8 @@ import PilotCore
     @Published private(set) var error: String?
     private(set) var state = RepositoryAssociations()
     private(set) var projects: [Hosted<Project>] = []
+    private var inventory: [HostResourceRef: Hosted<Project>] = [:]
+    private var observationsSinceSave = 0
     private var available: Set<HostRef> = []
     private var generations: [HostRef: UUID] = [:]
     private var observed: [HostResourceRef: String] = [:]
@@ -45,6 +47,7 @@ import PilotCore
         guard changed else { return }
         let previousGenerations = self.generations
         projects = values; self.available = available; self.generations = generations
+        inventory = Dictionary(values.map { ($0.ref, $0) }, uniquingKeysWith: { first, _ in first })
         for (ref, task) in tasks where !available.contains(ref.host) || previousGenerations[ref.host] != generations[ref.host]
             || !values.contains(where: { $0.ref == ref }) {
             // Keep the slot until the canceled request actually unwinds; reconnect cannot over-admit.
@@ -74,8 +77,8 @@ import PilotCore
 
     /// Explicit selection is placement consent only, not SharedContext enrollment.
     func confirm(source: HostResourceRef, target: HostResourceRef) async throws {
-        guard error == nil, let a = projects.first(where: { $0.ref == source }),
-              let b = projects.first(where: { $0.ref == target }), source.host != target.host else { throw HostRoutingError.invalidReference }
+        guard error == nil, let a = inventory[source],
+              let b = inventory[target], source.host != target.host else { throw HostRoutingError.invalidReference }
         var next = state
         for mapping in next.bindings.mappings where mapping.project == target && mapping.logicalProjectId != source.storageKey {
             next.bindings.remove(logicalProjectId: mapping.logicalProjectId, host: target.host)
@@ -102,10 +105,10 @@ import PilotCore
         guard started else { return } // Inert previews/fixtures never acquire endpoints implicitly.
         for ref in refs.prefix(2) {
             guard available.contains(ref.host), let generation = generations[ref.host],
-                  let item = projects.first(where: { $0.ref == ref }) else { throw HostRoutingError.disconnected }
+                  let item = inventory[ref] else { throw HostRoutingError.disconnected }
             let identity = try await admittedRead(ref)
             guard !Task.isCancelled, !stopped, generations[ref.host] == generation, available.contains(ref.host),
-                  projects.contains(where: { $0.ref == ref && $0.value.path == item.value.path }) else { throw HostRoutingError.staleGeneration }
+                  inventory[ref]?.value.path == item.value.path else { throw HostRoutingError.staleGeneration }
             state.origins.removeAll { $0.project == ref }
             state.origins.append(CheckoutOrigin(project: ref, path: item.value.path, identity: identity))
             revision &+= 1
@@ -145,7 +148,7 @@ import PilotCore
                 guard let self else { return }
                 defer {
                     self.tasks[ref] = nil
-                    if !self.stopped, let current = self.projects.first(where: { $0.ref == ref }),
+                    if !self.stopped, let current = self.inventory[ref],
                        let currentGeneration = self.generations[ref.host], self.available.contains(ref.host),
                        self.observed[ref] != currentGeneration.uuidString + "\u{0}" + current.value.path {
                         self.pending.append(current)
@@ -155,11 +158,17 @@ import PilotCore
                 do {
                     let identity = try await self.admittedRead(ref)
                     guard !Task.isCancelled, !self.stopped, self.generations[ref.host] == generation,
-                          self.available.contains(ref.host), self.projects.contains(where: { $0.ref == ref && $0.value.path == item.value.path }) else { return }
+                          self.available.contains(ref.host), self.inventory[ref]?.value.path == item.value.path else { return }
+                    let observation = CheckoutOrigin(project: ref, path: item.value.path, identity: identity)
+                    guard !self.state.origins.contains(observation) else { return }
                     self.state.origins.removeAll { $0.project == ref }
-                    self.state.origins.append(CheckoutOrigin(project: ref, path: item.value.path, identity: identity))
+                    self.state.origins.append(observation)
                     self.revision &+= 1
-                    await self.persist()
+                    self.observationsSinceSave += 1
+                    if self.observationsSinceSave >= 50 || self.pending.isEmpty {
+                        self.observationsSinceSave = 0
+                        await self.persist()
+                    }
                 } catch { /* Offline/old endpoints keep last verified evidence; never guess a new identity. */ }
             }
         }
@@ -185,6 +194,7 @@ import PilotCore
         for task in activeReads { task.cancel() }
         for task in pending { await task.value }
         for task in activeReads { _ = try? await task.value }
+        if started { await persist() }
         await writes?.value
     }
 }
