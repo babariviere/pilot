@@ -4,6 +4,26 @@ import Testing
 
 struct ControlHostsProtocolTests {
 
+    @Test func plannedLogicalMissionProjectionRoundTrip() throws {
+        let f = try fixtures()
+        let inputs = try roundTrip([ControlRemoteStatusSnapshot].self, #require(f["logicalMissionInputs"]))
+        #expect(inputs.allSatisfy { $0.dashboard.logicalMissions == nil })
+        let rows = try roundTrip([ControlLogicalMission].self, #require(f["logicalMissions"]))
+        #expect(rows.count == 2)
+        #expect(rows[0].title == rows[1].title)
+        #expect(rows[0].mission.missionId == rows[1].mission.missionId)
+        #expect(rows[0].mission.home != rows[1].mission.home)
+        #expect(rows[0].id != rows[1].id)
+        #expect(rows[0].provenance.map(\.kind) == [.canonical, .replica])
+        #expect(rows[0].coordinator?.host == rows[0].mission.home)
+        #expect(rows[1].tasksDone == nil)
+        #expect(rows[1].status == nil)
+        #expect(rows[1].provenance.first?.replicaAgeMs == nil)
+        let dashboard = try roundTrip(ControlDashboardResponse.self, #require(f["logicalDashboardProjection"]))
+        #expect(dashboard.logicalMissions == rows)
+        #expect(dashboard.totals.logicalMissions == 2)
+    }
+
     private struct EmptyAckPolicy: Codable, Equatable {
         let page: ControlRemoteEventPage
         let homeAcknowledgment: ControlRemoteEventAcknowledgment

@@ -25,6 +25,7 @@ and the declarations in `packages/protocol/src/control.ts` together; native mirr
 | Concrete invalidations, continuation/priority/session ordering, update blockers and sleep/quit | [Invalidation](#invalidation-and-exact-recovery-state), [priority/HOL](#priority-lanes-head-of-line-behavior-and-foreign-changes), [update and transport lifecycle](#updates-transport-shutdown-and-stop-presentation) |
 | No generic chat-create/chat-send/shared-* Control bypass | [Executor rejection and provenance preservation](#no-authority-downgrade-through-older-operation-kinds) |
 | One shared task DTO with title/status, import age and conflict/provisional provenance | [Common projection and dedupe](#one-taskstatus-dto-and-merge-precedence): existing `ControlDashboardSharedTask` and `ControlDashboardReplicaMission` in dashboard only; replica age, host import time and proposal state remain distinct |
+| One logical mission identity/navigation across all execution hosts | [Planned global projection](#planned-logical-mission-projection): canonical `SharedMissionRef`, bounded provenance, no host partition/filter |
 
 ## Authority and identity
 
@@ -61,25 +62,40 @@ Only explicit repair can replace a home; there is no partition election or autom
 
 ## Host-qualified actions
 
+**Missions are not host-scoped.** There is one logical mission list, identity and navigation across
+Local and devboxes. Identity is the canonical `(missionHome, missionId)`, using daemon/storage
+lineage pins, not a title or source-local ID alone. Canonical home, CAS and coordinator pins are
+internal authority/reconciliation, not a host partition, a Local subtitle or an execution placement.
+Execution hosts belong to chats and tasks. No mission host filter or "missions on host X" view.
+
 `ControlHostRequest` specifies routing for **every** pilot action. It is a future daemon envelope
-around action arguments, not a change to today's flat tool schema. An omitted `host` means the
+around action arguments, not a change to today's flat tool schema or a mission partition.
+Execution/evidence routing never changes canonical mission identity. An omitted `host` means the
 configured home, including when a request is decoded on an executor. Never default to the receiving
 daemon, currently selected devbox, project location or a host with a coincidentally matching ID.
 
-- `status/read/start/send/stop/pause/resume/redirect/watch/unwatch/watches` resolve local IDs on
-  the selected host. Saved watch targets carry that same explicit host.
+- `read/start/send/stop/pause/resume/redirect` route execution resources on the selected host.
+  Mission/task references remain canonically qualified; a task's delegated execution host never
+  substitutes for its mission home. Ambiguous bare mission IDs fail rather than picking by host.
+- Saved watch targets retain explicit source/authority routing. A mission target identifies its
+  canonical home and ID, not a host-scoped mission; task events retain canonical mission identity
+  even when execution occurs elsewhere. A host selector is never a mission-identity disambiguator.
 - `health/logs/telemetry/checks` select the evidence host. Devbox Ask about Pilot uses home Control
   with these read-only targets, not a new remote Control.
 - `authorize/authorizations/revoke/resolve_authorization` are home-owned. A remote host selector is
   rejected. Revoke fans out tombstones to executors that received that grant.
 - `mission_create/mission_attach` remain home-only in v1; remote selectors fail explicitly.
   Mission placement and shared-context operations are not replaced by Control start.
-- `status` includes home plus enrolled hosts' last fully imported snapshots, with a host label,
-  `capturedAt`, age and separate transport availability. Its host selector filters that merged view.
+- `status` merges home plus enrolled sources' last fully imported snapshots, with `capturedAt`,
+  age and separate transport provenance. Its host selector filters execution/evidence (chats,
+  task placement and diagnostics), **not** mission membership, identity or navigation. Mission
+  observations feed the same logical list regardless of which daemon supplied them.
   A disconnected host is Disconnected, never inferred stopped, failed or completed.
 
 `WatchTarget.host` qualifies saved targets and authorization targets. For authorization targets,
 omission means home; for a tool's new watch the home resolves the selected host and saves it explicitly.
+For mission targets that is a canonical-authority pin, not an execution-host scope. Resolve a task's
+canonical mission from its trusted delegation/context, or reject ambiguity; never choose by execution host.
 Reject conflicting outer/target hosts. Never route an existing watch or grant by an implicit current host.
 Bare IDs and `pilot://chat/<id>` links are not sufficient cross-host resource identity.
 
@@ -279,7 +295,10 @@ Redact/refuse secret-like exports; do not transport thoughts, credentials, attac
 
 A `ControlRemoteStatusSnapshot` carries sourceHost, stable snapshotId, capturedAt, bounded dashboard
 sections, including dashboard.sharedTasks and dashboard.replicaMissions. There is no second
-mission-task list or total outside dashboard. All pages retain the same identity, time and
+mission-task list or total outside dashboard. These are source observations to merge into one
+logical mission list, not per-host mission sections. sourceHost identifies the capture's verified
+producer only; it never partitions missions or substitutes for canonical mission identity.
+All pages retain the same identity, time and
 pre-clipping totals. Each page carries partial section arrays; concatenate by section in cursor
 order, deduplicating only exact repeated pages. The producer uses a frozen capture, not a live offset.
 Only the final page makes the capture visible at home. Opaque next cursors pin the snapshot;
@@ -644,6 +663,9 @@ audit and frozen grants remain readable, never silently executed or imported.
 
 ### One task/status DTO and merge precedence
 
+Missions form one logical list across Local/devboxes. Imported mission/task rows are inputs to
+that list, never separate "local" and "remote" mission collections in status or navigation.
+
 Use the existing `ControlDashboardSharedTask` and `ControlDashboardReplicaMission` declarations
 in control.ts and their native mirrors in PilotCore/ControlDashboard.swift **unchanged**. No field
 extension is required. Remote status carries these lists only in snapshot.dashboard.sharedTasks
@@ -696,6 +718,59 @@ provisional proposal rows. They are not canonical mission progress counts: never
 missions.tasksTotal/tasksDone. Keep committed/provisional labels and count canonical progress only
 from the authoritative mission/committed task identity set. Bounded proposal/conflict detail remains
 an explicit read of existing shared-context records; this snapshot adds no executable args or authority.
+
+
+### Planned logical mission projection
+
+The existing ControlDashboardResponse.replicaMissions from the thin status implementation is a
+**compatibility/source-input field**, not a second logical mission list. Folding it into one list
+with provenance is planned follow-up task 59, **not started and still requiring user approval**;
+native integration is Remote follow-up 30. This contract freezes their common target, not handlers,
+producer changes, UI, support advertisement or activation. The existing startup/auth/rollout gates
+remain unchanged. Existing shared task/replica DTO declarations are not extended.
+
+Target shape (declared once in control.ts and mirrored in PilotCore/ControlDashboard.swift):
+- Additive optional dashboard.logicalMissions: ControlLogicalMission[] and
+  dashboard.totals.logicalMissions: number. Both remain absent from current producers.
+- A ControlLogicalMission contains id, mission: SharedMissionRef {home,missionId}, optional
+  title/status/tasksDone/tasksTotal, optional coordinator: SharedSessionRef, and provenance[].
+  id is the stable JSON tuple [home.daemonId,home.lineageId,missionId]; navigation uses the
+  full mission reference, never the display id, title, current devbox or execution host.
+- ControlMissionProvenance carries kind canonical|replica, sourceHost, source-local projectId,
+  optional bindingId/sequence/complete/replicaSyncedAt/replicaAgeMs. Replica evidence supplies
+  its known binding/sequence/completeness. Unknown age is omitted in this new projection.
+  These fields describe source observations, not mission placement, visibility scope or authority.
+- The canonical, replica and task observations of the **same** reference collapse to one mission
+  row/count, retaining bounded provenance. Same title or bare ID with different pinned homes
+  remains distinct. Same pinned home/ID observed through multiple devboxes is one mission.
+- Canonical provenance must match the verified source and mission home. Replica provenance must
+  match its enrolled binding's mission-home pin and allowed mission. Existing read/access controls
+  still apply: one global list is not permission to disclose or mutate unauthorized missions.
+  coordinator.host, when known, equals mission.home; an executor is not a fallback coordinator.
+- Canonical committed definitions/tombstones win; otherwise use the greatest complete contiguous
+  authorized replica sequence for that same reference, not timestamps. Equal-sequence conflicts
+  remain visible through source/proposal evidence, not applied as a new mission state.
+  Incomplete/legacy evidence may identify a mission without inventing title, status or progress.
+  Unknown counts stay omitted; clipped/provisional task rows never fabricate mission progress.
+- Tasks retain the existing sharedTasks executionHost/epoch/grantState and committed/provisional
+  labels. Disconnection changes transport provenance/age, never mission status or task outcome.
+  Coordinator references remain canonical-home pinned; an execution host cannot take over.
+- Merge before clipping/counting; cap at 50 logical mission rows and 16 provenance entries per row
+  within the existing 24,000-byte dashboard bound. totals.logicalMissions counts canonical identities
+  before clipping. Any clipped provenance or row sets dashboard.truncated; omissions are not deletions.
+- Future consumers use logicalMissions as their **only mission collection** when present. Existing
+  missions/activeMissions/replicaMissions remain compatibility inputs during migration, not separate
+  host sections or additional rows. An active view is a status-derived subset of the same identities.
+  If absent, old input arrays must be normalized by that same canonical rule, not displayed by host;
+  a legacy local mission uses its verified capture producer as canonical home, never an endpoint label.
+  No new host field/filter partitions the mission list. Permission/host-scoped execution queries
+  do not narrow the logical mission registry or alter its canonical navigation.
+  Existing status/dashboard invalidations refresh this one projection; no host-partition cache
+  or polling fallback is introduced.
+
+Wire fixtures illustrate one mission observed locally and through a replica, plus a same-name,
+same-bare-ID mission under a different canonical home. They assert the frozen shape/identities only;
+they are **not** an implementation or execution test of the planned folding algorithm.
 
 ### Updates, transport shutdown and Stop presentation
 
