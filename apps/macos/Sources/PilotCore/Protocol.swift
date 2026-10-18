@@ -499,6 +499,12 @@ public struct ProjectGitHubRepository: Codable, Equatable, Sendable {
     public init(url: String) { self.url = url }
 }
 
+/// Read-only, sanitized origin identity. Never a credentialed URL or sharing authorization.
+public struct ProjectOrigin: Codable, Equatable, Sendable {
+    public let identity: String?
+    public init(identity: String?) { self.identity = identity }
+}
+
 /// POST /api/projects; PATCH sends only the fields to change (an empty model clears it).
 public struct ProjectRequest: Codable, Sendable {
     public var path: String?

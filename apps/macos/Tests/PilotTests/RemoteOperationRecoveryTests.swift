@@ -471,6 +471,35 @@ private final class RecoveryHTTPStub: URLProtocol {
         await hosts.disconnect(target)
     }
 
+    @Test @MainActor func mappedCheckoutUsesRemoteProjectInActualDurableCreateAction() async throws {
+        RecoveryHTTPStub.reset(.normal)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let hosts = HostClients(operationDirectory: directory.appendingPathComponent("operations"))
+        let remote = recoveryClient()
+        let project = Project(id: "remote-project", name: "Code", path: "/home/test/code", workspace: "direct", createdAt: 0)
+        remote.loadFixture(projects: [project], sessions: [])
+        try hosts.install(remote, host: target)
+        let app = try app(directory.appendingPathComponent("drafts"), hosts: hosts)
+        let source = HostResourceRef(host: origin, kind: .project, localId: "p")
+        let destination = HostResourceRef(host: target, kind: .project, localId: project.id)
+        try await hosts.projectCheckouts.confirm(source: source, target: destination)
+        #expect(app.chooseNewChatHost(origin))
+        app.draftProjectId = "p"
+        app.newSessionForm.message = "Use the mapped checkout"
+        #expect(app.chooseNewChatHost(target, sourceProject: app.client.project("p")))
+        #expect(app.draftProjectId == project.id)
+        await app.newSessionForm.checkoutValidationTask?.value
+        try await app.createHostedChat(form: app.newSessionForm, host: target, project: project, revision: app.newSessionForm.revision)
+        let mutation = try #require(RecoveryHTTPStub.requests.first { $0.path == "/api/operations" }?.operation)
+        let payload = try JSONValue.decode(Data(mutation.payload.utf8))
+        #expect(mutation.destination == target)
+        #expect(payload["projectId"]?.string == project.id)
+        #expect(payload["cwd"] == nil, "Use the daemon's registered checkout, not a Mac path")
+        #expect(hosts.projectCheckouts.groups(local: origin).count == 1)
+        await hosts.disconnectAll()
+    }
+
     @Test @MainActor func homeCheckPublishesProgressThenAdoptsPendingToAcceptedWithoutAnotherCreate() async throws {
         RecoveryHTTPStub.reset(.pending)
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

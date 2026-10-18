@@ -1054,6 +1054,8 @@ export function createDaemonServer(
 			return json(res, 200, await sessions.projectArtifacts(parts[2]!));
 		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "github" && req.method === "GET")
 			return json(res, 200, await projects.github(parts[2]!));
+		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "origin" && req.method === "GET")
+			return json(res, 200, await projects.origin(parts[2]!));
 		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "dashboard" && req.method === "GET") {
 			const rawLimit = url.searchParams.get("limit");
 			if (rawLimit !== null && (!/^\d+$/.test(rawLimit) || Number(rawLimit) < 1 || Number(rawLimit) > 100))

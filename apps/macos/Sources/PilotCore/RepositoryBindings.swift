@@ -30,6 +30,9 @@ public struct RepositoryMapping: Codable, Equatable, Sendable {
     public let project: HostResourceRef
     public let remotePath: String
     public let generation: UInt64
+    public let sourcePath: String?
+    public let sourceOrigin: String?
+    public let destinationOrigin: String?
 }
 
 public struct RepositoryBindings: Codable, Equatable, Sendable {
@@ -40,15 +43,20 @@ public struct RepositoryBindings: Codable, Equatable, Sendable {
     }
     /// Only an explicit user-confirmed selection calls this. No path/name/remote-URL inference.
     public mutating func confirm(logicalProjectId: String, project: HostResourceRef, remotePath: String,
-                                 expectedGeneration: UInt64?) throws -> RepositoryMapping {
+                                 expectedGeneration: UInt64?, sourcePath: String? = nil,
+                                 sourceOrigin: String? = nil, destinationOrigin: String? = nil) throws -> RepositoryMapping {
         guard project.kind == .project, !remotePath.isEmpty else { throw HostRoutingError.invalidReference }
         let current = mapping(logicalProjectId: logicalProjectId, host: project.host)
         guard current?.generation == expectedGeneration else { throw HostRoutingError.staleGeneration }
         let next = RepositoryMapping(logicalProjectId: logicalProjectId, project: project, remotePath: remotePath,
-                                     generation: (current?.generation ?? 0) + 1)
+                                     generation: (current?.generation ?? 0) + 1, sourcePath: sourcePath,
+                                     sourceOrigin: sourceOrigin, destinationOrigin: destinationOrigin)
         mappings.removeAll { $0.logicalProjectId == logicalProjectId && $0.project.host == project.host }
         mappings.append(next)
         return next
     }
-}
 
+    public mutating func remove(logicalProjectId: String, host: HostRef) {
+        mappings.removeAll { $0.logicalProjectId == logicalProjectId && $0.project.host == host }
+    }
+}

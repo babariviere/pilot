@@ -1307,6 +1307,10 @@ final class PilotClient: ObservableObject {
         return url
     }
 
+    func projectOrigin(_ projectId: String) async throws -> ProjectOrigin {
+        try await call(URLRequest(url: artifactURL(["projects", projectId, "origin"])))
+    }
+
     var fixtureChanges: SessionChanges?
     var fixtureChangeSummaries: [String: SessionChangeSummary] = [:]
 

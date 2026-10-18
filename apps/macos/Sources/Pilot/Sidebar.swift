@@ -160,9 +160,14 @@ struct SessionSidebar: View {
 
     @ViewBuilder private var unifiedRows: some View {
         let query = model.sidebarQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let scopedProjects = model.focusedProjectRef.flatMap { focused in
+            model.navigationProjectGroups.first { $0.checkouts.contains { $0.ref == focused } }
+        }.map { Set($0.checkouts.map(\.ref)) }
         let values = hosts.sessions.filter { hosted in
             (!hosted.value.isArchived || !query.isEmpty) && (query.isEmpty || hosted.value.title.lowercased().contains(query))
-                && (model.focusedProjectRef == nil || (hosted.ref.host == model.focusedProjectRef?.host && hosted.value.projectId == model.focusedProjectRef?.localId))
+                && (model.focusedProjectRef == nil || hosted.value.projectId.map {
+                    scopedProjects?.contains(HostResourceRef(host: hosted.ref.host, kind: .project, localId: $0)) == true
+                } == true)
         }.sorted { $0.value.listActivityAt > $1.value.listActivityAt }
         // Each host's control chat lives in the fixed slot above the list (`SidebarControlSlot`).
         ForEach(["Pinned", "Needs you", "Ready to merge", "Working", "Recent", "Archived"], id: \.self) { title in

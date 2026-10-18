@@ -71,7 +71,7 @@ extension AppModel {
     func createHostedChat(form: NewSessionForm, host: HostRef, project: Project, revision: UUID) async throws {
         guard let origin = localHost else { throw HostRoutingError.invalidReference }
         func ownsDraft() -> Bool { form.revision == revision && (form.executionHost ?? localHost) == host }
-        guard ownsDraft() else { throw HostRoutingError.invalidReference }
+        guard ownsDraft(), form.checkoutValidation == nil else { throw HostRoutingError.invalidReference }
         _ = try hosts.endpoint(host)
         let fence = try hosts.token(for: host)
         let images = form.attachments.items
