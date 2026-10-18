@@ -313,6 +313,8 @@ export interface ControlHostConfiguration {
 	host: OperationHost;
 	role: ControlDaemonRole;
 	controlSessionId?: string;
+	/** Staged executor policy may coexist with this visible legacy Control until the final archive. */
+	legacyControlSessionId?: string;
 	/** Present only after the explicit, end-to-end-gated archive migration. */
 	archive?: { sessionId: string; archivedAt: number };
 }
@@ -341,6 +343,46 @@ export interface ControlHostCutover {
 	/** Fully imported snapshot containing the required qualified task/epoch. */
 	taskSnapshotId?: string;
 	updatedAt: number;
+}
+/** PUT /api/control-hosts/:bindingId/enrollment on each confirmed peer. Local-user setup only. */
+export interface ControlHomeEnrollmentRequest {
+	enrollment: ControlHomeEnrollment;
+	/** Original hello from the app's verified peer endpoint; never an agent-supplied claim. */
+	peerHello: import("./hello.ts").DaemonHello;
+	/** null asserts no record; otherwise compare the persisted generation. Exact replay is idempotent. */
+	expectedGeneration: number | null;
+}
+/** GET /api/control-hosts/:bindingId; also returned after durable enrollment. */
+export interface ControlHostStateResponse {
+	configuration: ControlHostConfiguration;
+	enrollment: ControlHomeEnrollment;
+	peerHello: import("./hello.ts").DaemonHello;
+	/** Home-issued evidence, never readiness booleans supplied by the app/model. */
+	cutover?: ControlHostCutover;
+}
+/** POST /api/control-hosts/:bindingId/archive on home. App rollout only, not a pilot action. */
+export interface ControlArchiveRequest {
+	expectedGeneration: number;
+	sessionId: string;
+	/** Becomes the immutable outgoing operationId; retained across app restarts/lost responses. */
+	idempotencyKey: string;
+}
+/** Administrative payload. No authorization grant or spending capability is conveyed. */
+export interface ControlArchiveOperationPayload {
+	idempotencyKey: string;
+	sessionId: string;
+	/** Home verifies evidence from its durable stores before sealing this operation. */
+	readiness: ControlHostCutover;
+}
+/** A queued intent is not proof the executor is archived. Reconcile its receipt. */
+export interface ControlArchiveResponse {
+	operation: ControlDurableOperation;
+}
+/** Accepted control.archive receipt result, after the executor's durable transition. */
+export interface ControlArchiveResult {
+	kind: "control.archive";
+	configuration: ControlHostConfiguration;
+	cutover: ControlHostCutover;
 }
 export type ControlPilotAction =
 	| "status"
@@ -419,12 +461,14 @@ export interface ControlOperationPayloads {
 	"control.watch": ControlWatchOperationPayload;
 	"control.unwatch": ControlUnwatchOperationPayload;
 	"control.revoke": ControlRevokeOperationPayload;
+	/** App-triggered administrative transition, never a Control tool capability. */
+	"control.archive": ControlArchiveOperationPayload;
 }
 export type ControlOperationKind = keyof ControlOperationPayloads;
 /** Payload remains an exact JSON string in the existing immutable envelope. */
 export type ControlDurableOperation = Omit<DurableOperation, "kind"> & { kind: ControlOperationKind };
 export interface ControlOperationResult {
-	kind: ControlOperationKind;
+	kind: Exclude<ControlOperationKind, "control.archive">;
 	authorizationId: string;
 	sessionId?: string;
 	watchId?: string;
@@ -433,16 +477,24 @@ export interface ControlOperationResult {
 }
 export interface ControlOperationExchangeRequest {
 	peer: OperationHost;
+	/** Resume a bounded outbox scan, including past still-pending operations. */
+	cursor?: string;
 }
 export interface ControlOperationExchangeResponse {
 	bindingId: string;
 	generation: number;
 	operations: ControlDurableOperation[];
 	more: boolean;
+	next?: string;
 }
 export interface ControlOperationAcknowledgment {
 	operation: ControlDurableOperation;
 	receipt: OperationReceipt;
+}
+/** POST /api/control-hosts/:bindingId/ack response, only after conclusive durable adoption. */
+export interface ControlReceiptAdoptionResponse {
+	operationId: string;
+	state: "accepted" | "rejected";
 }
 export interface ControlUntrustedResultTail {
 	untrusted: true;
@@ -471,6 +523,11 @@ export interface ControlRemoteEventPage {
 	head: number;
 	events: ControlRemoteEvent[];
 	next?: number;
+}
+/** GET /api/control-hosts/:bindingId/events query. Enrollment resolves source/home. */
+export interface ControlRemoteEventQuery {
+	after: number;
+	limit?: number;
 }
 export interface ControlRemoteEventAcknowledgment {
 	bindingId: string;
@@ -504,5 +561,16 @@ export interface ControlRemoteStatusPage {
 	generation: number;
 	snapshot: ControlRemoteStatusSnapshot;
 	/** Opaque cursor pinned to the captured snapshot; absent on its final page. */
+	next?: string;
+}
+/** GET /api/control-hosts/:bindingId/status query; omitted cursor captures a new inventory. */
+export interface ControlRemoteStatusQuery {
+	cursor?: string;
+}
+/** POST /api/control-hosts/:bindingId/status/import; duplicates return the same durable stage. */
+export interface ControlRemoteStatusImportResponse {
+	snapshotId: string;
+	state: "staged" | "published";
+	/** Original capture's next cursor. Omitted only after the final page is published. */
 	next?: string;
 }

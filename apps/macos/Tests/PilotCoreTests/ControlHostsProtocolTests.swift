@@ -68,6 +68,7 @@ struct ControlHostsProtocolTests {
             case .watch: _ = try roundTrip(ControlWatchOperationPayload.self, payload)
             case .unwatch: _ = try roundTrip(ControlUnwatchOperationPayload.self, payload)
             case .revoke: _ = try roundTrip(ControlRevokeOperationPayload.self, payload)
+            case .archive: _ = try roundTrip(ControlArchiveOperationPayload.self, payload)
             }
         }
         #expect(kinds == Set(ControlOperationKind.allCases))
@@ -88,6 +89,57 @@ struct ControlHostsProtocolTests {
         let decoded = try JSONDecoder().decode(ControlOperationResult.self, from: JSONEncoder().encode(result))
         #expect(decoded.kind == .start)
         #expect(decoded.sessionId == operation.targetId)
+    }
+
+    @Test func enrollmentCourierQueriesAndArchiveTransitionRoundTrip() throws {
+        let f = try fixtures()
+        let enrollments = try roundTrip([ControlHomeEnrollmentRequest].self, #require(f["enrollmentRequests"]))
+        #expect(enrollments[0].expectedGeneration == nil)
+        #expect(enrollments[2].expectedGeneration == 1)
+        let constructed = ControlHomeEnrollmentRequest(enrollment: enrollments[0].enrollment,
+                                                      peerHello: enrollments[0].peerHello, expectedGeneration: nil)
+        #expect(constructed == enrollments[0])
+        // Explicit null is a CAS assertion, not an optional field that may be silently omitted.
+        let encoded = try JSONValue.decode(JSONEncoder().encode(constructed))
+        #expect(encoded["expectedGeneration"] == .null)
+        var missing = try #require((f["enrollmentRequests"] as? [[String: Any]])?.first)
+        missing.removeValue(forKey: "expectedGeneration")
+        let missingData = try JSONSerialization.data(withJSONObject: missing)
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(ControlHomeEnrollmentRequest.self, from: missingData)
+        }
+        let states = try roundTrip([ControlHostStateResponse].self, #require(f["hostStates"]))
+        #expect(states[0].cutover == nil)
+        #expect(states[1].cutover?.state == .ready)
+        let request = try roundTrip(ControlArchiveRequest.self, #require(f["archiveRequest"]))
+        #expect(ControlArchiveRequest(expectedGeneration: 1, sessionId: "old-control", idempotencyKey: "archive:1") == request)
+        let response = try roundTrip(ControlArchiveResponse.self, #require(f["archiveResponse"]))
+        #expect(response.operation.kind == .archive)
+        #expect(response.operation.operationId == request.idempotencyKey)
+        #expect(response.operation.targetId == request.sessionId)
+        let result = try roundTrip(ControlArchiveResult.self, #require(f["archiveResult"]))
+        #expect(result.configuration.role == .archivedControl)
+        #expect(result.cutover.state == .archived)
+        let acks = try roundTrip([ControlOperationAcknowledgment].self, #require(f["archiveAcknowledgments"]))
+        for ack in acks {
+            let generic = ack.operation.durableOperation
+            #expect(generic.payload == ack.operation.payload)
+            #expect(generic.operationId == ack.operation.operationId)
+            try ack.receipt.validate(generic)
+            #expect(ControlOperationAcknowledgment(operation: ack.operation, receipt: ack.receipt) == ack)
+        }
+        let queries = try roundTrip([ControlOperationExchangeRequest].self, #require(f["outboxQueries"]))
+        let pages = try roundTrip([ControlOperationExchangeResponse].self, #require(f["outboxPages"]))
+        #expect(queries[1].cursor == pages[0].next)
+        #expect(ControlOperationExchangeRequest(peer: queries[0].peer) == queries[0])
+        _ = try roundTrip([ControlReceiptAdoptionResponse].self, #require(f["receiptAdoptions"]))
+        let events = try roundTrip([ControlRemoteEventQuery].self, #require(f["eventQueries"]))
+        #expect(ControlRemoteEventQuery(after: 0, limit: 128) == events[0])
+        let statuses = try roundTrip([ControlRemoteStatusQuery].self, #require(f["statusQueries"]))
+        #expect(ControlRemoteStatusQuery() == statuses[0])
+        let imports = try roundTrip([ControlRemoteStatusImportResponse].self, #require(f["statusImports"]))
+        #expect(imports.map(\.state) == [.staged, .published])
+        #expect(statuses[1].cursor == imports[0].next)
     }
 
     @Test func journalCursorsAndStatusCapturePagesRoundTrip() throws {
