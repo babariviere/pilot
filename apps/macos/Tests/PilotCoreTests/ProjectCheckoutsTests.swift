@@ -54,3 +54,54 @@ private func origin(_ item: Hosted<Project>, _ identity: String? = "repository")
     let permissions = try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? NSNumber
     #expect(permissions?.intValue == 0o600)
 }
+
+@Test(arguments: ["repository", "fork"])
+func explicitPlacementKeepsTheSourcesAutomaticMatchesOnOtherHosts(_ destinationOrigin: String) throws {
+    let a = checkout("a", host: checkoutLocal), b = checkout("b", host: checkoutRemote)
+    let c = checkout("c", host: HostRef(hostId: "second-box", daemonId: "second", lineageId: "three"))
+    var bindings = RepositoryBindings()
+    _ = try bindings.confirm(logicalProjectId: a.ref.storageKey, project: b.ref, remotePath: b.value.path,
+        expectedGeneration: nil, sourcePath: a.value.path, sourceOrigin: "repository", destinationOrigin: destinationOrigin)
+    let result = ProjectCheckouts.groups([a, b, c], origins: [origin(a), origin(b, destinationOrigin), origin(c)], bindings: bindings, local: checkoutLocal)
+    #expect(result.count == 1)
+    #expect(Set(result.first?.checkouts.map(\.ref) ?? []) == Set([a.ref, b.ref, c.ref]))
+}
+
+@Test func explicitDestinationWinsWithoutHidingOtherHostsOrChoosingAnotherClone() throws {
+    let a = checkout("a", host: checkoutLocal), b = checkout("b", host: checkoutRemote)
+    let alternative = checkout("alternative", host: checkoutRemote)
+    let c = checkout("c", host: HostRef(hostId: "second-box", daemonId: "second", lineageId: "three"))
+    for destinationOrigin in ["repository", "fork"] {
+        var bindings = RepositoryBindings()
+        _ = try bindings.confirm(logicalProjectId: a.ref.storageKey, project: b.ref, remotePath: b.value.path,
+            expectedGeneration: nil, sourcePath: a.value.path, sourceOrigin: "repository", destinationOrigin: destinationOrigin)
+        let facts = [origin(a), origin(b, destinationOrigin), origin(alternative), origin(c)]
+        for projects in [[a, b, alternative, c], [c, alternative, b, a]] {
+            let result = ProjectCheckouts.groups(projects, origins: facts, bindings: bindings, local: checkoutLocal)
+            let mapped = try #require(result.first { $0.checkouts.contains { $0.ref == a.ref } })
+            #expect(result.count == 2)
+            #expect(Set(mapped.checkouts.map(\.ref)) == Set([a.ref, b.ref, c.ref]))
+            #expect(mapped.checkouts.filter { $0.ref.host == checkoutRemote }.count == 1)
+        }
+    }
+}
+
+@Test func overlappingExplicitPlacementsDoNotAssignAnotherHostByObservationOrder() throws {
+    let a = checkout("a", host: checkoutLocal), b = checkout("b", host: checkoutRemote)
+    let c = checkout("c", host: HostRef(hostId: "second-box", daemonId: "second", lineageId: "three"))
+    let d = checkout("d", host: checkoutRemote)
+    let e = checkout("e", host: HostRef(hostId: "third-box", daemonId: "third", lineageId: "four"))
+    var bindings = RepositoryBindings()
+    for (source, destination) in [(a, b), (c, d)] {
+        _ = try bindings.confirm(logicalProjectId: source.ref.storageKey, project: destination.ref, remotePath: destination.value.path,
+            expectedGeneration: nil, sourcePath: source.value.path, sourceOrigin: "repository", destinationOrigin: "fork")
+    }
+    let facts = [origin(a), origin(b, "fork"), origin(c), origin(d, "fork"), origin(e)]
+    for projects in [[a, b, c, d, e], [e, d, c, b, a]] {
+        let result = ProjectCheckouts.groups(projects, origins: facts, bindings: bindings, local: checkoutLocal)
+        #expect(result.count == 3)
+        #expect(result.contains { Set($0.checkouts.map(\.ref)) == Set([a.ref, b.ref]) })
+        #expect(result.contains { Set($0.checkouts.map(\.ref)) == Set([c.ref, d.ref]) })
+        #expect(result.contains { $0.checkouts.map(\.ref) == [e.ref] })
+    }
+}
