@@ -304,6 +304,7 @@ export function runKernelWorker(): void {
 						command.reportDelivery,
 						command.event,
 						admissionSpan?.carrier() ?? command.trace,
+						command.resumeHeld,
 					);
 					await send({ type: "accepted", requestId: command.requestId, ...delivery });
 					admissionSpan?.end();
@@ -321,6 +322,14 @@ export function runKernelWorker(): void {
 				await send({ type: "aborted", requestId: command.requestId, ...(withdrawn.length ? { withdrawn } : {}) });
 				break;
 			}
+			case "pauseInputs":
+				await session.pauseInputs(command.revision);
+				await send({ type: "accepted", requestId: command.requestId });
+				break;
+			case "resumeInputs":
+				await session.resumeInputs(command.revision);
+				await send({ type: "accepted", requestId: command.requestId });
+				break;
 			case "rewind":
 			case "activateAttempt": {
 				const result =

@@ -63,7 +63,14 @@ import { createDatabaseTool, type DatabaseCall } from "./database-tool.ts";
 import { createDiagnosticsTool, type DiagnosticsCall } from "./diagnostics-tool.ts";
 import { detectGhStack } from "./gh-stack.ts";
 import { appendGitHubAction, GitHubActionsDoc, githubActions } from "./github-actions.ts";
-import { admitWithHeld, discardHeld, HeldInputsDoc, holdOnStop, type SystemMessageStateEvent } from "./held-inputs.ts";
+import {
+	admitWithHeld,
+	discardHeld,
+	HeldInputsDoc,
+	holdOnStop,
+	pauseInputs,
+	type SystemMessageStateEvent,
+} from "./held-inputs.ts";
 import { submitIdleInput } from "./idle-input.ts";
 import { InputOrigins, inputOrigin } from "./input-origin.ts";
 import { JobsMonitor } from "./jobs.ts";
@@ -769,6 +776,8 @@ export class KernelSession {
 				}
 			});
 			await adapter.refreshUsage(context);
+			if (spec.pauseInputsOnOpen !== undefined)
+				await pauseInputs(harness, conversation.id, context, spec.pauseInputsOnOpen);
 			await harness.commit(async (tx) => {
 				await tx.doc(HeldInputsDoc, conversation.id);
 			}, context);
@@ -1104,13 +1113,14 @@ export class KernelSession {
 		reportDelivery = false,
 		event?: import("@pilot/protocol").ChatEventSummary,
 		trace?: TraceCarrier,
+		resumeHeld = false,
 	): Promise<{ delivery: "delivered" | "queued" | "not_started"; reason?: string } | undefined> {
 		// Reserve admission before serialization yields, so model changes and idle-only sends cannot race preparation.
 		if (this.#closing || this.#changingModel || this.#moving || (onlyIfIdle && this.#admissions))
 			return Promise.reject(new ConversationBusy(this.conversation.id));
 		this.#admissions++;
 		return this.serializeInput(() =>
-			this.submitInput(requestId, content, mode, onlyIfIdle, reportDelivery, event, trace),
+			this.submitInput(requestId, content, mode, onlyIfIdle, reportDelivery, event, trace, resumeHeld),
 		);
 	}
 
@@ -1122,6 +1132,7 @@ export class KernelSession {
 		reportDelivery = false,
 		event?: import("@pilot/protocol").ChatEventSummary,
 		trace?: TraceCarrier,
+		resumeHeld = false,
 	): Promise<{ delivery: "delivered" | "queued" | "not_started"; reason?: string } | undefined> {
 		const traced = trace ? this.adapter.beginInteraction(requestId, trace) : false;
 		try {
@@ -1134,6 +1145,7 @@ export class KernelSession {
 				{ requestId, content: prepared, mode },
 				context,
 				onlyIfIdle,
+				resumeHeld,
 			);
 			if (heldAdmission) {
 				await this.publishSystemMessageStates();
@@ -1281,6 +1293,26 @@ export class KernelSession {
 
 	sendHeldMessages(): Promise<void> {
 		return this.serializeInput(() => this.sendHeld());
+	}
+
+	pauseInputs(revision?: number): Promise<void> {
+		return this.serializeInput(() => pauseInputs(this.harness, this.conversation.id, context, revision));
+	}
+
+	resumeInputs(revision?: number): Promise<void> {
+		return this.serializeInput(async () => {
+			if (this.#closing || this.#moving) throw new ConversationBusy(this.conversation.id);
+			const admission = await admitWithHeld(
+				this.harness,
+				this.conversation.id,
+				undefined,
+				context,
+				false,
+				true,
+				revision,
+			);
+			if (admission?.started) this.harness.resume();
+		});
 	}
 
 	private async sendHeld(): Promise<void> {

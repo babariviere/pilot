@@ -157,7 +157,7 @@ import {
 
 export { NotFound } from "./errors.ts";
 
-type PendingCommand = Extract<KernelCommand, { type: "input" | "abort" }>;
+type PendingCommand = Extract<KernelCommand, { type: "input" | "abort" | "pauseInputs" | "resumeInputs" }>;
 type WorkerSpec = Extract<KernelCommand, { type: "start" }>["spec"];
 type MissionCallPacket = Extract<KernelPacket, { type: "mission.call" }>;
 
@@ -338,6 +338,9 @@ interface SessionMeta extends OutcomeMeta {
 	continuationModel?: WorkerSpec["continuationModel"];
 	/** Work closed by the system sleep policy, never a user Stop. */
 	sleepPaused?: boolean;
+	/** Durable desired input hold, including while its kernel is parked or sleeping. */
+	inputsPaused?: boolean;
+	inputControlRevision?: number;
 	/** Interrupted durable work, retained until a replacement kernel is ready. */
 	kernelRestartPending?: boolean;
 	id: string;
@@ -4428,6 +4431,7 @@ export class SessionManager {
 			!meta.failure &&
 			!this.kernelBackingOff(id) &&
 			!meta.working &&
+			!meta.inputsPaused &&
 			!meta.kernelRestartPending &&
 			!meta.initializing &&
 			!meta.preparing &&
@@ -4501,6 +4505,7 @@ export class SessionManager {
 		message: string,
 		requestId: string,
 		mode: DeliveryMode = "followUp",
+		resumeHeld = false,
 	): Promise<
 		({ delivery: "delivered" | "queued" } | { delivery: "rejected"; reason: string; error?: string }) & {
 			mode: DeliveryMode;
@@ -4512,7 +4517,7 @@ export class SessionManager {
 			const worker = this.workers.get(id);
 			if (worker?.state === "failed")
 				return { delivery: "rejected", mode, reason: "failed", error: worker.error ?? "Chat failed" };
-			await this.sendAdmitted(id, message, mode, requestId, true);
+			await this.sendAdmitted(id, message, mode, requestId, true, false, undefined, resumeHeld);
 			if (this.sleepPause) return { delivery: "queued", mode };
 			const report = this.deliveryReports.get(requestId);
 			if (report)
@@ -4594,6 +4599,7 @@ export class SessionManager {
 		report = false,
 		durable = false,
 		trace?: TraceCarrier,
+		resumeHeld = false,
 	): Promise<void> {
 		const meta = this.require(id);
 		const resumesStoppedRecovery = meta.recoveryStopped === true;
@@ -4634,6 +4640,7 @@ export class SessionManager {
 					content: message,
 					mode,
 					...(report ? { reportDelivery: true } : {}),
+					...(resumeHeld ? { resumeHeld: true } : {}),
 				});
 			}
 			meta.updatedAt = Date.now();
@@ -4771,6 +4778,7 @@ export class SessionManager {
 			!meta.pending?.length &&
 			!meta.kernelRestartPending &&
 			!meta.sleepPaused &&
+			!meta.inputsPaused &&
 			!meta.working
 		)
 			return { ok: true };
@@ -4809,6 +4817,7 @@ export class SessionManager {
 			)
 			.map((command) => ({ ...command, onlyIfIdle: false }));
 		meta.pending = [{ type: "abort", requestId }, ...automatic];
+		delete meta.inputsPaused;
 		if (meta.preparing) meta.cancelled = true;
 		await this.save(meta);
 		this.emit(meta);
@@ -4841,6 +4850,46 @@ export class SessionManager {
 			return draft ? { ok: true, draft } : { ok: true };
 		} finally {
 			this.stopResults.delete(requestId);
+		}
+	}
+
+	/** Durable queue controls share the app's input outbox and the kernel's inbox mutation line. */
+	async controlInputs(id: string, paused: boolean): Promise<{ delivery: "delivered" | "queued" }> {
+		const meta = this.require(id);
+		const end = this.updateGate.begin();
+		this.sending.set(id, (this.sending.get(id) ?? 0) + 1);
+		try {
+			this.assertNotContinued(meta);
+			const transition = this.archiveTransitions.get(id);
+			if (transition) await transition.promise;
+			if (meta.archivedAt !== undefined) throw new Conflict("Restore the archived session first");
+			if (this.changingModels.has(id)) throw new Conflict("Session is changing its model or conversation");
+			if (this.closing) throw new Error("pilotd is shutting down");
+			if (meta.failure || meta.recoveryStopped) throw new Conflict("Chat recovery must be restored first");
+			const revision = (meta.inputControlRevision ?? 0) + 1;
+			const command: PendingCommand = {
+				type: paused ? "pauseInputs" : "resumeInputs",
+				requestId: randomUUID(),
+				revision,
+			};
+			meta.inputControlRevision = revision;
+			meta.inputsPaused = paused;
+			meta.pending ??= [];
+			// Pause precedes waiting inputs. An already-delivering input is resolved on the same kernel line.
+			if (paused) meta.pending.unshift(command);
+			else meta.pending.push(command);
+			await this.save(meta, undefined, undefined, true);
+			const rejected = await this.start(id, true);
+			if (rejected.has(command.requestId)) throw rejected.get(command.requestId);
+			if (meta.failure) throw new Error(meta.failure);
+			if (this.sleepPause) return { delivery: "queued" };
+			if (meta.pending?.includes(command)) throw new WorkerUnavailable("Queue control acknowledgement is uncertain");
+			return { delivery: "delivered" };
+		} finally {
+			const count = (this.sending.get(id) ?? 1) - 1;
+			if (count) this.sending.set(id, count);
+			else this.sending.delete(id);
+			end();
 		}
 	}
 
@@ -4898,6 +4947,7 @@ export class SessionManager {
 			delete meta.updatePaused;
 			delete meta.sleepPaused;
 			meta.working = false;
+			delete meta.inputsPaused;
 			this.kernelErrors.delete(id);
 			clearOutcome(meta);
 			meta.updatedAt = Date.now();
@@ -6306,6 +6356,7 @@ export class SessionManager {
 						throw new Conflict("This chat's lifecycle or workspace role changed while preparing isolation");
 					}
 					if (meta.pending?.[0]?.type === "abort") spec.stopOnOpen = true;
+					if (meta.inputsPaused) spec.pauseInputsOnOpen = meta.inputControlRevision;
 					const worker = new Worker(
 						spec,
 						onPacket,
@@ -6342,6 +6393,7 @@ export class SessionManager {
 				model: meta.model,
 				thinking: meta.thinking,
 				...(meta.pending?.[0]?.type === "abort" ? { stopOnOpen: true } : {}),
+				...(meta.inputsPaused ? { pauseInputsOnOpen: meta.inputControlRevision } : {}),
 				...(meta.continuationModel ? { continuationModel: meta.continuationModel } : {}),
 				agentDir: this.agentDir,
 				...(meta.workspace ? { trustDirectory: meta.workspace.source } : {}),

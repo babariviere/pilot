@@ -66,6 +66,8 @@ export interface KernelSpec {
 	thinking?: string;
 	/** Cancel parked work before recovery can dispatch a model request or tool. */
 	stopOnOpen?: boolean;
+	/** Park queued input before recovered work can reach its next boundary. */
+	pauseInputsOnOpen?: number;
 	/** Explicit same-provider continuation after the previous worker's tool drain and close. */
 	continuationModel?: { model: string; thinking?: string; requestId: string };
 	agentDir?: string;
@@ -100,6 +102,8 @@ export type KernelCommand =
 			mode: DeliveryMode;
 			onlyIfIdle?: boolean;
 			reportDelivery?: boolean;
+			/** Explicit redirect releases the Stop hold without impersonating a user submission. */
+			resumeHeld?: boolean;
 			/** Ephemeral W3C parent context from pilotd. Never contains baggage or conversation data. */
 			trace?: TraceCarrier;
 			event?: import("@pilot/protocol").ChatEventSummary;
@@ -114,6 +118,8 @@ export type KernelCommand =
 	/** Manual compaction, acknowledged with `accepted` once its task is committed. */
 	| { type: "compact"; requestId: string; instructions?: string }
 	| { type: "abort"; requestId: string }
+	| { type: "pauseInputs"; requestId: string; revision: number }
+	| { type: "resumeInputs"; requestId: string; revision: number }
 	| { type: "sendHeldMessages"; requestId: string }
 	| { type: "discardHeldMessages"; requestId: string; submissionId?: number }
 	| { type: "systemMessageState.ack"; id: string }
