@@ -9,6 +9,7 @@ import type {
 	StartMissionTaskRequest,
 } from "@pilot/protocol";
 import type { ControlActions } from "./control-actions.ts";
+import { pullRequestChecks } from "./control-pr-checks.ts";
 import type { SessionManager } from "./sessions.ts";
 import type { WatchService } from "./watch-service.ts";
 import { validateWatch, type WatchInput } from "./watches.ts";
@@ -21,6 +22,7 @@ export interface ControlPilotOptions {
 	missions: () => Mission[];
 	projects: () => Project[];
 	linear: (projectId: string) => DashboardTrackedItem[];
+	checks?: (pr: string, includeStale: boolean) => Promise<unknown>;
 	mutations?: {
 		audit: () => ControlActions;
 		startProject: (request: SpawnRequest) => Promise<SessionSummary>;
@@ -49,6 +51,14 @@ export class ControlPilot {
 		if (!this.options.isControl(caller)) throw new Error("Only the control chat may call pilot");
 		if (action === "status") return this.status(args);
 		if (action === "read") return this.read(args);
+		if (action === "checks") {
+			const pr = args.pr;
+			if (typeof pr !== "string" || !pr.trim() || pr.length > 2048)
+				throw new Error("pr must be a GitHub pull request URL");
+			if (args.includeStale !== undefined && typeof args.includeStale !== "boolean")
+				throw new Error("includeStale must be a boolean");
+			return (this.options.checks ?? pullRequestChecks)(pr, args.includeStale === true);
+		}
 		if (action === "watch" || action === "unwatch" || action === "watches") {
 			const watches = this.options.watches;
 			if (!watches) throw new Error("Watches unavailable");
