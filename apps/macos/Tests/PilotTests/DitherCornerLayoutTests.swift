@@ -137,13 +137,13 @@ func inboxAndHomeGutterStaysInsideSelectionAndDoesNotMoveTrailingContent(home: B
                 #expect(image.height == height + 2 * margin)
                 let pixels = NSBitmapImageRep(cgImage: image)
                 var actionRight = 0
-                for y in 0 ..< image.height {
-                    for x in 0 ..< image.width {
-                        guard let color = pixels.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
-                              color.alphaComponent > 0.9, color.redComponent > 0.9,
-                              color.greenComponent < 0.1, color.blueComponent < 0.1 else { continue }
-                        actionRight = max(actionRight, x + 1)
-                    }
+                // The marker is vertically centered. One scanline is enough; avoid thousands of unnecessary
+                // AppKit color conversions on the main actor while the rest of the UI suite is running.
+                for x in 0 ..< image.width {
+                    guard let color = pixels.colorAt(x: x, y: image.height / 2)?.usingColorSpace(.deviceRGB),
+                          color.alphaComponent > 0.9, color.redComponent > 0.9,
+                          color.greenComponent < 0.1, color.blueComponent < 0.1 else { continue }
+                    actionRight = max(actionRight, x + 1)
                 }
                 // Only 24 pt beyond HoverRow's ordinary 8 pt inset, not a whole bitmap's worth of space.
                 #expect(actionRight == margin + width - 8 - (decorated ? 24 : 0))
