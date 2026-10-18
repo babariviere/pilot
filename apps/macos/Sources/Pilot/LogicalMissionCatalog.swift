@@ -18,7 +18,7 @@ enum LogicalMissionCatalog {
     }
     private struct Observation {
         let row: ControlLogicalMission
-        let canonical: Bool
+        let rank: Int
         let sequence: Int?
     }
     static let rowLimit = 50
@@ -32,6 +32,16 @@ enum LogicalMissionCatalog {
         return String(decoding: try! encoder.encode([home.daemonId, home.lineageId, missionId]), as: UTF8.self)
     }
 
+    /// Presentation identity only. Keep the stricter shared authorization/enrollment helpers unchanged.
+    static func sameHome(_ lhs: OperationHost, _ rhs: OperationHost) -> Bool {
+        lhs.daemonId == rhs.daemonId && lhs.lineageId == rhs.lineageId
+    }
+
+    static func matches(_ home: OperationHost, pin: HostRef) -> Bool {
+        !home.daemonId.isEmpty && !home.lineageId.isEmpty
+            && home.daemonId == pin.daemonId && home.lineageId == pin.lineageId
+    }
+
     static func normalize(_ sources: [Source]) throws -> Result {
         var groups: [String: [Observation]] = [:]
         var truncated = false
@@ -39,13 +49,14 @@ enum LogicalMissionCatalog {
         var provisional: Set<String> = []
         func append(_ row: ControlLogicalMission) {
             let home = row.mission.home
-            guard home.hostId == "daemon", !home.daemonId.isEmpty, !home.lineageId.isEmpty,
+            guard !home.daemonId.isEmpty, !home.lineageId.isEmpty,
                   !row.mission.missionId.isEmpty else { return }
-            let canonical = row.provenance.contains { $0.kind == .canonical && $0.sourceHost == home }
+            let canonical = row.provenance.filter { $0.kind == .canonical && sameHome($0.sourceHost, home) }
             let sequence = row.provenance.filter { $0.kind == .replica && $0.complete == true }
                 .compactMap(\.sequence).max()
             let id = identity(home: home, missionId: row.mission.missionId)
-            groups[id, default: []].append(Observation(row: row, canonical: canonical, sequence: sequence))
+            let rank = canonical.contains { $0.bindingId == nil } ? 3 : !canonical.isEmpty ? 2 : sequence != nil ? 1 : 0
+            groups[id, default: []].append(Observation(row: row, rank: rank, sequence: sequence))
         }
         for source in sources {
             let host = OperationHost(source.host)
@@ -72,16 +83,18 @@ enum LogicalMissionCatalog {
                     provenance: provenance(kind: "canonical", host: host, projectId: mission.projectId)))
             }
             for replica in dashboard?.replicaMissions ?? [] where replica.consistency == "committed" && replica.sequence >= 0 {
+                let definition = replica.complete && !sameHome(replica.missionHome, host)
                 append(try row(home: replica.missionHome, id: replica.missionId,
-                    title: replica.complete ? replica.title : nil, status: replica.complete ? replica.status : nil,
+                    title: definition ? replica.title : nil, status: definition ? replica.status : nil,
                     provenance: provenance(kind: "replica", host: host, projectId: replica.projectId,
                         bindingId: replica.bindingId, sequence: replica.sequence, complete: replica.complete,
                         syncedAt: replica.replicaSyncedAt, age: replica.replicaAgeMs)))
             }
             for task in dashboard?.sharedTasks ?? [] {
+                if task.source == "mission-home", !sameHome(task.missionHome, host) { continue }
                 // Clipped committed tasks and provisional proposals identify a mission, not its title/counts.
                 append(try row(home: task.missionHome, id: task.missionId,
-                    provenance: provenance(kind: "replica", host: host, projectId: task.projectId,
+                    provenance: provenance(kind: task.source == "mission-home" ? "canonical" : "replica", host: host, projectId: task.projectId,
                         bindingId: task.bindingId, syncedAt: task.replicaSyncedAt, age: task.replicaAgeMs)))
             }
         }
@@ -89,9 +102,9 @@ enum LogicalMissionCatalog {
         var rows: [ControlLogicalMission] = []
         for id in groups.keys.sorted() {
             let observations = groups[id]!
-            let canonical = observations.filter(\.canonical)
+            let rank = observations.map(\.rank).max() ?? 0
             let latest = observations.compactMap(\.sequence).max()
-            let selected = !canonical.isEmpty ? canonical : observations.filter { latest != nil && $0.sequence == latest }
+            let selected = observations.filter { $0.rank == rank && rank > 0 && (rank > 1 || $0.sequence == latest) }
             var fields: [String: JSONValue] = ["id": .string(id), "mission": try json(observations[0].row.mission)]
             // Equal-sequence disagreements are unknown, never resolved by wall clock or input order.
             if let first = selected.first {
@@ -101,7 +114,11 @@ enum LogicalMissionCatalog {
                     if values.allSatisfy({ $0[key] == firstValue[key] }) { fields[key] = firstValue[key] }
                     else { conflicts.insert(id) }
                 }
-                if let coordinator = first.row.coordinator, coordinator.host != first.row.mission.home {
+                if values.contains(where: { $0["title"] != firstValue["title"] || $0["status"] != firstValue["status"] }) {
+                    fields["title"] = nil; fields["status"] = nil
+                    conflicts.insert(id)
+                }
+                if let coordinator = first.row.coordinator, !sameHome(coordinator.host, first.row.mission.home) {
                     fields["coordinator"] = nil
                     conflicts.insert(id)
                 }
@@ -112,7 +129,9 @@ enum LogicalMissionCatalog {
             }
             // Canonical evidence cannot be displaced by many replica bindings.
             evidence.sort {
-                if $0.kind != $1.kind { return $0.kind == .canonical }
+                let left = evidenceRank($0), right = evidenceRank($1)
+                if left != right { return left > right }
+                if $0.sequence != $1.sequence { return ($0.sequence ?? -1) > ($1.sequence ?? -1) }
                 return evidenceKey($0) < evidenceKey($1)
             }
             if evidence.count > provenanceLimit { truncated = true }
@@ -124,7 +143,9 @@ enum LogicalMissionCatalog {
             let comparison = ($0.title ?? "").localizedStandardCompare($1.title ?? "")
             return comparison == .orderedSame ? $0.id < $1.id : comparison == .orderedAscending
         }
-        let total = countKnown ? rows.count : nil
+        let publishedTotal = sources.count == 1 && sources[0].dashboard?.logicalMissions != nil
+            ? sources[0].dashboard?.totals.logicalMissions : nil
+        let total = countKnown ? rows.count : publishedTotal
         if rows.count > rowLimit { truncated = true }
         var displayed: [ControlLogicalMission] = []
         var bytes = 2
@@ -142,6 +163,9 @@ enum LogicalMissionCatalog {
     private static func evidenceKey(_ item: ControlMissionProvenance) -> String {
         [item.sourceHost.daemonId, item.sourceHost.lineageId, item.projectId, item.bindingId ?? "",
          String(item.sequence ?? -1), String(item.complete ?? false)].joined(separator: "\u{0}")
+    }
+    private static func evidenceRank(_ item: ControlMissionProvenance) -> Int {
+        item.kind == .canonical ? (item.bindingId == nil ? 3 : 2) : item.complete == true ? 1 : 0
     }
     private static func provenance(kind: String, host: OperationHost, projectId: String,
         bindingId: String? = nil, sequence: Int? = nil, complete: Bool? = nil,
