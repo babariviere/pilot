@@ -163,6 +163,15 @@ private struct RowLineSegmentView: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(segment.accessibilityText)
             .help("Read-only · no isolated workspace")
+        case .diagnostics:
+            HStack(spacing: 3) {
+                PilotSymbol(PilotIcon.bug)
+                Text("Diagnostics")
+            }
+            .fontWeight(.medium)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(segment.accessibilityText)
+            .help("Read-only diagnostics · no isolated workspace")
         case .coordinator:
             HStack(spacing: 3) {
                 PilotSymbol(PilotIcon.coordinator)

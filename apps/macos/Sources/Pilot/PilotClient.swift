@@ -46,6 +46,8 @@ final class PilotClient: ObservableObject {
     private var fixtureDashboards = false
     private var fixtureMissions = false
     private var fixtureSessions = false
+    /// Native tests bypass durable HTTP admission while retaining the same AppModel validation.
+    var usesSessionFixtures: Bool { fixtureSessions }
     private(set) var fixtureSpawnRequests: [SpawnRequest] = []
     private(set) var fixtureSendRequests: [(sessionId: String, message: String, mode: DeliveryMode)] = []
     var fixtureDiagnostics: [String: SessionDiagnostics] = [:]

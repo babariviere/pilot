@@ -14,6 +14,33 @@ struct PendingDiagnosticRepairStart {
     let admission: DiagnosticRepairAdmission
 }
 
+struct DiagnosticRepairRequestState: Equatable {
+    enum Phase: Equatable { case requesting, queued, failed }
+
+    let revision: UUID
+    let target: DiagnosticTargetReference
+    let sessionUpdatedAt: Double
+    let queuedBehindWork: Bool
+    var phase: Phase
+    var observedWorking: Bool
+    var error: String?
+    var operation: DurableOperation?
+
+    var isPending: Bool { phase == .requesting || phase == .queued }
+}
+
+struct DiagnosticRepairHeaderPresentation: Equatable {
+    enum Action: Equatable { case request, review }
+
+    let action: Action
+    let title: String
+    let help: String
+    let detail: String?
+    let enabled: Bool
+    let busy: Bool
+    let detailIsError: Bool
+}
+
 struct DiagnosticSetupTarget: Identifiable {
     let id = UUID()
     let reference: HostResourceRef
@@ -133,29 +160,137 @@ enum DiagnosticSetup {
 }
 
 struct DiagnosticSpecialistHeader: View {
-    let target: DiagnosticTargetReference?
-    let fallbackTargetId: String?
-    let historyAccess: Bool
+    let session: SessionSummary
+    let context: HostViewContext?
+    @EnvironmentObject private var model: AppModel
+    @EndpointClient private var endpoint
+
+    init(session: SessionSummary, context: HostViewContext?, client: PilotClient? = nil) {
+        self.session = session
+        self.context = context
+        _endpoint = EndpointClient(client)
+    }
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            PilotSymbol(PilotIcon.bug).foregroundStyle(Theme.mutedForeground).accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Diagnostics specialist")
-                    .font(.pilot(.body, weight: .semibold)).foregroundStyle(Theme.foreground)
-                    .accessibilityAddTraits(.isHeader)
-                Text(summary).font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 12) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    PilotSymbol(PilotIcon.bug).foregroundStyle(Theme.mutedForeground).accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Diagnostics")
+                            .font(.pilot(.body, weight: .semibold)).foregroundStyle(Theme.foreground)
+                            .accessibilityAddTraits(.isHeader)
+                        Text(summary).font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
+                    }
+                }
+                .accessibilityElement(children: .combine)
+                .help("A read-only diagnostics specialist for one admitted chat on this host")
+                Spacer(minLength: 8)
+                if let presentation {
+                    DiagnosticRepairHeaderAction(presentation: presentation, action: perform)
+                }
+            }
+            if let detail = presentation?.detail {
+                Text(detail)
+                    .font(.pilot(.caption))
+                    .foregroundStyle(presentation?.detailIsError == true ? Theme.destructive : Theme.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
+        .onAppear(perform: reconcileRequest)
+        .onChange(of: requestFingerprint) { _, _ in reconcileRequest() }
     }
 
     private var summary: String {
-        let scope = historyAccess ? "operational evidence, Pilot logs, and bounded history" : "operational evidence and Pilot logs"
+        let scope = session.diagnosticHistoryAccess == true
+            ? "operational evidence, Pilot logs, and bounded history" : "operational evidence and Pilot logs"
+        let target = session.diagnosticTarget
         if let target { return "Read-only \(scope) for \(target.chatURL) on \(target.host.hostId)" }
-        if let fallbackTargetId { return "Read-only \(scope) for \(DiagnosticSetup.link(fallbackTargetId))" }
+        if let fallbackTargetId = session.diagnosticTargetId {
+            return "Read-only \(scope) for \(DiagnosticSetup.link(fallbackTargetId))"
+        }
         return "Read-only bounded operational evidence"
+    }
+
+    private var reference: HostResourceRef? {
+        model.resourceRef(session.id, kind: .session, context: context)
+    }
+
+    private var admittedTarget: SessionSummary? {
+        session.diagnosticTargetId.flatMap { endpoint.session($0) }
+    }
+
+    private var available: Bool {
+        guard let reference else { return false }
+        return DiagnosticSetup.available(reference, localHost: model.localHost,
+                                         localConnected: model.client.connected,
+                                         availableHosts: model.hosts.available)
+    }
+
+    private var destinationAvailable: Bool {
+        if let projectId = session.projectId { return endpoint.projects.contains { $0.id == projectId } }
+        return !endpoint.projects.isEmpty
+    }
+
+    private var presentation: DiagnosticRepairHeaderPresentation? {
+        guard let reference else {
+            return DiagnosticRepairHeaderPresentation(
+                action: session.diagnosticRepairProposal == nil ? .request : .review,
+                title: session.diagnosticRepairProposal == nil ? "Suggest a repair" : "Review repair",
+                help: "This diagnostics chat's host identity is unavailable.",
+                detail: "This diagnostics chat's host identity is unavailable.",
+                enabled: false, busy: false, detailIsError: true
+            )
+        }
+        return DiagnosticRepair.headerPresentation(
+            specialist: session, specialistHost: reference.host, admittedTarget: admittedTarget,
+            available: available, destinationAvailable: destinationAvailable,
+            request: model.diagnosticRepairRequest(for: reference)
+        )
+    }
+
+    private var requestFingerprint: String {
+        [session.diagnosticRepairProposal?.id ?? "", String(session.updatedAt), String(session.isWorking),
+         session.role?.rawValue ?? "", session.diagnosticTarget?.host.daemonId ?? ""].joined(separator: ":")
+    }
+
+    private func reconcileRequest() {
+        guard let reference else { return }
+        model.reconcileDiagnosticRepairRequest(session, reference: reference)
+    }
+
+    private func perform() {
+        guard let presentation, let reference else { return }
+        if presentation.action == .review {
+            model.prepareDiagnosticRepair(session, context: context)
+            return
+        }
+        let target = DiagnosticRepairTarget(specialist: session, reference: reference)
+        Task { try? await model.requestDiagnosticRepairProposal(target) }
+    }
+}
+
+private struct DiagnosticRepairHeaderAction: View {
+    let presentation: DiagnosticRepairHeaderPresentation
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                if presentation.busy { ProgressView().controlSize(.small) }
+                else { PilotSymbol(PilotIcon.handoff, context: .inline) }
+                Text(presentation.title)
+            }
+        }
+        .controlSize(.small)
+        .disabled(!presentation.enabled)
+        .fixedSize()
+        .help(presentation.help)
+        .accessibilityLabel(presentation.title)
+        .accessibilityHint(presentation.help)
+        .accessibilityIdentifier("diagnostic-repair-action")
     }
 }
 
@@ -216,6 +351,59 @@ enum DiagnosticRepair {
                 : "The diagnosed project is no longer available on this host."
         }
         return nil
+    }
+
+    static func headerPresentation(
+        specialist: SessionSummary, specialistHost: HostRef, admittedTarget: SessionSummary?,
+        available: Bool, destinationAvailable: Bool, request: DiagnosticRepairRequestState?
+    ) -> DiagnosticRepairHeaderPresentation {
+        let problem = problem(specialist: specialist, specialistHost: specialistHost,
+                              admittedTarget: admittedTarget, available: available,
+                              destinationAvailable: destinationAvailable)
+        if specialist.diagnosticRepairProposal != nil {
+            return DiagnosticRepairHeaderPresentation(
+                action: .review, title: "Review repair",
+                help: problem ?? "Review the specialist's proposal before any separate Build chat can start.",
+                detail: problem, enabled: problem == nil, busy: false, detailIsError: problem != nil
+            )
+        }
+        if let problem {
+            return DiagnosticRepairHeaderPresentation(
+                action: .request, title: "Suggest a repair",
+                help: problem, detail: problem, enabled: false, busy: false, detailIsError: true
+            )
+        }
+        switch request?.phase {
+        case .requesting:
+            return DiagnosticRepairHeaderPresentation(
+                action: .request, title: "Requesting…",
+                help: "Sending one host-qualified request to this diagnostics specialist.",
+                detail: "Requesting a bounded proposal. This cannot start or change either chat.",
+                enabled: false, busy: true, detailIsError: false
+            )
+        case .queued:
+            let queued = request?.queuedBehindWork == true
+            return DiagnosticRepairHeaderPresentation(
+                action: .request, title: queued ? "Suggestion queued" : "Suggestion requested",
+                help: queued ? "The request is queued behind the specialist's current work."
+                    : "The specialist is preparing a bounded repair proposal.",
+                detail: queued ? "Queued behind the specialist's current work. No Build chat has started."
+                    : "The specialist is preparing a proposal. No Build chat has started.",
+                enabled: false, busy: true, detailIsError: false
+            )
+        case .failed:
+            let message = request?.error ?? "The proposal request failed."
+            return DiagnosticRepairHeaderPresentation(
+                action: .request, title: "Retry suggestion", help: message,
+                detail: message, enabled: true, busy: false, detailIsError: true
+            )
+        case nil:
+            return DiagnosticRepairHeaderPresentation(
+                action: .request, title: "Suggest a repair",
+                help: "Ask this read-only specialist to publish a bounded, cited proposal. This cannot start a Build chat.",
+                detail: nil, enabled: true, busy: false, detailIsError: false
+            )
+        }
     }
 
     static func prompt(specialist: SessionSummary, specialistHost: HostRef, admittedTarget: SessionSummary?,
@@ -470,15 +658,146 @@ extension AppModel {
         return created
     }
 
-    func requestDiagnosticRepairProposal(_ target: DiagnosticRepairTarget) async throws {
-        let message = "Suggest a repair based only on bounded diagnostics and any explicitly authorized target history. Publish one proposal with repair_proposal. Include plain-language findings, uncertainty, a suggested repair, cited evidence refs, and regression-test guidance. Do not copy raw history into the proposal, and do not start or execute a repair."
-        if target.reference.host == localHost {
-            try await client.send(target.reference.localId, message: message, mode: .followUp)
-        } else {
-            guard let origin = localHost else { throw HostRoutingError.invalidReference }
-            _ = try await hosts.send(target.reference, message: message, mode: .followUp, origin: origin)
+    func diagnosticRepairRequest(for reference: HostResourceRef) -> DiagnosticRepairRequestState? {
+        diagnosticRepairRequests[reference.storageKey]
+    }
+
+    func ownsDiagnosticRepairOperation(_ operation: DurableOperation) -> Bool {
+        if diagnosticRepairRequests.values.contains(where: { $0.operation?.operationId == operation.operationId }) {
+            return true
+        }
+        guard operation.kind == "chat-send" else { return false }
+        let reference = HostResourceRef(host: operation.destination, kind: .session, localId: operation.targetId)
+        return diagnosticRepairRequests[reference.storageKey]?.phase == .requesting
+    }
+
+    func reconcileDiagnosticRepairRequest(_ specialist: SessionSummary, reference: HostResourceRef) {
+        let key = reference.storageKey
+        guard var request = diagnosticRepairRequests[key] else { return }
+        guard specialist.id == reference.localId, specialist.isDiagnosticsSpecialist,
+              specialist.diagnosticTarget == request.target, request.target.host == reference.host else {
+            request.phase = .failed
+            request.error = "This diagnostics chat or its admitted target changed. Start a new request from the current chat."
+            diagnosticRepairRequests[key] = request
+            return
+        }
+        if specialist.diagnosticRepairProposal != nil {
+            diagnosticRepairRequests[key] = nil
+            return
+        }
+        guard request.phase == .queued else { return }
+        if specialist.isWorking {
+            if !request.observedWorking {
+                request.observedWorking = true
+                diagnosticRepairRequests[key] = request
+            }
+        } else if request.observedWorking {
+            request.phase = .failed
+            request.error = "The specialist finished without publishing a repair proposal. Retry to ask again."
+            diagnosticRepairRequests[key] = request
         }
     }
+
+    func requestDiagnosticRepairProposal(_ target: DiagnosticRepairTarget) async throws {
+        let key = target.reference.storageKey
+        if diagnosticRepairRequests[key]?.isPending == true {
+            throw ClientError("A repair suggestion is already requested for this diagnostics chat.")
+        }
+        let originalOperation = diagnosticRepairRequests[key]?.operation
+        let otherPendingMessage = hosts.pendingOperations.values.contains {
+            $0.destination == target.reference.host && $0.targetId == target.reference.localId &&
+                ($0.kind == "chat-send" || $0.kind == "chat-send-attached") &&
+                $0.operationId != originalOperation?.operationId
+        }
+        guard !otherPendingMessage else {
+            throw ClientError("Resolve this chat's earlier message delivery before requesting a repair suggestion.")
+        }
+        guard target.reference.kind == .session,
+              let current = currentDiagnosticSpecialist(target.reference),
+              current.isDiagnosticsSpecialist, current.diagnosticRepairProposal == nil,
+              let admittedTarget = current.diagnosticTarget, admittedTarget.host == target.reference.host,
+              current.diagnosticTarget == target.specialist.diagnosticTarget,
+              current.diagnosticTargetId == target.specialist.diagnosticTargetId else {
+            throw ClientError("This diagnostics chat or its admitted target changed. Review the current chat before retrying.")
+        }
+        if diagnosticRepairRequests[key] == nil, diagnosticRepairRequests.count >= 64 {
+            if let old = diagnosticRepairRequests.filter({ $0.value.phase == .failed }).keys.sorted().first {
+                diagnosticRepairRequests[old] = nil
+            }
+            guard diagnosticRepairRequests.count < 64 else {
+                throw ClientError("Too many diagnostics requests are awaiting a result.")
+            }
+        }
+        let revision = UUID()
+        diagnosticRepairRequests[key] = DiagnosticRepairRequestState(
+            revision: revision, target: admittedTarget, sessionUpdatedAt: current.updatedAt,
+            queuedBehindWork: current.isWorking, phase: .requesting,
+            observedWorking: current.isWorking, error: nil, operation: originalOperation
+        )
+        let message = "Suggest a repair based only on bounded diagnostics and any explicitly authorized target history. Publish one proposal with repair_proposal. Include plain-language findings, uncertainty, a suggested repair, cited evidence refs, and regression-test guidance. Do not copy raw history into the proposal, and do not start or execute a repair."
+        do {
+            if target.reference.host == localHost, client.usesSessionFixtures {
+                try await client.send(target.reference.localId, message: message, mode: .followUp)
+            } else {
+                guard let origin = localHost else { throw HostRoutingError.invalidReference }
+                let operation: DurableOperation
+                let delivery: OperationDelivery
+                if let originalOperation {
+                    guard hosts.pendingOperations[originalOperation.operationId] == originalOperation else {
+                        throw ClientError("The earlier proposal request was already resolved. Wait for its result before sending another.")
+                    }
+                    try await hosts.retryOperation(originalOperation)
+                    operation = originalOperation
+                    delivery = hosts.operationDeliveries[originalOperation.operationId] ?? .unknown
+                } else {
+                    (operation, delivery) = try await hosts.send(
+                        target.reference, message: message, mode: .followUp, origin: origin
+                    )
+                }
+                if var request = diagnosticRepairRequests[key], request.revision == revision {
+                    request.operation = operation
+                    diagnosticRepairRequests[key] = request
+                }
+                guard case let .receipt(receipt) = delivery, receipt.state != .pending else {
+                    throw ClientError("Proposal request delivery is not confirmed. Reconnect, then use Retry suggestion to check the original request.")
+                }
+                try receipt.validate(operation)
+                try await acknowledgeAdopted(operation, receipt: receipt)
+                if var request = diagnosticRepairRequests[key], request.revision == revision {
+                    request.operation = nil
+                    diagnosticRepairRequests[key] = request
+                }
+                guard receipt.state == .accepted else {
+                    throw ClientError("The specialist did not accept the proposal request: \(receipt.reason ?? "request rejected").")
+                }
+            }
+            guard var request = diagnosticRepairRequests[key], request.revision == revision else { return }
+            guard let latest = currentDiagnosticSpecialist(target.reference), latest.isDiagnosticsSpecialist,
+                  latest.diagnosticTarget == current.diagnosticTarget else {
+                throw ClientError("This diagnostics chat or its admitted target changed while requesting a proposal.")
+            }
+            if latest.diagnosticRepairProposal != nil {
+                diagnosticRepairRequests[key] = nil
+                return
+            }
+            request.phase = .queued
+            request.observedWorking = request.observedWorking || latest.isWorking
+            diagnosticRepairRequests[key] = request
+        } catch {
+            if var request = diagnosticRepairRequests[key], request.revision == revision {
+                request.phase = .failed
+                request.error = String(error.localizedDescription.prefix(512))
+                diagnosticRepairRequests[key] = request
+            }
+            throw error
+        }
+    }
+
+    private func currentDiagnosticSpecialist(_ reference: HostResourceRef) -> SessionSummary? {
+        if reference.host == localHost { return client.session(reference.localId) }
+        return hosts.sessions.first { $0.ref == reference }?.value
+    }
+
 }
 
 struct DiagnosticSetupSheet: View {
@@ -699,6 +1018,9 @@ struct DiagnosticRepairSheet: View {
     }
 
     private var proposal: DiagnosticRepairProposal? { specialist.diagnosticRepairProposal }
+    private var proposalRequest: DiagnosticRepairRequestState? {
+        model.diagnosticRepairRequest(for: target.reference)
+    }
     private var pendingStart: PendingDiagnosticRepairStart? {
         try? model.pendingDiagnosticRepairStart(for: target)
     }
@@ -754,8 +1076,12 @@ struct DiagnosticRepairSheet: View {
                                       key: .commandReturn, enabled: canStart, action: startRepair)
         }
         if proposal == nil {
-            return SheetPrimaryAction(title: busy ? "Requesting…" : "Ask specialist",
-                                      enabled: !busy && targetProblem == nil,
+            let pending = proposalRequest?.isPending == true
+            let title = busy || proposalRequest?.phase == .requesting ? "Requesting…"
+                : proposalRequest?.phase == .queued ? "Suggestion queued"
+                : proposalRequest?.phase == .failed ? "Retry suggestion" : "Ask specialist"
+            return SheetPrimaryAction(title: title,
+                                      enabled: !busy && !pending && targetProblem == nil,
                                       action: requestProposal)
         }
         return SheetPrimaryAction(title: busy ? "Starting…" : "Start separate repair",
@@ -787,6 +1113,12 @@ struct DiagnosticRepairSheet: View {
                 }
                 if let targetProblem {
                     Text(targetProblem).font(.pilot(.caption)).foregroundStyle(Theme.destructive)
+                } else if proposal == nil, let proposalRequest {
+                    Text(proposalRequest.error ?? (proposalRequest.queuedBehindWork
+                         ? "The suggestion is queued behind the specialist's current work."
+                         : "The specialist is preparing a proposal."))
+                        .font(.pilot(.caption))
+                        .foregroundStyle(proposalRequest.phase == .failed ? Theme.destructive : Theme.mutedForeground)
                 }
                 if let pendingStart {
                     let replaced = pendingStart.admission.proposalId != proposal?.id
@@ -874,7 +1206,7 @@ struct DiagnosticRepairSheet: View {
     }
 
     private func requestProposal() {
-        guard !busy, targetProblem == nil else { return }
+        guard !busy, proposalRequest?.isPending != true, targetProblem == nil else { return }
         busy = true; error = nil
         Task {
             defer { busy = false }

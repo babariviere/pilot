@@ -1027,7 +1027,8 @@ an explicit setup sheet and choose the specialist's model and thinking level. As
 question or bug report and an optional known `pilot://chat/<UUID>` link; without a link it diagnoses Pilot on the
 selected host through that host's explicit control target. The report becomes only the specialist chat's bounded
 opening user message, never telemetry, diagnostic evidence or target authority. The created chat is visibly labeled
-**Diagnostics specialist** with its admitted host-qualified target. Its chat title is generated through the normal
+**Diagnostics** in the sidebar and chat header, with its admitted host-qualified target and read-only boundary. Its
+descriptive chat title remains independent and is generated through the normal
 bounded title lifecycle: a submitted reason seeds the title, while a reasonless setup waits for the first substantive
 specialist reply rather than naming the fixed diagnostic instruction. The readable fallback remains if title
 generation is unavailable, and a user rename always wins. Titles and title context stay out of telemetry. Cancel
@@ -1040,12 +1041,15 @@ its selected host. Missing app text logs, journal history or crash reports remai
 that no failure occurred. The reader rejects symbolic links and arbitrary files, uses opaque bounded continuations
 and excerpts, never wakes or probes the target, and does not copy logs into telemetry or repair handoffs. Logs and
 history stay local, are treated as untrusted data, and grant no attachment, child-session, shell or mutation access.
-When asked, the specialist can publish a bounded, cited repair proposal. After the turn settles, its chat shows a
-native Review repair tray without displacing a live question or stealing focus; Not now is remembered for that exact
-proposal, while the context menu can reopen it. Publishing, viewing, reconnecting, dismissing or cancelling never
-starts work. Only explicit confirmation in the review sheet sends the proposal to a separate ordinary Build chat in
-a valid chosen project. That start uses one durable, host-qualified operation, revalidates the current proposal and
-target at daemon admission, and reconciles an unknown response before any retry or replacement intent.
+When no proposal exists, the diagnostics header's directly visible **Suggest a repair** action sends one bounded,
+host-qualified follow-up to the specialist. It reports requesting, queued and retry states, but never opens a manual
+proposal form or starts work. Once the specialist publishes a bounded, cited proposal, the action becomes **Review
+repair**, and after the turn settles the chat also shows the native review tray without displacing a live question or
+stealing focus. Not now is remembered for that exact proposal, while the header or context menu can reopen it.
+Publishing, viewing, reconnecting, dismissing or cancelling never starts work. Only explicit confirmation in the
+review sheet sends the proposal to a separate ordinary Build chat in a valid chosen project. That start uses one
+durable, host-qualified operation, revalidates the current proposal and target at daemon admission, and reconciles
+an unknown response before any retry or replacement intent.
 [Tool-call diagnostics](docs/tool-call-diagnostics.md) add bounded in-flight and completed lifecycle evidence for
 built-ins, MCP and nested `codemode` calls while keeping raw names, arguments, output and commands out of diagnostics
 and opt-in telemetry. Liveness and useful progress remain separate observations; Pilot does not automatically retry,

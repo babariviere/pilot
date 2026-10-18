@@ -20,6 +20,7 @@ private func kinds(_ segments: [RowLineSegment]) -> [String] {
         switch segment.kind {
         case .project: "project"
         case .ask: "ask"
+        case .diagnostics: "diagnostics"
         case .coordinator: "coordinator"
         case .reason: "reason"
         case let .pullRequest(pr, _): "#\(pr.number)"
@@ -57,6 +58,16 @@ private func kinds(_ segments: [RowLineSegment]) -> [String] {
     let segments = RowLineSegments.session(session, projectName: "pilot", reason: "Asks: which file?", branch: "ignored")
     #expect(kinds(segments) == ["project", "ask", "reason"])
     #expect(segments[1].kind == .ask(source: "origin/main"))
+}
+
+@Test func diagnosticsChatsShowTheirPersistedRoleInsteadOfGenericAsk() {
+    let session = SessionSummary(id: "diagnostics", title: "Investigate reconnect", cwd: "/repo",
+                                 createdAt: 1, updatedAt: 1, state: "idle", mode: .ask,
+                                 role: .diagnostics, sourceBranch: "main")
+    let segments = RowLineSegments.session(session, projectName: "pilot", branch: "ignored")
+    #expect(kinds(segments) == ["project", "diagnostics"])
+    #expect(segments[1].kind == .diagnostics)
+    #expect(segments.accessibilityText == "pilot, Diagnostics, read-only")
 }
 
 @Test func coordinatorsReadCoordinatorThenTheirStateOnly() {
