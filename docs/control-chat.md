@@ -157,6 +157,35 @@ role again in pilotd. `status` uses session/project memory, cached Linear previe
 mission snapshot. It never reads SQL or starts/subscribes to a worker from the tool path. Filters apply
 to every resource family. Responses are capped at 24 KB with explicit totals and truncation.
 
+`GET /api/control-chat/dashboard?projectId&missionId` is the local-user equivalent of `pilot status`:
+both call the same synchronous builder. It retains the existing projects/chats/missions/PRs/Linear
+lists and adds running agents (latest user submission/creation time and elapsed milliseconds), active
+missions with task progress, blocked tasks, failed chats, open ask_user questions, pending decision
+proposals and `next.watches` with their saved instructions. Next is always global, including scoped
+requests. Its `total` is the number of active watches before the bounded cache/page limit. Follow-through
+work may extend Next later. Legacy PR readiness is not treated as exact-head check evidence; the
+optional failing-checks provider must use a verified exact-head cache, never trigger a fetch here.
+
+All lists have at most 100 rows (200 projects, 50 missions) within a shared 24,000-byte response budget.
+Totals precede clipping; `truncated` also covers the bounded watch and mission-attention caches. Linear
+previews are visited for at most 200 projects, so their total is the count in those visited previews.
+Unknown, duplicate, empty, overlong or conflicting filter parameters return 400. The endpoint never
+creates the control singleton. Session, project, mission, tracking and watch changes coalesce into
+`dashboard.changed` socket invalidations. No timer polls state or increments elapsed time; clients can
+derive a live elapsed display from `startedAt` and refetch on invalidation/reconnect.
+
+Mission changes update thin attention projections, not full task bodies or mission histories. The watch
+storage worker refreshes a bounded in-memory dashboard cache on changes and expiry; HTTP/tool reads
+never send it an RPC.
+
+`node scripts/bench/control-dashboard.ts 4d67c6e1 10000` compares the old status builder with the
+shared builder using 10,000 synthetic working chats, 40,000 PRs and repeated state changes. A local
+macOS arm64/Node 24 probe on 2026-10-18 measured median wall time per read of 7.43 ms before and
+1.01 ms after (process CPU 7.32 ms and 1.17 ms), including response serialization. Both stayed under
+24,000 bytes. Five alternating sample pairs follow one discarded warmup pair, 20 reads per sample.
+This isolates aggregation of already-created summaries, not SessionManager projection cost, live
+worker streaming, GUI responsiveness, providers or disk-cold recovery. No accounts or user data.
+
 `read` uses one bounded cold-history page, not a worker wake or an unbounded search for old replies.
 It returns a last assistant result found in that page, or up to 40 tail messages, capped at 12,000
 characters. Thoughts are omitted and content is explicitly labelled as quoted, untrusted data.

@@ -238,6 +238,9 @@ It can read global status, start or message requested work, create or attach mis
 and append memory across registered projects. Changes have a durable audit and timeline record.
 The Control screen (from its header or ⌘K) shows its memory summaries, a searchable message log, its watches and
 actions, and memory health, read-only.
+`GET /api/control-chat/dashboard` and its `pilot status` tool share one bounded, cached snapshot of
+running chats, mission progress, blockers, proposed decisions and active watch instructions. Reading it
+does not wake chat workers or fetch external services.
 See [control chat internals](docs/control-chat.md) for storage, compaction and recovery details.
 
 Control can read health, bounded redacted log tails and local diagnostic evidence through `pilot`

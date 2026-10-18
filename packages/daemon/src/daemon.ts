@@ -69,6 +69,7 @@ const projects = new ProjectStore(config.home);
 await projects.load();
 const trackedItems = new TrackedItemStore(join(config.home, "tracked-items.sqlite"));
 const watches = new WatchService(join(config.home, "watches.sqlite"));
+await watches.ready();
 await watches.list();
 await trackedItems.load(projects.list().map((project) => project.id));
 const sourceMcp = new PiSourceMcpClient(config.agentDir);
@@ -182,10 +183,17 @@ for (const mission of missionStore.list())
 const missionService = new MissionService(missionStore, sessions, projects);
 // Mission reads use a change-driven snapshot, never SQL from a control tool call.
 const controlMissions = new Map(missionStore.list().map((mission) => [mission.id, mission]));
+const controlAttention = new Map(
+	[...controlMissions.values()]
+		.filter((m) => m.status === "active")
+		.map((m) => [m.id, missionStore.controlAttention(m)]),
+);
 const stopControlMissions = missionStore.onChange((id) => {
 	const mission = missionStore.get(id);
 	if (mission) controlMissions.set(id, mission);
 	else controlMissions.delete(id);
+	if (mission?.status === "active") controlAttention.set(id, missionStore.controlAttention(mission));
+	else controlAttention.delete(id);
 });
 const { ControlPilot } = await import("./control-pilot.ts");
 sessions.setPilot(
@@ -217,6 +225,8 @@ sessions.setPilot(
 		sessions,
 		projects: () => projects.list(),
 		missions: () => [...controlMissions.values()],
+		missionAttention: (id) => controlAttention.get(id),
+		nextWatches: () => watches.dashboard(),
 		linear: (id) => trackedItems.preview(id, "linear").items,
 		mutations: {
 			organizeAllowed: () => sessions.controlOrganizeAllowed(),

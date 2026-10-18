@@ -1289,6 +1289,13 @@ export class SessionManager {
 	setPilot(pilot: ControlPilot): void {
 		this.pilot = pilot;
 	}
+	controlDashboard(args: Record<string, unknown> = {}): import("@pilot/protocol").ControlDashboardResponse {
+		if (!this.pilot) throw new ServiceUnavailable("Control dashboard unavailable");
+		return this.pilot.dashboard(args);
+	}
+	onControlDashboardChange(listener: () => void): () => void {
+		return this.pilot?.onDashboardChange(listener) ?? (() => {});
+	}
 	private creatingControl?: Promise<SessionSummary>;
 	static readonly CONTROL_ID = "00000000-0000-4000-8000-000000000001";
 	/** The control chat's name, shown as-is by every client. The only place it is spelled. */

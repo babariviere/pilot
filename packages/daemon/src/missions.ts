@@ -1888,6 +1888,52 @@ export class MissionStore {
 		return row ? missionFrom(row) : undefined;
 	}
 
+	/** Bounded attention rows for the control cache, refreshed only on mission changes. */
+	controlAttention(
+		mission: Pick<Mission, "id" | "projectId">,
+	): import("./control-dashboard.ts").ControlMissionAttention {
+		const { id, projectId } = mission;
+		// Thin, bounded projections for the change-driven control cache. Never load task bodies, history or resources.
+		const blockedTotal = num(
+			this.one("SELECT COUNT(*) AS n FROM tasks WHERE mission_id = ? AND status = 'blocked'", id)!.n!,
+		);
+		const decisionsTotal = num(
+			this.one("SELECT COUNT(*) AS n FROM decision_proposals WHERE mission_id = ? AND status = 'pending'", id)!.n!,
+		);
+		return {
+			blockedTotal,
+			decisionsTotal,
+			blockedTasks: this.all(
+				"SELECT id, number, substr(title, 1, 160) AS title, substr(body, 1, 512) AS detail, updated_at FROM tasks WHERE mission_id = ? AND status = 'blocked' ORDER BY sort, number LIMIT 100",
+				id,
+			).map((row) => ({
+				id: `task:${str(row.id!)}`,
+				kind: "blocked_task",
+				missionId: id,
+				projectId,
+				taskId: str(row.id!),
+				taskNumber: num(row.number!),
+				title: str(row.title!),
+				...(row.detail ? { detail: str(row.detail) } : {}),
+				at: num(row.updated_at!),
+			})),
+			pendingDecisions: this.all(
+				"SELECT id, decision_id, kind, substr(text, 1, 512) AS text, substr(reason, 1, 512) AS reason, author_session_id, created_at FROM decision_proposals WHERE mission_id = ? AND status = 'pending' ORDER BY created_at, id LIMIT 100",
+				id,
+			).map((row) => ({
+				id: str(row.id!),
+				missionId: id,
+				projectId,
+				decisionId: str(row.decision_id!),
+				kind: str(row.kind!) as "edit" | "remove",
+				...(row.text ? { text: str(row.text) } : {}),
+				reason: str(row.reason!),
+				authorSessionId: str(row.author_session_id!),
+				createdAt: num(row.created_at!),
+			})),
+		};
+	}
+
 	/** Task counts per mission (dropped tasks excluded), for summaries that do not load task bodies. */
 	taskProgress(projectId?: string): Map<string, MissionTaskProgress> {
 		const rows = this.all(

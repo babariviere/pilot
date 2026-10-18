@@ -109,4 +109,89 @@ export type ControlMessage =
 	| { type: "watches.changed" }
 	| { type: "control-audit.changed" }
 	/** Coalesced to at most one per second. */
-	| { type: "control-memory.changed" };
+	| { type: "control-memory.changed" }
+	| { type: "dashboard.changed" };
+
+export interface ControlDashboardChat {
+	id: string;
+	chatUrl: string;
+	title: string;
+	projectId?: string;
+	missionId?: string;
+	state: import("./index.ts").SessionState;
+	working?: boolean;
+	outcome?: import("./index.ts").SessionOutcome;
+	model?: string;
+}
+export interface ControlDashboardAgent extends ControlDashboardChat {
+	/** Latest user submission, else creation. Not worker uptime. */
+	startedAt: number;
+	elapsedMs: number;
+}
+export interface ControlDashboardMission {
+	id: string;
+	projectId: string;
+	title: string;
+	status: import("./index.ts").MissionStatus;
+	tasksDone: number;
+	tasksTotal: number;
+	coordinatorSessionId?: string;
+}
+export interface ControlDashboardBlocker {
+	id: string;
+	kind: "blocked_task" | "failed_chat" | "question" | "failing_checks";
+	projectId?: string;
+	missionId?: string;
+	sessionId?: string;
+	taskId?: string;
+	taskNumber?: number;
+	title: string;
+	detail?: string;
+	at: number;
+	url?: string;
+	/** Required for failing_checks: failures from a cache verified against this exact head. */
+	headSha?: string;
+}
+export interface ControlDashboardDecision {
+	id: string;
+	missionId: string;
+	projectId: string;
+	decisionId: string;
+	kind: "edit" | "remove";
+	text?: string;
+	reason: string;
+	authorSessionId: string;
+	createdAt: number;
+}
+/** GET /api/control-chat/dashboard?projectId&missionId. Same snapshot as pilot status.
+ * Local user only, daemon memory only, no worker starts. Unknown/duplicate parameters are 400.
+ * At most 24,000 encoded bytes, 100 rows per list (200 projects, 50 missions); totals precede clipping.
+ * Text is untrusted. Next contains global active watches with saved instructions, even for scoped requests.
+ */
+export interface ControlDashboardResponse {
+	untrusted: true;
+	source: "daemon-memory";
+	projects: Array<{ id: string; name: string }>;
+	chats: ControlDashboardChat[];
+	/** All statuses retained for status-tool compatibility; activeMissions is the dashboard section. */
+	missions: ControlDashboardMission[];
+	pullRequests: Array<{ sessionId: string; url: string; title: string; number: number; state: "open" | "draft" }>;
+	linear: Array<{ projectId: string; id: string; identifier?: string; title: string; status?: string; url?: string }>;
+	runningAgents: ControlDashboardAgent[];
+	activeMissions: ControlDashboardMission[];
+	blockers: ControlDashboardBlocker[];
+	pendingDecisions: ControlDashboardDecision[];
+	next: { watches: Watch[]; total: number };
+	totals: {
+		projects: number;
+		chats: number;
+		missions: number;
+		pullRequests: number;
+		linear: number;
+		runningAgents: number;
+		activeMissions: number;
+		blockers: number;
+		pendingDecisions: number;
+	};
+	truncated: boolean;
+}

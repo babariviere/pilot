@@ -17,6 +17,14 @@ export class WatchService {
 	private expiryUpdate?: Promise<void>;
 	private expiryDirty = false;
 	private closing = false;
+	private dashboardCache: { watches: Watch[]; total: number } = { watches: [], total: 0 };
+	/** Memory only. Refreshed by watch changes, never by a dashboard request. */
+	dashboard(): { watches: Watch[]; total: number } {
+		return this.dashboardCache;
+	}
+	ready(): Promise<void> {
+		return this.expiryUpdate ?? Promise.resolve();
+	}
 	constructor(path: string) {
 		this.dispatcher = new NoticeDispatcher({
 			deadlines: async (now) => {
@@ -70,7 +78,7 @@ export class WatchService {
 	async observe(events: WatchObservation[]): Promise<number> {
 		const matched = await this.rpc<number>("observe", { events, self: this.sink?.sessionId });
 		if (matched) {
-			this.changed();
+			await this.changed();
 			this.dispatcher.schedule();
 		}
 		return matched;
@@ -78,7 +86,7 @@ export class WatchService {
 	async transition(input: WatchTransition): Promise<number> {
 		const matched = await this.rpc<number>("transition", { input, self: this.sink?.sessionId });
 		if (matched) {
-			this.changed();
+			await this.changed();
 			this.dispatcher.schedule();
 		}
 		return matched;
@@ -89,7 +97,7 @@ export class WatchService {
 	async consume(source: string, events: WatchObservation[]): Promise<number> {
 		const matched = await this.rpc<number>("consume", { source, events, self: this.sink?.sessionId });
 		if (matched) {
-			this.changed();
+			await this.changed();
 			this.dispatcher.schedule();
 		}
 		return matched;
@@ -113,12 +121,12 @@ export class WatchService {
 	}
 	async add(input: WatchInput): Promise<Watch> {
 		const result = await this.rpc<Watch>("add", validateWatch(input));
-		this.changed();
+		await this.changed();
 		return result;
 	}
 	async remove(id: string): Promise<boolean> {
 		const result = await this.rpc<boolean>("remove", id);
-		if (result) this.changed();
+		if (result) await this.changed();
 		return result;
 	}
 	list(): Promise<Watch[]> {
@@ -138,9 +146,9 @@ export class WatchService {
 		this.listeners.add(listener);
 		return () => this.listeners.delete(listener);
 	}
-	protected changed(): void {
+	protected changed(): Promise<void> {
 		this.refreshExpiry();
-		for (const listener of this.listeners) listener();
+		return this.ready();
 	}
 	private refreshExpiry(): void {
 		this.expiryDirty = true;
@@ -148,6 +156,8 @@ export class WatchService {
 		this.expiryUpdate = (async () => {
 			while (this.expiryDirty && !this.closing) {
 				this.expiryDirty = false;
+				this.dashboardCache = await this.rpc("dashboard");
+				for (const listener of this.listeners) listener();
 				const at = await this.rpc<number | undefined>("expiry");
 				clearTimeout(this.expiryTimer);
 				if (at !== undefined && !this.closing) {

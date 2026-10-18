@@ -82,6 +82,16 @@ function dispatch(op: string, args: unknown): unknown {
 		return events.acknowledge(a.notice, a.now);
 	}
 	if (op === "list") return list(now);
+	if (op === "dashboard") {
+		prune(now);
+		return {
+			watches: db
+				.prepare("SELECT data FROM watches ORDER BY id LIMIT 100")
+				.all()
+				.map((row) => JSON.parse(String(row.data))),
+			total: Number(db.prepare("SELECT COUNT(*) AS n FROM watches").get()!.n),
+		};
+	}
 	if (op === "page") {
 		prune(now);
 		const { after, limit } = args as { after?: string; limit: number };
