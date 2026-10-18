@@ -513,25 +513,21 @@ final class AppModel: ObservableObject {
         }
         terminals.bind(to: settings)
         Task {
-            do {
-                try await hosts.restoreOffline(from: OfflineHostStore(directory: FileManager.default.urls(
-                    for: .applicationSupportDirectory, in: .userDomainMask)[0]
-                    .appendingPathComponent("Pilot/Hosts", isDirectory: true)))
-            } catch {
-                // Keep Local usable. Never reinterpret a corrupt index as empty or re-pair pins.
-                sessionActionError = "Could not restore offline devbox metadata. The saved file was kept."
-            }
-            await daemon.ensureRunning()
-            client.connect(to: daemon.baseURL)
-            Task {
-                guard let hello = try? await client.hello(), hello.isProtocolCompatible,
-                      let lineage = hello.lineageId else { return }
-                let host = HostRef(hostId: "local", daemonId: hello.daemonId, lineageId: lineage)
-                do {
-                    try registerLocal(host)
-                    try hosts.install(client, host: host)
-                    await refreshNativeTelemetry()
-                } catch { reportDraftError(error) }
+            await startHostConnections(offlineStore: OfflineHostStore(directory: FileManager.default.urls(
+                for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("Pilot/Hosts", isDirectory: true))) {
+                await daemon.ensureRunning()
+                client.connect(to: daemon.baseURL)
+                Task {
+                    guard let hello = try? await client.hello(), hello.isProtocolCompatible,
+                          let lineage = hello.lineageId else { return }
+                    let host = HostRef(hostId: "local", daemonId: hello.daemonId, lineageId: lineage)
+                    do {
+                        try registerLocal(host)
+                        try hosts.install(client, host: host)
+                        await refreshNativeTelemetry()
+                    } catch { reportDraftError(error) }
+                }
             }
         }
     }

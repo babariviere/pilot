@@ -27,6 +27,8 @@ it does not change chat-result read tracking or enable review entry points.
   a run. Every session has its own worker process.
 - **Work on a devbox, too.** Add a working SSH alias in Settings → Devboxes, confirm its identity, and
   sign in to providers independently there. Choose Local or that devbox in the new-chat composer.
+  At launch, saved trusted devboxes reconnect in the background and their verified runtime versions are read
+  without opening Settings. Unreachable hosts never block Local startup.
   Known remote chats stay visible as Disconnected through network loss, Mac sleep and app quit;
   remote work continues independently. Project sharing explicitly selects notes and missions,
   keeps pending contributions and conflicting edits separate, and never copies files or sign-ins.
