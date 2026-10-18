@@ -182,20 +182,22 @@ func pendingOrFailedEarlierLoadsKeepMessagesVisible(failed: Bool) async throws {
 }
 
 @Test @MainActor func loadingEarlierStoragePagesKeepsExistingMessagesPainted() async throws {
-    var transcript = Transcript()
-    transcript.apply(.object([
+    let snapshot: JSONValue = .object([
         "type": .string("snapshot"), "entries": .array([
             loadingEntry(6),
             .object(["id": .number(9), "kind": .string("pi.compaction"), "head": .number(6)]),
         ] + (10...20).map { loadingEntry($0, assistant: $0 == 20) }),
-    ]))
-    let feed = SessionFeed(sessionId: "synthetic-earlier", transcript: transcript)
+    ])
+    let feed = SessionFeed(sessionId: "synthetic-earlier", transcript: Transcript())
     let window = loadingWindow()
     defer { feed.stop(); window.close() }
     let scroll = TranscriptScrollState()
     let host = NSHostingView(rootView: LoadingTranscript(feed: feed, scroll: scroll))
     window.contentView = host
-    try await settleLoading(host)
+    // Seed the live reducer too, not just the static preview presentation. Otherwise the first
+    // history-page event is reduced against an empty transcript and publishes empty rows.
+    feed.applyFixtureEvents([snapshot])
+    try await settleLoading(host, until: { feed.presentation.earlierCursor == 6 })
     let previous = feed.rows.visibleRows
     let anchor = try #require(loadingAnchors(host).first { $0.rowID == "6-0" })
     scroll.follow.pauseFollowing()
@@ -215,7 +217,9 @@ func pendingOrFailedEarlierLoadsKeepMessagesVisible(failed: Bool) async throws {
     feed.applyFixtureEvents([Transcript.earlierEntries(before: 6, page: .object([
         "entries": .array((1...5).map { loadingEntry($0) }), "more": .bool(false),
     ]))])
-    try await settleLoading(host, until: { feed.presentation.earlierCursor == nil })
+    try await settleLoading(host, until: {
+        feed.presentation.earlierCursor == nil && feed.rows.visibleRows.first?.id == "1-0"
+    })
     #expect(feed.presentation.earlierCursor == nil)
     #expect(feed.rows.visibleRows.suffix(previous.count).elementsEqual(previous))
     #expect(feed.rows.visibleRows.first?.id == "1-0")
