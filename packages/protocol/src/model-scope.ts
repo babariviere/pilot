@@ -1,40 +1,54 @@
-/** Host-local Pi enabledModels. null means the global key is absent (all available models).
- * An empty array also means all models, matching Pi. Patterns are never rewritten by resolution.
+/** GET /api/model-scope. Global Pi scope, independent of project overrides.
+ * null means the key is absent. [] is retained on read; Pi treats both as all authenticated models.
  */
 export interface ModelScope {
 	enabledModels: string[] | null;
-	/** SHA-256 of JSON.stringify(enabledModels), including array order. Not a hash of the settings file. */
-	contentHash: string;
-	/** Read-only project enabledModels, or null when the project does not override the global scope. */
-	projectOverride: string[] | null;
-	/** One result per global pattern, in input order. Empty for null/all. */
+	allModels: boolean;
+	/** SHA-256 of compact JSON: the string "absent" for an absent key, otherwise the literal ordered array. */
+	scopeHash: string;
+	/** One entry per GLOBAL pattern, in input order. Empty when allModels is true. */
 	resolution: ModelScopePatternResolution[];
-	/** Project pattern results, or null when there is no override. */
-	projectResolution: ModelScopePatternResolution[] | null;
-	/** False on read-only hosts or when native host-action authorization is unavailable. */
-	writable: boolean;
+	/** Authenticated models regardless of scope. First 2048 unique entries, at most 1 MiB encoded. */
+	candidates: ModelScopeCandidate[];
+	/** Present only with ?projectId (or ?cwd). Read-only project enabledModels; null means no override. */
+	projectOverride?: string[] | null;
+}
+
+export interface ModelScopeCandidate {
+	/** provider/modelId, the same identifier used by /api/models. */
+	id: string;
+	provider: string;
+	name: string;
 }
 
 export interface ModelScopePatternResolution {
 	pattern: string;
-	/** Authenticated provider/modelId references on this host. Never model objects or credentials. */
-	matchedModelIds: string[];
-	/** Set only when no authenticated model matches. Known but unavailable does not prove bad credentials. */
-	unresolvedReason: "unknown" | "provider-not-logged-in" | null;
-	/** Pi resolver diagnostic codes, without provider errors or configuration details. */
-	diagnostics: string[];
+	/** Authenticated provider/modelId references on this host, resolved by Pi. */
+	matches: string[];
+	/** Present only when no authenticated model matches. Unavailable is not proof of bad credentials. */
+	unresolved?: "unknown" | "provider-not-logged-in";
 }
 
-/** PUT /api/model-scope, native host-action capability required (x-pilot-github-capability).
- * null removes only the global enabledModels key. This is never an agent/pilot tool action.
+/** PUT /api/model-scope requires native host-action capability (x-pilot-github-capability).
+ * null removes only the global key. Nonempty arrays: at most 256 patterns, at most 256 UTF-8 bytes each.
+ * Literal patterns/order are preserved. [] is rejected. This is never an agent/pilot tool action.
  */
 export interface ModelScopeUpdateRequest {
 	enabledModels: string[] | null;
 	expectedHash: string;
 }
 
+/** Value-idempotent retry succeeds even with a stale expectedHash, without writing or resolving models. */
+export type ModelScopeUpdateResponse = { changed: false; scopeHash: string } | (ModelScope & { changed: true });
+
 /** HTTP 409. Re-read/reconcile rather than automatically overwriting an external edit. */
 export interface ModelScopeConflict {
-	currentHash: string;
-	current: string[] | null;
+	error: "scope_conflict";
+	scopeHash: string;
+	enabledModels: string[] | null;
+}
+
+/** Non-conflict errors. settings_unreadable never means an absent/empty scope. */
+export interface ModelScopeError {
+	error: "read_only" | "settings_unreadable" | "invalid_scope" | "native_action_required" | "model_scope_unavailable";
 }

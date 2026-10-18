@@ -5,7 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { ModelScopeConflictError, modelScopeHash, modelScopeUpdate, writeModelScope } from "./model-scope.ts";
+import {
+	ModelScopeConflictError,
+	ModelScopeSettingsError,
+	modelScopeHash,
+	modelScopeUpdate,
+	readModelScopeValue,
+	writeModelScope,
+} from "./model-scope.ts";
 
 const lockfile = createRequire(import.meta.resolve("@earendil-works/pi-coding-agent"))("proper-lockfile") as {
 	lock(
@@ -28,6 +35,19 @@ test("scope CAS changes only enabledModels, preserving BOM, unrelated bytes, val
 	assert.deepEqual(await readdir(root), ["settings.json"]);
 });
 
+test("dangling settings symlinks are unreadable, not an absent-value retry or a replaceable file", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-scope-dangling-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const path = join(root, "settings.json");
+	await symlink(join(root, "missing-target.json"), path);
+	await assert.rejects(readModelScopeValue(path), { message: "settings unreadable", status: 503 });
+	await assert.rejects(writeModelScope(root, { enabledModels: null, expectedHash: "stale" }), { status: 503 });
+	await assert.rejects(writeModelScope(root, { enabledModels: ["test/*"], expectedHash: modelScopeHash(null) }), {
+		status: 503,
+	});
+	assert.deepEqual(await readdir(root), ["settings.json"]);
+});
+
 test("CAS detects external scope edits but ignores unrelated edits and whitespace changes", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "pilot-scope-cas-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
@@ -37,7 +57,11 @@ test("CAS detects external scope edits but ignores unrelated edits and whitespac
 	const before = await readFile(path, "utf8");
 	await assert.rejects(writeModelScope(root, { enabledModels: ["new"], expectedHash }), (error: unknown) => {
 		assert.ok(error instanceof ModelScopeConflictError);
-		assert.deepEqual(error.conflict, { currentHash: modelScopeHash(["external"]), current: ["external"] });
+		assert.deepEqual(error.conflict, {
+			error: "scope_conflict",
+			scopeHash: modelScopeHash(["external"]),
+			enabledModels: ["external"],
+		});
 		return true;
 	});
 	assert.equal(await readFile(path, "utf8"), before);
@@ -52,8 +76,8 @@ test("null removes only the global key; missing files, empty scopes, duplicate a
 	const agent = join(root, "agent");
 	await writeModelScope(agent, { enabledModels: null, expectedHash: modelScopeHash(null) });
 	await assert.rejects(stat(join(agent, "settings.json")), { code: "ENOENT" });
-	await writeModelScope(agent, { enabledModels: [], expectedHash: modelScopeHash(null) });
-	assert.deepEqual(JSON.parse(await readFile(join(agent, "settings.json"), "utf8")), { enabledModels: [] });
+	await writeModelScope(agent, { enabledModels: ["test/*"], expectedHash: modelScopeHash(null) });
+	assert.deepEqual(JSON.parse(await readFile(join(agent, "settings.json"), "utf8")), { enabledModels: ["test/*"] });
 	for (const text of [
 		'{"enabledModels":["a"],"enabledModels":["b"],"x":true}',
 		'{"x":true,"enabledModels":["a"],"enabledModels":["b"]}',
@@ -74,8 +98,9 @@ test("malformed settings are not overwritten or echoed, and existing settings sy
 	t.after(() => rm(root, { recursive: true, force: true }));
 	const path = join(root, "settings.json");
 	await writeFile(path, '{"secret": "private value", broken');
-	await assert.rejects(writeModelScope(root, { enabledModels: [], expectedHash: modelScopeHash(null) }), {
-		message: "Cannot edit malformed global settings",
+	await assert.rejects(writeModelScope(root, { enabledModels: null, expectedHash: modelScopeHash(null) }), {
+		message: "settings unreadable",
+		status: 422,
 	});
 	assert.equal(await readFile(path, "utf8"), '{"secret": "private value", broken');
 	await rm(path);
@@ -100,8 +125,9 @@ test("write lock contention yields timers, observes edits under the SDK lock, an
 		await release();
 		await assert.rejects(pending, ModelScopeConflictError);
 		release = await lockfile.lock(path, { realpath: false });
-		await assert.rejects(writeModelScope(root, { enabledModels: [], expectedHash: modelScopeHash(["external"]) }), {
-			code: "ELOCKED",
+		await assert.rejects(writeModelScope(root, { enabledModels: null, expectedHash: modelScopeHash(["external"]) }), {
+			message: "settings unreadable",
+			status: 503,
 		});
 		assert.deepEqual(JSON.parse(await readFile(path, "utf8")), { enabledModels: ["external"] });
 	} finally {
@@ -135,7 +161,8 @@ test("losing the SDK write lock fails closed before atomic replacement and clean
 		return release;
 	});
 	await assert.rejects(writeModelScope(root, { enabledModels: ["after"], expectedHash: modelScopeHash(["before"]) }), {
-		message: "Settings write lock was lost",
+		message: "settings unreadable",
+		status: 503,
 	});
 	assert.equal(await readFile(path, "utf8"), before);
 	assert.deepEqual(await readdir(root), ["settings.json"]);
@@ -143,14 +170,105 @@ test("losing the SDK write lock fails closed before atomic replacement and clean
 
 test("scope update validation bounds patterns and rejects missing fields and non-string values", () => {
 	const hash = modelScopeHash(null);
-	for (const enabledModels of [undefined, "*", [null], [""], ["\n"], ["x".repeat(513)], Array(257).fill("*")]) {
+	for (const enabledModels of [
+		undefined,
+		[],
+		"*",
+		[null],
+		[""],
+		["\n"],
+		["x".repeat(257)],
+		["é".repeat(129)],
+		Array(257).fill("*"),
+	]) {
 		assert.throws(() => modelScopeUpdate({ enabledModels, expectedHash: hash }));
 	}
 	assert.throws(() => modelScopeUpdate({ expectedHash: hash }));
-	assert.throws(() => modelScopeUpdate({ enabledModels: null, expectedHash: "bad" }));
+	assert.throws(() => modelScopeUpdate({ enabledModels: null, expectedHash: 1 }));
+	assert.deepEqual(modelScopeUpdate({ enabledModels: ["é".repeat(128)], expectedHash: hash }).enabledModels, [
+		"é".repeat(128),
+	]);
 	assert.throws(() => modelScopeUpdate({ enabledModels: null, expectedHash: hash, extra: true }));
 	assert.deepEqual(modelScopeUpdate({ enabledModels: ["unknown/*"], expectedHash: hash }), {
 		enabledModels: ["unknown/*"],
 		expectedHash: hash,
 	});
+});
+
+test("canonical hashes distinguish absent from [] and preserve array order, duplicate patterns and suffix text", () => {
+	assert.equal(modelScopeHash(null), "15dbb2c4361b809a46b847b3b6c071f3c27c096057d31c45351902b79fe39efd");
+	assert.equal(modelScopeHash([]), "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945");
+	assert.equal(
+		modelScopeHash(["test/*:high", "raw:model", "test/*:high"]),
+		"a60d0cf0df065da33bca087f16e86cd0deb79eeae9b7d0004683aeda2fb735aa",
+	);
+	assert.notEqual(modelScopeHash(["a", "b"]), modelScopeHash(["b", "a"]));
+});
+
+test("lost-ack retries are value-idempotent before CAS, without rewriting files or normalizing patterns", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-scope-retry-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const path = join(root, "settings.json");
+	assert.deepEqual(await writeModelScope(root, { enabledModels: null, expectedHash: "stale" }), {
+		changed: false,
+		scopeHash: modelScopeHash(null),
+	});
+	await assert.rejects(stat(path), { code: "ENOENT" });
+	const desired = ["test/SMALL:high", "absent/no-match", "test/SMALL:high"];
+	assert.deepEqual(await writeModelScope(root, { enabledModels: desired, expectedHash: modelScopeHash(null) }), {
+		changed: true,
+		scopeHash: modelScopeHash(desired),
+	});
+	const text = await readFile(path, "utf8");
+	const before = await stat(path);
+	assert.deepEqual(await writeModelScope(root, { enabledModels: desired, expectedHash: modelScopeHash(null) }), {
+		changed: false,
+		scopeHash: modelScopeHash(desired),
+	});
+	assert.equal((await stat(path)).ino, before.ino);
+	assert.equal((await stat(path)).mtimeMs, before.mtimeMs);
+	assert.equal(await readFile(path, "utf8"), text);
+	assert.deepEqual(JSON.parse(text).enabledModels, desired);
+	await assert.rejects(
+		writeModelScope(root, { enabledModels: [...desired].reverse().slice(1), expectedHash: "stale" }),
+		ModelScopeConflictError,
+	);
+});
+
+test("raw scope reads distinguish absence from invalid settings and never broaden scope on lock exhaustion", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-scope-read-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const path = join(root, "settings.json");
+	assert.equal(await readModelScopeValue(path), null);
+	const firstWriteLock = await lockfile.lock(path, { realpath: false });
+	try {
+		await assert.rejects(readModelScopeValue(path), { status: 503 });
+		await assert.rejects(writeModelScope(root, { enabledModels: null, expectedHash: "stale" }), { status: 503 });
+	} finally {
+		await firstWriteLock();
+	}
+	await writeFile(path, '{"theme":"keep"}');
+	assert.equal(await readModelScopeValue(path), null);
+	await writeFile(path, '{"enabledModels":[]}');
+	assert.deepEqual(await readModelScopeValue(path), []);
+	const release = await lockfile.lock(path, { realpath: false });
+	try {
+		await assert.rejects(readModelScopeValue(path), { message: "settings unreadable", status: 503 });
+	} finally {
+		await release();
+	}
+	for (const value of [
+		'{"secret":"private",broken',
+		"null",
+		"[]",
+		'{"enabledModels":null}',
+		'{"enabledModels":[1]}',
+	]) {
+		await writeFile(path, value);
+		await assert.rejects(readModelScopeValue(path), ModelScopeSettingsError);
+		await assert.rejects(writeModelScope(root, { enabledModels: null, expectedHash: modelScopeHash(null) }), {
+			status: 422,
+		});
+		assert.equal(await readFile(path, "utf8"), value);
+	}
 });

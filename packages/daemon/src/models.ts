@@ -9,18 +9,30 @@ import { stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { Tool } from "@earendil-works/pi-ai";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
-import { getAgentDir, ModelRuntime, resolveModelScopeWithDiagnostics } from "@earendil-works/pi-coding-agent";
+import {
+	CONFIG_DIR_NAME,
+	getAgentDir,
+	ModelRuntime,
+	resolveModelScopeWithDiagnostics,
+} from "@earendil-works/pi-coding-agent";
 import { installBundledAnthropicAuth } from "@pilot/kernel";
 import { installCredentialBrokerHooks } from "@pilot/kernel/credential-hooks";
-import type { ModelList, ModelOption, ModelScope, ModelScopePatternResolution } from "@pilot/protocol";
+import type {
+	ModelList,
+	ModelOption,
+	ModelScope,
+	ModelScopeCandidate,
+	ModelScopePatternResolution,
+	ModelScopeUpdateResponse,
+} from "@pilot/protocol";
 import { TITLE_CONTEXT_LIMIT } from "./chat-title.ts";
 import { compactControlNode } from "./control-compaction.ts";
 import type { ControlJob } from "./control-memory-disk.ts";
 import type { ControlLine } from "./control-view.ts";
 import { ServiceUnavailable } from "./errors.ts";
 import { compactMemory, type MemoryCompactionObserver } from "./memory-compaction.ts";
-import { modelScopeHash, modelScopeUpdate, scopePatterns, writeModelScope } from "./model-scope.ts";
-import { readModelSettings } from "./model-settings.ts";
+import { modelScopeHash, modelScopeUpdate, readModelScopeValue, writeModelScope } from "./model-scope.ts";
+import { readModelSettings, settingsPath } from "./model-settings.ts";
 import {
 	parseSlackClassification,
 	SLACK_CLASSIFICATION_SCHEMA,
@@ -238,16 +250,22 @@ export class ModelCatalog {
 	}
 
 	/** Host-local settings only. Resolution returns identifiers/codes, never runtime models or auth errors. */
-	async scope(cwd: string, writable = true): Promise<ModelScope> {
-		const [settings, available, runtime] = await Promise.all([
-			readModelSettings(cwd, this.agentDir),
-			this.available(),
-			this.getRuntime(),
-		]);
-		if (settings.drainErrors().some((entry) => entry.scope === "global"))
-			throw new Error("Cannot read malformed global model settings");
-		const enabledModels = scopePatterns(settings.getGlobalSettings().enabledModels);
-		const projectOverride = scopePatterns(settings.getProjectSettings().enabledModels);
+	async scope(projectCwd?: string): Promise<ModelScope> {
+		// Read global settings first: broken settings never fall back to all or get masked by auth errors.
+		const enabledModels = await readModelScopeValue(join(settingsPath(this.agentDir), "settings.json"));
+		return this.scopeSnapshot(enabledModels, projectCwd);
+	}
+
+	private async scopeSnapshot(enabledModels: string[] | null, projectCwd?: string): Promise<ModelScope> {
+		const project =
+			projectCwd === undefined
+				? {}
+				: {
+						projectOverride: await readModelScopeValue(
+							join(settingsPath(projectCwd), CONFIG_DIR_NAME, "settings.json"),
+						),
+					};
+		const [available, runtime] = await Promise.all([this.available(), this.getRuntime()]);
 		const resolve = async (patterns: string[] | null): Promise<ModelScopePatternResolution[]> => {
 			if (!patterns?.length) return [];
 			const source = (models: readonly ChatModel[]) => ({ getAvailable: async () => models }) as ModelRuntime;
@@ -255,37 +273,39 @@ export class ModelCatalog {
 			const results: ModelScopePatternResolution[] = [];
 			for (const pattern of patterns) {
 				const resolved = await resolveModelScopeWithDiagnostics([pattern], source(available));
-				const matchedModelIds = resolved.scopedModels.map(({ model }) => `${model.provider}/${model.id}`);
-				let unresolvedReason: ModelScopePatternResolution["unresolvedReason"] = null;
-				if (!matchedModelIds.length) {
+				const matches = resolved.scopedModels.map(({ model }) => `${model.provider}/${model.id}`);
+				let unresolved: ModelScopePatternResolution["unresolved"];
+				if (!matches.length) {
 					const known = await resolveModelScopeWithDiagnostics([pattern], source(runtime.getModelsOfType("chat")));
-					unresolvedReason = known.scopedModels.length ? "provider-not-logged-in" : "unknown";
+					unresolved = known.scopedModels.length ? "provider-not-logged-in" : "unknown";
 				}
 				results.push({
 					pattern,
-					matchedModelIds,
-					unresolvedReason,
-					diagnostics: resolved.diagnostics.map((diagnostic) => diagnostic.code),
+					matches,
+					...(unresolved ? { unresolved } : {}),
 				});
 			}
 			return results;
 		};
 		return {
 			enabledModels,
-			contentHash: modelScopeHash(enabledModels),
-			projectOverride,
+			allModels: !enabledModels?.length,
+			scopeHash: modelScopeHash(enabledModels),
 			resolution: await resolve(enabledModels),
-			projectResolution: projectOverride === null ? null : await resolve(projectOverride),
-			writable,
+			candidates: scopeCandidates(available),
+			...project,
 		};
 	}
 
-	async updateScope(cwd: string, input: unknown): Promise<ModelScope> {
-		await writeModelScope(this.agentDir, modelScopeUpdate(input));
+	async updateScope(projectCwd: string | undefined, input: unknown): Promise<ModelScopeUpdateResponse> {
+		const request = modelScopeUpdate(input);
+		const result = await writeModelScope(this.agentDir, request);
+		if (!result.changed) return { changed: false, scopeHash: result.scopeHash };
 		// Settled lists already re-read settings. Detach pre-write in-flight snapshots too, so a new
 		// request cannot join one of them. Do not refresh model runtimes or mutate active sessions.
 		this.lists.clear();
-		return this.scope(cwd);
+		// Reply with the committed value, not a later external edit observed during model resolution.
+		return { ...(await this.scopeSnapshot(request.enabledModels, projectCwd)), changed: true };
 	}
 
 	private pendingList(cwd: string) {
@@ -461,6 +481,23 @@ export class ModelCatalog {
 }
 
 type ChatModel = Awaited<ReturnType<ModelRuntime["getAvailable"]>>[number];
+
+/** Bounded unscoped picker metadata. Never leak runtime model objects, endpoints or credential fields. */
+function scopeCandidates(models: readonly ChatModel[]): ModelScopeCandidate[] {
+	const result: ModelScopeCandidate[] = [];
+	const seen = new Set<string>();
+	let bytes = 2;
+	for (const model of models) {
+		const candidate = { id: `${model.provider}/${model.id}`, provider: model.provider, name: model.name || model.id };
+		if (seen.has(candidate.id)) continue;
+		const size = Buffer.byteLength(JSON.stringify(candidate)) + (result.length ? 1 : 0);
+		if (result.length >= 2048 || bytes + size > 1024 * 1024) break;
+		seen.add(candidate.id);
+		result.push(candidate);
+		bytes += size;
+	}
+	return result;
+}
 
 /** Changes when a file is replaced, rewritten or removed. Unreadable files fall back to the backstop TTL. */
 async function fileSignature(path: string): Promise<string> {

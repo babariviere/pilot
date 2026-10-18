@@ -37,39 +37,64 @@ mission's host. Shared task placement is a separate, explicit operation, not a w
 
 ## Host-local model scope API
 
-Native settings/sync clients can read `GET /api/model-scope?cwd=…` (or `?projectId=…`,
-with the same host-local path/project rules as `/api/models`). The `ModelScope` response includes
-global `enabledModels`, its `contentHash`, read-only `projectOverride`, `resolution` for global
-patterns, `projectResolution` for project patterns, and `writable`. `null` global scope means the
-key is absent and all authenticated models are available; `[]` also means all, matching Pi.
-`projectOverride: null` means no override. An empty project array overrides the global scope with all.
+Native settings/sync clients use `GET /api/model-scope` for the host's **global** Pi
+`enabledModels`. The `ModelScope` DTO returns `enabledModels: string[] | null`, `allModels`,
+`scopeHash`, `resolution` and `candidates`. A missing file/key returns null; Pi's existing `[]`
+is preserved on read. Both mean all authenticated models (`allModels: true`, empty resolution).
 
-Each `ModelScopePatternResolution` preserves its input `pattern`, with `matchedModelIds` as
-`provider/modelId`, Pi diagnostic codes, and nullable `unresolvedReason`: `unknown` or
-`provider-not-logged-in` (known model, unavailable on this host, not proof of invalid credentials).
-No model objects, provider errors, credential fields or unrelated settings are returned.
+`resolution` contains one `ModelScopePatternResolution` per **global** pattern, in order:
+`{pattern, matches: ["provider/modelId"], unresolved?: "unknown" | "provider-not-logged-in"}`.
+A known but unavailable model is not proof of invalid credentials. Literal pattern text, thinking
+suffixes, order and duplicates are preserved; unresolved patterns are never dropped or substituted.
+`candidates` contains authenticated models **regardless of scope**, as `ModelScopeCandidate`
+(`{id, provider, name}`); it includes the first 2048 unique entries, capped at 1 MiB of encoded JSON.
+Only these three metadata fields are exposed, never model objects, provider errors, keys or endpoints.
+
+Optional `?projectId=…` adds `projectOverride: string[] | null`, read-only metadata from that
+project's `.pi/settings.json`. `?cwd=…` offers the same explicit host-local directory lookup.
+Neither changes the global hash, candidates or resolution. Without either query, project settings
+are not read and `projectOverride` is omitted. There is no project write path; `/api/models`
+continues to apply the effective global/project scope.
 
 `PUT /api/model-scope` accepts `ModelScopeUpdateRequest`:
 `{ "enabledModels": ["provider/model:high", "other/*"], "expectedHash": "…" }`.
-It requires the existing native host-action capability in `x-pilot-github-capability` (historical
-name), read from `github-app-capability` over the verified SSH/local-filesystem channel already
-used for setup/import. Never expose that capability to chats or infer consent from a message.
-Loopback access alone is not write authorization. This endpoint is not an agent/pilot tool.
+Null removes the global key; arrays must be nonempty, at most 256 patterns, at most **256 UTF-8
+bytes per pattern**. Empty/whitespace-only patterns and control characters are rejected. `[]` is
+always HTTP 400 `{error:"invalid_scope"}`, even if the file already contains `[]`. No normalization
+or deduplication occurs. The body limit is 160 KiB.
 
-The hash is lowercase SHA-256 of compact `JSON.stringify(enabledModels)`, including array order,
-not of the whole file. At most 256 non-empty patterns of 512 UTF-16 code units each are accepted
-(no control characters; request body limit 160 KiB). Patterns remain verbatim, even when unresolved.
-A successful PUT returns `ModelScope`. HTTP 409 returns `ModelScopeConflict`:
-`{ "currentHash": "…", "current": ["externally-edited/pattern"] }` (or `current: null`).
-Re-read/reconcile a conflict; do not blindly overwrite Pi's `/scoped-models` edits. Other errors use
-`{ "error": "…" }`; an uncertain/lost response also requires re-reading before retrying.
+`scopeHash` is lowercase SHA-256 of compact JSON encoded as UTF-8: `JSON.stringify(enabledModels)`
+for an array, or the fixed JSON string token `"absent"` (including its two quotes) for an absent key.
+It covers neither other settings nor project settings. Array order, duplicates and literal text
+matter; null and `[]` have distinct hashes. Treat the returned hash as opaque.
 
-Only the global `enabledModels` member in the host's Pi agent-directory `settings.json` changes,
-under Pi's own lock with an atomic replacement. `null` removes that member. Other members' bytes,
-including formatting/BOM, remain intact; project settings are never written. `/api/models` reads
-the new scope without changing running chats' models. Read-only hosts (`PILOT_MODEL_SCOPE_READ_ONLY=1`)
-deny PUT with 403; missing native authorization support returns 503. Malformed settings are not
-overwritten. This is only the per-host API; it does not implement a model-selection UI or sync fan-out.
+The `ModelScopeUpdateResponse` is value-idempotent:
+- If the current value already equals the requested literal value, return HTTP 200
+  `{changed:false, scopeHash}`, **even with a stale expectedHash**, without writing or model resolution.
+- Otherwise a stale hash returns HTTP 409 `ModelScopeConflict`:
+  `{error:"scope_conflict", scopeHash, enabledModels: current}`. Re-read/reconcile, never blindly overwrite.
+- Otherwise change only the global key under Pi's SDK lock with atomic replacement, invalidate pending
+  model lists, and return HTTP 200 `{changed:true, ...ModelScope}`.
+A lost response can be reconciled by GET: literal readback equal to the desired value counts as applied.
+Resolution failure after a committed write can return 503; re-read or retry that same desired value.
+
+Writes require the existing native host-action capability in `x-pilot-github-capability` (historical
+name), read with `GitHubNativeAccess.read` over verified SSH/local filesystem. Never expose it to
+chats, use chat grants as authority, or infer consent from a message. This is not an agent/pilot tool.
+Loopback access alone does not authorize writes. First-contact consent and sync fencing belong to
+the native client, not this API.
+
+`ModelScopeError` contains a typed `error`: HTTP 403 `read_only` for hosts configured with
+`PILOT_MODEL_SCOPE_READ_ONLY=1`, HTTP 403 `native_action_required` for missing/invalid native
+capability, HTTP 400 `invalid_scope` for invalid values, HTTP 422 `settings_unreadable` for malformed
+settings, HTTP 503 `settings_unreadable` for lock/I/O failures, or HTTP 503 `model_scope_unavailable`
+for unavailable native authorization/model resolution. Bad settings or an unreadable lock are never
+treated as absent and never overwritten. Older daemons without this route return 404; clients should
+offer a runtime update, not silently fall back to another host or settings source.
+
+Unrelated member bytes (including formatting/BOM), permissions, settings symlinks, defaults
+(`defaultModel`/`defaultProvider`) and project settings remain unchanged. Running chats retain
+their models. This API includes neither the model-selection UI nor multi-host sync fan-out.
 
 ## Machine information
 
