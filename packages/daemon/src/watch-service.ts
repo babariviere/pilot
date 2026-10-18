@@ -46,9 +46,14 @@ export class WatchService {
 	ready(): Promise<void> {
 		return this.expiryUpdate ?? Promise.resolve();
 	}
+	/** Effective executor/archive policy, installed before sources or notice admission. */
+	async freezeLegacy(): Promise<void> {
+		this.bindSink(undefined);
+		await this.rpc("freezeLegacy");
+	}
 	private removalAudit?: (removal: WatchRemoval) => Promise<void>;
 	private auditing?: Promise<void>;
-	constructor(path: string) {
+	constructor(path: string, frozen = false) {
 		this.dispatcher = new NoticeDispatcher({
 			deadlines: async (now) => {
 				await this.rpc("activity", { busy: !!this.sink && !this.sink.canSend(), now });
@@ -69,7 +74,7 @@ export class WatchService {
 				}
 			},
 		});
-		this.worker = new Worker(new URL("./watch-worker.ts", import.meta.url), { workerData: { path } });
+		this.worker = new Worker(new URL("./watch-worker.ts", import.meta.url), { workerData: { path, frozen } });
 		this.worker.on("message", (reply: { id: number; value?: unknown; error?: string }) => {
 			const call = this.pending.get(reply.id);
 			if (!call) return;
