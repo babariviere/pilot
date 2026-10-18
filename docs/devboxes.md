@@ -35,6 +35,16 @@ or switch the entire app to another server.
 An unsent draft keeps its destination when you return Home. Starting from a mission inherits the
 mission's host. Shared task placement is a separate, explicit operation, not a way to move a running chat.
 
+If a devbox chat start needs confirmation, **New Local chat**, **⌘N**, or choosing another host opens
+an independent draft. The original request and any newer unsent text/images stay with that devbox;
+select it again to check or open the original chat. Switching hosts never resends the pending start.
+
+For an older build with a disabled host selector, fully quit the app with **⌘Q** and, from a source
+checkout, run `python3 scripts/recover-local-chat-draft.py`. The optional helper checks the saved
+identity and original outbox, makes an exact private backup, and detaches only the new-chat composer
+to Local. It retains its text/images and other drafts, never changes or resends the remote request,
+and refuses unknown formats or a running app. Relaunch and choose the Local project afterward.
+
 ## Host-local model scope API
 
 Native settings/sync clients use `GET /api/model-scope` for the host's **global** Pi

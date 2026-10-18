@@ -8,6 +8,7 @@ final class NewSessionForm: ObservableObject {
     @Published var executionHost: HostRef? { didSet { onDraftChanged?() } }
     @Published var pendingOperationId: String? { didSet { onDraftChanged?() } }
     @Published var checkingStart = false
+    var startCheckId: UUID?
     @Published var startRecoveryMessage: String?
     let branches = BranchSelectorState()
     private(set) var revision = UUID()
@@ -34,6 +35,8 @@ final class NewSessionForm: ObservableObject {
         !message.isEmpty || !attachments.items.isEmpty || pendingBaseBranch != nil || mission != nil || trackedItem != nil
             || pendingOperationId != nil || busy
     }
+
+    var canChooseExecutionHost: Bool { !busy && mission == nil && trackedItem == nil }
 
     func resetChatContext() {
         mission = nil
@@ -166,15 +169,30 @@ struct HostedChatStartNotice: View {
             Spacer(minLength: 8)
             if case let .receipt(receipt)? = delivery, receipt.state == .accepted {
                 Button("Open chat") { Task { await app.checkHostedChat(operation, form: form, openConfirmed: true) } }
+                    .disabled(form.checkingStart)
             } else {
                 Button(form.checkingStart ? "Checking…" : "Check") { Task { await app.checkHostedChat(operation, form: form) } }
+                    .disabled(form.checkingStart)
                 if case .unknown? = delivery {
                     Button("Retry original start…", action: retryOriginal)
+                        .disabled(form.checkingStart)
                 }
             }
         }
-        .disabled(form.busy || form.checkingStart)
+        .disabled(form.busy)
         .padding(8)
+    }
+}
+
+/// Shared by the real recovery row and its isolated native-button regression fixture.
+struct IndependentLocalChatButton: View {
+    @EnvironmentObject private var app: AppModel
+    @ObservedObject var form: NewSessionForm
+
+    var body: some View {
+        Button("New Local chat") { app.newLocalChatWhileRemoteStartPending() }
+            .disabled(form.busy)
+            .help("Keep the devbox request and its draft, and open an independent Local draft.")
     }
 }
 
@@ -235,10 +253,7 @@ struct TaskComposer: View {
 
     private var destinationHost: HostRef? { form.executionHost ?? app.localHost }
     private var pendingCreate: DurableOperation? {
-        if let id = form.pendingOperationId, let operation = hosts.pendingOperations[id] { return operation }
-        return hosts.pendingOperations.values.first {
-            $0.destination == destinationHost && ($0.kind == "chat-create" || $0.kind == "chat-create-attached")
-        }
+        app.pendingChatCreate(on: destinationHost, operationId: form.pendingOperationId)
     }
     private var remote: Bool { destinationHost != nil && destinationHost != app.localHost }
     private var client: PilotClient { destinationHost.map { hosts.presentationClient($0) } ?? localClient }
@@ -259,7 +274,7 @@ struct TaskComposer: View {
                     }
                 } label: {
                     ChipLabel(title: destinationHost.map { HostViewContext(host: $0, hosts: hosts).name } ?? "Local", icon: PilotIcon.terminal)
-                }.chipMenuStyle().disabled(form.busy || pendingCreate != nil || form.mission != nil || form.trackedItem != nil)
+                }.chipMenuStyle().disabled(!form.canChooseExecutionHost)
                 TabButton(title: "New chat", selected: form.tab == .newTask) { form.tab = .newTask }
                 TabButton(title: "Running", count: client.workingCount, selected: form.tab == .running) { form.tab = .running }
                 Spacer()
@@ -327,6 +342,9 @@ struct TaskComposer: View {
         VStack(alignment: .leading, spacing: 0) {
             if let operation = pendingCreate {
                 HostedChatStartNotice(operation: operation, hosts: hosts, form: form) { retryingCreate = operation }
+                if operation.destination != app.localHost, app.localHost != nil {
+                    IndependentLocalChatButton(form: form).padding(.horizontal, 12).padding(.bottom, 8)
+                }
             }
             if let error = form.error {
                 InlineProblem(error).padding(.horizontal, 12).padding(.bottom, 8)
@@ -452,7 +470,7 @@ struct TaskComposer: View {
     }
 
     private var canStart: Bool {
-        pendingCreate == nil && !form.checkingStart && form.canStart(in: project, branches: branches)
+        pendingCreate == nil && form.pendingOperationId == nil && !form.checkingStart && form.canStart(in: project, branches: branches)
             && (!remote || (project != nil && destinationHost.map { hosts.available.contains($0) } == true))
     }
 
@@ -567,14 +585,7 @@ struct TaskComposer: View {
     }
 
     private func chooseHost(_ host: HostRef) {
-        guard destinationHost != host, pendingCreate == nil else { return }
-        form.invalidatePendingSubmission()
-        form.executionHost = host
-        form.model = ""; form.models = ModelList(models: [])
-        form.folder = ""; form.workspace = nil; form.pendingBaseBranch = nil
-        form.branches.restoreSelection(scope: nil, branch: nil)
-        app.draftProjectId = nil
-        form.error = hosts.available.contains(host) ? nil : "Disconnected. Reconnect to start a chat here."
+        app.chooseNewChatHost(host)
     }
 
     private func consumeDraft() {
@@ -648,7 +659,7 @@ struct TaskComposer: View {
                         ? FeatureEvent.outcome(.devboxChat, .failure, reason: .unknown)
                         : FeatureEvent.outcome(.devboxChat, .unavailable, reason: .disconnected)
                     if let event { PilotTelemetry.shared.recordFeature(event) }
-                    form.error = error.localizedDescription
+                    if form.revision == revision { form.error = error.localizedDescription }
                 }
             }
             return
@@ -658,10 +669,8 @@ struct TaskComposer: View {
         Task {
             defer { form.busy = false }
             do {
-                let session = try await app.client.spawn(request)
+                _ = try await app.createLocalChat(request, form: form, revision: revision, tracked: tracked)
                 if let id = request.projectId { lastProjectId = id }
-                if let tracked { await app.bindTrackedItem(tracked.itemId, label: tracked.label, sessionId: session.id) }
-                if form.completeSubmission(revision: revision) { app.selectedSessionId = session.id }
             } catch {
                 if form.revision == revision { form.error = error.localizedDescription }
             }
