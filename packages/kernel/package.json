@@ -6,6 +6,7 @@
 	"exports": {
 		"./control-context": "./src/control-context.ts",
 		"./review-boundary": "./src/review-boundary.ts",
+		"./review-history": "./src/review-history.ts",
 		"./shared-model-catalog": "./src/shared-model-catalog.ts",
 		"./bundled-extensions": "./src/bundled-extensions.ts",
 		"./credential-rpc": "./src/credential-rpc.ts",

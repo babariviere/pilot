@@ -83,7 +83,7 @@ Cancellation/deadline errors close the boundary, suppress late output and keep u
 Host erasure/expiry/store failure closes synthetic contexts and clears their in-memory copies.
 
 Not implemented or qualified: a real provider/Harness bridge, actual tokenizer/context-window and
-provider-output enforcement, model/profile availability, trusted context resolution, acquisition,
+provider-output enforcement, model/profile availability, trusted context resolution, production acquisition,
 findings publication, UI, host lifecycle scheduling and cross-process erasure notifications. The
 daemon remains the sole store owner. Do not wire the synthetic seam to real accounts, enable entry
 points or infer semantic quality from these permission tests. No product calls/evaluation ran.
@@ -166,3 +166,68 @@ fork access, account-switch detection, rate limits and cancellation with those a
 Do not add write scopes, default-branch fallbacks or execution as a workaround. No such probe, live
 acquisition, real provider/evaluation call or activation has run. Publishing this capture code does
 not authorize live access, review submission, provider/evaluation spend or production activation.
+
+## Committed session capture (disabled)
+
+`kernel/review-history.ts` and `daemon/critical-review-session.ts` add an internal transcript-only
+capture seam, exercised only with synthetic temporary SQLite stores. No server, SessionManager,
+agent tool, app entry point or production acquisition adapter calls it. It never starts/resumes a
+Harness, acquires the author writer lease, changes the active attempt, migrates/checkpoints storage,
+wakes an author workspace or reads queued/held/native input, streaming generation or tool progress.
+SQLite may maintain WAL read-coordination sidecars, as with the existing cold reader.
+
+The host supplies the exact attempt and inclusive committed entry boundary (zero means explicitly
+empty). Missing attempts/boundaries remain unavailable, never the active/latest/root fallback.
+One read-only SQLite transaction pins schema, ancestry, entries and receipts per source. Raw immutable
+entries include retained pre-compaction originals, summaries, reset markers, context edits, tool
+calls/results and child/artifact references. Fork ancestry inherits only its inclusive parent prefix;
+abandoned suffixes and newer entries are excluded. Mutable submission receipts are explicitly labeled
+as capture-revision observations, **not** reconstructed receipt state at an earlier entry boundary.
+
+SDK `scanEntries`/`scanSubmissions` hydrate whole JSON rows before byte limits can be imposed, and
+ordinary cold snapshots intentionally hide pre-compaction history. This export instead uses a dedicated
+off-thread raw reader, qualified against the default pi-durable SQLite schema v1 and retained SDK fork
+scans. Future schemas fail closed pending requalification. Metadata pages contain at most 64 rows;
+`octet_length` checks UTF-8 bytes without hydrating oversized rows; payload reads are at most 50 KiB,
+records/blobs 8 MiB, and aggregate hydrated/exported transcript data 20 MiB. Work is capped at 40,000
+records, 41,024 reads, 64 fork ancestors, 16 explicit session sources, two concurrent captures and a
+60-second deadline. The aggregate export reserves 256 KiB for bounded coverage reports. Hashing and
+history parsing run in a cancellable, memory-limited worker; vault reads retain their existing 50 KiB
+page cap. No history is materialized on a daemon refresh/summary path.
+
+Every source requires an explicit host lineage assertion (root, unavailable, or accepted continuation
+with the next selected predecessor and an opaque host authorization reference). Transcript prose,
+handoff summaries, child references and request-ID prefixes cannot select another store or grant
+access. Every selected predecessor enters `sourceIds` for linked erasure. Sources have independent
+SQLite revisions, not a cross-store atomic snapshot. A future authenticated host adapter must resolve
+same-host/project access, stable deletion identities and accepted lineage before invoking this seam.
+
+Sealed reports disclose compaction, unknown pre-compaction completeness, forks/rewinds, resets/context
+edits, original-request/input and submission gaps, legacy origin hints, unavailable sources and limits.
+Numeric entry-ID gaps alone do not prove missing history. Child histories and artifact contents are
+not acquired: only their committed boundary/reference records survive here. Unavailable continuation
+lineage is retained as unknown. This slice always marks the manifest incomplete via an unselected
+uncaptured-scope marker; its sealed coverage report explains the scope rather than implying a complete
+session/code review. Vault secret/unsafe/quota omissions still apply independently to every selection.
+
+Existing submissions do **not** retain verifiable original pre-expansion input. Unknown origins,
+`native:user:` and typed-looking IDs are not authenticated user intent. The pure `originalInputEvidence`
+helper defines a bounded future admission record (original host-received text, request ID and prepared
+text digest); no production writer is enabled. Export includes such a record only when it matches a
+committed input/submission inside the boundary, suppresses conflicting records and excludes unmatched
+or queued provenance. Even a match is labeled recorded, not authenticated, and never approval. Trusted
+structured app actions remain the only consent/authorization source. Future actual recording and
+authentication, plus legacy reconstruction (where possible), remain integration work.
+
+Cancellation or private-store invalidation terminates acquisition and checks cancellation during vault
+staging. Sealing's durable `put` is the cancellation linearization point: an already-started final put
+may finish and retains its durable result. Source tombstones still prevent sealed reads or resurrection.
+No automatic retry/reacquisition occurs after interruption. The vault's optional capture abort signal
+is additive; existing callers are unchanged.
+
+Focused fixtures cover compaction/fork/context-edit/reset history, retained/missing originals,
+continuation selection, concurrent writer commits, cancellation, linked erasure, secret omissions,
+multibyte pages, unsupported schemas and a 20,001-entry byte-limit case. These are storage/boundary
+checks, not live data acquisition, model quality evaluation, a GUI performance measurement or rollout
+qualification. Code/tree/verification capture, child/artifact content acquisition, production provenance
+recording, lifecycle wiring and all user-facing activation remain outside this slice.
