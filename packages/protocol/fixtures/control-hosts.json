@@ -1553,7 +1553,9 @@
 					"pendingDecisions": [],
 					"next": {
 						"watches": [],
-						"total": 0
+						"total": 0,
+						"followUps": [],
+						"followUpsTotal": 0
 					},
 					"totals": {
 						"projects": 0,
@@ -1599,7 +1601,9 @@
 							"replicaAgeMs": 100
 						}
 					],
-					"replicaMissions": []
+					"replicaMissions": [],
+					"authorizationNeeded": [],
+					"authorizationNeededTotal": 0
 				},
 				"truncated": false,
 				"revision": 1
@@ -1631,7 +1635,9 @@
 					"pendingDecisions": [],
 					"next": {
 						"watches": [],
-						"total": 0
+						"total": 0,
+						"followUps": [],
+						"followUpsTotal": 0
 					},
 					"totals": {
 						"projects": 0,
@@ -1666,7 +1672,9 @@
 							"proposalState": "conflict"
 						}
 					],
-					"replicaMissions": []
+					"replicaMissions": [],
+					"authorizationNeeded": [],
+					"authorizationNeededTotal": 0
 				},
 				"truncated": false,
 				"revision": 1
@@ -3030,7 +3038,9 @@
 		"pendingDecisions": [],
 		"next": {
 			"watches": [],
-			"total": 0
+			"total": 0,
+			"followUps": [],
+			"followUpsTotal": 0
 		},
 		"totals": {
 			"projects": 0,
@@ -3158,7 +3168,9 @@
 				"availability": "unknown",
 				"snapshotAgeMs": null
 			}
-		]
+		],
+		"authorizationNeeded": [],
+		"authorizationNeededTotal": 0
 	},
 	"invalidations": [
 		{
@@ -3906,7 +3918,9 @@
 						"pendingDecisions": [],
 						"next": {
 							"watches": [],
-							"total": 0
+							"total": 0,
+							"followUps": [],
+							"followUpsTotal": 0
 						},
 						"totals": {
 							"projects": 0,
@@ -3952,7 +3966,9 @@
 								"replicaAgeMs": 100
 							}
 						],
-						"replicaMissions": []
+						"replicaMissions": [],
+						"authorizationNeeded": [],
+						"authorizationNeededTotal": 0
 					},
 					"truncated": false,
 					"revision": 1
@@ -3987,7 +4003,9 @@
 						"pendingDecisions": [],
 						"next": {
 							"watches": [],
-							"total": 0
+							"total": 0,
+							"followUps": [],
+							"followUpsTotal": 0
 						},
 						"totals": {
 							"projects": 0,
@@ -4022,7 +4040,9 @@
 								"proposalState": "conflict"
 							}
 						],
-						"replicaMissions": []
+						"replicaMissions": [],
+						"authorizationNeeded": [],
+						"authorizationNeededTotal": 0
 					},
 					"truncated": false,
 					"revision": 1
@@ -4923,7 +4943,9 @@
 							"pendingDecisions": [],
 							"next": {
 								"watches": [],
-								"total": 0
+								"total": 0,
+								"followUps": [],
+								"followUpsTotal": 0
 							},
 							"totals": {
 								"projects": 0,
@@ -4958,7 +4980,9 @@
 									"proposalState": "conflict"
 								}
 							],
-							"replicaMissions": []
+							"replicaMissions": [],
+							"authorizationNeeded": [],
+							"authorizationNeededTotal": 0
 						},
 						"truncated": false,
 						"revision": 1
@@ -5000,7 +5024,9 @@
 							"pendingDecisions": [],
 							"next": {
 								"watches": [],
-								"total": 0
+								"total": 0,
+								"followUps": [],
+								"followUpsTotal": 0
 							},
 							"totals": {
 								"projects": 0,
@@ -5035,7 +5061,9 @@
 									"proposalState": "conflict"
 								}
 							],
-							"replicaMissions": []
+							"replicaMissions": [],
+							"authorizationNeeded": [],
+							"authorizationNeededTotal": 0
 						},
 						"truncated": false,
 						"revision": 1
@@ -5107,7 +5135,9 @@
 							"pendingDecisions": [],
 							"next": {
 								"watches": [],
-								"total": 0
+								"total": 0,
+								"followUps": [],
+								"followUpsTotal": 0
 							},
 							"totals": {
 								"projects": 0,
@@ -5142,7 +5172,9 @@
 									"proposalState": "conflict"
 								}
 							],
-							"replicaMissions": []
+							"replicaMissions": [],
+							"authorizationNeeded": [],
+							"authorizationNeededTotal": 0
 						},
 						"truncated": false,
 						"revision": 1
@@ -5184,7 +5216,9 @@
 							"pendingDecisions": [],
 							"next": {
 								"watches": [],
-								"total": 0
+								"total": 0,
+								"followUps": [],
+								"followUpsTotal": 0
 							},
 							"totals": {
 								"projects": 0,
@@ -5219,7 +5253,9 @@
 									"proposalState": "conflict"
 								}
 							],
-							"replicaMissions": []
+							"replicaMissions": [],
+							"authorizationNeeded": [],
+							"authorizationNeededTotal": 0
 						},
 						"truncated": false,
 						"revision": 1
@@ -7159,7 +7195,9 @@
 				"pendingDecisions": [],
 				"next": {
 					"watches": [],
-					"total": 0
+					"total": 0,
+					"followUps": [],
+					"followUpsTotal": 0
 				},
 				"totals": {
 					"projects": 0,
@@ -7176,7 +7214,9 @@
 				},
 				"truncated": false,
 				"sharedTasks": [],
-				"replicaMissions": []
+				"replicaMissions": [],
+				"authorizationNeeded": [],
+				"authorizationNeededTotal": 0
 			},
 			"truncated": false
 		},
@@ -7203,7 +7243,9 @@
 				"pendingDecisions": [],
 				"next": {
 					"watches": [],
-					"total": 0
+					"total": 0,
+					"followUps": [],
+					"followUpsTotal": 0
 				},
 				"totals": {
 					"projects": 0,
@@ -7255,7 +7297,9 @@
 						"consistency": "committed",
 						"replicaAgeMs": null
 					}
-				]
+				],
+				"authorizationNeeded": [],
+				"authorizationNeededTotal": 0
 			},
 			"truncated": false
 		}
@@ -7370,7 +7414,9 @@
 		"pendingDecisions": [],
 		"next": {
 			"watches": [],
-			"total": 0
+			"total": 0,
+			"followUps": [],
+			"followUpsTotal": 0
 		},
 		"totals": {
 			"projects": 0,
@@ -7499,6 +7545,8 @@
 					}
 				]
 			}
-		]
+		],
+		"authorizationNeeded": [],
+		"authorizationNeededTotal": 0
 	}
 }

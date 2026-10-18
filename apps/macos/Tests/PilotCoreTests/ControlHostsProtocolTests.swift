@@ -331,6 +331,8 @@ struct ControlHostsProtocolTests {
         #expect(snapshots[0].snapshot.dashboard.sharedTasks?.first?.grantState == "accepted")
         #expect(snapshots[1].snapshot.dashboard.sharedTasks?.first?.consistency == "provisional")
         #expect(snapshots[0].snapshot.dashboard.totals.sharedTasks == 2)
+        #expect(snapshots[0].snapshot.dashboard.next.followUps?.isEmpty == true)
+        #expect(snapshots[0].snapshot.dashboard.authorizationNeeded?.isEmpty == true)
         #expect(snapshots[1].snapshot.dashboard.totals.sharedTasks == 2)
         #expect(snapshots[0].next != nil)
         #expect(snapshots[1].next == nil)

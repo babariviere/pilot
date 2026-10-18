@@ -381,6 +381,10 @@ test("remote journal and frozen status pages round trip without losing source, c
 	assert.equal(pages[0].snapshot.dashboard.sharedTasks[0].grantState, "accepted");
 	assert.equal(pages[1].snapshot.dashboard.sharedTasks[0].consistency, "provisional");
 	for (const { snapshot } of pages) {
+		assert.deepEqual(snapshot.dashboard.next.followUps, []);
+		assert.equal(snapshot.dashboard.next.followUpsTotal, 0);
+		assert.deepEqual(snapshot.dashboard.authorizationNeeded, []);
+		assert.equal(snapshot.dashboard.authorizationNeededTotal, 0);
 		assert.equal("missionTasks" in snapshot, false);
 		assert.equal("missionTasksTotal" in snapshot, false);
 		assert.equal(snapshot.dashboard.totals.replicaMissions, 0);
