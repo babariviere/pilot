@@ -126,7 +126,7 @@ live in the selector's menu; folders are headings there and on Home, never a sid
 
 The Control chat has its own fixed row under the project selector, without a header: its antenna symbol before the
 title and "All projects" as its line, never Ask, a branch or a pin mark. It never scrolls with the list and shows in
-every scope; opening it from a focused project keeps the scope. Arrow keys and J/K reach it as the list's first row.
+every scope; opening it from a focused project keeps the scope. Arrow keys reach it as the list's first row.
 It offers no pin, archive or mission actions. Its window subtitle is "All projects" and its transcript opens
 with a one-sentence header on what it can see and do; the Ask badge and the Build-handoff row stay hidden.
 Its inspector adds a Watching pane: active watches (target, "When … · Once/Every time", the saved note) with Cancel
@@ -164,11 +164,13 @@ stays first. The highlighted list row's actions sit in their own labeled group, 
 Keyboard navigation (`KeyboardNavigation.swift`) has one owner at a time. The window has four regions, in ⌃⇥
 order: sidebar, page, composer and inspector, skipping those not on screen. A region marks itself with
 `keyboardRegion(_:onFocus:)`, and a page's main list takes the page's focus with `keyboardFocusHandler`.
-Plain-letter keys (G sequences, J/K, ?) work only outside text, IME composition, terminals and web content;
-`KeyboardInputGuard` reads the AppKit first responder to tell. Only ⌃⇥, ⌃⇧⇥ and ⌘L, plus ⌘K and ⌘J from a
-terminal or artifact, are read before the focused view. Every other shortcut is a menu key equivalent, so a
-focused view keeps its own first. Highlight, focus and editing stay distinct: moving through a list never opens,
-edits or submits.
+There are no plain-letter shortcuts, key sequences or pending-key modes: letters, digits and IME input always reach
+the focused view, and destinations live in the Go menu and ⌘K. `KeyboardInputGuard` reads the AppKit first
+responder to tell text, terminal and web content from browsing. Only ⌃⇥, ⌃⇧⇥ and ⌘L, plus ⌘K and ⌘J from a
+terminal or artifact, are read before the focused view; they are also the way out of embedded content. Every other
+shortcut is a menu key equivalent, so a focused view keeps its own first. Highlight, focus and editing stay
+distinct: moving through a list never opens, edits or submits, and row actions such as editing a title or message
+are buttons, context menus and ⌘K entries, not letters.
 Long pages use `keyboardList()` on their column and `keyboardListItem(_:target:activate:)` on rows (`KeyboardList.swift`):
 one focus stop, Return for the row's click action, and the highlight kept by row id through refreshes (the nearest
 row takes over when it leaves). Arrowing through sidebar chats keeps focus in the sidebar; the composer of the chat

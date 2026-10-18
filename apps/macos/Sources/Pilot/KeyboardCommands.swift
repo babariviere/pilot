@@ -29,18 +29,7 @@ extension AppModel {
             guard canToggleTerminal else { return false }
             toggleInspector(.terminal)
             return true
-        case let .go(letter):
-            if let destination = GoDestination(key: letter), availableGoDestinations.contains(destination) {
-                go(to: destination)
-                // The Control chat is for typing to: its composer takes focus (see go(to:)).
-                if destination != .control { keyboard.focusAfterNavigation(.content) }
-            }
-            return true
-        case .showShortcuts:
-            guard let openKeyboardShortcutsAction else { return false }
-            openKeyboardShortcutsAction()
-            return true
-        case .pass, .beginSequence, .cancelSequence, .move:
+        case .pass:
             return false
         }
     }
@@ -91,15 +80,15 @@ extension AppModel {
     /// The local daemon's global Control chat, once pilotd has created it.
     var controlChat: SessionSummary? { client.sessions.first(where: \.isControl) }
 
-    /// G then C, the Go menu or the palette: the local Control chat, with its composer focused. Its sidebar row shows
-    /// in every scope, so the scope stays.
+    /// The Go menu or the palette: the local Control chat, with its composer focused. Its sidebar row shows in every
+    /// scope, so the scope stays.
     func openControlChat() {
         guard let control = controlChat else { return }
         reveal(session: control.id)
         keyboard.focusAfterNavigation(.composer)
     }
 
-    /// Whether a G destination applies here. Unavailable ones never guess a project or mission.
+    /// Whether a Go menu destination applies here. Unavailable ones never guess a project or mission.
     func canGo(to destination: GoDestination) -> Bool {
         switch destination {
         case .home, .inbox, .archive, .slack, .linear: true
@@ -107,11 +96,6 @@ extension AppModel {
         case .mission, .tasks, .brief: currentMissionId != nil
         case .control: controlChat != nil
         }
-    }
-
-    /// Destinations shown in the G hint and accepted by G-key dispatch.
-    var availableGoDestinations: [GoDestination] {
-        GoDestination.allCases.filter { canGo(to: $0) }
     }
 
     func go(to destination: GoDestination) {
@@ -142,8 +126,8 @@ extension AppModel {
     }
 }
 
-/// The Go menu: region focus and destinations. Region keys are also read before embedded content (see
-/// `KeyboardRouter`); destinations use G sequences outside text, listed in the shortcut reference.
+/// The Go menu: history, region focus and destinations. Region keys are also read before embedded content (see
+/// `KeyboardRouter`). Destinations have no key of their own; the menu and ⌘K reach them.
 struct KeyboardNavigationCommands: Commands {
     @ObservedObject var model: AppModel
 
@@ -187,7 +171,4 @@ extension GoDestination {
         case .control: "Control Chat"
         }
     }
-
-    /// As the shortcut reference writes it.
-    var keys: String { "G then \(key.uppercased())" }
 }

@@ -23,7 +23,6 @@ enum KeyboardShortcuts {
     static let groups: [Group] = [
         Group(title: "Navigation", entries: [
             Entry(title: "Show keyboard shortcuts", keys: hint),
-            Entry(title: "Show keyboard shortcuts outside text", keys: "?"),
             Entry(title: "Open command palette", keys: "⌘K"),
             Entry(title: "Search chats", keys: "⌘F"),
             Entry(title: "Back", keys: "⌘←"),
@@ -39,11 +38,10 @@ enum KeyboardShortcuts {
             Entry(title: "Focus next region", keys: "⌃⇥"),
             Entry(title: "Focus previous region", keys: "⌃⇧⇥"),
             Entry(title: "Focus composer or question", keys: "⌘L"),
-            Entry(title: "Move through a list", keys: "↑ / ↓ or J / K"),
+            Entry(title: "Move through a list or the transcript", keys: "↑ / ↓"),
+            Entry(title: "Open the highlighted row", keys: "↩"),
+            Entry(title: "Leave the terminal or an artifact page", keys: "⌃⇥ / ⌘L / ⌘J"),
         ]),
-        Group(title: "Go to (outside text)", entries: GoDestination.allCases.map { destination in
-            Entry(title: destination.menuTitle, keys: destination.keys)
-        }),
         Group(title: "Chat", entries: [
             Entry(title: "New chat", keys: "⌘N"),
             Entry(title: "Toggle changes", keys: "⇧⌘D"),
@@ -52,6 +50,7 @@ enum KeyboardShortcuts {
             Entry(title: "Confirm merge of latest open pull request", keys: "⇧⌘M"),
             Entry(title: "Stop the open chat's agent", keys: "⌘."),
             Entry(title: "Choose model, thinking, mode, project, branch or workspace", keys: "⌘K, then type"),
+            Entry(title: "Actions for the highlighted chat, task or message", keys: "⌘K"),
         ]),
         Group(title: "Composer", entries: [
             Entry(title: "Send, or steer a running agent", keys: "↩"),
@@ -70,34 +69,16 @@ enum KeyboardShortcuts {
             Entry(title: "Send selected answers", keys: "↩"),
             Entry(title: "Return from reply to answers", keys: "esc"),
         ]),
-        Group(title: "Transcript and inspector", entries: [
-            Entry(title: "Focus the transcript", keys: "⌃⇥ from the sidebar"),
-            Entry(title: "Move between messages", keys: "↑ / ↓ or J / K"),
+        Group(title: "Transcript", entries: [
             Entry(title: "Fold or unfold work or a long message", keys: "↩"),
             Entry(title: "Copy the highlighted message", keys: "⌘C"),
-            Entry(title: "Edit the highlighted sent message", keys: "E"),
             Entry(title: "Return to the composer", keys: "esc or ⌘L"),
-            Entry(title: "Open a highlighted file, link, artifact or subagent", keys: "↩ in the inspector"),
-            Entry(title: "Leave the terminal or an artifact page", keys: "⌃⇥ / ⌘L / ⌘J"),
         ]),
-        Group(title: "Task list", entries: [
-            Entry(title: "Open the task's chat, or start one", keys: "↩"),
-            Entry(title: "Edit the task title", keys: "E"),
-            Entry(title: "Save or cancel the title", keys: "↩ / esc"),
-            Entry(title: "Move the task up or down in its phase", keys: "⌥↑ / ⌥↓"),
-            Entry(title: "Status, phase, model, dependencies and links", keys: "⌘K"),
-        ]),
-        Group(title: "Slack triage", entries: [
-            Entry(title: "Move between messages and columns", keys: "↑ ↓ ← → or J / K"),
-            Entry(title: "Start a chat from the message", keys: "↩"),
-            Entry(title: "Change type", keys: "T"),
-            Entry(title: "Change label", keys: "L"),
-            Entry(title: "Dismiss or restore", keys: "D"),
-        ]),
-        Group(title: "Memory", entries: [
-            Entry(title: "Move through the tree", keys: "↑ / ↓ or J / K"),
-            Entry(title: "Fold or unfold", keys: "← / →"),
-            Entry(title: "Clear the search, then return to the tree", keys: "esc"),
+        Group(title: "Lists and boards", entries: [
+            Entry(title: "Move a task up or down in its phase", keys: "⌥↑ / ⌥↓"),
+            Entry(title: "Move between Slack messages and columns", keys: "↑ ↓ ← →"),
+            Entry(title: "Fold or unfold in Memory", keys: "← / →"),
+            Entry(title: "Clear the Memory search, then return to the tree", keys: "esc"),
         ]),
         Group(title: "Editors and dialogs", entries: [
             Entry(title: "Save mission brief while editing", keys: "⌘S"),

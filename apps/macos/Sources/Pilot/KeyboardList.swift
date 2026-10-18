@@ -1,8 +1,8 @@
 import AppKit
 import SwiftUI
 
-// One keyboard entry for a long page: the page's list takes focus once (⌃⇥, a G destination, or a click), then
-// arrows or J/K move a highlight through its rows and Return opens the highlighted row. Tab is not needed per row.
+// One keyboard entry for a long page: the page's list takes focus once (⌃⇥, a Go menu destination, or a click), then
+// arrows move a highlight through its rows and Return opens the highlighted row. Tab is not needed per row.
 // Rows report themselves through a preference, in view order, so lists keep their existing layout and lazy parts.
 
 /// A row the page's keyboard list can highlight and open.
@@ -133,7 +133,7 @@ final class KeyboardListState: ObservableObject {
 
 /// Keys a list may give meaning to beyond moving and opening: ⌥↑/⌥↓ reorder, E edits.
 enum KeyboardListCommand: Equatable {
-    case moveUp, moveDown, edit
+    case moveUp, moveDown
 }
 
 extension View {
@@ -143,7 +143,7 @@ extension View {
         modifier(KeyboardListItemModifier(item: KeyboardListItem(id: id, target: target, activate: activate)))
     }
 
-    /// The page's main list: one focus stop for the region's keyboard entry, with arrow, J/K, Home/End and Return
+    /// The page's main list: one focus stop for the region's keyboard entry, with arrow, Home/End and Return
     /// handling. Put it inside the page's ScrollView so highlighted rows scroll into view.
     /// Pass `native: true` for a SwiftUI List, which already takes focus as a table. Preferences do not leave
     /// List rows, nor report unrealized rows of a lazy stack, so such a list's owner passes `suppliesRows` and
@@ -263,13 +263,6 @@ private struct KeyboardListBody<Content: View>: View {
                         item.activate()
                         return .handled
                     }
-                    return .handled
-                }
-                .onKeyPress(characters: CharacterSet(charactersIn: "eE")) { press in
-                    guard press.modifiers.isDisjoint(with: [.command, .control, .option]), let onCommand, let id = list.highlighted else {
-                        return .ignored
-                    }
-                    onCommand(id, .edit)
                     return .handled
                 }
                 .onChange(of: focused.wrappedValue) { _, isFocused in

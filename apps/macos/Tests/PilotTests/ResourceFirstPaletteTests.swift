@@ -63,7 +63,7 @@ private func modelWithControl() -> AppModel {
     #expect(control.item.kind == .page)
     #expect(control.item.suggested)
     #expect(control.icon == .controlChat)
-    #expect(control.shortcut == "G C")
+    #expect(control.shortcut == nil, "the Control chat has no letter sequence; the Go menu and palette reach it")
     #expect(entries.filter { $0.session?.isControl == true }.count == 1)
 
     let sections = CommandPalette.results(for: "", items: entries.map(\.item))

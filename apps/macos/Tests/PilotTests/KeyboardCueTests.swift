@@ -11,10 +11,15 @@ private let tab: UInt16 = KeyboardChord.tabKeyCode
 private let escape: UInt16 = KeyboardChord.escapeKeyCode
 
 @Test @MainActor func onlyNavigationKeysShowTheKeyboardCue() {
-    // Browsing outside text: arrows, J/K, G, Return, Tab and ⌥-arrows navigate.
-    for key in [chord("\u{f701}", keyCode: 125), chord("j", keyCode: 38), chord("g", keyCode: 5), chord("\r", keyCode: 36),
-                chord("\t", keyCode: tab), chord("\t", .shift, keyCode: tab), chord("\u{f700}", .option, keyCode: 126)] {
+    // Browsing outside text: arrows, Return, Tab, Home/End and ⌥-arrows navigate.
+    for key in [chord("\u{f701}", keyCode: 125), chord("\r", keyCode: 36), chord("\t", keyCode: tab),
+                chord("\t", .shift, keyCode: tab), chord("\u{f700}", .option, keyCode: 126), chord("\u{f729}", keyCode: 115)] {
         #expect(KeyboardCue.navigates(key, context: .navigation, fieldEditor: false))
+    }
+    // Letters and digits are not navigation keys, even outside text: there are no letter shortcuts.
+    for key in [chord("j", keyCode: 38), chord("k", keyCode: 40), chord("g", keyCode: 5), chord("e", keyCode: 14),
+                chord("1", keyCode: 18)] {
+        #expect(!KeyboardCue.navigates(key, context: .navigation, fieldEditor: false))
     }
     // Menu shortcuts are not navigation.
     #expect(!KeyboardCue.navigates(chord("n", .command), context: .navigation, fieldEditor: false))
@@ -110,8 +115,11 @@ private func click(in window: NSWindow) -> NSEvent? {
     #expect(window.makeFirstResponder(table))
     #expect(!cue.visible)
 
-    // The next navigation key restores it: J in the list, or ⌃⇥ from an editor.
+    // A letter in the list is not navigation, so the cue stays hidden.
     _ = router.handle(try #require(key("j", keyCode: 38, in: window)))
+    #expect(!cue.visible)
+    // The next navigation key restores it: an arrow in the list, or ⌃⇥ from an editor.
+    _ = router.handle(try #require(key("\u{f701}", keyCode: 125, modifiers: [.function, .numericPad], in: window)))
     #expect(cue.visible)
     _ = router.handlePointer(down)
     #expect(window.makeFirstResponder(editor))

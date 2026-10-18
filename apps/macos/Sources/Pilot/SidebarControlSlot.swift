@@ -26,7 +26,7 @@ struct SidebarControlRow: Identifiable, Equatable {
     }
 }
 
-/// Arrow keys and J/K in the sidebar list treat the fixed Control rows as the list's first items.
+/// Arrow keys in the sidebar list treat the fixed Control rows as the list's first items.
 enum SidebarStickyNavigation {
     enum Step: Equatable {
         /// Let the list move as usual.

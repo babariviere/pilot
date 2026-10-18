@@ -93,7 +93,6 @@ struct MainWindow: View {
             }
             .keyboardRegion(.content)
         }
-        .overlay(alignment: .bottom) { KeyboardSequenceHint(focus: model.keyboard, model: model) }
         .sheet(isPresented: $model.githubImportPresented) {
             GitHubImportSheet(hosts: hosts, localHost: model.localHost, initialURL: model.githubImportURL,
                 initialHost: model.githubImportHost) { project in

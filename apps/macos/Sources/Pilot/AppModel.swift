@@ -203,7 +203,7 @@ final class AppModel: ObservableObject {
     var openWindowAction: (() -> Void)?
     /// Opens the keyboard shortcuts window, captured from SwiftUI like openWindowAction.
     var openKeyboardShortcutsAction: (() -> Void)?
-    /// Keyboard regions, focus handlers and pending G sequences, published apart from the app model.
+    /// Keyboard regions and focus handlers, kept apart from the app model.
     let keyboard = KeyboardFocus()
     /// The row a keyboard list highlights, which ⌘K offers actions for. Not published: the palette reads it when
     /// it opens, so moving through a list never re-renders views observing the app model.

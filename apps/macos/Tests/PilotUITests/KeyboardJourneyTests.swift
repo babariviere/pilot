@@ -123,17 +123,19 @@ func keyboardOnlyStartSwitchTypeAndReturn() throws {
         journey.press("\t", keyCode: 48, .control)
         #expect(journey.wait { journey.responder is SubmitTextView }, "the new-chat editor takes focus")
 
-        // In the editor, letters are text: G types, and no navigation sequence starts.
+        // In the editor, letters are text.
         journey.press("g", keyCode: 5)
-        #expect(!keyboard.sequenceIsPending)
         #expect(journey.wait { model.newSessionForm.message == "g" })
 
-        // Escape leaves the composer for the page with the draft kept; G then I opens the Inbox.
+        // Escape leaves the composer for the page with the draft kept. Letters on the page never navigate: G then I
+        // stays where it is. The Go menu's Inbox does open it.
         journey.press("\u{1b}", keyCode: 53)
         #expect(journey.wait { !(journey.responder is SubmitTextView) })
         journey.press("g", keyCode: 5)
-        #expect(keyboard.sequenceIsPending)
         journey.press("i", keyCode: 34)
+        journey.settle(0.3)
+        #expect(!model.showingInbox && model.currentRoute == .home)
+        model.go(to: .inbox)
         #expect(journey.wait { model.showingInbox })
         #expect(model.newSessionForm.message == "g", "navigating never sends or clears the draft")
 
@@ -160,9 +162,14 @@ func keyboardOnlySidebarBrowsingKeepsFocusInTheSidebar() throws {
     journey.run {
         for _ in 0..<4 where !(journey.responder is NSTableView) { journey.press("\t", keyCode: 48, .control) }
         #expect(journey.wait { journey.responder is NSTableView })
-        // J moves like Down; arrowing onto a chat opens it, and its composer does not take the focus.
-        for _ in 0..<3 where model.selectedSessionId == nil { journey.press("j", keyCode: 38) }
-        #expect(journey.wait { model.selectedSessionId != nil }, "J reached a chat row")
+        // J is not a navigation key; Down is. Arrowing onto a chat opens it, and its composer does not take the focus.
+        journey.press("j", keyCode: 38)
+        journey.settle(0.2)
+        #expect(journey.responder is NSTableView, "a letter never moves focus out of the sidebar")
+        for _ in 0..<3 where model.selectedSessionId == nil {
+            journey.press("\u{f701}", keyCode: 125, [.function, .numericPad])
+        }
+        #expect(journey.wait { model.selectedSessionId != nil }, "Down reached a chat row")
         journey.settle(0.4)
         #expect(journey.responder is NSTableView, "browsing keeps focus in the sidebar")
         // ⌘L enters that chat's composer explicitly.

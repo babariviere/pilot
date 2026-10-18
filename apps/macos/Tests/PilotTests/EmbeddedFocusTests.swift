@@ -55,7 +55,6 @@ private func anchor(_ region: KeyboardRegion, _ frame: NSRect, focus: KeyboardFo
         #expect(router.handle(event) === event, "web content keeps \(event.charactersIgnoringModifiers ?? "")")
     }
     #expect(routes.isEmpty)
-    #expect(!focus.sequenceIsPending)
     #expect(router.handle(try key("k", 40, .command, in: window)) == nil)
     #expect(router.handle(try key("l", 37, .command, in: window)) == nil)
     #expect(router.handle(try key("\t", 48, .control, in: window)) == nil)

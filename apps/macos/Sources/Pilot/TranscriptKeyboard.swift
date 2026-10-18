@@ -2,10 +2,10 @@ import AppKit
 import PilotCore
 import SwiftUI
 
-/// Keyboard targeting for one chat's transcript. The page region's focus lands on the transcript; arrows or J/K
-/// move a highlight between rows by id, without realizing the lazy history. Return folds or unfolds the row's
-/// work or long message, ⌘C copies its text, E edits a sent message through the existing rewind flow, and moving
-/// above the first row loads earlier history. Escape returns to the composer with its draft.
+/// Keyboard targeting for one chat's transcript. The page region's focus lands on the transcript; arrows move a
+/// highlight between rows by id, without realizing the lazy history. Return folds or unfolds the row's work or long
+/// message, ⌘C copies its text, and moving above the first row loads earlier history. Escape returns to the composer
+/// with its draft. Letters are never taken: editing a sent message stays on its Edit button and context menu.
 @MainActor
 final class TranscriptKeyboard: ObservableObject {
     @Published var highlighted: String?
@@ -65,7 +65,6 @@ struct TranscriptKeyboardModifier: ViewModifier {
     /// Read only when a key is pressed, so streaming never re-evaluates this modifier.
     let rows: () -> [ChatRow]
     let messageExpansions: TranscriptExpansions
-    let rewind: TranscriptRewind?
     let loadEarlier: (() -> Void)?
     let pauseFollowing: () -> Void
     @FocusState private var focused: Bool
@@ -91,10 +90,6 @@ struct TranscriptKeyboardModifier: ViewModifier {
                     _ = keyboardFocus.focus(.composer)
                 }
                 return .handled
-            }
-            .onKeyPress(characters: CharacterSet(charactersIn: "eE")) { press in
-                guard press.modifiers.isDisjoint(with: [.command, .control, .option]) else { return .ignored }
-                return editHighlighted() ? .handled : .ignored
             }
             .onCopyCommand {
                 guard let row = highlightedRow, let text = TranscriptKeyboard.copyText(row) else { return [] }
@@ -149,12 +144,5 @@ struct TranscriptKeyboardModifier: ViewModifier {
         default:
             return
         }
-    }
-
-    /// E on a sent message opens the existing edit flow, which confirms before stopping a running agent.
-    private func editHighlighted() -> Bool {
-        guard let rewind, let row = highlightedRow, case .user = row, let entryID = row.entryID else { return false }
-        rewind.request(.edit, entryID: entryID)
-        return true
     }
 }

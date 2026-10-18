@@ -152,7 +152,7 @@ struct CommandPaletteCatalog {
             item: CommandPaletteItem(id: "page:control", kind: .page, title: control.title,
                                      keywords: ["control", "pilot", "chat", ControlChatIdentity.scope],
                                      suggested: true),
-            icon: .controlChat, session: control, shortcut: "G C"
+            icon: .controlChat, session: control
         ) { [model] in model.openControlChat() }]
     }
 
@@ -313,7 +313,7 @@ struct CommandPaletteCatalog {
                 icon: .subagents, suffix: session.title
             ) { [model] in model.showAgents() })
         }
-        // The open mission's tabs, beyond G M, G T and G B.
+        // The open mission's tabs, beyond the Go menu's Overview, Tasks and Brief.
         if let missionId = model.currentMissionId, let title = model.selectedLogicalMission?.title ?? model.currentMission?.title {
             let context = model.currentMissionReference.map { HostViewContext(host: $0.host, hosts: model.hosts) }
             for tab in MissionTab.allCases {

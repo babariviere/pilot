@@ -62,7 +62,7 @@ extension CommandPaletteCatalog {
         } else if task.status.canStart, detail.mission.status == .active {
             add("start", "Start chat…", .compose, keywords: ["start"]) { requests.send(.start, to: taskId) }
         }
-        add("edit", "Edit title", .edit, keywords: ["rename"], shortcut: "E") { requests.send(.editTitle, to: taskId) }
+        add("edit", "Edit title", .edit, keywords: ["rename"]) { requests.send(.editTitle, to: taskId) }
         add("up", "Move up", .collapse, keywords: ["reorder"], shortcut: "⌥↑") { requests.send(.moveUp, to: taskId) }
         add("down", "Move down", .disclosureOpen, keywords: ["reorder"], shortcut: "⌥↓") { requests.send(.moveDown, to: taskId) }
         for status in MissionTaskStatus.allCases where status != task.workStatus {
