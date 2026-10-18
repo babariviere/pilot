@@ -10,6 +10,7 @@ import {
 	toolActivityExtension,
 	toolActivityLine,
 	toolCategory,
+	toolWaitKind,
 } from "./tool-activity.ts";
 
 const roots: string[] = [];
@@ -33,6 +34,10 @@ test("classifies only closed built-in, MCP and nested codemode categories", () =
 	assert.equal(toolCategory("mcp__linear__get_issue"), "mcp");
 	assert.equal(toolCategory("mission"), "orchestration");
 	assert.equal(toolCategory("customer-secret-tool"), "other");
+	assert.equal(toolWaitKind("jobs"), "background");
+	assert.equal(toolWaitKind("question"), "user");
+	assert.equal(toolWaitKind("subagent"), "child");
+	assert.equal(toolWaitKind("mcp__linear__get_issue"), undefined);
 });
 
 test("tracks progress and liveness independently, then records bounded cancellation timing", async () => {

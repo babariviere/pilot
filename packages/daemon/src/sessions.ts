@@ -126,6 +126,7 @@ import {
 	subscriptionProvider,
 	subscriptionUsageReadings,
 } from "./subscription-usage.ts";
+import { nextToolStallAt, ToolStallWatchdog, toolStallAttention } from "./tool-stalls.ts";
 import { hasUnpublishedWork } from "./unpublished-work.ts";
 import { UpdateGate } from "./update-gate.ts";
 import type { WatchService } from "./watch-service.ts";
@@ -238,6 +239,7 @@ export interface SessionWorker {
 	stopJob?(jobId: string): Promise<void>;
 	runningJobs?: SessionJob[];
 	toolActivity?: ToolActivitySnapshot;
+	toolStallKey?: string;
 	/** Committed chat todo count, supplied on ready and after every mutation. */
 	openTodoCount?: number;
 	/** Live-worker work continues between the last job ending and its result turn completing. */
@@ -577,6 +579,7 @@ export class Worker implements SessionWorker {
 	usage?: KernelUsage;
 	runningJobs?: SessionJob[];
 	toolActivity?: ToolActivitySnapshot;
+	toolStallKey?: string;
 	openTodoCount?: number;
 	awaitingJobFollowUp?: boolean;
 	compacting = false;
@@ -1156,6 +1159,7 @@ export class SessionManager {
 	private readonly projectMainOperations = new Map<string, Promise<void>>();
 	private mainRefreshTimer?: ReturnType<typeof setTimeout>;
 	private readonly longJobTimers = new LongJobTimers();
+	private readonly toolStallWatchdog = new ToolStallWatchdog();
 	/** Live-only: chats that reached for an MCP server needing the user. Set by setMcpStatus. */
 	private mcpAttention?: McpChatAttention;
 	/** Chats with a scheduled follow-up message. Set by setScheduledMessages. */
@@ -5684,6 +5688,7 @@ export class SessionManager {
 		this.workerStarts.close();
 		this.recoveryStops.close();
 		this.longJobTimers.close();
+		this.toolStallWatchdog.close();
 		clearTimeout(this.updatePauseTimer);
 		for (const timer of this.kernelRestarts.values()) clearTimeout(timer);
 		clearTimeout(this.subscriptionResetTimer);
@@ -6128,7 +6133,10 @@ export class SessionManager {
 		// A late exit from a replaced worker cannot fail or resume its successor.
 		if (current && current !== exited) return;
 		const owned = current === exited || this.retiring.has(exited);
-		if (current === exited) this.workers.delete(meta.id);
+		if (current === exited) {
+			this.workers.delete(meta.id);
+			this.toolStallWatchdog.remove(meta.id);
+		}
 		// An inactivity close is not a failure, even if a slow shutdown had to be forced.
 		if (!this.closing && !this.parked.has(exited)) {
 			if (
@@ -6612,7 +6620,10 @@ export class SessionManager {
 			return;
 		}
 		if (packet.type === "tool.activity") {
-			if (this.workers.get(meta.id) === worker) worker.toolActivity = packet.activity;
+			if (this.workers.get(meta.id) === worker) {
+				worker.toolActivity = packet.activity;
+				this.refreshToolStallWatch(meta, worker);
+			}
 			return;
 		}
 		if (packet.type === "subagents") {
@@ -6704,6 +6715,22 @@ export class SessionManager {
 		this.emit(meta, worker);
 	}
 
+	private refreshToolStallWatch(meta: SessionMeta, worker: SessionWorker): void {
+		const context = { pauses: [], runningJobs: worker.runningJobs?.length ?? 0 } as const;
+		const now = Date.now();
+		const attention = toolStallAttention(worker.toolActivity, context, now);
+		const key = attention ? `${attention.assessment}:${attention.at}` : "none";
+		this.toolStallWatchdog.update(meta.id, nextToolStallAt(worker.toolActivity, context, now), (id) => {
+			const currentMeta = this.metas.get(id);
+			const currentWorker = this.workers.get(id);
+			if (!currentMeta || !currentWorker || currentMeta.archivedAt !== undefined) return;
+			this.refreshToolStallWatch(currentMeta, currentWorker);
+		});
+		if (worker.toolStallKey === key) return;
+		worker.toolStallKey = key;
+		this.emit(meta, worker);
+	}
+
 	private summary(meta: SessionMeta, worker = this.workers.get(meta.id)): SessionSummary {
 		const membership = this.missionSummary(meta.id);
 		const coordinator = membership.missionCoordinator === true;
@@ -6769,6 +6796,19 @@ export class SessionManager {
 			!meta.failure &&
 			!meta.recoveryStopped &&
 			(mainBusy || (childrenWorking && !questionWaits));
+		const toolPauses: DiagnosticPauseReason[] = [];
+		if (paused) toolPauses.push("sleep");
+		if (meta.updatePaused) toolPauses.push("update");
+		if (quotaPaused) toolPauses.push("quota");
+		if (offlinePaused) toolPauses.push("connectivity");
+		if (meta.recoveryStopped) toolPauses.push("user");
+		const toolStall =
+			meta.archivedAt === undefined
+				? toolStallAttention(worker?.toolActivity, {
+						pauses: toolPauses,
+						runningJobs: worker?.runningJobs?.length ?? 0,
+					})
+				: undefined;
 		const working =
 			!meta.failure &&
 			!meta.recoveryStopped &&
@@ -6783,6 +6823,8 @@ export class SessionManager {
 			(mainBusy || (childrenWorking && !questionWaits));
 		const state = heldAtQuota && kernelState !== "failed" ? "working" : kernelState;
 		const longJob = meta.archivedAt === undefined ? longJobAttention(worker?.runningJobs ?? []) : undefined;
+		const mcpAttention =
+			meta.archivedAt === undefined && !longJob ? this.mcpAttention?.attention(meta.id) : undefined;
 		const sourceBranch =
 			meta.mode === "ask"
 				? meta.ask?.branch
@@ -6829,7 +6871,10 @@ export class SessionManager {
 			...longJob,
 			...(!working ? this.stuckPullRequestAttention(meta) : {}),
 			// After stuck PRs, so an MCP server to fix wins. Long jobs keep their own reason.
-			...(meta.archivedAt === undefined && !longJob ? this.mcpAttention?.attention(meta.id) : {}),
+			...mcpAttention,
+			...(!longJob && !mcpAttention && toolStall
+				? { attentionReason: toolStall.reason, attentionAt: toolStall.at }
+				: {}),
 			...(meta.archivedAt === undefined && this.scheduledMessages.has(meta.id) ? { scheduledMessage: true } : {}),
 			...(meta.model ? { model: meta.model } : {}),
 			...(meta.thinking ? { thinking: meta.thinking } : {}),
@@ -7598,6 +7643,13 @@ export class SessionManager {
 	}
 
 	private emit(meta: SessionMeta, worker?: SessionWorker): void {
+		const activeWorker = this.workers.get(meta.id);
+		if (
+			meta.archivedAt !== undefined ||
+			!activeWorker?.toolActivity?.enabled ||
+			activeWorker.toolActivity.calls.length === 0
+		)
+			this.toolStallWatchdog.remove(meta.id);
 		const summary = this.summary(meta, worker ?? this.workers.get(meta.id));
 		if (!this.closing) this.observeLifecycle(meta, summary);
 		if (!this.closing)

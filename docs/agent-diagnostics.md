@@ -17,7 +17,8 @@ rejects every other ID even when another chat shares the project. This lets proj
 diagnostics keep the same qualified-host boundary. Tool results contain a qualified host identity, collection time, source
 freshness and availability, queue/resource summaries, stable evidence references and explicit truncation/drop
 counts. In-flight tool evidence separates elapsed time, useful-progress age, liveness age and cancellation wait; it
-does not claim that silence proves a stall. The specialist cannot restart, retry, replay, wake or mutate the target.
+does not claim that silence proves a stall. Conservative suspected-stall assessments preserve explicit waits,
+background jobs, pauses and disconnects. The specialist cannot restart, retry, replay, wake or mutate the target.
 
 Native clients call:
 

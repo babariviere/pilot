@@ -741,7 +741,7 @@ struct ProjectNeedsYouRow: View {
         case .question:
             if let sessionId = item.sessionId { model.navigate(.session, id: sessionId, context: hostContext) }
             else if let missionId = item.missionId { model.openMission(missionId, context: hostContext) }
-        case .unread, .failed, .scheduledFailed, .longJob, .prStuck:
+        case .unread, .failed, .scheduledFailed, .longJob, .toolStall, .prStuck:
             if let sessionId = item.sessionId { model.navigate(.session, id: sessionId, context: hostContext) }
         case .mcp:
             let action = mcpAction
@@ -1210,7 +1210,7 @@ enum ProjectPageText {
     static func needsAction(_ item: DashboardNeedsYouItem) -> String? {
         switch item.kind {
         case .unread: item.sessionId == nil ? nil : "Review"
-        case .failed, .longJob, .prStuck: item.sessionId == nil ? nil : "Open chat"
+        case .failed, .longJob, .toolStall, .prStuck: item.sessionId == nil ? nil : "Open chat"
         case .mcp: "Open Connections"
         case .question: item.sessionId == nil && item.missionId == nil ? nil : "Answer"
         case .scheduledFailed: item.sessionId == nil ? nil : "Open chat"

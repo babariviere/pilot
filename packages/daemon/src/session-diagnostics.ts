@@ -26,6 +26,7 @@ import release from "../../../package.json" with { type: "json" };
 import type { DaemonPerformance } from "./event-loop-watchdog.ts";
 import { LIFECYCLE_FILE, MAX_LIFECYCLE_FILE_BYTES, parseLifecycleDiagnostic } from "./lifecycle-diagnostics.ts";
 import { MAX_NATIVE_DIAGNOSTIC_BYTES, parseNativeDiagnostics } from "./native-diagnostics.ts";
+import { assessToolCall } from "./tool-stalls.ts";
 
 export const MAX_DIAGNOSTIC_ITEMS = 128;
 export const MAX_DIAGNOSTIC_BYTES = 64 * 1024;
@@ -253,6 +254,7 @@ const TOOL_CATEGORIES = new Set<ToolDiagnosticCategory>([
 	"other",
 ]);
 const TOOL_STATES = new Set(["dispatching", "running", "cancelling"]);
+const TOOL_WAIT_KINDS = new Set(["user", "background", "child"]);
 const TOOL_REF = /^[0-9a-f]{12}-[1-9][0-9]{0,8}$/;
 
 interface OpenToolRecord {
@@ -278,7 +280,11 @@ function completedTool(record: Extract<ToolActivityRecord, { kind: "finished" }>
 	};
 }
 
-function liveTools(snapshot: ToolActivitySnapshot | undefined, now: number): SourceRead<DiagnosticEvidence> {
+function liveTools(
+	snapshot: ToolActivitySnapshot | undefined,
+	current: SessionDiagnosticCurrent,
+	now: number,
+): SourceRead<DiagnosticEvidence> {
 	if (
 		!snapshot ||
 		typeof snapshot.enabled !== "boolean" ||
@@ -296,6 +302,7 @@ function liveTools(snapshot: ToolActivitySnapshot | undefined, now: number): Sou
 			!TOOL_REF.test(call.ref) ||
 			!TOOL_CATEGORIES.has(call.category) ||
 			typeof call.nested !== "boolean" ||
+			(call.waitKind !== undefined && !TOOL_WAIT_KINDS.has(call.waitKind)) ||
 			!TOOL_STATES.has(call.state) ||
 			!timestamp(call.startedAt) ||
 			!timestamp(call.progressAt) ||
@@ -305,6 +312,12 @@ function liveTools(snapshot: ToolActivitySnapshot | undefined, now: number): Sou
 			invalid++;
 			continue;
 		}
+		const assessment = assessToolCall(
+			call,
+			snapshot.observedAt,
+			{ pauses: current.pauses, runningJobs: current.queue.runningJobs },
+			now,
+		);
 		items.push({
 			ref: `diagnostic:v1:tool:${call.ref}`,
 			source: "tool",
@@ -312,7 +325,10 @@ function liveTools(snapshot: ToolActivitySnapshot | undefined, now: number): Sou
 			kind: "tool.in_flight",
 			category: call.category,
 			nested: call.nested,
+			...(call.waitKind ? { waitKind: call.waitKind } : {}),
 			state: call.state,
+			assessment: assessment.assessment,
+			...(assessment.thresholdMs === undefined ? {} : { thresholdMs: assessment.thresholdMs }),
 			durationMs: Math.max(0, now - call.startedAt),
 			progressAgeMs: Math.max(0, now - call.progressAt),
 			livenessAgeMs: Math.max(0, now - call.livenessAt),
@@ -334,6 +350,7 @@ function liveTools(snapshot: ToolActivitySnapshot | undefined, now: number): Sou
 async function tools(
 	storageDir: string,
 	snapshot: ToolActivitySnapshot | undefined,
+	current: SessionDiagnosticCurrent,
 	now: number,
 ): Promise<SourceRead<DiagnosticEvidence>> {
 	const data = await segments(join(storageDir, TOOL_ACTIVITY_FILE), MAX_TOOL_ACTIVITY_FILE_BYTES);
@@ -383,7 +400,7 @@ async function tools(
 	}
 	const persistedAvailable = items.length;
 	if (items.length > MAX_TOOL_ITEMS) items.splice(0, items.length - MAX_TOOL_ITEMS);
-	const live = liveTools(snapshot, now);
+	const live = liveTools(snapshot, current, now);
 	const combined = [...items, ...live.items];
 	const newestAt = combined
 		.map((item) => item.at)
@@ -461,7 +478,7 @@ export async function readSessionDiagnostics(input: SessionDiagnosticInput): Pro
 	const [lifecycleRead, timingRead, toolRead, nativeRead] = await Promise.all([
 		lifecycle(input.storageDir),
 		timings(join(input.storageDir, "durable")),
-		tools(join(input.storageDir, "durable"), input.toolActivity, now),
+		tools(join(input.storageDir, "durable"), input.toolActivity, input.current, now),
 		native(input.nativeDiagnosticsPath),
 	]);
 	const daemonRead = daemonEvidence(input.performance, now);

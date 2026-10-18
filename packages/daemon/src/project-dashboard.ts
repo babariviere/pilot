@@ -55,7 +55,16 @@ export interface DashboardInput {
 	memory?: ProjectMemorySummary;
 }
 
-const KIND_RANK = { failed: 0, question: 1, scheduled_failed: 2, long_job: 3, mcp: 4, pr_stuck: 5, unread: 6 } as const;
+const KIND_RANK = {
+	failed: 0,
+	question: 1,
+	scheduled_failed: 2,
+	tool_stall: 3,
+	long_job: 4,
+	mcp: 5,
+	pr_stuck: 6,
+	unread: 7,
+} as const;
 const isTerminal = (pr: SessionPullRequest) => pr.state === "merged" || pr.state === "closed";
 const isWorking = (session: SessionSummary) =>
 	session.working ?? (session.state === "working" || session.state === "starting" || !!session.runningJobs?.length);
@@ -86,8 +95,13 @@ function readinessOf(pr: SessionPullRequest): DashboardPullRequestReadiness | un
  * a ready current PR supersedes an unreviewed result. Failures stay until retried and questions until answered.
  */
 function needsReview(session: SessionSummary, isUnread: DashboardInput["isUnread"]): boolean {
-	// Live attention holds while the chat works: a long job, or an MCP server the chat could not use.
-	if (session.attentionReason?.kind === "long_job" || session.attentionReason?.kind === "mcp") return true;
+	// Live attention holds while the chat works: a long job, a suspected tool stall, or an MCP server it could not use.
+	if (
+		session.attentionReason?.kind === "long_job" ||
+		session.attentionReason?.kind === "mcp" ||
+		session.attentionReason?.kind === "tool_stall"
+	)
+		return true;
 	if (isWorking(session)) return false;
 	// A scheduled follow-up message is the user's answer: the chat now waits on that schedule.
 	if (session.scheduledMessage) return false;
@@ -127,7 +141,10 @@ export function buildProjectDashboard(input: DashboardInput, limit = DASHBOARD_S
 			needsYouByMission.set(session.missionId, (needsYouByMission.get(session.missionId) ?? 0) + 1);
 		const attentionReason = sessionNeedsYouReason(session);
 		const attention =
-			attentionReason.kind === "long_job" || attentionReason.kind === "pr_stuck" || attentionReason.kind === "mcp"
+			attentionReason.kind === "long_job" ||
+			attentionReason.kind === "pr_stuck" ||
+			attentionReason.kind === "mcp" ||
+			attentionReason.kind === "tool_stall"
 				? attentionReason.kind
 				: undefined;
 		const isFailure = !attention && failed(session);

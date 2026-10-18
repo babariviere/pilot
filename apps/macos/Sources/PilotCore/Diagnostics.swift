@@ -53,6 +53,9 @@ public struct DiagnosticEvidence: Codable, Sendable {
     public let cpuMs: Double?
     public let category: String?
     public let nested: Bool?
+    public let waitKind: String?
+    public let assessment: String?
+    public let thresholdMs: Double?
     public let progressAgeMs: Double?
     public let livenessAgeMs: Double?
     public let dispatchMs: Double?

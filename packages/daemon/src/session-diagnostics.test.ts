@@ -262,6 +262,7 @@ test("diagnostics combine live tool progress with completed and interrupted evid
 	);
 	const active = toolEvidence.find((item) => item.kind === "tool.in_flight");
 	assert.equal(active?.durationMs, 10_000);
+	assert.equal(active?.assessment, "active");
 	assert.equal(active?.progressAgeMs, 5_000);
 	assert.equal(active?.livenessAgeMs, 1_000);
 	assert.equal(result.sources.find((source) => source.source === "tool")?.available, 3);
