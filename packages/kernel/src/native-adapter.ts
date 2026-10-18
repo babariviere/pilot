@@ -80,6 +80,7 @@ import { MEMORY_TOOL_NAMES } from "./memory-tools.ts";
 import { type PerformanceSink, type PreparationMark, RequestTiming } from "./performance.ts";
 import type { AskContext } from "./policy.ts";
 import { REPAIR_PROPOSAL_TOOL } from "./repair-proposal-tool.ts";
+import { SHELL_STATUS_DETAIL, shellDeadline } from "./shell-deadline.ts";
 import type { SubagentBridge } from "./subagents.ts";
 import { type ReportSubscriptionLimit, subscriptionRecovery } from "./subscription-limit.ts";
 import { ToolActivityTracker, toolActivityExtension } from "./tool-activity.ts";
@@ -990,6 +991,30 @@ export class NativeAdapter {
 			const definition = this.session.getToolDefinition(info.name);
 			if (!definition || this.#diagnosticTools.has(definition)) continue;
 			this.#diagnosticTools.add(definition);
+			if (info.sourceInfo.source === "builtin" && ["bash", "powershell"].includes(definition.name)) {
+				definition.execute = shellDeadline(definition.execute, {
+					timeout: (id) => this.#toolActivity?.cancel(id, "timeout"),
+					status: (id, text) => {
+						// Codemode does not forward nested output updates to its caller. Publish just the
+						// elapsed notice to the owning direct tool, without copying nested command output.
+						for (const [parent, output] of this.#toolOutputs) if (id.startsWith(`${parent}/`)) output(text);
+					},
+				});
+				const schema = definition.parameters as { properties: Record<string, object> };
+				definition.parameters = {
+					...definition.parameters,
+					properties: {
+						...schema.properties,
+						timeout: {
+							...schema.properties.timeout,
+							description:
+								"Execution deadline in seconds (default 120). Set a longer deadline explicitly for long commands, or use jobs.",
+						},
+					},
+				};
+				const active = this.session.agent.state.tools.find((tool) => tool.name === definition.name);
+				if (active) active.parameters = definition.parameters;
+			}
 			const execute = definition.execute;
 			definition.execute = async (...args) => {
 				try {
@@ -1053,11 +1078,22 @@ export class NativeAdapter {
 					const before = new Set(this.session.sessionManager.getEntries().map((entry) => entry.id));
 					try {
 						let result: AgentToolResult<unknown>;
+						const started = performance.now();
+						let isError = true;
+						// Harness-owned direct calls bypass Pi's agent loop lifecycle events.
+						this.#toolActivity?.start(api.callId, tool.name, false, context.abortSignal);
+						this.#toolActivity?.running(api.callId);
+						this.#toolOutputs.set(api.callId, (text) => api.output(text));
 						try {
 							result = await current.execute(api.callId, args, context.abortSignal, (update) => {
+								if ((update.details as Record<string, unknown> | undefined)?.[SHELL_STATUS_DETAIL] !== true)
+									this.#toolActivity?.progress(api.callId);
 								for (const block of update.content) if (block.type === "text") api.output(block.text);
 							});
+							isError = result.isError ?? false;
 						} finally {
+							this.#toolOutputs.delete(api.callId);
+							this.#toolActivity?.finish(api.callId, isError, performance.now() - started);
 							if (this.#performance) this.#toolFinished = performance.now();
 						}
 						await this.persistCustomEntries(before, context);
@@ -1185,6 +1221,7 @@ export class NativeAdapter {
 	}
 
 	#diagnosticTools = new WeakSet<ToolDefinition>();
+	#toolOutputs = new Map<string, (text: string) => void>();
 
 	private preparationMark(): PreparationMark {
 		const interaction = this.#nextInteraction;

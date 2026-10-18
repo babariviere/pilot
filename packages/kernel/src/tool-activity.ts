@@ -12,6 +12,7 @@ import type {
 	ToolWaitKind,
 } from "@pilot/protocol";
 import { nodeTelemetry, type TraceCarrier } from "@pilot/telemetry";
+import { SHELL_STATUS_DETAIL } from "./shell-deadline.ts";
 
 export const TOOL_ACTIVITY_FILE = "tool-activity.jsonl";
 export const MAX_TOOL_ACTIVITY_FILE_BYTES = 256 * 1024;
@@ -595,6 +596,9 @@ export function toolActivityExtension(tracker: ToolActivityTracker): ExtensionFa
 			tracker.running(event.toolCallId);
 		});
 		pi.on("tool_execution_update", (event) => {
+			// A scheduled elapsed-time notice is liveness, not evidence of command output/progress.
+			if ((event.partialResult?.details as Record<string, unknown> | undefined)?.[SHELL_STATUS_DETAIL] === true)
+				return;
 			tracker.progress(event.toolCallId);
 		});
 		pi.on("tool_execution_end", (event) => {
