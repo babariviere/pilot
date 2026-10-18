@@ -908,6 +908,9 @@ private struct ProjectSettings: View {
     let project: Project
     @EndpointClient private var client
     @StateObject private var editor = ProjectEditor()
+    @StateObject private var environment = EnvironmentSettingsModel()
+    @State private var environmentSaving = false
+    @State private var environmentError: String?
     @State private var confirmingRemoval = false
     @State private var removeError: String?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -941,6 +944,11 @@ private struct ProjectSettings: View {
                                detail: "Publish changes through a pull request. Turning this off allows direct pushes to the default branch. Applies when a chat next starts working.",
                                isOn: $editor.requirePullRequest)
             }
+            EnvironmentSettingsSection(model: environment, hostName: hostName, check: {
+                Task { await environment.check(client: client, cacheKey: environmentKey) }
+            }, loadCatalog: {
+                Task { await environment.loadCatalog(client: client) }
+            })
             TrackingSettingsSection(project: project, editor: editor)
             if let host = hostContext?.host ?? AppModel.shared.localHost {
                 ProjectDatabaseSettingsSection(projectId: project.id, host: host,
@@ -953,15 +961,24 @@ private struct ProjectSettings: View {
             ProjectRemoval(error: removeError) { confirmingRemoval = true }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            if editor.hasChanges {
-                SettingsSaveBar(error: editor.error, updatedElsewhere: editor.hasIncomingChanges, saving: editor.isSaving,
-                                revert: { editor.revert() }, save: { Task { await save() } })
+            if editor.hasChanges || environment.hasChanges {
+                SettingsSaveBar(error: editor.error ?? environmentError, updatedElsewhere: editor.hasIncomingChanges,
+                                saving: editor.isSaving || environmentSaving,
+                                revert: {
+                                    editor.revert()
+                                    environment.revert()
+                                    environmentError = nil
+                                }, save: { Task { await save() } })
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .animation(Theme.Motion.standard(reduceMotion: reduceMotion), value: editor.hasChanges)
+        .animation(Theme.Motion.standard(reduceMotion: reduceMotion), value: editor.hasChanges || environment.hasChanges)
         .onAppear { editor.load(project) }
-        .onChange(of: project) { _, updated in editor.refresh(updated) }
+        .onChange(of: project) { _, updated in
+            editor.refresh(updated)
+            Task { await environment.projectChanged(updated, client: client, cacheKey: environmentKey) }
+        }
+        .task(id: project.id) { await environment.load(project: project, client: client, cacheKey: environmentKey) }
         .confirmationDialog("Remove \(project.name)?", isPresented: $confirmingRemoval) {
             Button("Remove Project", role: .destructive) { Task { await remove() } }
         } message: {
@@ -971,7 +988,26 @@ private struct ProjectSettings: View {
 
     private func save() async {
         let id = project.id
-        await editor.save { try await client.updateProject(id, $0) }
+        if editor.hasChanges { await editor.save { try await client.updateProject(id, $0) } }
+        guard editor.error == nil, environment.hasChanges, !environmentSaving else { return }
+        environmentSaving = true
+        defer { environmentSaving = false }
+        do {
+            try await environment.save(client: client)
+            environmentError = nil
+        } catch {
+            environmentError = error.localizedDescription
+        }
+    }
+
+    private var environmentKey: String {
+        EnvironmentSettingsModel.cacheKey(host: hostContext?.host ?? AppModel.shared.localHost, projectId: project.id)
+    }
+
+    /// "this Mac" or the devbox's saved name, for the Environment section's plan heading.
+    private var hostName: String {
+        guard let host = hostContext?.host, host.hostId != "local" else { return "this Mac" }
+        return AppModel.shared.hosts.offlineHosts[host]?.configuration.alias ?? "the devbox"
     }
 
     private func remove() async {
