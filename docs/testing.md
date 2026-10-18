@@ -455,9 +455,10 @@ The timed Stop-routing tests also run in a separate process. This keeps unrelate
 MainActor run loops from consuming their two-minute deadlines. Every selected Stop function must start;
 their assertions and time limits are unchanged.
 
-The CI-only keyboard journeys run last, in their own process. Without a key window they record known issues
-while their nested run loops hold the MainActor for minutes, which used to time out unrelated MainActor tests
-(for example the shared-context courier). On CI both journeys must start.
+The CI-only keyboard journeys run last, one journey per process. Each activates `NSApp`'s process-global key
+window and pumps nested main run loops; separate processes prevent the tests from interleaving at those yields
+and stealing focus from each other. A runner without a key window records known focus issues, but still executes
+the journey. On CI both journeys must start.
 
 CI runs native Node, packaging and Swift tests in one `macos` job, because the free plan runs only a few
 macOS jobs at once. PRs skip the Swift steps when they change nothing under `apps/macos/`, the release

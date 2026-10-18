@@ -32,9 +32,12 @@ isolated=artifactHeightRespectsNestedClippingWhileKeepingVisibleOverflow
 devbox=addDevboxPresentsSetupSheetAfterCancelAndReopen
 terminal=terminalOpeningAndResizingDoNotFeedNativeFittingSizeBackIntoWindowConstraints
 callbacks='localStopNormalizesQualifiedRowsAndRestoresWithdrawnMessages|remoteStopKeepsCollidingLocalChatAndDraftUntouched|unavailableStopNeverFallsBackToCurrentLocalHost|missionTaskDragLoadsItsPlainTextOnTheMainActor'
-# Keyboard journeys block the MainActor in nested run loops for minutes when a runner grants no key window,
-# starving unrelated timed tests. They run only on CI, so only CI requires them to start.
-journeys='keyboardOnlyStartSwitchTypeAndReturn|keyboardOnlySidebarBrowsingKeepsFocusInTheSidebar'
+# Each journey activates NSApp's process-global key window and pumps nested main run loops. Keep them in separate
+# processes so Swift Testing cannot interleave the journeys at those yields and let one take focus from the other.
+# They run only on CI, so only CI requires them to start.
+journeyStart=keyboardOnlyStartSwitchTypeAndReturn
+journeySidebar=keyboardOnlySidebarBrowsingKeepsFocusInTheSidebar
+journeys="$journeyStart|$journeySidebar"
 # These native approval controls also own AppKit mouse tracking. Run each alone, keeping its deadline.
 github='githubKeySheetRequiresNativeConfirmationAndCancelDoesNotRegister|githubExistingCheckoutRequiresExplicitNativeReuseConfirmation|githubImportNativeCloneActionStaysDisabledUntilHostDestinationPreview'
 partition=1
@@ -66,7 +69,8 @@ if [ "$partition" = 1 ]; then
 	run_tests "$terminal" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$terminal"
 	# Stop and drag-data callbacks keep their MainActor deadlines without competing with UI run loops.
 	run_tests "$callbacks" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$callbacks"
-	run_tests "${CI:+$journeys}" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$journeys"
+	run_tests "${CI:+$journeyStart}" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$journeyStart"
+	run_tests "${CI:+$journeySidebar}" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$journeySidebar"
 	IFS='|' read -r -a github_tests <<< "$github"
 	for name in "${github_tests[@]}"; do
 		run_tests "$name" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$name"

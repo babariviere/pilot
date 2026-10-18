@@ -30,7 +30,8 @@ CALLBACKS = ["localStopNormalizesQualifiedRowsAndRestoresWithdrawnMessages",
              "missionTaskDragLoadsItsPlainTextOnTheMainActor"]
 CALLBACKS_OUTPUT = STARTED + "".join(f"◇ Test {name}() started.\n" for name in CALLBACKS) + PASSED
 JOURNEYS = ["keyboardOnlyStartSwitchTypeAndReturn", "keyboardOnlySidebarBrowsingKeepsFocusInTheSidebar"]
-JOURNEYS_OUTPUT = STARTED + "".join(f"◇ Test {name}() started.\n" for name in JOURNEYS) + PASSED
+JOURNEY_START_OUTPUT = STARTED + f"◇ Test {JOURNEYS[0]}() started.\n" + PASSED
+JOURNEY_SIDEBAR_OUTPUT = STARTED + f"◇ Test {JOURNEYS[1]}() started.\n" + PASSED
 GITHUB = ["githubKeySheetRequiresNativeConfirmationAndCancelDoesNotRegister",
           "githubExistingCheckoutRequiresExplicitNativeReuseConfirmation",
           "githubImportNativeCloneActionStaysDisabledUntilHostDestinationPreview"]
@@ -53,9 +54,12 @@ class TestOutputTests(unittest.TestCase):
                     third_output=DEVBOX_OUTPUT, third_status=0,
                     fourth_output=TERMINAL_OUTPUT, fourth_status=0,
                     fifth_output=CALLBACKS_OUTPUT, fifth_status=0,
-                    sixth_output=None, sixth_status=0, extra_env=None, github_outputs=None):
+                    sixth_output=None, sixth_status=0, seventh_output=None, seventh_status=0,
+                    extra_env=None, github_outputs=None):
         if sixth_output is None:
-            sixth_output = JOURNEYS_OUTPUT
+            sixth_output = JOURNEY_START_OUTPUT
+        if seventh_output is None:
+            seventh_output = JOURNEY_SIDEBAR_OUTPUT
         extra_env = extra_env or {}
         # Exercise the actual shell wrapper without downloading/building the app.
         with tempfile.TemporaryDirectory(prefix="swift wrapper ") as directory:
@@ -85,7 +89,7 @@ class TestOutputTests(unittest.TestCase):
             arguments = root / "arguments"
             outputs = [(output, status), (ISOLATED_OUTPUT if second_output is None else second_output, second_status),
                        (third_output, third_status), (fourth_output, fourth_status), (fifth_output, fifth_status),
-                       (sixth_output, sixth_status)]
+                       (sixth_output, sixth_status), (seventh_output, seventh_status)]
             outputs += ([(text, 0) for text in GITHUB_OUTPUTS] if github_outputs is None else github_outputs)
             env = {**{key: value for key, value in os.environ.items() if key != "CI"},
                    "PATH": f"{root}:{os.environ['PATH']}",
@@ -107,7 +111,7 @@ class TestOutputTests(unittest.TestCase):
         result, continued, calls = self.run_wrapper(PASSED, all_calls=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(continued)
-        self.assertEqual(len(calls), 6 + len(GITHUB))
+        self.assertEqual(len(calls), 7 + len(GITHUB))
         self.assertEqual(calls[0][-2:],
                          ["--skip", f"{ISOLATED}|{DEVBOX}|{TERMINAL}|{'|'.join(CALLBACKS)}|{'|'.join(JOURNEYS)}|{'|'.join(GITHUB)}"])
         self.assertNotIn("--skip-build", calls[0])
@@ -120,25 +124,37 @@ class TestOutputTests(unittest.TestCase):
         self.assertIn("--skip-build", calls[4])
         self.assertEqual(calls[4][-2:], ["--filter", "|".join(CALLBACKS)])
         self.assertIn("--skip-build", calls[5])
-        self.assertEqual(calls[5][-2:], ["--filter", "|".join(JOURNEYS)])
-        for index, name in enumerate(GITHUB, start=6):
+        self.assertEqual(calls[5][-2:], ["--filter", JOURNEYS[0]])
+        self.assertIn("--skip-build", calls[6])
+        self.assertEqual(calls[6][-2:], ["--filter", JOURNEYS[1]])
+        for index, name in enumerate(GITHUB, start=7):
             self.assertIn("--skip-build", calls[index])
             self.assertEqual(calls[index][-2:], ["--filter", name])
         self.assertEqual(result.stderr.count("acquired slot 1/1"), 1)
         self.assertEqual(result.stdout, PASSED + ISOLATED_OUTPUT + DEVBOX_OUTPUT + TERMINAL_OUTPUT + CALLBACKS_OUTPUT
-                         + JOURNEYS_OUTPUT + "".join(GITHUB_OUTPUTS))
+                         + JOURNEY_START_OUTPUT + JOURNEY_SIDEBAR_OUTPUT + "".join(GITHUB_OUTPUTS))
 
     def test_isolated_journeys_are_required_only_on_ci(self):
         # Outside CI the journeys are disabled, so an empty run passes.
-        result, continued, calls = self.run_wrapper(PASSED, sixth_output=PASSED, all_calls=True)
+        result, continued, calls = self.run_wrapper(PASSED, sixth_output=PASSED, seventh_output=PASSED, all_calls=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(continued)
-        self.assertEqual(len(calls), 6 + len(GITHUB))
-        outputs = [(PASSED, 0), (JOURNEYS_OUTPUT + FAILED, 0), (JOURNEYS_OUTPUT, 42)]
-        for name in JOURNEYS:
-            outputs.append((JOURNEYS_OUTPUT.replace(f"◇ Test {name}() started.\n", ""), 0))
+        self.assertEqual(len(calls), 7 + len(GITHUB))
+        outputs = [("", 0), (PASSED, 0), (JOURNEY_START_OUTPUT + FAILED, 0),
+                   (JOURNEY_START_OUTPUT, 42),
+                   (JOURNEY_START_OUTPUT.replace(f"◇ Test {JOURNEYS[0]}() started.\n", ""), 0)]
         for output, status in outputs:
             result, continued, _ = self.run_wrapper(PASSED, sixth_output=output, sixth_status=status,
+                                                    seventh_output=JOURNEY_SIDEBAR_OUTPUT,
+                                                    extra_env={"CI": "true"})
+            self.assertNotEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(continued)
+        outputs = [("", 0), (PASSED, 0), (JOURNEY_SIDEBAR_OUTPUT + FAILED, 0),
+                   (JOURNEY_SIDEBAR_OUTPUT, 42),
+                   (JOURNEY_SIDEBAR_OUTPUT.replace(f"◇ Test {JOURNEYS[1]}() started.\n", ""), 0)]
+        for output, status in outputs:
+            result, continued, _ = self.run_wrapper(PASSED, sixth_output=JOURNEY_START_OUTPUT,
+                                                    seventh_output=output, seventh_status=status,
                                                     extra_env={"CI": "true"})
             self.assertNotEqual(result.returncode, 0, result.stderr)
             self.assertFalse(continued)
@@ -167,7 +183,7 @@ class TestOutputTests(unittest.TestCase):
                 result, continued, calls = self.run_wrapper(PASSED, github_outputs=outputs, all_calls=True)
                 self.assertNotEqual(result.returncode, 0, result.stderr)
                 self.assertFalse(continued)
-                self.assertEqual(len(calls), 7 + index)
+                self.assertEqual(len(calls), 8 + index)
 
     def test_isolated_terminal_must_start_finish_and_pass(self):
         for output, status in [("", 0), (PASSED, 0),
@@ -232,7 +248,7 @@ class TestOutputTests(unittest.TestCase):
     def test_explicit_build_options_still_partition_full_suite(self):
         result, _, calls = self.run_wrapper(PASSED, args=("--jobs=1", "--skip-build"), all_calls=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(len(calls), 6 + len(GITHUB))
+        self.assertEqual(len(calls), 7 + len(GITHUB))
         for call in calls:
             self.assertIn("--jobs=1", call)
             self.assertNotIn("--jobs", call)
