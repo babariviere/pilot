@@ -84,6 +84,8 @@ final class ScrollObserverView: NSView {
     private var anchors: [RowAnchor] = []
     private var anchorViewportTop: CGFloat = 0
     private var restoringAnchor = false
+    /// Own the reading position through a geometry pass, including SwiftUI's later offset restoration.
+    private var anchorLayoutPending = false
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
@@ -126,6 +128,7 @@ final class ScrollObserverView: NSView {
         anchorSettle?.cancel()
         anchorSettle = nil
         replaceAnchors([])
+        anchorLayoutPending = false
         scrollView = nil
     }
 
@@ -133,6 +136,7 @@ final class ScrollObserverView: NSView {
     /// and settle again once the pass is complete.
     @objc private func layoutChanged(_ notification: Notification) {
         lastLayoutChange = CACurrentMediaTime()
+        anchorLayoutPending = !following
         settleAnchor(recapture: false)
         scheduleAnchorSettle()
         scheduleLayoutScroll()
@@ -147,6 +151,7 @@ final class ScrollObserverView: NSView {
     @objc private func rowMoved(_ notification: Notification) {
         guard !following, let row = notification.object as? TranscriptRowAnchorView,
               anchors.contains(where: { $0.row === row }) else { return }
+        anchorLayoutPending = true
         settleAnchor(recapture: false)
         scheduleAnchorSettle()
     }
@@ -168,6 +173,15 @@ final class ScrollObserverView: NSView {
             DispatchQueue.main.async { [weak self] in self?.undoablePin = nil }
             return
         }
+        if !following, anchorLayoutPending, let scroll = scrollView {
+            let away = scroll.contentView.bounds.origin
+            settleAnchor(recapture: false)
+            if scroll.contentView.bounds.origin != away {
+                // As with bottom-follow, a real wheel gesture must win over our layout correction.
+                undoablePin = away
+                DispatchQueue.main.async { [weak self] in self?.undoablePin = nil }
+            }
+        }
         scheduleAnchorSettle()
     }
 
@@ -179,6 +193,7 @@ final class ScrollObserverView: NSView {
         let work = DispatchWorkItem { [weak self] in
             self?.anchorSettle = nil
             self?.settleAnchor(recapture: true)
+            self?.anchorLayoutPending = false
         }
         anchorSettle = work
         DispatchQueue.main.async(execute: work)
@@ -265,7 +280,7 @@ final class ScrollObserverView: NSView {
         }
         // Nothing moved under the reader: once the pass is complete, remember any keyboard or
         // programmatic scroll. Within the pass, rows may not have been placed yet.
-        guard abs(moved - anchors[index].edge) > 0.5 else {
+        guard anchorLayoutPending || abs(moved - anchors[index].edge) > 0.5 else {
             if recapture { captureAnchor() }
             return
         }
