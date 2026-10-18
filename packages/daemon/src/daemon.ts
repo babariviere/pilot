@@ -45,6 +45,7 @@ import { TerminalManager } from "./terminals.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
 import { TriageGroomer, workerTriage } from "./triage-grooming.ts";
 import { untrackedStats } from "./untracked-stats.ts";
+import { WatchLifecycle } from "./watch-lifecycle.ts";
 import { LinearWatchSource } from "./watch-linear.ts";
 import { MissionWatchSource } from "./watch-missions.ts";
 import { PullRequestWatchSource } from "./watch-pull-requests.ts";
@@ -163,7 +164,6 @@ sessions.setSlackStatus({
 trackedItems.onChange((projectId) => sessions.refreshSlackLinks(projectId));
 // Membership is read while sessions load (auto-archiving, worker specs), so the bridge comes first.
 const missionStore = new MissionStore(join(config.home, "missions.sqlite"));
-const missionWatches = new MissionWatchSource(missionStore, watches);
 const missionLinear = new MissionLinearSource(missionStore, sourceMcp);
 missionLinear.start();
 const linearSync = new MissionLinearSyncService(missionStore, projects, sourceMcp);
@@ -289,9 +289,13 @@ await connectivity.start();
 power?.onNetworkPath((path) => connectivity.setPath(path));
 // Recover global sleep overrides before any interrupted agent can reopen.
 await power?.start();
-const stopControlWatches = sessions.setWatches(watches);
 await sessions.load(maintenance?.frozen);
 await sessions.ensureControlChat();
+watches.bindRemovalAudit((removal) => sessions.auditWatchRemoval(removal));
+const watchLifecycle = new WatchLifecycle(watches, sessions, missionStore);
+await watchLifecycle.reconcile();
+const stopControlWatches = sessions.setWatches(watches);
+const missionWatches = new MissionWatchSource(missionStore, watches);
 const sessionWatches = new SessionWatchSource(watches, sessions);
 const prWatches = new PullRequestWatchSource(watches, config.home, (target) =>
 	sessions.refreshWatchedPullRequest(target),
@@ -387,6 +391,8 @@ async function stop(): Promise<void> {
 	stopControlMissions();
 	await missionService.notices.stop();
 	await missionService.compaction.stop();
+	await watchLifecycle.stop();
+	watches.bindRemovalAudit(undefined);
 	await Promise.all([setup.close(), terminals.shutdown(), sessions.shutdown()]);
 	await credentials.close();
 	stopSlackCompletions();

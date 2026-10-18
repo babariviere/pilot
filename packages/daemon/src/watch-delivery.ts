@@ -14,8 +14,13 @@ export interface WatchNotice {
 	requestId: string;
 	lastEventId: number;
 	/** Trusted watch notes and untrusted event summaries stay separate. */
-	items: { watchId: string; note: string; event: WatchEvent; text: string; count: number }[];
+	items: { watchId: string; note: string; event: WatchEvent | "watch.removed"; text: string; count: number }[];
 	overflow: number;
+}
+export interface WatchRemoval {
+	watch: import("./watches.ts").Watch;
+	reason: "chat archived" | "chat deleted" | "mission archived";
+	at: number;
 }
 /** First observation establishes a baseline; only a changed state can emit candidate. */
 export interface WatchTransition {

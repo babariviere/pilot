@@ -1934,6 +1934,11 @@ export class MissionStore {
 		};
 	}
 
+	/** Lifecycle listeners need no task counts or attention projection. */
+	status(id: string): MissionStatus | undefined {
+		return this.one("SELECT status FROM missions WHERE id = ?", id)?.status as MissionStatus | undefined;
+	}
+
 	/** Task counts per mission (dropped tasks excluded), for summaries that do not load task bodies. */
 	taskProgress(projectId?: string): Map<string, MissionTaskProgress> {
 		const rows = this.all(
