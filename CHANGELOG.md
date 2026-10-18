@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.51.0](https://github.com/babariviere/pilot/compare/v1.50.0...v1.51.0) (2026-10-18)
+
+
+### Features
+
+* **diagnostics:** add bounded Pilot log access ([c9e1307](https://github.com/babariviere/pilot/commit/c9e130721ec2f9baaf9f7f406de858c0e844ada5))
+* **diagnostics:** generate descriptive specialist titles ([921cd0c](https://github.com/babariviere/pilot/commit/921cd0cbd7bd30f3326b5afbce9f48caf8d9f4da))
+
+
+### Bug Fixes
+
+* **home:** bound PR badges in Working now rows ([6211e8f](https://github.com/babariviere/pilot/commit/6211e8f42f09650b967c221b7d78430c3f6f19ee))
+* **kernel:** bound shell execution and distinguish timeouts ([bad16fe](https://github.com/babariviere/pilot/commit/bad16fe272ae421e1bf22a120bdf43fda55665de))
+
 ## [1.50.0](https://github.com/babariviere/pilot/compare/v1.49.0...v1.50.0) (2026-10-18)
 
 
