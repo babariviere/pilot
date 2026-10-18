@@ -455,6 +455,10 @@ The timed Stop-routing tests also run in a separate process. This keeps unrelate
 MainActor run loops from consuming their two-minute deadlines. Every selected Stop function must start;
 their assertions and time limits are unchanged.
 
+The CI-only keyboard journeys run last, in their own process. Without a key window they record known issues
+while their nested run loops hold the MainActor for minutes, which used to time out unrelated MainActor tests
+(for example the shared-context courier). On CI both journeys must start.
+
 CI runs native Node, packaging and Swift tests in one `macos` job, because the free plan runs only a few
 macOS jobs at once. PRs skip the Swift steps when they change nothing under `apps/macos/`, the release
 workflow, `package.json` or the verification-slot script. PRs that run Swift package the debug binaries from

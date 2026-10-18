@@ -38,6 +38,11 @@ const root = ${JSON.stringify(root)};
 const mode = ${JSON.stringify(mode)};
 globalThis.fetch = () => { throw new Error("Child fixture must stay offline"); };
 export default pi => {
+	// The update drain must reach this worker before the in-flight tool is released. Record the
+	// host's quiesce request after the worker's own listener has handled it.
+	if (mode === "update") process.on("message", message => {
+		if (message?.type === "quiesce") writeFileSync(join(root, "quiesce-received"), "ready");
+	});
 	const faux = fauxProvider({ tokensPerSecond: 100_000 });
 	const call = step => fauxToolCall("codemode", {code: 'text(await tools.pause_effect({step:' + step + '}));'});
 	faux.setResponses(Array.from({length: 20}, () => async (request, options) => {
@@ -212,6 +217,8 @@ for (const mode of ["update", "sleep", "offline", "stop"] as const) {
 		const identity = session.subagentList[0]!.conversationId;
 		if (mode === "update") {
 			const paused = session.pauseForUpdate();
+			// Releasing tool 1 before the child sees quiesce would let it start tool 2 legitimately.
+			await until(() => existsSync(join(root, "quiesce-received")));
 			await writeFile(join(root, "release"), "ready");
 			await paused;
 			assert.equal(await readFile(join(root, "effects"), "utf8"), "1", "the drain freezes the queued child tool");
