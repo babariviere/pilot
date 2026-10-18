@@ -172,10 +172,21 @@ final class HostClients: ObservableObject {
     let scopedModels: ScopedModelsSync
     private let readScopedModelCapability: @MainActor (HostRef, SSHConnectionConfiguration?) async throws -> String
     private var scopedModelsStarted = false
+    private let automaticUpdateConfiguration: DevboxAutomaticUpdateConfiguration
+    private let devboxUpdateStore: DevboxUpdateIntentStore
+    /// One model per pinned host, reused by Settings and the automatic lifecycle consumer.
+    private(set) lazy var devboxUpdates = AutomaticDevboxUpdates(runtimes: remoteRuntimes,
+        targetVersion: automaticUpdateConfiguration.targetVersion,
+        loadPackage: automaticUpdateConfiguration.loadPackage,
+        actions: automaticUpdateConfiguration.actions ?? .live(self), store: devboxUpdateStore,
+        validate: { [weak self] token in
+            guard let self, !self.shuttingDown else { return false }
+            return (try? self.validate(token)) != nil
+        })
     private var liveConnectionsStarted = false
     private var enrollingHosts: Set<HostRef> = []
     var startupConnectionsIdle: Bool {
-        savedStartup.isIdle && connectionJobs.isEmpty && connectionCleanup.isEmpty && remoteRuntimes.isIdle && scopedModels.isIdle
+        savedStartup.isIdle && connectionJobs.isEmpty && connectionCleanup.isEmpty && remoteRuntimes.isIdle && scopedModels.isIdle && devboxUpdates.isIdle
     }
     private let makeTunnel: (SSHConnectionConfiguration, HostRef) -> any HostTunnel
     private let makeClient: @MainActor () -> PilotClient
@@ -205,6 +216,7 @@ final class HostClients: ObservableObject {
          readScopedModelCapability: @escaping @MainActor (HostRef, SSHConnectionConfiguration?) async throws -> String = {
              try await GitHubNativeAccess.read(host: $0, configuration: $1)
          },
+         automaticUpdates: DevboxAutomaticUpdateConfiguration? = nil,
          readRuntimeHello: @escaping @MainActor (PilotClient, HostRef) async throws -> DaemonHello = { client, _ in
              try await client.hello()
          }) {
@@ -216,6 +228,10 @@ final class HostClients: ObservableObject {
             operationDirectory?.appendingPathComponent("scoped-models", isDirectory: true) ??
                 FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                     .appendingPathComponent("Pilot/ScopedModels", isDirectory: true)))
+        automaticUpdateConfiguration = automaticUpdates ?? DevboxAutomaticUpdateConfiguration()
+        devboxUpdateStore = automaticUpdates?.store ?? operationDirectory.map {
+            DevboxUpdateIntentStore(directory: $0.appendingPathComponent("devbox-updates", isDirectory: true))
+        } ?? .shared
         operations = OperationOutbox(directory: operationDirectory ?? FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Pilot/Operations"))
     }
@@ -324,6 +340,13 @@ final class HostClients: ObservableObject {
                     return try await self.readRuntimeHello(client, host)
                 })
         })
+        devboxUpdates.retainSavedHosts(Set(offlineHosts.keys))
+        devboxUpdates.targetChanged()
+    }
+
+    func startAutomaticDevboxUpdates() {
+        guard !shuttingDown else { return }
+        devboxUpdates.start()
     }
 
     func historyAvailability(_ ref: HostResourceRef, cached: Bool) -> HostedHistoryAvailability {
@@ -781,6 +804,7 @@ final class HostClients: ObservableObject {
         savedStartup.stop()
         remoteRuntimes.stop()
         scopedModels.stop()
+        devboxUpdates.stop()
         for job in connectionJobs.values { job.task.cancel() }
         connectionJobs.removeAll()
         sharedContextCourier.stop()
@@ -791,6 +815,7 @@ final class HostClients: ObservableObject {
         }
         for host in Set(tunnels.keys).union(connectionCleanup.keys) { await disconnect(host) }
         await scopedModels.stopAndWait()
+        await devboxUpdates.stopAndWait()
         do { try await flushOffline() }
         catch { persistenceError = "Could not save offline host metadata before quitting." }
     }

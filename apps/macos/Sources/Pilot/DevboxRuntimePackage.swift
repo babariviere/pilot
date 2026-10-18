@@ -5,25 +5,74 @@ import PilotCore
 /// Supplied by the app's authenticated release-access owner. Never place its token in view/model state.
 typealias DevboxPackageLoader = @MainActor () async throws -> LinuxRuntimePackage
 
-/// Production default. Only an explicit Setup/Update action calls it. No token becomes model state.
-@MainActor
-enum DevboxRuntimePackage {
-    private static var cached: LinuxRuntimePackage?
-    private static var loading: Task<LinuxRuntimePackage, Error>?
+/// One bounded download, independent cancellable waiters. Quitting/disconnecting one consumer
+/// must not wait for another host's download or cancel its package acquisition.
+@MainActor final class DevboxPackageAcquisition {
+    private let acquire: DevboxPackageLoader
+    private var cached: LinuxRuntimePackage?
+    private var loading: Task<Void, Never>?
+    private var abandoned = false
+    private var waiters: [UUID: CheckedContinuation<LinuxRuntimePackage, Error>] = [:]
+    var waitingCount: Int { waiters.count }
+    init(acquire: @escaping DevboxPackageLoader) { self.acquire = acquire }
 
-    static func load() async throws -> LinuxRuntimePackage {
+    func load() async throws -> LinuxRuntimePackage {
+        try Task.checkCancellation()
         if let cached {
             try await Task.detached { try cached.manifest.verifyArchive(at: cached.archiveURL) }.value
+            try Task.checkCancellation()
             return cached
         }
-        if let loading { return try await loading.value }
-        let task = Task { try await download() }
-        loading = task
-        defer { loading = nil }
-        let package = try await task.value
-        cached = package
+        let id = UUID()
+        let package: LinuxRuntimePackage = try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                guard !Task.isCancelled else { continuation.resume(throwing: CancellationError()); return }
+                guard waiters.count < 64 else { continuation.resume(throwing: DevboxPackageFailure.access); return }
+                waiters[id] = continuation
+                if loading == nil { startLoading() }
+            }
+        } onCancel: {
+            Task { @MainActor in
+                guard let waiter = self.waiters.removeValue(forKey: id) else { return }
+                waiter.resume(throwing: CancellationError())
+                if self.waiters.isEmpty { self.abandoned = true; self.loading?.cancel() }
+            }
+        }
+        try Task.checkCancellation()
         return package
     }
+
+    private func startLoading() {
+        loading = Task {
+            do {
+                try Task.checkCancellation()
+                let package = try await acquire()
+                try Task.checkCancellation()
+                cached = package
+                finish(.success(package))
+            } catch { finish(.failure(error)) }
+        }
+    }
+
+    private func finish(_ result: Result<LinuxRuntimePackage, Error>) {
+        loading = nil
+        // A fresh reconnect can join while the cancelled last consumer's I/O unwinds.
+        // Wait for that owned operation to exit, then acquire afresh for the new waiters.
+        if abandoned {
+            abandoned = false
+            if !waiters.isEmpty { startLoading() }
+            return
+        }
+        let current = waiters; waiters.removeAll()
+        for waiter in current.values { waiter.resume(with: result) }
+    }
+}
+
+/// Shared by setup, explicit recovery and automatic compatible updates. No token becomes model state.
+@MainActor
+enum DevboxRuntimePackage {
+    private static let acquisition = DevboxPackageAcquisition { try await download() }
+    static func load() async throws -> LinuxRuntimePackage { try await acquisition.load() }
 
     private static func download() async throws -> LinuxRuntimePackage {
         let bundle = Bundle.main
@@ -66,6 +115,7 @@ enum DevboxRuntimePackage {
         do {
             let package = try await LinuxRuntimePackage.download(release: release, repository: repository, token: token,
                 releaseTag: tag, expectedVersion: version, bundle: bundle, to: directory.appendingPathComponent("runtime.tgz"))
+            try Task.checkCancellation()
             return package
         } catch {
             await Task.detached { try? FileManager.default.removeItem(at: directory) }.value
@@ -77,7 +127,7 @@ enum DevboxRuntimePackage {
 enum DevboxPackageFailure: Error { case trust, assets, access }
 
 enum DevboxProblem: Error, Equatable {
-    case savedUpdate, packageChanged, storage, invalidAlias
+    case savedUpdate, packageChanged, storage, invalidAlias, cancelledTarget, incompatibleRuntime
 }
 
 /// Plain, fixed UI copy. Never render raw SSH, URLSession, SDK or credential errors.
@@ -141,6 +191,8 @@ enum DevboxProblemText {
         case .storage: return "The update request could not be saved safely. No update was dispatched. Repair local storage before retrying."
         case .packageChanged: return "This pending update requires its original verified package. Check its saved status; do not replace it with a different release."
         case .savedUpdate: return "A previous update still needs reconciliation. Check that request before starting another update."
+        case .cancelledTarget: return "Automatic updating to this version was cancelled. Only an explicit retry can request it again."
+        case .incompatibleRuntime: return "The devbox runtime cannot be safely compared with this app. Check its version, identity and update support. No update was requested."
         default: break
         }
         if let failure = error as? LinuxBootstrapFailure, ["assets", "trust"].contains(failure.code) { return setup(error) }
@@ -158,7 +210,18 @@ struct DevboxUpdateIntent: Codable, Equatable, Sendable {
 
 /// Private metadata only. Synchronous filesystem work stays on this actor, never the UI actor.
 actor DevboxUpdateIntentStore {
-    private struct Index: Codable { let schema: Int; var intents: [DevboxUpdateIntent] }
+    private struct SuppressionTarget: Hashable { let host: HostRef; let version: String }
+    private struct Suppression: Codable {
+        let host: HostRef
+        let version: String
+        let updateId: String
+    }
+    private struct Index: Codable {
+        let schema: Int
+        var intents: [DevboxUpdateIntent]
+        // Optional for existing private indexes. The same store owns manual/automatic cancellation.
+        var suppressions: [Suppression]?
+    }
     private let directory: URL
     private var failure = false
 
@@ -169,21 +232,47 @@ actor DevboxUpdateIntentStore {
 
     func current(_ host: HostRef) throws -> DevboxUpdateIntent? { try read().intents.first { $0.host == host } }
 
+    func automaticSuppressed(host: HostRef, version: String) throws -> Bool {
+        try read().suppressions?.contains { $0.host == host && $0.version == version } == true
+    }
+
+    /// Save BEFORE sending cancellation, including a lost reply and a foreign remote owner.
+    func suppressAutomatic(host: HostRef, version: String, updateId: String) throws {
+        var index = try read()
+        guard host.hostId != "local", !host.hostId.isEmpty, !host.daemonId.isEmpty, !host.lineageId.isEmpty,
+              validVersion(version), UUID(uuidString: updateId) != nil else { throw DevboxProblem.storage }
+        var values = index.suppressions ?? []
+        guard !values.contains(where: { $0.host.hostId == host.hostId && $0.host != host }),
+              !index.intents.contains(where: { $0.host.hostId == host.hostId && $0.host != host }) else { throw DevboxProblem.storage }
+        values.removeAll { $0.host == host && $0.version == version }
+        guard values.count < 128 else { throw DevboxProblem.storage }
+        values.append(Suppression(host: host, version: version, updateId: updateId))
+        index.suppressions = values
+        try save(index)
+    }
+
     /// Returns the same UUID for an unresolved request. Never silently replaces its pin or package.
-    func reserve(host: HostRef, version: String, archive: String) throws -> DevboxUpdateIntent {
+    func reserve(host: HostRef, version: String, archive: String, automatic: Bool = false) throws -> DevboxUpdateIntent {
         var index = try read()
         guard host.hostId != "local", !host.hostId.isEmpty, !host.daemonId.isEmpty, !host.lineageId.isEmpty,
               version.range(of: #"^\d+\.\d+\.\d+$"#, options: .regularExpression) != nil,
               archive.range(of: #"^[a-f0-9]{64}$"#, options: .regularExpression) != nil,
-              !index.intents.contains(where: { $0.host.hostId == host.hostId && $0.host != host }) else { throw DevboxProblem.storage }
+              !index.intents.contains(where: { $0.host.hostId == host.hostId && $0.host != host }),
+              !(index.suppressions ?? []).contains(where: { $0.host.hostId == host.hostId && $0.host != host }) else { throw DevboxProblem.storage }
+        if automatic, index.suppressions?.contains(where: { $0.host == host && $0.version == version }) == true {
+            throw DevboxProblem.cancelledTarget
+        }
         if let previous = index.intents.first(where: { $0.host == host }), !previous.conclusive {
             guard previous.version == version, previous.archive == archive else { throw DevboxProblem.packageChanged }
+            guard !automatic else { throw DevboxProblem.savedUpdate }
             return previous
         }
         let intent = DevboxUpdateIntent(id: UUID(), host: host, version: version, archive: archive)
         index.intents.removeAll { $0.host == host }
         guard index.intents.count < 32 else { throw DevboxProblem.storage }
         index.intents.append(intent)
+        // Only a fresh explicit request supersedes cancellation; unresolved retries above retain it.
+        if !automatic { index.suppressions?.removeAll { $0.host == host && $0.version == version } }
         try save(index)
         return intent
     }
@@ -203,7 +292,7 @@ actor DevboxUpdateIntentStore {
                 let values = try directory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
                 guard values.isDirectory == true, values.isSymbolicLink != true else { throw DevboxProblem.storage }
             }
-            guard FileManager.default.fileExists(atPath: url.path) else { return Index(schema: 1, intents: []) }
+            guard FileManager.default.fileExists(atPath: url.path) else { return Index(schema: 1, intents: [], suppressions: nil) }
             let metadata = try url.resourceValues(forKeys: [.fileSizeKey, .isSymbolicLinkKey])
             guard metadata.isSymbolicLink != true, (metadata.fileSize ?? Int.max) <= 65_536 else { throw DevboxProblem.storage }
             let index = try JSONDecoder().decode(Index.self, from: Data(contentsOf: url))
@@ -211,9 +300,17 @@ actor DevboxUpdateIntentStore {
                   Set(index.intents.map { $0.host.hostId }).count == index.intents.count,
                   index.intents.allSatisfy({ $0.host.hostId != "local" && !$0.host.hostId.isEmpty && !$0.host.daemonId.isEmpty && !$0.host.lineageId.isEmpty &&
                     $0.version.range(of: #"^\d+\.\d+\.\d+$"#, options: .regularExpression) != nil &&
-                    $0.archive.range(of: #"^[a-f0-9]{64}$"#, options: .regularExpression) != nil }) else { throw DevboxProblem.storage }
+                    $0.archive.range(of: #"^[a-f0-9]{64}$"#, options: .regularExpression) != nil }),
+                  (index.suppressions?.count ?? 0) <= 128,
+                  Set((index.suppressions ?? []).map { SuppressionTarget(host: $0.host, version: $0.version) }).count == (index.suppressions?.count ?? 0),
+                  Dictionary(grouping: index.suppressions ?? [], by: { $0.host.hostId }).values.allSatisfy({ Set($0.map { $0.host }).count == 1 }),
+                  (index.suppressions ?? []).allSatisfy({ $0.host.hostId != "local" && !$0.host.hostId.isEmpty && !$0.host.daemonId.isEmpty && !$0.host.lineageId.isEmpty && validVersion($0.version) && UUID(uuidString: $0.updateId) != nil }) else { throw DevboxProblem.storage }
             return index
         } catch { failure = true; throw DevboxProblem.storage }
+    }
+
+    private func validVersion(_ version: String) -> Bool {
+        version.utf8.count <= 64 && version.range(of: #"^\d+\.\d+\.\d+$"#, options: .regularExpression) != nil
     }
 
     private func save(_ index: Index) throws {

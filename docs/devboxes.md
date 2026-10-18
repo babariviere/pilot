@@ -263,9 +263,18 @@ its offline copies. Late factual evidence is retained even when work was cancell
 
 ## Update safely
 
-Select a reachable devbox in Settings and use its Runtime updates section. The request is saved
-before dispatch and continues under an independent remote update owner, even after disconnect or
-app quit. Check the saved request rather than starting another when its result is unknown.
+On live app startup and verified reconnect, Pilot automatically compares saved trusted devboxes
+with the installed app. An older, compatible Linux runtime receives that exact app version's signed
+package. Current versions need no download or update. Newer, unknown, incompatible or replacement
+runtimes are not guessed or downgraded. Missing signing assets or release access remain visible in
+Settings → Devboxes; they never trigger an unsigned or newer-release fallback.
+
+The same Runtime updates model in Settings shows automatic checks, waiting work and recovery controls.
+Package/request work is bounded to two hosts at a time, independently of Local. The request is saved before dispatch
+and continues under the existing independent remote update owner, even after disconnect or app quit.
+An existing or uncertain manual/automatic request is checked, never automatically resent or replaced.
+Explicit cancellation suppresses automatic requests for that host/version across reconnect and relaunch;
+only an explicit retry can supersede it. Check an unknown result rather than starting another update.
 
 The update waits for live jobs, workspace shells, transfers and uncertain cleanup. Open the listed
 chat, let work finish, or explicitly stop/close it. A Stop reply or closed socket alone is not proof

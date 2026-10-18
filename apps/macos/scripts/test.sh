@@ -64,6 +64,24 @@ scoped_model_tests=(
 printf -v scoped_models '%s|' "${scoped_model_tests[@]}"
 scoped_models="${scoped_models%|}"
 scoped_model_native='scopedModelsNativeSavePersistsAndDispatchesExplicitAllOnlyAfterClick|scopedModelsNativeSelectorPreservesAdvancedPatterns|scopedModelsNativeSaveUsesHostOwnerCapabilityHttpAndLiteralReadback'
+# Update/store fault fixtures need MainActor scheduling, not native window run loops.
+automatic_update_tests=(
+	automaticPackageWaitersCancelIndependentlyAndReconnectDoesNotWaitForAbandonedIO
+	automaticStoreKeepsEveryCancelledTargetAndRefusesUnresolvedReplay
+	automaticLiveStartupKeepsLocalUnblockedAndUsesTheVerifiedRuntimeOwner
+	automaticOlderRuntimeStagesOnceAndSharesWaitingBlockersWithoutSettings
+	automaticSameNewerUnknownAndUnsupportedVersionsNeverDownloadOrDowngrade
+	automaticLostAckAndRelaunchLookUpOriginalManualOrAutomaticIntentOnly
+	automaticPendingDifferentPackageAndUnknownAckCannotAllocateReplacement
+	automaticUnreadableStoreAndNeedsRepairFailClosedWithoutReplacingState
+	automaticIdentityReplacementCannotPublishOldSuccessOrSendAnotherRequest
+	automaticCancellationSurvivesLostAckReconnectAndColdLaunchUntilExplicitRetry
+	automaticTrustFailureIsBoundedAndCannotCreateAnIntent
+	automaticDisconnectOrTargetChangeDuringDownloadCannotDispatchStalePackage
+	automaticWorkIsBoundedAndOneHostDoesNotBlockOthersOrInventTermination
+)
+printf -v automatic_updates '%s|' "${automatic_update_tests[@]}"
+automatic_updates="${automatic_updates%|}"
 partition=1
 reuse=(--skip-build)
 for argument in "$@"; do
@@ -87,7 +105,7 @@ run_tests() {
 		| python3 "$here/scripts/check-test-output.py" ${guards[@]+"${guards[@]}"}
 }
 if [ "$partition" = 1 ]; then
-	run_tests "" "$@" --skip "$isolated|$devbox|$terminal|$callbacks|$journeys|$github|$scoped_models|$scoped_model_native"
+	run_tests "" "$@" --skip "$isolated|$devbox|$terminal|$callbacks|$journeys|$github|$scoped_models|$scoped_model_native|$automatic_updates"
 	run_tests "$isolated" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$isolated"
 	run_tests "$devbox" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$devbox"
 	run_tests "$terminal" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$terminal"
@@ -104,6 +122,7 @@ if [ "$partition" = 1 ]; then
 	for name in "${scoped_model_native_tests[@]}"; do
 		run_tests "$name" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$name"
 	done
+	run_tests "$automatic_updates" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$automatic_updates"
 else
 	# Explicit selection/listing is the caller's scope. Do not append another filter.
 	run_tests "" "$@"

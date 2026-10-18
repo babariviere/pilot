@@ -1,179 +1,6 @@
-import Combine
+import Foundation
 import PilotCore
 import SwiftUI
-
-@MainActor
-struct DevboxUpdateActions {
-    var available: (HostRef) -> Bool
-    var configuration: (HostRef) -> SSHConnectionConfiguration?
-    var status: (String?, HostRef) async throws -> RuntimeUpdateStatus?
-    var start: (SSHConnectionConfiguration, LinuxRuntimePackage, HostRef, UUID) async throws -> String
-    var cancel: (String, HostRef) async throws -> RuntimeUpdateCancellation
-
-    static func live(_ hosts: HostClients) -> Self {
-        Self(available: { hosts.available.contains($0) }, configuration: { hosts.offlineHosts[$0]?.configuration },
-             status: { try await hosts.runtimeUpdate($0, on: $1) },
-             start: { try await LinuxSSHUpdate.start(configuration: $0, package: $1, host: $2, id: $3) },
-             cancel: { try await hosts.cancelRuntimeUpdate($0, on: $1) })
-    }
-}
-
-@MainActor
-final class DevboxUpdateModel: ObservableObject {
-    let host: HostRef
-    @Published private(set) var status: RuntimeUpdateStatus?
-    @Published private(set) var intent: DevboxUpdateIntent?
-    @Published private(set) var problem: String?
-    @Published private(set) var notice: String?
-    @Published private(set) var busy = false
-    @Published private(set) var checked = false
-    @Published private(set) var cancellationRequested = false
-    private let loadPackage: DevboxPackageLoader
-    private let actions: DevboxUpdateActions
-    private let store: DevboxUpdateIntentStore
-    private var generation = UUID()
-
-    init(host: HostRef, loadPackage: @escaping DevboxPackageLoader,
-         actions: DevboxUpdateActions, store: DevboxUpdateIntentStore = .shared) {
-        self.host = host; self.loadPackage = loadPackage; self.actions = actions; self.store = store
-    }
-
-    var available: Bool { actions.available(host) }
-    var unresolved: Bool { status.map { !Self.conclusive($0.phase) } ?? (intent != nil && intent?.conclusive != true) }
-    var mayRequest: Bool { checked && available && !busy && !unresolved }
-    /// A staged request may have crashed before installing its independent owner. Retrying the
-    /// exact saved request starts that owner so it can settle the durable remote cancellation.
-    var mayFinishCancellation: Bool {
-        available && !busy && cancellationRequested && intent?.conclusive == false &&
-            status?.phase == .staged && status?.requestConfirmed == false &&
-            status?.id == intent?.id.uuidString.lowercased() &&
-            problem != DevboxProblemText.update(DevboxProblem.storage)
-    }
-    var mayRetry: Bool {
-        if cancellationRequested { return mayFinishCancellation }
-        return available && !busy && intent != nil && intent?.conclusive != true &&
-            (status == nil || status?.phase == .staged) && problem != DevboxProblemText.update(DevboxProblem.storage)
-    }
-    static func conclusive(_ phase: RuntimeUpdatePhase) -> Bool { phase == .completed || phase == .cancelled }
-
-    func refresh() async {
-        guard !busy, available else { return }
-        busy = true; defer { busy = false }
-        let generation = self.generation
-        do {
-            let saved = try await store.current(host)
-            let value = try await actions.status(saved?.conclusive == false ? saved?.id.uuidString.lowercased() : nil, host)
-            guard self.generation == generation, available else { return }
-            if let value, !value.requestConfirmed && value.phase != .staged { throw DevboxProblem.savedUpdate }
-            guard value == nil || saved == nil || saved!.conclusive || value!.id == saved!.id.uuidString.lowercased() else { throw DevboxProblem.savedUpdate }
-            intent = saved; status = value; checked = true; problem = nil
-            if let value, Self.conclusive(value.phase) { cancellationRequested = false }
-            if let value, Self.conclusive(value.phase), let saved, value.id == saved.id.uuidString.lowercased() {
-                try await store.markConclusive(host: host, id: saved.id)
-                intent = try await store.current(host)
-                cancellationRequested = false
-            }
-            if value?.phase == .staged {
-                notice = saved == nil ? "This package was staged elsewhere. Reconcile it from its original request; Pilot will not invent a replacement." : "The package is staged, but the request is not confirmed. Retry only this saved update."
-            }
-            else if value == nil, let saved, !saved.conclusive { notice = "This saved request has no confirmed result. Check or explicitly retry the same request; it is never sent automatically." }
-            else { notice = nil }
-        } catch { if self.generation == generation { problem = error as? DevboxProblem == .storage ? DevboxProblemText.update(error) : "Could not check this devbox's update. Existing state has been kept. Reconnect and check again."; checked = false } }
-    }
-
-    /// Both a first request and an explicit unconfirmed retry go through the same immutable-intent gate.
-    func request() async {
-        guard !busy, available, let configuration = actions.configuration(host) else { return }
-        busy = true; problem = nil; notice = nil; defer { busy = false }
-        let generation = self.generation
-        let finishingCancellation = cancellationRequested
-        var dispatched = false
-        do {
-            let previous = try await store.current(host)
-            let current = try await actions.status(nil, host)
-            guard self.generation == generation, available else { return }
-            status = current; checked = true
-            if finishingCancellation {
-                guard let previous, !previous.conclusive, let current,
-                      current.id == previous.id.uuidString.lowercased(), current.phase == .staged,
-                      !current.requestConfirmed else { throw DevboxProblem.savedUpdate }
-            }
-            if let current, !Self.conclusive(current.phase) {
-                guard previous?.id.uuidString.lowercased() == current.id, current.phase == .staged else { throw DevboxProblem.savedUpdate }
-            }
-            let package = try await loadPackage()
-            guard self.generation == generation, available else { return }
-            let saved: DevboxUpdateIntent
-            if finishingCancellation {
-                // Do not call reserve here: even if local state changed, recovery must never mint
-                // a replacement UUID or erase the existing remote cancellation request.
-                guard let previous, !previous.conclusive,
-                      previous.version == package.manifest.version,
-                      previous.archive == package.manifest.archive.sha256 else { throw DevboxProblem.packageChanged }
-                saved = previous
-            } else {
-                saved = try await store.reserve(host: host, version: package.manifest.version, archive: package.manifest.archive.sha256)
-            }
-            guard self.generation == generation, available else { return }
-            intent = saved
-            if finishingCancellation {
-                // Package download can take time. An owner may have started in the meantime;
-                // never resubmit an accepted update merely because cancellation is pending.
-                let latest = try await actions.status(saved.id.uuidString.lowercased(), host)
-                guard self.generation == generation, available else { return }
-                status = latest
-                guard let latest, latest.id == saved.id.uuidString.lowercased() else { throw DevboxProblem.savedUpdate }
-                if Self.conclusive(latest.phase), latest.requestConfirmed {
-                    try await store.markConclusive(host: host, id: saved.id)
-                    intent = try await store.current(host)
-                    cancellationRequested = false
-                    notice = latest.phase == .cancelled ? "Update cancelled. The devbox confirmed it; no replacement update was created." : "The update completed before cancellation settled."
-                    return
-                }
-                guard latest.phase == .staged, !latest.requestConfirmed else { throw DevboxProblem.savedUpdate }
-            }
-            // The store has completed atomic publication and fsync of UUID, pin and package hash.
-            dispatched = true
-            let id = try await actions.start(configuration, package, host, saved.id)
-            guard id == saved.id.uuidString.lowercased() else { throw HostRoutingError.identityChanged }
-            guard self.generation == generation else { return }
-            notice = finishingCancellation
-                ? "Cancellation recovery requested for the same saved update. Waiting for the devbox to confirm cancellation; no replacement update was created."
-                : "Update requested. It continues on the devbox through disconnection, sleep and app quit."
-            checked = true
-            if available {
-                let value = try await actions.status(id, host)
-                guard self.generation == generation, available else { return }
-                guard value == nil || value?.id == id else { throw DevboxProblem.savedUpdate }
-                status = value
-                if let value, value.requestConfirmed, Self.conclusive(value.phase) {
-                    try await store.markConclusive(host: host, id: saved.id)
-                    intent = try await store.current(host)
-                    cancellationRequested = false
-                    notice = value.phase == .cancelled ? "Update cancelled. The devbox confirmed it; no replacement update was created." : "Runtime update completed."
-                }
-            }
-        } catch {
-            guard self.generation == generation else { return }
-            if !dispatched, error is DevboxPackageFailure || error is LinuxBootstrapFailure { problem = DevboxProblemText.setup(error) }
-            else { problem = DevboxProblemText.update(error) }
-        }
-    }
-
-    func requestCancellation() async {
-        guard !busy, available, let id = status?.id ?? intent?.id.uuidString.lowercased() else { return }
-        busy = true; defer { busy = false }
-        let generation = self.generation
-        do {
-            let result = try await actions.cancel(id, host)
-            guard self.generation == generation, available, result.id == id else { return }
-            cancellationRequested = result.requested
-            notice = result.requested ? "Cancellation requested. The devbox must confirm it before this update is cancelled." : "Cancellation was not accepted. Check the update; restart may already be committed."
-        } catch { if self.generation == generation { problem = "Cancellation has no confirmed reply. Reconnect and check this update; no cancellation is queued or replayed." } }
-    }
-
-    func disconnected() { generation = UUID(); checked = false }
-}
 
 @MainActor
 struct DevboxUpdateSection: View {
@@ -187,12 +14,12 @@ struct DevboxUpdateSection: View {
     init(host: HostRef, hosts: HostClients, loadPackage: @escaping DevboxPackageLoader,
          navigate: @escaping (HostResourceRef) -> Void = { _ in }) {
         self.host = host; self.hosts = hosts; self.navigate = navigate
-        _model = StateObject(wrappedValue: DevboxUpdateModel(host: host, loadPackage: loadPackage, actions: .live(hosts)))
+        _model = StateObject(wrappedValue: hosts.devboxUpdates.model(for: host, packageLoader: loadPackage))
     }
 
     var body: some View {
-        SettingsSection("Runtime updates", explanation: "Updates use a verified runtime matching this app. The devbox waits for jobs, terminals and transfers to finish. Nothing is stopped silently.") {
-            SettingsRow(model.status.map { $0.requestConfirmed ? DevboxUpdateCopy.phase($0.phase) : "Package staged, request not confirmed" } ?? "Update this devbox",
+        SettingsSection("Runtime updates", explanation: "Pilot automatically checks saved devboxes and requests the signed runtime matching this app when they are older. Restart waits for jobs, terminals, transfers and cleanup. Nothing is stopped silently.") {
+            SettingsRow(DevboxUpdateCopy.title(model.status, automatic: model.automaticPhase),
                 detail: hosts.available.contains(host) ? "Accepted work continues independently while an update waits." : "Disconnected. The last update state may be out of date.") {
                 HStack(spacing: 8) {
                     if model.busy { ProgressView().controlSize(.small) }
@@ -200,12 +27,15 @@ struct DevboxUpdateSection: View {
                         Button("Finish cancelling…") { confirmUpdate = true }.controlSize(.small)
                     } else if model.mayRetry {
                         Button("Retry saved request…") { confirmUpdate = true }.controlSize(.small)
-                    } else if !model.unresolved {
-                        Button("Update…") { confirmUpdate = true }.controlSize(.small).disabled(!model.mayRequest)
+                    } else if !model.unresolved, model.mayRequest {
+                        Button("Retry update…") { confirmUpdate = true }.controlSize(.small)
                     }
                     Button("Check status") { Task { await model.refresh() } }.controlSize(.small)
                         .disabled(model.busy || !hosts.available.contains(host))
                 }
+            }
+            if let observed = model.observedVersion {
+                SettingsRow("Verified runtime", detail: "Devbox \(observed) · app target \(model.targetVersion ?? "unknown")") { EmptyView() }
             }
             if let value = model.status {
                 let blockers = showAllBlockers ? value.blockers : Array(value.blockers.prefix(5))
@@ -253,6 +83,13 @@ struct DevboxUpdateSection: View {
 }
 
 enum DevboxUpdateCopy {
+    static func title(_ status: RuntimeUpdateStatus?, automatic: DevboxAutomaticUpdatePhase?) -> String {
+        if let status, !DevboxUpdateModel.conclusive(status.phase) {
+            return status.requestConfirmed ? phase(status.phase) : "Package staged, request not confirmed"
+        }
+        return automatic?.title ?? status.map { phase($0.phase) } ?? "Check this devbox"
+    }
+
     static func phase(_ phase: RuntimeUpdatePhase) -> String {
         switch phase {
         case .staged: "Package staged, request not confirmed"
