@@ -6,6 +6,7 @@ import type {
 	ArtifactRevision,
 	DeliveryMode,
 	DiagnosticTargetReference,
+	OperationHost,
 	RewindAction,
 	SessionAttempt,
 	SessionCommand,
@@ -30,6 +31,84 @@ export interface ExecutionEvidence {
 	inputSubmissionId?: number;
 	inputOperationId?: string;
 	completionEntry?: number;
+}
+
+export type DiagnosticLogSourceId =
+	| "app"
+	| "daemon"
+	| "kernel_worker"
+	| "native_report"
+	| "lifecycle"
+	| "request_timing"
+	| "tool_activity";
+
+export type DiagnosticLogRequest =
+	| { action: "inventory" }
+	| {
+			action: "search";
+			source: DiagnosticLogSourceId;
+			q?: string;
+			since?: string;
+			cursor?: string;
+			limit?: number;
+	  }
+	| { action: "excerpt"; ref: string; before?: number; after?: number };
+
+export interface DiagnosticLogSourceInventory {
+	id: DiagnosticLogSourceId;
+	scope: "host" | "target";
+	availability: "available" | "unavailable" | "disabled";
+	coverage: string;
+	retention: "current_process" | "current_and_rotated" | "bounded_local" | "os_managed" | "none";
+	availableFiles: number;
+	rotatedFiles: number;
+	catalogTruncated: boolean;
+	reason?: "not_recorded" | "missing" | "inaccessible" | "disabled" | "journal_unavailable" | "unsafe_source";
+}
+
+export interface DiagnosticLogRecord {
+	ref: string;
+	at?: string;
+	text: string;
+	truncated: boolean;
+}
+
+export interface DiagnosticLogPage {
+	source: DiagnosticLogSourceId;
+	status: "ok" | "unavailable" | "disabled" | "stale_cursor" | "source_changed";
+	records: DiagnosticLogRecord[];
+	scannedBytes: number;
+	maxScanBytes: number;
+	encodedBytes: number;
+	maxBytes: number;
+	oversizedRecords: number;
+	truncated: boolean;
+	nextCursor?: string;
+	reason?: string;
+}
+
+export interface DiagnosticLogExcerpt {
+	source: DiagnosticLogSourceId;
+	status: "ok" | "unavailable" | "stale_ref" | "source_changed";
+	record?: DiagnosticLogRecord;
+	before: DiagnosticLogRecord[];
+	after: DiagnosticLogRecord[];
+	scannedBytes: number;
+	maxScanBytes: number;
+	truncated: boolean;
+	reason?: string;
+}
+
+export interface DiagnosticLogResult {
+	schemaVersion: 1;
+	host: OperationHost;
+	targetSessionId: string;
+	collectedAt: string;
+	untrusted: true;
+	action: DiagnosticLogRequest["action"];
+	sources?: DiagnosticLogSourceInventory[];
+	page?: DiagnosticLogPage;
+	excerpt?: DiagnosticLogExcerpt;
 }
 
 /** A subagent as reported by the kernel, including where its read-only transcript lives. */
@@ -164,6 +243,7 @@ export type KernelCommand =
 			result?: import("@pilot/protocol").DiagnosticHistoryPage;
 			error?: string;
 	  }
+	| { type: "diagnostics.logs.result"; callId: string; result?: DiagnosticLogResult; error?: string }
 	| {
 			type: "diagnostics.proposal.result";
 			callId: string;
@@ -242,6 +322,8 @@ export type KernelPacket =
 	| { type: "diagnostics.call"; callId: string; sessionId: string; limit?: number }
 	/** Explicitly granted target-history read. Caller identity and target scope come from the supervised worker. */
 	| { type: "diagnostics.history.call"; callId: string; sessionId: string; before?: number; limit?: number }
+	/** Fixed-host Pilot log inventory/search/excerpts. No caller-supplied paths or host/session selectors. */
+	| { type: "diagnostics.logs.call"; callId: string; request: DiagnosticLogRequest }
 	/** Bounded proposal publication. This cannot create or mutate a repair or target chat. */
 	| {
 			type: "diagnostics.proposal";

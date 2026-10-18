@@ -169,8 +169,11 @@ SSH/bootstrap and verified remote-handshake observations remain independent. Thi
 native local bound and consent, is never exported through OTLP and cannot trigger setup, probes, retries or restarts.
 
 Agent-facing access is limited to an explicitly admitted diagnostics session role. That runtime profile exposes the
-bounded content-free diagnostic reader and a proposal-only publisher, is bound to one exact chat on its qualified
-host, and has no shell, source, repair, restart, retry, replay or child-agent authority. Diagnose this chat or an
+bounded content-free diagnostic reader, a fixed-catalogue reader for sanitized Pilot logs on that admitted host and
+a proposal-only publisher. It is bound to one exact chat on its qualified host and has no arbitrary path, shell,
+source, repair, restart, retry, replay or child-agent authority. The log reader reports missing/excluded coverage,
+bounded scans/output and stale rotations explicitly; excerpts and source paths never become schema fields or OTLP
+signals. Generic no-link Ask may use the host log catalogue without gaining the Control transcript. Diagnose this chat or an
 explicitly supplied target link may separately grant bounded, paginated cold reads of that exact target's committed
 conversation and tool history. A generic no-link Ask grant is absent, and legacy missing grants deny access. History
 is untrusted local content, never an OTLP signal or diagnostic aggregate, and cannot select another session, fetch

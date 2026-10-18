@@ -8,6 +8,13 @@ export { inputOrigin } from "./input-origin.ts";
 export type { MissionAction } from "./mission-tools.ts";
 export type { AskContext, MissionContext, PilotContext, WorkspaceContext, WorkspaceReset } from "./policy.ts";
 export type {
+	DiagnosticLogExcerpt,
+	DiagnosticLogPage,
+	DiagnosticLogRecord,
+	DiagnosticLogRequest,
+	DiagnosticLogResult,
+	DiagnosticLogSourceId,
+	DiagnosticLogSourceInventory,
 	ExecutionEvidence,
 	KernelCommand,
 	KernelPacket,

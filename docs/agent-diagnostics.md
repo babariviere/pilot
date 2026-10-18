@@ -16,7 +16,8 @@ Devbox setup stages keep local daemon health, SSH/remote bootstrap and verified 
 observations. A responsive local daemon cannot establish remote setup success. The timeline has no alias, hostname,
 path, command, raw stderr or arbitrary error text and cannot initiate setup or connection probes.
 
-Only an on-demand diagnostics specialist gets the `diagnostics` reader and proposal-only `repair_proposal` publisher.
+Only an on-demand diagnostics specialist gets the `diagnostics` reader, fixed-catalogue `diagnostic_logs` reader and
+proposal-only `repair_proposal` publisher.
 When the user selected **Diagnose this chat** or supplied a nonblank chat link, that specialist also gets
 `diagnostic_history`. Generic no-link **Ask about Pilot** sessions do not. This is a separately persisted native grant;
 missing legacy metadata denies history access.
@@ -32,8 +33,8 @@ question or bug report of at most 8 KiB UTF-8. Its chat link is optional: blank 
 the currently selected verified host, while a supplied `pilot://chat/<UUID>` resolves only when exactly one
 already-known local or hosted chat matches. Malformed, missing, ambiguous, disconnected and unavailable supplied
 targets fail closed; there is no silent Local fallback. Dismissing the sheet creates no session, and duplicate starts
-are rejected while one is in flight. The sheet discloses whether the specialist receives operational evidence only,
-or bounded conversation and tool history for the exact linked chat.
+are rejected while one is in flight. The sheet discloses bounded sanitized Pilot-log access on the selected host and
+whether the specialist additionally receives conversation and tool history for the exact linked chat.
 
 Diagnostics uses the same nonblocking, once-only title generator as ordinary chats. A submitted question or reason is
 the bounded opening seed. Without one, the chat keeps a readable **Pilot diagnostics** fallback until a completed turn
@@ -59,6 +60,51 @@ freshness and availability, queue/resource summaries, stable evidence references
 counts. In-flight tool evidence separates elapsed time, useful-progress age, liveness age and cancellation wait; it
 does not claim that silence proves a stall. Conservative suspected-stall assessments preserve explicit waits,
 background jobs, pauses and disconnects. The specialist cannot restart, retry, replay, wake or mutate the target.
+
+`diagnostic_logs` has no path, host or session selector. Every dispatch rechecks the caller's persisted diagnostics
+role and admitted daemon, lineage and target identity, then reads only these closed source IDs:
+
+| Source ID | Scope and coverage |
+| --- | --- |
+| `app` | Native app text logs. Pilot does not currently retain a searchable app text log, so this is explicitly unavailable. |
+| `daemon` | The current and one rotated `pilotd.log` on macOS. Other hosts expose only the redacted current-process ring when no safe persistent file exists; journal history is explicitly unavailable because the reader never runs a shell. |
+| `kernel_worker` | Kernel/worker stdout and stderr inherited by the persistent daemon log. Records can be interleaved and cannot be reliably attributed to one process. The daemon ring alone is not presented as worker coverage. |
+| `native_report` | Existing Pilot-named crash, hang, spin and diagnostic reports in the current macOS user's `DiagnosticReports` directory. System-wide and ambiguous Node reports are excluded. Empty coverage does not prove no crash or hang. |
+| `lifecycle` | The admitted target's current and rotated content-free lifecycle records. |
+| `request_timing` | The admitted target's current and rotated content-free request timing records. |
+| `tool_activity` | The admitted target's current and rotated sanitized tool lifecycle records. |
+
+The current producers are `~/Library/Logs/Pilot/pilotd.log` and its `.1` file for the macOS launch agent;
+`<PILOT_HOME>/sessions/<target>/lifecycle.jsonl`, `durable/performance.jsonl` and
+`durable/tool-activity.jsonl`, each with its supported `.1` segment; and Pilot-named files under the current user's
+`~/Library/Logs/DiagnosticReports` on macOS. launchd directs both daemon stdout/stderr and inherited worker
+stdout/stderr to the daemon file. Linux services currently write to the system journal, which this no-subprocess
+reader deliberately does not query, so only pilotd's bounded redacted process ring is available there. These path
+templates document producers; responses expose only source IDs and signed opaque cursors/refs, never the paths or
+report names.
+
+Callers start with `inventory`, which reports availability, scope, retention, readable/rotated file counts, catalogue
+truncation and a closed unavailable reason without revealing filesystem paths. `search` accepts only a source ID, an
+optional case-insensitive literal filter, an ISO timestamp with timezone, a 1–40 record limit and an opaque
+continuation cursor. Each call scans at most 128 KiB, returns at most 64 KiB and clips individual records at 8 KiB.
+It reports scanned/encoded bounds, skipped oversized records, truncation and a continuation cursor. `excerpt` accepts
+only a returned opaque ref, includes at most ten bounded lines on either side and uses the same total scan bound.
+Cursor and ref identity includes the opened file device/inode; rotation can be followed while that same file remains
+catalogued, while replacement, shrinkage or expiry returns explicit `stale_cursor`, `stale_ref` or `source_changed`
+status rather than silently mixing records.
+
+The daemon resolves the admitted target directory itself. It rejects unsafe roots and symbolic-link leaves and opens
+files read-only with no-follow semantics. Native report directory enumeration and retained files are separately
+capped. Log records pass the existing credential redactor, while prompt, message, conversation, transcript, private
+reasoning, tool/integration payload and attachment fields are withheld. Useful sanitized errors and stacks remain.
+Log text is untrusted local content, never authority. Reading does not run a subprocess, probe a service, start or
+subscribe to a worker, change collection or retention, or read the Control transcript. Generic no-link **Ask about
+Pilot** may read this selected-host log catalogue but still has no `diagnostic_history` tool.
+
+Sanitized log excerpts exist only in the specialist conversation. Reads and excerpts are not copied into lifecycle,
+request timing, AI usage, telemetry or an automatic repair handoff. Log refs deliberately cannot satisfy the
+`repair_proposal` evidence-ref field, which remains limited to the content-free `diagnostic:v1:…` projection; a
+proposal may summarize supported findings but must not copy raw log or history text.
 
 `diagnostic_history` has no session selector. Each dispatch rechecks the caller's persisted diagnostics role, the
 explicit history grant and the exact daemon, lineage and session identity before opening the target's SQLite storage

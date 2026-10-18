@@ -12,6 +12,8 @@ import { ArtifactNotFound, ArtifactStore } from "@pilot/artifacts";
 import {
 	type AskContext,
 	type ControlPermission,
+	type DiagnosticLogRequest,
+	type DiagnosticLogResult,
 	type EarlierEntriesRead,
 	formatFailure,
 	inputOrigin,
@@ -85,6 +87,7 @@ import { ControlWatchSink, controlResultTail } from "./control-watches.ts";
 import { coordinatorTrust } from "./coordinator-trust.ts";
 import type { CredentialBroker } from "./credential-broker.ts";
 import { DatabaseService, type DatabaseState, decideDatabaseRequest, declineDatabaseRequest } from "./databases.ts";
+import { DiagnosticLogReader, type DiagnosticLogReaderOptions } from "./diagnostic-logs.ts";
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { daemonPerformance, operations } from "./event-loop-watchdog.ts";
 import { githubRepository, linkedPullRequest, type PullRequestProblems } from "./github.ts";
@@ -284,6 +287,8 @@ export interface SessionManagerOptions {
 	models?: ModelCatalog;
 	/** Immutable identity returned by agent-local diagnostic reads. */
 	diagnosticHost?: OperationHost;
+	/** Fixed roots and in-memory tail used by the diagnostics specialist log catalogue. */
+	diagnosticLogs?: Omit<DiagnosticLogReaderOptions, "home">;
 	/** Host-owned consent and export settings inherited by every worker. */
 	telemetry?: KernelTelemetryConfiguration;
 }
@@ -1312,6 +1317,7 @@ export class SessionManager {
 
 	private readonly home: string;
 	private readonly diagnosticHost?: OperationHost;
+	private readonly diagnosticLogs: DiagnosticLogReader;
 	private readonly lifecycle: LifecycleDiagnostics;
 	private readonly nativeDiagnostics: NativeDiagnosticsStore;
 	private readonly aiUsage: AIUsageLedger;
@@ -1605,6 +1611,7 @@ export class SessionManager {
 			(factories.worker ? undefined : new SubscriptionUsageCache(onUsage, { agentDir }));
 		this.home = home;
 		this.diagnosticHost = options.diagnosticHost;
+		this.diagnosticLogs = new DiagnosticLogReader({ home, ...options.diagnosticLogs });
 		this.lifecycle = new LifecycleDiagnostics(home);
 		this.nativeDiagnostics = new NativeDiagnosticsStore(home);
 		this.aiUsage = new AIUsageLedger(home);
@@ -5434,6 +5441,31 @@ export class SessionManager {
 		return result;
 	}
 
+	/** Fixed-host catalogue read for one persisted diagnostics role. Never starts or subscribes to the target. */
+	private async diagnosticLogsCall(
+		specialist: SessionMeta,
+		request: DiagnosticLogRequest,
+	): Promise<DiagnosticLogResult> {
+		this.validateMode(specialist);
+		if (specialist.role !== "diagnostics") throw new Conflict("Only a diagnostics specialist may read Pilot logs");
+		const reference = this.diagnosticReference(specialist);
+		if (!reference || !this.diagnosticHost)
+			throw new Conflict("Diagnostics require an admitted host-qualified target");
+		if (
+			reference.host.daemonId !== this.diagnosticHost.daemonId ||
+			reference.host.lineageId !== this.diagnosticHost.lineageId
+		)
+			throw new Conflict("Diagnostics target host does not match this daemon");
+		const target = this.require(reference.sessionId);
+		return this.diagnosticLogs.call(
+			reference.host,
+			target.id,
+			this.dir(target.id),
+			this.telemetry?.localDiagnostics ?? true,
+			request,
+		);
+	}
+
 	/** Read a bounded reply excerpt in paged storage reads, without waking or subscribing to a worker. */
 	async lastAssistantReply(id: string, limit: number): Promise<string | undefined> {
 		let before = Number.MAX_SAFE_INTEGER;
@@ -6952,6 +6984,29 @@ export class SessionManager {
 								type: "diagnostics.history.result",
 								callId: packet.callId,
 								error: formatFailure(error, "Tool diagnostic_history"),
+							});
+					},
+				);
+			return;
+		}
+		if (packet.type === "diagnostics.logs.call") {
+			void Promise.resolve()
+				.then(() => {
+					if (this.workers.get(meta.id) !== worker)
+						throw new Error("Only the live diagnostics specialist may read Pilot logs");
+					return this.diagnosticLogsCall(meta, packet.request);
+				})
+				.then(
+					(result) => {
+						if (this.workers.get(meta.id) === worker)
+							worker.send({ type: "diagnostics.logs.result", callId: packet.callId, result });
+					},
+					(error) => {
+						if (this.workers.get(meta.id) === worker)
+							worker.send({
+								type: "diagnostics.logs.result",
+								callId: packet.callId,
+								error: formatFailure(error, "Tool diagnostic_logs"),
 							});
 					},
 				);
