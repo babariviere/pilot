@@ -34,6 +34,11 @@ type PayloadFixture = {
 	[K in ControlOperationKind]: { kind: K; payload: ControlOperationPayloads[K] };
 }[ControlOperationKind];
 interface Fixtures {
+	proofs: C.ControlAcceptanceProof[];
+	preparingProofCutover: C.ControlHostCutover;
+	roleAcknowledgments: C.ControlRoleAcknowledgment[];
+	activatedHomeState: C.ControlHostStateResponse;
+	archiveAdoption: C.ControlReceiptAdoptionResponse;
 	statusImportRequests: C.ControlRemoteStatusImportRequest[];
 	safetyQuery: C.ControlOperationExchangeRequest;
 	safetyExchange: C.ControlOperationExchangeResponse;
@@ -51,6 +56,7 @@ interface Fixtures {
 	dashboardProjection: C.ControlDashboardResponse;
 	archiveInfo: C.ControlArchiveInfo;
 	archiveReads: {
+		watches: C.ControlArchiveRead<C.ControlArchivedWatchesResponse>;
 		history: C.ControlArchiveRead<C.ControlArchiveHistoryPage>;
 		authorizations: C.ControlArchiveRead<C.ControlAuthorizationsResponse>;
 	};
@@ -344,6 +350,22 @@ test("audit contract preserves approval scope, durable cursors, task provenance,
 	assert.equal(f.syncStates[1].events.acknowledgedThrough, 1);
 	assert.ok(f.cutovers[1].compatibleRoutes && f.cutovers[1].archiveReady);
 	assert.equal(f.cutovers[1].acceptance?.suite, "control-hosts-two-daemon-v1");
+	assert.equal(f.cutovers[1].acceptance?.realCourier?.suite, "control-hosts-real-courier-v1");
+	assert.equal(f.proofs[0].realCourier, undefined);
+	assert.equal(f.preparingProofCutover.state, "preparing");
+	assert.equal(f.proofs[1].realCourier?.appBuildId, "fixture-app-build");
+	const roleAck = f.archiveAdoption.roleAcknowledgment;
+	assert.equal(roleAck?.intentId, f.archiveResponse.operation.operationId);
+	assert.equal(roleAck?.role, "archived-control");
+	assert.equal(roleAck?.roleEpoch, f.archiveResult.configuration.roleEpoch);
+	assert.equal(roleAck?.sessionId, f.archiveResponse.operation.targetId);
+	assert.deepEqual(f.archiveResult.roleAcknowledgment, roleAck);
+	assert.deepEqual(f.activatedHomeState.roleAcknowledgments?.[1], roleAck);
+	assert.equal(f.archiveReads.watches.value.watches[0].auditReason, "legacy-control-frozen");
+	assert.deepEqual(
+		f.archiveReads.watches.value.watches.map((w) => w.disposition),
+		["stopped", "fired"],
+	);
 	assert.equal(f.sharedTasks[0].id, f.sharedTasks[1].id);
 	assert.equal(f.sharedTasks[0].id, f.sharedTasks[2].id);
 	assert.equal(f.sharedTasks[3].taskId, undefined);

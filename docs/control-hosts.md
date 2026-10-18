@@ -365,7 +365,7 @@ its receipt stays pending, the old Control stays visible, and no second archive 
 Ordinary accepted execution is not stopped or reassigned by this transition.
 
 Only after the complete freeze transaction succeeds does the executor publish accepted with
-`ControlArchiveResult {kind:"control.archive",configuration,cutover}`. Configuration names role
+`ControlArchiveResult {kind:"control.archive",configuration,cutover,roleAcknowledgment}`. Configuration names role
 archived-control and the original archive session/time; cutover names state archived and the same
 enrollment/evidence. Replaying the same operation returns the same result and original archivedAt,
 without reappending watch-removal audits or altering history. Conflicting targets or payloads
@@ -562,9 +562,13 @@ and show peer pending. No implicit downgrade or failover.
 
 - Both installed builds have trusted packaged test evidence for suite
   `control-hosts-two-daemon-v1` (the two-daemon acceptance test), recorded as homeBuildId and
-  executorBuildId. The test covers admission/refusal, stop receipt, revocation, disconnect/replay
+  executorBuildId, with a verified daemonProofId. Activation additionally requires verified
+  realCourier evidence for `control-hosts-real-courier-v1`, including appBuildId and proofId.
+  Both suites cover the assembled actions, watches and task visibility before activation.
+  The daemon suite covers admission/refusal, stop receipt, revocation, disconnect/replay
   watch delivery, qualified task visibility and non-destructive archive/readback. A build without
-  this passing evidence must not advertise Control v1 capability. This is a release/build gate,
+  daemon-suite evidence must not advertise Control v1 route support; route support is not
+  activation, and missing real-courier proof keeps readiness preparing. This is a release/build gate,
   not an app-supplied `testsPassed` flag, and this contract does not claim the future suite has passed.
 - compatibleRoutes means both verified hellos/epochs and registered versioned enrollment, approval,
   exchange/receipt, events/import/ack, status/import, sync-state, lifecycle and archive-read routes
@@ -594,6 +598,7 @@ Read-only archive API, all on the original executor, never the current home sing
 | `/memory/stats` | `ControlArchiveRead<ControlMemoryStats>` |
 | `/audit?before&limit` | `ControlArchiveRead<ControlAuditResponse>` |
 | `/authorizations?after&limit` | `ControlArchiveRead<ControlAuthorizationsResponse>` |
+| `/watches?after&limit` | `ControlArchiveRead<ControlArchivedWatchesResponse>`; preserved watch records and their stopped/fired disposition, ID order, default 40 and maximum 100 |
 
 Resolve binding/session to its frozen original source stores, even if unpaired/revoked. Keep the
 original host/lineage in every wrapper; wrong-source IDs are 404/409, never a current-home fallback.
@@ -856,3 +861,95 @@ Home republishes dashboard.changed after an eligible foreign import updates its 
 Coalesce/dedupe unchanged projections and ack replays, and never emit just because a page was read,
 a capture was reserved or an outbox was scanned. Socket loss recovers by the durable HTTP state,
 not an assumed empty queue. The defined lifecycle/update blockers apply to either lane.
+
+## Final activation and legacy-work guarantees
+
+### Freeze the conversational owner, not its accepted independent work
+
+Legacy freeze blocks new legacy Control starts, follow-ups, scheduled/user/automatic wakes and
+recovery turns. It **must not** Stop, Pause, cancel, seal, reassign or otherwise interrupt already
+accepted independent remote agent work merely because the originating Control is frozen or archived.
+Do not traverse origin/parent links and mass-stop spawned chats, mission grants, subagents or jobs
+that belong to those independent accepted executions. Their original execution owner remains
+responsible for them, including while the Mac/courier is absent.
+
+Never raise their existing permission ceiling. Persist and recover the exact original ControlPermission,
+accepted scope, per-input/child ceilings, reservation IDs, consumed follow-up/USD accounting, remaining
+budget/caps and source authorization/audit provenance. Freeze/archive cannot reset usage, refund an
+active reservation, convert a capped chat to unrestricted Build, attach a broader home grant, or
+silently rewrite its origin. Missing historical metadata is not permission to invent a higher ceiling.
+New home follow-ups require new explicit authorization and still cannot exceed the execution's existing
+ceiling or accepted scope. Any separately requested cancellation/permission change is outside this
+migration, not a side effect of freeze.
+
+Pending legacy watches stop once with durable audit reason `legacy-control-frozen`, watched target,
+watch ID, origin and role epoch. Preserve their records for read-only /archives/:sessionId/watches;
+`ControlArchivedWatch` wraps the original Watch with stopped/fired disposition, stoppedAt and
+auditReason. Already-fired notices remain in retained history/audit; do not enqueue or deliver them
+again. Preserve whatever historical watch evidence exists, and report missing historical definitions
+honestly rather than fabricate a grant from a notice. Legacy grants/authorizations remain frozen,
+never merged, imported, rebound or revived at home. History and audit are read-only. Freeze and
+archive retries do not append duplicate removal audits or erase consumed-budget/scope evidence.
+These requirements apply to the pre-load role barrier as well as the final archive transaction.
+
+### Prove assembled behavior before activation, without a dependency cycle
+
+There are two independent required proof suites: the daemon/fake-courier two-daemon suite and the
+native real-courier lifecycle/integration suite. Both must prove assembled actions, watches and
+qualified task visibility **before production activation**. The real-courier proof must also cover
+reconnect/update/sleep lifecycle and the role/archive acknowledgment round trip with the preserved
+legacy stores. Daemon archive endpoints and their replay/read-only behavior can be implemented and
+tested before activation; they do not depend on a visible native one-row UI.
+
+Native routing/history code may land **inactive and fail-closed** first. A dedicated integration
+harness can exercise the assembled supported routes and injected trusted fixture identities while
+the production activation gate remains closed. Shipping a route handler or inactive UI does not
+enable orchestration, hide a legacy row or count as proof. Test evidence is generated from the tested
+immutable app/daemon build IDs and verified under trusted package/release provenance, not from native
+UI toggles, agent messages, a tool result or a client POST containing `passed:true`.
+
+`ControlAcceptanceProof` records daemon suite/build IDs and daemonProofId, plus optional realCourier
+suite/appBuildId/proofId. The home can report daemon-only evidence while preparing, but **ready
+requires both verified proofs**, matched to the installed paired builds and the current app build,
+plus the existing route/role/runtime action/watch/task evidence. Missing/unknown/mismatched proof,
+contract version, role epoch or archive-read support keeps preparing. The client cannot fill an
+omitted proof or invent compatibleRoutes, archiveReady, homeReady or executorEnrolled flags.
+Capabilities announce versioned route support, not permission to activate.
+Proof IDs resolve retained, build-matched attestations already verified by the home daemon, not
+arbitrary opaque IDs supplied by a client. The verified evidence and cutover reference are durable
+in home's Control-memory store; unverified test output or an unsigned native flag is not evidence.
+
+Thus the implementation order is acyclic: contract and inactive native plumbing; daemon handlers
+and archive endpoint; daemon suite; real-courier assembled suite; verified evidence publication;
+runtime readiness; explicitly approved archive; durable role/archive acknowledgment; active one-row UI.
+No implementation is required to activate prematurely so another implementation can test it.
+
+### Versioned role/archive acknowledgment
+
+`ControlRoleAcknowledgment` is a daemon-produced durable record containing contractVersion 1,
+binding/generation, exact home and issuer host pins, role/roleEpoch and intentId. Enrollment uses
+its consumed native approval request ID as intentId. The executor's accepted archive result uses
+the original archive operationId, original sessionId and archivedAt. It is not a client assertion
+and not an authority transfer or a cancellation/completion proof for independent work.
+
+- Enrollment PUT/readback supplies persisted roleAcknowledgments in ControlHostStateResponse
+  (at most home and executor). A successful transport or approval decision alone is not the role ack.
+- Archive remains the existing immutable control.archive operation/receipt protocol. Only after
+  durable freeze, store preservation and role epoch commit does accepted ControlArchiveResult include
+  roleAcknowledgment with role archived-control and the matching intent/session/time.
+- Home validates operation/hash/target/destination, enrollment, proof version and acknowledgment
+  identity/epoch, then durably adopts both receipt and role acknowledgment. Its
+	ControlReceiptAdoptionResponse includes that roleAcknowledgment; GET state returns persisted
+  roleAcknowledgments for restart/lost-response reconciliation.
+- Exact replay returns the same role acknowledgment and archive timestamp. Pending/unknown has no
+  conclusive role/archive ack. Reject a different intent, pin, generation, version, session or epoch;
+  never repair it by synthesizing flags, creating a fresh operation, copying history or raising a ceiling.
+- The client may show a single authoritative Control only after reading matching daemon-issued
+  proofs and the home-adopted archive/role acknowledgment. A bare hello role, queued archive response,
+  accepted-but-not-adopted remote response or native sidebar filter is insufficient. Reconnect
+  verifies current hello pins/version/role epoch against the stored acknowledgment; loss of transport
+  does not undo a completed cutover or promote the executor.
+
+Both acceptance suites test lost archive receipt, lost home-adoption response, duplicate acknowledgment,
+restart during freeze, preserved stopped-watch/fired-notice/audit records, and accepted independent
+work continuing with unchanged scope, ceiling, budget usage and provenance.
