@@ -24,6 +24,8 @@ public struct DiagnosticSourceStatus: Codable, Sendable {
 }
 
 /// Closed fields shared by lifecycle, request-timing, tool, daemon-stall and native OS evidence.
+/// Control preparation uses attemptRef, stage, reason and durationMs with prepared/failed/cancelled outcomes.
+/// A prepared projection and a parked_idle lifecycle completion are not task-success signals.
 public struct DiagnosticEvidence: Codable, Sendable {
     public let ref: String
     public let source: DiagnosticSource

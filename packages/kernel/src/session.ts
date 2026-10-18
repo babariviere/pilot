@@ -287,6 +287,7 @@ export class KernelSession {
 						() => harness!,
 						owned.storage,
 						() => artifactConversation!.id,
+						(record) => performanceLog?.record(record),
 					)
 				: undefined;
 		const subagents = new SubagentBridge(hooks.onSubagentsChanged);

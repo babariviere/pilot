@@ -173,6 +173,13 @@ Repository-wide lint still reports pre-existing assignment-expression errors in 
 
 ## Provider error recovery
 
+`control-preparation.test.ts` injects a history-summarization boundary failure using an isolated faux provider.
+It checks the correlated content-free event and explicit failed outcome, unchanged retained entries, zero action
+dispatches and no automatic retry. The success case records `prepared`, not task success. `control-chat.test.ts`
+also fails the real compactor during preparation and verifies its retained messages and failed pending job survive
+without an automatic retry. `session-diagnostics.test.ts` keeps these outcomes distinct from `parked_idle` lifecycle
+completion and rejects arbitrary stage/error text.
+
 Pi's Anthropic serializer moves images out of failed tool results. The model integration fixture
 persists a codemode image-then-error, reopens the failed chat and completes through the real Anthropic
 serializer with offline SSE, checking that the error result is text-only, the image is still sent, and

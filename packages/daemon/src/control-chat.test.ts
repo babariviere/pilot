@@ -62,3 +62,61 @@ test("turn view survives record/retry, and daemon remembers notice origin indepe
 	await control.call("control", "prepare", { ...args, key: "2", requestId: "watch-notice:1" });
 	assert.equal(control.handlingNotice, true);
 });
+
+test("a failed summarization faults preparation without changing retained messages or retrying the failed job", {
+	timeout: 10_000,
+}, async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "control-summary-failure-"));
+	let started!: () => void,
+		release!: () => void,
+		retryReady!: () => void,
+		calls = 0;
+	const entered = new Promise<void>((resolve) => {
+		started = resolve;
+	});
+	const held = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const retryDone = new Promise<void>((resolve) => {
+		retryReady = resolve;
+	});
+	const models = {
+		compactControl: async () => {
+			calls++;
+			started();
+			await held;
+			throw new Error("PRIVATE_PROVIDER_ERROR");
+		},
+	} as unknown as ModelCatalog;
+	const control = new ControlChat(
+		home,
+		home,
+		models,
+		(id) => id === "synthetic",
+		() => "offline/test",
+	);
+	t.after(async () => {
+		release();
+		await control.stop();
+		await rm(home, { recursive: true, force: true });
+	});
+	const retry = control.memory.retry.bind(control.memory);
+	t.mock.method(control.memory, "retry", async () => {
+		await retry();
+		retryReady();
+	});
+	await control.call("synthetic", "record", {
+		message: { kind: "user", text: "PRIVATE_HISTORY ".repeat(60), key: "previous" },
+	});
+	await entered;
+	const before = await control.memory.messages();
+	const preparation = control.call("synthetic", "prepare", { key: "turn", requestId: "typed", tools: [] });
+	await retryDone; // fail during this request, not before its existing explicit-turn retry boundary
+	release();
+	await assert.rejects(preparation, /Earlier chat messages could not be summarized/);
+	assert.equal(calls, 1);
+	assert.equal((await control.memory.state()).pending, 1, "failed summary stays pending, not silently discarded");
+	assert.deepEqual(await control.memory.messages(), before);
+	await control.stop();
+	assert.equal(calls, 1, "no automatic retry after preparation fails or during shutdown");
+});
