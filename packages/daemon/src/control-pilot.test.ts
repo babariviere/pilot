@@ -138,4 +138,15 @@ test("pilot has a short schema and forwards only supplied arguments", async () =
 		{} as never,
 	);
 	assert.deepEqual(calls, [["read", { sessionId: "target", view: "tail", limit: 10 }]]);
+	for (const action of ["stop", "pause", "resume", "redirect"] as const) {
+		const args = {
+			sessionId: "target",
+			authorizationId: "approval",
+			direct: true,
+			...(action === "resume" || action === "redirect" ? { budgetUsd: 1 } : {}),
+			...(action === "redirect" ? { message: "New instruction" } : {}),
+		};
+		await tool.execute(action, { action, ...args }, undefined, undefined, {} as never);
+		assert.deepEqual(calls.at(-1), [action, args]);
+	}
 });
