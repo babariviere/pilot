@@ -1,0 +1,312 @@
+name: Release
+
+# Runs Release Please on every main push, without waiting for tests. When it creates a stable draft,
+# this workflow builds the Mac app and Linux runtime from the tagged commit, signs and uploads both,
+# then publishes the draft. Tests run separately in main.yaml and never block a release.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Existing stable draft tag to retry (for example v0.2.0). Leave empty to run Release Please.'
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  # macos-15 is the standard arm64 runner. Its default Xcode 16.4 is too old for our Swift 6.2 package manifest.
+  DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
+  NODE_VERSION: 24.21.0
+
+jobs:
+  release-please:
+    # Never expose write permissions to forks.
+    if: github.ref == 'refs/heads/main' && github.event.repository.fork == false && inputs.release_tag == ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: pilot-release-please-${{ github.repository }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      sha: ${{ steps.release.outputs.sha }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ github.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  # Resolves the immutable release source: a draft Release Please just created, or an explicit retry.
+  # Release Please may tag an earlier merged release commit than this push, so every job builds the tag.
+  target:
+    needs: release-please
+    # always() permits an explicit retry when release-please is intentionally skipped.
+    if: always() && github.ref == 'refs/heads/main' && github.event.repository.fork == false && ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != ''))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - name: Resolve the release tag and commit
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag || needs.release-please.outputs.tag_name }}
+          RELEASE_SHA: ${{ needs.release-please.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo '::error::Only stable tags such as v1.2.3 can be released.'
+            exit 1
+          fi
+          tag_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha)"
+          if [ -n "$RELEASE_SHA" ] && [ "$RELEASE_SHA" != "$tag_sha" ]; then
+            echo '::error::Release Please reported a different commit than its tag.'
+            exit 1
+          fi
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "sha=$tag_sha" >> "$GITHUB_OUTPUT"
+
+  # Builds and verifies the self-contained Mac app once. No private keys: publishing signs it separately.
+  macos-app:
+    needs: target
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      PILOT_SWIFT_JOBS: 3
+      BUNDLE_RUNTIME: '1'
+      PILOT_UPDATE_REPOSITORY: ${{ github.repository }}
+      SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
+      LINUX_RUNTIME_PUBLIC_KEY: ${{ vars.LINUX_RUNTIME_PUBLIC_KEY }}
+      # Sparkle build versions must keep increasing. The release.yml workflow ended near run 1,100 with an
+      # offset of 10,000, so release.yaml starts above it. Raise this again if the workflow is renamed.
+      BUNDLE_VERSION_OFFSET: '20000'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ needs.target.outputs.sha }}
+      - uses: pnpm/action-setup@v4
+        if: hashFiles('pnpm-lock.yaml') != ''
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Configure production bundle
+        run: |
+          test -n "$SPARKLE_PUBLIC_KEY" || { echo '::error::Configure SPARKLE_PUBLIC_KEY before building production packages.'; exit 1; }
+          test -n "$LINUX_RUNTIME_PUBLIC_KEY" || { echo '::error::Configure LINUX_RUNTIME_PUBLIC_KEY before building production packages.'; exit 1; }
+          echo "BUNDLE_VERSION=$((GITHUB_RUN_NUMBER + BUNDLE_VERSION_OFFSET)).$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+      - name: Verify toolchain and architecture
+        id: swift-toolchain
+        run: |
+          test "$(uname -m)" = arm64
+          swift --version
+          identity="$(printf '%s\n' "$(swift --version)" "$(xcrun --show-sdk-version)" | shasum -a 256 | awk '{print $1}')"
+          echo "key=$identity" >> "$GITHUB_OUTPUT"
+      - name: Cache pinned Swift dependencies
+        uses: actions/cache@v4
+        with:
+          # Only dependency downloads and patched vendor sources, never build products or signing data.
+          path: |
+            ~/Library/Caches/org.swift.swiftpm/repositories
+            ~/Library/Caches/org.swift.swiftpm/artifacts
+            apps/macos/Vendor/libghostty-spm
+            apps/macos/Vendor/MermaidKit
+          key: swift-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.resolved', 'apps/macos/Package.swift', 'apps/macos/scripts/vendor-ghostty.sh', 'apps/macos/scripts/patch-ghostty-resources.py', 'apps/macos/scripts/patch-ghostty-layout.py', 'apps/macos/scripts/vendor-mermaidkit.sh', 'apps/macos/scripts/patches/**') }}
+      - name: Load current release packaging tools
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          path: .pilot-release-tools
+          sparse-checkout: apps/macos/scripts
+      - name: Apply current packaging policy to tagged application source
+        # An older draft must still use ZIP-only publishing and runtime cleanup.
+        # Overlay only packaging helpers, keeping the app, dependencies and vendor pins tagged.
+        run: |
+          cp .pilot-release-tools/apps/macos/scripts/production_artifact.py apps/macos/scripts/production_artifact.py
+          cp .pilot-release-tools/apps/macos/scripts/release_metadata.py apps/macos/scripts/release_metadata.py
+          cp .pilot-release-tools/apps/macos/scripts/publish-release.sh apps/macos/scripts/publish-release.sh
+          # Preserve the executable bit even when retrying a tag with a non-executable helper.
+          cp -p .pilot-release-tools/apps/macos/scripts/check-runtime.sh apps/macos/scripts/check-runtime.sh
+      # Build, sign and smoke-test the relocated app, not just the Swift executable.
+      - run: apps/macos/scripts/bundle.sh
+      - name: Archive and verify the production app
+        run: |
+          stage="$RUNNER_TEMP/macos-production"
+          mkdir -p "$stage"
+          ditto -c -k --sequesterRsrc --keepParent apps/macos/build/Pilot.app "$stage/Pilot-arm64.zip"
+          python3 apps/macos/scripts/production_artifact.py create "$stage" "$(git rev-parse HEAD)" "$(node -p 'require("./package.json").version')"
+          ditto -x -k "$stage/Pilot-arm64.zip" "$stage/extracted"
+          codesign --verify --deep --strict "$stage/extracted/Pilot.app"
+          apps/macos/scripts/check-runtime.sh "$stage/extracted/Pilot.app/Contents/Resources/runtime"
+      - name: Upload verified production app
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-production-app
+          path: |
+            ${{ runner.temp }}/macos-production/Pilot-arm64.zip
+            ${{ runner.temp }}/macos-production/production-artifact.json
+          if-no-files-found: error
+          overwrite: true
+          compression-level: 0
+
+  # Signs and uploads the verified macOS update in parallel with the Linux runtime. The publish job
+  # releases the draft once both platforms have uploaded their assets.
+  macos-publish:
+    needs: [target, macos-app]
+    runs-on: macos-15
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      PILOT_UPDATE_REPOSITORY: ${{ github.repository }}
+      SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
+      LINUX_RUNTIME_PUBLIC_KEY: ${{ vars.LINUX_RUNTIME_PUBLIC_KEY }}
+      RELEASE_TAG: ${{ needs.target.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ needs.target.outputs.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Verify tagged release source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - "$RELEASE_TAG" <<'PY'
+          import json, re, sys
+          version = json.load(open('package.json'))['version']
+          if not re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', version) or sys.argv[1] != f'v{version}':
+              raise SystemExit('Release tag must match the stable package.json version.')
+          PY
+          test "$(git rev-parse HEAD)" = "$(gh api "repos/$PILOT_UPDATE_REPOSITORY/commits/$RELEASE_TAG" --jq '.sha')"
+      - name: Load current release packaging tools
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          path: .pilot-release-tools
+          sparse-checkout: apps/macos/scripts
+      - name: Apply current packaging policy to tagged application source
+        run: |
+          cp .pilot-release-tools/apps/macos/scripts/production_artifact.py apps/macos/scripts/production_artifact.py
+          cp .pilot-release-tools/apps/macos/scripts/release_metadata.py apps/macos/scripts/release_metadata.py
+          cp .pilot-release-tools/apps/macos/scripts/publish-release.sh apps/macos/scripts/publish-release.sh
+          cp -p .pilot-release-tools/apps/macos/scripts/check-runtime.sh apps/macos/scripts/check-runtime.sh
+      - name: Require update signing configuration
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          if [ -z "$SPARKLE_PUBLIC_KEY" ] || [ -z "$SPARKLE_PRIVATE_KEY" ]; then
+            echo '::error::Configure SPARKLE_PUBLIC_KEY repository variable and SPARKLE_PRIVATE_KEY secret with apps/macos/scripts/setup-updates.sh before publishing.'
+            exit 1
+          fi
+          # The app pins this key to authenticate Linux runtimes it installs over SSH.
+          if [ -z "$LINUX_RUNTIME_PUBLIC_KEY" ]; then
+            echo '::error::Configure the LINUX_RUNTIME_PUBLIC_KEY repository variable (see scripts/linux/README.md) before publishing.'
+            exit 1
+          fi
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-production-app
+          path: ${{ runner.temp }}/macos-production
+      - name: Verify and restore the release ZIP
+        run: |
+          stage="$RUNNER_TEMP/macos-production"
+          python3 apps/macos/scripts/production_artifact.py verify "$stage" "$(git rev-parse HEAD)" "$(node -p 'require("./package.json").version')"
+          mkdir -p apps/macos/build
+          ditto -x -k "$stage/Pilot-arm64.zip" apps/macos/build
+          codesign --verify --deep --strict apps/macos/build/Pilot.app
+      - name: Sign and upload the macOS update ZIP and appcast to the stable draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: apps/macos/scripts/publish-release.sh apps/macos/build/Pilot.app "$RUNNER_TEMP/macos-production/Pilot-arm64.zip"
+
+  # Builds and validates the Linux runtime from the tag. No private keys.
+  linux-package:
+    needs: target
+    uses: ./.github/workflows/linux-package.yml
+    with:
+      ref: ${{ needs.target.outputs.sha }}
+
+  linux-publish:
+    needs: [target, linux-package]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      LINUX_RUNTIME_PUBLIC_KEY: ${{ vars.LINUX_RUNTIME_PUBLIC_KEY }}
+      RELEASE_TAG: ${{ needs.target.outputs.tag }}
+    steps:
+      - name: Require Linux runtime signing configuration
+        env:
+          LINUX_RUNTIME_PRIVATE_KEY: ${{ secrets.LINUX_RUNTIME_PRIVATE_KEY }}
+        run: |
+          if [ -z "$LINUX_RUNTIME_PUBLIC_KEY" ] || [ -z "$LINUX_RUNTIME_PRIVATE_KEY" ]; then
+            echo '::error::Configure the LINUX_RUNTIME_PUBLIC_KEY repository variable and LINUX_RUNTIME_PRIVATE_KEY secret (see scripts/linux/README.md) before publishing.'
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.target.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-production-runtime
+          path: release
+      - name: Sign verified manifest and attach to the matching stable draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LINUX_RUNTIME_PRIVATE_KEY: ${{ secrets.LINUX_RUNTIME_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          test "$RELEASE_TAG" = "$(node -p "JSON.parse(require('node:fs').readFileSync('release/runtime-manifest.json')).tag")"
+          test "$(git rev-parse HEAD)" = "$(node -p "JSON.parse(require('node:fs').readFileSync('release/runtime-manifest.json')).commit")"
+          test "$(git rev-parse HEAD)" = "$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha)"
+          node scripts/linux/release-manifest.mjs sign "$PWD/release"
+          gh release view "$RELEASE_TAG" --json isDraft,isPrerelease > release-state.json
+          node --input-type=module -e 'import fs from "node:fs"; const r=JSON.parse(fs.readFileSync("release-state.json")); if (!r.isDraft || r.isPrerelease) throw Error("Only stable drafts may receive runtime assets")'
+          gh release upload "$RELEASE_TAG" release/Pilot-linux-x64.tar.gz release/runtime-manifest.json release/runtime-manifest.json.sig --clobber
+
+  publish:
+    needs: [target, linux-publish, macos-publish]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # Serialize stable publishing. Semantic-version ordering protects latest.
+    concurrency:
+      group: pilot-macos-release-${{ github.repository }}-stable
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      # Current release tools, as in the packaging overlay. No tagged source is built here.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          sparse-checkout: apps/macos/scripts
+      - name: Publish the complete stable draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PILOT_UPDATE_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.target.outputs.tag }}
+        run: bash apps/macos/scripts/finalize-release.sh

@@ -7,9 +7,10 @@ agent session.
 
 ## Automated coverage
 
-The Release workflow keeps the portable Node suite, Darwin native lane, complete Swift tests,
-relocated Mac app and Linux production package gates. Linux headless CI retains the supported SDK,
-native ABI, real isolation and independent daemon/kernel checks. Do not replace either with mocks.
+PR and main CI keep the portable Node suite, Darwin native lane, complete Swift tests and Linux headless
+checks (supported SDK, native ABI, real isolation and independent daemon/kernel execution). PRs and
+releases build and verify the relocated Mac app and Linux production package. Tests do not block releases.
+Do not replace any of these with mocks.
 
 The Linux package job builds once, extracts the production runtime, then runs
 `scripts/linux/verify-service.sh` on a disposable SSH/PAM user with a real systemd user manager.

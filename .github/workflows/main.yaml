@@ -1,0 +1,20 @@
+name: Main
+
+# Post-merge test signal only. Releases (release.yaml) never wait for it.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Tests gate nothing, so a newer push cancels the previous run.
+concurrency:
+  group: pilot-main-${{ github.repository }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    # Release commits only bump versions and the changelog. Leave macOS runners free for the release build.
+    if: "${{ !startsWith(github.event.head_commit.message, 'chore(main): release') }}"
+    uses: ./.github/workflows/tests.yaml

@@ -48,7 +48,7 @@ PY
 archive="$stage/Pilot-arm64.zip"
 "$here/scripts/fetch-sparkle.sh" "$stage/sparkle"
 if [ -n "${2:-}" ]; then
-	# CI promotes the exact ZIP already validated by app-bundle. Local callers may still package an app.
+	# CI promotes the exact ZIP already validated by the release workflow's macos-app job. Local callers may still package an app.
 	cp "$2" "$archive"
 else
 	ditto -c -k --sequesterRsrc --keepParent "$app" "$archive"

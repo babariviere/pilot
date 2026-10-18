@@ -27,10 +27,9 @@ can be forwarded, for example `pnpm test:integration -- --test-name-pattern='res
 CI runs the portable lane and typechecking on Ubuntu x86-64. A smaller macOS arm64 lane retains
 the real coordinator sandbox, native Ask artifact publication/preview, wake sampling, PTYs, runtime
 environment and bundled-extension coverage, plus packaging and relocated production-runtime checks.
-Both lanes gate releases alongside Swift tests, the app bundle and the Linux production package.
-Production packages are built once in this workflow and promoted to publishing after commit checks.
-The separate Linux headless smoke workflow still verifies daemon/kernel execution and the native
-dependency ABI, but no longer builds a second production package.
+A `linux-headless` job verifies real isolation, daemon/kernel execution and the native dependency ABI.
+These jobs live in `tests.yaml`, which `pr.yaml` and `main.yaml` share. PRs also build and validate the
+Linux production package. Tests are informational: `release.yaml` never waits for them.
 
 Lane selection is explicit in `scripts/test-suites.ts`: new files default to the portable lane; only
 `kernel/ask.integration.test.ts` is currently native-only because it publishes and previews SwiftUI.
@@ -472,13 +471,13 @@ and stealing focus from each other. A runner without a key window records known 
 the journey. On CI both journeys must start.
 
 CI runs native Node, packaging and Swift tests in one `macos` job, because the free plan runs only a few
-macOS jobs at once. PRs skip the Swift steps when they change nothing under `apps/macos/`, the release
-workflow, `package.json` or the verification-slot script. PRs that run Swift package the debug binaries from
+macOS jobs at once. PRs skip the Swift steps when they change nothing under `apps/macos/`, `pr.yaml`,
+`tests.yaml`, `package.json` or the verification-slot script. PRs that run Swift package the debug binaries from
 the test build (`BUNDLE_PREBUILT=1 CONFIGURATION=debug bundle.sh`) and smoke-test that app, instead of
-compiling an optimized build. Main and manual runs also build and verify the optimized app in `app-bundle`,
-so release-only compiler problems surface on `main` before publishing, not in the PR.
+compiling an optimized build. Only `release.yaml` builds the optimized app, so release-only compiler problems
+surface when a release is built.
 
-Both Swift jobs cache pinned dependency
+The `macos` test job and the release app build cache pinned dependency
 repositories/downloaded artifacts and the patched Ghostty vendor sources. Keys include OS, architecture,
 Swift and SDK versions, package pins/manifests, and vendor/patch scripts. Dependency resolution still runs
 and verifies binary artifacts. No signing material or user data are cached.
@@ -488,6 +487,6 @@ tests run, even if some fail, because the build stays valid for the next increme
 (the repository's cache limit is 10 GB); they restore main's latest build. A fresh checkout stamps every file with the current
 time, which would make Swift recompile everything, so CI first runs `scripts/stable-mtimes.py`: each file
 under `apps/macos` gets an old timestamp derived from its contents, and only files whose contents changed
-recompile. Main always builds from scratch before saving, and `app-bundle` and releases never use cached
+recompile. Main always builds from scratch before saving, and releases never use cached
 build products, so a stale incremental build can at worst let a PR pass that main then catches.
 Local APFS sharing in `share-artifacts.sh` remains separate from this download cache.
