@@ -24,10 +24,11 @@ DEVBOX = "addDevboxPresentsSetupSheetAfterCancelAndReopen"
 DEVBOX_OUTPUT = STARTED + f"◇ Test {DEVBOX}() started.\n" + PASSED
 TERMINAL = "terminalOpeningAndResizingDoNotFeedNativeFittingSizeBackIntoWindowConstraints"
 TERMINAL_OUTPUT = STARTED + f"◇ Test {TERMINAL}() started.\n" + PASSED
-STOPS = ["localStopNormalizesQualifiedRowsAndRestoresWithdrawnMessages",
+CALLBACKS = ["localStopNormalizesQualifiedRowsAndRestoresWithdrawnMessages",
          "remoteStopKeepsCollidingLocalChatAndDraftUntouched",
-         "unavailableStopNeverFallsBackToCurrentLocalHost"]
-STOPS_OUTPUT = STARTED + "".join(f"◇ Test {name}() started.\n" for name in STOPS) + PASSED
+         "unavailableStopNeverFallsBackToCurrentLocalHost",
+             "missionTaskDragLoadsItsPlainTextOnTheMainActor"]
+CALLBACKS_OUTPUT = STARTED + "".join(f"◇ Test {name}() started.\n" for name in CALLBACKS) + PASSED
 
 
 class TestOutputTests(unittest.TestCase):
@@ -45,7 +46,7 @@ class TestOutputTests(unittest.TestCase):
                     second_output=None, second_status=0, all_calls=False,
                     third_output=DEVBOX_OUTPUT, third_status=0,
                     fourth_output=TERMINAL_OUTPUT, fourth_status=0,
-                    fifth_output=STOPS_OUTPUT, fifth_status=0):
+                    fifth_output=CALLBACKS_OUTPUT, fifth_status=0):
         # Exercise the actual shell wrapper without downloading/building the app.
         with tempfile.TemporaryDirectory(prefix="swift wrapper ") as directory:
             root = Path(directory)
@@ -105,7 +106,7 @@ class TestOutputTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(continued)
         self.assertEqual(len(calls), 5)
-        self.assertEqual(calls[0][-2:], ["--skip", f"{ISOLATED}|{DEVBOX}|{TERMINAL}|{'|'.join(STOPS)}"])
+        self.assertEqual(calls[0][-2:], ["--skip", f"{ISOLATED}|{DEVBOX}|{TERMINAL}|{'|'.join(CALLBACKS)}"])
         self.assertNotIn("--skip-build", calls[0])
         self.assertIn("--skip-build", calls[1])
         self.assertEqual(calls[1][-2:], ["--filter", ISOLATED])
@@ -114,14 +115,14 @@ class TestOutputTests(unittest.TestCase):
         self.assertIn("--skip-build", calls[3])
         self.assertEqual(calls[3][-2:], ["--filter", TERMINAL])
         self.assertIn("--skip-build", calls[4])
-        self.assertEqual(calls[4][-2:], ["--filter", "|".join(STOPS)])
+        self.assertEqual(calls[4][-2:], ["--filter", "|".join(CALLBACKS)])
         self.assertEqual(result.stderr.count("acquired slot 1/1"), 1)
-        self.assertEqual(result.stdout, PASSED + ISOLATED_OUTPUT + DEVBOX_OUTPUT + TERMINAL_OUTPUT + STOPS_OUTPUT)
+        self.assertEqual(result.stdout, PASSED + ISOLATED_OUTPUT + DEVBOX_OUTPUT + TERMINAL_OUTPUT + CALLBACKS_OUTPUT)
 
-    def test_isolated_stops_require_every_test_and_preserve_failures(self):
-        outputs = [("", 0), (PASSED, 0), (STOPS_OUTPUT + FAILED, 0), (STOPS_OUTPUT, 42)]
-        for name in STOPS:
-            outputs.append((STOPS_OUTPUT.replace(f"◇ Test {name}() started.\n", ""), 0))
+    def test_isolated_callbacks_require_every_test_and_preserve_failures(self):
+        outputs = [("", 0), (PASSED, 0), (CALLBACKS_OUTPUT + FAILED, 0), (CALLBACKS_OUTPUT, 42)]
+        for name in CALLBACKS:
+            outputs.append((CALLBACKS_OUTPUT.replace(f"◇ Test {name}() started.\n", ""), 0))
         for output, status in outputs:
             result, continued, calls = self.run_wrapper(PASSED, fifth_output=output,
                                                        fifth_status=status, all_calls=True)
