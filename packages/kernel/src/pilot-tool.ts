@@ -9,6 +9,7 @@ export const PILOT_ACTIONS = [
 	"telemetry",
 	"read",
 	"authorize",
+	"resolve_authorization",
 	"start",
 	"send",
 	"mission_create",
@@ -38,6 +39,13 @@ export function createPilotTool(call: PilotCall): ToolDefinition {
 				Type.String({ maxLength: 200, description: "Literal case-insensitive search over redacted log records." }),
 			),
 			authorizationId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+			itemId: Type.Optional(
+				Type.String({
+					maxLength: 128,
+					description:
+						"Authorization-needed item to dismiss after a user decision (resolve_authorization). Never executes it.",
+				}),
+			),
 			scope: Type.Optional(Type.String({ minLength: 1, maxLength: 4096 })),
 			level: Type.Optional(StringEnum(["investigate", "implement", "publish", "merge"] as const)),
 			targets: Type.Optional(

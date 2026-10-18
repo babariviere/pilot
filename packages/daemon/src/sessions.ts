@@ -76,7 +76,7 @@ import { ControlChat } from "./control-chat.ts";
 import type { ControlMemory } from "./control-memory.ts";
 import type { ControlPilot } from "./control-pilot.ts";
 import { ControlProjectMemory } from "./control-project-memory.ts";
-import { ControlWatchSink } from "./control-watches.ts";
+import { ControlWatchSink, controlResultTail } from "./control-watches.ts";
 import { coordinatorTrust } from "./coordinator-trust.ts";
 import type { CredentialBroker } from "./credential-broker.ts";
 import { DatabaseService, type DatabaseState, decideDatabaseRequest, declineDatabaseRequest } from "./databases.ts";
@@ -136,6 +136,7 @@ import { nextToolStallAt, ToolStallWatchdog, toolStallAttention } from "./tool-s
 import { hasUnpublishedWork } from "./unpublished-work.ts";
 import { UpdateGate } from "./update-gate.ts";
 import type { WatchService } from "./watch-service.ts";
+import { settledSessionEvents } from "./watch-sessions.ts";
 import { WorkerActivity } from "./worker-activity.ts";
 import { WorkerStarts } from "./worker-starts.ts";
 import {
@@ -1288,19 +1289,38 @@ export class SessionManager {
 	private controlActions?: ControlActions;
 	private controlProjectMemory?: ControlProjectMemory;
 	private watches?: WatchService;
-	private readonly controlStartOrigin = new AsyncLocalStorage<boolean>();
+	private readonly controlStartOrigin = new AsyncLocalStorage<string>();
 	/** Propagates only across the explicit start path, never unrelated concurrent user work. */
-	controlStart<T>(work: () => Promise<T>): Promise<T> {
-		return this.controlStartOrigin.run(true, work);
+	controlStart<T>(work: () => Promise<T>, requestId = `control:start:${randomUUID()}`): Promise<T> {
+		return this.controlStartOrigin.run(requestId, work);
+	}
+	/** Run binding must be available during kernel recovery, before the notice sink is enabled. */
+	setWatchService(watches: WatchService): void {
+		this.watches = watches;
 	}
 	setWatches(watches: WatchService): () => void {
-		this.watches = watches;
-		watches.bindSink(new ControlWatchSink(SessionManager.CONTROL_ID, this));
+		this.setWatchService(watches);
+		watches.bindSink(
+			new ControlWatchSink(SessionManager.CONTROL_ID, this, {
+				result: (id) => controlResultTail(this, id),
+				authorization: (id) => this.controlAuthorizations().authorizationGet(id),
+				active: (id) => watches.followThroughActive(id),
+			}),
+		);
 		const stop = this.onChange((chat) => {
 			if (chat.control) watches.sinkChanged();
 		});
+		let authorizationNeeds = watches.dashboard().authorizationNeededTotal;
+		const stopAttention = watches.onChange(() => {
+			const next = watches.dashboard().authorizationNeededTotal;
+			if (next === authorizationNeeds) return;
+			authorizationNeeds = next;
+			const meta = this.metas.get(SessionManager.CONTROL_ID);
+			if (meta) this.emit(meta);
+		});
 		return () => {
 			stop();
+			stopAttention();
 			watches.bindSink(undefined);
 			this.watches = undefined;
 		};
@@ -1705,6 +1725,11 @@ export class SessionManager {
 				const childWork = !meta.failure && !meta.recoveryStopped && this.backgroundWorking(meta);
 				if (childWork) applyActivity(meta, Boolean(meta.working), undefined, true);
 				this.metas.set(meta.id, meta);
+				if (meta.archivedAt === undefined)
+					for (const command of meta.pending ?? []) {
+						if (command.type === "input" && command.requestId.startsWith("control:start:"))
+							await this.watches?.followThroughCreated(meta.id, command.requestId);
+					}
 				if (legacyRefresh || childWork) await this.save(meta);
 			} catch (error) {
 				console.warn(`pilotd: skipping unreadable session ${id}: ${error}`);
@@ -4195,9 +4220,7 @@ export class SessionManager {
 			pending: [
 				{
 					type: "input",
-					requestId:
-						admission?.operationId ??
-						(this.controlStartOrigin.getStore() ? `control:start:${randomUUID()}` : randomUUID()),
+					requestId: this.controlStartOrigin.getStore() ?? admission?.operationId ?? randomUUID(),
 					content: request.message,
 					mode: "followUp",
 				},
@@ -4215,6 +4238,8 @@ export class SessionManager {
 				// The new chat may act on its membership as soon as it starts.
 				await this.missions!.whenDurable?.();
 			}
+			const controlRequestId = this.controlStartOrigin.getStore();
+			if (controlRequestId) await this.watches?.followThroughCreated(id, controlRequestId);
 		} catch (error) {
 			// Admission may lose a coordinator/task claim or race a closed mission.
 			this.missions?.leaveSpawn?.(id);
@@ -6337,6 +6362,15 @@ export class SessionManager {
 
 	private onPacket(meta: SessionMeta, worker: SessionWorker, packet: KernelPacket): void {
 		if (this.parked.has(worker)) return;
+		if (
+			packet.type === "accepted" &&
+			packet.delivery === "not_started" &&
+			packet.requestId.startsWith("control:send:") &&
+			this.workers.get(meta.id) === worker
+		)
+			void this.watches
+				?.cancelFollowThrough(packet.requestId)
+				.catch((error) => console.warn(`pilotd: result watch cancellation failed: ${error}`));
 		if (packet.type === "update.paused") {
 			const pause = this.updatePausing.get(worker);
 			if (pause?.id === packet.id) {
@@ -6369,17 +6403,25 @@ export class SessionManager {
 		if (packet.type === "watch.run") {
 			if (this.workers.get(meta.id) !== worker) return;
 			void (
-				this.watches?.attributeSessionRun(meta.id, packet.controlCaused ? SessionManager.CONTROL_ID : meta.id) ??
-				Promise.resolve()
-			).then(
-				() => worker.send({ type: "watch.run.result", callId: packet.callId }),
-				(error: unknown) =>
-					worker.send({
-						type: "watch.run.result",
-						callId: packet.callId,
-						error: formatFailure(error, "Watch run attribution"),
-					}),
-			);
+				this.watches?.attributeSessionRun(
+					meta.id,
+					packet.controlCaused ? SessionManager.CONTROL_ID : meta.id,
+					packet.requestIds,
+					packet.recoveredOnly,
+				) ?? Promise.resolve()
+			)
+				.then(async () => {
+					if (packet.recoveredOnly) await this.watches?.observe(settledSessionEvents(this.summary(meta)));
+				})
+				.then(
+					() => worker.send({ type: "watch.run.result", callId: packet.callId }),
+					(error: unknown) =>
+						worker.send({
+							type: "watch.run.result",
+							callId: packet.callId,
+							error: formatFailure(error, "Watch run attribution"),
+						}),
+				);
 			return;
 		}
 		if (packet.type === "systemMessageState") {
@@ -7101,6 +7143,12 @@ export class SessionManager {
 				: {}),
 			...(!working && !heldAtQuota && !offlinePaused && meta.outcomeReason !== undefined
 				? { outcomeReason: safeFailureText(meta.outcomeReason) }
+				: {}),
+			...(meta.control && !working && this.watches?.dashboard().authorizationNeededTotal
+				? {
+						outcome: "question" as const,
+						outcomeReason: "Authorization needed. No action taken; see the Control dashboard.",
+					}
 				: {}),
 			...(!coordinator && meta.pullRequest ? { pullRequest: meta.pullRequest } : {}),
 			...(!coordinator && sessionPullRequests(meta).length ? { pullRequests: sessionPullRequests(meta) } : {}),

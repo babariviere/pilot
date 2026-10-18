@@ -29,7 +29,17 @@ import { validateWatch, type WatchInput } from "./watches.ts";
 
 export interface ControlPilotOptions extends ControlDashboardSources {
 	diagnostics?: Pick<ControlDiagnostics, "call">;
-	watches?: Pick<WatchService, "add" | "remove" | "page" | "authority">;
+	watches?: Pick<
+		WatchService,
+		| "add"
+		| "remove"
+		| "page"
+		| "authority"
+		| "followThrough"
+		| "cancelFollowThrough"
+		| "authorizationNeeded"
+		| "resolveAuthorization"
+	>;
 	authorizations?: () => ControlMemory;
 	turnOrigin?: () => Promise<ControlTurnOrigin | undefined>;
 	taskDone?: (missionId: string, taskId: string) => boolean;
@@ -43,8 +53,13 @@ export interface ControlPilotOptions extends ControlDashboardSources {
 	checks?: (pr: string, includeStale: boolean) => Promise<unknown>;
 	mutations?: {
 		audit: () => ControlActions;
-		startProject: (request: SpawnRequest) => Promise<SessionSummary>;
-		startTask: (missionId: string, taskId: string, request: StartMissionTaskRequest) => Promise<SessionSummary>;
+		startProject: (request: SpawnRequest, requestId?: string) => Promise<SessionSummary>;
+		startTask: (
+			missionId: string,
+			taskId: string,
+			request: StartMissionTaskRequest,
+			requestId?: string,
+		) => Promise<SessionSummary>;
 		send: SessionManager["sendReported"];
 		organizeAllowed?: () => boolean;
 		createMission?: (request: CreateMissionRequest) => Promise<Mission>;
@@ -72,6 +87,16 @@ export class ControlPilot {
 		}
 		if (action === "status") return this.dashboard(args);
 		if (action === "read") return this.read(args);
+		if (action === "resolve_authorization") {
+			if (!(await this.options.turnOrigin?.())?.userMessage)
+				throw new Error("Resolving an authorization need requires a user-origin turn");
+			if (!this.options.mutations || !this.options.watches?.resolveAuthorization)
+				throw new Error("Control actions unavailable");
+			const id = string(args, "itemId", true)!;
+			return this.options.mutations.audit().perform(caller, action, args, operationId, async () => ({
+				resolved: await this.options.watches!.resolveAuthorization!(id),
+			}));
+		}
 		if (action === "checks") {
 			const pr = args.pr;
 			if (typeof pr !== "string" || !pr.trim() || pr.length > 2048)
@@ -101,7 +126,7 @@ export class ControlPilot {
 			if (action === "unwatch") return { removed: await watches.remove(string(args, "watchId", true)!) };
 			const input = validateWatch(args as unknown as WatchInput);
 			const targets = this.watchTargets(input.target);
-			const use = await this.authorizationUse(args, "watch", [targets]);
+			const use = await this.authorizationOrNeed(caller, args, "watch", [targets], operationId);
 			if (!this.options.mutations) throw new Error("Control actions unavailable");
 			return this.options.mutations.audit().perform(
 				caller,
@@ -114,6 +139,7 @@ export class ControlPilot {
 					return watches.add({ ...input, authorizationId: use.authorizationId });
 				},
 				use,
+				(error) => this.authorizationNeeded(caller, action, args, operationId, error),
 			);
 		}
 		if (action === "mission_create") return this.createMission(caller, args, operationId);
@@ -137,8 +163,9 @@ export class ControlPilot {
 		}
 		if (action === "start" || action === "send") {
 			if (!this.options.mutations) throw new Error("Control actions unavailable");
+			if (!this.options.watches) throw new Error("Result watches unavailable; no action taken");
 			const targets = action === "send" ? this.sendTargets(args) : this.startTargets(args);
-			const use = await this.authorizationUse(args, action, targets);
+			const use = await this.authorizationOrNeed(caller, args, action, targets, operationId);
 			return this.options.mutations.audit().perform<unknown>(
 				caller,
 				action,
@@ -148,12 +175,57 @@ export class ControlPilot {
 					const current = action === "send" ? this.sendTargets(args) : this.startTargets(args);
 					if (JSON.stringify(current) !== JSON.stringify(targets))
 						throw new Error("Control action target changed during admission");
-					return action === "start" ? this.start(args) : this.send(args, operationId);
+					try {
+						return action === "start" ? await this.start(args, operationId) : await this.send(args, operationId);
+					} catch (error) {
+						// New chats bind before starting. Failed pre-admission starts cannot leak watches.
+						// Sends can have an uncertain acknowledgement; retain those for committed-input recovery.
+						if (action === "start")
+							await this.options.watches!.cancelFollowThrough(`control:start:${operationId}`, true);
+						throw error;
+					}
 				},
 				use,
+				(error) => this.authorizationNeeded(caller, action, args, operationId, error),
 			);
 		}
 		throw new Error("Unknown pilot action");
+	}
+	private async authorizationNeeded(
+		caller: string,
+		action: "start" | "send" | "watch",
+		args: Record<string, unknown>,
+		operationId: string,
+		error: unknown,
+	): Promise<void> {
+		if (!operationId || operationId.length > 256) return;
+		await this.options.watches?.authorizationNeeded?.({
+			id: createHash("sha256").update(`${caller}:${operationId}`).digest("hex"),
+			action,
+			request: JSON.stringify({ action, ...args }),
+			reason: error instanceof Error ? error.message.slice(0, 500) : "Authorization required",
+			createdAt: Date.now(),
+		});
+	}
+	private async authorizationOrNeed(
+		caller: string,
+		args: Record<string, unknown>,
+		action: "start" | "send" | "watch",
+		targets: WatchTarget[][],
+		operationId: string,
+	) {
+		// Keep a complete denied request (including JSON escaping), not a clipped instruction.
+		if (
+			Buffer.byteLength(JSON.stringify(args)) > 16_000 ||
+			Buffer.byteLength(JSON.stringify({ request: JSON.stringify({ action, ...args }) })) > 18_000
+		)
+			throw new Error("Control request too large to capture exactly");
+		try {
+			return await this.authorizationUse(args, action, targets);
+		} catch (error) {
+			await this.authorizationNeeded(caller, action, args, operationId, error);
+			throw error;
+		}
 	}
 	private authorizationMemory(): ControlMemory {
 		if (!this.options.authorizations) throw new Error("Control authorizations unavailable");
@@ -316,7 +388,7 @@ export class ControlPilot {
 			);
 		return { ...created, coordinator };
 	}
-	private async start(args: Record<string, unknown>) {
+	private async start(args: Record<string, unknown>, operationId: string) {
 		const projectId = string(args, "projectId"),
 			missionId = string(args, "missionId"),
 			taskId = string(args, "taskId");
@@ -334,19 +406,30 @@ export class ControlPilot {
 			...(args.thinking ? { thinking: args.thinking as string } : {}),
 		};
 		let chat: SessionSummary;
+		const requestId = `control:start:${operationId}`;
 		if (missionId) {
 			const mission = this.options.missions().find((m) => m.id === missionId);
 			if (!mission) throw new Error("Unknown mission");
 			if (projectId && projectId !== mission.projectId) throw new Error("Mission belongs to another project");
 			if (!taskId) throw new Error("A mission start requires taskId");
-			chat = await this.options.mutations!.startTask(missionId, taskId, {
-				...choice,
-				...(message ? { message: message as string } : {}),
-			});
+			await this.options.watches!.followThrough(requestId, args.authorizationId as string);
+			chat = await this.options.mutations!.startTask(
+				missionId,
+				taskId,
+				{
+					...choice,
+					...(message ? { message: message as string } : {}),
+				},
+				requestId,
+			);
 		} else {
 			if (!projectId || !message || taskId)
 				throw new Error("Project starts require projectId and message, without taskId");
-			chat = await this.options.mutations!.startProject({ projectId, message: message as string, ...choice });
+			await this.options.watches!.followThrough(requestId, args.authorizationId as string);
+			chat = await this.options.mutations!.startProject(
+				{ projectId, message: message as string, ...choice },
+				requestId,
+			);
 		}
 		return {
 			id: chat.id,
@@ -372,12 +455,15 @@ export class ControlPilot {
 				throw new Error("This mission has no coordinator; choose direct=true for a member");
 			target = mission.coordinatorSessionId;
 		}
+		await this.options.watches!.followThrough(`control:send:${operationId}`, args.authorizationId as string, target);
 		const result = await this.options.mutations!.send(
 			target,
 			args.message,
 			`control:send:${operationId}`,
 			"followUp",
 		);
+		if (result.delivery === "rejected")
+			await this.options.watches?.cancelFollowThrough?.(`control:send:${operationId}`);
 		return { ...result, sessionId: target, requestedSessionId: id, chatUrl: `pilot://chat/${target}` };
 	}
 	/** Also serves the local-user dashboard endpoint, without creating the singleton or starting a worker. */

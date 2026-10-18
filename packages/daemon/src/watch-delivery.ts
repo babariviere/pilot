@@ -21,6 +21,8 @@ export interface WatchNotice {
 		event: WatchEvent | "watch.removed";
 		text: string;
 		count: number;
+		/** Daemon-created implicit watch, never accepted from a tool's watch input. */
+		followThrough?: { requestId: string; sessionId: string };
 	}[];
 	overflow: number;
 }

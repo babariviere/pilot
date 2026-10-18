@@ -85,6 +85,7 @@ export async function reconcileCompletion(
 	conversation: Conversation,
 	context: Context,
 	inputs?: readonly SubmissionId[],
+	recover?: (records: readonly SubmissionRecord[]) => Promise<void>,
 ): Promise<SessionCompletion | undefined> {
 	let latest: SubmissionRecord | undefined;
 	const consider = (record: SubmissionRecord | undefined) => {
@@ -98,11 +99,18 @@ export async function reconcileCompletion(
 		if (!latest || record.entry > (latest.entry ?? 0)) latest = record;
 	};
 	if (inputs) {
-		for (const input of inputs) consider(await storage.submission(input, context));
+		const records: SubmissionRecord[] = [];
+		for (const input of inputs) {
+			const record = await storage.submission(input, context);
+			consider(record);
+			if (record) records.push(record);
+		}
+		await recover?.(records);
 	} else {
 		let cursor: Cursor | undefined;
 		do {
 			const page = await storage.scanSubmissions({ conversationId: conversation.id }, 100, cursor, context);
+			await recover?.(page.items);
 			for (const record of page.items) consider(record);
 			cursor = page.next;
 		} while (cursor !== undefined);

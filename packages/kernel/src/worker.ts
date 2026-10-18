@@ -458,8 +458,14 @@ export function runKernelWorker(): void {
 					onSystemMessageState: (event) => {
 						void send({ type: "systemMessageState", event });
 					},
-					onRunAdmitted: (controlCaused) =>
-						callDaemon<void>((callId) => ({ type: "watch.run", callId, controlCaused })),
+					onRunAdmitted: (controlCaused, requestIds, recoveredOnly) =>
+						callDaemon<void>((callId) => ({
+							type: "watch.run",
+							callId,
+							controlCaused,
+							requestIds,
+							recoveredOnly,
+						})),
 					onWorking: (working, completion, execution) =>
 						notify({
 							type: "working",

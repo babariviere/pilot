@@ -237,7 +237,7 @@ test("shared snapshot reports running work, active progress, open blockers, deci
 	);
 	assert.ok(!data.blockers.some((b) => b.sessionId === "run"), "a prior question does not block a resumed chat");
 	assert.equal(data.pendingDecisions[0]!.reason, "Requirements changed");
-	assert.deepEqual(data.next, { watches: [watch], total: 1 });
+	assert.deepEqual(data.next, { watches: [watch], total: 1, followUps: [], followUpsTotal: 0 });
 	assert.equal(data.totals.chats, 8);
 	assert.equal(data.truncated, false);
 	const scoped = buildControlDashboard(sources, { missionId: "m" }, 5000);
@@ -608,7 +608,14 @@ test("watch dashboard is change-driven, bounded, restored at startup and drops f
 		await rm(home, { recursive: true, force: true });
 	});
 	await watches.ready();
-	assert.deepEqual(watches.dashboard(), { watches: [], total: 0 });
+	assert.deepEqual(watches.dashboard(), {
+		watches: [],
+		total: 0,
+		followUps: [],
+		followUpsTotal: 0,
+		authorizationNeeded: [],
+		authorizationNeededTotal: 0,
+	});
 	for (let i = 0; i < 102; i++) await watches.add({ ...watch, target: { kind: "chat", id: `chat${i}` } });
 	assert.equal(watches.dashboard().total, 102);
 	assert.equal(watches.dashboard().watches.length, 100);

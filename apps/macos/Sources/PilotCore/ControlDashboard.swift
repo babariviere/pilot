@@ -26,6 +26,9 @@ public struct ControlDashboardResponse: Codable, Equatable, Sendable {
     public struct Next: Codable, Equatable, Sendable {
         public let watches: [Watch]
         public let total: Int
+        /// Optional for compatibility with older daemons.
+        public let followUps: [ControlFollowUp]?
+        public let followUpsTotal: Int?
     }
     public struct Totals: Codable, Equatable, Sendable {
         public let projects: Int
@@ -55,8 +58,27 @@ public struct ControlDashboardResponse: Codable, Equatable, Sendable {
     public let sharedTasks: [ControlDashboardSharedTask]?
     public let replicaMissions: [ControlDashboardReplicaMission]?
     public let next: Next
+    public let authorizationNeeded: [ControlAuthorizationNeeded]?
+    public let authorizationNeededTotal: Int?
     public let totals: Totals
     public let truncated: Bool
+}
+
+public struct ControlFollowUp: Codable, Equatable, Sendable {
+    public let requestId: String
+    public let authorizationId: String
+    public let sessionId: String?
+    public let state: String
+    public let createdAt: Double
+}
+
+public struct ControlAuthorizationNeeded: Codable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let action: String
+    /// Exact JSON request, untrusted data. No action was taken.
+    public let request: String
+    public let reason: String
+    public let createdAt: Double
 }
 
 public struct ControlDashboardChat: Codable, Identifiable, Equatable, Sendable {

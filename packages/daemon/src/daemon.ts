@@ -269,17 +269,17 @@ sessions.setPilot(
 				return chat;
 			},
 			audit: () => sessions.controlAudit(),
-			startProject: async (request) => {
+			startProject: async (request, requestId) => {
 				const project = projects.require(request.projectId!);
 				const selection = await sessions.selectTaskModel(
 					project.path,
 					request.model ?? project.model,
 					request.thinking,
 				);
-				return sessions.controlStart(() => sessions.spawn({ ...request, ...selection }));
+				return sessions.controlStart(() => sessions.spawn({ ...request, ...selection }), requestId);
 			},
-			startTask: (missionId, taskId, request) =>
-				sessions.controlStart(() => missionService.startTask(missionId, taskId, request, "coordinator")),
+			startTask: (missionId, taskId, request, requestId) =>
+				sessions.controlStart(() => missionService.startTask(missionId, taskId, request, "coordinator"), requestId),
 			send: sessions.sendReported.bind(sessions),
 		},
 	}),
@@ -304,6 +304,7 @@ await connectivity.start();
 power?.onNetworkPath((path) => connectivity.setPath(path));
 // Recover global sleep overrides before any interrupted agent can reopen.
 await power?.start();
+sessions.setWatchService(watches);
 await sessions.load(maintenance?.frozen);
 await sessions.ensureControlChat();
 watches.bindRemovalAudit((removal) => sessions.auditWatchRemoval(removal));
