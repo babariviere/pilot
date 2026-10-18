@@ -6674,27 +6674,30 @@ export class SessionManager {
 						)),
 			) ??
 				false);
-		const mainBusy =
+		const mainActive =
 			kernelState !== "failed" &&
-			(kernelState === "working" ||
-				kernelState === "starting" ||
-				!!meta.working ||
-				!!meta.pending?.length ||
-				!!worker?.awaitingJobFollowUp);
+			(kernelState === "working" || kernelState === "starting" || !!meta.working || !!meta.pending?.length);
+		// An unanswered ask_user question needs the user, so background jobs and subagents do not count as work.
+		const questionWaits = !mainActive && meta.outcome === "question";
+		const mainBusy = mainActive || (!questionWaits && !!worker?.awaitingJobFollowUp);
 		const offlinePaused =
 			this.internetOnline === false &&
 			meta.archivedAt === undefined &&
 			!meta.failure &&
 			!meta.recoveryStopped &&
-			(mainBusy || childrenWorking);
+			(mainBusy || (childrenWorking && !questionWaits));
 		const working =
 			!meta.failure &&
 			!meta.recoveryStopped &&
 			!paused &&
 			!offlinePaused &&
-			((!mainQuotaPaused && mainBusy) || runnableChildren || !!worker?.runningJobs?.length);
+			((!mainQuotaPaused && mainBusy) || (!questionWaits && (runnableChildren || !!worker?.runningJobs?.length)));
 		const heldAtQuota =
-			!meta.failure && !meta.recoveryStopped && quotaPaused && !working && (mainBusy || childrenWorking);
+			!meta.failure &&
+			!meta.recoveryStopped &&
+			quotaPaused &&
+			!working &&
+			(mainBusy || (childrenWorking && !questionWaits));
 		const state = heldAtQuota && kernelState !== "failed" ? "working" : kernelState;
 		const longJob = meta.archivedAt === undefined ? longJobAttention(worker?.runningJobs ?? []) : undefined;
 		const sourceBranch =

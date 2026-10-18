@@ -101,6 +101,23 @@ test("job-waiting completions are consumed rather than deferred or replayed afte
 	assert.equal(reopened.outcomeAt, 43);
 });
 
+test("a question waits on the user while background work continues", () => {
+	const meta: OutcomeMeta = {};
+	applyActivity(meta, true);
+	const completion: SessionCompletion = { outcome: "question", outcomeAt: 42, outcomeReason: "Which branch?" };
+	assert.equal(applyActivity(meta, false, completion, true), true);
+	assert.equal(meta.outcome, "question");
+	assert.equal(meta.outcomeAt, 42);
+	assert.equal(meta.outcomeReason, "Which branch?");
+	// Later job or subagent updates keep the question until the agent works again.
+	assert.equal(applyActivity(meta, false, undefined, true), false);
+	assert.equal(applyActivity(meta, false, completion, true), false);
+	assert.equal(meta.outcome, "question");
+	applyActivity(meta, true);
+	assert.equal(meta.outcome, undefined);
+	assert.equal(meta.lastCompletionAt, 42);
+});
+
 test("settled packets persist each explicit outcome and replace obsolete reasons", () => {
 	const meta: OutcomeMeta = {};
 	const outcomes: SessionOutcome[] = ["done", "failed", "stopped"];
