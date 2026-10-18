@@ -1,5 +1,44 @@
 # Changelog
 
+## [1.48.0](https://github.com/babariviere/pilot/compare/v1.47.0...v1.48.0) (2026-10-18)
+
+
+### Features
+
+* add exact-head PR checks for Control ([a3c83ed](https://github.com/babariviere/pilot/commit/a3c83ed2ed39ba8db53a3bf8bb539618b2bd37e5))
+* add read-only control memory API ([97e873e](https://github.com/babariviere/pilot/commit/97e873e910164e76aa260786ee5bc866e95c19eb))
+* **control:** add bounded read-only diagnostics ([31c8d01](https://github.com/babariviere/pilot/commit/31c8d015c155cfca5cbd9d2aac03010b8b8dcf8a))
+* **control:** share a bounded dashboard snapshot ([c77c57b](https://github.com/babariviere/pilot/commit/c77c57b441707d1696ba06e04017725177e95d53))
+* **diagnostics:** surface suspected tool stalls ([21bd202](https://github.com/babariviere/pilot/commit/21bd202689e0072e307ef0f201b1a95aa6d2bb11))
+* **evidence:** capture committed session history and provenance ([4d67c6e](https://github.com/babariviere/pilot/commit/4d67c6e10ca0c0d43c2cd97a36e5b998bb9891ce))
+* **evidence:** freeze code and verification snapshots ([3197844](https://github.com/babariviere/pilot/commit/319784442c9778a28177166d8ac59834c9721613))
+* **github:** capture bounded PR discussions and check evidence ([6674367](https://github.com/babariviere/pilot/commit/6674367b1f675ad18072781fd618b3b25653cc55))
+* **github:** capture exact PR objects without branch ownership ([6be2147](https://github.com/babariviere/pilot/commit/6be2147d7d62eb8782b31fbfbdfb617379fdff4c))
+* **macos:** add the Control screen ([a00fbc3](https://github.com/babariviere/pilot/commit/a00fbc310e39d44112df8cc73d8be08bf218f750))
+* **macos:** open the Control chat with G then C and list it in the palette ([31aeda8](https://github.com/babariviere/pilot/commit/31aeda8cdf9b473013cd3c255cd3fc1c4947f14f))
+* **macos:** pin the Control chat above the sidebar list in every scope ([c65133b](https://github.com/babariviere/pilot/commit/c65133b44baaeaabe92c9e57bbe2f7a5db46816b))
+* **telemetry:** trace tool call lifecycle ([9fba05b](https://github.com/babariviere/pilot/commit/9fba05b29e42f028f6774872e28c991e91ac4428))
+
+
+### Bug Fixes
+
+* **agents:** leave remote CI monitoring to Pilot ([8889f11](https://github.com/babariviere/pilot/commit/8889f111530c90a30b74771465d3c0ae0e5c9a44))
+* **control:** format watch notices as readable event lists ([8f2ef69](https://github.com/babariviere/pilot/commit/8f2ef694fa1b90e1c5d4d4ef8122f8f92eeef5f8))
+* **daemon:** show unanswered questions as Needs you while jobs run ([9ef5165](https://github.com/babariviere/pilot/commit/9ef5165d6eeb61b8d5dc71a9c9dfc452f6b9a66e))
+* **deps:** update dependency @gotgenes/pi-anthropic-auth to v3.4.3 ([92498e4](https://github.com/babariviere/pilot/commit/92498e4f840f297fd9ffbd46f10188c3593a1881))
+* **deps:** update dependency motion to v14.3.0 ([1dcf7a5](https://github.com/babariviere/pilot/commit/1dcf7a51f13a7d685c1589b6d632186821ac388a))
+* **home:** share contained status corners with inbox ([df6a277](https://github.com/babariviere/pilot/commit/df6a2774503c0f22dd3c5c6b5c298602ccbc11ee))
+* **inbox:** keep status corners inside row bounds ([b277c4b](https://github.com/babariviere/pilot/commit/b277c4bb3b7621693975e9f7b01ecffee0f25ac2))
+* **macos:** keep chat history visible while loading ([b96a791](https://github.com/babariviere/pilot/commit/b96a7917b82af6b0eed16cb8537cb8aba79b249d))
+* **macos:** keep one reading anchor through a history layout pass ([c0cde23](https://github.com/babariviere/pilot/commit/c0cde23182d8ad8d3fcc813be9d6363cec061317))
+* **macos:** keep SSH control socket directory name valid ([9300d53](https://github.com/babariviere/pilot/commit/9300d536537cd99361eeec76e33b84b70ccede2f))
+* **macos:** keep the grey selection on highlighted chat rows ([725b77f](https://github.com/babariviere/pilot/commit/725b77f67c643f7a27ccc93d1c3d33ab778e6399))
+* **macos:** resolve Swift warnings and treat new warnings as errors ([368030a](https://github.com/babariviere/pilot/commit/368030a067accce337bcde071f3118de5d834360))
+* **macos:** retain reading anchors through history layout ([1c64a7d](https://github.com/babariviere/pilot/commit/1c64a7d68a747d344b30879a32099d8a21a184fe))
+* **macos:** show keyboard highlights only during keyboard navigation ([f1eca3e](https://github.com/babariviere/pilot/commit/f1eca3e1ba1ee06e70409a040c287f16560d746e))
+* show contextual G destinations ([7d1de46](https://github.com/babariviere/pilot/commit/7d1de46a75b9628873fab846a2258eb23a868809))
+* **watches:** remove subscriptions for archived targets ([acb46e8](https://github.com/babariviere/pilot/commit/acb46e8d794d30fa2f60dacce9d4680c39ad5f05))
+
 ## [1.47.0](https://github.com/babariviere/pilot/compare/v1.46.0...v1.47.0) (2026-10-17)
 
 
