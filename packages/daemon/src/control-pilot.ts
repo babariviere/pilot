@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { ControlTurnOrigin } from "@pilot/kernel";
+import type { ControlPermission, ControlTurnOrigin } from "@pilot/kernel";
 import type {
 	ControlAuthorizationLevel,
 	CreateMissionRequest,
@@ -55,6 +55,7 @@ export interface ControlPilotOptions extends ControlDashboardSources {
 		audit: () => ControlActions;
 		startProject: (
 			request: SpawnRequest,
+			permission: ControlPermission,
 			requestId?: string,
 			provenance?: { authorizationId: string; budgetUsd?: number },
 		) => Promise<SessionSummary>;
@@ -62,6 +63,7 @@ export interface ControlPilotOptions extends ControlDashboardSources {
 			missionId: string,
 			taskId: string,
 			request: StartMissionTaskRequest,
+			permission: ControlPermission,
 			requestId?: string,
 			provenance?: { authorizationId: string; budgetUsd?: number },
 		) => Promise<SessionSummary>;
@@ -191,7 +193,9 @@ export class ControlPilot {
 						});
 					}
 					try {
-						return action === "start" ? await this.start(args, operationId) : await this.send(args, operationId);
+						return action === "start"
+							? await this.start(args, use, operationId)
+							: await this.send(args, operationId);
 					} catch (error) {
 						// New chats bind before starting. Failed pre-admission starts cannot leak watches.
 						// Sends can have an uncertain acknowledgement; retain those for committed-input recovery.
@@ -430,8 +434,12 @@ export class ControlPilot {
 		}
 		return { projectId, missionId, taskId, message: message as string | undefined, choice };
 	}
-	private async start(args: Record<string, unknown>, operationId: string) {
-		const { projectId, missionId, taskId, message, choice } = this.validateStart(args);
+	private async start(args: Record<string, unknown>, permission: ControlPermission, operationId: string) {
+		const { projectId, missionId, taskId, message, choice: modelChoice } = this.validateStart(args);
+		const choice = {
+			...modelChoice,
+			mode: permission.level === "investigate" ? ("ask" as const) : ("build" as const),
+		};
 		const provenance = {
 			authorizationId: args.authorizationId as string,
 			...(typeof args.budgetUsd === "number" ? { budgetUsd: args.budgetUsd } : {}),
@@ -447,6 +455,7 @@ export class ControlPilot {
 					...choice,
 					...(message ? { message: message as string } : {}),
 				},
+				{ authorizationId: permission.authorizationId, level: permission.level },
 				requestId,
 				provenance,
 			);
@@ -454,6 +463,7 @@ export class ControlPilot {
 			await this.options.watches!.followThrough(requestId, args.authorizationId as string);
 			chat = await this.options.mutations!.startProject(
 				{ projectId, message: message as string, ...choice },
+				{ authorizationId: permission.authorizationId, level: permission.level },
 				requestId,
 				provenance,
 			);

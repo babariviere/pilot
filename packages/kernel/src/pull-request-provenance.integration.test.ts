@@ -20,6 +20,7 @@ import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import { PullRequestsDoc } from "./pull-request-provenance.ts";
 import { KernelSession, type KernelSessionHooks } from "./session.ts";
 import { readSessionSnapshot } from "./snapshot.ts";
+import type { ControlPermission } from "./tool-policy.ts";
 
 const context = BACKGROUND_CONTEXT;
 const url = (id: number) => `https://github.com/owner/repo/pull/${id}`;
@@ -177,7 +178,11 @@ async function fixture(t: TestContext) {
 		adapters.push(adapter);
 		return adapter;
 	});
-	const open = async (hooks: Partial<KernelSessionHooks> = {}, workspace = true) => {
+	const open = async (
+		hooks: Partial<KernelSessionHooks> = {},
+		workspace = true,
+		controlPermission?: ControlPermission,
+	) => {
 		const session = await KernelSession.open(
 			{
 				sessionId: "offline-pr",
@@ -185,7 +190,10 @@ async function fixture(t: TestContext) {
 				agentDir: join(root, "agent"),
 				storageDir: join(root, "durable"),
 				model: "pilot-pr-test/offline",
-				pilot: workspace ? { workspace: { source: root, base: "origin/main", jj: false } } : undefined,
+				pilot: {
+					...(workspace ? { workspace: { source: root, base: "origin/main", jj: false } } : {}),
+					...(controlPermission ? { controlPermission } : {}),
+				},
 			},
 			{ onWorking: () => {}, ...hooks },
 		);
@@ -202,6 +210,51 @@ async function fixture(t: TestContext) {
 	};
 	return { open, run, calls, adapters, faux, root };
 }
+
+test("native publication gates catch dynamic nested calls after reload and recovery", {
+	timeout: 20_000,
+}, async (t) => {
+	const f = await fixture(t);
+	let session = await f.open({}, true, { authorizationId: "grant", level: "implement" });
+	const commands = [
+		"git push origin fix/example",
+		"jj git push --bookmark fix/example",
+		"gh pr create --fill",
+		"gh pr edit 12 --body update",
+		"gh pr merge 12 --auto",
+	];
+	for (const command of commands) {
+		await f.run(session, `direct-${command}`, "bash", { command });
+		await f.run(session, `nested-${command}`, "codemode", {
+			code: `const command = ${JSON.stringify(command.split(" "))}.join(" "); await tools.bash({ command });`,
+		});
+	}
+	assert.deepEqual(f.calls, [], "no forbidden shell tool body executes");
+	await f.run(session, "local", "bash", { command: "pnpm test" });
+	assert.deepEqual(f.calls, ["pnpm test"]);
+	await f.adapters.at(-1)!.session.reload();
+	f.adapters.at(-1)!.refreshTools();
+	await f.run(session, "after-reload", "codemode", {
+		code: 'const command = ["git", "push"].join(" "); await tools.bash({ command });',
+	});
+	assert.deepEqual(f.calls, ["pnpm test"]);
+	await session.close();
+	session = await f.open({}, true, { authorizationId: "grant", level: "implement" });
+	await f.run(session, "after-reopen", "codemode", {
+		code: 'const command = ["gh", "pr", "create"].join(" "); await tools.bash({ command });',
+	});
+	assert.deepEqual(f.calls, ["pnpm test"]);
+	await session.close();
+	session = await f.open({}, true, { authorizationId: "publish-grant", level: "publish" });
+	await f.run(session, "published", "codemode", {
+		code: 'const command = ["gh", "pr", "create"].join(" "); await tools.bash({ command });',
+	});
+	assert.deepEqual(f.calls, ["pnpm test", "gh pr create"]);
+	await f.run(session, "still-no-merge", "codemode", {
+		code: 'const command = ["gh", "pr", "merge"].join(" "); await tools.bash({ command });',
+	});
+	assert.deepEqual(f.calls, ["pnpm test", "gh pr create"]);
+});
 
 test("agent PR provenance uses matching successful results, survives compaction and replays on open", {
 	timeout: 20_000,

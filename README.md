@@ -270,6 +270,10 @@ summarizes the grant's remaining limits. Out-of-scope or exhausted requests take
 in the dashboard's `authorizationNeeded` list with the exact request, and Control stays in Needs you
 until the user decides and Control dismisses the item with `resolve_authorization`. Pending result
 reads appear in `next.followUps`. A notice or result never grants new authority.
+Control-started chats keep their admitted permission level across restarts and follow-ups:
+**investigate** uses read-only Ask, **implement** allows local Build changes and checks but blocks
+pushes and PR publication, and **publish** allows pushing and opening/updating PRs. Agents never
+merge, even with a recorded merge authorization; merges still require confirmation in the app.
 See [control chat internals](docs/control-chat.md) for storage, compaction and recovery details.
 
 Control can read health, bounded redacted log tails and local diagnostic evidence through `pilot`

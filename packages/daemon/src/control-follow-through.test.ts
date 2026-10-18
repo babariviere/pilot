@@ -91,7 +91,7 @@ async function fixture(t: TestContext) {
 			linear: () => [],
 			mutations: {
 				audit: () => audit,
-				startProject: async (request, requestId) => {
+				startProject: async (request, _permission, requestId) => {
 					assert.equal(watches.dashboard().followUps[0]!.requestId, requestId, "arm before any start effect");
 					effects.push(request);
 					await watches.attributeSessionRun("target", "control", [requestId!]);
@@ -378,7 +378,7 @@ test("failed pre-admission starts drop only unbound watches; uncertain created c
 	};
 	await assert.rejects(pilot.call("control", "start", args, "unavailable"), /Model unavailable/);
 	assert.equal(f.watches.dashboard().followUpsTotal, 0);
-	pilot.options.mutations!.startProject = async (_request, requestId) => {
+	pilot.options.mutations!.startProject = async (_request, _permission, requestId) => {
 		await f.watches.followThroughCreated("target", requestId!);
 		throw new Error("Created chat, acknowledgement uncertain");
 	};

@@ -191,6 +191,7 @@ test("real subagent worker inherits the bundled child profile and required auth,
 }, async (t) => {
 	const f = await fixture(t);
 	const marker = join(f.root, "child-profile.json");
+	const publication = join(f.root, "child-publication");
 	const todos: TodoRecord[] = [];
 	const policy = join(f.root, "subscription-policy.json");
 	const savePolicy = (blocked: boolean) =>
@@ -226,10 +227,12 @@ test("real subagent worker inherits the bundled child profile and required auth,
 		`
 import { writeFileSync } from 'node:fs';
 import { fauxProvider, fauxAssistantMessage } from ${JSON.stringify(import.meta.resolve("@earendil-works/pi-ai/providers/faux"))};
+import { Type } from ${JSON.stringify(import.meta.resolve("@earendil-works/pi-ai"))};
 export default pi => {
+	pi.registerTool({ name: "bash", label: "bash", description: "Offline publication stub", parameters: Type.Object({command: Type.String()}), execute: async () => { writeFileSync(${JSON.stringify(publication)}, "executed"); return {content:[{type:"text",text:"stub"}],details:undefined}; } });
  const faux = fauxProvider({provider:'openai-codex',models:[{id:'offline'}]});
  faux.setResponses([
-  fauxAssistantMessage({type:'toolCall',id:'child-todo',name:'codemode',arguments:{code:'const item = await tools.todo({action:"create",title:"From real child"}); await tools.todo({action:"claim",id:item.id}); return item;'}}, {stopReason:'toolUse'}),
+  fauxAssistantMessage({type:'toolCall',id:'child-todo',name:'codemode',arguments:{code:'try { await tools.bash({command:["gh","pr","create"].join(" ")}); } catch {} const item = await tools.todo({action:"create",title:"From real child"}); await tools.todo({action:"claim",id:item.id}); return item;'}}, {stopReason:'toolUse'}),
   fauxAssistantMessage("", {stopReason:'error',errorMessage:'usage_limit_reached'}),
   fauxAssistantMessage("CHILD_PROFILE_OK"), fauxAssistantMessage("CHILD_FOLLOWUP_OK")
  ]);
@@ -258,6 +261,7 @@ export default pi => {
 			PILOT_PI_EXTENSIONS_PROFILE: CHILD_PROFILE_PATH,
 			PILOT_ANTHROPIC_AUTH_EXTENSION: ANTHROPIC_AUTH_PATH,
 			PILOT_SUBSCRIPTION_POLICY: policy,
+			PILOT_CONTROL_PERMISSION: JSON.stringify({ authorizationId: "child-grant", level: "implement" }),
 		},
 	});
 	const closed = once(child, "exit");
@@ -333,6 +337,7 @@ export default pi => {
 	child.send({ type: "stop", id: "stop" });
 	assert.equal(todos.length, 1, "child's tool writes to the parent list, not workspace files");
 	assert.equal(todos[0].title, "From real child");
+	await assert.rejects(readFile(publication), { code: "ENOENT" }, "child cannot publish under implement permission");
 	assert.ok(todos[0].assigned_to_session);
 	await packet("stopped", "stop");
 	child.send({ type: "pause" });

@@ -65,9 +65,9 @@ async function fixture(t: TestContext) {
 			linear: () => [],
 			mutations: {
 				audit: () => audit,
-				startProject: async (request) => {
+				startProject: async (request, permission, requestId, provenance) => {
 					if (startError) throw startError;
-					effects.push(["start", request]);
+					effects.push(["start", request, permission, requestId, provenance]);
 					return { id: "new" } as SessionSummary;
 				},
 				startTask: async (...args) => {
@@ -116,6 +116,53 @@ async function fixture(t: TestContext) {
 			service.call("control", "authorize", args, operation) as Promise<ControlAuthorization>,
 	};
 }
+test("starts propagate the admitted level and mode, never model-supplied authority", async (t) => {
+	const f = await fixture(t);
+	const record = await f.authorize({ ...approval, level: "publish", limits: { followUps: 10, budgetUsd: 10 } });
+	for (const level of ["investigate", "implement", "publish"] as const) {
+		const permission = { authorizationId: record.id, level };
+		await f.service.call(
+			"control",
+			"start",
+			{ ...permission, projectId: "p", message: "work", budgetUsd: 1, mode: "build" },
+			`project-${level}`,
+		);
+		await f.service.call(
+			"control",
+			"start",
+			{ ...permission, missionId: "m", taskId: "2", budgetUsd: 1, mode: "build" },
+			`task-${level}`,
+		);
+		assert.deepEqual(f.effects.at(-2), [
+			"start",
+			{ projectId: "p", message: "work", mode: level === "investigate" ? "ask" : "build" },
+			permission,
+			`control:start:project-${level}`,
+			{ authorizationId: record.id, budgetUsd: 1 },
+		]);
+		assert.deepEqual(f.effects.at(-1), [
+			"task",
+			"m",
+			"2",
+			{ mode: level === "investigate" ? "ask" : "build" },
+			permission,
+			`control:start:task-${level}`,
+			{ authorizationId: record.id, budgetUsd: 1 },
+		]);
+	}
+	const merge = await f.authorize({ ...approval, level: "merge" }, "merge");
+	await assert.rejects(
+		f.service.call(
+			"control",
+			"start",
+			{ authorizationId: merge.id, level: "merge", projectId: "p", message: "merge", budgetUsd: 1 },
+			"merge-start",
+		),
+		/user confirmation in the app/,
+	);
+	assert.equal(f.effects.length, 6);
+});
+
 test("authorize uses daemon provenance only; notices, tool input, idle and ordinary callers cannot mint grants", async (t) => {
 	const f = await fixture(t);
 	for (const requestId of ["watch-notice:1", "mission-notice:2", "native:extension:3", "native:user:4"]) {

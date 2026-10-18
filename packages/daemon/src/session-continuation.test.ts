@@ -247,6 +247,7 @@ test("cross-provider continuation creates only a fresh handoff and fences all ol
 	meta.boundPullRequests = [pr];
 	meta.unboundPullRequests = ["https://github.com/octo/repo/pull/2"];
 	meta.subscriptionPolicy = { version: 1, windows: [], forced: ["OLD FORCE"] };
+	meta.controlPermission = { authorizationId: "grant", level: "implement" };
 	await f.sessions["save"](meta);
 	const source = (await f.sessions["ensureWorker"](f.id)) as FakeWorker;
 	meta.subagents = [
@@ -269,6 +270,8 @@ test("cross-provider continuation creates only a fresh handoff and fences all ol
 	assert.equal(source.closed, true);
 	assert.equal(f.sessions.pullRequestOwner(pr), changed.id);
 	const target = f.workers.at(-1)!;
+	assert.deepEqual(target.spec.pilot?.controlPermission, meta.controlPermission);
+	assert.deepEqual(f.sessions["metas"].get(changed.id)?.controlPermission, meta.controlPermission);
 	assert.notEqual(target.spec.storageDir, source.spec.storageDir);
 	assert.equal(target.spec.continuationModel, undefined);
 	const input = target.commands.find((command) => command.type === "input");

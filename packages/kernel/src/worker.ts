@@ -454,6 +454,10 @@ export function runKernelWorker(): void {
 				if (command.spec.connectivityPolicy)
 					process.env.PILOT_CONNECTIVITY_POLICY = command.spec.connectivityPolicy;
 				else delete process.env.PILOT_CONNECTIVITY_POLICY;
+				// Bundled children inherit the same immutable authority ceiling, never a prompt-supplied level.
+				if (command.spec.pilot?.controlPermission)
+					process.env.PILOT_CONTROL_PERMISSION = JSON.stringify(command.spec.pilot.controlPermission);
+				else delete process.env.PILOT_CONTROL_PERMISSION;
 				const opened = await KernelSession.open(command.spec, {
 					onSystemMessageState: (event) => {
 						void send({ type: "systemMessageState", event });

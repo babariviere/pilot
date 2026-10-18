@@ -23,6 +23,7 @@ export {
 	parseToolActivityRecord,
 	TOOL_ACTIVITY_FILE,
 } from "./tool-activity.ts";
+export type { ControlPermission } from "./tool-policy.ts";
 
 /** Absolute path of the worker entry, for `child_process.fork`. Plain Node runs it: no loader is needed. */
 export const workerEntry = new URL("./worker-entry.ts", import.meta.url);

@@ -4,6 +4,17 @@ import type { Context } from "@earendil-works/chord";
 import { type Extension, hook, type PromptInput, section, ToolTask } from "@earendil-works/pi-durable";
 import type { DiagnosticTargetReference } from "@pilot/protocol";
 
+import {
+	type ControlPermission,
+	commandArguments,
+	controlPermissionBlock,
+	githubPosting,
+	nestedShellCommands,
+	strings,
+} from "./tool-policy.ts";
+
+export { commandArguments, githubPosting } from "./tool-policy.ts";
+
 export interface WorkspaceContext {
 	/** The user's checkout this isolated workspace came from. */
 	source: string;
@@ -16,6 +27,8 @@ export interface WorkspaceContext {
 }
 
 export interface PilotContext {
+	/** Trusted, durable authority ceiling for a chat started by Control. Never inferred from input text. */
+	controlPermission?: ControlPermission;
 	/** Runtime-enforced specialist profile. */
 	role?: "diagnostics";
 	/** Host-admitted target shown to the specialist; authority remains in pilotd/tool dispatch. */
@@ -74,21 +87,6 @@ export interface AskContext {
 	commit?: string;
 }
 
-/** Commands that would post on GitHub. Reads (`gh pr view`, `gh api …/comments` without a write) stay allowed. */
-const POSTING: Array<{ pattern: RegExp; what: string }> = [
-	{ pattern: /\bgh\s+(?:pr|issue)\s+(?:comment|review)\b/, what: "comment or review" },
-	{ pattern: /\bgh\s+pr\s+(?:merge|close)\b/, what: "merge or close a pull request" },
-	{ pattern: /\bgh\s+stack\s+merge\b/, what: "merge a pull request stack" },
-	{
-		pattern: /\bgh\s+stack\s+(?:submit|push|sync|rebase|modify|unstack)\b/,
-		what: "push or rewrite branches through gh stack",
-	},
-	{ pattern: /\bgh\s+issue\s+(?:close|create)\b/, what: "create or close an issue" },
-	{ pattern: /\bmcp__github\w*__\w*(?:comment|review|merge)\w*/i, what: "comment, review or merge" },
-];
-const API_WRITE = /\s(?:-X|--method)[\s=]*(?:POST|PATCH|PUT|DELETE)\b|\s-[fF]\s|\s--(?:raw-)?field\b|\s--input\b/i;
-const API_POSTING_PATH = /\/(?:comments|reviews|replies|merge)\b|\/pulls\/\d+\/reviews|\/issues\/\d+\/comments/;
-
 /** Commands that publish names or descriptions: commits, bookmarks/branches and pull requests. */
 const DELIVERABLE =
 	/\bgh\s+pr\s+(?:create|edit)\b|\bjj\s+(?:describe|desc|commit|ci|new|bookmark\s+(?:create|c|set|s|rename|r))\b|\bgit\s+(?:commit|switch\s+-[cC]|checkout\s+-[bB]|branch\s+(?:-m\s+)?[\w./-]+)\b/;
@@ -106,7 +104,7 @@ export function missionLeak(arguments_: unknown, mission: MissionContext | undef
 	return match ? `"${match[0]}"` : undefined;
 }
 
-export function missionPrompt(mission: MissionContext, ghStack?: boolean): string {
+export function missionPrompt(mission: MissionContext, ghStack?: boolean, localOnly = false): string {
 	const stackLink =
 		"link dependent PRs bottom-to-top with gh stack link <bottom-pr-url> … <top-pr-url>. Pass existing PR URLs, not branch names (with branch arguments, the command pushes them itself), keep the existing stack order and members, and use only link and view. If the repository rejects stacks, keep the plain chained PRs and report it.";
 	const lines = [
@@ -131,15 +129,19 @@ export function missionPrompt(mission: MissionContext, ghStack?: boolean): strin
 					"- Delegate all code changes to member chats. You have no branch or pull request and must not commit, create bookmarks or branches, push, or open pull requests. Durable output belongs in the brief, tasks and artifacts.",
 					"- When mentioning a member chat to the user, link its name with Markdown: [chat name](chatUrl). Use the chatUrl returned by mission status or start; status supplies links for existing chats. Links open the chat inside Pilot.",
 				]
-			: [
-					"- Open one pull request per task and link it to the task with the link action and taskId. In multi-task chats, this explicit link is required; PR creation and discovery never infer the task. Resource links are references, not PR ownership. Only the user or coordinator binds PRs: a PR bound to you is yours, including its head branch, CI/review follow-ups and pushes. Never rewrite or push branches of PRs owned by other chats, or PRs unbound from you. For a dependent task, base your own bookmark on the dependency's head and open with gh pr create --base <dependency-head> --head <own-head>.",
-					ghStack === true
-						? `- github/gh-stack is installed: ${stackLink}`
-						: ghStack === false
-							? "- github/gh-stack is unavailable: keep plain chained PRs and do not install it."
-							: `- If gh extension list shows github/gh-stack, ${stackLink} Otherwise keep plain chained PRs.`,
-					"- The mission is internal coordination. Commit messages, branch or bookmark names and pull requests describe the change itself, without mentioning the mission, its tasks, the coordinator, other chats or Pilot (Pilot rejects commands that mention the mission). External tracker references such as Linear issue IDs are fine.",
-				]),
+			: localOnly
+				? [
+						"- Work only within this chat's permission level. Report local results without pushing or opening a pull request.",
+					]
+				: [
+						"- Open one pull request per task and link it to the task with the link action and taskId. In multi-task chats, this explicit link is required; PR creation and discovery never infer the task. Resource links are references, not PR ownership. Only the user or coordinator binds PRs: a PR bound to you is yours, including its head branch, CI/review follow-ups and pushes. Never rewrite or push branches of PRs owned by other chats, or PRs unbound from you. For a dependent task, base your own bookmark on the dependency's head and open with gh pr create --base <dependency-head> --head <own-head>.",
+						ghStack === true
+							? `- github/gh-stack is installed: ${stackLink}`
+							: ghStack === false
+								? "- github/gh-stack is unavailable: keep plain chained PRs and do not install it."
+								: `- If gh extension list shows github/gh-stack, ${stackLink} Otherwise keep plain chained PRs.`,
+						"- The mission is internal coordination. Commit messages, branch or bookmark names and pull requests describe the change itself, without mentioning the mission, its tasks, the coordinator, other chats or Pilot (Pilot rejects commands that mention the mission). External tracker references such as Linear issue IDs are fine.",
+					]),
 	];
 	if (mission.status !== "active")
 		lines.push(`- This mission is ${mission.status}. Do not start new mission work unless the user asks.`);
@@ -165,39 +167,6 @@ export function missionPrompt(mission: MissionContext, ghStack?: boolean): strin
 			);
 	}
 	return lines.join("\n");
-}
-
-/** Literal shell arguments in codemode, not prose in other tool calls. Never evaluate script source. */
-function nestedShellCommands(code: string): unknown[] {
-	const literals = new Map<number, string>();
-	// Mask strings and comments before looking for calls, so examples inside content stay inert.
-	const masked = code.replace(
-		/"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|`(?:\\[\s\S]|[^`\\])*`|\/\/[^\n]*|\/\*[\s\S]*?\*\//g,
-		(value, offset: number) => {
-			if (value.startsWith("/")) return " ".repeat(value.length);
-			// Preserve quoted argument keys, but replace literal values with an indexed placeholder.
-			if (/^["'](?:action|command|cmd|script)["']$/.test(value) && /^\s*:/.test(code.slice(offset + value.length)))
-				return ` ${value.slice(1, -1)} `;
-			literals.set(offset, value.slice(1, -1));
-			return `@${" ".repeat(value.length - 1)}`;
-		},
-	);
-	const commands: unknown[] = [];
-	for (const call of masked.matchAll(/\btools\.(\w+)\s*\(\s*\{/g)) {
-		const start = call.index + call[0].length;
-		let end = start;
-		let depth = 1;
-		for (; end < masked.length && depth; end++) {
-			if (masked[end] === "{") depth++;
-			if (masked[end] === "}") depth--;
-		}
-		const args: Record<string, unknown> = {};
-		for (const field of masked.slice(start, end - 1).matchAll(/\b(action|command|cmd|script)\s*:\s*@/g)) {
-			args[field[1]!] = literals.get(start + field.index + field[0].length - 1);
-		}
-		commands.push(commandArguments(call[1]!, args));
-	}
-	return commands;
 }
 
 /** Conservative backup to the OS read-only view, including literal nested shell commands. */
@@ -229,18 +198,6 @@ export function coordinatorMutation(arguments_: unknown, codemode = false): bool
 	return false;
 }
 
-/** Why executable text would post on GitHub, or undefined. Includes nested calls in codemode scripts. */
-export function githubPosting(arguments_: unknown): string | undefined {
-	const text = strings(arguments_).join("\n");
-	for (const { pattern, what } of POSTING) if (pattern.test(text)) return what;
-	// One `gh api` command at a time: a write flag plus a comment/review/merge endpoint.
-	for (const command of text.split(/\n|;|&&|\|\|/)) {
-		if (/\bgh\s+api\b/.test(command) && API_POSTING_PATH.test(command) && API_WRITE.test(` ${command}`))
-			return "post through the GitHub API";
-	}
-	return undefined;
-}
-
 /** The HTTP user-inbox route cannot identify an agent caller. Do not silently impersonate the user.
  * This is an execution-policy guard, not network authentication or a content classifier. */
 export function userInboxWrite(arguments_: unknown, codemode = false): boolean {
@@ -250,24 +207,6 @@ export function userInboxWrite(arguments_: unknown, codemode = false): boolean {
 		/\/api\/sessions\/[^\s/"'`]+\/messages\b/.test(text) &&
 		/(?:\bPOST\b|--(?:data(?:-raw|-binary|-urlencode)?|json)\b|\s-d\s)/i.test(text)
 	);
-}
-
-function strings(value: unknown): string[] {
-	if (typeof value === "string") return [value];
-	if (Array.isArray(value)) return value.flatMap(strings);
-	if (value && typeof value === "object") return Object.values(value).flatMap(strings);
-	return [];
-}
-
-/** Select execution-bearing fields, not metadata or content-only tool arguments. */
-export function commandArguments(name: string, args: Record<string, unknown>): unknown {
-	// Conservatively scan script source to retain coverage of nested tool calls.
-	if (name === "codemode") return args.code;
-	if (name === "jobs") return args.action === "start" ? args.command : undefined;
-	// Native shells and common shell-tool names (including namespaced MCP tools).
-	if (/(?:^|__)(?:bash|powershell|shell|sh|exec|execute_command|run_command|terminal)$/.test(name))
-		return args.command ?? args.cmd ?? args.script;
-	return undefined;
 }
 
 export function pilotPrompt(context: PilotContext, artifactsAvailable = false, coordinator = false): string {
@@ -307,6 +246,16 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false, c
 	}
 	const workspace = context.workspace;
 	const requirePullRequest = context.requirePullRequest !== false;
+	const localOnly =
+		context.controlPermission?.level === "implement" || context.controlPermission?.level === "investigate";
+	if (context.controlPermission)
+		lines.push(
+			context.controlPermission.level === "investigate"
+				? "- This chat has investigate permission: Ask/read-only, with no implementation or publication."
+				: localOnly
+					? "- This chat has implement permission: build, verify and change files locally only. Do not push, open or update pull requests, or delegate publication. Report local results; publication needs a separately authorized chat."
+					: "- This chat has publish permission: push and open/update pull requests within the accepted scope. Merges still require user confirmation in the app; never merge through tools.",
+		);
 
 	if (coordinator)
 		lines.push(
@@ -328,7 +277,7 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false, c
 				`- Your working directory is the shared jj workspace \`${workspace.shared.name}\` in ${workspace.shared.repository}, created from ${workspace.source}. Its working-copy change starts on base \`${workspace.base}\`${workspace.baseBranch ? ` (branch \`${workspace.baseBranch}\`)` : ""}${workspace.branch ? `, with task bookmark \`${workspace.branch}\`` : ", with no task bookmark yet"}. The user's own checkout and its uncommitted changes are unaffected by your workspace edits. This is not a private clone or detached checkout.`,
 				"- Use jj for version-control changes. Your working copy is isolated, but bookmarks and history are shared with sibling sessions, so keep rebases, rewrites and pushes to this task's own changes and bookmark. Repository-wide operations (`jj undo`, `jj op restore`, broad rebases, `jj git push --all`) would change other sessions' work.",
 			);
-			if (requirePullRequest) {
+			if (requirePullRequest && !localOnly) {
 				lines.push(
 					"- Work on one task bookmark, keeping an existing one. If a new bookmark is needed, create it with `jj bookmark create <name> -r @`, move it after committing with `jj bookmark set <name> -r @-`, and push it alone with `jj git push --bookmark <name>`.",
 				);
@@ -338,11 +287,11 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false, c
 				`- Your working directory is a private clone of ${workspace.source}, started from \`${workspace.base}\`${workspace.branch ? `, with branch/bookmark \`${workspace.branch}\`` : ", initially detached with no task branch or bookmark"}. Uncommitted changes in the user's own checkout are not here, and nothing you do here touches it.`,
 			);
 		}
-		if (!workspace.shared && requirePullRequest && workspace.jj) {
+		if (!workspace.shared && requirePullRequest && !localOnly && workspace.jj) {
 			lines.push(
 				"- The clone is a colocated jj repository. Use jj for version-control changes. If a new bookmark is needed, create it with `jj bookmark create <name> -r @`; after committing, move the chosen bookmark with `jj bookmark set <name> -r @-`, and push with `jj git push --bookmark <name>`.",
 			);
-		} else if (!workspace.shared && requirePullRequest) {
+		} else if (!workspace.shared && requirePullRequest && !localOnly) {
 			lines.push(
 				"- If a new branch is needed, create it with `git switch -c <name>`. Commit on the chosen branch and push it with `git push -u origin <name>`.",
 			);
@@ -356,7 +305,7 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false, c
 				: "- While this chat was archived, Pilot deleted ignored dependency and build directories (such as `node_modules`, `dist`, `build` and `.build`) from this workspace to free disk space. History and all other files are intact. Reinstall or rebuild them before running builds or tests.",
 		);
 	}
-	if (!context.ask && !coordinator && (workspace || context.requirePullRequest !== undefined)) {
+	if (!context.ask && !coordinator && !localOnly && (workspace || context.requirePullRequest !== undefined)) {
 		if (requirePullRequest) {
 			lines.push(
 				"- Name a new branch or bookmark `<type>/<short-description>` with the conventional type that matches the task: `feat/`, `fix/`, `docs/`, `refactor/`, `test/`, `build/`, `ci/`, `perf/`, `style/`, `chore/` or `revert/` (for example `fix/branch-prefix-policy`), not `pilot/`. Keep an existing branch or bookmark name, including a PR head, even if it does not follow this convention.",
@@ -404,7 +353,7 @@ export function withPilotPolicy(
 				const current = mission();
 				const prompt = pilotPrompt(context, artifactsAvailable(), current?.coordinator === "self");
 				return current && context.role !== "diagnostics"
-					? `${prompt}\n${missionPrompt(current, context.ghStack)}`
+					? `${prompt}\n${missionPrompt(current, context.ghStack, context.controlPermission?.level === "implement" || context.controlPermission?.level === "investigate")}`
 					: prompt;
 			}),
 		],
@@ -417,6 +366,8 @@ export function withPilotPolicy(
 						return {
 							block: "Pilot policy: this is the user-message HTTP endpoint. Use pilot/mission send so the message keeps its actual origin. If that cannot reach the target, report the limitation; do not send as the user.",
 						};
+					const denied = controlPermissionBlock(context.controlPermission, call.name, call.arguments);
+					if (denied) return { block: denied };
 					if (
 						(mission()?.coordinator === "self" || context.coordinatorView) &&
 						/(?:^|__)(?:write|edit|apply_patch|applyPatch)$/.test(call.name)

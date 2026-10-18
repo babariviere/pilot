@@ -272,16 +272,22 @@ sessions.setPilot(
 				return chat;
 			},
 			audit: () => sessions.controlAudit(),
-			startProject: async (request, requestId, provenance) => {
+			startProject: async (request, permission, requestId, provenance) => {
 				const selection = await controlPreAdmission(async () => {
 					const project = projects.require(request.projectId!);
 					return sessions.selectTaskModel(project.path, request.model ?? project.model, request.thinking);
 				});
-				return sessions.controlStart(() => sessions.spawn({ ...request, ...selection }), requestId, provenance);
+				return sessions.controlStart(
+					() => sessions.spawn({ ...request, ...selection }),
+					permission,
+					requestId,
+					provenance,
+				);
 			},
-			startTask: (missionId, taskId, request, requestId, provenance) =>
+			startTask: (missionId, taskId, request, permission, requestId, provenance) =>
 				sessions.controlStart(
 					() => missionService.startTask(missionId, taskId, request, "coordinator"),
+					permission,
 					requestId,
 					provenance,
 				),
