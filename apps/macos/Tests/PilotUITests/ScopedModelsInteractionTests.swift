@@ -52,10 +52,11 @@ func scopedModelsNativeSavePersistsAndDispatchesExplicitAllOnlyAfterClick() asyn
     #expect(sync.state.entry(host)?.appliedRevision == 1)
 }
 
-@MainActor private func nativeScopeWait(_ predicate: () -> Bool) async throws {
+@MainActor private func nativeScopeWait(_ checkpoint: String = "Scoped models fixture did not settle",
+                                       _ predicate: () -> Bool) async throws {
     let deadline = Date().addingTimeInterval(10)
     while !predicate(), Date() < deadline { try await Task.sleep(for: .milliseconds(5)) }
-    try #require(predicate())
+    try #require(predicate(), Comment(rawValue: checkpoint))
 }
 
 @MainActor private func nativeScopeButtons(_ view: NSView) -> [NSButton] {
@@ -72,14 +73,42 @@ func scopedModelsNativeSelectorPreservesAdvancedPatterns() async throws {
     let window = NSWindow(contentRect: NSRect(x: -10000, y: -10000, width: 500, height: 120),
                           styleMask: [.titled], backing: .buffered, defer: false)
     window.isReleasedWhenClosed = false; window.contentView = hosting
-    window.orderFrontRegardless(); hosting.layoutSubtreeIfNeeded()
+    window.orderFrontRegardless(); hosting.layoutSubtreeIfNeeded(); window.update()
     defer { window.close() }
-    try await nativeScopeWait { nativeScopeButtons(hosting).count == 1 }
+    do {
+        try await nativeScopeWait("The native model checkbox did not mount") { nativeScopeButtons(hosting).count == 1 }
+    } catch {
+        print(nativeScopeViewTree(hosting))
+        throw error
+    }
     let checkbox = try #require(nativeScopeButtons(hosting).first)
-    checkbox.performClick(nil)
-    try await nativeScopeWait { editor.patterns.contains(candidate.id) }
+    try nativeScopeClickCheckbox(checkbox)
+    try await nativeScopeWait("A native checkbox click did not select the model") { editor.patterns.contains(candidate.id) }
     #expect(editor.patterns == ["unavailable/*:high", "unavailable/*:high", "provider/model"])
-    checkbox.performClick(nil)
-    try await nativeScopeWait { !editor.patterns.contains(candidate.id) }
+    try nativeScopeClickCheckbox(checkbox)
+    try await nativeScopeWait("A native checkbox click did not deselect the model") { !editor.patterns.contains(candidate.id) }
     #expect(editor.patterns == ["unavailable/*:high", "unavailable/*:high"])
+}
+
+/// Exercise the checkbox's real pointer path rather than relying on NSButton's
+/// programmatic action forwarding into a hosted SwiftUI toggle.
+@MainActor private func nativeScopeClickCheckbox(_ button: NSButton) throws {
+    let window = try #require(button.window)
+    try #require(button.isEnabled && !button.bounds.isEmpty)
+    let point = button.convert(NSPoint(x: button.bounds.midX, y: button.bounds.midY), to: nil)
+    func event(_ type: NSEvent.EventType) throws -> NSEvent {
+        try #require(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+            context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
+    }
+    NSApp.postEvent(try event(.leftMouseUp), atStart: false)
+    window.sendEvent(try event(.leftMouseDown))
+    if let up = NSApp.nextEvent(matching: .leftMouseUp, until: Date(), inMode: .default, dequeue: true) {
+        window.sendEvent(up)
+    }
+}
+
+@MainActor private func nativeScopeViewTree(_ view: NSView, depth: Int = 0) -> String {
+    String(repeating: " ", count: depth) + "\(type(of: view)) \(view.frame)\n" +
+        view.subviews.map { nativeScopeViewTree($0, depth: depth + 1) }.joined()
 }
