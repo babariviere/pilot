@@ -26,6 +26,21 @@ public struct ControlHomeEnrollment: Codable, Equatable, Sendable {
     public let executor: OperationHost
     public let state: State
 }
+public struct ControlHostCutover: Codable, Equatable, Sendable {
+    public enum State: String, Codable, Sendable { case preparing, ready, archived }
+    public let bindingId: String
+    public let generation: UInt64
+    public let contractVersion: Int
+    public let home: OperationHost
+    public let executor: OperationHost
+    public let state: State
+    public let homeReady: Bool
+    public let executorEnrolled: Bool
+    public let actionReceiptOperationId: String?
+    public let watchEventId: String?
+    public let taskSnapshotId: String?
+    public let updatedAt: Double
+}
 public enum ControlPilotAction: String, Codable, CaseIterable, Sendable {
     case status, health, logs, telemetry, read, checks, authorize, authorizations, revoke
     case resolveAuthorization = "resolve_authorization"

@@ -23,6 +23,15 @@ struct ControlHostsProtocolTests {
 
     @Test func hostIdentityRequestsAndAuthorizationScopeRoundTrip() throws {
         let f = try fixtures()
+        let hellos = try roundTrip([DaemonHello].self, #require(f["hellos"]))
+        #expect(hellos[0].capabilities.controlHosts == nil)
+        #expect(hellos[0].controlHost == nil)
+        #expect(hellos[1].capabilities.controlHosts == 1)
+        #expect(hellos.dropFirst().compactMap { $0.controlHost?.role } == [.home, .executor, .archivedControl])
+        let cutovers = try roundTrip([ControlHostCutover].self, #require(f["cutovers"]))
+        #expect(cutovers.map(\.state) == [.preparing, .ready, .archived])
+        #expect(cutovers[0].watchEventId == nil)
+        #expect(cutovers[1].actionReceiptOperationId == "operation:1")
         let configurations = try roundTrip([ControlHostConfiguration].self, #require(f["configurations"]))
         #expect(configurations.map(\.role) == [.home, .executor, .archivedControl])
         #expect(configurations[0].host == configurations[0].home)

@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import type { DaemonHello } from "./hello.ts";
 import type {
 	ControlAuthorization,
 	ControlBudgetReservation,
 	ControlHomeEnrollment,
 	ControlHostConfiguration,
+	ControlHostCutover,
 	ControlHostRequest,
 	ControlOperationAcknowledgment,
 	ControlOperationAuthority,
@@ -22,6 +24,8 @@ type PayloadFixture = {
 	[K in ControlOperationKind]: { kind: K; payload: ControlOperationPayloads[K] };
 }[ControlOperationKind];
 interface Fixtures {
+	hellos: DaemonHello[];
+	cutovers: ControlHostCutover[];
 	configurations: ControlHostConfiguration[];
 	enrollments: ControlHomeEnrollment[];
 	requests: ControlHostRequest[];
@@ -42,6 +46,19 @@ function roundTrip<T>(value: T): T {
 }
 test("Control host identity, default-home requests and explicit authorization hosts round trip", () => {
 	const f = roundTrip(fixture);
+	assert.equal(f.hellos[0].capabilities.controlHosts, undefined);
+	assert.equal(f.hellos[0].controlHost, undefined);
+	assert.deepEqual(
+		f.hellos.slice(1).map((h) => h.controlHost?.role),
+		["home", "executor", "archived-control"],
+	);
+	assert.ok(f.hellos.slice(1).every((h) => h.capabilities.controlHosts === 1));
+	assert.deepEqual(
+		f.cutovers.map((c) => c.state),
+		["preparing", "ready", "archived"],
+	);
+	assert.equal(f.cutovers[0].watchEventId, undefined);
+	assert.equal(f.cutovers[1].actionReceiptOperationId, "operation:1");
 	assert.deepEqual(
 		f.configurations.map((c) => c.role),
 		["home", "executor", "archived-control"],

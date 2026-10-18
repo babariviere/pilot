@@ -1481,5 +1481,186 @@
 				"truncated": false
 			}
 		}
+	],
+	"hellos": [
+		{
+			"daemonId": "home-daemon",
+			"lineageId": "home-lineage",
+			"daemonVersion": "fixture",
+			"protocolVersion": 1,
+			"minimumClientProtocolVersion": 1,
+			"platform": "fixture",
+			"arch": "fixture",
+			"capabilities": {
+				"powerManagement": false,
+				"systemSleepEvents": false,
+				"swiftUIArtifacts": false,
+				"coordinatorIsolation": true,
+				"independentExecution": true
+			}
+		},
+		{
+			"daemonId": "home-daemon",
+			"lineageId": "home-lineage",
+			"daemonVersion": "fixture",
+			"protocolVersion": 1,
+			"minimumClientProtocolVersion": 1,
+			"platform": "fixture",
+			"arch": "fixture",
+			"capabilities": {
+				"powerManagement": false,
+				"systemSleepEvents": false,
+				"swiftUIArtifacts": false,
+				"coordinatorIsolation": true,
+				"independentExecution": true,
+				"controlHosts": 1
+			},
+			"controlHost": {
+				"schemaVersion": 1,
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"host": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"role": "home",
+				"controlSessionId": "control"
+			}
+		},
+		{
+			"daemonId": "executor-daemon",
+			"lineageId": "executor-lineage",
+			"daemonVersion": "fixture",
+			"protocolVersion": 1,
+			"minimumClientProtocolVersion": 1,
+			"platform": "fixture",
+			"arch": "fixture",
+			"capabilities": {
+				"powerManagement": false,
+				"systemSleepEvents": false,
+				"swiftUIArtifacts": false,
+				"coordinatorIsolation": true,
+				"independentExecution": true,
+				"controlHosts": 1
+			},
+			"controlHost": {
+				"schemaVersion": 1,
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"host": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"role": "executor"
+			}
+		},
+		{
+			"daemonId": "executor-daemon",
+			"lineageId": "executor-lineage",
+			"daemonVersion": "fixture",
+			"protocolVersion": 1,
+			"minimumClientProtocolVersion": 1,
+			"platform": "fixture",
+			"arch": "fixture",
+			"capabilities": {
+				"powerManagement": false,
+				"systemSleepEvents": false,
+				"swiftUIArtifacts": false,
+				"coordinatorIsolation": true,
+				"independentExecution": true,
+				"controlHosts": 1
+			},
+			"controlHost": {
+				"schemaVersion": 1,
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"host": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"role": "archived-control",
+				"archive": {
+					"sessionId": "old-control",
+					"archivedAt": 2000
+				}
+			}
+		}
+	],
+	"cutovers": [
+		{
+			"bindingId": "control:binding:1",
+			"generation": 1,
+			"contractVersion": 1,
+			"home": {
+				"hostId": "daemon",
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage"
+			},
+			"executor": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"state": "preparing",
+			"homeReady": true,
+			"executorEnrolled": true,
+			"updatedAt": 5000
+		},
+		{
+			"bindingId": "control:binding:1",
+			"generation": 1,
+			"contractVersion": 1,
+			"home": {
+				"hostId": "daemon",
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage"
+			},
+			"executor": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"state": "ready",
+			"homeReady": true,
+			"executorEnrolled": true,
+			"actionReceiptOperationId": "operation:1",
+			"watchEventId": "event:1",
+			"taskSnapshotId": "snapshot:1",
+			"updatedAt": 5000
+		},
+		{
+			"bindingId": "control:binding:1",
+			"generation": 1,
+			"contractVersion": 1,
+			"home": {
+				"hostId": "daemon",
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage"
+			},
+			"executor": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"state": "archived",
+			"homeReady": true,
+			"executorEnrolled": true,
+			"actionReceiptOperationId": "operation:1",
+			"watchEventId": "event:1",
+			"taskSnapshotId": "snapshot:1",
+			"updatedAt": 5000
+		}
 	]
 }
