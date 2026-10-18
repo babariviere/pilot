@@ -216,9 +216,8 @@ Release runtimes include Node and Playwright but not npm, so use this bundled CL
 [UPDATES.md](UPDATES.md) covers the one-time GitHub signing-key setup, first installation and the
 local `gh` authentication, with a Keychain-backed token fallback in Settings > Updates.
 Release Please maintains semantic-version release PRs on `main`. Merging one publishes a stable
-Apple Silicon release (`vX.Y.Z`) with generated release notes, after all checks and signing succeed.
-Other main commits produce SHA-named GitHub dev prereleases. Each build includes a drag-and-drop
-DMG installer and the signed update ZIP. Dev prereleases do not replace stable automatic updates.
+Apple Silicon release (`vX.Y.Z`) with generated release notes and the signed update ZIP, once building
+and signing succeed. Tests do not block it.
 Sparkle downloads and installs verified updates when agents are idle. Installation restarts pilotd
 and closes terminal shells. No Apple developer membership is needed; builds are not notarized.
 

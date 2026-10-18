@@ -13,7 +13,7 @@ import xml.etree.ElementTree as ET
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.dont_write_bytecode = True
 from release_metadata import (
-    DRAFT_ASSETS, SPARKLE, appcast, appcast_build, complete_draft, dmg_release_tag, newer_build_than_latest,
+    DRAFT_ASSETS, SPARKLE, appcast, appcast_build, complete_draft, newer_build_than_latest,
     newer_than_latest, prepare_runtime, release_state, stable_version, validate_symlinks, write_plist,
 )
 
@@ -116,25 +116,6 @@ class ReleaseMetadataTests(unittest.TestCase):
         feed.write_text('<rss><channel><item /></channel></rss>')
         with self.assertRaises(ValueError):
             appcast_build(feed, "0.2.0")
-
-    def test_dmg_requires_a_complete_published_stable_release_without_an_installer(self):
-        release = {"tagName": "v1.2.3", "isDraft": False, "isPrerelease": False, "assets": [
-            {"name": name, "state": "uploaded"} for name in ['Pilot-arm64.zip', 'appcast.xml']
-        ]}
-        self.assertEqual(dmg_release_tag(release), "v1.2.3")
-        for changes in [{"isDraft": True}, {"isPrerelease": True}, {"tagName": "dev-123"},
-                        {"tagName": "v1.2.3-beta.1"}, {"tagName": "v1.2.3\n"}]:
-            with self.subTest(changes=changes), self.assertRaises(ValueError):
-                dmg_release_tag({**release, **changes})
-        for i in range(len(release['assets'])):
-            with self.subTest(asset=i), self.assertRaises(ValueError):
-                dmg_release_tag({**release, "assets": [a for j, a in enumerate(release['assets']) if i != j]})
-        with self.assertRaises(ValueError):
-            dmg_release_tag({**release, "assets": [{**a, "state": "new"} for a in release['assets']]})
-        for state in ['uploaded', 'new']:
-            with self.subTest(state=state), self.assertRaises(ValueError):
-                dmg_release_tag({**release, "assets": release['assets'] + [
-                    {"name": "Pilot-arm64.dmg", "state": state}]})
 
     def test_release_requires_all_configuration(self):
         for key in self.env:

@@ -73,24 +73,6 @@ def appcast_build(appcast, app_version):
     if build is None or not build.text:
         raise ValueError("Draft appcast is missing its Sparkle build version")
     return version(build.text)
-
-
-def dmg_release_tag(release):
-    if release["isDraft"] or release["isPrerelease"]:
-        raise ValueError("DMG creation requires a published stable release")
-    tag = release["tagName"]
-    if not tag.startswith("v"):
-        raise ValueError("Release tag must start with v")
-    stable_version(tag[1:])
-    assets = release["assets"]
-    if any(a["name"] == "Pilot-arm64.dmg" for a in assets):
-        raise ValueError("This release already has a DMG; refusing to overwrite it")
-    uploaded = {a["name"] for a in assets if a["state"] == "uploaded"}
-    if not {"Pilot-arm64.zip", "appcast.xml"} <= uploaded:
-        raise ValueError("Release must have a complete update ZIP and appcast")
-    return tag
-
-
 def write_plist(source, destination, repo_path, release=False, env=None, app_version=None):
     env = os.environ if env is None else env
     with open(source, "rb") as handle:
@@ -235,8 +217,6 @@ def main():
     draft_build = commands.add_parser("appcast-build")
     draft_build.add_argument("appcast")
     draft_build.add_argument("version")
-    dmg = commands.add_parser("dmg-release")
-    dmg.add_argument("release_json")
     args = parser.parse_args()
     if args.command == "plist":
         with open(Path(args.repo_path) / "package.json") as handle:
@@ -263,7 +243,7 @@ def main():
     else:
         with open(args.release_json) as handle:
             release = json.load(handle)
-        check = {"dmg-release": dmg_release_tag, "complete-draft": complete_draft}.get(args.command, release_state)
+        check = {"complete-draft": complete_draft}.get(args.command, release_state)
         print(check(release))
 
 

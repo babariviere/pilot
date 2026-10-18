@@ -159,7 +159,13 @@ unzip it and move `Pilot.app` to Applications.
   Git-only projects use private clones instead.
 
 These personal builds are ad-hoc signed, not notarized. If macOS blocks the first launch, verify the
-release source before using **System Settings → Privacy & Security → Open Anyway**.
+release source, then remove the download quarantine flag:
+
+```sh
+xattr -d com.apple.quarantine /Applications/Pilot.app
+```
+
+**System Settings → Privacy & Security → Open Anyway** also works.
 [Release and update setup](apps/macos/UPDATES.md) explains signing, packaging and automatic updates.
 Updates pause agents after active tool calls finish, update the app and daemon, then resume unfinished
 chats and subagents automatically. They do not wait for entire conversations to finish.
