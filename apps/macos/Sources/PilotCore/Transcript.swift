@@ -77,6 +77,8 @@ public struct Entry: Identifiable, Equatable, Sendable {
     public let question: AgentQuestion?
     /// Set on user entries that were automatic input. Unknown future origins read as extension input.
     public let origin: InputOrigin?
+    /// Display-only sender projected from durable submission provenance. Never inferred from message text.
+    public let sourceSessionId: String?
 
     public init?(json: JSONValue) {
         guard let id = json["id"]?.int else { return nil }
@@ -91,6 +93,7 @@ public struct Entry: Identifiable, Equatable, Sendable {
         activity = kind == "pilot.activity" ? json["data"]?["text"]?.string : nil
         question = kind == AgentQuestion.entryKind ? AgentQuestion(entryID: id, data: json["data"]) : nil
         origin = json["origin"]?.string.map { InputOrigin(rawValue: $0) ?? .extension }
+        sourceSessionId = origin == nil ? nil : json["sourceSessionId"]?.string
     }
 }
 

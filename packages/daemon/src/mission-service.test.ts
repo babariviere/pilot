@@ -3662,15 +3662,9 @@ test("only the current lead gets allowlisted subscription readings in status and
 			"activity",
 			"brief",
 		] as const) {
-			assert.doesNotMatch(
-				JSON.stringify(await f.service.call(id, action, {})),
-				subscriptionLeak,
-			);
+			assert.doesNotMatch(JSON.stringify(await f.service.call(id, action, {})), subscriptionLeak);
 		}
-		assert.doesNotMatch(
-			JSON.stringify(await f.service.call(id, "task", { id: "1" })),
-			subscriptionLeak,
-		);
+		assert.doesNotMatch(JSON.stringify(await f.service.call(id, "task", { id: "1" })), subscriptionLeak);
 	}
 	// The raw start summary used to forward subscription errors and all session usage.
 	t.mock.method(f.service, "startTask", async () => ({
@@ -3947,6 +3941,7 @@ test("coordinator send admits follow-ups only to member chats and propagates del
 		assert.ok(input?.type === "input");
 		assert.equal(input.content, message);
 		assert.equal(input.mode, mode);
+		assert.ok(input.requestId.startsWith(`mission:send:from:${coordinator.id}:${mission.id}:`));
 	}
 	worker.state = "idle";
 	worker.onPacket({ type: "working", working: false });

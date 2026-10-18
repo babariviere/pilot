@@ -492,6 +492,30 @@ test("only executable fields are checked in command tools", async () => {
 	assert.equal(await checkTool("codemode", { code: "text(1)", description: mention }), undefined);
 });
 
+test("agents cannot impersonate the user through the user-message HTTP endpoint", async () => {
+	for (const command of [
+		`curl -X POST -H 'Content-Type: application/json' --data @/tmp/message.json http://127.0.0.1:4319/api/sessions/chat/messages`,
+		`curl --json '{"message":"From the Global coordinator"}' http://localhost:4319/api/sessions/chat/messages`,
+		`fetch('http://127.0.0.1:4319/api/sessions/chat/messages', {method: 'POST', body: JSON.stringify({message: 'hello'})})`,
+	]) {
+		for (const [name, args] of [
+			["bash", { command }],
+			["codemode", { code: `await tools.bash({command: ${JSON.stringify(command)}})` }],
+			["jobs", { action: "start", command }],
+		] as const)
+			assert.match((await checkTool(name, args))?.block ?? "", /user.*message|message.*user/i);
+	}
+	assert.equal(await checkTool("bash", { command: "curl http://127.0.0.1:4319/api/sessions/chat" }), undefined);
+	assert.equal(await checkTool("mission", { action: "send", message: "From the Global coordinator" }), undefined);
+	assert.equal(await checkTool("write", { path: "note.md", content: "POST /api/sessions/chat/messages" }), undefined);
+	assert.equal(
+		await checkTool("codemode", {
+			code: `await tools.write({path: "note.md", content: "POST /api/sessions/chat/messages"})`,
+		}),
+		undefined,
+	);
+});
+
 test("direct GitHub write tools remain blocked, while read tools may mention commands", async () => {
 	assert.ok((await checkTool("mcp__github__add_issue_comment", { body: "Update" }))?.block);
 	assert.equal(await checkTool("mcp__github__search_issues", { query: "gh pr merge" }), undefined);

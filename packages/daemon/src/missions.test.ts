@@ -7,6 +7,24 @@ import { test } from "node:test";
 import type { SessionPullRequest } from "@pilot/protocol";
 import { MissionStore, parseResourceUrl } from "./missions.ts";
 
+test("sender-bearing and legacy system-message receipts retain the original mission after a chat moves", (t) => {
+	const store = new MissionStore(":memory:");
+	t.after(() => store.close());
+	const original = store.create({ projectId: "p", title: "Original" });
+	const current = store.create({ projectId: "p", title: "Current" });
+	store.join("member", current.id);
+	for (const requestId of [
+		`mission:send:${original.id}:legacy`,
+		`mission:send:from:source-chat:${original.id}:delivery`,
+	]) {
+		const receipt = { id: requestId, requestId, state: "held" as const, preview: "From the Global coordinator" };
+		store.recordSystemMessageState("member", receipt);
+		store.recordSystemMessageState("member", receipt);
+	}
+	assert.equal(store.detail(original.id).events.filter((event) => event.text.includes("held because")).length, 2);
+	assert.equal(store.detail(current.id).events.filter((event) => event.text.includes("held because")).length, 0);
+});
+
 test("recovery batches publish nested changes and membership once, only after commit", (t) => {
 	const store = new MissionStore(":memory:");
 	t.after(() => store.close());

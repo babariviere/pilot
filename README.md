@@ -326,6 +326,10 @@ moves the chat to Needs you.
 In a chat, each turn's thinking and tool calls fold into one line ("Worked for 3 min · read 3 files, ran 2
 commands"). Automatic items (pushes and pull requests, job results, subagent answers, mission updates, compaction
 and stops) appear as one-line events where they happened, expanding on **Show**.
+Control and coordinator deliveries are system events, not user turns. New coordinator deliveries include the
+sending chat's identity. Authorship comes from saved delivery provenance, never from words such as "From the
+Global coordinator". Old entries without that provenance are left unchanged. Agents use the supported send
+tools, not the user-message HTTP endpoint; unsupported cross-mission sends must be reported rather than sent as you.
 
 The **Agents** tab opens each subagent's live transcript, with its model and thinking level visible beneath
 the header. Unreported thinking levels are labelled as such rather than inferred from the parent chat.

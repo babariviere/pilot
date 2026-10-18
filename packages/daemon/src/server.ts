@@ -1369,6 +1369,12 @@ export function createDaemonServer(
 				);
 				try {
 					const body = await readJson<SendRequest>(req);
+					// User admission never accepts the internal automatic-producer namespaces.
+					if (
+						body.requestId !== undefined &&
+						(typeof body.requestId !== "string" || !/^[\w-]{1,128}$/.test(body.requestId))
+					)
+						throw new HttpError(400, "requestId must be 1-128 letters, digits, dashes or underscores");
 					await sessions.send(id, body.message, body.mode, body.requestId, span.carrier() ?? parent);
 					span.end();
 					return json(res, 202, { ok: true });

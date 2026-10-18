@@ -241,6 +241,17 @@ export function githubPosting(arguments_: unknown): string | undefined {
 	return undefined;
 }
 
+/** The HTTP user-inbox route cannot identify an agent caller. Do not silently impersonate the user.
+ * This is an execution-policy guard, not network authentication or a content classifier. */
+export function userInboxWrite(arguments_: unknown, codemode = false): boolean {
+	const source = strings(arguments_);
+	const text = (codemode ? source.flatMap((code) => strings(nestedShellCommands(code))) : source).join("\n");
+	return (
+		/\/api\/sessions\/[^\s/"'`]+\/messages\b/.test(text) &&
+		/(?:\bPOST\b|--(?:data(?:-raw|-binary|-urlencode)?|json)\b|\s-d\s)/i.test(text)
+	);
+}
+
 function strings(value: unknown): string[] {
 	if (typeof value === "string") return [value];
 	if (Array.isArray(value)) return value.flatMap(strings);
@@ -370,6 +381,7 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false, c
 		}
 	}
 	lines.push(
+		"- Agent messages must use the pilot or mission send tool, which preserves their origin. Never POST to the user-message HTTP endpoint. If no supported send can reach the target, report that limitation instead of impersonating the user.",
 		"- Pilot does not post on GitHub and blocks comments, reviews, replies, merges and closes. Put results, questions and anything you decided not to do in your final answer instead.",
 	);
 	return lines.join("\n");
@@ -401,6 +413,10 @@ export function withPilotPolicy(
 			hook(ToolTask, {
 				beforeTool: (call) => {
 					const commands = commandArguments(call.name, call.arguments);
+					if (userInboxWrite(commands, call.name === "codemode"))
+						return {
+							block: "Pilot policy: this is the user-message HTTP endpoint. Use pilot/mission send so the message keeps its actual origin. If that cannot reach the target, report the limitation; do not send as the user.",
+						};
 					if (
 						(mission()?.coordinator === "self" || context.coordinatorView) &&
 						/(?:^|__)(?:write|edit|apply_patch|applyPatch)$/.test(call.name)
