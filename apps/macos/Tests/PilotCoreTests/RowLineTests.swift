@@ -63,7 +63,7 @@ private func kinds(_ segments: [RowLineSegment]) -> [String] {
 @Test func diagnosticsChatsShowTheirPersistedRoleInsteadOfGenericAsk() {
     let session = SessionSummary(id: "diagnostics", title: "Investigate reconnect", cwd: "/repo",
                                  createdAt: 1, updatedAt: 1, state: "idle", mode: .ask,
-                                 role: .diagnostics, sourceBranch: "main")
+                                 sourceBranch: "main", role: .diagnostics)
     let segments = RowLineSegments.session(session, projectName: "pilot", branch: "ignored")
     #expect(kinds(segments) == ["project", "diagnostics"])
     #expect(segments[1].kind == .diagnostics)
