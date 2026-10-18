@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import type * as C from "./control.ts";
+
 import type { DaemonHello } from "./hello.ts";
 import type {
 	ControlArchiveRequest,
@@ -34,6 +35,51 @@ type PayloadFixture = {
 	[K in ControlOperationKind]: { kind: K; payload: ControlOperationPayloads[K] };
 }[ControlOperationKind];
 interface Fixtures {
+	stagingRollback: C.ControlUnpairResponse;
+	authErrors: C.ControlHostErrorResponse[];
+	delegationFence: C.ControlDelegationFence;
+	taskStartOperation: C.ControlDurableOperation;
+	delegationCases: Array<{
+		name: string;
+		sealed: C.ControlDelegationFence;
+		retained: C.ControlDelegationFence & { state?: string };
+		error: C.ControlHostErrorResponse;
+	}>;
+	checkpoints: C.ControlRemoteEventCheckpoint[];
+	eventFloors: C.ControlEventFloor[];
+	emptyEventPages: C.ControlRemoteEventPage[];
+	emptyEventAcknowledgments: C.ControlRemoteEventAcknowledgment[];
+	relaunchAfterRetirement: {
+		checkpoint: C.ControlRemoteEventCheckpoint;
+		query: C.ControlRemoteEventQuery;
+		page: C.ControlRemoteEventPage;
+		ack: C.ControlRemoteEventAcknowledgment;
+	};
+	cursorErrors: C.ControlHostErrorResponse[];
+	statusRecoveryCases: Array<{
+		name: string;
+		request: C.ControlRemoteStatusImportRequest;
+		publishedSourceRevision?: number;
+		response?: C.ControlRemoteStatusImportResponse;
+		currentPublishedRevision?: number;
+		checkpoint?: C.ControlHostSyncState;
+		error?: C.ControlHostErrorResponse;
+	}>;
+	courierCapability: C.ControlCourierCapability;
+	capabilityRefresh: C.ControlCourierCapabilityRefreshRequest;
+	previewRequest: C.ControlEnrollmentPreviewRequest;
+	previewResponse: C.ControlEnrollmentPreviewResponse;
+	stagedStates: C.ControlHostStateResponse[];
+	rollbackError: C.ControlHostErrorResponse;
+	courierProof: C.ControlCourierRequestProof;
+	nativeProof: C.ControlNativeRequestProof;
+	nativeEnrollmentProof: C.ControlNativeRequestProof;
+	authentications: C.ControlCourierAuthentication[];
+	readRequests: C.ControlRemoteReadRequest[];
+	readResponses: C.ControlRemoteReadResponse[];
+	readExchangeRequest: C.ControlReadExchangeRequest;
+	readExchangeResponse: C.ControlReadExchangeResponse;
+	readImports: C.ControlReadImportResponse[];
 	proofs: C.ControlAcceptanceProof[];
 	preparingProofCutover: C.ControlHostCutover;
 	roleAcknowledgments: C.ControlRoleAcknowledgment[];
@@ -153,7 +199,7 @@ test("all durable Control payloads retain the admission authority and typed body
 			kind: "control.start",
 			payload: {
 				...authority,
-				target: { kind: "task", missionId: "m", taskId: "t" },
+				target: { kind: "task", missionId: "m", taskId: "t", delegation: fixture.delegationFence },
 				message: "Investigate task",
 				model: "fake/model",
 			},
@@ -344,7 +390,7 @@ test("audit contract preserves approval scope, durable cursors, task provenance,
 	);
 	assert.equal(f.unpairResponses[0].enrollment.state, "revoked");
 	assert.equal(f.invalidations[0].type, "control-hosts.changed");
-	assert.equal(new Set(f.invalidations[0].changes).size, 7);
+	assert.equal(new Set(f.invalidations[0].changes).size, 9);
 	assert.equal(f.syncStates[0].events.importedThrough, 1);
 	assert.equal(f.syncStates[0].events.acknowledgedThrough, 0);
 	assert.equal(f.syncStates[1].events.acknowledgedThrough, 1);
@@ -387,5 +433,81 @@ test("audit contract preserves approval scope, durable cursors, task provenance,
 	assert.deepEqual(
 		f.lifecycles[0].operations.map((o) => o.delivery),
 		["queued", "unknown", "pending", "accepted", "rejected"],
+	);
+});
+
+test("wire-adoption fixtures cover checkpoint retirement, empty acknowledgments, causal status recovery and immutable delegation", () => {
+	const f = roundTrip(fixture);
+	assert.equal(f.emptyEventAcknowledgments[0].through, 0);
+	assert.equal(f.emptyEventAcknowledgments[0].eventId, undefined);
+	assert.equal(f.emptyEventPages[0].head, 0);
+	assert.equal(f.emptyEventPages[0].next, undefined);
+	const recovery = f.relaunchAfterRetirement;
+	assert.equal(recovery.query.after, recovery.checkpoint.importedThrough);
+	assert.equal(recovery.query.after, recovery.page.acknowledgedThrough);
+	assert.equal(recovery.ack.eventId, recovery.checkpoint.lastEventId);
+	assert.ok(recovery.query.after > 0);
+	assert.deepEqual(
+		f.cursorErrors.map((e) => e.code),
+		["cursor_before_floor", "cursor_gap"],
+	);
+	assert.equal(f.cursorErrors[0].floor?.through, 2);
+	assert.equal(f.statusRecoveryCases[0].error?.code, "stale_snapshot");
+	assert.equal(f.statusRecoveryCases[1].response?.publishedRevision, 1);
+	assert.equal(f.statusRecoveryCases[1].currentPublishedRevision, 2);
+	assert.equal(f.statusRecoveryCases[2].checkpoint?.status?.next, "snapshot:1/page:2");
+	assert.equal(f.statusRecoveryCases[2].request.expectedPublishedRevision, 0);
+	assert.equal(f.statusRecoveryCases[3].error?.code, "identity_mismatch");
+	const replacement = f.statusRecoveryCases[3].request.page.snapshot.sourceHost;
+	assert.notEqual(replacement.lineageId, f.checkpoints[1].sourceHost.lineageId);
+	assert.equal(f.taskStartOperation.targetId, f.delegationFence.session.sessionId);
+	assert.notEqual(f.taskStartOperation.operationId, f.delegationFence.placementOperationId);
+	assert.equal(f.delegationFence.task.mission.home.daemonId, f.configurations[0].host.daemonId);
+	assert.notEqual(f.taskStartOperation.bindingId, f.delegationFence.bindingId);
+	assert.deepEqual(
+		f.delegationCases.map((c) => c.error.code),
+		["delegation_stale", "delegation_sealed", "delegation_reassigned"],
+	);
+	for (const c of f.delegationCases) assert.deepEqual(c.sealed, f.delegationFence);
+});
+test("wire-adoption fixtures separate staged pairing, native approval, courier capabilities and bounded read relay", () => {
+	const f = roundTrip(fixture);
+	assert.equal(f.previewResponse.effect, "pair-only");
+	assert.deepEqual(JSON.parse(f.previewResponse.intentPayload), f.previewRequest);
+	assert.equal(f.stagedStates[0].configuration.role, "home");
+	assert.equal(f.stagedStates[0].configuration.stagedRole?.role, "executor");
+	assert.equal(f.stagedStates[0].configuration.freeze, undefined);
+	assert.equal(f.stagedStates[1].configuration.freeze?.phase, "blocked");
+	assert.equal(f.stagingRollback.configuration.role, "home");
+	assert.equal(f.stagingRollback.configuration.stagedRole, undefined);
+	assert.equal(f.stagingRollback.configuration.freeze, undefined);
+	assert.equal(f.stagingRollback.enrollment.state, "revoked");
+	assert.deepEqual(
+		f.authErrors.map((e) => e.code),
+		["authentication_required", "capability_denied", "capability_expired", "read_unavailable"],
+	);
+	assert.equal(f.rollbackError.code, "rollback_not_permitted");
+	assert.deepEqual(JSON.parse(f.authentications[0].signedPayload), f.courierProof);
+	assert.deepEqual(JSON.parse(f.authentications[1].signedPayload), f.nativeProof);
+	assert.equal(f.nativeEnrollmentProof.method, "PUT");
+	assert.deepEqual(JSON.parse(f.authentications[2].signedPayload), f.nativeEnrollmentProof);
+	assert.ok(f.courierCapability.scopes.includes("reads"));
+	assert.ok(!f.courierCapability.scopes.some((s) => (s as string) === "enroll"));
+	assert.equal(f.capabilityRefresh.capabilityId, f.courierCapability.id);
+	assert.deepEqual(
+		f.readRequests.map((r) => r.action),
+		["read", "health", "logs", "telemetry", "checks"],
+	);
+	assert.equal(f.readExchangeResponse.requests.length, 5);
+	assert.equal(f.readExchangeRequest.peer.daemonId, f.readRequests[0].host.daemonId);
+	for (let i = 0; i < f.readResponses.length; i++) {
+		assert.equal(f.readResponses[i].requestId, f.readRequests[i].requestId);
+		assert.deepEqual(f.readResponses[i].sourceHost, f.readRequests[i].host);
+		assert.equal(f.readResponses[i].untrusted, true);
+		assert.ok(Buffer.byteLength(JSON.stringify(f.readResponses[i])) <= 24_000);
+	}
+	assert.deepEqual(
+		f.readImports.map((r) => r.state),
+		["delivered", "expired"],
 	);
 });

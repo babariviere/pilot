@@ -316,6 +316,8 @@ export interface ControlHostConfiguration {
 	schemaVersion: 1;
 	/** Monotonic persisted role fence; not a transport reconnect generation. */
 	roleEpoch: number;
+	stagedRole?: ControlStagedRole;
+	freeze?: ControlFreezeIntent;
 	home: OperationHost;
 	host: OperationHost;
 	role: ControlDaemonRole;
@@ -374,6 +376,7 @@ export interface ControlHostStateResponse {
 	cutover?: ControlHostCutover;
 	/** At most the two persisted home/executor acknowledgments; no client-invented activation flags. */
 	roleAcknowledgments?: ControlRoleAcknowledgment[];
+	courierCapability?: ControlCourierCapability;
 }
 /** POST /api/control-hosts/:bindingId/archive on home. App rollout only, not a pilot action. */
 export interface ControlArchiveRequest {
@@ -449,7 +452,7 @@ export interface ControlOperationAuthority {
 }
 export type ControlStartTarget =
 	| { kind: "project"; projectId: string }
-	| { kind: "task"; missionId: string; taskId: string };
+	| { kind: "task"; missionId: string; taskId: string; delegation: ControlDelegationFence };
 export interface ControlStartOperationPayload extends ControlOperationAuthority {
 	target: ControlStartTarget;
 	message: string;
@@ -546,6 +549,8 @@ export interface ControlRemoteEventPage {
 	sourceHost: OperationHost;
 	after: number;
 	head: number;
+	acknowledgedThrough: number;
+	acknowledgedEventId?: string;
 	events: ControlRemoteEvent[];
 	next?: number;
 }
@@ -559,7 +564,8 @@ export interface ControlRemoteEventAcknowledgment {
 	generation: number;
 	sourceHost: OperationHost;
 	through: number;
-	eventId: string;
+	/** Omitted only for through=0 on a fresh empty stream. */
+	eventId?: string;
 }
 /** Projection only; never an executable allocation, ownership transfer or completion proof. */
 export type ControlRemoteMissionTask = ControlDashboardSharedTask;
@@ -606,7 +612,9 @@ export interface ControlHostInvalidation {
 	type: "control-hosts.changed";
 	bindingId: string;
 	generation: number;
-	changes: Array<"outbox" | "receipts" | "events" | "status" | "enrollment" | "readiness" | "archive">;
+	changes: Array<
+		"outbox" | "receipts" | "events" | "status" | "enrollment" | "readiness" | "archive" | "role" | "reads"
+	>;
 }
 export interface ControlRoleFence {
 	home: number;
@@ -831,8 +839,146 @@ export interface ControlHostErrorResponse {
 		| "snapshot_restart_required"
 		| "stale_snapshot"
 		| "snapshot_cas_mismatch"
+		| "cursor_gap"
+		| "cursor_before_floor"
+		| "delegation_required"
+		| "delegation_stale"
+		| "delegation_sealed"
+		| "delegation_reassigned"
+		| "rollback_not_permitted"
+		| "authentication_required"
+		| "capability_denied"
+		| "capability_expired"
+		| "read_unavailable"
 		| "not_ready"
 		| "capacity";
 	error: string;
 	syncState?: ControlHostSyncState;
+	checkpoint?: ControlRemoteEventCheckpoint;
+	floor?: ControlEventFloor;
+}
+
+/** Pairing stages this target only; it does not change the effective role or freeze legacy turns. */
+export interface ControlStagedRole {
+	home: OperationHost;
+	role: "executor";
+	phase: "paired";
+}
+export interface ControlFreezeIntent {
+	operationId: string;
+	expectedRoleEpoch: number;
+	phase: "requested" | "draining" | "blocked";
+}
+/** Reference to an immutable, already-owned grant. Never substitute a newer current grant. */
+export type ControlDelegationFence = Pick<
+	import("./shared-context.ts").DelegationGrant,
+	| "delegationId"
+	| "task"
+	| "bindingId"
+	| "bindingGeneration"
+	| "executionEpoch"
+	| "session"
+	| "target"
+	| "definitionRevision"
+	| "context"
+	| "manifestId"
+> & {
+	grantHash: string;
+	/** Execution.operationId owns the existing session creation and original opening input. */
+	placementOperationId: string;
+};
+export type ControlEnrollmentPreviewRequest = Omit<ControlHomeEnrollmentRequest, "approvalRequestId">;
+export interface ControlEnrollmentPreviewResponse {
+	intentPayload: string;
+	intentHash: string;
+	compatible: boolean;
+	effect: "pair-only";
+	courierScopes: ControlCourierCapability["scopes"];
+	current?: ControlHostStateResponse;
+	errors: ControlHostErrorResponse[];
+}
+/** Metadata only, never a native approval or a Control grant. */
+export interface ControlCourierCapability {
+	id: string;
+	bindingId: string;
+	generation: number;
+	home: OperationHost;
+	executor: OperationHost;
+	appKeyId: string;
+	roleFence: ControlRoleFence;
+	expiresAt: number;
+	scopes: Array<"exchange" | "receipts" | "events" | "status" | "reads" | "inspect" | "archive-read">;
+}
+/** Exact UTF-8 signedPayload in an authenticated HTTP header; no canonical reserialization. */
+export interface ControlCourierAuthentication {
+	signedPayload: string;
+	signature: string;
+}
+export interface ControlCourierCapabilityRefreshRequest {
+	capabilityId: string;
+	expectedRoleEpoch: number;
+}
+export interface ControlCourierRequestProof {
+	capabilityId: string;
+	requestId: string;
+	issuedAt: number;
+	method: "GET" | "POST";
+	path: string;
+	bodyHash: string;
+}
+/** Signed management authentication is distinct from the scoped courier capability. */
+export type ControlNativeRequestProof = Omit<ControlCourierRequestProof, "capabilityId" | "method"> & {
+	appKeyId: string;
+	host: OperationHost;
+	method: "GET" | "POST" | "PUT";
+};
+export interface ControlRemoteEventCheckpoint extends ControlEventImportCursor {
+	bindingId: string;
+	generation: number;
+	home: OperationHost;
+}
+export interface ControlEventFloor {
+	bindingId: string;
+	generation: number;
+	sourceHost: OperationHost;
+	through: number;
+	eventId?: string;
+}
+export type ControlReadAction = "read" | "health" | "logs" | "telemetry" | "checks";
+export interface ControlReadSelectors {
+	sessionId?: string;
+	view?: "result" | "tail";
+	limit?: number;
+	source?: "daemon" | "lifecycle" | "session";
+	since?: string;
+	q?: string;
+	pr?: string;
+	includeStale?: boolean;
+}
+export interface ControlRemoteReadRequest {
+	requestId: string;
+	host: OperationHost;
+	action: ControlReadAction;
+	selectors: ControlReadSelectors;
+}
+export interface ControlRemoteReadResponse {
+	requestId: string;
+	sourceHost: OperationHost;
+	capturedAt: number;
+	untrusted: true;
+	result: unknown;
+	truncated: boolean;
+}
+export interface ControlReadExchangeRequest {
+	peer: OperationHost;
+	cursor?: string;
+}
+export interface ControlReadExchangeResponse {
+	requests: ControlRemoteReadRequest[];
+	next?: string;
+	more: boolean;
+}
+export interface ControlReadImportResponse {
+	requestId: string;
+	state: "delivered" | "expired";
 }
