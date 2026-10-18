@@ -105,3 +105,30 @@ test("title context bounds scans through non-message history and respects cancel
 		{ name: "AbortError" },
 	);
 });
+
+test("reply-based title context omits the fixed diagnostic opening and waits for assistant text", async () => {
+	const boilerplate = "Inspect Pilot using bounded operational evidence for your admitted target.";
+	let includeReply = false;
+	const read = async () => ({
+		entries: [
+			entry(1, "pi.user", "user", boilerplate),
+			entry(2, "pi.tool-result", "toolResult", [{ type: "text", text: "private tool output" }]),
+			...(includeReply
+				? [entry(3, "pi.assistant", "assistant", [{ type: "text", text: "Reconnect loops after sleep" }])]
+				: []),
+		],
+		more: false,
+	});
+	const waiting = await chatTitleContext("", read, signal, {
+		excludeUserText: boilerplate,
+		requireAssistant: true,
+	});
+	assert.equal(waiting, "", "tool-only completion is not a substantive reply");
+	includeReply = true;
+	const ready = await chatTitleContext("", read, signal, {
+		excludeUserText: boilerplate,
+		requireAssistant: true,
+	});
+	assert.match(ready, /assistant: Reconnect loops after sleep/);
+	assert.doesNotMatch(ready, /Inspect Pilot|private tool output|Opening request/);
+});

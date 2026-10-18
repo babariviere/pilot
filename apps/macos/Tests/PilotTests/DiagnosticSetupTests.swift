@@ -27,6 +27,8 @@ private func diagnosticSession(_ id: String, _ title: String = "Private chat tit
     #expect(request.diagnosticTarget?.sessionId == diagnosticRemoteID)
     #expect(request.diagnosticTarget?.chatURL == "pilot://chat/\(diagnosticRemoteID)")
     #expect(request.diagnosticHistoryAccess == true)
+    #expect(request.title == nil)
+    #expect(request.diagnosticTitleFromReply == true)
     #expect(!request.message.contains("Secret transcript title"))
     #expect(!request.message.contains("/private/path"))
     #expect(!request.message.contains(diagnosticRemoteID), "trusted target metadata stays out of the user message")
@@ -54,6 +56,9 @@ private func diagnosticSession(_ id: String, _ title: String = "Private chat tit
         #expect(request.diagnosticTarget?.chatURL == "pilot://chat/\(diagnosticControlID)")
         #expect(request.diagnosticHistoryAccess == nil,
                 "generic no-link Ask about Pilot cannot expose the Control transcript")
+        #expect(request.title == nil)
+        #expect(request.diagnosticTitleFromReply == nil,
+                "the submitted reason is the meaningful title seed")
         #expect(request.diagnosticTarget?.chatURL.contains("north-star") == false,
                 "question text cannot become target authority")
     }
@@ -75,6 +80,7 @@ private func diagnosticSession(_ id: String, _ title: String = "Private chat tit
     #expect(linkedRequest.diagnosticTarget?.host == diagnosticRemoteHost)
     #expect(linkedRequest.diagnosticTarget?.sessionId == diagnosticRemoteID)
     #expect(linkedRequest.diagnosticHistoryAccess == true)
+    #expect(linkedRequest.diagnosticTitleFromReply == nil)
 
     let remoteSetup = DiagnosticSetupTarget(reference: remoteRef, askingAboutPilot: true, tracksFeature: false)
     let selectedHost = try DiagnosticSetup.resolve("  ", setup: remoteSetup, localHost: diagnosticLocalHost,
@@ -92,6 +98,7 @@ private func diagnosticSession(_ id: String, _ title: String = "Private chat tit
                                                     askingAboutPilot: true, question: exact)
     #expect(accepted.message == exact)
     #expect(accepted.message.utf8.count == DiagnosticSetup.maxQuestionBytes)
+    #expect(accepted.diagnosticTitleFromReply == nil)
 
     #expect(throws: DiagnosticQuestionValidationError.tooLarge(maxBytes: DiagnosticSetup.maxQuestionBytes)) {
         try DiagnosticSetup.spawnRequest(target: target, model: "", thinking: "", askingAboutPilot: true,
@@ -101,6 +108,7 @@ private func diagnosticSession(_ id: String, _ title: String = "Private chat tit
                                                    askingAboutPilot: true, question: " \n ")
     #expect(!generic.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             "an empty optional question retains generic Ask behavior")
+    #expect(generic.diagnosticTitleFromReply == true)
 }
 
 @Test func diagnosticSetupResolvesTrustedDefaultsAndRejectsMalformedMissingAmbiguousOrSpecialistLinks() throws {

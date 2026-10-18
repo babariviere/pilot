@@ -878,6 +878,145 @@ test("title waits for a completed turn, uses the thread and generates only once"
 	assert.equal(calls, 1, "replayed completions and later turns do not retitle");
 });
 
+test("a manual diagnostic rename wins over a late reason-seeded title without mutating its devbox target", async (t) => {
+	const f = await fixture(t);
+	const reason = "Why does Pilot freeze after reconnecting?";
+	let context = "";
+	const started = deferred();
+	const titleGate = deferred();
+	const sessions = await f.manager(
+		{
+			historyRead: async () => ({
+				entries: [
+					{ id: 1, kind: "pi.user", model: [{ role: "user", content: reason }] },
+					{
+						id: 2,
+						kind: "pi.assistant",
+						model: [{ role: "assistant", content: [{ type: "text", text: "The reconnect loop is bounded." }] }],
+					},
+				] as never,
+				more: false,
+			}),
+			title: async (_cwd, value) => {
+				context = value;
+				started.resolve();
+				await titleGate.promise;
+				return "Reconnect freeze investigation";
+			},
+		},
+		{ diagnosticHost },
+	);
+	const target = await sessions.spawn({ cwd: f.source, message: "Target", title: "Linked target" });
+	await until(() => f.workers.find((worker) => worker.spec.sessionId === target.id)?.state === "working");
+	f.workers.find((worker) => worker.spec.sessionId === target.id)!.finish({ outcome: "done", outcomeAt: 50 });
+	await until(() => sessions.get(target.id)?.outcomeAt === 50);
+	const targetBefore = sessions.get(target.id)!;
+	const reference = diagnosticTarget(target.id, { ...diagnosticHost, hostId: "remote-box" });
+	const specialist = await sessions.spawn({
+		message: reason,
+		role: "diagnostics",
+		diagnosticTarget: reference,
+	});
+	assert.equal(specialist.title, reason, "the readable fallback comes from the submitted reason");
+	await until(() => f.workers.find((worker) => worker.spec.sessionId === specialist.id)?.state === "working");
+	f.workers.find((worker) => worker.spec.sessionId === specialist.id)!.finish({ outcome: "done", outcomeAt: 100 });
+	await started.promise;
+	assert.match(context, /Opening request: Why does Pilot freeze after reconnecting\?/);
+	assert.doesNotMatch(context, /Inspect Pilot using|Diagnose your admitted target/);
+	await sessions.rename(specialist.id, "Reconnect notes");
+	titleGate.resolve();
+	await until(() => sessions["titleTasks"].size === 0);
+	assert.equal(sessions.get(specialist.id)?.title, "Reconnect notes", "a late provider response cannot undo a rename");
+	assert.equal((await f.stored(specialist.id)).titlePending, undefined);
+	assert.equal(sessions.get(specialist.id)?.role, "diagnostics", "the specialist badge remains role-driven");
+	assert.deepEqual(
+		sessions.get(target.id),
+		targetBefore,
+		"title generation cannot rename or update the linked target",
+	);
+	await sessions["lifecycle"].flush();
+	const lifecycle = await readFile(join(f.home, "sessions", specialist.id, "lifecycle.jsonl"), "utf8");
+	assert.doesNotMatch(lifecycle, /Why does Pilot|Reconnect notes|Reconnect freeze investigation/);
+});
+
+test("reasonless diagnostic titles wait across reopen for the first substantive reply", async (t) => {
+	const f = await fixture(t);
+	const boilerplate =
+		"Inspect Pilot using bounded operational evidence for your admitted target. Cite evidence references.";
+	let includeReply = false;
+	let calls = 0;
+	let context = "";
+	const factories: SessionFactories = {
+		historyRead: async () => ({
+			entries: [
+				{ id: 1, kind: "pi.user", model: [{ role: "user", content: boilerplate }] },
+				{
+					id: 2,
+					kind: "pi.tool-result",
+					model: [{ role: "toolResult", content: [{ type: "text", text: "private tool output" }] }],
+				},
+				...(includeReply
+					? [
+							{
+								id: 3,
+								kind: "pi.assistant",
+								model: [
+									{ role: "assistant", content: [{ type: "text", text: "Reconnect loops after sleep" }] },
+								],
+							},
+						]
+					: []),
+			] as never,
+			more: false,
+		}),
+		title: async (_cwd, value) => {
+			calls++;
+			context = value;
+			return "Reconnect loop after sleep";
+		},
+	};
+	const sessions = await f.manager(factories, { diagnosticHost });
+	const target = await sessions.spawn({ cwd: f.source, message: "Target", title: "Linked target" });
+	await until(() => f.workers.find((worker) => worker.spec.sessionId === target.id)?.state === "working");
+	f.workers.find((worker) => worker.spec.sessionId === target.id)!.finish({ outcome: "done", outcomeAt: 50 });
+	const specialist = await sessions.spawn({
+		message: boilerplate,
+		role: "diagnostics",
+		diagnosticTarget: diagnosticTarget(target.id, { ...diagnosticHost, hostId: "remote-box" }),
+		diagnosticTitleFromReply: true,
+	});
+	assert.equal(specialist.title, "Pilot diagnostics");
+	await until(() => f.workers.find((worker) => worker.spec.sessionId === specialist.id)?.state === "working");
+	f.workers.find((worker) => worker.spec.sessionId === specialist.id)!.finish({ outcome: "done", outcomeAt: 100 });
+	await until(
+		() =>
+			sessions["titleTasks"].size === 0 &&
+			sessions["metas"].get(specialist.id)?.titlePending?.attemptedCompletionAt === 100 &&
+			!sessions["metas"].get(specialist.id)?.titlePending?.ready,
+	);
+	assert.equal(calls, 0, "tool-only history does not call the title model");
+	assert.equal(sessions.get(specialist.id)?.title, "Pilot diagnostics");
+
+	await sessions.shutdown();
+	includeReply = true;
+	const reopened = await f.manager(factories, { diagnosticHost });
+	await Promise.resolve();
+	assert.equal(calls, 0, "reopen does not repeat the already-inspected completion");
+	assert.equal(reopened.get(specialist.id)?.title, "Pilot diagnostics");
+	await reopened.send(specialist.id, "Continue the diagnosis");
+	await until(() => f.workers.findLast((worker) => worker.spec.sessionId === specialist.id)?.state === "working");
+	f.workers.findLast((worker) => worker.spec.sessionId === specialist.id)!.finish({ outcome: "done", outcomeAt: 200 });
+	await until(() => reopened.get(specialist.id)?.title === "Reconnect loop after sleep");
+	await until(async () => (await f.stored(specialist.id)).titlePending === undefined);
+	assert.equal(calls, 1);
+	assert.match(context, /assistant: Reconnect loops after sleep/);
+	assert.doesNotMatch(context, /Inspect Pilot using|private tool output|Opening request/);
+	assert.equal(reopened.get(target.id)?.title, "Linked target");
+	f.workers.findLast((worker) => worker.spec.sessionId === specialist.id)!.finish({ outcome: "done", outcomeAt: 300 });
+	await Promise.resolve();
+	assert.equal(calls, 1, "later replies do not retitle the specialist");
+});
+
 test("stack-only PR updates publish, persist and leave chat activity unchanged", async (t) => {
 	const f = await fixture(t);
 	const sessions = await f.manager();
@@ -912,12 +1051,15 @@ test("stack-only PR updates publish, persist and leave chat activity unchanged",
 test("explicit titles bypass generation and provider failures keep the fallback", async (t) => {
 	const f = await fixture(t);
 	let calls = 0;
-	const sessions = await f.manager({
-		title: async () => {
-			calls++;
-			throw new Error("unavailable");
+	const sessions = await f.manager(
+		{
+			title: async () => {
+				calls++;
+				throw new Error("unavailable");
+			},
 		},
-	});
+		{ diagnosticHost },
+	);
 	const explicit = await sessions.spawn({ cwd: f.source, message: "task", title: " My title " });
 	assert.equal(explicit.title, "My title");
 	assert.equal(calls, 0);
@@ -929,6 +1071,25 @@ test("explicit titles bypass generation and provider failures keep the fallback"
 	assert.equal(calls, 1);
 	assert.equal(sessions.get(fallback.id)?.title, "Fallback task");
 	assert.equal(sessions.get(explicit.id)?.title, "My title");
+	const target = await sessions.spawn({ cwd: f.source, message: "Target", title: "Linked target" });
+	const diagnosticFallback = await sessions.spawn({
+		message: "Why did reconnect fail?",
+		role: "diagnostics",
+		diagnosticTarget: diagnosticTarget(target.id),
+	});
+	await until(
+		() =>
+			f.workers.find((worker) => worker.spec.sessionId === target.id)?.state === "working" &&
+			f.workers.find((worker) => worker.spec.sessionId === diagnosticFallback.id)?.state === "working",
+	);
+	f.workers.find((worker) => worker.spec.sessionId === target.id)!.finish({ outcome: "done", outcomeAt: 150 });
+	f.workers
+		.find((worker) => worker.spec.sessionId === diagnosticFallback.id)!
+		.finish({ outcome: "done", outcomeAt: 150 });
+	await until(async () => (await f.stored(diagnosticFallback.id)).titlePending === undefined);
+	assert.equal(calls, 2);
+	assert.equal(sessions.get(diagnosticFallback.id)?.title, "Why did reconnect fail?");
+	assert.equal(sessions.get(target.id)?.title, "Linked target");
 });
 
 for (const pending of [{ titlePending: { ready: true } }, { lastCompletionAt: 100, titlePending: {} }])
@@ -1517,11 +1678,34 @@ test("diagnostics role survives reopen and prepares only a bounded read-only han
 	const f = await fixture(t);
 	const sessions = await f.manager({}, { diagnosticHost });
 	await assert.rejects(
+		sessions.spawn({ cwd: f.source, message: "Ordinary", diagnosticTitleFromReply: true }),
+		/role=diagnostics/,
+	);
+	await assert.rejects(
 		sessions.spawn({ projectId: f.project.id, message: "Unscoped", role: "diagnostics" }),
 		/host-qualified target chat/i,
 	);
 	const target = await sessions.spawn({ projectId: f.project.id, message: "Target" });
 	const remoteTarget = diagnosticTarget(target.id, { ...diagnosticHost, hostId: "remote-box" });
+	await assert.rejects(
+		sessions.spawn({
+			message: "Invalid hint",
+			role: "diagnostics",
+			diagnosticTarget: remoteTarget,
+			diagnosticTitleFromReply: false,
+		}),
+		/explicit true hint or omitted/,
+	);
+	await assert.rejects(
+		sessions.spawn({
+			message: "Conflicting title",
+			title: "Explicit",
+			role: "diagnostics",
+			diagnosticTarget: remoteTarget,
+			diagnosticTitleFromReply: true,
+		}),
+		/cannot be combined/,
+	);
 	await assert.rejects(
 		sessions.spawn({
 			message: "Wrong host",

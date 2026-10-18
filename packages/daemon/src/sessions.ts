@@ -73,7 +73,7 @@ import { nodeTelemetry, type TraceCarrier } from "@pilot/telemetry";
 import { AIUsageLedger } from "./ai-usage.ts";
 import { compareAIUsageBudget } from "./ai-usage-budget.ts";
 import { prepareAskSnapshot } from "./ask-snapshots.ts";
-import { chatTitleContext } from "./chat-title.ts";
+import { chatTitleContext, TITLE_OPENING_LIMIT } from "./chat-title.ts";
 import { ColdViewReader } from "./cold-view-reader.ts";
 import { ControlActions, ControlPreAdmissionError } from "./control-actions.ts";
 import { ControlChat } from "./control-chat.ts";
@@ -360,7 +360,14 @@ interface SessionMeta extends OutcomeMeta {
 	/** Latest attempt list reported by the kernel, kept while it is parked. */
 	attempts?: SessionAttempt[];
 	/** Wait for the first finished turn; a ready generation resumes after a daemon restart. */
-	titlePending?: { cwd: string; message: string; ready?: boolean };
+	titlePending?: {
+		cwd: string;
+		message: string;
+		ready?: boolean;
+		requireAssistant?: true;
+		excludedOpening?: string;
+		attemptedCompletionAt?: number;
+	};
 	cwd: string;
 	mode?: "build" | "ask";
 	ask?: AskContext;
@@ -4258,11 +4265,17 @@ export class SessionManager {
 			throw new Error("Diagnostics specialists require a target-scoped read-only session");
 		if (request.diagnosticHistoryAccess !== undefined && request.diagnosticHistoryAccess !== true)
 			throw new Error("diagnosticHistoryAccess must be an explicit true grant or omitted");
+		if (request.diagnosticTitleFromReply !== undefined && request.diagnosticTitleFromReply !== true)
+			throw new Error("diagnosticTitleFromReply must be an explicit true hint or omitted");
 		if (
 			request.role !== "diagnostics" &&
-			(request.diagnosticTarget !== undefined || request.diagnosticHistoryAccess !== undefined)
+			(request.diagnosticTarget !== undefined ||
+				request.diagnosticHistoryAccess !== undefined ||
+				request.diagnosticTitleFromReply !== undefined)
 		)
-			throw new Error("Diagnostic target access requires role=diagnostics");
+			throw new Error("Diagnostic-only fields require role=diagnostics");
+		if (request.diagnosticTitleFromReply === true && request.title?.trim())
+			throw new Error("diagnosticTitleFromReply cannot be combined with an explicit title");
 		const controlPermission = this.controlStartOrigin.getStore()?.permission;
 		const mode =
 			request.role === "diagnostics" || controlPermission?.level === "investigate"
@@ -4321,8 +4334,21 @@ export class SessionManager {
 		if (reserved && (reserved.targetId !== id || reserved.operationId !== admission?.operationId))
 			throw new Conflict("New session ID aliases another admission");
 		if (this.newSessionAdmissions.has(folded)) throw new Conflict("New session ID aliases an active creation");
-		const title = request.title?.trim() || titleFrom(request.message);
-		const titlePending = request.title?.trim() ? undefined : { cwd, message: request.message };
+		const explicitTitle = request.title?.trim();
+		const titleFromReply = request.role === "diagnostics" && request.diagnosticTitleFromReply === true;
+		const title = explicitTitle || (titleFromReply ? "Pilot diagnostics" : titleFrom(request.message));
+		const titlePending: SessionMeta["titlePending"] = explicitTitle
+			? undefined
+			: {
+					cwd,
+					message: titleFromReply ? "" : request.message,
+					...(titleFromReply
+						? {
+								requireAssistant: true as const,
+								excludedOpening: request.message.slice(0, TITLE_OPENING_LIMIT),
+							}
+						: {}),
+				};
 		this.newSessionAdmissions.add(folded);
 		try {
 			await this.controlStartOrigin.getStore()?.fence?.();
@@ -4426,11 +4452,16 @@ export class SessionManager {
 		const pending = meta.titlePending;
 		if (!pending || this.closing || this.titleGenerating.has(meta.id)) return;
 		// An idle/ready worker alone is not evidence that the first agent turn finished.
-		if (!pending.ready && !((meta.lastCompletionAt ?? -1) > 0)) return;
+		if (!pending.ready) {
+			const completionAt = meta.lastCompletionAt ?? -1;
+			if (!(completionAt > (pending.attemptedCompletionAt ?? 0))) return;
+			pending.attemptedCompletionAt = completionAt;
+		}
 		this.titleGenerating.add(meta.id);
 		const signal = AbortSignal.any([this.shutdownSignal.signal, AbortSignal.timeout(15_000)]);
 		const task = (async () => {
 			let changed = false;
+			let waitForAssistant = false;
 			let abort!: () => void;
 			const cancelled = new Promise<never>((_resolve, reject) => {
 				abort = () => reject(signal.reason);
@@ -4444,8 +4475,16 @@ export class SessionManager {
 							pending.message,
 							(before, limit) => this.history(meta.id, before, limit),
 							signal,
+							{
+								...(pending.excludedOpening === undefined ? {} : { excludeUserText: pending.excludedOpening }),
+								...(pending.requireAssistant ? { requireAssistant: true } : {}),
+							},
 						);
 						if (meta.titlePending !== pending) return undefined;
+						if (!context.trim() && pending.requireAssistant) {
+							waitForAssistant = true;
+							return undefined;
+						}
 						return (this.factories.title ?? this.modelCatalog.generateTitle.bind(this.modelCatalog))(
 							pending.cwd,
 							context,
@@ -4466,6 +4505,11 @@ export class SessionManager {
 			}
 			if (this.closing) return;
 			if (meta.titlePending !== pending) return;
+			if (waitForAssistant) {
+				delete pending.ready;
+				await this.save(meta);
+				return;
+			}
 			delete meta.titlePending;
 			await this.save(meta);
 			if (changed) this.emit(meta);
@@ -7238,14 +7282,17 @@ export class SessionManager {
 			if (this.applyAttempts(meta, packet.attempts)) void this.save(meta);
 		} else if (packet.type === "ready" || packet.type === "working") {
 			if (packet.execution) meta.executionEvidence = packet.execution;
+			const titleCompletionAt = packet.completion?.outcomeAt;
 			if (
 				this.workers.get(meta.id) === worker &&
 				!packet.working &&
-				packet.completion &&
+				titleCompletionAt !== undefined &&
 				meta.titlePending &&
-				!meta.titlePending.ready
+				!meta.titlePending.ready &&
+				titleCompletionAt > (meta.titlePending.attemptedCompletionAt ?? 0)
 			) {
 				meta.titlePending.ready = true;
+				meta.titlePending.attemptedCompletionAt = titleCompletionAt;
 				void this.save(meta);
 				this.generateTitle(meta);
 			}
