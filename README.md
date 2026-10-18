@@ -461,10 +461,11 @@ messages. Declined or already-addressed feedback need not be resolved on GitHub 
 New threads, replies or edits to the latest comment can trigger another follow-up; CI and conflict
 retries remain independent. Pilot does not resolve review threads automatically.
 Unsafe or conflicting rebases go to the agent instead. Automatic follow-ups are limited to three per
-session, with a five-minute cooldown; sending a user message resets the limit. Results and blockers come back to Pilot,
+session, with a five-minute cooldown; sending a user message resets the limit. A second or third follow-up is sent only
+if the agent attempted a push (including a failed one) after the previous follow-up. Results and blockers come back to Pilot,
 not GitHub comments or reviews. Ask and direct-checkout sessions do not receive automatic PR follow-ups.
 Owned PRs still blocked by conflicts, failing checks, unresolved review threads or a diverged stack after
-three attempts (or without an automatic follow-up route) appear in Needs you once the chat is idle and
+three attempts, after a follow-up without a push attempt (or without an automatic follow-up route) appear in Needs you once the chat is idle and
 the cooldown has ended. Fixing the problem clears the reason; sending a message resets the follow-up budget.
 
 GitHub writes are attributed to the chat in its activity and, for mission members, in mission activity.
