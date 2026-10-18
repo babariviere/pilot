@@ -138,6 +138,10 @@ test("a transfer admitted before freezing blocks proof through final cleanup", a
 	await until(() => !f.maintenance.frozen);
 	const finish = f.transfers.begin({ kind: "download", id: "active" });
 	await writeUpdate(f.home, { ...f.journal, phase: "draining", revision: 3 });
+	// A watcher refresh that read the waiting journal before this write would release inspect's fence when it
+	// finishes, and inspect would correctly reject its proof. Let the watcher observe draining first.
+	await until(() => f.maintenance.frozen);
+	await (f.maintenance as unknown as { refreshing?: Promise<void> }).refreshing;
 	const proof = await f.maintenance.inspect(f.journal.id);
 	assert.equal(proof.ready, false);
 	assert.ok(proof.blockers.some((blocker) => blocker.kind === "download"));
