@@ -1070,6 +1070,17 @@ export class AIUsageLedger {
 		};
 	}
 
+	/**
+	 * Forget a session whose directory is about to be removed. Waits for an in-flight write, which creates
+	 * temporary files in that directory, and refuses later observations so none can recreate one.
+	 */
+	async discard(sessionId: string): Promise<void> {
+		this.disabled.add(sessionId);
+		this.states.delete(sessionId);
+		await this.writes.get(sessionId)?.catch(() => false);
+		this.versions.delete(sessionId);
+	}
+
 	async close(): Promise<void> {
 		if (this.closed) return;
 		for (const [id, state] of this.states) {

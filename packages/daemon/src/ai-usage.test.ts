@@ -101,6 +101,24 @@ test("ledger deduplicates conversation and timing snapshots across daemon and wo
 	await reopened.close();
 });
 
+test("discard waits for an in-flight write and keeps a removed session directory empty", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "pilot-ai-usage-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
+	const id = "11111111-1111-4111-8111-111111111112";
+	const dir = join(home, "sessions", id);
+	await mkdir(dir, { recursive: true });
+	const ledger = new AIUsageLedger(home, () => 1_000);
+	// A state change schedules a write that lands in the session directory.
+	ledger.observeState(id, { working: true, paused: false });
+	await ledger.discard(id);
+	await rm(dir, { recursive: true });
+	ledger.observeState(id, { working: false, paused: true });
+	ledger.observeUsage(id, report());
+	await ledger.close();
+	await assert.rejects(stat(dir), { code: "ENOENT" });
+	assert.equal(ledger.summary(id), undefined);
+});
+
 test("invalid or unexpected accounting cannot enter the bounded store", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-ai-usage-"));
 	t.after(() => rm(home, { recursive: true, force: true }));
