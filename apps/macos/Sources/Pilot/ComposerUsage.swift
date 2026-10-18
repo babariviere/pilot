@@ -68,7 +68,7 @@ struct ContextUsageIndicator: View {
                     .buttonStyle(.plain)
                     .help(ai.helpText)
                     .popover(isPresented: $showingAIUsage) {
-                        Text(ai.helpText).font(.callout).textSelection(.enabled).padding(16)
+                        Text(ai.helpText).font(.pilot(.body)).textSelection(.enabled).padding(16)
                             .frame(width: 360, alignment: .leading)
                     }
                     .accessibilityLabel("AI usage: \(ai.totalTokenLabel)")

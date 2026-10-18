@@ -177,11 +177,13 @@ extension AIUsageAccounting {
     private func money(_ micros: Double) -> String {
         let formatter = NumberFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.numberStyle = .currency
-        formatter.currencyCode = "USD"
+        // Currency formatting can insert locale- and SDK-dependent spacing between the symbol and amount.
+        // Accounting is always denominated in USD, so build the stable label explicitly.
+        formatter.numberStyle = .decimal
+        formatter.usesGroupingSeparator = false
         formatter.minimumFractionDigits = 2
         formatter.maximumFractionDigits = 6
-        return formatter.string(from: NSNumber(value: micros / 1_000_000)) ?? "Unavailable"
+        return formatter.string(from: NSNumber(value: micros / 1_000_000)).map { "$\($0)" } ?? "Unavailable"
     }
 
     private func duration(_ milliseconds: Double) -> String {
