@@ -168,6 +168,36 @@ private func logicalMission(_ id: String = "same", title: String = "Canonical", 
     #expect(model.hosts.selection?.host == second)
 }
 
+/// A sidebar row is highlighted while `selectedLogicalMission` is its row. Full rows open through
+/// `openMission(_:context:)` (MissionSidebarRow) and chat mission labels use the bare Local ID, so both
+/// must resolve to the clicked mission only, on Local and on a devbox with the same mission ID.
+@Test @MainActor func missionRowClicksSelectOnlyTheirOwnLogicalRow() async throws {
+    let model = AppModel()
+    try model.registerLocal(logicalHome)
+    model.client.loadFixture(projects: [], sessions: [])
+    model.client.handle(.missions([logicalMission()]))
+    let client = PilotClient()
+    client.loadFixture(projects: [], sessions: [])
+    client.handle(.missions([logicalMission()]))
+    try model.hosts.install(client, host: logicalBox)
+    model.missionRegistry.start(model)
+    defer { model.missionRegistry.stop() }
+    try await logicalEventually { model.missionRegistry.rows.count == 2 }
+    let local = try #require(model.missionRegistry.rows.first { $0.mission.home.matches(logicalHome) })
+    let remote = try #require(model.missionRegistry.rows.first { $0.mission.home.matches(logicalBox) })
+
+    for row in [local, remote] {
+        let reference = model.missionRegistry.destination(row, model: model)
+        model.openMission(row.mission.missionId, context: HostViewContext(host: reference.host, hosts: model.hosts))
+        #expect(model.selectedLogicalMission?.id == row.id)
+    }
+    model.openMission("same")
+    #expect(model.selectedLogicalMission?.id == local.id)
+    // Opening a chat moves the highlight to its row.
+    model.selectedSessionId = "chat"
+    #expect(model.selectedLogicalMission == nil)
+}
+
 @Test @MainActor func mountedReplicaMissionRowOpensCanonicalReferenceNotExecutionHost() throws {
     let model = AppModel()
     try model.registerLocal(logicalHome)
