@@ -25,6 +25,29 @@ export type PilotCall = (
 	args: Record<string, JsonValue>,
 	operationId: string,
 ) => Promise<JsonValue>;
+
+/** Compatibility arrays remain in structured details/HTTP, not repeated as separate mission lists. */
+function resultText(action: PilotAction, data: JsonValue): string {
+	if (
+		action !== "status" ||
+		!data ||
+		typeof data !== "object" ||
+		Array.isArray(data) ||
+		!Array.isArray(data.logicalMissions)
+	)
+		return JSON.stringify(data);
+	const text = { ...data };
+	delete text.missions;
+	delete text.activeMissions;
+	delete text.replicaMissions;
+	if (text.totals && typeof text.totals === "object" && !Array.isArray(text.totals)) {
+		text.totals = { ...text.totals };
+		delete text.totals.missions;
+		delete text.totals.activeMissions;
+		delete text.totals.replicaMissions;
+	}
+	return JSON.stringify(text);
+}
 export function createPilotTool(call: PilotCall): ToolDefinition {
 	return defineTool({
 		name: "pilot",
@@ -130,7 +153,7 @@ export function createPilotTool(call: PilotCall): ToolDefinition {
 		async execute(_id, params) {
 			const { action, ...args } = params;
 			const data = await call(action, args, _id);
-			return { content: [{ type: "text", text: JSON.stringify(data) }], details: data };
+			return { content: [{ type: "text", text: resultText(action, data) }], details: data };
 		},
 	});
 }

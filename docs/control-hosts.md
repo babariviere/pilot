@@ -723,15 +723,16 @@ an explicit read of existing shared-context records; this snapshot adds no execu
 ### Planned logical mission projection
 
 The existing ControlDashboardResponse.replicaMissions from the thin status implementation is a
-**compatibility/source-input field**, not a second logical mission list. Folding it into one list
-with provenance is planned follow-up task 59, **not started and still requiring user approval**;
-native integration is Remote follow-up 30. This contract freezes their common target, not handlers,
-producer changes, UI, support advertisement or activation. The existing startup/auth/rollout gates
-remain unchanged. Existing shared task/replica DTO declarations are not extended.
+**compatibility/source-input field**, not a second logical mission list. The daemon folds its cached
+canonical missions, authorized replica missions and task observations into one logical list with
+provenance. Native integration remains Remote follow-up 30. This projection does not enable cross-host
+orchestration or change the existing startup/auth/rollout gates. Existing shared task/replica DTO
+declarations are not extended.
 
 Target shape (declared once in control.ts and mirrored in PilotCore/ControlDashboard.swift):
 - Additive optional dashboard.logicalMissions: ControlLogicalMission[] and
-  dashboard.totals.logicalMissions: number. Both remain absent from current producers.
+  dashboard.totals.logicalMissions: number. The daemon supplies both using its verified producer identity;
+  legacy in-process callers without that identity omit both rather than guessing a canonical home.
 - A ControlLogicalMission contains id, mission: SharedMissionRef {home,missionId}, optional
   title/status/tasksDone/tasksTotal, optional coordinator: SharedSessionRef, and provenance[].
   id is the stable JSON tuple [home.daemonId,home.lineageId,missionId]; navigation uses the
@@ -770,7 +771,11 @@ Target shape (declared once in control.ts and mirrored in PilotCore/ControlDashb
 
 Wire fixtures illustrate one mission observed locally and through a replica, plus a same-name,
 same-bare-ID mission under a different canonical home. They assert the frozen shape/identities only;
-they are **not** an implementation or execution test of the planned folding algorithm.
+daemon tests separately exercise folding, precedence, clipping and HTTP/tool parity. The pilot status
+tool keeps compatibility arrays in structured details but omits them from its text, listing only
+logicalMissions with provenance. Resource filters still apply to compatibility arrays and execution
+resources, not the logical mission registry. Replica progress and coordinator remain unknown because
+the existing thin source DTO has neither; task rows never reconstruct those fields.
 
 ### Updates, transport shutdown and Stop presentation
 
