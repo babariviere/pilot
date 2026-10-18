@@ -20,7 +20,10 @@ import {
 	AssistantEntry,
 	createRegistry,
 	type EntryId,
+	type GenerationHooks,
+	GenerationTask,
 	Harness,
+	hook,
 	LiveDoc,
 	section,
 	type ToolRegistration,
@@ -29,6 +32,144 @@ import {
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { ControlTurn } from "./control-turn.ts";
 import { NativeAdapter } from "./native-adapter.ts";
+
+test("overlapping native request preparation cannot invalidate a projected Control request", {
+	timeout: 30_000,
+}, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "control-overlap-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const runtime = await ModelRuntime.create({
+		credentials: new InMemoryCredentialStore(),
+		modelsPath: null,
+		modelsStore: new InMemoryModelsStore(),
+		refreshOnCreate: false,
+		allowModelNetwork: false,
+	});
+	const faux = fauxProvider();
+	runtime.registerNativeProvider(faux.provider);
+	const adapter = await NativeAdapter.open({
+		cwd: root,
+		agentDir: root,
+		control: true,
+		settingsManager: SettingsManager.inMemory(),
+		sessionOptions: { modelRuntime: runtime, model: faux.getModel() },
+	});
+	const storage = await openNodeSqliteStorage(join(root, "harness.sqlite"));
+	let harness!: Harness, id!: Parameters<Harness["conversation"]>[0];
+	const turn = new ControlTurn(
+		async (action) => (action === "prepare" ? { lines: [] } : null),
+		() => harness,
+		storage,
+		() => id,
+	);
+	adapter.controlContext = (ctx) => turn.context(ctx);
+	const native = adapter.extension.hooks!.find((h) => h.task === GenerationTask.definition.name)!
+		.handlers as Partial<GenerationHooks>;
+	const projected = turn.prepare(adapter.extension, (messages, block) =>
+		adapter.prepareControlRequest(messages, block),
+	);
+	let overlaps = 0;
+	const extension = {
+		...projected,
+		hooks: [
+			...projected.hooks!,
+			hook(GenerationTask, {
+				beforeRequest: async (request, api, ctx) => {
+					// The first request is prepared but has not dispatched. A second native preparation
+					// enters on this adapter, as can happen at a recovery/auxiliary-work boundary.
+					await native.beforeRequest!(request, api, ctx);
+					overlaps++;
+				},
+			}),
+		],
+	};
+	const registry = createRegistry();
+	registry.install(extension);
+	harness = await Harness.open(
+		storage,
+		{ models: adapter.models, registry: turn.registry(registry), settings: { compaction: { enabled: false } } },
+		context,
+	);
+	t.after(async () => {
+		await harness.close(context);
+		await adapter.close();
+	});
+	const conversation = await harness.root(context, { agent: { model: adapter.model, extensions: [extension] } });
+	id = conversation.id;
+	await adapter.bindHarness(harness, id);
+	faux.setResponses([fauxAssistantMessage("first input after startup answered")]);
+	const submission = await conversation.submit({ type: "input", content: "first input" }, context);
+	await conversation.waitForIdle(context);
+	assert.equal(overlaps, 1);
+	assert.equal((await submission.status(context)).status, "done");
+	assert.equal(faux.state.callCount, 1);
+});
+
+test("Control dispatch isolates concurrent receipts and rejects missing, changed and reused projections", {
+	timeout: 30_000,
+}, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "control-receipts-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const runtime = await ModelRuntime.create({
+		credentials: new InMemoryCredentialStore(),
+		modelsPath: null,
+		modelsStore: new InMemoryModelsStore(),
+		refreshOnCreate: false,
+		allowModelNetwork: false,
+	});
+	const faux = fauxProvider();
+	runtime.registerNativeProvider(faux.provider);
+	const adapter = await NativeAdapter.open({
+		cwd: root,
+		agentDir: root,
+		control: true,
+		settingsManager: SettingsManager.inMemory(),
+		sessionOptions: { modelRuntime: runtime, model: faux.getModel() },
+	});
+	t.after(() => adapter.close());
+	const messages = (text: string): Message[] => [
+		{ role: "system", content: "projected", timestamp: 0 },
+		{ role: "user", content: text, timestamp: 0 },
+	];
+	const first = messages("first"),
+		second = messages("second");
+	adapter.prepareControlRequest(first, "first cache block");
+	adapter.prepareControlRequest(second, "second cache block");
+	assert.throws(
+		() => adapter.models.streamSimple(faux.getModel(), { messages: messages("unprojected") }),
+		/fresh request/,
+	);
+	let startFirst!: () => void, releaseFirst!: () => void;
+	const started = new Promise<void>((resolve) => {
+		startFirst = resolve;
+	});
+	const release = new Promise<void>((resolve) => {
+		releaseFirst = resolve;
+	});
+	t.after(() => releaseFirst());
+	faux.setResponses([
+		async (ctx) => {
+			startFirst();
+			await release;
+			return fauxAssistantMessage(contentText(ctx.messages.at(-1)!.content));
+		},
+		async (ctx) => fauxAssistantMessage(contentText(ctx.messages.at(-1)!.content)),
+	]);
+	const pending = adapter.models.completeSimple(faux.getModel(), { messages: [...first] });
+	await started;
+	const other = await adapter.models.complete(faux.getModel(), { messages: [...second] });
+	releaseFirst();
+	assert.equal(contentText(other.content), "second");
+	assert.equal(contentText((await pending).content), "first");
+	assert.throws(() => adapter.models.streamSimple(faux.getModel(), { messages: first }), /fresh request/);
+	const changed = messages("changed");
+	adapter.prepareControlRequest(changed, "");
+	assert.throws(
+		() => adapter.models.stream(faux.getModel(), { messages: [...changed, ...messages("extra")] }),
+		/fresh request/,
+	);
+	assert.equal(faux.state.callCount, 2, "only matching, single-use receipts reach the provider");
+});
 
 test("20k retained entries never enter preparation or SDK mirroring; request-phase recovery keeps the run", {
 	timeout: 90_000,
@@ -89,18 +230,12 @@ test("20k retained entries never enter preparation or SDK mirroring; request-pha
 		);
 		adapter.controlContext = (ctx) => turn.context(ctx);
 		const registry = createRegistry();
-		const extension = turn.prepare(adapter.extension, (block) => {
-			adapter.controlCacheBlock = block;
-			adapter.controlRequestReady = true;
-		});
+		const extension = turn.prepare(adapter.extension, (messages, block) =>
+			adapter.prepareControlRequest(messages, block),
+		);
 		registry.install(extension);
 		adapter.onToolsChanged = (next) =>
-			registry.install(
-				turn.prepare(next, (block) => {
-					adapter.controlCacheBlock = block;
-					adapter.controlRequestReady = true;
-				}),
-			);
+			registry.install(turn.prepare(next, (messages, block) => adapter.prepareControlRequest(messages, block)));
 		harness = await Harness.open(
 			storage,
 			{

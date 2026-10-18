@@ -54,8 +54,14 @@ test("control turns are fresh, tool rounds stay intact, log excludes thoughts an
 		prefixes = new Map<string, JsonValue>();
 	let preparations = 0,
 		fail = false;
+	let failedSettled!: () => void;
+	const failurePublished = new Promise<void>((resolve) => {
+		failedSettled = resolve;
+	});
 	const hooks = {
-		onWorking: () => {},
+		onWorking: (_working: boolean, completion?: import("@pilot/protocol").SessionCompletion) => {
+			if (completion?.outcome === "failed") failedSettled();
+		},
 		callPilot: async () => null,
 		callMemory: async () => ({}),
 		callControl: async (action: string, args: Record<string, JsonValue>): Promise<JsonValue> => {
@@ -181,7 +187,36 @@ test("control turns are fresh, tool rounds stay intact, log excludes thoughts an
 	faux.setResponses([async () => assert.fail("a failed projection must never send old Harness history")]);
 	await session.submit("failure", "must fail closed", "followUp");
 	await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
+	await failurePublished;
 	assert.equal(checked, 4);
+	const failed = await session.conversation.context(BACKGROUND_CONTEXT);
+	const errors = failed.entries
+		.flatMap((entry) => entry.model ?? [])
+		.filter((m) => m.role === "assistant" && m.stopReason === "error");
+	assert.equal(errors.length, 1, "a pre-provider fault must be visible in the transcript");
+	assert.match(
+		errors[0]!.role === "assistant" ? (errors[0].errorMessage ?? "") : "",
+		/summary unavailable.*retry|summary unavailable.*send/i,
+	);
+	await session.close();
+	session = await KernelSession.open(
+		{ sessionId: "control", cwd: root, storageDir: join(root, "durable"), control: true },
+		hooks,
+	);
+	const recoveredErrors = (await session.conversation.context(BACKGROUND_CONTEXT)).entries
+		.flatMap((entry) => entry.model ?? [])
+		.filter((m) => m.role === "assistant" && m.stopReason === "error");
+	assert.equal(recoveredErrors.length, 1, "an idle failure snapshot must not duplicate its error row");
+	fail = false;
+	faux.setResponses([fauxAssistantMessage("retry succeeded")]);
+	const conversationId = session.conversation.id;
+	await session.submit("explicit-retry", "retry my request", "followUp");
+	await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
+	assert.equal(session.conversation.id, conversationId, "retry must not fork or relaunch");
+	assert.equal(
+		contentText((await session.conversation.context(BACKGROUND_CONTEXT)).messages.at(-1)!.content),
+		"retry succeeded",
+	);
 });
 
 test("control run attribution follows admitted runs, not busy-chat queue placement", { timeout: 30_000 }, async (t) => {
@@ -246,3 +281,83 @@ test("control run attribution follows admitted runs, not busy-chat queue placeme
 	await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
 	assert.deepEqual(origins, [false, true]);
 });
+
+for (const reopened of [false, true])
+	test(`first Control input after ${reopened ? "worker reopen" : "startup"} exposes preparation failure and retries without relaunch`, {
+		timeout: 30_000,
+	}, async (t) => {
+		const root = await mkdtemp(join(tmpdir(), "control-startup-fault-"));
+		t.after(() => rm(root, { recursive: true, force: true }));
+		t.mock.method(globalThis, "fetch", () => assert.fail("fixture must remain offline"));
+		const runtime = await ModelRuntime.create({
+			credentials: new InMemoryCredentialStore(),
+			modelsPath: null,
+			modelsStore: new InMemoryModelsStore(),
+			refreshOnCreate: false,
+			allowModelNetwork: false,
+		});
+		const faux = fauxProvider();
+		runtime.registerNativeProvider(faux.provider);
+		const open = NativeAdapter.open;
+		t.mock.method(NativeAdapter, "open", (options: NativeAdapterOptions) =>
+			open.call(NativeAdapter, {
+				...options,
+				settingsManager: SettingsManager.inMemory(),
+				sessionOptions: { modelRuntime: runtime, model: faux.getModel() },
+			}),
+		);
+		let fail = true,
+			publishFailure!: () => void;
+		const published = new Promise<void>((resolve) => {
+			publishFailure = resolve;
+		});
+		const hooks = {
+			onWorking: (_working: boolean, completion?: import("@pilot/protocol").SessionCompletion) => {
+				if (completion?.outcome === "failed") publishFailure();
+			},
+			callPilot: async () => null,
+			callControl: async (action: string) => {
+				if (action !== "prepare") return null;
+				if (fail) throw new Error("Earlier chat messages could not be summarized; retry with your next message");
+				return { lines: [] };
+			},
+		};
+		const spec = { sessionId: "startup-control", cwd: root, storageDir: join(root, "durable"), control: true };
+		let session = await KernelSession.open(spec, hooks);
+		t.after(() => session.close());
+		if (reopened) {
+			await session.close();
+			session = await KernelSession.open(spec, hooks);
+		}
+		const conversationId = session.conversation.id;
+		await session.submit("startup-failure", "hello", "followUp");
+		await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
+		await published;
+		assert.equal(faux.state.callCount, 0);
+		assert.match(session.completion?.outcomeReason ?? "", /could not be summarized/);
+		const errors = async () =>
+			(await session.conversation.context(BACKGROUND_CONTEXT)).entries
+				.flatMap((entry) => entry.model ?? [])
+				.filter((m) => m.role === "assistant" && m.stopReason === "error");
+		assert.equal((await errors()).length, 1);
+		fail = false;
+		faux.setResponses([
+			async (ctx) => {
+				assert.equal(
+					ctx.messages.filter((m) => m.role === "user" && contentText(m.content) === "hello").length,
+					0,
+					"failed input is not silently replayed",
+				);
+				assert.ok(!ctx.messages.some((m) => m.role === "assistant" && m.stopReason === "error"));
+				return fauxAssistantMessage("retry worked");
+			},
+		]);
+		await session.submit("explicit-retry", "please try again", "followUp");
+		await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
+		assert.equal(session.conversation.id, conversationId);
+		assert.equal(faux.state.callCount, 1);
+		await session.close();
+		session = await KernelSession.open(spec, hooks);
+		assert.equal((await errors()).length, 1, "reopening does not duplicate the error row");
+		assert.equal(faux.state.callCount, 1, "reopening never replays a failed input");
+	});

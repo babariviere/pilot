@@ -1,7 +1,8 @@
 /** A fresh request projection, not a second model loop or a rewrite of Harness history. */
 import type { Context, JsonValue } from "@earendil-works/chord";
-import { contentText, getCurrentTools, type Message } from "@earendil-works/pi-ai";
+import { type Api, contentText, getCurrentTools, type Message } from "@earendil-works/pi-ai";
 import {
+	AssistantEntry,
 	type ContextView,
 	type ConversationId,
 	defineDoc,
@@ -14,8 +15,20 @@ import {
 	LiveDoc,
 	type RegistryReader,
 	type Storage,
+	type SubmissionId,
 } from "@earendil-works/pi-durable";
+import { AttentionDoc } from "./attention.ts";
 import { CONTROL_SYSTEM_PROMPT, type ControlContextLine, controlBlocks } from "./control-context.ts";
+import { safeFailureText } from "./failure.ts";
+
+const FailureDoc = defineDoc<{ input?: number }>({
+	kind: "pilot.control-failure",
+	version: 1,
+	scope: "conversation",
+	history: "latest",
+	fork: "initial",
+	initial: () => ({}),
+});
 
 export type ControlCall = (
 	action: "record" | "prepare" | "zoom" | "date",
@@ -123,7 +136,7 @@ export class ControlTurn {
 	}
 	/**
 	 * Pi 1.3 compatibility mapping: delegate every generation phase/commit to the built-in task,
-	 * replacing only runtime.context. No new task kind, checkpoint or model loop.
+	 * bounding runtime.context and making beforeRequest fail closed. No new task kind or model loop.
 	 * Public conversation reads, watches, storage and recovery continue to see the entire transcript.
 	 */
 	registry(registry: RegistryReader): RegistryReader {
@@ -131,6 +144,26 @@ export class ControlTurn {
 		type Runtime = Parameters<typeof definition.phases.prepare>[1];
 		const mapped = (runtime: Runtime): Runtime => ({
 			...runtime,
+			hooks: {
+				...runtime.hooks,
+				each: async (name, invoke) => {
+					if (name !== "beforeRequest") return runtime.hooks.each(name, invoke);
+					// Harness normally reports and contains hook throws. Control preparation is a
+					// safety boundary: retain the actual failure instead of dispatching or masking it.
+					let failed = false,
+						failure: unknown;
+					await runtime.hooks.each(name, async (handler) => {
+						if (failed) return;
+						try {
+							await invoke(handler);
+						} catch (error) {
+							failed = true;
+							failure = error;
+						}
+					});
+					if (failed) throw failure;
+				},
+			},
 			context: (id, context, options) => {
 				runtime.now(); // Retain the invocation-lifetime guard of the ordinary context reader.
 				if (id !== this.conversationId()) throw new Error("Control context belongs to another conversation");
@@ -198,7 +231,7 @@ export class ControlTurn {
 		this.serial = work.catch(() => {});
 		return work;
 	}
-	prepare(extension: Extension, cache: (block?: string) => void): Extension {
+	prepare(extension: Extension, prepared: (messages: readonly Message[], cacheBlock: string) => void): Extension {
 		return {
 			...extension,
 			hooks: [
@@ -232,22 +265,58 @@ export class ControlTurn {
 							(message) => message.role !== "system",
 						);
 						const { blocks, lastWhole } = controlBlocks(state?.lines ?? []);
-						cache(lastWhole ?? "");
-						return {
-							messages: [
-								{
-									role: "system",
-									content: CONTROL_SYSTEM_PROMPT,
-									toolsAdded: getCurrentTools(request.messages),
-									timestamp: 0,
-								},
-								{ role: "user", content: blocks.map((text) => ({ type: "text", text })), timestamp: 0 },
-								...messages,
-							] as Message[],
-						};
+						const projected: Message[] = [
+							{
+								role: "system",
+								content: CONTROL_SYSTEM_PROMPT,
+								toolsAdded: getCurrentTools(request.messages),
+								timestamp: 0,
+							},
+							{ role: "user", content: blocks.map((text) => ({ type: "text", text })), timestamp: 0 },
+							...messages,
+						];
+						prepared(projected, lastWhole ?? "");
+						return { messages: projected };
 					},
 				}),
 			],
 		};
+	}
+
+	/** Faults before a provider response have no assistant row. Publish one, without replay. */
+	async reportFailure(context: Context, model: { api: Api; provider: string; id: string }): Promise<void> {
+		const harness = this.host(),
+			id = this.conversationId();
+		const completion = (await harness.snapshot(AttentionDoc, id, context))?.completion;
+		if (completion?.outcome !== "failed") return;
+		const record = await this.storage.submission(completion.input as SubmissionId, context);
+		if (record?.status !== "unanswered" || record.reason !== "faulted") return;
+		await harness.commit(async (tx) => {
+			const state = await tx.doc(FailureDoc, id);
+			if ((state.input ?? 0) >= record.id) return;
+			await tx.appendEntry(AssistantEntry, id, {
+				model: [
+					{
+						role: "assistant",
+						content: [],
+						api: model.api,
+						provider: model.provider,
+						model: model.id,
+						stopReason: "error",
+						timestamp: Date.now(),
+						errorMessage: `Control request failed: ${safeFailureText(completion.outcomeReason ?? "Unknown preparation error")}. Send a new message to retry. No automatic retry was started.`,
+						usage: {
+							input: 0,
+							output: 0,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 0,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+					},
+				],
+			});
+			state.input = record.id;
+		}, context);
 	}
 }
