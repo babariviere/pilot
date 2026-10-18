@@ -153,6 +153,7 @@ public struct SessionDiagnostics: Codable, Sendable {
     public let connectivity: Connectivity
     public let current: SessionDiagnosticCurrent
     public let resources: SessionDiagnosticResources
+    public let ai: AIUsageAccounting?
     public let sources: [DiagnosticSourceStatus]
     public let evidence: [DiagnosticEvidence]
     public let truncation: SessionDiagnosticTruncation

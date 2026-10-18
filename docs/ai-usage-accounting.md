@@ -22,6 +22,28 @@ and a final interval lost to an abrupt daemon crash, are omitted rather than gue
 partial. Provider attempts and timing can also miss a crash before publication. Committed token totals remain
 recoverable from the durable source.
 
+## Context efficiency and relaunch observations
+
+The same bounded file keeps content-free observations that make efficiency regressions diagnosable without changing
+agent behavior:
+
+- Latest context usage records observed tokens, the model context window and derived headroom. It is one latest
+  observation, not a time average or a claim that unobserved context stayed constant.
+- Direct and child cache efficiency each retain the input, cache-read and cache-write growth seen between consecutive
+  authoritative reports. The displayed ratio is `cache read / (input + cache read)` with its explicit denominator
+  and observation count. Missing first reports and crash-lost publications remain outside that denominator.
+- A compaction is counted only when the kernel explicitly publishes a `pi.compaction` activity epoch. Before/after
+  tokens and removed tokens are reported only when both adjacent context observations exist. Compaction duration is
+  unavailable because no authoritative timing seam exists.
+- Physical request attempts beyond the first are counted as observed retries. Publication can be lost in a crash,
+  so retry coverage remains partial.
+- Each successfully published kernel worker records a closed launch reason: initial start, parked wake, user resume,
+  crash recovery, startup retry, replacement or unknown. The next context observation is associated with that launch
+  as prepared context volume. Relaunch cost is unavailable rather than inferred from catalog token prices.
+
+These are measurements, not control signals. They do not trigger compaction, alter context, switch models, retry a
+request, restart a worker or change parking/recovery policy.
+
 ## Cost semantics
 
 - Token classes stay separate. Reasoning is a reported subset of output, not an additional token class.
@@ -34,7 +56,7 @@ recoverable from the durable source.
   marginal subscription spend.
 
 With remote operational telemetry enabled, a checkpointed increase emits a zero-duration `pilot.ai.usage` span with
-closed scope/status classes and nonnegative numeric deltas. It contains no chat, request, provider, model, tool,
-repository or content identifier. Export remains off by default, memory-only and subject to the telemetry contract's
-queue and revocation behavior. The accounting is observational: it cannot route models, enforce budgets, retry,
-restart or change context.
+closed scope/status classes and nonnegative numeric deltas. Context, compaction and launch attributes are closed
+numeric or enum fields; no launch or usage span carries a chat, request, provider, model, tool, repository or content
+identifier. Export remains off by default, memory-only and subject to the telemetry contract's queue and revocation
+behavior. The accounting is observational: it cannot route models, enforce budgets, retry, restart or change context.

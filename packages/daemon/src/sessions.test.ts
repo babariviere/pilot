@@ -1106,6 +1106,7 @@ test("diagnostics reads a parked session without opening its worker or transcrip
 	assert.equal(offline.current.state, "parked");
 	assert.deepEqual(offline.current.pauses, ["connectivity"]);
 	assert.equal(offline.connectivity.state, "offline");
+	assert.equal(offline.ai?.efficiency?.relaunch.reasons.initial, 1);
 	meta.working = false;
 	meta.failure = "raw startup error with a secret";
 	const failed = await sessions.diagnostics(created.id);
@@ -2009,6 +2010,7 @@ for (const workspace of ["clone", "direct"] as const) {
 		assert.equal(result.error, undefined);
 		assert.equal(result.outcome, undefined);
 		assert.equal(result.canRetryStartup, undefined);
+		assert.equal(sessions["aiUsage"].summary(created.id, true)?.efficiency?.relaunch.reasons.startup_retry, 1);
 		assert.deepEqual(f.workers[1]!.requests, before.pending);
 		assert.equal(clones, workspace === "clone" ? 1 : 0);
 		assert.equal(await readFile(join(created.cwd, "keep"), "utf8"), "workspace contents");
@@ -2140,6 +2142,7 @@ test("Stop cancels failed child recovery without credentials and stays stopped a
 	await assert.rejects(reopened["ensureWorker"](created.id), /Recovery is stopped/);
 	await reopened.send(created.id, "new explicit work", "followUp", "new-work");
 	assert.equal(f.workers.length, 2);
+	assert.equal(reopened["aiUsage"].summary(created.id, true)?.efficiency?.relaunch.reasons.user_resume, 1);
 	assert.equal(f.workers[1]!.spec.stopOnOpen, true, "cancel the old run before resuming the Harness");
 	assert.deepEqual(
 		f.workers[1]!.requests.map((command) => command.type),
@@ -2290,6 +2293,7 @@ test("worker context is live-only while aggregate AI accounting survives worker 
 			cancelled: 0,
 			usageReports: 1,
 			providerAttemptsObserved: 1,
+			requestRetriesObserved: 0,
 			elapsedMsObserved: 100,
 			activeMsObserved: 80,
 			outcomeCoverage: "partial" as const,
@@ -2303,6 +2307,7 @@ test("worker context is live-only while aggregate AI accounting survives worker 
 			conversationId: "0",
 			timingBoot: "00000000-0000-4000-8000-000000000001",
 			activityEpoch: "initial",
+			epochKind: "initial",
 			observedAt: Date.now(),
 			direct: scope("model_requests", 100),
 			child: scope("child_operations", 20),
@@ -2310,6 +2315,7 @@ test("worker context is live-only while aggregate AI accounting survives worker 
 	});
 	assert.deepEqual(sessions.get(created.id)?.usage?.context, context);
 	assert.equal(sessions.get(created.id)?.usage?.ai?.direct.tokens.input, 100);
+	assert.equal(sessions.get(created.id)?.usage?.ai?.efficiency?.relaunch.reasons.initial, 1);
 	assert.equal(changes.at(-1)?.usage?.ai?.child.tokens.input, 20);
 	await f.workers[0]!.close();
 	assert.equal(sessions.get(created.id)?.usage?.context, undefined);
@@ -2317,6 +2323,7 @@ test("worker context is live-only while aggregate AI accounting survives worker 
 	await sessions.shutdown();
 	const reopened = await f.manager();
 	assert.equal(reopened.get(created.id)?.usage?.ai?.direct.tokens.input, 100);
+	assert.equal(reopened.get(created.id)?.usage?.ai?.efficiency?.relaunch.count, 1);
 });
 
 test("history reads entries hidden by compaction from the session's durable storage", async (t) => {
@@ -2598,9 +2605,16 @@ test("jobs listing is session-local and never wakes parked, archived or unknown 
 	const worker = f.workers[0]!;
 	const lastUse = sessions["lastUse"].get(created.id);
 	const summary = sessions.get(created.id);
+	const launches = sessions["aiUsage"].summary(created.id, true)?.efficiency?.relaunch.count;
 	const reads = t.mock.method(worker, "jobs", worker.jobs.bind(worker));
 	assert.deepEqual(await sessions.jobs(created.id), await worker.jobs());
-	assert.deepEqual(sessions.get(created.id), summary);
+	const afterJobs = sessions.get(created.id);
+	assert.deepEqual({ ...afterJobs, usage: undefined }, { ...summary, usage: undefined });
+	assert.equal(
+		sessions["aiUsage"].summary(created.id, true)?.efficiency?.relaunch.count,
+		launches,
+		"a jobs read does not create launch evidence",
+	);
 	assert.equal(sessions["lastUse"].get(created.id), lastUse);
 	await sessions.stop(created.id);
 	const now = sessions["lastUse"].get(created.id)! + 60_001;
@@ -2690,6 +2704,7 @@ test("idle unwatched kernels without subprocesses park, and reopen only after re
 		release.resolve();
 		await sending;
 		await until(() => f.workers.length === 2 && sessions.get(created.id)?.state === "working");
+		assert.equal(sessions["aiUsage"].summary(created.id, true)?.efficiency?.relaunch.reasons.parked_wake, 1);
 		await until(() => events.some((batch) => batch.some((event) => event.type === "snapshot")));
 		assert.equal((await f.stored(created.id)).failure, undefined);
 		assert.equal(sessions.get(created.id)?.error, undefined);
@@ -2904,6 +2919,7 @@ for (const recovery of ["restart", "demand", "automatic"] as const) {
 		assert.equal(admissions, 1);
 		assert.equal(attempts, 2);
 		assert.deepEqual(f.workers[1]!.requests, before.pending);
+		assert.equal(recovered["aiUsage"].summary(created.id, true)?.efficiency?.relaunch.reasons.crash_recovery, 1);
 		await until(async () => (await f.stored(created.id)).pending.length === 0);
 		assert.deepEqual((await f.stored(created.id)).pending, []);
 	});
@@ -2925,6 +2941,7 @@ test("a kernel crash without queued input stays usable and backs off automatic r
 	// User input is never delayed, and a fresh kernel clears the crash.
 	await sessions.send(created.id, "after crash");
 	assert.equal(f.workers.length, 2);
+	assert.equal(sessions["aiUsage"].summary(created.id, true)?.efficiency?.relaunch.reasons.crash_recovery, 1);
 	assert.equal(sessions.get(created.id)?.state, "working");
 	assert.equal(sessions.get(created.id)?.error, undefined);
 	f.workers[1]!.crash();

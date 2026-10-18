@@ -144,6 +144,49 @@ extension AIUsageAccounting {
         lines.append("Child operations observed: \(integer(child.activity.count))")
         lines.append("Usage reports observed: \(integer(direct.activity.usageReports + child.activity.usageReports)) (partial)")
         lines.append("Provider attempts observed: \(integer(direct.activity.providerAttemptsObserved + child.activity.providerAttemptsObserved)) (partial)")
+        let requestRetries = (direct.activity.requestRetriesObserved ?? 0) + (child.activity.requestRetriesObserved ?? 0)
+        lines.append("Request retries observed: \(integer(requestRetries)) (partial)")
+        if let efficiency {
+            if let context = efficiency.context {
+                lines.append("Latest context: \(UsageFormatting.tokens(context.tokens))/\(UsageFormatting.tokens(context.contextWindow)) " +
+                    "(\(UsageFormatting.tokens(context.headroomTokens)) headroom)")
+            }
+            func appendCache(_ label: String, _ scope: AIUsageEfficiencyScope) {
+                guard scope.observations > 0 else { return }
+                let percent = scope.cacheEfficiencyDenominator > 0
+                    ? UsageFormatting.percent(scope.cacheEfficiencyNumerator / scope.cacheEfficiencyDenominator * 100)
+                    : "Unavailable"
+                lines.append("\(label) cache efficiency: \(percent) across \(integer(scope.observations)) observed input changes")
+            }
+            appendCache("Direct", efficiency.direct)
+            appendCache("Child", efficiency.child)
+            lines.append("Compactions observed: \(integer(efficiency.compaction.count)) " +
+                "(\(integer(efficiency.compaction.pairedMeasurements)) with before/after context)")
+            if efficiency.compaction.pairedMeasurements > 0 {
+                lines.append("Paired compaction context: \(UsageFormatting.tokens(efficiency.compaction.beforeTokens)) before, " +
+                    "\(UsageFormatting.tokens(efficiency.compaction.afterTokens)) after, " +
+                    "\(UsageFormatting.tokens(efficiency.compaction.tokensRemoved)) removed (timing unavailable)")
+            }
+            lines.append("Worker launches observed: \(integer(efficiency.relaunch.count)) " +
+                "(\(integer(efficiency.relaunch.contextPreparationsObserved)) context preparations)")
+            let reasonLabels = efficiency.relaunch.reasons.compactMap { key, count -> String? in
+                guard count > 0 else { return nil }
+                let label: String? = switch key {
+                case "initial": "initial"
+                case "parked_wake": "parked wake"
+                case "user_resume": "user resume"
+                case "crash_recovery": "crash recovery"
+                case "startup_retry": "startup retry"
+                case "replacement": "replacement"
+                case "unknown": "unknown"
+                default: nil
+                }
+                return label.map { "\($0) \(integer(count))" }
+            }.sorted()
+            if !reasonLabels.isEmpty { lines.append("Launch reasons: \(reasonLabels.joined(separator: ", "))") }
+            lines.append("Prepared context observed: \(UsageFormatting.tokens(efficiency.relaunch.contextTokensPrepared)) " +
+                "tokens (relaunch cost unavailable)")
+        }
         lines.append(estimatedCostLine)
         lines.append(billedCostLine)
         let coverage = Set(relevantScopes.map(\.cost.subscriptionCoverage))

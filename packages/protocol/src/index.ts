@@ -437,10 +437,64 @@ export interface AIUsageActivity {
 	usageReports: number;
 	/** Physical HTTP attempts observed in this process family. May omit a crash before publication. */
 	providerAttemptsObserved: number;
+	/** Retries within observed provider requests. This is partial when a process exits before publishing timing. */
+	requestRetriesObserved: number;
 	elapsedMsObserved: number;
 	activeMsObserved: number;
 	outcomeCoverage: "partial";
 	timingCoverage: "partial";
+}
+
+export interface AIUsageEfficiencyScope {
+	/** Positive cumulative usage changes observed after the daemon established a durable baseline. */
+	observations: number;
+	inputTokens: number;
+	cacheReadTokens: number;
+	cacheWriteTokens: number;
+	/** Cache-read tokens divided by input plus cache-read tokens. Keep both values for honest aggregation. */
+	cacheEfficiencyNumerator: number;
+	cacheEfficiencyDenominator: number;
+	coverage: "daemon_observed_deltas_partial";
+}
+
+export type AIWorkerLaunchReason =
+	| "initial"
+	| "parked_wake"
+	| "user_resume"
+	| "crash_recovery"
+	| "startup_retry"
+	| "replacement"
+	| "unknown";
+
+export interface AIUsageEfficiency {
+	direct: AIUsageEfficiencyScope;
+	child: AIUsageEfficiencyScope;
+	context?: {
+		observedAt: number;
+		tokens: number;
+		contextWindow: number;
+		headroomTokens: number;
+		percent: number;
+		coverage: "latest_observation";
+	};
+	compaction: {
+		count: number;
+		pairedMeasurements: number;
+		beforeTokens: number;
+		afterTokens: number;
+		tokensRemoved: number;
+		timingStatus: "unavailable";
+		coverage: "epoch_observed_partial";
+	};
+	relaunch: {
+		count: number;
+		reasons: Record<AIWorkerLaunchReason, number>;
+		lastObservedAt?: number;
+		contextPreparationsObserved: number;
+		contextTokensPrepared: number;
+		estimatedCostStatus: "unavailable";
+		coverage: "daemon_observed_partial";
+	};
 }
 
 export interface AIUsageScope {
@@ -462,6 +516,8 @@ export interface AIUsageAccounting {
 		idleMs: number;
 		coverage: "daemon_observed_partial";
 	};
+	/** Context/cache and worker-launch observations. Missing means an older daemon has no efficiency evidence. */
+	efficiency?: AIUsageEfficiency;
 }
 
 export interface SessionUsage {

@@ -74,7 +74,7 @@ private func configuration(exporter: any SpanExporter) -> PilotTelemetryConfigur
     #expect(recorded?.attributes["pilot.outcome"] == .string("success"))
     #expect(recorded?.resource.attributes["service.namespace"] == .string("com.babariviere.pilot"))
     #expect(recorded?.resource.attributes["service.name"] == .string("pilot.app"))
-    #expect(recorded?.resource.attributes["pilot.schema.version"] == .int(2))
+    #expect(recorded?.resource.attributes["pilot.schema.version"] == .int(3))
     #expect(recorded?.resource.attributes["host.name"] == nil)
     await telemetry.shutdown()
 }

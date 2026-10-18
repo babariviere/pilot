@@ -30,7 +30,9 @@ server name. The helper and observer do not restart, retry, replay or change tim
 ## AI usage deltas
 
 After the daemon durably checkpoints a new aggregate usage snapshot, it may emit `pilot.ai.usage`. The span carries
-only direct/child token scopes or session timing scope, separate provider-reported token-class deltas, bounded request/outcome counts and explicit
-catalog-estimate, billed-spend and subscription-coverage statuses. Provider/model/tool keys and chat or attempt IDs
-are rejected. Missing prices remain unavailable; catalog estimates are versioned by `service.version` and never
-presented as billed or exact marginal subscription spend. See [AI usage accounting](ai-usage-accounting.md).
+only direct/child token scopes or session scope, separate provider-reported token-class deltas, bounded
+request/outcome/retry counts, observed context and compaction numeric deltas, or one closed worker-launch reason.
+It keeps explicit catalog-estimate, billed-spend and subscription-coverage statuses. Provider/model/tool keys and
+chat or attempt IDs are rejected. Missing prices and relaunch cost remain unavailable; catalog estimates are
+versioned by `service.version` and never presented as billed or exact marginal subscription spend. See
+[AI usage accounting](ai-usage-accounting.md).

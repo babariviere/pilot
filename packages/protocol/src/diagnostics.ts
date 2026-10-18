@@ -219,6 +219,8 @@ export interface SessionDiagnostics {
 	connectivity: { state: "online" | "offline" | "unknown"; observedAt?: string };
 	current: SessionDiagnosticCurrent;
 	resources: SessionDiagnosticResources;
+	/** Durable aggregate-only usage evidence. It contains no provider, model, prompt, path or chat identity. */
+	ai?: import("./index.ts").AIUsageAccounting;
 	sources: DiagnosticSourceStatus[];
 	evidence: DiagnosticEvidence[];
 	truncation: SessionDiagnosticTruncation;

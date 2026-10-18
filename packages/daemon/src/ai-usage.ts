@@ -3,12 +3,22 @@ import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { join } from "node:path";
 import type { KernelUsage } from "@pilot/kernel";
-import type { AIUsageAccounting, AIUsageActivity, AIUsageCost, AIUsageScope, AIUsageTokens } from "@pilot/protocol";
+import type {
+	AIUsageAccounting,
+	AIUsageActivity,
+	AIUsageCost,
+	AIUsageEfficiency,
+	AIUsageEfficiencyScope,
+	AIUsageScope,
+	AIUsageTokens,
+	AIWorkerLaunchReason,
+	ContextUsage,
+} from "@pilot/protocol";
 import { nodeTelemetry, type TelemetryAttributes } from "@pilot/telemetry";
 import { durableJSON } from "./operation-journal.ts";
 
 export const AI_USAGE_FILE = "ai-usage.json";
-export const AI_USAGE_SCHEMA_VERSION = 1 as const;
+export const AI_USAGE_SCHEMA_VERSION = 2 as const;
 export const MAX_AI_USAGE_CONVERSATIONS = 32;
 export const MAX_AI_USAGE_TIMING_BOOTS = 4;
 export const MAX_AI_USAGE_FILE_BYTES = 128 * 1024;
@@ -17,7 +27,10 @@ const ACTIVITY_EPOCH = /^(?:initial|0|[1-9][0-9]{0,15})$/;
 const BOOT = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const PRICING = /^pi-ai@[0-9]+(?:\.[0-9]+){2}(?:[-+][a-zA-Z0-9.-]+)?$/;
 
-type Timing = Pick<AIUsageActivity, "providerAttemptsObserved" | "elapsedMsObserved" | "activeMsObserved">;
+type Timing = Pick<
+	AIUsageActivity,
+	"providerAttemptsObserved" | "requestRetriesObserved" | "elapsedMsObserved" | "activeMsObserved"
+>;
 type Outcomes = Pick<AIUsageActivity, "count" | "success" | "failure" | "cancelled" | "usageReports">;
 type TimeCounters = Pick<StoredState["time"], "activeMs" | "pausedMs" | "idleMs">;
 
@@ -35,6 +48,23 @@ interface StoredConversation {
 	child: StoredScope;
 }
 
+interface StoredContextObservation {
+	observedAt: number;
+	tokens: number;
+	contextWindow: number;
+	percent: number;
+	conversationId: string;
+	activityEpoch: string;
+}
+
+interface StoredEfficiency {
+	direct: AIUsageEfficiencyScope;
+	child: AIUsageEfficiencyScope;
+	context?: StoredContextObservation;
+	compaction: AIUsageEfficiency["compaction"];
+	relaunch: AIUsageEfficiency["relaunch"] & { pending: boolean };
+}
+
 type Mode = "active" | "paused" | "idle";
 interface StoredState {
 	v: typeof AI_USAGE_SCHEMA_VERSION;
@@ -42,6 +72,7 @@ interface StoredState {
 	rolled: { direct: AIUsageScope; child: AIUsageScope };
 	conversations: Record<string, StoredConversation>;
 	time: { activeMs: number; pausedMs: number; idleMs: number; mode: Mode; since: number };
+	efficiency: StoredEfficiency;
 }
 
 export interface AIUsageStateObservation {
@@ -49,7 +80,12 @@ export interface AIUsageStateObservation {
 	paused: boolean;
 }
 
-const zeroTiming = (): Timing => ({ providerAttemptsObserved: 0, elapsedMsObserved: 0, activeMsObserved: 0 });
+const zeroTiming = (): Timing => ({
+	providerAttemptsObserved: 0,
+	requestRetriesObserved: 0,
+	elapsedMsObserved: 0,
+	activeMsObserved: 0,
+});
 const zeroOutcomes = (): Outcomes => ({ count: 0, success: 0, failure: 0, cancelled: 0, usageReports: 0 });
 const zeroTokens = (): AIUsageTokens => ({
 	input: 0,
@@ -79,6 +115,49 @@ const zeroScope = (kind: AIUsageActivity["kind"]): AIUsageScope => ({
 	},
 });
 
+const zeroEfficiencyScope = (): AIUsageEfficiencyScope => ({
+	observations: 0,
+	inputTokens: 0,
+	cacheReadTokens: 0,
+	cacheWriteTokens: 0,
+	cacheEfficiencyNumerator: 0,
+	cacheEfficiencyDenominator: 0,
+	coverage: "daemon_observed_deltas_partial",
+});
+
+const launchReasons = (): Record<AIWorkerLaunchReason, number> => ({
+	initial: 0,
+	parked_wake: 0,
+	user_resume: 0,
+	crash_recovery: 0,
+	startup_retry: 0,
+	replacement: 0,
+	unknown: 0,
+});
+
+const zeroEfficiency = (): StoredEfficiency => ({
+	direct: zeroEfficiencyScope(),
+	child: zeroEfficiencyScope(),
+	compaction: {
+		count: 0,
+		pairedMeasurements: 0,
+		beforeTokens: 0,
+		afterTokens: 0,
+		tokensRemoved: 0,
+		timingStatus: "unavailable",
+		coverage: "epoch_observed_partial",
+	},
+	relaunch: {
+		count: 0,
+		reasons: launchReasons(),
+		contextPreparationsObserved: 0,
+		contextTokensPrepared: 0,
+		estimatedCostStatus: "unavailable",
+		coverage: "daemon_observed_partial",
+		pending: false,
+	},
+});
+
 function initial(now: number): StoredState {
 	return {
 		v: AI_USAGE_SCHEMA_VERSION,
@@ -86,6 +165,7 @@ function initial(now: number): StoredState {
 		rolled: { direct: zeroScope("model_requests"), child: zeroScope("child_operations") },
 		conversations: {},
 		time: { activeMs: 0, pausedMs: 0, idleMs: 0, mode: "idle", since: now },
+		efficiency: zeroEfficiency(),
 	};
 }
 
@@ -151,7 +231,7 @@ function parseCost(value: unknown): AIUsageCost | undefined {
 	};
 }
 
-function parseActivity(value: unknown, kind: AIUsageActivity["kind"]): AIUsageActivity | undefined {
+function parseActivity(value: unknown, kind: AIUsageActivity["kind"], legacy = false): AIUsageActivity | undefined {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return;
 	const record = value as Record<string, unknown>;
 	const keys = [
@@ -169,6 +249,8 @@ function parseActivity(value: unknown, kind: AIUsageActivity["kind"]): AIUsageAc
 		record.outcomeCoverage !== "partial" ||
 		record.timingCoverage !== "partial" ||
 		!keys.every((key) => integer(record[key])) ||
+		(!legacy && !integer(record.requestRetriesObserved)) ||
+		(legacy && record.requestRetriesObserved !== undefined && !integer(record.requestRetriesObserved)) ||
 		(record.success as number) + (record.failure as number) + (record.cancelled as number) !== record.count ||
 		(record.usageReports as number) > (record.count as number)
 	)
@@ -176,17 +258,18 @@ function parseActivity(value: unknown, kind: AIUsageActivity["kind"]): AIUsageAc
 	return Object.fromEntries([
 		["kind", kind],
 		...keys.map((key) => [key, record[key]]),
+		["requestRetriesObserved", record.requestRetriesObserved ?? 0],
 		["outcomeCoverage", "partial"],
 		["timingCoverage", "partial"],
 	]) as unknown as AIUsageActivity;
 }
 
-function parseScope(value: unknown, kind: AIUsageActivity["kind"]): AIUsageScope | undefined {
+function parseScope(value: unknown, kind: AIUsageActivity["kind"], legacy = false): AIUsageScope | undefined {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return;
 	const record = value as Record<string, unknown>;
 	const tokens = parseTokens(record.tokens);
 	const cost = parseCost(record.cost);
-	const activity = parseActivity(record.activity, kind);
+	const activity = parseActivity(record.activity, kind, legacy);
 	return tokens && cost && activity ? { tokens, cost, activity } : undefined;
 }
 
@@ -196,6 +279,7 @@ function parseReport(value: KernelUsage["accounting"]): NonNullable<KernelUsage[
 		!CONVERSATION.test(value.conversationId) ||
 		!BOOT.test(value.timingBoot) ||
 		!ACTIVITY_EPOCH.test(value.activityEpoch) ||
+		!["initial", "compaction", "reset", "other"].includes(value.epochKind) ||
 		!timestamp(value.observedAt)
 	)
 		return;
@@ -207,6 +291,7 @@ function parseReport(value: KernelUsage["accounting"]): NonNullable<KernelUsage[
 function timing(activity: AIUsageActivity): Timing {
 	return {
 		providerAttemptsObserved: activity.providerAttemptsObserved,
+		requestRetriesObserved: activity.requestRetriesObserved,
 		elapsedMsObserved: activity.elapsedMsObserved,
 		activeMsObserved: activity.activeMsObserved,
 	};
@@ -286,6 +371,7 @@ function combineScopes(scopes: AIUsageScope[], kind: AIUsageActivity["kind"]): A
 			cancelled: sum(scopes.map((scope) => scope.activity.cancelled)),
 			usageReports: sum(scopes.map((scope) => scope.activity.usageReports)),
 			providerAttemptsObserved: sum(scopes.map((scope) => scope.activity.providerAttemptsObserved)),
+			requestRetriesObserved: sum(scopes.map((scope) => scope.activity.requestRetriesObserved)),
 			elapsedMsObserved: sum(scopes.map((scope) => scope.activity.elapsedMsObserved)),
 			activeMsObserved: sum(scopes.map((scope) => scope.activity.activeMsObserved)),
 			outcomeCoverage: "partial",
@@ -298,7 +384,13 @@ function difference(value: number | undefined, previous: number | undefined): nu
 	return Math.max(0, (value ?? 0) - (previous ?? 0));
 }
 
-function recordDelta(scope: "direct" | "child", current: AIUsageScope, previous: AIUsageScope): void {
+function recordDelta(
+	scope: "direct" | "child",
+	current: AIUsageScope,
+	previous: AIUsageScope,
+	currentEfficiency: AIUsageEfficiencyScope,
+	previousEfficiency: AIUsageEfficiencyScope,
+): void {
 	const numeric: TelemetryAttributes = {
 		"pilot.operation": "ai.usage",
 		"pilot.ai.scope": scope,
@@ -314,6 +406,14 @@ function recordDelta(scope: "direct" | "child", current: AIUsageScope, previous:
 		"pilot.ai.provider_attempt_count": difference(
 			current.activity.providerAttemptsObserved,
 			previous.activity.providerAttemptsObserved,
+		),
+		"pilot.ai.request_retry_count": difference(
+			current.activity.requestRetriesObserved,
+			previous.activity.requestRetriesObserved,
+		),
+		"pilot.ai.input_growth_observation_count": difference(
+			currentEfficiency.observations,
+			previousEfficiency.observations,
 		),
 	};
 	const hasDelta = Object.entries(numeric).some(
@@ -347,6 +447,72 @@ function recordDelta(scope: "direct" | "child", current: AIUsageScope, previous:
 	nodeTelemetry().recordSpan("pilot.ai.usage", 0, attributes);
 }
 
+function recordEfficiencyDelta(current: StoredEfficiency, previous: StoredEfficiency): void {
+	const contextChanged =
+		current.context !== undefined &&
+		(current.context.observedAt !== previous.context?.observedAt ||
+			current.context.tokens !== previous.context?.tokens ||
+			current.context.contextWindow !== previous.context?.contextWindow ||
+			current.context.percent !== previous.context?.percent ||
+			current.context.conversationId !== previous.context?.conversationId ||
+			current.context.activityEpoch !== previous.context?.activityEpoch);
+	const attributes: TelemetryAttributes = {
+		"pilot.operation": "ai.usage",
+		"pilot.ai.scope": "session",
+		...(contextChanged
+			? {
+					"pilot.ai.context_tokens": current.context!.tokens,
+					"pilot.ai.context_window_tokens": current.context!.contextWindow,
+					"pilot.ai.context_headroom_tokens": Math.max(
+						0,
+						current.context!.contextWindow - current.context!.tokens,
+					),
+					"pilot.ai.context_percent_millis": Math.round(current.context!.percent * 1_000),
+				}
+			: {}),
+		"pilot.ai.compaction_count": difference(current.compaction.count, previous.compaction.count),
+		"pilot.ai.compaction_paired_count": difference(
+			current.compaction.pairedMeasurements,
+			previous.compaction.pairedMeasurements,
+		),
+		"pilot.ai.compaction_before_tokens": difference(
+			current.compaction.beforeTokens,
+			previous.compaction.beforeTokens,
+		),
+		"pilot.ai.compaction_after_tokens": difference(current.compaction.afterTokens, previous.compaction.afterTokens),
+		"pilot.ai.compaction_removed_tokens": difference(
+			current.compaction.tokensRemoved,
+			previous.compaction.tokensRemoved,
+		),
+		"pilot.ai.prepared_context_count": difference(
+			current.relaunch.contextPreparationsObserved,
+			previous.relaunch.contextPreparationsObserved,
+		),
+		"pilot.ai.prepared_context_tokens": difference(
+			current.relaunch.contextTokensPrepared,
+			previous.relaunch.contextTokensPrepared,
+		),
+	};
+	if (
+		!contextChanged &&
+		!Object.entries(attributes).some(
+			([key, value]) =>
+				key !== "pilot.operation" && key !== "pilot.ai.scope" && typeof value === "number" && value > 0,
+		)
+	)
+		return;
+	nodeTelemetry().recordSpan("pilot.ai.usage", 0, attributes);
+}
+
+function recordLaunch(reason: AIWorkerLaunchReason): void {
+	nodeTelemetry().recordSpan("pilot.ai.usage", 0, {
+		"pilot.operation": "ai.usage",
+		"pilot.ai.scope": "session",
+		"pilot.ai.launch_count": 1,
+		"pilot.ai.launch_reason": reason,
+	});
+}
+
 function timeCounters(state: StoredState): TimeCounters {
 	return { activeMs: state.time.activeMs, pausedMs: state.time.pausedMs, idleMs: state.time.idleMs };
 }
@@ -371,6 +537,7 @@ function materialize(scope: StoredScope): AIUsageScope {
 	const timingTotal = [scope.timingRolled, ...Object.values(scope.timing)].reduce(
 		(total, value) => ({
 			providerAttemptsObserved: sum([total.providerAttemptsObserved, value.providerAttemptsObserved]),
+			requestRetriesObserved: sum([total.requestRetriesObserved, value.requestRetriesObserved]),
 			elapsedMsObserved: sum([total.elapsedMsObserved, value.elapsedMsObserved]),
 			activeMsObserved: sum([total.activeMsObserved, value.activeMsObserved]),
 		}),
@@ -420,6 +587,7 @@ function storedScope(
 		const [id, value] = boots.shift()!;
 		next.timingRolled = {
 			providerAttemptsObserved: sum([next.timingRolled.providerAttemptsObserved, value.providerAttemptsObserved]),
+			requestRetriesObserved: sum([next.timingRolled.requestRetriesObserved, value.requestRetriesObserved]),
 			elapsedMsObserved: sum([next.timingRolled.elapsedMsObserved, value.elapsedMsObserved]),
 			activeMsObserved: sum([next.timingRolled.activeMsObserved, value.activeMsObserved]),
 		};
@@ -436,11 +604,104 @@ function settleTime(state: StoredState, now: number): void {
 	state.time.since = now;
 }
 
-function parseStored(value: unknown, now: number): StoredState | undefined {
+const LAUNCH_REASONS: AIWorkerLaunchReason[] = [
+	"initial",
+	"parked_wake",
+	"user_resume",
+	"crash_recovery",
+	"startup_retry",
+	"replacement",
+	"unknown",
+];
+
+function parseEfficiencyScope(value: unknown): AIUsageEfficiencyScope | undefined {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return;
 	const record = value as Record<string, unknown>;
 	if (
-		record.v !== AI_USAGE_SCHEMA_VERSION ||
+		record.coverage !== "daemon_observed_deltas_partial" ||
+		![
+			"observations",
+			"inputTokens",
+			"cacheReadTokens",
+			"cacheWriteTokens",
+			"cacheEfficiencyNumerator",
+			"cacheEfficiencyDenominator",
+		].every((key) => integer(record[key])) ||
+		record.cacheEfficiencyNumerator !== record.cacheReadTokens ||
+		(record.cacheEfficiencyDenominator as number) !==
+			(record.inputTokens as number) + (record.cacheReadTokens as number)
+	)
+		return;
+	return record as unknown as AIUsageEfficiencyScope;
+}
+
+function parseEfficiency(value: unknown): StoredEfficiency | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return;
+	const record = value as Record<string, unknown>;
+	const direct = parseEfficiencyScope(record.direct);
+	const child = parseEfficiencyScope(record.child);
+	const compaction = record.compaction as Record<string, unknown> | undefined;
+	const relaunch = record.relaunch as Record<string, unknown> | undefined;
+	if (
+		!direct ||
+		!child ||
+		!compaction ||
+		compaction.timingStatus !== "unavailable" ||
+		compaction.coverage !== "epoch_observed_partial" ||
+		!["count", "pairedMeasurements", "beforeTokens", "afterTokens", "tokensRemoved"].every((key) =>
+			integer(compaction[key]),
+		) ||
+		!relaunch ||
+		relaunch.estimatedCostStatus !== "unavailable" ||
+		relaunch.coverage !== "daemon_observed_partial" ||
+		typeof relaunch.pending !== "boolean" ||
+		(relaunch.lastObservedAt !== undefined && !timestamp(relaunch.lastObservedAt)) ||
+		!["count", "contextPreparationsObserved", "contextTokensPrepared"].every((key) => integer(relaunch[key]))
+	)
+		return;
+	const reasons = relaunch.reasons as Record<string, unknown> | undefined;
+	if (!reasons || !LAUNCH_REASONS.every((reason) => integer(reasons[reason]))) return;
+	let context: StoredContextObservation | undefined;
+	if (record.context !== undefined) {
+		const candidate = record.context as Record<string, unknown>;
+		if (
+			!candidate ||
+			!timestamp(candidate.observedAt) ||
+			!integer(candidate.tokens) ||
+			!integer(candidate.contextWindow) ||
+			(candidate.contextWindow as number) <= 0 ||
+			typeof candidate.percent !== "number" ||
+			!Number.isFinite(candidate.percent) ||
+			(candidate.percent as number) < 0 ||
+			typeof candidate.conversationId !== "string" ||
+			!CONVERSATION.test(candidate.conversationId) ||
+			typeof candidate.activityEpoch !== "string" ||
+			!ACTIVITY_EPOCH.test(candidate.activityEpoch)
+		)
+			return;
+		context = candidate as unknown as StoredContextObservation;
+	}
+	return {
+		direct,
+		child,
+		...(context ? { context } : {}),
+		compaction: compaction as unknown as StoredEfficiency["compaction"],
+		relaunch: {
+			...(relaunch as unknown as StoredEfficiency["relaunch"]),
+			reasons: Object.fromEntries(LAUNCH_REASONS.map((reason) => [reason, reasons[reason]])) as Record<
+				AIWorkerLaunchReason,
+				number
+			>,
+		},
+	};
+}
+
+function parseStored(value: unknown, now: number): StoredState | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return;
+	const record = value as Record<string, unknown>;
+	const legacy = record.v === 1;
+	if (
+		(!legacy && record.v !== AI_USAGE_SCHEMA_VERSION) ||
 		!Number.isSafeInteger(record.rolledThrough) ||
 		(record.rolledThrough as number) < -1
 	)
@@ -448,8 +709,8 @@ function parseStored(value: unknown, now: number): StoredState | undefined {
 	// Persisted state is produced only by this class. Re-validate through the public summary and reject malformed files.
 	const state = record as unknown as StoredState;
 	if (!state.rolled || !state.conversations || !state.time) return;
-	const rolledDirect = parseScope(state.rolled.direct, "model_requests");
-	const rolledChild = parseScope(state.rolled.child, "child_operations");
+	const rolledDirect = parseScope(state.rolled.direct, "model_requests", legacy);
+	const rolledChild = parseScope(state.rolled.child, "child_operations", legacy);
 	if (
 		!rolledDirect ||
 		!rolledChild ||
@@ -459,6 +720,9 @@ function parseStored(value: unknown, now: number): StoredState | undefined {
 	)
 		return;
 	const parsed = initial(now);
+	const efficiency = legacy && state.efficiency === undefined ? parsed.efficiency : parseEfficiency(state.efficiency);
+	if (!efficiency) return;
+	parsed.efficiency = efficiency;
 	parsed.rolledThrough = state.rolledThrough;
 	parsed.rolled = { direct: rolledDirect, child: rolledChild };
 	for (const [id, conversation] of Object.entries(state.conversations).slice(0, MAX_AI_USAGE_CONVERSATIONS)) {
@@ -467,7 +731,7 @@ function parseStored(value: unknown, now: number): StoredState | undefined {
 			value: StoredScope | undefined,
 			kind: AIUsageActivity["kind"],
 		): StoredScope | undefined => {
-			const base = parseScope(value?.base, kind);
+			const base = parseScope(value?.base, kind, legacy);
 			if (
 				!base ||
 				!value ||
@@ -481,6 +745,10 @@ function parseStored(value: unknown, now: number): StoredState | undefined {
 					value.activityRolled.count ||
 				value.activityRolled.usageReports > value.activityRolled.count ||
 				!integer(value.timingRolled?.providerAttemptsObserved) ||
+				(!legacy && !integer(value.timingRolled?.requestRetriesObserved)) ||
+				(legacy &&
+					value.timingRolled?.requestRetriesObserved !== undefined &&
+					!integer(value.timingRolled.requestRetriesObserved)) ||
 				!integer(value.timingRolled?.elapsedMsObserved) ||
 				!integer(value.timingRolled?.activeMsObserved)
 			)
@@ -489,7 +757,10 @@ function parseStored(value: unknown, now: number): StoredState | undefined {
 				base,
 				activityEpoch: value.activityEpoch,
 				activityRolled: { ...value.activityRolled },
-				timingRolled: { ...value.timingRolled },
+				timingRolled: {
+					...value.timingRolled,
+					requestRetriesObserved: value.timingRolled.requestRetriesObserved ?? 0,
+				},
 				timing: {},
 			};
 			for (const [boot, counters] of Object.entries(value.timing ?? {}).slice(-MAX_AI_USAGE_TIMING_BOOTS)) {
@@ -497,11 +768,13 @@ function parseStored(value: unknown, now: number): StoredState | undefined {
 					!BOOT.test(boot) ||
 					!timestamp(counters.observedAt) ||
 					!integer(counters.providerAttemptsObserved) ||
+					(!legacy && !integer(counters.requestRetriesObserved)) ||
+					(legacy && counters.requestRetriesObserved !== undefined && !integer(counters.requestRetriesObserved)) ||
 					!integer(counters.elapsedMsObserved) ||
 					!integer(counters.activeMsObserved)
 				)
 					return;
-				result.timing[boot] = { ...counters };
+				result.timing[boot] = { ...counters, requestRetriesObserved: counters.requestRetriesObserved ?? 0 };
 			}
 			return result;
 		};
@@ -518,6 +791,111 @@ function parseStored(value: unknown, now: number): StoredState | undefined {
 		since: now,
 	};
 	return parsed;
+}
+
+function observeScopeEfficiency(
+	target: AIUsageEfficiencyScope,
+	current: AIUsageScope,
+	previous: AIUsageScope | undefined,
+): void {
+	if (!previous) return;
+	const input = difference(current.tokens.input, previous.tokens.input);
+	const cacheRead = difference(current.tokens.cacheRead, previous.tokens.cacheRead);
+	const cacheWrite = difference(current.tokens.cacheWrite, previous.tokens.cacheWrite);
+	if (input + cacheRead + cacheWrite === 0) return;
+	target.observations = sum([target.observations, 1]);
+	target.inputTokens = sum([target.inputTokens, input]);
+	target.cacheReadTokens = sum([target.cacheReadTokens, cacheRead]);
+	target.cacheWriteTokens = sum([target.cacheWriteTokens, cacheWrite]);
+	target.cacheEfficiencyNumerator = target.cacheReadTokens;
+	target.cacheEfficiencyDenominator = sum([target.inputTokens, target.cacheReadTokens]);
+}
+
+function contextObservation(
+	context: ContextUsage | undefined,
+	conversationId: string,
+	activityEpoch: string,
+	observedAt: number,
+): StoredContextObservation | undefined {
+	if (
+		context?.tokens === undefined ||
+		!Number.isFinite(context.tokens) ||
+		context.tokens < 0 ||
+		!Number.isFinite(context.contextWindow) ||
+		context.contextWindow <= 0
+	)
+		return;
+	const tokens = Math.min(Number.MAX_SAFE_INTEGER, Math.round(context.tokens));
+	const contextWindow = Math.min(Number.MAX_SAFE_INTEGER, Math.round(context.contextWindow));
+	const percent = Math.min(context.percent ?? (tokens / contextWindow) * 100, Number.MAX_SAFE_INTEGER / 1_000);
+	if (!Number.isFinite(percent) || percent < 0) return;
+	return { observedAt, tokens, contextWindow, percent, conversationId, activityEpoch };
+}
+
+function observeContextEfficiency(
+	efficiency: StoredEfficiency,
+	report: NonNullable<KernelUsage["accounting"]>,
+	context: ContextUsage | undefined,
+	previousActivityEpoch: string | undefined,
+): void {
+	const observation = contextObservation(context, report.conversationId, report.activityEpoch, report.observedAt);
+	if (
+		previousActivityEpoch !== undefined &&
+		previousActivityEpoch !== report.activityEpoch &&
+		report.epochKind === "compaction"
+	) {
+		efficiency.compaction.count = sum([efficiency.compaction.count, 1]);
+		const before =
+			efficiency.context?.conversationId === report.conversationId &&
+			efficiency.context.activityEpoch === previousActivityEpoch
+				? efficiency.context
+				: undefined;
+		if (before && observation) {
+			efficiency.compaction.pairedMeasurements = sum([efficiency.compaction.pairedMeasurements, 1]);
+			efficiency.compaction.beforeTokens = sum([efficiency.compaction.beforeTokens, before.tokens]);
+			efficiency.compaction.afterTokens = sum([efficiency.compaction.afterTokens, observation.tokens]);
+			efficiency.compaction.tokensRemoved = sum([
+				efficiency.compaction.tokensRemoved,
+				Math.max(0, before.tokens - observation.tokens),
+			]);
+		}
+	}
+	if (!observation) return;
+	efficiency.context = observation;
+	if (efficiency.relaunch.pending) {
+		efficiency.relaunch.pending = false;
+		efficiency.relaunch.contextPreparationsObserved = sum([efficiency.relaunch.contextPreparationsObserved, 1]);
+		efficiency.relaunch.contextTokensPrepared = sum([efficiency.relaunch.contextTokensPrepared, observation.tokens]);
+	}
+}
+
+function materializeEfficiency(value: StoredEfficiency): AIUsageEfficiency {
+	return {
+		direct: { ...value.direct },
+		child: { ...value.child },
+		...(value.context
+			? {
+					context: {
+						observedAt: value.context.observedAt,
+						tokens: value.context.tokens,
+						contextWindow: value.context.contextWindow,
+						headroomTokens: Math.max(0, value.context.contextWindow - value.context.tokens),
+						percent: value.context.percent,
+						coverage: "latest_observation" as const,
+					},
+				}
+			: {}),
+		compaction: { ...value.compaction },
+		relaunch: {
+			count: value.relaunch.count,
+			reasons: { ...value.relaunch.reasons },
+			...(value.relaunch.lastObservedAt === undefined ? {} : { lastObservedAt: value.relaunch.lastObservedAt }),
+			contextPreparationsObserved: value.relaunch.contextPreparationsObserved,
+			contextTokensPrepared: value.relaunch.contextTokensPrepared,
+			estimatedCostStatus: "unavailable",
+			coverage: "daemon_observed_partial",
+		},
+	};
 }
 
 export class AIUsageLedger {
@@ -569,9 +947,29 @@ export class AIUsageLedger {
 		});
 	}
 
-	observeUsage(sessionId: string, value: KernelUsage["accounting"]): void {
+	observeWorkerLaunch(sessionId: string, requestedReason?: AIWorkerLaunchReason): void {
 		if (this.closed || this.disabled.has(sessionId)) return;
-		const report = parseReport(value);
+		const state = this.state(sessionId);
+		const reason: AIWorkerLaunchReason =
+			requestedReason ??
+			(state.efficiency.relaunch.count > 0
+				? "parked_wake"
+				: Object.keys(state.conversations).length === 0
+					? "initial"
+					: "unknown");
+		state.efficiency.relaunch.count = sum([state.efficiency.relaunch.count, 1]);
+		state.efficiency.relaunch.reasons[reason] = sum([state.efficiency.relaunch.reasons[reason], 1]);
+		state.efficiency.relaunch.lastObservedAt = this.now();
+		state.efficiency.relaunch.pending = true;
+		void this.schedule(sessionId).then((stored) => {
+			if (stored) recordLaunch(reason);
+		});
+	}
+
+	observeUsage(sessionId: string, value: KernelUsage | KernelUsage["accounting"]): void {
+		if (this.closed || this.disabled.has(sessionId)) return;
+		const usage: KernelUsage = value && "conversationId" in value ? { accounting: value } : (value ?? {});
+		const report = parseReport(usage.accounting);
 		if (!report) return;
 		const numericId = Number(report.conversationId);
 		const state = this.state(sessionId);
@@ -582,6 +980,10 @@ export class AIUsageLedger {
 		const previous = state.conversations[report.conversationId];
 		const previousDirect = previous ? materialize(previous.direct) : zeroScope("model_requests");
 		const previousChild = previous ? materialize(previous.child) : zeroScope("child_operations");
+		const previousEfficiency = structuredClone(state.efficiency);
+		observeScopeEfficiency(state.efficiency.direct, report.direct, previous ? previousDirect : undefined);
+		observeScopeEfficiency(state.efficiency.child, report.child, previous ? previousChild : undefined);
+		observeContextEfficiency(state.efficiency, report, usage.context, previous?.direct.activityEpoch);
 		state.conversations[report.conversationId] = {
 			observedAt: report.observedAt,
 			direct: storedScope(
@@ -606,15 +1008,17 @@ export class AIUsageLedger {
 		const current = state.conversations[report.conversationId];
 		const currentDirect = current ? materialize(current.direct) : previousDirect;
 		const currentChild = current ? materialize(current.child) : previousChild;
+		const currentEfficiency = structuredClone(state.efficiency);
 		void this.schedule(sessionId).then((stored) => {
 			if (!stored) return;
-			recordDelta("direct", currentDirect, previousDirect);
-			recordDelta("child", currentChild, previousChild);
+			recordDelta("direct", currentDirect, previousDirect, currentEfficiency.direct, previousEfficiency.direct);
+			recordDelta("child", currentChild, previousChild, currentEfficiency.child, previousEfficiency.child);
+			recordEfficiencyDelta(currentEfficiency, previousEfficiency);
 			recordTimeDelta(currentTime, previousTime);
 		});
 	}
 
-	summary(sessionId: string): AIUsageAccounting | undefined {
+	summary(sessionId: string, includeEfficiencyOnly = false): AIUsageAccounting | undefined {
 		const state = this.states.get(sessionId);
 		if (!state) return;
 		const conversations = Object.values(state.conversations);
@@ -634,13 +1038,25 @@ export class AIUsageLedger {
 				scope.cost.estimatedUsdMicros !== undefined ||
 				scope.cost.billedUsdMicros !== undefined,
 		);
-		if (!hasEvidence) return;
+		const efficiency = materializeEfficiency(state.efficiency);
+		const hasEfficiencyEvidence =
+			efficiency.relaunch.count > 0 ||
+			efficiency.compaction.count > 0 ||
+			efficiency.direct.observations > 0 ||
+			efficiency.child.observations > 0 ||
+			efficiency.context !== undefined;
+		if (!hasEvidence && !(includeEfficiencyOnly && hasEfficiencyEvidence)) return;
 		const current = Math.max(0, this.now() - state.time.since);
 		const activeMs = sum([state.time.activeMs, state.time.mode === "active" ? current : 0]);
 		const pausedMs = sum([state.time.pausedMs, state.time.mode === "paused" ? current : 0]);
 		const idleMs = sum([state.time.idleMs, state.time.mode === "idle" ? current : 0]);
 		return {
-			observedAt: Math.max(0, ...conversations.map((conversation) => conversation.observedAt)),
+			observedAt: Math.max(
+				0,
+				state.efficiency.context?.observedAt ?? 0,
+				state.efficiency.relaunch.lastObservedAt ?? 0,
+				...conversations.map((conversation) => conversation.observedAt),
+			),
 			direct,
 			child,
 			time: {
@@ -650,6 +1066,7 @@ export class AIUsageLedger {
 				idleMs,
 				coverage: "daemon_observed_partial",
 			},
+			efficiency,
 		};
 	}
 

@@ -2,7 +2,10 @@
 
 Pilot exposes a bounded, read-only diagnostic snapshot to agents and native clients. It combines the current daemon
 projection with retained lifecycle transitions, request timings, [tool-call evidence](tool-call-diagnostics.md),
-event-loop stalls and delayed native OS evidence.
+event-loop stalls, delayed native OS evidence and the target's bounded aggregate AI usage/context-efficiency summary.
+The AI summary exposes explicit cache denominators, latest context headroom, paired compaction observations and closed
+worker-launch reasons with partial coverage. It contains no provider/model identity or transcript content, and
+missing timing, relaunch cost or adjacent context remains unavailable rather than inferred.
 Native crash/hang items are host-level observation windows, not events attributed to the selected chat. Reading it never starts,
 subscribes to or mutates the target session and never opens transcript storage.
 

@@ -68,7 +68,7 @@ test("exports only reviewed span and resource fields", async () => {
 	});
 	assert.equal(recorded?.resource.attributes["service.namespace"], "com.babariviere.pilot");
 	assert.equal(recorded?.resource.attributes["service.name"], "pilot.daemon");
-	assert.equal(recorded?.resource.attributes["pilot.schema.version"], 2);
+	assert.equal(recorded?.resource.attributes["pilot.schema.version"], 3);
 	assert.equal(typeof recorded?.resource.attributes["service.instance.id"], "string");
 	assert.equal(recorded?.resource.attributes["host.name"], undefined);
 	await telemetry.shutdown();
@@ -155,6 +155,8 @@ test("AI usage spans accept accounting classes but reject identity and false spe
 		"pilot.ai.cancelled_count": 0,
 		"pilot.ai.usage_report_count": 1,
 		"pilot.ai.provider_attempt_count": 2,
+		"pilot.ai.request_retry_count": 1,
+		"pilot.ai.input_growth_observation_count": 1,
 		"pilot.ai.estimate_status": "catalog_estimate",
 		"pilot.ai.estimated_usd_micros": 1234,
 		"pilot.ai.pricing_source": "pi_catalog",
@@ -169,6 +171,16 @@ test("AI usage spans accept accounting classes but reject identity and false spe
 		"pilot.ai.active_ms": 900,
 		"pilot.ai.paused_ms": 200,
 		"pilot.ai.idle_ms": 100,
+	});
+	telemetry.recordSpan("pilot.ai.usage", 0, {
+		"pilot.operation": "ai.usage",
+		"pilot.ai.scope": "session",
+		"pilot.ai.launch_count": 1,
+		"pilot.ai.launch_reason": "crash_recovery",
+		"pilot.ai.context_tokens": 100,
+		"pilot.ai.context_window_tokens": 200,
+		"pilot.ai.context_headroom_tokens": 100,
+		"pilot.ai.context_percent_millis": 50_000,
 	});
 	assert.equal(
 		telemetry.startSpan("pilot.ai.usage", {
@@ -188,7 +200,7 @@ test("AI usage spans accept accounting classes but reject identity and false spe
 		false,
 	);
 	await telemetry.forceFlush();
-	assert.equal(exporter.spans.length, 2);
+	assert.equal(exporter.spans.length, 3);
 	assert.doesNotMatch(JSON.stringify(exporter.spans[0]?.attributes), /private-provider|private-model/);
 	await telemetry.shutdown();
 });

@@ -1,6 +1,6 @@
 # Diagnostics and telemetry contract
 
-**Contract version:** 2
+**Contract version:** 3
 
 **Status:** implementation baseline
 
@@ -53,9 +53,10 @@ does not silently enable a devbox. A remote host reports its own effective setti
   predecessor. Events older than 7 days are omitted during read and compacted opportunistically during a later
   write. Parking does not delete them.
 - Existing request-timing files retain their current two 256 KiB segments and 64-line in-memory queue.
-- AI usage accounting retains at most 32 conversation attempts and four worker timing epochs per attempt in one
-  128 KiB aggregate file per chat. Older attempts roll into aggregate totals. It is retained with the chat and
-  removed by session deletion/archive cleanup. It contains no transcript, provider, model or tool names.
+- AI usage accounting retains at most 32 conversation attempts, four worker timing epochs per attempt and one latest
+  context/efficiency aggregate in one 128 KiB file per chat. Older attempts roll into aggregate totals. It is
+  retained with the chat and removed by session deletion/archive cleanup. It contains no transcript, provider,
+  model or tool names.
 - The daemon retains 32 recent stalls and at most 1,024 recent global lifecycle/transport observations in memory.
 - Read APIs return at most 128 evidence items and 64 KiB of encoded evidence. They report `truncated`, dropped
   counts, the observation window and freshness. They do not wake a worker to fill a gap.
@@ -92,9 +93,9 @@ identity in v1.
 - Durations use monotonic clocks within a process. Wall timestamps are RFC 3339 UTC with millisecond precision and
   are only for ordering/correlation. Cross-process wall-clock differences must not be subtracted to claim latency.
 
-## Resource schema v2
+## Resource schema v3
 
-All exported resources use OpenTelemetry semantic conventions where stable. The complete v1 allowlist is:
+All exported resources use OpenTelemetry semantic conventions where stable. The complete v3 allowlist is:
 
 | Attribute | Values |
 | --- | --- |
@@ -106,7 +107,7 @@ All exported resources use OpenTelemetry semantic conventions where stable. The 
 | `os.type` | `darwin` or `linux` |
 | `process.runtime.name` | `swift` or `nodejs` |
 | `process.runtime.version` | Bounded numeric runtime version |
-| `pilot.schema.version` | `2` |
+| `pilot.schema.version` | `3` |
 | `pilot.host.kind` | `local` or `devbox` |
 | `pilot.host.id` | Operational traces only, as defined above |
 | `pilot.analytics.id` | Cataloged analytics spans only |
@@ -173,12 +174,19 @@ operation counts. Outcome counts cover active-context epochs observed by local a
 are labeled partial because a compaction may precede observation or a crash may precede publication. Daemon time
 is split into active, paused and idle observed intervals; time while pilotd was not running is not invented.
 
+Efficiency fields retain explicit evidence and denominators: latest observed context tokens/window/headroom;
+input/cache-read/cache-write growth and observation count per direct/child scope; explicit compaction epoch count and
+paired before/after token totals; observed request retries; and worker launch counts by the closed reason classes
+`initial`, `parked_wake`, `user_resume`, `crash_recovery`, `startup_retry`, `replacement` and `unknown`. Relaunch
+context volume is counted only when a subsequent context observation exists. Missing observations remain missing,
+compaction timing and relaunch cost are `unavailable`, and every efficiency coverage label is partial or latest-only.
+
 `estimatedUsdMicros` is a model-catalog estimate, versioned locally by the pi-ai package revision. A partial estimate
 is labeled as at least that amount; zero or absent prices are unavailable, never free. `billedUsdMicros` is absent
 unless an authoritative billed source exists, and subscription coverage remains `unknown` unless explicitly
 reported. The initial implementation has no billed-spend source and never claims exact marginal spend.
 
-## OpenTelemetry signal schema v2
+## OpenTelemetry signal schema v3
 
 ### Spans
 
@@ -203,9 +211,11 @@ Allowed span attributes are booleans, bounded numbers or enums: `pilot.operation
 a URL.
 
 AI usage spans allow `pilot.ai.scope` (`direct`, `child`, `session`), separate input/output/cache-read/cache-write/reasoning
-token deltas, reasoning availability, activity/success/failure/cancellation/usage-report/provider-attempt counts,
-estimate status and USD micros, `pilot.ai.pricing_source=pi_catalog`, billed status and USD micros, and subscription
-coverage (`covered`, `not_covered`, `unknown`). Session scope allows elapsed, active, paused and idle milliseconds.
+token deltas, reasoning availability, activity/success/failure/cancellation/usage-report/provider-attempt/retry counts,
+input-growth observation count, estimate status and USD micros, `pilot.ai.pricing_source=pi_catalog`, billed status
+and USD micros, and subscription coverage (`covered`, `not_covered`, `unknown`). Session scope allows elapsed,
+active, paused and idle milliseconds; observed context/window/headroom and percent-millis; compaction count, paired
+count and before/after/removed token totals; prepared-context count/tokens; and one launch count with its closed reason.
 All counters are nonnegative safe integers. The resource
 `service.version` versions the exported catalog estimate. Reasoning remains a subset of output and is never added to
 token totals. `unavailable` estimate/billed status rejects a corresponding money value; known estimates require the
@@ -220,10 +230,11 @@ Stack traces, exception messages and raw HTTP status text are forbidden.
 
 ### Metrics
 
-V2 metrics are histograms/counters derived from completed allowlisted spans: interaction duration, phase duration,
+V3 metrics are histograms/counters derived from completed allowlisted spans: interaction duration, phase duration,
 failure count, dropped telemetry count, feature-event count and AI usage/cost-estimate deltas. Attributes are limited to service name/version,
 operation, phase, outcome, reason, cold/warm, progress kind, frame-observation availability and cataloged feature
-name/event/outcome or AI scope/status classes. Identifiers, provider/model names and price-table keys remain forbidden.
+name/event/outcome or AI scope/status/launch-reason classes. Identifiers, provider/model names and price-table keys
+remain forbidden.
 Producers enforce at most 128 distinct attribute sets per instrument per process lifetime;
 overflow is folded to `other` and increments a dropped-cardinality counter.
 

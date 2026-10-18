@@ -26,7 +26,7 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 
-export const TELEMETRY_SCHEMA_VERSION = 2 as const;
+export const TELEMETRY_SCHEMA_VERSION = 3 as const;
 export const NODE_SPAN_QUEUE_LIMIT = 512;
 export const NODE_SPAN_BATCH_LIMIT = 128;
 export const NODE_SPAN_SCHEDULE_MS = 5_000;
@@ -124,6 +124,28 @@ export interface TelemetryAttributes {
 	"pilot.ai.cancelled_count"?: number;
 	"pilot.ai.usage_report_count"?: number;
 	"pilot.ai.provider_attempt_count"?: number;
+	"pilot.ai.request_retry_count"?: number;
+	"pilot.ai.input_growth_observation_count"?: number;
+	"pilot.ai.context_tokens"?: number;
+	"pilot.ai.context_window_tokens"?: number;
+	"pilot.ai.context_headroom_tokens"?: number;
+	"pilot.ai.context_percent_millis"?: number;
+	"pilot.ai.compaction_count"?: number;
+	"pilot.ai.compaction_paired_count"?: number;
+	"pilot.ai.compaction_before_tokens"?: number;
+	"pilot.ai.compaction_after_tokens"?: number;
+	"pilot.ai.compaction_removed_tokens"?: number;
+	"pilot.ai.launch_count"?: number;
+	"pilot.ai.launch_reason"?:
+		| "initial"
+		| "parked_wake"
+		| "user_resume"
+		| "crash_recovery"
+		| "startup_retry"
+		| "replacement"
+		| "unknown";
+	"pilot.ai.prepared_context_count"?: number;
+	"pilot.ai.prepared_context_tokens"?: number;
 	"pilot.ai.elapsed_ms"?: number;
 	"pilot.ai.active_ms"?: number;
 	"pilot.ai.paused_ms"?: number;
@@ -280,6 +302,15 @@ const AI_REASONING_STATUS = new Set(["reported", "partial", "unavailable"]);
 const AI_ESTIMATE_STATUS = new Set(["catalog_estimate", "partial_catalog_estimate", "unavailable"]);
 const AI_BILLED_STATUS = new Set(["known", "unavailable"]);
 const AI_SUBSCRIPTION_COVERAGE = new Set(["covered", "not_covered", "unknown"]);
+const AI_LAUNCH_REASONS = new Set([
+	"initial",
+	"parked_wake",
+	"user_resume",
+	"crash_recovery",
+	"startup_retry",
+	"replacement",
+	"unknown",
+]);
 const TRACEPARENT = /^00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]$/;
 const setter: TextMapSetter<TraceCarrier> = {
 	set(carrier, key, value) {
@@ -326,6 +357,7 @@ export function telemetryAttributes(value: TelemetryAttributes): TelemetryAttrib
 		if (key === "pilot.ai.pricing_source" && field === "pi_catalog") continue;
 		if (key === "pilot.ai.billed_status" && closedString(field, AI_BILLED_STATUS)) continue;
 		if (key === "pilot.ai.subscription_coverage" && closedString(field, AI_SUBSCRIPTION_COVERAGE)) continue;
+		if (key === "pilot.ai.launch_reason" && closedString(field, AI_LAUNCH_REASONS)) continue;
 		if (
 			[
 				"pilot.ai.input_tokens",
@@ -339,6 +371,20 @@ export function telemetryAttributes(value: TelemetryAttributes): TelemetryAttrib
 				"pilot.ai.cancelled_count",
 				"pilot.ai.usage_report_count",
 				"pilot.ai.provider_attempt_count",
+				"pilot.ai.request_retry_count",
+				"pilot.ai.input_growth_observation_count",
+				"pilot.ai.context_tokens",
+				"pilot.ai.context_window_tokens",
+				"pilot.ai.context_headroom_tokens",
+				"pilot.ai.context_percent_millis",
+				"pilot.ai.compaction_count",
+				"pilot.ai.compaction_paired_count",
+				"pilot.ai.compaction_before_tokens",
+				"pilot.ai.compaction_after_tokens",
+				"pilot.ai.compaction_removed_tokens",
+				"pilot.ai.launch_count",
+				"pilot.ai.prepared_context_count",
+				"pilot.ai.prepared_context_tokens",
 				"pilot.ai.elapsed_ms",
 				"pilot.ai.active_ms",
 				"pilot.ai.paused_ms",
@@ -377,6 +423,7 @@ export function telemetryAttributes(value: TelemetryAttributes): TelemetryAttrib
 	if (value["pilot.ai.billed_status"] === "unavailable" && value["pilot.ai.billed_usd_micros"] !== undefined) return;
 	if (value["pilot.ai.billed_status"] === "known" && value["pilot.ai.billed_usd_micros"] === undefined) return;
 	if (value["pilot.ai.billed_usd_micros"] !== undefined && value["pilot.ai.billed_status"] !== "known") return;
+	if ((value["pilot.ai.launch_reason"] === undefined) !== (value["pilot.ai.launch_count"] === undefined)) return;
 	return Object.fromEntries(entries) as TelemetryAttributes;
 }
 

@@ -585,7 +585,7 @@ public final class PilotTelemetry: @unchecked Sendable {
             "os.type": .string("darwin"),
             "process.runtime.name": .string("swift"),
             "process.runtime.version": .string(swiftVersion),
-            "pilot.schema.version": .int(2),
+            "pilot.schema.version": .int(3),
             "pilot.host.kind": .string(configuration.hostKind.rawValue),
         ]
         if let hostID = configuration.hostID { resource["pilot.host.id"] = .string(hostID) }
