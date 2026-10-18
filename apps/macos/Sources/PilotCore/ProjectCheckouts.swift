@@ -24,29 +24,50 @@ public enum ProjectCheckouts {
         let evidence = Dictionary(origins.filter { known[$0.project]?.value.path == $0.path }.map { ($0.project, $0) },
                                   uniquingKeysWith: { _, last in last })
         var parents = Dictionary(uniqueKeysWithValues: known.keys.map { ($0, $0) })
+        var placements = Dictionary(uniqueKeysWithValues: known.keys.map { ($0, Set([$0.host])) })
+        var pinnedRoots: Set<HostResourceRef> = []
         func root(_ key: HostResourceRef) -> HostResourceRef {
             var result = key
             while let parent = parents[result], parent != result { result = parent }
             return result
         }
-        func join(_ a: HostResourceRef, _ b: HostResourceRef) { parents[root(b)] = root(a) }
-        var explicit: Set<HostResourceRef> = []
+        func join(_ a: HostResourceRef, _ b: HostResourceRef) {
+            let left = root(a), right = root(b)
+            guard left != right else { return }
+            parents[right] = left
+            placements[left, default: []].formUnion(placements.removeValue(forKey: right) ?? [])
+            if pinnedRoots.remove(right) != nil { pinnedRoots.insert(left) }
+        }
+        var explicitTargets: Set<HostResourceRef> = []
         for mapping in bindings.mappings {
             guard let source = try? HostResourceRef.decodeKey(mapping.logicalProjectId),
                   let a = known[source], let b = known[mapping.project],
                   a.value.path == mapping.sourcePath, b.value.path == mapping.remotePath,
                   evidence[source]?.identity == mapping.sourceOrigin,
                   evidence[b.ref]?.identity == mapping.destinationOrigin else { continue }
-            join(a.ref, b.ref); explicit.insert(a.ref); explicit.insert(b.ref)
+            join(a.ref, b.ref)
+            pinnedRoots.insert(root(a.ref)); explicitTargets.insert(b.ref)
         }
         // Wait for every known clone on a host: partially discovered inventory must not look unique.
         let settled = Set(Dictionary(grouping: projects, by: { $0.ref.host }).filter { _, values in
             values.allSatisfy { evidence[$0.ref] != nil }
         }.keys)
-        let automatic = Dictionary(grouping: projects.filter { settled.contains($0.ref.host) && !explicit.contains($0.ref) && evidence[$0.ref]?.identity != nil },
+        let automatic = Dictionary(grouping: projects.filter { settled.contains($0.ref.host) && evidence[$0.ref]?.identity != nil },
                                    by: { evidence[$0.ref]!.identity! })
-        for values in automatic.values where Set(values.map { $0.ref.host }).count == values.count {
-            for item in values.dropFirst() { join(values[0].ref, item.ref) }
+        for values in automatic.values {
+            // Ambiguity belongs to that host, not to the source's placements on other hosts.
+            let byHost = Dictionary(grouping: values, by: { $0.ref.host })
+            let roots = Set(values.filter { byHost[$0.ref.host]?.count == 1 && !explicitTargets.contains($0.ref) }.map { root($0.ref) })
+            let pinned = roots.intersection(pinnedRoots)
+            let reserved = pinned.reduce(into: Set<HostRef>()) { $0.formUnion(placements[$1] ?? []) }
+            // An explicit fork/worktree occupies its destination slot even when another checkout
+            // there has the source's origin. Do not pull that alternative into the project.
+            let candidates = roots.filter { pinned.contains($0) || (placements[$0] ?? []).isDisjoint(with: reserved) }
+            let hosts = candidates.reduce(into: Set<HostRef>()) { $0.formUnion(placements[$1] ?? []) }
+            guard hosts.count == candidates.reduce(0, { $0 + (placements[$1]?.count ?? 0) }) else { continue }
+            // Conflicting explicit groups stay separate; no observation order chooses a winner.
+            let ordered = candidates.sorted { $0.storageKey < $1.storageKey }
+            if let first = ordered.first { for other in ordered.dropFirst() { join(first, other) } }
         }
         return Dictionary(grouping: projects, by: { root($0.ref) }).values.map { values in
             ProjectCheckoutGroup(checkouts: values.sorted {
