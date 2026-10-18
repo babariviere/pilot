@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import type * as C from "./control.ts";
 import type { DaemonHello } from "./hello.ts";
 import type {
 	ControlArchiveRequest,
@@ -33,6 +34,24 @@ type PayloadFixture = {
 	[K in ControlOperationKind]: { kind: K; payload: ControlOperationPayloads[K] };
 }[ControlOperationKind];
 interface Fixtures {
+	errors: C.ControlHostErrorResponse[];
+	approvalInputs: C.ControlHostApprovalInput[];
+	approvalRequests: C.ControlHostApprovalRequest[];
+	approvalDecisions: C.ControlHostApprovalDecision[];
+	unpairRequest: C.ControlUnpairRequest;
+	unpairResponses: C.ControlUnpairResponse[];
+	invalidations: C.ControlHostInvalidation[];
+	syncStates: C.ControlHostSyncState[];
+	sharedTasks: C.ControlDashboardSharedTask[];
+	replicaMissions: C.ControlDashboardReplicaMission[];
+	hostObservations: C.ControlHostObservation[];
+	dashboardProjection: C.ControlDashboardResponse;
+	archiveInfo: C.ControlArchiveInfo;
+	archiveReads: {
+		history: C.ControlArchiveRead<C.ControlArchiveHistoryPage>;
+		authorizations: C.ControlArchiveRead<C.ControlAuthorizationsResponse>;
+	};
+	lifecycles: C.ControlHostLifecycleResponse[];
 	enrollmentRequests: ControlHomeEnrollmentRequest[];
 	hostStates: ControlHostStateResponse[];
 	archiveRequest: ControlArchiveRequest;
@@ -102,6 +121,7 @@ test("Control host identity, default-home requests and explicit authorization ho
 });
 test("all durable Control payloads retain the admission authority and typed body", () => {
 	const authority: ControlOperationAuthority = {
+		roleFence: { home: 1, executor: 2 },
 		authorizationId: "auth:1",
 		levelCeiling: "implement",
 		budgetReservation: { reservationId: "reservation:1", budgetUsd: 1, followUps: 1 },
@@ -164,7 +184,12 @@ test("all durable Control payloads retain the admission authority and typed body
 		{ kind: "control.revoke", payload: { ...authority, budgetReservation: free, revokedAt: 2000 } },
 		{
 			kind: "control.archive",
-			payload: { idempotencyKey: "archive:1", sessionId: "old-control", readiness: fixture.cutovers[1] },
+			payload: {
+				roleFence: { home: 1, executor: 2 },
+				idempotencyKey: "archive:1",
+				sessionId: "old-control",
+				readiness: fixture.cutovers[1],
+			},
 		},
 	];
 	assert.deepEqual(roundTrip(expected), fixture.payloads);
@@ -173,6 +198,8 @@ test("all durable Control payloads retain the admission authority and typed body
 test("enrollment CAS, courier page queries and app-only archive HTTP contracts round trip", () => {
 	const f = roundTrip(fixture);
 	const create: ControlHomeEnrollmentRequest = {
+		approvalRequestId: "approval:enroll:0",
+		expectedRoleEpoch: 2,
 		enrollment: f.enrollments[0],
 		peerHello: f.hellos[1],
 		expectedGeneration: null,
@@ -185,6 +212,8 @@ test("enrollment CAS, courier page queries and app-only archive HTTP contracts r
 	assert.equal(f.hostStates[1].cutover?.state, "ready");
 	assert.equal(f.hostStates[2].configuration.archive?.sessionId, "old-control");
 	const request: ControlArchiveRequest = {
+		approvalRequestId: "approval:archive",
+		expectedRoleEpoch: 1,
 		expectedGeneration: 1,
 		sessionId: "old-control",
 		idempotencyKey: "archive:1",
@@ -260,7 +289,68 @@ test("remote journal and frozen status pages round trip without losing source, c
 	assert.equal(pages[0].snapshot.snapshotId, pages[1].snapshot.snapshotId);
 	assert.equal(pages[0].snapshot.capturedAt, pages[1].snapshot.capturedAt);
 	assert.equal(pages[0].snapshot.missionTasksTotal, 2);
-	assert.equal(pages[0].snapshot.missionTasks[0].state, "accepted");
-	assert.equal(pages[1].snapshot.missionTasks[0].context, "provisional");
+	assert.equal(pages[0].snapshot.missionTasks[0].grantState, "accepted");
+	assert.equal(pages[1].snapshot.missionTasks[0].consistency, "provisional");
 	assert.equal(pages[1].next, undefined);
+});
+
+test("audit contract preserves approval scope, durable cursors, task provenance, archived stores and lifecycle uncertainty", () => {
+	const f = roundTrip(fixture);
+	assert.equal(f.configurations[0].roleEpoch, 1);
+	assert.equal(f.configurations[2].roleEpoch, 3);
+	assert.deepEqual(
+		f.approvalInputs.map((a) => a.action),
+		["enroll", "unpair", "archive"],
+	);
+	for (const request of f.approvalRequests) {
+		const signed = JSON.parse(request.signingPayload);
+		assert.equal(signed.requestId, request.requestId);
+		assert.deepEqual(signed.requestingHost, request.requestingHost);
+		assert.deepEqual(signed.home, request.home);
+		assert.deepEqual(signed.executor, request.executor);
+		assert.equal(signed.expectedRoleEpoch, request.expectedRoleEpoch);
+		assert.equal(signed.intentHash, request.intentHash);
+	}
+	assert.deepEqual(
+		f.approvalRequests.map((a) => a.state),
+		["pending", "approved", "denied", "consumed"],
+	);
+	assert.deepEqual(
+		f.approvalDecisions.map((d) => d.allow),
+		[true, false],
+	);
+	assert.deepEqual(
+		f.unpairResponses.map((r) => r.peerAcknowledged),
+		[false, true],
+	);
+	assert.equal(f.unpairResponses[0].enrollment.state, "revoked");
+	assert.equal(f.invalidations[0].type, "control-hosts.changed");
+	assert.equal(new Set(f.invalidations[0].changes).size, 7);
+	assert.equal(f.syncStates[0].events.importedThrough, 1);
+	assert.equal(f.syncStates[0].events.acknowledgedThrough, 0);
+	assert.equal(f.syncStates[1].events.acknowledgedThrough, 1);
+	assert.ok(f.cutovers[1].compatibleRoutes && f.cutovers[1].archiveReady);
+	assert.equal(f.cutovers[1].acceptance?.suite, "control-hosts-two-daemon-v1");
+	assert.equal(f.sharedTasks[0].id, f.sharedTasks[1].id);
+	assert.equal(f.sharedTasks[0].id, f.sharedTasks[2].id);
+	assert.equal(f.sharedTasks[3].taskId, undefined);
+	assert.equal(f.sharedTasks[3].taskNumber, undefined);
+	assert.equal(f.sharedTasks[3].proposalOrigin?.host.daemonId, "executor-daemon");
+	assert.equal(f.replicaMissions[1].replicaAgeMs, null);
+	assert.deepEqual(
+		f.hostObservations.map((h) => h.availability),
+		["available", "disconnected", "unknown"],
+	);
+	assert.equal(f.archiveReads.history.archive.readOnly, true);
+	assert.deepEqual(f.archiveReads.authorizations.value.authorizations, f.authorizations);
+	assert.equal(f.lifecycles[0].updateReady, false);
+	assert.equal(f.errors[0].code, "reconciliation_required");
+	assert.equal(f.errors[0].syncState?.reconciliationRequired, true);
+	assert.equal(f.dashboardProjection.sharedTasks?.length, 2);
+	assert.notEqual(f.sharedTasks[0].bindingId, f.sharedTasks[2].bindingId);
+	assert.equal(f.sharedTasks[2].grantBindingId, f.sharedTasks[0].grantBindingId);
+	assert.deepEqual(
+		f.lifecycles[0].operations.map((o) => o.delivery),
+		["queued", "unknown", "pending", "accepted", "rejected"],
+	);
 });
