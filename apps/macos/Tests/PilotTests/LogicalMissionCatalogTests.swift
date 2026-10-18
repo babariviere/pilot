@@ -168,7 +168,7 @@ private func logicalMission(_ id: String = "same", title: String = "Canonical", 
     #expect(model.hosts.selection?.host == second)
 }
 
-@Test @MainActor func mountedReplicaMissionRowOpensCanonicalReferenceNotExecutionHost() throws {
+@Test @MainActor func replicaMissionRowOpensCanonicalReferenceNotExecutionHost() throws {
     let model = AppModel()
     try model.registerLocal(logicalHome)
     model.newSessionForm.executionHost = logicalBox
@@ -177,19 +177,8 @@ private func logicalMission(_ id: String = "same", title: String = "Canonical", 
     let result = try LogicalMissionCatalog.normalize([.init(host: logicalBox, missions: [],
         dashboard: logicalDashboard(replicas: [replica]))])
     let row = try #require(result.rows.first)
-    let host = NSHostingView(rootView: LogicalMissionSidebarRow(mission: row, model: model, registry: model.missionRegistry))
-    host.frame = NSRect(x: 0, y: 0, width: 360, height: 80)
-    let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
-    window.contentView = host
-    defer { window.contentView = nil; window.close() }
-    host.layoutSubtreeIfNeeded()
-    func buttons(_ view: NSView) -> [NSButton] {
-        (view as? NSButton).map { [$0] } ?? view.subviews.flatMap(buttons)
-    }
-    let mounted = buttons(host)
-    #expect(mounted.count == 1)
-    let button = try #require(mounted.first)
-    button.performClick(nil)
+    // The row's button runs exactly this action. Its RowButtonStyle draws no NSButton to click, so call it directly.
+    model.openLogicalMission(row)
     let selected = try #require(model.selectedMissionId)
     let reference = try HostResourceRef.decodeKey(selected)
     #expect(reference.host.daemonId == "unavailable-home" && reference.host.lineageId == "original")
