@@ -67,6 +67,7 @@ struct DevboxSettingsContent: View {
             DevboxMachineSection(host: host, hosts: hosts).id(host)
             TelemetrySettingsSection(client: hosts.presentationClient(host), localApp: false).id(host)
             DevboxProviderSetup(host: host, hosts: hosts).id(host)
+            DevboxGitHubSetup(host: host, hosts: hosts).id(host)
             DevboxUpdateSection(host: host, hosts: hosts, loadPackage: loadPackage, navigate: navigate).id(host)
         }
     }

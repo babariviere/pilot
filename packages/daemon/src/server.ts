@@ -67,6 +67,7 @@ import { ChatStreams } from "./chat-streams.ts";
 import type { DaemonConfig } from "./config.ts";
 import { Conflict, ServiceUnavailable } from "./errors.ts";
 import { daemonPerformance, operations } from "./event-loop-watchdog.ts";
+import type { GitHubSetupService } from "./github-setup.ts";
 import { MachineInformationReader } from "./machine.ts";
 import { type McpStatusService, SignInUnavailable } from "./mcp-status.ts";
 import type { MissionService } from "./mission-service.ts";
@@ -308,6 +309,7 @@ export function createDaemonServer(
 	maintenance?: RuntimeMaintenance,
 	watches?: import("./watch-service.ts").WatchService,
 	telemetry?: TelemetrySettingsService,
+	githubSetup?: GitHubSetupService,
 ): Server & { runtimeResources: RuntimeResources } {
 	sessions.setWorkspaceProcessGuard((id) => terminals.isRunning(id));
 	const machine = new MachineInformationReader(_config.home, hello?.daemonVersion ?? "unknown");
@@ -347,6 +349,7 @@ export function createDaemonServer(
 		sessions,
 		transfers,
 		mutations,
+		...(githubSetup ? [githubSetup] : []),
 		...(setup ? [setup] : []),
 	]);
 	maintenance?.bind(runtimeResources);
@@ -541,6 +544,13 @@ export function createDaemonServer(
 		if (parts[0] !== "api") throw new HttpError(404, "Not found");
 		if (parts[1] === "setup") {
 			res.setHeader("cache-control", "no-store");
+			if (parts[2] === "github" && parts.length === 3) {
+				if (!githubSetup) throw new SetupError(503, "GitHub setup requires a paired host identity.");
+				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				if (req.method === "GET") return json(res, 200, await githubSetup.status());
+				if (req.method === "POST") return json(res, 200, await githubSetup.act(await readJson(req)));
+				throw new SetupError(404, "Unknown GitHub setup operation.");
+			}
 			if (!setup) throw new HttpError(503, "Host setup is unavailable.");
 			if (parts.length === 2 && req.method === "GET") return json(res, 200, await setup.readiness());
 			if (parts[2] === "runs") {

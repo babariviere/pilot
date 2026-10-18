@@ -66,6 +66,31 @@ func addDevboxPresentsSetupSheetAfterCancelAndReopen() async throws {
     #expect(hosts.available.isEmpty)
 }
 
+@Test(.timeLimit(.minutes(1))) @MainActor
+func githubKeySheetRequiresNativeConfirmationAndCancelDoesNotRegister() async throws {
+    _ = NSApplication.shared
+    let value = try JSONDecoder().decode(GitHubSetupStatus.self, from: Data("""
+    {"phase":"key_ready","account":"octocat","apiReady":true,"sshReady":false,"publicKey":"ssh-ed25519 fixture","fingerprint":"SHA256:fixture"}
+    """.utf8))
+    var approvals = 0, cancellations = 0
+    let hosting = NSHostingView(rootView: GitHubKeyApprovalSheet(value: value, revoking: false,
+        cancel: { cancellations += 1 }, approve: { approvals += 1 }))
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 340),
+        styleMask: [.titled, .closable], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false; window.contentView = hosting
+    window.setFrameOrigin(NSPoint(x: -10000, y: -10000)); window.orderFrontRegardless()
+    defer { window.close() }
+    try await devboxSettingsWait("GitHub key confirmation did not mount", in: hosting) {
+        devboxSettingsControls(in: hosting, of: NSButton.self).count == 2
+    }
+    #expect(approvals == 0)
+    let (cancel, approve) = try devboxSettingsFooter(in: hosting)
+    try devboxSettingsClick(cancel)
+    #expect(cancellations == 1 && approvals == 0)
+    try devboxSettingsClick(approve)
+    #expect(approvals == 1)
+}
+
 @MainActor private func devboxSettingsWait(_ message: String, in content: NSView,
                                           until ready: () -> Bool) async throws {
     let deadline = Date().addingTimeInterval(10)

@@ -13,6 +13,7 @@ import { ControlDiagnostics } from "./control-diagnostics.ts";
 import { CredentialBroker } from "./credential-broker.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import { daemonPerformance, EventLoopWatchdog } from "./event-loop-watchdog.ts";
+import { GitHubSetupService } from "./github-setup.ts";
 import { daemonHello } from "./hello.ts";
 import { createLinearSizePoller } from "./linear-size.ts";
 import { MissionLinearSource } from "./linear-source.ts";
@@ -330,6 +331,14 @@ if (!maintenance?.frozen) {
 }
 const terminals = new TerminalManager();
 const setup = new SetupService(credentials, { mcp: () => mcpStatus.status() });
+const githubSetup = new GitHubSetupService(config.home, {
+	hostId: "daemon",
+	daemonId: hello.daemonId,
+	lineageId: hello.lineageId,
+});
+await githubSetup.status().catch(() => {
+	console.warn("pilotd: GitHub setup unavailable; private storage needs attention");
+});
 const scheduleStore = new ScheduleStore(join(config.home, "schedules.sqlite"));
 const schedules = new ScheduleService(scheduleStore, {
 	sessions,
@@ -369,6 +378,7 @@ const server = createDaemonServer(
 	maintenance,
 	watches,
 	telemetry,
+	githubSetup,
 );
 server.listen(config.port, config.host, () => {
 	console.log(`pilotd listening on http://${config.host}:${config.port} (data: ${config.home})`);
@@ -402,7 +412,7 @@ async function stop(): Promise<void> {
 	await missionService.compaction.stop();
 	await watchLifecycle.stop();
 	watches.bindRemovalAudit(undefined);
-	await Promise.all([setup.close(), terminals.shutdown(), sessions.shutdown()]);
+	await Promise.all([setup.close(), githubSetup.close(), terminals.shutdown(), sessions.shutdown()]);
 	await credentials.close();
 	stopSlackCompletions();
 	await Promise.all(completionWrites);

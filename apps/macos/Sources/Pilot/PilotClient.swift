@@ -1476,6 +1476,19 @@ final class PilotClient: ObservableObject {
 
     // MARK: Pre-chat host setup. Explicit mutations are never queued/retried or sent to Local as fallback.
 
+    func githubRequest<Body: Encodable, Response: Decodable>(_ path: String, capability: String,
+                                                            body: Body?, method: String = "POST") async throws -> Response {
+        guard let baseURL else { throw HostRoutingError.disconnected }
+        var request = URLRequest(url: baseURL.appending(path: path))
+        request.httpMethod = method
+        request.setValue(capability, forHTTPHeaderField: "X-Pilot-GitHub-Capability")
+        if let body {
+            request.setValue("application/json", forHTTPHeaderField: "content-type")
+            request.httpBody = try JSONEncoder().encode(body)
+        }
+        return try await call(request)
+    }
+
     func runtimeUpdate(_ id: String? = nil) async throws -> RuntimeUpdateStatus? {
         try await missionRequest(["runtime-update"], query: id.map { [URLQueryItem(name: "id", value: $0)] } ?? [])
     }
