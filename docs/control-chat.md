@@ -251,6 +251,16 @@ with `after` and `limit` (default 40, at most 100); `next` is omitted at the end
 `DELETE /api/control-chat/watches/:id` returns `{removed}`, including false for already-fired or
 cancelled watches. Audit reads retain their newest-first sequence paging.
 `watches.changed` and `control-audit.changed` on the shared socket invalidate those HTTP pages.
+
+The app browses the memory read-only under `/api/control-chat/memory/` (404 until the control chat
+exists; agents keep using their own zoom and date tools). `view` returns the current view with
+unsummarized lines flagged `pending`. `nodes/:id/:n` returns a summary's two halves, or for `n=1` the
+whole message paged by `offset`. `messages?before&limit&q` pages the log newest first (limit at most
+100); rows clip long text and tool input. `q` is a literal, Unicode case-folded substring of text, tool
+name or input (LIKE wildcards escaped). A search examines at most 2,000 messages per request and
+returns `next` to continue, so a miss cannot hold the storage worker. `stats` reports counts, queued and
+failed summaries, view size, merging and database size. `control-memory.changed` invalidates these
+pages at most once a second.
 Clients refetch on reconnect rather than treating invalidations as a durable event stream.
 Model changes use the existing session response and `reason: "model"` attempt shape, including
 automatic cross-provider context rebuilds; no separate model-switch WebSocket channel is needed.

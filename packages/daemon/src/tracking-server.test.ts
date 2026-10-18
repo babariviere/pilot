@@ -57,6 +57,7 @@ test("tracking HTTP, WS invalidation and DashboardProviders.tracked share projec
 		onArtifactsChanged: () => () => {},
 		setWorkspaceProcessGuard() {},
 		onControlAudit: () => () => {},
+		onControlMemory: () => () => {},
 	} as unknown as SessionManager;
 	const server = createDaemonServer(
 		{ home, host: "127.0.0.1", port: 0 },
@@ -362,6 +363,7 @@ test("Linear cycle/fallback and transient prefill are exposed through the tracki
 		onArtifactsChanged: () => () => {},
 		setWorkspaceProcessGuard() {},
 		onControlAudit: () => () => {},
+		onControlMemory: () => () => {},
 	} as unknown as SessionManager;
 	const server = createDaemonServer(
 		{ home, host: "127.0.0.1", port: 0 },

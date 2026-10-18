@@ -35,6 +35,7 @@ test("schedule CRUD API, reconnect snapshot, WS updates, and dashboard provider"
 	const sessions = {
 		setWorkspaceProcessGuard() {},
 		onControlAudit: () => () => {},
+		onControlMemory: () => () => {},
 		list: () => [existing],
 		get: () => (targetExists ? existing : undefined),
 		onChange: () => () => {},

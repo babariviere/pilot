@@ -1,6 +1,12 @@
 /** Bounded RPC to the project-memory storage worker. No synchronous disk work in pilotd. */
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
+import type {
+	ControlMemoryLine,
+	ControlMemoryMessagesResponse,
+	ControlMemoryNodeResponse,
+	ControlMemoryStats,
+} from "@pilot/protocol";
 import type { ControlAuditEntry } from "./control-actions.ts";
 import type { ControlJob, ControlMemoryState, ControlMessage, ControlMessageInput } from "./control-memory-disk.ts";
 import type { ControlLine } from "./control-view.ts";
@@ -11,6 +17,7 @@ export class ControlMemory {
 	private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
 	private broken?: Error;
 	private stopping?: Promise<void>;
+	private readonly listeners = new Set<() => void>();
 	constructor(home: string) {
 		this.worker = new Worker(new URL("./memory-worker.ts", import.meta.url), {
 			workerData: { root: join(home, "memory") },
@@ -42,11 +49,23 @@ export class ControlMemory {
 			this.worker.postMessage({ id, method: `control.${method}`, args });
 		});
 	}
+	/** Log appends, built summaries (which may merge the view) and job state changes. Not coalesced. */
+	onChange(listener: () => void): () => void {
+		this.listeners.add(listener);
+		return () => {
+			this.listeners.delete(listener);
+		};
+	}
+	private async changing<T>(work: Promise<T>): Promise<T> {
+		const value = await work;
+		for (const listener of this.listeners) listener();
+		return value;
+	}
 	state(): Promise<ControlMemoryState> {
 		return this.rpc("state");
 	}
 	retry(): Promise<void> {
-		return this.rpc("retry");
+		return this.changing(this.rpc("retry"));
 	}
 	turnView(key: string): Promise<ControlLine[]> {
 		return this.rpc("turnView", { key });
@@ -61,7 +80,7 @@ export class ControlMemory {
 		return this.rpc("auditPage", { before, limit });
 	}
 	append(message: ControlMessageInput): Promise<ControlMessage[]> {
-		return this.rpc("append", { message });
+		return this.changing(this.rpc("append", { message }));
 	}
 	view(): Promise<ControlLine[]> {
 		return this.rpc("view");
@@ -73,10 +92,10 @@ export class ControlMemory {
 		return this.rpc("context", { id, n });
 	}
 	put(id: number, n: number, text: string): Promise<void> {
-		return this.rpc("put", { id, n, text });
+		return this.changing(this.rpc("put", { id, n, text }));
 	}
 	fail(id: number, n: number): Promise<void> {
-		return this.rpc("fail", { id, n });
+		return this.changing(this.rpc("fail", { id, n }));
 	}
 	message(
 		id: number,
@@ -89,6 +108,21 @@ export class ControlMemory {
 	}
 	date(id: number): Promise<string> {
 		return this.rpc("date", { id });
+	}
+	/** Read-only browsing for the app. Never offered to agents. */
+	viewLines(): Promise<ControlMemoryLine[]> {
+		return this.rpc("viewLines");
+	}
+	async node(id: number, n: number, offset?: number): Promise<ControlMemoryNodeResponse> {
+		if (n === 1) return this.message(id, offset);
+		if (offset !== undefined) throw new Error("Only whole messages have pages");
+		return { lines: await this.rpc<ControlMemoryLine[]>("childLines", { id, n }) };
+	}
+	messages(before?: number, limit?: number, q?: string): Promise<ControlMemoryMessagesResponse> {
+		return this.rpc("messages", { before, limit, q });
+	}
+	stats(): Promise<ControlMemoryStats> {
+		return this.rpc("stats");
 	}
 	stop(): Promise<void> {
 		if (this.stopping) return this.stopping;

@@ -1028,6 +1028,40 @@ export function createDaemonServer(
 						url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : undefined,
 					),
 			);
+		if (parts[1] === "control-chat" && parts[2] === "memory" && req.method === "GET") {
+			// Read-only browsing for the app. Agents read memory only through their own zoom/date tools.
+			const integer = (name: string, value: string | null | undefined): number | undefined => {
+				if (value === null || value === undefined) return undefined;
+				if (!/^\d{1,15}$/.test(value)) throw new HttpError(400, `${name} must be a non-negative integer`);
+				return Number(value);
+			};
+			if (parts.length === 4 && parts[3] === "view") {
+				const lines = await sessions.controlMemory().viewLines();
+				return json(res, 200, { lines } satisfies import("@pilot/protocol").ControlMemoryViewResponse);
+			}
+			if (parts.length === 4 && parts[3] === "stats") return json(res, 200, await sessions.controlMemory().stats());
+			if (parts.length === 4 && parts[3] === "messages") {
+				const q = url.searchParams.get("q") ?? undefined;
+				const limit = integer("limit", url.searchParams.get("limit")) ?? 50;
+				if (limit < 1 || limit > 100) throw new HttpError(400, "limit must be 1..100");
+				if (q !== undefined && (!q || q.length > 200 || q.includes("\0")))
+					throw new HttpError(400, "q must be 1..200 characters");
+				return json(
+					res,
+					200,
+					await sessions.controlMemory().messages(integer("before", url.searchParams.get("before")), limit, q),
+				);
+			}
+			if (parts.length === 6 && parts[3] === "nodes") {
+				const id = integer("id", parts[4])!,
+					n = integer("n", parts[5])!,
+					offset = integer("offset", url.searchParams.get("offset"));
+				if (n < 1 || !Number.isInteger(Math.log2(n)) || id % n)
+					throw new HttpError(400, "Expected id+n with an aligned power-of-two n");
+				if (n > 1 && offset !== undefined) throw new HttpError(400, "offset is only allowed for n=1");
+				return json(res, 200, await sessions.controlMemory().node(id, n, offset));
+			}
+		}
 		if (parts[1] === "sessions" && parts.length === 2) {
 			if (req.method === "GET") {
 				const archived = url.searchParams.get("archived") ?? "false";
@@ -1530,6 +1564,24 @@ export function createDaemonServer(
 		});
 	});
 	const stopControlAudit = sessions.onControlAudit(() => broadcast({ type: "control-audit.changed" }));
+	// Appends and summaries can arrive in bursts while a turn streams: leading edge, then at most one per second.
+	let memoryTimer: NodeJS.Timeout | undefined,
+		memoryDirty = false;
+	const memoryChanged = () => {
+		if (memoryTimer) {
+			memoryDirty = true;
+			return;
+		}
+		broadcast({ type: "control-memory.changed" });
+		memoryTimer = setTimeout(() => {
+			memoryTimer = undefined;
+			if (!memoryDirty) return;
+			memoryDirty = false;
+			memoryChanged();
+		}, 1000);
+		memoryTimer.unref();
+	};
+	const stopControlMemory = sessions.onControlMemory(memoryChanged);
 	const invalidateSharing = () => {
 		if (sharingInvalidationScheduled) return;
 		sharingInvalidationScheduled = true;
@@ -1558,6 +1610,8 @@ export function createDaemonServer(
 		stopSharingWatch?.();
 		stopWatches?.();
 		stopControlAudit();
+		stopControlMemory();
+		clearTimeout(memoryTimer);
 		stopSharingReceipts?.();
 	});
 	const stopPowerWatch = power?.onChange(() => broadcast({ type: "power", power: power.status() }));

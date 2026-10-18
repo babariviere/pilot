@@ -1,8 +1,14 @@
 /** Synchronous storage, used ONLY in the existing memory worker. SQLite repairs interrupted
  * transactions, keeping the append, tree queue and persisted view in one durable commit. */
-import { mkdirSync } from "node:fs";
+import { mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import type {
+	ControlMemoryLine,
+	ControlMemoryLogEntry,
+	ControlMemoryMessagesResponse,
+	ControlMemoryStats,
+} from "@pilot/protocol";
 import type { ControlAuditEntry } from "./control-actions.ts";
 import {
 	CONTROL_VIEW_HIGH,
@@ -39,6 +45,17 @@ export interface ControlMemoryState {
 }
 const PENDING = "(not summarized yet: zoom it)";
 export const CONTROL_NODE_BYTES = 512;
+/** Rows one log search examines before returning a continuation cursor, so a miss cannot hold the worker. */
+export const CONTROL_SEARCH_WINDOW = 2_000;
+const CLIP_TEXT = 1_000,
+	CLIP_INPUT = 500;
+/** Surrogate-safe prefix of at most `limit` UTF-16 units. */
+function clip(text: string, limit: number): { text: string; clipped: boolean } {
+	if (text.length <= limit) return { text, clipped: false };
+	let end = limit;
+	if (/[\uD800-\uDBFF]/.test(text[end - 1]!)) end--;
+	return { text: text.slice(0, end), clipped: true };
+}
 const kinds = new Set(["user", "assistant", "tool", "echo", "event", "note"]);
 function source(message: ControlMessageInput): string {
 	return message.kind === "tool"
@@ -59,6 +76,7 @@ function range(id: number, n: number): void {
 export class ControlMemoryDisk {
 	private readonly lease: DatabaseSync;
 	private readonly db: DatabaseSync;
+	private readonly path: string;
 	constructor(dir: string) {
 		mkdirSync(dir, { recursive: true, mode: 0o700 });
 		// Same non-expiring, OS-released owner lease as project memory. Never unlink the lock.
@@ -70,7 +88,12 @@ export class ControlMemoryDisk {
 			throw error;
 		}
 		try {
-			this.db = new DatabaseSync(join(dir, "chat.sqlite"));
+			this.path = join(dir, "chat.sqlite");
+			this.db = new DatabaseSync(this.path);
+			// Unicode case folding for log search; SQLite's own LIKE folds ASCII only.
+			this.db.function("pilot_fold", { deterministic: true }, (value) =>
+				typeof value === "string" ? value.toLowerCase() : null,
+			);
 			this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
 				CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY, key TEXT UNIQUE, at INTEGER NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL);
 				CREATE TRIGGER IF NOT EXISTS messages_no_update BEFORE UPDATE ON messages BEGIN SELECT RAISE(ABORT, 'append only'); END;
@@ -384,6 +407,90 @@ export class ControlMemoryDisk {
 		range(id, n);
 		if (n === 1 || id + n > this.meta("count")) throw new Error("Expected an existing summary range");
 		return [id, id + n / 2].map((id) => ({ id, n: n / 2, text: this.node(id, n / 2) ?? PENDING }));
+	}
+	/** The current view for people: unsummarized lines are flagged instead of carrying placeholder text. */
+	viewLines(): ControlMemoryLine[] {
+		return this.db
+			.prepare("SELECT v.id,v.n,t.text FROM view v LEFT JOIN nodes t ON v.id=t.id AND v.n=t.n ORDER BY v.id")
+			.all()
+			.map((row) => this.line(Number(row.id), Number(row.n), row.text as string | null));
+	}
+	childLines(id: number, n: number): ControlMemoryLine[] {
+		range(id, n);
+		if (n === 1 || id + n > this.meta("count")) throw new Error("Expected an existing summary range");
+		return [id, id + n / 2].map((id) => this.line(id, n / 2, this.node(id, n / 2) ?? null));
+	}
+	private line(id: number, n: number, text: string | null): ControlMemoryLine {
+		return text === null ? { id, n, text: "", pending: true } : { id, n, text };
+	}
+	/** Newest first, ids below `before`. A search folds case (Unicode) and matches q literally: LIKE wildcards
+	 * are escaped. It examines at most CONTROL_SEARCH_WINDOW ids per call and returns `next` to continue. */
+	messages(before?: number, limit = 50, q?: string, window = CONTROL_SEARCH_WINDOW): ControlMemoryMessagesResponse {
+		const count = this.meta("count");
+		if (before !== undefined && (!Number.isSafeInteger(before) || before < 0)) throw new Error("Invalid cursor");
+		if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error("limit must be 1..100");
+		if (q !== undefined && (typeof q !== "string" || !q || q.length > 200 || q.includes("\0")))
+			throw new Error("q must be 1..200 characters");
+		const end = Math.min(before ?? count, count);
+		let rows: Record<string, unknown>[];
+		let floor = 0;
+		if (q === undefined) {
+			rows = this.db
+				.prepare("SELECT id,at,kind,payload FROM messages WHERE id<? ORDER BY id DESC LIMIT ?")
+				.all(end, limit + 1);
+		} else {
+			floor = Math.max(0, end - window);
+			const pattern = `%${q.toLowerCase().replace(/[\\%_]/g, "\\$&")}%`;
+			rows = this.db
+				.prepare(
+					`SELECT id,at,kind,payload FROM messages WHERE id<? AND id>=? AND (
+						pilot_fold(json_extract(payload,'$.text')) LIKE ? ESCAPE '\\'
+						OR (kind='tool' AND pilot_fold(coalesce(json_extract(payload,'$.name'),'') || ' ' || coalesce(json_extract(payload,'$.input'),'')) LIKE ? ESCAPE '\\')
+					) ORDER BY id DESC LIMIT ?`,
+				)
+				.all(end, floor, pattern, pattern, limit + 1);
+		}
+		const more = rows.length > limit;
+		const messages = rows.slice(0, limit).map((row) => this.logEntry(row));
+		const next = more ? messages.at(-1)!.id : q !== undefined && floor > 0 ? floor : undefined;
+		return { messages, ...(next !== undefined ? { next } : {}) };
+	}
+	private logEntry(row: Record<string, unknown>): ControlMemoryLogEntry {
+		const message = JSON.parse(String(row.payload)) as ControlMessage;
+		const text = clip(message.text, CLIP_TEXT);
+		const input = message.kind === "tool" ? clip(JSON.stringify(message.input) ?? "null", CLIP_INPUT) : undefined;
+		return {
+			id: Number(row.id),
+			at: Number(row.at),
+			kind: String(row.kind) as ControlMessageKind,
+			text: text.text,
+			...(message.kind === "tool" ? { name: message.name, input: input!.text } : {}),
+			...(text.clipped || input?.clipped ? { clipped: true } : {}),
+		};
+	}
+	stats(): ControlMemoryStats {
+		const jobs = this.db
+			.prepare("SELECT coalesce(sum(state<2),0) AS pending, coalesce(sum(state=2),0) AS failed FROM jobs")
+			.get()!;
+		const oldest = this.db.prepare("SELECT at FROM messages ORDER BY id LIMIT 1").get();
+		const newest = this.db.prepare("SELECT at FROM messages ORDER BY id DESC LIMIT 1").get();
+		const size = (path: string) => {
+			try {
+				return statSync(path).size;
+			} catch {
+				return 0;
+			}
+		};
+		return {
+			count: this.meta("count"),
+			pendingJobs: Number(jobs.pending),
+			failedJobs: Number(jobs.failed),
+			viewBytes: this.meta("bytes"),
+			merging: !!this.meta("merging"),
+			dbBytes: size(this.path) + size(`${this.path}-wal`),
+			...(oldest ? { oldestAt: Number(oldest.at) } : {}),
+			...(newest ? { newestAt: Number(newest.at) } : {}),
+		};
 	}
 	date(id: number): string {
 		range(id, 1);

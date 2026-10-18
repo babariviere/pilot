@@ -119,6 +119,18 @@ if (workerData.replicaRecall) {
 					case "control.children":
 						value = control.children(args.id, args.n);
 						break;
+					case "control.viewLines":
+						value = control.viewLines();
+						break;
+					case "control.childLines":
+						value = control.childLines(args.id, args.n);
+						break;
+					case "control.messages":
+						value = control.messages(args.before, args.limit, args.q);
+						break;
+					case "control.stats":
+						value = control.stats();
+						break;
 					case "control.date":
 						value = control.date(args.id);
 						break;

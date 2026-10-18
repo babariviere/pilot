@@ -1,8 +1,9 @@
 import Foundation
 
-/// Which control-chat details a `watches.changed` or `control-audit.changed` invalidation covers.
+/// Which control-chat details a `watches.changed`, `control-audit.changed` or `control-memory.changed`
+/// invalidation covers.
 public enum ControlDetailsChange: Sendable, Equatable {
-    case watches, audit
+    case watches, audit, memory
 }
 
 /// One audited control action, folded from its requested, succeeded and failed entries into the latest state.

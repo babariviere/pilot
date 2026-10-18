@@ -72,6 +72,7 @@ final class ControlDetailsModel: ObservableObject {
             switch change {
             case .watches: self?.reloadWatches(coalescing: true)
             case .audit: self?.reloadAudit(coalescing: true)
+            case .memory: break
             }
         }
         reload()
