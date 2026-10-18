@@ -603,12 +603,13 @@ struct KeyboardRegionAnchor: NSViewRepresentable {
 /// The small hint shown after G, listing where the next letter goes.
 struct KeyboardSequenceHint: View {
     @ObservedObject var focus: KeyboardFocus
+    @ObservedObject var model: AppModel
 
     var body: some View {
         if focus.pendingSequence {
             HStack(spacing: 12) {
                 KeyCap(key: "G").foregroundStyle(Theme.foreground)
-                ForEach(GoDestination.allCases, id: \.self) { destination in
+                ForEach(model.availableGoDestinations, id: \.self) { destination in
                     KeyHint(key: destination.key.uppercased(), label: destination.title)
                 }
             }

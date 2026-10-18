@@ -240,10 +240,13 @@ private func keyEvent(_ characters: String, keyCode: UInt16, modifiers: NSEvent.
     let project = Project(id: "p1", name: "pilot", path: "/tmp/pilot", createdAt: 1)
     model.client.loadFixture(projects: [project], sessions: [
         SessionSummary(id: "a", title: "a", cwd: "/tmp", projectId: "p1", createdAt: 1, updatedAt: 2, state: "idle"),
+        SessionSummary(id: "mission-chat", title: "mission chat", cwd: "/tmp", projectId: "p1",
+                       createdAt: 1, updatedAt: 3, state: "idle", missionId: "m1"),
     ])
     model.selectedSessionId = "a"
     #expect(!model.canGo(to: .overview))
     #expect(!model.canGo(to: .tasks))
+    #expect(model.availableGoDestinations == [.home, .inbox, .archive, .slack, .linear])
     model.go(to: .overview)
     model.go(to: .brief)
     #expect(model.selectedSessionId == "a")
@@ -253,10 +256,27 @@ private func keyEvent(_ characters: String, keyCode: UInt16, modifiers: NSEvent.
     #expect(model.showingArchive && !model.showingInbox)
     model.focus(on: "p1")
     #expect(model.canGo(to: .overview))
+    #expect(model.availableGoDestinations.contains(.overview))
+    #expect(!model.availableGoDestinations.contains(.mission))
     model.go(to: .overview)
     #expect(model.selectedProjectId == "p1")
+    model.openMission("m1")
+    #expect(model.availableGoDestinations.contains(.mission))
+    #expect(model.availableGoDestinations.contains(.tasks))
+    #expect(model.availableGoDestinations.contains(.brief))
+    model.selectedMissionId = nil
+    model.selectedSessionId = "mission-chat"
+    #expect(model.currentMissionId == "m1")
+    #expect(model.availableGoDestinations.contains(.mission))
+    model.selectedSessionId = "a"
+    #expect(!model.availableGoDestinations.contains(.mission), "changing to a non-mission chat drops the prior target")
     model.go(to: .home)
     #expect(model.currentSelection == .home)
+    #expect(!model.availableGoDestinations.contains(.mission))
+    #expect(model.availableGoDestinations.contains(.overview) == model.canGo(to: .overview),
+            "Home retains the focused project scope for project Overview")
+    #expect(model.performKeyboardRoute(.go("m")))
+    #expect(model.currentSelection == .home, "a destination that disappeared with the context stays harmless")
     // Unknown letters do nothing but are still consumed, so they never type into a list.
     #expect(model.performKeyboardRoute(.go("z")))
     #expect(model.currentSelection == .home)

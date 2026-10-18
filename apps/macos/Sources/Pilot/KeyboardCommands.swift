@@ -30,7 +30,7 @@ extension AppModel {
             toggleInspector(.terminal)
             return true
         case let .go(letter):
-            if let destination = GoDestination(key: letter), canGo(to: destination) {
+            if let destination = GoDestination(key: letter), availableGoDestinations.contains(destination) {
                 go(to: destination)
                 keyboard.focusAfterNavigation(.content)
             }
@@ -94,6 +94,11 @@ extension AppModel {
         case .overview: sidebarScope != nil
         case .mission, .tasks, .brief: currentMissionId != nil
         }
+    }
+
+    /// Destinations shown in the G hint and accepted by G-key dispatch.
+    var availableGoDestinations: [GoDestination] {
+        GoDestination.allCases.filter { canGo(to: $0) }
     }
 
     func go(to destination: GoDestination) {
