@@ -136,6 +136,7 @@ public enum ControlPilotAction: String, Codable, CaseIterable, Sendable {
     case missionCreate = "mission_create", missionAttach = "mission_attach"
     case watch, unwatch, watches
 }
+/// Execution/evidence routing only. Mission identity/navigation is canonical, not host-scoped.
 public struct ControlHostRequest: Codable, Equatable, Sendable {
     public let action: ControlPilotAction
     public let host: OperationHost?
@@ -363,6 +364,7 @@ public struct ControlRemoteEventQuery: Codable, Equatable, Sendable {
     public let limit: Int?
     public init(after: Int, limit: Int? = nil) { self.after = after; self.limit = limit }
 }
+/// Source observations feed one logical mission list. sourceHost is provenance, not a partition.
 public struct ControlRemoteStatusSnapshot: Codable, Equatable, Sendable {
     public let sourceHost: OperationHost
     public let snapshotId: String

@@ -119,6 +119,9 @@ interface Fixtures {
 	replicaMissions: C.ControlDashboardReplicaMission[];
 	hostObservations: C.ControlHostObservation[];
 	dashboardProjection: C.ControlDashboardResponse;
+	logicalMissionInputs: C.ControlRemoteStatusSnapshot[];
+	logicalMissions: C.ControlLogicalMission[];
+	logicalDashboardProjection: C.ControlDashboardResponse;
 	archiveInfo: C.ControlArchiveInfo;
 	archiveReads: {
 		watches: C.ControlArchiveRead<C.ControlArchivedWatchesResponse>;
@@ -607,4 +610,34 @@ test("archive administrative approval binds exact intent and both role epochs; e
 	assert.equal(f.emptyAckPolicy.page.head, 0);
 	assert.equal(f.emptyAckPolicy.executorAckNeeded, false);
 	assert.equal(f.emptyAckPolicy.homeAcknowledgment.eventId, undefined);
+});
+
+test("planned logical mission wire rows retain canonical identity and source provenance, not host partitions", () => {
+	const f = roundTrip(fixture);
+	const [first, second] = f.logicalMissions;
+	assert.equal(first.title, second.title);
+	assert.equal(first.mission.missionId, second.mission.missionId);
+	assert.notDeepEqual(first.mission.home, second.mission.home);
+	assert.notEqual(first.id, second.id);
+	for (const row of f.logicalMissions) {
+		assert.equal(
+			row.id,
+			JSON.stringify([row.mission.home.daemonId, row.mission.home.lineageId, row.mission.missionId]),
+		);
+		assert.equal("executionHost" in row, false);
+	}
+	assert.equal(first.provenance.length, 2);
+	assert.notDeepEqual(first.provenance[0].sourceHost, first.provenance[1].sourceHost);
+	assert.deepEqual(first.coordinator?.host, first.mission.home);
+	assert.equal(second.tasksDone, undefined);
+	assert.equal(second.status, undefined);
+	assert.equal(second.provenance[0].replicaAgeMs, undefined);
+	const [canonical, replica] = f.logicalMissionInputs;
+	assert.equal(canonical.dashboard.logicalMissions, undefined);
+	assert.equal(replica.dashboard.logicalMissions, undefined);
+	assert.deepEqual(replica.dashboard.replicaMissions[0].missionHome, first.mission.home);
+	assert.equal(canonical.dashboard.missions[0].id, first.mission.missionId);
+	assert.equal(f.logicalDashboardProjection.logicalMissions?.length, 2);
+	assert.equal(f.logicalDashboardProjection.totals.logicalMissions, 2);
+	assert.deepEqual(f.logicalDashboardProjection.logicalMissions, f.logicalMissions);
 });

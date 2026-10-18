@@ -7114,5 +7114,391 @@
 			"proposalId": "proposal:2",
 			"proposalState": "rejected"
 		}
-	]
+	],
+	"logicalMissionInputs": [
+		{
+			"sourceHost": {
+				"hostId": "daemon",
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage"
+			},
+			"snapshotId": "logical-input:home",
+			"revision": 1,
+			"capturedAt": 4000,
+			"dashboard": {
+				"untrusted": true,
+				"source": "daemon-memory",
+				"projects": [],
+				"chats": [],
+				"missions": [
+					{
+						"id": "m",
+						"projectId": "p",
+						"title": "Same mission name",
+						"status": "active",
+						"tasksDone": 1,
+						"tasksTotal": 3,
+						"coordinatorSessionId": "coordinator:1"
+					}
+				],
+				"pullRequests": [],
+				"linear": [],
+				"runningAgents": [],
+				"activeMissions": [
+					{
+						"id": "m",
+						"projectId": "p",
+						"title": "Same mission name",
+						"status": "active",
+						"tasksDone": 1,
+						"tasksTotal": 3,
+						"coordinatorSessionId": "coordinator:1"
+					}
+				],
+				"blockers": [],
+				"pendingDecisions": [],
+				"next": {
+					"watches": [],
+					"total": 0
+				},
+				"totals": {
+					"projects": 0,
+					"chats": 0,
+					"missions": 1,
+					"pullRequests": 0,
+					"linear": 0,
+					"runningAgents": 0,
+					"activeMissions": 1,
+					"blockers": 0,
+					"pendingDecisions": 0,
+					"sharedTasks": 2,
+					"replicaMissions": 0
+				},
+				"truncated": false,
+				"sharedTasks": [],
+				"replicaMissions": []
+			},
+			"truncated": false
+		},
+		{
+			"sourceHost": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"snapshotId": "logical-input:replicas",
+			"revision": 1,
+			"capturedAt": 4000,
+			"dashboard": {
+				"untrusted": true,
+				"source": "daemon-memory",
+				"projects": [],
+				"chats": [],
+				"missions": [],
+				"pullRequests": [],
+				"linear": [],
+				"runningAgents": [],
+				"activeMissions": [],
+				"blockers": [],
+				"pendingDecisions": [],
+				"next": {
+					"watches": [],
+					"total": 0
+				},
+				"totals": {
+					"projects": 0,
+					"chats": 0,
+					"missions": 0,
+					"pullRequests": 0,
+					"linear": 0,
+					"runningAgents": 0,
+					"activeMissions": 0,
+					"blockers": 0,
+					"pendingDecisions": 0,
+					"sharedTasks": 2,
+					"replicaMissions": 2
+				},
+				"truncated": false,
+				"sharedTasks": [],
+				"replicaMissions": [
+					{
+						"id": "replica:canonical-m",
+						"bindingId": "shared:mission:1",
+						"projectId": "rp",
+						"missionId": "m",
+						"missionHome": {
+							"hostId": "daemon",
+							"daemonId": "home-daemon",
+							"lineageId": "home-lineage"
+						},
+						"title": "Same mission name",
+						"status": "active",
+						"complete": true,
+						"sequence": 9,
+						"consistency": "committed",
+						"replicaSyncedAt": 3900,
+						"replicaAgeMs": 100
+					},
+					{
+						"id": "replica:other-m",
+						"bindingId": "shared:mission:2",
+						"projectId": "rp",
+						"missionId": "m",
+						"missionHome": {
+							"hostId": "daemon",
+							"daemonId": "other-mission-authority",
+							"lineageId": "other-mission-lineage"
+						},
+						"title": "Same mission name",
+						"complete": false,
+						"sequence": 1,
+						"consistency": "committed",
+						"replicaAgeMs": null
+					}
+				]
+			},
+			"truncated": false
+		}
+	],
+	"logicalMissions": [
+		{
+			"id": "[\"home-daemon\",\"home-lineage\",\"m\"]",
+			"mission": {
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"missionId": "m"
+			},
+			"title": "Same mission name",
+			"status": "active",
+			"tasksDone": 1,
+			"tasksTotal": 3,
+			"coordinator": {
+				"host": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"sessionId": "coordinator:1"
+			},
+			"provenance": [
+				{
+					"kind": "canonical",
+					"sourceHost": {
+						"hostId": "daemon",
+						"daemonId": "home-daemon",
+						"lineageId": "home-lineage"
+					},
+					"projectId": "p"
+				},
+				{
+					"kind": "replica",
+					"sourceHost": {
+						"hostId": "daemon",
+						"daemonId": "executor-daemon",
+						"lineageId": "executor-lineage"
+					},
+					"projectId": "rp",
+					"bindingId": "shared:mission:1",
+					"sequence": 9,
+					"complete": true,
+					"replicaSyncedAt": 3900,
+					"replicaAgeMs": 100
+				}
+			]
+		},
+		{
+			"id": "[\"other-mission-authority\",\"other-mission-lineage\",\"m\"]",
+			"mission": {
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "other-mission-authority",
+					"lineageId": "other-mission-lineage"
+				},
+				"missionId": "m"
+			},
+			"title": "Same mission name",
+			"provenance": [
+				{
+					"kind": "replica",
+					"sourceHost": {
+						"hostId": "daemon",
+						"daemonId": "executor-daemon",
+						"lineageId": "executor-lineage"
+					},
+					"projectId": "rp",
+					"bindingId": "shared:mission:2",
+					"sequence": 1,
+					"complete": false
+				}
+			]
+		}
+	],
+	"logicalDashboardProjection": {
+		"untrusted": true,
+		"source": "daemon-memory",
+		"projects": [],
+		"chats": [],
+		"missions": [
+			{
+				"id": "m",
+				"projectId": "p",
+				"title": "Same mission name",
+				"status": "active",
+				"tasksDone": 1,
+				"tasksTotal": 3,
+				"coordinatorSessionId": "coordinator:1"
+			}
+		],
+		"pullRequests": [],
+		"linear": [],
+		"runningAgents": [],
+		"activeMissions": [
+			{
+				"id": "m",
+				"projectId": "p",
+				"title": "Same mission name",
+				"status": "active",
+				"tasksDone": 1,
+				"tasksTotal": 3,
+				"coordinatorSessionId": "coordinator:1"
+			}
+		],
+		"blockers": [],
+		"pendingDecisions": [],
+		"next": {
+			"watches": [],
+			"total": 0
+		},
+		"totals": {
+			"projects": 0,
+			"chats": 0,
+			"missions": 1,
+			"pullRequests": 0,
+			"linear": 0,
+			"runningAgents": 0,
+			"activeMissions": 1,
+			"blockers": 0,
+			"pendingDecisions": 0,
+			"sharedTasks": 2,
+			"replicaMissions": 2,
+			"logicalMissions": 2
+		},
+		"truncated": false,
+		"sharedTasks": [],
+		"replicaMissions": [
+			{
+				"id": "replica:canonical-m",
+				"bindingId": "shared:mission:1",
+				"projectId": "rp",
+				"missionId": "m",
+				"missionHome": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"title": "Same mission name",
+				"status": "active",
+				"complete": true,
+				"sequence": 9,
+				"consistency": "committed",
+				"replicaSyncedAt": 3900,
+				"replicaAgeMs": 100
+			},
+			{
+				"id": "replica:other-m",
+				"bindingId": "shared:mission:2",
+				"projectId": "rp",
+				"missionId": "m",
+				"missionHome": {
+					"hostId": "daemon",
+					"daemonId": "other-mission-authority",
+					"lineageId": "other-mission-lineage"
+				},
+				"title": "Same mission name",
+				"complete": false,
+				"sequence": 1,
+				"consistency": "committed",
+				"replicaAgeMs": null
+			}
+		],
+		"logicalMissions": [
+			{
+				"id": "[\"home-daemon\",\"home-lineage\",\"m\"]",
+				"mission": {
+					"home": {
+						"hostId": "daemon",
+						"daemonId": "home-daemon",
+						"lineageId": "home-lineage"
+					},
+					"missionId": "m"
+				},
+				"title": "Same mission name",
+				"status": "active",
+				"tasksDone": 1,
+				"tasksTotal": 3,
+				"coordinator": {
+					"host": {
+						"hostId": "daemon",
+						"daemonId": "home-daemon",
+						"lineageId": "home-lineage"
+					},
+					"sessionId": "coordinator:1"
+				},
+				"provenance": [
+					{
+						"kind": "canonical",
+						"sourceHost": {
+							"hostId": "daemon",
+							"daemonId": "home-daemon",
+							"lineageId": "home-lineage"
+						},
+						"projectId": "p"
+					},
+					{
+						"kind": "replica",
+						"sourceHost": {
+							"hostId": "daemon",
+							"daemonId": "executor-daemon",
+							"lineageId": "executor-lineage"
+						},
+						"projectId": "rp",
+						"bindingId": "shared:mission:1",
+						"sequence": 9,
+						"complete": true,
+						"replicaSyncedAt": 3900,
+						"replicaAgeMs": 100
+					}
+				]
+			},
+			{
+				"id": "[\"other-mission-authority\",\"other-mission-lineage\",\"m\"]",
+				"mission": {
+					"home": {
+						"hostId": "daemon",
+						"daemonId": "other-mission-authority",
+						"lineageId": "other-mission-lineage"
+					},
+					"missionId": "m"
+				},
+				"title": "Same mission name",
+				"provenance": [
+					{
+						"kind": "replica",
+						"sourceHost": {
+							"hostId": "daemon",
+							"daemonId": "executor-daemon",
+							"lineageId": "executor-lineage"
+						},
+						"projectId": "rp",
+						"bindingId": "shared:mission:2",
+						"sequence": 1,
+						"complete": false
+					}
+				]
+			}
+		]
+	}
 }

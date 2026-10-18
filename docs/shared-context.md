@@ -79,12 +79,16 @@ secret-like export refusal as synchronization. `conflicts` continues returning `
 
 `pilot status` and `GET /api/control-chat/dashboard` share a change-driven, read-only projection:
 `sharedTasks` contains mission-home grants and remote-home committed/provisional task rows;
-`replicaMissions` contains enrolled remote-home mission summaries (separate from local writable missions).
+`replicaMissions` contains enrolled replica observations as a compatibility/source-input array,
+not a separate mission namespace or host section. Missions have one logical list and navigation;
+the planned unified projection is frozen in [Control hosts](control-hosts.md#planned-logical-mission-projection),
+not implemented here. Execution hosts belong to chats/tasks, while mission home is internal authority.
 Rows carry the pinned mission-home identity and binding. Grants carry the execution host, execution
 epoch, reserved/accepted/cancel-requested/sealed state and any eligible last imported working fact.
 Cancel requested does not mean stopped; sealed means not running. Missing or old facts never imply failure.
-Project filters use the local enrolled execution project for replicas. Mission IDs may match multiple
-authorities; rows retain their qualified host/binding identities, never merge their state.
+Project filters use the local enrolled execution project for replica evidence, not a mission host partition.
+Mission identity is the canonical (mission home, missionId): repeated observations of that identity
+represent one mission; same title or bare ID under different pinned homes never merges their state.
 
 Replica summaries report completeness, sequence, last mission import time and age. Memory imports do
 not refresh mission age. Legacy/missing timestamps have unknown (`null`) age. Incomplete replicas expose

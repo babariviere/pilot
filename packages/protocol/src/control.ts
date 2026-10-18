@@ -145,6 +145,32 @@ export interface ControlDashboardMission {
 	tasksTotal: number;
 	coordinatorSessionId?: string;
 }
+/** Planned unified mission row; identity/navigation are canonical, never execution-host scoped. */
+export interface ControlLogicalMission {
+	/** Stable JSON tuple [mission.home.daemonId, mission.home.lineageId, mission.missionId]. */
+	id: string;
+	mission: import("./shared-context.ts").SharedMissionRef;
+	title?: string;
+	status?: import("./index.ts").MissionStatus;
+	/** Unknown counts are omitted, never reconstructed from a clipped/provisional task list. */
+	tasksDone?: number;
+	tasksTotal?: number;
+	coordinator?: import("./shared-context.ts").SharedSessionRef;
+	/** Bounded source evidence, not host sections, execution placement or new authority. */
+	provenance: ControlMissionProvenance[];
+}
+export interface ControlMissionProvenance {
+	kind: "canonical" | "replica";
+	sourceHost: import("./operations.ts").OperationHost;
+	/** Source-local project metadata, not logical mission identity. */
+	projectId: string;
+	bindingId?: string;
+	sequence?: number;
+	complete?: boolean;
+	replicaSyncedAt?: number;
+	/** Missing means unknown; no wall-clock ordering or connectivity-derived mission status. */
+	replicaAgeMs?: number;
+}
 export interface ControlDashboardBlocker {
 	id: string;
 	kind: "blocked_task" | "failed_chat" | "question" | "failing_checks";
@@ -233,6 +259,8 @@ export interface ControlAuthorizationNeeded {
 	createdAt: number;
 }
 export interface ControlDashboardResponse {
+	/** Planned single logical list. Not produced until the separately approved folding work. */
+	logicalMissions?: ControlLogicalMission[];
 	/** Host-aware transport metadata, independent of task outcome and replica freshness. */
 	hosts?: ControlHostObservation[];
 	untrusted: true;
@@ -262,6 +290,8 @@ export interface ControlDashboardResponse {
 		activeMissions: number;
 		blockers: number;
 		pendingDecisions: number;
+		/** Pre-clipping canonical mission identities, independent of provenance copies. */
+		logicalMissions?: number;
 		sharedTasks: number;
 		replicaMissions: number;
 	};
@@ -432,7 +462,8 @@ export type ControlPilotAction =
 	| "unwatch"
 	| "watches";
 /** Future daemon routing envelope, not a replacement for today's flat tool arguments.
- * All actions resolve host before resolving any daemon-local IDs. Home-owned actions reject remote hosts. */
+ * Host selects execution/evidence routing, never a mission partition or identity filter.
+ * Resolve canonical mission refs independently; home-owned actions reject remote hosts. */
 export interface ControlHostRequest {
 	action: ControlPilotAction;
 	host?: OperationHost;
@@ -570,14 +601,15 @@ export interface ControlRemoteEventAcknowledgment {
 	/** Omitted only for through=0 on a fresh empty stream. */
 	eventId?: string;
 }
-/** A bounded captured inventory. Across pages the identity, capture time and totals stay fixed. */
+/** Bounded source observations merged into one logical mission list, never a per-host mission section.
+ * Across pages the capture identity, time and totals stay fixed. SourceHost is transport provenance. */
 export interface ControlRemoteStatusSnapshot {
 	sourceHost: OperationHost;
 	snapshotId: string;
 	/** Durable per-binding capture counter, not mission intent revision or wall-clock order. */
 	revision: number;
 	capturedAt: number;
-	/** Task/replica rows and totals live only inside this capture's dashboard. */
+	/** Task/replica inputs and any planned logical projection live only inside dashboard. */
 	dashboard: ControlDashboardResponse;
 	truncated: boolean;
 }

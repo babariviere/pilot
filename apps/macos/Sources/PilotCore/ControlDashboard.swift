@@ -4,6 +4,8 @@ import Foundation
 /// Cached daemon state, no worker starts. Text is untrusted. Lists and encoded size are bounded;
 /// totals precede clipping. Next always contains global Control instructions, including scoped requests.
 public struct ControlDashboardResponse: Codable, Equatable, Sendable {
+    /// Planned one logical mission list, not emitted until separately approved folding work.
+    public let logicalMissions: [ControlLogicalMission]?
     public let hosts: [ControlHostObservation]?
     public struct Project: Codable, Equatable, Sendable {
         public let id: String
@@ -32,6 +34,7 @@ public struct ControlDashboardResponse: Codable, Equatable, Sendable {
         public let followUpsTotal: Int?
     }
     public struct Totals: Codable, Equatable, Sendable {
+        public let logicalMissions: Int?
         public let projects: Int
         public let chats: Int
         public let missions: Int
@@ -117,6 +120,29 @@ public struct ControlDashboardMission: Codable, Identifiable, Equatable, Sendabl
     public let tasksDone: Int
     public let tasksTotal: Int
     public let coordinatorSessionId: String?
+}
+
+/// Canonical mission navigation and identity. Source hosts are provenance, not mission partitions.
+public struct ControlLogicalMission: Codable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let mission: SharedMissionRef
+    public let title: String?
+    public let status: MissionStatus?
+    public let tasksDone: Int?
+    public let tasksTotal: Int?
+    public let coordinator: SharedSessionRef?
+    public let provenance: [ControlMissionProvenance]
+}
+public struct ControlMissionProvenance: Codable, Equatable, Sendable {
+    public enum Kind: String, Codable, Sendable { case canonical, replica }
+    public let kind: Kind
+    public let sourceHost: OperationHost
+    public let projectId: String
+    public let bindingId: String?
+    public let sequence: Int?
+    public let complete: Bool?
+    public let replicaSyncedAt: Double?
+    public let replicaAgeMs: Double?
 }
 
 public struct ControlDashboardBlocker: Codable, Identifiable, Equatable, Sendable {
