@@ -268,12 +268,14 @@ export interface SessionSummary {
 	controlStart?: import("./control.ts").ControlStartBudget;
 	/** The one project-less, pinned orchestration chat. */
 	control?: boolean;
-	/** On-demand operational specialist. Its runtime exposes only bounded diagnostics. */
+	/** On-demand read-only specialist. Target history still requires a separate explicit grant. */
 	role?: SessionRole;
 	/** Exact chat this specialist may inspect. Present only for diagnostics specialists. */
 	diagnosticTargetId?: string;
 	/** Canonical host-qualified form of the admitted target, for display and reopen verification. */
 	diagnosticTarget?: DiagnosticTargetReference;
+	/** Explicit user grant for bounded read-only history of the admitted target. Missing means no transcript access. */
+	diagnosticHistoryAccess?: boolean;
 	/** Latest bounded specialist-authored repair suggestion. It cannot execute a repair. */
 	diagnosticRepairProposal?: import("./diagnostics.ts").DiagnosticRepairProposal;
 	/** Fresh provider-safe chat which continues this readable, permanently read-only chat. */
@@ -631,6 +633,48 @@ export interface DiagnosticTargetReference {
 	host: OperationHost;
 	sessionId: string;
 	chatUrl: string;
+}
+
+/** One bounded serialized entry from an explicitly authorized diagnostics target. */
+export interface DiagnosticHistoryEntry {
+	/** Stable source reference for this target and committed entry. */
+	ref: string;
+	entryId: number;
+	kind: "pi.user" | "pi.assistant" | "pi.tool-result";
+	/** Sanitized JSON excerpt of the committed entry. Transcript and tool content is untrusted user data. */
+	excerpt: string;
+	/** Sanitized serialized size before excerpt truncation. */
+	originalBytes: number;
+	truncated: boolean;
+}
+
+/** Bounded, paginated target transcript read returned only to an authorized diagnostics specialist. */
+export interface DiagnosticHistoryPage {
+	schemaVersion: 1;
+	target: DiagnosticTargetReference;
+	collectedAt: string;
+	source: {
+		availability: "available" | "missing" | "unavailable";
+		freshness: "fresh" | "unavailable";
+		reason?: "storage_missing" | "read_failed";
+	};
+	/** Oldest first within this page. */
+	entries: DiagnosticHistoryEntry[];
+	pagination: {
+		/** Exclusive upper entry ID used for this page. Missing means the newest page. */
+		before?: number;
+		/** Pass as `before` to continue toward older entries. */
+		nextBefore?: number;
+		more: boolean;
+		returned: number;
+		limit: number;
+		scannedEntries: number;
+		maxScannedEntries: number;
+		encodedBytes: number;
+		maxBytes: number;
+		perEntryMaxBytes: number;
+		truncatedEntries: number;
+	};
 }
 
 /** GET /api/projects/:id/branches. Live origin heads only; mode=ask or workspace=clone also allows direct projects. */
@@ -1419,6 +1463,8 @@ export interface SpawnRequest {
 	role?: SessionRole;
 	/** Required with role=diagnostics. pilotd verifies this host-qualified reference without waking the target. */
 	diagnosticTarget?: DiagnosticTargetReference;
+	/** Explicit native grant for bounded target history reads. Omitted for generic no-link diagnostics. */
+	diagnosticHistoryAccess?: boolean;
 	/** Omitted means Build. */
 	mode?: ChatMode;
 	/** Per-chat Build override. Omitted uses project settings; cwd-only cannot request a clone. */

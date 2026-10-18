@@ -8,6 +8,7 @@ import { closePreviewBrowser } from "@pilot/artifacts";
 import { configureNodeTelemetry, nodeTelemetry } from "@pilot/telemetry";
 import release from "../../../package.json" with { type: "json" };
 import type { DatabaseCall } from "./database-tool.ts";
+import type { DiagnosticHistoryCall } from "./diagnostic-history-tool.ts";
 import type { DiagnosticsCall } from "./diagnostics-tool.ts";
 import { formatFailure } from "./failure.ts";
 import type { MissionCall } from "./mission-tools.ts";
@@ -232,6 +233,14 @@ export function runKernelWorker(): void {
 			sessionId,
 			...(limit === undefined ? {} : { limit }),
 		}));
+	const callDiagnosticHistory: DiagnosticHistoryCall = (sessionId, before, limit) =>
+		callDaemon((callId) => ({
+			type: "diagnostics.history.call",
+			callId,
+			sessionId,
+			...(before === undefined ? {} : { before }),
+			...(limit === undefined ? {} : { limit }),
+		}));
 	const callRepairProposal: import("./repair-proposal-tool.ts").RepairProposalCall = (proposal) =>
 		callDaemon((callId) => ({ type: "diagnostics.proposal", callId, proposal }));
 
@@ -400,6 +409,7 @@ export function runKernelWorker(): void {
 			command.type === "database.result" ||
 			command.type === "slack.result" ||
 			command.type === "diagnostics.result" ||
+			command.type === "diagnostics.history.result" ||
 			command.type === "diagnostics.proposal.result" ||
 			command.type === "subscription.limit.result" ||
 			command.type === "artifact.reference.result"
@@ -507,6 +517,7 @@ export function runKernelWorker(): void {
 					callDatabase,
 					callSlackStatus,
 					callDiagnostics,
+					callDiagnosticHistory,
 					callRepairProposal,
 					readArtifactReference: (id, revision) =>
 						callDaemon((callId) => ({ type: "artifact.reference.get", callId, id, revision })),

@@ -1,7 +1,7 @@
 # Telemetry and diagnostics verification
 
 This is the final offline verification map for the diagnostics and telemetry stack. It does not enable uploads,
-select a backend, contact a provider, inspect transcripts or grant recovery authority. GitHub CI runs the exact PR
+select a backend, contact a provider or grant recovery authority. GitHub CI runs the exact PR
 head on macOS and Linux; local checks deliberately use faux providers, in-memory exporters and loopback receivers.
 
 ## Privacy and consent
@@ -10,7 +10,7 @@ head on macOS and Linux; local checks deliberately use faux providers, in-memory
 | --- | --- |
 | OTLP schema | `packages/telemetry/src/index.test.ts` rejects prompts, responses, paths, chat URLs, raw host identity, errors, provider/model names and raw tool names, then inspects the accepted exporter payload. |
 | Native schema | `PilotTelemetryTests`, `NativeDiagnosticsTests` and `TelemetrySettingsTests` cover closed enums, separate analytics identity/consent, unsafe endpoint rejection, private host settings and revocation. |
-| Diagnostic read | `session-diagnostics.test.ts`, `control-diagnostics.test.ts` and `diagnostics-role.integration.test.ts` cover bounded projections, stale/missing evidence, direct/nested role denial and no transcript, path, wake or mutation access. |
+| Diagnostic read | `session-diagnostics.test.ts` and `control-diagnostics.test.ts` cover content-free operational projections. `sessions.test.ts`, `cold-snapshot-reader.test.ts`, `diagnostic-history-tool.test.ts` and `diagnostics-role.integration.test.ts` cover explicit target-history grants, no-link/legacy denial, fixed host/session scope, bounds, redaction, unavailable storage and no target wake or mutation. |
 | Devbox setup | `NativeDiagnosticsTests` and `DevboxSettingsInteractionTests` reject aliases, raw stderr and unknown reasons while retaining pre-registration stage evidence separately from remote connection state. |
 | Clipboard | `SessionClipboardActionsTests` keeps the authoritative session root in the user-invoked clipboard action only. Missing path metadata does not disable a canonical host-aware chat link; neither value enters diagnostic or OTLP schemas. |
 

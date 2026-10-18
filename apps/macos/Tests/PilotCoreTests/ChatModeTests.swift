@@ -26,10 +26,11 @@ import Testing
     let targetId = "01234567-89ab-4cde-8fab-0123456789ab"
     let target = try #require(DiagnosticTargetReference(host: host, sessionId: targetId))
     let request = SpawnRequest(projectId: "p", message: "Diagnose", mode: .ask, role: .diagnostics,
-                               diagnosticTarget: target)
+                               diagnosticTarget: target, diagnosticHistoryAccess: true)
     let decoded = try JSONDecoder().decode(SpawnRequest.self, from: JSONEncoder().encode(request))
     #expect(decoded.role == .diagnostics)
     #expect(decoded.diagnosticTarget == target)
+    #expect(decoded.diagnosticHistoryAccess == true)
     let proposal = DiagnosticRepairProposal(id: "diagnostic-proposal:v1:11111111-1111-4111-8111-111111111111",
                                             targetSessionId: targetId, createdAt: "2026-01-01T00:00:00.000Z",
                                             evidenceRefs: ["diagnostic:v1:lifecycle:one"], findings: "Finding",
@@ -37,7 +38,8 @@ import Testing
                                             regressionTestGuidance: "Test")
     let session = SessionSummary(id: "d", title: "Diagnose", cwd: "/tmp", createdAt: 1, updatedAt: 2,
                                  state: "idle", mode: .ask, role: .diagnostics, diagnosticTargetId: targetId,
-                                 diagnosticTarget: target, diagnosticRepairProposal: proposal)
+                                 diagnosticTarget: target, diagnosticHistoryAccess: true,
+                                 diagnosticRepairProposal: proposal)
     #expect(session.isDiagnosticsSpecialist)
     #expect(session.diagnosticRepairProposal == proposal)
     #expect(Set([proposal]).count == 1, "proposal metadata keeps SessionSummary Hashable")

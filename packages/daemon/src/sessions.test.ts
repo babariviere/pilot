@@ -13,6 +13,7 @@ import type { JsonValue } from "@earendil-works/chord";
 import type { KernelCommand, KernelPacket, KernelSubagent, KernelUsage } from "@pilot/kernel";
 import type {
 	AgentEvent,
+	DiagnosticHistoryPage,
 	McpStatus,
 	SessionCompletion,
 	SessionDiagnostics,
@@ -1324,6 +1325,175 @@ test("only a diagnostics specialist can inspect its parked admitted target", asy
 	assert.match(denied?.error ?? "", /host-admitted target/);
 });
 
+test("target history requires a durable explicit grant and stays fixed to the parked admitted target", async (t) => {
+	const f = await fixture(t);
+	const reads: Array<{ directory: string; hostId: string; sessionId: string; before?: number; limit: number }> = [];
+	const sessions = await f.manager(
+		{
+			diagnosticHistoryRead: async (directory, target, before, limit): Promise<DiagnosticHistoryPage> => {
+				reads.push({
+					directory,
+					hostId: target.host.hostId,
+					sessionId: target.sessionId,
+					...(before === undefined ? {} : { before }),
+					limit,
+				});
+				return {
+					schemaVersion: 1,
+					target: before === 99 ? { ...target, host: { ...target.host, lineageId: "wrong-lineage" } } : target,
+					collectedAt: "2026-01-01T00:00:00.000Z",
+					source: { availability: "available", freshness: "fresh" },
+					entries: [],
+					pagination: {
+						...(before === undefined ? {} : { before }),
+						more: false,
+						returned: 0,
+						limit,
+						scannedEntries: 0,
+						maxScannedEntries: 200,
+						encodedBytes: 0,
+						maxBytes: 65_536,
+						perEntryMaxBytes: 8_192,
+						truncatedEntries: 0,
+					},
+				};
+			},
+		},
+		{ diagnosticHost },
+	);
+	const target = await sessions.spawn({ projectId: f.project.id, message: "Target" });
+	const remoteTarget = diagnosticTarget(target.id, { ...diagnosticHost, hostId: "remote-box" });
+	const noLink = await sessions.spawn({
+		message: "Generic Ask about Pilot",
+		role: "diagnostics",
+		diagnosticTarget: remoteTarget,
+	});
+	const granted = await sessions.spawn({
+		message: "Diagnose this chat",
+		role: "diagnostics",
+		diagnosticTarget: remoteTarget,
+		diagnosticHistoryAccess: true,
+	});
+	await Promise.all([
+		sessions["starting"].get(target.id),
+		sessions["starting"].get(noLink.id),
+		sessions["starting"].get(granted.id),
+	]);
+	assert.equal(noLink.diagnosticHistoryAccess, undefined);
+	assert.equal(granted.diagnosticHistoryAccess, true);
+	assert.equal(
+		f.workers.find((worker) => worker.spec.sessionId === noLink.id)?.spec.diagnosticHistoryAccess,
+		undefined,
+	);
+	assert.equal(f.workers.find((worker) => worker.spec.sessionId === granted.id)?.spec.diagnosticHistoryAccess, true);
+
+	const noLinkWorker = sessions["workers"].get(noLink.id)! as FakeWorker;
+	sessions["onPacket"](sessions["metas"].get(noLink.id)!, noLinkWorker, {
+		type: "diagnostics.history.call",
+		callId: "no-link",
+		sessionId: target.id,
+	});
+	await until(() =>
+		noLinkWorker.sent.some(
+			(command) => command.type === "diagnostics.history.result" && command.callId === "no-link",
+		),
+	);
+	const noLinkResult = noLinkWorker.sent.find(
+		(command): command is Extract<KernelCommand, { type: "diagnostics.history.result" }> =>
+			command.type === "diagnostics.history.result" && command.callId === "no-link",
+	);
+	assert.match(noLinkResult?.error ?? "", /not explicitly authorized/);
+	assert.equal(reads.length, 0);
+
+	sessions["workers"].delete(target.id);
+	const workerCount = f.workers.length;
+	const grantedWorker = sessions["workers"].get(granted.id)! as FakeWorker;
+	sessions["onPacket"](sessions["metas"].get(granted.id)!, grantedWorker, {
+		type: "diagnostics.history.call",
+		callId: "allowed",
+		sessionId: target.id,
+		before: 17,
+		limit: 4,
+	});
+	await until(() =>
+		grantedWorker.sent.some(
+			(command) => command.type === "diagnostics.history.result" && command.callId === "allowed",
+		),
+	);
+	const allowed = grantedWorker.sent.find(
+		(command): command is Extract<KernelCommand, { type: "diagnostics.history.result" }> =>
+			command.type === "diagnostics.history.result" && command.callId === "allowed",
+	);
+	assert.ok(allowed?.result, allowed?.error);
+	assert.deepEqual(reads, [
+		{
+			directory: join(f.home, "sessions", target.id, "durable"),
+			hostId: "remote-box",
+			sessionId: target.id,
+			before: 17,
+			limit: 4,
+		},
+	]);
+	assert.equal(f.workers.length, workerCount, "history reads never wake or replace the target worker");
+	const targetMeta = sessions["metas"].get(target.id)!;
+	targetMeta.failure = "private failure";
+	targetMeta.archivedAt = Date.now();
+	sessions.setConnectivity(false);
+	sessions["onPacket"](sessions["metas"].get(granted.id)!, grantedWorker, {
+		type: "diagnostics.history.call",
+		callId: "archived-failed-offline",
+		sessionId: target.id,
+	});
+	await until(() =>
+		grantedWorker.sent.some(
+			(command) => command.type === "diagnostics.history.result" && command.callId === "archived-failed-offline",
+		),
+	);
+	const archived = grantedWorker.sent.find(
+		(command): command is Extract<KernelCommand, { type: "diagnostics.history.result" }> =>
+			command.type === "diagnostics.history.result" && command.callId === "archived-failed-offline",
+	);
+	assert.ok(archived?.result, archived?.error);
+	assert.equal(reads.length, 2, "archived, failed and offline targets remain available through cold storage");
+	assert.equal(f.workers.length, workerCount);
+	sessions["onPacket"](sessions["metas"].get(granted.id)!, grantedWorker, {
+		type: "diagnostics.history.call",
+		callId: "wrong-lineage",
+		sessionId: target.id,
+		before: 99,
+	});
+	await until(() =>
+		grantedWorker.sent.some(
+			(command) => command.type === "diagnostics.history.result" && command.callId === "wrong-lineage",
+		),
+	);
+	const wrongLineage = grantedWorker.sent.find(
+		(command): command is Extract<KernelCommand, { type: "diagnostics.history.result" }> =>
+			command.type === "diagnostics.history.result" && command.callId === "wrong-lineage",
+	);
+	assert.match(wrongLineage?.error ?? "", /source did not match the admitted target/);
+	assert.equal(reads.length, 3);
+
+	const other = await sessions.spawn({ projectId: f.project.id, message: "Other" });
+	await sessions["starting"].get(other.id);
+	sessions["onPacket"](sessions["metas"].get(granted.id)!, grantedWorker, {
+		type: "diagnostics.history.call",
+		callId: "cross-target",
+		sessionId: other.id,
+	});
+	await until(() =>
+		grantedWorker.sent.some(
+			(command) => command.type === "diagnostics.history.result" && command.callId === "cross-target",
+		),
+	);
+	const denied = grantedWorker.sent.find(
+		(command): command is Extract<KernelCommand, { type: "diagnostics.history.result" }> =>
+			command.type === "diagnostics.history.result" && command.callId === "cross-target",
+	);
+	assert.match(denied?.error ?? "", /host-admitted target/);
+	assert.equal(reads.length, 3);
+});
+
 test("spawning target-scoped diagnostics does not wake or change a parked target", async (t) => {
 	const f = await fixture(t);
 	const sessions = await f.manager({}, { diagnosticHost });
@@ -1388,16 +1558,22 @@ test("diagnostics role survives reopen and prepares only a bounded read-only han
 		message: "Diagnose the target",
 		role: "diagnostics",
 		diagnosticTarget: remoteTarget,
+		diagnosticHistoryAccess: true,
 		model: "test/diagnostic",
 		thinking: "high",
 	});
 	await Promise.all([sessions["starting"].get(specialist.id), sessions["starting"].get(target.id)]);
 	assert.equal(specialist.role, "diagnostics");
+	assert.equal(specialist.diagnosticHistoryAccess, true);
 	assert.equal(specialist.mode, "ask");
 	assert.equal(f.workers.find((worker) => worker.spec.sessionId === specialist.id)?.spec.role, "diagnostics");
 	assert.deepEqual(
 		f.workers.find((worker) => worker.spec.sessionId === specialist.id)?.spec.diagnosticTarget,
 		remoteTarget,
+	);
+	assert.equal(
+		f.workers.find((worker) => worker.spec.sessionId === specialist.id)?.spec.diagnosticHistoryAccess,
+		true,
 	);
 	assert.equal(f.workers.find((worker) => worker.spec.sessionId === specialist.id)?.spec.model, "test/diagnostic");
 	assert.equal(f.workers.find((worker) => worker.spec.sessionId === specialist.id)?.spec.thinking, "high");
@@ -1576,6 +1752,7 @@ test("diagnostics role survives reopen and prepares only a bounded read-only han
 	assert.equal(reopened["metas"].get(specialist.id)?.role, "diagnostics");
 	assert.equal(reopened.get(specialist.id)?.diagnosticTargetId, target.id);
 	assert.deepEqual(reopened.get(specialist.id)?.diagnosticTarget, remoteTarget);
+	assert.equal(reopened.get(specialist.id)?.diagnosticHistoryAccess, true);
 	assert.deepEqual(reopened.get(specialist.id)?.diagnosticRepairProposal, proposal);
 });
 

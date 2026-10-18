@@ -38,6 +38,7 @@ import type {
 	ArtifactSummary,
 	DeliveryMode,
 	DiagnosticErrorCode,
+	DiagnosticHistoryPage,
 	DiagnosticPauseReason,
 	DiagnosticRepairProposal,
 	DiagnosticRepairProposalDraft,
@@ -296,6 +297,13 @@ export interface SessionFactories {
 	subagentRead?: (directory: string, conversationId: string, after?: number) => Promise<SubagentTranscriptRead>;
 	/** Read-only page of a session's entries hidden by compaction. */
 	historyRead?: (directory: string, before: number, limit: number) => Promise<EarlierEntriesRead>;
+	/** Bounded cold-storage read for an explicitly authorized diagnostics target. */
+	diagnosticHistoryRead?: (
+		directory: string,
+		target: DiagnosticTargetReference,
+		before: number | undefined,
+		limit: number,
+	) => Promise<DiagnosticHistoryPage>;
 	/** Starts a live transcript watcher. Defaults to a long-lived reader thread. */
 	subagentWatch?: SubagentWatchStarter;
 	title?: (cwd: string, message: string, signal: AbortSignal) => Promise<string | undefined>;
@@ -321,6 +329,8 @@ interface SessionMeta extends OutcomeMeta {
 	diagnosticTargetId?: string;
 	/** Canonical host-qualified target persisted for worker recovery and user-visible context. */
 	diagnosticTarget?: DiagnosticTargetReference;
+	/** Explicit user grant for bounded target conversation/tool history. Missing is deny. */
+	diagnosticHistoryAccess?: true;
 	/** Latest bounded, non-executing suggestion published by this specialist. */
 	diagnosticRepairProposal?: DiagnosticRepairProposal;
 	executionEvidence?: import("@pilot/kernel").ExecutionEvidence;
@@ -3870,6 +3880,8 @@ export class SessionManager {
 		if (
 			meta.role === "diagnostics" &&
 			(meta.mode !== "ask" ||
+				(meta.diagnosticHistoryAccess !== undefined && meta.diagnosticHistoryAccess !== true) ||
+				(meta.diagnosticHistoryAccess === true && !meta.diagnosticTarget) ||
 				(meta.diagnosticTargetId !== undefined &&
 					(typeof meta.diagnosticTargetId !== "string" || !meta.diagnosticTargetId)) ||
 				(meta.diagnosticTarget !== undefined &&
@@ -3903,6 +3915,7 @@ export class SessionManager {
 			meta.role !== "diagnostics" &&
 			(meta.diagnosticTargetId !== undefined ||
 				meta.diagnosticTarget !== undefined ||
+				meta.diagnosticHistoryAccess !== undefined ||
 				meta.diagnosticRepairProposal !== undefined)
 		)
 			throw new Error("Diagnostic target requires a diagnostics specialist");
@@ -4243,8 +4256,13 @@ export class SessionManager {
 				request.cwd !== undefined)
 		)
 			throw new Error("Diagnostics specialists require a target-scoped read-only session");
-		if (request.role !== "diagnostics" && request.diagnosticTarget !== undefined)
-			throw new Error("diagnosticTarget requires role=diagnostics");
+		if (request.diagnosticHistoryAccess !== undefined && request.diagnosticHistoryAccess !== true)
+			throw new Error("diagnosticHistoryAccess must be an explicit true grant or omitted");
+		if (
+			request.role !== "diagnostics" &&
+			(request.diagnosticTarget !== undefined || request.diagnosticHistoryAccess !== undefined)
+		)
+			throw new Error("Diagnostic target access requires role=diagnostics");
 		const controlPermission = this.controlStartOrigin.getStore()?.permission;
 		const mode =
 			request.role === "diagnostics" || controlPermission?.level === "investigate"
@@ -4345,6 +4363,7 @@ export class SessionManager {
 			...(diagnosticTarget && diagnosticReference
 				? { diagnosticTargetId: diagnosticTarget.id, diagnosticTarget: diagnosticReference }
 				: {}),
+			...(request.diagnosticHistoryAccess === true ? { diagnosticHistoryAccess: true as const } : {}),
 			...(admission ? { createOperationId: admission.operationId } : {}),
 			...(admission && request.missionId ? { createMissionId: request.missionId } : {}),
 			mode,
@@ -5333,6 +5352,42 @@ export class SessionManager {
 			? await this.factories.historyRead(directory, before, limit)
 			: await this.coldReader.readEarlier(directory, before, limit);
 		return { entries: read.entries, more: read.more };
+	}
+
+	/** Fixed-target, bounded storage read for one authorized specialist. Never starts or subscribes to the target. */
+	private async diagnosticHistory(
+		specialist: SessionMeta,
+		sessionId: string,
+		before: number | undefined,
+		requestedLimit: number | undefined,
+	): Promise<DiagnosticHistoryPage> {
+		this.validateMode(specialist);
+		if (specialist.role !== "diagnostics" || specialist.diagnosticHistoryAccess !== true)
+			throw new Error("Target history was not explicitly authorized for this diagnostics specialist");
+		const reference = this.diagnosticReference(specialist);
+		if (!reference || reference.sessionId !== sessionId)
+			throw new Error("Diagnostic history is limited to the host-admitted target chat");
+		const target = this.require(sessionId);
+		if (target.role === "diagnostics")
+			throw new Conflict("A diagnostics specialist cannot inspect another specialist");
+		if (before !== undefined && (!Number.isSafeInteger(before) || before < 0))
+			throw new Error("Invalid diagnostic history cursor");
+		const limit = requestedLimit ?? 8;
+		if (!Number.isSafeInteger(limit) || limit < 1 || limit > 20)
+			throw new Error("Diagnostic history limit must be between 1 and 20");
+		const directory = join(this.dir(target.id), "durable");
+		const result = this.factories.diagnosticHistoryRead
+			? await this.factories.diagnosticHistoryRead(directory, reference, before, limit)
+			: await this.coldReader.readDiagnosticHistory(directory, reference, before, limit);
+		if (
+			result.target.sessionId !== reference.sessionId ||
+			result.target.chatUrl !== reference.chatUrl ||
+			result.target.host.hostId !== reference.host.hostId ||
+			result.target.host.daemonId !== reference.host.daemonId ||
+			result.target.host.lineageId !== reference.host.lineageId
+		)
+			throw new Error("Diagnostic history source did not match the admitted target");
+		return result;
 	}
 
 	/** Read a bounded reply excerpt in paged storage reads, without waking or subscribing to a worker. */
@@ -6482,6 +6537,7 @@ export class SessionManager {
 				...(meta.control ? { control: true } : {}),
 				...(meta.role ? { role: meta.role } : {}),
 				...(diagnosticTarget ? { diagnosticTarget } : {}),
+				...(meta.diagnosticHistoryAccess === true ? { diagnosticHistoryAccess: true } : {}),
 				...(meta.projectId ? { projectId: meta.projectId } : {}),
 				storageDir: join(this.dir(id), "durable"),
 				subscriptionPolicy: join(this.dir(id), "subscription-policy.json"),
@@ -6499,6 +6555,7 @@ export class SessionManager {
 					...(meta.controlPermission ? { controlPermission: meta.controlPermission } : {}),
 					...(meta.role ? { role: meta.role } : {}),
 					...(diagnosticTarget ? { diagnosticTarget } : {}),
+					...(meta.diagnosticHistoryAccess === true ? { diagnosticHistoryAccess: true } : {}),
 					...(meta.ask ? { ask: meta.ask } : {}),
 					...(meta.workspace ? { workspace: meta.workspace } : {}),
 					...(meta.coordinatorView
@@ -6828,6 +6885,29 @@ export class SessionManager {
 								type: "diagnostics.result",
 								callId: packet.callId,
 								error: formatFailure(error, "Tool diagnostics"),
+							});
+					},
+				);
+			return;
+		}
+		if (packet.type === "diagnostics.history.call") {
+			void Promise.resolve()
+				.then(() => {
+					if (this.workers.get(meta.id) !== worker)
+						throw new Error("Only the live diagnostics specialist may read target history");
+					return this.diagnosticHistory(meta, packet.sessionId, packet.before, packet.limit);
+				})
+				.then(
+					(result) => {
+						if (this.workers.get(meta.id) === worker)
+							worker.send({ type: "diagnostics.history.result", callId: packet.callId, result });
+					},
+					(error) => {
+						if (this.workers.get(meta.id) === worker)
+							worker.send({
+								type: "diagnostics.history.result",
+								callId: packet.callId,
+								error: formatFailure(error, "Tool diagnostic_history"),
 							});
 					},
 				);
@@ -7341,6 +7421,7 @@ export class SessionManager {
 			...(meta.role ? { role: meta.role } : {}),
 			...(meta.diagnosticTargetId ? { diagnosticTargetId: meta.diagnosticTargetId } : {}),
 			...(this.diagnosticReference(meta) ? { diagnosticTarget: this.diagnosticReference(meta) } : {}),
+			...(meta.diagnosticHistoryAccess === true ? { diagnosticHistoryAccess: true } : {}),
 			...(meta.diagnosticRepairProposal ? { diagnosticRepairProposal: meta.diagnosticRepairProposal } : {}),
 			...(meta.continuationOf ? { continuationOf: meta.continuationOf } : {}),
 			...(meta.continuedTo ? { continuedTo: meta.continuedTo } : {}),

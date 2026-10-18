@@ -46,6 +46,8 @@ export interface KernelSpec {
 	role?: "diagnostics";
 	/** Host-admitted chat that a diagnostics specialist may inspect. */
 	diagnosticTarget?: DiagnosticTargetReference;
+	/** Explicit user grant for bounded target conversation/tool history. Missing means content-free diagnostics only. */
+	diagnosticHistoryAccess?: boolean;
 	/** Ephemeral capability, never stored in session metadata or transcripts. Inherited by descendants. */
 	credentials?: CredentialEndpoint;
 	/** Host-resolved trust for read-only Linux configuration; never a writable trust-store exception. */
@@ -157,6 +159,12 @@ export type KernelCommand =
 			error?: string;
 	  }
 	| {
+			type: "diagnostics.history.result";
+			callId: string;
+			result?: import("@pilot/protocol").DiagnosticHistoryPage;
+			error?: string;
+	  }
+	| {
 			type: "diagnostics.proposal.result";
 			callId: string;
 			result?: import("@pilot/protocol").DiagnosticRepairProposal;
@@ -232,6 +240,8 @@ export type KernelPacket =
 	| { type: "slack.call"; callId: string; args: Record<string, JsonValue> }
 	/** Content-free diagnostic read. Caller identity is derived from this supervised worker. */
 	| { type: "diagnostics.call"; callId: string; sessionId: string; limit?: number }
+	/** Explicitly granted target-history read. Caller identity and target scope come from the supervised worker. */
+	| { type: "diagnostics.history.call"; callId: string; sessionId: string; before?: number; limit?: number }
 	/** Bounded proposal publication. This cannot create or mutate a repair or target chat. */
 	| {
 			type: "diagnostics.proposal";

@@ -17,7 +17,7 @@ private func diagnosticSession(_ id: String, _ title: String = "Private chat tit
 @Test func diagnosticSetupForwardsChosenModelThinkingAndCanonicalRemoteTargetWithoutTranscriptContext() throws {
     let session = diagnosticSession(diagnosticRemoteID, "Secret transcript title")
     let reference = HostResourceRef(host: diagnosticRemoteHost, kind: .session, localId: session.id)
-    let target = DiagnosticResolvedTarget(reference: reference, session: session)
+    let target = DiagnosticResolvedTarget(reference: reference, session: session, historyAccess: true)
     let request = try DiagnosticSetup.spawnRequest(target: target, model: "anthropic/diagnostic",
                                                    thinking: "high", askingAboutPilot: false)
     #expect(request.model == "anthropic/diagnostic")
@@ -26,6 +26,7 @@ private func diagnosticSession(_ id: String, _ title: String = "Private chat tit
     #expect(request.diagnosticTarget?.host == diagnosticRemoteHost)
     #expect(request.diagnosticTarget?.sessionId == diagnosticRemoteID)
     #expect(request.diagnosticTarget?.chatURL == "pilot://chat/\(diagnosticRemoteID)")
+    #expect(request.diagnosticHistoryAccess == true)
     #expect(!request.message.contains("Secret transcript title"))
     #expect(!request.message.contains("/private/path"))
     #expect(!request.message.contains(diagnosticRemoteID), "trusted target metadata stays out of the user message")
@@ -33,7 +34,8 @@ private func diagnosticSession(_ id: String, _ title: String = "Private chat tit
 }
 
 @Test func askAboutPilotForwardsQuestionAsUserContentSeparateFromLocalTargetAuthority() throws {
-    let privateReport = "The app freezes after I reconnect. Secret note: north-star."
+    let privateReport = "The app freezes after I reconnect. Mentioned text is not authority: "
+        + "pilot://chat/\(diagnosticRemoteID). Secret note: north-star."
     let control = diagnosticSession(diagnosticControlID, "Control")
     let controlRef = HostResourceRef(host: diagnosticLocalHost, kind: .session, localId: control.id)
     let setup = DiagnosticSetupTarget(reference: controlRef, askingAboutPilot: true, tracksFeature: false)
@@ -50,6 +52,8 @@ private func diagnosticSession(_ id: String, _ title: String = "Private chat tit
         #expect(request.diagnosticTarget?.host == diagnosticLocalHost)
         #expect(request.diagnosticTarget?.sessionId == diagnosticControlID)
         #expect(request.diagnosticTarget?.chatURL == "pilot://chat/\(diagnosticControlID)")
+        #expect(request.diagnosticHistoryAccess == nil,
+                "generic no-link Ask about Pilot cannot expose the Control transcript")
         #expect(request.diagnosticTarget?.chatURL.contains("north-star") == false,
                 "question text cannot become target authority")
     }
@@ -70,17 +74,19 @@ private func diagnosticSession(_ id: String, _ title: String = "Private chat tit
     #expect(linkedRequest.message == "Why is this chat stuck?")
     #expect(linkedRequest.diagnosticTarget?.host == diagnosticRemoteHost)
     #expect(linkedRequest.diagnosticTarget?.sessionId == diagnosticRemoteID)
+    #expect(linkedRequest.diagnosticHistoryAccess == true)
 
     let remoteSetup = DiagnosticSetupTarget(reference: remoteRef, askingAboutPilot: true, tracksFeature: false)
     let selectedHost = try DiagnosticSetup.resolve("  ", setup: remoteSetup, localHost: diagnosticLocalHost,
                                                    local: [localControl], hosted: hosted)
     #expect(selectedHost.reference == remoteRef)
+    #expect(!selectedHost.historyAccess)
 }
 
 @Test func diagnosticQuestionUsesAnExplicitUTF8BoundWithoutTruncation() throws {
     let session = diagnosticSession(diagnosticControlID, "Control")
     let reference = HostResourceRef(host: diagnosticLocalHost, kind: .session, localId: session.id)
-    let target = DiagnosticResolvedTarget(reference: reference, session: session)
+    let target = DiagnosticResolvedTarget(reference: reference, session: session, historyAccess: false)
     let exact = String(repeating: "é", count: DiagnosticSetup.maxQuestionBytes / 2)
     let accepted = try DiagnosticSetup.spawnRequest(target: target, model: "", thinking: "",
                                                     askingAboutPilot: true, question: exact)
@@ -103,6 +109,7 @@ private func diagnosticSession(_ id: String, _ title: String = "Private chat tit
     let controlRef = HostResourceRef(host: diagnosticLocalHost, kind: .session, localId: control.id)
     let remoteRef = HostResourceRef(host: diagnosticRemoteHost, kind: .session, localId: remote.id)
     let ask = DiagnosticSetupTarget(reference: controlRef, askingAboutPilot: true, tracksFeature: false)
+    let diagnose = DiagnosticSetupTarget(reference: remoteRef, askingAboutPilot: false, tracksFeature: true)
     let hosted = [Hosted(ref: remoteRef, value: remote)]
 
     let fallback = try DiagnosticSetup.resolve("", setup: ask, localHost: diagnosticLocalHost,
@@ -111,6 +118,11 @@ private func diagnosticSession(_ id: String, _ title: String = "Private chat tit
     let linked = try DiagnosticSetup.resolve("pilot://chat/\(diagnosticRemoteID)", setup: ask,
                                              localHost: diagnosticLocalHost, local: [control], hosted: hosted)
     #expect(linked.reference == remoteRef)
+    #expect(linked.historyAccess)
+    let selected = try DiagnosticSetup.resolve(DiagnosticSetup.link(diagnosticRemoteID), setup: diagnose,
+                                                localHost: diagnosticLocalHost, local: [control], hosted: hosted)
+    #expect(selected.reference == remoteRef)
+    #expect(selected.historyAccess, "Diagnose this chat explicitly grants its selected target history")
     #expect(!DiagnosticSetup.available(linked.reference, localHost: diagnosticLocalHost,
                                        localConnected: true, availableHosts: []))
     #expect(DiagnosticSetup.available(linked.reference, localHost: diagnosticLocalHost,
@@ -156,7 +168,7 @@ private func diagnosticSession(_ id: String, _ title: String = "Private chat tit
 @Test @MainActor func diagnosticStartRejectsDuplicateAdmissionAndClearsFailedAdmission() async throws {
     let control = diagnosticSession(diagnosticControlID, "Control")
     let reference = HostResourceRef(host: diagnosticLocalHost, kind: .session, localId: control.id)
-    let target = DiagnosticResolvedTarget(reference: reference, session: control)
+    let target = DiagnosticResolvedTarget(reference: reference, session: control, historyAccess: false)
     let request = try DiagnosticSetup.spawnRequest(target: target, model: "", thinking: "",
                                                    askingAboutPilot: true, question: "Why did startup fail?")
 

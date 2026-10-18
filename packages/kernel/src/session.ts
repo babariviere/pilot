@@ -60,6 +60,7 @@ import { chatEvents, compactionEvents } from "./chat-events.ts";
 import { createControlMemoryTools } from "./control-memory-tools.ts";
 import { type ControlCall, ControlTurn } from "./control-turn.ts";
 import { createDatabaseTool, type DatabaseCall } from "./database-tool.ts";
+import { createDiagnosticHistoryTool, type DiagnosticHistoryCall } from "./diagnostic-history-tool.ts";
 import { createDiagnosticsTool, type DiagnosticsCall } from "./diagnostics-tool.ts";
 import { detectGhStack } from "./gh-stack.ts";
 import { appendGitHubAction, GitHubActionsDoc, githubActions } from "./github-actions.ts";
@@ -181,6 +182,8 @@ export interface KernelSessionHooks {
 	callSlackStatus?: SlackStatusCall;
 	/** Reads bounded host-local diagnostics through pilotd without touching target workers or transcripts. */
 	callDiagnostics?: DiagnosticsCall;
+	/** Reads bounded history only for an explicitly authorized diagnostic target. */
+	callDiagnosticHistory?: DiagnosticHistoryCall;
 	/** Publishes a bounded, non-executing specialist proposal for explicit user review. */
 	callRepairProposal?: RepairProposalCall;
 	/** Read-only artifact references, authorized by pilotd on every call. */
@@ -453,6 +456,7 @@ export class KernelSession {
 				control: spec.control,
 				ask: spec.pilot?.ask,
 				diagnostics: spec.role === "diagnostics",
+				diagnosticHistory: spec.diagnosticHistoryAccess === true,
 				agentDir: spec.agentDir,
 				trustDirectory: spec.trustDirectory,
 				projectTrusted: spec.projectTrusted,
@@ -480,6 +484,9 @@ export class KernelSession {
 					spec.diagnosticTarget
 						? [
 								createDiagnosticsTool(hooks.callDiagnostics, spec.diagnosticTarget),
+								...(spec.diagnosticHistoryAccess && hooks.callDiagnosticHistory
+									? [createDiagnosticHistoryTool(hooks.callDiagnosticHistory, spec.diagnosticTarget)]
+									: []),
 								createRepairProposalTool(hooks.callRepairProposal),
 							]
 						: []),

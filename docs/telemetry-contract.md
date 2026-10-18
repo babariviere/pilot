@@ -169,8 +169,12 @@ SSH/bootstrap and verified remote-handshake observations remain independent. Thi
 native local bound and consent, is never exported through OTLP and cannot trigger setup, probes, retries or restarts.
 
 Agent-facing access is limited to an explicitly admitted diagnostics session role. That runtime profile exposes the
-bounded diagnostic reader and a proposal-only publisher, is bound to one exact chat on its qualified host, and has no
-shell, source, transcript, repair, restart, retry, replay or child-agent authority. After a user asks, the specialist
+bounded content-free diagnostic reader and a proposal-only publisher, is bound to one exact chat on its qualified
+host, and has no shell, source, repair, restart, retry, replay or child-agent authority. Diagnose this chat or an
+explicitly supplied target link may separately grant bounded, paginated cold reads of that exact target's committed
+conversation and tool history. A generic no-link Ask grant is absent, and legacy missing grants deny access. History
+is untrusted local content, never an OTLP signal or diagnostic aggregate, and cannot select another session, fetch
+files or attachments, expand child sessions, wake the target or enter an automatic repair handoff. After a user asks, the specialist
 may persist one closed, bounded, non-executing proposal with at most 16 currently available evidence refs, findings,
 uncertainty, suggested repair and test guidance. Only explicit review confirmation may hand that exact proposal and
 evidence to a separate ordinary coding agent in a valid project; publishing, reviewing or cancelling never launches
@@ -285,6 +289,7 @@ rejected value.
 | Per-session AI accounting | 32 attempts, 4 timing epochs/attempt, 128 KiB aggregate file | Roll old attempts/timing into content-free totals; reject malformed/oversize state |
 | Native crash/hang archive | 32 items, 32 KiB, 7-day read window | Drop oldest, report count |
 | Diagnostic API | 128 evidence items, 64 KiB encoded | Truncate oldest detail, report counts/window |
+| Explicit target history page | 20 returned entries, 200 scanned records, 64 KiB entry data, 8 KiB/entry | Continue with an exclusive entry cursor; report per-entry truncation and source availability |
 | Node spans | 512 queued per process, batches of 128, 5 s schedule, 3 s export timeout | Drop newest; never await from product path |
 | Swift spans | 256 queued, batches of 64, 5 s schedule, 3 s export timeout | Drop newest; serial utility queue, never main actor |
 | Export retries | At most one SDK attempt per batch; no Pilot retry and no disk spool | Drop batch and count locally |

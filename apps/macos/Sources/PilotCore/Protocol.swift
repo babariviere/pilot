@@ -66,6 +66,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public var diagnosticTargetId: String? = nil
     /// Canonical host-qualified form of the admitted target.
     public var diagnosticTarget: DiagnosticTargetReference? = nil
+    /// Explicit grant for bounded read-only target history. Nil means operational evidence only.
+    public var diagnosticHistoryAccess: Bool? = nil
     /// Latest bounded specialist-authored repair suggestion. It cannot execute a repair.
     public var diagnosticRepairProposal: DiagnosticRepairProposal? = nil
     public let id: String
@@ -231,13 +233,14 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         workspaceBehind: String? = nil, runningJobs: [SessionJob]? = nil, canRetryStartup: Bool? = nil,
         working: Bool? = nil, attentionReason: NeedsYouReason? = nil, attentionAt: Double? = nil,
         role: SessionRole? = nil, diagnosticTargetId: String? = nil,
-        diagnosticTarget: DiagnosticTargetReference? = nil,
+        diagnosticTarget: DiagnosticTargetReference? = nil, diagnosticHistoryAccess: Bool? = nil,
         diagnosticRepairProposal: DiagnosticRepairProposal? = nil
     ) {
         self.id = id
         self.role = role
         self.diagnosticTargetId = diagnosticTargetId
         self.diagnosticTarget = diagnosticTarget
+        self.diagnosticHistoryAccess = diagnosticHistoryAccess
         self.diagnosticRepairProposal = diagnosticRepairProposal
         self.title = title
         self.cwd = cwd
@@ -591,6 +594,8 @@ public struct SpawnRequest: Codable, Sendable {
     public var role: SessionRole?
     /// Required for diagnostics. The daemon derives the specialist scope from this sleeping target.
     public var diagnosticTarget: DiagnosticTargetReference?
+    /// Explicit grant for bounded target history reads. Omitted for generic no-link Ask about Pilot.
+    public var diagnosticHistoryAccess: Bool?
     public var projectId: String?
     public var cwd: String?
     public var message: String
@@ -605,11 +610,13 @@ public struct SpawnRequest: Codable, Sendable {
     public init(
         projectId: String? = nil, cwd: String? = nil, message: String, title: String? = nil, model: String? = nil,
         thinking: String? = nil, baseBranch: String? = nil, mode: ChatMode? = nil, workspace: WorkspaceMode? = nil,
-        missionId: String? = nil, role: SessionRole? = nil, diagnosticTarget: DiagnosticTargetReference? = nil
+        missionId: String? = nil, role: SessionRole? = nil, diagnosticTarget: DiagnosticTargetReference? = nil,
+        diagnosticHistoryAccess: Bool? = nil
     ) {
         self.missionId = missionId
         self.role = role
         self.diagnosticTarget = diagnosticTarget
+        self.diagnosticHistoryAccess = diagnosticHistoryAccess
         self.projectId = projectId
         self.cwd = cwd
         self.message = message

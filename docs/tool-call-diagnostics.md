@@ -48,8 +48,10 @@ closed mapping emits only `shell`, `filesystem`, `network`, `background`, `codem
 256-KiB files beside the session's other local diagnostics. Progress publication is coalesced to 250 ms, persisted
 progress is limited to once per five seconds and liveness snapshots occur every 15 seconds only while calls exist.
 
-The diagnostics specialist sees tool evidence through the existing host-qualified, target-bound read-only snapshot.
-Reading it does not open transcript storage or wake the target. Turning off local diagnostics stops new records;
+The diagnostics specialist sees content-free tool evidence through the existing host-qualified, target-bound
+read-only snapshot. Reading that snapshot does not open transcript storage or wake the target. A separately explicit
+history grant may expose bounded sanitized tool-result excerpts from the exact target; that local untrusted content is never
+diagnostic evidence or telemetry. Turning off local diagnostics stops new records;
 **Clear local diagnostics** removes both tool files along with the other local evidence. Remote operational export
 remains separately opt-in and emits only completed `pilot.tool.call` and `pilot.tool.cancel_wait` spans with the
 closed category, nested flag, reviewed outcome and bounded durations. There is no disk telemetry spool.

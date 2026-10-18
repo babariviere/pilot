@@ -377,7 +377,8 @@ struct ChatView: View {
                     }
                     if session.isDiagnosticsSpecialist {
                         DiagnosticSpecialistHeader(target: session.diagnosticTarget,
-                                                   fallbackTargetId: session.diagnosticTargetId)
+                                                   fallbackTargetId: session.diagnosticTargetId,
+                                                   historyAccess: session.diagnosticHistoryAccess == true)
                             .frame(maxWidth: Theme.column, alignment: .leading)
                             .frame(maxWidth: .infinity)
                     }

@@ -35,6 +35,29 @@ test("cold todo counts read committed progress under a live writer lease without
 	assert.equal(await reader.readTodoCount(join(directory, "unopened")), 0);
 });
 
+test("cold reader returns explicit unavailable metadata for missing diagnostic target history", async (t) => {
+	const directory = await mkdtemp(join(tmpdir(), "pilot-diagnostic-history-reader-"));
+	const reader = new ColdViewReader();
+	t.after(async () => {
+		await reader.close();
+		await rm(directory, { recursive: true, force: true });
+	});
+	const target = {
+		host: { hostId: "local", daemonId: "daemon", lineageId: "lineage" },
+		sessionId: "01234567-89ab-4cde-8fab-0123456789ab",
+		chatUrl: "pilot://chat/01234567-89ab-4cde-8fab-0123456789ab",
+	};
+	const page = await reader.readDiagnosticHistory(join(directory, "missing"), target, undefined, 8);
+	assert.deepEqual(page.target, target);
+	assert.deepEqual(page.source, {
+		availability: "missing",
+		freshness: "unavailable",
+		reason: "storage_missing",
+	});
+	assert.deepEqual(page.entries, []);
+	assert.equal(page.pagination.limit, 8);
+});
+
 test("cold-reader admission bounds queued work and releases it on shutdown", async () => {
 	const reader = new ColdViewReader();
 	// Fill synchronously, before the worker threads can return their first result.
