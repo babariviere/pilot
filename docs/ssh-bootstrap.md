@@ -75,6 +75,13 @@ busy rather than stealing a lock. A lost success response is harmless: replay ke
 identities. A different runtime is deliberately not an update transaction. No API execution mutations
 or chat creation are replayed by setup.
 
+An earlier setup can install Pilot's service for another runtime (for example before an app update)
+without the app saving the host. Before uploading, the helper then reports `update-required` with the
+observed identity instead of a service blocker, and `install` throws `LinuxBootstrapUpdateRequired`.
+The setup sheet offers an explicit **Update devbox** action: one `LinuxSSHUpdate` request for that
+identity (retries reuse its ID), then `awaitUpdated`, a read-only wait until hello reports the package
+version. The user still confirms the identity before it is saved. Foreign units remain blockers.
+
 ## Verification
 
 - `scripts/linux/test_ssh_bootstrap.py`: bounded extraction/transfer, partial/lost-reply reuse, unsafe

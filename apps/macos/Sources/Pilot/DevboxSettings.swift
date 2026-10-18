@@ -122,13 +122,27 @@ private struct DevboxAddSheet: View {
         hosts.offlineHosts.values.contains { $0.configuration.alias == alias.trimmingCharacters(in: .whitespacesAndNewlines) }
     }
 
+    private var title: String {
+        if model.candidate != nil { return "Confirm devbox identity" }
+        return model.outdated != nil ? "Update devbox runtime" : "Add devbox"
+    }
+
+    private var primaryTitle: String {
+        if model.candidate != nil { return "Save and connect" }
+        return model.outdated != nil ? "Update devbox" : "Set up devbox"
+    }
+
+    private var primaryEnabled: Bool {
+        !model.busy && (model.candidate != nil || model.outdated != nil || (authorized && !alias.isEmpty && !duplicateAlias))
+    }
+
     var body: some View {
-        SheetScaffold(model.candidate == nil ? "Add devbox" : "Confirm devbox identity", subtitle: "Independent setup over standard SSH",
-            error: model.problem, primary: SheetPrimaryAction(title: model.candidate == nil ? "Set up devbox" : "Save and connect",
-                enabled: !model.busy && (model.candidate != nil || (authorized && !alias.isEmpty && !duplicateAlias)), action: {
+        SheetScaffold(title, subtitle: "Independent setup over standard SSH",
+            error: model.problem, primary: SheetPrimaryAction(title: primaryTitle, enabled: primaryEnabled, action: {
                     Task {
-                        if model.candidate == nil { await model.prepare(alias: alias) }
-                        else { await model.confirmEnrollment() }
+                        if model.candidate != nil { await model.confirmEnrollment() }
+                        else if model.outdated != nil { await model.updateRuntime() }
+                        else { await model.prepare(alias: alias) }
                         if let host = model.completed { onComplete(host) }
                     }
                 }), cancel: { Task { await model.cancel(); dismiss() } }, width: 480) {
@@ -139,6 +153,14 @@ private struct DevboxAddSheet: View {
                     SettingsRow("Installation", detail: candidate.daemonId) { EmptyView() }
                     SettingsRow("History", detail: candidate.lineageId) { EmptyView() }
                 }
+            } else if let outdated = model.outdated {
+                SettingsNote("This devbox already runs another Pilot version from an earlier setup. Updating installs the verified \(model.packageVersion ?? "package") runtime through the update flow, which waits for active work and keeps its history. You confirm its identity afterwards.")
+                SettingsSection {
+                    SettingsRow("SSH alias", detail: alias) { EmptyView() }
+                    SettingsRow("Installation", detail: outdated.daemonId) { EmptyView() }
+                    SettingsRow("History", detail: outdated.lineageId) { EmptyView() }
+                }
+                if model.busy { HStack { ProgressView().controlSize(.small); SettingsNote("Updating the devbox runtime. This can take a few minutes…") } }
             } else {
                 TextField("Existing SSH alias", text: $alias).textFieldStyle(.roundedBorder).disabled(model.busy)
                     .accessibilityLabel("Existing SSH alias")

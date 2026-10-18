@@ -147,6 +147,9 @@ private final class SSHFixture {
             if mode == 'http-hang':
                 time.sleep(60)
             body = b'{"fixture":true}'
+            hello = os.path.join(root, 'hello')
+            if os.path.exists(hello):
+                body = open(hello, 'rb').read()
             if mode == 'oversized':
                 body = b'x' * 65537
             if mode == 'wrong-hello':
@@ -173,6 +176,46 @@ private func withSSHFixture(_ mode: String = "normal", _ body: (SSHFixture) asyn
 // Keep startup headroom separate from the deliberately bounded timeout cases below.
 @Suite(.serialized)
 struct SSHTunnelTests {
+    @Test
+    func updateWaitRetriesPreviousVersionStopsOnOtherIdentityAndTimesOut() async throws {
+        try await withSSHFixture { fixture in
+            let host = HostRef(hostId: "fixture", daemonId: "daemon", lineageId: "lineage")
+            let configuration = try SSHConnectionConfiguration(alias: "fixture-alias")
+            func serve(_ version: String, daemon: String = "daemon") throws {
+                let hello = #"{"daemonId":"DAEMON","lineageId":"lineage","daemonVersion":"VERSION","protocolVersion":1,"minimumClientProtocolVersion":1,"platform":"linux","arch":"x64","capabilities":{"powerManagement":false,"systemSleepEvents":false,"swiftUIArtifacts":false,"coordinatorIsolation":true,"independentExecution":true}}"#
+                try hello.replacingOccurrences(of: "DAEMON", with: daemon).replacingOccurrences(of: "VERSION", with: version)
+                    .write(to: fixture.directory.appending(path: "hello"), atomically: true, encoding: .utf8)
+            }
+            var options = SSHTunnelOptions()
+            options.executable = fixture.executable
+            options.maxAttempts = 1
+            options.retryDelay = 0.05
+            options.probeInterval = 0.02
+            options.stopGrace = 0.05
+            func wait(timeout: TimeInterval) async throws -> LinuxBootstrapConnection {
+                try await LinuxSSHBootstrap.awaitUpdated(configuration: configuration, version: "1.38.0", host: host,
+                                                         timeout: timeout, retryDelay: 0.05, options: options)
+            }
+            // The previous runtime still answers: keep checking read-only until the new version serves.
+            try serve("1.37.0")
+            let pending = Task { try await wait(timeout: 30) }
+            try await sshEventually { try fixture.tunnelPIDs().count >= 2 }
+            try serve("1.38.0")
+            let connection = try await pending.value
+            try sshRequire(connection.host == host)
+            await connection.tunnel.disconnect()
+            // Another installation is final, not something to wait out.
+            try serve("1.38.0", daemon: "other")
+            let launched = try fixture.tunnelPIDs().count
+            do { _ = try await wait(timeout: 30); throw SSHTunnelError.rejectedHello }
+            catch HostRoutingError.identityChanged { }
+            try sshRequire(try fixture.tunnelPIDs().count == launched + 1, "Must not retry another identity")
+            try serve("1.37.0")
+            do { _ = try await wait(timeout: 0.2); throw SSHTunnelError.rejectedHello }
+            catch let failure as LinuxBootstrapFailure { try sshRequire(failure.code == "update-pending") }
+        }
+    }
+
     @Test
     func sshConfigurationAndArgumentsAreSafe() throws {
         for invalid in ["", "-option", "alias name", "user@host", "host\n", "a;touch", "$(echo x)", "host/path", "é", String(repeating: "a", count: 256)] {

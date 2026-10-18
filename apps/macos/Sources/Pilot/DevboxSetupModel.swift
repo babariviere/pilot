@@ -14,22 +14,33 @@ struct DevboxSetupActions {
         await NativeDiagnostics.shared.recordSetup(attemptRef: attempt, sequence: sequence, stage: stage,
                                                    outcome: outcome, reason: reason)
     }
+    /// Explicit update of an unsaved devbox that already runs another Pilot runtime, then a read-only wait for it.
+    var update: (SSHConnectionConfiguration, LinuxRuntimePackage, HostRef, UUID) async throws -> Void = { _, _, _, _ in
+        throw DevboxProblem.storage
+    }
+    var awaitUpdated: (SSHConnectionConfiguration, LinuxRuntimePackage, HostRef) async throws -> LinuxBootstrapConnection = { _, _, _ in
+        throw DevboxProblem.storage
+    }
 
     @MainActor static func live(_ hosts: HostClients) -> Self {
         Self(bootstrap: { try await LinuxSSHBootstrap.install(configuration: $0, package: $1, hostId: $2,
                                                               pinnedHost: $3, progress: $4) },
              enroll: { try await hosts.enroll($0, configuration: $1) },
-             adopt: { try await hosts.adopt($0, configuration: $1) }, dispose: { await $0.tunnel.disconnect() })
+             adopt: { try await hosts.adopt($0, configuration: $1) }, dispose: { await $0.tunnel.disconnect() },
+             update: { _ = try await LinuxSSHUpdate.start(configuration: $0, package: $1, host: $2, id: $3) },
+             awaitUpdated: { try await LinuxSSHBootstrap.awaitUpdated(configuration: $0, package: $1, host: $2) })
     }
 }
 
 /// Owns only initial setup and its not-yet-adopted local forward. Does not create a project/chat.
 @MainActor
 final class DevboxSetupModel: ObservableObject {
-    enum Phase: Equatable { case idle, preparing, awaitingTrust, saving, complete, failed }
+    enum Phase: Equatable { case idle, preparing, updateRequired, updating, awaitingTrust, saving, complete, failed }
     @Published private(set) var phase = Phase.idle
     @Published private(set) var problem: String?
     @Published private(set) var candidate: HostRef?
+    /// Observed identity of an unsaved devbox running another Pilot runtime. Not trusted or saved until confirmed.
+    @Published private(set) var outdated: HostRef?
     @Published private(set) var completed: HostRef?
     private let loadPackage: DevboxPackageLoader
     private let actions: DevboxSetupActions
@@ -37,6 +48,8 @@ final class DevboxSetupModel: ObservableObject {
     private var package: LinuxRuntimePackage?
     private var connection: LinuxBootstrapConnection?
     private var observedHost: HostRef?
+    // One request per setup. Retrying after an ambiguous result reconciles this same ID remotely.
+    private var updateId: UUID?
     private var hostId = "devbox-" + UUID().uuidString.lowercased()
     private var generation = UUID()
     private var operation: Task<LinuxBootstrapConnection, Error>?
@@ -48,7 +61,8 @@ final class DevboxSetupModel: ObservableObject {
         self.loadPackage = loadPackage; self.actions = actions
     }
 
-    var busy: Bool { phase == .preparing || phase == .saving }
+    var busy: Bool { phase == .preparing || phase == .updating || phase == .saving }
+    var packageVersion: String? { package?.manifest.version }
 
     func prepare(alias: String) async {
         guard !busy, connection == nil else { return }
@@ -87,6 +101,11 @@ final class DevboxSetupModel: ObservableObject {
             guard self.generation == generation else { await actions.dispose(result); return }
             await succeedDiagnostic()
             connection = result; candidate = result.host; observedHost = result.host; phase = .awaitingTrust
+        } catch let required as LinuxBootstrapUpdateRequired {
+            guard self.generation == generation else { return }
+            // Setup itself stopped at the remote runtime check; the explicit update is a separate action.
+            await failDiagnostic(.remoteSetup)
+            outdated = required.host; observedHost = required.host; phase = .updateRequired
         } catch {
             guard self.generation == generation else { return }
             if error is CancellationError {
@@ -95,6 +114,30 @@ final class DevboxSetupModel: ObservableObject {
                 await failDiagnostic(Self.diagnosticReason(error))
             }
             problem = DevboxProblemText.setup(error); phase = .failed
+        }
+        if self.generation == generation { operation = nil }
+    }
+
+    func updateRuntime() async {
+        guard phase == .updateRequired, let host = outdated, let package, let configuration else { return }
+        phase = .updating; problem = nil
+        let generation = self.generation, actions = actions
+        let id = updateId ?? UUID()
+        updateId = id
+        let task = Task { () throws -> LinuxBootstrapConnection in
+            try await actions.update(configuration, package, host, id)
+            try Task.checkCancellation()
+            return try await actions.awaitUpdated(configuration, package, host)
+        }
+        operation = task
+        do {
+            let result = try await task.value
+            guard self.generation == generation else { await actions.dispose(result); return }
+            updateId = nil; outdated = nil
+            connection = result; candidate = result.host; phase = .awaitingTrust
+        } catch {
+            guard self.generation == generation else { return }
+            problem = DevboxProblemText.setupUpdate(error); phase = .updateRequired
         }
         if self.generation == generation { operation = nil }
     }
@@ -132,7 +175,7 @@ final class DevboxSetupModel: ObservableObject {
         generation = UUID()
         operation?.cancel(); operation = nil
         if let connection { self.connection = nil; await actions.dispose(connection) }
-        candidate = nil; observedHost = nil; package = nil; configuration = nil
+        candidate = nil; outdated = nil; observedHost = nil; package = nil; configuration = nil
         phase = .idle; problem = nil
     }
 

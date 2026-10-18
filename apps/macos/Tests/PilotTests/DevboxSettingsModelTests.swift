@@ -87,6 +87,36 @@ private func settingsDirectory() throws -> URL {
     let secret = NSError(domain: "fixture", code: 1, userInfo: [NSLocalizedDescriptionKey: "private-token-server-body"])
     #expect(!DevboxProblemText.setup(secret).contains("private-token"))
     #expect(!DevboxProblemText.update(secret).contains("private-token"))
+    #expect(!DevboxProblemText.setupUpdate(secret).contains("private-token"))
+}
+
+@Test @MainActor func outdatedUnsavedDevboxUpdatesExplicitlyWithOneRequestThenAwaitsTrust() async throws {
+    let directory = try settingsDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
+    let package = try await settingsPackage(directory)
+    let configuration = try SSHConnectionConfiguration(alias: "fixture-box")
+    let connection = LinuxBootstrapConnection(host: settingsHost, tunnel: ManagedSSHTunnel(configuration: configuration, validateHello: { _ in }))
+    var requests: [UUID] = [], awaited = 0, enrolled = false, failWait = true
+    let model = DevboxSetupModel(loadPackage: { package }, actions: DevboxSetupActions(
+        bootstrap: { _, _, _, _, _ in throw LinuxBootstrapUpdateRequired(host: settingsHost) },
+        enroll: { _, _ in enrolled = true }, adopt: { _, _ in }, dispose: { _ in },
+        update: { value, _, host, id in #expect(value == configuration); #expect(host == settingsHost); requests.append(id) },
+        awaitUpdated: { _, _, host in
+            #expect(host == settingsHost); awaited += 1
+            if failWait { throw LinuxBootstrapFailure("update-pending", "fixture") }
+            return connection
+        }))
+    await model.prepare(alias: "fixture-box")
+    // Nothing remote changes until the user explicitly asks for the update.
+    #expect(model.phase == .updateRequired && model.outdated == settingsHost && model.candidate == nil)
+    #expect(requests.isEmpty && model.problem == nil)
+    await model.updateRuntime()
+    #expect(model.phase == .updateRequired && model.problem?.contains("not active yet") == true)
+    failWait = false
+    await model.updateRuntime()
+    #expect(requests.count == 2 && requests[0] == requests[1] && awaited == 2)
+    #expect(model.phase == .awaitingTrust && model.candidate == settingsHost && model.outdated == nil)
+    #expect(!enrolled)
+    await model.cancel()
 }
 
 @Test @MainActor func failedEnrollmentDisposesUnadoptedForwardAndKeepsObservedIdentityForExplicitRetry() async throws {
