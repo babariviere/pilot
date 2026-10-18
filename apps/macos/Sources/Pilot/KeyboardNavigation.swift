@@ -204,7 +204,8 @@ final class KeyboardFocus: ObservableObject {
     func removeSelectionProvider(_ id: UUID) { selectionProviders.removeAll { $0.id == id } }
 
     /// Escape after any picker, marked text or queue edit: leave the composer for the page, keeping the draft.
-    static func leaveComposer(_ focus: KeyboardFocus = AppModel.shared.keyboard) {
+    static func leaveComposer(_ focus: KeyboardFocus? = nil) {
+        let focus = focus ?? AppModel.shared.keyboard
         if !focus.focus(.content) {
             NSApp.keyWindow?.makeFirstResponder(nil)
             focus.noteFocused(.content)

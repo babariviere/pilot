@@ -505,7 +505,7 @@ final class SlackExcerptStore: ObservableObject {
 
     static let limit = 40
     /// Moving through the list with the arrow keys reads only the message the selection settles on.
-    static let settle: Duration = .milliseconds(150)
+    nonisolated static let settle: Duration = .milliseconds(150)
 
     func state(_ id: String) -> SlackExcerptState { states[id] ?? .loading }
 

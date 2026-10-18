@@ -64,6 +64,10 @@ waiting. `pnpm test` (also `npm test`) and all `test:*` suite commands use the N
 build/test subprocesses. Use these wrappers rather than raw `swift build` / `swift test`. Existing
 per-command limits (`PILOT_SWIFT_JOBS`, `PILOT_TEST_CONCURRENCY`) still apply inside each slot.
 
+Every first-party Swift target treats compiler warnings as errors in all configurations, including
+tests and helper executables. This policy is set in `apps/macos/Package.swift`, so local builds and CI
+enforce the same gate without promoting warnings from third-party packages to errors.
+
 The Python 3 stdlib runner, `scripts/verification-slot.py`, uses local OS file locks under
 `$PILOT_HOME/verification` (default `$XDG_DATA_HOME/pilot/verification`, or
 `~/.local/share/pilot/verification`). All checkouts using that home share **1 Swift slot and 2 Node

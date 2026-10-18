@@ -191,9 +191,9 @@ struct ControlDetailsPane: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            InspectorPaneHeader("Watching") {
+            InspectorPaneHeader("Watching", trailing: {
                 if !details.watches.isEmpty { CountBadge(count: details.watches.count) }
-            }
+            })
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     watchingSection

@@ -15,6 +15,12 @@ private func clipboardImage() throws -> NSBitmapImageRep {
     return bitmap
 }
 
+@MainActor
+private func clipboardPNGData() throws -> Data {
+    let bitmap = try clipboardImage()
+    return try #require(bitmap.representation(using: .png, properties: [:]))
+}
+
 private func imageTestDirectory() -> URL {
     FileManager.default.temporaryDirectory.appendingPathComponent("Image Tests \(UUID().uuidString)", isDirectory: true)
 }
@@ -63,7 +69,7 @@ private func imageTestDirectory() -> URL {
         board.releaseGlobally()
         try? FileManager.default.removeItem(at: directory)
     }
-    let data = try #require(try clipboardImage().representation(using: .png, properties: [:]))
+    let data = try clipboardPNGData()
     let originals = [directory.appendingPathComponent("one.png"), directory.appendingPathComponent("two.png")]
     for url in originals { try data.write(to: url) }
     board.writeObjects(originals as [NSURL])
@@ -93,7 +99,7 @@ private func imageTestDirectory() -> URL {
     #expect((attachments.paste(from: board, directory: directory)) == true)
     #expect(attachments.error != nil && attachments.items.isEmpty)
     board.clearContents()
-    board.setData(try #require(try clipboardImage().representation(using: .png, properties: [:])), forType: .png)
+    board.setData(try clipboardPNGData(), forType: .png)
     let notDirectory = directory.appendingPathComponent("file")
     try Data().write(to: notDirectory)
     #expect((attachments.paste(from: board, directory: notDirectory)) == true)
@@ -110,7 +116,7 @@ private func imageTestDirectory() -> URL {
         board.releaseGlobally()
         try? FileManager.default.removeItem(at: directory)
     }
-    board.setData(try #require(try clipboardImage().representation(using: .png, properties: [:])), forType: .png)
+    board.setData(try clipboardPNGData(), forType: .png)
     let editor = SubmitTextView()
     editor.isRichText = false
     editor.string = "My draft"
@@ -147,7 +153,7 @@ private func imageTestDirectory() -> URL {
         board.releaseGlobally()
         try? FileManager.default.removeItem(at: directory)
     }
-    board.setData(try #require(try clipboardImage().representation(using: .png, properties: [:])), forType: .png)
+    board.setData(try clipboardPNGData(), forType: .png)
     let state = ComposerState()
     #expect(!state.canSend(changingModel: false))
     #expect((state.attachments.paste(from: board, directory: directory)) == true)
@@ -177,7 +183,7 @@ private func imageTestDirectory() -> URL {
         board.releaseGlobally()
         try? FileManager.default.removeItem(at: directory)
     }
-    board.setData(try #require(try clipboardImage().representation(using: .png, properties: [:])), forType: .png)
+    board.setData(try clipboardPNGData(), forType: .png)
     var staged: ImageAttachments? = ImageAttachments()
     #expect((staged!.paste(from: board, directory: directory)) == true)
     let stagedURL = staged!.items[0].url
@@ -201,7 +207,7 @@ private func imageTestDirectory() -> URL {
         try? FileManager.default.removeItem(at: directory)
     }
     let png = directory.appendingPathComponent("image.png")
-    try #require(try clipboardImage().representation(using: .png, properties: [:])).write(to: png)
+    try clipboardPNGData().write(to: png)
     let pdf = directory.appendingPathComponent("document.pdf")
     try Data("%PDF-1.4".utf8).write(to: pdf)
     var attachments = ImageAttachments()
@@ -229,7 +235,7 @@ private func imageTestDirectory() -> URL {
         board.releaseGlobally()
         try? FileManager.default.removeItem(at: directory)
     }
-    board.setData(try #require(try clipboardImage().representation(using: .png, properties: [:])), forType: .png)
+    board.setData(try clipboardPNGData(), forType: .png)
     var attachments = ImageAttachments()
     for _ in 0..<8 { #expect((attachments.paste(from: board, directory: directory)) == true) }
     #expect(attachments.items.count == 8 && attachments.error == nil)

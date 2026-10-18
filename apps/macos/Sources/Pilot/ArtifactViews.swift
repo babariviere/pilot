@@ -14,7 +14,8 @@ final class ArtifactViewState: ObservableObject {
     @Published var error: String?
     @Published var loading = false
 
-    func load(_ reference: ArtifactReference, latest: Bool, client: PilotClient = AppModel.shared.client) async {
+    func load(_ reference: ArtifactReference, latest: Bool, client: PilotClient? = nil) async {
+        let client = client ?? AppModel.shared.client
         loading = true
         error = nil
         do {
