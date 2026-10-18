@@ -168,11 +168,13 @@ SSH alias, hostname, host identity, path, command, plan, credential, raw output 
 SSH/bootstrap and verified remote-handshake observations remain independent. This evidence is retained under the
 native local bound and consent, is never exported through OTLP and cannot trigger setup, probes, retries or restarts.
 
-Agent-facing access is limited to an explicitly admitted diagnostics session role. That runtime profile exposes only
-the bounded diagnostic read tool, is bound to one exact chat on its qualified host, and has no shell, source,
-transcript, write, restart, retry, replay or child-agent authority. A user-authorized repair handoff selects at most
-16 currently available evidence refs and bounded cause/test guidance for a separate ordinary coding agent; creating
-the handoff itself performs no target or repair-chat mutation.
+Agent-facing access is limited to an explicitly admitted diagnostics session role. That runtime profile exposes the
+bounded diagnostic reader and a proposal-only publisher, is bound to one exact chat on its qualified host, and has no
+shell, source, transcript, repair, restart, retry, replay or child-agent authority. After a user asks, the specialist
+may persist one closed, bounded, non-executing proposal with at most 16 currently available evidence refs, findings,
+uncertainty, suggested repair and test guidance. Only explicit review confirmation may hand that exact proposal and
+evidence to a separate ordinary coding agent in a valid project; publishing, reviewing or cancelling never launches
+work or mutates the target.
 
 AI accounting is a separate `SessionUsage.ai` summary. `direct` is usage in Durable's model ledger;
 `child` is usage reported by usage-bearing tool operations. Input, output, cache-read and cache-write are separate;

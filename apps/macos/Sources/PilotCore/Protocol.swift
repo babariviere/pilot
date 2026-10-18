@@ -65,6 +65,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public var diagnosticTargetId: String? = nil
     /// Canonical host-qualified form of the admitted target.
     public var diagnosticTarget: DiagnosticTargetReference? = nil
+    /// Latest bounded specialist-authored repair suggestion. It cannot execute a repair.
+    public var diagnosticRepairProposal: DiagnosticRepairProposal? = nil
     public let id: String
     public let title: String
     public let cwd: String
@@ -228,12 +230,14 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         workspaceBehind: String? = nil, runningJobs: [SessionJob]? = nil, canRetryStartup: Bool? = nil,
         working: Bool? = nil, attentionReason: NeedsYouReason? = nil, attentionAt: Double? = nil,
         role: SessionRole? = nil, diagnosticTargetId: String? = nil,
-        diagnosticTarget: DiagnosticTargetReference? = nil
+        diagnosticTarget: DiagnosticTargetReference? = nil,
+        diagnosticRepairProposal: DiagnosticRepairProposal? = nil
     ) {
         self.id = id
         self.role = role
         self.diagnosticTargetId = diagnosticTargetId
         self.diagnosticTarget = diagnosticTarget
+        self.diagnosticRepairProposal = diagnosticRepairProposal
         self.title = title
         self.cwd = cwd
         self.sessionPath = sessionPath

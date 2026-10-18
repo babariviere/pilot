@@ -309,9 +309,9 @@ struct SessionMoreActions: View {
             Divider()
             if session.isDiagnosticsSpecialist {
                 Button { model.prepareDiagnosticRepair(session, context: hostContext) } label: {
-                    Label("Start a repair…", icon: PilotIcon.handoff)
+                    Label(session.diagnosticRepairProposal == nil ? "Suggest a repair…" : "Review repair proposal…",
+                          icon: PilotIcon.handoff)
                 }
-                .disabled(!model.canPrepareDiagnosticRepair(session, context: hostContext))
             } else {
                 Button { model.diagnose(session, context: hostContext) } label: {
                     Label(session.isControl ? "Ask about Pilot" : "Diagnose this chat", icon: PilotIcon.bug)

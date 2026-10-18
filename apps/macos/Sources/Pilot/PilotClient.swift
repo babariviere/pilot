@@ -47,6 +47,7 @@ final class PilotClient: ObservableObject {
     private var fixtureMissions = false
     private var fixtureSessions = false
     private(set) var fixtureSpawnRequests: [SpawnRequest] = []
+    private(set) var fixtureSendRequests: [(sessionId: String, message: String, mode: DeliveryMode)] = []
     var fixtureDiagnostics: [String: SessionDiagnostics] = [:]
     /// Static previews/test snapshots do not start background network reconciliation.
     var sharedContextTransportEnabled: Bool { !fixtureSessions }
@@ -558,6 +559,7 @@ final class PilotClient: ObservableObject {
     func send(_ sessionId: String, message: String, mode: DeliveryMode) async throws {
         guard session(sessionId)?.isArchived != true else { throw ClientError("Restore this archived chat before sending messages.") }
         try ensureNotContinued(sessionId)
+        if fixtureSessions { fixtureSendRequests.append((sessionId, message, mode)); return }
         let _: Ack = try await call("api/sessions/\(sessionId)/messages", body: SendRequest(message: message, mode: mode))
     }
 

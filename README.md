@@ -960,8 +960,9 @@ wakes a parked worker. Use **Diagnose this chat** from a chat's More menu, or **
 an explicit setup sheet, verify or paste a known `pilot://chat/<UUID>` link, and choose the specialist's model and
 thinking level before creation. The created chat is visibly labeled **Diagnostics specialist** with its admitted
 host-qualified target. Cancel creates nothing, and unavailable, missing or ambiguous targets fail without falling
-back to Local. Repair remains a separate user-authorized coding-agent handoff with explicitly selected bounded
-cited evidence.
+back to Local. When asked, the specialist can publish a bounded, cited repair proposal for review; publishing or
+cancelling never starts work. Only explicit confirmation sends the reviewed proposal to a separate ordinary Build
+chat in a valid chosen project.
 [Tool-call diagnostics](docs/tool-call-diagnostics.md) add bounded in-flight and completed lifecycle evidence for
 built-ins, MCP and nested `codemode` calls while keeping raw names, arguments, output and commands out of diagnostics
 and opt-in telemetry. Liveness and useful progress remain separate observations; Pilot does not automatically retry,

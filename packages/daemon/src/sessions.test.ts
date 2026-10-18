@@ -527,6 +527,13 @@ class FakeWorker implements SessionWorker {
 		this.onPacket({ type: "subagents", subagents });
 	}
 
+	publishRepairProposal(
+		callId: string,
+		proposal: Extract<KernelPacket, { type: "diagnostics.proposal" }>["proposal"],
+	): void {
+		this.onPacket({ type: "diagnostics.proposal", callId, proposal });
+	}
+
 	finish(completion?: SessionCompletion): void {
 		this.state = "idle";
 		this.onPacket({ type: "working", working: false, ...(completion ? { completion } : {}) });
@@ -1314,24 +1321,112 @@ test("diagnostics role survives reopen and prepares only a bounded read-only han
 			maxBytes: 65_536,
 		},
 	};
-	t.mock.method(sessions, "diagnostics", async () => diagnostic);
+	t.mock.method(
+		sessions,
+		"diagnostics",
+		async (_id: string, options: NonNullable<Parameters<SessionManager["diagnostics"]>[1]> = {}) => {
+			if (options.host && options.host.daemonId !== diagnosticHost.daemonId)
+				throw new Conflict("Diagnostic host identity does not match this daemon");
+			return diagnostic;
+		},
+	);
 	const workerCount = f.workers.length;
+	const specialistWorker = f.workers.find((worker) => worker.spec.sessionId === specialist.id)!;
+	const proposalDraft = {
+		evidenceRefs: [evidence.ref],
+		findings: "The worker exited before durable completion.",
+		uncertainty: "medium" as const,
+		suggestedRepair: "Preserve the startup failure until the supervised worker settles.",
+		regressionTestGuidance: "Cover the supervised exit boundary with a deterministic fixture.",
+	};
+	specialistWorker.publishRepairProposal("invalid", { ...proposalDraft, execute: "start" } as never);
+	await until(() =>
+		specialistWorker.sent.some(
+			(command) => command.type === "diagnostics.proposal.result" && command.callId === "invalid",
+		),
+	);
+	assert.match(
+		specialistWorker.sent.find(
+			(command): command is Extract<KernelCommand, { type: "diagnostics.proposal.result" }> =>
+				command.type === "diagnostics.proposal.result" && command.callId === "invalid",
+		)?.error ?? "",
+		/fields/,
+	);
+	specialistWorker.publishRepairProposal("stale", { ...proposalDraft, evidenceRefs: ["diagnostic:v1:missing"] });
+	await until(() =>
+		specialistWorker.sent.some(
+			(command) => command.type === "diagnostics.proposal.result" && command.callId === "stale",
+		),
+	);
+	assert.match(
+		specialistWorker.sent.find(
+			(command): command is Extract<KernelCommand, { type: "diagnostics.proposal.result" }> =>
+				command.type === "diagnostics.proposal.result" && command.callId === "stale",
+		)?.error ?? "",
+		/no longer available/,
+	);
+	specialistWorker.publishRepairProposal("proposal", proposalDraft);
+	await until(() =>
+		specialistWorker.sent.some(
+			(command) => command.type === "diagnostics.proposal.result" && command.callId === "proposal",
+		),
+	);
+	const proposalResult = specialistWorker.sent.find(
+		(command): command is Extract<KernelCommand, { type: "diagnostics.proposal.result" }> =>
+			command.type === "diagnostics.proposal.result" && command.callId === "proposal",
+	);
+	const proposal = proposalResult?.result;
+	assert.ok(proposal);
+	assert.equal(proposal.targetSessionId, target.id);
+	assert.deepEqual(sessions.get(specialist.id)?.diagnosticRepairProposal, proposal);
+	assert.equal(f.workers.length, workerCount, "publishing a proposal starts no worker or repair chat");
 	const handoff = await sessions.diagnosticsHandoff(specialist.id, {
 		targetSessionId: target.id,
-		evidenceRefs: [evidence.ref],
-		likelyCause: "The worker exited before durable completion.",
+		proposalId: proposal.id,
+		findings: proposal.findings,
+		uncertainty: proposal.uncertainty,
+		suggestedRepair: proposal.suggestedRepair,
 		regressionTestGuidance: "Cover the supervised exit boundary with a deterministic fixture.",
 	});
 	assert.deepEqual(handoff.evidence, [evidence]);
 	assert.equal(handoff.targetSessionId, target.id);
+	assert.equal(handoff.proposalId, proposal.id);
 	assert.equal(f.workers.length, workerCount, "handoff preparation never starts another worker");
+	await assert.rejects(
+		sessions.diagnosticsHandoff(specialist.id, {
+			targetSessionId: target.id,
+			proposalId: "diagnostic-proposal:v1:00000000-0000-4000-8000-000000000001",
+			findings: proposal.findings,
+			uncertainty: proposal.uncertainty,
+			suggestedRepair: proposal.suggestedRepair,
+			regressionTestGuidance: proposal.regressionTestGuidance,
+		}),
+		/missing or has changed/,
+	);
+	await assert.rejects(
+		sessions.diagnosticsHandoff(
+			specialist.id,
+			{
+				targetSessionId: target.id,
+				proposalId: proposal.id,
+				findings: proposal.findings,
+				uncertainty: proposal.uncertainty,
+				suggestedRepair: proposal.suggestedRepair,
+				regressionTestGuidance: proposal.regressionTestGuidance,
+			},
+			{ host: { ...diagnosticHost, daemonId: "other" } },
+		),
+		/host identity/i,
+	);
 	const sibling = await sessions.spawn({ projectId: f.project.id, message: "Same-project sibling" });
 	await sessions["starting"].get(sibling.id);
 	await assert.rejects(
 		sessions.diagnosticsHandoff(specialist.id, {
 			targetSessionId: sibling.id,
-			evidenceRefs: [evidence.ref],
-			likelyCause: "Cause",
+			proposalId: proposal.id,
+			findings: proposal.findings,
+			uncertainty: proposal.uncertainty,
+			suggestedRepair: proposal.suggestedRepair,
 			regressionTestGuidance: "Test",
 		}),
 		/host-admitted target/,
@@ -1339,8 +1434,10 @@ test("diagnostics role survives reopen and prepares only a bounded read-only han
 	await assert.rejects(
 		sessions.diagnosticsHandoff(target.id, {
 			targetSessionId: specialist.id,
-			evidenceRefs: [evidence.ref],
-			likelyCause: "Cause",
+			proposalId: proposal.id,
+			findings: proposal.findings,
+			uncertainty: proposal.uncertainty,
+			suggestedRepair: proposal.suggestedRepair,
 			regressionTestGuidance: "Test",
 		}),
 		/Only a diagnostics specialist/,
@@ -1351,6 +1448,7 @@ test("diagnostics role survives reopen and prepares only a bounded read-only han
 	assert.equal(reopened["metas"].get(specialist.id)?.role, "diagnostics");
 	assert.equal(reopened.get(specialist.id)?.diagnosticTargetId, target.id);
 	assert.deepEqual(reopened.get(specialist.id)?.diagnosticTarget, remoteTarget);
+	assert.deepEqual(reopened.get(specialist.id)?.diagnosticRepairProposal, proposal);
 });
 
 test("large restart recovery keeps the daemon responsive and bounds cold starts without losing input IDs", async (t) => {

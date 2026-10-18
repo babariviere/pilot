@@ -30,18 +30,26 @@ import Testing
     let decoded = try JSONDecoder().decode(SpawnRequest.self, from: JSONEncoder().encode(request))
     #expect(decoded.role == .diagnostics)
     #expect(decoded.diagnosticTarget == target)
+    let proposal = DiagnosticRepairProposal(id: "diagnostic-proposal:v1:11111111-1111-4111-8111-111111111111",
+                                            targetSessionId: targetId, createdAt: "2026-01-01T00:00:00.000Z",
+                                            evidenceRefs: ["diagnostic:v1:lifecycle:one"], findings: "Finding",
+                                            uncertainty: .medium, suggestedRepair: "Repair",
+                                            regressionTestGuidance: "Test")
     let session = SessionSummary(id: "d", title: "Diagnose", cwd: "/tmp", createdAt: 1, updatedAt: 2,
                                  state: "idle", mode: .ask, role: .diagnostics, diagnosticTargetId: targetId,
-                                 diagnosticTarget: target)
+                                 diagnosticTarget: target, diagnosticRepairProposal: proposal)
     #expect(session.isDiagnosticsSpecialist)
+    #expect(session.diagnosticRepairProposal == proposal)
+    #expect(Set([proposal]).count == 1, "proposal metadata keeps SessionSummary Hashable")
     #expect(try JSONDecoder().decode(SessionSummary.self, from: JSONEncoder().encode(session)) == session)
-    let handoff = DiagnosticsHandoffRequest(targetSessionId: "target",
-                                            evidenceRefs: ["diagnostic:v1:lifecycle:1"],
-                                            likelyCause: "Likely cause",
+    let handoff = DiagnosticsHandoffRequest(targetSessionId: "target", proposalId: "proposal",
+                                            findings: "Findings", uncertainty: .medium,
+                                            suggestedRepair: "Suggested repair",
                                             regressionTestGuidance: "Regression guidance")
     let handoffWire = try JSONValue.decode(JSONEncoder().encode(handoff))
     #expect(handoffWire["targetSessionId"]?.string == "target")
-    #expect(handoffWire["evidenceRefs"]?.array?.count == 1)
+    #expect(handoffWire["proposalId"]?.string == "proposal")
+    #expect(handoffWire["suggestedRepair"]?.string == "Suggested repair")
     let wrongLink = Data(#"{"host":{"hostId":"remote-box","daemonId":"daemon","lineageId":"lineage"},"sessionId":"01234567-89ab-4cde-8fab-0123456789ab","chatUrl":"pilot://chat/00000000-0000-4000-8000-000000000001"}"#.utf8)
     #expect(throws: DecodingError.self) { try JSONDecoder().decode(DiagnosticTargetReference.self, from: wrongLink) }
 }

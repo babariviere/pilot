@@ -268,11 +268,31 @@ export interface SessionDiagnostics {
 	truncation: SessionDiagnosticTruncation;
 }
 
-/** Explicit app action that selects a bounded specialist finding for a separate repair chat. */
+export type DiagnosticRepairUncertainty = "low" | "medium" | "high";
+
+/** Closed, bounded specialist-authored suggestion. Publishing it cannot create or mutate a chat. */
+export interface DiagnosticRepairProposalDraft {
+	evidenceRefs: string[];
+	findings: string;
+	uncertainty: DiagnosticRepairUncertainty;
+	suggestedRepair: string;
+	regressionTestGuidance: string;
+}
+
+export interface DiagnosticRepairProposal extends DiagnosticRepairProposalDraft {
+	schemaVersion: typeof DIAGNOSTIC_SCHEMA_VERSION;
+	id: string;
+	targetSessionId: string;
+	createdAt: string;
+}
+
+/** Explicit app action that reviews one persisted proposal for a separate repair chat. */
 export interface DiagnosticsHandoffRequest {
 	targetSessionId: string;
-	evidenceRefs: string[];
-	likelyCause: string;
+	proposalId: string;
+	findings: string;
+	uncertainty: DiagnosticRepairUncertainty;
+	suggestedRepair: string;
 	regressionTestGuidance: string;
 }
 
@@ -283,6 +303,9 @@ export interface DiagnosticsHandoff {
 	targetSessionId: string;
 	projectId?: string;
 	evidence: DiagnosticEvidence[];
-	likelyCause: string;
+	proposalId: string;
+	findings: string;
+	uncertainty: DiagnosticRepairUncertainty;
+	suggestedRepair: string;
 	regressionTestGuidance: string;
 }

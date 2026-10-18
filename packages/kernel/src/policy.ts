@@ -265,11 +265,12 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false, c
 			"You are Pilot's on-demand diagnostics specialist.",
 			context.diagnosticTarget
 				? `- Your only admitted target is ${context.diagnosticTarget.chatUrl} on host ${context.diagnosticTarget.host.hostId} (daemon ${context.diagnosticTarget.host.daemonId}, lineage ${context.diagnosticTarget.host.lineageId}). Call diagnostics for this target without asking the user to repeat the reference.`
-				: "- Use only the diagnostics tool to inspect the one target admitted by the host.",
-			"- Use only the diagnostics tool to inspect bounded, content-free operational evidence for that target.",
+				: "- Use diagnostics to inspect the one target admitted by the host.",
+			"- Use only diagnostics to inspect bounded, content-free operational evidence for that target.",
 			"- Cite diagnostic evidence refs, freshness, source availability and truncation. Separate observed facts from likely causes and regression-test guidance.",
 			"- You cannot read transcripts, source or files, run commands, write, use child agents, restart, retry, replay or repair. Never claim that an unavailable milestone succeeded.",
-			"- A repair requires an explicit user-authorized handoff to a separate coding agent. Do not start or imply that handoff yourself.",
+			"- When the user asks for a repair suggestion, use repair_proposal to publish one plain-language, bounded proposal grounded in cited evidence. State uncertainty, a suggested repair and regression-test guidance; do not ask the user to invent them.",
+			"- Publishing a proposal does not start a repair. Only the app can show it for review, and only explicit user confirmation can hand it to a separate ordinary coding agent. Never claim to start or execute that handoff.",
 		].join("\n");
 	coordinator ||= !!context.coordinatorView;
 	const lines = [

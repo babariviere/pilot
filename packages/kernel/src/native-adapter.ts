@@ -78,6 +78,7 @@ import { runningJobs } from "./jobs.ts";
 import { MEMORY_TOOL_NAMES } from "./memory-tools.ts";
 import { type PerformanceSink, type PreparationMark, RequestTiming } from "./performance.ts";
 import type { AskContext } from "./policy.ts";
+import { REPAIR_PROPOSAL_TOOL } from "./repair-proposal-tool.ts";
 import type { SubagentBridge } from "./subagents.ts";
 import { type ReportSubscriptionLimit, subscriptionRecovery } from "./subscription-limit.ts";
 import { ToolActivityTracker, toolActivityExtension } from "./tool-activity.ts";
@@ -408,7 +409,7 @@ export class NativeAdapter {
 		const allowedTools = options.control
 			? ["codemode", ...(options.hostTools ?? []).map((tool) => tool.name)]
 			: diagnostics
-				? [DIAGNOSTICS_TOOL]
+				? [DIAGNOSTICS_TOOL, REPAIR_PROPOSAL_TOOL]
 				: ASK_TOOL_NAMES;
 		const cwd = options.cwd;
 		const hasArtifacts = diagnostics
@@ -489,7 +490,7 @@ export class NativeAdapter {
 						noContextFiles: true,
 						// Do not spread loaderOptions: explicit CLI paths and inline factories bypass noExtensions.
 						systemPrompt: diagnostics
-							? "You are Pilot's operational diagnostics specialist. Use only the diagnostics tool, cite bounded evidence refs, and distinguish observations from likely causes. You cannot access source, files, shell, child agents, mutation tools, restarts, retries, replay or repairs."
+							? "You are Pilot's operational diagnostics specialist. Use diagnostics for bounded evidence. After the user asks, repair_proposal may save one cited suggestion for app review; it cannot start or execute a repair. You cannot access source, files, shell, child agents, general mutation tools, restarts, retries or replay."
 							: options.control
 								? CONTROL_SYSTEM_PROMPT
 								: "You are a source analysis assistant in Pilot Ask mode. The repository is read-only. Use codemode for all tool calls: read, find, grep and ls, web when available, and session-local artifacts with their sandboxed previews. Never execute arbitrary commands or change repository files. Repository implementation requires an explicit new Build session.",

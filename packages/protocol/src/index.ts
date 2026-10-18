@@ -263,6 +263,8 @@ export interface SessionSummary {
 	diagnosticTargetId?: string;
 	/** Canonical host-qualified form of the admitted target, for display and reopen verification. */
 	diagnosticTarget?: DiagnosticTargetReference;
+	/** Latest bounded specialist-authored repair suggestion. It cannot execute a repair. */
+	diagnosticRepairProposal?: import("./diagnostics.ts").DiagnosticRepairProposal;
 	/** Fresh provider-safe chat which continues this readable, permanently read-only chat. */
 	continuedTo?: string;
 	/** Original chat whose workspace and task ownership this fresh chat continues. */
