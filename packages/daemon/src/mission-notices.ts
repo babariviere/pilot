@@ -93,7 +93,12 @@ export class MissionNotices {
 		]);
 		if (this.seen.get(session.id) === key) return;
 		this.seen.set(session.id, key);
-		if (session.working || session.state === "working" || session.state === "starting" || session.runningJobs?.length)
+		// An unanswered question is a result for the mission even while the chat's jobs keep running.
+		const question = session.outcome === "question" && !session.working;
+		if (
+			!question &&
+			(session.working || session.state === "working" || session.state === "starting" || session.runningJobs?.length)
+		)
 			this.store.recordMemberRun(session);
 		else if (session.outcome) this.store.recordMemberCompletion(session, recovering);
 		if (!recovering) this.refreshActivity(session.missionId);

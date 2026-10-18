@@ -31,7 +31,10 @@ export function applyActivity(
 	meta.working = working;
 	const last = Math.max(meta.lastOutcomeAt ?? -1, meta.outcomeAt ?? -1);
 	const lastCompletion = meta.lastCompletionAt ?? meta.outcomeAt ?? -1;
-	if (working || backgroundWorking) {
+	const fresh = completion && completion.outcomeAt > lastCompletion ? completion : undefined;
+	// An unanswered question waits on the user even while jobs or subagents keep running.
+	const questionWaits = !working && (fresh ? fresh.outcome === "question" : meta.outcome === "question");
+	if (working || (backgroundWorking && !questionWaits)) {
 		if (meta.outcomeAt !== undefined) {
 			meta.lastOutcomeAt = last;
 			meta.lastCompletionAt ??= meta.outcomeAt;
@@ -46,9 +49,9 @@ export function applyActivity(
 			meta.lastCompletionAt = completion.outcomeAt;
 			changed = true;
 		}
-	} else if (completion && completion.outcomeAt > lastCompletion) {
+	} else if (fresh) {
 		// Cold views (or an older worker) can still contain the retired persisted outcome.
-		completion = { ...completion };
+		completion = { ...fresh };
 		normalizeLegacyOutcome(completion);
 		meta.outcome = completion.outcome;
 		// Keep client attention versions monotonic across the independent kernel and daemon clocks.

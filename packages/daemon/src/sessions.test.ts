@@ -3275,6 +3275,38 @@ test("idle jobs and their follow-up stay working without publishing an intermedi
 	});
 });
 
+test("a question needs the user while jobs keep running", async () => {
+	await outcomeFixture(async (manager, meta) => {
+		const worker = fakeWorker();
+		manager["workers"].set(meta.id, worker);
+		const jobs = [
+			{ id: "tests", name: "Tests", state: "running" as const, startedAt: 1, outputPath: "/tmp/tests.log" },
+		];
+		worker.state = "working";
+		manager["onPacket"](meta, worker, { type: "working", working: true });
+		manager["onPacket"](meta, worker, { type: "jobs.changed", jobs });
+		worker.state = "idle";
+		manager["onPacket"](meta, worker, {
+			type: "working",
+			working: false,
+			completion: { outcome: "question", outcomeAt: 42, outcomeReason: "Which branch?" },
+		});
+		assert.equal(manager.get(meta.id)?.working, false);
+		assert.equal(manager.get(meta.id)?.outcome, "question");
+		assert.deepEqual(manager.get(meta.id)?.runningJobs, jobs);
+		// Job progress and the end of the last job leave the question in place.
+		manager["onPacket"](meta, worker, { type: "jobs.changed", jobs });
+		manager["onPacket"](meta, worker, { type: "jobs.changed", jobs: [] });
+		assert.equal(manager.get(meta.id)?.working, false);
+		assert.equal(manager.get(meta.id)?.outcome, "question");
+		// The answer starts a new turn.
+		worker.state = "working";
+		manager["onPacket"](meta, worker, { type: "working", working: true });
+		assert.equal(manager.get(meta.id)?.working, true);
+		assert.equal(manager.get(meta.id)?.outcome, undefined);
+	});
+});
+
 test("jobs that end during a turn allow that turn's final outcome", async () => {
 	await outcomeFixture(async (manager, meta) => {
 		const worker = fakeWorker();
