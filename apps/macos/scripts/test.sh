@@ -40,6 +40,24 @@ journeySidebar=keyboardOnlySidebarBrowsingKeepsFocusInTheSidebar
 journeys="$journeyStart|$journeySidebar"
 # These native approval controls also own AppKit mouse tracking. Run each alone, keeping its deadline.
 github='githubKeySheetRequiresNativeConfirmationAndCancelDoesNotRegister|githubExistingCheckoutRequiresExplicitNativeReuseConfirmation|githubImportNativeCloneActionStaysDisabledUntilHostDestinationPreview'
+# Scoped-model scheduler waits need the MainActor, but no AppKit run loops. Keep
+# their bounded fault fixtures together, separate from both the full suite and native clicks.
+scoped_model_tests=(
+	scopedModelsNoStartupWritesAndLocalFirstIndependentHosts
+	scopedModelsOfflineColdLaunchAndNewIdentityNeedExplicitConsent
+	scopedModelsLostAckExactReadbackAndOnlyOneBoundedRetryAcrossRelaunch
+	scopedModelsConflictChoicesNeverBlindlyRebaseOtherHosts
+	scopedModelsSupersededRevisionAndGenerationCannotPublishOldSuccess
+	scopedModelsCoalescesSavesWithoutCallingOlderReadbackNewSuccess
+	scopedModelsLeaveDuringAcceptedWritePersistsWithoutLateSuccessRevivingSync
+	scopedModelsReadOnlyAndUnavailablePatternsAreTruthfulAndDurable
+	scopedModelsBoundsIndependentHostConcurrency
+	scopedModelsConflictConsentCannotFollowNewIntentOrConnection
+	scopedModelsReadFailureCannotErasePersistedLeaveAsIs
+)
+printf -v scoped_models '%s|' "${scoped_model_tests[@]}"
+scoped_models="${scoped_models%|}"
+scoped_model_native='scopedModelsNativeSavePersistsAndDispatchesExplicitAllOnlyAfterClick|scopedModelsNativeSelectorPreservesAdvancedPatterns'
 partition=1
 reuse=(--skip-build)
 for argument in "$@"; do
@@ -63,7 +81,7 @@ run_tests() {
 		| python3 "$here/scripts/check-test-output.py" ${guards[@]+"${guards[@]}"}
 }
 if [ "$partition" = 1 ]; then
-	run_tests "" "$@" --skip "$isolated|$devbox|$terminal|$callbacks|$journeys|$github"
+	run_tests "" "$@" --skip "$isolated|$devbox|$terminal|$callbacks|$journeys|$github|$scoped_models|$scoped_model_native"
 	run_tests "$isolated" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$isolated"
 	run_tests "$devbox" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$devbox"
 	run_tests "$terminal" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$terminal"
@@ -73,6 +91,11 @@ if [ "$partition" = 1 ]; then
 	run_tests "${CI:+$journeySidebar}" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$journeySidebar"
 	IFS='|' read -r -a github_tests <<< "$github"
 	for name in "${github_tests[@]}"; do
+		run_tests "$name" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$name"
+	done
+	run_tests "$scoped_models" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$scoped_models"
+	IFS='|' read -r -a scoped_model_native_tests <<< "$scoped_model_native"
+	for name in "${scoped_model_native_tests[@]}"; do
 		run_tests "$name" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$name"
 	done
 else

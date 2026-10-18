@@ -441,6 +441,10 @@ they do not replace real daemon HTTP/WebSocket tests or certify compatibility wi
 
 ## Swift checks and CI caches
 
+Scoped-model sync fixtures run together in a separate process, away from unrelated AppKit run loops.
+Their bounded waits and fault assertions are unchanged. The two native model selector/Save interactions each
+run alone. Every scheduler fixture and native interaction must start, so stale filters cannot drop coverage.
+
 Continue using `apps/macos/scripts/test.sh` and `apps/macos/scripts/build.sh`, which select the supported
 SDK and test macro plugin. After a successful build, `apps/macos/scripts/test.sh --skip-build --filter
 <name>` is appropriate for repeating an affected test without rebuilding.
