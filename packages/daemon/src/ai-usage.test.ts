@@ -17,6 +17,7 @@ function activity(kind: AIUsageActivity["kind"], overrides: Partial<AIUsageActiv
 		cancelled: 0,
 		usageReports: 1,
 		providerAttemptsObserved: 2,
+		requestRetriesObserved: 1,
 		elapsedMsObserved: 100,
 		activeMsObserved: 80,
 		outcomeCoverage: "partial",
@@ -53,6 +54,7 @@ function report(
 		conversationId,
 		timingBoot,
 		activityEpoch: "initial",
+		epochKind: "initial",
 		observedAt: 1_000,
 		direct: scope("model_requests", 100, 12_345),
 		child: scope("child_operations", 25),
@@ -121,6 +123,33 @@ test("invalid or unexpected accounting cannot enter the bounded store", async (t
 	assert.doesNotMatch(await readFile(join(directory, AI_USAGE_FILE), "utf8"), /private/);
 });
 
+test("schema-v1 accounting migrates without discarding usage totals", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "pilot-ai-usage-v1-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
+	const id = "22222222-2222-4222-8222-222222222223";
+	const directory = join(home, "sessions", id);
+	await mkdir(directory, { recursive: true });
+	const original = new AIUsageLedger(home, () => 2_500);
+	original.observeUsage(id, report());
+	await original.close();
+	const path = join(directory, AI_USAGE_FILE);
+	const legacy = JSON.parse(await readFile(path, "utf8"));
+	legacy.v = 1;
+	delete legacy.efficiency;
+	await writeFile(
+		path,
+		JSON.stringify(legacy, (key, value) => (key === "requestRetriesObserved" ? undefined : value)),
+	);
+	const migrated = new AIUsageLedger(home, () => 2_600);
+	await migrated.load([id]);
+	assert.equal(migrated.summary(id)?.direct.tokens.input, 100);
+	migrated.observeWorkerLaunch(id);
+	await migrated.close();
+	const stored = JSON.parse(await readFile(path, "utf8"));
+	assert.equal(stored.v, 2);
+	assert.equal(stored.efficiency.relaunch.count, 1);
+});
+
 test("retention rolls old attempts and timing epochs into bounded aggregate totals", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-ai-usage-"));
 	t.after(() => rm(home, { recursive: true, force: true }));
@@ -174,7 +203,7 @@ test("active-context outcome snapshots roll across compaction epochs without dou
 	await mkdir(join(home, "sessions", id), { recursive: true });
 	const ledger = new AIUsageLedger(home, () => 5_000);
 	ledger.observeUsage(id, report("0"));
-	const afterCompaction = { ...report("0"), activityEpoch: "10" };
+	const afterCompaction = { ...report("0"), activityEpoch: "10", epochKind: "compaction" as const };
 	ledger.observeUsage(id, afterCompaction);
 	ledger.observeUsage(id, afterCompaction);
 	assert.equal(ledger.summary(id)?.direct.activity.count, 2);
@@ -184,7 +213,83 @@ test("active-context outcome snapshots roll across compaction epochs without dou
 	second.direct.activity.usageReports = 2;
 	ledger.observeUsage(id, second);
 	assert.equal(ledger.summary(id)?.direct.activity.count, 3);
+	assert.equal(ledger.summary(id)?.efficiency?.compaction.count, 1);
+	assert.equal(ledger.summary(id)?.efficiency?.compaction.pairedMeasurements, 0);
+	assert.equal(ledger.summary(id)?.efficiency?.compaction.timingStatus, "unavailable");
 	await ledger.close();
+});
+
+test("context, cache, compaction and relaunch efficiency keep explicit denominators and partial coverage", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "pilot-ai-efficiency-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
+	const id = "77777777-7777-4777-8777-777777777777";
+	await mkdir(join(home, "sessions", id), { recursive: true });
+	const ledger = new AIUsageLedger(home, () => 7_000);
+	ledger.observeWorkerLaunch(id);
+	ledger.observeUsage(id, { context: { tokens: 100, contextWindow: 200, percent: 50 }, accounting: report() });
+	const grown = structuredClone(report());
+	grown.direct.tokens.input = 160;
+	grown.direct.tokens.cacheRead = 50;
+	grown.direct.tokens.cacheWrite = 7;
+	grown.direct.activity.count = 2;
+	grown.direct.activity.success = 2;
+	grown.direct.activity.usageReports = 2;
+	ledger.observeUsage(id, { context: { tokens: 100, contextWindow: 200, percent: 50 }, accounting: grown });
+	const compacted = structuredClone(grown);
+	compacted.activityEpoch = "10";
+	compacted.epochKind = "compaction";
+	ledger.observeUsage(id, { context: { tokens: 40, contextWindow: 200, percent: 20 }, accounting: compacted });
+	ledger.observeUsage(id, {
+		context: { tokens: 80, contextWindow: 200, percent: 40 },
+		accounting: report("1"),
+	});
+	const compactedAgain = structuredClone(compacted);
+	compactedAgain.activityEpoch = "11";
+	ledger.observeUsage(id, {
+		context: { tokens: 30, contextWindow: 200, percent: 15 },
+		accounting: compactedAgain,
+	});
+	ledger.observeWorkerLaunch(id, "parked_wake");
+	ledger.observeUsage(id, { context: { tokens: 30, contextWindow: 200, percent: 15 }, accounting: compactedAgain });
+	const efficiency = ledger.summary(id)?.efficiency;
+	assert.deepEqual(efficiency?.direct, {
+		observations: 1,
+		inputTokens: 60,
+		cacheReadTokens: 30,
+		cacheWriteTokens: 2,
+		cacheEfficiencyNumerator: 30,
+		cacheEfficiencyDenominator: 90,
+		coverage: "daemon_observed_deltas_partial",
+	});
+	assert.deepEqual(efficiency?.context, {
+		observedAt: 1_000,
+		tokens: 30,
+		contextWindow: 200,
+		headroomTokens: 170,
+		percent: 15,
+		coverage: "latest_observation",
+	});
+	assert.deepEqual(efficiency?.compaction, {
+		count: 2,
+		pairedMeasurements: 1,
+		beforeTokens: 100,
+		afterTokens: 40,
+		tokensRemoved: 60,
+		timingStatus: "unavailable",
+		coverage: "epoch_observed_partial",
+	});
+	assert.equal(efficiency?.relaunch.count, 2);
+	assert.equal(efficiency?.relaunch.reasons.initial, 1);
+	assert.equal(efficiency?.relaunch.reasons.parked_wake, 1);
+	assert.equal(efficiency?.relaunch.contextPreparationsObserved, 2);
+	assert.equal(efficiency?.relaunch.contextTokensPrepared, 130);
+	assert.equal(efficiency?.relaunch.estimatedCostStatus, "unavailable");
+	await ledger.close();
+	const reopened = new AIUsageLedger(home, () => 8_000);
+	await reopened.load([id]);
+	assert.equal(reopened.summary(id)?.efficiency?.context?.tokens, 30);
+	assert.equal(reopened.summary(id)?.efficiency?.compaction.count, 2);
+	await reopened.close();
 });
 
 test("durable checkpoints emit only aggregate AI and session-time deltas", async (t) => {

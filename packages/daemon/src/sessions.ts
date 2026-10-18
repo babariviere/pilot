@@ -31,6 +31,7 @@ import {
 import { credentialEnvironment } from "@pilot/kernel/credential-client";
 import type {
 	AgentEvent,
+	AIWorkerLaunchReason,
 	ArtifactRevision,
 	ArtifactSummary,
 	DeliveryMode,
@@ -1194,6 +1195,8 @@ export class SessionManager {
 	/** Live subagent subscriptions waiting for, or following, their child's storage. */
 	private readonly subagentAttachers = new Map<string, Set<() => void>>();
 	private readonly workerGenerations = new Map<string, number>();
+	/** One-shot causal classification for the next successfully published worker. */
+	private readonly nextWorkerLaunchReason = new Map<string, AIWorkerLaunchReason>();
 	/** Slash commands from each session's latest ready kernel. Kept while parked so listing never reopens it. */
 	private readonly commandLists = new Map<string, SessionCommand[]>();
 	private parkTimer?: ReturnType<typeof setTimeout>;
@@ -1776,6 +1779,7 @@ export class SessionManager {
 			this.workers.delete(id);
 			this.lastUse.delete(id);
 			this.parked.add(worker);
+			this.nextWorkerLaunchReason.set(id, "parked_wake");
 			const closing: Promise<void> = worker.close().finally(() => {
 				if (this.parking.get(id) === closing) this.parking.delete(id);
 			});
@@ -4355,6 +4359,7 @@ export class SessionManager {
 		trace?: TraceCarrier,
 	): Promise<void> {
 		const meta = this.require(id);
+		const resumesStoppedRecovery = meta.recoveryStopped === true;
 		this.assertNotContinued(meta);
 		if (typeof message !== "string" || !message.trim()) throw new Error("message is required");
 		const transition = this.archiveTransitions.get(id);
@@ -4404,6 +4409,7 @@ export class SessionManager {
 				meta.prFollowUp = { attempts: 0, nextAttemptAt: 0, generation: (meta.prFollowUp?.generation ?? 0) + 1 };
 			}
 			await this.save(meta, undefined, undefined, durable);
+			if (resumesStoppedRecovery && !this.workers.has(id)) this.nextWorkerLaunchReason.set(id, "user_resume");
 			admissionSpan?.progress();
 			admissionSpan?.end();
 			admissionFinished = true;
@@ -4493,6 +4499,7 @@ export class SessionManager {
 			// A restart here resumes initialization on load, with the same durable outbox.
 			await this.save(meta);
 			this.emit(meta);
+			this.nextWorkerLaunchReason.set(id, "startup_retry");
 			await this.start(id, true);
 			if (meta.failure || meta.inputError) throw new Error(meta.failure ?? meta.inputError);
 			return this.summary(meta);
@@ -4841,6 +4848,7 @@ export class SessionManager {
 					: { observedAt: new Date(this.internetObservedAt).toISOString() }),
 			},
 			performance: daemonPerformance(),
+			ai: this.aiUsage.summary(id, true),
 			toolActivity: worker?.toolActivity,
 			...(options.limit === undefined ? {} : { limit: options.limit }),
 		});
@@ -5173,6 +5181,7 @@ export class SessionManager {
 		const refresh = !this.workers.has(id) ? this.workspaceRefreshes.get(id) : undefined;
 		if (refresh) await refresh;
 		if (this.closing) throw new Error("pilotd is shutting down");
+		this.nextWorkerLaunchReason.set(id, "replacement");
 		const replacement = await this.ensureWorker(id);
 		await replacement.ready;
 	}
@@ -6004,6 +6013,9 @@ export class SessionManager {
 		if (existing) return existing;
 		if (this.closing) throw new Error("pilotd is shutting down");
 		const meta = this.require(id);
+		const launchReason: AIWorkerLaunchReason | undefined = meta.kernelRestartPending
+			? "crash_recovery"
+			: this.nextWorkerLaunchReason.get(id);
 		if (!meta.delegationFenced) await this.sharing?.assertRunnable(id);
 		this.assertNotContinued(meta);
 		if (meta.archivedAt !== undefined) throw new Conflict("Restore the archived session before starting its worker");
@@ -6130,6 +6142,8 @@ export class SessionManager {
 		}
 		published = worker;
 		this.workers.set(id, worker);
+		this.nextWorkerLaunchReason.delete(id);
+		this.aiUsage.observeWorkerLaunch(id, launchReason);
 		for (const packet of earlyPackets) this.onPacket(meta, worker, packet);
 		this.lastUse.set(id, Date.now());
 		// Reattach existing subscribers, for example after a kernel restart.
@@ -6156,6 +6170,7 @@ export class SessionManager {
 		}
 		// An inactivity close is not a failure, even if a slow shutdown had to be forced.
 		if (!this.closing && !this.parked.has(exited)) {
+			if (owned) this.nextWorkerLaunchReason.set(meta.id, "crash_recovery");
 			if (
 				owned &&
 				(exited.state === "failed" || code !== 0 || signal !== null) &&
@@ -6226,7 +6241,7 @@ export class SessionManager {
 			this.workers.get(meta.id) === worker &&
 			(packet.type === "ready" || packet.type === "usage" || packet.type === "modelChanged")
 		)
-			this.aiUsage.observeUsage(meta.id, packet.usage.accounting);
+			this.aiUsage.observeUsage(meta.id, packet.usage);
 		if (packet.type === "watch.run") {
 			if (this.workers.get(meta.id) !== worker) return;
 			void (

@@ -138,8 +138,18 @@ test("AI accounting aggregates authoritative ledgers without provider or model d
 		},
 		"boot-private",
 		{
-			direct: { providerAttemptsObserved: 3, elapsedMsObserved: 500, activeMsObserved: 400 },
-			child: { providerAttemptsObserved: 1, elapsedMsObserved: 100, activeMsObserved: 80 },
+			direct: {
+				providerAttemptsObserved: 3,
+				requestRetriesObserved: 1,
+				elapsedMsObserved: 500,
+				activeMsObserved: 400,
+			},
+			child: {
+				providerAttemptsObserved: 1,
+				requestRetriesObserved: 0,
+				elapsedMsObserved: 100,
+				activeMsObserved: 80,
+			},
 		},
 		10_000,
 	);
@@ -155,6 +165,8 @@ test("AI accounting aggregates authoritative ledgers without provider or model d
 	assert.equal(report.direct.activity.success, 1);
 	assert.equal(report.direct.activity.failure, 1);
 	assert.equal(report.direct.activity.providerAttemptsObserved, 3);
+	assert.equal(report.direct.activity.requestRetriesObserved, 1);
+	assert.equal(report.epochKind, "initial");
 	assert.equal(report.direct.cost.estimateStatus, "catalog_estimate");
 	assert.equal(report.direct.cost.estimatedUsdMicros, 87_000);
 	assert.equal(report.direct.cost.billedStatus, "unavailable");
@@ -164,6 +176,24 @@ test("AI accounting aggregates authoritative ledgers without provider or model d
 	assert.equal(report.child.cost.estimatedUsdMicros, undefined);
 	assert.equal(report.child.cost.subscriptionCoverage, "unknown");
 	assert.doesNotMatch(JSON.stringify(report), /secret-provider|secret-model|subagent-private-name|tokenless-priced/);
+});
+
+test("accounting classifies only explicit compaction heads as compaction epochs", () => {
+	const tracker = new UsageTracker(() => {});
+	tracker.set(undefined, undefined, {
+		conversationId: ROOT_CONVERSATION_ID,
+		observedAt: 1,
+		view: view([]),
+		state: { models: {}, tools: {} },
+	});
+	assert.equal(tracker.current.accounting?.epochKind, "initial");
+	tracker.set(undefined, undefined, {
+		conversationId: ROOT_CONVERSATION_ID,
+		observedAt: 2,
+		view: view([], 3),
+		state: { models: {}, tools: {} },
+	});
+	assert.equal(tracker.current.accounting?.epochKind, "compaction");
 });
 
 test("request timing remains explicitly partial and deduplicates unchanged publications", () => {
@@ -187,6 +217,7 @@ test("request timing remains explicitly partial and deduplicates unchanged publi
 		httpAttempts: 2,
 	});
 	assert.equal(tracker.current.accounting?.direct.activity.providerAttemptsObserved, 2);
+	assert.equal(tracker.current.accounting?.direct.activity.requestRetriesObserved, 1);
 	assert.equal(tracker.current.accounting?.direct.activity.elapsedMsObserved, 100);
 	assert.equal(tracker.current.accounting?.direct.activity.activeMsObserved, 80);
 	assert.equal(tracker.current.accounting?.direct.activity.timingCoverage, "partial");

@@ -300,6 +300,7 @@ public struct AIUsageAccounting: Codable, Equatable, Hashable, Sendable {
     public let direct: AIUsageScope
     public let child: AIUsageScope
     public let time: AIUsageTime
+    public let efficiency: AIUsageEfficiency?
 }
 
 public struct AIUsageScope: Codable, Equatable, Hashable, Sendable {
@@ -334,10 +335,58 @@ public struct AIUsageActivity: Codable, Equatable, Hashable, Sendable {
     public let cancelled: Double
     public let usageReports: Double
     public let providerAttemptsObserved: Double
+    public let requestRetriesObserved: Double?
     public let elapsedMsObserved: Double
     public let activeMsObserved: Double
     public let outcomeCoverage: String
     public let timingCoverage: String
+}
+
+public struct AIUsageEfficiency: Codable, Equatable, Hashable, Sendable {
+    public let direct: AIUsageEfficiencyScope
+    public let child: AIUsageEfficiencyScope
+    public let context: AIContextEfficiency?
+    public let compaction: AICompactionEfficiency
+    public let relaunch: AIRelaunchEfficiency
+}
+
+public struct AIUsageEfficiencyScope: Codable, Equatable, Hashable, Sendable {
+    public let observations: Double
+    public let inputTokens: Double
+    public let cacheReadTokens: Double
+    public let cacheWriteTokens: Double
+    public let cacheEfficiencyNumerator: Double
+    public let cacheEfficiencyDenominator: Double
+    public let coverage: String
+}
+
+public struct AIContextEfficiency: Codable, Equatable, Hashable, Sendable {
+    public let observedAt: Double
+    public let tokens: Double
+    public let contextWindow: Double
+    public let headroomTokens: Double
+    public let percent: Double
+    public let coverage: String
+}
+
+public struct AICompactionEfficiency: Codable, Equatable, Hashable, Sendable {
+    public let count: Double
+    public let pairedMeasurements: Double
+    public let beforeTokens: Double
+    public let afterTokens: Double
+    public let tokensRemoved: Double
+    public let timingStatus: String
+    public let coverage: String
+}
+
+public struct AIRelaunchEfficiency: Codable, Equatable, Hashable, Sendable {
+    public let count: Double
+    public let reasons: [String: Double]
+    public let lastObservedAt: Double?
+    public let contextPreparationsObserved: Double
+    public let contextTokensPrepared: Double
+    public let estimatedCostStatus: String
+    public let coverage: String
 }
 
 public struct AIUsageTime: Codable, Equatable, Hashable, Sendable {

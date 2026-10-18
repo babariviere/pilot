@@ -16,6 +16,8 @@ export interface KernelAIUsageConversation {
 	timingBoot: string;
 	/** Active-context epoch. pilotd retains observed outcomes across resets without double attribution. */
 	activityEpoch: string;
+	/** Closed classification of the active head. Only compaction is counted as compaction evidence. */
+	epochKind: "initial" | "compaction" | "reset" | "other";
 	observedAt: number;
 	direct: AIUsageScope;
 	child: AIUsageScope;
@@ -32,6 +34,7 @@ export interface KernelUsage {
 
 interface TimingCounters {
 	providerAttemptsObserved: number;
+	requestRetriesObserved: number;
 	elapsedMsObserved: number;
 	activeMsObserved: number;
 }
@@ -46,6 +49,7 @@ interface ActivityCounters {
 
 const zeroTiming = (): TimingCounters => ({
 	providerAttemptsObserved: 0,
+	requestRetriesObserved: 0,
 	elapsedMsObserved: 0,
 	activeMsObserved: 0,
 });
@@ -202,6 +206,14 @@ export function aiUsageConversation(
 		conversationId: String(conversationId),
 		timingBoot,
 		activityEpoch: view.head ? String(view.head.id) : "initial",
+		epochKind:
+			view.head === undefined
+				? "initial"
+				: view.head.kind === "pi.compaction"
+					? "compaction"
+					: view.head.kind === "pi.reset"
+						? "reset"
+						: "other",
 		observedAt: now,
 		direct: scope(
 			usageValues(state, "models"),
@@ -285,6 +297,10 @@ export class UsageTracker {
 		counters.providerAttemptsObserved = add(
 			counters.providerAttemptsObserved,
 			Math.max(1, amount(record.httpAttempts)),
+		);
+		counters.requestRetriesObserved = add(
+			counters.requestRetriesObserved,
+			Math.max(0, amount(record.httpAttempts) - 1),
 		);
 		counters.elapsedMsObserved = add(counters.elapsedMsObserved, amount(record.totalMs));
 		counters.activeMsObserved = add(counters.activeMsObserved, amount(record.providerMs));

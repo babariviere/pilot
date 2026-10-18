@@ -58,14 +58,21 @@ private func decodeUsageSession(_ usage: String = "") throws -> SessionSummary {
       "direct":{
         "tokens":{"input":100,"output":20,"cacheRead":80,"cacheWrite":10,"reasoning":5,"reasoningStatus":"reported"},
         "cost":{"estimateStatus":"catalog_estimate","estimatedUsdMicros":12340,"pricingRevision":"pi-ai@1.3.0","billedStatus":"unavailable","subscriptionCoverage":"unknown"},
-        "activity":{"kind":"model_requests","count":2,"success":1,"failure":1,"cancelled":0,"usageReports":1,"providerAttemptsObserved":3,"elapsedMsObserved":500,"activeMsObserved":400,"outcomeCoverage":"partial","timingCoverage":"partial"}
+        "activity":{"kind":"model_requests","count":2,"success":1,"failure":1,"cancelled":0,"usageReports":1,"providerAttemptsObserved":3,"requestRetriesObserved":1,"elapsedMsObserved":500,"activeMsObserved":400,"outcomeCoverage":"partial","timingCoverage":"partial"}
       },
       "child":{
         "tokens":{"input":10,"output":5,"cacheRead":0,"cacheWrite":0,"reasoningStatus":"unavailable"},
         "cost":{"estimateStatus":"unavailable","billedStatus":"unavailable","subscriptionCoverage":"unknown"},
-        "activity":{"kind":"child_operations","count":1,"success":1,"failure":0,"cancelled":0,"usageReports":1,"providerAttemptsObserved":1,"elapsedMsObserved":100,"activeMsObserved":80,"outcomeCoverage":"partial","timingCoverage":"partial"}
+        "activity":{"kind":"child_operations","count":1,"success":1,"failure":0,"cancelled":0,"usageReports":1,"providerAttemptsObserved":1,"requestRetriesObserved":0,"elapsedMsObserved":100,"activeMsObserved":80,"outcomeCoverage":"partial","timingCoverage":"partial"}
       },
-      "time":{"elapsedMs":3000,"activeMs":1500,"pausedMs":500,"idleMs":1000,"coverage":"daemon_observed_partial"}
+      "time":{"elapsedMs":3000,"activeMs":1500,"pausedMs":500,"idleMs":1000,"coverage":"daemon_observed_partial"},
+      "efficiency":{
+        "direct":{"observations":2,"inputTokens":100,"cacheReadTokens":80,"cacheWriteTokens":10,"cacheEfficiencyNumerator":80,"cacheEfficiencyDenominator":180,"coverage":"daemon_observed_deltas_partial"},
+        "child":{"observations":0,"inputTokens":0,"cacheReadTokens":0,"cacheWriteTokens":0,"cacheEfficiencyNumerator":0,"cacheEfficiencyDenominator":0,"coverage":"daemon_observed_deltas_partial"},
+        "context":{"observedAt":1000,"tokens":120,"contextWindow":200,"headroomTokens":80,"percent":60,"coverage":"latest_observation"},
+        "compaction":{"count":1,"pairedMeasurements":1,"beforeTokens":180,"afterTokens":120,"tokensRemoved":60,"timingStatus":"unavailable","coverage":"epoch_observed_partial"},
+        "relaunch":{"count":2,"reasons":{"initial":1,"parked_wake":1},"contextPreparationsObserved":2,"contextTokensPrepared":220,"estimatedCostStatus":"unavailable","coverage":"daemon_observed_partial"}
+      }
     }}
     """#)
     let accounting = try #require(session.usage?.ai)
@@ -75,6 +82,13 @@ private func decodeUsageSession(_ usage: String = "") throws -> SessionSummary {
     #expect(accounting.helpText.contains("Billed spend: Unavailable"))
     #expect(accounting.helpText.contains("Subscription coverage: Unknown"))
     #expect(accounting.helpText.contains("Provider attempts observed: 4 (partial)"))
+    #expect(accounting.helpText.contains("Request retries observed: 1 (partial)"))
+    #expect(accounting.helpText.contains("Latest context: 120/200 (80 headroom)"))
+    #expect(accounting.helpText.contains("Direct cache efficiency: 44% across 2 observed input changes"))
+    #expect(accounting.helpText.contains("Compactions observed: 1 (1 with before/after context)"))
+    #expect(accounting.helpText.contains("Worker launches observed: 2 (2 context preparations)"))
+    #expect(accounting.helpText.contains("Launch reasons: initial 1, parked wake 1"))
+    #expect(accounting.helpText.contains("Prepared context observed: 220 tokens (relaunch cost unavailable)"))
     #expect(try JSONDecoder().decode(SessionSummary.self, from: JSONEncoder().encode(session)) == session)
 }
 
