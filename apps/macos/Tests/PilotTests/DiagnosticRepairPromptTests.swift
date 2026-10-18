@@ -9,6 +9,19 @@ private let repairRemoteHost = HostRef(hostId: "devbox", daemonId: "remote-daemo
 private let repairTargetID = "00000000-0000-4000-8000-000000000101"
 private let repairSpecialistID = "00000000-0000-4000-8000-000000000102"
 
+/// SwiftUI's hosted AppKit button can keep its user-facing text in the accessibility payload while leaving
+/// `NSButton.title` empty. Locate the real native control by the same accessibility contract users receive.
+@MainActor private func mountedButtons(_ view: NSView) -> [NSButton] {
+    (view as? NSButton).map { [$0] } ?? view.subviews.flatMap(mountedButtons)
+}
+
+@MainActor private func mountedButton(_ view: NSView, identifier: String, label: String) -> NSButton? {
+    mountedButtons(view).first { button in
+        button.accessibilityIdentifier() == identifier ||
+            [button.accessibilityTitle(), button.accessibilityLabel()].compactMap { $0 }.contains { $0.contains(label) }
+    }
+}
+
 private func repairProposal(_ id: String = "diagnostic-proposal:v1:000000000000000000000001")
     -> DiagnosticRepairProposal {
     DiagnosticRepairProposal(id: id, targetSessionId: repairTargetID, createdAt: "2026-10-18T18:00:00.000Z",
@@ -195,18 +208,15 @@ private func repairSession(host: HostRef = repairLocalHost, proposal: Diagnostic
     window.contentView = hosting
     window.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
     window.orderFrontRegardless(); window.update(); hosting.layoutSubtreeIfNeeded()
-    func buttons(_ view: NSView) -> [NSButton] {
-        (view as? NSButton).map { [$0] } ?? view.subviews.flatMap(buttons)
-    }
     let deadline = ContinuousClock.now.advanced(by: .seconds(5))
-    while buttons(hosting).count < 2, ContinuousClock.now < deadline {
+    while mountedButtons(hosting).count < 2, ContinuousClock.now < deadline {
         hosting.layoutSubtreeIfNeeded()
         try await Task.sleep(for: .milliseconds(20))
     }
-    let controls = buttons(hosting)
+    let controls = mountedButtons(hosting)
     try #require(controls.count == 2, "the production proposal tray has only Review and Not now actions")
-    let review = try #require(controls.first { $0.title.contains("Review repair") })
-    let dismiss = try #require(controls.first { $0.title == "Not now" })
+    let review = try #require(mountedButton(hosting, identifier: "diagnostic-repair-review", label: "Review repair"))
+    let dismiss = try #require(mountedButton(hosting, identifier: "diagnostic-repair-dismiss", label: "Not now"))
     review.performClick(nil)
     dismiss.performClick(nil)
     #expect(reviews == 1 && dismissals == 1)
@@ -330,15 +340,15 @@ private func repairSession(host: HostRef = repairLocalHost, proposal: Diagnostic
     window.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
     window.orderFrontRegardless(); window.update(); hosting.layoutSubtreeIfNeeded()
 
-    func buttons(_ view: NSView) -> [NSButton] {
-        (view as? NSButton).map { [$0] } ?? view.subviews.flatMap(buttons)
-    }
     let deadline = ContinuousClock.now.advanced(by: .seconds(5))
-    while buttons(hosting).isEmpty, ContinuousClock.now < deadline {
+    while mountedButtons(hosting).isEmpty, ContinuousClock.now < deadline {
         hosting.layoutSubtreeIfNeeded()
         try await Task.sleep(for: .milliseconds(20))
     }
-    let action = try #require(buttons(hosting).first { $0.title.contains("Suggest a repair") })
+    try #require(mountedButtons(hosting).count == 1, "the production diagnostics header has one repair action")
+    let action = try #require(mountedButton(
+        hosting, identifier: "diagnostic-repair-action", label: "Suggest a repair"
+    ))
     action.performClick(nil)
     action.performClick(nil)
     while client.fixtureSendRequests.isEmpty, ContinuousClock.now < deadline {
@@ -369,15 +379,15 @@ private func repairSession(host: HostRef = repairLocalHost, proposal: Diagnostic
     window.contentView = hosting
     window.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
     window.orderFrontRegardless(); window.update(); hosting.layoutSubtreeIfNeeded()
-    func buttons(_ view: NSView) -> [NSButton] {
-        (view as? NSButton).map { [$0] } ?? view.subviews.flatMap(buttons)
-    }
     let deadline = ContinuousClock.now.advanced(by: .seconds(5))
-    while buttons(hosting).isEmpty, ContinuousClock.now < deadline {
+    while mountedButtons(hosting).isEmpty, ContinuousClock.now < deadline {
         hosting.layoutSubtreeIfNeeded()
         try await Task.sleep(for: .milliseconds(20))
     }
-    try #require(buttons(hosting).first { $0.title.contains("Review repair") }).performClick(nil)
+    try #require(mountedButtons(hosting).count == 1, "the production diagnostics header has one repair action")
+    try #require(mountedButton(
+        hosting, identifier: "diagnostic-repair-action", label: "Review repair"
+    )).performClick(nil)
     #expect(app.diagnosticRepairTarget?.reference.localId == fixture.specialist.id)
     #expect(client.fixtureSendRequests.isEmpty && client.fixtureSpawnRequests.isEmpty)
 }
