@@ -1198,6 +1198,13 @@ final class AppModel: ObservableObject {
         }
     }
 
+    @Published var githubImportPresented = false
+    var githubImportURL = ""
+    var githubImportHost: HostRef?
+    func importGitHubProject(url: String = "", host: HostRef? = nil) {
+        githubImportURL = url; githubImportHost = host; githubImportPresented = true
+    }
+
     func open(session id: String) {
         reveal(session: id)
         showMainWindow()

@@ -67,6 +67,7 @@ import { ChatStreams } from "./chat-streams.ts";
 import type { DaemonConfig } from "./config.ts";
 import { Conflict, ServiceUnavailable } from "./errors.ts";
 import { daemonPerformance, operations } from "./event-loop-watchdog.ts";
+import type { GitHubImportService } from "./github-import.ts";
 import type { GitHubSetupService } from "./github-setup.ts";
 import { MachineInformationReader } from "./machine.ts";
 import { type McpStatusService, SignInUnavailable } from "./mcp-status.ts";
@@ -310,6 +311,7 @@ export function createDaemonServer(
 	watches?: import("./watch-service.ts").WatchService,
 	telemetry?: TelemetrySettingsService,
 	githubSetup?: GitHubSetupService,
+	githubImport?: GitHubImportService,
 ): Server & { runtimeResources: RuntimeResources } {
 	sessions.setWorkspaceProcessGuard((id) => terminals.isRunning(id));
 	const machine = new MachineInformationReader(_config.home, hello?.daemonVersion ?? "unknown");
@@ -350,6 +352,7 @@ export function createDaemonServer(
 		transfers,
 		mutations,
 		...(githubSetup ? [githubSetup] : []),
+		...(githubImport ? [githubImport] : []),
 		...(setup ? [setup] : []),
 	]);
 	maintenance?.bind(runtimeResources);
@@ -434,6 +437,23 @@ export function createDaemonServer(
 		const url = new URL(req.url ?? "/", "http://localhost");
 		const parts = url.pathname.split("/").filter(Boolean);
 		if (parts[0] !== "api") throw new HttpError(404, "Not found");
+		if (parts[1] === "github-import") {
+			res.setHeader("cache-control", "no-store");
+			if (!githubSetup || !githubImport) throw new SetupError(503, "GitHub import is unavailable on this host.");
+			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (parts.length === 3 && parts[2] === "preview" && req.method === "POST") {
+				const body = await readJson<{ url: string; destination?: string }>(req);
+				return json(res, 200, await githubImport.preview(body.url, body.destination));
+			}
+			if (parts.length === 3 && parts[2] === "repositories" && req.method === "GET")
+				return json(res, 200, await githubImport.repositories(url.searchParams.get("q") ?? ""));
+			if (parts.length === 2 && req.method === "GET") return json(res, 200, await githubImport.list());
+			if (parts.length === 2 && req.method === "POST")
+				return json(res, 201, await githubImport.start(await readJson(req)));
+			if (parts.length === 4 && req.method === "POST")
+				return json(res, 200, await githubImport.action(parts[2]!, parts[3]!));
+			throw new SetupError(404, "Unknown GitHub import operation.");
+		}
 		if (parts[1] === "runtime-update" && maintenance) {
 			res.setHeader("cache-control", "no-store");
 			if (parts.length === 2 && req.method === "GET")
@@ -1481,7 +1501,8 @@ export function createDaemonServer(
 								? 409
 								: 400;
 			const message =
-				(req.url ?? "").startsWith("/api/setup") && !(error instanceof SetupError || error instanceof HttpError)
+				((req.url ?? "").startsWith("/api/setup") || (req.url ?? "").startsWith("/api/github-import")) &&
+				!(error instanceof SetupError || error instanceof HttpError)
 					? "Setup operation failed. No credential details are returned."
 					: error instanceof Error
 						? error.message

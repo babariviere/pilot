@@ -68,6 +68,7 @@ struct SessionSidebar: View {
                 EmptyStateView(icon: PilotIcon.newProject, title: "No projects yet",
                                message: "Add a project to get started.") {
                     Button("Add Project…") { model.addProject() }
+                    Button("Import GitHub Project…") { model.importGitHubProject() }
                 }
                 .padding(.horizontal, 12)
             }

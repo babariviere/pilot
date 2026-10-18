@@ -30,6 +30,7 @@ struct PilotApp: App {
                     .keyboardShortcut("n", modifiers: .command)
                 Button("Add Project…") { model.addProject() }
                     .keyboardShortcut("o", modifiers: [.command, .shift])
+                Button("Import GitHub Project…") { model.importGitHubProject() }
             }
             CommandGroup(after: .toolbar) {
                 Button("Back") { model.goBack() }

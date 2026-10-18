@@ -929,6 +929,12 @@ final class PilotClient: ObservableObject {
         return project
     }
 
+    func importedProject(_ id: String) async throws -> Project {
+        let project: Project = try await missionRequest(["projects", id])
+        upsert(project)
+        return project
+    }
+
     func updateProject(_ id: String, _ request: ProjectRequest) async throws -> Project {
         let project: Project = try await call("api/projects/\(id)", method: "PATCH", body: request)
         upsert(project)
