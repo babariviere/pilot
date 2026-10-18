@@ -3,6 +3,88 @@ import PilotCore
 import Testing
 
 struct ControlHostsProtocolTests {
+
+    private struct DelegationCase: Codable, Equatable {
+        let name: String
+        let sealed: ControlDelegationFence
+        let retained: JSONValue
+        let error: ControlHostErrorResponse
+    }
+    private struct StatusRecoveryCase: Codable, Equatable {
+        let name: String
+        let request: ControlRemoteStatusImportRequest
+        let publishedSourceRevision: Int?
+        let response: ControlRemoteStatusImportResponse?
+        let currentPublishedRevision: Int?
+        let checkpoint: ControlHostSyncState?
+        let error: ControlHostErrorResponse?
+    }
+    private struct RetirementRecovery: Codable, Equatable {
+        let checkpoint: ControlRemoteEventCheckpoint
+        let query: ControlRemoteEventQuery
+        let page: ControlRemoteEventPage
+        let ack: ControlRemoteEventAcknowledgment
+    }
+    @Test func wireRecoveryAndDelegationFenceRoundTrip() throws {
+        let f = try fixtures()
+        _ = try roundTrip(ControlDelegationFence.self, #require(f["delegationFence"]))
+        let operation = try roundTrip(ControlDurableOperation.self, #require(f["taskStartOperation"]))
+        let payload = try JSONDecoder().decode(ControlStartOperationPayload.self, from: Data(operation.payload.utf8))
+        guard case let .task(_, _, delegation) = payload.target else {
+            Issue.record("Expected pinned delegation"); return
+        }
+        #expect(operation.targetId == delegation.session.sessionId)
+        #expect(operation.operationId != delegation.placementOperationId)
+        let cases = try roundTrip([DelegationCase].self, #require(f["delegationCases"]))
+        #expect(cases.map(\.error.code) == [.delegationStale, .delegationSealed, .delegationReassigned])
+        _ = try roundTrip([ControlRemoteEventCheckpoint].self, #require(f["checkpoints"]))
+        _ = try roundTrip([ControlEventFloor].self, #require(f["eventFloors"]))
+        _ = try roundTrip([ControlRemoteEventPage].self, #require(f["emptyEventPages"]))
+        let acks = try roundTrip([ControlRemoteEventAcknowledgment].self, #require(f["emptyEventAcknowledgments"]))
+        #expect(acks[0].through == 0)
+        #expect(acks[0].eventId == nil)
+        let recovery = try roundTrip(RetirementRecovery.self, #require(f["relaunchAfterRetirement"]))
+        #expect(recovery.query.after == recovery.checkpoint.importedThrough)
+        #expect(recovery.query.after == recovery.page.acknowledgedThrough)
+        #expect(recovery.ack.eventId == recovery.checkpoint.lastEventId)
+        _ = try roundTrip([ControlHostErrorResponse].self, #require(f["cursorErrors"]))
+        let statuses = try roundTrip([StatusRecoveryCase].self, #require(f["statusRecoveryCases"]))
+        #expect(statuses[0].error?.code == .staleSnapshot)
+        #expect(statuses[1].response?.publishedRevision == 1)
+        #expect(statuses[1].currentPublishedRevision == 2)
+        #expect(statuses[2].checkpoint?.status?.next == "snapshot:1/page:2")
+        #expect(statuses[3].error?.code == .identityMismatch)
+    }
+    @Test func stagedPairingReadRelayAndAuthenticationRoundTrip() throws {
+        let f = try fixtures()
+        _ = try roundTrip(ControlEnrollmentPreviewRequest.self, #require(f["previewRequest"]))
+        _ = try roundTrip(ControlEnrollmentPreviewResponse.self, #require(f["previewResponse"]))
+        let states = try roundTrip([ControlHostStateResponse].self, #require(f["stagedStates"]))
+        #expect(states[0].configuration.role == .home)
+        #expect(states[0].configuration.stagedRole?.role == .executor)
+        #expect(states[0].configuration.freeze == nil)
+        #expect(states[1].configuration.freeze?.phase == .blocked)
+        let rollback = try roundTrip(ControlUnpairResponse.self, #require(f["stagingRollback"]))
+        #expect(rollback.configuration.role == .home)
+        #expect(rollback.configuration.stagedRole == nil)
+        #expect(rollback.configuration.freeze == nil)
+        _ = try roundTrip([ControlHostErrorResponse].self, #require(f["authErrors"]))
+        _ = try roundTrip(ControlHostErrorResponse.self, #require(f["rollbackError"]))
+        _ = try roundTrip(ControlCourierCapability.self, #require(f["courierCapability"]))
+        _ = try roundTrip(ControlCourierCapabilityRefreshRequest.self, #require(f["capabilityRefresh"]))
+        _ = try roundTrip(ControlCourierRequestProof.self, #require(f["courierProof"]))
+        _ = try roundTrip(ControlNativeRequestProof.self, #require(f["nativeProof"]))
+        let enrollmentProof = try roundTrip(ControlNativeRequestProof.self, #require(f["nativeEnrollmentProof"]))
+        #expect(enrollmentProof.method == .put)
+        _ = try roundTrip([ControlCourierAuthentication].self, #require(f["authentications"]))
+        let requests = try roundTrip([ControlRemoteReadRequest].self, #require(f["readRequests"]))
+        #expect(requests.map(\.action) == [.read, .health, .logs, .telemetry, .checks])
+        _ = try roundTrip([ControlRemoteReadResponse].self, #require(f["readResponses"]))
+        _ = try roundTrip(ControlReadExchangeRequest.self, #require(f["readExchangeRequest"]))
+        _ = try roundTrip(ControlReadExchangeResponse.self, #require(f["readExchangeResponse"]))
+        let imports = try roundTrip([ControlReadImportResponse].self, #require(f["readImports"]))
+        #expect(imports.map(\.state) == [.delivered, .expired])
+    }
     private func fixtures() throws -> [String: Any] {
         var root = URL(fileURLWithPath: #filePath)
         for _ in 0..<5 { root.deleteLastPathComponent() }

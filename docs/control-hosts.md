@@ -184,7 +184,7 @@ is bounded to 1024 UTF-8 bytes, redacted and untrusted, never an authorization s
 The enrollment PUT accepts `{enrollment,peerHello,expectedGeneration,expectedRoleEpoch,approvalRequestId}`.
 It requires the authenticated structured approval described below. `peerHello` is the original
 hello copied from the other app-verified endpoint. Validate its installation/lineage, general
-protocol compatibility, Control version/configuration and home against the enrolled peer, then
+protocol compatibility and Control version/configuration against the enrolled peer, then
 retain that last verified handshake in `ControlHostStateResponse.peerHello`. It is local-user
 setup evidence, not a model-asserted identity. The executor receives home's hello; home receives
 executor's hello, including its staged legacy session ID. Unsupported peers cannot activate a pair.
@@ -217,7 +217,8 @@ Read-only host-targeted `read/health/logs/telemetry/checks` use the same verifie
 as request/response reads, not mutation replay or worker starts. Requests remain scoped to the
 enrolled peer and existing bounded diagnostic/read selectors. Replies are untrusted, host-labelled,
 capture-timed and at most 24,000 UTF-8 bytes. An unavailable courier reports unavailable, never
-fabricates a result. Detailed read-proxy endpoint wiring is left to the home/courier implementation.
+fabricates a result. Exact v1 read-proxy routes and authentication are defined in the wire-adoption
+section below; there is no deferred transport-specific choice of endpoint or caller authority.
 
 The courier relays original bytes, looks up receipts first and retries only the same immutable
 operation. It may batch events/snapshots, but cannot merge identities, rewrite targets, infer success,
@@ -315,9 +316,10 @@ not just the Mac or a cached app version. Capability support alone never hides a
 
 `ControlHostCutover` records readiness against the exact binding/generation and both host lineages:
 
-1. Both verified hellos support contract v1, agree on home, and home advertises role home.
-   Explicitly approved executor policy fences legacy execution before load/recovery; it does not
-   hide or archive the legacy row before end-to-end cutover. See the startup barrier below.
+1. Both verified hellos support contract v1, agree on the approved home through effective or
+   stagedRole metadata as appropriate, and the authoritative home advertises role home.
+   Pairing may leave the effective legacy role active with a staged executor role. Only explicit
+   freeze applies executor policy before load/recovery. See pre-cutover staging below.
 2. `homeReady` means the authoritative home Control, grant ledger, durable outbox and import stores
    are recovered and usable. `executorEnrolled` requires the same active confirmed enrollment on
    both sides and working registered Control handlers on the executor.
@@ -423,8 +425,8 @@ audit; they supersede any earlier description of an unauthenticated "local-user"
 
 The reserved socket invalidation is `ControlHostInvalidation`:
 `{type:"control-hosts.changed",bindingId,generation,changes:[...]}`, on the existing `/api/ws`.
-Changes are outbox, receipts, events, status, enrollment, readiness or archive. Emit only after
-durable changes, coalesce to at most once/second/binding, and send at most the seven distinct flags.
+Changes are outbox, receipts, events, status, enrollment, readiness, archive, role or reads. Emit only after
+durable changes, coalesce to at most once/second/binding, and send at most the nine distinct flags.
 An event flag means a journal page is available, not that the socket payload is the event.
 No cursor or result is trusted from a socket. Existing `dashboard.changed` remains the home
 merged-view invalidation. Reconnect re-verifies hello/pins/role epochs and drains bounded HTTP reads.
@@ -535,8 +537,10 @@ fence; old unadmitted envelopes cannot acquire authority under it. Event cursor 
 binding+generation+source lineage, so old factual evidence can still reconcile after archive/unpair.
 
 Pairing approves and persists each exact peer intent independently, reads both back, then permits
-dispatch. Unpair immediately fences new local dispatch/admission, retains revocation tombstones,
-freezes relevant watch authority and keeps archives/audit/receipts readable. It neither stops accepted
+cross-host dispatch. Unpair immediately fences new enrolled cross-host dispatch/admission, retains
+revocation tombstones, freezes that enrollment's remote-watch authority and keeps archives/audit/
+receipts readable. Before freeze it leaves the never-frozen legacy role unchanged; afterwards it
+cannot revive legacy wakes. It neither stops accepted
 ordinary work nor restores the legacy Control. If the other daemon is unreachable, peerAcknowledged
 stays false and UI says revocation pending there. Retain the signed native consent and exact unpair
 intent durably; on reconnect the native management path obtains/answers the peer request only for
@@ -745,10 +749,10 @@ Required startup contract for the enrollment/role owner and archive-transition o
    commit and idempotent watch-removal audit preserve that same fence. Every runtime ingress also
    checks the guard, so changing a row/filter cannot reactivate a frozen Control.
 
-An explicitly approved executor role therefore freezes conversational execution immediately, even
-if its legacy row remains visible pending end-to-end readiness. Final archive is the last
-non-destructive cutover step; it is not the first execution fence. Native filtering alone is
-insufficient. Staging must not run a second Control while waiting for the one-row UI gate.
+An explicit freeze intent applies the executor fence immediately, while the legacy row remains
+visible until acknowledged archive. Pairing alone stores stagedRole and leaves the effective legacy
+role active. Final archive is the last non-destructive step, not the first execution fence. Native
+filtering is insufficient. Staging alone cannot activate production remote orchestration or failover.
 
 Required implementation tests seed an old Control with a recoverable run, queued input, pending and
 already-fired watches, grants and audit, then restart as executor and archived-control. Assert zero
@@ -984,3 +988,197 @@ and not an authority transfer or a cancellation/completion proof for independent
 Both acceptance suites test lost archive receipt, lost home-adoption response, duplicate acknowledgment,
 restart during freeze, preserved stopped-watch/fired-notice/audit records, and accepted independent
 work continuing with unchanged scope, ceiling, budget usage and provenance.
+
+## Wire-adoption closure: authenticated routes and recovery cases
+
+### Separate management authentication from courier capability
+
+Every route in this document has one of two authentication classes. The **receiving daemon**
+authenticates requests, pins binding/generation/home/executor and rechecks its durable policy; the
+app verifies its SSH/hello pin and the response source. This is never a new public listener.
+
+**M (native management)** uses `ControlNativeRequestProof` under the already bootstrap-pinned
+app key, carried as base64 exact JSON in `X-Pilot-Control-Proof` and a base64 Ed25519 signature in
+`X-Pilot-Control-Signature`. Sign UTF-8 `native-management-v1\n` plus the original proof bytes.
+The proof binds appKeyId, exact receiver host, requestId, issuedAt, method, raw path/query and SHA-256
+of exact body bytes. The daemon verifies its installed key and all fields, including a five-minute
+authentication window; skew/unknown key fails closed. This authentication alone is not user consent:
+enroll/unpair/archive still consume the separately issued, previewed and signed approval request.
+
+**C (courier data)** uses `ControlCourierAuthentication` with a `ControlCourierRequestProof` in
+the same headers, but signature prefix `courier-v1\n`. Its capabilityId resolves a daemon-issued
+`ControlCourierCapability`, scoped to fixed binding/generation, exact peers, native app key, role
+fence, expiry and route scopes. It never authorizes native preview/approval/enrollment/unpair/archive
+initiation, arbitrary URL/path reads, generic legacy chat operations or a new grant. A management
+signature cannot be replayed as a courier proof, nor a courier signature as an approval decision.
+The private signer/key remains protected from workers; an agent-supplied header is not authentication.
+
+Successful native enrollment may issue only the fixed narrow capability shown in its preview.
+GET state returns its metadata; no secret/native approval is encoded there. Capabilities expire in
+at most five minutes. POST `/api/control-hosts/:id/courier-capability/refresh` accepts
+`ControlCourierCapabilityRefreshRequest` under M authentication and returns the same scoped
+capability with current expiry/fence, only while its original pairing/key remains valid. It cannot
+add scopes, replace a home or revive a revoked binding. Reconciliation/archive-read can retain a
+read-only historical capability after revoke; new executable delivery is forbidden. Role changes
+permit receipt/factual reconciliation for the original namespace, not stale-epoch new admission.
+A lost HTTP response may use fresh authentication proof but must retain the original domain intent,
+operation ID, page or CAS baseline. Authentication request IDs are not mutation idempotency keys.
+
+| Reserved route / receiver | Authentication and scope | Request → success body |
+| --- | --- | --- |
+| POST `/:id/enrollment/preview`, either peer | M; no mutation/role change | ControlEnrollmentPreviewRequest → ControlEnrollmentPreviewResponse (pair-only, exact intent/hash/current state/errors) |
+| POST `/:id/approval-requests`, GET issued request, POST decision, same peer | M; exact request ID/intent; decision additionally verifies approve/deny signature | ControlHostApprovalInput / ControlHostApprovalDecision → ControlHostApprovalRequest |
+| PUT `/:id/enrollment`, either peer | M + its consumed matching structured approval | ControlHomeEnrollmentRequest → ControlHostStateResponse |
+| POST `/:id/unpair` and home `/unpair/ack` | M; unpair consumes matching approval; ack reconciles that same intent | ControlUnpairRequest / original peer ControlUnpairResponse → ControlUnpairResponse |
+| GET `/:id`, `/sync-state`, `/lifecycle` | M, or C inspect | Existing state/sync/lifecycle DTOs |
+| POST home `/:id/archive` | M + fresh matching archive approval and verified readiness | ControlArchiveRequest → ControlArchiveResponse; never a courier-capability mutation |
+| Home `/exchange`, `/ack` | C exchange / receipts | Existing typed exchange/receipt-adoption DTOs |
+| Executor `/api/operations/receipt`, `/api/operations` | C receipts / exchange for Control traffic only | Original control.* envelope → original generic receipt/unknown; handler rechecks authority |
+| Executor `/events`, home `/events/import`, executor `/events/ack` | C events, checked by each receiver | Existing typed event query/page/ack |
+| GET home `/:id/events/checkpoint` | M, or C events | ControlRemoteEventCheckpoint, authoritative imported cursor |
+| Executor `/status`, home `/status/import` | C status | Existing capture query/page and CAS import request/response |
+| Executor archive GET pages | M, or C archive-read on historical namespace | Existing source-qualified read-only archive DTOs |
+| Home `/reads/exchange`, executor `/reads/execute`, home `/reads/import` | C reads at each receiver | Read-proxy DTOs below |
+
+All shorthand paths begin `/api/control-hosts`. Hello remains GET `/api/hello` over verified
+transport, with optional support-version/effective-role/staged-role fields; it confers no mutation
+authority. Enrollment revocation is the explicit POST /:id/unpair above (not an implicit disconnect
+or a second undeclared revoke endpoint); grant revocation remains control.revoke with its own receipt.
+Errors on reserved routes are bounded `ControlHostErrorResponse`: 400 invalid_request,
+401 authentication_required; 403 approval_required or capability_denied; 404 not_found;
+409 approval_expired/capability_expired, identity/role/generation, readiness/CAS/gap/delegation/rollback
+conflict; 503 capacity/incompatible_peer/read_unavailable. Preview returns
+compatible false with typed errors without enacting the intent. Generic operation rejections remain
+conclusive OperationReceipt state rejected, with a typed ControlHostErrorResponse result and
+machine code reason; pending/unknown remains uncertain. No receiver treats error prose as consent.
+
+### Frozen host-targeted read proxy
+
+Home's pilot read/health/logs/telemetry/checks enqueues `ControlRemoteReadRequest` for the selected
+enrolled host. It is a read request, not a DurableOperation, approval or authority extension.
+The home owns a bounded request/waiter; reads never start a worker or initiate provider/integration
+work. The app relays only through:
+
+- POST home `/:id/reads/exchange`: `ControlReadExchangeRequest {peer,cursor?}` →
+  `ControlReadExchangeResponse {requests,more,next?}`, at most 16 original requests/64 KiB.
+- POST executor `/:id/reads/execute`: original ControlRemoteReadRequest →
+  `ControlRemoteReadResponse {requestId,sourceHost,capturedAt,untrusted:true,result,truncated}`.
+- POST home `/:id/reads/import`: original response → `ControlReadImportResponse`, delivered to
+  the original waiter or expired without side effects. Verify pending request ID and exact source
+  peer before releasing data. Never retarget an expired response to a newer request.
+
+Selectors are strict per action: read requires sessionId, optional result|tail view and limit;
+health permits sessionId only; logs permits source/sessionId/since/q/limit (session/lifecycle source
+requires sessionId); telemetry permits sessionId/limit; checks requires pr and permits includeStale.
+Read/limit is 1..40, logs/telemetry 1..100, q at most 200 characters, since an ISO timestamp, IDs
+at most 128 bytes, PR URL at most 2048 bytes. Unknown selectors are 400. Filesystem paths,
+arbitrary endpoints, executable configuration, thought/tool-log export and unbounded transcript
+hydration are forbidden. Checks uses only available exact-head cache, not a network refresh.
+
+Replies cap at 24,000 UTF-8 bytes after redaction; result tails bound before hydration. At most 32
+outstanding reads/1 MiB retained response data per home and four executions in flight, sharing the
+courier's global four-request budget. A read expires after 30 seconds or caller cancellation.
+These ephemeral reads may be retried as new explicit reads after expiry; they carry no mutation
+ownership and do not survive home restart as executable work. Interrupted reads report unavailable,
+never an empty/successful fabricated result. Reads invalidation wakes the courier for queued requests;
+status/role invalidation includes foreign-target changes. Page reads and duplicate imports do not poll
+or create new model turns. M and C authentication are not interchangeable with native approval.
+
+### Durable checkpoint, retired floor and empty streams
+
+GET home `/:id/events/checkpoint` returns `ControlRemoteEventCheckpoint`, from the same durable
+Control-memory cursor/dedupe transaction as event import, including importedThrough/lastEventId,
+last known source ack floor/head and the exact home/source/binding/generation pins. On relaunch,
+read this home checkpoint first; an app-local cursor is advisory and cannot authorize a reset.
+
+Every source page includes acknowledgedThrough/acknowledgedEventId from the executor's retained
+floor. A request below that floor returns 409 cursor_before_floor with typed ControlEventFloor;
+noncontiguous IDs return 409 cursor_gap with known floor/checkpoint evidence. Do not guess a cursor.
+The existing reconciliation rules still apply: resend a lost import's exact page, resend home's
+durable acknowledgment after a lost ack, or require explicit repair if a source floor exceeds
+home's actual committed import state. There is no event-content checkpoint shortcut in v1.
+
+For a genuinely fresh empty stream, head=after=acknowledgedThrough=0, events=[], next absent.
+Its import is a read-only no-op acknowledgment with through=0 and eventId omitted. No fake event ID,
+cursor advance, floor write or notice is created. eventId is otherwise required when through>0.
+For an already caught-up empty page at N>0, home's durable checkpoint supplies the retained last
+event ID; source retirement preserves that floor ID. Reacknowledging that exact N/ID is harmless.
+A relaunch after retirement with home cursor N/source floor N requests after=N and continues, without
+resetting to zero, rereading retired rows or reconstructing authority from an app cache.
+
+### Task start pins an existing delegation, not a mutable lookup
+
+ControlStartTarget.task now requires `ControlDelegationFence`, a thin immutable reference to the
+existing DelegationGrant: delegationId, SharedTaskRef (canonical mission-home pin/missionId/taskId),
+shared-context bindingId/bindingGeneration, executionEpoch, target project, owned preallocated session,
+definitionRevision/context, manifestId, original immutable offer's grantHash and placementOperationId.
+The latter is the original shared Execution.operationId, not the new Control envelope ID. It is distinct
+from the envelope's Control binding/generation. This is not a new grant or permission model.
+
+Before sealing, the placement path must supply that exact already-owned grant/session and recorded
+immutable-offer hash. targetId equals grant.session.sessionId; grant.session.host and target.host
+equal the executor. The top-level task IDs must agree with the qualified task reference; instructions,
+model and scope must not replace or widen the accepted request. Without complete placement proof,
+reject delegation_required before reservation/materialization; do not derive a session or an offer
+from a task ID alone. Legacy records without an intact immutable offer digest are not silently adopted.
+Existing shared admission uses placementOperationId for assertCreate, session createOperationId
+and the opening input requestId. A delegated Control start must reconcile that same placement-owned
+session/input, never call spawnDurable with a fresh Control operation ID or append another opening
+message. The Control envelope retains its own receipt/audit ID but does not replace allocation
+ownership. Admission also requires durable evidence that placement already enforces the matching
+Control authorization, ceiling and reservation before executable work starts. Until placement can
+supply that fence/authority evidence, remote task start explicitly rejects delegation_required;
+an already unrestricted shared start cannot be retroactively adopted or widened.
+
+Executor checks that exact sealed reference against its retained grant and tombstones. Stale epoch
+or definition/context fence rejects delegation_stale; sealed grant rejects delegation_sealed;
+changed ownership/session/target rejects delegation_reassigned. A retry must retain original bytes,
+hash, session and epoch; never select a newer "current grant", even if it would otherwise be executable.
+Already conclusive operation receipt replay returns its original outcome, not a fresh current-grant
+check/allocation. Unknown/pending preserves the old intent until reconciled. The common #56/UI row
+still deduplicates by canonical mission-home+missionId+taskId, never by execution epoch or binding,
+and remains the sole display projection with title/status/import time/conflict provenance.
+
+### Pre-cutover staging, active turns and rollback
+
+Pairing is **pair-only**. Enrollment preview and approval store an accepted future home and
+`configuration.stagedRole {home,role:"executor",phase:"paired"}`, not an effective executor role.
+The existing legacy role, local starts/follow-ups/wakes and ordinary source stores stay active while
+proof/route readiness is assembled. Its current configuration.home may still name that legacy daemon;
+compare the separately approved stagedRole.home to enrollment.home for pre-cutover readiness.
+No grant/history is merged and the native UI cannot hide anything. Missing proofs or incompatible
+peers leave the staged pair inactive; they cannot suppress the legacy Control early.
+An enrollment role acknowledgment can report the unchanged effective legacy role while home names
+the approved future home. StagedRole/enrollment pins disambiguate this state; it is not activation.
+Archive-role ack and both proofs remain mandatory. Archive-read routes return not_ready before
+the frozen source exists; they cannot label a live legacy store as a completed archive.
+
+Only the separately approved archive/freeze operation, after both proof suites and runtime readiness,
+persists `configuration.freeze {operationId,expectedRoleEpoch,phase}` and the effective executor role.
+That durable freeze is loaded before sessions.load/recovery/ensure/import/sink/audit on every restart.
+The earlier boot guards apply to **effective frozen executor/archived policy**, not a stagedRole record.
+During freeze, block new legacy turns/inputs/wakes first, then quiesce its active model turn: interrupt
+provider dispatch/new tool scheduling, retain already-started tool/operation IDs and reconcile their
+durable outcomes without replaying arbitrary tools. Never delete uncertain journal entries or ask a
+frozen model to finish them. Use requested/draining/blocked phases; keep UI visible/requested until
+a final acknowledged archive. Independent accepted remote work continues under unchanged ceilings,
+scope, budget and audit provenance.
+
+On crash, recover the same freeze/operation and quiescence evidence before any conversational recovery;
+adopt already committed domain results and continue forward, without a new operation ID. A failure to
+prove quiescence, a journal fault or incompatible runtime leaves blocked with preserved stores.
+The operator may repair the supported runtime/storage and retry the same intent; no destructive reset.
+
+Before freeze begins, explicit authenticated unpair cancels the staged pairing, clears stagedRole and
+leaves the never-frozen legacy role unchanged. This is the staging rollback, not revival of a frozen
+Control. After freeze starts, rollback to legacy execution is forbidden: return 409 rollback_not_permitted,
+retain the guard/evidence, and reconcile/repair forward. Unpair/rekey cannot restore legacy wakes or
+delete a partial archive. After accepted archive there is no inverse operation that merges/restores it.
+An incompatible peer before freeze keeps its original role usable; after freeze it stays read-only/
+blocked until explicit compatible repair. No downgrade, guessed role, hidden row or client flag is a fix.
+
+Both suites prove the assembled paths before activation. The native implementation may land inactive;
+the archive endpoint can be implemented/tested with trusted fixture evidence beforehand. Only the final
+home-adopted versioned archive/role acknowledgment, both proofs and current pins permit one-row UI.
+Runtime fault proofs for these sequences belong to daemon handler/watch/archive tests and real-courier
+integration; the shared fixtures in this PR establish DTO/route/error compatibility, not executed handlers.

@@ -641,7 +641,48 @@
 				"target": {
 					"kind": "task",
 					"missionId": "m",
-					"taskId": "t"
+					"taskId": "t",
+					"delegation": {
+						"delegationId": "delegation:1",
+						"task": {
+							"mission": {
+								"home": {
+									"hostId": "daemon",
+									"daemonId": "home-daemon",
+									"lineageId": "home-lineage"
+								},
+								"missionId": "m"
+							},
+							"taskId": "t"
+						},
+						"bindingId": "shared:binding:1",
+						"bindingGeneration": 1,
+						"executionEpoch": 2,
+						"session": {
+							"host": {
+								"hostId": "daemon",
+								"daemonId": "executor-daemon",
+								"lineageId": "executor-lineage"
+							},
+							"sessionId": "task-chat:1"
+						},
+						"target": {
+							"host": {
+								"hostId": "daemon",
+								"daemonId": "executor-daemon",
+								"lineageId": "executor-lineage"
+							},
+							"projectId": "p"
+						},
+						"definitionRevision": 3,
+						"context": {
+							"memory": 1,
+							"mission": 3
+						},
+						"manifestId": "manifest:1",
+						"grantHash": "fixture-original-immutable-offer-hash",
+						"placementOperationId": "shared:offer:1"
+					}
 				},
 				"message": "Investigate task",
 				"model": "fake/model",
@@ -1422,7 +1463,8 @@
 					}
 				}
 			],
-			"next": 1
+			"next": 1,
+			"acknowledgedThrough": 0
 		},
 		{
 			"bindingId": "control:binding:1",
@@ -1434,7 +1476,8 @@
 			},
 			"after": 2,
 			"head": 2,
-			"events": []
+			"events": [],
+			"acknowledgedThrough": 0
 		}
 	],
 	"eventAcknowledgment": {
@@ -3259,7 +3302,7 @@
 			"type": "control-hosts.changed",
 			"bindingId": "control:binding:1",
 			"generation": 1,
-			"changes": ["outbox", "receipts", "events", "status", "enrollment", "readiness", "archive"]
+			"changes": ["outbox", "receipts", "events", "status", "enrollment", "readiness", "archive", "role", "reads"]
 		}
 	],
 	"syncStates": [
@@ -4481,5 +4524,1626 @@
 			"sessionId": "old-control",
 			"archivedAt": 2000
 		}
+	},
+	"delegationFence": {
+		"delegationId": "delegation:1",
+		"task": {
+			"mission": {
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"missionId": "m"
+			},
+			"taskId": "t"
+		},
+		"bindingId": "shared:binding:1",
+		"bindingGeneration": 1,
+		"executionEpoch": 2,
+		"session": {
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"sessionId": "task-chat:1"
+		},
+		"target": {
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"projectId": "p"
+		},
+		"definitionRevision": 3,
+		"context": {
+			"memory": 1,
+			"mission": 3
+		},
+		"manifestId": "manifest:1",
+		"grantHash": "fixture-original-immutable-offer-hash",
+		"placementOperationId": "shared:offer:1"
+	},
+	"taskStartOperation": {
+		"schemaVersion": 1,
+		"operationId": "task:start:1",
+		"producerId": "producer:1",
+		"sequence": 4,
+		"origin": {
+			"hostId": "daemon",
+			"daemonId": "home-daemon",
+			"lineageId": "home-lineage"
+		},
+		"destination": {
+			"hostId": "daemon",
+			"daemonId": "executor-daemon",
+			"lineageId": "executor-lineage"
+		},
+		"kind": "control.start",
+		"targetId": "task-chat:1",
+		"payload": "{\"authorizationId\":\"auth:1\",\"levelCeiling\":\"implement\",\"budgetReservation\":{\"reservationId\":\"reservation:1\",\"budgetUsd\":1,\"followUps\":1},\"idempotencyKey\":\"task:start:1\",\"authorization\":{\"id\":\"auth:1\",\"hosts\":[{\"hostId\":\"daemon\",\"daemonId\":\"home-daemon\",\"lineageId\":\"home-lineage\"},{\"hostId\":\"daemon\",\"daemonId\":\"executor-daemon\",\"lineageId\":\"executor-lineage\"}],\"userMessage\":{\"conversationId\":\"control\",\"submissionId\":1,\"entryId\":2,\"requestId\":\"user:1\"},\"scope\":\"Investigate and fix\",\"level\":\"implement\",\"targets\":[{\"host\":{\"hostId\":\"daemon\",\"daemonId\":\"executor-daemon\",\"lineageId\":\"executor-lineage\"},\"kind\":\"project\",\"id\":\"p\"}],\"limits\":{\"followUps\":2,\"budgetUsd\":4},\"createdAt\":1000,\"expiresAt\":10000,\"usage\":{\"followUps\":1,\"budgetUsd\":1}},\"target\":{\"kind\":\"task\",\"missionId\":\"m\",\"taskId\":\"t\",\"delegation\":{\"delegationId\":\"delegation:1\",\"task\":{\"mission\":{\"home\":{\"hostId\":\"daemon\",\"daemonId\":\"home-daemon\",\"lineageId\":\"home-lineage\"},\"missionId\":\"m\"},\"taskId\":\"t\"},\"bindingId\":\"shared:binding:1\",\"bindingGeneration\":1,\"executionEpoch\":2,\"session\":{\"host\":{\"hostId\":\"daemon\",\"daemonId\":\"executor-daemon\",\"lineageId\":\"executor-lineage\"},\"sessionId\":\"task-chat:1\"},\"target\":{\"host\":{\"hostId\":\"daemon\",\"daemonId\":\"executor-daemon\",\"lineageId\":\"executor-lineage\"},\"projectId\":\"p\"},\"definitionRevision\":3,\"context\":{\"memory\":1,\"mission\":3},\"manifestId\":\"manifest:1\",\"grantHash\":\"fixture-original-immutable-offer-hash\",\"placementOperationId\":\"shared:offer:1\"}},\"message\":\"Investigate task\",\"model\":\"fake/model\",\"roleFence\":{\"home\":1,\"executor\":2}}",
+		"payloadHash": "fixture-sha256-not-for-admission",
+		"bindingId": "control:binding:1",
+		"bindingGeneration": 1
+	},
+	"delegationCases": [
+		{
+			"name": "stale",
+			"sealed": {
+				"delegationId": "delegation:1",
+				"task": {
+					"mission": {
+						"home": {
+							"hostId": "daemon",
+							"daemonId": "home-daemon",
+							"lineageId": "home-lineage"
+						},
+						"missionId": "m"
+					},
+					"taskId": "t"
+				},
+				"bindingId": "shared:binding:1",
+				"bindingGeneration": 1,
+				"executionEpoch": 2,
+				"session": {
+					"host": {
+						"hostId": "daemon",
+						"daemonId": "executor-daemon",
+						"lineageId": "executor-lineage"
+					},
+					"sessionId": "task-chat:1"
+				},
+				"target": {
+					"host": {
+						"hostId": "daemon",
+						"daemonId": "executor-daemon",
+						"lineageId": "executor-lineage"
+					},
+					"projectId": "p"
+				},
+				"definitionRevision": 3,
+				"context": {
+					"memory": 1,
+					"mission": 3
+				},
+				"manifestId": "manifest:1",
+				"grantHash": "fixture-original-immutable-offer-hash",
+				"placementOperationId": "shared:offer:1"
+			},
+			"retained": {
+				"delegationId": "delegation:1",
+				"task": {
+					"mission": {
+						"home": {
+							"hostId": "daemon",
+							"daemonId": "home-daemon",
+							"lineageId": "home-lineage"
+						},
+						"missionId": "m"
+					},
+					"taskId": "t"
+				},
+				"bindingId": "shared:binding:1",
+				"bindingGeneration": 1,
+				"executionEpoch": 3,
+				"session": {
+					"host": {
+						"hostId": "daemon",
+						"daemonId": "executor-daemon",
+						"lineageId": "executor-lineage"
+					},
+					"sessionId": "task-chat:1"
+				},
+				"target": {
+					"host": {
+						"hostId": "daemon",
+						"daemonId": "executor-daemon",
+						"lineageId": "executor-lineage"
+					},
+					"projectId": "p"
+				},
+				"definitionRevision": 3,
+				"context": {
+					"memory": 1,
+					"mission": 3
+				},
+				"manifestId": "manifest:1",
+				"grantHash": "fixture-original-immutable-offer-hash",
+				"placementOperationId": "shared:offer:1"
+			},
+			"error": {
+				"code": "delegation_stale",
+				"error": "Original execution epoch retired"
+			}
+		},
+		{
+			"name": "sealed",
+			"sealed": {
+				"delegationId": "delegation:1",
+				"task": {
+					"mission": {
+						"home": {
+							"hostId": "daemon",
+							"daemonId": "home-daemon",
+							"lineageId": "home-lineage"
+						},
+						"missionId": "m"
+					},
+					"taskId": "t"
+				},
+				"bindingId": "shared:binding:1",
+				"bindingGeneration": 1,
+				"executionEpoch": 2,
+				"session": {
+					"host": {
+						"hostId": "daemon",
+						"daemonId": "executor-daemon",
+						"lineageId": "executor-lineage"
+					},
+					"sessionId": "task-chat:1"
+				},
+				"target": {
+					"host": {
+						"hostId": "daemon",
+						"daemonId": "executor-daemon",
+						"lineageId": "executor-lineage"
+					},
+					"projectId": "p"
+				},
+				"definitionRevision": 3,
+				"context": {
+					"memory": 1,
+					"mission": 3
+				},
+				"manifestId": "manifest:1",
+				"grantHash": "fixture-original-immutable-offer-hash",
+				"placementOperationId": "shared:offer:1"
+			},
+			"retained": {
+				"delegationId": "delegation:1",
+				"task": {
+					"mission": {
+						"home": {
+							"hostId": "daemon",
+							"daemonId": "home-daemon",
+							"lineageId": "home-lineage"
+						},
+						"missionId": "m"
+					},
+					"taskId": "t"
+				},
+				"bindingId": "shared:binding:1",
+				"bindingGeneration": 1,
+				"executionEpoch": 2,
+				"session": {
+					"host": {
+						"hostId": "daemon",
+						"daemonId": "executor-daemon",
+						"lineageId": "executor-lineage"
+					},
+					"sessionId": "task-chat:1"
+				},
+				"target": {
+					"host": {
+						"hostId": "daemon",
+						"daemonId": "executor-daemon",
+						"lineageId": "executor-lineage"
+					},
+					"projectId": "p"
+				},
+				"definitionRevision": 3,
+				"context": {
+					"memory": 1,
+					"mission": 3
+				},
+				"manifestId": "manifest:1",
+				"grantHash": "fixture-original-immutable-offer-hash",
+				"state": "sealed",
+				"placementOperationId": "shared:offer:1"
+			},
+			"error": {
+				"code": "delegation_sealed",
+				"error": "Original delegation sealed"
+			}
+		},
+		{
+			"name": "reassigned",
+			"sealed": {
+				"delegationId": "delegation:1",
+				"task": {
+					"mission": {
+						"home": {
+							"hostId": "daemon",
+							"daemonId": "home-daemon",
+							"lineageId": "home-lineage"
+						},
+						"missionId": "m"
+					},
+					"taskId": "t"
+				},
+				"bindingId": "shared:binding:1",
+				"bindingGeneration": 1,
+				"executionEpoch": 2,
+				"session": {
+					"host": {
+						"hostId": "daemon",
+						"daemonId": "executor-daemon",
+						"lineageId": "executor-lineage"
+					},
+					"sessionId": "task-chat:1"
+				},
+				"target": {
+					"host": {
+						"hostId": "daemon",
+						"daemonId": "executor-daemon",
+						"lineageId": "executor-lineage"
+					},
+					"projectId": "p"
+				},
+				"definitionRevision": 3,
+				"context": {
+					"memory": 1,
+					"mission": 3
+				},
+				"manifestId": "manifest:1",
+				"grantHash": "fixture-original-immutable-offer-hash",
+				"placementOperationId": "shared:offer:1"
+			},
+			"retained": {
+				"delegationId": "delegation:1",
+				"task": {
+					"mission": {
+						"home": {
+							"hostId": "daemon",
+							"daemonId": "home-daemon",
+							"lineageId": "home-lineage"
+						},
+						"missionId": "m"
+					},
+					"taskId": "t"
+				},
+				"bindingId": "shared:binding:1",
+				"bindingGeneration": 1,
+				"executionEpoch": 2,
+				"session": {
+					"host": {
+						"hostId": "daemon",
+						"daemonId": "executor-daemon",
+						"lineageId": "executor-lineage"
+					},
+					"sessionId": "other-session"
+				},
+				"target": {
+					"host": {
+						"hostId": "daemon",
+						"daemonId": "executor-daemon",
+						"lineageId": "executor-lineage"
+					},
+					"projectId": "p"
+				},
+				"definitionRevision": 3,
+				"context": {
+					"memory": 1,
+					"mission": 3
+				},
+				"manifestId": "manifest:1",
+				"grantHash": "fixture-original-immutable-offer-hash",
+				"placementOperationId": "shared:offer:1"
+			},
+			"error": {
+				"code": "delegation_reassigned",
+				"error": "Original session ownership does not match"
+			}
+		}
+	],
+	"checkpoints": [
+		{
+			"sourceHost": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"importedThrough": 0,
+			"acknowledgedThrough": 0,
+			"head": 0,
+			"bindingId": "control:binding:1",
+			"generation": 1,
+			"home": {
+				"hostId": "daemon",
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage"
+			}
+		},
+		{
+			"sourceHost": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"importedThrough": 2,
+			"lastEventId": "event:2",
+			"acknowledgedThrough": 2,
+			"head": 2,
+			"bindingId": "control:binding:1",
+			"generation": 1,
+			"home": {
+				"hostId": "daemon",
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage"
+			}
+		}
+	],
+	"eventFloors": [
+		{
+			"bindingId": "control:binding:1",
+			"generation": 1,
+			"sourceHost": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"through": 0
+		},
+		{
+			"bindingId": "control:binding:1",
+			"generation": 1,
+			"sourceHost": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"through": 2,
+			"eventId": "event:2"
+		}
+	],
+	"emptyEventPages": [
+		{
+			"bindingId": "control:binding:1",
+			"generation": 1,
+			"sourceHost": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"after": 0,
+			"head": 0,
+			"acknowledgedThrough": 0,
+			"events": []
+		},
+		{
+			"bindingId": "control:binding:1",
+			"generation": 1,
+			"sourceHost": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"after": 2,
+			"head": 2,
+			"acknowledgedThrough": 2,
+			"events": [],
+			"acknowledgedEventId": "event:2"
+		}
+	],
+	"emptyEventAcknowledgments": [
+		{
+			"bindingId": "control:binding:1",
+			"generation": 1,
+			"sourceHost": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"through": 0
+		},
+		{
+			"bindingId": "control:binding:1",
+			"generation": 1,
+			"sourceHost": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"through": 2,
+			"eventId": "event:2"
+		}
+	],
+	"relaunchAfterRetirement": {
+		"checkpoint": {
+			"sourceHost": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"importedThrough": 2,
+			"lastEventId": "event:2",
+			"acknowledgedThrough": 2,
+			"head": 2,
+			"bindingId": "control:binding:1",
+			"generation": 1,
+			"home": {
+				"hostId": "daemon",
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage"
+			}
+		},
+		"query": {
+			"after": 2,
+			"limit": 128
+		},
+		"page": {
+			"bindingId": "control:binding:1",
+			"generation": 1,
+			"sourceHost": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"after": 2,
+			"head": 2,
+			"acknowledgedThrough": 2,
+			"events": [],
+			"acknowledgedEventId": "event:2"
+		},
+		"ack": {
+			"bindingId": "control:binding:1",
+			"generation": 1,
+			"sourceHost": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"through": 2,
+			"eventId": "event:2"
+		}
+	},
+	"cursorErrors": [
+		{
+			"code": "cursor_before_floor",
+			"error": "Requested prefix already retired",
+			"floor": {
+				"bindingId": "control:binding:1",
+				"generation": 1,
+				"sourceHost": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"through": 2,
+				"eventId": "event:2"
+			}
+		},
+		{
+			"code": "cursor_gap",
+			"error": "Missing contiguous event",
+			"checkpoint": {
+				"sourceHost": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"importedThrough": 2,
+				"lastEventId": "event:2",
+				"acknowledgedThrough": 2,
+				"head": 2,
+				"bindingId": "control:binding:1",
+				"generation": 1,
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				}
+			},
+			"floor": {
+				"bindingId": "control:binding:1",
+				"generation": 1,
+				"sourceHost": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"through": 2,
+				"eventId": "event:2"
+			}
+		}
+	],
+	"statusRecoveryCases": [
+		{
+			"name": "old-after-new",
+			"request": {
+				"page": {
+					"bindingId": "control:binding:1",
+					"generation": 1,
+					"snapshot": {
+						"sourceHost": {
+							"hostId": "daemon",
+							"daemonId": "executor-daemon",
+							"lineageId": "executor-lineage"
+						},
+						"snapshotId": "snapshot:1",
+						"capturedAt": 4000,
+						"dashboard": {
+							"untrusted": true,
+							"source": "daemon-memory",
+							"projects": [],
+							"chats": [],
+							"missions": [],
+							"pullRequests": [],
+							"linear": [],
+							"runningAgents": [],
+							"activeMissions": [],
+							"blockers": [],
+							"pendingDecisions": [],
+							"next": {
+								"watches": [],
+								"total": 0
+							},
+							"totals": {
+								"projects": 0,
+								"chats": 0,
+								"missions": 0,
+								"pullRequests": 0,
+								"linear": 0,
+								"runningAgents": 0,
+								"activeMissions": 0,
+								"blockers": 0,
+								"pendingDecisions": 0
+							},
+							"truncated": false
+						},
+						"missionTasks": [
+							{
+								"id": "[\"proposal\",\"executor-daemon\",\"executor-lineage\",\"shared:binding:1\",1,\"proposal:1\"]",
+								"bindingId": "shared:binding:1",
+								"bindingGeneration": 1,
+								"projectId": "p",
+								"missionId": "m",
+								"missionHome": {
+									"hostId": "daemon",
+									"daemonId": "home-daemon",
+									"lineageId": "home-lineage"
+								},
+								"observedOn": {
+									"hostId": "daemon",
+									"daemonId": "executor-daemon",
+									"lineageId": "executor-lineage"
+								},
+								"source": "proposal",
+								"consistency": "provisional",
+								"title": "Proposed task",
+								"status": "todo",
+								"proposalId": "proposal:1",
+								"proposalState": "conflict",
+								"proposalOrigin": {
+									"host": {
+										"hostId": "daemon",
+										"daemonId": "executor-daemon",
+										"lineageId": "executor-lineage"
+									},
+									"sessionId": "chat:1"
+								},
+								"conflicts": [
+									{
+										"proposalId": "proposal:1",
+										"origin": {
+											"host": {
+												"hostId": "daemon",
+												"daemonId": "executor-daemon",
+												"lineageId": "executor-lineage"
+											},
+											"sessionId": "chat:1"
+										},
+										"state": "conflict",
+										"reason": "Definition changed",
+										"evidenceId": "proposal:1"
+									}
+								],
+								"availability": "unknown"
+							}
+						],
+						"missionTasksTotal": 2,
+						"truncated": false,
+						"revision": 1
+					}
+				},
+				"expectedPublishedRevision": 0
+			},
+			"publishedSourceRevision": 2,
+			"error": {
+				"code": "stale_snapshot",
+				"error": "Revision 1 cannot replace revision 2"
+			}
+		},
+		{
+			"name": "duplicate-final",
+			"request": {
+				"page": {
+					"bindingId": "control:binding:1",
+					"generation": 1,
+					"snapshot": {
+						"sourceHost": {
+							"hostId": "daemon",
+							"daemonId": "executor-daemon",
+							"lineageId": "executor-lineage"
+						},
+						"snapshotId": "snapshot:1",
+						"capturedAt": 4000,
+						"dashboard": {
+							"untrusted": true,
+							"source": "daemon-memory",
+							"projects": [],
+							"chats": [],
+							"missions": [],
+							"pullRequests": [],
+							"linear": [],
+							"runningAgents": [],
+							"activeMissions": [],
+							"blockers": [],
+							"pendingDecisions": [],
+							"next": {
+								"watches": [],
+								"total": 0
+							},
+							"totals": {
+								"projects": 0,
+								"chats": 0,
+								"missions": 0,
+								"pullRequests": 0,
+								"linear": 0,
+								"runningAgents": 0,
+								"activeMissions": 0,
+								"blockers": 0,
+								"pendingDecisions": 0
+							},
+							"truncated": false
+						},
+						"missionTasks": [
+							{
+								"id": "[\"proposal\",\"executor-daemon\",\"executor-lineage\",\"shared:binding:1\",1,\"proposal:1\"]",
+								"bindingId": "shared:binding:1",
+								"bindingGeneration": 1,
+								"projectId": "p",
+								"missionId": "m",
+								"missionHome": {
+									"hostId": "daemon",
+									"daemonId": "home-daemon",
+									"lineageId": "home-lineage"
+								},
+								"observedOn": {
+									"hostId": "daemon",
+									"daemonId": "executor-daemon",
+									"lineageId": "executor-lineage"
+								},
+								"source": "proposal",
+								"consistency": "provisional",
+								"title": "Proposed task",
+								"status": "todo",
+								"proposalId": "proposal:1",
+								"proposalState": "conflict",
+								"proposalOrigin": {
+									"host": {
+										"hostId": "daemon",
+										"daemonId": "executor-daemon",
+										"lineageId": "executor-lineage"
+									},
+									"sessionId": "chat:1"
+								},
+								"conflicts": [
+									{
+										"proposalId": "proposal:1",
+										"origin": {
+											"host": {
+												"hostId": "daemon",
+												"daemonId": "executor-daemon",
+												"lineageId": "executor-lineage"
+											},
+											"sessionId": "chat:1"
+										},
+										"state": "conflict",
+										"reason": "Definition changed",
+										"evidenceId": "proposal:1"
+									}
+								],
+								"availability": "unknown"
+							}
+						],
+						"missionTasksTotal": 2,
+						"truncated": false,
+						"revision": 1
+					}
+				},
+				"expectedPublishedRevision": 0
+			},
+			"response": {
+				"snapshotId": "snapshot:1",
+				"state": "published",
+				"publishedRevision": 1
+			},
+			"currentPublishedRevision": 2
+		},
+		{
+			"name": "restart-mid-capture",
+			"checkpoint": {
+				"bindingId": "control:binding:1",
+				"generation": 1,
+				"host": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"events": {
+					"sourceHost": {
+						"hostId": "daemon",
+						"daemonId": "executor-daemon",
+						"lineageId": "executor-lineage"
+					},
+					"importedThrough": 1,
+					"lastEventId": "event:1",
+					"acknowledgedThrough": 0,
+					"head": 2
+				},
+				"status": {
+					"snapshotId": "snapshot:1",
+					"next": "snapshot:1/page:2",
+					"state": "staged",
+					"importedAt": 4001,
+					"revision": 1,
+					"publishedRevision": 0
+				},
+				"reconciliationRequired": false
+			},
+			"request": {
+				"page": {
+					"bindingId": "control:binding:1",
+					"generation": 1,
+					"snapshot": {
+						"sourceHost": {
+							"hostId": "daemon",
+							"daemonId": "executor-daemon",
+							"lineageId": "executor-lineage"
+						},
+						"snapshotId": "snapshot:1",
+						"capturedAt": 4000,
+						"dashboard": {
+							"untrusted": true,
+							"source": "daemon-memory",
+							"projects": [],
+							"chats": [],
+							"missions": [],
+							"pullRequests": [],
+							"linear": [],
+							"runningAgents": [],
+							"activeMissions": [],
+							"blockers": [],
+							"pendingDecisions": [],
+							"next": {
+								"watches": [],
+								"total": 0
+							},
+							"totals": {
+								"projects": 0,
+								"chats": 0,
+								"missions": 0,
+								"pullRequests": 0,
+								"linear": 0,
+								"runningAgents": 0,
+								"activeMissions": 0,
+								"blockers": 0,
+								"pendingDecisions": 0
+							},
+							"truncated": false
+						},
+						"missionTasks": [
+							{
+								"id": "[\"proposal\",\"executor-daemon\",\"executor-lineage\",\"shared:binding:1\",1,\"proposal:1\"]",
+								"bindingId": "shared:binding:1",
+								"bindingGeneration": 1,
+								"projectId": "p",
+								"missionId": "m",
+								"missionHome": {
+									"hostId": "daemon",
+									"daemonId": "home-daemon",
+									"lineageId": "home-lineage"
+								},
+								"observedOn": {
+									"hostId": "daemon",
+									"daemonId": "executor-daemon",
+									"lineageId": "executor-lineage"
+								},
+								"source": "proposal",
+								"consistency": "provisional",
+								"title": "Proposed task",
+								"status": "todo",
+								"proposalId": "proposal:1",
+								"proposalState": "conflict",
+								"proposalOrigin": {
+									"host": {
+										"hostId": "daemon",
+										"daemonId": "executor-daemon",
+										"lineageId": "executor-lineage"
+									},
+									"sessionId": "chat:1"
+								},
+								"conflicts": [
+									{
+										"proposalId": "proposal:1",
+										"origin": {
+											"host": {
+												"hostId": "daemon",
+												"daemonId": "executor-daemon",
+												"lineageId": "executor-lineage"
+											},
+											"sessionId": "chat:1"
+										},
+										"state": "conflict",
+										"reason": "Definition changed",
+										"evidenceId": "proposal:1"
+									}
+								],
+								"availability": "unknown"
+							}
+						],
+						"missionTasksTotal": 2,
+						"truncated": false,
+						"revision": 1
+					}
+				},
+				"expectedPublishedRevision": 0
+			},
+			"response": {
+				"snapshotId": "snapshot:1",
+				"state": "published",
+				"publishedRevision": 1
+			}
+		},
+		{
+			"name": "lineage-replacement",
+			"request": {
+				"page": {
+					"bindingId": "control:binding:1",
+					"generation": 1,
+					"snapshot": {
+						"sourceHost": {
+							"hostId": "daemon",
+							"daemonId": "executor-daemon",
+							"lineageId": "replacement-lineage"
+						},
+						"snapshotId": "snapshot:1",
+						"capturedAt": 4000,
+						"dashboard": {
+							"untrusted": true,
+							"source": "daemon-memory",
+							"projects": [],
+							"chats": [],
+							"missions": [],
+							"pullRequests": [],
+							"linear": [],
+							"runningAgents": [],
+							"activeMissions": [],
+							"blockers": [],
+							"pendingDecisions": [],
+							"next": {
+								"watches": [],
+								"total": 0
+							},
+							"totals": {
+								"projects": 0,
+								"chats": 0,
+								"missions": 0,
+								"pullRequests": 0,
+								"linear": 0,
+								"runningAgents": 0,
+								"activeMissions": 0,
+								"blockers": 0,
+								"pendingDecisions": 0
+							},
+							"truncated": false
+						},
+						"missionTasks": [
+							{
+								"id": "[\"proposal\",\"executor-daemon\",\"executor-lineage\",\"shared:binding:1\",1,\"proposal:1\"]",
+								"bindingId": "shared:binding:1",
+								"bindingGeneration": 1,
+								"projectId": "p",
+								"missionId": "m",
+								"missionHome": {
+									"hostId": "daemon",
+									"daemonId": "home-daemon",
+									"lineageId": "home-lineage"
+								},
+								"observedOn": {
+									"hostId": "daemon",
+									"daemonId": "executor-daemon",
+									"lineageId": "executor-lineage"
+								},
+								"source": "proposal",
+								"consistency": "provisional",
+								"title": "Proposed task",
+								"status": "todo",
+								"proposalId": "proposal:1",
+								"proposalState": "conflict",
+								"proposalOrigin": {
+									"host": {
+										"hostId": "daemon",
+										"daemonId": "executor-daemon",
+										"lineageId": "executor-lineage"
+									},
+									"sessionId": "chat:1"
+								},
+								"conflicts": [
+									{
+										"proposalId": "proposal:1",
+										"origin": {
+											"host": {
+												"hostId": "daemon",
+												"daemonId": "executor-daemon",
+												"lineageId": "executor-lineage"
+											},
+											"sessionId": "chat:1"
+										},
+										"state": "conflict",
+										"reason": "Definition changed",
+										"evidenceId": "proposal:1"
+									}
+								],
+								"availability": "unknown"
+							}
+						],
+						"missionTasksTotal": 2,
+						"truncated": false,
+						"revision": 1
+					}
+				},
+				"expectedPublishedRevision": 0
+			},
+			"error": {
+				"code": "identity_mismatch",
+				"error": "Reenrollment required; retain original cursors"
+			}
+		}
+	],
+	"courierCapability": {
+		"id": "courier:1",
+		"bindingId": "control:binding:1",
+		"generation": 1,
+		"home": {
+			"hostId": "daemon",
+			"daemonId": "home-daemon",
+			"lineageId": "home-lineage"
+		},
+		"executor": {
+			"hostId": "daemon",
+			"daemonId": "executor-daemon",
+			"lineageId": "executor-lineage"
+		},
+		"appKeyId": "native-key:1",
+		"roleFence": {
+			"home": 1,
+			"executor": 1
+		},
+		"expiresAt": 10000,
+		"scopes": ["exchange", "receipts", "events", "status", "reads", "inspect", "archive-read"]
+	},
+	"capabilityRefresh": {
+		"capabilityId": "courier:1",
+		"expectedRoleEpoch": 1
+	},
+	"previewRequest": {
+		"enrollment": {
+			"schemaVersion": 1,
+			"bindingId": "control:binding:1",
+			"generation": 1,
+			"home": {
+				"hostId": "daemon",
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage"
+			},
+			"executor": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"state": "active"
+		},
+		"peerHello": {
+			"daemonId": "home-daemon",
+			"lineageId": "home-lineage",
+			"daemonVersion": "fixture",
+			"protocolVersion": 1,
+			"minimumClientProtocolVersion": 1,
+			"platform": "fixture",
+			"arch": "fixture",
+			"capabilities": {
+				"powerManagement": false,
+				"systemSleepEvents": false,
+				"swiftUIArtifacts": false,
+				"coordinatorIsolation": true,
+				"independentExecution": true,
+				"controlHosts": 1
+			},
+			"controlHost": {
+				"schemaVersion": 1,
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"host": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"role": "home",
+				"controlSessionId": "control",
+				"roleEpoch": 1
+			}
+		},
+		"expectedGeneration": null,
+		"expectedRoleEpoch": 1
+	},
+	"previewResponse": {
+		"intentPayload": "{\"enrollment\":{\"schemaVersion\":1,\"bindingId\":\"control:binding:1\",\"generation\":1,\"home\":{\"hostId\":\"daemon\",\"daemonId\":\"home-daemon\",\"lineageId\":\"home-lineage\"},\"executor\":{\"hostId\":\"daemon\",\"daemonId\":\"executor-daemon\",\"lineageId\":\"executor-lineage\"},\"state\":\"active\"},\"peerHello\":{\"daemonId\":\"home-daemon\",\"lineageId\":\"home-lineage\",\"daemonVersion\":\"fixture\",\"protocolVersion\":1,\"minimumClientProtocolVersion\":1,\"platform\":\"fixture\",\"arch\":\"fixture\",\"capabilities\":{\"powerManagement\":false,\"systemSleepEvents\":false,\"swiftUIArtifacts\":false,\"coordinatorIsolation\":true,\"independentExecution\":true,\"controlHosts\":1},\"controlHost\":{\"schemaVersion\":1,\"home\":{\"hostId\":\"daemon\",\"daemonId\":\"home-daemon\",\"lineageId\":\"home-lineage\"},\"host\":{\"hostId\":\"daemon\",\"daemonId\":\"home-daemon\",\"lineageId\":\"home-lineage\"},\"role\":\"home\",\"controlSessionId\":\"control\",\"roleEpoch\":1}},\"expectedGeneration\":null,\"expectedRoleEpoch\":1}",
+		"intentHash": "fixture-intent-hash",
+		"compatible": true,
+		"effect": "pair-only",
+		"courierScopes": ["exchange", "receipts", "events", "status", "reads", "inspect", "archive-read"],
+		"errors": []
+	},
+	"stagedStates": [
+		{
+			"configuration": {
+				"schemaVersion": 1,
+				"roleEpoch": 1,
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"host": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"role": "home",
+				"controlSessionId": "old-control",
+				"legacyControlSessionId": "old-control",
+				"stagedRole": {
+					"home": {
+						"hostId": "daemon",
+						"daemonId": "home-daemon",
+						"lineageId": "home-lineage"
+					},
+					"role": "executor",
+					"phase": "paired"
+				}
+			},
+			"enrollment": {
+				"schemaVersion": 1,
+				"bindingId": "control:binding:1",
+				"generation": 1,
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"executor": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"state": "active"
+			},
+			"peerHello": {
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage",
+				"daemonVersion": "fixture",
+				"protocolVersion": 1,
+				"minimumClientProtocolVersion": 1,
+				"platform": "fixture",
+				"arch": "fixture",
+				"capabilities": {
+					"powerManagement": false,
+					"systemSleepEvents": false,
+					"swiftUIArtifacts": false,
+					"coordinatorIsolation": true,
+					"independentExecution": true,
+					"controlHosts": 1
+				},
+				"controlHost": {
+					"schemaVersion": 1,
+					"home": {
+						"hostId": "daemon",
+						"daemonId": "home-daemon",
+						"lineageId": "home-lineage"
+					},
+					"host": {
+						"hostId": "daemon",
+						"daemonId": "home-daemon",
+						"lineageId": "home-lineage"
+					},
+					"role": "home",
+					"controlSessionId": "control",
+					"roleEpoch": 1
+				}
+			},
+			"courierCapability": {
+				"id": "courier:1",
+				"bindingId": "control:binding:1",
+				"generation": 1,
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"executor": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"appKeyId": "native-key:1",
+				"roleFence": {
+					"home": 1,
+					"executor": 1
+				},
+				"expiresAt": 10000,
+				"scopes": ["exchange", "receipts", "events", "status", "reads", "inspect", "archive-read"]
+			},
+			"roleAcknowledgments": [
+				{
+					"contractVersion": 1,
+					"bindingId": "control:binding:1",
+					"generation": 1,
+					"home": {
+						"hostId": "daemon",
+						"daemonId": "home-daemon",
+						"lineageId": "home-lineage"
+					},
+					"host": {
+						"hostId": "daemon",
+						"daemonId": "executor-daemon",
+						"lineageId": "executor-lineage"
+					},
+					"role": "home",
+					"roleEpoch": 1,
+					"intentId": "approval:enroll:0"
+				}
+			]
+		},
+		{
+			"configuration": {
+				"schemaVersion": 1,
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"host": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"role": "executor",
+				"legacyControlSessionId": "old-control",
+				"roleEpoch": 2,
+				"freeze": {
+					"operationId": "archive:1",
+					"expectedRoleEpoch": 1,
+					"phase": "blocked"
+				}
+			},
+			"enrollment": {
+				"schemaVersion": 1,
+				"bindingId": "control:binding:1",
+				"generation": 1,
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"executor": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"state": "active"
+			},
+			"peerHello": {
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage",
+				"daemonVersion": "fixture",
+				"protocolVersion": 1,
+				"minimumClientProtocolVersion": 1,
+				"platform": "fixture",
+				"arch": "fixture",
+				"capabilities": {
+					"powerManagement": false,
+					"systemSleepEvents": false,
+					"swiftUIArtifacts": false,
+					"coordinatorIsolation": true,
+					"independentExecution": true,
+					"controlHosts": 1
+				},
+				"controlHost": {
+					"schemaVersion": 1,
+					"home": {
+						"hostId": "daemon",
+						"daemonId": "home-daemon",
+						"lineageId": "home-lineage"
+					},
+					"host": {
+						"hostId": "daemon",
+						"daemonId": "home-daemon",
+						"lineageId": "home-lineage"
+					},
+					"role": "home",
+					"controlSessionId": "control",
+					"roleEpoch": 1
+				}
+			}
+		}
+	],
+	"rollbackError": {
+		"code": "rollback_not_permitted",
+		"error": "Frozen legacy execution cannot be revived"
+	},
+	"courierProof": {
+		"capabilityId": "courier:1",
+		"requestId": "auth-read:1",
+		"issuedAt": 4000,
+		"method": "POST",
+		"path": "/api/control-hosts/control:binding:1/reads/execute",
+		"bodyHash": "fixture-body-hash"
+	},
+	"nativeProof": {
+		"appKeyId": "native-key:1",
+		"host": {
+			"hostId": "daemon",
+			"daemonId": "executor-daemon",
+			"lineageId": "executor-lineage"
+		},
+		"requestId": "auth-preview:1",
+		"issuedAt": 4000,
+		"method": "POST",
+		"path": "/api/control-hosts/control:binding:1/enrollment/preview",
+		"bodyHash": "fixture-body-hash"
+	},
+	"authentications": [
+		{
+			"signedPayload": "{\"capabilityId\":\"courier:1\",\"requestId\":\"auth-read:1\",\"issuedAt\":4000,\"method\":\"POST\",\"path\":\"/api/control-hosts/control:binding:1/reads/execute\",\"bodyHash\":\"fixture-body-hash\"}",
+			"signature": "fixture-not-for-admission"
+		},
+		{
+			"signedPayload": "{\"appKeyId\":\"native-key:1\",\"host\":{\"hostId\":\"daemon\",\"daemonId\":\"executor-daemon\",\"lineageId\":\"executor-lineage\"},\"requestId\":\"auth-preview:1\",\"issuedAt\":4000,\"method\":\"POST\",\"path\":\"/api/control-hosts/control:binding:1/enrollment/preview\",\"bodyHash\":\"fixture-body-hash\"}",
+			"signature": "fixture-not-for-admission"
+		},
+		{
+			"signedPayload": "{\"appKeyId\":\"native-key:1\",\"host\":{\"hostId\":\"daemon\",\"daemonId\":\"executor-daemon\",\"lineageId\":\"executor-lineage\"},\"requestId\":\"auth-enroll:1\",\"issuedAt\":4000,\"method\":\"PUT\",\"path\":\"/api/control-hosts/control:binding:1/enrollment\",\"bodyHash\":\"fixture-body-hash\"}",
+			"signature": "fixture-not-for-admission"
+		}
+	],
+	"readRequests": [
+		{
+			"requestId": "read:0",
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"action": "read",
+			"selectors": {
+				"sessionId": "chat:1",
+				"view": "result",
+				"limit": 40
+			}
+		},
+		{
+			"requestId": "read:1",
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"action": "health",
+			"selectors": {
+				"sessionId": "chat:1"
+			}
+		},
+		{
+			"requestId": "read:2",
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"action": "logs",
+			"selectors": {
+				"source": "session",
+				"sessionId": "chat:1",
+				"q": "error",
+				"limit": 50
+			}
+		},
+		{
+			"requestId": "read:3",
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"action": "telemetry",
+			"selectors": {
+				"sessionId": "chat:1",
+				"limit": 50
+			}
+		},
+		{
+			"requestId": "read:4",
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"action": "checks",
+			"selectors": {
+				"pr": "https://github.com/example/repo/pull/1",
+				"includeStale": false
+			}
+		}
+	],
+	"readResponses": [
+		{
+			"requestId": "read:0",
+			"sourceHost": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"capturedAt": 4000,
+			"untrusted": true,
+			"result": {
+				"text": "Quoted untrusted result",
+				"cached": true
+			},
+			"truncated": false
+		},
+		{
+			"requestId": "read:1",
+			"sourceHost": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"capturedAt": 4000,
+			"untrusted": true,
+			"result": {
+				"text": "Quoted untrusted result",
+				"cached": true
+			},
+			"truncated": false
+		},
+		{
+			"requestId": "read:2",
+			"sourceHost": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"capturedAt": 4000,
+			"untrusted": true,
+			"result": {
+				"text": "Quoted untrusted result",
+				"cached": true
+			},
+			"truncated": false
+		},
+		{
+			"requestId": "read:3",
+			"sourceHost": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"capturedAt": 4000,
+			"untrusted": true,
+			"result": {
+				"text": "Quoted untrusted result",
+				"cached": true
+			},
+			"truncated": false
+		},
+		{
+			"requestId": "read:4",
+			"sourceHost": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"capturedAt": 4000,
+			"untrusted": true,
+			"result": {
+				"text": "Quoted untrusted result",
+				"cached": true
+			},
+			"truncated": false
+		}
+	],
+	"readExchangeRequest": {
+		"peer": {
+			"hostId": "daemon",
+			"daemonId": "executor-daemon",
+			"lineageId": "executor-lineage"
+		}
+	},
+	"readExchangeResponse": {
+		"requests": [
+			{
+				"requestId": "read:0",
+				"host": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"action": "read",
+				"selectors": {
+					"sessionId": "chat:1",
+					"view": "result",
+					"limit": 40
+				}
+			},
+			{
+				"requestId": "read:1",
+				"host": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"action": "health",
+				"selectors": {
+					"sessionId": "chat:1"
+				}
+			},
+			{
+				"requestId": "read:2",
+				"host": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"action": "logs",
+				"selectors": {
+					"source": "session",
+					"sessionId": "chat:1",
+					"q": "error",
+					"limit": 50
+				}
+			},
+			{
+				"requestId": "read:3",
+				"host": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"action": "telemetry",
+				"selectors": {
+					"sessionId": "chat:1",
+					"limit": 50
+				}
+			},
+			{
+				"requestId": "read:4",
+				"host": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"action": "checks",
+				"selectors": {
+					"pr": "https://github.com/example/repo/pull/1",
+					"includeStale": false
+				}
+			}
+		],
+		"more": false
+	},
+	"readImports": [
+		{
+			"requestId": "read:0",
+			"state": "delivered"
+		},
+		{
+			"requestId": "read:1",
+			"state": "expired"
+		}
+	],
+	"stagingRollback": {
+		"enrollment": {
+			"schemaVersion": 1,
+			"bindingId": "control:binding:1",
+			"generation": 1,
+			"home": {
+				"hostId": "daemon",
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage"
+			},
+			"executor": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"state": "revoked"
+		},
+		"configuration": {
+			"schemaVersion": 1,
+			"roleEpoch": 2,
+			"home": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"role": "home",
+			"controlSessionId": "old-control",
+			"legacyControlSessionId": "old-control"
+		},
+		"revokedAt": 5000,
+		"peerAcknowledged": false
+	},
+	"authErrors": [
+		{
+			"code": "authentication_required",
+			"error": "Unavailable or unauthorized"
+		},
+		{
+			"code": "capability_denied",
+			"error": "Unavailable or unauthorized"
+		},
+		{
+			"code": "capability_expired",
+			"error": "Unavailable or unauthorized"
+		},
+		{
+			"code": "read_unavailable",
+			"error": "Unavailable or unauthorized"
+		}
+	],
+	"nativeEnrollmentProof": {
+		"appKeyId": "native-key:1",
+		"host": {
+			"hostId": "daemon",
+			"daemonId": "executor-daemon",
+			"lineageId": "executor-lineage"
+		},
+		"requestId": "auth-enroll:1",
+		"issuedAt": 4000,
+		"method": "PUT",
+		"path": "/api/control-hosts/control:binding:1/enrollment",
+		"bodyHash": "fixture-body-hash"
 	}
 }
