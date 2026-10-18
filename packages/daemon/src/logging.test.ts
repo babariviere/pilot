@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { Console } from "node:console";
 import { Writable } from "node:stream";
 import { test } from "node:test";
-import { timestampConsole } from "./logging.ts";
+import { daemonLogTail, timestampConsole } from "./logging.ts";
 
 test("daemon logs timestamp every line, preserve formatting and route warnings to stderr", () => {
 	const out: string[] = [];
@@ -36,4 +36,20 @@ test("daemon logs timestamp every line, preserve formatting and route warnings t
 			.split("\n")
 			.every((line) => line.startsWith("[2026-01-01T12:01:00.000Z] ")),
 	);
+});
+
+test("current-process diagnostic log ring is redacted before retention and bounded by bytes and records", () => {
+	const discard = (..._args: unknown[]) => {};
+	const logger = { log: discard, info: discard, warn: discard, error: discard, debug: discard };
+	timestampConsole(logger, () => new Date("2026-01-01T12:00:00.000Z"));
+	logger.log("old-marker");
+	for (let i = 0; i < 600; i++) logger.log(`record ${i} ${"ordinary words ".repeat(30)}`);
+	logger.warn("Authorization: Bearer ring-secret");
+	logger.error("-----BEGIN PRIVATE KEY-----\nshort-secret\n-----END PRIVATE KEY-----");
+	const snapshot = daemonLogTail();
+	assert.ok(Buffer.byteLength(snapshot.text) <= 64 * 1024);
+	assert.ok(snapshot.text.split("\n").length <= 513);
+	assert.equal(snapshot.truncated, true);
+	assert.doesNotMatch(snapshot.text, /old-marker|ring-secret|short-secret/);
+	assert.match(snapshot.text, /REDACTED/);
 });

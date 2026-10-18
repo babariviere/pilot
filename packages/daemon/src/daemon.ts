@@ -1,6 +1,7 @@
 /** pilotd: background pi agents on durable sessions. */
 
 import { mkdir, realpath } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { credentialEnvironment } from "@pilot/kernel/credential-client";
@@ -8,12 +9,14 @@ import { installCredentialBrokerHooks } from "@pilot/kernel/credential-hooks";
 import { configureNodeTelemetry, nodeTelemetry } from "@pilot/telemetry";
 import { loadConfig } from "./config.ts";
 import { ConnectivityService } from "./connectivity.ts";
+import { ControlDiagnostics } from "./control-diagnostics.ts";
 import { CredentialBroker } from "./credential-broker.ts";
 import { Conflict, NotFound } from "./errors.ts";
-import { EventLoopWatchdog } from "./event-loop-watchdog.ts";
+import { daemonPerformance, EventLoopWatchdog } from "./event-loop-watchdog.ts";
 import { daemonHello } from "./hello.ts";
 import { createLinearSizePoller } from "./linear-size.ts";
 import { MissionLinearSource } from "./linear-source.ts";
+import { daemonLogTail } from "./logging.ts";
 import { McpStatusService, workerProbe } from "./mcp-status.ts";
 import { MissionLinearPrChecks } from "./mission-linear-prs.ts";
 import { MissionLinearSyncService } from "./mission-linear-sync.ts";
@@ -187,6 +190,28 @@ const stopControlMissions = missionStore.onChange((id) => {
 const { ControlPilot } = await import("./control-pilot.ts");
 sessions.setPilot(
 	new ControlPilot({
+		diagnostics: new ControlDiagnostics({
+			home: config.home,
+			daemonId: hello.daemonId,
+			lineageId: hello.lineageId,
+			...(process.platform === "darwin" ? { daemonLog: join(homedir(), "Library/Logs/Pilot/pilotd.log") } : {}),
+			daemonTail: daemonLogTail,
+			localDiagnostics: () => telemetry.settings().localDiagnostics,
+			health: () => sessions.controlHealth(),
+			sessionDirectory: (id) => sessions.controlDiagnosticDirectory(id),
+			evidence: (id, limit) => sessions.diagnostics(id, { limit }),
+			evidenceSummary: () => {
+				const performance = daemonPerformance();
+				return performance
+					? {
+							uptimeMs: performance.uptimeMs,
+							eventLoop: performance.eventLoop,
+							process: performance.process,
+							stalls: performance.stalls.recent.slice(-20).map(({ at, ms, cpuMs }) => ({ at, ms, cpuMs })),
+						}
+					: { available: false, reason: "Local performance diagnostics are not running" };
+			},
+		}),
 		isControl: (id) => sessions.isControlSession(id),
 		watches,
 		sessions,
