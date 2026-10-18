@@ -236,6 +236,8 @@ the top of the sidebar in every scope, apart from Ask chats. Its fresh turns use
 `date` for the original messages. It has no workspace or filesystem tools.
 It can read global status, start or message requested work, create or attach missions with your approval,
 and append memory across registered projects. Changes have a durable audit and timeline record.
+The Control screen (from its header or ⌘K) shows its memory summaries, a searchable message log, its watches and
+actions, and memory health, read-only.
 See [control chat internals](docs/control-chat.md) for storage, compaction and recovery details.
 
 Control can read health, bounded redacted log tails and local diagnostic evidence through `pilot`

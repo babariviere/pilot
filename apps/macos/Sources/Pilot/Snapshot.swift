@@ -213,6 +213,13 @@ enum Snapshot {
             return
         }
 
+        if CommandLine.arguments.contains("--control-screen-only") {
+            await renderControlScreen(to: directory)
+            print("snapshots written to \(directory.path)")
+            NSApp.terminate(nil)
+            return
+        }
+
         if CommandLine.arguments.contains("--questions-only") {
             // An agent question in place of the composer, single and multi-select, then its answered record.
             let base = Fixtures.sessions.first { $0.id == "s5" }!
@@ -597,6 +604,7 @@ enum Snapshot {
             return
         }
 
+        await renderControlScreen(to: directory)
         model.selectedSessionId = nil
         model.client.loadFixture(projects: Fixtures.projects, sessions: Fixtures.sessions + [
             SessionSummary(id: "status-idle", title: "Idle, ready for a task", cwd: Fixtures.projects[0].path, projectId: "p1",
@@ -940,6 +948,22 @@ enum Snapshot {
 
     /// Project page states with fixture dashboards: populated, long content, quiet, new, loading and errors,
     /// plus the real window so the toolbar title, New chat and actions menu are visible.
+
+    /// The Control screen's sections against a fixture source: summaries with one line opened down to its message,
+    /// the log, a search and health.
+    static func renderControlScreen(to directory: URL) async {
+        let size = CGSize(width: 900, height: 820)
+        let source = ControlMemoryFixture()
+        await render(ControlScreen(source: source, expanding: [ControlMemoryLine(start: 8, n: 4, text: "")]),
+                     size: size, to: directory.appending(path: "control-summaries.png"))
+        await render(ControlScreen(source: source, section: .log), size: size,
+                     to: directory.appending(path: "control-log.png"))
+        await render(ControlScreen(source: source, section: .health), size: CGSize(width: 900, height: 560),
+                     to: directory.appending(path: "control-health.png"))
+        await render(ControlScreen(source: ControlMemoryFixture(empty: true)), size: CGSize(width: 900, height: 420),
+                     to: directory.appending(path: "control-empty.png"))
+    }
+
 
     private static func renderMissionLinks(model: AppModel, to directory: URL) async {
         let now = Fixtures.now
@@ -2354,3 +2378,69 @@ enum Fixtures {
         return transcript
     }
 }
+
+/// Control memory for snapshots: a merged view, halves down to one message, a short log and health figures.
+@MainActor
+final class ControlMemoryFixture: ControlMemoryReading {
+    private let empty: Bool
+    private let now = Fixtures.now
+
+    init(empty: Bool = false) {
+        self.empty = empty
+    }
+
+    func controlMemoryView() async throws -> ControlMemoryViewResponse {
+        guard !empty else { return ControlMemoryViewResponse(lines: []) }
+        return ControlMemoryViewResponse(lines: [
+            ControlMemoryLine(start: 0, n: 8, text: "User set up Control on Oct 14: watch release PRs in pilot, keep "
+                + "project memory tidy, never start missions unasked. Watched PR #712 and the Linear PIL-142 issue."),
+            ControlMemoryLine(start: 8, n: 4, text: "PR #712 merged; Control sent the follow-up to the release chat "
+                + "and noted the Slack forwarding fix in pilot's memory."),
+            ControlMemoryLine(start: 12, n: 1, text: "user: what's still waiting on me today?"),
+            ControlMemoryLine(start: 13, n: 1, text: "", pending: true),
+        ])
+    }
+
+    func controlMemoryNode(start: Int, n: Int, offset: Int?) async throws -> ControlMemoryNodeResponse {
+        if n > 1 {
+            let half = n / 2
+            let lines = [start, start + half].map { id in
+                ControlMemoryLine(start: id, n: half, text: half == 1
+                    ? (id == 8 ? "event: watch fired: PR #712 merged in pilot." : "tool: send {\"chat\":\"Release coordinator\"}")
+                    : "PR #712 merged and the release chat was told to continue with the changelog.")
+            }
+            return ControlMemoryNodeResponse(lines: lines)
+        }
+        let page = ControlMemoryMessagePage(
+            message: .init(id: start, at: now - 3_600_000, kind: .event,
+                           text: "Watch fired: PR #712 \"Treat forwarded Slack messages as attachments\" merged in pilot. "
+                               + "Saved note: tell the release coordinator to continue with the changelog."),
+            format: nil, next: nil)
+        return ControlMemoryNodeResponse(page)
+    }
+
+    func controlMemoryMessages(before: Int?, limit: Int, query: String?) async throws -> ControlMemoryMessagesResponse {
+        guard !empty else { return ControlMemoryMessagesResponse(messages: [], next: nil) }
+        let minute = 60_000.0
+        let entries = [
+            ControlMemoryLogEntry(id: 13, at: now - minute, kind: .assistant,
+                                  text: "Two chats need you: the checkout fix failed its tests, and the release PR is ready to merge.",
+                                  name: nil, input: nil, clipped: nil),
+            ControlMemoryLogEntry(id: 12, at: now - 2 * minute, kind: .user, text: "What's still waiting on me today?",
+                                  name: nil, input: nil, clipped: nil),
+            ControlMemoryLogEntry(id: 11, at: now - 50 * minute, kind: .tool, text: "Sent.", name: "send",
+                                  input: #"{"chat":"Release coordinator","message":"PR #712 merged. Continue with the changelog."}"#,
+                                  clipped: nil),
+            ControlMemoryLogEntry(id: 8, at: now - 60 * minute, kind: .event,
+                                  text: "Watch fired: PR #712 merged in pilot.", name: nil, input: nil, clipped: nil),
+        ]
+        return ControlMemoryMessagesResponse(messages: entries, next: 8)
+    }
+
+    func controlMemoryStats() async throws -> ControlMemoryStats {
+        ControlMemoryStats(count: empty ? 0 : 14, pendingJobs: empty ? 0 : 1, failedJobs: 0, viewBytes: 1_840,
+                           merging: false, dbBytes: 286_720, oldestAt: empty ? nil : now - 4 * 86_400_000,
+                           newestAt: empty ? nil : now - 60_000)
+    }
+}
+

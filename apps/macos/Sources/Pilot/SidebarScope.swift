@@ -14,6 +14,8 @@ enum SidebarSelection: Equatable {
     case archive(projectId: String?, missionId: String?)
     /// The Inbox, its project filter preset from the sidebar's scope.
     case inbox
+    /// The Control screen, which covers every project.
+    case control
 
     /// Key for `AppModel.scopeSelections`: the project id, or "" for every project.
     static func scopeKey(_ scope: String?) -> String { scope ?? "" }
@@ -25,7 +27,7 @@ enum SidebarSelection: Equatable {
         let fallback: SidebarSelection = scope.map { .project($0) } ?? .home
         guard let saved else { return fallback }
         switch saved {
-        case .home, .inbox:
+        case .home, .inbox, .control:
             return saved
         case let .session(id):
             guard let session = sessions.first(where: { $0.id == id }),

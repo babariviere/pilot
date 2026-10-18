@@ -249,6 +249,15 @@ struct CommandPaletteCatalog {
                                 icon: .inbox) { [model] in model.showInbox() },
         ]
         entries += controlChat()
+        // A page about the control chat, apart from the chat itself.
+        if model.controlChat != nil {
+            entries.append(CommandPaletteEntry(
+                item: CommandPaletteItem(id: "page:control-screen", kind: .page, title: "Control screen",
+                                         keywords: ["control", "memory", "log", "summaries", "watches", "health"]),
+                icon: .controlChat, detail: "Memory, message log, watches and health") { [model] in
+                    model.openControlScreen()
+                })
+        }
         let projects = model.orderedProjects
         for project in projects.filter({ $0.id == focused }) + projects.filter({ $0.id != focused }) {
             entries.append(CommandPaletteEntry(

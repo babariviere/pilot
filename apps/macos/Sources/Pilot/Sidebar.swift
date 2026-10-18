@@ -206,7 +206,7 @@ struct SessionSidebar: View {
     /// Home is selected when the detail shows it, in any scope.
     private var homeSelected: Bool {
         model.selectedSessionId == nil && model.selectedMissionId == nil && model.selectedProjectId == nil
-            && !model.showingArchive && !model.showingInbox
+            && !model.showingArchive && !model.showingInbox && !model.showingControl
     }
 
     private func overviewSelected(_ focused: Project?) -> Bool {
@@ -223,7 +223,7 @@ struct SessionSidebar: View {
     }
 
     private var inboxSelected: Bool {
-        model.showingInbox && model.selectedSessionId == nil && model.selectedMissionId == nil
+        model.showingInbox && !model.showingControl && model.selectedSessionId == nil && model.selectedMissionId == nil
             && model.selectedProjectId == nil
     }
 

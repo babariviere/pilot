@@ -369,7 +369,10 @@ struct ChatView: View {
                 // bottom marker beyond every realized message on opening or resizing.
                 VStack(alignment: .leading, spacing: 16) {
                     if session.isControl {
-                        ControlChatHeader(title: session.title)
+                        // The Control screen reads the local pilotd's control chat.
+                        ControlChatHeader(title: session.title,
+                                          openScreen: context == nil || context?.host == model.localHost
+                                              ? { model.openControlScreen() } : nil)
                             .frame(maxWidth: Theme.column, alignment: .leading)
                             .frame(maxWidth: .infinity)
                     }
