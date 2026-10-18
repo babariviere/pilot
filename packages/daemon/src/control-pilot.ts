@@ -9,13 +9,14 @@ import type {
 	StartMissionTaskRequest,
 } from "@pilot/protocol";
 import type { ControlActions } from "./control-actions.ts";
+import { buildControlDashboard, type ControlDashboardSources } from "./control-dashboard.ts";
 import type { ControlDiagnostics } from "./control-diagnostics.ts";
 import { pullRequestChecks } from "./control-pr-checks.ts";
 import type { SessionManager } from "./sessions.ts";
 import type { WatchService } from "./watch-service.ts";
 import { validateWatch, type WatchInput } from "./watches.ts";
 
-export interface ControlPilotOptions {
+export interface ControlPilotOptions extends ControlDashboardSources {
 	diagnostics?: Pick<ControlDiagnostics, "call">;
 	watches?: Pick<WatchService, "add" | "remove" | "page">;
 	isControl: (id: string) => boolean;
@@ -36,7 +37,6 @@ export interface ControlPilotOptions {
 		attachMission?: (sessionId: string, missionId: string, taskId?: string) => Promise<SessionSummary>;
 	};
 }
-const short = (text: string | undefined, n = 160) => text?.replace(/[\r\n]/g, " ").slice(0, n);
 function string(args: Record<string, unknown>, key: string, required = false): string | undefined {
 	const value = args[key];
 	if (value === undefined && !required) return undefined;
@@ -55,7 +55,7 @@ export class ControlPilot {
 			if (!this.options.diagnostics) throw new Error("Control diagnostics unavailable");
 			return this.options.diagnostics.call(action, args);
 		}
-		if (action === "status") return this.status(args);
+		if (action === "status") return this.dashboard(args);
 		if (action === "read") return this.read(args);
 		if (action === "checks") {
 			const pr = args.pr;
@@ -214,94 +214,12 @@ export class ControlPilot {
 		);
 		return { ...result, sessionId: target, requestedSessionId: id, chatUrl: `pilot://chat/${target}` };
 	}
-	private status(args: Record<string, unknown>) {
-		const projectId = string(args, "projectId"),
-			missionId = string(args, "missionId");
-		const projects = this.options.projects(),
-			missions = this.options.missions();
-		if (projectId && !projects.some((p) => p.id === projectId)) throw new Error("Unknown project");
-		const mission = missionId ? missions.find((m) => m.id === missionId) : undefined;
-		if (missionId && !mission) throw new Error("Unknown mission");
-		if (projectId && mission && mission.projectId !== projectId)
-			throw new Error("Mission belongs to another project");
-		const selected = projectId ?? mission?.projectId;
-		const chats = this.options.sessions.list({
-			archived: "false",
-			...(selected ? { projectId: selected } : {}),
-			...(missionId ? { missionId } : {}),
-		});
-		const ms = missions.filter((m) => (!selected || m.projectId === selected) && (!missionId || m.id === missionId));
-		const prs = chats.flatMap((chat) =>
-			(chat.pullRequests ?? (chat.pullRequest ? [chat.pullRequest] : []))
-				.filter((pr) => pr.state === "open" || pr.state === "draft")
-				.map((pr) => ({
-					sessionId: chat.id,
-					url: pr.url,
-					title: short(pr.title),
-					number: pr.number,
-					state: pr.state,
-				})),
-		);
-		const items = projects
-			.filter((p) => !selected || p.id === selected)
-			.slice(0, 200)
-			.flatMap((project) =>
-				this.options
-					.linear(project.id)
-					.filter((item) => !missionId || item.missionId === missionId || item.missionIds?.includes(missionId))
-					.map((item) => ({
-						projectId: project.id,
-						id: item.id,
-						identifier: item.externalId,
-						title: short(item.title),
-						status: short(item.status, 60),
-						url: item.url?.slice(0, 2048),
-					})),
-			);
-		const data = {
-			untrusted: true,
-			source: "daemon-memory",
-			projects: projects
-				.filter((p) => !selected || p.id === selected)
-				.slice(0, 200)
-				.map((p) => ({ id: p.id, name: short(p.name, 100) })),
-			chats: chats.slice(0, 100).map((chat) => ({
-				id: chat.id,
-				chatUrl: `pilot://chat/${chat.id}`,
-				title: short(chat.title),
-				projectId: chat.projectId,
-				missionId: chat.missionId,
-				state: chat.state,
-				working: chat.working,
-				outcome: chat.outcome,
-				model: chat.model,
-			})),
-			missions: ms.slice(0, 50).map((m) => ({
-				id: m.id,
-				projectId: m.projectId,
-				title: short(m.title),
-				status: m.status,
-				tasksDone: m.tasksDone,
-				tasksTotal: m.tasksTotal,
-				coordinatorSessionId: m.coordinatorSessionId,
-			})),
-			pullRequests: prs.slice(0, 100),
-			linear: items.slice(0, 100),
-			totals: { chats: chats.length, missions: ms.length, pullRequests: prs.length, linear: items.length },
-			truncated: false,
-		};
-		const lists = [data.projects, data.chats, data.missions, data.pullRequests, data.linear];
-		while (Buffer.byteLength(JSON.stringify(data)) > 24_000) {
-			const longest = lists.reduce((a, b) => (a.length > b.length ? a : b));
-			longest.pop();
-			data.truncated = true;
-		}
-		data.truncated ||=
-			data.chats.length < chats.length ||
-			data.missions.length < ms.length ||
-			data.pullRequests.length < prs.length ||
-			data.linear.length < items.length;
-		return data;
+	/** Also serves the local-user dashboard endpoint, without creating the singleton or starting a worker. */
+	dashboard(args: Record<string, unknown> = {}) {
+		return buildControlDashboard(this.options, args);
+	}
+	onDashboardChange(listener: () => void): () => void {
+		return this.options.onDashboardChange?.(listener) ?? (() => {});
 	}
 	private async read(args: Record<string, unknown>) {
 		const id = string(args, "sessionId", true)!;

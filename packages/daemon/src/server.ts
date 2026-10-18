@@ -999,6 +999,15 @@ export function createDaemonServer(
 						(url.searchParams.get("mode") === "build" && url.searchParams.get("workspace") === "clone"),
 				),
 			);
+		if (parts[1] === "control-chat" && parts[2] === "dashboard" && parts.length === 3 && req.method === "GET") {
+			const args: Record<string, string> = {};
+			for (const [key, value] of url.searchParams) {
+				if ((key !== "projectId" && key !== "missionId") || key in args)
+					throw new HttpError(400, "Invalid dashboard parameters");
+				args[key] = value;
+			}
+			return json(res, 200, sessions.controlDashboard(args));
+		}
 		if (parts[1] === "control-chat" && parts.length === 2 && (req.method === "POST" || req.method === "GET"))
 			return json(res, 200, await sessions.ensureControlChat());
 		if (parts[1] === "control-chat" && parts[2] === "watches") {
@@ -1555,7 +1564,18 @@ export function createDaemonServer(
 	};
 	let sharingInvalidationScheduled = false;
 	let watchInvalidationScheduled = false;
+	let controlDashboardTimer: NodeJS.Timeout | undefined;
+	const invalidateControlDashboard = () => {
+		if (clients.size === 0 || controlDashboardTimer) return;
+		controlDashboardTimer = setTimeout(() => {
+			controlDashboardTimer = undefined;
+			broadcast({ type: "dashboard.changed" });
+		}, DASHBOARD_DEBOUNCE_MS);
+		controlDashboardTimer.unref();
+	};
+	const stopControlDashboard = sessions.onControlDashboardChange(invalidateControlDashboard);
 	const stopWatches = watches?.onChange(() => {
+		invalidateControlDashboard();
 		if (watchInvalidationScheduled) return;
 		watchInvalidationScheduled = true;
 		queueMicrotask(() => {
@@ -1612,7 +1632,9 @@ export function createDaemonServer(
 		stopControlAudit();
 		stopControlMemory();
 		clearTimeout(memoryTimer);
+		stopControlDashboard();
 		stopSharingReceipts?.();
+		clearTimeout(controlDashboardTimer);
 	});
 	const stopPowerWatch = power?.onChange(() => broadcast({ type: "power", power: power.status() }));
 	server.on("close", () => stopPowerWatch?.());
@@ -1644,6 +1666,7 @@ export function createDaemonServer(
 	let sourceTimer: NodeJS.Timeout | undefined;
 	const changedTrackingProjects = new Set<string>();
 	const stopTrackingWatch = tracking?.onChange((change) => {
+		invalidateControlDashboard();
 		if (clients.size === 0) return;
 		if (change.type === "items") changedTrackingProjects.add(change.projectId);
 		if (sourceTimer) return;
@@ -1660,6 +1683,7 @@ export function createDaemonServer(
 		clearTimeout(sourceTimer);
 	});
 	projects.onChange((list) => {
+		invalidateControlDashboard();
 		broadcast({ type: "projects", projects: list });
 	});
 	sessions.onArtifactsChanged((sessionId, artifacts) => {
@@ -1725,6 +1749,7 @@ export function createDaemonServer(
 	});
 	// Keep this the last `sessions.onChange` registration: server.test.ts drives the most recent listener.
 	sessions.onChange((session) => {
+		invalidateControlDashboard();
 		const previous = repositoryVersions.get(session.id);
 		const version = repositoryVersion(session);
 		if (previous?.version !== version) {
@@ -1746,6 +1771,7 @@ export function createDaemonServer(
 		let scheduled = false;
 		// Coalesce bursts (a mission and its tasks created together) into one list and one detail per mission.
 		missions.store.onChange((missionId) => {
+			invalidateControlDashboard();
 			pending.add(missionId);
 			if (scheduled) return;
 			scheduled = true;

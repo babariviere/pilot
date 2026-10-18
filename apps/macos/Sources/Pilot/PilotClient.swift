@@ -1030,6 +1030,15 @@ final class PilotClient: ObservableObject {
 
     // MARK: Control chat details
 
+    /// The same bounded daemon-memory snapshot as pilot status. Never starts a worker.
+    func controlDashboard(projectId: String? = nil, missionId: String? = nil) async throws -> ControlDashboardResponse {
+        guard let baseURL else { throw HostRoutingError.disconnected }
+        var url = URLComponents(url: baseURL.appending(path: "api/control-chat/dashboard"), resolvingAgainstBaseURL: false)!
+        url.queryItems = (projectId.map { [URLQueryItem(name: "projectId", value: $0)] } ?? [])
+            + (missionId.map { [URLQueryItem(name: "missionId", value: $0)] } ?? [])
+        return try await get(url.url!)
+    }
+
     /// One bounded page of active watches, in ID order. `after` is the previous page's `next`.
     func controlWatches(after: String? = nil, limit: Int = 40) async throws -> WatchesResponse {
         guard let baseURL else { throw HostRoutingError.disconnected }
@@ -2238,6 +2247,8 @@ final class PilotClient: ObservableObject {
             for observer in controlObservers.values { observer(.audit) }
         case .controlMemoryChanged:
             for observer in controlObservers.values { observer(.memory) }
+        case .dashboardChanged:
+            for observer in controlObservers.values { observer(.dashboard) }
         case let .projects(list):
             projects = list
             hasProjectSnapshot = true

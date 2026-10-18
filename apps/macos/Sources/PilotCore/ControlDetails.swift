@@ -1,9 +1,8 @@
 import Foundation
 
-/// Which control-chat details a `watches.changed`, `control-audit.changed` or `control-memory.changed`
-/// invalidation covers.
+/// Which bounded control-chat page a socket invalidation covers.
 public enum ControlDetailsChange: Sendable, Equatable {
-    case watches, audit, memory
+    case watches, audit, memory, dashboard
 }
 
 /// One audited control action, folded from its requested, succeeded and failed entries into the latest state.
