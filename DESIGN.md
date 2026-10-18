@@ -221,6 +221,11 @@ as "1 needs you · 2 working". pilotd's controls sit in their own submenu.
 
 A chat reads as a conversation, not a log.
 
+- **History paints before it grows.** Open with the latest 40 historical rows and the live tail, using measured
+  rather than estimated heights. Show earlier messages reveals prepared pages before fetching older stored
+  entries. Each explicit request adds a page without hiding messages already displayed or changing agent context.
+  New replies extend the displayed window rather than evicting its oldest message.
+
 - **A turn folds.** Thinking, notes and tool calls between the user's message and the answer fold into one line
   ("Worked for 3 min · read 3 files, edited 1, ran 2 commands"). It stays open while the turn runs with the latest
   step visible, folds when the turn ends and stays open on a failed step. Steps read as sentences; finished steps

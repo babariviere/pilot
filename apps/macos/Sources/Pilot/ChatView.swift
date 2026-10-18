@@ -228,6 +228,7 @@ final class SessionFeed: ObservableObject {
         pending.removeAll()
         // The cache retains prepared rows, not the reducer's duplicate history and tool state.
         processor = TranscriptProcessor()
+        rows.resetHistoryWindow()
         onPresentationChanged?()
     }
 
@@ -364,9 +365,7 @@ struct ChatView: View {
         let transcript = feed.status
         ScrollViewReader { proxy in
             ScrollView {
-                // History already owns a lazy stack. Making its container lazy as well
-                // treats the entire history as one estimated row, which can put the
-                // bottom marker beyond every realized message on opening or resizing.
+                // Measured rows keep native bottom-follow and pagination away from lazy-stack estimates.
                 VStack(alignment: .leading, spacing: 16) {
                     if session.isControl {
                         // The Control screen reads the local pilotd's control chat.
@@ -389,14 +388,11 @@ struct ChatView: View {
                         ProgressView(session.state == "starting" ? "Starting task…" : "Loading conversation…")
                             .frame(maxWidth: .infinity)
                     }
-                    if transcript.earlierCursor != nil, feed.hasSnapshot {
-                        EarlierMessagesRow(loading: feed.loadingEarlier, error: feed.earlierError, load: feed.loadEarlier)
-                            .frame(maxWidth: Theme.column)
-                            .frame(maxWidth: .infinity)
-                    }
                     // The only part observing streamed rows; everything else here reads the turn's status.
                     TranscriptRowsSection(model: feed.rows, toolExpansions: toolExpansions,
-                                          messageExpansions: messageExpansions)
+                                          messageExpansions: messageExpansions, hasSnapshot: feed.hasSnapshot,
+                                          loadingEarlier: feed.loadingEarlier, earlierError: feed.earlierError,
+                                          loadEarlier: feed.loadEarlier)
                     // Sent messages show at once; the committed row replaces each in the same frame.
                     ForEach(feed.outgoing.messages) { message in
                         UserMessage(text: message.text)
@@ -456,7 +452,7 @@ struct ChatView: View {
                 .padding(.bottom, bottomPadding)
                 .frame(maxWidth: .infinity)
                 .background(TranscriptScrollObserver(state: scroll, bottomPadding: bottomPadding))
-                .modifier(transcriptKeys(proxy, canLoadEarlier: transcript.earlierCursor != nil && feed.hasSnapshot))
+                .modifier(transcriptKeys(proxy, canLoadEarlier: feed.hasSnapshot))
             }
             .environment(\.transcriptContentPrepared, preparedAction.callback)
             .environment(\.transcriptComposer, session.isReadOnlyHistory ? nil : composer)
@@ -764,9 +760,12 @@ struct ChatView: View {
         let feed = feed
         let scroll = scroll
         return TranscriptKeyboardModifier(
-            keyboard: transcriptKeyboard, proxy: proxy, rows: { feed.presentation.rows },
+            keyboard: transcriptKeyboard, proxy: proxy, rows: { feed.rows.visibleRows },
             messageExpansions: messageExpansions, rewind: session.isReadOnlyHistory ? nil : rewind,
-            loadEarlier: canLoadEarlier ? { feed.loadEarlier() } : nil,
+            loadEarlier: canLoadEarlier ? {
+                guard !feed.loadingEarlier else { return }
+                if !feed.rows.revealEarlier() { feed.loadEarlier() }
+            } : nil,
             pauseFollowing: { scroll.follow.pauseFollowing() })
     }
 
@@ -822,7 +821,39 @@ struct ChatView: View {
 /// `TranscriptRowsSection` observes it, so a token re-evaluates the rows, not the chat around them.
 @MainActor
 final class TranscriptRowsModel: ObservableObject {
-    @Published fileprivate(set) var presentation: TranscriptPresentation
+    @Published fileprivate(set) var presentation: TranscriptPresentation {
+        didSet {
+            // Live commits must not evict the oldest displayed message. Check the old boundary in O(1),
+            // only when history changes. A prepended snapshot prefix/page must not open the entire history.
+            guard presentation.historyRevision != oldValue.historyRevision,
+                  presentation.historyRowCount > oldValue.historyRowCount else { return }
+            let start = max(0, oldValue.historyRowCount - historyLimit)
+            guard start < oldValue.historyRowCount,
+                  presentation.historyRows[start].id == oldValue.historyRows[start].id else { return }
+            historyLimit = max(historyLimit, presentation.historyRowCount - start)
+        }
+    }
+    static let historyPageSize = 40
+    @Published private(set) var historyLimit = historyPageSize
+
+    var hasHiddenHistory: Bool { presentation.historyRowCount > historyLimit }
+    var visibleHistory: ArraySlice<ChatRow> { presentation.historyRows.suffix(historyLimit) }
+    var visibleRows: [ChatRow] { Array(visibleHistory) + presentation.liveRows }
+
+    func resetHistoryWindow() { historyLimit = Self.historyPageSize }
+
+    /// Reveal prepared history first. A storage page is needed only once all loaded rows are visible.
+    /// Grow the budget before requesting storage, so a completed page never hides rows already on screen.
+    @discardableResult
+    func revealEarlier() -> Bool {
+        let local = hasHiddenHistory
+        if local {
+            historyLimit += Self.historyPageSize
+        } else if presentation.earlierCursor != nil {
+            historyLimit = max(historyLimit, presentation.historyRowCount + Self.historyPageSize)
+        }
+        return local
+    }
 
     init(_ presentation: TranscriptPresentation) {
         self.presentation = presentation
@@ -834,15 +865,26 @@ struct TranscriptRowsSection: View {
     @ObservedObject var model: TranscriptRowsModel
     let toolExpansions: TranscriptExpansions
     let messageExpansions: TranscriptExpansions
+    var hasSnapshot = true
+    var loadingEarlier = false
+    var earlierError: String?
+    var loadEarlier: () -> Void = {}
     /// Offline performance checks report this next to ChatView's count.
     static var bodyEvaluations = 0
 
     var body: some View {
         let _ = Self.bodyEvaluations &+= 1
         let transcript = model.presentation
+        if hasSnapshot, model.hasHiddenHistory || transcript.earlierCursor != nil {
+            EarlierMessagesRow(loading: loadingEarlier, error: earlierError) {
+                if !model.revealEarlier() { loadEarlier() }
+            }
+            .frame(maxWidth: Theme.column)
+            .frame(maxWidth: .infinity)
+        }
         if transcript.historyRowCount > 0 {
             TranscriptHistoryRows(revision: transcript.historyRevision,
-                rows: transcript.historyRows[...], toolExpansions: toolExpansions,
+                rows: model.visibleHistory, toolExpansions: toolExpansions,
                 messageExpansions: messageExpansions).equatable()
         }
         let activeWork = transcript.working ? transcript.liveRows.last(where: \.isWork)?.id : nil
@@ -867,7 +909,9 @@ struct TranscriptHistoryRows: View, Equatable {
     }
 
     var body: some View {
-        LazyVStack(alignment: .leading, spacing: 16) {
+        // The visible page is bounded on open, then grows with history requests or new messages. Unlike
+        // LazyVStack, this reports measured geometry even when Markdown preparation changes row heights.
+        VStack(alignment: .leading, spacing: 16) {
             ForEach(rows) { row in
                 RowView(row: row, toolExpansions: toolExpansions, messageExpansions: messageExpansions).equatable()
                     // Row geometry for scroll anchoring; see ScrollObserverView.
@@ -981,8 +1025,7 @@ struct UserMessage: View {
     }
 }
 
-/// Top of a transcript whose older messages were compacted out of the agent's context. They stay in storage and
-/// load a page at a time; scroll anchoring keeps the rows the reader was looking at in place.
+/// Reveals prepared history before fetching pages hidden by compaction. Neither action changes agent context.
 private struct EarlierMessagesRow: View {
     let loading: Bool
     let error: String?
@@ -1005,7 +1048,7 @@ private struct EarlierMessagesRow: View {
                         .buttonStyle(.link)
                         .font(.pilot(.caption))
                         .fixedSize()
-                        .help("Messages from before the context was compacted. The agent no longer sees them.")
+                        .help("Show older messages without changing the agent's context.")
                 }
                 VStack { Divider() }
             }

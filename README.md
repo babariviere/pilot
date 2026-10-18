@@ -105,6 +105,7 @@ it does not change chat-result read tracking or enable review entry points.
 - **Review work in context.** Build chats include a diff inspector, a [libghostty](https://github.com/Lakr233/libghostty-spm)
   terminal in the session workspace, task progress and pull request status. Attach a pull request in Changes
   using its GitHub link or just its number (`123` or `#123`) in the project's GitHub repository.
+  Chats open with recent messages; **Show earlier messages** reveals older pages without changing agent context.
 - **Coordinate bigger goals.** Missions group chats around a shared brief, decisions, tasks, dependencies,
   artifacts and activity, with an optional coordinator agent.
 - **Keep useful context.** Build agents can save lasting decisions, preferences and lessons in project
