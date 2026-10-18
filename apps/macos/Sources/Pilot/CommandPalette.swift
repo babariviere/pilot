@@ -122,10 +122,11 @@ struct CommandPaletteCatalog {
     }
 
     /// Chats by latest activity, then archived chats by archive time. Archived chats are found by search only and
-    /// say so after their title. The open chat is left out of the recent ones: it is already on screen.
+    /// say so after their title. The open chat is left out of the recent ones: it is already on screen. The Control
+    /// chat is listed with the pages instead (see controlChat()).
     private func chats() -> [CommandPaletteEntry] {
         let client = model.client
-        let sessions = client.activeSessions.sorted { $0.listActivityAt > $1.listActivityAt }
+        let sessions = client.activeSessions.filter { !$0.isControl }.sorted { $0.listActivityAt > $1.listActivityAt }
         var recent = 0
         return (sessions + ArchiveFilter.ordered(client.archivedSessions)).map { session in
             let suggested = !session.isArchived && session.id != model.selectedSessionId && recent < Self.recentChats
@@ -141,6 +142,18 @@ struct CommandPaletteCatalog {
                 session: session
             ) { [model] in model.reveal(session: session.id) }
         }
+    }
+
+    /// The local Control chat, always suggested with the pages (it is a destination, like Home and Inbox) and found
+    /// by "control" or "pilot". It never takes a recent chat's place.
+    private func controlChat() -> [CommandPaletteEntry] {
+        guard let control = model.controlChat else { return [] }
+        return [CommandPaletteEntry(
+            item: CommandPaletteItem(id: "page:control", kind: .page, title: control.title,
+                                     keywords: ["control", "pilot", "chat", ControlChatIdentity.scope],
+                                     suggested: true),
+            icon: .controlChat, session: control, shortcut: "G C"
+        ) { [model] in model.openControlChat() }]
     }
 
     private func remoteResources() -> [CommandPaletteEntry] {
@@ -235,6 +248,7 @@ struct CommandPaletteCatalog {
             CommandPaletteEntry(item: CommandPaletteItem(id: "page:inbox", kind: .page, title: "Inbox", suggested: true),
                                 icon: .inbox) { [model] in model.showInbox() },
         ]
+        entries += controlChat()
         let projects = model.orderedProjects
         for project in projects.filter({ $0.id == focused }) + projects.filter({ $0.id != focused }) {
             entries.append(CommandPaletteEntry(

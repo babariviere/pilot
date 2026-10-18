@@ -32,7 +32,8 @@ extension AppModel {
         case let .go(letter):
             if let destination = GoDestination(key: letter), availableGoDestinations.contains(destination) {
                 go(to: destination)
-                keyboard.focusAfterNavigation(.content)
+                // The Control chat is for typing to: its composer takes focus (see go(to:)).
+                if destination != .control { keyboard.focusAfterNavigation(.content) }
             }
             return true
         case .showShortcuts:
@@ -87,12 +88,24 @@ extension AppModel {
     /// The mission on screen: the open mission page, or the open chat's mission.
     var currentMissionId: String? { selectedMissionId ?? selectedSession?.missionId }
 
+    /// The local daemon's global Control chat, once pilotd has created it.
+    var controlChat: SessionSummary? { client.sessions.first(where: \.isControl) }
+
+    /// G then C, the Go menu or the palette: the local Control chat, widening a project-scoped sidebar to all
+    /// projects, with its composer focused.
+    func openControlChat() {
+        guard let control = controlChat else { return }
+        reveal(session: control.id)
+        keyboard.focusAfterNavigation(.composer)
+    }
+
     /// Whether a G destination applies here. Unavailable ones never guess a project or mission.
     func canGo(to destination: GoDestination) -> Bool {
         switch destination {
         case .home, .inbox, .archive, .slack, .linear: true
         case .overview: sidebarScope != nil
         case .mission, .tasks, .brief: currentMissionId != nil
+        case .control: controlChat != nil
         }
     }
 
@@ -110,6 +123,7 @@ extension AppModel {
         case .archive: showArchive(in: focusedProject?.id)
         case .slack: jump(to: .slack)
         case .linear: jump(to: .linear)
+        case .control: openControlChat()
         case .mission, .tasks, .brief:
             guard let missionId = currentMissionId else { return }
             let tab: MissionTab = destination == .tasks ? .tasks : destination == .brief ? .brief : .overview
@@ -170,6 +184,7 @@ extension GoDestination {
         case .archive: "Archive"
         case .slack: "Slack Triage"
         case .linear: "Linear Queue"
+        case .control: "Control Chat"
         }
     }
 

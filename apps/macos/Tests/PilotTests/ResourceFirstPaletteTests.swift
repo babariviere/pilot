@@ -44,3 +44,45 @@ private func model() -> AppModel {
     #expect(KeyboardShortcuts.filtered("⌘L").flatMap(\.entries).contains { $0.keys == "⌘L" })
     #expect(KeyboardShortcuts.filtered("zzzz").isEmpty)
 }
+
+@MainActor
+private func modelWithControl() -> AppModel {
+    let model = model()
+    var control = SessionSummary(id: "ctl", title: "Control", cwd: "", createdAt: 1, updatedAt: 0, state: "idle",
+                                 mode: .ask, pinned: true)
+    control.control = true
+    model.client.loadFixture(projects: model.client.projects, sessions: model.client.sessions + [control])
+    return model
+}
+
+@Test @MainActor func controlChatIsAlwaysSuggestedWithThePagesNotTheRecentChats() throws {
+    let model = modelWithControl()
+    let catalog = CommandPaletteCatalog(model: model, openSettings: {}, openKeyboardShortcuts: {})
+    let entries = catalog.entries()
+    let control = try #require(entries.first { $0.session?.isControl == true })
+    #expect(control.item.kind == .page)
+    #expect(control.item.suggested)
+    #expect(control.icon == .controlChat)
+    #expect(control.shortcut == "G C")
+    #expect(entries.filter { $0.session?.isControl == true }.count == 1)
+
+    let sections = CommandPalette.results(for: "", items: entries.map(\.item))
+    let pages = try #require(sections.first { $0.title == "Pages" })
+    #expect(pages.items.prefix(3).map(\.id).contains(control.item.id))
+    // It is the oldest chat, yet it shows, and the recent chats keep all their places.
+    let recent = try #require(sections.first { $0.title == "Recent chats" })
+    #expect(recent.items.count == CommandPaletteCatalog.recentChats)
+    #expect(!recent.items.contains { $0.id == control.item.id })
+
+    for query in ["control", "pilot"] {
+        let found = CommandPalette.results(for: query, items: entries.map(\.item)).flatMap(\.items)
+        #expect(found.contains { $0.id == control.item.id }, "\(query)")
+    }
+}
+
+@Test @MainActor func paletteHasNoControlEntryWithoutTheControlChat() {
+    let model = model()
+    let catalog = CommandPaletteCatalog(model: model, openSettings: {}, openKeyboardShortcuts: {})
+    #expect(!catalog.entries().contains { $0.icon == .controlChat })
+    #expect(!model.canGo(to: .control))
+}
