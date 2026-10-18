@@ -1010,6 +1010,24 @@ export function createDaemonServer(
 		}
 		if (parts[1] === "control-chat" && parts.length === 2 && (req.method === "POST" || req.method === "GET"))
 			return json(res, 200, await sessions.ensureControlChat());
+		// Local app HTTP surface only. There is deliberately no agent tool to revoke or edit a grant.
+		if (parts[1] === "control-chat" && parts[2] === "authorizations") {
+			if (parts.length === 3 && req.method === "GET")
+				return json(
+					res,
+					200,
+					await sessions
+						.controlAuthorizations()
+						.authorizationPage(
+							url.searchParams.get("after") ?? undefined,
+							url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : undefined,
+						),
+				);
+			if (parts.length === 4 && req.method === "DELETE")
+				return json(res, 200, {
+					revoked: await sessions.controlAuthorizations().authorizationRevoke(parts[3]!),
+				} satisfies import("@pilot/protocol").RevokeControlAuthorizationResponse);
+		}
 		if (parts[1] === "control-chat" && parts[2] === "watches") {
 			if (!watches) throw new HttpError(503, "Watches unavailable");
 			if (parts.length === 3 && req.method === "GET")

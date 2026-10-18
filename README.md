@@ -242,6 +242,9 @@ actions, and memory health, read-only.
 `GET /api/control-chat/dashboard` and its `pilot status` tool share one bounded, cached snapshot of
 running chats, mission progress, blockers, proposed decisions and active watch instructions. Reading it
 does not wake chat workers or fetch external services.
+Control records user-turn authorizations for starts, follow-ups and watches, with explicit targets,
+permission levels, follow-up limits and USD reservations. Authorizations can be read and revoked through
+the local API. Existing watch instructions keep their original, narrowly scoped authority.
 See [control chat internals](docs/control-chat.md) for storage, compaction and recovery details.
 
 Control can read health, bounded redacted log tails and local diagnostic evidence through `pilot`

@@ -63,6 +63,9 @@ export function validateWatch(value: WatchInput, now = Date.now()): WatchInput {
 	)
 		throw new Error("Invalid watch filter");
 	return {
+		...(typeof value.authorizationId === "string" && value.authorizationId.length <= 128
+			? { authorizationId: value.authorizationId }
+			: {}),
 		event: value.event,
 		target,
 		filter: value.filter,

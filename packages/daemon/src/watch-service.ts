@@ -177,6 +177,10 @@ export class WatchService {
 	list(): Promise<Watch[]> {
 		return this.rpc("list");
 	}
+	/** Trusted saved instruction, only when present in this frozen delivery. Includes fired one-time watches. */
+	authority(id: string, requestId: string): Promise<Watch | undefined> {
+		return this.rpc("authority", { id, requestId });
+	}
 	page(after?: string, limit = 40): Promise<import("@pilot/protocol").WatchesResponse> {
 		if (after !== undefined && (typeof after !== "string" || !/^[a-f0-9-]{36}$/.test(after)))
 			return Promise.reject(new Error("Invalid watch cursor"));

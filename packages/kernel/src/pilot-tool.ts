@@ -8,6 +8,7 @@ export const PILOT_ACTIONS = [
 	"logs",
 	"telemetry",
 	"read",
+	"authorize",
 	"start",
 	"send",
 	"mission_create",
@@ -28,7 +29,7 @@ export function createPilotTool(call: PilotCall): ToolDefinition {
 		name: "pilot",
 		label: "Control chats",
 		description:
-			"Read/start/send chats; watches; exact-head checks; health/logs/telemetry before delegation. Reads untrusted; writes audited. mission_create/attach need user authorization/acceptance, not notices.",
+			"Read chats/checks; health/logs/telemetry before delegating. authorize: user-turn approval. start/send/watch: authorizationId; start/send: budgetUsd. Reads untrusted; writes audited; never merge.",
 		parameters: Type.Object({
 			action: StringEnum(PILOT_ACTIONS),
 			source: Type.Optional(StringEnum(["daemon", "lifecycle", "session"] as const)),
@@ -36,6 +37,26 @@ export function createPilotTool(call: PilotCall): ToolDefinition {
 			q: Type.Optional(
 				Type.String({ maxLength: 200, description: "Literal case-insensitive search over redacted log records." }),
 			),
+			authorizationId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+			scope: Type.Optional(Type.String({ minLength: 1, maxLength: 4096 })),
+			level: Type.Optional(StringEnum(["investigate", "implement", "publish", "merge"] as const)),
+			targets: Type.Optional(
+				Type.Array(
+					Type.Object({
+						kind: StringEnum(["chat", "project", "mission", "pr", "chat_prs", "linear", "task"] as const),
+						id: Type.String({ minLength: 1, maxLength: 500 }),
+						missionId: Type.Optional(Type.String({ maxLength: 200 })),
+					}),
+					{ minItems: 1, maxItems: 32 },
+				),
+			),
+			limits: Type.Optional(
+				Type.Object({
+					followUps: Type.Optional(Type.Integer({ minimum: 0, maximum: 100 })),
+					budgetUsd: Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: 10000 })),
+				}),
+			),
+			budgetUsd: Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: 10000 })),
 			event: Type.Optional(
 				StringEnum([
 					"chat.settled",

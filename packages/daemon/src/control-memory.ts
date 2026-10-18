@@ -8,6 +8,7 @@ import type {
 	ControlMemoryStats,
 } from "@pilot/protocol";
 import type { ControlAuditEntry } from "./control-actions.ts";
+import type { ControlAuthorizationCreate, ControlAuthorizationUse } from "./control-authorizations.ts";
 import type { ControlJob, ControlMemoryState, ControlMessage, ControlMessageInput } from "./control-memory-disk.ts";
 import type { ControlLine } from "./control-view.ts";
 
@@ -72,6 +73,24 @@ export class ControlMemory {
 	}
 	auditAppend(entry: Omit<ControlAuditEntry, "seq">): Promise<ControlAuditEntry> {
 		return this.rpc("auditAppend", { entry });
+	}
+	authorizationCreate(record: ControlAuthorizationCreate): Promise<import("@pilot/protocol").ControlAuthorization> {
+		return this.rpc("authorizationCreate", { record });
+	}
+	authorizationImport(records: ControlAuthorizationCreate[]): Promise<void> {
+		return this.rpc("authorizationImport", { records });
+	}
+	authorizationGet(id: string): Promise<import("@pilot/protocol").ControlAuthorization | undefined> {
+		return this.rpc("authorizationGet", { id });
+	}
+	authorizationRevoke(id: string): Promise<boolean> {
+		return this.rpc("authorizationRevoke", { id });
+	}
+	authorizationPage(after?: string, limit?: number): Promise<import("@pilot/protocol").ControlAuthorizationsResponse> {
+		return this.rpc("authorizationPage", { after, limit });
+	}
+	authorizationAdmit(entry: Omit<ControlAuditEntry, "seq">, use: ControlAuthorizationUse): Promise<ControlAuditEntry> {
+		return this.rpc("authorizationAdmit", { entry, use });
 	}
 	auditOperation(operationId: string): Promise<ControlAuditEntry | undefined> {
 		return this.rpc("auditOperation", { operationId });

@@ -14,7 +14,14 @@ export interface WatchNotice {
 	requestId: string;
 	lastEventId: number;
 	/** Trusted watch notes and untrusted event summaries stay separate. */
-	items: { watchId: string; note: string; event: WatchEvent | "watch.removed"; text: string; count: number }[];
+	items: {
+		watchId: string;
+		authorizationId?: string;
+		note: string;
+		event: WatchEvent | "watch.removed";
+		text: string;
+		count: number;
+	}[];
 	overflow: number;
 }
 export interface WatchRemoval {

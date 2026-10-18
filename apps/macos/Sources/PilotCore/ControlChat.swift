@@ -31,6 +31,7 @@ public struct WatchFilter: Codable, Equatable, Sendable {
 }
 public enum WatchMode: String, Codable, Sendable { case once, persistent }
 public struct WatchInput: Codable, Equatable, Sendable {
+    public let authorizationId: String?
     public let event: WatchEvent
     public let target: WatchTarget
     public let filter: WatchFilter?
@@ -39,6 +40,7 @@ public struct WatchInput: Codable, Equatable, Sendable {
     public let expiresAt: Double?
 }
 public struct Watch: Codable, Identifiable, Equatable, Sendable {
+    public let authorizationId: String?
     public let id: String
     public let createdAt: Double
     public let event: WatchEvent
@@ -56,6 +58,7 @@ public struct WatchesResponse: Codable, Equatable, Sendable {
 /// DELETE /api/control-chat/watches/:id. False also covers fired/expired watches.
 public struct CancelWatchResponse: Codable, Equatable, Sendable { public let removed: Bool }
 public struct ControlAuditEntry: Codable, Identifiable, Equatable, Sendable {
+    public let authorizationId: String?
     public enum Phase: String, Codable, Sendable { case requested, succeeded, failed }
     public var id: Int { seq }
     public let seq: Int
@@ -207,3 +210,44 @@ public struct ControlMemoryStats: Codable, Equatable, Sendable {
 }
 /// POST /api/sessions/:id/model. Incompatible context becomes a restorable attempt with reason=model.
 public typealias ChangeModelResponse = SessionSummary
+
+public enum ControlAuthorizationLevel: String, Codable, CaseIterable, Sendable {
+    case investigate, implement, publish, merge
+}
+public struct ControlUserMessageRef: Codable, Equatable, Sendable {
+    public let conversationId: String
+    public let submissionId: Int
+    public let entryId: Int
+    public let requestId: String
+}
+public struct ControlAuthorizationLimits: Codable, Equatable, Sendable {
+    public let followUps: Int
+    /// Missing means paid delegation is not authorized, not unlimited.
+    public let budgetUsd: Double?
+}
+public struct ControlAuthorizationUsage: Codable, Equatable, Sendable {
+    public let followUps: Int
+    public let budgetUsd: Double
+}
+public struct ControlAuthorization: Codable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let userMessage: ControlUserMessageRef?
+    public let watchId: String?
+    public let scope: String
+    public let level: ControlAuthorizationLevel
+    public let targets: [WatchTarget]
+    public let limits: ControlAuthorizationLimits
+    public let createdAt: Double
+    public let expiresAt: Double?
+    public let revokedAt: Double?
+    public let usage: ControlAuthorizationUsage
+}
+/// GET /api/control-chat/authorizations?after=<id>&limit=40. Includes expired and revoked records.
+public struct ControlAuthorizationsResponse: Codable, Equatable, Sendable {
+    public let authorizations: [ControlAuthorization]
+    public let next: String?
+}
+/// DELETE /api/control-chat/authorizations/:id, local app only.
+public struct RevokeControlAuthorizationResponse: Codable, Equatable, Sendable {
+    public let revoked: Bool
+}

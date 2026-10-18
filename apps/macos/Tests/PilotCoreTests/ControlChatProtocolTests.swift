@@ -3,6 +3,28 @@ import PilotCore
 import Testing
 
 struct ControlChatProtocolTests {
+    @Test func authorizationRecordsRoundTripIncludingRevokedAndLegacyWatches() throws {
+        for level in ControlAuthorizationLevel.allCases {
+            let source = """
+            {"authorizations":[{"id":"auth:1","userMessage":{"conversationId":"1","submissionId":10,"entryId":20,"requestId":"typed"},"scope":"Fix the failure","level":"\(level.rawValue)","targets":[{"kind":"task","id":"2","missionId":"m"}],"limits":{"followUps":2,"budgetUsd":3},"createdAt":1000,"expiresAt":2000,"revokedAt":1500,"usage":{"followUps":1,"budgetUsd":0.5}},{"id":"watch:w","watchId":"w","scope":"Saved note","level":"publish","targets":[{"kind":"chat","id":"c"}],"limits":{"followUps":2},"createdAt":1,"usage":{"followUps":0,"budgetUsd":0}}],"next":"watch:w"}
+            """
+            let page = try JSONDecoder().decode(ControlAuthorizationsResponse.self, from: Data(source.utf8))
+            let record = try #require(page.authorizations.first)
+            #expect(record.level == level)
+            #expect(record.userMessage?.entryId == 20)
+            #expect(record.limits.followUps == 2)
+            #expect(record.usage.budgetUsd == 0.5)
+            #expect(record.revokedAt == 1500)
+            #expect(page.authorizations.last?.userMessage == nil)
+            #expect(page.authorizations.last?.limits.budgetUsd == nil)
+            let roundTrip = try JSONDecoder().decode(ControlAuthorizationsResponse.self, from: JSONEncoder().encode(page))
+            #expect(roundTrip == page)
+        }
+        let revoked = try JSONDecoder().decode(RevokeControlAuthorizationResponse.self, from: Data(#"{"revoked":false}"#.utf8))
+        #expect(!revoked.revoked)
+        let audit = try JSONDecoder().decode(ControlAuditEntry.self, from: Data(#"{"seq":1,"operationId":"op","authorizationId":"auth:1","action":"send","phase":"requested","at":1,"caller":"c","args":{}}"#.utf8))
+        #expect(audit.authorizationId == "auth:1")
+    }
     @Test func watchNoticesRenderAsEventsAndControlInputStaysAutomatic() async throws {
         let source = #"{"type":"snapshot","entries":[{"id":1,"kind":"pi.user","origin":"watch","data":{"event":{"kind":"watch_notice","text":"1 event fired"}},"model":[{"role":"user","timestamp":1,"content":"Saved note and quoted event"}]},{"id":2,"kind":"pi.user","origin":"control","model":[{"role":"user","timestamp":2,"content":"Continue the work"}]}]}"#
         let result = try await TranscriptProcessor().apply([try JSONValue.decode(Data(source.utf8))])

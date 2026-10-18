@@ -221,6 +221,13 @@ sessions.setPilot(
 			},
 		}),
 		isControl: (id) => sessions.isControlSession(id),
+		authorizations: () => sessions.controlAuthorizations(),
+		turnOrigin: () => sessions.controlTurnOrigin(),
+		taskDone: (missionId, taskId) => {
+			const task = missionStore.resolveTask(missionId, taskId);
+			return task.status === "done" || task.status === "dropped";
+		},
+		taskSession: (missionId, taskId) => missionStore.resolveTask(missionId, taskId).sessionId,
 		watches,
 		sessions,
 		projects: () => projects.list(),
@@ -294,6 +301,8 @@ await sessions.ensureControlChat();
 watches.bindRemovalAudit((removal) => sessions.auditWatchRemoval(removal));
 const watchLifecycle = new WatchLifecycle(watches, sessions, missionStore);
 await watchLifecycle.reconcile();
+const { importLegacyWatchAuthorizations } = await import("./control-authorizations.ts");
+await importLegacyWatchAuthorizations(() => sessions.controlAuthorizations(), watches);
 const stopControlWatches = sessions.setWatches(watches);
 const missionWatches = new MissionWatchSource(missionStore, watches);
 const sessionWatches = new SessionWatchSource(watches, sessions);

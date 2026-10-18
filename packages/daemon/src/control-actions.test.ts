@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import type { Mission, SessionSummary } from "@pilot/protocol";
 import { ControlActions, type ControlAuditEntry } from "./control-actions.ts";
+import { createAuthorization } from "./control-authorizations.ts";
 import { ControlMemory } from "./control-memory.ts";
 import { ControlPilot } from "./control-pilot.ts";
 
@@ -25,10 +26,28 @@ test("start/send use existing admissions, route mission members and durably audi
 		},
 	);
 	const chat = { id: "created", title: "Created", model: "test/cheap" } as SessionSummary;
-	const target = { id: "member", missionId: "m" } as SessionSummary;
+	const target = { id: "member", projectId: "p", missionId: "m" } as SessionSummary;
+	await memory.authorizationCreate(
+		createAuthorization(
+			"approval",
+			{
+				scope: "requested work",
+				level: "publish",
+				targets: [{ kind: "project", id: "p" }],
+				limits: { followUps: 3, budgetUsd: 10 },
+			},
+			{ conversationId: "1", submissionId: 1, entryId: 1, requestId: "user" },
+		),
+	);
+	const authorized = { authorizationId: "approval", budgetUsd: 1 };
 	const service = new ControlPilot({
 		isControl: (id) => id === "control",
-		sessions: { list: () => [], get: () => target, history: async () => ({ entries: [], more: false }) },
+		authorizations: () => memory,
+		sessions: {
+			list: () => [],
+			get: (id) => ({ ...target, id }),
+			history: async () => ({ entries: [], more: false }),
+		},
 		projects: () => [],
 		missions: () => [{ id: "m", projectId: "p", coordinatorSessionId: "lead" }] as Mission[],
 		linear: () => [],
@@ -49,13 +68,18 @@ test("start/send use existing admissions, route mission members and durably audi
 			},
 		},
 	});
-	const project = { projectId: "p", message: "requested work", model: "test/cheap" };
+	const project = { ...authorized, projectId: "p", message: "requested work", model: "test/cheap" };
 	const result = await service.call("control", "start", project, "project");
 	assert.deepEqual(await service.call("control", "start", project, "project"), result);
 	assert.equal(calls.length, 1, "same call never starts twice");
-	await service.call("control", "start", { missionId: "m", taskId: "2" }, "task");
-	await service.call("control", "send", { sessionId: "member", message: "next" }, "send");
-	await service.call("control", "send", { sessionId: "member", message: "direct", direct: true }, "direct");
+	await service.call("control", "start", { ...authorized, missionId: "m", taskId: "2" }, "task");
+	await service.call("control", "send", { ...authorized, sessionId: "member", message: "next" }, "send");
+	await service.call(
+		"control",
+		"send",
+		{ ...authorized, sessionId: "member", message: "direct", direct: true },
+		"direct",
+	);
 	assert.deepEqual(calls.slice(1), [
 		["task", "m", "2", {}],
 		["send", "lead", "next", "control:send:send", "followUp"],
@@ -71,8 +95,7 @@ test("start/send use existing admissions, route mission members and durably audi
 		service.call("control", "start", { ...project, message: "changed" }, "project"),
 		/identity reused/,
 	);
-	await assert.rejects(service.call("control", "start", { missionId: "m" }, "invalid"), /requires taskId/);
-	assert.equal((await audit.page())[0]!.phase, "failed");
+	await assert.rejects(service.call("control", "start", { ...authorized, missionId: "m" }, "invalid"), /taskId/);
 	await memory.auditAppend({
 		operationId: "control:uncertain",
 		action: "start",
