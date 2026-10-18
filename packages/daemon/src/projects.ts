@@ -4,13 +4,23 @@ import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import type {
 	Project,
+	ProjectEnvironment,
+	ProjectEnvironmentOverride,
 	ProjectGitHubRepository,
 	ProjectRequest,
 	ProjectTrackingConfig,
 	RemoteBranchList,
 	SlackProjectLabel,
 } from "@pilot/protocol";
-import { NotFound, ServiceUnavailable } from "./errors.ts";
+import {
+	applyEnvironmentApprovals,
+	effectiveEnvironment,
+	validateEnvironmentOverride,
+	validateEnvironmentProfile,
+	validateProjectEnvironment,
+	validateProjectEnvironmentOverride,
+} from "./environment-profile.ts";
+import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { projectOriginIdentity } from "./project-origin.ts";
 import { listRemoteBranches, type Runner, run } from "./workspaces.ts";
 
@@ -26,6 +36,12 @@ export async function requireDirectory(path: string): Promise<string> {
 
 export class ProjectStore {
 	private projects: Project[] = [];
+	/** Profiles and overrides that failed validation on load, by project. Kept so a later save does not silently drop
+	 * a hand edit. */
+	private readonly invalid = {
+		environment: new Map<string, unknown>(),
+		environmentOverride: new Map<string, unknown>(),
+	};
 	private readonly listeners = new Set<(projects: Project[]) => void>();
 	private saving: Promise<void> = Promise.resolve();
 
@@ -47,6 +63,23 @@ export class ProjectStore {
 			const parsed = JSON.parse(await readFile(this.file, "utf8")) as Project[];
 			this.projects = Array.isArray(parsed) ? parsed : [];
 			let migrated = false;
+			const validators = {
+				environment: validateProjectEnvironment,
+				environmentOverride: validateProjectEnvironmentOverride,
+			} as const;
+			for (const field of ["environment", "environmentOverride"] as const)
+				this.projects = this.projects.map((project) => {
+					if (project[field] === undefined) return project;
+					try {
+						return { ...project, [field]: validators[field](project[field]) };
+					} catch (error) {
+						// Clients never see an invalid layer; the stored value stays on disk until the user saves a new one.
+						console.warn(`pilotd: project ${project.id} ${field} ignored: ${(error as Error).message}`);
+						this.invalid[field].set(project.id, project[field]);
+						const { [field]: _ignored, ...rest } = project;
+						return rest;
+					}
+				});
 			this.projects = this.projects.map((project) => {
 				if (!project.tracking) return project;
 				// Labels from before effects: hideFromInbox: true becomes hide, every label states its effect.
@@ -206,15 +239,91 @@ export class ProjectStore {
 		return next;
 	}
 
+	/**
+	 * Replace a project's environment profile. expectedRevision is the current revision (0 without a profile).
+	 * native: the caller holds the native host-action capability, required to add or change review pins.
+	 */
+	async updateEnvironment(
+		id: string,
+		environment: unknown,
+		expectedRevision: unknown,
+		options: { native: boolean },
+	): Promise<ProjectEnvironment> {
+		if (typeof expectedRevision !== "number" || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0)
+			throw new Error("expectedRevision must be a non-negative integer");
+		const profile = validateEnvironmentProfile(environment);
+		const project = this.require(id);
+		const revision = this.layerRevision(project, "environment");
+		if (expectedRevision !== revision) throw new EnvironmentRevisionConflict(revision);
+		const next: ProjectEnvironment = {
+			revision: revision + 1,
+			...applyEnvironmentApprovals(project.environment, profile, options.native),
+		};
+		this.invalid.environment.delete(id);
+		this.projects = this.projects.map((existing) =>
+			existing.id === id ? { ...existing, environment: next } : existing,
+		);
+		await this.persist();
+		return next;
+	}
+
+	/**
+	 * Replace this host's override layer. Same revision and review-pin rules as the shared profile; the layer is
+	 * never synced. The result must leave a valid effective profile.
+	 */
+	async updateEnvironmentOverride(
+		id: string,
+		override: unknown,
+		expectedRevision: unknown,
+		options: { native: boolean },
+	): Promise<ProjectEnvironmentOverride> {
+		if (typeof expectedRevision !== "number" || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0)
+			throw new Error("expectedRevision must be a non-negative integer");
+		const layer = validateEnvironmentOverride(override);
+		const project = this.require(id);
+		const revision = this.layerRevision(project, "environmentOverride");
+		if (expectedRevision !== revision) throw new EnvironmentRevisionConflict(revision);
+		const next: ProjectEnvironmentOverride = {
+			revision: revision + 1,
+			...applyEnvironmentApprovals(project.environmentOverride, layer, options.native),
+		};
+		const effective = validateProjectEnvironment(effectiveEnvironment(project.environment, next));
+		const known = new Set([...effective.tools, ...effective.services].map((entry) => entry.id));
+		const dangling = next.steps?.find((step) => step.requires.some((id) => !known.has(id)));
+		if (dangling) throw new Error(`override step ${dangling.id} requires an unknown tool or service`);
+		this.invalid.environmentOverride.delete(id);
+		this.projects = this.projects.map((existing) =>
+			existing.id === id ? { ...existing, environmentOverride: next } : existing,
+		);
+		await this.persist();
+		return next;
+	}
+
+	private layerRevision(project: Project, field: "environment" | "environmentOverride"): number {
+		const current = project[field];
+		if (current) return current.revision;
+		const invalid = (this.invalid[field].get(project.id) as { revision?: unknown } | undefined)?.revision;
+		return typeof invalid === "number" && Number.isSafeInteger(invalid) && invalid >= 0 ? invalid : 0;
+	}
+
 	/** Sessions keep their projectId; clients show them as unassigned. */
 	async remove(id: string): Promise<void> {
 		this.require(id);
+		this.invalid.environment.delete(id);
+		this.invalid.environmentOverride.delete(id);
 		this.projects = this.projects.filter((project) => project.id !== id);
 		await this.persist();
 	}
 
 	private persist(): Promise<void> {
-		const snapshot = `${JSON.stringify(this.projects, null, "\t")}\n`;
+		const stored = this.projects.map((project) => {
+			let result: Record<string, unknown> = project as unknown as Record<string, unknown>;
+			for (const field of ["environment", "environmentOverride"] as const)
+				if (this.invalid[field].has(project.id) && !project[field])
+					result = { ...result, [field]: this.invalid[field].get(project.id) };
+			return result;
+		});
+		const snapshot = `${JSON.stringify(stored, null, "\t")}\n`;
 		this.saving = this.saving
 			.catch(() => undefined)
 			.then(async () => {
@@ -225,6 +334,15 @@ export class ProjectStore {
 		const projects = this.list();
 		for (const listener of this.listeners) listener(projects);
 		return this.saving;
+	}
+}
+
+/** HTTP 409 with the current revision. Clients re-read; they never overwrite automatically. */
+export class EnvironmentRevisionConflict extends Conflict {
+	readonly revision: number;
+	constructor(revision: number) {
+		super("The environment profile changed. Review the latest version and try again.");
+		this.revision = revision;
 	}
 }
 

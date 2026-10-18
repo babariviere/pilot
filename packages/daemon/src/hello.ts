@@ -44,7 +44,19 @@ async function persistentIdentity(home: string, name: string): Promise<string> {
 	return id;
 }
 
-export async function daemonHello(home: string, capabilities: DaemonCapabilities): Promise<DaemonHello> {
+/**
+ * Environment setup stays off until its user-facing parts ship. PILOT_ENVIRONMENT_SETUP=1 turns it on for
+ * development; clients and environment routes both follow the advertised capability.
+ */
+export function environmentSetupEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+	return env.PILOT_ENVIRONMENT_SETUP === "1";
+}
+
+export async function daemonHello(
+	home: string,
+	capabilities: DaemonCapabilities,
+	env: NodeJS.ProcessEnv = process.env,
+): Promise<DaemonHello> {
 	return {
 		daemonId: await daemonIdentity(home),
 		lineageId: await daemonLineage(home),
@@ -57,6 +69,7 @@ export async function daemonHello(home: string, capabilities: DaemonCapabilities
 			...capabilities,
 			workspaceTerminalProtocol: 2,
 			...(process.platform === "linux" ? { runtimeUpdates: 1 as const } : {}),
+			...(environmentSetupEnabled(env) ? { environmentSetup: 1 as const } : {}),
 		},
 	};
 }
