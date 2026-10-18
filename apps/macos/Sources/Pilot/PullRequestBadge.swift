@@ -30,9 +30,19 @@ struct PullRequestBadge: View {
         .help(session.pullRequestHelpText ?? "")
     }
 
-    private var links: some View {
-        ForEach(session.linkedPullRequests, id: \.url) { pr in
+    /// Details list every PR; the compact badge keeps a few, open ones first, and counts the rest.
+    @ViewBuilder private var links: some View {
+        let compact = presentation == .badge ? session.compactPullRequests() : (shown: session.linkedPullRequests, hidden: 0)
+        ForEach(compact.shown, id: \.url) { pr in
             PullRequestLink(pullRequest: pr, presentation: presentation, stale: session.pullRequestIsStale)
+        }
+        if compact.hidden > 0 {
+            Text("+\(compact.hidden)")
+                .font(.pilot(.small, weight: .medium))
+                .foregroundStyle(Theme.mutedForeground)
+                .fixedSize()
+                .help(RowLineSegments.pullRequestSummary(session) ?? "")
+                .accessibilityLabel("\(compact.hidden) more pull requests")
         }
     }
 }
