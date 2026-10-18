@@ -595,7 +595,7 @@ test("title generation follows project model scope, ignores its thinking suffix 
 	assert.equal(calls.length, 1);
 });
 
-test("scope API resolves every global/project pattern on this host without dropping unknown or unauthenticated patterns", async (t) => {
+test("scope resolution is global-only; candidates ignore scope and project settings remain read-only", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "pilot-model-scope-resolution-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
 	const project = join(root, "project");
@@ -615,48 +615,111 @@ test("scope API resolves every global/project pattern on this host without dropp
 			}) as unknown as ModelRuntime,
 	);
 	const catalog = new ModelCatalog(root);
-	const patterns = ["test/*:high", "test/small", "signed-out/known", "missing/no-match", "test/small:bogus"];
+	const patterns = ["test/small:high", "signed-out/known", "missing/no-match", "test/small:bogus", "test/small:high"];
 	const result = await catalog.updateScope(project, { enabledModels: patterns, expectedHash: modelScopeHash(null) });
+	assert.ok(result.changed);
 	assert.deepEqual(result.enabledModels, patterns);
-	assert.equal(result.contentHash, modelScopeHash(patterns));
+	assert.equal(result.scopeHash, modelScopeHash(patterns));
+	assert.equal(result.allModels, false);
 	assert.deepEqual(result.projectOverride, ["test/large:high"]);
 	assert.deepEqual(result.resolution, [
-		{ pattern: patterns[0], matchedModelIds: ["test/small", "test/large"], unresolvedReason: null, diagnostics: [] },
-		{ pattern: patterns[1], matchedModelIds: ["test/small"], unresolvedReason: null, diagnostics: [] },
-		{
-			pattern: patterns[2],
-			matchedModelIds: [],
-			unresolvedReason: "provider-not-logged-in",
-			diagnostics: ["no-match"],
-		},
-		{ pattern: patterns[3], matchedModelIds: [], unresolvedReason: "unknown", diagnostics: ["no-match"] },
-		{
-			pattern: patterns[4],
-			matchedModelIds: ["test/small"],
-			unresolvedReason: null,
-			diagnostics: ["invalid-thinking-level"],
-		},
+		{ pattern: patterns[0], matches: ["test/small"] },
+		{ pattern: patterns[1], matches: [], unresolved: "provider-not-logged-in" },
+		{ pattern: patterns[2], matches: [], unresolved: "unknown" },
+		{ pattern: patterns[3], matches: ["test/small"] },
+		{ pattern: patterns[4], matches: ["test/small"] },
 	]);
-	assert.deepEqual(result.projectResolution, [
-		{ pattern: "test/large:high", matchedModelIds: ["test/large"], unresolvedReason: null, diagnostics: [] },
+	assert.deepEqual(result.candidates, [
+		{ id: "test/small", provider: "test", name: "small" },
+		{ id: "test/large", provider: "test", name: "large" },
 	]);
+	assert.deepEqual(
+		(await catalog.list(root)).models.map((entry) => entry.id),
+		["test/small"],
+	);
 	assert.deepEqual(
 		(await catalog.list(project)).models.map((entry) => entry.id),
 		["test/large"],
 	);
 	assert.equal(await readFile(projectPath, "utf8"), projectText);
-	const reset = await catalog.updateScope(project, { enabledModels: null, expectedHash: result.contentHash });
+	const global = await catalog.scope();
+	assert.equal("projectOverride" in global, false);
+	assert.deepEqual(global.resolution, result.resolution);
+	const reset = await catalog.updateScope(project, { enabledModels: null, expectedHash: result.scopeHash });
+	assert.ok(reset.changed);
 	assert.equal(reset.enabledModels, null);
+	assert.equal(reset.allModels, true);
 	assert.deepEqual(reset.resolution, []);
 	assert.deepEqual(
 		(await catalog.list(root)).models.map((entry) => entry.id),
 		["test/small", "test/large"],
 	);
-	assert.equal((await catalog.scope(root)).projectResolution, null);
 	assert.deepEqual(
 		(await catalog.list(project)).models.map((entry) => entry.id),
 		["test/large"],
 	);
+	// Existing Pi [] is preserved on read and still means all models. It has a distinct value hash.
+	await writeFile(join(root, "settings.json"), '{"enabledModels":[]}');
+	const empty = await catalog.scope();
+	assert.deepEqual(empty.enabledModels, []);
+	assert.equal(empty.allModels, true);
+	assert.equal(empty.scopeHash, modelScopeHash([]));
+	assert.deepEqual(empty.resolution, []);
+	assert.equal((await catalog.list(root)).models.length, 2);
+});
+
+test("unscoped candidates are deduplicated, credential-free and bounded by count and encoded bytes", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-model-candidates-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	let available = Array.from({ length: 2200 }, (_, i) => model(`candidate-${i}`, 0, 0));
+	t.mock.method(
+		ModelRuntime,
+		"create",
+		async () =>
+			({
+				...requiredAuthRegistration,
+				getAvailable: async () => [available[0], ...available],
+			}) as unknown as ModelRuntime,
+	);
+	const catalog = new ModelCatalog(root);
+	const scope = await catalog.scope();
+	assert.equal(scope.candidates.length, 2048);
+	assert.equal(new Set(scope.candidates.map((candidate) => candidate.id)).size, 2048);
+	assert.ok(scope.candidates.every((candidate) => Object.keys(candidate).sort().join(",") === "id,name,provider"));
+	available = Array.from({ length: 500 }, (_, i) => ({ ...model(`large-${i}`, 0, 0), name: "x".repeat(10_000) }));
+	const second = await new ModelCatalog(root).scope();
+	assert.ok(second.candidates.length < 500);
+	assert.ok(Buffer.byteLength(JSON.stringify(second.candidates)) <= 1024 * 1024);
+});
+
+test("changed response resolves the committed global value, not a later external edit during auth resolution", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-model-scope-response-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const path = join(root, "settings.json");
+	t.mock.method(
+		ModelRuntime,
+		"create",
+		async () =>
+			({
+				...requiredAuthRegistration,
+				getAvailable: async () => {
+					await writeFile(path, '{"enabledModels":["test/large"]}');
+					return [cheap, expensive];
+				},
+			}) as unknown as ModelRuntime,
+	);
+	const catalog = new ModelCatalog(root);
+	const result = await catalog.updateScope(undefined, {
+		enabledModels: ["test/small"],
+		expectedHash: modelScopeHash(null),
+	});
+	assert.ok(result.changed);
+	assert.deepEqual(result.enabledModels, ["test/small"]);
+	assert.equal(result.scopeHash, modelScopeHash(["test/small"]));
+	assert.deepEqual(result.resolution, [{ pattern: "test/small", matches: ["test/small"] }]);
+	const current = await catalog.scope();
+	assert.deepEqual(current.enabledModels, ["test/large"]);
+	assert.equal(current.scopeHash, modelScopeHash(["test/large"]));
 });
 
 test("scope writes detach pending model lists without recreating the runtime or changing any model", async (t) => {
@@ -713,7 +776,7 @@ test("scope writes detach pending model lists without recreating the runtime or 
 	assert.equal(calls, 1);
 	assert.equal(cheap.id, "small");
 	assert.equal(expensive.id, "large");
-	await catalog.updateScope(root, { enabledModels: [], expectedHash: modelScopeHash(["test/large"]) });
+	await catalog.updateScope(root, { enabledModels: null, expectedHash: modelScopeHash(["test/large"]) });
 	assert.equal((await catalog.list(root)).models.length, 2);
 });
 

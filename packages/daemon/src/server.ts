@@ -73,7 +73,7 @@ import { MachineInformationReader } from "./machine.ts";
 import { type McpStatusService, SignInUnavailable } from "./mcp-status.ts";
 import type { MissionService } from "./mission-service.ts";
 import type { MissionStore } from "./missions.ts";
-import { ModelScopeConflictError } from "./model-scope.ts";
+import { ModelScopeConflictError, ModelScopeSettingsError, modelScopeUpdate } from "./model-scope.ts";
 import type { ModelCatalog } from "./models.ts";
 import { MAX_NATIVE_DIAGNOSTIC_BYTES } from "./native-diagnostics.ts";
 import { OperationJournal, OperationRejected } from "./operation-journal.ts";
@@ -958,31 +958,44 @@ export function createDaemonServer(
 		if (parts[1] === "model-scope" && parts.length === 2) {
 			res.setHeader("cache-control", "no-store");
 			const projectId = url.searchParams.get("projectId");
-			const cwd = projectId ? projects.require(projectId).path : expandHome(url.searchParams.get("cwd") || "~");
+			const cwd = projectId
+				? projects.require(projectId).path
+				: url.searchParams.has("cwd")
+					? expandHome(url.searchParams.get("cwd")!)
+					: undefined;
 			if (req.method === "GET") {
 				try {
-					return json(res, 200, await models.scope(cwd, !_config.modelScopeReadOnly && !!githubSetup));
-				} catch {
-					throw new HttpError(503, "Model scope is unavailable");
+					return json(res, 200, await models.scope(cwd));
+				} catch (error) {
+					if (error instanceof ModelScopeSettingsError)
+						return json(res, error.status, { error: "settings_unreadable" });
+					return json(res, 503, { error: "model_scope_unavailable" });
 				}
 			}
 			if (req.method === "PUT") {
-				if (_config.modelScopeReadOnly) throw new HttpError(403, "Model scope is read-only on this host");
+				if (_config.modelScopeReadOnly) return json(res, 403, { error: "read_only" });
 				// Reuse the native host-action boundary, not a chat grant or an agent-supplied identity.
 				// The capability's historical filename/header is shared with GitHub setup/import.
-				if (!githubSetup) throw new HttpError(503, "Native host-action authorization is unavailable");
+				if (!githubSetup) return json(res, 503, { error: "model_scope_unavailable" });
 				try {
 					await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
 				} catch {
-					throw new HttpError(403, "Model scope changes require the native app's host-action capability");
+					return json(res, 403, { error: "native_action_required" });
 				}
 				const input = await readJson(req, 160 * 1024);
+				try {
+					modelScopeUpdate(input);
+				} catch {
+					return json(res, 400, { error: "invalid_scope" });
+				}
 				try {
 					return json(res, 200, await models.updateScope(cwd, input));
 				} catch (error) {
 					if (error instanceof ModelScopeConflictError) return json(res, 409, error.conflict);
+					if (error instanceof ModelScopeSettingsError)
+						return json(res, error.status, { error: "settings_unreadable" });
 					// No raw SDK/provider/configuration errors may escape this settings-only API.
-					throw new HttpError(400, "Model scope update failed; re-read the scope before retrying");
+					return json(res, 503, { error: "model_scope_unavailable" });
 				}
 			}
 		}
