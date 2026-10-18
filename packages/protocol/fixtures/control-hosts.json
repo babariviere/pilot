@@ -1564,52 +1564,43 @@
 						"runningAgents": 0,
 						"activeMissions": 0,
 						"blockers": 0,
-						"pendingDecisions": 0
+						"pendingDecisions": 0,
+						"sharedTasks": 2,
+						"replicaMissions": 0
 					},
-					"truncated": false
+					"truncated": false,
+					"sharedTasks": [
+						{
+							"id": "[\"home-daemon\",\"home-lineage\",\"m\",\"t\"]",
+							"bindingId": "shared:replica-binding:2",
+							"projectId": "p",
+							"missionId": "m",
+							"missionHome": {
+								"hostId": "daemon",
+								"daemonId": "home-daemon",
+								"lineageId": "home-lineage"
+							},
+							"source": "replica",
+							"consistency": "committed",
+							"taskId": "t",
+							"taskNumber": 7,
+							"title": "Investigate",
+							"status": "in_progress",
+							"delegationId": "delegation:1",
+							"executionHost": {
+								"hostId": "daemon",
+								"daemonId": "executor-daemon",
+								"lineageId": "executor-lineage"
+							},
+							"executionEpoch": 2,
+							"grantState": "accepted",
+							"running": true,
+							"replicaSyncedAt": 3900,
+							"replicaAgeMs": 100
+						}
+					],
+					"replicaMissions": []
 				},
-				"missionTasks": [
-					{
-						"id": "[\"home-daemon\",\"home-lineage\",\"m\",\"t\"]",
-						"bindingId": "shared:replica-binding:2",
-						"bindingGeneration": 1,
-						"projectId": "p",
-						"missionId": "m",
-						"missionHome": {
-							"hostId": "daemon",
-							"daemonId": "home-daemon",
-							"lineageId": "home-lineage"
-						},
-						"observedOn": {
-							"hostId": "daemon",
-							"daemonId": "executor-daemon",
-							"lineageId": "executor-lineage"
-						},
-						"source": "replica",
-						"consistency": "committed",
-						"taskId": "t",
-						"taskNumber": 7,
-						"title": "Investigate",
-						"status": "in_progress",
-						"definitionRevision": 3,
-						"delegationId": "delegation:1",
-						"executionHost": {
-							"hostId": "daemon",
-							"daemonId": "executor-daemon",
-							"lineageId": "executor-lineage"
-						},
-						"executionEpoch": 2,
-						"grantState": "accepted",
-						"running": true,
-						"availability": "unknown",
-						"replicaSyncedAt": 3900,
-						"replicaAgeMs": 100,
-						"snapshotCapturedAt": 4000,
-						"grantBindingId": "shared:binding:1",
-						"grantBindingGeneration": 1
-					}
-				],
-				"missionTasksTotal": 2,
 				"truncated": false,
 				"revision": 1
 			},
@@ -1651,61 +1642,32 @@
 						"runningAgents": 0,
 						"activeMissions": 0,
 						"blockers": 0,
-						"pendingDecisions": 0
+						"pendingDecisions": 0,
+						"sharedTasks": 2,
+						"replicaMissions": 0
 					},
-					"truncated": false
-				},
-				"missionTasks": [
-					{
-						"id": "[\"proposal\",\"executor-daemon\",\"executor-lineage\",\"shared:binding:1\",1,\"proposal:1\"]",
-						"bindingId": "shared:binding:1",
-						"bindingGeneration": 1,
-						"projectId": "p",
-						"missionId": "m",
-						"missionHome": {
-							"hostId": "daemon",
-							"daemonId": "home-daemon",
-							"lineageId": "home-lineage"
-						},
-						"observedOn": {
-							"hostId": "daemon",
-							"daemonId": "executor-daemon",
-							"lineageId": "executor-lineage"
-						},
-						"source": "proposal",
-						"consistency": "provisional",
-						"title": "Proposed task",
-						"status": "todo",
-						"proposalId": "proposal:1",
-						"proposalState": "conflict",
-						"proposalOrigin": {
-							"host": {
+					"truncated": false,
+					"sharedTasks": [
+						{
+							"id": "[\"proposal\",\"executor-daemon\",\"executor-lineage\",\"shared:binding:1\",1,\"proposal:1\"]",
+							"bindingId": "shared:binding:1",
+							"projectId": "p",
+							"missionId": "m",
+							"missionHome": {
 								"hostId": "daemon",
-								"daemonId": "executor-daemon",
-								"lineageId": "executor-lineage"
+								"daemonId": "home-daemon",
+								"lineageId": "home-lineage"
 							},
-							"sessionId": "chat:1"
-						},
-						"conflicts": [
-							{
-								"proposalId": "proposal:1",
-								"origin": {
-									"host": {
-										"hostId": "daemon",
-										"daemonId": "executor-daemon",
-										"lineageId": "executor-lineage"
-									},
-									"sessionId": "chat:1"
-								},
-								"state": "conflict",
-								"reason": "Definition changed",
-								"evidenceId": "proposal:1"
-							}
-						],
-						"availability": "unknown"
-					}
-				],
-				"missionTasksTotal": 2,
+							"source": "replica",
+							"consistency": "provisional",
+							"title": "Proposed task",
+							"status": "todo",
+							"proposalId": "proposal:1",
+							"proposalState": "conflict"
+						}
+					],
+					"replicaMissions": []
+				},
 				"truncated": false,
 				"revision": 1
 			}
@@ -2891,15 +2853,9 @@
 		{
 			"id": "[\"home-daemon\",\"home-lineage\",\"m\",\"t\"]",
 			"bindingId": "shared:binding:1",
-			"bindingGeneration": 1,
 			"projectId": "p",
 			"missionId": "m",
 			"missionHome": {
-				"hostId": "daemon",
-				"daemonId": "home-daemon",
-				"lineageId": "home-lineage"
-			},
-			"observedOn": {
 				"hostId": "daemon",
 				"daemonId": "home-daemon",
 				"lineageId": "home-lineage"
@@ -2910,7 +2866,6 @@
 			"taskNumber": 7,
 			"title": "Investigate",
 			"status": "in_progress",
-			"definitionRevision": 3,
 			"delegationId": "delegation:1",
 			"executionHost": {
 				"hostId": "daemon",
@@ -2919,62 +2874,17 @@
 			},
 			"executionEpoch": 2,
 			"grantState": "accepted",
-			"running": true,
-			"availability": "unknown",
-			"grantBindingId": "shared:binding:1",
-			"grantBindingGeneration": 1
+			"running": true
 		},
 		{
 			"id": "[\"home-daemon\",\"home-lineage\",\"m\",\"t\"]",
 			"bindingId": "shared:binding:1",
-			"bindingGeneration": 1,
 			"projectId": "p",
 			"missionId": "m",
 			"missionHome": {
 				"hostId": "daemon",
 				"daemonId": "home-daemon",
 				"lineageId": "home-lineage"
-			},
-			"observedOn": {
-				"hostId": "daemon",
-				"daemonId": "executor-daemon",
-				"lineageId": "executor-lineage"
-			},
-			"source": "execution-fact",
-			"consistency": "committed",
-			"taskId": "t",
-			"taskNumber": 7,
-			"title": "Investigate",
-			"status": "in_progress",
-			"definitionRevision": 3,
-			"delegationId": "delegation:1",
-			"executionHost": {
-				"hostId": "daemon",
-				"daemonId": "executor-daemon",
-				"lineageId": "executor-lineage"
-			},
-			"executionEpoch": 2,
-			"grantState": "accepted",
-			"running": true,
-			"availability": "disconnected",
-			"grantBindingId": "shared:binding:1",
-			"grantBindingGeneration": 1
-		},
-		{
-			"id": "[\"home-daemon\",\"home-lineage\",\"m\",\"t\"]",
-			"bindingId": "shared:replica-binding:2",
-			"bindingGeneration": 1,
-			"projectId": "p",
-			"missionId": "m",
-			"missionHome": {
-				"hostId": "daemon",
-				"daemonId": "home-daemon",
-				"lineageId": "home-lineage"
-			},
-			"observedOn": {
-				"hostId": "daemon",
-				"daemonId": "executor-daemon",
-				"lineageId": "executor-lineage"
 			},
 			"source": "replica",
 			"consistency": "committed",
@@ -2982,7 +2892,32 @@
 			"taskNumber": 7,
 			"title": "Investigate",
 			"status": "in_progress",
-			"definitionRevision": 3,
+			"delegationId": "delegation:1",
+			"executionHost": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"executionEpoch": 2,
+			"grantState": "accepted",
+			"running": true
+		},
+		{
+			"id": "[\"home-daemon\",\"home-lineage\",\"m\",\"t\"]",
+			"bindingId": "shared:replica-binding:2",
+			"projectId": "p",
+			"missionId": "m",
+			"missionHome": {
+				"hostId": "daemon",
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage"
+			},
+			"source": "replica",
+			"consistency": "committed",
+			"taskId": "t",
+			"taskNumber": 7,
+			"title": "Investigate",
+			"status": "in_progress",
 			"delegationId": "delegation:1",
 			"executionHost": {
 				"hostId": "daemon",
@@ -2992,17 +2927,12 @@
 			"executionEpoch": 2,
 			"grantState": "accepted",
 			"running": true,
-			"availability": "unknown",
 			"replicaSyncedAt": 3900,
-			"replicaAgeMs": 100,
-			"snapshotCapturedAt": 4000,
-			"grantBindingId": "shared:binding:1",
-			"grantBindingGeneration": 1
+			"replicaAgeMs": 100
 		},
 		{
 			"id": "[\"proposal\",\"executor-daemon\",\"executor-lineage\",\"shared:binding:1\",1,\"proposal:1\"]",
 			"bindingId": "shared:binding:1",
-			"bindingGeneration": 1,
 			"projectId": "p",
 			"missionId": "m",
 			"missionHome": {
@@ -3010,49 +2940,18 @@
 				"daemonId": "home-daemon",
 				"lineageId": "home-lineage"
 			},
-			"observedOn": {
-				"hostId": "daemon",
-				"daemonId": "executor-daemon",
-				"lineageId": "executor-lineage"
-			},
-			"source": "proposal",
+			"source": "replica",
 			"consistency": "provisional",
 			"title": "Proposed task",
 			"status": "todo",
 			"proposalId": "proposal:1",
-			"proposalState": "conflict",
-			"proposalOrigin": {
-				"host": {
-					"hostId": "daemon",
-					"daemonId": "executor-daemon",
-					"lineageId": "executor-lineage"
-				},
-				"sessionId": "chat:1"
-			},
-			"conflicts": [
-				{
-					"proposalId": "proposal:1",
-					"origin": {
-						"host": {
-							"hostId": "daemon",
-							"daemonId": "executor-daemon",
-							"lineageId": "executor-lineage"
-						},
-						"sessionId": "chat:1"
-					},
-					"state": "conflict",
-					"reason": "Definition changed",
-					"evidenceId": "proposal:1"
-				}
-			],
-			"availability": "unknown"
+			"proposalState": "conflict"
 		}
 	],
 	"replicaMissions": [
 		{
 			"id": "[\"executor-daemon\",\"executor-lineage\",\"remote-m\"]",
 			"bindingId": "shared:binding:2",
-			"bindingGeneration": 1,
 			"projectId": "p",
 			"missionId": "remote-m",
 			"missionHome": {
@@ -3060,26 +2959,17 @@
 				"daemonId": "executor-daemon",
 				"lineageId": "executor-lineage"
 			},
-			"observedOn": {
-				"hostId": "daemon",
-				"daemonId": "home-daemon",
-				"lineageId": "home-lineage"
-			},
 			"title": "Remote mission",
 			"status": "active",
 			"complete": true,
 			"sequence": 9,
 			"consistency": "committed",
 			"replicaSyncedAt": 3900,
-			"replicaAgeMs": 100,
-			"pendingCount": 1,
-			"conflictCount": 1,
-			"availability": "disconnected"
+			"replicaAgeMs": 100
 		},
 		{
 			"id": "legacy-replica",
 			"bindingId": "shared:binding:3",
-			"bindingGeneration": 1,
 			"projectId": "p",
 			"missionId": "legacy-m",
 			"missionHome": {
@@ -3087,18 +2977,10 @@
 				"daemonId": "executor-daemon",
 				"lineageId": "executor-lineage"
 			},
-			"observedOn": {
-				"hostId": "daemon",
-				"daemonId": "home-daemon",
-				"lineageId": "home-lineage"
-			},
 			"complete": false,
 			"sequence": 1,
 			"consistency": "committed",
-			"replicaAgeMs": null,
-			"pendingCount": 0,
-			"conflictCount": 0,
-			"availability": "unknown"
+			"replicaAgeMs": null
 		}
 	],
 	"hostObservations": [
@@ -3168,15 +3050,9 @@
 			{
 				"id": "[\"home-daemon\",\"home-lineage\",\"m\",\"t\"]",
 				"bindingId": "shared:binding:1",
-				"bindingGeneration": 1,
 				"projectId": "p",
 				"missionId": "m",
 				"missionHome": {
-					"hostId": "daemon",
-					"daemonId": "home-daemon",
-					"lineageId": "home-lineage"
-				},
-				"observedOn": {
 					"hostId": "daemon",
 					"daemonId": "home-daemon",
 					"lineageId": "home-lineage"
@@ -3187,7 +3063,6 @@
 				"taskNumber": 7,
 				"title": "Investigate",
 				"status": "in_progress",
-				"definitionRevision": 3,
 				"delegationId": "delegation:1",
 				"executionHost": {
 					"hostId": "daemon",
@@ -3196,15 +3071,11 @@
 				},
 				"executionEpoch": 2,
 				"grantState": "accepted",
-				"running": true,
-				"availability": "disconnected",
-				"grantBindingId": "shared:binding:1",
-				"grantBindingGeneration": 1
+				"running": true
 			},
 			{
 				"id": "[\"proposal\",\"executor-daemon\",\"executor-lineage\",\"shared:binding:1\",1,\"proposal:1\"]",
 				"bindingId": "shared:binding:1",
-				"bindingGeneration": 1,
 				"projectId": "p",
 				"missionId": "m",
 				"missionHome": {
@@ -3212,49 +3083,18 @@
 					"daemonId": "home-daemon",
 					"lineageId": "home-lineage"
 				},
-				"observedOn": {
-					"hostId": "daemon",
-					"daemonId": "executor-daemon",
-					"lineageId": "executor-lineage"
-				},
-				"source": "proposal",
+				"source": "replica",
 				"consistency": "provisional",
 				"title": "Proposed task",
 				"status": "todo",
 				"proposalId": "proposal:1",
-				"proposalState": "conflict",
-				"proposalOrigin": {
-					"host": {
-						"hostId": "daemon",
-						"daemonId": "executor-daemon",
-						"lineageId": "executor-lineage"
-					},
-					"sessionId": "chat:1"
-				},
-				"conflicts": [
-					{
-						"proposalId": "proposal:1",
-						"origin": {
-							"host": {
-								"hostId": "daemon",
-								"daemonId": "executor-daemon",
-								"lineageId": "executor-lineage"
-							},
-							"sessionId": "chat:1"
-						},
-						"state": "conflict",
-						"reason": "Definition changed",
-						"evidenceId": "proposal:1"
-					}
-				],
-				"availability": "unknown"
+				"proposalState": "conflict"
 			}
 		],
 		"replicaMissions": [
 			{
 				"id": "[\"executor-daemon\",\"executor-lineage\",\"remote-m\"]",
 				"bindingId": "shared:binding:2",
-				"bindingGeneration": 1,
 				"projectId": "p",
 				"missionId": "remote-m",
 				"missionHome": {
@@ -3262,26 +3102,17 @@
 					"daemonId": "executor-daemon",
 					"lineageId": "executor-lineage"
 				},
-				"observedOn": {
-					"hostId": "daemon",
-					"daemonId": "home-daemon",
-					"lineageId": "home-lineage"
-				},
 				"title": "Remote mission",
 				"status": "active",
 				"complete": true,
 				"sequence": 9,
 				"consistency": "committed",
 				"replicaSyncedAt": 3900,
-				"replicaAgeMs": 100,
-				"pendingCount": 1,
-				"conflictCount": 1,
-				"availability": "disconnected"
+				"replicaAgeMs": 100
 			},
 			{
 				"id": "legacy-replica",
 				"bindingId": "shared:binding:3",
-				"bindingGeneration": 1,
 				"projectId": "p",
 				"missionId": "legacy-m",
 				"missionHome": {
@@ -3289,18 +3120,10 @@
 					"daemonId": "executor-daemon",
 					"lineageId": "executor-lineage"
 				},
-				"observedOn": {
-					"hostId": "daemon",
-					"daemonId": "home-daemon",
-					"lineageId": "home-lineage"
-				},
 				"complete": false,
 				"sequence": 1,
 				"consistency": "committed",
-				"replicaAgeMs": null,
-				"pendingCount": 0,
-				"conflictCount": 0,
-				"availability": "unknown"
+				"replicaAgeMs": null
 			}
 		],
 		"hosts": [
@@ -4094,52 +3917,43 @@
 							"runningAgents": 0,
 							"activeMissions": 0,
 							"blockers": 0,
-							"pendingDecisions": 0
+							"pendingDecisions": 0,
+							"sharedTasks": 2,
+							"replicaMissions": 0
 						},
-						"truncated": false
+						"truncated": false,
+						"sharedTasks": [
+							{
+								"id": "[\"home-daemon\",\"home-lineage\",\"m\",\"t\"]",
+								"bindingId": "shared:replica-binding:2",
+								"projectId": "p",
+								"missionId": "m",
+								"missionHome": {
+									"hostId": "daemon",
+									"daemonId": "home-daemon",
+									"lineageId": "home-lineage"
+								},
+								"source": "replica",
+								"consistency": "committed",
+								"taskId": "t",
+								"taskNumber": 7,
+								"title": "Investigate",
+								"status": "in_progress",
+								"delegationId": "delegation:1",
+								"executionHost": {
+									"hostId": "daemon",
+									"daemonId": "executor-daemon",
+									"lineageId": "executor-lineage"
+								},
+								"executionEpoch": 2,
+								"grantState": "accepted",
+								"running": true,
+								"replicaSyncedAt": 3900,
+								"replicaAgeMs": 100
+							}
+						],
+						"replicaMissions": []
 					},
-					"missionTasks": [
-						{
-							"id": "[\"home-daemon\",\"home-lineage\",\"m\",\"t\"]",
-							"bindingId": "shared:replica-binding:2",
-							"bindingGeneration": 1,
-							"projectId": "p",
-							"missionId": "m",
-							"missionHome": {
-								"hostId": "daemon",
-								"daemonId": "home-daemon",
-								"lineageId": "home-lineage"
-							},
-							"observedOn": {
-								"hostId": "daemon",
-								"daemonId": "executor-daemon",
-								"lineageId": "executor-lineage"
-							},
-							"source": "replica",
-							"consistency": "committed",
-							"taskId": "t",
-							"taskNumber": 7,
-							"title": "Investigate",
-							"status": "in_progress",
-							"definitionRevision": 3,
-							"delegationId": "delegation:1",
-							"executionHost": {
-								"hostId": "daemon",
-								"daemonId": "executor-daemon",
-								"lineageId": "executor-lineage"
-							},
-							"executionEpoch": 2,
-							"grantState": "accepted",
-							"running": true,
-							"availability": "unknown",
-							"replicaSyncedAt": 3900,
-							"replicaAgeMs": 100,
-							"snapshotCapturedAt": 4000,
-							"grantBindingId": "shared:binding:1",
-							"grantBindingGeneration": 1
-						}
-					],
-					"missionTasksTotal": 2,
 					"truncated": false,
 					"revision": 1
 				},
@@ -4184,61 +3998,32 @@
 							"runningAgents": 0,
 							"activeMissions": 0,
 							"blockers": 0,
-							"pendingDecisions": 0
+							"pendingDecisions": 0,
+							"sharedTasks": 2,
+							"replicaMissions": 0
 						},
-						"truncated": false
-					},
-					"missionTasks": [
-						{
-							"id": "[\"proposal\",\"executor-daemon\",\"executor-lineage\",\"shared:binding:1\",1,\"proposal:1\"]",
-							"bindingId": "shared:binding:1",
-							"bindingGeneration": 1,
-							"projectId": "p",
-							"missionId": "m",
-							"missionHome": {
-								"hostId": "daemon",
-								"daemonId": "home-daemon",
-								"lineageId": "home-lineage"
-							},
-							"observedOn": {
-								"hostId": "daemon",
-								"daemonId": "executor-daemon",
-								"lineageId": "executor-lineage"
-							},
-							"source": "proposal",
-							"consistency": "provisional",
-							"title": "Proposed task",
-							"status": "todo",
-							"proposalId": "proposal:1",
-							"proposalState": "conflict",
-							"proposalOrigin": {
-								"host": {
+						"truncated": false,
+						"sharedTasks": [
+							{
+								"id": "[\"proposal\",\"executor-daemon\",\"executor-lineage\",\"shared:binding:1\",1,\"proposal:1\"]",
+								"bindingId": "shared:binding:1",
+								"projectId": "p",
+								"missionId": "m",
+								"missionHome": {
 									"hostId": "daemon",
-									"daemonId": "executor-daemon",
-									"lineageId": "executor-lineage"
+									"daemonId": "home-daemon",
+									"lineageId": "home-lineage"
 								},
-								"sessionId": "chat:1"
-							},
-							"conflicts": [
-								{
-									"proposalId": "proposal:1",
-									"origin": {
-										"host": {
-											"hostId": "daemon",
-											"daemonId": "executor-daemon",
-											"lineageId": "executor-lineage"
-										},
-										"sessionId": "chat:1"
-									},
-									"state": "conflict",
-									"reason": "Definition changed",
-									"evidenceId": "proposal:1"
-								}
-							],
-							"availability": "unknown"
-						}
-					],
-					"missionTasksTotal": 2,
+								"source": "replica",
+								"consistency": "provisional",
+								"title": "Proposed task",
+								"status": "todo",
+								"proposalId": "proposal:1",
+								"proposalState": "conflict"
+							}
+						],
+						"replicaMissions": []
+					},
 					"truncated": false,
 					"revision": 1
 				}
@@ -5149,61 +4934,32 @@
 								"runningAgents": 0,
 								"activeMissions": 0,
 								"blockers": 0,
-								"pendingDecisions": 0
+								"pendingDecisions": 0,
+								"sharedTasks": 2,
+								"replicaMissions": 0
 							},
-							"truncated": false
-						},
-						"missionTasks": [
-							{
-								"id": "[\"proposal\",\"executor-daemon\",\"executor-lineage\",\"shared:binding:1\",1,\"proposal:1\"]",
-								"bindingId": "shared:binding:1",
-								"bindingGeneration": 1,
-								"projectId": "p",
-								"missionId": "m",
-								"missionHome": {
-									"hostId": "daemon",
-									"daemonId": "home-daemon",
-									"lineageId": "home-lineage"
-								},
-								"observedOn": {
-									"hostId": "daemon",
-									"daemonId": "executor-daemon",
-									"lineageId": "executor-lineage"
-								},
-								"source": "proposal",
-								"consistency": "provisional",
-								"title": "Proposed task",
-								"status": "todo",
-								"proposalId": "proposal:1",
-								"proposalState": "conflict",
-								"proposalOrigin": {
-									"host": {
+							"truncated": false,
+							"sharedTasks": [
+								{
+									"id": "[\"proposal\",\"executor-daemon\",\"executor-lineage\",\"shared:binding:1\",1,\"proposal:1\"]",
+									"bindingId": "shared:binding:1",
+									"projectId": "p",
+									"missionId": "m",
+									"missionHome": {
 										"hostId": "daemon",
-										"daemonId": "executor-daemon",
-										"lineageId": "executor-lineage"
+										"daemonId": "home-daemon",
+										"lineageId": "home-lineage"
 									},
-									"sessionId": "chat:1"
-								},
-								"conflicts": [
-									{
-										"proposalId": "proposal:1",
-										"origin": {
-											"host": {
-												"hostId": "daemon",
-												"daemonId": "executor-daemon",
-												"lineageId": "executor-lineage"
-											},
-											"sessionId": "chat:1"
-										},
-										"state": "conflict",
-										"reason": "Definition changed",
-										"evidenceId": "proposal:1"
-									}
-								],
-								"availability": "unknown"
-							}
-						],
-						"missionTasksTotal": 2,
+									"source": "replica",
+									"consistency": "provisional",
+									"title": "Proposed task",
+									"status": "todo",
+									"proposalId": "proposal:1",
+									"proposalState": "conflict"
+								}
+							],
+							"replicaMissions": []
+						},
 						"truncated": false,
 						"revision": 1
 					}
@@ -5255,61 +5011,32 @@
 								"runningAgents": 0,
 								"activeMissions": 0,
 								"blockers": 0,
-								"pendingDecisions": 0
+								"pendingDecisions": 0,
+								"sharedTasks": 2,
+								"replicaMissions": 0
 							},
-							"truncated": false
-						},
-						"missionTasks": [
-							{
-								"id": "[\"proposal\",\"executor-daemon\",\"executor-lineage\",\"shared:binding:1\",1,\"proposal:1\"]",
-								"bindingId": "shared:binding:1",
-								"bindingGeneration": 1,
-								"projectId": "p",
-								"missionId": "m",
-								"missionHome": {
-									"hostId": "daemon",
-									"daemonId": "home-daemon",
-									"lineageId": "home-lineage"
-								},
-								"observedOn": {
-									"hostId": "daemon",
-									"daemonId": "executor-daemon",
-									"lineageId": "executor-lineage"
-								},
-								"source": "proposal",
-								"consistency": "provisional",
-								"title": "Proposed task",
-								"status": "todo",
-								"proposalId": "proposal:1",
-								"proposalState": "conflict",
-								"proposalOrigin": {
-									"host": {
+							"truncated": false,
+							"sharedTasks": [
+								{
+									"id": "[\"proposal\",\"executor-daemon\",\"executor-lineage\",\"shared:binding:1\",1,\"proposal:1\"]",
+									"bindingId": "shared:binding:1",
+									"projectId": "p",
+									"missionId": "m",
+									"missionHome": {
 										"hostId": "daemon",
-										"daemonId": "executor-daemon",
-										"lineageId": "executor-lineage"
+										"daemonId": "home-daemon",
+										"lineageId": "home-lineage"
 									},
-									"sessionId": "chat:1"
-								},
-								"conflicts": [
-									{
-										"proposalId": "proposal:1",
-										"origin": {
-											"host": {
-												"hostId": "daemon",
-												"daemonId": "executor-daemon",
-												"lineageId": "executor-lineage"
-											},
-											"sessionId": "chat:1"
-										},
-										"state": "conflict",
-										"reason": "Definition changed",
-										"evidenceId": "proposal:1"
-									}
-								],
-								"availability": "unknown"
-							}
-						],
-						"missionTasksTotal": 2,
+									"source": "replica",
+									"consistency": "provisional",
+									"title": "Proposed task",
+									"status": "todo",
+									"proposalId": "proposal:1",
+									"proposalState": "conflict"
+								}
+							],
+							"replicaMissions": []
+						},
 						"truncated": false,
 						"revision": 1
 					}
@@ -5391,61 +5118,32 @@
 								"runningAgents": 0,
 								"activeMissions": 0,
 								"blockers": 0,
-								"pendingDecisions": 0
+								"pendingDecisions": 0,
+								"sharedTasks": 2,
+								"replicaMissions": 0
 							},
-							"truncated": false
-						},
-						"missionTasks": [
-							{
-								"id": "[\"proposal\",\"executor-daemon\",\"executor-lineage\",\"shared:binding:1\",1,\"proposal:1\"]",
-								"bindingId": "shared:binding:1",
-								"bindingGeneration": 1,
-								"projectId": "p",
-								"missionId": "m",
-								"missionHome": {
-									"hostId": "daemon",
-									"daemonId": "home-daemon",
-									"lineageId": "home-lineage"
-								},
-								"observedOn": {
-									"hostId": "daemon",
-									"daemonId": "executor-daemon",
-									"lineageId": "executor-lineage"
-								},
-								"source": "proposal",
-								"consistency": "provisional",
-								"title": "Proposed task",
-								"status": "todo",
-								"proposalId": "proposal:1",
-								"proposalState": "conflict",
-								"proposalOrigin": {
-									"host": {
+							"truncated": false,
+							"sharedTasks": [
+								{
+									"id": "[\"proposal\",\"executor-daemon\",\"executor-lineage\",\"shared:binding:1\",1,\"proposal:1\"]",
+									"bindingId": "shared:binding:1",
+									"projectId": "p",
+									"missionId": "m",
+									"missionHome": {
 										"hostId": "daemon",
-										"daemonId": "executor-daemon",
-										"lineageId": "executor-lineage"
+										"daemonId": "home-daemon",
+										"lineageId": "home-lineage"
 									},
-									"sessionId": "chat:1"
-								},
-								"conflicts": [
-									{
-										"proposalId": "proposal:1",
-										"origin": {
-											"host": {
-												"hostId": "daemon",
-												"daemonId": "executor-daemon",
-												"lineageId": "executor-lineage"
-											},
-											"sessionId": "chat:1"
-										},
-										"state": "conflict",
-										"reason": "Definition changed",
-										"evidenceId": "proposal:1"
-									}
-								],
-								"availability": "unknown"
-							}
-						],
-						"missionTasksTotal": 2,
+									"source": "replica",
+									"consistency": "provisional",
+									"title": "Proposed task",
+									"status": "todo",
+									"proposalId": "proposal:1",
+									"proposalState": "conflict"
+								}
+							],
+							"replicaMissions": []
+						},
 						"truncated": false,
 						"revision": 1
 					}
@@ -5497,61 +5195,32 @@
 								"runningAgents": 0,
 								"activeMissions": 0,
 								"blockers": 0,
-								"pendingDecisions": 0
+								"pendingDecisions": 0,
+								"sharedTasks": 2,
+								"replicaMissions": 0
 							},
-							"truncated": false
-						},
-						"missionTasks": [
-							{
-								"id": "[\"proposal\",\"executor-daemon\",\"executor-lineage\",\"shared:binding:1\",1,\"proposal:1\"]",
-								"bindingId": "shared:binding:1",
-								"bindingGeneration": 1,
-								"projectId": "p",
-								"missionId": "m",
-								"missionHome": {
-									"hostId": "daemon",
-									"daemonId": "home-daemon",
-									"lineageId": "home-lineage"
-								},
-								"observedOn": {
-									"hostId": "daemon",
-									"daemonId": "executor-daemon",
-									"lineageId": "executor-lineage"
-								},
-								"source": "proposal",
-								"consistency": "provisional",
-								"title": "Proposed task",
-								"status": "todo",
-								"proposalId": "proposal:1",
-								"proposalState": "conflict",
-								"proposalOrigin": {
-									"host": {
+							"truncated": false,
+							"sharedTasks": [
+								{
+									"id": "[\"proposal\",\"executor-daemon\",\"executor-lineage\",\"shared:binding:1\",1,\"proposal:1\"]",
+									"bindingId": "shared:binding:1",
+									"projectId": "p",
+									"missionId": "m",
+									"missionHome": {
 										"hostId": "daemon",
-										"daemonId": "executor-daemon",
-										"lineageId": "executor-lineage"
+										"daemonId": "home-daemon",
+										"lineageId": "home-lineage"
 									},
-									"sessionId": "chat:1"
-								},
-								"conflicts": [
-									{
-										"proposalId": "proposal:1",
-										"origin": {
-											"host": {
-												"hostId": "daemon",
-												"daemonId": "executor-daemon",
-												"lineageId": "executor-lineage"
-											},
-											"sessionId": "chat:1"
-										},
-										"state": "conflict",
-										"reason": "Definition changed",
-										"evidenceId": "proposal:1"
-									}
-								],
-								"availability": "unknown"
-							}
-						],
-						"missionTasksTotal": 2,
+									"source": "replica",
+									"consistency": "provisional",
+									"title": "Proposed task",
+									"status": "todo",
+									"proposalId": "proposal:1",
+									"proposalState": "conflict"
+								}
+							],
+							"replicaMissions": []
+						},
 						"truncated": false,
 						"revision": 1
 					}
@@ -7391,6 +7060,59 @@
 		{
 			"code": "approval_expired",
 			"error": "Unconsumed native approval expired"
+		}
+	],
+	"proposalStates": [
+		{
+			"id": "proposal:display:0",
+			"bindingId": "shared:binding:1",
+			"projectId": "p",
+			"missionId": "m",
+			"missionHome": {
+				"hostId": "daemon",
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage"
+			},
+			"source": "replica",
+			"consistency": "provisional",
+			"title": "Proposed task",
+			"status": "todo",
+			"proposalId": "proposal:0",
+			"proposalState": "pending"
+		},
+		{
+			"id": "proposal:display:1",
+			"bindingId": "shared:binding:1",
+			"projectId": "p",
+			"missionId": "m",
+			"missionHome": {
+				"hostId": "daemon",
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage"
+			},
+			"source": "replica",
+			"consistency": "provisional",
+			"title": "Proposed task",
+			"status": "todo",
+			"proposalId": "proposal:1",
+			"proposalState": "conflict"
+		},
+		{
+			"id": "proposal:display:2",
+			"bindingId": "shared:binding:1",
+			"projectId": "p",
+			"missionId": "m",
+			"missionHome": {
+				"hostId": "daemon",
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage"
+			},
+			"source": "replica",
+			"consistency": "provisional",
+			"title": "Proposed task",
+			"status": "todo",
+			"proposalId": "proposal:2",
+			"proposalState": "rejected"
 		}
 	]
 }

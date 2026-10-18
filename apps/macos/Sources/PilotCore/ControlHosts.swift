@@ -363,15 +363,12 @@ public struct ControlRemoteEventQuery: Codable, Equatable, Sendable {
     public let limit: Int?
     public init(after: Int, limit: Int? = nil) { self.after = after; self.limit = limit }
 }
-public typealias ControlRemoteMissionTask = ControlDashboardSharedTask
 public struct ControlRemoteStatusSnapshot: Codable, Equatable, Sendable {
     public let sourceHost: OperationHost
     public let snapshotId: String
     public let revision: Int
     public let capturedAt: Double
     public let dashboard: ControlDashboardResponse
-    public let missionTasks: [ControlRemoteMissionTask]
-    public let missionTasksTotal: Int
     public let truncated: Bool
 }
 public struct ControlRemoteStatusPage: Codable, Equatable, Sendable {
@@ -539,97 +536,6 @@ public struct ControlHostObservation: Codable, Equatable, Sendable {
         try values.encodeIfPresent(capturedAt, forKey: .capturedAt)
         try values.encodeIfPresent(importedAt, forKey: .importedAt)
         try values.encode(snapshotAgeMs, forKey: .snapshotAgeMs)
-    }
-}
-public struct ControlTaskConflict: Codable, Equatable, Sendable {
-    public enum State: String, Codable, Sendable { case pending, conflict, rejected }
-    public let proposalId: String?
-    public let operationId: String?
-    public let origin: SharedSessionRef?
-    public let state: State
-    public let reason: String?
-    public let evidenceId: String?
-}
-public struct ControlDashboardSharedTask: Codable, Equatable, Sendable {
-    public enum Source: String, Codable, Sendable {
-        case missionHome = "mission-home", executionFact = "execution-fact", replica, proposal
-    }
-    public enum Consistency: String, Codable, Sendable { case committed, provisional }
-    public let id: String
-    public let bindingId: String
-    public let bindingGeneration: UInt64
-    public let projectId: String
-    public let missionId: String
-    public let missionHome: OperationHost
-    public let observedOn: OperationHost
-    public let source: Source
-    public let consistency: Consistency
-    public let taskId: String?
-    public let taskNumber: Int?
-    public let title: String?
-    public let status: MissionTaskStatus?
-    public let definitionRevision: Int?
-    public let proposalId: String?
-    public let proposalState: ControlTaskConflict.State?
-    public let proposalOrigin: SharedSessionRef?
-    public let conflicts: [ControlTaskConflict]?
-    public let delegationId: String?
-    public let grantBindingId: String?
-    public let grantBindingGeneration: UInt64?
-    public let executionHost: OperationHost?
-    public let executionEpoch: Int?
-    public let grantState: DelegationGrant.State?
-    public let running: Bool?
-    public let replicaSyncedAt: Double?
-    public let replicaAgeMs: Double?
-    public let snapshotCapturedAt: Double?
-    public let availability: ControlHostAvailability
-}
-public struct ControlDashboardReplicaMission: Codable, Equatable, Sendable {
-    public enum Consistency: String, Codable, Sendable { case committed }
-    public let id: String
-    public let bindingId: String
-    public let bindingGeneration: UInt64
-    public let projectId: String
-    public let missionId: String
-    public let missionHome: OperationHost
-    public let observedOn: OperationHost
-    public let title: String?
-    public let status: MissionStatus?
-    public let complete: Bool
-    public let sequence: Int
-    public let consistency: Consistency
-    public let replicaSyncedAt: Double?
-    public let replicaAgeMs: Double?
-    public let snapshotCapturedAt: Double?
-    public let pendingCount: Int
-    public let conflictCount: Int
-    public let availability: ControlHostAvailability
-    private enum CodingKeys: String, CodingKey {
-        case id, bindingId, bindingGeneration, projectId, missionId, missionHome, observedOn, title, status
-        case complete, sequence, consistency, replicaSyncedAt, replicaAgeMs, snapshotCapturedAt
-        case pendingCount, conflictCount, availability
-    }
-    public func encode(to encoder: Encoder) throws {
-        var values = encoder.container(keyedBy: CodingKeys.self)
-        try values.encode(id, forKey: .id)
-        try values.encode(bindingId, forKey: .bindingId)
-        try values.encode(bindingGeneration, forKey: .bindingGeneration)
-        try values.encode(projectId, forKey: .projectId)
-        try values.encode(missionId, forKey: .missionId)
-        try values.encode(missionHome, forKey: .missionHome)
-        try values.encode(observedOn, forKey: .observedOn)
-        try values.encodeIfPresent(title, forKey: .title)
-        try values.encodeIfPresent(status, forKey: .status)
-        try values.encode(complete, forKey: .complete)
-        try values.encode(sequence, forKey: .sequence)
-        try values.encode(consistency, forKey: .consistency)
-        try values.encodeIfPresent(replicaSyncedAt, forKey: .replicaSyncedAt)
-        try values.encode(replicaAgeMs, forKey: .replicaAgeMs)
-        try values.encodeIfPresent(snapshotCapturedAt, forKey: .snapshotCapturedAt)
-        try values.encode(pendingCount, forKey: .pendingCount)
-        try values.encode(conflictCount, forKey: .conflictCount)
-        try values.encode(availability, forKey: .availability)
     }
 }
 public struct ControlArchiveInfo: Codable, Equatable, Sendable {

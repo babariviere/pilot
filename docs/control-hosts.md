@@ -24,7 +24,7 @@ and the declarations in `packages/protocol/src/control.ts` together; native mirr
 | Pre-load role/freeze, accepted ceilings/work, fresh bootstrap and both rollout proofs | [Startup barrier](#rolefreeze-barrier-before-any-recovery), [accepted-work guarantees](#freeze-the-conversational-owner-not-its-accepted-independent-work), [role bootstrap](#native-only-role-bootstrap-before-conversational-startup), [both proof suites](#prove-assembled-behavior-before-activation-without-a-dependency-cycle) |
 | Concrete invalidations, continuation/priority/session ordering, update blockers and sleep/quit | [Invalidation](#invalidation-and-exact-recovery-state), [priority/HOL](#priority-lanes-head-of-line-behavior-and-foreign-changes), [update and transport lifecycle](#updates-transport-shutdown-and-stop-presentation) |
 | No generic chat-create/chat-send/shared-* Control bypass | [Executor rejection and provenance preservation](#no-authority-downgrade-through-older-operation-kinds) |
-| One shared task DTO with title/status, import age and conflict/provisional provenance | [Common projection and dedupe](#one-taskstatus-dto-and-merge-precedence): `ControlDashboardSharedTask`, alias `ControlRemoteMissionTask`; `replicaSyncedAt`, host `importedAt`, proposals and conflicts remain distinct |
+| One shared task DTO with title/status, import age and conflict/provisional provenance | [Common projection and dedupe](#one-taskstatus-dto-and-merge-precedence): existing `ControlDashboardSharedTask` and `ControlDashboardReplicaMission` in dashboard only; replica age, host import time and proposal state remain distinct |
 
 ## Authority and identity
 
@@ -278,7 +278,8 @@ Redact/refuse secret-like exports; do not transport thoughts, credentials, attac
 ## Status captures and mission placement
 
 A `ControlRemoteStatusSnapshot` carries sourceHost, stable snapshotId, capturedAt, bounded dashboard
-sections and mission-task projections. All pages of a capture retain the same identity, time and
+sections, including dashboard.sharedTasks and dashboard.replicaMissions. There is no second
+mission-task list or total outside dashboard. All pages retain the same identity, time and
 pre-clipping totals. Each page carries partial section arrays; concatenate by section in cursor
 order, deduplicating only exact repeated pages. The producer uses a frozen capture, not a live offset.
 Only the final page makes the capture visible at home. Opaque next cursors pin the snapshot;
@@ -643,27 +644,28 @@ audit and frozen grants remain readable, never silently executed or imported.
 
 ### One task/status DTO and merge precedence
 
-`ControlDashboardSharedTask` is the sole thin row for both optional dashboard.sharedTasks and
-snapshot.missionTasks (`ControlRemoteMissionTask` is an alias). `ControlDashboardReplicaMission`
-is the remote-home replica summary. They derive authority from existing `SharedContextSummary`,
-`DelegationGrant`, `SharedTaskRef` and shared proposal/freshness records; no new executable grant
-or copied grant.request is introduced. Dashboard fields/counts stay optional for older producers,
-and a negotiated v1 producer supplies explicit empty lists/counts.
+Use the existing `ControlDashboardSharedTask` and `ControlDashboardReplicaMission` declarations
+in control.ts and their native mirrors in PilotCore/ControlDashboard.swift **unchanged**. No field
+extension is required. Remote status carries these lists only in snapshot.dashboard.sharedTasks
+and snapshot.dashboard.replicaMissions, with dashboard.totals.sharedTasks/replicaMissions; there
+is no parallel remote task DTO/list/count. Current producers supply explicit empty arrays/counts;
+the existing Swift optional fields continue to read older producers. These are display-only
+projections of SharedContextSummary, DelegationGrant and proposal/freshness records, never grants.
 
 Committed identity is exactly the tuple (missionHome.daemonId, missionHome.lineageId, missionId,
-taskId). Stable display id is the compact JSON encoding of that array; binding, source, epoch and
-execution host are not part of it. Proposal identity uses ["proposal",origin host daemon/lineage,
-bindingId,bindingGeneration,proposalId]; new proposals have no canonical taskId/taskNumber. Known
+taskId). Keep the existing producer-issued display id opaque and stable; binding, source, epoch and
+execution host do not create a second canonical identity. Proposals retain their existing display id,
+bindingId and proposalId; new proposals have no canonical taskId/taskNumber. Known
 existing-task proposals may reference the committed task but stay separate provisional evidence.
 Do not count a proposed new task as a committed task or display it as a second committed row.
 
-Rows carry title/status/number when known, observedOn source host, source
-mission-home|execution-fact|replica|proposal, consistency committed|provisional, and binding/generation.
-Optional delegationId/grantBindingId/grantBindingGeneration/executionEpoch/grantState are thin
-references to the existing grant, distinct from the observer's replica binding; map
-reserved/accepted/cancel_requested/sealed without inventing a second state machine. Optional
-definitionRevision fences execution-fact eligibility. Proposal state/origin and up to 16 conflicts
-retain bounded reason/evidence IDs, never executable proposal args. Omitted values are unknown.
+Rows already carry title/status/number, source mission-home|replica, consistency committed|provisional,
+proposalId/proposalState pending|conflict|rejected, delegationId, executionHost/executionEpoch/grantState,
+running and replicaSyncedAt/replicaAgeMs. Keep those existing enums and field meanings. The outer status
+sourceHost and Control binding/generation identify the observing producer; authoritative shared binding,
+definition and grant-generation checks happen against existing shared-context records before projection,
+not inferred from thin display rows. Proposal details remain in those source records, not copied arguments
+or a second conflict schema. Omitted values are unknown.
 `projectId` is the producer-local canonical or execution project, not cross-host task identity.
 
 Merge before clipping/counting:
@@ -681,18 +683,19 @@ Merge before clipping/counting:
    only through the authoritative current grant, never because a socket reconnected.
 
 replicaSyncedAt/replicaAgeMs describe **local mission replica import**, unknown for legacy missing
-timestamps; snapshotCapturedAt is the producer's remote capture time and remains distinct.
+timestamps; snapshot.capturedAt is the producer's remote capture time and remains distinct.
 `ControlHostObservation` joins verified host availability/import time to rows: available,
 disconnected or unknown is explicit, never inferred from age or outcome. For a delegated task row
-availability refers to executionHost, otherwise observedOn. Missing transport evidence means unknown.
+availability refers to executionHost, otherwise the enclosing snapshot's sourceHost. Missing evidence means unknown.
 A stale capture remains stale even after import; clock skew is reported, not used to pick authority.
-Replica summaries expose complete/sequence, pendingCount/conflictCount and age. Local/home/native
+Replica summaries expose their existing complete/sequence and age. Pending/conflict/rejected proposals
+remain separate sharedTasks rows. Local/home/native
 producers use these same DTOs; the app does not deduplicate by binding or mutate status based on a timer.
-totals.sharedTasks and snapshot.missionTasksTotal count deduplicated display rows, including separate
+dashboard.totals.sharedTasks counts deduplicated display rows, including separate
 provisional proposal rows. They are not canonical mission progress counts: never feed proposals into
 missions.tasksTotal/tasksDone. Keep committed/provisional labels and count canonical progress only
-from the authoritative mission/committed task identity set. Conflict text is at most 512 UTF-8 bytes
-per item and 16 items per row; evidence IDs reference existing shared-context records, not copied args.
+from the authoritative mission/committed task identity set. Bounded proposal/conflict detail remains
+an explicit read of existing shared-context records; this snapshot adds no executable args or authority.
 
 ### Updates, transport shutdown and Stop presentation
 
