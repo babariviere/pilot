@@ -1465,6 +1465,8 @@ export interface SpawnRequest {
 	diagnosticTarget?: DiagnosticTargetReference;
 	/** Explicit native grant for bounded target history reads. Omitted for generic no-link diagnostics. */
 	diagnosticHistoryAccess?: boolean;
+	/** Diagnostics-only title hint: ignore the fixed opening instruction and wait for substantive assistant text. */
+	diagnosticTitleFromReply?: boolean;
 	/** Omitted means Build. */
 	mode?: ChatMode;
 	/** Per-chat Build override. Omitted uses project settings; cwd-only cannot request a clone. */

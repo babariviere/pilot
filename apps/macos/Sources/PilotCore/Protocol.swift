@@ -596,6 +596,8 @@ public struct SpawnRequest: Codable, Sendable {
     public var diagnosticTarget: DiagnosticTargetReference?
     /// Explicit grant for bounded target history reads. Omitted for generic no-link Ask about Pilot.
     public var diagnosticHistoryAccess: Bool?
+    /// Diagnostics-only hint to title from substantive specialist text instead of the fixed opening instruction.
+    public var diagnosticTitleFromReply: Bool?
     public var projectId: String?
     public var cwd: String?
     public var message: String
@@ -611,12 +613,13 @@ public struct SpawnRequest: Codable, Sendable {
         projectId: String? = nil, cwd: String? = nil, message: String, title: String? = nil, model: String? = nil,
         thinking: String? = nil, baseBranch: String? = nil, mode: ChatMode? = nil, workspace: WorkspaceMode? = nil,
         missionId: String? = nil, role: SessionRole? = nil, diagnosticTarget: DiagnosticTargetReference? = nil,
-        diagnosticHistoryAccess: Bool? = nil
+        diagnosticHistoryAccess: Bool? = nil, diagnosticTitleFromReply: Bool? = nil
     ) {
         self.missionId = missionId
         self.role = role
         self.diagnosticTarget = diagnosticTarget
         self.diagnosticHistoryAccess = diagnosticHistoryAccess
+        self.diagnosticTitleFromReply = diagnosticTitleFromReply
         self.projectId = projectId
         self.cwd = cwd
         self.message = message

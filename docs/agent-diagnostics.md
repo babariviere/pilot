@@ -35,6 +35,14 @@ targets fail closed; there is no silent Local fallback. Dismissing the sheet cre
 are rejected while one is in flight. The sheet discloses whether the specialist receives operational evidence only,
 or bounded conversation and tool history for the exact linked chat.
 
+Diagnostics uses the same nonblocking, once-only title generator as ordinary chats. A submitted question or reason is
+the bounded opening seed. Without one, the chat keeps a readable **Pilot diagnostics** fallback until a completed turn
+contains substantive assistant text; ready/idle transitions and tool-only history do not qualify. The fixed diagnostic
+instruction, target link and host identity are excluded from that reply-based title context. Provider failure keeps the
+fallback, interrupted generation resumes safely on reopen, and a manual rename clears the pending title so a late
+result cannot overwrite it. This renames only the specialist, never its linked target. Reason, transcript excerpts and
+generated title remain local chat metadata and are not telemetry fields.
+
 The app admits one exact target as a canonical host-qualified reference containing the host, session UUID and
 matching canonical chat URL. Native code sends that reference with the selected model and thinking level, the daemon
 revalidates the URL plus daemon and lineage identity before persisting it, and the kernel receives the same reference.

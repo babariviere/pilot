@@ -1020,7 +1020,11 @@ an explicit setup sheet and choose the specialist's model and thinking level. As
 question or bug report and an optional known `pilot://chat/<UUID>` link; without a link it diagnoses Pilot on the
 selected host through that host's explicit control target. The report becomes only the specialist chat's bounded
 opening user message, never telemetry, diagnostic evidence or target authority. The created chat is visibly labeled
-**Diagnostics specialist** with its admitted host-qualified target. Cancel creates nothing, and supplied unavailable,
+**Diagnostics specialist** with its admitted host-qualified target. Its chat title is generated through the normal
+bounded title lifecycle: a submitted reason seeds the title, while a reasonless setup waits for the first substantive
+specialist reply rather than naming the fixed diagnostic instruction. The readable fallback remains if title
+generation is unavailable, and a user rename always wins. Titles and title context stay out of telemetry. Cancel
+creates nothing, and supplied unavailable,
 missing or ambiguous links fail without falling back to Local. Diagnose this chat and an explicitly supplied link
 also grant a bounded, paginated cold read of that exact chat's committed conversation and tool history. Generic
 no-link Ask about Pilot cannot read the Control transcript. History stays local, is treated as untrusted data, is not
