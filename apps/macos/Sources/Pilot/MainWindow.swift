@@ -167,8 +167,8 @@ struct MainWindow: View {
             model.missionRegistry.start(model)
             model.openWindowAction = { openWindow(id: MainWindow.id) }
             model.openKeyboardShortcutsAction = { openWindow(id: KeyboardShortcuts.windowID) }
-            KeyboardRouter.shared.install(focus: model.keyboard) { [weak model] route in
-                model?.performKeyboardRoute(route) ?? false
+            KeyboardRouter.shared.install(focus: model.keyboard) { [weak appModel = model] route in
+                appModel?.performKeyboardRoute(route) ?? false
             }
             NSApp.setActivationPolicy(.regular)
         }
