@@ -75,7 +75,8 @@ The daemon rechecks the supervised caller's control role on every read.
 spending on a greeting. Production calls it after metadata load; `POST /api/control-chat` also returns
 the same chat. It is Ask, project-less, permanently pinned and cannot be archived. Its internal
 configuration directory is not exposed as a workspace. The native control profile constructs no
-filesystem tools, repository readers, personal extensions, project context, MCP or shell.
+general filesystem tools, repository readers, personal extensions, project context, MCP or shell.
+Its dedicated `read_file` tool is admitted by the daemon's bounded read-only file service below.
 
 One Harness conversation retains the transcript, input queue, tool execution, Stop and crash recovery.
 Each run's first input submission anchors the turn. A request hook sends only the shared system/tools,
@@ -210,6 +211,25 @@ It returns a last assistant result found in that page, or up to 40 tail messages
 characters. Thoughts are omitted and content is explicitly labelled as quoted, untrusted data.
 
 ## Read-only diagnostics
+
+### Local text and images
+
+Control alone can call `read_file({path})` with an absolute path on its own host. The daemon
+allowlists the app's Attachments directory (on macOS), daemon attachments, registered project
+roots, main views, and registered session scratch directories. It does not allow the surrounding
+session stores or arbitrary home files. Remote paths and URLs are rejected, not fetched.
+
+Reads resolve real paths, reject root and escaping symlinks, use read-only/no-follow/non-blocking
+file handles, require regular files, and recheck root, file identity and Control role around reads.
+Only two reads can be active. Supported UTF-8 source/text files return at most 64 KiB, with explicit
+original size and truncation, without splitting a character. PNG/JPEG/GIF/WebP return image blocks,
+not base64 text, up to 8 MiB. In codemode, the structured image result must be shown with
+`image(result)`, not `text(result)`. Unsupported formats and oversized images report the type or size.
+Text is quoted as untrusted and images carry an untrusted-data label. Neither can authorize actions.
+The audit records only caller, path, size, returned byte count and outcome, never file contents.
+This is a local read admission fence, not a shell, arbitrary remote-file capability or OS sandbox.
+
+### Health and logs
 
 The same Control-only `pilot` tool offers `health`, `logs` and `telemetry`. The daemon rechecks
 the caller role before dispatch. Results are JSON-quoted under `quotedContent`, labelled untrusted,

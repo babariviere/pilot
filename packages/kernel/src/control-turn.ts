@@ -31,7 +31,7 @@ const FailureDoc = defineDoc<{ input?: number }>({
 });
 
 export type ControlCall = (
-	action: "record" | "prepare" | "zoom" | "date",
+	action: "record" | "prepare" | "zoom" | "date" | "file",
 	args: Record<string, JsonValue>,
 ) => Promise<JsonValue>;
 const JournalDoc = defineDoc<{ through: number; anchor: number; mirrorAnchor?: number; lines: ControlContextLine[] }>({

@@ -89,6 +89,7 @@ test("control turns are fresh, tool rounds stay intact, log excludes thoughts an
 	);
 	t.after(() => session.close());
 	assert.ok(adapter.session.getCallableToolNames().includes("history"));
+	assert.ok(adapter.session.getCallableToolNames().includes("read_file"));
 	assert.ok(adapter.session.getCallableToolNames().includes("pilot"));
 	assert.ok(adapter.session.getCallableToolNames().includes("memory"));
 	for (const denied of ["zoom", "date", "bash", "read", "find", "grep", "ls", "mission", "db", "todo", "slack_status"])
@@ -392,3 +393,72 @@ for (const reopened of [false, true])
 		assert.equal((await errors()).length, 1, "reopening does not duplicate the error row");
 		assert.equal(faux.state.callCount, 1, "reopening never replays a failed input");
 	});
+
+test("Control file images reach the provider through the native codemode tool result", {
+	timeout: 30_000,
+}, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "control-file-image-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	t.mock.method(globalThis, "fetch", () => assert.fail("fixture must remain offline"));
+	const runtime = await ModelRuntime.create({
+		credentials: new InMemoryCredentialStore(),
+		modelsPath: null,
+		modelsStore: new InMemoryModelsStore(),
+		refreshOnCreate: false,
+		allowModelNetwork: false,
+	});
+	const faux = fauxProvider();
+	runtime.registerNativeProvider(faux.provider);
+	const open = NativeAdapter.open;
+	t.mock.method(NativeAdapter, "open", (options: NativeAdapterOptions) =>
+		open.call(NativeAdapter, {
+			...options,
+			settingsManager: SettingsManager.inMemory(),
+			sessionOptions: { modelRuntime: runtime, model: faux.getModel() },
+		}),
+	);
+	let reads = 0,
+		imageSeen = false;
+	const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6dQAAAABJRU5ErkJggg==";
+	const session = await KernelSession.open(
+		{ sessionId: "file-control", cwd: root, storageDir: join(root, "durable"), control: true },
+		{
+			onWorking: () => {},
+			callPilot: async () => null,
+			callControl: async (action, args): Promise<JsonValue> => {
+				if (action === "prepare") return { lines: [] };
+				if (action !== "file") return null;
+				reads++;
+				assert.equal(args.path, "/attachments/screen.png");
+				return { untrusted: true, path: "/attachments/screen.png", bytes: 3, mimeType: "image/png", data: png };
+			},
+		},
+	);
+	t.after(() => session.close());
+	faux.setResponses([
+		fauxAssistantMessage(
+			{
+				type: "toolCall",
+				id: "read-image",
+				name: "codemode",
+				arguments: {
+					code: 'const result = await tools.read_file({path:"/attachments/screen.png"}); if (result.type === "image") image(result); else text(result);',
+				},
+			},
+			{ stopReason: "toolUse" },
+		),
+		async (ctx) => {
+			imageSeen = ctx.messages.some(
+				(m) =>
+					m.role === "toolResult" &&
+					Array.isArray(m.content) &&
+					m.content.some((b) => b.type === "image" && b.mimeType === "image/png" && b.data === png),
+			);
+			return fauxAssistantMessage("image inspected");
+		},
+	]);
+	await session.submit("image", "inspect this screenshot", "followUp");
+	await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
+	assert.equal(reads, 1);
+	assert.equal(imageSeen, true, JSON.stringify((await session.conversation.context(BACKGROUND_CONTEXT)).entries));
+});

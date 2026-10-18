@@ -1492,6 +1492,13 @@ export class SessionManager {
 				this.modelCatalog,
 				(id) => this.isControlSession(id),
 				() => this.metas.get(SessionManager.CONTROL_ID)?.model,
+				(path) => [
+					join(this.home, "main-views"),
+					...this.projects.list().map((project) => project.path),
+					...Array.from(this.metas.keys(), (id) => join(this.dir(id), "scratch")).filter((root) =>
+						path.startsWith(`${root}/`),
+					),
+				],
 			);
 			this.controlChat.memory.onChange(() => {
 				for (const listener of this.controlMemoryListeners) listener();

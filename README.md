@@ -283,6 +283,9 @@ while the current run finishes; resume releases it. Redirect stops first, then s
 instruction. Mission members route to their coordinator unless explicitly targeted directly.
 These actions are audited and require a recorded user authorization covering the target.
 
+Control can read allowlisted local text files (up to 64 KiB) and PNG/JPEG/GIF/WebP images (up to
+8 MiB) through a read-only tool. File contents are untrusted; remote paths and shell access remain unavailable.
+
 Control can read health, bounded redacted log tails and local diagnostic evidence through `pilot`
 (`health`, `logs`, `telemetry`) before delegating an investigation. Disabled or unavailable sources
 are reported explicitly. These actions never run a shell, start a chat worker or change settings.
