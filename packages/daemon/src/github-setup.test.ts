@@ -30,7 +30,8 @@ async function fixture(t: TestContext) {
 		revokes = 0,
 		lostUpload = false,
 		sshAccount = "octocat",
-		missing = false;
+		missing = false,
+		keyAccess = true;
 	const keys: { id: number; key: string }[] = [];
 	const calls: { file: string; args: string[]; stdin?: string }[] = [];
 	const options = {
@@ -65,7 +66,14 @@ async function fixture(t: TestContext) {
 			}
 			if (args.join(" ") === "api user")
 				return loggedIn ? result(JSON.stringify({ login: "octocat" })) : result("", 1, "private-token SSO");
-			if (args[0] === "api" && args[1]?.startsWith("user/keys?")) return result(JSON.stringify(keys));
+			if (args[0] === "api" && args[1]?.startsWith("user/keys?"))
+				return keyAccess
+					? result(JSON.stringify(keys))
+					: result(
+							'{"message":"Resource not accessible by integration"}',
+							1,
+							"gh: Resource not accessible by integration (HTTP 403)",
+						);
 			if (args.includes("POST")) {
 				uploads++;
 				keys.push({ id: 42, key: args.at(-1)!.slice(4) });
@@ -104,6 +112,9 @@ async function fixture(t: TestContext) {
 		},
 		set sshAccount(v: string) {
 			sshAccount = v;
+		},
+		set keyAccess(v: boolean) {
+			keyAccess = v;
 		},
 	};
 }
@@ -157,6 +168,20 @@ test("native capability, exact key approval, independent identity verification a
 	assert.ok(!disk.includes("private-token"));
 });
 
+test("a login without SSH key access explains the missing scope and uploads nothing", async (t) => {
+	const f = await fixture(t);
+	const prepared = await f.service.act(action("prepare_key"));
+	f.keyAccess = false;
+	const state = await f.service.act(
+		action("approve_key", { account: prepared.account, fingerprint: prepared.fingerprint }),
+	);
+	assert.equal(state.apiReady, true);
+	assert.equal(state.sshReady, false);
+	assert.match(state.problem!, /gh auth refresh -h github\.com -s admin:public_key/);
+	assert.equal(f.uploads, 0);
+	assert.match((await f.service.act(action("verify"))).problem!, /admin:public_key/);
+});
+
 test("lost upload response reconciles exact remote key and restart never replays approval", async (t) => {
 	const f = await fixture(t);
 	f.lostUpload = true;
@@ -195,6 +220,7 @@ test("device authorization stays remote, is bounded/cancellable and never persis
 	const f = await fixture(t);
 	f.loggedIn = false;
 	let exchange = false;
+	const requests: URLSearchParams[] = [];
 	const service = new GitHubSetupService(f.home, identity, {
 		...f.options,
 		wait: async (_ms, signal) => {
@@ -202,6 +228,7 @@ test("device authorization stays remote, is bounded/cancellable and never persis
 		},
 		fetch: async (url, opts) => {
 			assert.equal(opts?.redirect, "error");
+			requests.push(opts?.body as URLSearchParams);
 			if (String(url).endsWith("device/code"))
 				return Response.json({
 					device_code: "device-private",
@@ -217,6 +244,9 @@ test("device authorization stays remote, is bounded/cancellable and never persis
 	assert.equal(started.challenge?.code, "ABCD-EFGH");
 	await idle(service);
 	assert.equal(exchange, true);
+	// The GitHub CLI OAuth app honors scopes; GitHub App clients cannot manage SSH keys whatever they request.
+	for (const body of requests) assert.equal(body.get("client_id"), "178c6fc778ccc68e1d6a");
+	assert.ok(requests[0]!.get("scope")!.split(" ").includes("admin:public_key"));
 	assert.equal((await service.status()).apiReady, true);
 	assert.equal(f.calls.find((c) => c.args.includes("--with-token"))?.stdin, "gho_remote_fixture_token_1234567890\n");
 	const disk = await readFile(join(f.home, "github-setup/state.json"), "utf8");

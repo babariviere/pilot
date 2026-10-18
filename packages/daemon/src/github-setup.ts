@@ -30,6 +30,15 @@ type Options = {
 };
 const UUID = /^[a-f0-9]{8}-[a-f0-9-]{27}$/i;
 const ACCOUNT = /^[a-z\d](?:[a-z\d-]{0,38})$/i;
+// The GitHub CLI's OAuth app. The token is handed to gh, so it is an ordinary gh login whose scopes GitHub honors.
+// A GitHub App client (user tokens prefixed ghu_) ignores requested scopes and cannot list or register SSH keys.
+const CLIENT_ID = "178c6fc778ccc68e1d6a";
+// gh's minimum scopes plus admin:public_key, which listing, registering and deleting the dedicated key require.
+const SCOPES = "repo read:org gist admin:public_key";
+const CLI_ACCESS =
+	"GitHub CLI access failed on this host. Check login, scopes, SSO restrictions and revocation. Existing authentication is unchanged.";
+const KEY_ACCESS =
+	"This host's GitHub login cannot manage SSH keys. It needs the admin:public_key scope: run gh auth refresh -h github.com -s admin:public_key on this host, then check access. Existing authentication is unchanged.";
 const fail = (message: string): never => {
 	throw new SetupError(409, message);
 };
@@ -165,7 +174,7 @@ export class GitHubSetupService extends RuntimeAdmission {
 				this.authorization = controller;
 				const code = await this.oauth(
 					"https://github.com/login/device/code",
-					{ client_id: "Iv1.b507a08c87ecfe98", scope: "repo read:org gist write:public_key read:public_key" },
+					{ client_id: CLIENT_ID, scope: SCOPES },
 					controller.signal,
 				);
 				if (
@@ -214,7 +223,7 @@ export class GitHubSetupService extends RuntimeAdmission {
 				if (request.action === "revoke_key") {
 					if (!this.state.keyId)
 						fail("This dedicated key's registration could not be confirmed. Nothing was revoked.");
-					await this.gh(["api", "--method", "DELETE", `user/keys/${this.state.keyId}`]);
+					await this.keys(["api", "--method", "DELETE", `user/keys/${this.state.keyId}`]);
 					delete this.state.keyId;
 					this.state.sshReady = false;
 					this.state.phase = "key_ready";
@@ -290,10 +299,14 @@ export class GitHubSetupService extends RuntimeAdmission {
 	}
 	async gh(args: string[], stdin?: string, signal?: AbortSignal) {
 		const result = await this.exec("gh", args, stdin, signal);
-		if (result.code !== 0)
-			fail(
-				"GitHub CLI access failed on this host. Check login, scopes, SSO restrictions and revocation. Existing authentication is unchanged.",
-			);
+		if (result.code !== 0) fail(CLI_ACCESS);
+		return result.stdout.toString("utf8");
+	}
+	/** Key endpoints: a 403/404 means the login lacks key access (missing scope, or a GitHub App token). */
+	private async keys(args: string[]) {
+		const result = await this.exec("gh", args);
+		if (result.code !== 0 && /\bHTTP 40[34]\b/.test(result.stderr)) fail(KEY_ACCESS);
+		if (result.code !== 0) fail(CLI_ACCESS);
 		return result.stdout.toString("utf8");
 	}
 	private async account() {
@@ -364,7 +377,7 @@ export class GitHubSetupService extends RuntimeAdmission {
 				const reply = await this.oauth(
 					"https://github.com/login/oauth/access_token",
 					{
-						client_id: "Iv1.b507a08c87ecfe98",
+						client_id: CLIENT_ID,
 						device_code: code.device_code,
 						grant_type: "urn:ietf:params:oauth:grant-type:device_code",
 					},
@@ -468,7 +481,7 @@ export class GitHubSetupService extends RuntimeAdmission {
 	private async reconcileKey() {
 		if (!this.state.publicKey) return;
 		for (let page = 1; page <= 10; page++) {
-			const keys = JSON.parse(await this.gh(["api", `user/keys?per_page=100&page=${page}`]));
+			const keys = JSON.parse(await this.keys(["api", `user/keys?per_page=100&page=${page}`]));
 			if (!Array.isArray(keys)) fail("Could not reconcile GitHub key registration.");
 			const key = keys.find((k: { key?: unknown; id?: unknown }) => k.key === this.state.publicKey);
 			if (key && Number.isSafeInteger(key.id) && key.id > 0) {
