@@ -198,9 +198,8 @@ private func configuration(exporter: any SpanExporter) -> PilotTelemetryConfigur
     ))
     for _ in 0 ..< featureEventProcessLimit + 2 { telemetry.recordFeature(.attempt(.slackTriage)) }
     #expect(telemetry.stats.dropped == 2)
-    let flush = Task { await telemetry.flush() }
+    await telemetry.flush()
     #expect(exporter.waitForExportStart(timeout: 5), "the batch processor started exporting the accepted events")
-    await flush.value
     #expect(exporter.spans.isEmpty, "bounded flush can return while an exporter is still working")
     exporter.release()
     #expect(exporter.waitForSpanCount(featureEventProcessLimit, timeout: 10),
