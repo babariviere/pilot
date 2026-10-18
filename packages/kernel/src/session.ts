@@ -515,10 +515,9 @@ export class KernelSession {
 			const prepare = (extension: Extension) => {
 				if (control)
 					return toolDrain.prepare(
-						control.prepare(replayUnsafe(extension), (block) => {
-							adapter!.controlCacheBlock = block;
-							adapter!.controlRequestReady = true;
-						}),
+						control.prepare(replayUnsafe(extension), (messages, block) =>
+							adapter!.prepareControlRequest(messages, block),
+						),
 						(context) => adapter!.waitForSubscription(context.abortSignal),
 					);
 				const prepared = replayUnsafe(
@@ -663,6 +662,7 @@ export class KernelSession {
 			session.#attempts = publicAttempts(await harness.snapshot(AttemptsDoc, context));
 			if (!session.#reportedWorking) {
 				session.#completion = await reconcileCompletion(owned.storage, harness, conversation, context);
+				if (control && adapter.session.model) await control.reportFailure(context, adapter.session.model);
 			}
 			status.start(async (events, deliveryContext) => {
 				let working = session.#reportedWorking;
@@ -696,6 +696,8 @@ export class KernelSession {
 							context,
 							event.type === "run_end" ? event.inputs : undefined,
 						);
+						if (control && adapter!.session.model)
+							await control.reportFailure(deliveryContext, adapter!.session.model);
 					}
 				}
 				if (!working) {

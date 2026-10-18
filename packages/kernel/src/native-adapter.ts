@@ -268,8 +268,7 @@ export class NativeAdapter {
 	#registerHostTool!: (tool: ToolDefinition) => void;
 	readonly #ask: boolean;
 	readonly #allowedTools: readonly string[];
-	controlCacheBlock?: string;
-	controlRequestReady = false;
+	readonly #controlRequests = new WeakMap<Message, { messages: readonly Message[]; cacheBlock: string }>();
 	/** Control-only run mapping. Never use the retained transcript for SDK compatibility. */
 	controlContext?: (context: TaskContext) => Promise<ContextView>;
 	readonly #control: boolean;
@@ -348,8 +347,7 @@ export class NativeAdapter {
 						options?: ModelsSimpleStreamOptions,
 					) => {
 						this.assertOpen();
-						if (this.#control && !this.controlRequestReady)
-							throw new Error("Control turn projection did not prepare a fresh request");
+						const cacheBlock = this.consumeControlRequest(context.messages);
 						return this.requestStream(
 							(observe, timing, signal, onProvider) =>
 								session.extensionRunner
@@ -357,7 +355,14 @@ export class NativeAdapter {
 									.streamSimple(
 										model,
 										context,
-										this.requestOptions({ ...options, signal }, observe, model.api, timing, onProvider),
+										this.requestOptions(
+											{ ...options, signal },
+											observe,
+											model.api,
+											timing,
+											onProvider,
+											cacheBlock,
+										),
 									),
 							model,
 							options?.signal,
@@ -370,8 +375,7 @@ export class NativeAdapter {
 						options?: ModelsApiStreamOptions<Api>,
 					) => {
 						this.assertOpen();
-						if (this.#control && !this.controlRequestReady)
-							throw new Error("Control turn projection did not prepare a fresh request");
+						const cacheBlock = this.consumeControlRequest(context.messages);
 						return this.requestStream(
 							(observe, timing, signal, onProvider) =>
 								// Instrument shared fields; the spread preserves provider-specific options unchanged.
@@ -386,6 +390,7 @@ export class NativeAdapter {
 											model.api,
 											timing,
 											onProvider,
+											cacheBlock,
 										),
 									),
 							model,
@@ -400,6 +405,26 @@ export class NativeAdapter {
 				return typeof value === "function" ? value.bind(target) : value;
 			},
 		});
+	}
+
+	/** The Harness copies the array before dispatch, but retains its message identities. */
+	prepareControlRequest(messages: readonly Message[], cacheBlock: string): void {
+		if (!this.#control || !messages[0]) throw new Error("Expected a Control request projection");
+		this.#controlRequests.set(messages[0], { messages: [...messages], cacheBlock });
+	}
+
+	private consumeControlRequest(messages: readonly Message[]): string | undefined {
+		if (!this.#control) return undefined;
+		const first = messages[0];
+		const prepared = first ? this.#controlRequests.get(first) : undefined;
+		if (first) this.#controlRequests.delete(first);
+		if (
+			!prepared ||
+			prepared.messages.length !== messages.length ||
+			prepared.messages.some((m, i) => m !== messages[i])
+		)
+			throw new Error("Control turn projection did not prepare a fresh request");
+		return prepared.cacheBlock;
 	}
 
 	static async open(options: NativeAdapterOptions): Promise<NativeAdapter> {
@@ -1060,7 +1085,6 @@ export class NativeAdapter {
 			hooks: [
 				hook(GenerationTask, {
 					beforeRequest: async (request, _api, context) => {
-						if (this.#control) this.controlRequestReady = false;
 						const preparation = this.#performance
 							? (this.#pendingPreparation ?? this.preparationMark())
 							: undefined;
@@ -1364,6 +1388,7 @@ export class NativeAdapter {
 		api: string,
 		timing?: RequestTiming,
 		onProvider?: (provider: string, baseUrl?: string) => void,
+		controlCacheBlock?: string,
 	): ModelsSimpleStreamOptions {
 		const runner = this.session.extensionRunner;
 		const settings = this.session.settingsManager;
@@ -1401,8 +1426,8 @@ export class NativeAdapter {
 					(await options?.onPayload?.(payload, model)) ?? payload,
 				);
 				timing?.mark("payloadReadyMs");
-				return model.api === "anthropic-messages" && this.controlCacheBlock !== undefined
-					? markControlCache(value, this.controlCacheBlock)
+				return model.api === "anthropic-messages" && controlCacheBlock !== undefined
+					? markControlCache(value, controlCacheBlock)
 					: value;
 			},
 			transformHeaders: async (headers) =>

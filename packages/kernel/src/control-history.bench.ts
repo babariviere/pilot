@@ -78,10 +78,7 @@ async function sample(variant: string, entries: number) {
 		const registry = createRegistry();
 		registry.install(
 			control
-				? turn.prepare(adapter.extension, (block) => {
-						adapter!.controlCacheBlock = block;
-						adapter!.controlRequestReady = true;
-					})
+				? turn.prepare(adapter.extension, (messages, block) => adapter!.prepareControlRequest(messages, block))
 				: adapter.extension,
 		);
 		if (control) adapter.controlContext = (context) => turn.context(context);
