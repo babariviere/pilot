@@ -481,7 +481,7 @@ chat history or the offline index.
 
 ## 10. Integration points assumed from other hooks
 
-The general lifecycle hook design is not written yet. This design assumes the following, so that design can adopt or adjust them.
+The general lifecycle hook design, [automations](automations.md), adopts these assumptions (its section 8).
 
 **A1. Bounded shell runner.**
 

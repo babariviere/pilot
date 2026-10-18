@@ -516,6 +516,22 @@ Reproducible project environments (pinned toolchains, a built-in Postgres databa
 setup scripts, set up when a workspace is created or restored) are a design proposal, not yet implemented: see
 [project environment setup](docs/environment-setup.md).
 
+### Automations
+
+Personal automations around a chat's workspace and runs are a design proposal, not yet implemented. Each is a
+trigger, conditions and an action, stored in Pilot's project settings (never in the repository) and run by the
+daemon of the host that runs the chat:
+
+- **Setup** runs your commands when a workspace is created and again after an archived workspace is restored.
+  The first turn waits for it, up to 10 minutes. There is no teardown.
+- **Checks** run lint or tests after a run that changed files, and send failures back to the agent.
+- **Continue** asks the agent to keep going when the chat finishes with open todos.
+
+Commands are bounded by timeouts and output caps, stop with **Stop** and archive, and wait during sleep and
+update pauses. Messages to the agent follow the PR follow-up rules: idle only, at most three per chat until you
+send a message, and only after the agent made progress. Results show as one-line events in the chat; failures
+and exhausted attempts appear in **Needs you**. See [automations](docs/automations.md).
+
 ### Missions
 
 Use a mission when one goal needs several chats. Its shared brief and decisions give agents a common
