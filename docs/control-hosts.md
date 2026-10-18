@@ -7,6 +7,25 @@ transport, enrollment, migration, permission enforcement or UI behavior. Old dae
 receive these requests until support and enrollment are verified. This document is the interface
 between Control handlers and the app courier/enrollment implementation.
 
+## Contract navigation
+
+All routes below are reserved contracts, not handlers enabled by this change. Use these sections
+and the declarations in `packages/protocol/src/control.ts` together; native mirrors are in
+`PilotCore/ControlHosts.swift`. Runtime implementation and fault proof remain separate.
+
+| Contract area | Wire and safety definition |
+| --- | --- |
+| Authenticated pairing preview, approval ID, enroll/revoke/status and partial/replay/conflict | [Native approval](#native-approval-enrollment-and-unpair), [M/C authentication matrix](#separate-management-authentication-from-courier-capability), [typed pairing results](#pairing-partial-replay-conflict-and-revoke-readback) |
+| Archived history/memory/audit/authorizations and transition lookup | [Read-only archive pages](#machine-readable-rollout-proof-and-archived-reads), [archive lookup](#archive-lookup-and-read-availability-are-explicit-apis), [role/archive acknowledgment](#versioned-rolearchive-acknowledgment) |
+| Read/health/logs proxy, request IDs, responses and unavailable outcomes | [Complete proxy routes](#frozen-host-targeted-read-proxy), [explicit availability](#archive-lookup-and-read-availability-are-explicit-apis) |
+| Home durable checkpoint, floor/gap, empty ack and retired relaunch | [Checkpoint protocol](#durable-checkpoint-retired-floor-and-empty-streams), [durable cursor ownership](#invalidation-and-exact-recovery-state) |
+| Monotonic status capture revision, publication CAS and installed revision | [Status ordering and import acknowledgment](#status-revision-and-publication-cas) |
+| Immutable task delegation, shared binding/generation/epoch and original session ownership | [Required task-start fence](#task-start-pins-an-existing-delegation-not-a-mutable-lookup) |
+| Pre-load role/freeze, accepted ceilings/work, fresh bootstrap and both rollout proofs | [Startup barrier](#rolefreeze-barrier-before-any-recovery), [accepted-work guarantees](#freeze-the-conversational-owner-not-its-accepted-independent-work), [role bootstrap](#native-only-role-bootstrap-before-conversational-startup), [both proof suites](#prove-assembled-behavior-before-activation-without-a-dependency-cycle) |
+| Concrete invalidations, continuation/priority/session ordering, update blockers and sleep/quit | [Invalidation](#invalidation-and-exact-recovery-state), [priority/HOL](#priority-lanes-head-of-line-behavior-and-foreign-changes), [update and transport lifecycle](#updates-transport-shutdown-and-stop-presentation) |
+| No generic chat-create/chat-send/shared-* Control bypass | [Executor rejection and provenance preservation](#no-authority-downgrade-through-older-operation-kinds) |
+| One shared task DTO with title/status, import age and conflict/provisional provenance | [Common projection and dedupe](#one-taskstatus-dto-and-merge-precedence): `ControlDashboardSharedTask`, alias `ControlRemoteMissionTask`; `replicaSyncedAt`, host `importedAt`, proposals and conflicts remain distinct |
+
 ## Authority and identity
 
 Exactly one visible, authoritative Control lives on an explicitly selected home daemon, initially
