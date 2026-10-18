@@ -6,6 +6,7 @@ struct OperationDeliveryNotice: View {
     let ref: HostResourceRef
     @ObservedObject var hosts: HostClients
     let adopt: (DurableOperation) async throws -> Void
+    var excludes: (DurableOperation) -> Bool = { _ in false }
     @State private var busy = false
     @State private var error: String?
     @State private var confirmingRetry: DurableOperation?
@@ -13,7 +14,7 @@ struct OperationDeliveryNotice: View {
     private var operations: [DurableOperation] {
         hosts.pendingOperations.values.filter {
             $0.destination == ref.host && $0.targetId == ref.localId &&
-            ($0.kind == "chat-send" || $0.kind == "chat-send-attached")
+            ($0.kind == "chat-send" || $0.kind == "chat-send-attached") && !excludes($0)
         }.sorted { $0.sequence < $1.sequence }
     }
 

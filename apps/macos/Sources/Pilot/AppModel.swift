@@ -180,6 +180,8 @@ final class AppModel: ObservableObject {
     @Published var diagnosingSessions: Set<String> = []
     @Published var diagnosticSetupTarget: DiagnosticSetupTarget?
     @Published var diagnosticRepairTarget: DiagnosticRepairTarget?
+    /// One bounded, host-qualified proposal request state per diagnostics specialist.
+    @Published var diagnosticRepairRequests: [String: DiagnosticRepairRequestState] = [:]
     /// One proposal ID per host-qualified specialist. Proposal text and evidence never enter app preferences.
     private var diagnosticRepairDismissals: [String: String] = [:]
     @Published var projectActionError: String?

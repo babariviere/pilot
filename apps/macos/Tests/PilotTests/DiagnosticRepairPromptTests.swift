@@ -19,15 +19,17 @@ private func repairProposal(_ id: String = "diagnostic-proposal:v1:0000000000000
 }
 
 private func repairSession(host: HostRef = repairLocalHost, proposal: DiagnosticRepairProposal? = repairProposal(),
-                           targetControl: Bool = false) -> (specialist: SessionSummary, target: SessionSummary) {
+                           targetControl: Bool = false, specialistState: String = "idle",
+                           specialistUpdatedAt: Double = 2) -> (specialist: SessionSummary, target: SessionSummary) {
     var target = SessionSummary(id: repairTargetID, title: targetControl ? "Control" : "Target", cwd: "/tmp",
                                 projectId: targetControl ? nil : "project", createdAt: 1, updatedAt: 1,
                                 state: "idle")
     target.control = targetControl ? true : nil
     let reference = DiagnosticTargetReference(host: host, sessionId: repairTargetID)!
     let specialist = SessionSummary(id: repairSpecialistID, title: "Diagnostics", cwd: "/tmp",
-                                    projectId: targetControl ? nil : "project", createdAt: 2, updatedAt: 2,
-                                    state: "idle", mode: .ask, role: .diagnostics,
+                                    projectId: targetControl ? nil : "project", createdAt: 2,
+                                    updatedAt: specialistUpdatedAt, state: specialistState,
+                                    mode: .ask, role: .diagnostics,
                                     diagnosticTargetId: repairTargetID, diagnosticTarget: reference,
                                     diagnosticRepairProposal: proposal)
     return (specialist, target)
@@ -209,4 +211,173 @@ private func repairSession(host: HostRef = repairLocalHost, proposal: Diagnostic
     dismiss.performClick(nil)
     #expect(reviews == 1 && dismissals == 1)
     #expect(client.fixtureSpawnRequests.isEmpty, "viewing, reviewing and dismissing the tray never starts a chat")
+}
+
+@Test func diagnosticsRolePresentationReplacesGenericAskWithoutChangingReadOnlyMode() throws {
+    for (host, control) in [(repairLocalHost, false), (repairRemoteHost, false), (repairLocalHost, true)] {
+        let fixture = repairSession(host: host, proposal: nil, targetControl: control)
+        let segments = RowLineSegments.session(fixture.specialist, projectName: control ? nil : "Pilot")
+        #expect(segments.contains { $0.kind == .diagnostics })
+        #expect(!segments.contains { if case .ask = $0.kind { true } else { false } })
+        #expect(fixture.specialist.isAsk && fixture.specialist.isDiagnosticsSpecialist)
+        let presentation = DiagnosticRepair.headerPresentation(
+            specialist: fixture.specialist, specialistHost: host, admittedTarget: fixture.target,
+            available: true, destinationAvailable: true, request: nil
+        )
+        #expect(presentation.title == "Suggest a repair" && presentation.enabled)
+    }
+
+    let proposed = repairSession()
+    let review = DiagnosticRepair.headerPresentation(
+        specialist: proposed.specialist, specialistHost: repairLocalHost, admittedTarget: proposed.target,
+        available: true, destinationAvailable: true, request: nil
+    )
+    #expect(review.action == .review && review.title == "Review repair" && review.enabled)
+
+    let ordinaryAsk = SessionSummary(id: "ask", title: "Ask", cwd: "/tmp", createdAt: 1, updatedAt: 1,
+                                     state: "idle", mode: .ask, sourceBranch: "main")
+    let ordinaryBuild = SessionSummary(id: "build", title: "Build", cwd: "/tmp", branch: "main",
+                                       createdAt: 1, updatedAt: 1, state: "idle")
+    #expect(RowLineSegments.session(ordinaryAsk)[0].kind == .ask(source: "origin/main"))
+    #expect(RowLineSegments.session(ordinaryBuild, branch: "main")[0].kind == .branch("main"))
+}
+
+@Test func diagnosticRepairHeaderExplainsUnavailableTargetsWithoutFallback() {
+    let fixture = repairSession(proposal: nil)
+    let disconnected = DiagnosticRepair.headerPresentation(
+        specialist: fixture.specialist, specialistHost: repairLocalHost, admittedTarget: fixture.target,
+        available: false, destinationAvailable: true, request: nil
+    )
+    #expect(disconnected.title == "Suggest a repair" && !disconnected.enabled)
+    #expect(disconnected.detail?.contains("Reconnect") == true)
+
+    let proposed = repairSession()
+    let missingDestination = DiagnosticRepair.headerPresentation(
+        specialist: proposed.specialist, specialistHost: repairLocalHost, admittedTarget: proposed.target,
+        available: true, destinationAvailable: false, request: nil
+    )
+    #expect(missingDestination.title == "Review repair" && !missingDestination.enabled)
+    #expect(missingDestination.detail?.contains("project") == true)
+}
+
+@Test @MainActor func proposalRequestUsesBusyQueueFailureAndExplicitRetryState() async throws {
+    let client = PilotClient()
+    let fixture = repairSession(proposal: nil, specialistState: "working")
+    client.loadFixture(projects: [], sessions: [fixture.specialist, fixture.target])
+    let app = AppModel(client: client)
+    try app.registerLocal(repairLocalHost)
+    let reference = HostResourceRef(host: repairLocalHost, kind: .session, localId: fixture.specialist.id)
+    let target = DiagnosticRepairTarget(specialist: fixture.specialist, reference: reference)
+
+    try await app.requestDiagnosticRepairProposal(target)
+    var state = try #require(app.diagnosticRepairRequest(for: reference))
+    #expect(state.phase == .queued && state.queuedBehindWork && state.observedWorking)
+    #expect(client.fixtureSendRequests.count == 1)
+
+    let settled = repairSession(proposal: nil, specialistState: "idle", specialistUpdatedAt: 3)
+    client.loadFixture(projects: [], sessions: [settled.specialist, settled.target])
+    app.reconcileDiagnosticRepairRequest(settled.specialist, reference: reference)
+    state = try #require(app.diagnosticRepairRequest(for: reference))
+    #expect(state.phase == .failed)
+    #expect(state.error?.contains("without publishing") == true)
+
+    try await app.requestDiagnosticRepairProposal(target)
+    #expect(client.fixtureSendRequests.count == 2, "retry is a new request only after the previous turn settled")
+    #expect(client.fixtureSpawnRequests.isEmpty)
+}
+
+@Test @MainActor func hostQualifiedProposalStateDoesNotFollowNavigationOrAnotherHost() throws {
+    let app = AppModel()
+    let local = HostResourceRef(host: repairLocalHost, kind: .session, localId: repairSpecialistID)
+    let remote = HostResourceRef(host: repairRemoteHost, kind: .session, localId: repairSpecialistID)
+    let localFixture = repairSession(host: repairLocalHost, proposal: nil)
+    let remoteFixture = repairSession(host: repairRemoteHost, proposal: nil)
+    let localTarget = try #require(localFixture.specialist.diagnosticTarget)
+    let remoteTarget = try #require(remoteFixture.specialist.diagnosticTarget)
+    app.diagnosticRepairRequests[local.storageKey] = DiagnosticRepairRequestState(
+        revision: UUID(), target: localTarget, sessionUpdatedAt: 1, queuedBehindWork: false,
+        phase: .queued, observedWorking: false, error: nil, operation: nil
+    )
+    let remoteState = DiagnosticRepairRequestState(
+        revision: UUID(), target: remoteTarget, sessionUpdatedAt: 1, queuedBehindWork: true,
+        phase: .queued, observedWorking: true, error: nil, operation: nil
+    )
+    app.diagnosticRepairRequests[remote.storageKey] = remoteState
+
+    app.selectedSessionId = "another-chat"
+    let completedLocal = repairSession(host: repairLocalHost).specialist
+    app.reconcileDiagnosticRepairRequest(completedLocal, reference: local)
+    #expect(app.diagnosticRepairRequest(for: local) == nil)
+    #expect(app.diagnosticRepairRequest(for: remote) == remoteState,
+            "a late result is fenced to its original host and specialist")
+}
+
+@Test @MainActor func mountedDiagnosticsHeaderSubmitsOnceAndNeverStartsRepair() async throws {
+    _ = NSApplication.shared
+    let client = PilotClient()
+    let fixture = repairSession(proposal: nil)
+    client.loadFixture(projects: [], sessions: [fixture.specialist, fixture.target])
+    let app = AppModel(client: client)
+    try app.registerLocal(repairLocalHost)
+    let header = DiagnosticSpecialistHeader(session: fixture.specialist, context: nil, client: client)
+        .environmentObject(app)
+    let hosting = NSHostingView(rootView: header)
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 180),
+                          styleMask: [.titled], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    defer { window.close() }
+    window.contentView = hosting
+    window.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
+    window.orderFrontRegardless(); window.update(); hosting.layoutSubtreeIfNeeded()
+
+    func buttons(_ view: NSView) -> [NSButton] {
+        (view as? NSButton).map { [$0] } ?? view.subviews.flatMap(buttons)
+    }
+    let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+    while buttons(hosting).isEmpty, ContinuousClock.now < deadline {
+        hosting.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(20))
+    }
+    let action = try #require(buttons(hosting).first { $0.title.contains("Suggest a repair") })
+    action.performClick(nil)
+    action.performClick(nil)
+    while client.fixtureSendRequests.isEmpty, ContinuousClock.now < deadline {
+        try await Task.sleep(for: .milliseconds(20))
+    }
+    #expect(client.fixtureSendRequests.count == 1, "duplicate clicks admit only one proposal request")
+    #expect(client.fixtureSendRequests.first?.mode == .followUp)
+    #expect(client.fixtureSendRequests.first?.message.contains("repair_proposal") == true)
+    #expect(app.diagnosticRepairTarget == nil, "Suggest does not open an empty manual proposal sheet")
+    #expect(client.fixtureSpawnRequests.isEmpty, "Suggest never starts a Build chat")
+}
+
+@Test @MainActor func mountedDiagnosticsHeaderReviewsAnExistingProposalWithoutStartingWork() async throws {
+    _ = NSApplication.shared
+    let client = PilotClient()
+    let fixture = repairSession()
+    client.loadFixture(projects: [Project(id: "project", name: "Pilot", path: "/tmp", createdAt: 1)],
+                       sessions: [fixture.specialist, fixture.target])
+    let app = AppModel(client: client)
+    try app.registerLocal(repairLocalHost)
+    let hosting = NSHostingView(rootView:
+        DiagnosticSpecialistHeader(session: fixture.specialist, context: nil, client: client)
+            .environmentObject(app))
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 180),
+                          styleMask: [.titled], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    defer { window.close() }
+    window.contentView = hosting
+    window.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
+    window.orderFrontRegardless(); window.update(); hosting.layoutSubtreeIfNeeded()
+    func buttons(_ view: NSView) -> [NSButton] {
+        (view as? NSButton).map { [$0] } ?? view.subviews.flatMap(buttons)
+    }
+    let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+    while buttons(hosting).isEmpty, ContinuousClock.now < deadline {
+        hosting.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(20))
+    }
+    try #require(buttons(hosting).first { $0.title.contains("Review repair") }).performClick(nil)
+    #expect(app.diagnosticRepairTarget?.reference.localId == fixture.specialist.id)
+    #expect(client.fixtureSendRequests.isEmpty && client.fixtureSpawnRequests.isEmpty)
 }

@@ -11,6 +11,8 @@ public struct RowLineSegment: Equatable, Sendable, Identifiable {
         case project(String)
         /// "Ask · <source>" for a read-only Ask chat. One unit, though it reads with a dot.
         case ask(source: String)
+        /// A persisted read-only diagnostics specialist. Its generated chat title remains separate.
+        case diagnostics
         /// The amber "Coordinator" mark of a mission coordinator. Its state follows as `.reason`.
         case coordinator
         /// The row's Needs you reason, a coordinator's state or a working chat's mode, in its own wording.
@@ -38,6 +40,7 @@ public struct RowLineSegment: Equatable, Sendable, Identifiable {
         switch kind {
         case let .project(name): "project:\(name)"
         case let .ask(source): "ask:\(source)"
+        case .diagnostics: "diagnostics"
         case .coordinator: "coordinator"
         case let .reason(text): "reason:\(text)"
         case let .pullRequest(pr, _): "pr:\(pr.url)"
@@ -56,6 +59,7 @@ public struct RowLineSegment: Equatable, Sendable, Identifiable {
         switch kind {
         case let .project(name): name
         case let .ask(source): "Ask, \(source)"
+        case .diagnostics: "Diagnostics, read-only"
         case .coordinator: "Coordinator"
         case let .reason(text): text
         case let .pullRequest(pr, stale): "Pull request \(pr.number)\(stale ? ", last known" : "")"
@@ -163,7 +167,8 @@ public enum RowLineSegments {
             return segments
         }
         let isAsk = session?.isAsk == true
-        if let session, isAsk { segments.append(RowLineSegment(.ask(source: session.sourceLabel))) }
+        if let session, session.isDiagnosticsSpecialist { segments.append(RowLineSegment(.diagnostics)) }
+        else if let session, isAsk { segments.append(RowLineSegment(.ask(source: session.sourceLabel))) }
         if let reason, !reason.isEmpty { segments.append(RowLineSegment(.reason(reason))) }
         else if session?.offlinePaused == true { segments.append(RowLineSegment(.reason("Paused offline"))) }
         var shownBranch = branch

@@ -574,7 +574,8 @@ struct SessionRow: View {
         .onPreferenceChange(SessionRepositoryHelpKey.self) { repositoryHelp = $0 }
         .animation(Theme.Motion.quick, value: hovered)
         .help([draft?.help,
-               [reason ?? signal?.label, missionTitle.map { "Mission: \($0)" }, session.cwd.abbreviatingHome]
+               [session.isDiagnosticsSpecialist ? "Diagnostics · Read-only" : nil,
+                reason ?? signal?.label, missionTitle.map { "Mission: \($0)" }, session.cwd.abbreviatingHome]
                 .compactMap { $0 }.joined(separator: " · "), RowLineSegments.pullRequestSummary(session), repositoryHelp]
             .compactMap { $0 }.joined(separator: "\n"))
         .accessibilityElement(children: .contain)

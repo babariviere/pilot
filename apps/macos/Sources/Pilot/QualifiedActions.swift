@@ -268,7 +268,8 @@ extension AppModel {
         let pending = composer?.pendingOperationId.flatMap { hosts.pendingOperations[$0] }
             ?? hosts.pendingOperations.values.first {
                 $0.destination == ref.host && $0.targetId == ref.localId &&
-                    ($0.kind == "chat-send" || $0.kind == "chat-send-attached") && !adoptedOperationIds.contains($0.operationId)
+                    ($0.kind == "chat-send" || $0.kind == "chat-send-attached") &&
+                    !adoptedOperationIds.contains($0.operationId) && !ownsDiagnosticRepairOperation($0)
             }
         if let known = pending {
             let id = known.operationId

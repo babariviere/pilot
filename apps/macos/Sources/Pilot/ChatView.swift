@@ -377,9 +377,7 @@ struct ChatView: View {
                             .frame(maxWidth: .infinity)
                     }
                     if session.isDiagnosticsSpecialist {
-                        DiagnosticSpecialistHeader(target: session.diagnosticTarget,
-                                                   fallbackTargetId: session.diagnosticTargetId,
-                                                   historyAccess: session.diagnosticHistoryAccess == true)
+                        DiagnosticSpecialistHeader(session: session, context: context)
                             .frame(maxWidth: Theme.column, alignment: .leading)
                             .frame(maxWidth: .infinity)
                     }
@@ -508,7 +506,8 @@ struct ChatView: View {
                 .padding(.horizontal, 24)
                 if let context, context.host != model.localHost {
                     OperationDeliveryNotice(ref: context.ref(.session, session.id), hosts: context.hosts,
-                        adopt: { operation in try await model.adoptPendingMessage(operation, composer: composer) })
+                        adopt: { operation in try await model.adoptPendingMessage(operation, composer: composer) },
+                        excludes: { model.ownsDiagnosticRepairOperation($0) })
                         .padding(.horizontal, 24)
                 }
                 // Control and diagnostics chats cannot transfer their privileged context to Build.

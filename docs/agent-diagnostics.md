@@ -152,14 +152,21 @@ findings, low/medium/high uncertainty, a suggested repair and regression-test gu
 closed fields, byte bounds, target and refs before replacing the previous proposal. Publishing only updates the
 specialist's proposal summary; it never starts, wakes, changes, retries, restarts or replays either chat.
 
-Before a proposal exists, the app explains that the diagnostic agent must author it and offers a non-executing
-request. It does not ask the user to invent a cause, choose raw event IDs or write a regression test. Once published,
-the specialist chat replaces its ordinary composer with a native proposal tray after the current turn settles. A
-live agent question stays in front. The tray summarizes findings, uncertainty, suggested repair and cited-evidence
-count without taking focus or navigating from another chat. **Not now** persists only that proposal ID; a replacement
-appears again, and the context menu can always reopen review. Viewing, reconnecting, dismissing or reopening never
-creates work. The review sheet shows labeled prefilled fields and distinguishable safe source/time/evidence summaries.
-The user may optionally edit the bounded text and uncertainty. Cancelling creates nothing.
+Diagnostics chats retain their generated descriptive title, while the sidebar, read-only toolbar badge and chat
+header identify the persisted **Diagnostics** role instead of presenting it as ordinary Ask. Before a proposal exists,
+the header's directly visible **Suggest a repair** action sends one host-qualified follow-up asking the specialist to
+author it. Requesting and busy-queue states prevent duplicate submission; a failed completed attempt offers an
+explicit retry. Missing target identity, destination or connectivity is explained without another-host fallback or
+probing. The action does not open a manual authoring form, and the app does not ask the user to invent a cause, choose
+raw event IDs or write a regression test.
+
+Once published, the header action becomes **Review repair**, and the specialist chat replaces its ordinary composer
+with a native proposal tray after the current turn settles. A live agent question stays in front. The tray summarizes
+findings, uncertainty, suggested repair and cited-evidence count without taking focus or navigating from another
+chat. **Not now** persists only that proposal ID; a replacement appears again, and the header or context menu can
+always reopen review. Viewing, reconnecting, dismissing or reopening never creates work. The review sheet shows
+labeled prefilled fields and distinguishable safe source/time/evidence summaries. The user may optionally edit the
+bounded text and uncertainty. Cancelling creates nothing.
 
 A repair is always a separate ordinary coding chat. Only explicit confirmation after review may call:
 
