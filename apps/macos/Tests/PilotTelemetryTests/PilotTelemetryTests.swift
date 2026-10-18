@@ -18,6 +18,60 @@ private final class MemorySpanExporter: SpanExporter, @unchecked Sendable {
     func shutdown(explicitTimeout _: TimeInterval?) {}
 }
 
+private final class GatedMemorySpanExporter: SpanExporter, @unchecked Sendable {
+    private let condition = NSCondition()
+    private var values: [SpanData] = []
+    private var exportStarted = false
+    private var released = false
+
+    var spans: [SpanData] {
+        condition.lock()
+        defer { condition.unlock() }
+        return values
+    }
+
+    func export(spans: [SpanData], explicitTimeout _: TimeInterval?) -> SpanExporterResultCode {
+        condition.lock()
+        exportStarted = true
+        condition.broadcast()
+        while !released { condition.wait() }
+        values.append(contentsOf: spans)
+        condition.broadcast()
+        condition.unlock()
+        return .success
+    }
+
+    func waitForExportStart(timeout: TimeInterval) -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        let deadline = Date(timeIntervalSinceNow: timeout)
+        while !exportStarted {
+            guard condition.wait(until: deadline) else { return false }
+        }
+        return true
+    }
+
+    func waitForSpanCount(_ count: Int, timeout: TimeInterval) -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        let deadline = Date(timeIntervalSinceNow: timeout)
+        while values.count < count {
+            guard condition.wait(until: deadline) else { return false }
+        }
+        return true
+    }
+
+    func release() {
+        condition.lock()
+        released = true
+        condition.broadcast()
+        condition.unlock()
+    }
+
+    func flush(explicitTimeout _: TimeInterval?) -> SpanExporterResultCode { .success }
+    func shutdown(explicitTimeout _: TimeInterval?) { release() }
+}
+
 private final class BlockingSpanExporter: SpanExporter, @unchecked Sendable {
     private let condition = NSCondition()
     private var blocked = true
@@ -136,13 +190,21 @@ private func configuration(exporter: any SpanExporter) -> PilotTelemetryConfigur
 }
 
 @Test func featureEventsRespectTheProcessRateCap() async {
-    let exporter = MemorySpanExporter()
+    let exporter = GatedMemorySpanExporter()
+    defer { exporter.release() }
     let telemetry = PilotTelemetry(configuration: PilotTelemetryConfiguration(
         enabled: true, serviceVersion: "1.45.1", environment: .test, hostKind: .local,
         analyticsID: "analytics_123456789012", exporter: exporter
     ))
     for _ in 0 ..< featureEventProcessLimit + 2 { telemetry.recordFeature(.attempt(.slackTriage)) }
     #expect(telemetry.stats.dropped == 2)
+    let flush = Task { await telemetry.flush() }
+    #expect(exporter.waitForExportStart(timeout: 5), "the batch processor started exporting the accepted events")
+    await flush.value
+    #expect(exporter.spans.isEmpty, "bounded flush can return while an exporter is still working")
+    exporter.release()
+    #expect(exporter.waitForSpanCount(featureEventProcessLimit, timeout: 10),
+            "all rate-cap-accepted feature events eventually reach the exporter")
     await telemetry.flush()
     #expect(exporter.spans.filter { $0.name == "pilot.feature" }.count == featureEventProcessLimit)
     await telemetry.shutdown()
