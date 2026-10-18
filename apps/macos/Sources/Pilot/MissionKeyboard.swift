@@ -35,10 +35,12 @@ extension CommandPaletteCatalog {
     /// The highlighted mission task's actions: the same ones as its row menu, without hovering. Delete stays in the
     /// row's context menu.
     func missionTaskActions(missionId: String, taskId: String) -> (title: String, entries: [CommandPaletteEntry])? {
-        guard let detail = model.client.missionDetails[missionId],
+        let reference = model.currentMissionReference.flatMap { $0.localId == missionId ? $0 : nil }
+        let context = reference.map { HostViewContext(host: $0.host, hosts: model.hosts) }
+        let client = context.map { $0.hosts.presentationClient($0.host) } ?? model.client
+        guard let detail = client.missionDetails[missionId],
               let task = detail.tasks.first(where: { $0.id == taskId }) else { return nil }
         let model = model
-        let client = model.client
         let requests = model.missionTaskRequests
         var entries: [CommandPaletteEntry] = []
         func add(_ key: String, _ title: String, _ icon: PilotIcon, keywords: [String] = [], shortcut: String? = nil,
@@ -56,7 +58,7 @@ extension CommandPaletteCatalog {
             model.missionAction { try await client.updateMissionTask(missionId, taskId: taskId, request) }
         }
         if let sessionId = task.sessionId {
-            add("open", "Open chat", .message) { model.navigate(.session, id: sessionId) }
+            add("open", "Open chat", .message) { model.navigate(.session, id: sessionId, context: context) }
         } else if task.status.canStart, detail.mission.status == .active {
             add("start", "Start chat…", .compose, keywords: ["start"]) { requests.send(.start, to: taskId) }
         }

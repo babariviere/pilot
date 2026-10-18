@@ -109,7 +109,9 @@ it does not change chat-result read tracking or enable review entry points.
   using its GitHub link or just its number (`123` or `#123`) in the project's GitHub repository.
   Chats open with recent messages; **Show earlier messages** reveals older pages without changing agent context.
 - **Coordinate bigger goals.** Missions group chats around a shared brief, decisions, tasks, dependencies,
-  artifacts and activity, with an optional coordinator agent.
+  artifacts and activity, with an optional coordinator agent. One logical mission list stays visible regardless
+  of a chat's execution devbox. Synced mission evidence retains its canonical identity; disconnected or
+  replica-only summaries remain read-only until current details can be loaded from the mission's home.
 - **Keep useful context.** Build agents can save lasting decisions, preferences and lessons in project
   memory for later chats, rather than task status or secrets. A note can replace an outdated one, and
   duplicates are refused. Background summaries use byte-validated submissions, never hard truncation;

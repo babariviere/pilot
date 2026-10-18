@@ -60,7 +60,10 @@ struct MainWindow: View {
                 .navigationSplitViewColumnWidth(min: 230, ideal: 280, max: 400)
         } detail: {
             Group {
-                if let ref = hosts.selection, ref.host != model.localHost, ref.kind == .session,
+                if let id = model.selectedMissionId, let ref = model.resourceRef(id, kind: .mission) {
+                    LogicalMissionDestination(reference: ref, model: model, registry: model.missionRegistry)
+                        .id(ref.storageKey)
+                } else if let ref = hosts.selection, ref.host != model.localHost, ref.kind == .session,
                    let hosted = hosts.sessions.first(where: { $0.ref == ref }) {
                     SessionDetail(session: hosted.value, context: HostViewContext(host: ref.host, hosts: hosts))
                         .environment(\.hostViewContext, HostViewContext(host: ref.host, hosts: hosts))
@@ -161,6 +164,7 @@ struct MainWindow: View {
             CommandPaletteView().environmentObject(model)
         }
         .onAppear {
+            model.missionRegistry.start(model)
             model.openWindowAction = { openWindow(id: MainWindow.id) }
             model.openKeyboardShortcutsAction = { openWindow(id: KeyboardShortcuts.windowID) }
             KeyboardRouter.shared.install(focus: model.keyboard) { [weak model] route in
@@ -169,6 +173,7 @@ struct MainWindow: View {
             NSApp.setActivationPolicy(.regular)
         }
         .onDisappear {
+            model.missionRegistry.stop()
             // SwiftUI owns the window lifecycle; scene IDs need not be NSWindow identifiers.
             model.flushDrafts()
             // Closing the window leaves the open chat, so a result read there leaves Needs you.
