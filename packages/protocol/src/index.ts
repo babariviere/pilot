@@ -1714,6 +1714,7 @@ export type {
 	ControlDurableOperation,
 	ControlHomeEnrollment,
 	ControlHostConfiguration,
+	ControlHostCutover,
 	ControlHostRequest,
 	ControlMemoryKind,
 	ControlMemoryLine,

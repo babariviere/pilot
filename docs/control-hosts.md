@@ -236,6 +236,42 @@ positive, timestamps epoch milliseconds, reservation USD finite and nonnegative.
 
 ## Archive migration and offline rules
 
+### Negotiation and cutover readiness
+
+The future implementation advertises both `DaemonHello.capabilities.controlHosts = 1` (the
+Control contract version) and `DaemonHello.controlHost` (configuration, schemaVersion 1, home
+identity and this daemon's role). This change only reserves optional wire fields; current hello
+producers do not advertise support. Absent fields, unsupported versions, identity mismatches or
+incompatible general hello protocols disable cross-host routing and cutover. Verify both daemons,
+not just the Mac or a cached app version. Capability support alone never hides an old Control.
+
+`ControlHostCutover` records readiness against the exact binding/generation and both host lineages:
+
+1. Both verified hellos support contract v1, agree on home, and home advertises role home.
+   The configured executor may stage its executor policy before its legacy Control is frozen;
+   that staging alone does not suppress or archive the legacy row.
+2. `homeReady` means the authoritative home Control, grant ledger, durable outbox and import stores
+   are recovered and usable. `executorEnrolled` requires the same active confirmed enrollment on
+   both sides and working registered Control handlers on the executor.
+3. `actionReceiptOperationId` names a real remote authorized action with an accepted matching
+   receipt durably adopted by home, not a successful socket write or health probe.
+4. `watchEventId` names a real remote watch event imported durably after a courier disconnect and
+   reconnect, with duplicate replay producing no second notice.
+5. `taskSnapshotId` names a completely imported capture proving the required task visibility with
+   mission/execution host and epoch. A partial capture or provisional completion is insufficient.
+
+Only all five conditions permit state ready. Evidence is local trusted rollout state, never a
+model-supplied permission, and is invalidated by changed enrollment, version or lineage. The app's
+rollout trigger requests the final archive transition only after ready; that transition reconciles
+the old Control and durably freezes every ingress, watches and grants before recording archived.
+It is the last step, non-destructive and idempotent for the same enrollment and archive session.
+Lost acknowledgments reconcile this same transition; they do not repeat mutations or reactivate
+the old Control. Only verified archived state permits the app to show exactly one active Control
+and move the old one to read-only history. If home is disconnected afterwards, retain its one
+authoritative identity and the archives; do not undo cutover or promote the executor.
+
+### Preserving legacy state
+
 Accepted remote work continues while home sleeps or the app courier is absent. Events wait
 durably on the executor. Home's authorized orchestration operations can remain pending in its
 durable outbox, visibly pending versus acknowledged. This exception is for Control orchestration,
@@ -246,6 +282,9 @@ flows work may explicit migration set a non-home Control to archived-control. Pr
 transcript, memory, authorization records and audit on its original host/lineage. Block new turns,
 scheduled wakes, queued notices, automatic recovery inputs and mutations through every ingress,
 not just the sidebar. Stop its live watches with durable removal audits and freeze its grants.
+Pending legacy watches stop with audit and deliver nothing new. Already-fired notices and the
+old audit remain readable but cannot start another turn. Frozen grants are never merged, revived
+or reinterpreted as home grants.
 Do not silently merge history, memory, grants, reservations or audit into home. Already accepted
 ordinary execution remains owned by that host. Migration must reconcile an active Control turn
 before freezing, not erase an uncertain mutation. Archives remain navigable/readable and clearly

@@ -324,6 +324,24 @@ export interface ControlHomeEnrollment {
 	executor: OperationHost;
 	state: "active" | "revoked";
 }
+/** Durable cutover evidence, pinned to one enrollment. A capability bit alone is not readiness. */
+export interface ControlHostCutover {
+	bindingId: string;
+	generation: number;
+	contractVersion: 1;
+	home: OperationHost;
+	executor: OperationHost;
+	state: "preparing" | "ready" | "archived";
+	homeReady: boolean;
+	executorEnrolled: boolean;
+	/** Conclusive accepted operation, durably adopted at home. */
+	actionReceiptOperationId?: string;
+	/** Remote watch match durably imported at home after reconnect. */
+	watchEventId?: string;
+	/** Fully imported snapshot containing the required qualified task/epoch. */
+	taskSnapshotId?: string;
+	updatedAt: number;
+}
 export type ControlPilotAction =
 	| "status"
 	| "health"
