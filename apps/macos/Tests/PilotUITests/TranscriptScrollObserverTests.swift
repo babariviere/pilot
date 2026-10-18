@@ -204,6 +204,43 @@ private final class FlippedScrollDocument: NSView {
     #expect(scroll.contentView.bounds.minY == 100)
 }
 
+@Test @MainActor func readingAnchorUndoesForeignOffsetsWithinTheHistoryLayoutPass() async throws {
+    let window = testWindow()
+    defer { window.close() }
+    let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+    let document = FlippedScrollDocument(frame: NSRect(x: 0, y: 0, width: 600, height: 1600))
+    scroll.documentView = document
+    let marker = TranscriptRowAnchorView(frame: NSRect(x: 0, y: 600, width: 600, height: 90))
+    marker.rowID = "history-offset"
+    document.addSubview(marker)
+    let state = TranscriptScrollState()
+    state.follow.pauseFollowing()
+    let observer = ScrollObserverView(frame: document.bounds)
+    observer.state = state
+    document.addSubview(observer)
+    window.contentView = scroll
+    scroll.layoutSubtreeIfNeeded()
+    scroll.contentView.scroll(to: NSPoint(x: 0, y: 500))
+    observer.captureAnchor()
+    try await Task.sleep(for: .milliseconds(30))
+
+    document.setFrameSize(NSSize(width: 600, height: 1900))
+    marker.setFrameOrigin(NSPoint(x: 0, y: 900))
+    #expect(abs(scroll.contentView.bounds.minY - 800) <= 0.5)
+    // SwiftUI can restore its own adjusted offset after the native anchor already settled.
+    // The row's document geometry did not change again, but its screen position must still be pinned.
+    scroll.contentView.scroll(to: NSPoint(x: 0, y: 1100))
+    #expect(abs(scroll.contentView.bounds.minY - 800) <= 0.5)
+    // A real wheel notification following the same bounds change must still keep the user's movement.
+    scroll.contentView.scroll(to: NSPoint(x: 0, y: 1000))
+    NotificationCenter.default.post(name: NSScrollView.didLiveScrollNotification, object: scroll)
+    #expect(abs(scroll.contentView.bounds.minY - 1000) <= 0.5)
+    try await Task.sleep(for: .milliseconds(30))
+    scroll.contentView.scroll(to: NSPoint(x: 0, y: 900))
+    #expect(abs(scroll.contentView.bounds.minY - 900) <= 0.5, "idle keyboard scrolling remains free")
+    observer.stopObserving()
+}
+
 @Test @MainActor func nativeUserScrollingPausesFollowButLayoutChangesDoNot() {
     let window = testWindow()
     defer { window.close() }
