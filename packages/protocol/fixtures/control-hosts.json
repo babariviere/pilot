@@ -5926,7 +5926,8 @@
 				"text": "Quoted untrusted result",
 				"cached": true
 			},
-			"truncated": false
+			"truncated": false,
+			"availability": "available"
 		},
 		{
 			"requestId": "read:1",
@@ -5941,7 +5942,8 @@
 				"text": "Quoted untrusted result",
 				"cached": true
 			},
-			"truncated": false
+			"truncated": false,
+			"availability": "available"
 		},
 		{
 			"requestId": "read:2",
@@ -5956,7 +5958,8 @@
 				"text": "Quoted untrusted result",
 				"cached": true
 			},
-			"truncated": false
+			"truncated": false,
+			"availability": "available"
 		},
 		{
 			"requestId": "read:3",
@@ -5971,7 +5974,8 @@
 				"text": "Quoted untrusted result",
 				"cached": true
 			},
-			"truncated": false
+			"truncated": false,
+			"availability": "available"
 		},
 		{
 			"requestId": "read:4",
@@ -5986,7 +5990,8 @@
 				"text": "Quoted untrusted result",
 				"cached": true
 			},
-			"truncated": false
+			"truncated": false,
+			"availability": "available"
 		}
 	],
 	"readExchangeRequest": {
@@ -6145,5 +6150,1131 @@
 		"method": "PUT",
 		"path": "/api/control-hosts/control:binding:1/enrollment",
 		"bodyHash": "fixture-body-hash"
+	},
+	"readOutcomes": [
+		{
+			"requestId": "read:0",
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"availability": "available",
+			"response": {
+				"requestId": "read:0",
+				"sourceHost": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"capturedAt": 4000,
+				"untrusted": true,
+				"result": {
+					"text": "Quoted untrusted result",
+					"cached": true
+				},
+				"truncated": false,
+				"availability": "available"
+			}
+		},
+		{
+			"requestId": "read:1",
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"availability": "disconnected",
+			"error": {
+				"code": "read_unavailable",
+				"error": "Verified target transport is disconnected"
+			}
+		}
+	],
+	"readImportRequests": [
+		{
+			"outcome": {
+				"requestId": "read:0",
+				"host": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"availability": "available",
+				"response": {
+					"requestId": "read:0",
+					"sourceHost": {
+						"hostId": "daemon",
+						"daemonId": "executor-daemon",
+						"lineageId": "executor-lineage"
+					},
+					"capturedAt": 4000,
+					"untrusted": true,
+					"result": {
+						"text": "Quoted untrusted result",
+						"cached": true
+					},
+					"truncated": false,
+					"availability": "available"
+				}
+			}
+		},
+		{
+			"outcome": {
+				"requestId": "read:1",
+				"host": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"availability": "disconnected",
+				"error": {
+					"code": "read_unavailable",
+					"error": "Verified target transport is disconnected"
+				}
+			}
+		}
+	],
+	"pairingResults": [
+		{
+			"configuration": {
+				"schemaVersion": 1,
+				"roleEpoch": 1,
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"host": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"role": "home",
+				"controlSessionId": "old-control",
+				"legacyControlSessionId": "old-control",
+				"stagedRole": {
+					"home": {
+						"hostId": "daemon",
+						"daemonId": "home-daemon",
+						"lineageId": "home-lineage"
+					},
+					"role": "executor",
+					"phase": "paired"
+				}
+			},
+			"enrollment": {
+				"schemaVersion": 1,
+				"bindingId": "control:binding:1",
+				"generation": 1,
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"executor": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"state": "active"
+			},
+			"peerHello": {
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage",
+				"daemonVersion": "fixture",
+				"protocolVersion": 1,
+				"minimumClientProtocolVersion": 1,
+				"platform": "fixture",
+				"arch": "fixture",
+				"capabilities": {
+					"powerManagement": false,
+					"systemSleepEvents": false,
+					"swiftUIArtifacts": false,
+					"coordinatorIsolation": true,
+					"independentExecution": true,
+					"controlHosts": 1
+				},
+				"controlHost": {
+					"schemaVersion": 1,
+					"home": {
+						"hostId": "daemon",
+						"daemonId": "home-daemon",
+						"lineageId": "home-lineage"
+					},
+					"host": {
+						"hostId": "daemon",
+						"daemonId": "home-daemon",
+						"lineageId": "home-lineage"
+					},
+					"role": "home",
+					"controlSessionId": "control",
+					"roleEpoch": 1
+				}
+			},
+			"courierCapability": {
+				"id": "courier:1",
+				"bindingId": "control:binding:1",
+				"generation": 1,
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"executor": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"appKeyId": "native-key:1",
+				"roleFence": {
+					"home": 1,
+					"executor": 1
+				},
+				"expiresAt": 10000,
+				"scopes": ["exchange", "receipts", "events", "status", "reads", "inspect", "archive-read"]
+			},
+			"roleAcknowledgments": [
+				{
+					"contractVersion": 1,
+					"bindingId": "control:binding:1",
+					"generation": 1,
+					"home": {
+						"hostId": "daemon",
+						"daemonId": "home-daemon",
+						"lineageId": "home-lineage"
+					},
+					"host": {
+						"hostId": "daemon",
+						"daemonId": "executor-daemon",
+						"lineageId": "executor-lineage"
+					},
+					"role": "home",
+					"roleEpoch": 1,
+					"intentId": "approval:enroll:0"
+				}
+			],
+			"pairing": {
+				"phase": "partial",
+				"localCommitted": true,
+				"peerCommitted": false
+			},
+			"mutation": {
+				"disposition": "applied",
+				"intentId": "approval:enroll:0"
+			}
+		},
+		{
+			"configuration": {
+				"schemaVersion": 1,
+				"roleEpoch": 1,
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"host": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"role": "home",
+				"controlSessionId": "old-control",
+				"legacyControlSessionId": "old-control",
+				"stagedRole": {
+					"home": {
+						"hostId": "daemon",
+						"daemonId": "home-daemon",
+						"lineageId": "home-lineage"
+					},
+					"role": "executor",
+					"phase": "paired"
+				}
+			},
+			"enrollment": {
+				"schemaVersion": 1,
+				"bindingId": "control:binding:1",
+				"generation": 1,
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"executor": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"state": "active"
+			},
+			"peerHello": {
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage",
+				"daemonVersion": "fixture",
+				"protocolVersion": 1,
+				"minimumClientProtocolVersion": 1,
+				"platform": "fixture",
+				"arch": "fixture",
+				"capabilities": {
+					"powerManagement": false,
+					"systemSleepEvents": false,
+					"swiftUIArtifacts": false,
+					"coordinatorIsolation": true,
+					"independentExecution": true,
+					"controlHosts": 1
+				},
+				"controlHost": {
+					"schemaVersion": 1,
+					"home": {
+						"hostId": "daemon",
+						"daemonId": "home-daemon",
+						"lineageId": "home-lineage"
+					},
+					"host": {
+						"hostId": "daemon",
+						"daemonId": "home-daemon",
+						"lineageId": "home-lineage"
+					},
+					"role": "home",
+					"controlSessionId": "control",
+					"roleEpoch": 1
+				}
+			},
+			"courierCapability": {
+				"id": "courier:1",
+				"bindingId": "control:binding:1",
+				"generation": 1,
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"executor": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"appKeyId": "native-key:1",
+				"roleFence": {
+					"home": 1,
+					"executor": 1
+				},
+				"expiresAt": 10000,
+				"scopes": ["exchange", "receipts", "events", "status", "reads", "inspect", "archive-read"]
+			},
+			"roleAcknowledgments": [
+				{
+					"contractVersion": 1,
+					"bindingId": "control:binding:1",
+					"generation": 1,
+					"home": {
+						"hostId": "daemon",
+						"daemonId": "home-daemon",
+						"lineageId": "home-lineage"
+					},
+					"host": {
+						"hostId": "daemon",
+						"daemonId": "executor-daemon",
+						"lineageId": "executor-lineage"
+					},
+					"role": "home",
+					"roleEpoch": 1,
+					"intentId": "approval:enroll:0"
+				}
+			],
+			"pairing": {
+				"phase": "paired",
+				"localCommitted": true,
+				"peerCommitted": true
+			},
+			"mutation": {
+				"disposition": "applied",
+				"intentId": "approval:enroll:1"
+			}
+		},
+		{
+			"configuration": {
+				"schemaVersion": 1,
+				"roleEpoch": 1,
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"host": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"role": "home",
+				"controlSessionId": "old-control",
+				"legacyControlSessionId": "old-control",
+				"stagedRole": {
+					"home": {
+						"hostId": "daemon",
+						"daemonId": "home-daemon",
+						"lineageId": "home-lineage"
+					},
+					"role": "executor",
+					"phase": "paired"
+				}
+			},
+			"enrollment": {
+				"schemaVersion": 1,
+				"bindingId": "control:binding:1",
+				"generation": 1,
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"executor": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"state": "active"
+			},
+			"peerHello": {
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage",
+				"daemonVersion": "fixture",
+				"protocolVersion": 1,
+				"minimumClientProtocolVersion": 1,
+				"platform": "fixture",
+				"arch": "fixture",
+				"capabilities": {
+					"powerManagement": false,
+					"systemSleepEvents": false,
+					"swiftUIArtifacts": false,
+					"coordinatorIsolation": true,
+					"independentExecution": true,
+					"controlHosts": 1
+				},
+				"controlHost": {
+					"schemaVersion": 1,
+					"home": {
+						"hostId": "daemon",
+						"daemonId": "home-daemon",
+						"lineageId": "home-lineage"
+					},
+					"host": {
+						"hostId": "daemon",
+						"daemonId": "home-daemon",
+						"lineageId": "home-lineage"
+					},
+					"role": "home",
+					"controlSessionId": "control",
+					"roleEpoch": 1
+				}
+			},
+			"courierCapability": {
+				"id": "courier:1",
+				"bindingId": "control:binding:1",
+				"generation": 1,
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"executor": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"appKeyId": "native-key:1",
+				"roleFence": {
+					"home": 1,
+					"executor": 1
+				},
+				"expiresAt": 10000,
+				"scopes": ["exchange", "receipts", "events", "status", "reads", "inspect", "archive-read"]
+			},
+			"roleAcknowledgments": [
+				{
+					"contractVersion": 1,
+					"bindingId": "control:binding:1",
+					"generation": 1,
+					"home": {
+						"hostId": "daemon",
+						"daemonId": "home-daemon",
+						"lineageId": "home-lineage"
+					},
+					"host": {
+						"hostId": "daemon",
+						"daemonId": "executor-daemon",
+						"lineageId": "executor-lineage"
+					},
+					"role": "home",
+					"roleEpoch": 1,
+					"intentId": "approval:enroll:0"
+				}
+			],
+			"pairing": {
+				"phase": "paired",
+				"localCommitted": true,
+				"peerCommitted": true
+			},
+			"mutation": {
+				"disposition": "replayed",
+				"intentId": "approval:enroll:1"
+			}
+		}
+	],
+	"pairingAcknowledgment": {
+		"peerRoleAcknowledgment": {
+			"contractVersion": 1,
+			"bindingId": "control:binding:1",
+			"generation": 1,
+			"home": {
+				"hostId": "daemon",
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage"
+			},
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage"
+			},
+			"role": "home",
+			"roleEpoch": 1,
+			"intentId": "approval:enroll:1"
+		},
+		"peerHello": {
+			"daemonId": "home-daemon",
+			"lineageId": "home-lineage",
+			"daemonVersion": "fixture",
+			"protocolVersion": 1,
+			"minimumClientProtocolVersion": 1,
+			"platform": "fixture",
+			"arch": "fixture",
+			"capabilities": {
+				"powerManagement": false,
+				"systemSleepEvents": false,
+				"swiftUIArtifacts": false,
+				"coordinatorIsolation": true,
+				"independentExecution": true,
+				"controlHosts": 1
+			},
+			"controlHost": {
+				"schemaVersion": 1,
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"host": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"role": "home",
+				"controlSessionId": "control",
+				"roleEpoch": 1
+			}
+		}
+	},
+	"pairingConflict": {
+		"code": "stale_generation",
+		"error": "Refresh exact peer generation",
+		"current": {
+			"configuration": {
+				"schemaVersion": 1,
+				"roleEpoch": 1,
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"host": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"role": "home",
+				"controlSessionId": "old-control",
+				"legacyControlSessionId": "old-control",
+				"stagedRole": {
+					"home": {
+						"hostId": "daemon",
+						"daemonId": "home-daemon",
+						"lineageId": "home-lineage"
+					},
+					"role": "executor",
+					"phase": "paired"
+				}
+			},
+			"enrollment": {
+				"schemaVersion": 1,
+				"bindingId": "control:binding:1",
+				"generation": 1,
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"executor": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"state": "active"
+			},
+			"peerHello": {
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage",
+				"daemonVersion": "fixture",
+				"protocolVersion": 1,
+				"minimumClientProtocolVersion": 1,
+				"platform": "fixture",
+				"arch": "fixture",
+				"capabilities": {
+					"powerManagement": false,
+					"systemSleepEvents": false,
+					"swiftUIArtifacts": false,
+					"coordinatorIsolation": true,
+					"independentExecution": true,
+					"controlHosts": 1
+				},
+				"controlHost": {
+					"schemaVersion": 1,
+					"home": {
+						"hostId": "daemon",
+						"daemonId": "home-daemon",
+						"lineageId": "home-lineage"
+					},
+					"host": {
+						"hostId": "daemon",
+						"daemonId": "home-daemon",
+						"lineageId": "home-lineage"
+					},
+					"role": "home",
+					"controlSessionId": "control",
+					"roleEpoch": 1
+				}
+			},
+			"courierCapability": {
+				"id": "courier:1",
+				"bindingId": "control:binding:1",
+				"generation": 1,
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"executor": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"appKeyId": "native-key:1",
+				"roleFence": {
+					"home": 1,
+					"executor": 1
+				},
+				"expiresAt": 10000,
+				"scopes": ["exchange", "receipts", "events", "status", "reads", "inspect", "archive-read"]
+			},
+			"roleAcknowledgments": [
+				{
+					"contractVersion": 1,
+					"bindingId": "control:binding:1",
+					"generation": 1,
+					"home": {
+						"hostId": "daemon",
+						"daemonId": "home-daemon",
+						"lineageId": "home-lineage"
+					},
+					"host": {
+						"hostId": "daemon",
+						"daemonId": "executor-daemon",
+						"lineageId": "executor-lineage"
+					},
+					"role": "home",
+					"roleEpoch": 1,
+					"intentId": "approval:enroll:0"
+				}
+			],
+			"pairing": {
+				"phase": "paired",
+				"localCommitted": true,
+				"peerCommitted": true
+			},
+			"mutation": {
+				"disposition": "applied",
+				"intentId": "approval:enroll:1"
+			}
+		}
+	},
+	"archiveLookups": [
+		{
+			"operation": {
+				"schemaVersion": 1,
+				"operationId": "archive:1",
+				"producerId": "producer:1",
+				"sequence": 2,
+				"origin": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"destination": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"kind": "control.archive",
+				"targetId": "old-control",
+				"payload": "{\"idempotencyKey\":\"archive:1\",\"sessionId\":\"old-control\",\"readiness\":{\"bindingId\":\"control:binding:1\",\"generation\":1,\"contractVersion\":1,\"home\":{\"hostId\":\"daemon\",\"daemonId\":\"home-daemon\",\"lineageId\":\"home-lineage\"},\"executor\":{\"hostId\":\"daemon\",\"daemonId\":\"executor-daemon\",\"lineageId\":\"executor-lineage\"},\"state\":\"ready\",\"homeReady\":true,\"executorEnrolled\":true,\"actionReceiptOperationId\":\"operation:1\",\"watchEventId\":\"event:1\",\"taskSnapshotId\":\"snapshot:1\",\"updatedAt\":5000,\"roleFence\":{\"home\":1,\"executor\":2},\"compatibleRoutes\":true,\"archiveReady\":true,\"acceptance\":{\"suite\":\"control-hosts-two-daemon-v1\",\"homeBuildId\":\"fixture-build-home\",\"executorBuildId\":\"fixture-build-executor\",\"daemonProofId\":\"fixture-daemon-proof\",\"realCourier\":{\"suite\":\"control-hosts-real-courier-v1\",\"appBuildId\":\"fixture-app-build\",\"proofId\":\"fixture-courier-proof\"}}},\"roleFence\":{\"home\":1,\"executor\":2}}",
+				"payloadHash": "fixture-sha256-not-for-admission",
+				"bindingId": "control:binding:1",
+				"bindingGeneration": 1
+			},
+			"delivery": {
+				"state": "unknown"
+			},
+			"adopted": false
+		},
+		{
+			"operation": {
+				"schemaVersion": 1,
+				"operationId": "archive:1",
+				"producerId": "producer:1",
+				"sequence": 2,
+				"origin": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"destination": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"kind": "control.archive",
+				"targetId": "old-control",
+				"payload": "{\"idempotencyKey\":\"archive:1\",\"sessionId\":\"old-control\",\"readiness\":{\"bindingId\":\"control:binding:1\",\"generation\":1,\"contractVersion\":1,\"home\":{\"hostId\":\"daemon\",\"daemonId\":\"home-daemon\",\"lineageId\":\"home-lineage\"},\"executor\":{\"hostId\":\"daemon\",\"daemonId\":\"executor-daemon\",\"lineageId\":\"executor-lineage\"},\"state\":\"ready\",\"homeReady\":true,\"executorEnrolled\":true,\"actionReceiptOperationId\":\"operation:1\",\"watchEventId\":\"event:1\",\"taskSnapshotId\":\"snapshot:1\",\"updatedAt\":5000,\"roleFence\":{\"home\":1,\"executor\":2},\"compatibleRoutes\":true,\"archiveReady\":true,\"acceptance\":{\"suite\":\"control-hosts-two-daemon-v1\",\"homeBuildId\":\"fixture-build-home\",\"executorBuildId\":\"fixture-build-executor\",\"daemonProofId\":\"fixture-daemon-proof\",\"realCourier\":{\"suite\":\"control-hosts-real-courier-v1\",\"appBuildId\":\"fixture-app-build\",\"proofId\":\"fixture-courier-proof\"}}},\"roleFence\":{\"home\":1,\"executor\":2}}",
+				"payloadHash": "fixture-sha256-not-for-admission",
+				"bindingId": "control:binding:1",
+				"bindingGeneration": 1
+			},
+			"delivery": {
+				"operationId": "archive:1",
+				"payloadHash": "fixture-sha256-not-for-admission",
+				"destination": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"targetId": "old-control",
+				"state": "accepted",
+				"result": {
+					"kind": "control.archive",
+					"configuration": {
+						"schemaVersion": 1,
+						"home": {
+							"hostId": "daemon",
+							"daemonId": "home-daemon",
+							"lineageId": "home-lineage"
+						},
+						"host": {
+							"hostId": "daemon",
+							"daemonId": "executor-daemon",
+							"lineageId": "executor-lineage"
+						},
+						"role": "archived-control",
+						"archive": {
+							"sessionId": "old-control",
+							"archivedAt": 2000
+						},
+						"roleEpoch": 3
+					},
+					"cutover": {
+						"bindingId": "control:binding:1",
+						"generation": 1,
+						"contractVersion": 1,
+						"home": {
+							"hostId": "daemon",
+							"daemonId": "home-daemon",
+							"lineageId": "home-lineage"
+						},
+						"executor": {
+							"hostId": "daemon",
+							"daemonId": "executor-daemon",
+							"lineageId": "executor-lineage"
+						},
+						"state": "archived",
+						"homeReady": true,
+						"executorEnrolled": true,
+						"actionReceiptOperationId": "operation:1",
+						"watchEventId": "event:1",
+						"taskSnapshotId": "snapshot:1",
+						"updatedAt": 5000,
+						"roleFence": {
+							"home": 1,
+							"executor": 3
+						},
+						"compatibleRoutes": true,
+						"archiveReady": true,
+						"acceptance": {
+							"suite": "control-hosts-two-daemon-v1",
+							"homeBuildId": "fixture-build-home",
+							"executorBuildId": "fixture-build-executor",
+							"daemonProofId": "fixture-daemon-proof",
+							"realCourier": {
+								"suite": "control-hosts-real-courier-v1",
+								"appBuildId": "fixture-app-build",
+								"proofId": "fixture-courier-proof"
+							}
+						}
+					},
+					"roleAcknowledgment": {
+						"contractVersion": 1,
+						"bindingId": "control:binding:1",
+						"generation": 1,
+						"home": {
+							"hostId": "daemon",
+							"daemonId": "home-daemon",
+							"lineageId": "home-lineage"
+						},
+						"host": {
+							"hostId": "daemon",
+							"daemonId": "executor-daemon",
+							"lineageId": "executor-lineage"
+						},
+						"role": "archived-control",
+						"roleEpoch": 3,
+						"intentId": "archive:1",
+						"sessionId": "old-control",
+						"archivedAt": 2000
+					}
+				}
+			},
+			"adopted": false
+		},
+		{
+			"operation": {
+				"schemaVersion": 1,
+				"operationId": "archive:1",
+				"producerId": "producer:1",
+				"sequence": 2,
+				"origin": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"destination": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"kind": "control.archive",
+				"targetId": "old-control",
+				"payload": "{\"idempotencyKey\":\"archive:1\",\"sessionId\":\"old-control\",\"readiness\":{\"bindingId\":\"control:binding:1\",\"generation\":1,\"contractVersion\":1,\"home\":{\"hostId\":\"daemon\",\"daemonId\":\"home-daemon\",\"lineageId\":\"home-lineage\"},\"executor\":{\"hostId\":\"daemon\",\"daemonId\":\"executor-daemon\",\"lineageId\":\"executor-lineage\"},\"state\":\"ready\",\"homeReady\":true,\"executorEnrolled\":true,\"actionReceiptOperationId\":\"operation:1\",\"watchEventId\":\"event:1\",\"taskSnapshotId\":\"snapshot:1\",\"updatedAt\":5000,\"roleFence\":{\"home\":1,\"executor\":2},\"compatibleRoutes\":true,\"archiveReady\":true,\"acceptance\":{\"suite\":\"control-hosts-two-daemon-v1\",\"homeBuildId\":\"fixture-build-home\",\"executorBuildId\":\"fixture-build-executor\",\"daemonProofId\":\"fixture-daemon-proof\",\"realCourier\":{\"suite\":\"control-hosts-real-courier-v1\",\"appBuildId\":\"fixture-app-build\",\"proofId\":\"fixture-courier-proof\"}}},\"roleFence\":{\"home\":1,\"executor\":2}}",
+				"payloadHash": "fixture-sha256-not-for-admission",
+				"bindingId": "control:binding:1",
+				"bindingGeneration": 1
+			},
+			"delivery": {
+				"operationId": "archive:1",
+				"payloadHash": "fixture-sha256-not-for-admission",
+				"destination": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"targetId": "old-control",
+				"state": "accepted",
+				"result": {
+					"kind": "control.archive",
+					"configuration": {
+						"schemaVersion": 1,
+						"home": {
+							"hostId": "daemon",
+							"daemonId": "home-daemon",
+							"lineageId": "home-lineage"
+						},
+						"host": {
+							"hostId": "daemon",
+							"daemonId": "executor-daemon",
+							"lineageId": "executor-lineage"
+						},
+						"role": "archived-control",
+						"archive": {
+							"sessionId": "old-control",
+							"archivedAt": 2000
+						},
+						"roleEpoch": 3
+					},
+					"cutover": {
+						"bindingId": "control:binding:1",
+						"generation": 1,
+						"contractVersion": 1,
+						"home": {
+							"hostId": "daemon",
+							"daemonId": "home-daemon",
+							"lineageId": "home-lineage"
+						},
+						"executor": {
+							"hostId": "daemon",
+							"daemonId": "executor-daemon",
+							"lineageId": "executor-lineage"
+						},
+						"state": "archived",
+						"homeReady": true,
+						"executorEnrolled": true,
+						"actionReceiptOperationId": "operation:1",
+						"watchEventId": "event:1",
+						"taskSnapshotId": "snapshot:1",
+						"updatedAt": 5000,
+						"roleFence": {
+							"home": 1,
+							"executor": 3
+						},
+						"compatibleRoutes": true,
+						"archiveReady": true,
+						"acceptance": {
+							"suite": "control-hosts-two-daemon-v1",
+							"homeBuildId": "fixture-build-home",
+							"executorBuildId": "fixture-build-executor",
+							"daemonProofId": "fixture-daemon-proof",
+							"realCourier": {
+								"suite": "control-hosts-real-courier-v1",
+								"appBuildId": "fixture-app-build",
+								"proofId": "fixture-courier-proof"
+							}
+						}
+					},
+					"roleAcknowledgment": {
+						"contractVersion": 1,
+						"bindingId": "control:binding:1",
+						"generation": 1,
+						"home": {
+							"hostId": "daemon",
+							"daemonId": "home-daemon",
+							"lineageId": "home-lineage"
+						},
+						"host": {
+							"hostId": "daemon",
+							"daemonId": "executor-daemon",
+							"lineageId": "executor-lineage"
+						},
+						"role": "archived-control",
+						"roleEpoch": 3,
+						"intentId": "archive:1",
+						"sessionId": "old-control",
+						"archivedAt": 2000
+					}
+				}
+			},
+			"adopted": true,
+			"roleAcknowledgment": {
+				"contractVersion": 1,
+				"bindingId": "control:binding:1",
+				"generation": 1,
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"host": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"role": "archived-control",
+				"roleEpoch": 3,
+				"intentId": "archive:1",
+				"sessionId": "old-control",
+				"archivedAt": 2000
+			}
+		}
+	],
+	"bootstrapRequests": [
+		{
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "fresh-daemon",
+				"lineageId": "fresh-lineage"
+			},
+			"home": {
+				"hostId": "daemon",
+				"daemonId": "fresh-daemon",
+				"lineageId": "fresh-lineage"
+			},
+			"role": "home",
+			"mode": "fresh",
+			"expectedRoleEpoch": 0,
+			"idempotencyKey": "bootstrap:fresh",
+			"approvalRequestId": "approval:bootstrap"
+		},
+		{
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"home": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"role": "home",
+			"mode": "preserve-legacy",
+			"expectedRoleEpoch": 0,
+			"idempotencyKey": "bootstrap:legacy",
+			"approvalRequestId": "approval:legacy"
+		}
+	],
+	"bootstrapStatuses": [
+		{
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "fresh-daemon",
+				"lineageId": "fresh-lineage"
+			},
+			"state": "unconfigured",
+			"roleEpoch": 0
+		},
+		{
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "fresh-daemon",
+				"lineageId": "fresh-lineage"
+			},
+			"state": "configured",
+			"roleEpoch": 1,
+			"configuration": {
+				"schemaVersion": 1,
+				"roleEpoch": 1,
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "fresh-daemon",
+					"lineageId": "fresh-lineage"
+				},
+				"host": {
+					"hostId": "daemon",
+					"daemonId": "fresh-daemon",
+					"lineageId": "fresh-lineage"
+				},
+				"role": "home"
+			},
+			"roleAcknowledgment": {
+				"contractVersion": 1,
+				"bindingId": "role-bootstrap:fresh-daemon:fresh-lineage",
+				"generation": 1,
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "fresh-daemon",
+					"lineageId": "fresh-lineage"
+				},
+				"host": {
+					"hostId": "daemon",
+					"daemonId": "fresh-daemon",
+					"lineageId": "fresh-lineage"
+				},
+				"role": "home",
+				"roleEpoch": 1,
+				"intentId": "bootstrap:fresh"
+			}
+		},
+		{
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"state": "legacy-migration-required",
+			"roleEpoch": 0
+		}
+	],
+	"bootstrapResults": [
+		{
+			"configuration": {
+				"schemaVersion": 1,
+				"roleEpoch": 1,
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "fresh-daemon",
+					"lineageId": "fresh-lineage"
+				},
+				"host": {
+					"hostId": "daemon",
+					"daemonId": "fresh-daemon",
+					"lineageId": "fresh-lineage"
+				},
+				"role": "home"
+			},
+			"roleAcknowledgment": {
+				"contractVersion": 1,
+				"bindingId": "role-bootstrap:fresh-daemon:fresh-lineage",
+				"generation": 1,
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "fresh-daemon",
+					"lineageId": "fresh-lineage"
+				},
+				"host": {
+					"hostId": "daemon",
+					"daemonId": "fresh-daemon",
+					"lineageId": "fresh-lineage"
+				},
+				"role": "home",
+				"roleEpoch": 1,
+				"intentId": "bootstrap:fresh"
+			},
+			"mutation": {
+				"disposition": "applied",
+				"intentId": "bootstrap:fresh"
+			}
+		},
+		{
+			"configuration": {
+				"schemaVersion": 1,
+				"roleEpoch": 1,
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "fresh-daemon",
+					"lineageId": "fresh-lineage"
+				},
+				"host": {
+					"hostId": "daemon",
+					"daemonId": "fresh-daemon",
+					"lineageId": "fresh-lineage"
+				},
+				"role": "home"
+			},
+			"roleAcknowledgment": {
+				"contractVersion": 1,
+				"bindingId": "role-bootstrap:fresh-daemon:fresh-lineage",
+				"generation": 1,
+				"home": {
+					"hostId": "daemon",
+					"daemonId": "fresh-daemon",
+					"lineageId": "fresh-lineage"
+				},
+				"host": {
+					"hostId": "daemon",
+					"daemonId": "fresh-daemon",
+					"lineageId": "fresh-lineage"
+				},
+				"role": "home",
+				"roleEpoch": 1,
+				"intentId": "bootstrap:fresh"
+			},
+			"mutation": {
+				"disposition": "replayed",
+				"intentId": "bootstrap:fresh"
+			}
+		}
+	],
+	"bootstrapApproval": {
+		"action": "bootstrap",
+		"appKeyId": "native-key:1",
+		"intentPayload": "{\"host\":{\"hostId\":\"daemon\",\"daemonId\":\"fresh-daemon\",\"lineageId\":\"fresh-lineage\"},\"home\":{\"hostId\":\"daemon\",\"daemonId\":\"fresh-daemon\",\"lineageId\":\"fresh-lineage\"},\"role\":\"home\",\"mode\":\"fresh\",\"expectedRoleEpoch\":0,\"idempotencyKey\":\"bootstrap:fresh\"}"
+	},
+	"bootstrapError": {
+		"code": "legacy_migration_required",
+		"error": "Preserve and reconcile original legacy policy"
 	}
 }

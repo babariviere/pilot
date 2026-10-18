@@ -4,6 +4,36 @@ import Testing
 
 struct ControlHostsProtocolTests {
 
+    @Test func bootstrapPairingReplayArchiveLookupAndReadAvailabilityRoundTrip() throws {
+        let f = try fixtures()
+        let requests = try roundTrip([ControlRoleBootstrapRequest].self, #require(f["bootstrapRequests"]))
+        #expect(requests.map(\.expectedRoleEpoch) == [0, 0])
+        #expect(ControlRoleBootstrapRequest(host: requests[0].host, home: requests[0].home, role: .home,
+                                            mode: .fresh, idempotencyKey: "bootstrap:fresh",
+                                            approvalRequestId: "approval:bootstrap") == requests[0])
+        _ = try roundTrip([ControlRoleBootstrapStatus].self, #require(f["bootstrapStatuses"]))
+        let results = try roundTrip([ControlRoleBootstrapResult].self, #require(f["bootstrapResults"]))
+        #expect(results.map(\.mutation.disposition) == [.applied, .replayed])
+        #expect(results[0].roleAcknowledgment == results[1].roleAcknowledgment)
+        _ = try roundTrip(ControlHostApprovalInput.self, #require(f["bootstrapApproval"]))
+        _ = try roundTrip(ControlHostErrorResponse.self, #require(f["bootstrapError"]))
+        let pairing = try roundTrip([ControlHostStateResponse].self, #require(f["pairingResults"]))
+        #expect(pairing.map { $0.pairing?.phase } == [.partial, .paired, .paired])
+        #expect(pairing[2].mutation?.disposition == .replayed)
+        _ = try roundTrip(ControlPairingAcknowledgment.self, #require(f["pairingAcknowledgment"]))
+        _ = try roundTrip(ControlHostErrorResponse.self, #require(f["pairingConflict"]))
+        let lookup = try roundTrip([ControlArchiveLookupResponse].self, #require(f["archiveLookups"]))
+        #expect(lookup[0].delivery == .unknown)
+        #expect(lookup[1].adopted == false)
+        #expect(lookup[1].roleAcknowledgment == nil)
+        #expect(lookup[2].roleAcknowledgment?.intentId == "archive:1")
+        let reads = try roundTrip([ControlRemoteReadOutcome].self, #require(f["readOutcomes"]))
+        #expect(reads[0].response?.availability == .available)
+        #expect(reads[1].availability == .disconnected)
+        #expect(reads[1].response == nil)
+        _ = try roundTrip([ControlReadImportRequest].self, #require(f["readImportRequests"]))
+    }
+
     private struct DelegationCase: Codable, Equatable {
         let name: String
         let sealed: ControlDelegationFence

@@ -94,6 +94,8 @@ public struct ControlHostStateResponse: Codable, Equatable, Sendable {
     public let cutover: ControlHostCutover?
     public let roleAcknowledgments: [ControlRoleAcknowledgment]?
     public let courierCapability: ControlCourierCapability?
+    public let pairing: ControlPairingState?
+    public let mutation: ControlMutationResult?
 }
 public struct ControlArchiveRequest: Codable, Equatable, Sendable {
     public let approvalRequestId: String
@@ -442,7 +444,7 @@ public struct ControlHostInvalidation: Codable, Equatable, Sendable {
     public let changes: [Change]
 }
 public struct ControlHostApprovalInput: Codable, Equatable, Sendable {
-    public enum Action: String, Codable, Sendable { case enroll, unpair, archive }
+    public enum Action: String, Codable, Sendable { case enroll, unpair, archive, bootstrap }
     public let action: Action
     public let appKeyId: String
     public let intentPayload: String
@@ -675,12 +677,14 @@ public struct ControlHostErrorResponse: Codable, Equatable, Sendable {
         case rollbackNotPermitted = "rollback_not_permitted"
         case authenticationRequired = "authentication_required", capabilityDenied = "capability_denied"
         case capabilityExpired = "capability_expired", readUnavailable = "read_unavailable"
+        case legacyMigrationRequired = "legacy_migration_required"
     }
     public let code: Code
     public let error: String
     public let syncState: ControlHostSyncState?
     public let checkpoint: ControlRemoteEventCheckpoint?
     public let floor: ControlEventFloor?
+    public let current: ControlHostStateResponse?
 }
 
 public struct ControlStagedRole: Codable, Equatable, Sendable {
@@ -847,6 +851,7 @@ public struct ControlRemoteReadResponse: Codable, Equatable, Sendable {
     public let untrusted: Bool
     public let result: JSONValue
     public let truncated: Bool
+    public let availability: ControlHostAvailability
 }
 public struct ControlReadExchangeRequest: Codable, Equatable, Sendable {
     public let peer: OperationHost
@@ -862,4 +867,96 @@ public struct ControlReadImportResponse: Codable, Equatable, Sendable {
     public enum State: String, Codable, Sendable { case delivered, expired }
     public let requestId: String
     public let state: State
+}
+public struct ControlRemoteReadOutcome: Codable, Equatable, Sendable {
+    public let requestId: String
+    public let host: OperationHost
+    public let availability: ControlHostAvailability
+    public let response: ControlRemoteReadResponse?
+    public let error: ControlHostErrorResponse?
+    public init(requestId: String, host: OperationHost, availability: ControlHostAvailability,
+                response: ControlRemoteReadResponse? = nil, error: ControlHostErrorResponse? = nil) {
+        self.requestId = requestId; self.host = host; self.availability = availability
+        self.response = response; self.error = error
+    }
+}
+public struct ControlReadImportRequest: Codable, Equatable, Sendable {
+    public let outcome: ControlRemoteReadOutcome
+    public init(outcome: ControlRemoteReadOutcome) { self.outcome = outcome }
+}
+
+public struct ControlMutationResult: Codable, Equatable, Sendable {
+    public enum Disposition: String, Codable, Sendable { case applied, replayed }
+    public let disposition: Disposition
+    public let intentId: String
+}
+public struct ControlPairingState: Codable, Equatable, Sendable {
+    public enum Phase: String, Codable, Sendable { case partial, paired, revoked }
+    public let phase: Phase
+    public let localCommitted: Bool
+    public let peerCommitted: Bool
+}
+public struct ControlPairingAcknowledgment: Codable, Equatable, Sendable {
+    public let peerRoleAcknowledgment: ControlRoleAcknowledgment
+    public let peerHello: DaemonHello
+    public init(peerRoleAcknowledgment: ControlRoleAcknowledgment, peerHello: DaemonHello) {
+        self.peerRoleAcknowledgment = peerRoleAcknowledgment; self.peerHello = peerHello
+    }
+}
+public enum ControlArchiveLookupDelivery: Codable, Equatable, Sendable {
+    case unknown
+    case receipt(OperationReceipt)
+    private enum CodingKeys: String, CodingKey { case state }
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        if try values.decode(String.self, forKey: .state) == "unknown" { self = .unknown }
+        else { self = .receipt(try OperationReceipt(from: decoder)) }
+    }
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .unknown:
+            var values = encoder.container(keyedBy: CodingKeys.self)
+            try values.encode("unknown", forKey: .state)
+        case let .receipt(receipt): try receipt.encode(to: encoder)
+        }
+    }
+}
+public struct ControlArchiveLookupResponse: Codable, Equatable, Sendable {
+    public let operation: ControlDurableOperation
+    public let delivery: ControlArchiveLookupDelivery
+    public let adopted: Bool
+    public let roleAcknowledgment: ControlRoleAcknowledgment?
+}
+public struct ControlRoleBootstrapRequest: Codable, Equatable, Sendable {
+    public enum Role: String, Codable, Sendable { case home, executor }
+    public enum Mode: String, Codable, Sendable { case fresh, preserveLegacy = "preserve-legacy" }
+    public let host: OperationHost
+    public let home: OperationHost
+    public let role: Role
+    public let mode: Mode
+    public let expectedRoleEpoch: Int
+    public let idempotencyKey: String
+    public let approvalRequestId: String
+    public init(host: OperationHost, home: OperationHost, role: Role, mode: Mode,
+                idempotencyKey: String, approvalRequestId: String) {
+        self.host = host; self.home = home; self.role = role; self.mode = mode
+        expectedRoleEpoch = 0; self.idempotencyKey = idempotencyKey
+        self.approvalRequestId = approvalRequestId
+    }
+}
+public struct ControlRoleBootstrapStatus: Codable, Equatable, Sendable {
+    public enum State: String, Codable, Sendable {
+        case unconfigured, configured
+        case legacyMigrationRequired = "legacy-migration-required"
+    }
+    public let host: OperationHost
+    public let state: State
+    public let roleEpoch: Int
+    public let configuration: ControlHostConfiguration?
+    public let roleAcknowledgment: ControlRoleAcknowledgment?
+}
+public struct ControlRoleBootstrapResult: Codable, Equatable, Sendable {
+    public let configuration: ControlHostConfiguration
+    public let roleAcknowledgment: ControlRoleAcknowledgment
+    public let mutation: ControlMutationResult
 }
