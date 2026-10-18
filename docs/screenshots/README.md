@@ -39,5 +39,5 @@ Keep one-off review captures in a temporary directory or CI artifacts. The nativ
 supports focused sets such as `--missions-only`, `--delegated-tasks-only`, `--long-messages-only`,
 `--branches-only` and `--pr-icons-only`. See [native development notes](../../apps/macos/README.md).
 
-CI uploads delegation fixtures as `delegated-task-screenshots` (from the `macos` job on PRs that touch the
-app, and from `app-bundle` on main), without requiring a local Swift build.
+CI uploads delegation fixtures as `delegated-task-screenshots` from the `macos` job on PRs that touch the
+app, without requiring a local Swift build.

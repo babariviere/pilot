@@ -1,0 +1,259 @@
+name: Tests
+
+# Shared by pr.yaml and main.yaml. Results are informational: releases never wait for them.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  # macos-15 is the standard arm64 runner, not macos-15-intel / macos-15-large.
+  # Its default Xcode 16.4 is too old for our Swift 6.2 package manifest.
+  DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
+  NODE_VERSION: 24.21.0
+  # Shared workspace integration tests require jj 0.46+.
+  JJ_VERSION: 0.46.0
+  JJ_SHA256: 43daa37ce0f9716cdf6fb65a29cbcae74a3160aef048cf3cb3d166d41cb4ab58
+
+jobs:
+  # Portable tests use Linux so they do not compete for macOS runner capacity.
+  node:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      JJ_SHA256: fce0271158e665ceb82dc66c5eb95b1728649094e9133074f3b5baece345fc08
+      # The Linux runner has 4 cores and runs nothing else. The default of 2 suits shared machines.
+      PILOT_TEST_CONCURRENCY: 4
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - name: Install native addon build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes python3 make g++
+      - name: Install Jujutsu
+        run: |
+          install_dir="$RUNNER_TEMP/jj"
+          archive="$RUNNER_TEMP/jj.tar.gz"
+          mkdir -p "$install_dir"
+          curl --fail --location --retry 3 --output "$archive" "https://github.com/jj-vcs/jj/releases/download/v$JJ_VERSION/jj-v$JJ_VERSION-x86_64-unknown-linux-musl.tar.gz"
+          echo "$JJ_SHA256  $archive" | sha256sum --check
+          tar -xzf "$archive" -C "$install_dir"
+          echo "$install_dir" >> "$GITHUB_PATH"
+          "$install_dir/jj" --version
+      - name: Verify toolchain and architecture
+        run: |
+          test "$(uname -m)" = x86_64
+          node --version
+          jj --version
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      # --timings lists the slowest test files, which decide how long this job takes.
+      - run: pnpm test -- --lane=portable --timings
+
+  # One macOS job per run: native Node and packaging tests, then Swift tests. The free plan runs only a few
+  # macOS jobs at once, so separate jobs mostly waited in the queue. PRs smoke-test an app bundled from the
+  # Swift test build. Only release.yaml builds the optimized production app.
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      # The scripts default to 2 jobs for agents sharing a machine. CI owns the whole runner.
+      PILOT_SWIFT_JOBS: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          # A PR checks out its merge commit. Its first parent is the base, so that diff is the PR's change.
+          fetch-depth: 2
+      - name: Check whether the Mac app changed
+        id: changes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          # Main pushes always verify the app. PRs skip Swift when nothing it reads changed.
+          swift=true
+          if [ "$EVENT_NAME" = pull_request ] && files="$(git diff --name-only HEAD^1 HEAD)"; then
+            if ! printf '%s\n' "$files" | grep -Eq '^(apps/macos/|scripts/verification-slot\.py$|\.github/workflows/(pr|tests)\.yaml$|package\.json$)'; then
+              swift=false
+            fi
+          fi
+          echo "Swift checks: $swift"
+          echo "swift=$swift" >> "$GITHUB_OUTPUT"
+      # Installs the pnpm version pinned by package.json's packageManager field.
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - name: Install Jujutsu
+        run: |
+          install_dir="$RUNNER_TEMP/jj"
+          archive="$RUNNER_TEMP/jj.tar.gz"
+          mkdir -p "$install_dir"
+          curl --fail --location --retry 3 --output "$archive" "https://github.com/jj-vcs/jj/releases/download/v$JJ_VERSION/jj-v$JJ_VERSION-aarch64-apple-darwin.tar.gz"
+          echo "$JJ_SHA256  $archive" | shasum -a 256 --check
+          tar -xzf "$archive" -C "$install_dir"
+          echo "$install_dir" >> "$GITHUB_PATH"
+          "$install_dir/jj" --version
+      - name: Verify toolchain and architecture
+        run: |
+          test "$(uname -m)" = arm64
+          node --version
+          jj --version
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test -- --lane=macos
+      - name: SwiftLint
+        if: ${{ !cancelled() }}
+        run: apps/macos/scripts/lint.sh
+      - name: Packaging and release metadata tests
+        run: |
+          for script in apps/macos/scripts/*.sh; do bash -n "$script"; done
+          python3 -B -m unittest discover -s apps/macos/scripts/tests -p 'test_*.py'
+          node --test apps/macos/scripts/tests/*.test.mjs
+      - name: Verify packaged dependency updates
+        if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'renovate/')
+        run: |
+          set -euo pipefail
+          stage="$(mktemp -d "$RUNNER_TEMP/renovate-runtime.XXXXXX")"
+          trap 'rm -rf "$stage"' EXIT
+          apps/macos/scripts/bundle-runtime.sh "$stage/runtime"
+          ditto -c -k --keepParent "$stage/runtime" "$stage/runtime.zip"
+          mkdir "$stage/relocated"
+          ditto -x -k "$stage/runtime.zip" "$stage/relocated"
+          apps/macos/scripts/check-runtime.sh "$stage/relocated/runtime"
+      # Swift steps still run after a Node failure, so one run reports both.
+      - name: Verify Swift toolchain
+        id: swift-toolchain
+        if: ${{ !cancelled() && steps.changes.outputs.swift == 'true' }}
+        env:
+          BUILD_INPUTS: ${{ hashFiles('apps/macos/Package.resolved', 'apps/macos/Package.swift', 'apps/macos/scripts/test.sh', 'apps/macos/scripts/swift-env.sh', 'apps/macos/scripts/stable-mtimes.py') }}
+        run: |
+          swift --version
+          identity="$(printf '%s\n' "$(swift --version)" "$(xcrun --show-sdk-version)" | shasum -a 256 | awk '{print $1}')"
+          echo "key=$identity" >> "$GITHUB_OUTPUT"
+          echo "build=swift-build-v1-$RUNNER_OS-$RUNNER_ARCH-$identity-$BUILD_INPUTS" >> "$GITHUB_OUTPUT"
+      - name: Cache pinned Swift dependencies
+        if: ${{ !cancelled() && steps.swift-toolchain.outcome == 'success' }}
+        uses: actions/cache@v4
+        with:
+          # Only dependency downloads and patched vendor sources, never build products or signing data.
+          path: |
+            ~/Library/Caches/org.swift.swiftpm/repositories
+            ~/Library/Caches/org.swift.swiftpm/artifacts
+            apps/macos/Vendor/libghostty-spm
+            apps/macos/Vendor/MermaidKit
+          key: swift-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.resolved', 'apps/macos/Package.swift', 'apps/macos/scripts/vendor-ghostty.sh', 'apps/macos/scripts/patch-ghostty-resources.py', 'apps/macos/scripts/patch-ghostty-layout.py', 'apps/macos/scripts/vendor-mermaidkit.sh', 'apps/macos/scripts/patches/**') }}
+      # PRs start from main's newest debug build and recompile only inputs whose contents changed. Main always
+      # builds from scratch, and releases never use cached build products.
+      - name: Restore the Swift test build
+        id: swift-build-cache
+        if: ${{ !cancelled() && steps.swift-toolchain.outcome == 'success' && github.event_name == 'pull_request' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: apps/macos/.build
+          key: ${{ steps.swift-toolchain.outputs.build }}-${{ github.sha }}
+          restore-keys: ${{ steps.swift-toolchain.outputs.build }}-
+      - name: Give Swift inputs content-derived timestamps
+        if: ${{ !cancelled() && steps.swift-toolchain.outcome == 'success' }}
+        run: |
+          apps/macos/scripts/vendor-ghostty.sh
+          apps/macos/scripts/vendor-mermaidkit.sh
+          python3 apps/macos/scripts/stable-mtimes.py apps/macos
+      - name: Swift tests
+        id: swift-test
+        if: ${{ !cancelled() && steps.swift-toolchain.outcome == 'success' }}
+        # A normal run takes about 5 minutes. Fail a hung test process quickly instead of at the job limit.
+        timeout-minutes: 12
+        run: apps/macos/scripts/test.sh
+      # Only main saves (each build is ~430 MB against the repo's 10 GB cache limit), also after failing
+      # tests: the build itself stays valid for the next incremental build.
+      - name: Save the Swift test build
+        if: ${{ !cancelled() && steps.swift-test.outcome != 'skipped' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: apps/macos/.build
+          key: ${{ steps.swift-toolchain.outputs.build }}-${{ github.sha }}
+      # PRs package the debug binaries the tests just built and smoke-test the relocated app.
+      - name: Bundle the app from the Swift test build
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.swift-test.outcome == 'success' }}
+        env:
+          CONFIGURATION: debug
+          BUNDLE_PREBUILT: '1'
+        run: apps/macos/scripts/bundle.sh
+      - name: Render delegated task fixtures
+        id: pr-fixtures
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.swift-test.outcome == 'success' }}
+        run: |
+          fixture_home="$(mktemp -d "$RUNNER_TEMP/delegated-home.XXXXXX")"
+          HOME="$fixture_home" CFFIXED_USER_HOME="$fixture_home" apps/macos/build/Pilot.app/Contents/MacOS/Pilot --snapshot "$RUNNER_TEMP/delegated-screenshots" --delegated-tasks-only
+          HOME="$fixture_home" CFFIXED_USER_HOME="$fixture_home" apps/macos/build/Pilot.app/Contents/MacOS/Pilot --snapshot "$RUNNER_TEMP/delegated-screenshots" --control-sidebar-only
+      - name: Upload delegated task screenshots
+        if: ${{ !cancelled() && steps.pr-fixtures.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: delegated-task-screenshots
+          path: ${{ runner.temp }}/delegated-screenshots/*.png
+          if-no-files-found: error
+
+  # Real Linux isolation, native ABI and headless daemon/kernel checks. A test fixture, not a release requirement.
+  linux-headless:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - name: Verify runtime capabilities
+        run: |
+          test "$(uname -m)" = x86_64
+          node --version
+          command -v bash
+          command -v ldd
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - name: Install sandbox tooling (runner fixture only)
+        run: |
+          sudo apt-get update && sudo apt-get install -y bubblewrap
+          # The runner's default policy restricts unprivileged userns. Grant only the
+          # system bwrap executable this capability, never disable host policy globally.
+          if command -v apparmor_parser >/dev/null && grep -q Y /sys/module/apparmor/parameters/enabled; then
+            printf '%s\n' 'abi <abi/4.0>,' \
+              'profile pilot-ci-bwrap /usr/bin/bwrap flags=(unconfined) {' '  userns,' '}' \
+              | sudo apparmor_parser -r
+          fi
+      - name: Verify real coordinator isolation, descendants, aliases and denied capabilities
+        env:
+          PILOT_REQUIRE_LINUX_ISOLATION: "1"
+          PILOT_LINUX_BIND_FIXTURES: "1"
+        run: |
+          node --test --test-force-exit packages/kernel/src/readonly-settings.test.ts packages/daemon/src/credential-broker.test.ts
+          node --test --test-force-exit packages/daemon/src/linux-coordinator.integration.test.ts
+          node --test --test-force-exit --test-name-pattern='every cold' packages/daemon/src/coordinator-role.test.ts
+      - name: Verify selected native dependencies and ABI
+        run: node --test --test-force-exit packages/daemon/src/native-runtime.test.ts
+      - name: Headless daemon, shell environment, handshake and independent kernel execution
+        run: |
+          node --test --test-force-exit --test-concurrency=2 \
+            packages/kernel/src/runtime-environment.test.ts \
+            packages/daemon/src/platform.test.ts \
+            packages/daemon/src/headless.integration.test.ts \
+            packages/daemon/src/terminals.test.ts \
+            packages/daemon/src/pty-input.test.ts \
+            packages/daemon/src/terminal-output.test.ts \
+            packages/daemon/src/runtime-admission.test.ts \
+            packages/daemon/src/workspace-terminal-server.test.ts \
+            packages/kernel/src/bundled-extensions.integration.test.ts \
+            packages/artifacts/src/swiftui.test.ts

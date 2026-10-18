@@ -35,32 +35,28 @@ minutes and may incur charges. No App Store or Developer ID distribution is conf
    app**, because installed versions trust the original public key. The helper refuses to overwrite
    a different configured public key. Secret setup is intentionally not run by the coding agent.
 3. In Settings > Actions > General, enable **Allow GitHub Actions to create and approve pull requests**.
-   Release Please needs Contents, Issues and Pull requests write permissions, scoped in its job.
-   Optionally configure **Actions secret `RELEASE_PLEASE_TOKEN`** with a GitHub App token or a
-   fine-grained personal access token limited to this repository with those permissions. This is
-   only needed if CI must run automatically on bot-created PRs that change more than release metadata:
-   the default `GITHUB_TOKEN` creates PR workflow runs that require approval. Do not give this token
-   access to other repositories. The macOS publishing job still uses only `GITHUB_TOKEN`.
-4. Merge the workflow changes, then merge the Release Please PR when ready to release. Every PR runs
-   verification, including release metadata and lockfile changes. Merging triggers full verification and
-   publishing on `main`. Other PRs run verification only, without release secrets or publishing
-   permissions. Trusted main builds require the public signing keys; only publishing jobs receive
-   private keys. Missing configuration fails with a setup message. Ordinary main commits run verification and
-   Release Please without publishing unless it creates a stable release.
+   Release Please uses the default `GITHUB_TOKEN` with Contents, Issues and Pull requests write
+   permissions, scoped in its job.
+4. Merge the workflow changes, then merge the Release Please PR when ready to release.
 
-The workflow is `.github/workflows/release.yml`. It selects an arm64 macOS runner with Xcode
-26.2 (Swift 6.2). Verification runs in parallel: portable Node tests, one `macos` job for native Node,
-packaging and Swift tests, the Mac app bundle and the Linux production package. On trusted main runs, `app-bundle`
-builds the self-contained app once and verifies its extracted production ZIP. PRs retain the native
-app smoke test without release configuration or credentials, packaging the `macos` job's debug test
-build instead of running `app-bundle`. The Mac publishing job downloads that
-same ZIP, checks its source commit, version, checksum and embedded public keys, then signs and uploads
-it without recompiling or repackaging. Linux publishing likewise signs the verified runtime artifact
-after checking its tag and commit. Artifacts come only from the current workflow run, never a PR run
-or a mutable build cache. Missing, corrupt or unexpected artifacts fail closed. If concurrent main
-runs make Release Please select an earlier release commit, packaging falls back to that verified tag
-instead of publishing the newer commit's artifact. This exceptional path rebuilds; matching commits
-are never rebuilt by publishing.
+CI has three entry points. `.github/workflows/pr.yaml` and `.github/workflows/main.yaml` run the shared
+tests (`tests.yaml`) on PRs and after merging. `.github/workflows/release.yaml` runs Release Please on every
+main push and publishes releases. **Tests never block a release**: Release Please and publishing do not wait
+for any test job, so a red `main` can still ship. Release Please PRs (and PRs that only touch
+`package.json`, `CHANGELOG.md` or `.release-please-manifest.json`) start no PR run, because GitHub would hold
+runs from its bot-created PRs for manual approval. Release commits also skip the main tests.
+
+When Release Please creates a stable draft, `release.yaml` resolves its tag and commit, then builds from that
+tag, never from a newer `main`. It selects an arm64 macOS runner with Xcode 26.2 (Swift 6.2). `macos-app`
+builds the self-contained app once, without private keys, and verifies its extracted production ZIP. In
+parallel, the Linux production package is built and validated from the same tag. `macos-publish` downloads
+that ZIP, checks its source commit, version, checksum and embedded public keys, then signs and uploads it
+without recompiling or repackaging. Linux publishing likewise signs the verified runtime artifact after
+checking its tag and commit. Artifacts come only from the current workflow run, never a PR run or a mutable
+build cache. Missing, corrupt or unexpected artifacts fail closed. Only publishing jobs receive private keys,
+and missing configuration fails with a setup message. PRs never receive release secrets or write permissions;
+they smoke-test an app bundled from the Swift debug test build. The optimized build runs only at release, so
+release-only compiler problems surface there.
 Release Please creates only a draft. A final publishing job releases it after the Mac ZIP/appcast
 and all three Linux assets are uploaded, so incomplete releases are not offered to the app.
 An explicit `release_tag` retry builds the requested tag once in each package job, even if `main`
@@ -85,14 +81,16 @@ commits (`feat!:` or `BREAKING CHANGE:`) use Release Please's semantic-version r
 pre-1.0 rules). Release notes are generated from conventional commits. The manifest starts at `0.1.0`;
 versions without prerelease suffixes are stable releases, even before `1.0.0`.
 
-Sparkle's separate build version is the workflow run number plus `BUNDLE_VERSION_OFFSET`, then the
-attempt. Renaming or recreating the workflow restarts its run numbers, so raise the offset above the
-latest published build when that happens, and keep the signing key stable. Publication checks both
+Sparkle's separate build version is the `release.yaml` run number plus `BUNDLE_VERSION_OFFSET` (20000), then
+the attempt. Renaming or recreating the workflow restarts its run numbers, so raise the offset above the
+latest published build when that happens, and keep the signing key stable. The offset moved from 10000 to
+20000 when `release.yml` became `release.yaml`, so new builds (20001 and up) stay above the last
+`release.yml` builds (about 10900). Publication checks both
 semantic and Sparkle build ordering. Old `pilot-N.M` releases are supported as a one-way migration;
 the first stable release can replace them without changing the installed app's signing trust.
 
 If publication fails after draft creation, rerun the failed publishing job to reuse its verified
-artifact, or use **Run workflow** on
+artifact, or use **Run workflow** for **Release** on
 `main` with **`release_tag`** set to the existing stable draft (for example `v0.2.0`). A new dispatch
 also rebuilds expired artifacts and fixes a draft whose Sparkle build version is older than the latest release. Retrying replaces
 only draft assets; published releases and prereleases cannot be overwritten. Leave `release_tag`

@@ -1,0 +1,29 @@
+name: PR
+
+on:
+  pull_request:
+    # Release Please PRs change only these files. GitHub holds runs from its bot-created PRs for manual
+    # approval, and the release commit adds nothing to test, so those PRs start no run at all.
+    # A PR that changes nothing else is tested by main.yaml after merging.
+    paths-ignore:
+      - CHANGELOG.md
+      - .release-please-manifest.json
+      - package.json
+
+permissions:
+  contents: read
+
+# A newer push to the same PR cancels its previous run.
+concurrency:
+  group: pilot-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    uses: ./.github/workflows/tests.yaml
+
+  # Builds and validates the Linux production package, without signing or publishing it.
+  linux-package:
+    uses: ./.github/workflows/linux-package.yml
+    with:
+      ref: ${{ github.sha }}
