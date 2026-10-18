@@ -232,6 +232,8 @@ export function runKernelWorker(): void {
 			sessionId,
 			...(limit === undefined ? {} : { limit }),
 		}));
+	const callRepairProposal: import("./repair-proposal-tool.ts").RepairProposalCall = (proposal) =>
+		callDaemon((callId) => ({ type: "diagnostics.proposal", callId, proposal }));
 
 	async function shutdown(code = 0): Promise<void> {
 		if (exiting) return;
@@ -389,6 +391,7 @@ export function runKernelWorker(): void {
 			command.type === "database.result" ||
 			command.type === "slack.result" ||
 			command.type === "diagnostics.result" ||
+			command.type === "diagnostics.proposal.result" ||
 			command.type === "subscription.limit.result" ||
 			command.type === "artifact.reference.result"
 		) {
@@ -485,6 +488,7 @@ export function runKernelWorker(): void {
 					callDatabase,
 					callSlackStatus,
 					callDiagnostics,
+					callRepairProposal,
 					readArtifactReference: (id, revision) =>
 						callDaemon((callId) => ({ type: "artifact.reference.get", callId, id, revision })),
 					prepareWorkspace,

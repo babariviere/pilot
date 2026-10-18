@@ -13,8 +13,9 @@ Devbox setup stages keep local daemon health, SSH/remote bootstrap and verified 
 observations. A responsive local daemon cannot establish remote setup success. The timeline has no alias, hostname,
 path, command, raw stderr or arbitrary error text and cannot initiate setup or connection probes.
 
-Only an on-demand diagnostics specialist gets the `diagnostics` tool. The app admits that persistent session role
-explicitly; Build, Ask, control and child agents do not receive the tool. The kernel loads the specialist with no
+Only an on-demand diagnostics specialist gets the `diagnostics` reader and proposal-only `repair_proposal` publisher.
+The app admits that persistent session role explicitly; Build, Ask, control and child agents receive neither. The
+kernel loads the specialist with no
 personal or project extensions, skills, MCP, codemode, shell, file, job, memory, mission, artifact, question or
 subagent tools. A tool-dispatch allowlist is reapplied after reload and the daemon independently rejects diagnostic
 IPC from a session whose persisted role is not `diagnostics`. These are runtime boundaries, not prompt conventions.
@@ -49,25 +50,37 @@ The immutable daemon and lineage values must match the connected host. A stale i
 falling back to another host. Responses are `no-store`, contain at most 128 evidence items and 64 KiB, and report
 missing or stale sources instead of manufacturing evidence.
 
-## Authorized repair handoff
+## Specialist-authored repair proposal and authorized handoff
 
-A repair is a separate ordinary coding chat. After reviewing a diagnosis, an explicit app action may call:
+A specialist has no repair or spawn tool. When the user asks for a suggestion, its host-owned `repair_proposal` tool
+may persist one latest bounded proposal containing 1 to 16 currently available evidence refs, plain-language
+findings, low/medium/high uncertainty, a suggested repair and regression-test guidance. The daemon validates the
+closed fields, byte bounds, target and refs before replacing the previous proposal. Publishing only updates the
+specialist's proposal summary; it never starts, wakes, changes, retries, restarts or replays either chat.
+
+Before a proposal exists, the app explains that the diagnostic agent must author it and offers a non-executing
+request. It does not ask the user to invent a cause, choose raw event IDs or write a regression test. Once published,
+the review sheet shows labeled prefilled fields and distinguishable safe source/time/evidence summaries. The user may
+optionally edit the bounded text and uncertainty. Cancelling creates nothing.
+
+A repair is always a separate ordinary coding chat. Only explicit confirmation after review may call:
 
 ```text
 POST /api/sessions/:specialistId/diagnostics/handoff?hostId=…&daemonId=…&lineageId=…
 ```
 
-The request selects 1 to 16 evidence refs from the admitted target and supplies bounded likely-cause and
-regression-test guidance. The daemon re-reads local diagnostics and returns only those exact structured evidence
-items plus the two bounded guidance fields. It rejects stale or invented refs. Preparing the handoff never creates,
-starts, subscribes to, wakes or changes either chat. The specialist cannot call this endpoint as a tool; the app
-must obtain user authorization and pass the returned material when it separately creates the coding chat. Pilot's
-repair sheet makes that selection explicit and states that the action does not retry, restart, replay or change the
-diagnosed chat. The resulting chat
+The request identifies the latest persisted proposal and carries only the reviewed bounded fields. Evidence refs are
+fixed by that proposal rather than selected or invented by the app. The daemon re-reads diagnostics, rejects missing,
+changed or stale proposals and refs, and returns only those exact structured items plus the reviewed proposal. This
+step still never creates, starts, subscribes to, wakes or changes either chat. The specialist cannot call this
+endpoint or spawn a coding chat. For a projectless app/control diagnosis, the user must explicitly choose an
+available project on the same host; Pilot never treats a control or specialist working directory as a repair
+destination. Only the sheet's confirmation starts the separate Build chat. The resulting chat
 does not inherit the specialist role or diagnostics authority. The normal Ask “Start a Build chat with this
 context” path is unavailable for diagnostics specialists, so an unbounded transcript cannot substitute for this
 handoff.
 
 The schema intentionally has no open attribute maps. It does not include messages, prompts, responses, tool input or
 output, model/provider names, paths, credentials, raw errors, event-loop labels or stall contexts. Treat a snapshot as
-operational evidence, not as conversation history, and cite its `diagnostic:v1:…` references in findings.
+operational evidence, not as conversation history, and cite its `diagnostic:v1:…` references in findings. Proposal
+text is bounded agent output for review, not telemetry and not an authorization channel.

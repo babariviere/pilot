@@ -146,7 +146,10 @@ test("diagnostics GET requires the pinned host identity and remains read-only", 
 			targetSessionId: request.targetSessionId,
 			projectId: "project",
 			evidence: [],
-			likelyCause: request.likelyCause,
+			proposalId: request.proposalId,
+			findings: request.findings,
+			uncertainty: request.uncertainty,
+			suggestedRepair: request.suggestedRepair,
 			regressionTestGuidance: request.regressionTestGuidance,
 		}),
 	);
@@ -194,8 +197,10 @@ test("diagnostics GET requires the pinned host identity and remains read-only", 
 	]);
 	const handoffBody = {
 		targetSessionId: "target",
-		evidenceRefs: ["diagnostic:v1:lifecycle:1"],
-		likelyCause: "Likely cause",
+		proposalId: "proposal",
+		findings: "Likely cause",
+		uncertainty: "medium" as const,
+		suggestedRepair: "Suggested repair",
 		regressionTestGuidance: "Regression guidance",
 	};
 	const handoff = await fetch(`${base}/handoff?hostId=local&daemonId=daemon&lineageId=lineage`, {

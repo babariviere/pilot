@@ -37,6 +37,8 @@ import type {
 	DeliveryMode,
 	DiagnosticErrorCode,
 	DiagnosticPauseReason,
+	DiagnosticRepairProposal,
+	DiagnosticRepairProposalDraft,
 	DiagnosticsHandoff,
 	DiagnosticsHandoffRequest,
 	DiagnosticTargetReference,
@@ -308,6 +310,8 @@ interface SessionMeta extends OutcomeMeta {
 	diagnosticTargetId?: string;
 	/** Canonical host-qualified target persisted for worker recovery and user-visible context. */
 	diagnosticTarget?: DiagnosticTargetReference;
+	/** Latest bounded, non-executing suggestion published by this specialist. */
+	diagnosticRepairProposal?: DiagnosticRepairProposal;
 	executionEvidence?: import("@pilot/kernel").ExecutionEvidence;
 	/** Durable execution-ownership fence. Never cleared by reconnect, restart or a fresh input. */
 	delegationFenced?: boolean;
@@ -503,6 +507,45 @@ const COLD_SNAPSHOT_MAX_BYTES = 16 * 1024 * 1024;
 function titleFrom(message: string): string {
 	const line = message.trim().split("\n")[0] ?? "";
 	return line.length > 60 ? `${line.slice(0, 57)}...` : line || "Untitled session";
+}
+
+const PROPOSAL_CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u;
+
+function diagnosticProposalText(value: unknown, label: string, maxChars: number): string {
+	if (typeof value !== "string") throw new Conflict(`${label} must be plain text`);
+	const text = value.trim();
+	if (!text || text.length > maxChars || Buffer.byteLength(text) > maxChars * 3 || PROPOSAL_CONTROL.test(text))
+		throw new Conflict(`${label} must be bounded plain text`);
+	return text;
+}
+
+function validatedDiagnosticProposal(value: unknown): DiagnosticRepairProposalDraft {
+	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Conflict("Invalid repair proposal");
+	const proposal = value as Record<string, unknown>;
+	if (
+		Object.keys(proposal).sort().join(",") !==
+		"evidenceRefs,findings,regressionTestGuidance,suggestedRepair,uncertainty"
+	)
+		throw new Conflict("Invalid repair proposal fields");
+	if (
+		!Array.isArray(proposal.evidenceRefs) ||
+		proposal.evidenceRefs.length < 1 ||
+		proposal.evidenceRefs.length > 16 ||
+		proposal.evidenceRefs.some(
+			(ref) => typeof ref !== "string" || !ref.startsWith("diagnostic:v1:") || ref.length > 256,
+		) ||
+		new Set(proposal.evidenceRefs).size !== proposal.evidenceRefs.length
+	)
+		throw new Conflict("A repair proposal requires 1 to 16 unique diagnostic evidence refs");
+	if (proposal.uncertainty !== "low" && proposal.uncertainty !== "medium" && proposal.uncertainty !== "high")
+		throw new Conflict("Repair proposal uncertainty must be low, medium or high");
+	return {
+		evidenceRefs: proposal.evidenceRefs as string[],
+		findings: diagnosticProposalText(proposal.findings, "Findings", 1_200),
+		uncertainty: proposal.uncertainty,
+		suggestedRepair: diagnosticProposalText(proposal.suggestedRepair, "Suggested repair", 1_200),
+		regressionTestGuidance: diagnosticProposalText(proposal.regressionTestGuidance, "Regression-test guidance", 800),
+	};
 }
 
 /** Client view of a kernel subagent: no private storage path or child conversation identity. */
@@ -3709,7 +3752,35 @@ export class SessionManager {
 					this.admittedDiagnosticTarget(meta.diagnosticTarget).sessionId !== meta.diagnosticTargetId))
 		)
 			throw new Error("Invalid diagnostics specialist metadata");
-		if (meta.role !== "diagnostics" && (meta.diagnosticTargetId !== undefined || meta.diagnosticTarget !== undefined))
+		if (meta.diagnosticRepairProposal !== undefined) {
+			const proposal = meta.diagnosticRepairProposal;
+			if (
+				meta.role !== "diagnostics" ||
+				!proposal ||
+				typeof proposal !== "object" ||
+				Array.isArray(proposal) ||
+				Object.keys(proposal).sort().join(",") !==
+					"createdAt,evidenceRefs,findings,id,regressionTestGuidance,schemaVersion,suggestedRepair,targetSessionId,uncertainty" ||
+				proposal.schemaVersion !== 1 ||
+				!/^diagnostic-proposal:v1:[0-9a-f-]{36}$/.test(proposal.id) ||
+				!Number.isFinite(Date.parse(proposal.createdAt)) ||
+				proposal.targetSessionId !== meta.diagnosticTargetId
+			)
+				throw new Error("Invalid diagnostic repair proposal metadata");
+			validatedDiagnosticProposal({
+				evidenceRefs: proposal.evidenceRefs,
+				findings: proposal.findings,
+				uncertainty: proposal.uncertainty,
+				suggestedRepair: proposal.suggestedRepair,
+				regressionTestGuidance: proposal.regressionTestGuidance,
+			});
+		}
+		if (
+			meta.role !== "diagnostics" &&
+			(meta.diagnosticTargetId !== undefined ||
+				meta.diagnosticTarget !== undefined ||
+				meta.diagnosticRepairProposal !== undefined)
+		)
 			throw new Error("Diagnostic target requires a diagnostics specialist");
 		if (meta.mode !== "ask") {
 			if (meta.ask !== undefined) throw new Error("Ask context requires Ask mode");
@@ -4898,41 +4969,46 @@ export class SessionManager {
 	): Promise<DiagnosticsHandoff> {
 		const specialist = this.require(specialistId);
 		if (specialist.role !== "diagnostics") throw new Conflict("Only a diagnostics specialist can prepare a handoff");
-		if (!request || typeof request.targetSessionId !== "string" || request.targetSessionId === specialistId)
+		if (
+			!request ||
+			typeof request !== "object" ||
+			Array.isArray(request) ||
+			Object.keys(request).sort().join(",") !==
+				"findings,proposalId,regressionTestGuidance,suggestedRepair,targetSessionId,uncertainty" ||
+			typeof request.targetSessionId !== "string" ||
+			request.targetSessionId === specialistId
+		)
 			throw new Conflict("A separate target chat is required");
 		const target = this.require(request.targetSessionId);
 		if (target.id !== specialist.diagnosticTargetId)
 			throw new Conflict("Diagnostics handoff is limited to the host-admitted target chat");
-		if (
-			!Array.isArray(request.evidenceRefs) ||
-			request.evidenceRefs.length < 1 ||
-			request.evidenceRefs.length > 16 ||
-			request.evidenceRefs.some(
-				(ref) => typeof ref !== "string" || !ref.startsWith("diagnostic:v1:") || ref.length > 256,
-			) ||
-			new Set(request.evidenceRefs).size !== request.evidenceRefs.length
-		)
-			throw new Conflict("Select between 1 and 16 unique diagnostic evidence refs");
-		const boundedText = (value: unknown, label: string): string => {
-			if (typeof value !== "string" || !value.trim() || value.length > 2_000 || Buffer.byteLength(value) > 4_000)
-				throw new Conflict(`${label} must be non-empty and at most 4 KiB`);
-			return value.trim();
-		};
-		const likelyCause = boundedText(request.likelyCause, "Likely cause");
-		const regressionTestGuidance = boundedText(request.regressionTestGuidance, "Regression-test guidance");
+		const proposal = specialist.diagnosticRepairProposal;
+		if (!proposal || typeof request.proposalId !== "string" || proposal.id !== request.proposalId)
+			throw new Conflict("The reviewed repair proposal is missing or has changed");
+		if (proposal.targetSessionId !== target.id) throw new Conflict("Repair proposal target does not match");
+		const reviewed = validatedDiagnosticProposal({
+			evidenceRefs: proposal.evidenceRefs,
+			findings: request.findings,
+			uncertainty: request.uncertainty,
+			suggestedRepair: request.suggestedRepair,
+			regressionTestGuidance: request.regressionTestGuidance,
+		});
 		const diagnostics = await this.diagnostics(target.id, { ...options, limit: 128 });
 		const byRef = new Map(diagnostics.evidence.map((evidence) => [evidence.ref, evidence]));
-		const evidence = request.evidenceRefs.map((ref) => byRef.get(ref));
+		const evidence = proposal.evidenceRefs.map((ref) => byRef.get(ref));
 		if (evidence.some((item) => item === undefined))
-			throw new Conflict("Selected diagnostic evidence is no longer available");
+			throw new Conflict("Proposed diagnostic evidence is no longer available");
 		return {
 			schemaVersion: 1,
 			host: diagnostics.host,
 			targetSessionId: target.id,
 			...(specialist.projectId ? { projectId: specialist.projectId } : {}),
 			evidence: evidence as DiagnosticsHandoff["evidence"],
-			likelyCause,
-			regressionTestGuidance,
+			proposalId: proposal.id,
+			findings: reviewed.findings,
+			uncertainty: reviewed.uncertainty,
+			suggestedRepair: reviewed.suggestedRepair,
+			regressionTestGuidance: reviewed.regressionTestGuidance,
 		};
 	}
 
@@ -6452,6 +6528,47 @@ export class SessionManager {
 				);
 			return;
 		}
+		if (packet.type === "diagnostics.proposal") {
+			void Promise.resolve()
+				.then(async () => {
+					if (this.workers.get(meta.id) !== worker || meta.role !== "diagnostics")
+						throw new Error("Only the live diagnostics specialist may publish a repair proposal");
+					const targetId = this.diagnosticReference(meta)?.sessionId;
+					if (!targetId || targetId === meta.id) throw new Error("A host-admitted diagnostic target is required");
+					const draft = validatedDiagnosticProposal(packet.proposal);
+					const diagnostics = await this.diagnostics(targetId, { limit: 128 });
+					const refs = new Set(diagnostics.evidence.map((item) => item.ref));
+					if (draft.evidenceRefs.some((ref) => !refs.has(ref)))
+						throw new Conflict("Proposed diagnostic evidence is no longer available");
+					const proposal: DiagnosticRepairProposal = {
+						schemaVersion: 1,
+						id: `diagnostic-proposal:v1:${randomUUID()}`,
+						targetSessionId: targetId,
+						createdAt: new Date().toISOString(),
+						...draft,
+					};
+					meta.diagnosticRepairProposal = proposal;
+					meta.updatedAt = Date.now();
+					await this.save(meta);
+					this.emit(meta);
+					return proposal;
+				})
+				.then(
+					(result) => {
+						if (this.workers.get(meta.id) === worker)
+							worker.send({ type: "diagnostics.proposal.result", callId: packet.callId, result });
+					},
+					(error) => {
+						if (this.workers.get(meta.id) === worker)
+							worker.send({
+								type: "diagnostics.proposal.result",
+								callId: packet.callId,
+								error: formatFailure(error, "Repair proposal"),
+							});
+					},
+				);
+			return;
+		}
 		if (packet.type === "control.call") {
 			void Promise.resolve()
 				.then(() => {
@@ -6909,6 +7026,7 @@ export class SessionManager {
 			...(meta.role ? { role: meta.role } : {}),
 			...(meta.diagnosticTargetId ? { diagnosticTargetId: meta.diagnosticTargetId } : {}),
 			...(this.diagnosticReference(meta) ? { diagnosticTarget: this.diagnosticReference(meta) } : {}),
+			...(meta.diagnosticRepairProposal ? { diagnosticRepairProposal: meta.diagnosticRepairProposal } : {}),
 			...(meta.continuationOf ? { continuationOf: meta.continuationOf } : {}),
 			...(meta.continuedTo ? { continuedTo: meta.continuedTo } : {}),
 			mode: meta.mode === "ask" ? "ask" : "build",

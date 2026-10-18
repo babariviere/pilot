@@ -89,6 +89,7 @@ import {
 	watchQueue,
 } from "./queue.ts";
 import { refActivity } from "./ref-activity.ts";
+import { createRepairProposalTool, type RepairProposalCall } from "./repair-proposal-tool.ts";
 import { createSlackStatusTool, SLACK_STATUS_TOOL, type SlackStatusCall } from "./slack-status-tool.ts";
 import { openSessionStorage } from "./storage.ts";
 import { SubagentBridge, type SubagentCommand } from "./subagents.ts";
@@ -172,6 +173,8 @@ export interface KernelSessionHooks {
 	callSlackStatus?: SlackStatusCall;
 	/** Reads bounded host-local diagnostics through pilotd without touching target workers or transcripts. */
 	callDiagnostics?: DiagnosticsCall;
+	/** Publishes a bounded, non-executing specialist proposal for explicit user review. */
+	callRepairProposal?: RepairProposalCall;
 	/** Read-only artifact references, authorized by pilotd on every call. */
 	readArtifactReference?: ArtifactToolOptions["readReference"];
 	prepareWorkspace?(): Promise<WorkspaceContext | undefined>;
@@ -461,8 +464,14 @@ export class KernelSession {
 				],
 				subagents,
 				hostTools: [
-					...(spec.role === "diagnostics" && hooks.callDiagnostics && spec.diagnosticTarget
-						? [createDiagnosticsTool(hooks.callDiagnostics, spec.diagnosticTarget)]
+					...(spec.role === "diagnostics" &&
+					hooks.callDiagnostics &&
+					hooks.callRepairProposal &&
+					spec.diagnosticTarget
+						? [
+								createDiagnosticsTool(hooks.callDiagnostics, spec.diagnosticTarget),
+								createRepairProposalTool(hooks.callRepairProposal),
+							]
 						: []),
 					...(spec.control && hooks.callMemory ? createMemoryTools(hooks.callMemory, spec.sessionId, true) : []),
 					...(spec.control && hooks.callPilot ? [createPilotTool(hooks.callPilot)] : []),

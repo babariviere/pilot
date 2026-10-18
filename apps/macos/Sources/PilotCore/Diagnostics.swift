@@ -205,17 +205,52 @@ public struct SessionDiagnostics: Codable, Sendable {
     public let truncation: SessionDiagnosticTruncation
 }
 
-public struct DiagnosticsHandoffRequest: Codable, Sendable {
+public enum DiagnosticRepairUncertainty: String, Codable, CaseIterable, Hashable, Sendable {
+    case low, medium, high
+}
+
+public struct DiagnosticRepairProposal: Codable, Equatable, Hashable, Sendable {
+    public let schemaVersion: Int
+    public let id: String
     public let targetSessionId: String
+    public let createdAt: String
     public let evidenceRefs: [String]
-    public let likelyCause: String
+    public let findings: String
+    public let uncertainty: DiagnosticRepairUncertainty
+    public let suggestedRepair: String
     public let regressionTestGuidance: String
 
-    public init(targetSessionId: String, evidenceRefs: [String], likelyCause: String,
+    public init(schemaVersion: Int = 1, id: String, targetSessionId: String, createdAt: String,
+                evidenceRefs: [String], findings: String, uncertainty: DiagnosticRepairUncertainty,
+                suggestedRepair: String, regressionTestGuidance: String) {
+        self.schemaVersion = schemaVersion
+        self.id = id
+        self.targetSessionId = targetSessionId
+        self.createdAt = createdAt
+        self.evidenceRefs = evidenceRefs
+        self.findings = findings
+        self.uncertainty = uncertainty
+        self.suggestedRepair = suggestedRepair
+        self.regressionTestGuidance = regressionTestGuidance
+    }
+}
+
+public struct DiagnosticsHandoffRequest: Codable, Sendable {
+    public let targetSessionId: String
+    public let proposalId: String
+    public let findings: String
+    public let uncertainty: DiagnosticRepairUncertainty
+    public let suggestedRepair: String
+    public let regressionTestGuidance: String
+
+    public init(targetSessionId: String, proposalId: String, findings: String,
+                uncertainty: DiagnosticRepairUncertainty, suggestedRepair: String,
                 regressionTestGuidance: String) {
         self.targetSessionId = targetSessionId
-        self.evidenceRefs = evidenceRefs
-        self.likelyCause = likelyCause
+        self.proposalId = proposalId
+        self.findings = findings
+        self.uncertainty = uncertainty
+        self.suggestedRepair = suggestedRepair
         self.regressionTestGuidance = regressionTestGuidance
     }
 }
@@ -227,6 +262,9 @@ public struct DiagnosticsHandoff: Codable, Sendable {
     public let targetSessionId: String
     public let projectId: String?
     public let evidence: [DiagnosticEvidence]
-    public let likelyCause: String
+    public let proposalId: String
+    public let findings: String
+    public let uncertainty: DiagnosticRepairUncertainty
+    public let suggestedRepair: String
     public let regressionTestGuidance: String
 }
