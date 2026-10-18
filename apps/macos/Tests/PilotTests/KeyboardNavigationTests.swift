@@ -13,57 +13,41 @@ private let controlTab = chord("\t", .control, keyCode: KeyboardChord.tabKeyCode
 
 @Test func reservedRegionAndComposerKeysWorkEverywhere() {
     for context in [KeyboardInputContext.navigation, .text, .embedded] {
-        #expect(KeyboardRoute.decide(controlTab, context: context, pending: false) == .focusNextRegion)
-        #expect(KeyboardRoute.decide(chord("\t", [.control, .shift], keyCode: 48), context: context, pending: false)
+        #expect(KeyboardRoute.decide(controlTab, context: context) == .focusNextRegion)
+        #expect(KeyboardRoute.decide(chord("\t", [.control, .shift], keyCode: 48), context: context)
             == .focusPreviousRegion)
-        #expect(KeyboardRoute.decide(chord("l", .command), context: context, pending: false) == .focusComposer)
+        #expect(KeyboardRoute.decide(chord("l", .command), context: context) == .focusComposer)
     }
     // Plain Tab and Shift-Tab keep moving between controls.
-    #expect(KeyboardRoute.decide(chord("\t", keyCode: 48), context: .navigation, pending: false) == .pass)
-    #expect(KeyboardRoute.decide(chord("\t", .shift, keyCode: 48), context: .text, pending: false) == .pass)
+    #expect(KeyboardRoute.decide(chord("\t", keyCode: 48), context: .navigation) == .pass)
+    #expect(KeyboardRoute.decide(chord("\t", .shift, keyCode: 48), context: .text) == .pass)
 }
 
 @Test func embeddedContentKeepsEveryOtherKey() {
-    #expect(KeyboardRoute.decide(chord("k", .command), context: .embedded, pending: false) == .commandPalette)
-    #expect(KeyboardRoute.decide(chord("j", .command), context: .embedded, pending: false) == .toggleTerminal)
+    #expect(KeyboardRoute.decide(chord("k", .command), context: .embedded) == .commandPalette)
+    #expect(KeyboardRoute.decide(chord("j", .command), context: .embedded) == .toggleTerminal)
     for key in [chord("c", .control), chord("d", .control), chord("g"), chord("j"), chord("?", .shift),
                 chord("\u{1b}", keyCode: KeyboardChord.escapeKeyCode), chord("w", .command)] {
-        #expect(KeyboardRoute.decide(key, context: .embedded, pending: false) == .pass)
+        #expect(KeyboardRoute.decide(key, context: .embedded) == .pass)
     }
 }
 
-@Test func plainLettersNavigateOnlyOutsideText() {
-    #expect(KeyboardRoute.decide(chord("g"), context: .navigation, pending: false) == .beginSequence)
-    #expect(KeyboardRoute.decide(chord("j"), context: .navigation, pending: false) == .move(down: true))
-    #expect(KeyboardRoute.decide(chord("K", .shift), context: .navigation, pending: false) == .pass)
-    #expect(KeyboardRoute.decide(chord("k"), context: .navigation, pending: false) == .move(down: false))
-    #expect(KeyboardRoute.decide(chord("?", .shift), context: .navigation, pending: false) == .showShortcuts)
-    for key in [chord("g"), chord("j"), chord("k"), chord("?", .shift)] {
-        #expect(KeyboardRoute.decide(key, context: .text, pending: false) == .pass)
+/// No Vim-style keys: unmodified letters, digits and punctuation reach the focused view in every context, including
+/// the former G, J, K, ?, E, T, L and D, so typing, IME and type-select are never intercepted.
+@Test func plainKeysAlwaysReachTheFocusedView() {
+    let letters = "abcdefghijklmnopqrstuvwxyz".map { chord(String($0)) }
+    let others = [chord("1"), chord("0"), chord("/"), chord("?", .shift), chord("G", .shift), chord("K", .shift),
+                  chord("j", .option), chord("\u{1b}", keyCode: KeyboardChord.escapeKeyCode), chord("\r", keyCode: 36),
+                  chord("\u{f701}", keyCode: 125), chord("\u{f700}", keyCode: 126), chord("\t", keyCode: 48)]
+    for context in [KeyboardInputContext.navigation, .text, .embedded] {
+        for key in letters + others {
+            #expect(KeyboardRoute.decide(key, context: context) == .pass, "\(key.characters) in \(context)")
+        }
     }
-    #expect(KeyboardRoute.decide(chord("g", .command), context: .navigation, pending: false) == .pass)
-}
-
-@Test func sequencesTakeOneLetterAndNeverReachEditors() {
-    #expect(KeyboardRoute.decide(chord("h"), context: .navigation, pending: true) == .go("h"))
-    #expect(KeyboardRoute.decide(chord("H"), context: .navigation, pending: true) == .go("h"))
-    #expect(KeyboardRoute.decide(chord("\u{1b}", keyCode: KeyboardChord.escapeKeyCode), context: .navigation,
-                                 pending: true) == .cancelSequence(deliver: false))
-    #expect(KeyboardRoute.decide(chord("1"), context: .navigation, pending: true) == .cancelSequence(deliver: true))
-    // Focus moved into an editor after G: the letter is text, delivered once.
-    #expect(KeyboardRoute.decide(chord("h"), context: .text, pending: true) == .cancelSequence(deliver: true))
-    #expect(GoDestination(key: "h") == .home && GoDestination(key: "T") == .tasks && GoDestination(key: "z") == nil)
-    #expect(Set(GoDestination.allCases.map(\.key)).count == GoDestination.allCases.count)
-}
-
-@Test func everyGoDestinationRoundTripsThroughItsKey() {
-    for destination in GoDestination.allCases {
-        #expect(GoDestination(key: destination.key) == destination)
-        #expect(GoDestination(key: Character(destination.key.uppercased())) == destination)
+    // Menu shortcuts stay menu key equivalents, not routes read before the focused view.
+    for key in [chord("g", .command), chord("k", .command), chord("j", .command), chord("?", [.command, .shift])] {
+        #expect(KeyboardRoute.decide(key, context: .navigation) == .pass)
     }
-    #expect(GoDestination(key: "c") == .control)
-    #expect(GoDestination.control.title == "Control")
-    #expect(GoDestination.control.keys == "G then C")
 }
 
 @MainActor
@@ -209,42 +193,39 @@ private func keyEvent(_ characters: String, keyCode: UInt16, modifiers: NSEvent.
     let composer = try #require(fixture.editors[.composer])
     #expect(window.makeFirstResponder(composer))
 
-    // Typing in the composer: letters reach the editor untouched, and no sequence starts.
+    // Typing in the composer: letters reach the editor untouched.
     let g = try #require(keyEvent("g", keyCode: 5, window: window))
     #expect(router.handle(g) === g)
-    #expect(!fixture.focus.sequenceIsPending)
     #expect(routes.isEmpty)
     // Ctrl-Tab is reserved even while editing.
     let tab = try #require(keyEvent("\t", keyCode: 48, modifiers: .control, window: window))
     #expect(router.handle(tab) == nil)
     #expect(routes == [.focusNextRegion])
 
-    // Browsing: G then H goes Home without either letter reaching the view.
+    // Browsing a list: letters still reach it unchanged (type-select, VoiceOver), and nothing waits for a second key.
     let list = NSTableView(frame: NSRect(x: 0, y: 300, width: 150, height: 200))
     window.contentView?.addSubview(list)
     #expect(window.makeFirstResponder(list))
-    #expect(router.handle(g) == nil)
-    #expect(fixture.focus.sequenceIsPending)
-    #expect(fixture.focus.pendingSequence)
-    let h = try #require(keyEvent("h", keyCode: 4, window: window))
-    #expect(router.handle(h) == nil)
-    #expect(routes.last == .go("h"))
-    #expect(!fixture.focus.pendingSequence)
-    // J becomes a Down arrow for the focused list.
-    let j = try #require(keyEvent("j", keyCode: 38, window: window))
-    let arrow = try #require(router.handle(j))
-    #expect(arrow.keyCode == 125)
-    #expect(arrow.charactersIgnoringModifiers == "\u{f701}")
+    for (letter, code) in [("g", UInt16(5)), ("h", 4), ("j", 38), ("k", 40), ("e", 14), ("t", 17), ("d", 2)] {
+        let event = try #require(keyEvent(letter, keyCode: code, window: window))
+        #expect(router.handle(event) === event, "\(letter) reaches the list")
+    }
+    let question = try #require(keyEvent("?", keyCode: 44, modifiers: .shift, window: window))
+    #expect(router.handle(question) === question)
+    // Arrows and Return are the list's own, delivered unchanged.
+    let down = try #require(keyEvent("\u{f701}", keyCode: 125, modifiers: [.function, .numericPad], window: window))
+    #expect(router.handle(down) === down)
+    #expect(routes == [.focusNextRegion])
 
     // Other windows, such as Settings or the shortcut reference, keep their own keys.
     let other = makeWindow()
     defer { other.close() }
     let elsewhere = try #require(keyEvent("\t", keyCode: 48, modifiers: .control, window: other))
     #expect(router.handle(elsewhere) === elsewhere)
-    #expect(routes.count == 2)
+    #expect(routes.count == 1)
 }
 
-@Test @MainActor func goDestinationsNeverGuessAProjectOrMission() {
+@Test @MainActor func goMenuDestinationsNeverGuessAProjectOrMission() {
     let defaults = UserDefaults(suiteName: "keyboard-go-\(UUID().uuidString)")!
     let model = AppModel(projectFolderDefaults: defaults)
     let project = Project(id: "p1", name: "pilot", path: "/tmp/pilot", createdAt: 1)
@@ -256,40 +237,35 @@ private func keyEvent(_ characters: String, keyCode: UInt16, modifiers: NSEvent.
     model.selectedSessionId = "a"
     #expect(!model.canGo(to: .overview))
     #expect(!model.canGo(to: .tasks))
-    #expect(model.availableGoDestinations == [.home, .inbox, .archive, .slack, .linear])
+    #expect(GoDestination.allCases.filter(model.canGo(to:)) == [.home, .inbox, .archive, .slack, .linear])
     model.go(to: .overview)
     model.go(to: .brief)
     #expect(model.selectedSessionId == "a")
-    #expect(model.performKeyboardRoute(.go("i")))
+    model.go(to: .inbox)
     #expect(model.showingInbox && model.selectedSessionId == nil)
     model.go(to: .archive)
     #expect(model.showingArchive && !model.showingInbox)
     model.focus(on: "p1")
     #expect(model.canGo(to: .overview))
-    #expect(model.availableGoDestinations.contains(.overview))
-    #expect(!model.availableGoDestinations.contains(.mission))
+    #expect(!model.canGo(to: .mission))
     model.go(to: .overview)
     #expect(model.selectedProjectId == "p1")
     model.openMission("m1")
-    #expect(model.availableGoDestinations.contains(.mission))
-    #expect(model.availableGoDestinations.contains(.tasks))
-    #expect(model.availableGoDestinations.contains(.brief))
+    #expect(model.canGo(to: .mission))
+    #expect(model.canGo(to: .tasks))
+    #expect(model.canGo(to: .brief))
     model.selectedMissionId = nil
     model.selectedSessionId = "mission-chat"
     #expect(model.currentMissionId == "m1")
-    #expect(model.availableGoDestinations.contains(.mission))
+    #expect(model.canGo(to: .mission))
     model.selectedSessionId = "a"
-    #expect(!model.availableGoDestinations.contains(.mission), "changing to a non-mission chat drops the prior target")
+    #expect(!model.canGo(to: .mission), "changing to a non-mission chat drops the prior target")
     model.go(to: .home)
     #expect(model.currentSelection == .home)
-    #expect(!model.availableGoDestinations.contains(.mission))
-    #expect(model.availableGoDestinations.contains(.overview) == model.canGo(to: .overview),
-            "Home retains the focused project scope for project Overview")
-    #expect(model.performKeyboardRoute(.go("m")))
+    #expect(!model.canGo(to: .mission))
+    #expect(model.canGo(to: .overview), "Home retains the focused project scope for project Overview")
+    model.go(to: .mission)
     #expect(model.currentSelection == .home, "a destination that disappeared with the context stays harmless")
-    // Unknown letters do nothing but are still consumed, so they never type into a list.
-    #expect(model.performKeyboardRoute(.go("z")))
-    #expect(model.currentSelection == .home)
     // No terminal without an open Build chat.
     #expect(!model.performKeyboardRoute(.toggleTerminal))
 }
@@ -302,7 +278,7 @@ private func keyEvent(_ characters: String, keyCode: UInt16, modifiers: NSEvent.
     model.client.loadFixture(projects: [project], sessions: [chat])
     model.selectedSessionId = "a"
     #expect(!model.canGo(to: .control))
-    #expect(model.performKeyboardRoute(.go("c")))
+    model.go(to: .control)
     #expect(model.selectedSessionId == "a")
 
     var control = SessionSummary(id: "ctl", title: "Control", cwd: "", createdAt: 1, updatedAt: 3, state: "idle",
@@ -312,19 +288,34 @@ private func keyEvent(_ characters: String, keyCode: UInt16, modifiers: NSEvent.
     model.focus(on: "p1")
     #expect(model.sidebarScope == "p1")
     #expect(model.canGo(to: .control))
-    #expect(model.performKeyboardRoute(.go("c")))
+    model.go(to: .control)
     #expect(model.selectedSessionId == "ctl")
     #expect(model.sidebarScope == "p1")
 }
 
-@Test func shortcutReferenceListsRegionAndGoKeys() {
+@Test func shortcutReferenceListsRegionKeysAndNoLetterShortcuts() {
     let keys = Dictionary(uniqueKeysWithValues: KeyboardShortcuts.groups.flatMap(\.entries).map { ($0.title, $0.keys) })
     #expect(keys["Focus next region"] == "⌃⇥")
     #expect(keys["Focus previous region"] == "⌃⇧⇥")
     #expect(keys["Focus composer or question"] == "⌘L")
-    #expect(keys["Home"] == "G then H")
-    #expect(keys["Mission Tasks"] == "G then T")
+    #expect(keys["Open command palette"] == "⌘K")
+    #expect(keys["Back"] == "⌘←" && keys["Forward"] == "⌘→")
+    #expect(keys["Open latest pull request"] == "⇧⌘P")
+    #expect(keys["Confirm merge of latest open pull request"] == "⇧⌘M")
+    #expect(keys["Open a control: /model, /mode, /terminal, /changes, /artifacts, /help"] == "/ then ↩")
     #expect(!keys.values.contains { $0.contains("F6") || $0.contains("fn") })
+    // No G sequences, J/K, bare ? or single-letter row actions.
+    #expect(!keys.values.contains { $0.contains("G then") || $0.contains("J / K") })
+    func hasBareLetter(_ keys: String) -> Bool {
+        let characters = Array(keys)
+        return characters.indices.contains { index in
+            guard characters[index].isUppercase else { return false }
+            let before = index > 0 ? characters[index - 1] : " "
+            let after = index + 1 < characters.count ? characters[index + 1] : " "
+            return !"⌘⌃⌥⇧".contains(before) && !before.isLetter && !after.isLetter
+        }
+    }
+    #expect(!keys.values.contains { $0 == "?" || hasBareLetter($0) }, "\(keys.values.sorted())")
 }
 
 @Test @MainActor func paletteLabelsActionsForTheHighlightedChatOnly() throws {

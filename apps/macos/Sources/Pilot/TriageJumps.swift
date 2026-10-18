@@ -38,7 +38,7 @@ extension AppModel {
             ?? selectedProjectId.flatMap { client.project($0)?.id }
     }
 
-    /// G then S, G then L, or the palette entry: opens the board or queue, or lets the user pick a project.
+    /// The Go menu or the palette entry: opens the board or queue, or lets the user pick a project.
     func jump(to jump: TriageJump) {
         let ordered = orderedProjects
         if let project = TriageJump.target(jump, in: ordered, sources: client.trackingSources, preferred: contextProjectId) {
@@ -91,8 +91,7 @@ extension CommandPaletteCatalog {
                     item: CommandPaletteItem(id: "jump:\(jump.kind.rawValue):\(project.id)", kind: .page, title: jump.title,
                                              keywords: jump.keywords + [project.name] + [team].compactMap { $0 },
                                              suggested: index == 0),
-                    icon: icon, suffix: [project.name, team].compactMap { $0 }.joined(separator: " · "),
-                    shortcut: index == 0 ? (jump == .slack ? "G S" : "G L") : nil
+                    icon: icon, suffix: [project.name, team].compactMap { $0 }.joined(separator: " · ")
                 ) { model.open(jump, in: project.id) })
             }
         }

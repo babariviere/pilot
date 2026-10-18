@@ -303,7 +303,7 @@ private struct SettingsSidebar: View {
     @Binding var selection: SettingsTab
     let projects: [Project]
     let addProject: () -> Void
-    /// The sidebar takes focus when Settings opens: arrows or J/K move between pages, as in the main sidebar.
+    /// The sidebar takes focus when Settings opens: arrows move between pages, as in the main sidebar.
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -341,12 +341,6 @@ private struct SettingsSidebar: View {
                     case .end: selection = order.last ?? selection
                     default: selection = SettingsTab.moving(from: selection, by: press.key == .upArrow ? -1 : 1, in: order)
                     }
-                    return .handled
-                }
-                .onKeyPress(characters: CharacterSet(charactersIn: "jk")) { press in
-                    guard press.modifiers.isDisjoint(with: [.command, .control, .option]) else { return .ignored }
-                    selection = SettingsTab.moving(from: selection, by: press.characters == "k" ? -1 : 1,
-                                                   in: SettingsTab.ordered(projects: projects))
                     return .handled
                 }
             }

@@ -121,9 +121,7 @@ private func message(_ id: String, _ type: SlackMessageType = .bug, _ severity: 
     #expect(SlackTriageText.successor(of: "x", in: board) == nil)
 }
 
-@Test func triageKeysCycleTypesAndLabels() {
-    #expect(SlackTriageText.nextType(.bug) == .question)
-    #expect(SlackTriageText.nextType(.unknown) == .bug)
+@Test func nextLabelCyclesThroughProjectLabels() {
     let names = ["Product", "Billing"]
     #expect(SlackTriageText.nextLabel(nil, names: names) == SlackOverrides(label: "Product"))
     #expect(SlackTriageText.nextLabel("Product", names: names) == SlackOverrides(label: "Billing"))

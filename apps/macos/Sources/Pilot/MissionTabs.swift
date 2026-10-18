@@ -649,10 +649,9 @@ struct MissionTasksTab: View {
         }
         .onAppear { reveal(scroll) }
         .onChange(of: model.revealedMissionTaskId) { _, _ in reveal(scroll) }
-        // ⌃⇥ or G T focuses the tasks; arrows move, Return opens or starts, E edits, ⌥↑/⌥↓ reorder.
+        // ⌃⇥ or the Go menu focuses the tasks; arrows move, Return opens or starts, ⌥↑/⌥↓ reorder, ⌘K edits.
         .keyboardList(state: keyboardRows, suppliesRows: true, onCommand: { taskId, command in
             switch command {
-            case .edit: model.missionTaskRequests.send(.editTitle, to: taskId)
             case .moveUp: model.missionTaskRequests.send(.moveUp, to: taskId)
             case .moveDown: model.missionTaskRequests.send(.moveDown, to: taskId)
             }

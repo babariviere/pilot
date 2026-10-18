@@ -5,9 +5,10 @@ import WebKit
 // Shared keyboard navigation: named focus regions, input guards and the few reserved app-level keys.
 //
 // Ordinary shortcuts stay menu key equivalents, so a focused editor or embedded view keeps its own equivalents
-// first. Only the routes in `KeyboardRoute` are read before the focused view: region cycling and composer focus
-// everywhere, the palette and terminal toggle out of embedded content, and plain-letter navigation (G sequences,
-// J/K, ?) outside any text input. Nothing is recorded or replayed.
+// first. Only the routes in `KeyboardRoute` are read before the focused view: ⌃⇥ region focus and ⌘L composer
+// focus everywhere, and the palette and terminal toggle out of embedded content. Plain letters are never taken from
+// the focused view, so typing, IME composition and native type-select behave as usual. Nothing is recorded or
+// replayed.
 
 /// The window's keyboard regions, in Ctrl-Tab order. Regions that are not on screen are skipped.
 enum KeyboardRegion: String, CaseIterable {
@@ -28,7 +29,7 @@ enum KeyboardRegion: String, CaseIterable {
 
 /// Who owns typed keys right now.
 enum KeyboardInputContext: Equatable {
-    /// Browsing: plain-letter navigation is allowed.
+    /// Browsing: no editor or embedded content owns typed keys. Arrows, Return and Tab navigate.
     case navigation
     /// A text field or editor, including IME composition. Letters are text.
     case text
@@ -110,17 +111,9 @@ enum KeyboardRoute: Equatable {
     case focusComposer
     case commandPalette
     case toggleTerminal
-    /// G was pressed: wait briefly for the destination letter.
-    case beginSequence
-    /// The letter after G.
-    case go(Character)
-    /// Drop a pending sequence. Escape and unknown keys are consumed; other keys still reach the view.
-    case cancelSequence(deliver: Bool)
-    /// J and K move like the arrow keys in the focused list.
-    case move(down: Bool)
-    case showShortcuts
 
-    static func decide(_ chord: KeyboardChord, context: KeyboardInputContext, pending: Bool) -> KeyboardRoute {
+    /// Only modified chords are reserved; every unmodified key reaches the focused view.
+    static func decide(_ chord: KeyboardChord, context: KeyboardInputContext) -> KeyboardRoute {
         let mods = chord.modifiers
         if chord.keyCode == KeyboardChord.tabKeyCode {
             if mods == [.control] { return .focusNextRegion }
@@ -131,39 +124,18 @@ enum KeyboardRoute: Equatable {
             if chord.characters == "k" { return .commandPalette }
             if chord.characters == "j" { return .toggleTerminal }
         }
-        guard context == .navigation else { return pending ? .cancelSequence(deliver: true) : .pass }
-        if pending {
-            if chord.keyCode == KeyboardChord.escapeKeyCode { return .cancelSequence(deliver: false) }
-            guard mods.isEmpty, chord.characters.count == 1, let letter = chord.characters.first, letter.isLetter else {
-                return .cancelSequence(deliver: true)
-            }
-            return .go(letter)
-        }
-        if mods.isEmpty {
-            switch chord.characters {
-            case "g": return .beginSequence
-            case "j": return .move(down: true)
-            case "k": return .move(down: false)
-            default: break
-            }
-        }
-        if chord.characters == "?", mods.isSubset(of: [.shift]) { return .showShortcuts }
         return .pass
     }
 }
 
-/// Region anchors, focus handlers and the pending G sequence. Separate from AppModel so the hint and anchors
-/// never re-render views that observe the app model.
+/// Region anchors and focus handlers. Separate from AppModel so the anchors never re-render views that observe the
+/// app model.
 @MainActor
 final class KeyboardFocus: ObservableObject {
-    /// Shown while a G sequence waits for its letter.
-    @Published private(set) var pendingSequence = false
     /// The last region focus moved to by a command or a region's own focus report.
     private(set) var lastRegion: KeyboardRegion?
     private var anchors: [KeyboardRegion: [WeakAnchor]] = [:]
     private var handlers: [KeyboardRegion: [(id: UUID, perform: () -> Bool)]] = [:]
-    private var sequenceStarted: TimeInterval?
-    private var sequenceTimeout: Task<Void, Never>?
     /// A region to focus once its destination view registers, after a navigation command.
     private var pendingFocus: (region: KeyboardRegion, at: TimeInterval)?
     /// When arrow keys last moved a native list (the sidebar), so a chat it opens leaves focus there.
@@ -171,8 +143,8 @@ final class KeyboardFocus: ObservableObject {
     /// Composers offering their controls to the palette, oldest first.
     private(set) var composerProviders: [(id: UUID, provide: @MainActor () -> [ComposerCommand])] = []
 
-    /// Rows fixed above the sidebar's list (the Control chat), which arrow keys and J/K reach as the list's first
-    /// items (`SidebarStickyNavigation`). Set by the sidebar while it is on screen.
+    /// Rows fixed above the sidebar's list (the Control chat), which arrow keys reach as the list's first items
+    /// (`SidebarStickyNavigation`). Set by the sidebar while it is on screen.
     struct StickyRows {
         let keys: @MainActor () -> [String]
         let current: @MainActor () -> String?
@@ -211,9 +183,6 @@ final class KeyboardFocus: ObservableObject {
             focus.noteFocused(.content)
         }
     }
-
-    /// A sequence letter must follow G within this time.
-    static let sequenceWindow: TimeInterval = 1.5
 
     private struct WeakAnchor {
         weak var view: NSView?
@@ -379,31 +348,6 @@ final class KeyboardFocus: ObservableObject {
         guard let target = candidate(in: root) else { return false }
         return window.makeFirstResponder(target)
     }
-
-    // MARK: Sequences
-
-    var sequenceIsPending: Bool {
-        guard let sequenceStarted else { return false }
-        return ProcessInfo.processInfo.systemUptime - sequenceStarted < Self.sequenceWindow
-    }
-
-    func beginSequence() {
-        sequenceStarted = ProcessInfo.processInfo.systemUptime
-        pendingSequence = true
-        sequenceTimeout?.cancel()
-        sequenceTimeout = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(Self.sequenceWindow))
-            guard !Task.isCancelled else { return }
-            self?.cancelSequence()
-        }
-    }
-
-    func cancelSequence() {
-        sequenceStarted = nil
-        sequenceTimeout?.cancel()
-        sequenceTimeout = nil
-        if pendingSequence { pendingSequence = false }
-    }
 }
 
 // MARK: - Router
@@ -414,7 +358,6 @@ final class KeyboardRouter {
     static let shared = KeyboardRouter()
     private var monitor: Any?
     private var pointerMonitor: Any?
-    private var resignObserver: NSObjectProtocol?
     /// Performs an app action for a route. Returns false to deliver the key normally.
     var perform: ((KeyboardRoute) -> Bool)?
     var focus: KeyboardFocus?
@@ -434,10 +377,6 @@ final class KeyboardRouter {
             [weak self] event in
             self?.handlePointer(event) ?? event
         }
-        // A sequence never survives the window losing focus.
-        resignObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.didResignKeyNotification, object: nil, queue: .main
-        ) { [weak self] _ in MainActor.assumeIsolated { self?.focus?.cancelSequence() } }
     }
 
     /// The event to deliver, or nil when a route consumed it.
@@ -460,11 +399,10 @@ final class KeyboardRouter {
             return nil
         }
         let context = KeyboardInputGuard.context(for: window.firstResponder)
-        if context == .navigation, window.firstResponder is NSTableView,
-           [125, 126].contains(event.keyCode) || ["j", "k"].contains(event.charactersIgnoringModifiers ?? "") {
+        if context == .navigation, window.firstResponder is NSTableView, [125, 126].contains(event.keyCode) {
             focus.noteListKey()
         }
-        if context == .navigation, !focus.sequenceIsPending, let table = window.firstResponder as? NSTableView,
+        if context == .navigation, let table = window.firstResponder as? NSTableView,
            let down = Self.verticalStep(event), let sticky = focus.sidebarStickyRows, focus.currentRegion() == .sidebar {
             let step = SidebarStickyNavigation.step(down: down, sticky: sticky.keys(), current: sticky.current(),
                                                     listHasSelection: table.selectedRow >= 0)
@@ -484,26 +422,9 @@ final class KeyboardRouter {
                 return nil
             }
         }
-        let route = KeyboardRoute.decide(KeyboardChord(event), context: context, pending: focus.sequenceIsPending)
-        switch route {
-        case .pass:
-            return event
-        case let .cancelSequence(deliver):
-            focus.cancelSequence()
-            return deliver ? event : nil
-        case .beginSequence:
-            focus.beginSequence()
-            return nil
-        case .go:
-            focus.cancelSequence()
-            _ = perform?(route)
-            return nil
-        case let .move(down):
-            // The focused list moves exactly as it does for an arrow key.
-            return Self.arrowEvent(down: down, like: event) ?? event
-        default:
-            return perform?(route) == true ? nil : event
-        }
+        let route = KeyboardRoute.decide(KeyboardChord(event), context: context)
+        guard route != .pass else { return event }
+        return perform?(route) == true ? nil : event
     }
 
     /// A mouse button went down: hide keyboard-only decoration, including for focus the click moves later.
@@ -520,18 +441,13 @@ final class KeyboardRouter {
                                 isARepeat: event.isARepeat, keyCode: down ? 125 : 126)
     }
 
-    /// Down (true) or up (false) for an unmodified arrow, J or K; nil for any other key.
+    /// Down (true) or up (false) for an unmodified arrow; nil for any other key.
     static func verticalStep(_ event: NSEvent) -> Bool? {
         let chord = KeyboardChord(event)
         guard chord.modifiers.isEmpty else { return nil }
         switch chord.keyCode {
         case 125: return true
         case 126: return false
-        default: break
-        }
-        switch chord.characters {
-        case "j": return true
-        case "k": return false
         default: return nil
         }
     }
@@ -647,33 +563,7 @@ struct KeyboardRegionAnchor: NSViewRepresentable {
     }
 }
 
-/// The small hint shown after G, listing where the next letter goes.
-struct KeyboardSequenceHint: View {
-    @ObservedObject var focus: KeyboardFocus
-    @ObservedObject var model: AppModel
-
-    var body: some View {
-        if focus.pendingSequence {
-            HStack(spacing: 12) {
-                KeyCap(key: "G").foregroundStyle(Theme.foreground)
-                ForEach(model.availableGoDestinations, id: \.self) { destination in
-                    KeyHint(key: destination.key.uppercased(), label: destination.title)
-                }
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .background(RoundedRectangle(cornerRadius: Theme.Radius.tray).fill(Theme.tray))
-            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.tray).strokeBorder(Theme.border))
-            .shadow(color: .black.opacity(0.08), radius: 10, y: 3)
-            .padding(.bottom, 18)
-            .allowsHitTesting(false)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("Go to: press a letter")
-        }
-    }
-}
-
-/// The letter after G. Navigation only: a destination that is not available does nothing.
+/// A Go menu and palette destination. Navigation only: a destination that is not available does nothing.
 enum GoDestination: String, CaseIterable {
     case home
     case inbox
@@ -685,41 +575,6 @@ enum GoDestination: String, CaseIterable {
     case slack
     case linear
     case control
-
-    var key: Character {
-        switch self {
-        case .home: "h"
-        case .inbox: "i"
-        case .overview: "p"
-        case .mission: "m"
-        case .tasks: "t"
-        case .brief: "b"
-        case .archive: "a"
-        case .slack: "s"
-        case .linear: "l"
-        case .control: "c"
-        }
-    }
-
-    var title: String {
-        switch self {
-        case .home: "Home"
-        case .inbox: "Inbox"
-        case .overview: "Overview"
-        case .mission: "Mission"
-        case .tasks: "Tasks"
-        case .brief: "Brief"
-        case .archive: "Archive"
-        case .slack: "Slack triage"
-        case .linear: "Linear queue"
-        case .control: "Control"
-        }
-    }
-
-    init?(key: Character) {
-        guard let match = Self.allCases.first(where: { $0.key == Character(key.lowercased()) }) else { return nil }
-        self = match
-    }
 }
 
 /// The keyboard state views register their regions, handlers and commands with: the app's, or a fixture window's.

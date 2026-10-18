@@ -33,8 +33,8 @@ final class KeyboardCue: ObservableObject {
     /// True when a key press navigates rather than types.
     ///
     /// - ⌃⇥ and ⌃⇧⇥ move between regions from anywhere, even out of terminals and web content.
-    /// - Outside text, unmodified and ⌥ keys browse: arrows, J/K, G sequences, Return, Tab, Home/End. Menu shortcuts
-    ///   (⌘ or ⌃) do not.
+    /// - Outside text, unmodified and ⌥ navigation keys browse: arrows, Return, Tab, Space, Escape, Home/End and
+    ///   Page Up/Down. Letters, digits and menu shortcuts (⌘ or ⌃) do not.
     /// - In text, only leaving the field navigates: Tab out of a single-line field, or Escape back to the page.
     ///   Letters, arrows, Return and the composer's own Tab completion are editing.
     /// - Every other key in terminal or web content is that content's input.
@@ -49,9 +49,12 @@ final class KeyboardCue: ObservableObject {
             if chord.keyCode == KeyboardChord.escapeKeyCode { return mods.isEmpty }
             return tab && fieldEditor && mods.subtracting(.shift).isEmpty
         case .navigation:
-            return mods.isDisjoint(with: [.command, .control])
+            return mods.isDisjoint(with: [.command, .control]) && navigationKeyCodes.contains(chord.keyCode)
         }
     }
+
+    /// Return, Tab, Space, Escape, keypad Enter, Home, Page Up, End, Page Down and the four arrows.
+    static let navigationKeyCodes: Set<UInt16> = [36, 48, 49, 53, 76, 115, 116, 119, 121, 123, 124, 125, 126]
 }
 
 private struct KeyboardCueKey: EnvironmentKey {

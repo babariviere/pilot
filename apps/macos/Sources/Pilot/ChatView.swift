@@ -802,7 +802,7 @@ struct ChatView: View {
         let scroll = scroll
         return TranscriptKeyboardModifier(
             keyboard: transcriptKeyboard, proxy: proxy, rows: { feed.rows.visibleRows },
-            messageExpansions: messageExpansions, rewind: session.isReadOnlyHistory ? nil : rewind,
+            messageExpansions: messageExpansions,
             loadEarlier: canLoadEarlier ? {
                 guard !feed.loadingEarlier else { return }
                 if !feed.rows.revealEarlier() { feed.loadEarlier() }

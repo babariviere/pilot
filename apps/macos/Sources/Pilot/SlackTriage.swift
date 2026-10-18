@@ -225,13 +225,8 @@ enum SlackTriageText {
         return row > 0 ? column[row - 1] : nil
     }
 
-    /// T: the next type, wrapping around.
-    static func nextType(_ type: SlackMessageType) -> SlackMessageType {
-        let types = SlackMessageType.ordered
-        return types[((types.firstIndex(of: type) ?? -1) + 1) % types.count]
-    }
-
-    /// L: each project label in order, then no label, then the first again. nil when there are no labels.
+    /// ⌘K's Next label: each project label in order, then no label, then the first again. nil when there are no
+    /// labels.
     static func nextLabel(_ label: String?, names: [String]) -> SlackOverrides? {
         guard !names.isEmpty else { return nil }
         guard let label, let index = names.firstIndex(of: label) else { return SlackOverrides(label: names[0]) }
@@ -788,10 +783,7 @@ struct SlackTriagePage: View {
                     .focused($listFocused)
                     .focusEffectDisabled()
                     .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow, .return]) { press in
-                        key(press, columns: columns, labels: labels)
-                    }
-                    .onKeyPress(characters: CharacterSet(charactersIn: "tTlLdD")) { press in
-                        key(press, columns: columns, labels: labels)
+                        key(press, columns: columns)
                     }
                     .modifier(TriageListFocus(focused: $listFocused))
                     .selectionCommands(revision: "\(selection ?? "")|\(selected?.updatedAt ?? 0)|\(selected?.dismissed == true)|\(columns.count)") {
@@ -1006,7 +998,9 @@ struct SlackTriagePage: View {
         }
     }
 
-    private func key(_ press: KeyPress, columns: [[String]], labels: [SlackProjectLabel]) -> KeyPress.Result {
+    /// Arrows move the selection and Return starts a chat. Type, label and dismiss are buttons and ⌘K actions, so
+    /// letters stay free for VoiceOver and type-select.
+    private func key(_ press: KeyPress, columns: [[String]]) -> KeyPress.Result {
         guard press.modifiers.isDisjoint(with: [.command, .control, .option]) else { return .ignored }
         let selected = selection.flatMap { id in triage.items.first { $0.id == id } }
         switch press.key {
@@ -1018,18 +1012,7 @@ struct SlackTriagePage: View {
             guard let selected else { return .ignored }
             actions.startChat(selected, app: model)
         default:
-            guard let selected else { return .ignored }
-            let current = SlackTriageText.triage(selected)
-            switch press.characters.lowercased() {
-            case "t": update(selected, SlackOverrides(type: SlackTriageText.nextType(current.type)), columns: columns)
-            case "l":
-                guard let change = SlackTriageText.nextLabel(current.label, names: labels.map(\.name)) else {
-                    return .ignored
-                }
-                update(selected, change, columns: columns)
-            case "d": toggleDismissed(selected, columns: columns)
-            default: return .ignored
-            }
+            return .ignored
         }
         return .handled
     }
@@ -1042,7 +1025,7 @@ struct SlackTriagePage: View {
         triage.update(item, change)
     }
 
-    /// The selected message's actions for ⌘K: the same changes as Return, T, L and D and the inspector, by name.
+    /// The selected message's actions for ⌘K: the same changes as Return and the inspector, by name.
     private func triageCommands(_ item: TrackedItem, columns: [[String]],
                                 labels: [SlackProjectLabel]) -> (title: String, commands: [ComposerCommand]) {
         let current = SlackTriageText.triage(item)
@@ -1057,7 +1040,7 @@ struct SlackTriagePage: View {
         }
         if let change = SlackTriageText.nextLabel(current.label, names: labels.map(\.name)) {
             commands.append(ComposerCommand(id: "triage-label", title: "Next label", keywords: ["label", "triage"],
-                                            icon: .filter, detail: "As L does") {
+                                            icon: .filter) {
                 update(item, change, columns: columns)
             })
         }
@@ -1633,12 +1616,8 @@ struct SlackTriageInspector: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 10) {
                     KeyHint(key: "↑↓", label: "move")
-                    KeyHint(key: "T", label: "type")
-                    KeyHint(key: "L", label: "label")
-                }
-                HStack(spacing: 10) {
                     KeyHint(key: "↩", label: "start chat")
-                    KeyHint(key: "D", label: "dismiss")
+                    KeyHint(key: "⌘K", label: "actions")
                 }
                 Text("Your triage changes stay in Pilot and teach this project's classifier. Starting work adds an eyes reaction in Slack, never a message or reply.")
                     .font(.pilot(.caption)).foregroundStyle(Theme.faintForeground)

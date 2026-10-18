@@ -65,19 +65,18 @@ it does not change chat-result read tracking or enable review entry points.
   also available from **Help → Keyboard Shortcuts** or by searching for shortcuts in ⌘K. ⌘← and ⌘→ go back
   and forward through visited chats and pages, restoring their sidebar scope.
   ⌃⇥ and ⌃⇧⇥ move focus between the sidebar, the page, the composer and the inspector, and ⌘L focuses the
-  composer (or the open question), including from the terminal or an artifact. Outside text fields, G then a letter
-  goes to a page (G H Home, G I Inbox, G P the focused project's Overview, G M/T/B the current mission's Overview,
-  Tasks or Brief, G A Archive, G S Slack triage, G L the Linear queue, G C the Control chat with its composer
-  focused), J and K move through lists, and ? opens
-  the shortcut reference. The **Go** menu lists the same destinations. G S and G L open the board or queue of the
-  project in view (or the only project tracking it); otherwise ⌘K lists one "Slack triage" or "Linear queue" per
-  project ("Linear triage" finds it too). The Linear queue is the project's Linear list in Pilot, not the Linear
-  app. Home, Overview, Inbox and Archive each have one keyboard list: ⌃⇥ (or a G
-  destination) focuses it, arrows or J/K move the highlight, Return opens the row as a click would, and ⌘K lists
-  the highlighted chat's actions under its name.
+  composer (or the open question), including from the terminal or an artifact. Plain letters are never taken as
+  shortcuts, so typing, IME input and list type-select behave as in any Mac app. The **Go** menu and ⌘K reach
+  Home, Inbox, the focused project's Overview, the current mission's Overview, Tasks or Brief, Archive, Slack
+  triage, the Linear queue and the Control chat (with its composer focused). Slack triage and the Linear queue open
+  the board or queue of the project in view (or the only project tracking it); otherwise ⌘K lists one "Slack
+  triage" or "Linear queue" per project ("Linear triage" finds it too). The Linear queue is the project's Linear
+  list in Pilot, not the Linear app. Home, Overview, Inbox and Archive each have one keyboard list: ⌃⇥ (or a Go
+  destination) focuses it, arrows move the highlight, Return opens the row as a click would, and ⌘K lists the
+  highlighted chat's actions under its name.
   ⌘[ and ⌘] go Back and Forward too, and lists return to the row you had highlighted.
   A highlighted chat keeps its grey selection. Other highlighted rows and messages show a faint grey fill only
-  while you navigate with the keyboard; a click hides it and the next arrow, J/K or ⌃⇥ brings it back.
+  while you navigate with the keyboard; a click hides it and the next arrow or ⌃⇥ brings it back.
   In a composer, ⌘K also finds its controls by name (model, thinking, Build/Ask, project, folder, base branch,
   workspace, send later, attach image from the clipboard); choosing one never sends the draft. ⌘. stops the open
   chat's agent while it works. Escape, after closing any picker or queued-message edit, leaves the composer for the
@@ -86,26 +85,26 @@ it does not change chat-result read tracking or enable review entry points.
   (Build or Ask, before a chat starts), `/terminal`, `/changes`, `/artifacts` and `/help`. They run in the app,
   keep the rest of the draft, and are never sent, queued or scheduled. A session prompt or skill with the same name
   keeps it.
-  In a chat, ⌃⇥ moves into the transcript: arrows or J/K move between messages, Return folds or unfolds work and
-  long messages, ⌘C copies a message, E edits a sent message (as its Edit button does), moving past the top loads
-  earlier history, and Escape returns to the composer. The inspector's Changes, Links, Artifacts and Agents lists
+  In a chat, ⌃⇥ moves into the transcript: arrows move between messages, Return folds or unfolds work and long
+  messages, ⌘C copies a message, moving past the top loads earlier history, and Escape returns to the composer. A
+  sent message's Edit button and context menu edit it. The inspector's Changes, Links, Artifacts and Agents lists
   and the running-jobs panel work the same way; closing the inspector returns focus to the composer.
   Terminal and artifact content keep every key (Escape, Tab, ⌃C, ⌃D, letters) except the reserved ⌃⇥, ⌃⇧⇥ and
   ⌘L, plus ⌘K and ⌘J. ⌘J closes the terminal back to the composer. In an artifact viewer, ⌃⇥ leaves the page so
   its Close button and Escape work again.
   On a mission's Tasks tab, the list takes focus like other pages: Return opens the task's chat (or the start
-  sheet), E edits its title (Return saves, Escape cancels), ⌥↑/⌥↓ reorders it within its phase, and ⌘K lists its
-  status, phase, model, dependency and link actions. The highlighted row shows its status and actions menus
-  without hovering. Chats and Artifacts tabs are keyboard lists too, and ⌘K reaches every mission tab.
-  Settings opens with its sidebar focused: arrows or J/K move between pages and projects. ⌘K also opens any
+  sheet), ⌥↑/⌥↓ reorders it within its phase, and ⌘K lists its title edit (Return saves, Escape cancels), status,
+  phase, model, dependency and link actions. The highlighted row shows its status and actions menus without
+  hovering. Chats and Artifacts tabs are keyboard lists too, and ⌘K reaches every mission tab.
+  Settings opens with its sidebar focused: arrows move between pages and projects. ⌘K also opens any
   Settings page by name ("Energy settings", "Project settings"). Controls inside a page follow macOS: Tab reaches
   text fields, and toggles, pickers and buttons too when **Keyboard navigation** is on in System Settings.
   Keyboard focus never draws a blue outline; neutral row selections and text carets remain.
   The composer's task and subagent lists, "Send later: At a time…", Start chat or mission on Linear and Slack rows,
   and the selected Slack triage message's type, label, dismiss and start actions are all in ⌘K as well.
-  Slack triage and Memory take the page's focus from ⌃⇥ or G S like other pages and keep their own keys (arrows,
-  Return, T/L/D in triage). Typing in their search fields never triggers those keys, and Escape in the memory
-  search clears it, then returns to the tree.
+  Slack triage and Memory take the page's focus from ⌃⇥ or the Go menu like other pages and keep their own keys
+  (arrows and Return). Typing in their search fields never triggers those keys, and Escape in the memory search
+  clears it, then returns to the tree.
 - **Let the display rest while agents work.** Keep the Mac awake without keeping the display on.
   Optional closed-lid work requires power and Wi-Fi; without both, agents pause and resume on the next
   full wake with connectivity. Screen locking is left to macOS. See [agent-aware sleep](docs/agent-sleep.md) for

@@ -1226,8 +1226,8 @@ struct TrackedInboxSheet: View {
                         }
                     }
                     .padding(.vertical, 4)
-                    // Opened by G L or Linear and Slack…: arrows move, Return opens; the highlighted row shows its
-                    // Start and actions buttons. ⌘K offers the same rows' actions on the Inbox and Overview.
+                    // Opened by the Go menu or Linear and Slack…: arrows move, Return opens; the highlighted row
+                    // shows its Start and actions buttons. ⌘K offers the same rows' actions on the Inbox and Overview.
                     .keyboardList(region: nil, focusOnAppear: true)
                 }
             }
