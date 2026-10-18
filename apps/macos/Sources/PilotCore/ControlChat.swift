@@ -17,6 +17,8 @@ public enum WatchEvent: String, Codable, CaseIterable, Sendable {
     case linearDone = "linear.done", missionTaskDone = "mission.task_done", missionDone = "mission.done"
 }
 public struct WatchTarget: Codable, Equatable, Sendable {
+    /// Contract-only. Missing means the configured Control home.
+    public let host: OperationHost?
     public enum Kind: String, Codable, Sendable {
         case chat, project, mission, pr, linear, task
         case chatPRs = "chat_prs"
@@ -231,6 +233,8 @@ public struct ControlAuthorizationUsage: Codable, Equatable, Sendable {
 }
 public struct ControlAuthorization: Codable, Identifiable, Equatable, Sendable {
     public let id: String
+    /// Contract-only. Missing means home only; an empty array grants no hosts.
+    public let hosts: [OperationHost]?
     public let userMessage: ControlUserMessageRef?
     public let watchId: String?
     public let scope: String
