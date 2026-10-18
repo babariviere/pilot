@@ -230,7 +230,7 @@ final class NativeDiagnostics: NSObject, MXMetricManagerSubscriber, @unchecked S
         let observations = Self.observations(payloads)
         guard !observations.isEmpty, isEnabled else { return }
         Task {
-            guard self.isEnabled, try await self.archive.append(observations) else { return }
+            guard self.isEnabled, (try? await self.archive.append(observations)) == true else { return }
             self.lock.withLock { self.changeHandler }?()
         }
     }
