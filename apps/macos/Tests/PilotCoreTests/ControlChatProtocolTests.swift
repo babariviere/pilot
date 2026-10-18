@@ -77,9 +77,53 @@ struct ControlChatProtocolTests {
         guard case .controlAuditChanged = try ServerUpdate.decode(Data(#"{"type":"control-audit.changed"}"#.utf8)) else {
             Issue.record("Missing audit invalidation"); return
         }
+        guard case .controlMemoryChanged = try ServerUpdate.decode(Data(#"{"type":"control-memory.changed"}"#.utf8)) else {
+            Issue.record("Missing memory invalidation"); return
+        }
         let summary = ChatEventSummary(json: try JSONValue.decode(Data(#"{"kind":"watch_notice","text":"1 event fired"}"#.utf8)))
         #expect(summary?.kind == "watch_notice")
         #expect(summary?.text == "1 event fired")
+    }
+
+    @Test func memoryPagesDecode() throws {
+        let decoder = JSONDecoder()
+        let view = try decoder.decode(ControlMemoryViewResponse.self, from: Data(#"{"lines":[{"id":0,"n":4,"text":"user: hi"},{"id":4,"n":1,"text":"","pending":true}]}"#.utf8))
+        #expect(view.lines.map(\.id) == ["0+4", "4+1"])
+        #expect(view.lines[0].end == 3)
+        #expect(!view.lines[0].isPending)
+        #expect(view.lines[1].isPending)
+
+        let halves = try decoder.decode(ControlMemoryNodeResponse.self, from: Data(#"{"lines":[{"id":0,"n":2,"text":"a"},{"id":2,"n":2,"text":"b"}]}"#.utf8))
+        #expect(halves.lines?.map(\.start) == [0, 2])
+        #expect(halves.page == nil)
+        let message = try decoder.decode(ControlMemoryNodeResponse.self, from: Data(#"{"message":{"id":3,"at":1000,"kind":"tool","text":"{\"name\":\"read\"}","name":"read"},"format":"json","next":12000}"#.utf8))
+        let page = try #require(message.page)
+        #expect(page.message.kind == .tool)
+        #expect(page.message.name == "read")
+        #expect(page.format == "json")
+        #expect(page.next == 12000)
+        #expect(message.lines == nil)
+
+        let log = try decoder.decode(ControlMemoryMessagesResponse.self, from: Data(#"{"messages":[{"id":2,"at":5,"kind":"tool","text":"ok","name":"grep","input":"{\"q\":1}","clipped":true},{"id":1,"at":4,"kind":"event","text":"fired"}],"next":1}"#.utf8))
+        #expect(log.messages.map(\.id) == [2, 1])
+        #expect(log.messages[0].input == #"{"q":1}"#)
+        #expect(log.messages[0].clipped == true)
+        #expect(log.messages[1].name == nil)
+        #expect(log.next == 1)
+        let last = try decoder.decode(ControlMemoryMessagesResponse.self, from: Data(#"{"messages":[]}"#.utf8))
+        #expect(last.next == nil)
+        for kind in ControlMemoryKind.allCases {
+            let entry = try decoder.decode(ControlMemoryLogEntry.self, from: Data(#"{"id":0,"at":1,"kind":"\#(kind.rawValue)","text":""}"#.utf8))
+            #expect(entry.kind == kind)
+        }
+
+        let stats = try decoder.decode(ControlMemoryStats.self, from: Data(#"{"count":3,"pendingJobs":1,"failedJobs":0,"viewBytes":120,"merging":false,"dbBytes":4096,"oldestAt":10,"newestAt":20}"#.utf8))
+        #expect(stats.count == 3)
+        #expect(stats.oldestAt == 10)
+        let empty = try decoder.decode(ControlMemoryStats.self, from: Data(#"{"count":0,"pendingJobs":0,"failedJobs":0,"viewBytes":0,"merging":true,"dbBytes":0}"#.utf8))
+        #expect(empty.merging)
+        #expect(empty.newestAt == nil)
+        #expect(try decoder.decode(ControlMemoryStats.self, from: JSONEncoder().encode(stats)) == stats)
     }
 
     @Test func controlChatListsApartWithoutArchiveOrPinActions() throws {

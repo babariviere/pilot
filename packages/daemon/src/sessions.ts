@@ -1254,6 +1254,17 @@ export class SessionManager {
 		this.controlAuditListeners.add(listener);
 		return () => this.controlAuditListeners.delete(listener);
 	}
+	private readonly controlMemoryListeners = new Set<() => void>();
+	/** Control memory appends, summaries and merges. Callers coalesce. */
+	onControlMemory(listener: () => void): () => void {
+		this.controlMemoryListeners.add(listener);
+		return () => this.controlMemoryListeners.delete(listener);
+	}
+	/** Read-only memory browsing for the app; NotFound until the control chat exists. */
+	controlMemory(): ControlChat["memory"] {
+		if (!this.metas.get(SessionManager.CONTROL_ID)?.control) throw new NotFound("No control chat");
+		return this.controlService().memory;
+	}
 	controlAudit(): ControlActions {
 		this.controlActions ??= new ControlActions(
 			this.controlService().memory,
@@ -1315,13 +1326,18 @@ export class SessionManager {
 		return this.creatingControl;
 	}
 	private controlService(): ControlChat {
-		this.controlChat ??= new ControlChat(
-			this.home,
-			this.home,
-			this.modelCatalog,
-			(id) => this.isControlSession(id),
-			() => this.metas.get(SessionManager.CONTROL_ID)?.model,
-		);
+		if (!this.controlChat) {
+			this.controlChat = new ControlChat(
+				this.home,
+				this.home,
+				this.modelCatalog,
+				(id) => this.isControlSession(id),
+				() => this.metas.get(SessionManager.CONTROL_ID)?.model,
+			);
+			this.controlChat.memory.onChange(() => {
+				for (const listener of this.controlMemoryListeners) listener();
+			});
+		}
 		return this.controlChat;
 	}
 	controlOrganizeAllowed(): boolean {

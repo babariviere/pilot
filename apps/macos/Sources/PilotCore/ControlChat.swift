@@ -71,5 +71,89 @@ public struct ControlAuditEntry: Codable, Identifiable, Equatable, Sendable {
 public typealias ControlAuditResponse = [ControlAuditEntry]
 /// GET/POST /api/control-chat. POST ensures the singleton without starting a turn.
 public typealias ControlChatResponse = SessionSummary
+
+// MARK: Control memory (read-only browsing; every route 404s without a control chat)
+
+public enum ControlMemoryKind: String, Codable, Sendable, CaseIterable {
+    case user, assistant, tool, echo, event, note
+}
+/// One summary range: messages `id` ..< `id + n`. Pending lines have no summary yet and empty text.
+public struct ControlMemoryLine: Codable, Identifiable, Hashable, Sendable {
+    public var id: String { "\(start)+\(n)" }
+    public let start: Int
+    public let n: Int
+    public let text: String
+    public let pending: Bool?
+    public var isPending: Bool { pending == true }
+    public var end: Int { start + n - 1 }
+    public init(start: Int, n: Int, text: String, pending: Bool? = nil) {
+        self.start = start
+        self.n = n
+        self.text = text
+        self.pending = pending
+    }
+    enum CodingKeys: String, CodingKey {
+        case start = "id", n, text, pending
+    }
+}
+/// GET /api/control-chat/memory/view. Oldest first.
+public struct ControlMemoryViewResponse: Codable, Equatable, Sendable {
+    public let lines: [ControlMemoryLine]
+}
+/// One page of a whole message. Tool rows are JSON `{name,input,text}` with `format == "json"`.
+public struct ControlMemoryMessagePage: Codable, Equatable, Sendable {
+    public struct Message: Codable, Equatable, Sendable {
+        public let id: Int
+        public let at: Double
+        public let kind: ControlMemoryKind
+        public let text: String
+        public let name: String?
+    }
+    public let message: Message
+    public let format: String?
+    /// Offset of the next page of the same message.
+    public let next: Int?
+}
+/// GET /api/control-chat/memory/nodes/:id/:n. n > 1 sets `lines` (the two halves); n = 1 sets `message`
+/// (paged with `offset`).
+public struct ControlMemoryNodeResponse: Codable, Equatable, Sendable {
+    public let lines: [ControlMemoryLine]?
+    public let message: ControlMemoryMessagePage.Message?
+    public let format: String?
+    public let next: Int?
+    public var page: ControlMemoryMessagePage? {
+        message.map { ControlMemoryMessagePage(message: $0, format: format, next: next) }
+    }
+}
+/// A clipped log row. `input` is the tool input as JSON text. Full content via nodes/:id/1.
+public struct ControlMemoryLogEntry: Codable, Identifiable, Equatable, Sendable {
+    public let id: Int
+    public let at: Double
+    public let kind: ControlMemoryKind
+    public let text: String
+    public let name: String?
+    public let input: String?
+    public let clipped: Bool?
+}
+/// GET /api/control-chat/memory/messages?before=<id>&limit=50&q=<text>. Newest first, limit 1...100, q at most
+/// 200 characters. A search scans a bounded window, so a page may hold fewer matches; continue with `next`.
+public struct ControlMemoryMessagesResponse: Codable, Equatable, Sendable {
+    public let messages: [ControlMemoryLogEntry]
+    public let next: Int?
+}
+/// GET /api/control-chat/memory/stats.
+public struct ControlMemoryStats: Codable, Equatable, Sendable {
+    public let count: Int
+    /// Summaries waiting to be built (queued or running).
+    public let pendingJobs: Int
+    /// Summaries that failed; they retry with the next message.
+    public let failedJobs: Int
+    public let viewBytes: Int
+    public let merging: Bool
+    /// chat.sqlite plus its write-ahead log.
+    public let dbBytes: Int
+    public let oldestAt: Double?
+    public let newestAt: Double?
+}
 /// POST /api/sessions/:id/model. Incompatible context becomes a restorable attempt with reason=model.
 public typealias ChangeModelResponse = SessionSummary

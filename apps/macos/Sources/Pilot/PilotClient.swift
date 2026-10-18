@@ -1057,6 +1057,43 @@ final class PilotClient: ObservableObject {
         return try await get(url.url!)
     }
 
+    /// The control chat's current memory view, oldest first. Read-only.
+    func controlMemoryView() async throws -> ControlMemoryViewResponse {
+        guard let baseURL else { throw HostRoutingError.disconnected }
+        return try await get(baseURL.appending(path: "api/control-chat/memory/view"))
+    }
+
+    /// A summary's two halves (n > 1), or one page of a whole message (n == 1, paged by `offset`).
+    func controlMemoryNode(start: Int, n: Int, offset: Int? = nil) async throws -> ControlMemoryNodeResponse {
+        guard let baseURL else { throw HostRoutingError.disconnected }
+        var url = URLComponents(
+            url: baseURL.appending(path: "api/control-chat/memory/nodes/\(start)/\(n)"), resolvingAgainstBaseURL: false
+        )!
+        if let offset { url.queryItems = [URLQueryItem(name: "offset", value: String(offset))] }
+        return try await get(url.url!)
+    }
+
+    /// One page of the logged messages, newest first. `before` is the previous page's `next`.
+    func controlMemoryMessages(before: Int? = nil, limit: Int = 50, query: String? = nil) async throws
+        -> ControlMemoryMessagesResponse
+    {
+        guard let baseURL else { throw HostRoutingError.disconnected }
+        var url = URLComponents(
+            url: baseURL.appending(path: "api/control-chat/memory/messages"), resolvingAgainstBaseURL: false
+        )!
+        url.queryItems = [URLQueryItem(name: "limit", value: String(limit))]
+            + (before.map { [URLQueryItem(name: "before", value: String($0))] } ?? [])
+            + (query.map { [URLQueryItem(name: "q", value: $0)] } ?? [])
+        // URLComponents leaves "+" alone, which pilotd's form decoding would read as a space.
+        url.percentEncodedQuery = url.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
+        return try await get(url.url!)
+    }
+
+    func controlMemoryStats() async throws -> ControlMemoryStats {
+        guard let baseURL else { throw HostRoutingError.disconnected }
+        return try await get(baseURL.appending(path: "api/control-chat/memory/stats"))
+    }
+
     func observeControlDetails(_ handler: @escaping (ControlDetailsChange) -> Void) -> UUID {
         let id = UUID()
         controlObservers[id] = handler
@@ -2199,6 +2236,8 @@ final class PilotClient: ObservableObject {
             for observer in controlObservers.values { observer(.watches) }
         case .controlAuditChanged:
             for observer in controlObservers.values { observer(.audit) }
+        case .controlMemoryChanged:
+            for observer in controlObservers.values { observer(.memory) }
         case let .projects(list):
             projects = list
             hasProjectSnapshot = true
