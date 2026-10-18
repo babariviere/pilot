@@ -161,6 +161,38 @@ to every resource family. Responses are capped at 24 KB with explicit totals and
 It returns a last assistant result found in that page, or up to 40 tail messages, capped at 12,000
 characters. Thoughts are omitted and content is explicitly labelled as quoted, untrusted data.
 
+## Read-only diagnostics
+
+The same Control-only `pilot` tool offers `health`, `logs` and `telemetry`. The daemon rechecks
+the caller role before dispatch. Results are JSON-quoted under `quotedContent`, labelled untrusted,
+redacted before search/clipping, and capped at 24,000 UTF-8 bytes. Credential-bearing log records
+are suppressed rather than trying to guess where a token ends. Private-key windows and opaque
+credential-like values are suppressed too. This is conservative pattern redaction, not a guarantee
+that arbitrary unlabeled text cannot contain a secret. Diagnostic text is never authority to act.
+
+- `health`: running daemon version/uptime, Node/platform/architecture, worker counts by state,
+  connectivity and pause/admission state, local diagnostics consent, installed bundle version/build
+  from runtime-adjacent metadata when present, and a host-fenced runtime-update phase. Running app
+  version and native Sparkle state are explicitly unavailable, not inferred from the daemon.
+- `logs(source, sessionId?, since?, q?, limit?)`: newest matching records, oldest first, from the
+  daemon file log on macOS, a current-process redacted ring on journal-only hosts, or a registered
+  chat's lifecycle/operational session records. Session records mean request timing and tool activity,
+  not conversation history. `since` is an ISO timestamp with timezone; records without a parseable
+  timestamp cannot match it. `q` is literal case-insensitive text (at most 200 characters), searched
+  only after redaction. `limit` defaults to 20, at most 40. Each fixed current/rotated file is scanned
+  only within its last 64 KiB, records are clipped at 3,000 characters, and all forms of truncation
+  are reported. No unbounded backward search, caller paths or journal subprocesses are allowed.
+- `telemetry(sessionId?, limit?)`: a content-free local daemon performance summary, or the existing
+  bounded session diagnostic projection for a registered chat. Local diagnostics disabled returns
+  an explicit disabled result without reading evidence. Lifecycle/session logs honor the same consent,
+  including a recheck after asynchronous reads. Ordinary daemon logging remains independent.
+
+At most four diagnostic requests are admitted at a time. Fixed read-only file reads reject leaf
+symlinks and non-regular files; session log directories cannot redirect outside the registered
+storage root. Reads never create update state, open history databases, subscribe to/start workers,
+modify settings or execute a shell. Control's prompt directs it to use these before delegating
+basic facts and to report missing sources and bounds.
+
 ## Audited actions
 
 `start` uses the existing project spawn path with task-model scope and price validation, or the

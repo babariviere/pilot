@@ -238,6 +238,10 @@ It can read global status, start or message requested work, create or attach mis
 and append memory across registered projects. Changes have a durable audit and timeline record.
 See [control chat internals](docs/control-chat.md) for storage, compaction and recovery details.
 
+Control can read health, bounded redacted log tails and local diagnostic evidence through `pilot`
+(`health`, `logs`, `telemetry`) before delegating an investigation. Disabled or unavailable sources
+are reported explicitly. These actions never run a shell, start a chat worker or change settings.
+
 Chat messages render Linear, Slack and GitHub URLs as compact links with the service mark and a short name.
 Names come from Markdown labels or the URL, without fetching private pages. Bare `#123` references stay literal
 so mission task numbers are never mistaken for GitHub issues. Copying preserves the original text and URLs.

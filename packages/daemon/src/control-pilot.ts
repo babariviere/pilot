@@ -9,12 +9,14 @@ import type {
 	StartMissionTaskRequest,
 } from "@pilot/protocol";
 import type { ControlActions } from "./control-actions.ts";
+import type { ControlDiagnostics } from "./control-diagnostics.ts";
 import { pullRequestChecks } from "./control-pr-checks.ts";
 import type { SessionManager } from "./sessions.ts";
 import type { WatchService } from "./watch-service.ts";
 import { validateWatch, type WatchInput } from "./watches.ts";
 
 export interface ControlPilotOptions {
+	diagnostics?: Pick<ControlDiagnostics, "call">;
 	watches?: Pick<WatchService, "add" | "remove" | "page">;
 	isControl: (id: string) => boolean;
 	sessions: Pick<SessionManager, "list" | "get" | "history">;
@@ -49,6 +51,10 @@ export class ControlPilot {
 	}
 	async call(caller: string, action: string, args: Record<string, unknown>, operationId = ""): Promise<unknown> {
 		if (!this.options.isControl(caller)) throw new Error("Only the control chat may call pilot");
+		if (action === "health" || action === "logs" || action === "telemetry") {
+			if (!this.options.diagnostics) throw new Error("Control diagnostics unavailable");
+			return this.options.diagnostics.call(action, args);
+		}
 		if (action === "status") return this.status(args);
 		if (action === "read") return this.read(args);
 		if (action === "checks") {

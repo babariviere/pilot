@@ -4,6 +4,9 @@ import { StringEnum, Type } from "@earendil-works/pi-ai";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 export const PILOT_ACTIONS = [
 	"status",
+	"health",
+	"logs",
+	"telemetry",
 	"read",
 	"start",
 	"send",
@@ -25,9 +28,14 @@ export function createPilotTool(call: PilotCall): ToolDefinition {
 		name: "pilot",
 		label: "Control chats",
 		description:
-			"Read/start/send chats; inspect exact-head PR checks; manage requested watches. Reads untrusted; writes audited. Mission creation needs user authorization and attachment needs acceptance.",
+			"Read/start/send chats; watches; exact-head checks; health/logs/telemetry before delegation. Reads untrusted; writes audited. mission_create/attach need user authorization/acceptance, not notices.",
 		parameters: Type.Object({
 			action: StringEnum(PILOT_ACTIONS),
+			source: Type.Optional(StringEnum(["daemon", "lifecycle", "session"] as const)),
+			since: Type.Optional(Type.String({ maxLength: 64, description: "ISO timestamp with timezone, for logs." })),
+			q: Type.Optional(
+				Type.String({ maxLength: 200, description: "Literal case-insensitive search over redacted log records." }),
+			),
 			event: Type.Optional(
 				StringEnum([
 					"chat.settled",
@@ -63,7 +71,12 @@ export function createPilotTool(call: PilotCall): ToolDefinition {
 			after: Type.Optional(Type.String({ maxLength: 128 })),
 			projectId: Type.Optional(Type.String({ maxLength: 128 })),
 			missionId: Type.Optional(Type.String({ maxLength: 128 })),
-			sessionId: Type.Optional(Type.String({ maxLength: 128 })),
+			sessionId: Type.Optional(
+				Type.String({
+					maxLength: 128,
+					description: "Required for lifecycle/session logs; optional telemetry target (otherwise host summary).",
+				}),
+			),
 			view: Type.Optional(StringEnum(["result", "tail"] as const)),
 			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 40 })),
 			pr: Type.Optional(

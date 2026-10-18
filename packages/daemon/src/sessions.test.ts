@@ -1095,6 +1095,12 @@ test("diagnostics reads a parked session without opening its worker or transcrip
 	const meta = sessions["metas"].get(created.id)!;
 	meta.working = true;
 	sessions.setConnectivity(false);
+	const health = sessions.controlHealth();
+	assert.equal(health.workers.total, 0);
+	assert.equal(health.connectivity.state, "offline");
+	assert.equal(health.pause.update, false);
+	assert.equal(sessions.controlDiagnosticDirectory(created.id), join(f.home, "sessions", created.id));
+	assert.throws(() => sessions.controlDiagnosticDirectory("unknown"));
 	const offline = await sessions.diagnostics(created.id);
 	assert.equal(offline.host.daemonId, "daemon");
 	assert.equal(offline.current.state, "parked");

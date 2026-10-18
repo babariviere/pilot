@@ -4691,6 +4691,40 @@ export class SessionManager {
 		return (await worker.jobs?.()) ?? [];
 	}
 
+	/** Content-free in-memory worker/admission state, without transcript or storage reads. */
+	controlHealth() {
+		const workers: Record<string, number> = {};
+		for (const worker of this.workers.values()) workers[worker.state] = (workers[worker.state] ?? 0) + 1;
+		let quotaPaused = 0,
+			userStopped = 0;
+		for (const meta of this.metas.values()) {
+			if (meta.archivedAt !== undefined) continue;
+			const quota = this.subscriptionPause(meta);
+			if (quota && !quota.forced) quotaPaused++;
+			if (meta.recoveryStopped) userStopped++;
+		}
+		return {
+			workers: { total: this.workers.size, byState: workers, starting: this.starting.size },
+			connectivity: {
+				state: this.internetOnline === undefined ? "unknown" : this.internetOnline ? "online" : "offline",
+				observedAt: this.internetObservedAt,
+			},
+			pause: {
+				sleep: !!this.sleepPause,
+				update: this.updateGate.paused,
+				maintenance: this.updateGate.frozen,
+				quotaPaused,
+				userStopped,
+			},
+		};
+	}
+
+	/** Registered identity only. Never accepts a path and never starts a worker. */
+	controlDiagnosticDirectory(id: string): string {
+		this.require(id);
+		return this.dir(id);
+	}
+
 	/** Content-free local evidence. Reading a parked or archived chat never starts, subscribes to or mutates it. */
 	async diagnostics(id: string, options: { host?: OperationHost; limit?: number } = {}): Promise<SessionDiagnostics> {
 		const meta = this.require(id);
