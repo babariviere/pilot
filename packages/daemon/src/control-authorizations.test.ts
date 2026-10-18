@@ -144,18 +144,18 @@ test("starts propagate the admitted level and mode, never model-supplied authori
 		await f.service.call(
 			"control",
 			"start",
-			{ ...permission, projectId: "p", message: "work", budgetUsd: 1, mode: "build" },
+			{ ...permission, projectId: "p", message: "work", model: "test/model", budgetUsd: 1, mode: "build" },
 			`project-${level}`,
 		);
 		await f.service.call(
 			"control",
 			"start",
-			{ ...permission, missionId: "m", taskId: "2", budgetUsd: 1, mode: "build" },
+			{ ...permission, missionId: "m", taskId: "2", model: "test/model", budgetUsd: 1, mode: "build" },
 			`task-${level}`,
 		);
 		assert.deepEqual(f.effects.at(-2), [
 			"start",
-			{ projectId: "p", message: "work", mode: level === "investigate" ? "ask" : "build" },
+			{ projectId: "p", message: "work", model: "test/model", mode: level === "investigate" ? "ask" : "build" },
 			permission,
 			`control:start:project-${level}`,
 			{ authorizationId: record.id, budgetUsd: 1 },
@@ -164,7 +164,7 @@ test("starts propagate the admitted level and mode, never model-supplied authori
 			"task",
 			"m",
 			"2",
-			{ mode: level === "investigate" ? "ask" : "build" },
+			{ model: "test/model", mode: level === "investigate" ? "ask" : "build" },
 			permission,
 			`control:start:task-${level}`,
 			{ authorizationId: record.id, budgetUsd: 1 },
@@ -175,7 +175,14 @@ test("starts propagate the admitted level and mode, never model-supplied authori
 		f.service.call(
 			"control",
 			"start",
-			{ authorizationId: merge.id, level: "merge", projectId: "p", message: "merge", budgetUsd: 1 },
+			{
+				authorizationId: merge.id,
+				level: "merge",
+				projectId: "p",
+				message: "merge",
+				model: "test/model",
+				budgetUsd: 1,
+			},
 			"merge-start",
 		),
 		/user confirmation in the app/,
