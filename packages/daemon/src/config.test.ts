@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { loadConfig } from "./config.ts";
 
+test("read-only hosts explicitly deny model scope writes", () => {
+	assert.equal(loadConfig({}).modelScopeReadOnly, undefined);
+	assert.equal(loadConfig({ PILOT_MODEL_SCOPE_READ_ONLY: "1" }).modelScopeReadOnly, true);
+});
+
 test("shared workspace retention defaults to 1 day and zero disables automatic cleanup", () => {
 	assert.equal(loadConfig({}).workspaceRetentionMs, 86_400_000);
 	assert.equal(loadConfig({ PILOT_WORKSPACE_RETENTION_DAYS: "7" }).workspaceRetentionMs, 7 * 86_400_000);

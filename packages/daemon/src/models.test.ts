@@ -9,6 +9,7 @@ import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { TITLE_CONTEXT_LIMIT } from "./chat-title.ts";
 import { ServiceUnavailable } from "./errors.ts";
 import { captureMemory, type MemoryCompactionAttempt, type MemoryCompactionTrace } from "./memory-compaction.ts";
+import { modelScopeHash } from "./model-scope.ts";
 import { cheapestTitleModel, generateChatTitle, ModelCatalog } from "./models.ts";
 import { type MemorySummarizer, ProjectMemoryService } from "./project-memory.ts";
 import type { SlackClassifierContext } from "./slack-classifier.ts";
@@ -592,6 +593,128 @@ test("title generation follows project model scope, ignores its thinking suffix 
 	await writeFile(join(cwd, ".pi", "settings.json"), JSON.stringify({ enabledModels: ["missing/*"] }));
 	assert.equal(await catalog.generateTitle(cwd, "task"), undefined);
 	assert.equal(calls.length, 1);
+});
+
+test("scope API resolves every global/project pattern on this host without dropping unknown or unauthenticated patterns", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-model-scope-resolution-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const project = join(root, "project");
+	await mkdir(join(project, ".pi"), { recursive: true });
+	const projectPath = join(project, ".pi", "settings.json");
+	const projectText = '{"enabledModels":["test/large:high"],"theme":"unchanged"}';
+	await writeFile(projectPath, projectText);
+	const unavailable = { ...cheap, provider: "signed-out", id: "known" };
+	t.mock.method(
+		ModelRuntime,
+		"create",
+		async () =>
+			({
+				...requiredAuthRegistration,
+				getAvailable: async () => [cheap, expensive],
+				getModelsOfType: () => [cheap, expensive, unavailable],
+			}) as unknown as ModelRuntime,
+	);
+	const catalog = new ModelCatalog(root);
+	const patterns = ["test/*:high", "test/small", "signed-out/known", "missing/no-match", "test/small:bogus"];
+	const result = await catalog.updateScope(project, { enabledModels: patterns, expectedHash: modelScopeHash(null) });
+	assert.deepEqual(result.enabledModels, patterns);
+	assert.equal(result.contentHash, modelScopeHash(patterns));
+	assert.deepEqual(result.projectOverride, ["test/large:high"]);
+	assert.deepEqual(result.resolution, [
+		{ pattern: patterns[0], matchedModelIds: ["test/small", "test/large"], unresolvedReason: null, diagnostics: [] },
+		{ pattern: patterns[1], matchedModelIds: ["test/small"], unresolvedReason: null, diagnostics: [] },
+		{
+			pattern: patterns[2],
+			matchedModelIds: [],
+			unresolvedReason: "provider-not-logged-in",
+			diagnostics: ["no-match"],
+		},
+		{ pattern: patterns[3], matchedModelIds: [], unresolvedReason: "unknown", diagnostics: ["no-match"] },
+		{
+			pattern: patterns[4],
+			matchedModelIds: ["test/small"],
+			unresolvedReason: null,
+			diagnostics: ["invalid-thinking-level"],
+		},
+	]);
+	assert.deepEqual(result.projectResolution, [
+		{ pattern: "test/large:high", matchedModelIds: ["test/large"], unresolvedReason: null, diagnostics: [] },
+	]);
+	assert.deepEqual(
+		(await catalog.list(project)).models.map((entry) => entry.id),
+		["test/large"],
+	);
+	assert.equal(await readFile(projectPath, "utf8"), projectText);
+	const reset = await catalog.updateScope(project, { enabledModels: null, expectedHash: result.contentHash });
+	assert.equal(reset.enabledModels, null);
+	assert.deepEqual(reset.resolution, []);
+	assert.deepEqual(
+		(await catalog.list(root)).models.map((entry) => entry.id),
+		["test/small", "test/large"],
+	);
+	assert.equal((await catalog.scope(root)).projectResolution, null);
+	assert.deepEqual(
+		(await catalog.list(project)).models.map((entry) => entry.id),
+		["test/large"],
+	);
+});
+
+test("scope writes detach pending model lists without recreating the runtime or changing any model", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-model-scope-invalidation-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	await writeFile(join(root, "settings.json"), '{"enabledModels":["test/small"]}');
+	let entered!: () => void;
+	let finish!: () => void;
+	const started = new Promise<void>((resolve) => {
+		entered = resolve;
+	});
+	const blocked = new Promise<void>((resolve) => {
+		finish = resolve;
+	});
+	let calls = 0;
+	t.mock.method(
+		ModelRuntime,
+		"create",
+		async () =>
+			({
+				...requiredAuthRegistration,
+				getAvailable: async () => {
+					calls++;
+					return [cheap, expensive];
+				},
+			}) as unknown as ModelRuntime,
+	);
+	const catalog = new ModelCatalog(root);
+	const load = (catalog as unknown as { load(cwd: string): Promise<unknown> }).load.bind(catalog);
+	let first = true;
+	t.mock.method(catalog as unknown as { load(cwd: string): Promise<unknown> }, "load", async (cwd: string) => {
+		const result = await load(cwd);
+		if (first) {
+			first = false;
+			entered();
+			await blocked;
+		}
+		return result;
+	});
+	const old = catalog.list(root);
+	await started;
+	await catalog.updateScope(root, { enabledModels: ["test/large"], expectedHash: modelScopeHash(["test/small"]) });
+	const next = catalog.list(root);
+	assert.notEqual(next, old);
+	assert.deepEqual(
+		(await next).models.map((entry) => entry.id),
+		["test/large"],
+	);
+	finish();
+	assert.deepEqual(
+		(await old).models.map((entry) => entry.id),
+		["test/small"],
+	);
+	assert.equal(calls, 1);
+	assert.equal(cheap.id, "small");
+	assert.equal(expensive.id, "large");
+	await catalog.updateScope(root, { enabledModels: [], expectedHash: modelScopeHash(["test/large"]) });
+	assert.equal((await catalog.list(root)).models.length, 2);
 });
 
 test("model catalog shares availability across directories and applies settings immediately", async (t) => {
