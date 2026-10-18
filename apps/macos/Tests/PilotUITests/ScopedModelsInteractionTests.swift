@@ -112,3 +112,94 @@ func scopedModelsNativeSelectorPreservesAdvancedPatterns() async throws {
     String(repeating: " ", count: depth) + "\(type(of: view)) \(view.frame)\n" +
         view.subviews.map { nativeScopeViewTree($0, depth: depth + 1) }.joined()
 }
+
+private final class NativeScopeHTTP: URLProtocol {
+    private final class State: @unchecked Sendable {
+        let lock = NSLock()
+        var writes = 0
+        var reads = 0
+        var explicitNull = false
+        var authorized = false
+    }
+    private static let state = State()
+    static func reset() {
+        state.lock.lock(); defer { state.lock.unlock() }
+        state.writes = 0; state.reads = 0; state.explicitNull = false; state.authorized = false
+    }
+    static var counts: (writes: Int, reads: Int, explicitNull: Bool, authorized: Bool) {
+        state.lock.lock(); defer { state.lock.unlock() }
+        return (state.writes, state.reads, state.explicitNull, state.authorized)
+    }
+    override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "native-scope.invalid" }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        var data = request.httpBody ?? Data()
+        if data.isEmpty, let stream = request.httpBodyStream {
+            stream.open(); defer { stream.close() }
+            var buffer = [UInt8](repeating: 0, count: 1024)
+            while data.count < 160 * 1024 {
+                let count = stream.read(&buffer, maxLength: buffer.count)
+                if count <= 0 { break }
+                data.append(contentsOf: buffer.prefix(count))
+            }
+        }
+        let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        Self.state.lock.lock()
+        let put = request.httpMethod == "PUT"
+        if put {
+            Self.state.writes += 1
+            Self.state.explicitNull = body?["enabledModels"] is NSNull
+            Self.state.authorized = request.value(forHTTPHeaderField: "x-pilot-github-capability") == "synthetic-native-only"
+        } else { Self.state.reads += 1 }
+        let written = Self.state.writes > 0
+        Self.state.lock.unlock()
+        let snapshot = "\"enabledModels\":\(written ? "null" : "[]"),\"allModels\":true,\"scopeHash\":\"\(written ? "absent-hash" : "array-hash")\",\"resolution\":[],\"candidates\":[]"
+        let response = put ? "{\"changed\":true,\(snapshot)}" : "{\(snapshot)}"
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
+            headerFields: ["content-type": "application/json"])!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(response.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
+@Test(.timeLimit(.minutes(1))) @MainActor
+func scopedModelsNativeSaveUsesHostOwnerCapabilityHttpAndLiteralReadback() async throws {
+    _ = NSApplication.shared
+    NativeScopeHTTP.reset()
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    var acquisitions = 0
+    let host = HostRef(hostId: "local", daemonId: "native-http", lineageId: "native-http-lineage")
+    let hosts = HostClients(operationDirectory: directory.appendingPathComponent("operations"),
+        scopedModelsStore: ScopedModelsStore(directory: directory.appendingPathComponent("models")),
+        readScopedModelCapability: { target, configuration in
+            #expect(target == host && configuration == nil)
+            acquisitions += 1
+            return "synthetic-native-only"
+        })
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [NativeScopeHTTP.self]
+    let client = PilotClient(baseURL: URL(string: "http://native-scope.invalid"), commandConfiguration: configuration)
+    client.loadFixture(projects: [], sessions: [])
+    try hosts.install(client, host: host)
+    #expect(NativeScopeHTTP.counts.reads == 0 && acquisitions == 0)
+    hosts.startScopedModels()
+    try await nativeScopeWait { hosts.scopedModels.observations[host] != nil && hosts.scopedModels.isIdle }
+    #expect(NativeScopeHTTP.counts.writes == 0 && acquisitions == 0)
+    let editor = ScopedModelsEditor(); editor.initialize(.all)
+    let hosting = NSHostingView(rootView: ScopedModelsSaveButton(sync: hosts.scopedModels, editor: editor, localHost: host).padding(12))
+    let window = NSWindow(contentRect: NSRect(x: -10000, y: -10000, width: 200, height: 80),
+                          styleMask: [.titled], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false; window.contentView = hosting
+    window.orderFrontRegardless(); hosting.layoutSubtreeIfNeeded()
+    defer { window.close() }
+    try await nativeScopeWait { nativeScopeButtons(hosting).count == 1 }
+    let save = try #require(nativeScopeButtons(hosting).first)
+    save.performClick(nil)
+    try await nativeScopeWait { hosts.scopedModels.state.entry(host)?.status == .synced && hosts.scopedModels.isIdle }
+    #expect(NativeScopeHTTP.counts.writes == 1 && NativeScopeHTTP.counts.explicitNull && NativeScopeHTTP.counts.authorized)
+    #expect(NativeScopeHTTP.counts.reads >= 3 && acquisitions == 1)
+    #expect(hosts.scopedModels.state.entry(host)?.appliedHash == "absent-hash")
+    await hosts.disconnectAll()
+}

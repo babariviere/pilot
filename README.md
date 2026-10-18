@@ -25,6 +25,11 @@ it does not change chat-result read tracking or enable review entry points.
 
 - **Run several agents at once.** Follow progress across projects, send follow-ups, queue messages or stop
   a run. Every session has its own worker process.
+- **Choose pi’s scoped models.** Settings → Scoped models has a searchable multi-select and an All option.
+  Save keeps one global model list on this Mac and participating devboxes, with per-host sync/conflict
+  status and explicit review before a new devbox joins. Offline hosts catch up after verified reconnect;
+  project overrides, sign-ins, default models and running chats are unchanged. Advanced literal patterns
+  and unavailable models are preserved.
 - **Work on a devbox, too.** Add a working SSH alias in Settings → Devboxes, confirm its identity, and
   sign in to providers independently there. Choose Local or that devbox in the new-chat composer.
   At launch, saved trusted devboxes reconnect in the background and their verified runtime versions are read

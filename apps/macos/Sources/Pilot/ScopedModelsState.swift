@@ -9,7 +9,8 @@ struct ScopedModelsSelection: Codable, Equatable, Sendable {
     func validate() throws {
         if let patterns {
             guard !patterns.isEmpty, patterns.count <= 256,
-                  patterns.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 256 }) else {
+                  patterns.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.utf8.count <= 256
+                      && !$0.unicodeScalars.contains(where: { $0.value < 32 || $0.value == 127 }) }) else {
                 throw ScopedModelsFailure.invalidSelection
             }
         }
@@ -25,11 +26,11 @@ struct ScopedModelsBaseline: Codable, Equatable, Sendable {
 }
 
 enum ScopedModelsFailure: Error {
-    case invalidSelection, storage, stale, conflict, unsupported, readOnly, unavailable
+    case invalidSelection, storage, stale, conflict, unsupported, readOnly, unavailable, nativeActionRequired, settingsUnreadable
 }
 
 enum ScopedModelsHostStatus: String, Codable, Sendable {
-    case needsConsent, pending, applying, synced, conflict, divergent, failed, unsupported, readOnly
+    case needsConsent, pending, applying, synced, conflict, divergent, failed, unsupported, readOnly, authorizationRequired, settingsUnreadable
 
     var title: String {
         switch self {
@@ -42,6 +43,8 @@ enum ScopedModelsHostStatus: String, Codable, Sendable {
         case .failed: "Could not sync"
         case .unsupported: "Update required"
         case .readOnly: "Read-only host"
+        case .authorizationRequired: "Native authorization unavailable"
+        case .settingsUnreadable: "Settings could not be read"
         }
     }
 }
