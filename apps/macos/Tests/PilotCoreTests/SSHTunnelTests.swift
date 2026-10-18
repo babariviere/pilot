@@ -87,6 +87,7 @@ private final class SSHFixture {
     with open(os.path.join(root, 'launches'), 'a') as log:
         log.write(json.dumps({'pid': os.getpid(), 'control': is_control, 'args': args}) + '\n')
     control_path = args[args.index('-S') + 1]
+    assert control_path.startswith('/tmp/pilot-ssh-') and os.path.basename(control_path) == 'control'
     assert os.stat(os.path.dirname(control_path)).st_mode & 0o777 == 0o700
     assert len(control_path.encode()) < 104
     if is_control:

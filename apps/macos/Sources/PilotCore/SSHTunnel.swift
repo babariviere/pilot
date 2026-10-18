@@ -311,8 +311,16 @@ private struct SSHControlSocket {
         // Short path for sockaddr_un's macOS limit. mkdtemp atomically owns a new 0700 directory;
         // never reuse a user's socket, predictable filename or shared multiplex master.
         var template = Array("/tmp/pilot-ssh-XXXXXX".utf8CString)
-        guard let directory = mkdtemp(&template) else { throw SSHTunnelError.launchFailed }
-        self.directory = String(cString: directory)
+        // Read the name while the buffer is pinned. mkdtemp(&template) returns a pointer into a temporary
+        // that optimized builds may already have released, which produced "-S /control" in release apps.
+        let created = template.withUnsafeMutableBufferPointer { buffer -> String? in
+            guard let base = buffer.baseAddress, mkdtemp(base) != nil else { return nil }
+            return String(cString: base)
+        }
+        guard let created, created.hasPrefix("/tmp/pilot-ssh-"), created.count == 21 else {
+            throw SSHTunnelError.launchFailed
+        }
+        self.directory = created
     }
 
     func remove() { try? FileManager.default.removeItem(atPath: directory) }
