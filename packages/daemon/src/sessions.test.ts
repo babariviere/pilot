@@ -2049,6 +2049,70 @@ test("diagnostics role survives reopen and prepares only a bounded read-only han
 		}),
 		/Only a diagnostics specialist/,
 	);
+	const repairAdmission = {
+		specialistSessionId: specialist.id,
+		proposalId: proposal.id,
+		target: remoteTarget,
+	};
+	const repairRequest = {
+		projectId: f.project.id,
+		message: "Apply the reviewed repair",
+		mode: "build" as const,
+		diagnosticRepair: repairAdmission,
+	};
+	await assert.rejects(
+		sessions.spawn(repairRequest),
+		/durable native confirmation/,
+		"a proposal cannot grant direct create authority",
+	);
+	await assert.rejects(
+		sessions.spawnDurable(
+			{
+				...repairRequest,
+				diagnosticRepair: {
+					...repairAdmission,
+					target: { ...remoteTarget, host: { ...remoteTarget.host, lineageId: "other" } },
+				},
+			},
+			randomUUID(),
+			randomUUID(),
+		),
+		/stale or belongs to another target/,
+	);
+	const repairId = randomUUID();
+	const repairOperationId = randomUUID();
+	const [repair, duplicate] = await Promise.all([
+		sessions.spawnDurable(repairRequest, repairId, repairOperationId),
+		sessions.spawnDurable(repairRequest, repairId, repairOperationId),
+	]);
+	assert.equal(duplicate.id, repair.id, "duplicate confirmation joins the exact durable admission");
+	assert.equal(
+		(await sessions.spawnDurable(repairRequest, repairId, repairOperationId)).id,
+		repair.id,
+		"lost-response lookup returns the existing repair chat",
+	);
+	assert.equal(repair.mode, "build");
+	assert.equal(repair.role, undefined);
+
+	specialistWorker.publishRepairProposal("replacement", {
+		...proposalDraft,
+		findings: "A newer diagnosis replaced the reviewed proposal.",
+	});
+	await until(() =>
+		specialistWorker.sent.some(
+			(command) => command.type === "diagnostics.proposal.result" && command.callId === "replacement",
+		),
+	);
+	const replacementProposal = specialistWorker.sent.find(
+		(command): command is Extract<KernelCommand, { type: "diagnostics.proposal.result" }> =>
+			command.type === "diagnostics.proposal.result" && command.callId === "replacement",
+	)?.result;
+	assert.ok(replacementProposal);
+	await assert.rejects(
+		sessions.spawnDurable(repairRequest, randomUUID(), randomUUID()),
+		/stale or belongs to another target/,
+		"replacement between review and admission invalidates the old confirmation",
+	);
 	await sessions.shutdown();
 	const reopened = await f.manager({}, { diagnosticHost });
 	assert.equal(reopened.get(specialist.id)?.role, "diagnostics");
@@ -2056,7 +2120,7 @@ test("diagnostics role survives reopen and prepares only a bounded read-only han
 	assert.equal(reopened.get(specialist.id)?.diagnosticTargetId, target.id);
 	assert.deepEqual(reopened.get(specialist.id)?.diagnosticTarget, remoteTarget);
 	assert.equal(reopened.get(specialist.id)?.diagnosticHistoryAccess, true);
-	assert.deepEqual(reopened.get(specialist.id)?.diagnosticRepairProposal, proposal);
+	assert.deepEqual(reopened.get(specialist.id)?.diagnosticRepairProposal, replacementProposal);
 });
 
 test("large restart recovery keeps the daemon responsive and bounds cold starts without losing input IDs", async (t) => {

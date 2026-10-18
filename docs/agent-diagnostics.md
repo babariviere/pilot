@@ -154,8 +154,12 @@ specialist's proposal summary; it never starts, wakes, changes, retries, restart
 
 Before a proposal exists, the app explains that the diagnostic agent must author it and offers a non-executing
 request. It does not ask the user to invent a cause, choose raw event IDs or write a regression test. Once published,
-the review sheet shows labeled prefilled fields and distinguishable safe source/time/evidence summaries. The user may
-optionally edit the bounded text and uncertainty. Cancelling creates nothing.
+the specialist chat replaces its ordinary composer with a native proposal tray after the current turn settles. A
+live agent question stays in front. The tray summarizes findings, uncertainty, suggested repair and cited-evidence
+count without taking focus or navigating from another chat. **Not now** persists only that proposal ID; a replacement
+appears again, and the context menu can always reopen review. Viewing, reconnecting, dismissing or reopening never
+creates work. The review sheet shows labeled prefilled fields and distinguishable safe source/time/evidence summaries.
+The user may optionally edit the bounded text and uncertainty. Cancelling creates nothing.
 
 A repair is always a separate ordinary coding chat. Only explicit confirmation after review may call:
 
@@ -172,7 +176,11 @@ available project on the same host; Pilot never treats a control or specialist w
 destination. Only the sheet's confirmation starts the separate Build chat. The resulting chat
 does not inherit the specialist role or diagnostics authority. The normal Ask “Start a Build chat with this
 context” path is unavailable for diagnostics specialists, so an unbounded transcript cannot substitute for this
-handoff.
+handoff. The confirmed start is an immutable `repair-create` operation. Pilot keeps it through an unknown response,
+checks that exact operation before an explicit retry, and blocks a second intent. At daemon admission the current
+specialist role, proposal ID, host/daemon/lineage and admitted target are checked again immediately before creation;
+a replaced proposal cannot borrow an older confirmation. An accepted chat is selected before the operation is
+retired. An unresolved start remains actionable after reconnect rather than being inferred as success or failure.
 
 The operational diagnostic schema intentionally has no open attribute maps. It does not include messages, prompts,
 responses, tool input or output, model/provider names, paths, credentials, raw errors, event-loop labels or stall
