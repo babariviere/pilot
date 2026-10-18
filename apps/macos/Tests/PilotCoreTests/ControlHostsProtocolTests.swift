@@ -4,6 +4,30 @@ import Testing
 
 struct ControlHostsProtocolTests {
 
+    private struct EmptyAckPolicy: Codable, Equatable {
+        let page: ControlRemoteEventPage
+        let homeAcknowledgment: ControlRemoteEventAcknowledgment
+        let executorAckNeeded: Bool
+    }
+    @Test func nativeArchiveProofAndNoEmptyAckRoundTrip() throws {
+        let f = try fixtures()
+        let proof = try roundTrip(ControlArchiveApproval.self, #require(f["archiveApproval"]))
+        #expect(proof.request.action == .archive)
+        #expect(proof.decision.allow)
+        #expect(proof.consumedAt <= proof.request.expiresAt)
+        let response = try roundTrip(ControlArchiveResponse.self, #require(f["archiveResponse"]))
+        let payload = try JSONDecoder().decode(ControlArchiveOperationPayload.self, from: Data(response.operation.payload.utf8))
+        #expect(payload.approval == proof)
+        let intent = try JSONDecoder().decode([String: JSONValue].self, from: Data(proof.intentPayload.utf8))
+        #expect(intent["idempotencyKey"]?.string == response.operation.operationId)
+        #expect(intent["sessionId"]?.string == response.operation.targetId)
+        _ = try roundTrip([ControlHostErrorResponse].self, #require(f["archiveApprovalErrors"]))
+        let empty = try roundTrip(EmptyAckPolicy.self, #require(f["emptyAckPolicy"]))
+        #expect(!empty.executorAckNeeded)
+        #expect(empty.page.head == 0)
+        #expect(empty.homeAcknowledgment.eventId == nil)
+    }
+
     @Test func bootstrapPairingReplayArchiveLookupAndReadAvailabilityRoundTrip() throws {
         let f = try fixtures()
         let requests = try roundTrip([ControlRoleBootstrapRequest].self, #require(f["bootstrapRequests"]))
@@ -226,7 +250,8 @@ struct ControlHostsProtocolTests {
         #expect(states[1].cutover?.state == .ready)
         let request = try roundTrip(ControlArchiveRequest.self, #require(f["archiveRequest"]))
         #expect(ControlArchiveRequest(expectedGeneration: 1, sessionId: "old-control", idempotencyKey: "archive:1",
-                                      approvalRequestId: "approval:archive", expectedRoleEpoch: 1) == request)
+                                      approvalRequestId: "approval:archive", expectedRoleEpoch: 1,
+                                      expectedRoleFence: ControlRoleFence(home: 1, executor: 2)) == request)
         let response = try roundTrip(ControlArchiveResponse.self, #require(f["archiveResponse"]))
         #expect(response.operation.kind == .archive)
         #expect(response.operation.operationId == request.idempotencyKey)

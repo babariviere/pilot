@@ -100,18 +100,21 @@ public struct ControlHostStateResponse: Codable, Equatable, Sendable {
 public struct ControlArchiveRequest: Codable, Equatable, Sendable {
     public let approvalRequestId: String
     public let expectedRoleEpoch: Int
+    public let expectedRoleFence: ControlRoleFence
     public let expectedGeneration: UInt64
     public let sessionId: String
     public let idempotencyKey: String
     public init(expectedGeneration: UInt64, sessionId: String, idempotencyKey: String,
-                approvalRequestId: String, expectedRoleEpoch: Int) {
+                approvalRequestId: String, expectedRoleEpoch: Int, expectedRoleFence: ControlRoleFence) {
         self.expectedGeneration = expectedGeneration; self.sessionId = sessionId
         self.idempotencyKey = idempotencyKey
         self.approvalRequestId = approvalRequestId; self.expectedRoleEpoch = expectedRoleEpoch
+        self.expectedRoleFence = expectedRoleFence
     }
 }
 public struct ControlArchiveOperationPayload: Codable, Equatable, Sendable {
     public let roleFence: ControlRoleFence
+    public let approval: ControlArchiveApproval
     public let idempotencyKey: String
     public let sessionId: String
     public let readiness: ControlHostCutover
@@ -475,6 +478,12 @@ public struct ControlHostApprovalDecision: Codable, Equatable, Sendable {
     public init(allow: Bool, appKeyId: String, signature: String) {
         self.allow = allow; self.appKeyId = appKeyId; self.signature = signature
     }
+}
+public struct ControlArchiveApproval: Codable, Equatable, Sendable {
+    public let request: ControlHostApprovalRequest
+    public let decision: ControlHostApprovalDecision
+    public let intentPayload: String
+    public let consumedAt: Double
 }
 public struct ControlUnpairRequest: Codable, Equatable, Sendable {
     public let approvalRequestId: String

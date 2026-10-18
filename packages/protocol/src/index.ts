@@ -1693,6 +1693,7 @@ export type {
 	CancelWatchResponse,
 	ChangeModelResponse,
 	ControlAcceptanceProof,
+	ControlArchiveApproval,
 	ControlArchivedWatch,
 	ControlArchivedWatchesResponse,
 	ControlArchiveHistoryPage,

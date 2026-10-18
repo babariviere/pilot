@@ -35,6 +35,13 @@ type PayloadFixture = {
 	[K in ControlOperationKind]: { kind: K; payload: ControlOperationPayloads[K] };
 }[ControlOperationKind];
 interface Fixtures {
+	archiveApproval: C.ControlArchiveApproval;
+	archiveApprovalErrors: C.ControlHostErrorResponse[];
+	emptyAckPolicy: {
+		page: C.ControlRemoteEventPage;
+		homeAcknowledgment: C.ControlRemoteEventAcknowledgment;
+		executorAckNeeded: boolean;
+	};
 	readOutcomes: C.ControlRemoteReadOutcome[];
 	readImportRequests: C.ControlReadImportRequest[];
 	pairingResults: C.ControlHostStateResponse[];
@@ -251,6 +258,7 @@ test("all durable Control payloads retain the admission authority and typed body
 		{
 			kind: "control.archive",
 			payload: {
+				approval: fixture.archiveApproval,
 				roleFence: { home: 1, executor: 2 },
 				idempotencyKey: "archive:1",
 				sessionId: "old-control",
@@ -278,6 +286,7 @@ test("enrollment CAS, courier page queries and app-only archive HTTP contracts r
 	assert.equal(f.hostStates[1].cutover?.state, "ready");
 	assert.equal(f.hostStates[2].configuration.archive?.sessionId, "old-control");
 	const request: ControlArchiveRequest = {
+		expectedRoleFence: { home: 1, executor: 2 },
 		approvalRequestId: "approval:archive",
 		expectedRoleEpoch: 1,
 		expectedGeneration: 1,
@@ -560,4 +569,31 @@ test("bootstrap, pairing replay, archive lookup and unavailable reads expose dae
 		f.readImportRequests.map((r) => r.outcome.requestId),
 		["read:0", "read:1"],
 	);
+});
+
+test("archive administrative approval binds exact intent and both role epochs; empty source needs no ack", () => {
+	const f = roundTrip(fixture);
+	const proof = f.archiveApproval;
+	assert.equal(proof.request.action, "archive");
+	assert.equal(proof.request.requestId, f.archiveRequest.approvalRequestId);
+	assert.equal(proof.decision.allow, true);
+	assert.equal(proof.decision.appKeyId, proof.request.appKeyId);
+	assert.deepEqual(proof.request.requestingHost, f.archiveResponse.operation.origin);
+	assert.deepEqual(proof.request.executor, f.archiveResponse.operation.destination);
+	const intent = JSON.parse(proof.intentPayload);
+	assert.deepEqual(intent.expectedRoleFence, f.archiveRequest.expectedRoleFence);
+	assert.equal(intent.expectedRoleEpoch, intent.expectedRoleFence.home);
+	assert.equal(intent.idempotencyKey, f.archiveResponse.operation.operationId);
+	assert.equal(intent.sessionId, f.archiveResponse.operation.targetId);
+	assert.ok(proof.consumedAt <= proof.request.expiresAt);
+	const payload: C.ControlArchiveOperationPayload = JSON.parse(f.archiveResponse.operation.payload);
+	assert.deepEqual(payload.approval, proof);
+	assert.deepEqual(payload.roleFence, intent.expectedRoleFence);
+	assert.deepEqual(
+		f.archiveApprovalErrors.map((e) => e.code),
+		["approval_required", "stale_role", "approval_expired"],
+	);
+	assert.equal(f.emptyAckPolicy.page.head, 0);
+	assert.equal(f.emptyAckPolicy.executorAckNeeded, false);
+	assert.equal(f.emptyAckPolicy.homeAcknowledgment.eventId, undefined);
 });

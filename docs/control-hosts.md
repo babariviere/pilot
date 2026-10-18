@@ -15,7 +15,7 @@ and the declarations in `packages/protocol/src/control.ts` together; native mirr
 
 | Contract area | Wire and safety definition |
 | --- | --- |
-| Authenticated pairing preview, approval ID, enroll/revoke/status and partial/replay/conflict | [Native approval](#native-approval-enrollment-and-unpair), [M/C authentication matrix](#separate-management-authentication-from-courier-capability), [typed pairing results](#pairing-partial-replay-conflict-and-revoke-readback) |
+| Authenticated pairing preview, approval ID, enroll/revoke/status and partial/replay/conflict | [Native approval](#native-approval-enrollment-and-unpair), [M/C authentication matrix](#separate-management-authentication-from-courier-capability), [typed pairing results](#pairing-partial-replay-conflict-and-revoke-readback), [archive consent verified at both ends](#administrative-archive-approval-is-checked-at-both-ends) |
 | Archived history/memory/audit/authorizations and transition lookup | [Read-only archive pages](#machine-readable-rollout-proof-and-archived-reads), [archive lookup](#archive-lookup-and-read-availability-are-explicit-apis), [role/archive acknowledgment](#versioned-rolearchive-acknowledgment) |
 | Read/health/logs proxy, request IDs, responses and unavailable outcomes | [Complete proxy routes](#frozen-host-targeted-read-proxy), [explicit availability](#archive-lookup-and-read-availability-are-explicit-apis) |
 | Home durable checkpoint, floor/gap, empty ack and retired relaunch | [Checkpoint protocol](#durable-checkpoint-retired-floor-and-empty-streams), [durable cursor ownership](#invalidation-and-exact-recovery-state) |
@@ -366,7 +366,8 @@ authoritative identity and the archives; do not undo cutover or promote the exec
 
 After the readiness GET reports ready, the app persists a single idempotency key and calls
 POST `/api/control-hosts/:bindingId/archive` **on home** with `ControlArchiveRequest`:
-`{expectedGeneration,expectedRoleEpoch,sessionId,idempotencyKey,approvalRequestId}`. This is an administrative rollout request, not
+`{expectedGeneration,expectedRoleEpoch,expectedRoleFence,sessionId,idempotencyKey,approvalRequestId}`.
+This is an administrative rollout request, not
 a pilot action or grant-authorized delegation. Home checks both negotiated roles/versions, the
 active matching enrollment/generation, the selected legacy session on the executor and its own
 durable action/watch/task evidence. The app cannot supply that evidence or choose a different home.
@@ -374,7 +375,8 @@ durable action/watch/task evidence. The app cannot supply that evidence or choos
 Home reserves an immutable `DurableOperation` with kind `control.archive`, origin home,
 destination executor, that enrollment's binding/generation, operationId equal to idempotencyKey
 and targetId equal to the exact legacy sessionId. Its `ControlArchiveOperationPayload` is
-`{roleFence,idempotencyKey,sessionId,readiness}`; home seals its verified readiness snapshot, not app booleans.
+`{roleFence,approval,idempotencyKey,sessionId,readiness}`; home seals verified readiness and the exact
+native administrative approval proof, not app booleans. Executor verifies that proof as specified below.
 It carries no authorization grant, budget reservation, model instruction or spending capability.
 `ControlArchiveResponse` returns that same queued envelope. It is not an archive acknowledgment.
 
@@ -1118,7 +1120,9 @@ durable acknowledgment after a lost ack, or require explicit repair if a source 
 home's actual committed import state. There is no event-content checkpoint shortcut in v1.
 
 For a genuinely fresh empty stream, head=after=acknowledgedThrough=0, events=[], next absent.
-Its import is a read-only no-op acknowledgment with through=0 and eventId omitted. No fake event ID,
+**No executor acknowledgment is needed.** Its optional home import returns a read-only no-op
+acknowledgment with through=0 and eventId omitted; the courier does not need to POST this zero ack.
+No fake event ID,
 cursor advance, floor write or notice is created. eventId is otherwise required when through>0.
 For an already caught-up empty page at N>0, home's durable checkpoint supplies the retained last
 event ID; source retirement preserves that floor ID. Reacknowledging that exact N/ID is harmless.
@@ -1286,3 +1290,48 @@ Do not fabricate a remote capture time or an empty result when disconnected. The
 32-request/1-MiB, expiry/cancellation bounds apply to success and unavailable imports. A late result
 is expired rather than attached to a different waiter; unknown/disconnected is never failed/stopped
 agent work. These availability data cannot set readiness or migration flags.
+
+## Administrative archive approval is checked at both ends
+
+This is the single mandated native mechanism, not a UI-selected strategy. Enrollment PUT and archive
+POST **both** require M authentication plus a matching daemon-issued structured approval request ID.
+Approval-request creation/decision is M-only; neither shell/chat text nor courier capabilities can mint
+or approve those requests. SSH enrollment, runtime update and prior enrollment approval never count
+as archive consent. Enrollment and archive use different action-bound approval records.
+
+Archive's exact native intent now includes expectedGeneration, expectedRoleEpoch (home) and
+expectedRoleFence {home,executor}; its home value must equal expectedRoleEpoch. The preview/signature
+binds those CAS values, exact home/executor/lineages, legacy sessionId and idempotencyKey. Home consumes
+that approved request once, while valid, in the same prepared/committed domain intent as its outgoing
+archive. Wrong request ID/action/key/pins/digest is 403 approval_required; expired unconsumed approval
+is 409 approval_expired; changed generation/role fence is the existing typed 409 stale_generation/
+stale_role. Current policy is read through GET state, never repaired by changing a signed intent.
+
+The immutable control.archive payload carries ControlArchiveApproval: the original issued request
+and signingPayload, signed allow decision, exact intentPayload (excluding approvalRequestId) and
+home's durable consumedAt. The executor must verify the native approve-prefix signature using its
+independently pinned app key, parse/compare the signed fields, recompute intentHash and match action
+archive, requestId, home/executor pins, Control binding/generation, both role epochs, session and
+operationId/idempotencyKey. It also verifies consumedAt is within the request's issuance validity and
+consistent with the authenticated original home intent. **Enrolled origin, courier capability and
+readiness alone are not administrative approval.** A valid enroll signature cannot authorize archive.
+
+Before changing role/freeze state, the executor persists the approved request ID → exact operation ID/
+payload hash association, so the same approval cannot be reused under a fresh envelope or target.
+Unknown/changed bindings, roles or native-key revocation reject new admission. Pending approval expiry
+limits when home may consume consent, not a lease that cancels an already consumed/journaled intent;
+after valid consumption, the exact same owned transition can reconcile through delay/restart. Receipt/
+domain-ownership lookup precedes fresh-admission expiry/role checks. A first delivery still requires
+the intact approval proof and current admission fences; it cannot infer consent from an old phase flag.
+
+Exact archive retry/readback uses its original operation ID: query the home archive lookup and generic
+executor receipt, relay the same immutable envelope if permitted, then durably adopt the conclusive
+receipt and role acknowledgment at home. A lost home response replays that same approved request/key
+or reads its stored result; it does not rerun freeze/audits or mint another approval. A reused ID with
+different intent is a 409 conflict, never an idempotent success. Explicit reapproval after a conclusive
+rejection is a separately previewed user action, not automatic retry with a new key. History/audit and
+consumed scope/budget provenance remain intact throughout.
+
+The TypeScript/Swift fixtures carry this proof and full CAS for wire round-trip coverage only.
+They do not execute approval verification, hashing/signing, lifecycle or fault recovery; those runtime
+proofs remain required before activation.

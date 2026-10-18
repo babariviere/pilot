@@ -384,6 +384,7 @@ export interface ControlHostStateResponse {
 export interface ControlArchiveRequest {
 	approvalRequestId: string;
 	expectedRoleEpoch: number;
+	expectedRoleFence: ControlRoleFence;
 	expectedGeneration: number;
 	sessionId: string;
 	/** Becomes the immutable outgoing operationId; retained across app restarts/lost responses. */
@@ -392,6 +393,8 @@ export interface ControlArchiveRequest {
 /** Administrative payload. No authorization grant or spending capability is conveyed. */
 export interface ControlArchiveOperationPayload {
 	roleFence: ControlRoleFence;
+	/** Native administrative consent, verified by executor independently of enrolled origin/courier auth. */
+	approval: ControlArchiveApproval;
 	idempotencyKey: string;
 	sessionId: string;
 	/** Home verifies evidence from its durable stores before sealing this operation. */
@@ -650,6 +653,14 @@ export interface ControlHostApprovalDecision {
 	appKeyId: string;
 	/** Base64 Ed25519 signature; private app key never leaves native secure storage. */
 	signature: string;
+}
+export interface ControlArchiveApproval {
+	request: ControlHostApprovalRequest;
+	decision: ControlHostApprovalDecision;
+	/** Exact original archive intent excluding approvalRequestId; digest is signed in request.signingPayload. */
+	intentPayload: string;
+	/** Home's durable consumption time, no later than request expiry. */
+	consumedAt: number;
 }
 export interface ControlUnpairRequest {
 	approvalRequestId: string;
