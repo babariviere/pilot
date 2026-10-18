@@ -6,11 +6,11 @@ struct ControlDashboardProtocolTests {
     @Test func snapshotDecodesAllSectionsAndRoundTrips() throws {
         let source = """
         {"untrusted":true,"source":"daemon-memory","projects":[{"id":"p","name":"Project"}],
-         "chats":[{"id":"c","chatUrl":"pilot://chat/c","title":"Chat","state":"working","working":true,"model":"test/model","projectId":"p","missionId":"m"}],
+         "chats":[{"id":"c","chatUrl":"pilot://chat/c","title":"Chat","state":"working","working":true,"model":"test/model","controlStart":{"authorizationId":"approval","budgetUsd":2.5},"projectId":"p","missionId":"m"}],
          "missions":[{"id":"m","projectId":"p","title":"Mission","status":"active","tasksDone":2,"tasksTotal":3,"coordinatorSessionId":"lead"}],
          "pullRequests":[{"sessionId":"c","url":"https://github.com/example/repo/pull/1","number":1,"title":"PR","state":"open"}],
          "linear":[{"projectId":"p","id":"issue","identifier":"ABC-1","title":"Issue","status":"Started","url":"https://linear.app/example/issue/ABC-1"}],
-         "runningAgents":[{"id":"c","chatUrl":"pilot://chat/c","title":"Chat","projectId":"p","missionId":"m","model":"test/model","state":"working","working":true,"startedAt":1000,"elapsedMs":4000}],
+         "runningAgents":[{"id":"c","chatUrl":"pilot://chat/c","title":"Chat","projectId":"p","missionId":"m","model":"test/model","controlStart":{"authorizationId":"approval","budgetUsd":2.5},"state":"working","working":true,"startedAt":1000,"elapsedMs":4000}],
          "activeMissions":[{"id":"m","projectId":"p","title":"Mission","status":"active","tasksDone":2,"tasksTotal":3}],
          "blockers":[{"id":"task:t","kind":"blocked_task","projectId":"p","missionId":"m","taskId":"t","taskNumber":3,"title":"Blocked","detail":"Waiting for access","at":300},
          {"id":"chat:failed","kind":"failed_chat","sessionId":"failed","title":"Failed","at":200},
@@ -29,6 +29,9 @@ struct ControlDashboardProtocolTests {
         #expect(value.source == "daemon-memory")
         let agent = try #require(value.runningAgents.first)
         #expect(agent.model == "test/model")
+        #expect(agent.controlStart?.authorizationId == "approval")
+        #expect(agent.controlStart?.budgetUsd == 2.5)
+        #expect(value.chats.first?.controlStart == agent.controlStart)
         #expect(agent.startedAt == 1000 && agent.elapsedMs == 4000)
         #expect(value.activeMissions.first?.tasksDone == 2)
         #expect(value.blockers.map(\.kind) == [.blockedTask, .failedChat, .question, .failingChecks])

@@ -428,6 +428,8 @@ export class ControlPilot {
 		const message = args.message;
 		if (message !== undefined && (typeof message !== "string" || !message.trim() || message.length > 4000))
 			throw new Error("message must be 1..4000 characters");
+		if (typeof args.model !== "string" || !args.model.trim() || args.model.length > 256)
+			throw new Error("start requires an explicit model from the project's allowed scope; ask the user");
 		for (const key of ["model", "thinking"])
 			if (
 				args[key] !== undefined &&
@@ -489,6 +491,7 @@ export class ControlPilot {
 			projectId: chat.projectId,
 			missionId: chat.missionId,
 			model: chat.model,
+			...provenance,
 		};
 	}
 	private validateChatAction(

@@ -42,7 +42,7 @@ test("start/send use existing admissions, route mission members and durably audi
 			{ conversationId: "1", submissionId: 1, entryId: 1, requestId: "user" },
 		),
 	);
-	const authorized = { authorizationId: "approval", budgetUsd: 1 };
+	const authorized = { authorizationId: "approval", budgetUsd: 1, model: "test/cheap" };
 	const service = new ControlPilot({
 		watches,
 		isControl: (id) => id === "control",
@@ -89,7 +89,7 @@ test("start/send use existing admissions, route mission members and durably audi
 			"task",
 			"m",
 			"2",
-			{ mode: "ask" },
+			{ mode: "ask", model: "test/cheap" },
 			{ authorizationId: "approval", level: "investigate" },
 			"control:start:task",
 			{ authorizationId: "approval", budgetUsd: 1 },
