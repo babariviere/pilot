@@ -21,10 +21,12 @@ subagent tools. A tool-dispatch allowlist is reapplied after reload and the daem
 IPC from a session whose persisted role is not `diagnostics`. These are runtime boundaries, not prompt conventions.
 
 Before creation, the app shows an explicit setup sheet with the resolved target host, target link and the selected
-model and thinking level. **Diagnose this chat** pins that chat. **Ask about Pilot** defaults to the selected host's
-control chat and can resolve a pasted `pilot://chat/<UUID>` only when exactly one already-known local or hosted chat
-matches. Malformed, missing, ambiguous, disconnected and unavailable targets fail closed; there is no silent Local
-fallback. Dismissing the sheet creates no session.
+model and thinking level. **Diagnose this chat** pins that chat. **Ask about Pilot** also accepts an optional multiline
+question or bug report of at most 8 KiB UTF-8. Its chat link is optional: blank selects the explicit control target on
+the currently selected verified host, while a supplied `pilot://chat/<UUID>` resolves only when exactly one
+already-known local or hosted chat matches. Malformed, missing, ambiguous, disconnected and unavailable supplied
+targets fail closed; there is no silent Local fallback. Dismissing the sheet creates no session, and duplicate starts
+are rejected while one is in flight.
 
 The app admits one exact target as a canonical host-qualified reference containing the host, session UUID and
 matching canonical chat URL. Native code sends that reference with the selected model and thinking level, the daemon
@@ -32,8 +34,10 @@ revalidates the URL plus daemon and lineage identity before persisting it, and t
 The specialist prompt and visible header identify that admitted scope, while the host-owned tool always makes its
 first and every later read for the persisted session UUID. The model has no target selector, and the daemon rejects
 every other ID even when another chat shares the project. This lets project-less and control-chat diagnostics keep
-the same qualified-host boundary. The link is authority to bounded operational diagnostics only: no title, path,
-message or transcript is copied into the request, and no transcript or cold-reader access occurs. Tool results
+the same qualified-host boundary. The link is authority to bounded operational diagnostics only: no target title,
+path, message or transcript is copied into the request, and no transcript or cold-reader access occurs. An Ask about
+Pilot question is new user-authored specialist-chat content, separate from that immutable target reference. It is not
+included in diagnostic evidence or telemetry and cannot grant transcript, tool or target access. Tool results
 contain a qualified host identity, collection time, source
 freshness and availability, queue/resource summaries, stable evidence references and explicit truncation/drop
 counts. In-flight tool evidence separates elapsed time, useful-progress age, liveness age and cancellation wait; it
