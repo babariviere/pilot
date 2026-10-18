@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { ControlChat } from "./control-chat.ts";
+import { ControlMemoryDisk } from "./control-memory-disk.ts";
 import type { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
 import { SessionManager } from "./sessions.ts";
@@ -37,6 +38,92 @@ test("singleton is project-less, pinned, never archived, and creation starts no 
 	await assert.rejects(sessions.archive(chat.id), /cannot be archived/);
 	await assert.rejects(sessions.setPinned(chat.id, false), /stays pinned/);
 	assert.throws(() => sessions.assertWritable(chat.id), /read-only/);
+});
+
+test("failed compaction records a redacted cause while an under-cap turn proceeds exactly once", {
+	timeout: 10_000,
+}, async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "control-raw-turn-"));
+	const control = new ControlChat(
+		home,
+		home,
+		{
+			compactControl: async () => {
+				throw new TypeError("Authorization: Bearer private-token");
+			},
+		} as unknown as ModelCatalog,
+		(id) => id === "control",
+		() => "test/model",
+	);
+	t.after(async () => {
+		await control.stop();
+		await rm(home, { recursive: true, force: true });
+	});
+	let failed!: () => void;
+	const failure = new Promise<void>((resolve) => {
+		failed = resolve;
+	});
+	const remove = control.memory.onChange(() => {
+		void control.memory.state().then((s) => {
+			if (s.failure) failed();
+		});
+	});
+	t.after(remove);
+	const message = { kind: "user", text: "raw history ".repeat(100), key: "retained" };
+	await control.call("control", "record", { message });
+	const args = { key: "first", requestId: "typed", tools: [] };
+	const view = await control.call("control", "prepare", args);
+	assert.match(JSON.stringify(view), /raw history/);
+	assert.doesNotMatch(JSON.stringify(view), /not summarized/);
+	await failure;
+	const state = await control.memory.state();
+	assert.equal(state.failure?.attempts, 1);
+	assert.equal(state.failure?.errorClass, "TypeError");
+	assert.match(state.failure?.reason ?? "", /REDACTED/);
+	assert.doesNotMatch(JSON.stringify(state), /private-token/);
+	assert.deepEqual(await control.call("control", "prepare", args), view, "same input keeps its frozen view");
+	await control.call("control", "record", { message });
+	assert.equal((await control.memory.state()).count, 1, "record retry never duplicates history");
+	assert.equal((await control.memory.stats()).compactionFailure?.attempts, 1);
+});
+
+test("over-cap raw history faults with its cause; success clears failures without replay or duplication", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "control-raw-cap-"));
+	const disk = new ControlMemoryDisk(home);
+	t.after(async () => {
+		disk.close();
+		await rm(home, { recursive: true, force: true });
+	});
+	for (let i = 0; i < 5; i++) disk.append({ kind: "user", text: "x".repeat(29_000), key: `input-${i}` });
+	for (let job = disk.next(); job; job = disk.next())
+		disk.fail(job.id, job.n, { errorClass: "NetworkError", reason: "Provider unreachable" });
+	assert.throws(
+		() => disk.turnView("too-large"),
+		/128000-byte context cap.*NetworkError, attempt 1: Provider unreachable/,
+	);
+	const count = disk.state().count;
+	disk.retry(Number.MAX_SAFE_INTEGER);
+	for (let job = disk.next(); job; job = disk.next()) disk.put(job.id, job.n, "Recovered summary");
+	assert.equal(disk.state().failure, undefined);
+	assert.equal(disk.state().pending, 0);
+	assert.equal(disk.state().count, count);
+	assert.match(JSON.stringify(disk.turnView("retry-explicitly")), /Recovered summary/);
+	assert.equal(disk.state().count, count);
+});
+
+test("raw fallback measures decoded UTF-8, not escaped JSON payload bytes", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "control-raw-escaping-"));
+	const disk = new ControlMemoryDisk(home);
+	t.after(async () => {
+		disk.close();
+		await rm(home, { recursive: true, force: true });
+	});
+	disk.append({ kind: "user", text: "\\".repeat(75_000) });
+	const lines = disk.turnView("raw");
+	assert.equal(
+		lines.reduce((n, line) => n + line.text.replace(/^user: /, "").length, 0),
+		75_000,
+	);
 });
 test("turn view survives record/retry, and daemon remembers notice origin independently of actions", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "control-turn-service-"));

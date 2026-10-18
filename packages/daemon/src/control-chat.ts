@@ -55,9 +55,6 @@ export class ControlChat {
 		if (this.preparedKey === args.key) return { lines: await this.memory.turnView(args.key) };
 		await this.memory.retry();
 		this.compactor.wake();
-		await this.compactor.settled();
-		if ((await this.memory.state()).pending)
-			throw new Error("Earlier chat messages could not be summarized; retry with your next message");
 		const lines = await this.memory.turnView(args.key);
 		this.preparedKey = args.key;
 		return { lines };

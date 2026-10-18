@@ -19,7 +19,8 @@ into adjacent messages. Thoughts are not an accepted message kind. Raw reads are
 
 Nodes hold at most 512 UTF-8 bytes, including the source's kind. Short sources need no model call;
 long sources enter a durable ready queue. Building a child only checks its sibling and enqueues
-their parent. Claimed work returns to the ready queue on restart; failed calls wait for a new message.
+their parent. Claimed work returns to the ready queue on restart. Failed jobs retain an attempt count,
+bounded redacted reason and error class, and a persistent next-retry time.
 
 The view is stored as ranges, not reconstructed from the log on startup. It contains only summary
 text, or an explicit unsummarized placeholder, never partial raw messages. Its rendered UTF-8 size
@@ -39,7 +40,9 @@ to compare against. Full live-session responsiveness remains an integration chec
 
 `ControlCompactor` admits at most eight calls, from the durable ready queue. A leaf starts only
 among the first eight unbuilt leaves; a parent enters the queue only when both children exist.
-Failures retry on the next message, not a timer. Shutdown races cancellation against the provider,
+Failures retry in the background with exponential backoff from one second to five minutes. New
+messages cannot bypass that delay. One cancellable timer wakes the durable queue, never an input
+or model turn. Shutdown races cancellation against the provider,
 so even an uncooperative provider cannot hold daemon shutdown open. Storage closes after cancellation.
 
 `ModelCatalog.compactControl` chooses the cheapest authenticated model in the turn's scope and
@@ -54,6 +57,13 @@ unbuilt range, with no placeholders or partial messages. Four-line text blocks k
 prefix; the Anthropic payload hook marks the last whole block and the request end. No keepalive
 requests or artificial cache retention are used. Faux-provider tests cover retries, tools, same-provider
 selection, concurrency, parent readiness, failure recovery, cache blocks and shutdown cancellation.
+
+Turn preparation does not wait for the compaction queue. For missing leaf summaries it uses the
+complete raw source, with a hard 128,000-byte rendered history cap, and freezes that view for the
+input's tool rounds/recovery. Escaped JSON bytes are not mistaken for rendered UTF-8 bytes. It
+never sends placeholder summaries or silently truncates raw history. Over-cap preparation fails
+with the last recorded compaction reason and an explicit new-message retry instruction; failed
+inputs are never replayed automatically. Memory stats include the bounded failure diagnostics.
 
 ## Session and turns
 

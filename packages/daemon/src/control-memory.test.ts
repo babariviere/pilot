@@ -120,7 +120,7 @@ test("128 KB triggers one due-ordered batch to 64 KB; restart preserves the exac
 	assert.deepEqual(disk.view(), previous);
 	assert.equal(disk.state().count, 600);
 });
-test("unfinished leaf/parent jobs recover, failed jobs retry only on a new message", async (t) => {
+test("unfinished jobs recover and failure diagnostics/backoff survive restart", async (t) => {
 	const dir = await home(t);
 	let disk = new ControlMemoryDisk(dir);
 	t.after(() => disk.close());
@@ -130,11 +130,18 @@ test("unfinished leaf/parent jobs recover, failed jobs retry only on a new messa
 	assert.equal(disk.next(), undefined);
 	disk.close();
 	disk = new ControlMemoryDisk(dir);
-	assert.deepEqual(disk.next(), job, "claimed job recovered after crash");
+	assert.deepEqual({ ...disk.next() }, { ...job, attempts: 2 }, "claimed job recovered after crash");
 	disk.fail(job.id, job.n);
 	assert.equal(disk.next(), undefined);
 	disk.append({ kind: "user", text: "second" });
-	assert.deepEqual(disk.next(), job);
+	assert.equal(disk.next(), undefined, "new messages respect persisted retry backoff");
+	const failure = disk.state().failure!;
+	assert.equal(failure.attempts, 2);
+	disk.close();
+	disk = new ControlMemoryDisk(dir);
+	assert.deepEqual(disk.state().failure, failure, "failure diagnostics survive restart");
+	disk.retry(failure.retryAt);
+	assert.deepEqual({ ...disk.next() }, { ...job, attempts: 3 });
 	assert.throws(() => disk.put(0, 1, "é".repeat(257)), /512/);
 	disk.put(0, 1, "é".repeat(256));
 	const parent = disk.next()!;

@@ -138,7 +138,7 @@ if (workerData.replicaRecall) {
 						value = control.put(args.id, args.n, args.text);
 						break;
 					case "control.fail":
-						value = control.fail(args.id, args.n);
+						value = control.fail(args.id, args.n, args.failure);
 						break;
 					case "control.message":
 						value = control.message(args.id, args.offset);

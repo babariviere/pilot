@@ -122,8 +122,8 @@ export class ControlMemory {
 	put(id: number, n: number, text: string): Promise<void> {
 		return this.changing(this.rpc("put", { id, n, text }));
 	}
-	fail(id: number, n: number): Promise<void> {
-		return this.changing(this.rpc("fail", { id, n }));
+	fail(id: number, n: number, failure?: { errorClass: string; reason: string }): Promise<void> {
+		return this.changing(this.rpc("fail", { id, n, failure }));
 	}
 	message(
 		id: number,
