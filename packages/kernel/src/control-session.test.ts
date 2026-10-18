@@ -160,7 +160,7 @@ test("control turns are fresh, tool rounds stay intact, log excludes thoughts an
 	]);
 	await session.submit("watch-notice:1", "third request", "followUp", true, false, {
 		kind: "watch_notice",
-		text: "Watch fired",
+		text: "1 event fired",
 	});
 	await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
 	await session.close();
@@ -170,7 +170,7 @@ test("control turns are fresh, tool rounds stay intact, log excludes thoughts an
 	);
 	await session.submit("watch-notice:1", "third request", "followUp", true, false, {
 		kind: "watch_notice",
-		text: "Watch fired",
+		text: "1 event fired",
 	});
 	await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
 	assert.equal(log.filter((m) => m.kind === "event" && m.text === "third request").length, 1);
