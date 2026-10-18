@@ -690,6 +690,19 @@ final class HostClients: ObservableObject {
         return value
     }
 
+    /// Capability acquisition and the response are both fenced to this installation and connection.
+    func githubRequest<Body: Encodable, Response: Decodable>(on host: HostRef, path: String = "api/setup/github",
+                                                            body: Body?, method: String = "POST") async throws -> Response {
+        let client = try endpoint(host), fence = try token(for: host)
+        let configuration = offlineHosts[host]?.configuration
+        guard configuration != nil || host.hostId == "local" else { throw HostRoutingError.invalidReference }
+        let capability = try await GitHubNativeAccess.read(host: host, configuration: configuration)
+        try validate(fence)
+        let value: Response = try await client.githubRequest(path, capability: capability, body: body, method: method)
+        try validate(fence)
+        return value
+    }
+
     func setupRuns(on host: HostRef) async throws -> [HostedSetupRun] {
         let client = try endpoint(host), token = try token(for: host)
         let values = try await client.setupRuns()

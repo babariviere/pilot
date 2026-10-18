@@ -53,6 +53,47 @@ Last-known values are marked **Stale** after disconnection, a failed check, a co
 or five minutes without another check. They remain in memory while the app is open; relaunch starts
 unchecked. Neither a failed check nor disconnection means the machine, service or agents stopped.
 
+## Connect a devbox to GitHub
+
+In **Settings → Devboxes**, select a connected devbox and use **GitHub → Check access**.
+Existing host-local GitHub CLI credentials are verified, not replaced. If there is no GitHub.com
+login, **Connect GitHub** shows GitHub's device page and a temporary code for your Mac browser.
+Authorization exchanges and the resulting token remain on the devbox. The requested scopes are
+GitHub CLI's standard `repo read:org gist` plus public-key read/write. A separate native confirmation
+is required before registering the dedicated key, even after browser authorization.
+
+Choose **Generate key**, review the displayed account, public key and SHA-256 fingerprint, then
+approve registration. The key is generated under the devbox's private Pilot data directory, not
+copied from the Mac. No agent forwarding, existing-key replacement, SSH config edits or global Git
+configuration changes are used. Existing checkouts are not reconfigured. The verified dedicated key
+is used by a GitHub-only SSH wrapper for new daemon/agent processes. Other Git servers pass through
+unchanged, explicit `GIT_SSH`/`GIT_SSH_COMMAND` overrides are respected, and existing shells/agents
+are not reconfigured. Commands launched outside Pilot do not automatically discover this key.
+CLI/API and SSH readiness are separate, and neither
+guarantees write access to every repository or approval by an organization's SSO policy.
+
+Install missing `gh`, `git`, OpenSSH or `ssh-keygen` independently. Pilot never runs sudo or installs
+privileged packages for this flow. Normal SSH host-key checks apply. If GitHub is not yet trusted on
+the devbox, establish that trust independently after verifying its published fingerprint, then check
+access again. A revoked/expired existing CLI login must be repaired independently, not silently
+overwritten. GitHub Enterprise and remote browser callbacks are not supported by this helper.
+
+Closing the screen or losing the Mac connection does not cancel remote authorization. Reconnect
+the **same saved devbox**, refresh state and explicitly cancel if needed. Cancellation is acknowledged
+only after host work settles. An interrupted exchange is never replayed. Key-upload completion can
+be unknown; **Check access** reconciles the exact public key against a bounded GitHub inventory
+before another explicit approval. A daemon restart loses temporary device challenges and requires
+fresh authorization, not automatic resubmission. No GitHub token, private key, device code or raw
+command diagnostic enters chat history, operation journals or the app's offline cache.
+
+**Revoke key** confirms and removes only the displayed dedicated key from the displayed account.
+It leaves private material on the devbox and does not remove other SSH keys or revoke the CLI token.
+Manage/revoke that token separately in GitHub's application settings. Recheck access after revocation.
+Setup/import endpoints require a separate, host-identity-bound native-action capability read over
+verified system SSH (or the local user's filesystem for Local). It is not a GitHub credential and
+is never exposed to agent tools, queued inputs or permission grants inferred from chat messages.
+As with existing SSH setup, this assumes a dedicated personal host, not hostile same-user processes.
+
 ## Connection loss, sleep and quit
 
 **Disconnected** describes availability, not the agent's outcome. Known remote chats, drafts and

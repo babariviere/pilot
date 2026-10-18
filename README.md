@@ -139,6 +139,8 @@ unzip it and move `Pilot.app` to Applications.
 - Releases bundle Node and the daemon, so you don't need a source checkout or a separate Node installation.
 - Set up a model provider in [pi](https://github.com/earendil-works/pi) first. Pilot uses your pi agent directory
   (normally `~/.pi/agent`), including provider authentication.
+- For a devbox, **Settings → Devboxes → GitHub** provides independent browser authorization and explicitly
+  approved dedicated-key setup. Tokens and private keys stay remote. See [devbox setup](docs/devboxes.md).
 - Install and authenticate [GitHub CLI](https://cli.github.com) (`gh auth login`) if you want agents to create
   pull requests or Pilot to monitor them.
 - Install [Jujutsu](https://jj-vcs.github.io/jj/) **0.46+** and **Git 2.42+** for shared, isolated jj workspaces.
