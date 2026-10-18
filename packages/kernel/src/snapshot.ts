@@ -11,7 +11,13 @@ import {
 	type Storage,
 	UsageDoc,
 } from "@earendil-works/pi-durable";
-import type { AgentEvent, SessionCompletion } from "@pilot/protocol";
+import type {
+	AgentEvent,
+	DiagnosticHistoryEntry,
+	DiagnosticHistoryPage,
+	DiagnosticTargetReference,
+	SessionCompletion,
+} from "@pilot/protocol";
 import { activeConversation, lineage } from "./attempts.ts";
 import { AttentionDoc, normalizeCompletion } from "./attention.ts";
 import { chatEventEntries } from "./chat-events.ts";
@@ -183,6 +189,16 @@ export interface EarlierEntriesRead {
 /** Stop a page early once its JSON passes this size, so a few huge tool results cannot build an unbounded reply. */
 export const EARLIER_ENTRIES_MAX_BYTES = 4 * 1024 * 1024;
 
+export const DIAGNOSTIC_HISTORY_MAX_ENTRIES = 20;
+export const DIAGNOSTIC_HISTORY_MAX_BYTES = 64 * 1024;
+export const DIAGNOSTIC_HISTORY_ENTRY_MAX_BYTES = 8 * 1024;
+export const DIAGNOSTIC_HISTORY_MAX_SCANNED_ENTRIES = 200;
+const DIAGNOSTIC_HISTORY_KINDS = new Set<DiagnosticHistoryEntry["kind"]>(["pi.user", "pi.assistant", "pi.tool-result"]);
+
+function isDiagnosticHistoryKind(kind: string): kind is DiagnosticHistoryEntry["kind"] {
+	return DIAGNOSTIC_HISTORY_KINDS.has(kind as DiagnosticHistoryEntry["kind"]);
+}
+
 /**
  * Read-only page of the session's entries with IDs below `before`, newest first from storage and returned oldest
  * first. Includes older compaction and reset markers. At least one entry is returned when any exists.
@@ -235,6 +251,187 @@ export async function readEarlierEntries(
 	}
 	entries.sort((a, b) => Number(a.id) - Number(b.id));
 	return { entries, more };
+}
+
+function utf8Prefix(value: string, maxBytes: number): string {
+	const bytes = Buffer.from(value);
+	if (bytes.length <= maxBytes) return value;
+	let end = maxBytes;
+	while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end--;
+	return bytes.subarray(0, end).toString("utf8");
+}
+
+function serializedDiagnosticEntry(entry: EntryRecord): string {
+	return JSON.stringify(entry, (key, value) => {
+		if (
+			/^(?:auth|authentication)$|key$|authorization|cookie|token|secret|password|passwd|credential|signature/i.test(
+				key,
+			)
+		)
+			return "[REDACTED]";
+		if (
+			typeof value === "string" &&
+			(/-----\s*(?:BEGIN|END)[^\n]*(?:PRIVATE KEY|OPENSSH|PGP)/i.test(value) ||
+				/\b(?:Bearer|Basic)\s+\S+|:\/\/[^\s/@]+:[^\s/@]+@|[?&](?:sig|signature|key|auth)=|\b(?:sk-|gh[pousr]_|github_pat_|xox[baprs]-|AKIA)[A-Za-z0-9_-]+/i.test(
+					value,
+				))
+		)
+			return "[REDACTED secret-bearing text]";
+		if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+		const type = (value as { type?: unknown }).type;
+		if (type === "thinking" || type === "redacted_thinking") return { type, omitted: "private_reasoning" };
+		return type === "image" ||
+			type === "audio" ||
+			type === "file" ||
+			type === "document" ||
+			type === "resource" ||
+			type === "resource_link"
+			? { type, omitted: "attachment" }
+			: value;
+	});
+}
+
+function diagnosticHistoryUnavailable(
+	target: DiagnosticTargetReference,
+	limit: number,
+	before: number | undefined,
+	availability: "missing" | "unavailable",
+	reason: "storage_missing" | "read_failed",
+): DiagnosticHistoryPage {
+	return {
+		schemaVersion: 1,
+		target,
+		collectedAt: new Date().toISOString(),
+		source: { availability, freshness: "unavailable", reason },
+		entries: [],
+		pagination: {
+			...(before === undefined ? {} : { before }),
+			more: false,
+			returned: 0,
+			limit,
+			scannedEntries: 0,
+			maxScannedEntries: DIAGNOSTIC_HISTORY_MAX_SCANNED_ENTRIES,
+			encodedBytes: 0,
+			maxBytes: DIAGNOSTIC_HISTORY_MAX_BYTES,
+			perEntryMaxBytes: DIAGNOSTIC_HISTORY_ENTRY_MAX_BYTES,
+			truncatedEntries: 0,
+		},
+	};
+}
+
+/**
+ * Read a bounded newest-first storage page for one host-authorized diagnostic target. The response is chronological,
+ * each entry is byte-truncated explicitly, and callers continue toward older entries with `nextBefore`. This opens
+ * only a short read transaction and never initializes or wakes the target's kernel.
+ */
+export async function readDiagnosticHistoryPage(
+	directory: string,
+	target: DiagnosticTargetReference,
+	before: number | undefined,
+	limit: number,
+): Promise<DiagnosticHistoryPage> {
+	if (before !== undefined && (!Number.isSafeInteger(before) || before < 0))
+		throw new Error(`Invalid diagnostic history cursor: ${before}`);
+	if (!Number.isSafeInteger(limit) || limit < 1 || limit > DIAGNOSTIC_HISTORY_MAX_ENTRIES)
+		throw new Error(`Invalid diagnostic history limit: ${limit}`);
+	let storage: Storage | undefined;
+	try {
+		storage = await openSessionReader(directory);
+	} catch {
+		return diagnosticHistoryUnavailable(target, limit, before, "unavailable", "read_failed");
+	}
+	if (!storage) return diagnosticHistoryUnavailable(target, limit, before, "missing", "storage_missing");
+	try {
+		const conversationId = await activeConversation(storage, context);
+		const entries: DiagnosticHistoryEntry[] = [];
+		let encodedBytes = 0;
+		let truncatedEntries = 0;
+		let scannedEntries = 0;
+		let more = false;
+		let nextBefore: number | undefined;
+		let cursor: Cursor | undefined;
+		if ((before ?? Number.MAX_SAFE_INTEGER) > 1) {
+			for (;;) {
+				const page = await storage.scanEntries(
+					{
+						conversationId,
+						maxEntryId: ((before ?? Number.MAX_SAFE_INTEGER) - 1) as EntryRecord["id"],
+					},
+					1,
+					cursor,
+					context,
+				);
+				const entry = page.items[0];
+				if (!entry) break;
+				scannedEntries++;
+				cursor = page.next;
+				if (!isDiagnosticHistoryKind(entry.kind)) {
+					if (cursor === undefined) break;
+					if (scannedEntries >= DIAGNOSTIC_HISTORY_MAX_SCANNED_ENTRIES) {
+						more = true;
+						nextBefore = Number(entry.id);
+						break;
+					}
+					continue;
+				}
+				const serialized = serializedDiagnosticEntry(entry);
+				const originalBytes = Buffer.byteLength(serialized);
+				const truncated = originalBytes > DIAGNOSTIC_HISTORY_ENTRY_MAX_BYTES;
+				const result: DiagnosticHistoryEntry = {
+					ref: `diagnostic-history:v1:${target.sessionId}:${entry.id}`,
+					entryId: Number(entry.id),
+					kind: entry.kind,
+					excerpt: utf8Prefix(serialized, DIAGNOSTIC_HISTORY_ENTRY_MAX_BYTES),
+					originalBytes,
+					truncated,
+				};
+				const resultBytes = Buffer.byteLength(JSON.stringify(result));
+				if (entries.length && encodedBytes + resultBytes > DIAGNOSTIC_HISTORY_MAX_BYTES) {
+					more = true;
+					nextBefore = entries.at(-1)!.entryId;
+					break;
+				}
+				entries.push(result);
+				encodedBytes += resultBytes;
+				if (truncated) truncatedEntries++;
+				more = cursor !== undefined;
+				if (entries.length >= limit) {
+					if (more) nextBefore = result.entryId;
+					break;
+				}
+				if (cursor === undefined) break;
+				if (scannedEntries >= DIAGNOSTIC_HISTORY_MAX_SCANNED_ENTRIES) {
+					nextBefore = result.entryId;
+					break;
+				}
+			}
+		}
+		entries.reverse();
+		return {
+			schemaVersion: 1,
+			target,
+			collectedAt: new Date().toISOString(),
+			source: { availability: "available", freshness: "fresh" },
+			entries,
+			pagination: {
+				...(before === undefined ? {} : { before }),
+				...(nextBefore === undefined ? {} : { nextBefore }),
+				more,
+				returned: entries.length,
+				limit,
+				scannedEntries,
+				maxScannedEntries: DIAGNOSTIC_HISTORY_MAX_SCANNED_ENTRIES,
+				encodedBytes,
+				maxBytes: DIAGNOSTIC_HISTORY_MAX_BYTES,
+				perEntryMaxBytes: DIAGNOSTIC_HISTORY_ENTRY_MAX_BYTES,
+				truncatedEntries,
+			},
+		};
+	} catch {
+		return diagnosticHistoryUnavailable(target, limit, before, "unavailable", "read_failed");
+	} finally {
+		await storage.close(context).catch(() => undefined);
+	}
 }
 
 export async function readSessionSnapshot(

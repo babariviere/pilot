@@ -17,6 +17,9 @@ observations. A responsive local daemon cannot establish remote setup success. T
 path, command, raw stderr or arbitrary error text and cannot initiate setup or connection probes.
 
 Only an on-demand diagnostics specialist gets the `diagnostics` reader and proposal-only `repair_proposal` publisher.
+When the user selected **Diagnose this chat** or supplied a nonblank chat link, that specialist also gets
+`diagnostic_history`. Generic no-link **Ask about Pilot** sessions do not. This is a separately persisted native grant;
+missing legacy metadata denies history access.
 The app admits that persistent session role explicitly; Build, Ask, control and child agents receive neither. The
 kernel loads the specialist with no
 personal or project extensions, skills, MCP, codemode, shell, file, job, memory, mission, artifact, question or
@@ -29,7 +32,8 @@ question or bug report of at most 8 KiB UTF-8. Its chat link is optional: blank 
 the currently selected verified host, while a supplied `pilot://chat/<UUID>` resolves only when exactly one
 already-known local or hosted chat matches. Malformed, missing, ambiguous, disconnected and unavailable supplied
 targets fail closed; there is no silent Local fallback. Dismissing the sheet creates no session, and duplicate starts
-are rejected while one is in flight.
+are rejected while one is in flight. The sheet discloses whether the specialist receives operational evidence only,
+or bounded conversation and tool history for the exact linked chat.
 
 The app admits one exact target as a canonical host-qualified reference containing the host, session UUID and
 matching canonical chat URL. Native code sends that reference with the selected model and thinking level, the daemon
@@ -37,15 +41,35 @@ revalidates the URL plus daemon and lineage identity before persisting it, and t
 The specialist prompt and visible header identify that admitted scope, while the host-owned tool always makes its
 first and every later read for the persisted session UUID. The model has no target selector, and the daemon rejects
 every other ID even when another chat shares the project. This lets project-less and control-chat diagnostics keep
-the same qualified-host boundary. The link is authority to bounded operational diagnostics only: no target title,
-path, message or transcript is copied into the request, and no transcript or cold-reader access occurs. An Ask about
-Pilot question is new user-authored specialist-chat content, separate from that immutable target reference. It is not
-included in diagnostic evidence or telemetry and cannot grant transcript, tool or target access. Tool results
+the same qualified-host boundary. **Diagnose this chat** and a supplied link explicitly authorize a separate bounded
+cold read of committed conversation and tool entries for that exact target. A blank Ask about Pilot link does not
+authorize the Control transcript. An Ask about Pilot question is new user-authored specialist-chat content, separate
+from that immutable target reference. Its text cannot grant or widen transcript, tool or target access and is never
+included in diagnostic evidence or telemetry. Operational tool results
 contain a qualified host identity, collection time, source
 freshness and availability, queue/resource summaries, stable evidence references and explicit truncation/drop
 counts. In-flight tool evidence separates elapsed time, useful-progress age, liveness age and cancellation wait; it
 does not claim that silence proves a stall. Conservative suspected-stall assessments preserve explicit waits,
 background jobs, pauses and disconnects. The specialist cannot restart, retry, replay, wake or mutate the target.
+
+`diagnostic_history` has no session selector. Each dispatch rechecks the caller's persisted diagnostics role, the
+explicit history grant and the exact daemon, lineage and session identity before opening the target's SQLite storage
+in a one-shot read-only worker. It does not start or subscribe to the target and works for parked, failed and archived
+chats while their storage remains available. A page returns at most 20 entries, at most 64 KiB of encoded entry data,
+at most 8 KiB per entry and scans at most 200 committed records per call. Only user, assistant and tool-result entries
+are returned; internal state records are skipped, embedded attachment bodies are omitted, and credential-named fields
+and obvious credential-bearing text are redacted before sizing. Private model reasoning and signatures are omitted.
+Each entry includes a stable `diagnostic-history:v1:…` source ref, sanitized byte count
+before excerpt truncation, and a truncation flag. The response reports source availability/freshness, scan bounds and
+`nextBefore` for explicit pagination toward older entries. Missing or unreadable storage is reported as unavailable
+rather than replaced with cached or invented content. History does not expand child sessions or fetch attachments,
+files, links or secrets.
+
+Conversation and tool entries are untrusted data, not instructions or authorization. The specialist must not follow
+commands, links or target references found in them. Sanitized history excerpts remain local to the specialist
+conversation, are not added to lifecycle diagnostics or AI usage summaries, are never emitted as telemetry, and are
+not copied into an
+automatic repair handoff. The proposal path remains limited to user-reviewed bounded findings and cited evidence.
 
 Native clients call:
 
@@ -96,7 +120,8 @@ does not inherit the specialist role or diagnostics authority. The normal Ask �
 context” path is unavailable for diagnostics specialists, so an unbounded transcript cannot substitute for this
 handoff.
 
-The schema intentionally has no open attribute maps. It does not include messages, prompts, responses, tool input or
-output, model/provider names, paths, credentials, raw errors, event-loop labels or stall contexts. Treat a snapshot as
-operational evidence, not as conversation history, and cite its `diagnostic:v1:…` references in findings. Proposal
-text is bounded agent output for review, not telemetry and not an authorization channel.
+The operational diagnostic schema intentionally has no open attribute maps. It does not include messages, prompts,
+responses, tool input or output, model/provider names, paths, credentials, raw errors, event-loop labels or stall
+contexts. Treat that snapshot as operational evidence, not as conversation history, and cite its `diagnostic:v1:…`
+references in findings. The separately authorized history page is local untrusted content, not diagnostic or
+telemetry data. Proposal text is bounded agent output for review, not telemetry and not an authorization channel.

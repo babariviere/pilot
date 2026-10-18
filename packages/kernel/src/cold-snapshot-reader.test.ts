@@ -22,7 +22,11 @@ import {
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { AttentionDoc } from "./attention.ts";
 import {
+	DIAGNOSTIC_HISTORY_ENTRY_MAX_BYTES,
+	DIAGNOSTIC_HISTORY_MAX_BYTES,
+	DIAGNOSTIC_HISTORY_MAX_SCANNED_ENTRIES,
 	EARLIER_ENTRIES_MAX_BYTES,
+	readDiagnosticHistoryPage,
 	readEarlierEntries,
 	readSessionSnapshot,
 	readSubagentTranscript,
@@ -358,6 +362,140 @@ test("an earlier-entries page ends early once it is large, but always returns on
 		const page = await readEarlierEntries(durable, last, 100);
 		assert.equal(page.entries.length, 1, "one oversized entry fills the page");
 		assert.equal(page.more, true);
+	} finally {
+		await harness.close(context);
+		owned.release();
+	}
+});
+
+test("diagnostic history cold-reads active and compacted entries with explicit byte bounds and cursors", async (t) => {
+	const dir = await mkdtemp(join(tmpdir(), "pilot-diagnostic-history-"));
+	t.after(() => rm(dir, { recursive: true, force: true }));
+	const durable = join(dir, "durable");
+	const target = {
+		host: { hostId: "local", daemonId: "daemon", lineageId: "lineage" },
+		sessionId: "01234567-89ab-4cde-8fab-0123456789ab",
+		chatUrl: "pilot://chat/01234567-89ab-4cde-8fab-0123456789ab",
+	};
+	const missing = await readDiagnosticHistoryPage(durable, target, undefined, 2);
+	assert.deepEqual(missing.source, {
+		availability: "missing",
+		freshness: "unavailable",
+		reason: "storage_missing",
+	});
+
+	const owned = await openSessionStorage(durable);
+	const harness = await Harness.open(owned.storage, { models: createModels(), registry: createRegistry() }, context);
+	try {
+		const root = await harness.root(context, { agent: { model: { provider: "missing", modelId: "offline" } } });
+		const ids = await root.commit(async (tx) => {
+			const first = await tx.appendEntry(root.id, {
+				kind: "pi.user",
+				model: [{ role: "user", content: "old question", timestamp: 1 }],
+			});
+			const tool = await tx.appendEntry(root.id, {
+				kind: "pi.tool-result",
+				apiKey: "credential-secret",
+				model: [
+					{
+						role: "toolResult",
+						toolCallId: "call-1",
+						toolName: "read",
+						content: [
+							{ type: "image", data: "attachment-secret", mimeType: "image/png" } as never,
+							{ type: "text", text: "Bearer inline-secret" },
+							{ type: "text", text: "é".repeat(DIAGNOSTIC_HISTORY_ENTRY_MAX_BYTES) },
+						],
+						isError: false,
+						timestamp: 2,
+					},
+				],
+			} as never);
+			const tail = await tx.appendEntry(root.id, {
+				kind: "pi.assistant",
+				model: [
+					fauxAssistantMessage([
+						{ type: "thinking", thinking: "private-reasoning", thinkingSignature: "opaque-signature" },
+						{ type: "text", text: "newest" },
+					]),
+				],
+			});
+			await tx.appendEntry(root.id, { kind: "note", data: { mustNotAppear: true } });
+			return [Number(first.id), Number(tool.id), Number(tail.id)];
+		}, context);
+
+		const newest = await readDiagnosticHistoryPage(durable, target, undefined, 2);
+		assert.deepEqual(newest.source, { availability: "available", freshness: "fresh" });
+		assert.deepEqual(
+			newest.entries.map((entry) => entry.entryId),
+			ids.slice(1),
+			"page output is chronological even though storage scans newest first",
+		);
+		assert.equal(newest.pagination.more, true);
+		assert.equal(newest.pagination.nextBefore, ids[1]);
+		assert.equal(newest.pagination.scannedEntries, 3, "internal state is skipped under an explicit scan bound");
+		assert.doesNotMatch(JSON.stringify(newest), /mustNotAppear|\"kind\":\"note\"/);
+		assert.equal(newest.entries[0]?.truncated, true);
+		assert.doesNotMatch(newest.entries[0]!.excerpt, /attachment-secret/);
+		assert.doesNotMatch(newest.entries[0]!.excerpt, /credential-secret/);
+		assert.doesNotMatch(newest.entries[0]!.excerpt, /inline-secret/);
+		assert.match(newest.entries[0]!.excerpt, /"apiKey":"\[REDACTED\]"/);
+		assert.doesNotMatch(newest.entries[1]!.excerpt, /private-reasoning|opaque-signature/);
+		assert.match(newest.entries[1]!.excerpt, /"omitted":"private_reasoning"/);
+		assert.match(newest.entries[0]!.excerpt, /"omitted":"attachment"/);
+		assert.ok(Buffer.byteLength(newest.entries[0]!.excerpt) <= DIAGNOSTIC_HISTORY_ENTRY_MAX_BYTES);
+		assert.ok(newest.pagination.encodedBytes <= DIAGNOSTIC_HISTORY_MAX_BYTES);
+		assert.equal(newest.pagination.truncatedEntries, 1);
+
+		const older = await readDiagnosticHistoryPage(durable, target, newest.pagination.nextBefore, 2);
+		assert.deepEqual(
+			older.entries.map((entry) => entry.entryId),
+			[ids[0]],
+		);
+		assert.equal(older.pagination.more, false);
+		assert.equal(older.pagination.before, ids[1]);
+		assert.match(older.entries[0]!.ref, new RegExp(`${target.sessionId}:${ids[0]}$`));
+	} finally {
+		await harness.close(context);
+		owned.release();
+	}
+});
+
+test("diagnostic history scan bounds internal records and continues even when a page returns no transcript entries", async (t) => {
+	const dir = await mkdtemp(join(tmpdir(), "pilot-diagnostic-history-scan-"));
+	t.after(() => rm(dir, { recursive: true, force: true }));
+	const durable = join(dir, "durable");
+	const target = {
+		host: { hostId: "local", daemonId: "daemon", lineageId: "lineage" },
+		sessionId: "01234567-89ab-4cde-8fab-0123456789ab",
+		chatUrl: "pilot://chat/01234567-89ab-4cde-8fab-0123456789ab",
+	};
+	const owned = await openSessionStorage(durable);
+	const harness = await Harness.open(owned.storage, { models: createModels(), registry: createRegistry() }, context);
+	try {
+		const root = await harness.root(context, { agent: { model: { provider: "missing", modelId: "offline" } } });
+		const userId = await root.commit(async (tx) => {
+			const user = await tx.appendEntry(root.id, {
+				kind: "pi.user",
+				model: [{ role: "user", content: "old but authorized", timestamp: 1 }],
+			});
+			for (let index = 0; index < DIAGNOSTIC_HISTORY_MAX_SCANNED_ENTRIES + 5; index++)
+				await tx.appendEntry(root.id, { kind: "note", data: { index } });
+			return Number(user.id);
+		}, context);
+
+		const first = await readDiagnosticHistoryPage(durable, target, undefined, 1);
+		assert.deepEqual(first.entries, []);
+		assert.equal(first.pagination.scannedEntries, DIAGNOSTIC_HISTORY_MAX_SCANNED_ENTRIES);
+		assert.equal(first.pagination.more, true);
+		assert.ok(first.pagination.nextBefore);
+		const second = await readDiagnosticHistoryPage(durable, target, first.pagination.nextBefore, 1);
+		assert.deepEqual(
+			second.entries.map((entry) => entry.entryId),
+			[userId],
+		);
+		assert.equal(second.pagination.scannedEntries, 6);
+		assert.equal(second.pagination.more, false);
 	} finally {
 		await harness.close(context);
 		owned.release();

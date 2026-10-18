@@ -1004,14 +1004,17 @@ They stay outside the transcript, have bounded private storage, and are never ex
 [Local lifecycle diagnostics](docs/lifecycle-diagnostics.md) retain bounded, content-free startup, pause, quota,
 connectivity, recovery and parking transitions without waking parked workers.
 [Agent diagnostics](docs/agent-diagnostics.md) combine those records with request timings and daemon health in an
-on-demand, runtime-restricted specialist and host-qualified read-only API that never opens a target transcript or
-wakes a parked worker. Use **Diagnose this chat** from a chat's More menu, or **Ask about Pilot** from Help, to open
+on-demand, runtime-restricted specialist and host-qualified read-only API that never wakes a parked worker. Use
+**Diagnose this chat** from a chat's More menu, or **Ask about Pilot** from Help, to open
 an explicit setup sheet and choose the specialist's model and thinking level. Ask about Pilot accepts an optional
 question or bug report and an optional known `pilot://chat/<UUID>` link; without a link it diagnoses Pilot on the
 selected host through that host's explicit control target. The report becomes only the specialist chat's bounded
 opening user message, never telemetry, diagnostic evidence or target authority. The created chat is visibly labeled
 **Diagnostics specialist** with its admitted host-qualified target. Cancel creates nothing, and supplied unavailable,
-missing or ambiguous links fail without falling back to Local. When asked, the specialist can publish a bounded,
+missing or ambiguous links fail without falling back to Local. Diagnose this chat and an explicitly supplied link
+also grant a bounded, paginated cold read of that exact chat's committed conversation and tool history. Generic
+no-link Ask about Pilot cannot read the Control transcript. History stays local, is treated as untrusted data, is not
+telemetry, and does not grant file, attachment, child-session, shell or mutation access. When asked, the specialist can publish a bounded,
 cited repair proposal for review; publishing or cancelling never starts work. Only explicit confirmation sends the
 reviewed proposal to a separate ordinary Build chat in a valid chosen project.
 [Tool-call diagnostics](docs/tool-call-diagnostics.md) add bounded in-flight and completed lifecycle evidence for
