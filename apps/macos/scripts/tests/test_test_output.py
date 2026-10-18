@@ -1,5 +1,6 @@
 import importlib.util
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -36,9 +37,32 @@ GITHUB = ["githubKeySheetRequiresNativeConfirmationAndCancelDoesNotRegister",
           "githubExistingCheckoutRequiresExplicitNativeReuseConfirmation",
           "githubImportNativeCloneActionStaysDisabledUntilHostDestinationPreview"]
 GITHUB_OUTPUTS = [STARTED + f"◇ Test {name}() started.\n" + PASSED for name in GITHUB]
+SCOPED_MODELS = [
+    "scopedModelsNoStartupWritesAndLocalFirstIndependentHosts",
+    "scopedModelsOfflineColdLaunchAndNewIdentityNeedExplicitConsent",
+    "scopedModelsLostAckExactReadbackAndOnlyOneBoundedRetryAcrossRelaunch",
+    "scopedModelsConflictChoicesNeverBlindlyRebaseOtherHosts",
+    "scopedModelsSupersededRevisionAndGenerationCannotPublishOldSuccess",
+    "scopedModelsCoalescesSavesWithoutCallingOlderReadbackNewSuccess",
+    "scopedModelsLeaveDuringAcceptedWritePersistsWithoutLateSuccessRevivingSync",
+    "scopedModelsReadOnlyAndUnavailablePatternsAreTruthfulAndDurable",
+    "scopedModelsBoundsIndependentHostConcurrency",
+    "scopedModelsConflictConsentCannotFollowNewIntentOrConnection",
+    "scopedModelsReadFailureCannotErasePersistedLeaveAsIs"
+]
+SCOPED_MODEL_NATIVE = ["scopedModelsNativeSavePersistsAndDispatchesExplicitAllOnlyAfterClick",
+                       "scopedModelsNativeSelectorPreservesAdvancedPatterns"]
+SCOPED_MODEL_OUTPUTS = [STARTED + "".join(f"◇ Test {name}() started.\n" for name in SCOPED_MODELS) + PASSED]
+SCOPED_MODEL_OUTPUTS += [STARTED + f"◇ Test {name}() started.\n" + PASSED for name in SCOPED_MODEL_NATIVE]
 
 
 class TestOutputTests(unittest.TestCase):
+    def test_scoped_model_partitions_cover_the_production_fixtures(self):
+        scheduler = SCRIPTS.parent / "Tests/PilotTests/ScopedModelsSyncTests.swift"
+        native = SCRIPTS.parent / "Tests/PilotUITests/ScopedModelsInteractionTests.swift"
+        self.assertEqual(re.findall(r"func (scopedModels\w+)\(", scheduler.read_text()), SCOPED_MODELS)
+        self.assertEqual(re.findall(r"func (scopedModels\w+)\(", native.read_text()), SCOPED_MODEL_NATIVE)
+
     def test_summaries_not_warning_prose(self):
         for line in [FAILED, '\x1b[31m' + FAILED + '\x1b[0m',
                      '✘ Test run with 1 test failed after 0.001 seconds with 1 issue.',
@@ -55,7 +79,7 @@ class TestOutputTests(unittest.TestCase):
                     fourth_output=TERMINAL_OUTPUT, fourth_status=0,
                     fifth_output=CALLBACKS_OUTPUT, fifth_status=0,
                     sixth_output=None, sixth_status=0, seventh_output=None, seventh_status=0,
-                    extra_env=None, github_outputs=None):
+                    extra_env=None, github_outputs=None, scoped_model_outputs=None):
         if sixth_output is None:
             sixth_output = JOURNEY_START_OUTPUT
         if seventh_output is None:
@@ -91,6 +115,7 @@ class TestOutputTests(unittest.TestCase):
                        (third_output, third_status), (fourth_output, fourth_status), (fifth_output, fifth_status),
                        (sixth_output, sixth_status), (seventh_output, seventh_status)]
             outputs += ([(text, 0) for text in GITHUB_OUTPUTS] if github_outputs is None else github_outputs)
+            outputs += ([(text, 0) for text in SCOPED_MODEL_OUTPUTS] if scoped_model_outputs is None else scoped_model_outputs)
             env = {**{key: value for key, value in os.environ.items() if key != "CI"},
                    "PATH": f"{root}:{os.environ['PATH']}",
                    "FAKE_SWIFT": str(root / "swift"), "ARGUMENTS": str(arguments), "PILOT_SWIFT_JOBS": "2",
@@ -111,9 +136,9 @@ class TestOutputTests(unittest.TestCase):
         result, continued, calls = self.run_wrapper(PASSED, all_calls=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(continued)
-        self.assertEqual(len(calls), 7 + len(GITHUB))
+        self.assertEqual(len(calls), 7 + len(GITHUB) + len(SCOPED_MODEL_OUTPUTS))
         self.assertEqual(calls[0][-2:],
-                         ["--skip", f"{ISOLATED}|{DEVBOX}|{TERMINAL}|{'|'.join(CALLBACKS)}|{'|'.join(JOURNEYS)}|{'|'.join(GITHUB)}"])
+                         ["--skip", f"{ISOLATED}|{DEVBOX}|{TERMINAL}|{'|'.join(CALLBACKS)}|{'|'.join(JOURNEYS)}|{'|'.join(GITHUB)}|{'|'.join(SCOPED_MODELS)}|{'|'.join(SCOPED_MODEL_NATIVE)}"])
         self.assertNotIn("--skip-build", calls[0])
         self.assertIn("--skip-build", calls[1])
         self.assertEqual(calls[1][-2:], ["--filter", ISOLATED])
@@ -130,16 +155,23 @@ class TestOutputTests(unittest.TestCase):
         for index, name in enumerate(GITHUB, start=7):
             self.assertIn("--skip-build", calls[index])
             self.assertEqual(calls[index][-2:], ["--filter", name])
+        scoped_start = 7 + len(GITHUB)
+        self.assertEqual(calls[scoped_start][-2:], ["--filter", "|".join(SCOPED_MODELS)])
+        self.assertIn("--skip-build", calls[scoped_start])
+        for index, name in enumerate(SCOPED_MODEL_NATIVE, start=scoped_start + 1):
+            self.assertEqual(calls[index][-2:], ["--filter", name])
+            self.assertIn("--skip-build", calls[index])
         self.assertEqual(result.stderr.count("acquired slot 1/1"), 1)
         self.assertEqual(result.stdout, PASSED + ISOLATED_OUTPUT + DEVBOX_OUTPUT + TERMINAL_OUTPUT + CALLBACKS_OUTPUT
-                         + JOURNEY_START_OUTPUT + JOURNEY_SIDEBAR_OUTPUT + "".join(GITHUB_OUTPUTS))
+                         + JOURNEY_START_OUTPUT + JOURNEY_SIDEBAR_OUTPUT + "".join(GITHUB_OUTPUTS)
+                         + "".join(SCOPED_MODEL_OUTPUTS))
 
     def test_isolated_journeys_are_required_only_on_ci(self):
         # Outside CI the journeys are disabled, so an empty run passes.
         result, continued, calls = self.run_wrapper(PASSED, sixth_output=PASSED, seventh_output=PASSED, all_calls=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(continued)
-        self.assertEqual(len(calls), 7 + len(GITHUB))
+        self.assertEqual(len(calls), 7 + len(GITHUB) + len(SCOPED_MODEL_OUTPUTS))
         outputs = [("", 0), (PASSED, 0), (JOURNEY_START_OUTPUT + FAILED, 0),
                    (JOURNEY_START_OUTPUT, 42),
                    (JOURNEY_START_OUTPUT.replace(f"◇ Test {JOURNEYS[0]}() started.\n", ""), 0)]
@@ -195,6 +227,32 @@ class TestOutputTests(unittest.TestCase):
             self.assertFalse(continued)
             self.assertEqual(len(calls), 4)
 
+    def test_scoped_model_scheduler_requires_every_fixture_and_preserves_failures(self):
+        output = SCOPED_MODEL_OUTPUTS[0]
+        cases = [("", 0), (PASSED, 0), (output + FAILED, 0), (output, 42)]
+        for name in SCOPED_MODELS:
+            cases.append((output.replace(f"◇ Test {name}() started.\n", ""), 0))
+        for text, code in cases:
+            outputs = [(value, 0) for value in SCOPED_MODEL_OUTPUTS]
+            outputs[0] = (text, code)
+            result, continued, calls = self.run_wrapper(PASSED, scoped_model_outputs=outputs, all_calls=True)
+            self.assertNotEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(continued)
+            self.assertEqual(len(calls), 8 + len(GITHUB))
+
+    def test_scoped_model_native_controls_run_alone_and_require_real_start(self):
+        for index, name in enumerate(SCOPED_MODEL_NATIVE, start=1):
+            output = SCOPED_MODEL_OUTPUTS[index]
+            for text, code in [("", 0), (PASSED, 0),
+                               (STARTED + f"◇ Test {name}() started.\n", 0),
+                               (output + FAILED, 0), (output, 42)]:
+                outputs = [(value, 0) for value in SCOPED_MODEL_OUTPUTS]
+                outputs[index] = (text, code)
+                result, continued, calls = self.run_wrapper(PASSED, scoped_model_outputs=outputs, all_calls=True)
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+                self.assertFalse(continued)
+                self.assertEqual(len(calls), 8 + len(GITHUB) + index)
+
     def test_isolated_devbox_must_start_finish_and_pass(self):
         for output, status in [("", 0), (PASSED, 0),
                                (STARTED + f"◇ Test {DEVBOX}() started.\n", 0),
@@ -248,7 +306,7 @@ class TestOutputTests(unittest.TestCase):
     def test_explicit_build_options_still_partition_full_suite(self):
         result, _, calls = self.run_wrapper(PASSED, args=("--jobs=1", "--skip-build"), all_calls=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(len(calls), 7 + len(GITHUB))
+        self.assertEqual(len(calls), 7 + len(GITHUB) + len(SCOPED_MODEL_OUTPUTS))
         for call in calls:
             self.assertIn("--jobs=1", call)
             self.assertNotIn("--jobs", call)
