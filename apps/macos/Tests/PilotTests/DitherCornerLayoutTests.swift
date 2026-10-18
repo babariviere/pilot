@@ -51,15 +51,16 @@ import Testing
     let margin: CGFloat = 12
     for size in [CGSize(width: 280, height: 40), CGSize(width: 60, height: 24), CGSize(width: 400, height: 64)] {
         for scheme in [ColorScheme.light, .dark] {
-            for signal in SessionSignal.allCases {
+            for signal in [SessionSignal.failed, .readyToMerge] {
                 // Compare the Inbox wrapper with an ordinary, full-sized corner clipped to the row itself.
-                // Reduce Motion renders the same resting bitmap without requiring an AppKit animation layer.
+                // Steady states use SwiftUI bitmaps; ImageRenderer cannot capture the moving states' AppKit
+                // layers. Their full-sized and receded frames are covered by DitherCornerTests.
                 let inbox = ImageRenderer(content: Color.clear.frame(width: size.width, height: size.height)
                     .inboxCorner(signal).padding(margin)
-                    .environment(\.accessibilityReduceMotion, true).environment(\.colorScheme, scheme))
+                    .environment(\.colorScheme, scheme))
                 let reference = ImageRenderer(content: Color.clear.frame(width: size.width, height: size.height)
                     .ditherCorner(signal, outset: EdgeInsets()).padding(margin)
-                    .environment(\.accessibilityReduceMotion, true).environment(\.colorScheme, scheme))
+                    .environment(\.colorScheme, scheme))
                 let image = try #require(inbox.cgImage)
                 let referenceImage = try #require(reference.cgImage)
                 try #require(image.width == Int(size.width + 2 * margin), "No padding outside the row")
