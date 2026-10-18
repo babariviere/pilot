@@ -1129,7 +1129,10 @@ test("diagnostics reads a parked session without opening its worker or transcrip
 	assert.equal(failed.current.state, "failed");
 	assert.equal(failed.current.errorCode, "startup_failure");
 	assert.equal(failed.sessionId, created.id);
-	assert.equal(JSON.stringify(failed).includes("raw startup error"), false);
+	const encoded = JSON.stringify(failed);
+	assert.equal(encoded.includes("raw startup error"), false);
+	assert.equal(encoded.includes(created.sessionPath!), false, "clipboard-only session roots never enter diagnostics");
+	assert.equal(encoded.includes(created.cwd), false, "workspaces never enter diagnostics");
 	assert.equal(f.workers.length, 1, "diagnostics never constructs a replacement worker");
 	assert.equal(reads.mock.callCount(), 0);
 });

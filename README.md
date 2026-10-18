@@ -1017,6 +1017,8 @@ The [local OTLP Collector example](examples/otel-collector/README.md) and
 a hosted backend or enabling upload automatically.
 [Telemetry controls](docs/telemetry-settings.md) documents independent local, operational and analytics consent,
 per-host OTLP endpoints, revocation and private pseudonymous identity.
+[Telemetry verification](docs/telemetry-verification.md) maps the offline privacy, failure-isolation, bounds and
+overhead fixtures used by the exact-head Node, macOS, Linux and packaging gates.
 [Message send tracing](docs/message-send-tracing.md) explains the correlated app/daemon/kernel phases, thinking versus
 visible text, and why queued, restarted or unobservable milestones are reported as unavailable rather than guessed.
 [Chat-open tracing](docs/chat-open-tracing.md) covers warm and cold transcript latency, bounded history buckets,

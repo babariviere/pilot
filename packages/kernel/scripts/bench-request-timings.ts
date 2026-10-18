@@ -22,9 +22,13 @@ globalThis.fetch = async () => {
 	throw new Error("Offline benchmark must not access the network");
 };
 
+const samples = Math.max(1, Math.min(15, Number.parseInt(process.argv[2] ?? "5", 10) || 5));
 for (const history of [100, 1000]) {
 	// Alternating order helps reveal host-load noise. This is feature-off/on, not an old installed binary.
-	for (const enabled of [false, true, true, false]) {
+	const variants = Array.from({ length: samples }, (_, index) =>
+		index % 2 === 0 ? [false, true] : [true, false],
+	).flat();
+	for (const enabled of variants) {
 		const home = await mkdtemp(join(tmpdir(), "pilot-timings-bench-"));
 		let adapter: NativeAdapter | undefined;
 		let harness: Harness | undefined;
@@ -50,6 +54,9 @@ for (const history of [100, 1000]) {
 				cwd: home,
 				agentDir,
 				projectTrusted: false,
+				// The fixture measures request timing, not Pilot's bundled capability profile. Durable subagents also
+				// require file-backed storage, while this benchmark deliberately uses MemoryStorage below.
+				bundledExtensions: false,
 				performance: timingLog,
 				settingsManager: SettingsManager.inMemory({ defaultTools: [] }),
 				sessionOptions: {

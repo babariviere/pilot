@@ -36,6 +36,18 @@ class BlockingExporter implements SpanExporter {
 	}
 }
 
+class FailingExporter implements SpanExporter {
+	private readonly shouldThrow: boolean;
+	constructor(shouldThrow: boolean) {
+		this.shouldThrow = shouldThrow;
+	}
+	export(_spans: ReadableSpan[], done: (result: { code: ExportResultCode }) => void): void {
+		if (this.shouldThrow) throw new Error("offline sink failure");
+		done({ code: ExportResultCode.FAILED });
+	}
+	async shutdown(): Promise<void> {}
+}
+
 function options(exporter: SpanExporter, enabled = true) {
 	return {
 		enabled,
@@ -105,6 +117,36 @@ test("rejects arbitrary fields and malformed trace carriers before recording", a
 	assert.equal(traceCarrier({ traceparent: "not-a-trace", tracestate: "vendor=value" }), undefined);
 	assert.equal(await telemetry.forceFlush(), true);
 	assert.equal(exporter.spans.length, 0);
+	await telemetry.shutdown();
+});
+
+test("privacy rejection covers content, identity, paths, URLs and raw failure evidence", async () => {
+	const exporter = new MemoryExporter();
+	const telemetry = new NodeTelemetry(options(exporter));
+	const forbidden: Array<Record<string, unknown>> = [
+		{ prompt: "private prompt" },
+		{ response: "private response" },
+		{ sessionPath: "/srv/custom-pilot/sessions/private" },
+		{ cwd: "/private/worktree" },
+		{ url: "pilot://chat/abee494b-d1a8-484c-a57b-669148815d37" },
+		{ hostId: "raw-daemon-lineage" },
+		{ error: "ssh: private-host permission denied" },
+		{ "pilot.ai.provider": "private-provider" },
+		{ "pilot.ai.model": "private-model" },
+		{ "pilot.tool.name": "mcp__private__database" },
+	];
+	for (const attributes of forbidden)
+		assert.equal(telemetry.startSpan("pilot.daemon.request", attributes as never).recording, false);
+	telemetry.recordSpan("pilot.daemon.request", 1, {
+		"pilot.operation": "daemon.request",
+		"pilot.outcome": "success",
+	});
+	assert.equal(await telemetry.forceFlush(), true);
+	assert.equal(telemetry.stats.invalid, forbidden.length);
+	assert.equal(exporter.spans.length, 1);
+	const encoded = JSON.stringify(exporter.spans.map((span) => span.attributes));
+	for (const value of ["private", "custom-pilot", "pilot://chat", "daemon-lineage", "permission denied", "mcp__"])
+		assert.equal(encoded.includes(value), false, value);
 	await telemetry.shutdown();
 });
 
@@ -254,6 +296,20 @@ test("sheds new spans at the process queue bound", async () => {
 	assert.equal(await telemetry.forceFlush(), true);
 	assert.equal(telemetry.stats.queued, 0);
 	await telemetry.shutdown();
+});
+
+test("failing and throwing sinks drop bounded batches without escaping into product code", async () => {
+	for (const sink of [new FailingExporter(false), new FailingExporter(true)]) {
+		const telemetry = new NodeTelemetry(options(sink));
+		assert.doesNotThrow(() => {
+			for (let index = 0; index < 129; index++) telemetry.startSpan("pilot.daemon.request").end();
+		});
+		assert.equal(await telemetry.forceFlush(250), false);
+		assert.equal(telemetry.stats.queued, 0);
+		assert.equal(telemetry.stats.dropped, 129);
+		assert.ok(telemetry.stats.exportFailures >= 2);
+		await telemetry.shutdown();
+	}
 });
 
 test("local in-flight hooks distinguish useful progress from liveness with export disabled", () => {

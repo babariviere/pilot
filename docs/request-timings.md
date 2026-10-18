@@ -68,10 +68,11 @@ polling uses the SDK's separate polling path and is outside this stream instrume
 ```sh
 node --test --test-force-exit --test-concurrency=2 \
   packages/kernel/src/performance.test.ts packages/kernel/src/model.integration.test.ts
-node --expose-gc scripts/bench/request-timings.ts
+node --expose-gc scripts/bench/request-timings.ts 5
 ```
 
-The fixture alternates disabled/enabled recording over 100 and 1,000 history entries (about 1 KiB
+The fixture takes the sample count as its optional argument (five per variant by default), alternates
+disabled/enabled recording over 100 and 1,000 history entries (about 1 KiB
 each), one native tool call and a roughly 19 KiB streamed answer in small chunks. It uses disposable
 storage, a faux model, in-memory credentials and no user extensions or network. Reports include wall
 time (both turn latency and elapsed including log flush), process CPU, event-loop p99, RSS, record count
