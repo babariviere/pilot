@@ -20,7 +20,13 @@ const sameHost = (a: OperationHost, b: OperationHost): boolean =>
 	a.daemonId === b.daemonId && a.lineageId === b.lineageId;
 export class OperationConflict extends Error {}
 export class OperationExpired extends Error {}
-export class OperationRejected extends Error {}
+export class OperationRejected extends Error {
+	readonly result?: unknown;
+	constructor(message: string, result?: unknown) {
+		super(message);
+		this.result = result;
+	}
+}
 interface StoredOperation {
 	operation: DurableOperation;
 	receipt: OperationReceipt;
@@ -143,7 +149,7 @@ export class OperationJournal {
 			op.sequence < 1 ||
 			!identifier.test(op.targetId) ||
 			typeof op.kind !== "string" ||
-			!identifier.test(op.kind) ||
+			!/^[A-Za-z0-9_.-]{1,128}$/.test(op.kind) ||
 			typeof op.payload !== "string" ||
 			Buffer.byteLength(op.payload) > MAX_PAYLOAD ||
 			payloadHash(op.payload) !== op.payloadHash
@@ -241,6 +247,7 @@ export class OperationJournal {
 			} catch (e) {
 				if (!(e instanceof OperationRejected)) return receipt;
 				reason = e.message.slice(0, 512);
+				result = e.result;
 			}
 			return this.serial(async () => {
 				const previous = this.checked(op)!;
@@ -249,7 +256,7 @@ export class OperationJournal {
 					receipt: {
 						...previous.receipt,
 						state: reason === undefined ? "accepted" : "rejected",
-						...(reason === undefined ? { result } : { reason }),
+						...(reason === undefined ? { result } : { reason, ...(result === undefined ? {} : { result }) }),
 					},
 				};
 				if (Buffer.byteLength(JSON.stringify(updated)) > MAX_PAYLOAD * 2) throw new Error("Receipt too large");

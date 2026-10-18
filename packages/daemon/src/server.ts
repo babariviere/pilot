@@ -65,6 +65,10 @@ import { boundedSender } from "./backpressure.ts";
 import { RepositoryChanges } from "./changes.ts";
 import { ChatStreams } from "./chat-streams.ts";
 import type { DaemonConfig } from "./config.ts";
+import type { ControlExecutor } from "./control-executor.ts";
+import { controlBody, controlHeaders, controlHostRoute, controlJSON } from "./control-host-http.ts";
+import { ControlHostError } from "./control-host-policy.ts";
+import type { ControlHosts } from "./control-hosts.ts";
 import { Conflict, ServiceUnavailable } from "./errors.ts";
 import { daemonPerformance, operations } from "./event-loop-watchdog.ts";
 import type { GitHubImportService } from "./github-import.ts";
@@ -313,6 +317,7 @@ export function createDaemonServer(
 	telemetry?: TelemetrySettingsService,
 	githubSetup?: GitHubSetupService,
 	githubImport?: GitHubImportService,
+	control?: { hosts: ControlHosts; executor: ControlExecutor },
 ): Server & { runtimeResources: RuntimeResources } {
 	sessions.setWorkspaceProcessGuard((id) => terminals.isRunning(id));
 	const machine = new MachineInformationReader(_config.home, hello?.daemonVersion ?? "unknown");
@@ -373,6 +378,10 @@ export function createDaemonServer(
 		}
 	};
 	const admitOperationHeld = async (op: DurableOperation): Promise<unknown> => {
+		if (op.kind.startsWith("control.")) {
+			if (!control) throw new OperationRejected("Control executor unavailable");
+			return control.executor.handle(op);
+		}
 		if (op.kind.startsWith("share-")) {
 			if (!sharing) throw new OperationRejected("Shared context unavailable");
 			return sharing.handle(op);
@@ -438,6 +447,7 @@ export function createDaemonServer(
 		const url = new URL(req.url ?? "/", "http://localhost");
 		const parts = url.pathname.split("/").filter(Boolean);
 		if (parts[0] !== "api") throw new HttpError(404, "Not found");
+		if (control && (await controlHostRoute(control.hosts, req, res))) return;
 		if (parts[1] === "github-import") {
 			res.setHeader("cache-control", "no-store");
 			if (!githubSetup || !githubImport) throw new SetupError(503, "GitHub import is unavailable on this host.");
@@ -649,7 +659,20 @@ export function createDaemonServer(
 				await attachments.releaseRejected(body.operation, body.attachments);
 				return json(res, 200, { ok: true });
 			}
-			const operation = await readJson<DurableOperation>(req);
+			const bytes = await controlBody(req, MAX_BODY);
+			const operation = controlJSON<DurableOperation>(bytes);
+			if (operation?.kind?.startsWith("control.")) {
+				try {
+					if (!control) throw new ControlHostError("capability_denied", "Control executor unavailable", 403);
+					await control.hosts.authenticate(controlHeaders(req), req.method!, req.url!, bytes, {
+						bindingId: operation.bindingId!,
+						kind: parts[2] === "receipt" ? "receipts" : "exchange",
+					});
+				} catch (error) {
+					if (error instanceof ControlHostError) return json(res, error.status, error.response());
+					throw error;
+				}
+			}
 			if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 			const receipt =
 				parts[2] === "receipt" ? await journal.lookup(operation) : await journal.execute(operation, admitOperation);

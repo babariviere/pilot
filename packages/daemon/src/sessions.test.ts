@@ -1035,6 +1035,7 @@ async function fixture(t: TestContext) {
 		factories: SessionFactories = {},
 		options: SessionManagerOptions = {},
 		pullRequests: ConstructorParameters<typeof SessionManager>[4] = {},
+		beforeLoad?: (sessions: SessionManager) => void,
 	) => {
 		const sessions = new SessionManager(
 			home,
@@ -1049,6 +1050,7 @@ async function fixture(t: TestContext) {
 			options,
 		);
 		managers.push(sessions);
+		beforeLoad?.(sessions);
 		await sessions.load();
 		return sessions;
 	};
@@ -1145,6 +1147,46 @@ test("queue pause is durable before cold startup, survives sleep/restart, and re
 	assert.deepEqual(await resumed.controlInputs(created.id, false), { delivery: "delivered" });
 	assert.equal(worker.requests.at(-1)?.type, "resumeInputs");
 	assert.equal((await f.stored(created.id)).pending.length, 0);
+});
+
+test("remote Control run commands do not repeat after another input or restart", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager();
+	const chat = await sessions.spawn({ cwd: f.source, message: "Start" });
+	await sessions["starting"].get(chat.id);
+	await sessions.stop(chat.id, "control:stop:stable");
+	await sessions.sendDurable(chat.id, "Redirect once", "followUp", "control:redirect:stable", true);
+	const worker = f.workers.at(-1)!;
+	const aborts = worker.requests.filter((c) => c.type === "abort").length;
+	await sessions.stop(chat.id, "control:stop:stable");
+	assert.equal(worker.requests.filter((c) => c.type === "abort").length, aborts);
+	await sessions.controlInputs(chat.id, true, "control:pause:stable");
+	const revision = sessions["metas"].get(chat.id)!.inputControlRevision;
+	await sessions.controlInputs(chat.id, true, "control:pause:stable");
+	assert.equal(sessions["metas"].get(chat.id)!.inputControlRevision, revision);
+	await sessions.shutdown();
+	const reopened = await f.manager();
+	await reopened.stop(chat.id, "control:stop:stable");
+	assert.equal(reopened["metas"].get(chat.id)!.inputControlRevision, revision);
+});
+
+test("effective executor guard blocks legacy recovery, input and audit actions without stopping independent work", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager();
+	const legacy = await sessions.ensureControlChat();
+	await sessions.send(legacy.id, "Old queued input");
+	await sessions["starting"].get(legacy.id);
+	const ordinary = await sessions.spawn({ cwd: f.source, message: "Independent" });
+	await sessions["starting"].get(ordinary.id);
+	await sessions.shutdown();
+	const count = f.workers.filter((w) => w.spec.control).length;
+	const reopened = await f.manager({}, {}, {}, (manager) => manager.setControlRoleGuard(() => false));
+	await assert.rejects(reopened.ensureControlChat(), /read-only/);
+	await assert.rejects(reopened.send(legacy.id, "New input"), /read-only/);
+	assert.equal(reopened.isControlSession(legacy.id), false);
+	assert.equal(f.workers.filter((w) => w.spec.control).length, count);
+	assert.ok(reopened.get(legacy.id));
+	assert.ok(reopened.get(ordinary.id));
 });
 
 test("queue controls reject archived chats and surface uncertain acknowledgement without losing the command", async (t) => {

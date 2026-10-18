@@ -10,6 +10,10 @@ import { configureNodeTelemetry, nodeTelemetry } from "@pilot/telemetry";
 import { loadConfig } from "./config.ts";
 import { ConnectivityService } from "./connectivity.ts";
 import { ControlDiagnostics } from "./control-diagnostics.ts";
+import { ControlExecutor } from "./control-executor.ts";
+import { controlSessionBackend } from "./control-executor-sessions.ts";
+import { ControlHostStore } from "./control-host-store.ts";
+import { ControlHosts } from "./control-hosts.ts";
 import { CredentialBroker } from "./credential-broker.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import { daemonPerformance, EventLoopWatchdog } from "./event-loop-watchdog.ts";
@@ -63,6 +67,13 @@ await installCredentialBrokerHooks();
 const capabilities = await detectPlatformCapabilities();
 const hello = await daemonHello(config.home, capabilities);
 if (!hello.lineageId) throw new Error("Storage lineage is required for sharing");
+// Recover effective policy before any session/watch recovery. No inferred home bootstrap here.
+const controlHostStore = new ControlHostStore(join(config.home, "control-hosts", "state.sqlite"));
+const controlHosts = new ControlHosts(
+	{ hostId: "daemon", daemonId: hello.daemonId, lineageId: hello.lineageId },
+	controlHostStore,
+);
+await controlHosts.configuration();
 const telemetry = await TelemetrySettingsService.open(config.home, hello);
 configureNodeTelemetry(telemetry.nodeOptions("pilot.daemon"));
 // Log long timer delays with context, without assuming sleep or descheduling is synchronous CPU work.
@@ -71,7 +82,7 @@ watchdog.start();
 const projects = new ProjectStore(config.home);
 await projects.load();
 const trackedItems = new TrackedItemStore(join(config.home, "tracked-items.sqlite"));
-const watches = new WatchService(join(config.home, "watches.sqlite"));
+const watches = new WatchService(join(config.home, "watches.sqlite"), !controlHosts.legacyAllowed());
 await watches.ready();
 await watches.list();
 await trackedItems.load(projects.list().map((project) => project.id));
@@ -138,6 +149,7 @@ const sessions = new SessionManager(
 		telemetry: telemetry.kernelSettings(),
 	},
 );
+sessions.setControlRoleGuard(() => controlHosts.legacyAllowed());
 let appliedTelemetry = telemetry.settings();
 sessions.configureTelemetry(telemetry.kernelSettings(), appliedTelemetry.aiUsageBudget);
 telemetry.onChange((settings) => {
@@ -319,13 +331,14 @@ power?.onNetworkPath((path) => connectivity.setPath(path));
 await power?.start();
 sessions.setWatchService(watches);
 await sessions.load(maintenance?.frozen);
-await sessions.ensureControlChat();
-watches.bindRemovalAudit((removal) => sessions.auditWatchRemoval(removal));
+if (controlHosts.legacyAllowed()) await sessions.ensureControlChat();
+if (controlHosts.legacyAllowed()) watches.bindRemovalAudit((removal) => sessions.auditWatchRemoval(removal));
 const watchLifecycle = new WatchLifecycle(watches, sessions, missionStore, () => sessions.controlAuthorizations());
-await watchLifecycle.reconcile();
+if (controlHosts.legacyAllowed()) await watchLifecycle.reconcile();
 const { importLegacyWatchAuthorizations } = await import("./control-authorizations.ts");
-await importLegacyWatchAuthorizations(() => sessions.controlAuthorizations(), watches);
-const stopControlWatches = sessions.setWatches(watches);
+if (controlHosts.legacyAllowed())
+	await importLegacyWatchAuthorizations(() => sessions.controlAuthorizations(), watches);
+const stopControlWatches = controlHosts.legacyAllowed() ? sessions.setWatches(watches) : () => {};
 const missionWatches = new MissionWatchSource(missionStore, watches);
 const sessionWatches = new SessionWatchSource(watches, sessions);
 const prWatches = new PullRequestWatchSource(watches, config.home, (target) =>
@@ -402,6 +415,13 @@ const server = createDaemonServer(
 	telemetry,
 	githubSetup,
 	githubImport,
+	{
+		hosts: controlHosts,
+		executor: new ControlExecutor(
+			controlHostStore,
+			controlSessionBackend(sessions, projects, (id) => missionStore.get(id)?.coordinatorSessionId),
+		),
+	},
 );
 server.listen(config.port, config.host, () => {
 	console.log(`pilotd listening on http://${config.host}:${config.port} (data: ${config.home})`);
@@ -446,6 +466,7 @@ async function stop(): Promise<void> {
 	await missionWatches.stop();
 	await prWatches.stop();
 	await watches.close();
+	await controlHostStore.close();
 	await power?.stop();
 	await untrackedStats.close();
 	await nodeTelemetry().shutdown();

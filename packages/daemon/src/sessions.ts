@@ -309,6 +309,8 @@ export interface SessionFactories {
 }
 
 interface SessionMeta extends OutcomeMeta {
+	/** Durable command admission markers, saved with the corresponding outbox mutation. */
+	remoteControlCommands?: Record<string, "stop" | "pause" | "resume" | "send" | "redirect">;
 	controlStart?: SessionSummary["controlStart"];
 	/** Persisted authority ceiling, independent of prompts, model and worker lifetime. */
 	controlPermission?: ControlPermission;
@@ -1311,6 +1313,7 @@ export class SessionManager {
 		requestId: string;
 		provenance?: SessionSummary["controlStart"];
 		sideEffectAttempted: boolean;
+		fence?: () => Promise<void>;
 	}>();
 	/** Propagates only across the explicit start path, never unrelated concurrent user work. */
 	controlStart<T>(
@@ -1318,12 +1321,14 @@ export class SessionManager {
 		permission: ControlPermission,
 		requestId = `control:start:${randomUUID()}`,
 		provenance?: SessionSummary["controlStart"],
+		fence?: () => Promise<void>,
 	): Promise<T> {
 		const origin = {
 			permission: { ...permission },
 			requestId,
 			...(provenance ? { provenance: { ...provenance } } : {}),
 			sideEffectAttempted: false,
+			...(fence ? { fence } : {}),
 		};
 		return this.controlStartOrigin.run(origin, async () => {
 			try {
@@ -1452,10 +1457,30 @@ export class SessionManager {
 	static readonly CONTROL_ID = "00000000-0000-4000-8000-000000000001";
 	/** The control chat's name, shown as-is by every client. The only place it is spelled. */
 	static readonly CONTROL_TITLE = "Control";
+	private controlRoleAllows = () => true;
+	/** Installed from the durable effective policy before load. Staged pairing does not freeze. */
+	setControlRoleGuard(allows: () => boolean): void {
+		this.controlRoleAllows = allows;
+	}
+	controlPermission(id: string): ControlPermission | undefined {
+		const p = this.metas.get(id)?.controlPermission;
+		return p && { ...p };
+	}
+	async remoteControlReconciled(op: import("@pilot/protocol").DurableOperation): Promise<boolean> {
+		const meta = this.metas.get(op.targetId);
+		if (!meta) return false;
+		await this.saving.get(meta.id);
+		const disk = JSON.parse(await readFile(join(this.dir(meta.id), "meta.json"), "utf8")) as SessionMeta;
+		if (op.kind === "control.start") return disk.createOperationId === op.operationId && !!disk.controlPermission;
+		const p = JSON.parse(op.payload) as { action?: string };
+		const action = op.kind === "control.send" ? "send" : p.action;
+		return !!action && disk.remoteControlCommands?.[`control:${action}:${op.operationId}`] === action;
+	}
 	isControlSession(id: string): boolean {
-		return id === SessionManager.CONTROL_ID && this.metas.get(id)?.control === true;
+		return this.controlRoleAllows() && id === SessionManager.CONTROL_ID && this.metas.get(id)?.control === true;
 	}
 	ensureControlChat(): Promise<SessionSummary> {
+		if (!this.controlRoleAllows()) return Promise.reject(new Conflict("Control is read-only on this host"));
 		if (this.creatingControl) return this.creatingControl;
 		this.creatingControl = (async () => {
 			if (this.closing) throw new Error("pilotd is shutting down");
@@ -4281,6 +4306,12 @@ export class SessionManager {
 		const title = request.title?.trim() || titleFrom(request.message);
 		const titlePending = request.title?.trim() ? undefined : { cwd, message: request.message };
 		this.newSessionAdmissions.add(folded);
+		try {
+			await this.controlStartOrigin.getStore()?.fence?.();
+		} catch (error) {
+			this.newSessionAdmissions.delete(folded);
+			throw error;
+		}
 		this.controlStartSideEffect();
 		try {
 			await mkdir(this.dir(id), { recursive: true, mode: 0o700 });
@@ -4339,6 +4370,7 @@ export class SessionManager {
 			...(request.thinking ? { thinking: request.thinking } : {}),
 		};
 		try {
+			await this.controlStartOrigin.getStore()?.fence?.();
 			await this.save(meta, undefined, undefined, Boolean(admission));
 			if (request.missionId !== undefined) {
 				this.missions!.joinSpawn(id, request.missionId, coordinator, taskId);
@@ -4593,10 +4625,16 @@ export class SessionManager {
 		await this.send(id, message, "steer", `database-access:${requestId}`);
 	}
 
-	async sendDurable(id: string, message: string, mode: DeliveryMode, operationId: string): Promise<void> {
+	async sendDurable(
+		id: string,
+		message: string,
+		mode: DeliveryMode,
+		operationId: string,
+		resumeHeld = false,
+	): Promise<void> {
 		const end = this.updateGate.begin();
 		try {
-			await this.sendAdmitted(id, message, mode, operationId, false, true);
+			await this.sendAdmitted(id, message, mode, operationId, false, true, undefined, resumeHeld);
 		} finally {
 			end();
 		}
@@ -4613,6 +4651,7 @@ export class SessionManager {
 		resumeHeld = false,
 	): Promise<void> {
 		const meta = this.require(id);
+		if (meta.control && !this.controlRoleAllows()) throw new Conflict("Control is read-only on this host");
 		const resumesStoppedRecovery = meta.recoveryStopped === true;
 		this.assertNotContinued(meta);
 		if (typeof message !== "string" || !message.trim()) throw new Error("message is required");
@@ -4653,6 +4692,16 @@ export class SessionManager {
 					...(report ? { reportDelivery: true } : {}),
 					...(resumeHeld ? { resumeHeld: true } : {}),
 				});
+			}
+			if (durable && /^control:(send|redirect):/.test(requestId)) {
+				if (
+					Object.keys(meta.remoteControlCommands ?? {}).length >= 4096 &&
+					!meta.remoteControlCommands?.[requestId]
+				)
+					throw new Conflict("Remote command receipt retention full");
+				(meta.remoteControlCommands ??= {})[requestId] = requestId.startsWith("control:redirect:")
+					? "redirect"
+					: "send";
 			}
 			meta.updatedAt = Date.now();
 			meta.lastUserMessageAt = meta.updatedAt;
@@ -4776,13 +4825,14 @@ export class SessionManager {
 		);
 	}
 
-	async stop(id: string): Promise<StopResponse> {
+	async stop(id: string, durableRequestId?: string): Promise<StopResponse> {
 		const meta = this.require(id);
+		if (durableRequestId && (await this.remoteControlCommand(meta, durableRequestId, "stop"))) return { ok: true };
 		this.assertNotContinued(meta, true);
 		if (this.changingModels.has(id)) throw new Conflict("Session is changing its model or conversation");
 		if (this.closing) throw new Error("pilotd is shutting down");
 		if (this.canRetryStartup(meta)) return this.stopFailedRecovery(meta);
-		if (meta.failure || meta.recoveryStopped) return { ok: true };
+		if (meta.failure || meta.recoveryStopped) return this.remoteStopped(meta, durableRequestId);
 		if (
 			!meta.initializing &&
 			!this.workers.has(id) &&
@@ -4792,7 +4842,7 @@ export class SessionManager {
 			!meta.inputsPaused &&
 			!meta.working
 		)
-			return { ok: true };
+			return this.remoteStopped(meta, durableRequestId);
 		// Stop is allowed for an existing worker, but must not reopen a parked worker during a lease.
 		// A sleep pause needs no admission: persist cancellation now, drain it before recovery on wake.
 		if (!this.workers.has(id) && !this.sleepPause) this.updateGate.assertOpen();
@@ -4818,7 +4868,7 @@ export class SessionManager {
 				? [{ requestId: command.requestId, content: command.content }]
 				: [],
 		);
-		const requestId = randomUUID();
+		const requestId = durableRequestId ?? randomUUID();
 		const automatic = (meta.delegationFenced ? [] : (meta.pending ?? []))
 			.filter(
 				(command) =>
@@ -4828,6 +4878,7 @@ export class SessionManager {
 			)
 			.map((command) => ({ ...command, onlyIfIdle: false }));
 		meta.pending = [{ type: "abort", requestId }, ...automatic];
+		if (durableRequestId) (meta.remoteControlCommands ??= {})[durableRequestId] = "stop";
 		delete meta.inputsPaused;
 		if (meta.preparing) meta.cancelled = true;
 		await this.save(meta);
@@ -4865,8 +4916,14 @@ export class SessionManager {
 	}
 
 	/** Durable queue controls share the app's input outbox and the kernel's inbox mutation line. */
-	async controlInputs(id: string, paused: boolean): Promise<{ delivery: "delivered" | "queued" }> {
+	async controlInputs(
+		id: string,
+		paused: boolean,
+		durableRequestId?: string,
+	): Promise<{ delivery: "delivered" | "queued" }> {
 		const meta = this.require(id);
+		if (durableRequestId && (await this.remoteControlCommand(meta, durableRequestId, paused ? "pause" : "resume")))
+			return { delivery: "queued" };
 		const end = this.updateGate.begin();
 		this.sending.set(id, (this.sending.get(id) ?? 0) + 1);
 		try {
@@ -4880,11 +4937,12 @@ export class SessionManager {
 			const revision = (meta.inputControlRevision ?? 0) + 1;
 			const command: PendingCommand = {
 				type: paused ? "pauseInputs" : "resumeInputs",
-				requestId: randomUUID(),
+				requestId: durableRequestId ?? randomUUID(),
 				revision,
 			};
 			meta.inputControlRevision = revision;
 			meta.inputsPaused = paused;
+			if (durableRequestId) (meta.remoteControlCommands ??= {})[durableRequestId] = paused ? "pause" : "resume";
 			meta.pending ??= [];
 			// Pause precedes waiting inputs. An already-delivering input is resolved on the same kernel line.
 			if (paused) meta.pending.unshift(command);
@@ -4902,6 +4960,30 @@ export class SessionManager {
 			else this.sending.delete(id);
 			end();
 		}
+	}
+	private async remoteControlCommand(
+		meta: SessionMeta,
+		requestId: string,
+		kind: "stop" | "pause" | "resume",
+	): Promise<boolean> {
+		const prior = meta.remoteControlCommands?.[requestId];
+		if (prior) {
+			if (prior !== kind) throw new Conflict("Remote command identity reused");
+			await this.saving.get(meta.id);
+			const disk = JSON.parse(await readFile(join(this.dir(meta.id), "meta.json"), "utf8")) as SessionMeta;
+			if (disk.remoteControlCommands?.[requestId] === kind) return true;
+			delete meta.remoteControlCommands![requestId];
+		}
+		if (Object.keys(meta.remoteControlCommands ?? {}).length >= 4096)
+			throw new Conflict("Remote command receipt retention full");
+		return false;
+	}
+	private async remoteStopped(meta: SessionMeta, requestId?: string): Promise<StopResponse> {
+		if (requestId) {
+			(meta.remoteControlCommands ??= {})[requestId] = "stop";
+			await this.save(meta);
+		}
+		return { ok: true };
 	}
 
 	/** Stop failed recovery without signing in, starting a model, or discarding durable history. */
@@ -6069,6 +6151,7 @@ export class SessionManager {
 		const existing = this.starting.get(id);
 		if (existing) return existing;
 		const meta = this.require(id);
+		if (meta.control && !this.controlRoleAllows()) return Promise.resolve(new Map());
 		if (meta.delegationFenced && !meta.pending?.some((command) => command.type === "abort"))
 			return Promise.resolve(new Map());
 		if (meta.continuedTo || meta.continuationPending || (!admitted && this.changingModels.has(id)))

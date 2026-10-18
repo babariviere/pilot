@@ -29,7 +29,9 @@ db.exec(`
  CREATE TRIGGER IF NOT EXISTS watch_authority_no_delete BEFORE DELETE ON watch_authority BEGIN SELECT RAISE(ABORT,'append only'); END;
 `);
 const events = new WatchEventsDisk(db);
+let legacyFrozen = workerData.frozen === true;
 function prune(now: number): void {
+	if (legacyFrozen) return;
 	db.prepare("DELETE FROM watches WHERE expires_at <= ?").run(now);
 }
 function list(now: number): Watch[] {
@@ -41,6 +43,28 @@ function list(now: number): Watch[] {
 }
 function dispatch(op: string, args: unknown): unknown {
 	const now = Date.now();
+	if (op === "freezeLegacy") {
+		legacyFrozen = true;
+		return;
+	}
+	if (legacyFrozen) {
+		if (["activity", "deadline", "expiry"].includes(op)) return;
+		if (["observe", "transition", "consume"].includes(op)) return 0;
+		if (
+			![
+				"list",
+				"page",
+				"targets",
+				"cursor",
+				"expiry",
+				"dashboard",
+				"close",
+				"authority",
+				"followThroughActive",
+			].includes(op)
+		)
+			throw new Error("Legacy Control watches are frozen");
+	}
 	if (op === "self") return events.setControl(String(args));
 	if (op === "followThrough") {
 		const a = args as { requestId: string; authorizationId: string; sessionId?: string };
