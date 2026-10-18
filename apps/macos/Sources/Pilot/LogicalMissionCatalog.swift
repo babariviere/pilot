@@ -66,9 +66,22 @@ enum LogicalMissionCatalog {
                 provisional.insert(identity(home: task.missionHome, missionId: task.missionId))
             }
             if let logical = dashboard?.logicalMissions {
-                // Presence, including an empty list, supersedes all legacy collections from this source.
+                // A complete published list supersedes legacy collections, even when empty.
                 for row in logical { append(row) }
-                if (dashboard?.totals.logicalMissions ?? logical.count) > logical.count { countKnown = false; truncated = true }
+                let clipped = dashboard?.totals.logicalMissions.map { $0 > logical.count }
+                    ?? (dashboard?.truncated == true)
+                if clipped {
+                    countKnown = false; truncated = true
+                    // The compact dashboard shares its byte budget with chats, watches, etc.
+                    // Missing rows are not deletions. Recover only absent home definitions from
+                    // the full mission feed, never legacy replicas/tasks or a different home.
+                    let published = Set(logical.filter { sameHome($0.mission.home, host) }.map { $0.mission.missionId })
+                    for mission in source.missions where !published.contains(mission.id) {
+                        append(try row(home: host, id: mission.id, title: mission.title, status: mission.status,
+                            done: mission.tasksDone, total: mission.tasksTotal, coordinator: mission.coordinatorSessionId,
+                            provenance: provenance(kind: "canonical", host: host, projectId: mission.projectId)))
+                    }
+                }
                 continue
             }
             let known = Set(source.missions.map(\.id))
