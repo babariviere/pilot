@@ -494,12 +494,15 @@ export interface ControlOperationResult {
 }
 export interface ControlOperationExchangeRequest {
 	peer: OperationHost;
+	/** Omitted means ordinary. The courier drains revocation before ordinary on reconnect. */
+	lane?: "revocation" | "ordinary";
 	/** Resume a bounded outbox scan, including past still-pending operations. */
 	cursor?: string;
 }
 export interface ControlOperationExchangeResponse {
 	bindingId: string;
 	generation: number;
+	lane: "revocation" | "ordinary";
 	operations: ControlDurableOperation[];
 	more: boolean;
 	next?: string;
@@ -559,6 +562,8 @@ export type ControlRemoteMissionTask = ControlDashboardSharedTask;
 export interface ControlRemoteStatusSnapshot {
 	sourceHost: OperationHost;
 	snapshotId: string;
+	/** Durable per-binding capture counter, not mission intent revision or wall-clock order. */
+	revision: number;
 	capturedAt: number;
 	dashboard: ControlDashboardResponse;
 	missionTasks: ControlRemoteMissionTask[];
@@ -576,10 +581,17 @@ export interface ControlRemoteStatusPage {
 export interface ControlRemoteStatusQuery {
 	cursor?: string;
 }
+/** POST /api/control-hosts/:bindingId/status/import. Same baseline CAS on every page of a capture. */
+export interface ControlRemoteStatusImportRequest {
+	page: ControlRemoteStatusPage;
+	expectedPublishedRevision: number;
+}
 /** POST /api/control-hosts/:bindingId/status/import; duplicates return the same durable stage. */
 export interface ControlRemoteStatusImportResponse {
 	snapshotId: string;
 	state: "staged" | "published";
+	/** Home-local publication counter (zero before the first complete publication). */
+	publishedRevision: number;
 	/** Original capture's next cursor. Omitted only after the final page is published. */
 	next?: string;
 }
@@ -649,7 +661,14 @@ export interface ControlHostSyncState {
 	/** Cursor owner, not necessarily event source. */
 	host: OperationHost;
 	events: ControlEventImportCursor;
-	status?: { snapshotId: string; next?: string; state: "staged" | "published"; importedAt: number };
+	status?: {
+		snapshotId: string;
+		revision: number;
+		publishedRevision: number;
+		next?: string;
+		state: "staged" | "published";
+		importedAt: number;
+	};
 	reconciliationRequired: boolean;
 }
 export interface ControlAcceptanceProof {
@@ -774,6 +793,8 @@ export interface ControlHostErrorResponse {
 		| "stale_generation"
 		| "reconciliation_required"
 		| "snapshot_restart_required"
+		| "stale_snapshot"
+		| "snapshot_cas_mismatch"
 		| "not_ready"
 		| "capacity";
 	error: string;

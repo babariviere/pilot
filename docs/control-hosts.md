@@ -140,7 +140,7 @@ already has verified connections to both daemons; it relays immutable data and n
 | --- | --- |
 | GET `/api/control-hosts/:bindingId` on either peer | `ControlHostStateResponse`: persisted configuration/enrollment; home additionally supplies its trusted cutover evidence. Unknown binding is 404, never an implicit enrollment. |
 | PUT `/api/control-hosts/:bindingId/enrollment` on either peer | Local-user `ControlHomeEnrollmentRequest` → durable `ControlHostStateResponse`. On executor this records the only accepted Control home. See enrollment rules below. |
-| POST `/api/control-hosts/:bindingId/exchange` on home | `ControlOperationExchangeRequest {peer,cursor?}` → `ControlOperationExchangeResponse`, up to 16 original envelopes and `more`/`next`. Export durably fences possible transmission. |
+| POST `/api/control-hosts/:bindingId/exchange` on home | `ControlOperationExchangeRequest {peer,cursor?,lane?}` → `ControlOperationExchangeResponse`, up to 16 original envelopes and lane/`more`/`next`. Export durably fences possible transmission. |
 | POST `/api/operations/receipt` on executor | Existing immutable operation receipt lookup, before attempting delivery. |
 | POST `/api/operations` on executor | Existing operation envelope → matching pending/accepted/rejected receipt. |
 | POST `/api/control-hosts/:bindingId/ack` on home | `ControlOperationAcknowledgment {operation,receipt}` → `ControlReceiptAdoptionResponse`; home durably adopts conclusive matching receipt before courier drops ownership. |
@@ -148,7 +148,7 @@ already has verified connections to both daemons; it relays immutable data and n
 | POST `/api/control-hosts/:bindingId/events/import` on home | Original event page; atomically dedupe, stage eligible notice/audit and advance imported cursor. Returns `ControlRemoteEventAcknowledgment` only after durable commit. |
 | POST `/api/control-hosts/:bindingId/events/ack` on executor | That acknowledgment → durably retained `ControlRemoteEventAcknowledgment` floor; validates binding/generation/source and exact through/eventId before retirement. |
 | GET `/api/control-hosts/:bindingId/status?cursor=...` on executor | `ControlRemoteStatusQuery` → `ControlRemoteStatusPage`; omit cursor to capture, otherwise resume that capture. |
-| POST `/api/control-hosts/:bindingId/status/import` on home | Original status page → `ControlRemoteStatusImportResponse` (`staged` with original next, or `published` on the last page); only then replace that host's cached snapshot. |
+| POST `/api/control-hosts/:bindingId/status/import` on home | `ControlRemoteStatusImportRequest {page,expectedPublishedRevision}` → `ControlRemoteStatusImportResponse` (`staged` with original next, or `published` on the last page, plus publishedRevision); only then replace that host's cached snapshot. |
 | POST `/api/control-hosts/:bindingId/archive` on home | Local-user app rollout `ControlArchiveRequest` → `ControlArchiveResponse`; creates the original durable `control.archive` envelope only after verified readiness. Delivery uses the same exchange/receipt/adoption flow. |
 
 Enrollment UI persists the same `ControlHomeEnrollment` on both sides via explicit local-user setup.
@@ -316,8 +316,8 @@ not just the Mac or a cached app version. Capability support alone never hides a
 `ControlHostCutover` records readiness against the exact binding/generation and both host lineages:
 
 1. Both verified hellos support contract v1, agree on home, and home advertises role home.
-   The configured executor may stage its executor policy before its legacy Control is frozen;
-   that staging alone does not suppress or archive the legacy row.
+   Explicitly approved executor policy fences legacy execution before load/recovery; it does not
+   hide or archive the legacy row before end-to-end cutover. See the startup barrier below.
 2. `homeReady` means the authoritative home Control, grant ledger, durable outbox and import stores
    are recovered and usable. `executorEnrolled` requires the same active confirmed enrollment on
    both sides and working registered Control handlers on the executor.
@@ -702,3 +702,157 @@ The UI keys this to operationId/target/host, persists requested across restart a
 acknowledgment from an idle session, cancelled HTTP request or a later snapshot. Acknowledgment is
 durable command admission, not quiescence or permission to reassign. Ordinary legacy native Stop
 still has its documented lost-reply limits and is not retroactively given a durable receipt.
+
+## Source-audit additions: boot fences, consent and courier ordering
+
+### Role/freeze barrier before any recovery
+
+The current boot chain is `sessions.load → ensureControlChat → watchLifecycle.reconcile →
+importLegacyWatchAuthorizations → setWatches(ControlWatchSink)`; audit initialization can also
+start a live Control worker. This order must not be reused unchanged for executor/archived roles.
+
+Required startup contract for the enrollment/role owner and archive-transition owner:
+
+1. Open and recover the durable Control-host role/enrollment/freeze store **before SessionManager
+   load, session recovery scheduling, input admission, watch observation or any callback that can
+   start a Control worker**. Install a process-wide trusted role/roleEpoch admission guard first.
+   Missing, corrupt or uncertain policy fences Control creation/recovery/wakes; never default to
+   home based on platform, SSH configuration or an empty store. Ordinary independent chats may
+   recover when their own safety prerequisites hold.
+2. Load metadata/history for all chats, but executor and archived-control must suppress execution
+   recovery of legacy conversational Controls, queued Control inputs, scheduled wakes and provider
+   dispatch. No `ensureControlChat` singleton allocation/start on those roles. Deferred callbacks,
+   `controlAudit`, audit initialization, diagnostics and read APIs cannot bypass this guard or
+   lazily start a live Control worker. Executor operation audit belongs in its domain journal,
+   not a recovered remote conversation. Read-only archive audit opens preserved storage only.
+3. Before observation/notice delivery, reconcile the durable freeze/removal intents. Executor and
+   archived-control **skip importLegacyWatchAuthorizations** and never install the conversational
+   `ControlWatchSink`. This prevents a restart from reviving old grant authority or notices.
+   Their enrolled remote-watch journal writer is a separate sink, with no conversational wake.
+   Home alone may install its live sink/import, after its own archive/watch reconciliation.
+4. Recovery of already journaled remote control.* handlers is separate from recovery of a Control
+   model turn: reconcile immutable operation/domain IDs under current enrollment/role fences, never
+   replay an arbitrary old Control tool or ask a frozen model to finish an uncertain mutation.
+   Preserve uncertain evidence and block cutover until it is reconciled. Accepted ordinary remote
+   chats continue independently.
+5. The archive operation persists its freeze intent before any asynchronous drain/reconciliation.
+   A crash/restart sees that intent at step 1, not after sessions.load. Final role epoch/archive
+   commit and idempotent watch-removal audit preserve that same fence. Every runtime ingress also
+   checks the guard, so changing a row/filter cannot reactivate a frozen Control.
+
+An explicitly approved executor role therefore freezes conversational execution immediately, even
+if its legacy row remains visible pending end-to-end readiness. Final archive is the last
+non-destructive cutover step; it is not the first execution fence. Native filtering alone is
+insufficient. Staging must not run a second Control while waiting for the one-row UI gate.
+
+Required implementation tests seed an old Control with a recoverable run, queued input, pending and
+already-fired watches, grants and audit, then restart as executor and archived-control. Assert zero
+legacy worker/model starts, zero imported legacy grants, no conversational sink/wakes, preserved
+readable stores, independent ordinary execution, and same-ID remote handler reconciliation. Repeat
+with a crash during freeze and with audit access before ordinary load completes.
+
+### SSH trust is not Control-home consent
+
+Devbox/SSH enrollment confirms transport identity only. Accepting an SSH fingerprint, importing an
+SSH alias, installing the app's public management key or accepting a runtime update is **not**
+approval to select a Control home, stage an executor role/freeze or archive a legacy Control.
+No bootstrap/update code may infer that consent from its own successful setup result.
+
+Native UI obtains a separate explicit structured `enroll` approval naming the pinned home,
+executor, binding/generation, current role epoch and the effect on the legacy Control. Only that
+approved daemon intent can persist the accepted Control home and executor role policy. The
+management public-key pin merely authenticates this later decision; it grants no home authority
+by itself. Updates preserve role, epochs, enrollment and freezes exactly and never silently enroll
+or reapprove. The native pairing task owns the distinct preview/gesture; daemon role enforcement
+owns the durable result.
+
+### No authority downgrade through older operation kinds
+
+Control-originated remote start/send/run/watch/revoke actions **must** use the reserved control.*
+envelopes and their trusted authorization, ceiling, reservation, roleFence and idempotency data.
+The courier may not translate them into naked `chat-create`, `chat-send`, legacy spawn/send/stop
+HTTP calls, or `shared-*` operations to get around a missing Control handler.
+
+Those existing kinds have independent UI/shared-context purposes and carry no Control grant or
+ceiling. They are not a substitute authority container. An accepted Control start may internally
+reuse an idempotent target allocation/input helper, but must retain its original control.* admission,
+target, permission and reservation metadata. Shared-context grants remain additionally mandatory
+where mission placement needs them; possessing one does not authorize arbitrary Control actions.
+An incompatible/missing control.* route leaves the original operation pending or explicitly rejected,
+never retries it under another kind or fresh ID.
+
+### Status revision and publication CAS
+
+`ControlRemoteStatusSnapshot.revision` is a positive, durably reserved, strictly increasing capture
+counter per executor Control binding/generation/source lineage. It survives restarts and is never
+derived from timestamps, role epochs, reconnect counts or mission/task revision. Reserve once per
+new capture; all its pages keep the same revision/snapshotId/capturedAt and frozen content. A new
+capture reserves a new revision even if display facts are unchanged; capture reads themselves do
+not emit invalidations or trigger another capture. It is transport freshness ordering only, not
+canonical task authority.
+
+POST status/import now takes `ControlRemoteStatusImportRequest {page,expectedPublishedRevision}`,
+not a naked page. Home's publication counter starts at 0, persists in the Control-memory cache
+tables, and increments only on complete atomic publication. Read sync-state for the last published
+counter before starting a capture import (0 when no status exists), and persist that same baseline
+with every page of its stage. `ControlRemoteStatusImportResponse.publishedRevision` reports 0/current
+counter while staged and the new counter after publication. Sync-state exposes the staged/last
+capture revision separately from the publication counter.
+
+- Exact repeated pages/imports return the original stage/result without advancing counters.
+- Same snapshotId/revision with different page content is 409 reconciliation-required.
+- A source revision below the published source revision is 409 stale_snapshot, even if capturedAt
+  looks newer. A different snapshot ID cannot reuse a source revision. Do not pick a wall-clock winner.
+- At final-page commit, compare expectedPublishedRevision with the current durable publication
+  counter. If another complete capture won first, return 409 snapshot_cas_mismatch and discard only
+  the superseded incomplete stage. Re-read sync-state and capture/import a current inventory; never
+  rebase an older capture onto a new baseline to overwrite newer data.
+- An ambiguous final import is resolved by sync-state or replay of the exact final request. Retain
+  its original conclusive response so lost acknowledgments do not republish or regress importedAt.
+  A duplicate old response does not mean it is still the currently published snapshot.
+- Snapshot restart/expired-capture handling never resets event cursors, operation IDs, grants or
+  committed task state. New lineage/enrollment starts a separate namespace; it cannot inherit a
+  previous peer's publication counter as authorization.
+
+### Priority lanes, head-of-line behavior and foreign changes
+
+POST exchange accepts `lane:"revocation"|"ordinary"` (omission means ordinary); responses explicitly
+name their lane. Each cursor is scoped to binding/generation/peer/lane and immutable queue ordering.
+It is invalid to use an ordinary cursor on the revocation lane. Both lanes retain the existing
+16-operation/2-MiB page bounds; their combined retained envelopes still share 4096 records/64 MiB.
+No priority path evicts a safety record or changes its immutable envelope.
+
+Revocation lane contains control.revoke, control.unwatch and non-spending control.run stop/pause.
+Other agent actions and app-only archive use ordinary. Native unpair is a separate authenticated
+management fence and takes priority over either lane. On reconnect/invalidation the courier scans
+revocation first and performs receipt lookup before delivery of each original envelope. It need not
+wait for old ordinary pending receipts to reach the revocation lane: cursor paging can pass them.
+Priority does not pretend an offline peer has observed a tombstone.
+
+While a known revocation/removal or role freeze is pending/unknown, park new spend-capable ordinary
+operations for that affected binding/grant/watch/target; unrelated targets/bindings may progress.
+When the scope cannot be determined safely, park that binding rather than guess. Executor admission
+prioritizes durable safety fences and rechecks them after asynchronous preparation, including for
+already admitted but uncommitted work. A full/broken journal reports backpressure and holds ordinary
+work; it never drops a revoke or claims success to free a lane. Removal/revocation does not itself
+kill previously accepted ordinary execution or prove a task seal.
+
+Courier scheduling is bounded and fair across hosts: at most four concurrent HTTP requests, with
+one slot reserved for pending revocation/native safety reconciliation, at most one page request per
+binding/lane at a time, and round-robin ordinary peers. One unavailable host or pending operation
+cannot block another host's receipt/event/status reconciliation. A pending handler does not occupy
+an HTTP request indefinitely: bounded pending receipt reads yield ownership to its daemon journal.
+No tight retry/poll loop is a workaround for a head-of-line blocker. A new invalidation/reconnect
+restarts affected scans; existing pending ownership remains durable. Continuous safety work may
+deliberately hold affected spending, which UI reports as waiting, not failed.
+
+Subscribe to control-hosts.changed on **both** home and every verified executor. Home emits outbox,
+receipts, enrollment/readiness/archive and completed-import status changes for its bindings; executor
+emits events after durable matches and status when its projection can change. Foreign session,
+mission, delegation, replica freshness/proposal/conflict, PR/Linear and role changes invalidate every
+affected Control binding's status, even when no local conversational Control exists. Shared-context
+invalidations remain inputs to the producer; the app does not reinterpret them as complete snapshots.
+Home republishes dashboard.changed after an eligible foreign import updates its merged view.
+Coalesce/dedupe unchanged projections and ack replays, and never emit just because a page was read,
+a capture was reserved or an outbox was scanned. Socket loss recovers by the durable HTTP state,
+not an assumed empty queue. The defined lifecycle/update blockers apply to either lane.

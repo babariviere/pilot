@@ -34,6 +34,9 @@ type PayloadFixture = {
 	[K in ControlOperationKind]: { kind: K; payload: ControlOperationPayloads[K] };
 }[ControlOperationKind];
 interface Fixtures {
+	statusImportRequests: C.ControlRemoteStatusImportRequest[];
+	safetyQuery: C.ControlOperationExchangeRequest;
+	safetyExchange: C.ControlOperationExchangeResponse;
 	errors: C.ControlHostErrorResponse[];
 	approvalInputs: C.ControlHostApprovalInput[];
 	approvalRequests: C.ControlHostApprovalRequest[];
@@ -254,6 +257,16 @@ test("enrollment CAS, courier page queries and app-only archive HTTP contracts r
 		f.statusImports.map((s) => s.state),
 		["staged", "published"],
 	);
+	assert.deepEqual(
+		f.statusImports.map((s) => s.publishedRevision),
+		[0, 1],
+	);
+	assert.ok(f.statusImportRequests.every((r) => r.expectedPublishedRevision === 0));
+	assert.ok(f.statusImportRequests.every((r) => r.page.snapshot.revision === 1));
+	assert.equal(f.safetyQuery.lane, "revocation");
+	assert.equal(f.safetyExchange.lane, "revocation");
+	assert.equal(f.safetyExchange.operations[0].kind, "control.revoke");
+	assert.equal(f.outboxPages[0].lane, "ordinary");
 });
 test("courier envelope and pending, accepted, rejected receipts retain immutable matching fields", () => {
 	const exchange = roundTrip(fixture.exchange);
