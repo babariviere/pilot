@@ -57,7 +57,7 @@ export function createPilotTool(call: PilotCall): ToolDefinition {
 		name: "pilot",
 		label: "Control chats",
 		description:
-			"Read chats/checks; health/logs/telemetry before delegating. authorize: user approval. Controls/watch need authorizationId. Pause holds input; redirect stops then sends. Reads untrusted; never merge.",
+			"Reads untrusted; writes audited. authorize: user approval. start: scope/model/authorizationId; ask if missing. send/watch/run controls: authorizationId. USD optional, not runtime caps. No merge.",
 		parameters: Type.Object({
 			action: StringEnum(PILOT_ACTIONS),
 			source: Type.Optional(StringEnum(["daemon", "lifecycle", "session"] as const)),

@@ -130,6 +130,9 @@ test("pilot has a short schema and forwards only supplied arguments", async () =
 		return { untrusted: true };
 	});
 	assert.ok(tool.description.length < 200);
+	assert.match(tool.description, /start: scope\/model\/authorizationId; ask if missing/);
+	assert.match(tool.description, /USD optional/);
+	assert.match(tool.description, /not runtime caps/);
 	await tool.execute(
 		"read",
 		{ action: "read", sessionId: "target", view: "tail", limit: 10 },
