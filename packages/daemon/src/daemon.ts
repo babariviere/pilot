@@ -214,6 +214,7 @@ const stopControlSharedContext = sharing.onChange(() => {
 const { ControlPilot } = await import("./control-pilot.ts");
 sessions.setPilot(
 	new ControlPilot({
+		host: sharing.host,
 		diagnostics: new ControlDiagnostics({
 			home: config.home,
 			daemonId: hello.daemonId,

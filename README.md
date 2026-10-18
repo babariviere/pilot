@@ -253,6 +253,8 @@ Its shared-context sections include mission-home delegation grants (execution ho
 state and last-known running fact) and enrolled remote-home mission replicas. Committed tasks and
 provisional task proposals stay separate. Replica age is the last mission import, not a connectivity
 check; unknown or disconnected hosts are never inferred to have failed.
+Status lists each logical mission once, with bounded source provenance, even when it is observed through
+multiple replicas. Canonical homes keep same-name missions distinct; replica task rows never invent progress.
 Control records user-turn authorizations for starts, follow-ups and watches, with explicit targets,
 permission levels, follow-up limits and USD reservations. Authorizations can be read and revoked through
 the local API. Existing watch instructions keep their original, narrowly scoped authority.

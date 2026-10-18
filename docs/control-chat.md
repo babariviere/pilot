@@ -155,7 +155,8 @@ codemode runtime; it is not memory exclusively owned by the mirror.
 Only the control profile registers `pilot`. Every IPC call checks the supervised session's current
 role again in pilotd. `status` uses session/project memory, cached Linear previews and a change-driven
 mission snapshot. It never reads SQL or starts/subscribes to a worker from the tool path. Filters apply
-to every resource family. Responses are capped at 24 KB with explicit totals and truncation.
+to execution resources and compatibility lists; the logical mission registry and Next remain global.
+Responses are capped at 24 KB with explicit totals and truncation.
 
 `GET /api/control-chat/dashboard?projectId&missionId` is the local-user equivalent of `pilot status`:
 both call the same synchronous builder. It retains the existing projects/chats/missions/PRs/Linear
@@ -165,6 +166,14 @@ proposals and `next.watches` with their saved instructions. Next is always globa
 requests. Its `total` is the number of active watches before the bounded cache/page limit. Follow-through
 work may extend Next later. Legacy PR readiness is not treated as exact-head check evidence; the
 optional failing-checks provider must use a verified exact-head cache, never trigger a fetch here.
+
+`logicalMissions` is the sole mission collection for new consumers: local canonical missions, authorized
+replicas and shared-task observations merge by canonical home daemon/lineage and mission ID, never title
+or execution host. Canonical definitions win, otherwise the greatest complete contiguous replica sequence
+wins; conflicting equal sequences and incomplete evidence do not invent mission state. Unknown replica
+progress/coordinators stay omitted. Up to 50 rows retain up to 16 provenance entries each, with totals
+before clipping. HTTP and tool details retain the old mission arrays for compatibility; tool text lists
+only logical missions with provenance. See the [projection contract](control-hosts.md#planned-logical-mission-projection).
 
 All lists have at most 100 rows (200 projects, 50 missions) within a shared 24,000-byte response budget.
 Totals precede clipping; `truncated` also covers the bounded watch and mission-attention caches. Linear

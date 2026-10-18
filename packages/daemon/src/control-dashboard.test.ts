@@ -15,7 +15,12 @@ import type {
 	Watch,
 } from "@pilot/protocol";
 import { WebSocket } from "ws";
-import { buildControlDashboard, type ControlDashboardSources } from "./control-dashboard.ts";
+import { createPilotTool } from "../../kernel/src/pilot-tool.ts";
+import {
+	buildControlDashboard,
+	type ControlDashboardSources,
+	type ControlSharedMissionGroup,
+} from "./control-dashboard.ts";
 import { ControlPilot } from "./control-pilot.ts";
 import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
@@ -44,6 +49,28 @@ const watch: Watch = {
 	mode: "once",
 	note: "Read the result and report it",
 };
+const localHost: OperationHost = { hostId: "daemon", daemonId: "local", lineageId: "local-lineage" };
+const replicaHost: OperationHost = { hostId: "daemon", daemonId: "remote", lineageId: "remote-lineage" };
+function replicaGroup(
+	bindingId: string,
+	patch: Partial<NonNullable<ControlSharedMissionGroup["replica"]>> = {},
+): ControlSharedMissionGroup {
+	const replica: NonNullable<ControlSharedMissionGroup["replica"]> = {
+		id: `replica:${bindingId}:m`,
+		bindingId,
+		projectId: "p",
+		missionId: "m",
+		missionHome: replicaHost,
+		title: "Mission",
+		status: "active",
+		complete: true,
+		sequence: 1,
+		consistency: "committed",
+		replicaAgeMs: null,
+		...patch,
+	};
+	return { projectId: replica.projectId, missionId: replica.missionId, replica, tasks: [], tasksTotal: 0 };
+}
 function sharedFixture(t: TestContext) {
 	const store = new MissionStore(":memory:"),
 		authority = new MissionStore(":memory:");
@@ -148,6 +175,7 @@ function fixture(): { sources: ControlDashboardSources; chats: SessionSummary[] 
 	return {
 		chats,
 		sources: {
+			host: localHost,
 			sessions: {
 				list: (query) =>
 					chats.filter(
@@ -295,6 +323,208 @@ test("all lists and Unicode payloads stay within row/byte bounds with pre-clippi
 	])
 		assert.ok(list.length <= 100);
 	assert.ok(data.missions.length <= 50 && data.activeMissions.length <= 50 && data.projects.length <= 200);
+});
+
+test("logical missions collapse canonical, replica and task observations without merging different homes", () => {
+	const { sources } = fixture();
+	sources.missions = () =>
+		[
+			{
+				id: "m",
+				projectId: "p",
+				title: "Mission",
+				status: "archived",
+				tasksDone: 2,
+				tasksTotal: 3,
+				coordinatorSessionId: "lead",
+			},
+		] as Mission[];
+	const copy = replicaGroup("copy", {
+		missionHome: { ...localHost, hostId: "alias" },
+		sequence: 100,
+		title: "Stale replica",
+		status: "active",
+		replicaSyncedAt: 4999,
+	});
+	copy.tasks.push({
+		id: "task",
+		bindingId: "copy",
+		projectId: "p",
+		missionId: "m",
+		missionHome: localHost,
+		source: "replica",
+		consistency: "provisional",
+		status: "done",
+		title: "Not a mission title",
+	});
+	sources.sharedContext = () => [
+		copy,
+		replicaGroup("other"),
+		replicaGroup("alias", { missionHome: { ...replicaHost, hostId: "alias" } }),
+		replicaGroup("lineage", { missionHome: { ...replicaHost, lineageId: "other-lineage" } }),
+	];
+	const data = buildControlDashboard(sources, {}, 5000);
+	assert.equal(data.totals.logicalMissions, 3);
+	assert.equal(data.logicalMissions!.length, 3);
+	const [canonical, other, lineage] = data.logicalMissions!;
+	assert.equal(canonical!.id, JSON.stringify([localHost.daemonId, localHost.lineageId, "m"]));
+	assert.deepEqual(canonical!.mission, { home: localHost, missionId: "m" });
+	assert.equal(canonical!.title, "Mission");
+	assert.equal(canonical!.status, "archived", "canonical committed state beats even a later replica sequence");
+	assert.equal(canonical!.tasksDone, 2);
+	assert.equal(canonical!.tasksTotal, 3);
+	assert.deepEqual(canonical!.coordinator, { host: localHost, sessionId: "lead" });
+	assert.deepEqual(
+		canonical!.provenance.map((p) => p.kind),
+		["canonical", "replica"],
+	);
+	assert.ok(
+		canonical!.provenance.every((p) => p.sourceHost === localHost),
+		"provenance identifies the verified observer, not execution/home guesses",
+	);
+	assert.equal(other!.title, "Mission");
+	assert.equal(other!.provenance.length, 2);
+	assert.notEqual(other!.id, lineage!.id);
+	assert.equal(other!.tasksTotal, undefined, "replica task counts are not mission progress");
+	assert.equal(other!.coordinator, undefined, "observer/executor is not a fallback coordinator");
+	assert.equal(data.missions.length, 1);
+	assert.equal(data.replicaMissions.length, 4, "compatibility arrays stay intact");
+	assert.deepEqual(
+		buildControlDashboard(sources, { projectId: "q" }, 5000).logicalMissions,
+		data.logicalMissions,
+		"resource filters do not partition the logical mission registry",
+	);
+	assert.deepEqual(buildControlDashboard(sources, { missionId: "m" }, 5000).logicalMissions, data.logicalMissions);
+});
+
+test("logical replica precedence uses complete contiguous sequences, not time or observation order", () => {
+	const { sources } = fixture();
+	sources.missions = () => [];
+	const groups = [
+		replicaGroup("old", { sequence: 2, title: "Old", replicaSyncedAt: 4999 }),
+		replicaGroup("latest", { sequence: 5, title: "Latest", status: "done", replicaSyncedAt: 1000 }),
+		replicaGroup("incomplete", {
+			sequence: 100,
+			title: "Unusable",
+			status: "active",
+			complete: false,
+			replicaSyncedAt: 5000,
+		}),
+	];
+	sources.sharedContext = () => groups;
+	let result = buildControlDashboard(sources, {}, 5000).logicalMissions![0]!;
+	assert.equal(result.title, "Latest");
+	assert.equal(result.status, "done");
+	assert.equal(result.tasksDone, undefined);
+	assert.equal(result.tasksTotal, undefined);
+	assert.equal(result.provenance.find((p) => p.bindingId === "latest")!.replicaAgeMs, 4000);
+	groups.reverse();
+	result = buildControlDashboard(sources, {}, 5000).logicalMissions![0]!;
+	assert.equal(result.title, "Latest");
+	assert.equal(result.status, "done");
+	groups.push(replicaGroup("conflict", { sequence: 5, title: "Conflicting", status: "active" }));
+	result = buildControlDashboard(sources, {}, 5000).logicalMissions![0]!;
+	assert.equal(result.title, undefined, "equal-sequence conflict cannot invent a winning definition");
+	assert.equal(result.status, undefined);
+	assert.equal(result.provenance.filter((p) => p.sequence === 5).length, 2);
+	groups.push(replicaGroup("resolved", { sequence: 6, title: "Resolved", status: "archived" }));
+	result = buildControlDashboard(sources, {}, 5000).logicalMissions![0]!;
+	assert.equal(result.title, "Resolved");
+	assert.equal(result.status, "archived");
+});
+
+test("incomplete and task-only mission evidence does not invent definitions, progress or age", () => {
+	const { sources } = fixture();
+	sources.missions = () => [];
+	const incomplete = replicaGroup("incomplete", { complete: false, title: "Untrusted partial title" });
+	const taskOnly: ControlSharedMissionGroup = {
+		projectId: "p",
+		missionId: "task-only",
+		tasksTotal: 1000,
+		tasks: [
+			{
+				id: "proposal",
+				bindingId: "legacy",
+				projectId: "p",
+				missionId: "task-only",
+				missionHome: replicaHost,
+				source: "replica",
+				consistency: "provisional",
+				status: "done",
+				title: "Task title",
+				replicaAgeMs: 0,
+			},
+		],
+	};
+	const homeTask: ControlSharedMissionGroup = {
+		projectId: "p",
+		missionId: "home-task",
+		tasksTotal: 1,
+		tasks: [
+			{
+				id: "grant",
+				bindingId: "grant-binding",
+				projectId: "p",
+				missionId: "home-task",
+				missionHome: localHost,
+				source: "mission-home",
+				consistency: "committed",
+				executionHost: replicaHost,
+			},
+		],
+	};
+	sources.sharedContext = () => [incomplete, taskOnly, homeTask];
+	const data = buildControlDashboard(sources);
+	assert.equal(data.totals.logicalMissions, 3);
+	for (const mission of data.logicalMissions!) {
+		assert.equal(mission.title, undefined);
+		assert.equal(mission.status, undefined);
+		assert.equal(mission.tasksDone, undefined);
+		assert.equal(mission.tasksTotal, undefined);
+		assert.equal(mission.coordinator, undefined);
+		assert.ok(mission.provenance.every((p) => p.replicaAgeMs === undefined));
+	}
+	assert.equal(data.logicalMissions![2]!.provenance[0]!.kind, "canonical");
+	assert.deepEqual(data.logicalMissions![2]!.mission.home, localHost);
+	// Old in-process consumers without a verified producer retain the legacy wire form, never a guessed home.
+	sources.host = undefined;
+	assert.equal(buildControlDashboard(sources).logicalMissions, undefined);
+});
+
+test("logical mission merging precedes row/provenance clipping and counts identities once", () => {
+	const { sources } = fixture();
+	sources.missions = () => [];
+	const groups = Array.from({ length: 16 }, (_, i) => replicaGroup(`binding-${i}`, { sequence: i }));
+	sources.sharedContext = () => groups;
+	let data = buildControlDashboard(sources);
+	assert.equal(data.truncated, false);
+	assert.equal(data.logicalMissions![0]!.provenance.length, 16);
+	groups.push(replicaGroup("binding-16", { sequence: 16, title: "After provenance cap" }));
+	data = buildControlDashboard(sources);
+	assert.equal(data.truncated, true);
+	assert.equal(data.logicalMissions![0]!.provenance.length, 16);
+	assert.equal(data.logicalMissions![0]!.title, "After provenance cap");
+	assert.ok(
+		data.logicalMissions![0]!.provenance.some((p) => p.sequence === 16),
+		"winning definition evidence survives clipping",
+	);
+	groups.splice(
+		0,
+		groups.length,
+		...Array.from({ length: 70 }, (_, i) => replicaGroup(`b-${i}`, { missionId: `m${i}` })),
+	);
+	groups.push(replicaGroup("last", { missionId: "m0", sequence: 100, title: "😀".repeat(1000) }));
+	data = buildControlDashboard(sources);
+	assert.equal(data.totals.logicalMissions, 70);
+	assert.ok(data.logicalMissions!.length <= 50);
+	assert.equal(data.logicalMissions![0]!.title, "😀".repeat(80));
+	assert.equal(
+		data.logicalMissions![0]!.provenance.length,
+		2,
+		"observations past the compatibility row cap still merge",
+	);
+	assert.equal(data.truncated, true);
+	assert.ok(Buffer.byteLength(JSON.stringify(data)) <= 24_000);
 });
 
 test("mission attention cache reads thin bounded rows, excludes resolved proposals and updates on changes", async (t) => {
@@ -514,7 +744,7 @@ test("shared-context projections stay thin and bounded before dashboard byte cli
 	for (let i = 0; i < 6; i++) {
 		chats[0]!.title += " streaming append";
 		for (const variant of i % 2 ? [1, 0] : [0, 1]) {
-			sources.sharedContext = variant ? () => cache : undefined;
+			sources.host = variant ? host : undefined;
 			const start = performance.now();
 			buildControlDashboard(sources);
 			if (i) samples[variant]!.push(performance.now() - start);
@@ -522,7 +752,7 @@ test("shared-context projections stay thin and bounded before dashboard byte cli
 	}
 	const median = (values: number[]) => values.sort((a, b) => a - b)[2]!.toFixed(2);
 	t.diagnostic(
-		`10,000 working-chat snapshot median: existing ${median(samples[0]!)} ms; shared-context ${median(samples[1]!)} ms (synthetic appends, 5 alternating samples)`,
+		`10,000 working-chat snapshot median: legacy projection ${median(samples[0]!)} ms; logical projection ${median(samples[1]!)} ms (same cached shared inputs, synthetic appends, 5 alternating samples)`,
 	);
 });
 
@@ -544,6 +774,7 @@ test("HTTP and pilot status agree on the identical fixture; bad params are 400 a
 		throw new Error("Creating control forbidden");
 	});
 	const service = new ControlPilot({ ...sources, sessions, isControl: (id) => id === "control" });
+	const tool = createPilotTool(async (action, args) => (await service.call("control", action, args)) as never);
 	sessions.setPilot(service);
 	const server = createDaemonServer(
 		{ home, host: "127.0.0.1", port: 0 },
@@ -571,10 +802,22 @@ test("HTTP and pilot status agree on the identical fixture; bad params are 400 a
 	] as Record<string, string>[]) {
 		const response = await fetch(`${base}?${new URLSearchParams(args)}`);
 		assert.equal(response.status, 200);
-		assert.deepEqual(
-			await response.json(),
-			JSON.parse(JSON.stringify(await service.call("control", "status", args))),
-		);
+		const http = await response.json();
+		assert.deepEqual(http, JSON.parse(JSON.stringify(await service.call("control", "status", args))));
+		const result = await tool.execute("status", { action: "status", ...args }, undefined, undefined, {} as never);
+		assert.deepEqual(JSON.parse(JSON.stringify(result.details)), http);
+		const text = JSON.parse((result.content[0] as { text: string }).text);
+		assert.deepEqual(text.logicalMissions, http.logicalMissions);
+		assert.equal(text.totals.logicalMissions, http.totals.logicalMissions);
+		for (const key of ["missions", "activeMissions", "replicaMissions"]) {
+			assert.equal(
+				text[key],
+				undefined,
+				"pilot status text lists logical missions only, not compatibility collections",
+			);
+			assert.equal(text.totals[key], undefined);
+		}
+		assert.ok(Buffer.byteLength(JSON.stringify(http)) <= 24_000);
 	}
 	for (const query of [
 		"limit=0",
