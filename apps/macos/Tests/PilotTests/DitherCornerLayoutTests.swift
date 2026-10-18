@@ -90,18 +90,24 @@ private struct InboxGutterFixture: View {
     let decorated: Bool
     let highlighted: Bool
     let height: CGFloat
+    var home = false
+
+    private var label: some View {
+        HoverRow(verticalPadding: 7) { _ in
+            InboxRowLabel(title: "") {
+                Color.clear.frame(height: 10)
+            } trailing: {
+                // A marker in the actual action slot lets the test measure its trailing inset, without
+                // depending on text rasterization or SF Symbol metrics on a particular macOS release.
+                Color.red.frame(width: 8, height: 8)
+            }
+        }
+    }
 
     private var row: some View {
         Button {} label: {
-            HoverRow(verticalPadding: 7) { _ in
-                InboxRowLabel(title: "") {
-                    Color.clear.frame(height: 10)
-                } trailing: {
-                    // A marker in the actual action slot lets the test measure its trailing inset, without
-                    // depending on text rasterization or SF Symbol metrics on a particular macOS release.
-                    Color.red.frame(width: 8, height: 8)
-                }
-            }
+            // Home decorates its button label; Inbox decorates outside the button and keyboard selection.
+            if decorated, home { label.inboxCorner(nil) } else { label }
         }
         .rowButtonStyle()
         .frame(height: height)
@@ -110,18 +116,19 @@ private struct InboxGutterFixture: View {
     }
 
     var body: some View {
-        if decorated { row.inboxCorner(nil) } else { row }
+        if decorated, !home { row.inboxCorner(nil) } else { row }
     }
 }
 
-@Test @MainActor func inboxGutterStaysInsideSelectionAndDoesNotMoveActionsOnHighlight() throws {
+@Test(arguments: [false, true]) @MainActor
+func inboxAndHomeGutterStaysInsideSelectionAndDoesNotMoveTrailingContent(home: Bool) throws {
     let width = 280
     let margin = 12
     for height in [40, 64] {
         for decorated in [false, true] {
             for highlighted in [false, true] {
                 let renderer = ImageRenderer(content: InboxGutterFixture(decorated: decorated, highlighted: highlighted,
-                                                                         height: CGFloat(height))
+                                                                         height: CGFloat(height), home: home)
                     .frame(width: CGFloat(width)).padding(CGFloat(margin)).environment(\.colorScheme, .light))
                 let image = try #require(renderer.cgImage)
                 #expect(image.width == width + 2 * margin)

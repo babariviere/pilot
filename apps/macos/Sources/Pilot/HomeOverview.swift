@@ -322,7 +322,7 @@ struct HomeOverview: View {
                     }
                 }
             }
-            .homeCorner(row.signal)
+            .inboxCorner(row.signal)
         }
         .rowButtonStyle()
         .help("Open \(row.project.name) Overview")
@@ -363,7 +363,7 @@ struct HomeOverview: View {
                     }
                 }
             }
-            .homeCorner(.working)
+            .inboxCorner(.working)
         }
         .rowButtonStyle()
         .accessibilityLabel([session.title, RemoteChatBadgeText(context: owner)?.accessibilityLabel, project, mission, "working"].compactMap { $0 }.joined(separator: ", "))
@@ -425,7 +425,7 @@ struct HomeOverview: View {
                 }
             }
         }
-        .homeCorner(signal)
+        .inboxCorner(signal)
         .keyboardListItem("mission:" + (context?.ref(.mission, mission.id).storageKey ?? mission.id)) {
             app.openMission(mission.id, context: owner)
         }
@@ -549,12 +549,5 @@ struct SubscriptionUsageBars: View {
             return "extra usage " + (extra.cap.map { "\(extra.spent) of \($0)" } ?? extra.spent) + " spent"
         }
         return "\(usage.providerLabel) subscription: " + windows.joined(separator: ", ") + (stale ? ", not recent" : "")
-    }
-}
-
-private extension View {
-    /// The sidebar's dithered status corner on a Home row, with trailing room so text stays off its densest cells.
-    func homeCorner(_ signal: SessionSignal?) -> some View {
-        padding(.trailing, 24).ditherCorner(signal)
     }
 }

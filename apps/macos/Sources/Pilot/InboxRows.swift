@@ -2,7 +2,7 @@ import AppKit
 import PilotCore
 import SwiftUI
 
-// Rows and helpers shared by the Inbox and a project's Overview. They name the project only when a list mixes
+// Rows and helpers shared by the Inbox, Home and a project's Overview. They name the project only when a list mixes
 // projects, read like the chat's sidebar row on their second line, and carry the sidebar's dithered corner.
 
 extension View {
