@@ -12,6 +12,7 @@ struct RepositoryChooser: View {
     @State private var entries: [RepositoryDirectory] = []
     @State private var busy = false
     @State private var error: String?
+    @State private var importing = false
 
     var body: some View {
         SheetScaffold("Choose repository", subtitle: HostViewContext(host: host, hosts: hosts).name,
@@ -38,8 +39,13 @@ struct RepositoryChooser: View {
                 if busy { ProgressView().controlSize(.small) }
                 if let error { InlineProblem(error) }
             }
+        } footerLeading: {
+            Button("Import from GitHub…") { importing = true }.controlSize(.small)
         }
         .task(id: "\(selection.rootId):\(selection.path)") { await load() }
+        .sheet(isPresented: $importing) {
+            GitHubImportContent(host: host, hosts: hosts, initialURL: "") { project in importing = false; selected(project) }
+        }
     }
 
     private func choose() {

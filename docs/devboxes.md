@@ -94,6 +94,50 @@ verified system SSH (or the local user's filesystem for Local). It is not a GitH
 is never exposed to agent tools, queued inputs or permission grants inferred from chat messages.
 As with existing SSH setup, this assumes a dedicated personal host, not hostile same-user processes.
 
+## Import a GitHub project onto a host
+
+Use **File → Import GitHub Project**, the sidebar's project menu, or **Import from GitHub** in a
+devbox's repository chooser. Select **Local** or a saved devbox. The destination, clone, independent
+GitHub login and resulting project all belong to that host. The existing **Add Project** local-folder
+workflow is unchanged. A local project's **Set up on devbox** action resolves its GitHub remote URL
+and preselects a saved devbox. It does not copy local files, uncommitted changes or unpushed commits.
+
+**Load repositories** lists up to 300 recently updated accessible GitHub.com repositories. Search
+filters that bounded inventory; paste a credential-free HTTPS or `git@github.com:owner/repo.git` URL
+for others. If access is missing, **Connect GitHub** opens the same independent host setup helper.
+Both CLI/API and dedicated SSH identity are checked before cloning, with a live repository-access
+probe. Repository-specific push, PR and organization SSO permissions still apply.
+
+The reusable destination pattern defaults to **`~/src/{host}/{owner}/{repo}`**, for example
+`~/src/github.com/babariviere/pilot`. `{host}` is the **Git server hostname**, not the execution
+devbox name. `~` is resolved only on the selected execution host. Edit the destination or choose a
+parent folder on that host, then **Check destination** to review its fully resolved path before
+**Clone and add project** is enabled. Changing the URL or destination invalidates that preview.
+Substituted components are validated, with no shell/environment expansion, traversal or symlink
+parents. Missing parent folders are created privately at execution time, not during preview.
+This naming policy does not add non-GitHub authorization or GitHub Enterprise support.
+
+Clone reserves a new directory exclusively and never replaces even an empty unrelated destination.
+A matching existing standalone checkout is only registered after **Review existing checkout** and
+explicit **Use this checkout** confirmation. Its directory identity, HEAD and credential-free origin
+are checked again. Worktrees with redirected `.git` files, symlinked destinations and unrelated
+origins fail closed. Reuse does not reset files, change authentication/configuration, fetch or run setup.
+
+Fresh clones disable hooks and inherited Git checkout filters, use empty templates, and do not
+initialize submodules or execute repository setup/configuration. Adding/opening the project does
+not grant project trust or link/share memory, tasks or other context. Those retain their own
+existing confirmation flows.
+
+Host-owned import records survive app disconnection/relaunch and daemon restart. Refresh on the
+same saved host before acting on an uncertain start. **Retry original start** uses only its original
+operation ID, URL and resolved destination, never a newer draft or Local. Registration is reconciled
+against the existing host project, so a lost response does not create a second project. A restart
+requires an explicit resume, not automatic clone replay. An interrupted nonempty checkout is kept
+for inspection and explicit reuse, not force-checked-out again. Cancellation is only confirmed after
+the child process exits; partial directories remain for inspection, never silently deleted.
+At most two imports run concurrently, commands/output are bounded, and active imports block a
+runtime update until clone, registration and journal writes settle.
+
 ## Connection loss, sleep and quit
 
 **Disconnected** describes availability, not the agent's outcome. Known remote chats, drafts and

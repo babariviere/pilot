@@ -40,6 +40,8 @@ the packaged update runs after React publication, so a leaked helper must still 
 | --- | --- |
 | Capability-based setup, dnf plans, unavailable signing/assets, archive substitution | `scripts/linux/contracts.test.mjs`, `test_ssh_bootstrap.py`; `RemoteSetupTests`, `DevboxSettingsModelTests` |
 | Independent provider setup, unsupported flows, cancellation/redaction | `setup.test.ts`, `setup-provider.test.ts`; `DevboxProviderModelTests` |
+| Independent GitHub browser/key approval, ambiguous upload, identity mismatch, cancellation and transport isolation | `github-setup.test.ts`; `GitHubSetupModelTests`, mounted key-approval interaction in `DevboxSettingsInteractionTests` |
+| Git server destination pattern, selected-host tilde preview, clone/reuse safety, cancelled/lost registration and no checkout filters | `github-import.test.ts`; `GitHubImportModelTests`, mounted reuse-confirmation interaction in `DevboxSettingsInteractionTests` |
 | Colliding IDs, drafts, feeds, subscriptions, caches/exports and host replacement | `HostRoutingTests`, `HostClientsTests`, `HostDraftMigrationTests`, `HostSubscriptionTests`, `QualifiedNativeTests`, artifact tests |
 | Disconnect/offline relaunch, local-only sleep/quit control, Stop requested vs acknowledged | `OfflineHostsTests`, `RemoteLifecycleTests`, `RemoteOperationRecoveryTests`; packaged forward closure/logout checks |
 | Lost acceptance/receipt, immutable explicit retry, target/lineage mismatch | `operation-journal.test.ts`, `operation-admission.test.ts`, `RemoteOperationRecoveryTests`; packaged attached create/receipt replay |

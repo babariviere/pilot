@@ -13,6 +13,7 @@ import { ControlDiagnostics } from "./control-diagnostics.ts";
 import { CredentialBroker } from "./credential-broker.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import { daemonPerformance, EventLoopWatchdog } from "./event-loop-watchdog.ts";
+import { GitHubImportService } from "./github-import.ts";
 import { GitHubSetupService } from "./github-setup.ts";
 import { daemonHello } from "./hello.ts";
 import { createLinearSizePoller } from "./linear-size.ts";
@@ -339,6 +340,7 @@ const githubSetup = new GitHubSetupService(config.home, {
 await githubSetup.status().catch(() => {
 	console.warn("pilotd: GitHub setup unavailable; private storage needs attention");
 });
+const githubImport = new GitHubImportService(githubSetup, projects);
 const scheduleStore = new ScheduleStore(join(config.home, "schedules.sqlite"));
 const schedules = new ScheduleService(scheduleStore, {
 	sessions,
@@ -379,6 +381,7 @@ const server = createDaemonServer(
 	watches,
 	telemetry,
 	githubSetup,
+	githubImport,
 );
 server.listen(config.port, config.host, () => {
 	console.log(`pilotd listening on http://${config.host}:${config.port} (data: ${config.home})`);
@@ -412,6 +415,7 @@ async function stop(): Promise<void> {
 	await missionService.compaction.stop();
 	await watchLifecycle.stop();
 	watches.bindRemovalAudit(undefined);
+	await githubImport.close();
 	await Promise.all([setup.close(), githubSetup.close(), terminals.shutdown(), sessions.shutdown()]);
 	await credentials.close();
 	stopSlackCompletions();

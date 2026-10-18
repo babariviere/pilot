@@ -91,6 +91,13 @@ struct MainWindow: View {
             .keyboardRegion(.content)
         }
         .overlay(alignment: .bottom) { KeyboardSequenceHint(focus: model.keyboard, model: model) }
+        .sheet(isPresented: $model.githubImportPresented) {
+            GitHubImportSheet(hosts: hosts, localHost: model.localHost, initialURL: model.githubImportURL,
+                initialHost: model.githubImportHost) { project in
+                    model.githubImportPresented = false
+                    model.openProject(project.value.id, context: HostViewContext(host: project.ref.host, hosts: hosts))
+                }
+        }
         .environment(\.keyboardFocus, model.keyboard)
         .environment(\.hostViewContext, model.localHost.map { HostViewContext(host: $0, hosts: hosts) })
         .environment(\.repositoryPollingVisible, repositoryPollingVisible)

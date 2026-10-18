@@ -141,6 +141,9 @@ unzip it and move `Pilot.app` to Applications.
   (normally `~/.pi/agent`), including provider authentication.
 - For a devbox, **Settings → Devboxes → GitHub** provides independent browser authorization and explicitly
   approved dedicated-key setup. Tokens and private keys stay remote. See [devbox setup](docs/devboxes.md).
+- **File → Import GitHub Project** clones directly onto Local or a chosen devbox, previews an editable
+  `~/src/github.com/owner/repo` destination and adds the host-qualified project. Local projects can use
+  **Set up on devbox** with their GitHub remote URL, without copying local changes or sharing context.
 - Install and authenticate [GitHub CLI](https://cli.github.com) (`gh auth login`) if you want agents to create
   pull requests or Pilot to monitor them.
 - Install [Jujutsu](https://jj-vcs.github.io/jj/) **0.46+** and **Git 2.42+** for shared, isolated jj workspaces.

@@ -91,6 +91,73 @@ func githubKeySheetRequiresNativeConfirmationAndCancelDoesNotRegister() async th
     #expect(approvals == 1)
 }
 
+@Test(.timeLimit(.minutes(1))) @MainActor
+func githubExistingCheckoutRequiresExplicitNativeReuseConfirmation() async throws {
+    _ = NSApplication.shared
+    let value = try JSONDecoder().decode(GitHubImportOperation.self, from: Data("""
+    {"id":"fixture","url":"https://github.com/owner/repo","destination":"/remote/src/github.com/owner/repo","phase":"confirm_existing"}
+    """.utf8))
+    var confirmations = 0, cancellations = 0
+    let hosting = NSHostingView(rootView: GitHubReuseSheet(value: value, cancel: { cancellations += 1 }, confirm: { confirmations += 1 }))
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 340),
+        styleMask: [.titled, .closable], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false; window.contentView = hosting
+    window.setFrameOrigin(NSPoint(x: -10000, y: -10000)); window.orderFrontRegardless()
+    defer { window.close() }
+    try await devboxSettingsWait("Existing checkout confirmation did not mount", in: hosting) {
+        devboxSettingsControls(in: hosting, of: NSButton.self).count == 2
+    }
+    #expect(confirmations == 0)
+    let (cancel, confirm) = try devboxSettingsFooter(in: hosting)
+    try devboxSettingsClick(cancel)
+    #expect(cancellations == 1 && confirmations == 0)
+    try devboxSettingsClick(confirm)
+    #expect(confirmations == 1)
+}
+
+@Test(.timeLimit(.minutes(1))) @MainActor
+func githubImportNativeCloneActionStaysDisabledUntilHostDestinationPreview() async throws {
+    _ = NSApplication.shared
+    let host = HostRef(hostId: "fixture-box", daemonId: "d", lineageId: "l")
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let hosts = HostClients(operationDirectory: directory)
+    let preview = try JSONDecoder().decode(GitHubImportPreview.self, from: Data("""
+    {"destination":"~/src/github.com/owner/repo","resolvedDestination":"/remote/src/github.com/owner/repo"}
+    """.utf8))
+    var starts = 0
+    let actions = GitHubImportActions(available: { $0 == host }, repositories: { _ in
+        try JSONDecoder().decode(GitHubRepositoryChoices.self, from: Data("{\"repositories\":[],\"truncated\":false}".utf8))
+    }, operations: { _ in [] }, preview: { target, _, _ in #expect(target == host); return preview },
+        start: { target, request in
+            #expect(target == host && request.destination == preview.resolvedDestination)
+            starts += 1
+            return try JSONDecoder().decode(GitHubImportOperation.self, from: Data("""
+            {"id":"\(request.id)","url":"\(request.url)","destination":"\(request.destination)","phase":"done","projectId":"project"}
+            """.utf8))
+        }, act: { _, _, _ in throw CancellationError() }, project: { _, _ in throw CancellationError() })
+    let model = GitHubImportModel(host: host, actions: actions, initialURL: "https://github.com/owner/repo")
+    let hosting = NSHostingView(rootView: GitHubImportContent(host: host, hosts: hosts, initialURL: model.url, model: model) { _ in })
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 660, height: 900),
+        styleMask: [.titled, .closable], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false; window.contentView = hosting
+    window.setFrameOrigin(NSPoint(x: -10000, y: -10000)); window.orderFrontRegardless()
+    defer { window.close() }
+    try await devboxSettingsWait("GitHub import form did not mount", in: hosting) {
+        !model.busy && devboxSettingsControls(in: hosting, of: NSTextField.self).filter(\.isEditable).count >= 3
+    }
+    let (_, initialClone) = try devboxSettingsFooter(in: hosting)
+    #expect(!initialClone.isEnabled && starts == 0)
+    await model.checkDestination()
+    try await devboxSettingsWait("Clone did not enable after the selected host's preview", in: hosting) {
+        devboxSettingsControls(in: hosting, of: NSButton.self).contains { $0.isEnabled && $0 === initialClone }
+    }
+    let (_, clone) = try devboxSettingsFooter(in: hosting)
+    try devboxSettingsClick(clone)
+    try await devboxSettingsWait("Native clone action did not reach the host-bound model", in: hosting) { starts == 1 }
+    #expect(starts == 1)
+}
+
 @MainActor private func devboxSettingsWait(_ message: String, in content: NSView,
                                           until ready: () -> Bool) async throws {
     let deadline = Date().addingTimeInterval(10)

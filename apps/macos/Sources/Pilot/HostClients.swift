@@ -428,6 +428,15 @@ final class HostClients: ObservableObject {
         return Hosted(ref: HostResourceRef(host: host, kind: .project, localId: project.id), value: project)
     }
 
+    func importedProject(on host: HostRef, id: String) async throws -> Hosted<Project> {
+        let client = try endpoint(host), fence = try token(for: host)
+        let project = try await client.importedProject(id)
+        try validate(fence)
+        guard project.id == id, let entry = entries[host] else { throw HostRoutingError.invalidReference }
+        refresh(host, token: entry.token)
+        return Hosted(ref: HostResourceRef(host: host, kind: .project, localId: id), value: project)
+    }
+
     func file(_ session: HostResourceRef, path: String) async throws -> SessionFileContent {
         try await perform(session, kind: .session) { client, id in try await client.file(id, path: path) }
     }
