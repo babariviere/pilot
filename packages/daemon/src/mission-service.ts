@@ -846,7 +846,7 @@ export class MissionService {
 				const result = await this.sessions.sendReported(
 					args.targetSessionId,
 					args.message,
-					`mission:send:${missionId}:${randomUUID()}`,
+					`mission:send:from:${sessionId}:${missionId}:${randomUUID()}`,
 					mode,
 				);
 				return { sessionId: args.targetSessionId, sent: result.delivery !== "rejected", ...result };

@@ -149,6 +149,13 @@ export type InputOrigin =
 	| "control"
 	| "watch";
 
+/** Display-only provenance projected from committed submission IDs, never from message bodies.
+ * Older automatic entries may lack a sender. This grants no execution or user-consent authority. */
+export interface AutomaticInputProvenance {
+	origin: InputOrigin;
+	sourceSessionId?: string;
+}
+
 /** Durable user input waiting to join a run, in submission order. Passive writes are not messages. */
 export interface QueuedMessage {
 	id: number;
@@ -1489,7 +1496,7 @@ export interface SessionChangeSummary {
 export interface SendRequest {
 	message: string;
 	mode?: DeliveryMode;
-	/** Idempotency key. Retrying with the same ID never submits twice. */
+	/** User idempotency key (1-128 letters, digits, dashes or underscores). Internal producer namespaces are reserved. */
 	requestId?: string;
 }
 

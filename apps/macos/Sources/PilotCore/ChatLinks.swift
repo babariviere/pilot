@@ -39,6 +39,9 @@ public struct ChatLinkIndex: Sendable {
             case let .user(rowId, value, _), let .text(rowId, value, _), let .automatic(rowId, value, _, _):
                 id = rowId
                 text = value
+            case let .event(event) where event.kind == "coordinator_message":
+                id = event.id
+                text = event.detail ?? ""
             default: continue
             }
             let scan = scans[id].flatMap { $0.text == text ? $0 : nil } ?? Scan(text: text, found: ChatLinks.mentions(in: text))

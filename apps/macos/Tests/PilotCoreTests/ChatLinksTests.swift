@@ -54,5 +54,8 @@ import Testing
     rows[3] = .text(id: "a1", text: "Working on https://two.example")
     rows.append(.automatic(id: "m1", text: "From mission: https://three.example", origin: .extension))
     #expect(index.links(in: rows).map(\.url) == ["https://three.example", "https://two.example", "https://one.example"])
+    rows.append(.event(.automatic(id: "c1", text: "See https://four.example", origin: .coordinator,
+                                  sourceSessionId: "source-chat")))
+    #expect(index.links(in: rows).map(\.url) == ["https://four.example", "https://three.example", "https://two.example", "https://one.example"])
     #expect(index.links(in: Array(rows.prefix(1))).map(\.url) == ["https://one.example"])
 }

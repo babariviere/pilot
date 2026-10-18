@@ -1,7 +1,7 @@
 /** Which pi.user entries were automatic input rather than typed by the user, from their submission request IDs. */
 import type { Context } from "@earendil-works/chord";
 import type { ConversationId, Cursor, EntryRecord, Storage } from "@earendil-works/pi-durable";
-import type { AgentEvent, InputOrigin } from "@pilot/protocol";
+import type { AgentEvent, AutomaticInputProvenance, InputOrigin } from "@pilot/protocol";
 
 const PREFIXES: [string, InputOrigin | "user"][] = [
 	["native:user:", "user"],
@@ -30,6 +30,7 @@ export function inputOrigin(requestId: string | undefined): InputOrigin | undefi
  */
 export class InputOrigins {
 	readonly #origins = new Map<number, InputOrigin>();
+	readonly #sources = new Map<number, string>();
 	readonly #known = new Set<number>();
 	#scanning?: Promise<void>;
 	readonly #storage: Pick<Storage, "scanSubmissions">;
@@ -55,9 +56,16 @@ export class InputOrigins {
 				for (const submission of page.items) {
 					if (submission.type !== "input" || submission.entry === undefined) continue;
 					const entry = Number(submission.entry);
+					// Submission provenance is immutable. A live rescan only needs new entries,
+					// not another parse and map write for the whole transcript on every message.
+					if (this.#known.has(entry)) continue;
 					this.#known.add(entry);
 					const origin = inputOrigin(submission.requestId);
 					if (origin) this.#origins.set(entry, origin);
+					// This namespace is minted by MissionService using its IPC-authenticated caller.
+					// Legacy request IDs identify a mission, not the sending chat. Never guess those.
+					const source = /^mission:send:from:([\w-]{1,128}):/.exec(submission.requestId ?? "")?.[1];
+					if (source) this.#sources.set(entry, source);
 				}
 				cursor = page.next;
 			} while (cursor !== undefined);
@@ -86,7 +94,11 @@ export class InputOrigins {
 		return entries.map((entry) => {
 			const origin = entry.kind === "pi.user" ? this.#origins.get(Number(entry.id)) : undefined;
 			if (!origin) return entry;
-			if (origin !== "mission") return { ...entry, origin } as EntryRecord;
+			const provenance: AutomaticInputProvenance = {
+				origin,
+				...(this.#sources.has(Number(entry.id)) ? { sourceSessionId: this.#sources.get(Number(entry.id))! } : {}),
+			};
+			if (origin !== "mission") return { ...entry, ...provenance } as EntryRecord;
 			const data =
 				typeof entry.data === "object" && entry.data !== null && !Array.isArray(entry.data) ? entry.data : {};
 			// Legacy notices and non-notice automatic inputs still get a user-facing summary from the kernel.

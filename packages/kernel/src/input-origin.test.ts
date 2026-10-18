@@ -4,6 +4,53 @@ import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createSession, MemoryStorage, UserEntry } from "@earendil-works/pi-durable";
 import { InputOrigins, inputOrigin } from "./input-origin.ts";
 
+test("coordinator provenance survives replay without interpreting body prefixes", async () => {
+	const storage = new MemoryStorage();
+	const session = createSession(storage);
+	try {
+		const conversation = await session.commit(
+			(tx) => tx.createConversation({ ownership: { kind: "ownerless" } }),
+			context,
+		);
+		const text = 'From the Global coordinator: "please fix it"';
+		const place = (requestId: string) =>
+			session.commit(async (tx) => {
+				const entry = await tx.appendEntry(UserEntry, conversation.id, {
+					model: [{ role: "user", content: text, timestamp: 1 }],
+				});
+				await tx.createSubmission({
+					conversationId: conversation.id,
+					requestId,
+					type: "input",
+					status: "placed",
+					entry: entry.id,
+				});
+				return entry;
+			}, context);
+		const sourceSessionId = "F8D1C654-6FF8-4D41-96E9-CEBD36A88C4A";
+		const automatic = await place(`mission:send:from:${sourceSessionId}:mission:delivery`);
+		const typed = await place("user-request");
+		const legacy = await place("mission:send:mission:legacy");
+		for (const _replay of [false, true]) {
+			const origins = new InputOrigins(storage, conversation.id, context);
+			const entries = await origins.entries([automatic, typed, legacy]);
+			assert.equal((entries[0] as unknown as { sourceSessionId: string }).sourceSessionId, sourceSessionId);
+			assert.equal((entries[0] as unknown as { origin: string }).origin, "coordinator");
+			assert.equal(entries[0]?.model, automatic.model);
+			assert.equal(entries[1], typed, "the same words from a user remain a user turn");
+			assert.equal("sourceSessionId" in entries[2]!, false, "do not invent a sender for legacy history");
+			const [event] = await origins.events([{ type: "message_end", entry: automatic } as never]);
+			assert.equal(
+				(event as unknown as { entry: { sourceSessionId: string } }).entry.sourceSessionId,
+				sourceSessionId,
+			);
+		}
+		assert.equal("sourceSessionId" in automatic, false, "projection does not rewrite stored history");
+	} finally {
+		await session.close(context);
+	}
+});
+
 test("request IDs map to automatic origins, and user input has none", () => {
 	assert.equal(inputOrigin(undefined), undefined);
 	assert.equal(inputOrigin("8d0c-uuid"), undefined);

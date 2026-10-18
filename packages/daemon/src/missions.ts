@@ -4390,7 +4390,12 @@ export class MissionStore {
 	): void {
 		// New sends carry their original mission identity, even if the recipient later leaves or moves.
 		const parts = event.requestId.split(":");
-		const id = parts.length === 4 ? parts[2] : this.missionOf(sessionId);
+		const id =
+			parts.length === 6 && parts[2] === "from"
+				? parts[4]
+				: parts.length === 4
+					? parts[2]
+					: this.missionOf(sessionId);
 		if (!id || !this.get(id)) return;
 		const changed = this.transaction(() => {
 			if (

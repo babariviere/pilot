@@ -215,7 +215,12 @@ extension Transcript {
                                                    text: summary?.text ?? (entry.origin == .watch ? "Watch fired" : "Mission updated"),
                                                    timestamp: message.timestamp, detail: message.text)))
                         } else if let origin = entry.origin {
-                            append(.automatic(id: id, text: message.text, origin: origin, timestamp: message.timestamp))
+                            if let sourceSessionId = entry.sourceSessionId {
+                                append(.event(.automatic(id: id, text: message.text, origin: origin,
+                                                         timestamp: message.timestamp, sourceSessionId: sourceSessionId)))
+                            } else {
+                                append(.automatic(id: id, text: message.text, origin: origin, timestamp: message.timestamp))
+                            }
                         } else {
                             append(.user(id: id, text: message.text, timestamp: message.timestamp))
                         }

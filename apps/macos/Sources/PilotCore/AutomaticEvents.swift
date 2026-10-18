@@ -5,8 +5,9 @@ import Foundation
 extension ChatEvent {
     /// Automatic input delivered to the chat: background job results, coordinator messages, PR follow-ups and
     /// extension messages. Mission notices keep their own summary.
-    public static func automatic(id: String, text: String, origin: InputOrigin, timestamp: Double? = nil) -> ChatEvent {
-        if let notification = SubagentNotification(message: text) {
+    public static func automatic(id: String, text: String, origin: InputOrigin, timestamp: Double? = nil,
+                                 sourceSessionId: String? = nil) -> ChatEvent {
+        if origin == .subagent, let notification = SubagentNotification(message: text) {
             return subagent(id: id, notification: notification, timestamp: timestamp)
         }
         var event: ChatEvent
@@ -20,7 +21,8 @@ extension ChatEvent {
             let summary = PullRequestFollowUpSummary(text: text)
             event = ChatEvent(id: id, kind: "pr_follow_up", text: summary.sentence, title: summary.title, detail: text)
         case .coordinator:
-            event = ChatEvent(id: id, kind: "coordinator_message", text: "Coordinator wrote", title: preview(text), detail: text)
+            let sender = sourceSessionId.map { "Coordinator (\($0.prefix(8))) wrote" } ?? "Coordinator wrote"
+            event = ChatEvent(id: id, kind: "coordinator_message", text: sender, title: preview(text), detail: text)
         case .mission:
             event = ChatEvent(id: id, kind: "mission_updated", text: "Mission updated", detail: text)
         case .subagent:
@@ -33,6 +35,9 @@ extension ChatEvent {
             event = ChatEvent(id: id, kind: "control_message", text: "Control chat wrote", title: preview(text), detail: text)
         case .watch:
             event = ChatEvent(id: id, kind: "watch_notice", text: "Watch fired", detail: text)
+        }
+        if let sourceSessionId {
+            event.detail = "From chat \(sourceSessionId)\n\n" + (event.detail ?? text)
         }
         event.timestamp = timestamp
         return event
