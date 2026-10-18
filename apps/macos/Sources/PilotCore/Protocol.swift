@@ -285,11 +285,67 @@ public extension Collection where Element == SessionSummary {
 public struct SessionUsage: Codable, Equatable, Hashable, Sendable {
     public let context: ContextUsage?
     public let subscription: SubscriptionUsage?
+    public let ai: AIUsageAccounting?
 
-    public init(context: ContextUsage? = nil, subscription: SubscriptionUsage? = nil) {
+    public init(context: ContextUsage? = nil, subscription: SubscriptionUsage? = nil,
+                ai: AIUsageAccounting? = nil) {
         self.context = context
         self.subscription = subscription
+        self.ai = ai
     }
+}
+
+public struct AIUsageAccounting: Codable, Equatable, Hashable, Sendable {
+    public let observedAt: Double
+    public let direct: AIUsageScope
+    public let child: AIUsageScope
+    public let time: AIUsageTime
+}
+
+public struct AIUsageScope: Codable, Equatable, Hashable, Sendable {
+    public let tokens: AIUsageTokens
+    public let cost: AIUsageCost
+    public let activity: AIUsageActivity
+}
+
+public struct AIUsageTokens: Codable, Equatable, Hashable, Sendable {
+    public let input: Double
+    public let output: Double
+    public let cacheRead: Double
+    public let cacheWrite: Double
+    public let reasoning: Double?
+    public let reasoningStatus: String
+}
+
+public struct AIUsageCost: Codable, Equatable, Hashable, Sendable {
+    public let estimateStatus: String
+    public let estimatedUsdMicros: Double?
+    public let pricingRevision: String?
+    public let billedStatus: String
+    public let billedUsdMicros: Double?
+    public let subscriptionCoverage: String
+}
+
+public struct AIUsageActivity: Codable, Equatable, Hashable, Sendable {
+    public let kind: String
+    public let count: Double
+    public let success: Double
+    public let failure: Double
+    public let cancelled: Double
+    public let usageReports: Double
+    public let providerAttemptsObserved: Double
+    public let elapsedMsObserved: Double
+    public let activeMsObserved: Double
+    public let outcomeCoverage: String
+    public let timingCoverage: String
+}
+
+public struct AIUsageTime: Codable, Equatable, Hashable, Sendable {
+    public let elapsedMs: Double
+    public let activeMs: Double
+    public let pausedMs: Double
+    public let idleMs: Double
+    public let coverage: String
 }
 
 public struct ContextUsage: Codable, Equatable, Hashable, Sendable {

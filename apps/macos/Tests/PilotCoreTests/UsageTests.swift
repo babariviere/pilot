@@ -51,6 +51,33 @@ private func decodeUsageSession(_ usage: String = "") throws -> SessionSummary {
     #expect(claude.usage?.subscription?.providerLabel == "Claude")
 }
 
+@Test func AIAccountingKeepsTokensEstimatesAndBilledSpendDistinct() throws {
+    let session = try decodeUsageSession(#"""
+    , "usage": {"ai": {
+      "observedAt":1000,
+      "direct":{
+        "tokens":{"input":100,"output":20,"cacheRead":80,"cacheWrite":10,"reasoning":5,"reasoningStatus":"reported"},
+        "cost":{"estimateStatus":"catalog_estimate","estimatedUsdMicros":12340,"pricingRevision":"pi-ai@1.3.0","billedStatus":"unavailable","subscriptionCoverage":"unknown"},
+        "activity":{"kind":"model_requests","count":2,"success":1,"failure":1,"cancelled":0,"usageReports":1,"providerAttemptsObserved":3,"elapsedMsObserved":500,"activeMsObserved":400,"outcomeCoverage":"partial","timingCoverage":"partial"}
+      },
+      "child":{
+        "tokens":{"input":10,"output":5,"cacheRead":0,"cacheWrite":0,"reasoningStatus":"unavailable"},
+        "cost":{"estimateStatus":"unavailable","billedStatus":"unavailable","subscriptionCoverage":"unknown"},
+        "activity":{"kind":"child_operations","count":1,"success":1,"failure":0,"cancelled":0,"usageReports":1,"providerAttemptsObserved":1,"elapsedMsObserved":100,"activeMsObserved":80,"outcomeCoverage":"partial","timingCoverage":"partial"}
+      },
+      "time":{"elapsedMs":3000,"activeMs":1500,"pausedMs":500,"idleMs":1000,"coverage":"daemon_observed_partial"}
+    }}
+    """#)
+    let accounting = try #require(session.usage?.ai)
+    #expect(accounting.totalTokenLabel == "225 tokens")
+    #expect(accounting.helpText.contains("Reasoning: 5 (included in output, partial reporting)"))
+    #expect(accounting.helpText.contains("Estimated cost: At least $0.01234 (partial catalog estimate · pi-ai@1.3.0)"))
+    #expect(accounting.helpText.contains("Billed spend: Unavailable"))
+    #expect(accounting.helpText.contains("Subscription coverage: Unknown"))
+    #expect(accounting.helpText.contains("Provider attempts observed: 4 (partial)"))
+    #expect(try JSONDecoder().decode(SessionSummary.self, from: JSONEncoder().encode(session)) == session)
+}
+
 @Test func formatsContextEstimateWithoutInventingMeasurements() {
     let unknown = ContextUsage(contextWindow: 200_000)
     #expect(unknown.displayedPercent == nil)

@@ -21,6 +21,9 @@ import type { KernelUsage } from "./usage.ts";
 
 const context = BACKGROUND_CONTEXT;
 const contextWindow = 32_000;
+function assertBaseUsage(actual: KernelUsage, expected: Omit<KernelUsage, "accounting">): void {
+	assert.deepEqual({ context: actual.context, provider: actual.provider }, expected);
+}
 async function fixture(t: TestContext, extensions: ExtensionFactory[] = []) {
 	const root = await mkdtemp(join(tmpdir(), "pilot-usage-"));
 	const cleanup: Array<() => Promise<void>> = [];
@@ -132,7 +135,7 @@ test("refresh reads committed Harness context without changing native history", 
 	const before = await conversation.context(context);
 	const inspection = await harness.inspect(context);
 	await adapter.refreshUsage(context);
-	assert.deepEqual(adapter.usage.current, {
+	assertBaseUsage(adapter.usage.current, {
 		context: { tokens: 3, contextWindow, percent: (3 / contextWindow) * 100 },
 		provider: adapter.model.provider,
 	});
@@ -211,7 +214,7 @@ test("committed response usage anchors trailing context, while resets discard ol
 		await tx.appendEntry(UserEntry, conversation.id, { model: [trailing] });
 	}, context);
 	await adapter.refreshUsage(context);
-	assert.deepEqual(adapter.usage.current, {
+	assertBaseUsage(adapter.usage.current, {
 		provider: adapter.model.provider,
 		context: { tokens: 154, contextWindow, percent: (154 / contextWindow) * 100 },
 	});
@@ -219,7 +222,7 @@ test("committed response usage anchors trailing context, while resets discard ol
 	await conversation.reset("fresh123", context);
 	await conversation.waitForIdle(context);
 	await adapter.refreshUsage(context);
-	assert.deepEqual(adapter.usage.current, {
+	assertBaseUsage(adapter.usage.current, {
 		provider: adapter.model.provider,
 		context: { tokens: 3, contextWindow, percent: (3 / contextWindow) * 100 },
 	});
@@ -316,7 +319,8 @@ test("KernelSession exposes startup usage for ready and publishes committed fina
 		});
 	};
 	const provider = f.faux.getModel().provider;
-	assert.deepEqual(session.usage, { provider, context: { tokens: 0, contextWindow, percent: 0 } });
+	assertBaseUsage(session.usage, { provider, context: { tokens: 0, contextWindow, percent: 0 } });
+	assert.equal(session.usage.accounting?.direct.activity.count, 0);
 	assert.deepEqual(changes.at(-1), session.usage, "ready can read the same state as the usage hook");
 	assert.equal(session.working, false);
 	const readyUsage = session.usage;
@@ -336,10 +340,12 @@ test("KernelSession exposes startup usage for ready and publishes committed fina
 	assert.ok(tokens > 0);
 	// Lifecycle notification precedes the same batch's asynchronous usage refresh.
 	await waitForTokens(tokens);
-	assert.deepEqual(session.usage, {
+	assertBaseUsage(session.usage, {
 		provider,
 		context: { tokens, contextWindow, percent: (tokens / contextWindow) * 100 },
 	});
+	assert.equal(session.usage.accounting?.direct.activity.count, 1);
+	assert.ok((session.usage.accounting?.direct.tokens.output ?? 0) > 0);
 	assert.deepEqual(changes.at(-1), session.usage);
 	assert.deepEqual(working, [true, false]);
 	assert.equal(session.working, false);
@@ -357,9 +363,10 @@ test("KernelSession exposes startup usage for ready and publishes committed fina
 	});
 	f.cleanup.push(() => restored.close());
 	const restoredTokens = tokens + estimateMessageTokens(trailing);
-	assert.deepEqual(restored.usage, {
+	assertBaseUsage(restored.usage, {
 		provider,
 		context: { tokens: restoredTokens, contextWindow, percent: (restoredTokens / contextWindow) * 100 },
 	});
+	assert.equal(restored.usage.accounting?.direct.activity.count, 1);
 	assert.equal(f.faux.state.callCount, 1, "restoring ready usage never invokes a model");
 });

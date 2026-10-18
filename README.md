@@ -961,6 +961,8 @@ built-ins, MCP and nested `codemode` calls while keeping raw names, arguments, o
 and opt-in telemetry. Liveness and useful progress remain separate observations; Pilot does not automatically retry,
 restart or replay a suspected call. Conservative live **Needs you** attention distinguishes suspected no-progress,
 worker-liveness and cancellation delay from explicit waits, background jobs and paused sessions.
+Chats also expose durable, content-free AI usage accounting from committed provider reports, keeping token classes,
+catalog estimates, billed-spend availability and subscription coverage semantically distinct.
 [Native crash and hang diagnostics](docs/native-diagnostics.md) use Apple's delayed MetricKit delivery and retain
 only bounded content-free incident metadata locally. Pilot does not ingest stacks or report bodies, upload to a
 crash vendor, or treat historical hang evidence as a live restart signal.

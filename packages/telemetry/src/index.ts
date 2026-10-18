@@ -26,7 +26,7 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 
-export const TELEMETRY_SCHEMA_VERSION = 1 as const;
+export const TELEMETRY_SCHEMA_VERSION = 2 as const;
 export const NODE_SPAN_QUEUE_LIMIT = 512;
 export const NODE_SPAN_BATCH_LIMIT = 128;
 export const NODE_SPAN_SCHEDULE_MS = 5_000;
@@ -44,6 +44,7 @@ export type TelemetrySpanName =
 	| "pilot.daemon.request"
 	| "pilot.kernel.request"
 	| "pilot.event_loop.stall"
+	| "pilot.ai.usage"
 	| "pilot.tool.call"
 	| "pilot.tool.cancel_wait"
 	| "pilot.feature";
@@ -93,6 +94,7 @@ export interface TelemetryAttributes {
 		| "daemon.request"
 		| "kernel.request"
 		| "event_loop.stall"
+		| "ai.usage"
 		| "tool.call"
 		| "tool.cancel_wait";
 	"pilot.phase"?: TelemetryPhase;
@@ -109,6 +111,29 @@ export interface TelemetryAttributes {
 	"pilot.tool.nested"?: boolean;
 	"pilot.tool.dispatch_ms"?: number;
 	"pilot.tool.execution_ms"?: number;
+	"pilot.ai.scope"?: "direct" | "child" | "session";
+	"pilot.ai.input_tokens"?: number;
+	"pilot.ai.output_tokens"?: number;
+	"pilot.ai.cache_read_tokens"?: number;
+	"pilot.ai.cache_write_tokens"?: number;
+	"pilot.ai.reasoning_tokens"?: number;
+	"pilot.ai.reasoning_status"?: "reported" | "partial" | "unavailable";
+	"pilot.ai.activity_count"?: number;
+	"pilot.ai.success_count"?: number;
+	"pilot.ai.failure_count"?: number;
+	"pilot.ai.cancelled_count"?: number;
+	"pilot.ai.usage_report_count"?: number;
+	"pilot.ai.provider_attempt_count"?: number;
+	"pilot.ai.elapsed_ms"?: number;
+	"pilot.ai.active_ms"?: number;
+	"pilot.ai.paused_ms"?: number;
+	"pilot.ai.idle_ms"?: number;
+	"pilot.ai.estimate_status"?: "catalog_estimate" | "partial_catalog_estimate" | "unavailable";
+	"pilot.ai.estimated_usd_micros"?: number;
+	"pilot.ai.pricing_source"?: "pi_catalog";
+	"pilot.ai.billed_status"?: "known" | "unavailable";
+	"pilot.ai.billed_usd_micros"?: number;
+	"pilot.ai.subscription_coverage"?: "covered" | "not_covered" | "unknown";
 }
 
 /** The only daemon/kernel propagation format. Baggage and tracestate are deliberately absent. */
@@ -186,6 +211,7 @@ const SPAN_NAMES = new Set<TelemetrySpanName>([
 	"pilot.daemon.request",
 	"pilot.kernel.request",
 	"pilot.event_loop.stall",
+	"pilot.ai.usage",
 	"pilot.tool.call",
 	"pilot.tool.cancel_wait",
 	"pilot.feature",
@@ -196,6 +222,7 @@ const OPERATIONS = new Set([
 	"daemon.request",
 	"kernel.request",
 	"event_loop.stall",
+	"ai.usage",
 	"tool.call",
 	"tool.cancel_wait",
 ]);
@@ -248,6 +275,11 @@ const TOOL_CATEGORIES = new Set<TelemetryToolCategory>([
 	"orchestration",
 	"other",
 ]);
+const AI_SCOPES = new Set(["direct", "child", "session"]);
+const AI_REASONING_STATUS = new Set(["reported", "partial", "unavailable"]);
+const AI_ESTIMATE_STATUS = new Set(["catalog_estimate", "partial_catalog_estimate", "unavailable"]);
+const AI_BILLED_STATUS = new Set(["known", "unavailable"]);
+const AI_SUBSCRIPTION_COVERAGE = new Set(["covered", "not_covered", "unknown"]);
 const TRACEPARENT = /^00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]$/;
 const setter: TextMapSetter<TraceCarrier> = {
 	set(carrier, key, value) {
@@ -288,6 +320,36 @@ export function telemetryAttributes(value: TelemetryAttributes): TelemetryAttrib
 		if (key === "pilot.frame_observation" && closedString(field, FRAME_OBSERVATIONS)) continue;
 		if (key === "pilot.tool.category" && closedString(field, TOOL_CATEGORIES)) continue;
 		if (key === "pilot.tool.nested" && typeof field === "boolean") continue;
+		if (key === "pilot.ai.scope" && closedString(field, AI_SCOPES)) continue;
+		if (key === "pilot.ai.reasoning_status" && closedString(field, AI_REASONING_STATUS)) continue;
+		if (key === "pilot.ai.estimate_status" && closedString(field, AI_ESTIMATE_STATUS)) continue;
+		if (key === "pilot.ai.pricing_source" && field === "pi_catalog") continue;
+		if (key === "pilot.ai.billed_status" && closedString(field, AI_BILLED_STATUS)) continue;
+		if (key === "pilot.ai.subscription_coverage" && closedString(field, AI_SUBSCRIPTION_COVERAGE)) continue;
+		if (
+			[
+				"pilot.ai.input_tokens",
+				"pilot.ai.output_tokens",
+				"pilot.ai.cache_read_tokens",
+				"pilot.ai.cache_write_tokens",
+				"pilot.ai.reasoning_tokens",
+				"pilot.ai.activity_count",
+				"pilot.ai.success_count",
+				"pilot.ai.failure_count",
+				"pilot.ai.cancelled_count",
+				"pilot.ai.usage_report_count",
+				"pilot.ai.provider_attempt_count",
+				"pilot.ai.elapsed_ms",
+				"pilot.ai.active_ms",
+				"pilot.ai.paused_ms",
+				"pilot.ai.idle_ms",
+				"pilot.ai.estimated_usd_micros",
+				"pilot.ai.billed_usd_micros",
+			].includes(key) &&
+			Number.isSafeInteger(field) &&
+			(field as number) >= 0
+		)
+			continue;
 		if (
 			(key === "pilot.tool.dispatch_ms" || key === "pilot.tool.execution_ms") &&
 			typeof field === "number" &&
@@ -298,6 +360,23 @@ export function telemetryAttributes(value: TelemetryAttributes): TelemetryAttrib
 			continue;
 		return;
 	}
+	if (value["pilot.ai.estimate_status"] === "unavailable" && value["pilot.ai.estimated_usd_micros"] !== undefined)
+		return;
+	if (
+		value["pilot.ai.estimate_status"] !== undefined &&
+		value["pilot.ai.estimate_status"] !== "unavailable" &&
+		(value["pilot.ai.estimated_usd_micros"] === undefined || value["pilot.ai.pricing_source"] !== "pi_catalog")
+	)
+		return;
+	if (
+		value["pilot.ai.estimated_usd_micros"] !== undefined &&
+		(value["pilot.ai.estimate_status"] === undefined || value["pilot.ai.estimate_status"] === "unavailable")
+	)
+		return;
+	if (value["pilot.ai.pricing_source"] !== undefined && value["pilot.ai.estimated_usd_micros"] === undefined) return;
+	if (value["pilot.ai.billed_status"] === "unavailable" && value["pilot.ai.billed_usd_micros"] !== undefined) return;
+	if (value["pilot.ai.billed_status"] === "known" && value["pilot.ai.billed_usd_micros"] === undefined) return;
+	if (value["pilot.ai.billed_usd_micros"] !== undefined && value["pilot.ai.billed_status"] !== "known") return;
 	return Object.fromEntries(entries) as TelemetryAttributes;
 }
 
