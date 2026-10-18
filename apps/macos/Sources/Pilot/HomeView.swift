@@ -148,6 +148,36 @@ enum ComposerTab: Hashable {
     case running
 }
 
+/// The live recovery row shared by Home and the isolated native-control regression fixture.
+struct HostedChatStartNotice: View {
+    @EnvironmentObject private var app: AppModel
+    let operation: DurableOperation
+    @ObservedObject var hosts: HostClients
+    @ObservedObject var form: NewSessionForm
+    let retryOriginal: () -> Void
+
+    private var delivery: OperationDelivery? { hosts.operationDeliveries[operation.operationId] }
+
+    var body: some View {
+        HStack {
+            Text(form.checkingStart ? "Checking chat start…" : form.startRecoveryMessage ?? "Chat start needs confirmation. Your draft has been kept.")
+                .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            if case let .receipt(receipt)? = delivery, receipt.state == .accepted {
+                Button("Open chat") { Task { await app.checkHostedChat(operation, form: form, openConfirmed: true) } }
+            } else {
+                Button(form.checkingStart ? "Checking…" : "Check") { Task { await app.checkHostedChat(operation, form: form) } }
+                if case .unknown? = delivery {
+                    Button("Retry original start…", action: retryOriginal)
+                }
+            }
+        }
+        .disabled(form.busy || form.checkingStart)
+        .padding(8)
+    }
+}
+
 /// Home: a sky band, the task composer, and how every project is doing (`HomeOverview`).
 struct HomeView: View {
     @EnvironmentObject private var app: AppModel
@@ -296,23 +326,7 @@ struct TaskComposer: View {
     private var newTask: some View {
         VStack(alignment: .leading, spacing: 0) {
             if let operation = pendingCreate {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text(form.checkingStart ? "Checking chat start…" : form.startRecoveryMessage ?? "Chat start needs confirmation. Your draft has been kept.")
-                            .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Spacer(minLength: 8)
-                        if case let .receipt(receipt)? = pendingCreateDelivery, receipt.state == .accepted {
-                            Button("Open chat") { Task { await app.checkHostedChat(operation, form: form, openConfirmed: true) } }
-                        } else {
-                            Button(form.checkingStart ? "Checking…" : "Check") { Task { await app.checkHostedChat(operation, form: form) } }
-                            if case .unknown? = pendingCreateDelivery {
-                                Button("Retry original start…") { retryingCreate = operation }
-                            }
-                        }
-                    }
-                    .disabled(form.busy || form.checkingStart)
-                }.padding(8)
+                HostedChatStartNotice(operation: operation, hosts: hosts, form: form) { retryingCreate = operation }
             }
             if let error = form.error {
                 InlineProblem(error).padding(.horizontal, 12).padding(.bottom, 8)
