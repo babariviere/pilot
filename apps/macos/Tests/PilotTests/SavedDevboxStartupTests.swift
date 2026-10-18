@@ -103,7 +103,7 @@ private final class StartupReceiptHTTP: URLProtocol {
             client.loadFixture(projects: [], sessions: [])
             clients.append(client)
             return client
-        }, connectClient: { _, _ in }, readRuntimeHello: { [self] client, host in
+        }, connectClient: { _, _ in }, automaticUpdates: DevboxAutomaticUpdateConfiguration(targetVersion: { nil }), readRuntimeHello: { [self] client, host in
             #expect(client.hostIdentity == host)
             runtimeReads[host, default: 0] += 1
             return try startupHello(host)

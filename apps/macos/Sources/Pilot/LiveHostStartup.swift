@@ -7,6 +7,7 @@ extension AppModel {
     func startHostConnections(offlineStore: OfflineHostStore,
                               localStart: @MainActor () async -> Void) async {
         hosts.startScopedModels()
+        hosts.startAutomaticDevboxUpdates()
         do {
             try await hosts.restoreOffline(from: offlineStore)
             hosts.startSavedConnections()

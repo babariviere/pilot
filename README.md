@@ -177,7 +177,11 @@ signed manifest, private Node/jj runtime and an explicitly provisioned persisten
 CI verifies extracted production assets and real SSH logout survival. `PilotCore.LinuxSSHBootstrap`
 provides repeatable initial SSH setup without a model chat, with signed-asset, prerequisite, persistent
 service, identity and separate coordinator-isolation gates. Settings → Devboxes exposes setup,
-provider helpers, reconnect and user-triggered safe updates. Setup
+provider helpers, reconnect and safe automatic runtime updates. Live startup and verified reconnect
+check saved trusted devboxes outside Settings; older compatible runtimes receive the exact installed
+app version's signed package. Current runtimes are left alone, newer/unknown versions are never
+downgraded, and existing or cancelled requests retain their ownership. Settings shares the automatic
+status and offers explicit recovery controls. Setup
 requires a configured signing key and published trusted assets; it never installs packages, grants
 linger, weakens security policy or copies credentials automatically. See [SSH setup](docs/ssh-bootstrap.md).
 
