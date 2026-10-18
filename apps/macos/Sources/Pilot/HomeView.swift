@@ -8,6 +8,9 @@ final class NewSessionForm: ObservableObject {
     @Published var executionHost: HostRef? { didSet { onDraftChanged?() } }
     @Published var pendingOperationId: String? { didSet { onDraftChanged?() } }
     @Published var checkingStart = false
+    @Published var checkoutChoice: CheckoutChoice?
+    @Published var checkoutValidation: UUID?
+    var checkoutValidationTask: Task<Void, Never>?
     var startCheckId: UUID?
     @Published var startRecoveryMessage: String?
     let branches = BranchSelectorState()
@@ -84,7 +87,7 @@ final class NewSessionForm: ObservableObject {
         let destinationReady = mission.map { project?.id == $0.projectId }
             ?? trackedItem.map { project?.id == $0.projectId }
             ?? (project != nil || !folder.isEmpty)
-        return !busy && destinationReady && sourceReady
+        return !busy && checkoutValidation == nil && destinationReady && sourceReady
             && (!message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.items.isEmpty)
     }
 
@@ -260,6 +263,7 @@ struct TaskComposer: View {
 
     private var project: Project? {
         if let mission = form.mission { return client.project(mission.projectId) }
+        if app.draftProjectId == "" { return nil } // An unresolved/cancelled checkout choice is not a default project.
         return client.project(app.draftProjectId) ?? (form.folder.isEmpty && !remote ? client.project(lastProjectId) ?? client.projects.first : nil)
     }
 
@@ -316,11 +320,22 @@ struct TaskComposer: View {
         } message: { _ in Text("Only the original saved request is retried on its original devbox. Your newer draft is not sent.") }
         .sheet(isPresented: $choosingRepository) {
             if let host = destinationHost {
+                let revision = form.revision
+                let projectId = app.draftProjectId
+                let folder = form.folder
                 RepositoryChooser(host: host, hosts: hosts) { selected in
+                    guard form.revision == revision, destinationHost == selected.ref.host,
+                          app.draftProjectId == projectId, form.folder == folder,
+                          form.pendingOperationId == nil, !form.busy else { return }
                     app.draftProjectId = selected.value.id
                     form.folder = ""
                     choosingRepository = false
                 }
+            }
+        }
+        .sheet(item: $form.checkoutChoice) { choice in
+            ProjectCheckoutChooser(source: choice.source, initialHost: choice.host, hosts: hosts) { target in
+                app.applyCheckoutChoice(choice, target: target)
             }
         }
         .onChange(of: app.draftRevision) { _, _ in consumeDraft() }
@@ -470,7 +485,7 @@ struct TaskComposer: View {
     }
 
     private var canStart: Bool {
-        pendingCreate == nil && form.pendingOperationId == nil && !form.checkingStart && form.canStart(in: project, branches: branches)
+        form.checkoutChoice == nil && !choosingRepository && pendingCreate == nil && form.pendingOperationId == nil && !form.checkingStart && form.canStart(in: project, branches: branches)
             && (!remote || (project != nil && destinationHost.map { hosts.available.contains($0) } == true))
     }
 
@@ -585,7 +600,8 @@ struct TaskComposer: View {
     }
 
     private func chooseHost(_ host: HostRef) {
-        app.chooseNewChatHost(host)
+        let intentionalFolder = !form.folder.isEmpty
+        if app.chooseNewChatHost(host, sourceProject: project), intentionalFolder { choosingRepository = true }
     }
 
     private func consumeDraft() {

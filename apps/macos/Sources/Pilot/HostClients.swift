@@ -22,6 +22,22 @@ enum HostedHistoryAvailability: Equatable {
 /// Callers hold qualified refs, never select a process-wide "current server".
 @MainActor
 final class HostClients: ObservableObject {
+    private var checkoutObservation: AnyCancellable?
+    private let checkoutDirectory: URL
+    private(set) lazy var projectCheckouts: ProjectCheckoutModel = {
+        let file = checkoutDirectory.appendingPathComponent("project-checkouts.json")
+        let model = ProjectCheckoutModel(store: RepositoryAssociationStore(file: file)) { [weak self] ref in
+            guard let self else { throw HostRoutingError.disconnected }
+            return try await self.perform(ref, kind: .project) { try await $0.projectOrigin($1).identity }
+        }
+        checkoutObservation = model.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        return model
+    }()
+
+    private func refreshProjectCheckouts() {
+        projectCheckouts.update(projects, available: available,
+            generations: entries.mapValues { $0.client.connectionGeneration })
+    }
     let machineInformationStore = DevboxMachineStore()
     var onOperationDeliveryChanged: ((DurableOperation, OperationDelivery) -> Void)?
     var onRemoteSessionsChanged: ((HostRef, [SessionSummary], Bool) -> Void)?
@@ -232,6 +248,8 @@ final class HostClients: ObservableObject {
         devboxUpdateStore = automaticUpdates?.store ?? operationDirectory.map {
             DevboxUpdateIntentStore(directory: $0.appendingPathComponent("devbox-updates", isDirectory: true))
         } ?? .shared
+        checkoutDirectory = operationDirectory ?? FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Pilot")
         operations = OperationOutbox(directory: operationDirectory ?? FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Pilot/Operations"))
     }
@@ -816,12 +834,14 @@ final class HostClients: ObservableObject {
         for host in Set(tunnels.keys).union(connectionCleanup.keys) { await disconnect(host) }
         await scopedModels.stopAndWait()
         await devboxUpdates.stopAndWait()
+        await projectCheckouts.stop()
         do { try await flushOffline() }
         catch { persistenceError = "Could not save offline host metadata before quitting." }
     }
 
     /// Removal keeps last-known summaries. It does not invent an execution outcome.
     private func removeConnection(_ host: HostRef) {
+        defer { refreshProjectCheckouts() }
         for registration in terminalRegistrations.values where registration.ref.host == host {
             registration.detach(); registration.attachment.onStatus(.disconnected)
         }
@@ -1086,6 +1106,7 @@ final class HostClients: ObservableObject {
     }
 
     private func refresh(_ host: HostRef, token: HostConnectionToken) {
+        defer { refreshProjectCheckouts() }
         guard let entry = entries[host], entry.token == token else { return }
         let sharedGeneration = entry.client.connected ? entry.client.connectionGeneration : nil
         if sharedContextGenerations[host] != sharedGeneration {
@@ -1132,5 +1153,6 @@ final class HostClients: ObservableObject {
         missions = missions.filter { $0.ref.host != host } + missionValues.map {
             Hosted(ref: HostResourceRef(host: host, kind: .mission, localId: $0.id), value: $0)
         }
+        refreshProjectCheckouts()
     }
 }

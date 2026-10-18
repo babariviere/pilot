@@ -623,6 +623,11 @@ export interface ProjectGitHubRepository {
 	url: string;
 }
 
+/** GET /api/projects/:id/origin. Sanitized local-config identity only; null requires manual matching. */
+export interface ProjectOrigin {
+	identity: string | null;
+}
+
 /** Build may modify its workspace; Ask is read-only. Omitted mode defaults to Build. */
 export type ChatMode = "build" | "ask";
 /** Runtime-enforced specialist profile. Omitted means an ordinary chat. */

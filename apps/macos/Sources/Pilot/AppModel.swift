@@ -478,11 +478,18 @@ final class AppModel: ObservableObject {
     /// Host changes never retarget an uncertain start. Park its entire newer draft and restore
     /// the chosen destination independently, in the same private draft file and image lifetime.
     @discardableResult
-    func chooseNewChatHost(_ host: HostRef, independent: Bool = false) -> Bool {
+    func chooseNewChatHost(_ host: HostRef, independent: Bool = false, sourceProject: Project? = nil) -> Bool {
         let form = newSessionForm
         guard independent ? !form.busy : form.canChooseExecutionHost,
               let previous = form.executionHost ?? localHost, previous != host else { return false }
         let pending = form.pendingOperationId != nil || pendingChatCreate(on: previous) != nil
+        let source = sourceProject ?? draftProjectId.flatMap { hosts.presentationClient(previous).project($0) }
+        let sourceRef = source.map { HostResourceRef(host: previous, kind: .project, localId: $0.id) }
+        let ordinary = !pending && parkedTaskDrafts.isEmpty && pendingChatCreate(on: host) == nil
+        let intentionalFolder = !form.folder.isEmpty
+        form.checkoutValidationTask?.cancel()
+        form.checkoutValidation = nil
+        form.checkoutChoice = nil
         if pending || !parkedTaskDrafts.isEmpty || pendingChatCreate(on: host) != nil {
             let original = ParkedTaskDraft(value: taskDraftSnapshot(), attachments: form.attachments)
             let oldParked = parkedTaskDrafts
@@ -519,6 +526,17 @@ final class AppModel: ObservableObject {
             draftProjectId = nil
             draftMessage = nil; draftBaseBranch = nil; draftCwd = nil; draftWorkspace = nil
             restoringDrafts = false
+            if ordinary, !intentionalFolder, let sourceRef {
+                if let mapped = hosts.projectCheckouts.mapped(sourceRef, on: host) {
+                    draftProjectId = mapped.value.id
+                    verifyMappedCheckout(source: sourceRef, target: mapped)
+                }
+                else {
+                    draftProjectId = ""
+                    form.checkoutChoice = CheckoutChoice(source: sourceRef, host: host, revision: form.revision, projectId: "")
+                }
+            }
+            if ordinary, intentionalFolder { draftProjectId = "" }
             saveDrafts()
         }
         form.models = ModelList(models: [])
@@ -989,7 +1007,22 @@ final class AppModel: ObservableObject {
 
     /// Projects in picker order (by folder, then ungrouped), which is also the ⌘1…⌘9 order.
     var orderedProjects: [Project] {
-        projectFolders.sections(client.projects, projectId: \.id).flatMap(\.items)
+        if hosts.projects.isEmpty { return projectFolders.sections(client.projects, projectId: \.id).flatMap(\.items) }
+        let values = navigationProjectGroups.map { group -> Project in
+            let item = group.representative, value = item.value
+            return Project(id: item.ref.host == localHost ? value.id : item.ref.storageKey,
+                name: value.name, path: value.path, model: value.model, workspace: value.workspace,
+                requirePullRequest: value.requirePullRequest, tracking: value.tracking, createdAt: value.createdAt)
+        }
+        return projectFolders.sections(values, projectId: \.id).flatMap(\.items)
+    }
+
+    var navigationProjectGroups: [ProjectCheckoutGroup] { hosts.projectCheckouts.groups(local: localHost) }
+
+    var navigationProjectScope: String? {
+        guard let focused = focusedProjectRef,
+              let group = navigationProjectGroups.first(where: { $0.checkouts.contains { $0.ref == focused } }) else { return sidebarScope }
+        return group.id.host == localHost ? group.id.localId : group.id.storageKey
     }
 
     /// The current selection, as remembered per scope.

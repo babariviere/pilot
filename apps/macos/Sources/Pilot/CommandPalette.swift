@@ -166,12 +166,7 @@ struct CommandPaletteCatalog {
                     try? model.selectSession(item.ref)
                 }
         }
-        let projects = hosts.projects.filter { $0.ref.host != model.localHost }.map { item in
-            CommandPaletteEntry(item: CommandPaletteItem(id: "project:" + item.ref.storageKey, kind: .project,
-                title: item.value.name, keywords: [HostViewContext(host: item.ref.host, hosts: hosts).name]), icon: .project,
-                detail: HostViewContext(host: item.ref.host, hosts: hosts).name) { model.navigate(.project, id: item.ref.storageKey) }
-        }
-        return chats + projects
+        return chats
     }
 
     /// Tasks of the active missions, open ones first. A task's pull requests are the ones linked to it.

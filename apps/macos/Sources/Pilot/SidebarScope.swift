@@ -266,6 +266,7 @@ struct SidebarProjectSelector: View {
     let archivedCount: Int
     let folderEditor: ProjectFolderEditorState
     @State private var showingList = false
+    @State private var showingCheckouts = false
     @State private var hovered = false
 
     var body: some View {
@@ -296,7 +297,7 @@ struct SidebarProjectSelector: View {
         .help("Switch projects: ⌘0 for all projects, ⌘1 to ⌘9 for one")
         .popover(isPresented: $showingList, arrowEdge: .bottom) {
             VStack(spacing: 0) {
-            SidebarScopeList(projects: model.orderedProjects, folders: model.projectFolders, scope: model.sidebarScope,
+            SidebarScopeList(projects: model.orderedProjects, folders: model.projectFolders, scope: model.navigationProjectScope,
                              counts: counts, archivedCount: archivedCount,
                              choose: { id in
                                  showingList = false
@@ -324,24 +325,16 @@ struct SidebarProjectSelector: View {
                              },
                              deleteFolder: { model.projectFolders.remove($0) },
                              move: { model.projectFolders.move(projectId: $0, to: $1) })
-            if !model.hosts.offlineHosts.isEmpty {
+            if model.focusedProjectRef != nil {
                 HairlineDivider()
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(model.hosts.projects.filter { $0.ref.host != model.localHost }) { item in
-                            Button {
-                                showingList = false
-                                model.focus(on: item.ref.storageKey)
-                            } label: {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(item.value.name).font(.pilot(.body))
-                                    Text(HostViewContext(host: item.ref.host, hosts: model.hosts).name).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
-                                }.frame(maxWidth: .infinity, alignment: .leading).padding(6)
-                            }.rowButtonStyle()
-                        }
-                    }.padding(8)
-                }.frame(maxHeight: 180)
+                Button("Checkout locations…") { showingList = false; showingCheckouts = true }
+                    .padding(10).rowButtonStyle()
             }
+            }
+        }
+        .sheet(isPresented: $showingCheckouts) {
+            if let source = model.focusedProjectRef {
+                ProjectCheckoutChooser(source: source, initialHost: nil, hosts: model.hosts) { _ in }
             }
         }
     }

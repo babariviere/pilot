@@ -32,6 +32,10 @@ it does not change chat-result read tracking or enable review entry points.
   and unavailable models are preserved.
 - **Work on a devbox, too.** Add a working SSH alias in Settings → Devboxes, confirm its identity, and
   sign in to providers independently there. Choose Local or that devbox in the new-chat composer.
+  Known checkouts with an unambiguous matching Git origin appear as one navigation project;
+  choosing a host selects its registered checkout. Use the project selector’s **Checkout locations…**
+  to match missing/ambiguous origins or correct a choice. Matching never copies files or sign-ins,
+  moves existing chats, or enables project sharing. Offline matches retain their original host and path.
   At launch, saved trusted devboxes reconnect in the background and their verified runtime versions are read
   without opening Settings. Unreachable hosts never block Local startup.
   Known remote chats stay visible as Disconnected through network loss, Mac sleep and app quit;

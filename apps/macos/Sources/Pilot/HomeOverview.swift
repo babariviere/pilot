@@ -51,6 +51,18 @@ enum HomeStatus {
     static let previewLimit = 5
     static let projectLimit = 8
 
+    /// Count host-qualified chat activity once under the navigation project, not once per checkout row.
+    static func combined(_ rows: [HomeProjectStatus], representative: HomeProjectStatus) -> HomeProjectStatus {
+        var reasons: [String: Int] = [:]
+        for row in rows { for (key, count) in row.counts.needsYouReasons ?? [:] { reasons[key, default: 0] += count } }
+        return HomeProjectStatus(project: representative.project,
+            counts: ProjectDashboardCount(working: rows.reduce(0) { $0 + $1.counts.working },
+                needsYou: rows.reduce(0) { $0 + $1.counts.needsYou }, tracked: rows.reduce(0) { $0 + $1.counts.tracked },
+                needsYouReasons: rows.allSatisfy { $0.counts.needsYouReasons != nil } ? reasons : nil),
+            readyToMerge: rows.reduce(0) { $0 + $1.readyToMerge }, missions: rows.flatMap(\.missions),
+            lastActivity: rows.compactMap(\.lastActivity).max())
+    }
+
     /// One row per project, most urgent first, then most recently active, then by name.
     static func projects(_ projects: [Project], counts: [String: ProjectDashboardCount], sessions: [SessionSummary],
                          missions: [Mission]) -> [HomeProjectStatus] {
@@ -69,12 +81,14 @@ enum HomeStatus {
                               missions: (active[project.id] ?? []).sorted { ($0.createdAt, $0.id) > ($1.createdAt, $1.id) },
                               lastActivity: latest[project.id])
         }
-        return rows.sorted { lhs, rhs in
+        return rows.sorted(by: precedes)
+    }
+
+    static func precedes(_ lhs: HomeProjectStatus, _ rhs: HomeProjectStatus) -> Bool {
             let left = rank(lhs), right = rank(rhs)
             if left != right { return left < right }
             if (lhs.lastActivity ?? 0) != (rhs.lastActivity ?? 0) { return (lhs.lastActivity ?? 0) > (rhs.lastActivity ?? 0) }
             return (lhs.project.name.localizedLowercase, lhs.id) < (rhs.project.name.localizedLowercase, rhs.id)
-        }
     }
 
     private static func rank(_ row: HomeProjectStatus) -> Int {
@@ -184,7 +198,7 @@ struct HomeOverview: View {
         var id: HostResourceRef { ref }
     }
     private var remoteProjects: [RemoteProject] {
-        Set(hosts.projects.map { $0.ref.host }).filter { $0 != app.localHost }.flatMap { host in
+        return Set(hosts.projects.map { $0.ref.host }).filter { $0 != app.localHost }.flatMap { host in
             let client = hosts.presentationClient(host)
             return HomeStatus.projects(client.projects, counts: client.projectCounts.projects,
                 sessions: client.sessions, missions: client.missions).map {
@@ -194,9 +208,19 @@ struct HomeOverview: View {
     }
 
     private func content(now: Date) -> some View {
-        let rows = HomeStatus.projects(client.projects, counts: client.projectCounts.projects,
+        let localRows = HomeStatus.projects(client.projects, counts: client.projectCounts.projects,
                                        sessions: client.sessions, missions: client.missions)
-        let remoteRows = remoteProjects
+        let sourceRemote = remoteProjects
+        var byRef = Dictionary(sourceRemote.map { ($0.ref, $0.status) }, uniquingKeysWith: { first, _ in first })
+        if let local = app.localHost {
+            for row in localRows { byRef[HostResourceRef(host: local, kind: .project, localId: row.id)] = row }
+        }
+        let united = app.navigationProjectGroups.compactMap { group -> RemoteProject? in
+            guard let representative = byRef[group.id] else { return nil }
+            return RemoteProject(ref: group.id, status: HomeStatus.combined(group.checkouts.compactMap { byRef[$0.ref] }, representative: representative))
+        }.sorted { HomeStatus.precedes($0.status, $1.status) }
+        let rows = app.localHost == nil || app.navigationProjectGroups.isEmpty ? localRows : united.filter { $0.ref.host == app.localHost }.map(\.status)
+        let remoteRows = united.filter { $0.ref.host != app.localHost }
         let remoteWorking = hosts.sessions.filter { $0.ref.host != app.localHost && hosts.available.contains($0.ref.host) && $0.value.isWorking && !$0.value.isArchived }
         let working = HomeStatus.working(client.sessions)
         let missions = HomeStatus.missions(client.missions)
