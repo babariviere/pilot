@@ -238,6 +238,39 @@ existing mission task-start admission (including user-set task preferences). `se
 so busy targets queue it. Mission member targets route to the current coordinator unless `direct`
 is true; a mission without a coordinator requires an explicit direct target. Self-send is rejected.
 
+`stop`, `pause`, `resume` and `redirect` accept `sessionId` and the same `direct` routing as `send`.
+All require an authorization covering both the requested chat and the resolved coordinator, and
+use the same durable audit/admission path. Control cannot target itself. Legacy watch grants do
+not authorize these controls.
+
+- `stop` calls the app's Stop path: abort the current run/children, withdraw queued user input
+  (returned as `draft`), and hold automatic input. It works during sleep without waking a worker.
+- `pause` moves queued input off the consumable inbox on its mutation line. The current run may
+  finish, but queued and newly arriving input, including user input, stays held until explicit resume.
+  The hold survives worker/daemon replacement. User queue items remain editable/removable in the app.
+- `resume` releases held input through the existing queue admission machinery. If a run is active,
+  it restores the original queue modes for the next boundary; otherwise the held messages start one run. Repeated empty resumes do
+  not start runs. It consumes no follow-up. USD reservations are optional diagnostics, as for starts/sends.
+- `redirect` requires `message`, consumes one follow-up, and calls Stop
+  before sending the new instruction. The new input explicitly releases the Stop/pause hold, with
+  its automatic Control provenance retained. The result includes Stop's outcome/draft and the new
+  instruction's delivery report. A failed or uncertain Stop never proceeds to send.
+
+Pause/resume commands are persisted in the same daemon outbox as app input/Stop, acknowledged by
+the kernel, and queued during sleep. A pending cold-start pause parks the inbox before recovered
+scheduling begins. Stop/pause themselves reserve no budget and consume no follow-up. These
+controls do not bypass quota, connectivity, update, archive, or model-transition admission guards.
+Monotonic queue-control revisions fence duplicate/stale acknowledgements: retrying an older resume
+cannot release a newer pause.
+
+Offline performance probe (Node 24, macOS arm64, MemoryStorage): seven alternating 1,000-call
+samples of the original empty-held fast path versus the new admission path had medians of
+4.17 ms and 5.30 ms (about 1.1 µs additional per admission). Parking 10,000 queued 1 KiB inputs
+took 36.5 ms; releasing them into one run took 163.5 ms, with all 10,000 submission IDs retained.
+Queue mutation runs in the kernel, not the daemon event loop. This synthetic probe does not
+measure SQLite latency, native UI responsiveness or provider streaming; offline native integration
+tests separately cover active-tool completion, pause across reopen and Stop-before-redirect order.
+
 The supervised tool call ID keys an append-only audit intent before the effect and a terminal result
 afterwards. Exact successful retries return the durable result; uncertain or failed requests are not
 replayed. Audit SQL runs in the memory worker. Terminal records also enqueue passive control-chat
@@ -265,7 +298,7 @@ tool arguments, a later steering message, or a tool-result message to establish 
 Automatic/notice/extension turns (including `native:user:`) and idle chats cannot create a record.
 The durable user-message reference contains conversation, submission, entry and request IDs.
 
-`start`, `send` and `watch` require `authorizationId`. Levels are `investigate`, `implement`,
+`start`, `send`, `watch`, `stop`, `pause`, `resume` and `redirect` require `authorizationId`. Levels are `investigate`, `implement`,
 `publish` and `merge`; implement does not imply publish. Merge is recorded intent only: no agent
 action may execute at merge level. Merging remains a separately confirmed app action.
 Targets are explicit chat/project/mission/task/PR/Linear scopes, without wildcards. Both the

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { ControlPermission, ControlTurnOrigin } from "@pilot/kernel";
 import type {
 	ControlAuthorizationLevel,
+	ControlAuthorizationNeeded,
 	CreateMissionRequest,
 	DashboardTrackedItem,
 	Mission,
@@ -68,6 +69,8 @@ export interface ControlPilotOptions extends ControlDashboardSources {
 			provenance?: { authorizationId: string; budgetUsd?: number },
 		) => Promise<SessionSummary>;
 		send: SessionManager["sendReported"];
+		stop?: SessionManager["stop"];
+		controlInputs?: SessionManager["controlInputs"];
 		organizeAllowed?: () => boolean;
 		createMission?: (request: CreateMissionRequest) => Promise<Mission>;
 		startCoordinator?: (missionId: string, request: StartMissionCoordinatorRequest) => Promise<SessionSummary>;
@@ -168,12 +171,20 @@ export class ControlPilot {
 				};
 			});
 		}
-		if (action === "start" || action === "send") {
+		if (
+			action === "start" ||
+			action === "send" ||
+			action === "stop" ||
+			action === "pause" ||
+			action === "resume" ||
+			action === "redirect"
+		) {
 			if (!this.options.mutations) throw new Error("Control actions unavailable");
-			if (!this.options.watches) throw new Error("Result watches unavailable; no action taken");
+			if ((action === "start" || action === "send" || action === "redirect") && !this.options.watches)
+				throw new Error("Result watches unavailable; no action taken");
 			if (action === "start") this.validateStart(args);
-			else this.validateSend(args);
-			const targets = action === "send" ? this.sendTargets(args) : this.startTargets(args);
+			else this.validateChatAction(action, args);
+			const targets = action === "start" ? this.startTargets(args) : this.sendTargets(args);
 			const use = await this.authorizationOrNeed(caller, args, action, targets, operationId);
 			return this.options.mutations.audit().perform<unknown>(
 				caller,
@@ -183,8 +194,8 @@ export class ControlPilot {
 				async () => {
 					try {
 						if (action === "start") this.validateStart(args);
-						else this.validateSend(args);
-						const current = action === "send" ? this.sendTargets(args) : this.startTargets(args);
+						else this.validateChatAction(action, args);
+						const current = action === "start" ? this.startTargets(args) : this.sendTargets(args);
 						if (JSON.stringify(current) !== JSON.stringify(targets))
 							throw new Error("Control action target changed during admission");
 					} catch (error) {
@@ -195,7 +206,7 @@ export class ControlPilot {
 					try {
 						return action === "start"
 							? await this.start(args, use, operationId)
-							: await this.send(args, operationId);
+							: await this.chatAction(action, args, operationId);
 					} catch (error) {
 						// New chats bind before starting. Failed pre-admission starts cannot leak watches.
 						// Sends can have an uncertain acknowledgement; retain those for committed-input recovery.
@@ -212,7 +223,7 @@ export class ControlPilot {
 	}
 	private async authorizationNeeded(
 		caller: string,
-		action: "start" | "send" | "watch",
+		action: ControlAuthorizationNeeded["action"],
 		args: Record<string, unknown>,
 		operationId: string,
 		error: unknown,
@@ -229,7 +240,7 @@ export class ControlPilot {
 	private async authorizationOrNeed(
 		caller: string,
 		args: Record<string, unknown>,
-		action: "start" | "send" | "watch",
+		action: ControlAuthorizationNeeded["action"],
 		targets: WatchTarget[][],
 		operationId: string,
 	) {
@@ -252,13 +263,15 @@ export class ControlPilot {
 	}
 	private async authorizationUse(
 		args: Record<string, unknown>,
-		action: "start" | "send" | "watch",
+		action: ControlAuthorizationNeeded["action"],
 		targets: WatchTarget[][],
 	): Promise<ControlAuthorizationUse> {
 		const authorizationId = string(args, "authorizationId", true)!;
 		const memory = this.authorizationMemory();
 		let legacyWatch: ControlAuthorizationUse["legacyWatch"];
 		if (authorizationId.startsWith("watch:")) {
+			if (action !== "start" && action !== "send" && action !== "watch")
+				throw new Error("Legacy watch cannot authorize chat controls");
 			if (action === "watch") throw new Error("A legacy watch cannot authorize another watch");
 			const watchId = authorizationId.slice(6);
 			const turn = await this.options.turnOrigin?.();
@@ -288,9 +301,10 @@ export class ControlPilot {
 					if (owner && alternatives.some((item) => item.kind === "chat" && item.id === owner))
 						alternatives.push(target);
 			}
-		const budgetUsd = action === "watch" ? 0 : args.budgetUsd;
+		const startsWork = action === "start" || action === "send" || action === "resume" || action === "redirect";
+		const budgetUsd = startsWork ? args.budgetUsd : 0;
 		if (
-			action !== "watch" &&
+			startsWork &&
 			budgetUsd !== undefined &&
 			(typeof budgetUsd !== "number" || !Number.isFinite(budgetUsd) || budgetUsd <= 0 || budgetUsd > 10_000)
 		)
@@ -299,7 +313,7 @@ export class ControlPilot {
 			authorizationId,
 			level: level as ControlAuthorizationLevel,
 			targets: scopedTargets,
-			followUps: action === "send" ? 1 : 0,
+			followUps: action === "send" || action === "redirect" ? 1 : 0,
 			...(action === "start" ? { initialStart: true } : {}),
 			budgetUsd: typeof budgetUsd === "number" ? budgetUsd : 0,
 			...(legacyWatch ? { legacyWatch } : {}),
@@ -477,14 +491,28 @@ export class ControlPilot {
 			model: chat.model,
 		};
 	}
-	private validateSend(args: Record<string, unknown>) {
-		const id = string(args, "sessionId", true)!;
+	private validateChatAction(
+		action: "send" | "stop" | "pause" | "resume" | "redirect",
+		args: Record<string, unknown>,
+	) {
+		this.chatTarget(args);
+		if (action === "send" || action === "redirect") this.message(args);
+		if ((action === "stop" || action === "redirect") && !this.options.mutations!.stop)
+			throw new Error("Chat controls unavailable");
+		if ((action === "pause" || action === "resume") && !this.options.mutations!.controlInputs)
+			throw new Error("Chat controls unavailable");
+	}
+	private message(args: Record<string, unknown>): string {
 		if (typeof args.message !== "string" || !args.message.trim() || args.message.length > 4000)
 			throw new Error("message must be 1..4000 characters");
+		return args.message;
+	}
+	private chatTarget(args: Record<string, unknown>): string {
+		const id = string(args, "sessionId", true)!;
 		if (args.direct !== undefined && typeof args.direct !== "boolean") throw new Error("direct must be a boolean");
 		const chat = this.options.sessions.get(id);
 		if (!chat) throw new Error("Unknown chat");
-		if (this.options.isControl(id)) throw new Error("Use a user message, not send, for the control chat itself");
+		if (this.options.isControl(id)) throw new Error("Use the app to control the control chat itself");
 		let target = id;
 		if (chat.missionId && !args.direct) {
 			const mission = this.options.missions().find((m) => m.id === chat.missionId);
@@ -492,15 +520,44 @@ export class ControlPilot {
 				throw new Error("This mission has no coordinator; choose direct=true for a member");
 			target = mission.coordinatorSessionId;
 		}
-		return { id, target, message: args.message };
+		if (this.options.isControl(target)) throw new Error("Use the app to control the control chat itself");
+		return target;
 	}
-	private async send(args: Record<string, unknown>, operationId: string) {
-		const { id, target, message } = this.validateSend(args);
-		await this.options.watches!.followThrough(`control:send:${operationId}`, args.authorizationId as string, target);
-		const result = await this.options.mutations!.send(target, message, `control:send:${operationId}`, "followUp");
-		if (result.delivery === "rejected")
-			await this.options.watches?.cancelFollowThrough?.(`control:send:${operationId}`);
-		return { ...result, sessionId: target, requestedSessionId: id, chatUrl: `pilot://chat/${target}` };
+	private async chatAction(
+		action: "send" | "stop" | "pause" | "resume" | "redirect",
+		args: Record<string, unknown>,
+		operationId: string,
+	) {
+		const target = this.chatTarget(args);
+		const mutations = this.options.mutations!;
+		let result: unknown;
+		if (action === "stop" || action === "redirect") {
+			if (!mutations.stop) throw new Error("Chat controls unavailable");
+			result = await mutations.stop(target);
+		}
+		if (action === "pause" || action === "resume") {
+			if (!mutations.controlInputs) throw new Error("Chat controls unavailable");
+			result = await mutations.controlInputs(target, action === "pause");
+		}
+		if (action === "send" || action === "redirect") {
+			const requestId = `control:${action}:${operationId}`;
+			await this.options.watches!.followThrough(requestId, args.authorizationId as string, target);
+			const delivery = await mutations.send(
+				target,
+				this.message(args),
+				requestId,
+				"followUp",
+				...(action === "redirect" ? ([true] as const) : ([] as const)),
+			);
+			if (delivery.delivery === "rejected") await this.options.watches!.cancelFollowThrough(requestId);
+			result = action === "redirect" ? { stopped: result, ...delivery } : delivery;
+		}
+		return {
+			...(result as object),
+			sessionId: target,
+			requestedSessionId: args.sessionId,
+			chatUrl: `pilot://chat/${target}`,
+		};
 	}
 	/** Also serves the local-user dashboard endpoint, without creating the singleton or starting a worker. */
 	dashboard(args: Record<string, unknown> = {}) {

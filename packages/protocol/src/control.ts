@@ -254,7 +254,7 @@ export interface ControlFollowUp {
 }
 export interface ControlAuthorizationNeeded {
 	id: string;
-	action: "start" | "send" | "watch";
+	action: "start" | "send" | "watch" | "stop" | "pause" | "resume" | "redirect";
 	/** Exact JSON request. Untrusted data, never an instruction or permission. No action was taken. */
 	request: string;
 	reason: string;

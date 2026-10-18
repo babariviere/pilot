@@ -38,7 +38,7 @@ import {
 import type { SubagentWatchUpdate } from "./subagent-watches.ts";
 import type { TerminalManager } from "./terminals.ts";
 
-type Command = Extract<KernelCommand, { type: "input" | "abort" }>;
+type Command = Extract<KernelCommand, { type: "input" | "abort" | "pauseInputs" | "resumeInputs" }>;
 type Spec = Extract<KernelCommand, { type: "start" }>["spec"];
 const diagnosticHost = { hostId: "local", daemonId: "daemon", lineageId: "lineage" } as const;
 const diagnosticTarget = (
@@ -1125,6 +1125,55 @@ test("todo count uses the live cache, ignores retired workers, and cold-reads wi
 	sessions["workers"].delete(created.id);
 	assert.equal(await sessions.openTodoCount(created.id), 0, "unopened durable storage has no todos");
 	assert.equal(f.workers.length, 1, "counting never reopens a parked agent");
+});
+
+test("queue pause is durable before cold startup, survives sleep/restart, and resume uses the same outbox", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager();
+	const created = await sessions.spawn({ cwd: f.source, message: "Start" });
+	await sessions["starting"].get(created.id);
+	await sessions.pauseForSleep();
+	assert.deepEqual(await sessions.controlInputs(created.id, true), { delivery: "queued" });
+	assert.equal((await f.stored(created.id)).pending[0]?.type, "pauseInputs");
+	await sessions.shutdown();
+	const resumed = await f.manager();
+	await resumed.resumeAfterSleep();
+	await resumed["starting"].get(created.id);
+	const worker = f.workers.at(-1)!;
+	assert.ok(worker.spec.pauseInputsOnOpen);
+	assert.equal(worker.requests[0]?.type, "pauseInputs");
+	assert.deepEqual(await resumed.controlInputs(created.id, false), { delivery: "delivered" });
+	assert.equal(worker.requests.at(-1)?.type, "resumeInputs");
+	assert.equal((await f.stored(created.id)).pending.length, 0);
+});
+
+test("queue controls reject archived chats and surface uncertain acknowledgement without losing the command", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager({
+		worker: f.workerFactory(true, async (command) => {
+			if (command.type === "pauseInputs") throw new WorkerUnavailable("lost ack");
+		}),
+	});
+	const created = await sessions.spawn({ cwd: f.source, message: "Start" });
+	await sessions["starting"].get(created.id);
+	await assert.rejects(sessions.controlInputs(created.id, true), /lost ack/);
+	assert.equal((await f.stored(created.id)).pending[0]?.type, "pauseInputs");
+	sessions["metas"].get(created.id)!.archivedAt = Date.now();
+	await assert.rejects(sessions.controlInputs(created.id, false), /archived/);
+});
+
+test("Stop reopens a parked input-paused chat instead of incorrectly reporting an idle no-op", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager();
+	const created = await sessions.spawn({ cwd: f.source, message: "Start" });
+	await sessions["starting"].get(created.id);
+	await sessions.controlInputs(created.id, true);
+	f.workers[0]!.finish();
+	sessions["workers"].delete(created.id);
+	await sessions.stop(created.id);
+	await sessions["starting"].get(created.id);
+	assert.equal(f.workers.at(-1)!.requests[0]?.type, "abort");
+	assert.equal(sessions["metas"].get(created.id)!.inputsPaused, undefined);
 });
 
 test("diagnostics reads a parked session without opening its worker or transcript", async (t) => {

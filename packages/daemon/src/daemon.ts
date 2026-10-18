@@ -292,6 +292,8 @@ sessions.setPilot(
 					provenance,
 				),
 			send: sessions.sendReported.bind(sessions),
+			stop: sessions.stop.bind(sessions),
+			controlInputs: sessions.controlInputs.bind(sessions),
 		},
 	}),
 );

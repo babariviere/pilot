@@ -78,6 +78,14 @@ async function fixture(t: TestContext) {
 					effects.push(["send", ...args]);
 					return { delivery: "delivered", mode: "followUp" };
 				},
+				stop: async (id) => {
+					effects.push(["stop", id]);
+					return { ok: true, draft: "withdrawn user input" };
+				},
+				controlInputs: async (id, paused) => {
+					effects.push([paused ? "pause" : "resume", id]);
+					return { delivery: "delivered" };
+				},
 			},
 		});
 	};
@@ -163,6 +171,175 @@ test("starts propagate the admitted level and mode, never model-supplied authori
 	assert.equal(f.effects.length, 6);
 });
 
+for (const action of ["stop", "pause", "resume", "redirect"] as const) {
+	test(`${action} requires live target authorization, routes mission chats like send, and audits/deduplicates effects`, async (t) => {
+		const f = await fixture(t);
+		const record = await f.authorize();
+		const args = { sessionId: "member", message: "change course", budgetUsd: 1, authorizationId: record.id };
+		await assert.rejects(f.service.call("ordinary", action, args, "ordinary"), /Only the control/);
+		await assert.rejects(
+			f.service.call("control", action, { ...args, authorizationId: undefined }, "missing"),
+			/authorizationId/,
+		);
+		await assert.rejects(
+			f.service.call("control", action, { ...args, authorizationId: "unknown" }, "unknown"),
+			/Unknown authorization/,
+		);
+		await assert.rejects(
+			f.service.call("control", action, { ...args, sessionId: "elsewhere" }, "foreign"),
+			/targets/,
+		);
+		const narrow = await f.authorize({ ...approval, targets: [{ kind: "chat", id: "member" }] }, "narrow");
+		await assert.rejects(
+			f.service.call("control", action, { ...args, authorizationId: narrow.id }, "narrow-action"),
+			/targets/,
+		);
+		assert.equal(f.effects.length, 0);
+		if (action === "stop" || action === "pause") args.budgetUsd = 0;
+		const result = (await f.service.call("control", action, args, "valid")) as {
+			sessionId: string;
+			requestedSessionId: string;
+		};
+		assert.equal(result.sessionId, "lead");
+		assert.equal(result.requestedSessionId, "member");
+		assert.deepEqual(
+			f.effects,
+			action === "redirect"
+				? [
+						["stop", "lead"],
+						["send", "lead", "change course", "control:redirect:valid", "followUp", true],
+					]
+				: [[action, "lead"]],
+		);
+		await f.restart();
+		await f.service.call("control", action, args, "valid");
+		assert.equal(f.effects.length, action === "redirect" ? 2 : 1);
+		const audit = (await f.memory.auditPage()).filter(
+			(entry) => entry.action === action && entry.operationId === "control:valid",
+		);
+		assert.deepEqual(audit.map((entry) => entry.phase).sort(), ["requested", "succeeded"]);
+		assert.ok(audit.every((entry) => entry.authorizationId === record.id));
+		assert.deepEqual((await f.memory.authorizationGet(record.id))?.usage, {
+			followUps: action === "redirect" ? 1 : 0,
+			budgetUsd: action === "redirect" || action === "resume" ? 1 : 0,
+		});
+		await f.service.call("control", action, { ...args, direct: true }, "direct");
+		assert.ok(f.effects.some((effect) => (effect as string[])[1] === "member"));
+		await f.memory.authorizationRevoke(record.id);
+		const count = f.effects.length;
+		await assert.rejects(f.service.call("control", action, args, "revoked"), /revoked/);
+		assert.equal(f.effects.length, count);
+	});
+}
+
+for (const action of ["stop", "pause", "resume", "redirect"] as const) {
+	test(`${action} needs no invented USD limit and persists authorization denials`, async (t) => {
+		const f = await fixture(t);
+		const record = await f.authorize({ ...approval, limits: { followUps: 2 } });
+		const args = { sessionId: "member", message: "change course", authorizationId: record.id };
+		await assert.rejects(
+			f.service.call("control", action, { ...args, authorizationId: "missing" }, "denied"),
+			/Unknown authorization/,
+		);
+		const denied = f.watches.dashboard().authorizationNeeded.find((item) => item.action === action);
+		assert.ok(denied);
+		assert.deepEqual(JSON.parse(denied.request), { action, ...args, authorizationId: "missing" });
+		assert.equal(f.effects.length, 0);
+		await f.service.call("control", action, args, "budgetless");
+		const stored = (await f.memory.authorizationGet(record.id))!;
+		assert.equal(stored.limits.budgetUsd, undefined);
+		assert.deepEqual(stored.usage, { followUps: action === "redirect" ? 1 : 0, budgetUsd: 0 });
+		if (action === "redirect") {
+			const followUp = f.watches
+				.dashboard()
+				.followUps.find((item) => item.requestId === "control:redirect:budgetless");
+			assert.equal(followUp?.sessionId, "lead");
+		}
+	});
+}
+
+test("resume/redirect validate optional reservations before taking any action", async (t) => {
+	const f = await fixture(t),
+		record = await f.authorize();
+	for (const action of ["resume", "redirect"] as const)
+		for (const budgetUsd of [0, -1, 10_001, Number.NaN])
+			await assert.rejects(
+				f.service.call(
+					"control",
+					action,
+					{ sessionId: "member", message: "change", authorizationId: record.id, budgetUsd },
+					`${action}-${budgetUsd}`,
+				),
+				/budgetUsd/,
+			);
+	assert.equal(f.effects.length, 0);
+	assert.deepEqual((await f.memory.authorizationGet(record.id))?.usage, { followUps: 0, budgetUsd: 0 });
+});
+
+test("invalid redirect never stops, and controls reject legacy authority and invalid routing", async (t) => {
+	const f = await fixture(t),
+		record = await f.authorize();
+	const args = { sessionId: "member", authorizationId: record.id, budgetUsd: 1 };
+	for (const message of [undefined, "", " ", "x".repeat(4001)])
+		await assert.rejects(
+			f.service.call("control", "redirect", { ...args, message }, `bad-${String(message).length}`),
+			/message/,
+		);
+	for (const action of ["stop", "pause", "resume", "redirect"]) {
+		await assert.rejects(
+			f.service.call("control", action, { ...args, message: "change", direct: "yes" }, `direct-${action}`),
+			/direct/,
+		);
+		await assert.rejects(
+			f.service.call(
+				"control",
+				action,
+				{ ...args, message: "change", authorizationId: "watch:old" },
+				`legacy-${action}`,
+			),
+			/Legacy watch/,
+		);
+	}
+	assert.equal(f.effects.length, 0);
+});
+
+test("a failed Stop never sends the redirect and its uncertain operation is never replayed", async (t) => {
+	const f = await fixture(t),
+		record = await f.authorize();
+	let stops = 0;
+	f.service.options.mutations!.stop = async () => {
+		stops++;
+		throw new Error("Stop acknowledgement lost");
+	};
+	const args = { sessionId: "member", authorizationId: record.id, message: "New direction", budgetUsd: 1 };
+	await assert.rejects(f.service.call("control", "redirect", args, "failed-stop"), /acknowledgement lost/);
+	await assert.rejects(f.service.call("control", "redirect", args, "failed-stop"), /uncertain/);
+	assert.equal(stops, 1);
+	assert.equal(f.effects.length, 0);
+	const audit = (await f.memory.auditPage()).filter((entry) => entry.action === "redirect");
+	assert.ok(audit.some((entry) => entry.phase === "failed" && entry.authorizationId === record.id));
+});
+
+test("chat controls revalidate routing after authorization admission before any Stop effect", async (t) => {
+	const f = await fixture(t),
+		record = await f.authorize();
+	const admit = f.memory.authorizationAdmit.bind(f.memory);
+	t.mock.method(f.memory, "authorizationAdmit", async (...args: Parameters<typeof admit>) => {
+		const result = await admit(...args);
+		f.service.options.missions = () => [{ id: "m", projectId: "p", coordinatorSessionId: "elsewhere" }] as Mission[];
+		return result;
+	});
+	await assert.rejects(
+		f.service.call(
+			"control",
+			"redirect",
+			{ sessionId: "member", authorizationId: record.id, message: "New direction", budgetUsd: 1 },
+			"rerouted",
+		),
+		/target changed/,
+	);
+	assert.equal(f.effects.length, 0);
+});
 test("authorize uses daemon provenance only; notices, tool input, idle and ordinary callers cannot mint grants", async (t) => {
 	const f = await fixture(t);
 	for (const requestId of ["watch-notice:1", "mission-notice:2", "native:extension:3", "native:user:4"]) {

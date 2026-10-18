@@ -8,6 +8,7 @@ import {
 	type SubmissionId,
 } from "@earendil-works/pi-durable";
 import type { PendingAutomaticInput, QueueUpdateEvent } from "@pilot/protocol";
+import { HeldInputsDoc } from "./held-inputs-doc.ts";
 import { inputOrigin } from "./input-origin.ts";
 
 export function queueUpdate(inbox: Readonly<InboxState> | null): QueueUpdateEvent {
@@ -81,7 +82,9 @@ export async function removeQueuedMessage(
 ): Promise<void> {
 	if (!Number.isSafeInteger(submissionId) || submissionId <= 0) throw new Error("Invalid queued message ID");
 	await session.commit(async (tx) => {
-		const inbox = await tx.doc(InboxDoc, conversationId);
+		const live = await tx.doc(InboxDoc, conversationId);
+		const held = await tx.doc(HeldInputsDoc, conversationId);
+		const inbox = held.items.some((item) => item.id === submissionId) ? held : live;
 		const index = inbox.items.findIndex((item) => item.id === submissionId);
 		const item = inbox.items[index];
 		if (!item || item.mode === "write") throw new Error("Message is no longer queued. It has not been removed.");
@@ -176,7 +179,9 @@ export async function editQueuedMessage(
 	if (mode !== undefined && mode !== "steer" && mode !== "followUp") throw new Error("mode must be steer or followUp");
 	await session.commit(async (tx) => {
 		// Admission, consumption, and withdrawal all mutate this conversation's inbox on the same line.
-		const inbox = await tx.doc(InboxDoc, conversationId);
+		const live = await tx.doc(InboxDoc, conversationId);
+		const held = await tx.doc(HeldInputsDoc, conversationId);
+		const inbox = held.items.some((item) => item.id === submissionId) ? held : live;
 		const item = inbox.items.find((item) => item.id === submissionId);
 		if (!item || item.mode === "write") throw new Error("Message is no longer queued. Your edit has not been sent.");
 		item.content = content;

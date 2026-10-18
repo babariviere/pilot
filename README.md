@@ -276,6 +276,11 @@ pushes and PR publication, and **publish** allows pushing and opening/updating P
 merge, even with a recorded merge authorization; merges still require confirmation in the app.
 See [control chat internals](docs/control-chat.md) for storage, compaction and recovery details.
 
+Control can stop, pause, resume or redirect authorized chats. Pause holds queued and new input
+while the current run finishes; resume releases it. Redirect stops first, then sends a new
+instruction. Mission members route to their coordinator unless explicitly targeted directly.
+These actions are audited and require a recorded user authorization covering the target.
+
 Control can read health, bounded redacted log tails and local diagnostic evidence through `pilot`
 (`health`, `logs`, `telemetry`) before delegating an investigation. Disabled or unavailable sources
 are reported explicitly. These actions never run a shell, start a chat worker or change settings.
