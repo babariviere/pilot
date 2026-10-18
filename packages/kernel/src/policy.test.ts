@@ -197,6 +197,19 @@ test("Build verification guidance prefers focused iteration and shared slots, ne
 	assert.doesNotMatch(pilotPrompt({ ask: { source: "/source" } }), /focused tests|heavy-check slots/);
 });
 
+test("Build agents leave remote CI monitoring to Pilot, not background jobs", () => {
+	for (const context of [{}, { requirePullRequest: true }, { requirePullRequest: false }]) {
+		const prompt = pilotPrompt(context);
+		assert.match(prompt, /Run long local checks as background jobs/);
+		assert.match(prompt, /Pilot monitors tracked PRs and sends automatic follow-ups for actionable failures/);
+		assert.match(prompt, /After publishing or rebasing, finish without waiting for remote CI/);
+		assert.match(prompt, /Do not use jobs, polling loops, `gh pr checks --watch` or `gh run watch` to wait for CI/);
+		assert.match(prompt, /background jobs are for local verification, not CI monitoring/);
+	}
+	for (const prompt of [pilotPrompt({ ask: { source: "/source" } }), pilotPrompt({}, false, true)])
+		assert.doesNotMatch(prompt, /Pilot monitors tracked PRs|CI monitoring/);
+});
+
 test("memory guidance is short and limited to project chats with memory, never Ask", () => {
 	const prompt = pilotPrompt({ projectMemory: true });
 	assert.match(

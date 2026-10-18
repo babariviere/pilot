@@ -272,7 +272,8 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false, c
 	if (!context.ask && !coordinator)
 		lines.push(
 			"- Take each request as far as it asks. For implementation, finish with a working change: implement it, run the checks that cover it, fix failures it causes, and deliver it as described below when delivery applies, without pausing for review after a first pass. Ask only when a decision would materially change scope, user-visible behavior or risk, or when you are blocked, and then use ask_user.",
-			"- Run focused tests while iterating, then the relevant full suites once before publishing. Use the project's verification wrappers and shared heavy-check slots; do not bypass a queue or start duplicate full suites while waiting. Run long checks as background jobs so they can finish without blocking other work.",
+			"- Run focused tests while iterating, then the relevant full suites once before publishing. Use the project's verification wrappers and shared heavy-check slots; do not bypass a queue or start duplicate full suites while waiting. Run long local checks as background jobs so they can finish without blocking other work.",
+			"- Pilot monitors tracked PRs and sends automatic follow-ups for actionable failures. After publishing or rebasing, finish without waiting for remote CI. Do not use jobs, polling loops, `gh pr checks --watch` or `gh run watch` to wait for CI; background jobs are for local verification, not CI monitoring.",
 		);
 	if (artifactsAvailable) {
 		lines.push(

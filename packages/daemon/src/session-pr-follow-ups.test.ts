@@ -519,7 +519,13 @@ test("owned open and draft PRs reopen parked workers with one durable idle-only 
 			assert.match(input.content, /flaky or infrastructure failures/);
 			assert.match(input.content, /Consider rebasing if ancestry shows a PR is behind its actual target branch/);
 			assert.match(input.content, /GitHub's BEHIND status alone is not enough/);
-			assert.match(input.content, /Wait for fresh CI after rebasing/);
+			assert.doesNotMatch(input.content, /Wait for fresh CI after rebasing/);
+			assert.match(input.content, /After pushing or rebasing, report and finish/);
+			assert.match(input.content, /Pilot monitors fresh CI and sends another follow-up if needed/);
+			assert.match(
+				input.content,
+				/Do not wait for CI with jobs, polling loops, gh pr checks --watch or gh run watch/,
+			);
 			assert.match(input.content, /Only revisit listed review thread IDs, using the latest comments/);
 			assert.match(input.content, /skip resolved, outdated or already-addressed feedback/);
 			assert.match(

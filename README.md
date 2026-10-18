@@ -406,7 +406,9 @@ and no user messages are queued. Before a failed-CI follow-up, eligible jj works
 conflict-free rebase onto the PR's current base, once per PR/base commit. A successful rebase waits for
 fresh CI without spending a follow-up attempt; new review feedback still goes to the agent.
 Follow-ups also ask the agent to check the PR's actual target branch and consider rebasing if behind,
-preserving stack boundaries and other sessions' work, then waiting for fresh CI.
+preserving stack boundaries and other sessions' work. After pushing or rebasing, agents report and
+finish without waiting for remote CI. Pilot monitors fresh results; agents must not start background
+jobs or polling loops to wait for CI. Long local verification checks still run as background jobs.
 An unresolved thread is reported only once per latest-comment version, even across restarts and user
 messages. Declined or already-addressed feedback need not be resolved on GitHub to stop repeat prompts.
 New threads, replies or edits to the latest comment can trigger another follow-up; CI and conflict
