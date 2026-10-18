@@ -785,6 +785,13 @@ target, permission and reservation metadata. Shared-context grants remain additi
 where mission placement needs them; possessing one does not authorize arbitrary Control actions.
 An incompatible/missing control.* route leaves the original operation pending or explicitly rejected,
 never retries it under another kind or fresh ID.
+Executors must reject trusted Control-attributed work arriving through chat-create, chat-send,
+shared-* or legacy mutation routes, before allocating metadata or admitting input, with an explicit
+OperationRejected/unsupported-authority outcome. Attribution comes from trusted admission origin,
+persisted intent and permission context, not an agent-supplied caller label. A missing public
+authorization field must not reclassify a Control intent as native user work. Home dispatch and
+internal helpers preserve that provenance. Legitimate independent native UI/shared-context requests
+retain their own authority paths; their existence does not provide a Control downgrade path.
 
 ### Status revision and publication CAS
 
@@ -833,6 +840,30 @@ management fence and takes priority over either lane. On reconnect/invalidation 
 revocation first and performs receipt lookup before delivery of each original envelope. It need not
 wait for old ordinary pending receipts to reach the revocation lane: cursor paging can pass them.
 Priority does not pretend an offline peer has observed a tombstone.
+
+Per-session ordinary ordering is mandatory. The serialization key is the actual routed
+(destination daemonId, lineageId, sessionId), not the project's host alias, an unrouted member ID
+or the whole host. A start uses its preallocated sessionId. Home durably orders its ordinary intents
+for that key and exposes only its earliest unadopted ordinary intent as deliverable in exchange;
+later same-session ordinary intents remain parked until that predecessor has a conclusive receipt
+durably adopted at home. Unknown and pending therefore block later ordinary start/send/redirect/
+resume for that session, but not work for other sessions on the same host. An accepted queued input
+is conclusive admission; do not wait for the agent to finish its run. Explicit rejection also releases
+that ordering barrier after durable adoption, without automatically authorizing a replacement action.
+
+Page cursors may scan past a pending session head to other sessions, never past it to execute a
+later intent for that same session. The executor serializes same-session ordinary admission/domain
+commits; home does not expose the successor until receipt proof that its predecessor committed.
+Retries of an earlier already-admitted operation return its original receipt, not a second input.
+Do not compare sequence numbers from different producers to invent a global execution order.
+The ordering index and predecessor/adoption frontier survive home restart and ambiguous imports.
+
+The revocation lane intentionally bypasses that ordinary barrier. Revoke/unwatch install their
+durable tombstones; stop/pause install the appropriate durable scheduling/input fence before a
+conclusive acknowledgment. If a target or effect cannot yet be resolved safely, keep the safety
+operation pending/requested, not falsely acknowledged. This exception never permits an ordinary
+resume/send to leapfrog an unresolved stop, revoke or pause affecting it. Other sessions' independent
+accepted execution is neither held nor cancelled solely by this session's queue head.
 
 While a known revocation/removal or role freeze is pending/unknown, park new spend-capable ordinary
 operations for that affected binding/grant/watch/target; unrelated targets/bindings may progress.
