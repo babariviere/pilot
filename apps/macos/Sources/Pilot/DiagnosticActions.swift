@@ -207,10 +207,58 @@ private struct DiagnosticEvidenceSelectionRow: View {
     @Binding var selected: Set<String>
 
     var body: some View {
-        Button(evidence.kind, action: toggleSelection)
+        Button(action: toggleSelection) {
+            HStack(alignment: .top, spacing: 8) {
+                if suspected { PilotSymbol(PilotIcon.warning, context: .inline).foregroundStyle(Theme.warning) }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(assessmentLabel ?? evidence.kind).font(.pilot(.body, weight: .medium))
+                        .foregroundStyle(suspected ? Theme.warning : Theme.foreground)
+                    Text(detail).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).lineLimit(2)
+                }
+                Spacer(minLength: 8)
+                if selected.contains(evidence.ref) {
+                    PilotSymbol(PilotIcon.done, context: .inline).foregroundStyle(Theme.mutedForeground)
+                }
+            }
+            .contentShape(Rectangle())
+        }
         .buttonStyle(.plain)
-        .opacity(selected.contains(evidence.ref) ? 1 : 0.65)
+        .opacity(selected.contains(evidence.ref) ? 1 : 0.72)
         .help("\(evidence.source.rawValue) · \(evidence.at) · \(evidence.ref)")
+    }
+
+    private var suspected: Bool { evidence.assessment?.hasPrefix("suspected_") == true }
+
+    private var assessmentLabel: String? {
+        switch evidence.assessment {
+        case "suspected_no_progress": "Tool may be stalled"
+        case "suspected_unresponsive": "Worker may be unresponsive"
+        case "suspected_cancellation_delay": "Cancellation is taking longer than expected"
+        case "waiting_user": "Waiting for your response"
+        case "waiting_child": "Waiting for a child agent"
+        case "background_work": "Background work is still running"
+        case "paused_sleep": "Deferred while the Mac sleeps"
+        case "paused_update": "Deferred for an update"
+        case "paused_quota": "Deferred by a usage limit"
+        case "paused_connectivity": "Deferred while disconnected"
+        case "paused_user": "Stopped by you"
+        case "cancelling": "Cancellation requested"
+        default: nil
+        }
+    }
+
+    private var detail: String {
+        let category = evidence.category.map { $0 == "mcp" ? "MCP" : $0.capitalized }
+        var parts = [category, evidence.nested == true ? "Nested call" : nil].compactMap { $0 }
+        if let age = evidence.progressAgeMs, evidence.kind == "tool.in_flight" {
+            parts.append("Last useful progress \(duration(age)) ago")
+        }
+        return parts.isEmpty ? evidence.kind : parts.joined(separator: " · ")
+    }
+
+    private func duration(_ milliseconds: Double) -> String {
+        if milliseconds < 60_000 { return "\(max(1, Int(milliseconds / 1000)))s" }
+        return "\(Int(milliseconds / 60_000))m"
     }
 
     private func toggleSelection() {

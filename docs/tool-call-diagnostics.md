@@ -18,9 +18,27 @@ unexpected worker exit, a persisted start without a finish is projected as inter
 it. Disabled collection never turns a still-running call into a guessed interruption.
 
 Liveness is not useful progress. A promise can remain live while making no progress, and a healthy silent tool can
-run for a long time. This slice exposes the two clocks without declaring a stall, deadlock or root cause. Suspected
-stall thresholds and native presentation are documented separately when enabled. Pilot does not automatically
-timeout, retry, restart or replay a tool because it may already have caused external effects.
+run for a long time. Pilot labels a call **suspected**, never deadlocked or causally diagnosed, using these
+conservative thresholds:
+
+| Evidence | Threshold |
+| --- | ---: |
+| Cancellation requested but the call has not finished | 30 seconds |
+| Kernel liveness observation has stopped | 60 seconds |
+| Filesystem call with no useful progress | 5 minutes |
+| Network or MCP call with no useful progress | 10 minutes |
+| Shell, codemode, orchestration or unknown call with no useful progress | 15 minutes |
+| Unclassified background call with no useful progress | 60 minutes |
+
+Explicit user waits, child-agent waits, known background jobs, sleep, update, quota, connectivity and user stops are
+shown as those states instead of no-progress stalls. They can still become **suspected unresponsive** if kernel
+liveness itself stops. A single daemon watchdog tracks the nearest deadline across sessions; 15-second kernel
+heartbeats move that deadline without per-call polling. A suspected call appears as live **Needs you** attention and
+as labeled bounded evidence in the Diagnose repair sheet. Completion, new useful progress or disabling collection
+clears the live attention.
+
+Pilot does not automatically timeout, retry, restart or replay a tool because it may already have caused external
+effects. A manual stop or restart records what was interrupted but never claims that no external effect occurred.
 
 ## Privacy and bounds
 

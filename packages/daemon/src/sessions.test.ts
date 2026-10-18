@@ -3145,6 +3145,89 @@ test("long jobs emit live user attention at one hour and clear on job end or wor
 	});
 });
 
+test("suspected tool stalls ask for diagnosis while waits and pauses remain distinct", async () => {
+	await outcomeFixture(async (manager, meta) => {
+		const worker = fakeWorker();
+		worker.state = "working";
+		manager["workers"].set(meta.id, worker);
+		const now = Date.now();
+		const stalled = {
+			enabled: true,
+			observedAt: now,
+			dropped: 0,
+			calls: [
+				{
+					ref: "abcdef012345-1",
+					category: "mcp" as const,
+					nested: true,
+					state: "running" as const,
+					startedAt: now - 700_000,
+					progressAt: now - 700_000,
+					livenessAt: now,
+				},
+			],
+		};
+		manager["onPacket"](meta, worker, { type: "tool.activity", activity: stalled });
+		assert.equal(manager.get(meta.id)?.attentionReason?.kind, "tool_stall");
+		assert.match(manager.get(meta.id)?.attentionReason?.detail ?? "", /no useful progress/);
+		manager["onPacket"](meta, worker, {
+			type: "jobs.changed",
+			jobs: [{ id: "build", name: "Build", state: "running", startedAt: now - 3_700_000, outputPath: "/tmp/build" }],
+		});
+		assert.equal(manager.get(meta.id)?.attentionReason?.kind, "long_job", "known jobs keep their distinct reason");
+		manager["onPacket"](meta, worker, { type: "jobs.changed", jobs: [] });
+
+		meta.updatePaused = true;
+		assert.equal(manager.get(meta.id)?.attentionReason, undefined, "an update pause is not reported as a tool stall");
+		delete meta.updatePaused;
+
+		manager["onPacket"](meta, worker, {
+			type: "tool.activity",
+			activity: {
+				...stalled,
+				calls: [{ ...stalled.calls[0]!, waitKind: "user" as const, livenessAt: now, progressAt: now - 700_000 }],
+			},
+		});
+		assert.equal(
+			manager.get(meta.id)?.attentionReason,
+			undefined,
+			"an explicit user wait stays visible only as evidence",
+		);
+
+		manager["onPacket"](meta, worker, {
+			type: "tool.activity",
+			activity: {
+				...stalled,
+				calls: [
+					{
+						...stalled.calls[0]!,
+						state: "cancelling" as const,
+						cancelRequestedAt: now - 31_000,
+						progressAt: now,
+						livenessAt: now,
+					},
+				],
+			},
+		});
+		assert.match(manager.get(meta.id)?.attentionReason?.detail ?? "", /cancellation was requested/);
+
+		manager["onPacket"](meta, worker, {
+			type: "tool.activity",
+			activity: { ...stalled, calls: [] },
+		});
+		assert.equal(manager.get(meta.id)?.attentionReason, undefined);
+
+		manager["onPacket"](meta, worker, { type: "tool.activity", activity: stalled });
+		worker.state = "failed";
+		manager["onExit"](meta, worker, 0);
+		assert.notEqual(
+			manager.get(meta.id)?.attentionReason?.kind,
+			"tool_stall",
+			"a dead worker is not a live tool stall",
+		);
+	});
+});
+
 test("chats that reach for an MCP server needing sign-in ask for it until it works or the chat is archived", async () => {
 	await outcomeFixture(async (manager, meta) => {
 		let status: McpStatus = {

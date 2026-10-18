@@ -9,6 +9,7 @@ import type {
 	ToolActivityOutcome,
 	ToolActivitySnapshot,
 	ToolDiagnosticCategory,
+	ToolWaitKind,
 } from "@pilot/protocol";
 import { nodeTelemetry, type TraceCarrier } from "@pilot/telemetry";
 
@@ -105,6 +106,14 @@ export function toolCategory(name: string): ToolDiagnosticCategory {
 	)
 		return "orchestration";
 	return "other";
+}
+
+/** Only explicit host-owned wait tools get a wait classification. Unknown names stay unclassified. */
+export function toolWaitKind(name: string): ToolWaitKind | undefined {
+	if (name === "jobs") return "background";
+	if (name === "question" || name === "ask_user") return "user";
+	if (name === "subagent") return "child";
+	return undefined;
 }
 
 /** Strictly copy the reviewed fields. Unknown runtime fields can never reach disk. */
@@ -350,11 +359,13 @@ export class ToolActivityTracker {
 		}
 		const now = this.wallNow();
 		const parent = this.options.parent?.();
+		const waitKind = toolWaitKind(name);
 		const call: ActiveCall = {
 			rawId,
 			ref: `${this.boot}-${++this.sequence}`,
 			category: toolCategory(name),
 			nested,
+			...(waitKind ? { waitKind } : {}),
 			state: "dispatching",
 			startedAt: now,
 			progressAt: now,

@@ -1017,6 +1017,7 @@ export type DashboardNeedsYouKind =
 	| "scheduled_failed"
 	| "long_job"
 	| "mcp"
+	| "tool_stall"
 	| "pr_stuck"
 	| "unread";
 
@@ -1029,12 +1030,14 @@ export type NeedsYouReasonKind =
 	| "limit"
 	| "pr_stuck"
 	| "long_job"
-	| "mcp";
+	| "mcp"
+	| "tool_stall";
 
 /**
  * One reason per row. Not-reviewed age is formatted by clients from the row's `at`.
  * `limit`: a failed chat stopped by a subscription limit ("Limit reached · resumes at 18:00").
  * `mcp`: the chat reached for an MCP server that needs the user ("datadog needs sign-in"); live-only.
+ * `tool_stall`: bounded evidence suspects an unfinished tool is not progressing; live-only and uncertain.
  */
 export interface NeedsYouReason {
 	kind: NeedsYouReasonKind;

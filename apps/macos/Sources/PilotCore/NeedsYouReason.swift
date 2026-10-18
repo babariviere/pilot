@@ -6,13 +6,14 @@ public enum NeedsYouReasonKind: String, LenientStringEnum {
     case notReviewed = "not_reviewed"
     case couldntStart = "couldnt_start"
     case longJob = "long_job"
+    case toolStall = "tool_stall"
     case prStuck = "pr_stuck"
     /// The chat reached for an MCP server that needs the user (sign-in, or it fails to connect). Live-only.
     case mcp
     public static let fallback = NeedsYouReasonKind.notReviewed
 
     /// Live attention that holds while the chat works and outranks its outcome until it clears.
-    public var isLive: Bool { self == .longJob || self == .mcp }
+    public var isLive: Bool { self == .longJob || self == .mcp || self == .toolStall }
 }
 
 public struct NeedsYouReason: Codable, Hashable, Sendable {
@@ -37,6 +38,7 @@ public struct NeedsYouReason: Codable, Hashable, Sendable {
         case .asks: return "Asks: \(detail ?? "A question is waiting for your answer")"
         case .couldntStart: return "Couldn't start: \(detail ?? "The scheduled chat could not start")"
         case .longJob: return "Long job: \(detail ?? "A background job has run for over an hour")"
+        case .toolStall: return "Tool may be stalled: \(detail ?? "No useful progress has been observed")"
         case .mcp: return "MCP: \(detail ?? "A server this chat uses needs you")"
         case .prStuck: return detail ?? "A pull request needs your help"
         case .mission: return "Mission: \(detail ?? "A question or blocked task is waiting on you")"
@@ -69,6 +71,7 @@ extension DashboardNeedsYouItem {
         case .scheduledFailed: return NeedsYouReason(kind: .couldntStart, detail: reason)
         case .unread: return NeedsYouReason(kind: .notReviewed)
         case .longJob: return NeedsYouReason(kind: .longJob, detail: reason)
+        case .toolStall: return NeedsYouReason(kind: .toolStall, detail: reason)
         case .mcp: return NeedsYouReason(kind: .mcp, detail: reason)
         case .prStuck: return NeedsYouReason(kind: .prStuck, detail: reason)
         }
@@ -139,7 +142,8 @@ extension InboxText {
         for count in counts {
             for (kind, number) in count.needsYouReasons ?? [:] { reasons[kind, default: 0] += number }
         }
-        let vocabulary = [("long_job", "long job", "long jobs"), ("mcp", "MCP sign-in", "MCP sign-ins"),
+        let vocabulary = [("tool_stall", "tool stall", "tool stalls"),
+                          ("long_job", "long job", "long jobs"), ("mcp", "MCP sign-in", "MCP sign-ins"),
                           ("asks", "question", "questions"), ("failed", "failed", "failed"),
                           ("pr_stuck", "stuck PR", "stuck PRs"),
                           ("not_reviewed", "not reviewed", "not reviewed"),

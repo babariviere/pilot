@@ -15,12 +15,28 @@ export type ToolDiagnosticCategory =
 	| "other";
 export type ToolActivityState = "dispatching" | "running" | "cancelling";
 export type ToolActivityOutcome = "success" | "failure" | "timeout" | "cancelled" | "interrupted";
+export type ToolWaitKind = "user" | "background" | "child";
+export type ToolActivityAssessment =
+	| "active"
+	| "cancelling"
+	| "waiting_user"
+	| "waiting_child"
+	| "background_work"
+	| "paused_sleep"
+	| "paused_update"
+	| "paused_quota"
+	| "paused_connectivity"
+	| "paused_user"
+	| "suspected_no_progress"
+	| "suspected_unresponsive"
+	| "suspected_cancellation_delay";
 
 /** Sanitized live kernel state. Raw call IDs, tool names, arguments and results never cross IPC. */
 export interface ToolActivityCall {
 	ref: string;
 	category: ToolDiagnosticCategory;
 	nested: boolean;
+	waitKind?: ToolWaitKind;
 	state: ToolActivityState;
 	startedAt: number;
 	progressAt: number;
@@ -102,7 +118,10 @@ export interface ToolInFlightDiagnosticEvidence {
 	kind: "tool.in_flight";
 	category: ToolDiagnosticCategory;
 	nested: boolean;
+	waitKind?: ToolWaitKind;
 	state: ToolActivityState;
+	assessment: ToolActivityAssessment;
+	thresholdMs?: number;
 	durationMs: number;
 	progressAgeMs: number;
 	livenessAgeMs: number;

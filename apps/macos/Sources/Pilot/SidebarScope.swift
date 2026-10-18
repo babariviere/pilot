@@ -87,6 +87,7 @@ enum SidebarScopeCounts {
             return InboxText.needsYouSummary(Array(counts.values))
         }
         let parts = [
+            reasons.toolStalls > 0 ? "\(reasons.toolStalls) \(reasons.toolStalls == 1 ? "tool stall" : "tool stalls")" : nil,
             reasons.longJobs > 0 ? "\(reasons.longJobs) \(reasons.longJobs == 1 ? "long job" : "long jobs")" : nil,
             reasons.mcp > 0 ? "\(reasons.mcp) \(reasons.mcp == 1 ? "MCP sign-in" : "MCP sign-ins")" : nil,
             reasons.questions > 0 ? "\(reasons.questions) \(reasons.questions == 1 ? "question" : "questions")" : nil,
@@ -107,12 +108,13 @@ struct NeedsYouReasons: Equatable {
     var notReviewed = 0
     /// Failed chats stopped by a subscription limit.
     var limited = 0
+    var toolStalls = 0
     var longJobs = 0
     var stuckPRs = 0
     /// Chats blocked on an MCP server that needs the user.
     var mcp = 0
 
-    var total: Int { questions + failed + notReviewed + limited + longJobs + stuckPRs + mcp }
+    var total: Int { questions + failed + notReviewed + limited + toolStalls + longJobs + stuckPRs + mcp }
 
     init(questions: Int = 0, failed: Int = 0, notReviewed: Int = 0, limited: Int = 0) {
         self.questions = questions
@@ -124,6 +126,7 @@ struct NeedsYouReasons: Equatable {
     /// Counts the Needs you group of `SidebarUrgency.groups` by reason.
     init(_ needsYou: [SessionSummary], unread: (SessionSummary) -> Bool) {
         for session in needsYou {
+            if session.attentionReason?.kind == .toolStall { toolStalls += 1; continue }
             if session.attentionReason?.kind == .longJob { longJobs += 1; continue }
             if session.attentionReason?.kind == .mcp { mcp += 1; continue }
             if session.needsYouReason(unread: unread(session))?.kind == .prStuck { stuckPRs += 1; continue }

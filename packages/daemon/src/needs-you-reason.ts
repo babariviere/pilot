@@ -12,7 +12,11 @@ export function reasonLine(text: string | undefined): string | undefined {
 
 export function sessionNeedsYouReason(session: SessionSummary, now = Date.now()): NeedsYouReason {
 	// Live attention the user can act on outranks the outcome; it clears once fixed and the outcome shows again.
-	if (session.attentionReason?.kind === "long_job" || session.attentionReason?.kind === "mcp")
+	if (
+		session.attentionReason?.kind === "long_job" ||
+		session.attentionReason?.kind === "mcp" ||
+		session.attentionReason?.kind === "tool_stall"
+	)
 		return session.attentionReason;
 	if (session.outcome === "failed" || (!session.outcome && session.state === "failed")) {
 		const limit = subscriptionLimit(session, now);
