@@ -109,6 +109,49 @@ test("environment routes stay off unless the service is enabled", async (t) => {
 	assert.equal(plan.status, 200);
 	assert.deepEqual((await plan.json()).items, []);
 	assert.equal((await fetch(`${urls[1]!.replace(project.id, "missing")}/discovery`)).status, 404);
+
+	const profile = {
+		tools: [{ id: "go", version: "1.23.4", from: { path: "go.mod", line: 3 } }],
+		services: [],
+		steps: [],
+		confirmedSources: [],
+	};
+	const put = (body: unknown, url = urls[1]!) =>
+		fetch(url, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+	assert.equal((await put({ environment: profile, expectedRevision: 0 }, urls[0]!)).status, 404);
+	const saved = await put({ environment: profile, expectedRevision: 0 });
+	assert.equal(saved.status, 200);
+	assert.equal((await saved.json()).revision, 1);
+	assert.equal(projects.require(project.id).environment?.revision, 1);
+	const stale = await put({ environment: profile, expectedRevision: 0 });
+	assert.equal(stale.status, 409);
+	assert.deepEqual(await stale.json(), {
+		error: "environment_conflict",
+		revision: 1,
+		message: "The environment profile changed. Review the latest version and try again.",
+	});
+	const step = { id: "setup", title: "Setup", run: { argv: ["make", "setup"] }, inputs: [], requires: [] };
+	const review = { files: [{ path: "Makefile", sha256: "a".repeat(64) }], reviewedAt: 1 };
+	const forged = await put({ environment: { ...profile, steps: [{ ...step, review }] }, expectedRevision: 1 });
+	assert.equal(forged.status, 403, "reviews are never approved through this route");
+	assert.equal((await forged.json()).error, "native_action_required");
+	const invalid = await put({
+		environment: { ...profile, tools: [{ id: "go", version: "latest", from: "user" }] },
+		expectedRevision: 1,
+	});
+	assert.equal(invalid.status, 400);
+	assert.equal(projects.require(project.id).environment?.revision, 1, "rejected writes change nothing");
+
+	const putOverride = (body: unknown, url = `${urls[1]!}/override`) =>
+		fetch(url, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+	assert.equal((await putOverride({ override: {}, expectedRevision: 0 }, `${urls[0]!}/override`)).status, 404);
+	const layer = await putOverride({ override: { env: { GOFLAGS: "-p=2" } }, expectedRevision: 0 });
+	assert.equal(layer.status, 200);
+	assert.deepEqual(await layer.json(), { revision: 1, env: { GOFLAGS: "-p=2" } });
+	assert.equal((await putOverride({ override: {}, expectedRevision: 0 })).status, 409);
+	const hostReview = await putOverride({ override: { steps: [{ ...step, review }] }, expectedRevision: 1 });
+	assert.equal(hostReview.status, 403, "host review pins need the native capability too");
+	assert.equal(projects.require(project.id).environment?.revision, 1, "the shared profile is untouched");
 });
 
 test("plans use the saved profile, check reviews against the checkout and keep the last plan", async (t) => {

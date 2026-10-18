@@ -1,7 +1,8 @@
 # Project environment setup (design)
 
-**Status: design proposal, not implemented.** Section 13 records the choices confirmed in review; the final
-design is confirmed before implementation starts.
+**Status: steps 1–4 of section 12 are implemented and off by default** (a daemon started with
+`PILOT_ENVIRONMENT_SETUP=1` advertises them: discovery, the plan preview and the app's Environment section, which
+edits the shared profile but installs nothing). The rest is design. Section 13 records the choices confirmed in review.
 It extends the planned lifecycle hooks (setup on workspace creation and after restore) with reproducible
 toolchains, a built-in database and reviewed project scripts. Scope is **setup only**: there are no teardown scripts,
 archive-time hooks or automatic service shutdown.

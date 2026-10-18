@@ -70,6 +70,7 @@ import { controlBody, controlHeaders, controlHostRoute, controlJSON } from "./co
 import { ControlHostError } from "./control-host-policy.ts";
 import type { ControlHosts } from "./control-hosts.ts";
 import { DatabaseSettingsError } from "./databases.ts";
+import { EnvironmentApprovalRequired } from "./environment-profile.ts";
 import { Conflict, ServiceUnavailable } from "./errors.ts";
 import { daemonPerformance, operations } from "./event-loop-watchdog.ts";
 import type { GitHubImportService } from "./github-import.ts";
@@ -86,7 +87,7 @@ import { isAllowedOrigin } from "./origin.ts";
 import type { PowerService } from "./power.ts";
 import { type DashboardProviders, ProjectDashboardService } from "./project-dashboard.ts";
 import type { ProjectMemoryService } from "./project-memory.ts";
-import { expandHome, type ProjectStore } from "./projects.ts";
+import { EnvironmentRevisionConflict, expandHome, type ProjectStore } from "./projects.ts";
 import { PTY_INPUT_CHUNK } from "./pty-input.ts";
 import { RepositoryBrowser } from "./repository-browser.ts";
 import { ReviewStore } from "./reviews.ts";
@@ -1084,6 +1085,52 @@ export function createDaemonServer(
 				return json(res, 200, await environment.discover(parts[2]!));
 			if (parts.length === 5 && parts[4] === "plan" && req.method === "GET")
 				return json(res, 200, await environment.plan(parts[2]!));
+			if (parts.length === 4 && req.method === "PUT") {
+				const body = await readJson<{ environment?: unknown; expectedRevision?: unknown }>(req);
+				try {
+					// Approvals (review pins) need the native host-action capability; this route grants none yet.
+					return json(
+						res,
+						200,
+						await projects.updateEnvironment(parts[2]!, body.environment, body.expectedRevision, {
+							native: false,
+						}),
+					);
+				} catch (error) {
+					if (error instanceof EnvironmentRevisionConflict)
+						return json(res, 409, {
+							error: "environment_conflict",
+							revision: error.revision,
+							message: error.message,
+						});
+					if (error instanceof EnvironmentApprovalRequired)
+						return json(res, 403, { error: "native_action_required", message: error.message });
+					throw error;
+				}
+			}
+			if (parts.length === 5 && parts[4] === "override" && req.method === "PUT") {
+				const body = await readJson<{ override?: unknown; expectedRevision?: unknown }>(req);
+				try {
+					// This host's own layer: never synced, same revision and review-pin rules.
+					return json(
+						res,
+						200,
+						await projects.updateEnvironmentOverride(parts[2]!, body.override, body.expectedRevision, {
+							native: false,
+						}),
+					);
+				} catch (error) {
+					if (error instanceof EnvironmentRevisionConflict)
+						return json(res, 409, {
+							error: "environment_conflict",
+							revision: error.revision,
+							message: error.message,
+						});
+					if (error instanceof EnvironmentApprovalRequired)
+						return json(res, 403, { error: "native_action_required", message: error.message });
+					throw error;
+				}
+			}
 		}
 		if (parts[1] === "environment" && parts.length === 3 && parts[2] === "tools" && req.method === "GET") {
 			if (!environment) return json(res, 404, { error: "environment_unavailable" });

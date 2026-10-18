@@ -1311,6 +1311,26 @@ final class PilotClient: ObservableObject {
         try await call(URLRequest(url: artifactURL(["projects", projectId, "origin"])))
     }
 
+    /// Read-only discovery from the project's checkout on its host. Requires hello.capabilities.environmentSetup.
+    func environmentDiscovery(_ projectId: String) async throws -> EnvironmentDiscovery {
+        try await call(URLRequest(url: artifactURL(["projects", projectId, "environment", "discovery"])))
+    }
+
+    /// The host's install plan preview for the saved profile. Probing changes nothing on the host.
+    func environmentPlan(_ projectId: String) async throws -> EnvironmentPlan {
+        try await call(URLRequest(url: artifactURL(["projects", projectId, "environment", "plan"])))
+    }
+
+    /// Tool names from the host's mise registry, for adding tools to a profile.
+    func environmentTools() async throws -> EnvironmentToolCatalog {
+        try await call(URLRequest(url: artifactURL(["environment", "tools"])))
+    }
+
+    /// Replace the profile. The daemon refuses a stale revision with 409.
+    func updateEnvironment(_ projectId: String, _ request: ProjectEnvironmentUpdateRequest) async throws -> ProjectEnvironment {
+        try await call("api/projects/\(projectId)/environment", method: "PUT", body: request)
+    }
+
     var fixtureChanges: SessionChanges?
     var fixtureChangeSummaries: [String: SessionChangeSummary] = [:]
 
