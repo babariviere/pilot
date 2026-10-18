@@ -312,7 +312,7 @@ function tokenCount(tokens: AIUsageTokens): number {
 	return sum([tokens.input, tokens.output, tokens.cacheRead, tokens.cacheWrite]);
 }
 
-function combineScopes(scopes: AIUsageScope[], kind: AIUsageActivity["kind"]): AIUsageScope {
+export function combineScopes(scopes: AIUsageScope[], kind: AIUsageActivity["kind"]): AIUsageScope {
 	if (!scopes.length) return zeroScope(kind);
 	const reasoningScopes = scopes.filter((scope) => scope.tokens.reasoningStatus !== "unavailable");
 	const outputScopes = scopes.filter((scope) => scope.tokens.output > 0);

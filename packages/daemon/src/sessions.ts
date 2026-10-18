@@ -71,11 +71,12 @@ import { AIUsageLedger } from "./ai-usage.ts";
 import { prepareAskSnapshot } from "./ask-snapshots.ts";
 import { chatTitleContext } from "./chat-title.ts";
 import { ColdViewReader } from "./cold-view-reader.ts";
-import { ControlActions } from "./control-actions.ts";
+import { ControlActions, ControlPreAdmissionError } from "./control-actions.ts";
 import { ControlChat } from "./control-chat.ts";
 import type { ControlMemory } from "./control-memory.ts";
 import type { ControlPilot } from "./control-pilot.ts";
 import { ControlProjectMemory } from "./control-project-memory.ts";
+import { ControlSpendAccumulator } from "./control-spend.ts";
 import { ControlWatchSink, controlResultTail } from "./control-watches.ts";
 import { coordinatorTrust } from "./coordinator-trust.ts";
 import type { CredentialBroker } from "./credential-broker.ts";
@@ -305,6 +306,7 @@ export interface SessionFactories {
 }
 
 interface SessionMeta extends OutcomeMeta {
+	controlStart?: SessionSummary["controlStart"];
 	control?: boolean;
 	/** Runtime-enforced specialist profile. Omitted for ordinary chats. */
 	role?: "diagnostics";
@@ -1289,10 +1291,37 @@ export class SessionManager {
 	private controlActions?: ControlActions;
 	private controlProjectMemory?: ControlProjectMemory;
 	private watches?: WatchService;
-	private readonly controlStartOrigin = new AsyncLocalStorage<string>();
+	private readonly controlStartOrigin = new AsyncLocalStorage<{
+		requestId: string;
+		provenance?: SessionSummary["controlStart"];
+		sideEffectAttempted: boolean;
+	}>();
 	/** Propagates only across the explicit start path, never unrelated concurrent user work. */
-	controlStart<T>(work: () => Promise<T>, requestId = `control:start:${randomUUID()}`): Promise<T> {
-		return this.controlStartOrigin.run(requestId, work);
+	controlStart<T>(
+		work: () => Promise<T>,
+		requestId = `control:start:${randomUUID()}`,
+		provenance?: SessionSummary["controlStart"],
+	): Promise<T> {
+		const origin = {
+			requestId,
+			...(provenance ? { provenance: { ...provenance } } : {}),
+			sideEffectAttempted: false,
+		};
+		return this.controlStartOrigin.run(origin, async () => {
+			try {
+				return await work();
+			} catch (error) {
+				if (origin.sideEffectAttempted) throw error;
+				throw new ControlPreAdmissionError(error instanceof Error ? error.message : "Start preparation failed", {
+					cause: error,
+				});
+			}
+		});
+	}
+	/** Fence before a persistent mission write or spawn attempt. Later failures may be uncertain. */
+	controlStartSideEffect(): void {
+		const origin = this.controlStartOrigin.getStore();
+		if (origin) origin.sideEffectAttempted = true;
 	}
 	/** Run binding must be available during kernel recovery, before the notice sink is enabled. */
 	setWatchService(watches: WatchService): void {
@@ -1394,6 +1423,29 @@ export class SessionManager {
 	}
 	onControlDashboardChange(listener: () => void): () => void {
 		return this.pilot?.onDashboardChange(listener) ?? (() => {});
+	}
+	/** Bounded authorization page, enriched from the already-loaded AI usage ledger. No worker/history reads. */
+	async controlAuthorizationPage(
+		after?: string,
+		limit?: number,
+	): Promise<import("@pilot/protocol").ControlAuthorizationsResponse> {
+		const page = await this.controlAuthorizations().authorizationPage(after, limit);
+		const ids = new Set(page.authorizations.map((record) => record.id));
+		const usages = new Map<string, ControlSpendAccumulator>();
+		for (const meta of this.metas.values()) {
+			const id = meta.controlStart?.authorizationId;
+			if (!id || !ids.has(id)) continue;
+			const accumulator = usages.get(id) ?? new ControlSpendAccumulator();
+			accumulator.add(this.aiUsage.summary(meta.id));
+			usages.set(id, accumulator);
+		}
+		return {
+			...page,
+			authorizations: page.authorizations.map((record) => ({
+				...record,
+				spend: (usages.get(record.id) ?? new ControlSpendAccumulator()).value(),
+			})),
+		};
 	}
 	private creatingControl?: Promise<SessionSummary>;
 	static readonly CONTROL_ID = "00000000-0000-4000-8000-000000000001";
@@ -3507,6 +3559,7 @@ export class SessionManager {
 						view.events.filter((event) => event.type !== "queue_update"),
 					);
 					const target: SessionMeta = {
+						...(meta.controlStart ? { controlStart: { ...meta.controlStart } } : {}),
 						title: meta.title,
 						cwd: meta.cwd,
 						mode: meta.mode,
@@ -4215,6 +4268,7 @@ export class SessionManager {
 		const title = request.title?.trim() || titleFrom(request.message);
 		const titlePending = request.title?.trim() ? undefined : { cwd, message: request.message };
 		this.newSessionAdmissions.add(folded);
+		this.controlStartSideEffect();
 		try {
 			await mkdir(this.dir(id), { recursive: true, mode: 0o700 });
 		} catch (error) {
@@ -4238,6 +4292,9 @@ export class SessionManager {
 			cwd = join(this.dir(id), "workspace");
 		}
 		const meta: SessionMeta = {
+			...(this.controlStartOrigin.getStore()?.provenance
+				? { controlStart: { ...this.controlStartOrigin.getStore()!.provenance! } }
+				: {}),
 			id,
 			...(request.role ? { role: request.role } : {}),
 			...(diagnosticTarget && diagnosticReference
@@ -4256,7 +4313,7 @@ export class SessionManager {
 			pending: [
 				{
 					type: "input",
-					requestId: this.controlStartOrigin.getStore() ?? admission?.operationId ?? randomUUID(),
+					requestId: this.controlStartOrigin.getStore()?.requestId ?? admission?.operationId ?? randomUUID(),
 					content: request.message,
 					mode: "followUp",
 				},
@@ -4274,7 +4331,7 @@ export class SessionManager {
 				// The new chat may act on its membership as soon as it starts.
 				await this.missions!.whenDurable?.();
 			}
-			const controlRequestId = this.controlStartOrigin.getStore();
+			const controlRequestId = this.controlStartOrigin.getStore()?.requestId;
 			if (controlRequestId) await this.watches?.followThroughCreated(id, controlRequestId);
 		} catch (error) {
 			// Admission may lose a coordinator/task claim or race a closed mission.
@@ -7116,6 +7173,7 @@ export class SessionManager {
 		return {
 			id: meta.id,
 			...(meta.control ? { control: true } : {}),
+			...(meta.controlStart ? { controlStart: { ...meta.controlStart } } : {}),
 			...(meta.role ? { role: meta.role } : {}),
 			...(meta.diagnosticTargetId ? { diagnosticTargetId: meta.diagnosticTargetId } : {}),
 			...(this.diagnosticReference(meta) ? { diagnosticTarget: this.diagnosticReference(meta) } : {}),

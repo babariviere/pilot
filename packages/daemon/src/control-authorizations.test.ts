@@ -6,7 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { type TestContext, test } from "node:test";
 import type { ControlTurnOrigin } from "@pilot/kernel";
 import type { ControlAuthorization, Mission, SessionSummary, Watch } from "@pilot/protocol";
-import { ControlActions } from "./control-actions.ts";
+import { ControlActions, ControlPreAdmissionError } from "./control-actions.ts";
 import {
 	CONTROL_DEFAULT_AUTHORIZATION_TTL_MS,
 	CONTROL_DEFAULT_FOLLOW_UPS,
@@ -30,6 +30,7 @@ async function fixture(t: TestContext) {
 	const watches = new WatchService(join(home, "watches.sqlite"));
 	let turn: ControlTurnOrigin | undefined = { requestId: userMessage.requestId, userMessage };
 	let taskDone = false;
+	let startError: Error | undefined;
 	const effects: unknown[] = [];
 	const chats = new Map(
 		["member", "lead", "elsewhere"].map((id) => [
@@ -65,6 +66,7 @@ async function fixture(t: TestContext) {
 			mutations: {
 				audit: () => audit,
 				startProject: async (request) => {
+					if (startError) throw startError;
 					effects.push(["start", request]);
 					return { id: "new" } as SessionSummary;
 				},
@@ -102,6 +104,9 @@ async function fixture(t: TestContext) {
 		setTaskDone() {
 			taskDone = true;
 		},
+		setStartError(error?: Error) {
+			startError = error;
+		},
 		async restart() {
 			await memory.stop();
 			memory = new ControlMemory(home);
@@ -130,7 +135,7 @@ test("authorize uses daemon provenance only; notices, tool input, idle and ordin
 	assert.equal((await f.memory.authorizationPage()).authorizations.length, 1);
 	assert.ok((await f.memory.auditPage()).every((entry) => entry.authorizationId === record.id));
 });
-test("admission checks level, resolved coordinator targets, missing budget and merge prohibition before any effect", async (t) => {
+test("admission checks level, resolved coordinator targets, invalid budget and merge prohibition before any effect", async (t) => {
 	const f = await fixture(t);
 	const record = await f.authorize();
 	const args = { sessionId: "member", direct: true, message: "continue", authorizationId: record.id, budgetUsd: 1 };
@@ -141,15 +146,6 @@ test("admission checks level, resolved coordinator targets, missing budget and m
 	await assert.rejects(f.service.call("control", "send", { ...args, level: "publish" }, "publish"), /level/);
 	await assert.rejects(f.service.call("control", "send", { ...args, sessionId: "elsewhere" }, "foreign"), /targets/);
 	await assert.rejects(f.service.call("control", "send", { ...args, budgetUsd: 0 }, "zero"), /positive/);
-	await assert.rejects(
-		f.service.call("control", "send", { ...args, budgetUsd: undefined }, "no-reservation"),
-		/budgetUsd/,
-	);
-	const noBudget = await f.authorize({ ...approval, limits: { followUps: 2 } }, "no-budget");
-	await assert.rejects(
-		f.service.call("control", "send", { ...args, authorizationId: noBudget.id }, "no-budget-send"),
-		/No USD budget/,
-	);
 	const narrow = await f.authorize({ ...approval, targets: [{ kind: "chat", id: "member" }] }, "narrow");
 	await assert.rejects(
 		f.service.call("control", "send", { ...args, authorizationId: narrow.id, direct: false }, "routed"),
@@ -163,6 +159,112 @@ test("admission checks level, resolved coordinator targets, missing budget and m
 	assert.equal(f.effects.length, 0);
 	await f.service.call("control", "send", { ...args, direct: false, level: "implement" }, "valid");
 	assert.equal((f.effects[0] as string[])[1], "lead");
+});
+test("budgets are diagnostic by default, optional on start/send, and do not bypass follow-up limits", async (t) => {
+	const f = await fixture(t);
+	const record = await f.authorize({ ...approval, limits: { followUps: 2 } });
+	await f.service.call(
+		"control",
+		"watch",
+		{
+			authorizationId: record.id,
+			event: "chat.settled",
+			target: { kind: "project", id: "p" },
+			mode: "once",
+			note: "Read result",
+		},
+		"watch-first",
+	);
+	await f.service.call("control", "start", { authorizationId: record.id, projectId: "p", message: "work" }, "start");
+	await f.service.call(
+		"control",
+		"send",
+		{ authorizationId: record.id, sessionId: "member", message: "continue", direct: true },
+		"send-no-budget",
+	);
+	await f.service.call(
+		"control",
+		"send",
+		{ authorizationId: record.id, sessionId: "member", message: "continue", direct: true, budgetUsd: 100 },
+		"send",
+	);
+	await assert.rejects(
+		f.service.call("control", "start", { authorizationId: record.id, projectId: "p", message: "again" }, "again"),
+		/follow-up limit/,
+	);
+	const stored = (await f.memory.authorizationGet(record.id))!;
+	assert.equal(stored.limits.budgetUsd, undefined);
+	assert.deepEqual(stored.usage, { followUps: 2, budgetUsd: 100 });
+	assert.deepEqual(stored.budget, { reservedUsd: 100, releasedUsd: 0 });
+	assert.equal(f.effects.length, 3);
+});
+test("invalid start/send arguments consume no use or reservation; corrected retry succeeds", async (t) => {
+	const f = await fixture(t);
+	const record = await f.authorize({ ...approval, limits: { followUps: 0, budgetUsd: 15 } });
+	const args = { authorizationId: record.id, projectId: "p", budgetUsd: 15 };
+	for (const [i, invalid] of [
+		{},
+		{ message: "" },
+		{ message: "work", model: 4 },
+		{ message: "work", taskId: "2" },
+	].entries()) {
+		await assert.rejects(f.service.call("control", "start", { ...args, ...invalid }, `bad-${i}`));
+	}
+	await assert.rejects(
+		f.service.call(
+			"control",
+			"send",
+			{ authorizationId: record.id, sessionId: "member", direct: "yes", message: "continue" },
+			"bad-send",
+		),
+		/direct/,
+	);
+	assert.deepEqual((await f.memory.authorizationGet(record.id))?.usage, { followUps: 0, budgetUsd: 0 });
+	assert.deepEqual((await f.memory.authorizationGet(record.id))?.budget, { reservedUsd: 0, releasedUsd: 0 });
+	assert.equal(
+		(await f.memory.auditPage()).filter((entry) => entry.action === "start" || entry.action === "send").length,
+		0,
+	);
+	const db = new DatabaseSync(join(f.home, "memory/control-chat/chat.sqlite"), { readOnly: true });
+	try {
+		assert.equal(db.prepare("SELECT count(*) AS n FROM authorization_uses").get()!.n, 0);
+	} finally {
+		db.close();
+	}
+	await f.service.call("control", "start", { ...args, message: "work" }, "corrected");
+	assert.equal(f.effects.length, 1);
+});
+test("proven pre-admission failure appends a release, frees the initial action, and never replays; uncertainty does not refund", async (t) => {
+	const f = await fixture(t);
+	const record = await f.authorize({ ...approval, limits: { followUps: 0, budgetUsd: 15 } });
+	const args = { authorizationId: record.id, projectId: "p", message: "work", budgetUsd: 15 };
+	f.setStartError(new ControlPreAdmissionError("Model unavailable before spawn"));
+	await assert.rejects(f.service.call("control", "start", args, "failed"), /Model unavailable/);
+	let stored = (await f.memory.authorizationGet(record.id))!;
+	assert.deepEqual(stored.usage, { followUps: 0, budgetUsd: 0 });
+	assert.deepEqual(stored.budget, { reservedUsd: 15, releasedUsd: 15 });
+	await f.restart();
+	await assert.rejects(f.service.call("control", "start", args, "failed"), /uncertain/);
+	f.setStartError(new Error("Acknowledgement lost, outcome unknown"));
+	await assert.rejects(f.service.call("control", "start", args, "uncertain"), /unknown/);
+	stored = (await f.memory.authorizationGet(record.id))!;
+	assert.deepEqual(stored.budget, { reservedUsd: 30, releasedUsd: 15 });
+	assert.equal(stored.usage.budgetUsd, 15);
+	const db = new DatabaseSync(join(f.home, "memory/control-chat/chat.sqlite"));
+	try {
+		assert.equal(db.prepare("SELECT count(*) AS n FROM authorization_uses").get()!.n, 2);
+		assert.equal(db.prepare("SELECT count(*) AS n FROM authorization_releases").get()!.n, 1);
+		assert.throws(() => db.exec("DELETE FROM authorization_releases"), /append only/);
+		assert.throws(() => db.exec("UPDATE authorization_releases SET reason='changed'"), /append only/);
+	} finally {
+		db.close();
+	}
+	const other = await f.authorize({ ...approval, limits: { followUps: 0, budgetUsd: 15 } }, "retry-grant");
+	f.setStartError(new ControlPreAdmissionError("Unavailable"));
+	await assert.rejects(f.service.call("control", "start", { ...args, authorizationId: other.id }, "safe-fail"));
+	f.setStartError();
+	await f.service.call("control", "start", { ...args, authorizationId: other.id }, "retry");
+	assert.equal(f.effects.length, 1);
 });
 test("follow-up and USD reservations are atomic, audited, bounded across restart and not charged on successful replay", async (t) => {
 	const f = await fixture(t),
@@ -193,11 +295,35 @@ test("follow-up and USD reservations are atomic, audited, bounded across restart
 		(await f.memory.auditPage()).filter((entry) => entry.action === "send").every((entry) => !!entry.authorizationId),
 	);
 });
+test("a routing race after reservation releases follow-up and USD accounting before any effect", async (t) => {
+	const f = await fixture(t);
+	const record = await f.authorize({ ...approval, limits: { followUps: 1, budgetUsd: 1 } });
+	const original = f.memory.authorizationAdmit.bind(f.memory);
+	const mock = t.mock.method(
+		f.memory,
+		"authorizationAdmit",
+		async (...args: Parameters<ControlMemory["authorizationAdmit"]>) => {
+			const result = await original(...args);
+			f.chats.get("member")!.projectId = "q";
+			return result;
+		},
+	);
+	const args = { authorizationId: record.id, budgetUsd: 1, sessionId: "member", message: "continue", direct: true };
+	await assert.rejects(f.service.call("control", "send", args, "raced"), /changed during admission/);
+	assert.equal(f.effects.length, 0);
+	assert.deepEqual((await f.memory.authorizationGet(record.id))?.usage, { followUps: 0, budgetUsd: 0 });
+	assert.deepEqual((await f.memory.authorizationGet(record.id))?.budget, { reservedUsd: 1, releasedUsd: 1 });
+	mock.mock.restore();
+	f.chats.get("member")!.projectId = "p";
+	await f.service.call("control", "send", args, "corrected");
+	assert.equal(f.effects.length, 1);
+});
 test("only the initial start is free of follow-up accounting; repeated starts cannot bypass the limit", async (t) => {
 	const f = await fixture(t),
 		record = await f.authorize({ ...approval, limits: { followUps: 0, budgetUsd: 10 } });
-	const args = { authorizationId: record.id, budgetUsd: 1, projectId: "p", message: "work" };
+	const args = { authorizationId: record.id, projectId: "p", message: "work" };
 	await f.service.call("control", "start", args, "first");
+	await f.restart();
 	await assert.rejects(f.service.call("control", "start", args, "second"), /follow-up limit/);
 	assert.equal(f.effects.length, 1);
 });

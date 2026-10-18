@@ -15,7 +15,7 @@ export const CONTROL_DEFAULT_AUTHORIZATION_TTL_MS = 24 * 60 * 60_000;
 export const CONTROL_IMPLEMENT_INCLUDES_PUBLISH = false;
 export const CONTROL_LEVELS: readonly ControlAuthorizationLevel[] = ["investigate", "implement", "publish", "merge"];
 
-export type ControlAuthorizationCreate = Omit<ControlAuthorization, "revokedAt" | "usage">;
+export type ControlAuthorizationCreate = Omit<ControlAuthorization, "revokedAt" | "usage" | "budget" | "spend">;
 export function legacyWatchAuthorization(watch: Watch): ControlAuthorizationCreate {
 	return {
 		id: `watch:${watch.id}`,
@@ -146,8 +146,6 @@ export function checkAuthorization(record: ControlAuthorization, use: ControlAut
 	}
 	if (record.usage.followUps + use.followUps > record.limits.followUps)
 		throw new Error("Authorization follow-up limit exceeded");
-	if (use.budgetUsd > 0 && record.limits.budgetUsd === undefined)
-		throw new Error("No USD budget authorized; ask the user");
-	if (record.usage.budgetUsd + use.budgetUsd > (record.limits.budgetUsd ?? 0) + 1e-9)
+	if (record.limits.budgetUsd !== undefined && record.usage.budgetUsd + use.budgetUsd > record.limits.budgetUsd + 1e-9)
 		throw new Error("Authorization budget exceeded");
 }

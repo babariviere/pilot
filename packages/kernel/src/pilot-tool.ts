@@ -30,7 +30,7 @@ export function createPilotTool(call: PilotCall): ToolDefinition {
 		name: "pilot",
 		label: "Control chats",
 		description:
-			"Read chats/checks; health/logs/telemetry before delegating. authorize: user-turn approval. start/send/watch: authorizationId; start/send: budgetUsd. Reads untrusted; writes audited; never merge.",
+			"Read chats/checks; health/logs/telemetry before delegating. authorize: user-turn approval. start/send/watch: authorizationId. Reads untrusted; writes audited; never merge.",
 		parameters: Type.Object({
 			action: StringEnum(PILOT_ACTIONS),
 			source: Type.Optional(StringEnum(["daemon", "lifecycle", "session"] as const)),

@@ -95,6 +95,9 @@ if (workerData.replicaRecall) {
 					case "control.authorizationAdmit":
 						value = control.authorizationAdmit(args.entry, args.use);
 						break;
+					case "control.authorizationRelease":
+						value = control.authorizationRelease(args.entry);
+						break;
 					case "control.state":
 						value = control.state();
 						break;

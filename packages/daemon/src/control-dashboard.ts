@@ -14,6 +14,7 @@ import type {
 	SessionSummary,
 	Watch,
 } from "@pilot/protocol";
+import { controlSpend } from "./control-spend.ts";
 import type { SessionManager } from "./sessions.ts";
 
 export interface ControlMissionAttention {
@@ -141,6 +142,7 @@ export function buildControlDashboard(
 				working: chat.working,
 				outcome: chat.outcome,
 				model: short(chat.model, 256),
+				...(chat.controlStart ? { controlStart: chat.controlStart, spend: controlSpend([chat.usage?.ai]) } : {}),
 			});
 		append(data.chats, row);
 		if (working(chat)) {

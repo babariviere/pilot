@@ -86,6 +86,8 @@ public struct ControlAuthorizationNeeded: Codable, Identifiable, Equatable, Send
 }
 
 public struct ControlDashboardChat: Codable, Identifiable, Equatable, Sendable {
+    public let controlStart: ControlStartBudget?
+    public let spend: ControlSpend?
     public let id: String
     public let chatUrl: String
     public let title: String
@@ -98,6 +100,8 @@ public struct ControlDashboardChat: Codable, Identifiable, Equatable, Sendable {
 }
 
 public struct ControlDashboardAgent: Codable, Identifiable, Equatable, Sendable {
+    public let controlStart: ControlStartBudget?
+    public let spend: ControlSpend?
     public let id: String
     public let chatUrl: String
     public let title: String

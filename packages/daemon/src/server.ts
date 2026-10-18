@@ -1046,12 +1046,10 @@ export function createDaemonServer(
 				return json(
 					res,
 					200,
-					await sessions
-						.controlAuthorizations()
-						.authorizationPage(
-							url.searchParams.get("after") ?? undefined,
-							url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : undefined,
-						),
+					await sessions.controlAuthorizationPage(
+						url.searchParams.get("after") ?? undefined,
+						url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : undefined,
+					),
 				);
 			if (parts.length === 4 && req.method === "DELETE")
 				return json(res, 200, {

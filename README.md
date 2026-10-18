@@ -254,8 +254,10 @@ state and last-known running fact) and enrolled remote-home mission replicas. Co
 provisional task proposals stay separate. Replica age is the last mission import, not a connectivity
 check; unknown or disconnected hosts are never inferred to have failed.
 Control records user-turn authorizations for starts, follow-ups and watches, with explicit targets,
-permission levels, follow-up limits and USD reservations. Authorizations can be read and revoked through
-the local API. Existing watch instructions keep their original, narrowly scoped authority.
+permission levels and follow-up limits. USD accounting is diagnostic by default, without a required cap.
+The local API reports optional user-set limits, reservations/releases and separate ledger costs, and can
+revoke authorizations. Proven pre-admission failures release reservations; uncertain outcomes do not.
+Existing watch instructions keep their original, narrowly scoped authority.
 Each authorized start or message also installs an implicit once result watch, bound to that admitted
 input, including queued messages. Its notice automatically reads a bounded, untrusted result tail and
 summarizes the grant's remaining limits. Out-of-scope or exhausted requests take no action: they appear

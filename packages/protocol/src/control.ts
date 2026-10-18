@@ -121,6 +121,8 @@ export type ControlMessage =
 	| ControlHostInvalidation;
 
 export interface ControlDashboardChat {
+	controlStart?: ControlStartBudget;
+	spend?: ControlSpend;
 	id: string;
 	chatUrl: string;
 	title: string;
@@ -308,8 +310,20 @@ export interface ControlUserMessageRef {
 }
 export interface ControlAuthorizationLimits {
 	followUps: number;
-	/** Omitted means no paid delegation is authorized, not unlimited spending. */
+	/** Optional user-set reservation limit. Omitted means diagnostic-only, not a runtime cap. */
 	budgetUsd?: number;
+}
+/** Trusted start attribution. An optional reservation is never measured spend or a runtime cap. */
+export interface ControlStartBudget {
+	authorizationId: string;
+	budgetUsd?: number;
+}
+/** Ledger-observed usage of chats started under a grant, including child operations and archived chats. */
+export interface ControlSpend {
+	sessions: number;
+	observedSessions: number;
+	cost: import("./index.ts").AIUsageCost;
+	coverage: "ledger_observed_partial";
 }
 export interface ControlAuthorization {
 	id: string;
@@ -326,6 +340,9 @@ export interface ControlAuthorization {
 	expiresAt?: number;
 	revokedAt?: number;
 	usage: { followUps: number; budgetUsd: number };
+	/** Gross historical reservations and releases. usage.budgetUsd is the outstanding balance, not spend. */
+	budget?: { reservedUsd: number; releasedUsd: number };
+	spend?: ControlSpend;
 }
 /** GET /api/control-chat/authorizations?after=<id>&limit=40. Includes revoked/expired records. */
 export interface ControlAuthorizationsResponse {

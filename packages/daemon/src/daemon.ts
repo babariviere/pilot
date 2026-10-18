@@ -212,6 +212,7 @@ const stopControlSharedContext = sharing.onChange(() => {
 	controlSharedContext = missionStore.controlSharedContext(sharing.host);
 });
 const { ControlPilot } = await import("./control-pilot.ts");
+const { controlPreAdmission } = await import("./control-actions.ts");
 sessions.setPilot(
 	new ControlPilot({
 		diagnostics: new ControlDiagnostics({
@@ -269,17 +270,19 @@ sessions.setPilot(
 				return chat;
 			},
 			audit: () => sessions.controlAudit(),
-			startProject: async (request, requestId) => {
-				const project = projects.require(request.projectId!);
-				const selection = await sessions.selectTaskModel(
-					project.path,
-					request.model ?? project.model,
-					request.thinking,
-				);
-				return sessions.controlStart(() => sessions.spawn({ ...request, ...selection }), requestId);
+			startProject: async (request, requestId, provenance) => {
+				const selection = await controlPreAdmission(async () => {
+					const project = projects.require(request.projectId!);
+					return sessions.selectTaskModel(project.path, request.model ?? project.model, request.thinking);
+				});
+				return sessions.controlStart(() => sessions.spawn({ ...request, ...selection }), requestId, provenance);
 			},
-			startTask: (missionId, taskId, request, requestId) =>
-				sessions.controlStart(() => missionService.startTask(missionId, taskId, request, "coordinator"), requestId),
+			startTask: (missionId, taskId, request, requestId, provenance) =>
+				sessions.controlStart(
+					() => missionService.startTask(missionId, taskId, request, "coordinator"),
+					requestId,
+					provenance,
+				),
 			send: sessions.sendReported.bind(sessions),
 		},
 	}),
