@@ -3606,6 +3606,8 @@ test("coordinator actions check the current role on every call before causing si
 });
 
 test("only the current lead gets allowlisted subscription readings in status and start", async (t) => {
+	// Match the readings as numbers, not digits inside activity timestamps such as "13:54:12.420Z".
+	const subscriptionLeak = /subscription|(?<!\d:|\d)(?:67\.3|12\.4)(?!\d)|private-account/;
 	const fetchedAt = Date.now();
 	const source: SubscriptionUsageSource = {
 		get: (provider) => ({
@@ -3662,12 +3664,12 @@ test("only the current lead gets allowlisted subscription readings in status and
 		] as const) {
 			assert.doesNotMatch(
 				JSON.stringify(await f.service.call(id, action, {})),
-				/subscription|67\.3|12\.4|private-account/,
+				subscriptionLeak,
 			);
 		}
 		assert.doesNotMatch(
 			JSON.stringify(await f.service.call(id, "task", { id: "1" })),
-			/subscription|67\.3|private-account/,
+			subscriptionLeak,
 		);
 	}
 	// The raw start summary used to forward subscription errors and all session usage.
