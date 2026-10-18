@@ -23,6 +23,10 @@ db.exec(`
  CREATE INDEX IF NOT EXISTS watches_match ON watches(event, target_kind, target_id, target_scope);
  CREATE INDEX IF NOT EXISTS watches_target ON watches(target_kind, target_id);
  CREATE INDEX IF NOT EXISTS watches_expiry ON watches(expires_at) WHERE expires_at IS NOT NULL;
+ CREATE TABLE IF NOT EXISTS watch_authority (id TEXT PRIMARY KEY, data TEXT NOT NULL);
+ INSERT OR IGNORE INTO watch_authority SELECT id,data FROM watches;
+ CREATE TRIGGER IF NOT EXISTS watch_authority_no_update BEFORE UPDATE ON watch_authority BEGIN SELECT RAISE(ABORT,'append only'); END;
+ CREATE TRIGGER IF NOT EXISTS watch_authority_no_delete BEFORE DELETE ON watch_authority BEGIN SELECT RAISE(ABORT,'append only'); END;
 `);
 const events = new WatchEventsDisk(db);
 function prune(now: number): void {
@@ -44,6 +48,15 @@ function dispatch(op: string, args: unknown): unknown {
 	}
 	if (op === "removalAudit") return events.removalAudit();
 	if (op === "acknowledgeRemoval") return events.acknowledgeRemoval(String(args));
+	if (op === "authority") {
+		const { id, requestId } = args as { id: string; requestId: string };
+		const delivery = db.prepare("SELECT data FROM watch_delivery WHERE request_id=?").get(requestId);
+		const item =
+			delivery && (JSON.parse(String(delivery.data)) as WatchNotice).items.find((item) => item.watchId === id);
+		const row = item && db.prepare("SELECT data FROM watch_authority WHERE id=?").get(id);
+		const watch = row ? (JSON.parse(String(row.data)) as Watch) : undefined;
+		return watch && watch.note === item?.note ? watch : undefined;
+	}
 	if (op === "expiry") {
 		prune(now);
 		const row = db.prepare("SELECT MIN(expires_at) AS at FROM watches WHERE expires_at IS NOT NULL").get();
@@ -112,6 +125,7 @@ function dispatch(op: string, args: unknown): unknown {
 		if (Number(db.prepare("SELECT COUNT(*) AS n FROM watches").get()!.n) >= MAX_WATCHES)
 			throw new Error("Watch limit reached");
 		const watch: Watch = { ...input, id: randomUUID(), createdAt: now };
+		db.prepare("INSERT INTO watch_authority VALUES (?,?)").run(watch.id, JSON.stringify(watch));
 		db.prepare("INSERT INTO watches VALUES (?, ?, ?, ?, ?, ?, ?)").run(
 			watch.id,
 			watch.event,

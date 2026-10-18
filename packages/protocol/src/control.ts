@@ -14,6 +14,8 @@ export interface WatchTarget {
 	missionId?: string;
 }
 export interface WatchInput {
+	/** Present on watches created by Control after authorization records were introduced. */
+	authorizationId?: string;
 	event: WatchEvent;
 	target: WatchTarget;
 	filter?: { outcome?: "done" | "failed" | "stopped" };
@@ -35,6 +37,7 @@ export interface CancelWatchResponse {
 	removed: boolean;
 }
 export interface ControlAuditEntry {
+	authorizationId?: string;
 	seq: number;
 	operationId: string;
 	action: string;
@@ -194,4 +197,41 @@ export interface ControlDashboardResponse {
 		pendingDecisions: number;
 	};
 	truncated: boolean;
+}
+
+export type ControlAuthorizationLevel = "investigate" | "implement" | "publish" | "merge";
+/** Durable Harness input reference, resolved by the daemon, never supplied by a tool. */
+export interface ControlUserMessageRef {
+	conversationId: string;
+	submissionId: number;
+	entryId: number;
+	requestId: string;
+}
+export interface ControlAuthorizationLimits {
+	followUps: number;
+	/** Omitted means no paid delegation is authorized, not unlimited spending. */
+	budgetUsd?: number;
+}
+export interface ControlAuthorization {
+	id: string;
+	userMessage?: ControlUserMessageRef;
+	/** Only grandfathered watch authorizations omit userMessage. */
+	watchId?: string;
+	scope: string;
+	level: ControlAuthorizationLevel;
+	targets: WatchTarget[];
+	limits: ControlAuthorizationLimits;
+	createdAt: number;
+	expiresAt?: number;
+	revokedAt?: number;
+	usage: { followUps: number; budgetUsd: number };
+}
+/** GET /api/control-chat/authorizations?after=<id>&limit=40. Includes revoked/expired records. */
+export interface ControlAuthorizationsResponse {
+	authorizations: ControlAuthorization[];
+	next?: string;
+}
+/** DELETE /api/control-chat/authorizations/:id. Local app only, idempotent. */
+export interface RevokeControlAuthorizationResponse {
+	revoked: boolean;
 }

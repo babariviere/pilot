@@ -77,6 +77,24 @@ if (workerData.replicaRecall) {
 				control ??= new ControlMemoryDisk(join(workerData.root, "control-chat"));
 				let value: unknown;
 				switch (method) {
+					case "control.authorizationImport":
+						value = control.authorizationImport(args.records);
+						break;
+					case "control.authorizationCreate":
+						value = control.authorizations.create(args.record);
+						break;
+					case "control.authorizationGet":
+						value = control.authorizations.get(args.id);
+						break;
+					case "control.authorizationRevoke":
+						value = control.authorizations.revoke(args.id);
+						break;
+					case "control.authorizationPage":
+						value = control.authorizations.page(args.after, args.limit);
+						break;
+					case "control.authorizationAdmit":
+						value = control.authorizationAdmit(args.entry, args.use);
+						break;
 					case "control.state":
 						value = control.state();
 						break;

@@ -161,6 +161,7 @@ export class WatchEventsDisk {
 					const prior = old && Number(old.event_id) > cutoff ? JSON.parse(String(old.data)) : undefined;
 					const item = {
 						watchId: watch.id,
+						authorizationId: watch.authorizationId ?? `watch:${watch.id}`,
 						note: watch.note,
 						event: event.event,
 						text: event.text.slice(0, 1000),

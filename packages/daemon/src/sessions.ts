@@ -68,6 +68,7 @@ import { chatTitleContext } from "./chat-title.ts";
 import { ColdViewReader } from "./cold-view-reader.ts";
 import { ControlActions } from "./control-actions.ts";
 import { ControlChat } from "./control-chat.ts";
+import type { ControlMemory } from "./control-memory.ts";
 import type { ControlPilot } from "./control-pilot.ts";
 import { ControlProjectMemory } from "./control-project-memory.ts";
 import { ControlWatchSink } from "./control-watches.ts";
@@ -1376,6 +1377,17 @@ export class SessionManager {
 	}
 	controlOrganizeAllowed(): boolean {
 		return !this.controlService().handlingNotice;
+	}
+	controlAuthorizations(): ControlMemory {
+		return this.controlService().memory;
+	}
+	/** Never trust control.prepare's requestId, which is supplied across the tool boundary. */
+	async controlTurnOrigin(): Promise<import("@pilot/kernel").ControlTurnOrigin | undefined> {
+		const worker = this.workers.get(SessionManager.CONTROL_ID);
+		if (!worker || !this.isControlSession(SessionManager.CONTROL_ID)) return undefined;
+		const turn = await this.coldReader.readControlTurn(join(this.dir(SessionManager.CONTROL_ID), "durable"));
+		if (this.workers.get(SessionManager.CONTROL_ID) !== worker) throw new Error("Control worker changed");
+		return turn;
 	}
 	/** The role service joins synchronously after this guard, so input cannot interleave. */
 	attachIdleToMission(id: string, join: () => SessionSummary): SessionSummary {
@@ -6328,7 +6340,7 @@ export class SessionManager {
 		if (packet.type === "pilot.call") {
 			void Promise.resolve()
 				.then(() => {
-					if (!this.isControlSession(meta.id) || !this.pilot)
+					if (this.workers.get(meta.id) !== worker || !this.isControlSession(meta.id) || !this.pilot)
 						throw new Error("Only the control chat may call pilot");
 					return this.pilot.call(meta.id, packet.action, packet.args, packet.operationId);
 				})

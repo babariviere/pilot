@@ -2,6 +2,7 @@ import type { ControlAuditEntry } from "@pilot/protocol";
 
 export type { ControlAuditEntry } from "@pilot/protocol";
 
+import type { ControlAuthorizationUse } from "./control-authorizations.ts";
 import type { ControlMemory } from "./control-memory.ts";
 export class ControlActions {
 	private readonly memory: ControlMemory;
@@ -26,6 +27,7 @@ export class ControlActions {
 		args: Record<string, unknown>,
 		operationId: string,
 		work: () => Promise<T>,
+		admission?: ControlAuthorizationUse,
 	): Promise<T> {
 		if (!this.isControl(caller)) return Promise.reject(new Error("Only the control chat may perform global actions"));
 		if (typeof operationId !== "string" || !operationId || operationId.length > 256)
@@ -48,7 +50,31 @@ export class ControlActions {
 					"This action failed or its outcome is uncertain; inspect the audit before requesting a new action",
 				);
 			}
-			await this.memory.auditAppend({ operationId: key, action, phase: "requested", at: Date.now(), caller, args });
+			const requested = {
+				operationId: key,
+				action,
+				phase: "requested" as const,
+				at: Date.now(),
+				caller,
+				args,
+				...(typeof args.authorizationId === "string" ? { authorizationId: args.authorizationId } : {}),
+			};
+			try {
+				if (admission) await this.memory.authorizationAdmit(requested, admission);
+				else await this.memory.auditAppend(requested);
+			} catch (error) {
+				// Denied requests have no reservation/effect, but their rejection remains inspectable.
+				if (admission) {
+					const entry = await this.memory.auditAppend({
+						...requested,
+						phase: "failed",
+						result: { error: error instanceof Error ? error.message.slice(0, 500) : "Admission failed" },
+					});
+					this.changed();
+					await this.publish(entry).catch(() => {});
+				}
+				throw error;
+			}
 			this.changed();
 			let result: T;
 			try {
@@ -62,6 +88,7 @@ export class ControlActions {
 					at: Date.now(),
 					caller,
 					args,
+					...(requested.authorizationId ? { authorizationId: requested.authorizationId } : {}),
 					result: { error: error instanceof Error ? error.message.slice(0, 500) : "Action failed" },
 				});
 				this.changed();
@@ -76,6 +103,7 @@ export class ControlActions {
 				at: Date.now(),
 				caller,
 				args,
+				...(requested.authorizationId ? { authorizationId: requested.authorizationId } : {}),
 				result,
 			});
 			this.changed();

@@ -23,6 +23,7 @@ type Job = {
 	/** Read a page of entries hidden by compaction instead of the active view. */
 	earlier?: { before: number; limit: number };
 	todoCount?: boolean;
+	controlTurn?: boolean;
 	resolve(view: SizedSessionView): void;
 	reject(error: Error): void;
 };
@@ -116,6 +117,16 @@ export class ColdViewReader {
 		}).then((view) => (view as unknown as { openCount: number }).openCount);
 	}
 
+	/** Fresh, bounded provenance read. Never uses the transcript snapshot cache. */
+	readControlTurn(directory: string): Promise<import("@pilot/kernel").ControlTurnOrigin | undefined> {
+		if (this.closed) return Promise.reject(new Error("Session reader is closed"));
+		if (this.waiting.length >= MAX_QUEUED_READS)
+			return Promise.reject(new ServiceUnavailable("Session history is busy. Retry shortly."));
+		return new Promise<SizedSessionView>((resolve, reject) => {
+			this.waiting.push({ directory, cwd: directory, includeTodos: false, controlTurn: true, resolve, reject });
+			this.drain();
+		}).then((view) => (view as unknown as { turn?: import("@pilot/kernel").ControlTurnOrigin }).turn);
+	}
 	private drain(): void {
 		while (!this.closed && this.active.size < 2 && this.waiting.length) {
 			const job = this.waiting.shift()!;
@@ -131,6 +142,7 @@ export class ColdViewReader {
 						...(job.after === undefined ? {} : { after: job.after }),
 						...(job.earlier === undefined ? {} : { earlier: job.earlier }),
 						...(job.todoCount ? { todoCount: true } : {}),
+						...(job.controlTurn ? { controlTurn: true } : {}),
 					},
 					execArgv: [],
 				});

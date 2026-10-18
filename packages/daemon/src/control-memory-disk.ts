@@ -10,6 +10,8 @@ import type {
 	ControlMemoryStats,
 } from "@pilot/protocol";
 import type { ControlAuditEntry } from "./control-actions.ts";
+import type { ControlAuthorizationUse } from "./control-authorizations.ts";
+import { ControlAuthorizationsDisk } from "./control-authorizations-disk.ts";
 import {
 	CONTROL_VIEW_HIGH,
 	CONTROL_VIEW_LOW,
@@ -74,6 +76,7 @@ function range(id: number, n: number): void {
 		throw new Error("Expected id+n with an aligned power-of-two n");
 }
 export class ControlMemoryDisk {
+	readonly authorizations: ControlAuthorizationsDisk;
 	private readonly lease: DatabaseSync;
 	private readonly db: DatabaseSync;
 	private readonly path: string;
@@ -94,6 +97,7 @@ export class ControlMemoryDisk {
 			this.db.function("pilot_fold", { deterministic: true }, (value) =>
 				typeof value === "string" ? value.toLowerCase() : null,
 			);
+			this.authorizations = new ControlAuthorizationsDisk(this.db);
 			this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
 				CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY, key TEXT UNIQUE, at INTEGER NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL);
 				CREATE TRIGGER IF NOT EXISTS messages_no_update BEFORE UPDATE ON messages BEGIN SELECT RAISE(ABORT, 'append only'); END;
@@ -159,6 +163,20 @@ export class ControlMemoryDisk {
 			.prepare("INSERT INTO audit(operation,payload) VALUES (?,?)")
 			.run(entry.operationId, payload);
 		return { ...entry, seq: Number(result.lastInsertRowid) };
+	}
+	authorizationAdmit(entry: Omit<ControlAuditEntry, "seq">, use: ControlAuthorizationUse): ControlAuditEntry {
+		return this.transaction(() => {
+			if (entry.phase !== "requested" || entry.authorizationId !== use.authorizationId)
+				throw new Error("Invalid authorization audit");
+			this.authorizations.reserve(entry.operationId, use);
+			return this.auditAppend(entry);
+		});
+	}
+	authorizationImport(records: import("./control-authorizations.ts").ControlAuthorizationCreate[]): void {
+		if (!Array.isArray(records) || records.length > 100) throw new Error("Invalid authorization import batch");
+		this.transaction(() => {
+			for (const record of records) this.authorizations.create(record);
+		});
 	}
 	auditOperation(operationId: string): ControlAuditEntry | undefined {
 		const row = this.db

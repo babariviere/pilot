@@ -1,4 +1,7 @@
+import { createHash } from "node:crypto";
+import type { ControlTurnOrigin } from "@pilot/kernel";
 import type {
+	ControlAuthorizationLevel,
 	CreateMissionRequest,
 	DashboardTrackedItem,
 	Mission,
@@ -7,10 +10,18 @@ import type {
 	SpawnRequest,
 	StartMissionCoordinatorRequest,
 	StartMissionTaskRequest,
+	WatchTarget,
 } from "@pilot/protocol";
 import type { ControlActions } from "./control-actions.ts";
+import {
+	authorizationLevel,
+	type ControlAuthorizationUse,
+	createAuthorization,
+	legacyWatchAuthorization,
+} from "./control-authorizations.ts";
 import { buildControlDashboard, type ControlDashboardSources } from "./control-dashboard.ts";
 import type { ControlDiagnostics } from "./control-diagnostics.ts";
+import type { ControlMemory } from "./control-memory.ts";
 import { pullRequestChecks } from "./control-pr-checks.ts";
 import type { SessionManager } from "./sessions.ts";
 import type { WatchService } from "./watch-service.ts";
@@ -18,7 +29,11 @@ import { validateWatch, type WatchInput } from "./watches.ts";
 
 export interface ControlPilotOptions extends ControlDashboardSources {
 	diagnostics?: Pick<ControlDiagnostics, "call">;
-	watches?: Pick<WatchService, "add" | "remove" | "page">;
+	watches?: Pick<WatchService, "add" | "remove" | "page" | "authority">;
+	authorizations?: () => ControlMemory;
+	turnOrigin?: () => Promise<ControlTurnOrigin | undefined>;
+	taskDone?: (missionId: string, taskId: string) => boolean;
+	taskSession?: (missionId: string, taskId: string) => string | undefined;
 	isControl: (id: string) => boolean;
 	sessions: Pick<SessionManager, "list" | "get" | "history">;
 	/** Cached projections only. These callbacks must not perform storage or network reads. */
@@ -65,12 +80,41 @@ export class ControlPilot {
 				throw new Error("includeStale must be a boolean");
 			return (this.options.checks ?? pullRequestChecks)(pr, args.includeStale === true);
 		}
+		if (action === "authorize") {
+			const turn = await this.options.turnOrigin?.();
+			if (!turn?.userMessage)
+				throw new Error("Authorization requires the active user-origin turn, not a notice or tool input");
+			const memory = this.authorizationMemory();
+			if (!this.options.mutations) throw new Error("Control actions unavailable");
+			const id = `auth:${createHash("sha256").update(`${caller}:${operationId}`).digest("hex")}`;
+			const record = createAuthorization(id, args, turn.userMessage);
+			return this.options.mutations
+				.audit()
+				.perform(caller, action, { ...args, authorizationId: id }, operationId, () =>
+					memory.authorizationCreate(record),
+				);
+		}
 		if (action === "watch" || action === "unwatch" || action === "watches") {
 			const watches = this.options.watches;
 			if (!watches) throw new Error("Watches unavailable");
 			if (action === "watches") return watches.page(string(args, "after"), args.limit as number | undefined);
 			if (action === "unwatch") return { removed: await watches.remove(string(args, "watchId", true)!) };
-			return watches.add(validateWatch(args as unknown as WatchInput));
+			const input = validateWatch(args as unknown as WatchInput);
+			const targets = this.watchTargets(input.target);
+			const use = await this.authorizationUse(args, "watch", [targets]);
+			if (!this.options.mutations) throw new Error("Control actions unavailable");
+			return this.options.mutations.audit().perform(
+				caller,
+				action,
+				args,
+				operationId,
+				async () => {
+					if (JSON.stringify(this.watchTargets(input.target)) !== JSON.stringify(targets))
+						throw new Error("Watch target changed during admission");
+					return watches.add({ ...input, authorizationId: use.authorizationId });
+				},
+				use,
+			);
 		}
 		if (action === "mission_create") return this.createMission(caller, args, operationId);
 		if (action === "mission_attach") {
@@ -93,13 +137,135 @@ export class ControlPilot {
 		}
 		if (action === "start" || action === "send") {
 			if (!this.options.mutations) throw new Error("Control actions unavailable");
-			return this.options.mutations
-				.audit()
-				.perform<unknown>(caller, action, args, operationId, () =>
-					action === "start" ? this.start(args) : this.send(args, operationId),
-				);
+			const targets = action === "send" ? this.sendTargets(args) : this.startTargets(args);
+			const use = await this.authorizationUse(args, action, targets);
+			return this.options.mutations.audit().perform<unknown>(
+				caller,
+				action,
+				args,
+				operationId,
+				async () => {
+					const current = action === "send" ? this.sendTargets(args) : this.startTargets(args);
+					if (JSON.stringify(current) !== JSON.stringify(targets))
+						throw new Error("Control action target changed during admission");
+					return action === "start" ? this.start(args) : this.send(args, operationId);
+				},
+				use,
+			);
 		}
 		throw new Error("Unknown pilot action");
+	}
+	private authorizationMemory(): ControlMemory {
+		if (!this.options.authorizations) throw new Error("Control authorizations unavailable");
+		return this.options.authorizations();
+	}
+	private async authorizationUse(
+		args: Record<string, unknown>,
+		action: "start" | "send" | "watch",
+		targets: WatchTarget[][],
+	): Promise<ControlAuthorizationUse> {
+		const authorizationId = string(args, "authorizationId", true)!;
+		const memory = this.authorizationMemory();
+		let legacyWatch: ControlAuthorizationUse["legacyWatch"];
+		if (authorizationId.startsWith("watch:")) {
+			if (action === "watch") throw new Error("A legacy watch cannot authorize another watch");
+			const watchId = authorizationId.slice(6);
+			const turn = await this.options.turnOrigin?.();
+			const watch = turn && (await this.options.watches?.authority(watchId, turn.requestId));
+			if (!watch || watch.authorizationId) throw new Error("Legacy watch is not part of the active delivery");
+			if (args.message !== watch.note) throw new Error("Legacy watch authorizes only its exact saved note");
+			legacyWatch = { watchId, note: watch.note };
+			await memory.authorizationCreate(legacyWatchAuthorization(watch));
+		}
+		const record = await memory.authorizationGet(authorizationId);
+		if (!record) throw new Error("Unknown authorization");
+		if (
+			record.targets.some(
+				(target) => target.kind === "task" && this.options.taskDone?.(target.missionId!, target.id),
+			)
+		) {
+			await memory.authorizationRevoke(record.id);
+			throw new Error("Authorization ended because its task is done");
+		}
+		const level = args.level === undefined ? "investigate" : authorizationLevel(args.level);
+		// A task scope follows its current, daemon-confirmed owner, never an arbitrary supplied chat ID.
+		const scopedTargets = targets.map((alternatives) => [...alternatives]);
+		for (const target of record.targets)
+			if (target.kind === "task") {
+				const owner = this.options.taskSession?.(target.missionId!, target.id);
+				for (const alternatives of scopedTargets)
+					if (owner && alternatives.some((item) => item.kind === "chat" && item.id === owner))
+						alternatives.push(target);
+			}
+		const budgetUsd = action === "watch" ? 0 : args.budgetUsd;
+		if (
+			!legacyWatch &&
+			action !== "watch" &&
+			(typeof budgetUsd !== "number" || !Number.isFinite(budgetUsd) || budgetUsd <= 0)
+		)
+			throw new Error("start/send require an explicit positive budgetUsd reservation");
+		return {
+			authorizationId,
+			level: level as ControlAuthorizationLevel,
+			targets: scopedTargets,
+			followUps: action === "send" ? 1 : 0,
+			...(action === "start" ? { initialStart: true } : {}),
+			budgetUsd: typeof budgetUsd === "number" ? budgetUsd : 0,
+			...(legacyWatch ? { legacyWatch } : {}),
+		};
+	}
+	private startTargets(args: Record<string, unknown>): WatchTarget[][] {
+		const missionId = string(args, "missionId");
+		if (missionId) {
+			const mission = this.options.missions().find((mission) => mission.id === missionId);
+			if (!mission) throw new Error("Unknown mission");
+			const taskId = string(args, "taskId", true)!;
+			return [
+				[
+					{ kind: "project", id: mission.projectId },
+					{ kind: "mission", id: missionId },
+					{ kind: "task", id: taskId, missionId },
+				],
+			];
+		}
+		return [[{ kind: "project", id: string(args, "projectId", true)! }]];
+	}
+	private watchTargets(target: WatchTarget): WatchTarget[] {
+		if (target.kind === "chat" || target.kind === "chat_prs")
+			return [
+				target,
+				...this.chatTargets(target.id).filter((scope) => scope.kind === "project" || scope.kind === "mission"),
+			];
+		if (target.kind === "mission" || target.kind === "task") {
+			const missionId = target.kind === "mission" ? target.id : target.missionId!;
+			const mission = this.options.missions().find((mission) => mission.id === missionId);
+			if (!mission) throw new Error("Unknown mission");
+			return [target, { kind: "mission", id: missionId }, { kind: "project", id: mission.projectId }];
+		}
+		return [target];
+	}
+	private chatTargets(id: string): WatchTarget[] {
+		const chat = this.options.sessions.get(id);
+		if (!chat) throw new Error("Unknown chat");
+		return [
+			{ kind: "chat", id },
+			{ kind: "chat_prs", id },
+			...(chat.projectId ? [{ kind: "project" as const, id: chat.projectId }] : []),
+			...(chat.missionId ? [{ kind: "mission" as const, id: chat.missionId }] : []),
+			...(chat.pullRequests ?? (chat.pullRequest ? [chat.pullRequest] : [])).map((pr) => ({
+				kind: "pr" as const,
+				id: pr.url,
+			})),
+		];
+	}
+	private sendTargets(args: Record<string, unknown>): WatchTarget[][] {
+		const id = string(args, "sessionId", true)!;
+		const requested = this.chatTargets(id);
+		const chat = this.options.sessions.get(id)!;
+		if (!chat.missionId || args.direct === true) return [requested];
+		const lead = this.options.missions().find((mission) => mission.id === chat.missionId)?.coordinatorSessionId;
+		if (!lead) throw new Error("This mission has no coordinator; choose direct=true for a member");
+		return [requested, this.chatTargets(lead)];
 	}
 	private assertOrganize(args: Record<string, unknown>, attachment = false): void {
 		if (!this.options.mutations?.organizeAllowed?.())

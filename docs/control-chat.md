@@ -247,6 +247,55 @@ configuration transitions. Same-project and task-owner checks remain in the shar
 before membership is changed. It requires an accepted suggestion, is forbidden during notices,
 waits for durable membership and records the target, optional claim and outcome in the audit.
 
+## Authorization records
+
+`pilot({action: "authorize", scope, level, targets, limits?, expiresAt?})` records user intent.
+The daemon independently reads the active Harness run's first placed submission from a short,
+read-only SQLite transaction in the bounded cold-reader worker pool. It does not trust `prepare`,
+tool arguments, a later steering message, or a tool-result message to establish user origin.
+Automatic/notice/extension turns (including `native:user:`) and idle chats cannot create a record.
+The durable user-message reference contains conversation, submission, entry and request IDs.
+
+`start`, `send` and `watch` require `authorizationId`. Levels are `investigate`, `implement`,
+`publish` and `merge`; implement does not imply publish. Merge is recorded intent only: no agent
+action may execute at merge level. Merging remains a separately confirmed app action.
+Targets are explicit chat/project/mission/task/PR/Linear scopes, without wildcards. Both the
+requested chat and the actual coordinator must be covered when a send is redirected. The daemon
+rechecks routing after admission so a changed coordinator cannot escape the checked scope.
+
+Records, revocations and usage reservations are append-only SQLite tables in the existing control
+memory worker. A requested audit row and its usage reservation commit atomically before any effect.
+Successful retries return the original result without another charge. Failed/uncertain actions
+retain their reservation, never automatically refund or replay. Audit phases link `authorizationId`.
+The first start is initial work; later starts and all sends consume follow-ups. Concurrent actions
+share the same durable counters, including after daemon replacement.
+
+Provisional defaults are named constants: two follow-ups, no default USD budget (ask the user),
+24-hour expiry or earlier on use of an already-completed task scope, and publish separate from
+implement. Starts/sends require an explicit positive `budgetUsd` reservation from that total.
+These are **Control admission reservations**, not measured child-runtime spend caps. Enforcing
+child tool permissions and per-chat runtime budgets is separate work; these records do not add
+a sandbox or change the current Build profile. Scope text is retained intent, not an automated
+semantic classifier for the delegated message.
+
+`GET /api/control-chat/authorizations?after&limit` returns bounded ID-ordered pages (default 40,
+maximum 100), including expired/revoked records and current usage. Local-app-only
+`DELETE /api/control-chat/authorizations/:id` appends a revocation and returns `{revoked}`;
+repeated calls return false. There is no tool action to edit, delete or revoke records.
+This uses the same loopback/local-origin boundary as the existing app API, not a new
+authenticated security boundary against arbitrary same-user processes.
+
+New watches cite and retain their parent authorization; firing does not replenish its limits.
+Existing watches are imported in bounded pages without a migration prompt, with `watch:<id>`
+authorizations scoped to the exact saved note and target. They retain the old behavior without a
+retroactive USD/expiry default, and are usable only in a genuine frozen delivery containing that
+watch. A saved authority snapshot survives one-time firing; a legacy watch cannot authorize a
+different message, unrelated target or a new watch. Explicit revocation always wins on restart.
+Legacy one-time watches already deleted by a pre-upgrade firing have no saved target in the old
+schema; if that target cannot be recovered from an existing live watch, delegation fails closed.
+
+No user-visible views change here, so no visual artifact or screenshot is needed.
+
 ## Cross-project memory
 
 Control declares `memory({action: "wake" | "recall" | "zoom" | "note", ...})`, with a required
