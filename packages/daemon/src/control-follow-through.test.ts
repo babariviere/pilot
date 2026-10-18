@@ -489,6 +489,7 @@ test("startup cleanup finds implicit-only targets and a frozen retry loses execu
 			durable: async () => {},
 			onChange: () => () => {},
 		},
+		() => f.memory,
 	);
 	t.after(() => lifecycle.stop());
 	await lifecycle.reconcile();

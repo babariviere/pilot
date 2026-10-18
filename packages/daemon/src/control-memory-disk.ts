@@ -193,6 +193,44 @@ export class ControlMemoryDisk {
 			return this.auditAppend(entry);
 		});
 	}
+	/** Only the per-watch grant, never the shared user authorization that created a watch. */
+	private revokeWatchGrant(watchId: string, reason: string, at: number): boolean {
+		const authorizationId = `watch:${watchId}`;
+		if (!this.authorizations.revoke(authorizationId, at)) return false;
+		this.auditAppend({
+			operationId: `watch-authorization-revoked:${watchId}`,
+			action: "revokeAuthorization",
+			phase: "succeeded",
+			at,
+			caller: "daemon",
+			authorizationId,
+			args: { watchId, authorizationId },
+			result: { revoked: true, reason },
+		});
+		return true;
+	}
+	revokeWatchAuthorization(watchId: string, reason: string): boolean {
+		return this.transaction(() => this.revokeWatchGrant(watchId, reason, Date.now()));
+	}
+	/** The watch outbox is acknowledged only after revocation and both audits commit. */
+	auditWatchRemoval(removal: import("./watch-delivery.ts").WatchRemoval): boolean {
+		return this.transaction(() => {
+			const { watch, reason, at } = removal;
+			const revoked = this.revokeWatchGrant(watch.id, reason, at);
+			const operationId = `watch-removed:${watch.id}`;
+			if (this.auditOperation(operationId)) return revoked;
+			this.auditAppend({
+				operationId,
+				action: "unwatch",
+				phase: "succeeded",
+				at,
+				caller: "daemon",
+				args: { watchId: watch.id, event: watch.event, target: watch.target, mode: watch.mode, note: watch.note },
+				result: { removed: true, reason: `removed: ${reason}` },
+			});
+			return true;
+		});
+	}
 	auditOperation(operationId: string): ControlAuditEntry | undefined {
 		const row = this.db
 			.prepare("SELECT seq,payload FROM audit WHERE operation=? ORDER BY seq DESC LIMIT 1")
