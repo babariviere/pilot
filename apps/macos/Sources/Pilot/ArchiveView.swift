@@ -207,6 +207,7 @@ private struct ArchiveRow: View {
             Button("Read Chat") { model.navigate(.session, id: session.id, context: hostContext) }
             SessionProjectAction(session: session)
             SessionRenameAction(session: session)
+            SessionClipboardActions(session: session)
             SessionArchiveAction(session: session)
         }
         .accessibilityAction(named: "Restore") { model.setArchived(false, sessionId: hostContext?.ref(.session, session.id).storageKey ?? session.id) }

@@ -36,7 +36,9 @@ it does not change chat-result read tracking or enable review entry points.
 - **See what needs you first.** Home shows how every project is doing. The Inbox is the one place to act: chats
   that need you (each with a short reason), pull requests ready to merge, and Linear and Slack items, across
   projects or filtered to one. Each project has an Overview that starts with what is next for it.
-  Right-click a chat and choose **Go to project** to open its project's Overview.
+  Right-click a chat and choose **Go to project** to open its project's Overview. Chat menus also copy the
+  authoritative session storage path or a canonical Pilot chat link as separate actions, including from cached
+  archived and devbox rows when that metadata is available.
 - **Jump anywhere from the keyboard.** ⌘K opens a command palette that leads with places: pages, Slack triage and
   the Linear queue, missions, tasks and projects, then a few recent chats. It searches chats, archived ones
   included (by title, branch, project or pull request number), pages, missions and tasks (`#25`), project scopes,

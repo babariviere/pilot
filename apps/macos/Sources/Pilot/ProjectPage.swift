@@ -764,13 +764,17 @@ private struct NeedsYouRowActions: ViewModifier {
         if item.kind == .scheduledFailed, let id = item.scheduledId {
             content
                 .contextMenu {
-                    if let sessionId = item.sessionId { Button("Open Chat") { model.navigate(.session, id: sessionId, context: hostContext) } }
+                    if let sessionId = item.sessionId {
+                        Button("Open Chat") { model.navigate(.session, id: sessionId, context: hostContext) }
+                        if let session = endpoint.session(sessionId) { SessionClipboardActions(session: session) }
+                    }
                     Button("Dismiss") { dismiss(id) }
                 }
                 .accessibilityAction(named: "Dismiss") { dismiss(id) }
         } else if let chatId {
             content.contextMenu {
                 Button("Open Chat") { model.navigate(.session, id: chatId, context: hostContext) }
+                if let session = endpoint.session(chatId) { SessionClipboardActions(session: session) }
                 if let missionId = item.missionId { Button("Open Mission") { model.openMission(missionId, context: hostContext) } }
             }
         } else {
@@ -835,6 +839,7 @@ private struct ProjectWorkingRow: View {
             .filter { !$0.isEmpty }.joined(separator: ", "))
         .contextMenu {
             Button("Open Chat") { model.navigate(.session, id: item.sessionId, context: hostContext) }
+            if let session { SessionClipboardActions(session: session) }
             Button("Stop Chat") { model.stopSession(hostContext?.ref(.session, item.sessionId).storageKey ?? item.sessionId) }
             if let pr = item.pullRequest, let url = dashboardBrowserURL(pr.url) {
                 Link("Open PR #\(pr.number) in Browser", destination: url)

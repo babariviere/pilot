@@ -560,6 +560,7 @@ struct SessionRow: View {
         .contextMenu {
             SessionProjectAction(session: session)
             SessionRenameAction(session: session)
+            SessionClipboardActions(session: session)
             if session.canChangePin {
                 Button {
                     model.setPinned(!session.isPinned, sessionId: owner?.storageKey ?? session.id)

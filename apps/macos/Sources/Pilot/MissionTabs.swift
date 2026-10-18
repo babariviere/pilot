@@ -1312,6 +1312,7 @@ private struct MissionChatRow: View {
 
     @ViewBuilder private func actions(coordinator: Bool) -> some View {
         Button("Open Chat") { model.navigate(.session, id: session.id, context: hostContext) }
+        SessionClipboardActions(session: session)
         if coordinator {
             Button("Coordinate It Yourself") { model.setCoordinator(nil, missionId: mission.id) }
         } else if !session.isArchived {
