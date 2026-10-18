@@ -1,4 +1,7 @@
+import AppKit
+import Foundation
 import PilotCore
+import SwiftUI
 import Testing
 @testable import Pilot
 
@@ -127,4 +130,261 @@ import Testing
     editor.load(Project(id: "q", name: "Other", path: "/other", createdAt: 1))
     #expect(editor.linearStateMappings.isEmpty)
     #expect(!editor.hasChanges)
+}
+
+private struct SaveFailure: LocalizedError { var errorDescription: String? { "Save refused" } }
+
+private func settingsProject(_ id: String = "p", name: String = "Repo", model: String? = nil, channels: [String] = ["C1"]) -> Project {
+    Project(id: id, name: name, path: "/repo/\(id)", model: model, tracking: .init(slackChannels: channels), createdAt: 1)
+}
+
+@Test @MainActor func projectEditorRefreshFollowsServerWhileFormIsClean() {
+    let editor = ProjectEditor()
+    editor.load(settingsProject())
+    editor.refresh(settingsProject(name: "Renamed", model: "gpt", channels: ["C1", "C2"]))
+    #expect(editor.name == "Renamed" && editor.model == "gpt")
+    #expect(editor.slackChannels.map(\.id) == ["C1", "C2"])
+    #expect(!editor.hasChanges && !editor.hasIncomingChanges)
+}
+
+@Test @MainActor func projectEditorRefreshKeepsUnsavedEditsAndRevertLoadsLatest() {
+    let editor = ProjectEditor()
+    editor.load(settingsProject())
+    editor.name = "Mine"
+    editor.model = "mine-model"
+    editor.addChannel(SlackChannelOption(id: "C9", name: "mine"))
+    editor.refresh(settingsProject(name: "Theirs", model: "their-model", channels: ["C1", "C2"]))
+    #expect(editor.name == "Mine" && editor.model == "mine-model")
+    #expect(editor.slackChannels.map(\.id) == ["C1", "C9"])
+    #expect(editor.hasChanges && editor.hasIncomingChanges)
+    editor.refresh(settingsProject(name: "Theirs again", model: "their-model"))
+    #expect(editor.name == "Mine")
+    editor.revert()
+    #expect(editor.name == "Theirs again" && editor.model == "their-model")
+    #expect(editor.slackChannels.map(\.id) == ["C1"])
+    #expect(!editor.hasChanges && !editor.hasIncomingChanges)
+}
+
+@Test @MainActor func projectEditorRefreshWithUnchangedEditableFieldsRaisesNoNotice() {
+    let editor = ProjectEditor()
+    editor.load(settingsProject())
+    editor.name = "Mine"
+    editor.refresh(Project(id: "p", name: "Repo", path: "/moved", tracking: .init(slackChannels: ["C1"]), createdAt: 2))
+    #expect(editor.name == "Mine" && editor.hasChanges)
+    #expect(!editor.hasIncomingChanges)
+}
+
+@Test @MainActor func projectEditorIncomingValueMatchingTheEditsBecomesTheBaseline() {
+    let editor = ProjectEditor()
+    editor.load(settingsProject())
+    editor.name = "Same"
+    editor.refresh(settingsProject(name: "Same"))
+    #expect(editor.name == "Same")
+    #expect(!editor.hasChanges && !editor.hasIncomingChanges)
+}
+
+@Test @MainActor func projectEditorSwitchingProjectsLoadsTheOtherProjectAndDropsEdits() {
+    let editor = ProjectEditor()
+    editor.load(settingsProject("a", name: "A"))
+    editor.name = "Edited A"
+    editor.refresh(settingsProject("b", name: "B"))
+    #expect(editor.name == "B" && !editor.hasChanges && !editor.hasIncomingChanges)
+}
+
+@Test @MainActor func projectEditorsForSameIdOnDifferentHostsStayIndependent() {
+    let local = ProjectEditor(), remote = ProjectEditor()
+    local.load(settingsProject("same", name: "Local"))
+    remote.load(settingsProject("same", name: "Remote"))
+    local.name = "Local edit"
+    remote.refresh(settingsProject("same", name: "Remote updated"))
+    #expect(local.name == "Local edit" && local.hasChanges)
+    #expect(remote.name == "Remote updated" && !remote.hasChanges)
+    local.refresh(settingsProject("same", name: "Local updated"))
+    #expect(remote.name == "Remote updated")
+    local.revert()
+    #expect(local.name == "Local updated")
+}
+
+@Test @MainActor func projectEditorSaveFailureKeepsEveryFieldAndErrorUntilRevert() async {
+    let editor = ProjectEditor()
+    editor.load(settingsProject())
+    editor.name = "Mine"
+    editor.model = "mine-model"
+    await editor.save { _ in throw SaveFailure() }
+    #expect(editor.error == "Save refused")
+    #expect(editor.name == "Mine" && editor.model == "mine-model" && editor.hasChanges && !editor.isSaving)
+    editor.refresh(settingsProject(name: "Theirs"))
+    #expect(editor.name == "Mine" && editor.error == "Save refused")
+    editor.revert()
+    #expect(editor.name == "Theirs" && editor.error == nil)
+}
+
+@Test @MainActor func projectEditorSaveAdoptsServerValueWhenNothingChangedDuringIt() async {
+    let editor = ProjectEditor()
+    editor.load(settingsProject())
+    editor.name = " Saved "
+    await editor.save { request in
+        #expect(request.name == " Saved ")
+        return settingsProject(name: "Saved")
+    }
+    #expect(editor.name == "Saved" && !editor.hasChanges && editor.error == nil)
+}
+
+@Test @MainActor func projectEditorTypingDuringSaveStaysUnsavedAndIsNotOverwritten() async {
+    let editor = ProjectEditor()
+    editor.load(settingsProject())
+    editor.name = "First"
+    await editor.save { request in
+        #expect(request.name == "First")
+        editor.name = "First, then more"
+        editor.model = "typed-during-save"
+        return settingsProject(name: "First")
+    }
+    #expect(editor.name == "First, then more" && editor.model == "typed-during-save")
+    #expect(editor.hasChanges && editor.error == nil)
+    // The next save sends what was typed, and the baseline is the first save's result.
+    editor.revert()
+    #expect(editor.name == "First" && editor.model == "")
+}
+
+@Test @MainActor func projectEditorExternalRefreshMatchingTheSaveResponseSettlesCleanly() async {
+    let editor = ProjectEditor()
+    editor.load(settingsProject())
+    editor.name = "Mine"
+    await editor.save { _ in
+        editor.refresh(settingsProject(name: "Mine"))
+        #expect(editor.name == "Mine")
+        return settingsProject(name: "Mine")
+    }
+    #expect(editor.name == "Mine" && !editor.hasChanges && !editor.hasIncomingChanges)
+}
+
+@Test @MainActor func projectEditorLateAckOlderThanObservedStateKeepsFormAndRevertLoadsTheObservedState() async {
+    let editor = ProjectEditor()
+    editor.load(settingsProject())
+    editor.name = "Mine"
+    await editor.save { _ in
+        // Someone else's newer state is observed while this save awaits its receipt, then the older ack arrives.
+        editor.refresh(settingsProject(name: "Theirs", model: "theirs"))
+        #expect(editor.name == "Mine")
+        return settingsProject(name: "Mine")
+    }
+    #expect(editor.name == "Mine" && editor.error == nil)
+    #expect(editor.latest?.name == "Theirs", "The ack must not replace the later observed state")
+    #expect(editor.hasChanges && editor.hasIncomingChanges)
+    editor.revert()
+    #expect(editor.name == "Theirs" && editor.model == "theirs" && !editor.hasChanges && !editor.hasIncomingChanges)
+}
+
+@Test @MainActor func projectEditorLateAckNeverOverwritesACleanFormWithAnOlderSnapshot() async {
+    let editor = ProjectEditor()
+    editor.load(settingsProject())
+    editor.name = "Mine"
+    await editor.save { _ in
+        editor.refresh(settingsProject(name: "Newer"))
+        return settingsProject(name: "Older ack")
+    }
+    #expect(editor.name == "Mine", "Neither the ack nor the observed state may replace what the user submitted")
+    #expect(editor.latest?.name == "Newer" && editor.hasIncomingChanges)
+    // Saving again sends the form and settles against whatever the server then returns.
+    await editor.save { request in
+        #expect(request.name == "Mine")
+        return settingsProject(name: "Mine")
+    }
+    #expect(editor.name == "Mine" && !editor.hasChanges && editor.latest?.name == "Mine")
+}
+
+@Test @MainActor func projectEditorLateAckAfterTypingStillKeepsObservedStateAndTypedFields() async {
+    let editor = ProjectEditor()
+    editor.load(settingsProject())
+    editor.name = "Mine"
+    await editor.save { _ in
+        editor.model = "typed"
+        editor.refresh(settingsProject(name: "Theirs"))
+        return settingsProject(name: "Mine")
+    }
+    #expect(editor.name == "Mine" && editor.model == "typed" && editor.hasIncomingChanges)
+    editor.revert()
+    #expect(editor.name == "Theirs" && editor.model == "")
+}
+
+@Test @MainActor func projectEditorObservedStateFromBeforeASaveDoesNotAffectItsAck() async {
+    let editor = ProjectEditor()
+    editor.load(settingsProject())
+    editor.name = "Mine"
+    editor.refresh(settingsProject(name: "Theirs"))
+    await editor.save { _ in settingsProject(name: "Mine") }
+    #expect(editor.name == "Mine" && !editor.hasChanges && !editor.hasIncomingChanges && editor.latest?.name == "Mine")
+}
+
+@Test @MainActor func projectEditorRejectsSecondSaveAndRevertWhileSaving() async {
+    let editor = ProjectEditor()
+    editor.load(settingsProject())
+    editor.name = "Mine"
+    var sends = 0
+    await editor.save { _ in
+        sends += 1
+        editor.revert()
+        #expect(editor.name == "Mine")
+        await editor.save { _ in sends += 1; return settingsProject() }
+        return settingsProject(name: "Mine")
+    }
+    #expect(sends == 1)
+}
+
+@Test @MainActor func projectEditorLateSaveResponseCannotTouchAnotherProject() async {
+    let editor = ProjectEditor()
+    editor.load(settingsProject("a", name: "A"))
+    editor.name = "Edited A"
+    await editor.save { _ in
+        editor.refresh(settingsProject("b", name: "B"))
+        return settingsProject("a", name: "Edited A")
+    }
+    #expect(editor.name == "B" && !editor.hasChanges && editor.latest?.id == "b")
+}
+
+@Test @MainActor func projectEditorBaselineFieldsMatchWhatLoadPutsInTheForm() {
+    let labels = [SlackProjectLabel(name: "Client", description: "App", effect: .hide), SlackProjectLabel(name: "", description: "")]
+    let project = Project(id: "p", name: "Repo", path: "/repo", model: "m", workspace: "direct", requirePullRequest: false,
+                          tracking: .init(slackChannels: ["C1"], linearTeam: "", slackLabels: labels,
+                                          slackMentionOnlyChannels: ["C1"], slackGroupHandles: ["a", "b"]), createdAt: 1)
+    let editor = ProjectEditor()
+    editor.load(project)
+    editor.refresh(project)
+    editor.name = "x"
+    editor.refresh(project)
+    #expect(!editor.hasIncomingChanges)
+}
+
+@Test(.timeLimit(.minutes(1))) @MainActor
+func settingsSaveBarMountsForDirtyFormAndLeavesAfterRevert() async throws {
+    _ = NSApplication.shared
+    let editor = ProjectEditor()
+    editor.load(settingsProject())
+    editor.name = "Mine"
+    editor.refresh(settingsProject(name: "Theirs"))
+    struct Bar: View {
+        @ObservedObject var editor: ProjectEditor
+        var body: some View {
+            if editor.hasChanges {
+                SettingsSaveBar(error: editor.error, updatedElsewhere: editor.hasIncomingChanges, saving: editor.isSaving,
+                                revert: { editor.revert() }, save: {})
+            }
+        }
+    }
+    let hosting = NSHostingView(rootView: Bar(editor: editor).frame(width: 640))
+    let window = NSWindow(contentRect: NSRect(x: -10000, y: -10000, width: 640, height: 80),
+                          styleMask: [.titled], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false; window.contentView = hosting
+    window.orderFrontRegardless(); hosting.layoutSubtreeIfNeeded()
+    defer { window.close() }
+    func settle() async { for _ in 0..<20 { try? await Task.sleep(for: .milliseconds(5)); hosting.layoutSubtreeIfNeeded() } }
+    await settle()
+    // The mounted bar is present for the dirty form, with the incoming-update notice.
+    #expect(hosting.fittingSize.height > 20)
+    #expect(editor.hasIncomingChanges && editor.name == "Mine")
+    editor.revert()
+    await settle()
+    #expect(editor.name == "Theirs" && !editor.hasChanges && !editor.hasIncomingChanges)
+    #expect(hosting.fittingSize.height < 1)
 }
