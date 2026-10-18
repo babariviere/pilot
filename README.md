@@ -922,6 +922,10 @@ pending-notice writes run on a worker. Chat, PR, Linear Done and mission complet
 idempotent batches through the same settle/rate policy as mission notices. Standalone PR watches reuse
 the PR tracker; out-of-scope Linear watches use at most 25 rotating `list_issues` reads per five minutes.
 The control chat manages these subscriptions with `pilot` actions `watch`, `unwatch` and `watches`.
+Archiving a chat removes its chat and chat-PR watches in both modes. Archiving a mission removes
+watches targeting that mission, but marking it Done does not. Restoring never restores watches.
+The daemon reconciles archived or deleted targets on startup, audits each removal and queues a short
+informational cleanup notice for Control, even when its agent is asleep.
 Saved watch instructions run automatically as event turns. Event summaries remain quoted, untrusted
 data, and notice turns cannot create or attach missions. The control chat's own activity and work
 it starts or sends do not wake it again. In the app, the control chat's Watching pane (binoculars in its

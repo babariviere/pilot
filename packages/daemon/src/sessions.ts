@@ -1249,6 +1249,29 @@ export class SessionManager {
 			this.watches = undefined;
 		};
 	}
+	/** Idempotent copy from the watch worker's durable removal outbox. */
+	async auditWatchRemoval(removal: import("./watch-delivery.ts").WatchRemoval): Promise<void> {
+		const memory = this.controlMemory();
+		const operationId = `watch-removed:${removal.watch.id}`;
+		if (!(await memory.auditOperation(operationId))) {
+			await memory.auditAppend({
+				operationId,
+				action: "unwatch",
+				phase: "succeeded",
+				at: removal.at,
+				caller: "daemon",
+				args: {
+					watchId: removal.watch.id,
+					event: removal.watch.event,
+					target: removal.watch.target,
+					mode: removal.watch.mode,
+					note: removal.watch.note,
+				},
+				result: { removed: true, reason: `removed: ${removal.reason}` },
+			});
+			for (const listener of this.controlAuditListeners) listener();
+		}
+	}
 	private readonly controlAuditListeners = new Set<() => void>();
 	onControlAudit(listener: () => void): () => void {
 		this.controlAuditListeners.add(listener);
@@ -3155,6 +3178,8 @@ export class SessionManager {
 						throw error;
 					}
 				}
+				// Finish interrupted cleanup even on an idempotent archive or an immediate restore.
+				if (meta.archivedAt !== undefined) await this.watches?.removeTarget("chat", id, "chat archived");
 				if ((meta.archivedAt !== undefined) === archived) return this.summary(meta);
 				const worker = this.workers.get(id);
 				if (
@@ -3182,6 +3207,7 @@ export class SessionManager {
 					...(!archived ? { restoredAt: Date.now() } : {}),
 					autoArchivedPullRequest,
 				});
+				if (archived) await this.watches?.removeTarget("chat", id, "chat archived");
 				this.workspaceCleanupBackoff.delete(id);
 				if (archived) await rm(join(this.dir(id), "scratch"), { recursive: true, force: true });
 				this.emit(meta);

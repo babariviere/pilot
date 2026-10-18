@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { NOTICE_HOURLY_CAP, NOTICE_WINDOW_MS, noticeDeadline, noticeInvolvesSession } from "./notice-dispatcher.ts";
-import type { WatchNotice, WatchObservation, WatchTransition } from "./watch-delivery.ts";
+import type { WatchNotice, WatchObservation, WatchRemoval, WatchTransition } from "./watch-delivery.ts";
 import type { Watch } from "./watches.ts";
 
 /** Called only on the SQLite worker. Match/consume/freeze are transactional. */
@@ -14,6 +14,7 @@ export class WatchEventsDisk {
 			CREATE TABLE IF NOT EXISTS watch_states (source TEXT PRIMARY KEY, state TEXT NOT NULL, revision INTEGER NOT NULL, at INTEGER NOT NULL);
 			CREATE TABLE IF NOT EXISTS watch_cursors (source TEXT PRIMARY KEY, cursor INTEGER NOT NULL);
 			CREATE TABLE IF NOT EXISTS watch_control (id INTEGER PRIMARY KEY CHECK(id=1), session_id TEXT NOT NULL);
+			CREATE TABLE IF NOT EXISTS watch_removals (watch_id TEXT PRIMARY KEY, data TEXT NOT NULL);
    CREATE TABLE IF NOT EXISTS watch_pending (
     watch_id TEXT PRIMARY KEY, event_id INTEGER NOT NULL, first_at INTEGER NOT NULL, last_at INTEGER NOT NULL, data TEXT NOT NULL
    );
@@ -35,6 +36,59 @@ export class WatchEventsDisk {
 			this.db.exec("ROLLBACK");
 			throw error;
 		}
+	}
+	/** Deletion, audit outbox and one informational notice commit together. */
+	removeTarget(kind: "chat" | "mission", id: string, reason: WatchRemoval["reason"]): number {
+		return this.transaction(() => {
+			const rows = this.db
+				.prepare(
+					kind === "chat"
+						? "SELECT data FROM watches WHERE target_kind IN ('chat','chat_prs') AND target_id=?"
+						: "SELECT data FROM watches WHERE target_kind='mission' AND target_id=?",
+				)
+				.all(id);
+			if (!rows.length) return 0;
+			const at = Date.now();
+			const groups = new Map<string, number>();
+			const ids: string[] = [];
+			for (const row of rows) {
+				const watch: Watch = JSON.parse(String(row.data));
+				this.db
+					.prepare("INSERT INTO watch_removals VALUES(?,?)")
+					.run(watch.id, JSON.stringify({ watch, reason, at }));
+				this.db.prepare("DELETE FROM watches WHERE id=?").run(watch.id);
+				const group = `${watch.event} (${watch.target.kind}, ${watch.mode})`;
+				groups.set(group, (groups.get(group) ?? 0) + 1);
+				if (ids.length < 8) ids.push(watch.id);
+			}
+			const seq = Number(
+				this.db.prepare("UPDATE watch_sequence SET value=value+1 WHERE id=1 RETURNING value").get()!.value,
+			);
+			const text = `Removed ${rows.length} watch(es): ${reason}, ${id}. ${[...groups].map(([key, n]) => `${n} × ${key}`).join("; ")}. IDs: ${ids.join(", ")}${rows.length > ids.length ? ` (+${rows.length - ids.length} more; see audit)` : ""}`;
+			this.db.prepare("INSERT INTO watch_pending VALUES(?,?,?,?,?)").run(
+				`removed:${seq}`,
+				seq,
+				at,
+				at,
+				JSON.stringify({
+					watchId: `removed:${seq}`,
+					event: "watch.removed",
+					note: "",
+					text,
+					count: 1,
+				}),
+			);
+			return rows.length;
+		});
+	}
+	removalAudit(): WatchRemoval[] {
+		return this.db
+			.prepare("SELECT data FROM watch_removals ORDER BY rowid LIMIT 32")
+			.all()
+			.map((row) => JSON.parse(String(row.data)));
+	}
+	acknowledgeRemoval(id: string): void {
+		this.db.prepare("DELETE FROM watch_removals WHERE watch_id=?").run(id);
 	}
 	observe(events: WatchObservation[], self?: string, inside = false): number {
 		if (events.length > 128) throw new Error("Watch observation batch too large");

@@ -1,6 +1,12 @@
 import { Worker } from "node:worker_threads";
 import { NoticeDispatcher } from "./notice-dispatcher.ts";
-import type { WatchNotice, WatchNoticeSink, WatchObservation, WatchTransition } from "./watch-delivery.ts";
+import type {
+	WatchNotice,
+	WatchNoticeSink,
+	WatchObservation,
+	WatchRemoval,
+	WatchTransition,
+} from "./watch-delivery.ts";
 import { validateWatch, type Watch, type WatchInput, type WatchTarget } from "./watches.ts";
 
 /** Bounded RPC mailbox. No SQLite connection or unbounded watch cache on the event loop. */
@@ -25,6 +31,8 @@ export class WatchService {
 	ready(): Promise<void> {
 		return this.expiryUpdate ?? Promise.resolve();
 	}
+	private removalAudit?: (removal: WatchRemoval) => Promise<void>;
+	private auditing?: Promise<void>;
 	constructor(path: string) {
 		this.dispatcher = new NoticeDispatcher({
 			deadlines: async (now) => {
@@ -129,6 +137,43 @@ export class WatchService {
 		if (result) await this.changed();
 		return result;
 	}
+	bindRemovalAudit(audit: ((removal: WatchRemoval) => Promise<void>) | undefined): void {
+		this.removalAudit = audit;
+	}
+	async removeTarget(kind: "chat" | "mission", id: string, reason: WatchRemoval["reason"]): Promise<number> {
+		const removed = await this.rpc<number>("removeTarget", { kind, id, reason });
+		if (removed) {
+			this.changed();
+			this.dispatcher.schedule();
+		}
+		await this.flushRemovalAudit();
+		return removed;
+	}
+	/** Replay the durable audit outbox before accepting new lifecycle work on startup. */
+	async flushRemovalAudit(): Promise<void> {
+		if (this.auditing) {
+			await this.auditing;
+			return this.flushRemovalAudit();
+		}
+		if (!this.removalAudit) return;
+		this.auditing = (async () => {
+			while (this.removalAudit) {
+				const rows = await this.rpc<WatchRemoval[]>("removalAudit");
+				if (!rows.length) return;
+				for (const removal of rows) {
+					const audit = this.removalAudit;
+					if (!audit) return;
+					await audit(removal);
+					await this.rpc("acknowledgeRemoval", removal.watch.id);
+				}
+			}
+		})();
+		try {
+			await this.auditing;
+		} finally {
+			this.auditing = undefined;
+		}
+	}
 	list(): Promise<Watch[]> {
 		return this.rpc("list");
 	}
@@ -176,6 +221,7 @@ export class WatchService {
 		this.closing = true;
 		clearTimeout(this.expiryTimer);
 		await this.expiryUpdate;
+		await this.auditing?.catch(() => {});
 		await this.dispatcher.stop();
 		try {
 			await this.rpc("close");

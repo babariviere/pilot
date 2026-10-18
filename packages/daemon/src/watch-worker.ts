@@ -4,7 +4,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { parentPort, workerData } from "node:worker_threads";
-import type { WatchNotice, WatchObservation, WatchTransition } from "./watch-delivery.ts";
+import type { WatchNotice, WatchObservation, WatchRemoval, WatchTransition } from "./watch-delivery.ts";
 import { WatchEventsDisk } from "./watch-events-disk.ts";
 import { MAX_WATCHES, validateWatch, type Watch, type WatchInput } from "./watches.ts";
 
@@ -21,6 +21,7 @@ db.exec(`
  target_id TEXT NOT NULL, target_scope TEXT NOT NULL, data TEXT NOT NULL, expires_at INTEGER
  );
  CREATE INDEX IF NOT EXISTS watches_match ON watches(event, target_kind, target_id, target_scope);
+ CREATE INDEX IF NOT EXISTS watches_target ON watches(target_kind, target_id);
  CREATE INDEX IF NOT EXISTS watches_expiry ON watches(expires_at) WHERE expires_at IS NOT NULL;
 `);
 const events = new WatchEventsDisk(db);
@@ -37,6 +38,12 @@ function list(now: number): Watch[] {
 function dispatch(op: string, args: unknown): unknown {
 	const now = Date.now();
 	if (op === "self") return events.setControl(String(args));
+	if (op === "removeTarget") {
+		const a = args as { kind: "chat" | "mission"; id: string; reason: WatchRemoval["reason"] };
+		return events.removeTarget(a.kind, a.id, a.reason);
+	}
+	if (op === "removalAudit") return events.removalAudit();
+	if (op === "acknowledgeRemoval") return events.acknowledgeRemoval(String(args));
 	if (op === "expiry") {
 		prune(now);
 		const row = db.prepare("SELECT MIN(expires_at) AS at FROM watches WHERE expires_at IS NOT NULL").get();
