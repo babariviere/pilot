@@ -117,6 +117,24 @@ enum DevboxProblemText {
         return "Setup could not be confirmed. Check the existing SSH alias, host trust and non-interactive authentication. Retry the same verified package; no remote stop was sent."
     }
 
+    /// Update of an unsaved devbox from the setup sheet. Retrying reuses the same request.
+    static func setupUpdate(_ error: Error) -> String {
+        if error is DevboxPackageFailure || error is LinuxRuntimeManifest.ValidationError { return setup(error) }
+        if let failure = error as? LinuxBootstrapFailure {
+            switch failure.code {
+            case "assets", "trust", "python", "sandbox": return setup(error)
+            case "update-pending": return "The update was requested but is not active yet. It may be waiting for work on the devbox to finish. Try again to check the same update."
+            case "newer-runtime": return "The devbox runs a newer Pilot runtime. Update this app first. Downgrades are not supported."
+            case "identity": return "The devbox identity changed during setup. Close this form and start setup again."
+            default: break
+            }
+        }
+        if let routing = error as? HostRoutingError, routing == .identityChanged || routing == .incompatible {
+            return setup(error)
+        }
+        return "The update has no confirmed result. It may continue on the devbox. Try again to check the same update; no remote stop was sent."
+    }
+
     static func update(_ error: Error) -> String {
         if error is DevboxPackageFailure { return setup(error) }
         switch error as? DevboxProblem {

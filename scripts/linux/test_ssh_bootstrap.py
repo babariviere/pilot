@@ -184,6 +184,40 @@ class BootstrapTests(unittest.TestCase):
         self.assertTrue(unrelated.exists())
         self.assertEqual(credential.read_text(), "fixture-secret-never-transferred")
 
+    def test_other_owned_runtime_reports_update_before_staging_and_ignores_foreign_units(self):
+        home = self.base / "home"
+        base = home / ".local/share/pilot/runtimes"
+        base.mkdir(parents=True, mode=0o700)
+        data = home / ".local/share/pilot"
+        daemon, lineage = "868e87e1-3b80-4c4f-a809-9cbe97a73c21", "ded72b74-65e5-4b49-9339-c97803bc6a0b"
+        (data / "daemon-id").write_text(daemon)
+        (data / "storage-lineage").write_text(lineage)
+        unit = home / ".config/systemd/user/pilotd.service"
+        unit.parent.mkdir(parents=True)
+        old = "a" * 64
+        owned = f'# Managed by Pilot Linux runtime v1\n[Service]\nExecStart="{base}/{old}/runtime/node/bin/node" "x"\n'
+        cases = [
+            (owned, "update-required"),
+            (owned.replace(old, self.sha), None),
+            (owned.replace("# Managed by Pilot Linux runtime v1", "# Someone else"), None),
+        ]
+        for text, code in cases:
+            unit.write_text(text)
+            with self.subTest(code=code), patch.object(bootstrap.Path, "home", return_value=home), \
+                    patch.object(bootstrap.platform, "system", return_value="Linux"), \
+                    patch.object(bootstrap.platform, "machine", return_value="x86_64"), \
+                    patch.object(bootstrap, "stage", return_value=base / "staged") as stage, \
+                    patch.object(bootstrap, "activate", return_value=dict(ok=True)):
+                if code:
+                    with self.assertRaises(bootstrap.Blocked) as error:
+                        bootstrap.setup(self.sha, len(self.good), None, io.BytesIO(self.good))
+                    self.assertEqual(error.exception.result["code"], code)
+                    self.assertEqual(error.exception.result["identity"], dict(daemonId=daemon, lineageId=lineage))
+                    stage.assert_not_called()
+                else:
+                    self.assertTrue(bootstrap.setup(self.sha, len(self.good), None, io.BytesIO(self.good))["ok"])
+        self.assertEqual(unit.read_text(), cases[-1][0])
+
 
 if __name__ == "__main__":
     unittest.main()

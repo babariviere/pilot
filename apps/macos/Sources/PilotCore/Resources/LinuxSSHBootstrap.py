@@ -152,6 +152,21 @@ def read_identity(home):
     return dict(daemonId=values[0], lineageId=values[1])
 
 
+def installed_runtime(home, base):
+    """Digest of an existing Pilot-managed unit's runtime, or None for no/foreign units.
+
+    Read-only. The update flow re-verifies the full unit before it changes anything.
+    """
+    unit = home / ".config/systemd/user/pilotd.service"
+    if unit.is_symlink() or not unit.is_file():
+        return None
+    text = unit.read_text()
+    if not text.startswith("# Managed by Pilot Linux runtime v1\n"):
+        return None
+    match = re.search(r'^ExecStart="' + re.escape(str(base)) + r'/([a-f0-9]{64})/runtime/node/bin/node" ', text, re.M)
+    return match.group(1) if match else None
+
+
 def activate(root, home):
     helper = [str(root / "node/bin/node"), str(root / "service.mjs")]
     try:
@@ -210,6 +225,14 @@ def setup(digest, size, pinned, stream):
             if (not stale.is_symlink() and stale.is_dir() and stale.stat().st_uid == os.getuid() and
                     not marker.is_symlink() and marker.is_file() and marker.read_text() == "pilot-bootstrap-v1"):
                 shutil.rmtree(stale)
+        # An earlier setup may have installed another Pilot runtime before the app saved this host.
+        # Setup never switches runtimes; report the observed identity so the app can offer the update flow.
+        installed = installed_runtime(home, base)
+        identity = read_identity(home)
+        if installed and installed != digest and identity:
+            blocked = Blocked("update-required", "This devbox runs another Pilot runtime. Update it with the verified package; setup never switches runtimes.")
+            blocked.result["identity"] = identity
+            raise blocked
         root = stage(base, digest, size, stream)
         return activate(root, home)
 

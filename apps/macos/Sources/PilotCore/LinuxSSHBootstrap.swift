@@ -114,6 +114,12 @@ public struct LinuxBootstrapConnection: Sendable {
     public let tunnel: ManagedSSHTunnel
 }
 
+/// Setup found a Pilot service for another runtime that an earlier setup installed but the app never saved.
+/// Setup never switches runtimes. Offer the explicit update flow for this observed identity instead.
+public struct LinuxBootstrapUpdateRequired: Error, Equatable, Sendable {
+    public let host: HostRef
+}
+
 public enum LinuxSSHBootstrap {
     /// Explicit initial setup/reconciliation, not a side effect of connection or an update transaction.
     /// Repeating with the same package never replaces credentials/data or restarts a running unit.
@@ -135,6 +141,11 @@ public enum LinuxSSHBootstrap {
         let report: Report
         do { report = try JSONDecoder().decode(Report.self, from: output) }
         catch { throw LinuxBootstrapFailure("ssh", "SSH setup returned no valid result. Check the working alias/authentication and Python 3, then retry the same package to reconcile partial setup.") }
+        if !report.ok, report.code == "update-required", let identity = report.identity {
+            let host = HostRef(hostId: hostId, daemonId: identity.daemonId, lineageId: identity.lineageId)
+            if let pinnedHost, pinnedHost != host { throw HostRoutingError.identityChanged }
+            throw LinuxBootstrapUpdateRequired(host: host)
+        }
         guard report.ok, let identity = report.identity else {
             throw LinuxBootstrapFailure(report.code ?? "setup", report.detail ?? "Remote setup did not complete.", plan: report.plan)
         }
@@ -147,6 +158,57 @@ public enum LinuxSSHBootstrap {
         do { _ = try await tunnel.connect() }
         catch { await tunnel.disconnect(); throw error }
         return LinuxBootstrapConnection(host: host, tunnel: tunnel)
+    }
+
+    /// After a confirmed update request for an unsaved devbox, waits until its service reports the package version
+    /// with the observed identity. Read-only: it never stops, restarts or re-requests anything remotely.
+    /// An update may wait for active remote work, so a timeout leaves it running and the caller retries the same ID.
+    public static func awaitUpdated(configuration: SSHConnectionConfiguration, package: LinuxRuntimePackage,
+                                    host: HostRef, timeout: TimeInterval = 600) async throws -> LinuxBootstrapConnection {
+        try await awaitUpdated(configuration: configuration, version: package.manifest.version, host: host,
+                               timeout: timeout, retryDelay: 5, options: SSHTunnelOptions())
+    }
+
+    static func awaitUpdated(configuration: SSHConnectionConfiguration, version: String, host: HostRef,
+                             timeout: TimeInterval, retryDelay: TimeInterval,
+                             options: SSHTunnelOptions) async throws -> LinuxBootstrapConnection {
+        let deadline = ProcessInfo.processInfo.systemUptime + timeout
+        while true {
+            let outcome = HelloOutcome()
+            let tunnel = ManagedSSHTunnel(configuration: configuration, options: options, probe: { url, timeout in
+                try await SSHTunnelHello.check(url: url, timeout: timeout) { data in
+                    // The previous runtime keeps serving the same identity until the updater switches the unit,
+                    // and an older hello may not decode with this app's schema. Both are worth another check.
+                    let hello = try JSONDecoder().decode(DaemonHello.self, from: data)
+                    if (try? host.validate(hello)) != nil, hello.daemonVersion != version {
+                        throw HostRoutingError.incompatible
+                    }
+                    do { try validateHello(data, host: host, version: version) }
+                    catch { outcome.fail(error); throw error }
+                }
+            })
+            do {
+                _ = try await tunnel.connect()
+                return LinuxBootstrapConnection(host: host, tunnel: tunnel)
+            } catch {
+                await tunnel.disconnect()
+                if error is CancellationError { throw error }
+                // A different identity, platform or missing isolation is final. Only the old version or an
+                // unreachable service (the switch restarts it) is worth another read-only check.
+                if let terminal = outcome.terminal { throw terminal }
+            }
+            guard ProcessInfo.processInfo.systemUptime + retryDelay < deadline else {
+                throw LinuxBootstrapFailure("update-pending", "The update was requested but is not active yet. It may be waiting for remote work to finish. Retry to check the same update.")
+            }
+            try await Task.sleep(for: .seconds(retryDelay))
+        }
+    }
+
+    private final class HelloOutcome: @unchecked Sendable {
+        private let lock = NSLock()
+        private var error: Error?
+        func fail(_ error: Error) { lock.withLock { self.error = error } }
+        var terminal: Error? { lock.withLock { error } }
     }
 
     static func validateHello(_ data: Data, host: HostRef, version: String) throws {
