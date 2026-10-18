@@ -377,6 +377,8 @@ export interface ControlHostStateResponse {
 	/** At most the two persisted home/executor acknowledgments; no client-invented activation flags. */
 	roleAcknowledgments?: ControlRoleAcknowledgment[];
 	courierCapability?: ControlCourierCapability;
+	pairing?: ControlPairingState;
+	mutation?: ControlMutationResult;
 }
 /** POST /api/control-hosts/:bindingId/archive on home. App rollout only, not a pilot action. */
 export interface ControlArchiveRequest {
@@ -622,7 +624,7 @@ export interface ControlRoleFence {
 }
 /** Exact-intent native approval. Request IDs and loopback reachability alone are not authentication. */
 export interface ControlHostApprovalInput {
-	action: "enroll" | "unpair" | "archive";
+	action: "enroll" | "unpair" | "archive" | "bootstrap";
 	appKeyId: string;
 	/** Exact UTF-8 JSON intent bytes, excluding approvalRequestId; at most 64 KiB. */
 	intentPayload: string;
@@ -850,12 +852,14 @@ export interface ControlHostErrorResponse {
 		| "capability_denied"
 		| "capability_expired"
 		| "read_unavailable"
+		| "legacy_migration_required"
 		| "not_ready"
 		| "capacity";
 	error: string;
 	syncState?: ControlHostSyncState;
 	checkpoint?: ControlRemoteEventCheckpoint;
 	floor?: ControlEventFloor;
+	current?: ControlHostStateResponse;
 }
 
 /** Pairing stages this target only; it does not change the effective role or freeze legacy turns. */
@@ -968,6 +972,17 @@ export interface ControlRemoteReadResponse {
 	untrusted: true;
 	result: unknown;
 	truncated: boolean;
+	availability: "available";
+}
+export interface ControlRemoteReadOutcome {
+	requestId: string;
+	host: OperationHost;
+	availability: ControlHostAvailability;
+	response?: ControlRemoteReadResponse;
+	error?: ControlHostErrorResponse;
+}
+export interface ControlReadImportRequest {
+	outcome: ControlRemoteReadOutcome;
 }
 export interface ControlReadExchangeRequest {
 	peer: OperationHost;
@@ -981,4 +996,45 @@ export interface ControlReadExchangeResponse {
 export interface ControlReadImportResponse {
 	requestId: string;
 	state: "delivered" | "expired";
+}
+
+export interface ControlMutationResult {
+	disposition: "applied" | "replayed";
+	intentId: string;
+}
+export interface ControlPairingState {
+	phase: "partial" | "paired" | "revoked";
+	localCommitted: true;
+	peerCommitted: boolean;
+}
+export interface ControlPairingAcknowledgment {
+	peerRoleAcknowledgment: ControlRoleAcknowledgment;
+	peerHello: import("./hello.ts").DaemonHello;
+}
+export interface ControlArchiveLookupResponse {
+	operation: ControlDurableOperation;
+	delivery: import("./operations.ts").OperationDelivery;
+	adopted: boolean;
+	roleAcknowledgment?: ControlRoleAcknowledgment;
+}
+export interface ControlRoleBootstrapRequest {
+	host: OperationHost;
+	home: OperationHost;
+	role: "home" | "executor";
+	mode: "fresh" | "preserve-legacy";
+	expectedRoleEpoch: 0;
+	idempotencyKey: string;
+	approvalRequestId: string;
+}
+export interface ControlRoleBootstrapStatus {
+	host: OperationHost;
+	state: "unconfigured" | "configured" | "legacy-migration-required";
+	roleEpoch: number;
+	configuration?: ControlHostConfiguration;
+	roleAcknowledgment?: ControlRoleAcknowledgment;
+}
+export interface ControlRoleBootstrapResult {
+	configuration: ControlHostConfiguration;
+	roleAcknowledgment: ControlRoleAcknowledgment;
+	mutation: ControlMutationResult;
 }

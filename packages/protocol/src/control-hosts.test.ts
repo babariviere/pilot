@@ -35,6 +35,17 @@ type PayloadFixture = {
 	[K in ControlOperationKind]: { kind: K; payload: ControlOperationPayloads[K] };
 }[ControlOperationKind];
 interface Fixtures {
+	readOutcomes: C.ControlRemoteReadOutcome[];
+	readImportRequests: C.ControlReadImportRequest[];
+	pairingResults: C.ControlHostStateResponse[];
+	pairingAcknowledgment: C.ControlPairingAcknowledgment;
+	pairingConflict: C.ControlHostErrorResponse;
+	archiveLookups: C.ControlArchiveLookupResponse[];
+	bootstrapRequests: C.ControlRoleBootstrapRequest[];
+	bootstrapStatuses: C.ControlRoleBootstrapStatus[];
+	bootstrapResults: C.ControlRoleBootstrapResult[];
+	bootstrapApproval: C.ControlHostApprovalInput;
+	bootstrapError: C.ControlHostErrorResponse;
 	stagingRollback: C.ControlUnpairResponse;
 	authErrors: C.ControlHostErrorResponse[];
 	delegationFence: C.ControlDelegationFence;
@@ -509,5 +520,44 @@ test("wire-adoption fixtures separate staged pairing, native approval, courier c
 	assert.deepEqual(
 		f.readImports.map((r) => r.state),
 		["delivered", "expired"],
+	);
+});
+
+test("bootstrap, pairing replay, archive lookup and unavailable reads expose daemon-owned wire outcomes", () => {
+	const f = roundTrip(fixture);
+	assert.deepEqual(
+		f.bootstrapStatuses.map((s) => s.state),
+		["unconfigured", "configured", "legacy-migration-required"],
+	);
+	assert.ok(f.bootstrapRequests.every((r) => r.expectedRoleEpoch === 0));
+	assert.equal(f.bootstrapApproval.action, "bootstrap");
+	assert.deepEqual(
+		f.bootstrapResults.map((r) => r.mutation.disposition),
+		["applied", "replayed"],
+	);
+	assert.deepEqual(f.bootstrapResults[0].roleAcknowledgment, f.bootstrapResults[1].roleAcknowledgment);
+	assert.match(f.bootstrapResults[0].roleAcknowledgment.bindingId, /^role-bootstrap:/);
+	assert.equal(f.bootstrapError.code, "legacy_migration_required");
+	assert.deepEqual(
+		f.pairingResults.map((s) => s.pairing?.phase),
+		["partial", "paired", "paired"],
+	);
+	assert.equal(f.pairingResults[0].pairing?.peerCommitted, false);
+	assert.equal(f.pairingResults[2].mutation?.disposition, "replayed");
+	assert.equal(f.pairingConflict.current?.pairing?.phase, "paired");
+	assert.equal(f.pairingAcknowledgment.peerRoleAcknowledgment.generation, f.enrollments[0].generation);
+	assert.equal(f.archiveLookups[0].delivery.state, "unknown");
+	assert.equal(f.archiveLookups[1].delivery.state, "accepted");
+	assert.equal(f.archiveLookups[1].adopted, false);
+	assert.equal(f.archiveLookups[1].roleAcknowledgment, undefined);
+	assert.equal(f.archiveLookups[2].adopted, true);
+	assert.equal(f.archiveLookups[2].roleAcknowledgment?.intentId, f.archiveResponse.operation.operationId);
+	assert.equal(f.readOutcomes[0].response?.availability, "available");
+	assert.equal(f.readOutcomes[1].availability, "disconnected");
+	assert.equal(f.readOutcomes[1].response, undefined);
+	assert.equal(f.readOutcomes[1].error?.code, "read_unavailable");
+	assert.deepEqual(
+		f.readImportRequests.map((r) => r.outcome.requestId),
+		["read:0", "read:1"],
 	);
 });

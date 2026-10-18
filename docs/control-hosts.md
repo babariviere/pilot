@@ -1062,8 +1062,8 @@ work. The app relays only through:
 - POST home `/:id/reads/exchange`: `ControlReadExchangeRequest {peer,cursor?}` →
   `ControlReadExchangeResponse {requests,more,next?}`, at most 16 original requests/64 KiB.
 - POST executor `/:id/reads/execute`: original ControlRemoteReadRequest →
-  `ControlRemoteReadResponse {requestId,sourceHost,capturedAt,untrusted:true,result,truncated}`.
-- POST home `/:id/reads/import`: original response → `ControlReadImportResponse`, delivered to
+  `ControlRemoteReadResponse {requestId,sourceHost,capturedAt,untrusted:true,result,truncated,availability:"available"}`.
+- POST home `/:id/reads/import`: `ControlReadImportRequest {outcome}` → `ControlReadImportResponse`, delivered to
   the original waiter or expired without side effects. Verify pending request ID and exact source
   peer before releasing data. Never retarget an expired response to a newer request.
 
@@ -1182,3 +1182,88 @@ the archive endpoint can be implemented/tested with trusted fixture evidence bef
 home-adopted versioned archive/role acknowledgment, both proofs and current pins permit one-row UI.
 Runtime fault proofs for these sequences belong to daemon handler/watch/archive tests and real-courier
 integration; the shared fixtures in this PR establish DTO/route/error compatibility, not executed handlers.
+
+## Fresh-host bootstrap and explicit query results
+
+### Native-only role bootstrap before conversational startup
+
+Fresh daemons have no inferred Control home. GET `/api/control-role` under M authentication returns
+`ControlRoleBootstrapStatus`: unconfigured (epoch 0), configured (persisted positive epoch/config/ack),
+or legacy-migration-required. Opening this management API or hello must not load/create a Control.
+Read the durable role/freeze guard before any conversation load/recovery, even in the unconfigured
+state. Ordinary accepted agent work is unaffected by this management hold.
+
+Reserved M-only role APIs, never courier capabilities or agent messages:
+
+| Route | Request → response |
+| --- | --- |
+| POST `/api/control-role/approval-requests` | ControlHostApprovalInput action bootstrap with exact bootstrap intent → ControlHostApprovalRequest |
+| GET `/api/control-role/approval-requests/:requestId` | Stored request/status |
+| POST `/api/control-role/approval-requests/:requestId/decision` | ControlHostApprovalDecision → stored approved/denied request, using the existing exact-intent signature |
+| POST `/api/control-role/bootstrap` | ControlRoleBootstrapRequest → ControlRoleBootstrapResult |
+| GET `/api/control-role` | ControlRoleBootstrapStatus, no side effects |
+
+Bootstrap approval uses the dedicated scope ID `role-bootstrap:<daemonId>:<lineageId>`, generation 1
+and expectedRoleEpoch 0; it is not an enrolled Control binding, cannot mint a courier capability and
+cannot satisfy pairing/cutover proofs. Native approval shows exact host/home pins, role and mode.
+The bootstrap result's role acknowledgment uses this dedicated scope, epoch 1 and the persisted
+idempotencyKey as intentId. Existing installed native-key authentication is still required; SSH trust
+or successful installation/update alone cannot authorize role bootstrap.
+
+Mode fresh requires daemon-verified virgin lineage/absence of legacy Control or freeze evidence,
+not a caller's claim of emptiness. Role home requires home=host. Role executor may name the separately
+previewed intended home, but admits no remote Control operation until independent enrollment/approval.
+Persist role, ack and idempotency evidence before allowing any Control startup; fresh executor
+therefore never accidentally creates a legacy singleton. expectedRoleEpoch other than 0 or conflicting
+same-key intent fails 409 stale_role/conflict; exact same-key replay returns mutation.disposition replayed,
+the same bootstrap acknowledgment and unchanged role epoch. No overwrite/reset of existing policy.
+
+Mode preserve-legacy is available only for a verifiably pre-existing legacy-home configuration with
+no prior freeze/archive/revocation evidence: host=home and role home, no new singleton, reset scope,
+usage or grant authority. It persists the recognized effective legacy role before normal recovery,
+leaving later pairing pair-only. It cannot restore a frozen owner. Unknown/corrupt legacy policy,
+reinstall identity mismatch or any freeze evidence returns 409 legacy_migration_required and retains
+the source stores; there is no destructive repair, guessed default or automatic home promotion.
+An already configured daemon uses the staged pairing/archive APIs, never bootstrap to replace a home.
+
+### Pairing partial, replay, conflict and revoke readback
+
+ControlHostStateResponse.pairing is ControlPairingState, not a client flag:
+- partial: localCommitted=true, peerCommitted=false after one native enrollment commit;
+- paired: both durable peer records have been reconciled for the exact pins/generation;
+- revoked: local monotonic revoke is committed, with peerCommitted reporting known peer revoke evidence.
+
+POST `/api/control-hosts/:id/pairing/ack` on either peer accepts ControlPairingAcknowledgment
+(original peerRoleAcknowledgment plus verified peerHello), authenticated M or C inspect. The receiving
+daemon verifies the peer acknowledgment against the same enrolled home/target/generation, current
+or staged role and role epoch, then persists its peer-commit evidence and returns ControlHostStateResponse.
+No body field `paired:true` is accepted. A lost ack replays the original records or reads GET state.
+Partial pairing never starts migration, grants execution authority by itself or hides a legacy row.
+
+Native enrollment/pairing/revoke responses may carry ControlMutationResult: applied or replayed with
+the original consumed intent ID. Replays reconcile current persisted policy while preserving the
+original effect/ack evidence; they cannot reinstate an old role. A conflict returns the existing
+typed 409 code and optional ControlHostErrorResponse.current state for explicit reconciliation.
+Unknown peers, changed pins/generation/epoch, revoked→active and a conflicting idempotency key remain
+hard conflicts, not partial success. Enrollment revoke is POST unpair; read GET state and UnpairResponse
+to distinguish local revoke from peerAcknowledged=false. A partial revoke never permits failover.
+
+### Archive lookup and read availability are explicit APIs
+
+GET home `/api/control-hosts/:id/archive/operations/:operationId` under M or C receipts returns
+ControlArchiveLookupResponse: original immutable operation, generic receipt/unknown delivery,
+adopted and optional home-adopted roleAcknowledgment. Unknown operation is 404, not permission to
+create a fresh ID. Exported but unknown/pending keeps adopted false; a remote accepted receipt is
+not sufficient until home adopts it. Only matching accepted+adopted+versioned role/archive ack,
+both verified proofs and current identities permit native one-row UI. This lookup plus GET state
+handles lost archive request/adoption replies without inventing flags or relying on UI-local state.
+
+ControlRemoteReadResponse is a successful source capture with availability available. The home-facing
+ControlRemoteReadOutcome always names requestId and selected host: available requires that original
+response; disconnected or unknown has no response/capturedAt and carries a bounded typed error.
+The courier reports only its verified transport/request outcome through ControlReadImportRequest,
+and home checks the original pending request/host and current availability before delivering it.
+Do not fabricate a remote capture time or an empty result when disconnected. The same 24,000-byte,
+32-request/1-MiB, expiry/cancellation bounds apply to success and unavailable imports. A late result
+is expired rather than attached to a different waiter; unknown/disconnected is never failed/stopped
+agent work. These availability data cannot set readiness or migration flags.
