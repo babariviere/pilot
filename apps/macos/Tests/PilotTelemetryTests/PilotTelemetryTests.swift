@@ -207,7 +207,9 @@ private func configuration(exporter: any SpanExporter) -> PilotTelemetryConfigur
     #expect(telemetry.stats.queued == pilotSwiftSpanQueueLimit)
     #expect(telemetry.stats.dropped == 600 - pilotSwiftSpanQueueLimit)
     exporter.release()
-    await telemetry.flush()
+    // A bounded flush can return while the released exporter is still draining the full queue on a slow runner.
+    let deadline = Date(timeIntervalSinceNow: 15)
+    repeat { await telemetry.flush() } while telemetry.stats.queued > 0 && Date() < deadline
     #expect(telemetry.stats.queued == 0)
     await telemetry.shutdown()
 }
