@@ -117,7 +117,8 @@ export type ControlMessage =
 	| { type: "control-audit.changed" }
 	/** Coalesced to at most one per second. */
 	| { type: "control-memory.changed" }
-	| { type: "dashboard.changed" };
+	| { type: "dashboard.changed" }
+	| ControlHostInvalidation;
 
 export interface ControlDashboardChat {
 	id: string;
@@ -232,6 +233,10 @@ export interface ControlAuthorizationNeeded {
 	createdAt: number;
 }
 export interface ControlDashboardResponse {
+	/** Additive until the host-aware status producer is enabled. */
+	sharedTasks?: ControlDashboardSharedTask[];
+	replicaMissions?: ControlDashboardReplicaMission[];
+	hosts?: ControlHostObservation[];
 	untrusted: true;
 	source: "daemon-memory";
 	projects: Array<{ id: string; name: string }>;
@@ -309,6 +314,8 @@ export interface RevokeControlAuthorizationResponse {
 export type ControlDaemonRole = "home" | "executor" | "archived-control";
 export interface ControlHostConfiguration {
 	schemaVersion: 1;
+	/** Monotonic persisted role fence; not a transport reconnect generation. */
+	roleEpoch: number;
 	home: OperationHost;
 	host: OperationHost;
 	role: ControlDaemonRole;
@@ -331,6 +338,10 @@ export interface ControlHostCutover {
 	bindingId: string;
 	generation: number;
 	contractVersion: 1;
+	roleFence: ControlRoleFence;
+	compatibleRoutes: boolean;
+	archiveReady: boolean;
+	acceptance?: ControlAcceptanceProof;
 	home: OperationHost;
 	executor: OperationHost;
 	state: "preparing" | "ready" | "archived";
@@ -347,6 +358,8 @@ export interface ControlHostCutover {
 /** PUT /api/control-hosts/:bindingId/enrollment on each confirmed peer. Local-user setup only. */
 export interface ControlHomeEnrollmentRequest {
 	enrollment: ControlHomeEnrollment;
+	approvalRequestId: string;
+	expectedRoleEpoch: number;
 	/** Original hello from the app's verified peer endpoint; never an agent-supplied claim. */
 	peerHello: import("./hello.ts").DaemonHello;
 	/** null asserts no record; otherwise compare the persisted generation. Exact replay is idempotent. */
@@ -362,6 +375,8 @@ export interface ControlHostStateResponse {
 }
 /** POST /api/control-hosts/:bindingId/archive on home. App rollout only, not a pilot action. */
 export interface ControlArchiveRequest {
+	approvalRequestId: string;
+	expectedRoleEpoch: number;
 	expectedGeneration: number;
 	sessionId: string;
 	/** Becomes the immutable outgoing operationId; retained across app restarts/lost responses. */
@@ -369,6 +384,7 @@ export interface ControlArchiveRequest {
 }
 /** Administrative payload. No authorization grant or spending capability is conveyed. */
 export interface ControlArchiveOperationPayload {
+	roleFence: ControlRoleFence;
 	idempotencyKey: string;
 	sessionId: string;
 	/** Home verifies evidence from its durable stores before sealing this operation. */
@@ -419,6 +435,7 @@ export interface ControlBudgetReservation {
 	followUps: number;
 }
 export interface ControlOperationAuthority {
+	roleFence: ControlRoleFence;
 	authorizationId: string;
 	levelCeiling: ControlAuthorizationLevel;
 	budgetReservation: ControlBudgetReservation;
@@ -537,15 +554,7 @@ export interface ControlRemoteEventAcknowledgment {
 	eventId: string;
 }
 /** Projection only; never an executable allocation, ownership transfer or completion proof. */
-export interface ControlRemoteMissionTask {
-	missionHome: OperationHost;
-	missionId: string;
-	taskId: string;
-	executionHost: OperationHost;
-	epoch: number;
-	state: "offered" | "accepted" | "cancel-requested" | "sealed";
-	context: "committed" | "provisional";
-}
+export type ControlRemoteMissionTask = ControlDashboardSharedTask;
 /** A bounded captured inventory. Across pages the identity, capture time and totals stay fixed. */
 export interface ControlRemoteStatusSnapshot {
 	sourceHost: OperationHost;
@@ -573,4 +582,200 @@ export interface ControlRemoteStatusImportResponse {
 	state: "staged" | "published";
 	/** Original capture's next cursor. Omitted only after the final page is published. */
 	next?: string;
+}
+
+/** Reserved post-commit invalidation. Never emitted by reads, scan fences or unchanged acknowledgments. */
+export interface ControlHostInvalidation {
+	type: "control-hosts.changed";
+	bindingId: string;
+	generation: number;
+	changes: Array<"outbox" | "receipts" | "events" | "status" | "enrollment" | "readiness" | "archive">;
+}
+export interface ControlRoleFence {
+	home: number;
+	executor: number;
+}
+/** Exact-intent native approval. Request IDs and loopback reachability alone are not authentication. */
+export interface ControlHostApprovalInput {
+	action: "enroll" | "unpair" | "archive";
+	appKeyId: string;
+	/** Exact UTF-8 JSON intent bytes, excluding approvalRequestId; at most 64 KiB. */
+	intentPayload: string;
+}
+export interface ControlHostApprovalRequest {
+	requestId: string;
+	action: ControlHostApprovalInput["action"];
+	appKeyId: string;
+	requestingHost: OperationHost;
+	home: OperationHost;
+	executor: OperationHost;
+	bindingId: string;
+	generation: number;
+	expectedRoleEpoch: number;
+	intentHash: string;
+	expiresAt: number;
+	state: "pending" | "approved" | "denied" | "consumed";
+	/** Exact UTF-8 bytes to sign, prefixed by "approve\\n" or "deny\\n". See docs/control-hosts.md. */
+	signingPayload: string;
+}
+export interface ControlHostApprovalDecision {
+	allow: boolean;
+	appKeyId: string;
+	/** Base64 Ed25519 signature; private app key never leaves native secure storage. */
+	signature: string;
+}
+export interface ControlUnpairRequest {
+	approvalRequestId: string;
+	expectedGeneration: number;
+	expectedRoleEpoch: number;
+	idempotencyKey: string;
+}
+export interface ControlUnpairResponse {
+	enrollment: ControlHomeEnrollment;
+	configuration: ControlHostConfiguration;
+	revokedAt: number;
+	peerAcknowledged: boolean;
+}
+export interface ControlEventImportCursor {
+	sourceHost: OperationHost;
+	importedThrough: number;
+	lastEventId?: string;
+	acknowledgedThrough: number;
+	head: number;
+}
+export interface ControlHostSyncState {
+	bindingId: string;
+	generation: number;
+	/** Cursor owner, not necessarily event source. */
+	host: OperationHost;
+	events: ControlEventImportCursor;
+	status?: { snapshotId: string; next?: string; state: "staged" | "published"; importedAt: number };
+	reconciliationRequired: boolean;
+}
+export interface ControlAcceptanceProof {
+	suite: "control-hosts-two-daemon-v1";
+	homeBuildId: string;
+	executorBuildId: string;
+}
+export type ControlHostAvailability = "available" | "disconnected" | "unknown";
+export interface ControlHostObservation {
+	host: OperationHost;
+	availability: ControlHostAvailability;
+	capturedAt?: number;
+	importedAt?: number;
+	snapshotAgeMs: number | null;
+}
+export interface ControlTaskConflict {
+	proposalId?: string;
+	operationId?: string;
+	origin?: import("./shared-context.ts").SharedSessionRef;
+	state: "pending" | "conflict" | "rejected";
+	reason?: string;
+	evidenceId?: string;
+}
+/** Thin display projection from SharedContextSummary/DelegationGrant, never an execution grant. */
+export interface ControlDashboardSharedTask {
+	id: string;
+	bindingId: string;
+	bindingGeneration: number;
+	projectId: string;
+	missionId: string;
+	missionHome: OperationHost;
+	observedOn: OperationHost;
+	source: "mission-home" | "execution-fact" | "replica" | "proposal";
+	consistency: "committed" | "provisional";
+	taskId?: string;
+	taskNumber?: number;
+	title?: string;
+	status?: import("./index.ts").MissionTaskStatus;
+	definitionRevision?: number;
+	proposalId?: string;
+	proposalState?: "pending" | "conflict" | "rejected";
+	proposalOrigin?: import("./shared-context.ts").SharedSessionRef;
+	conflicts?: ControlTaskConflict[];
+	delegationId?: import("./shared-context.ts").DelegationGrant["delegationId"];
+	/** The grant binding can differ from the observing replica's binding above. */
+	grantBindingId?: import("./shared-context.ts").DelegationGrant["bindingId"];
+	grantBindingGeneration?: import("./shared-context.ts").DelegationGrant["bindingGeneration"];
+	executionHost?: OperationHost;
+	executionEpoch?: import("./shared-context.ts").DelegationGrant["executionEpoch"];
+	grantState?: import("./shared-context.ts").DelegationGrant["state"];
+	running?: boolean;
+	replicaSyncedAt?: number;
+	replicaAgeMs?: number | null;
+	snapshotCapturedAt?: number;
+	availability: ControlHostAvailability;
+}
+export interface ControlDashboardReplicaMission {
+	id: string;
+	bindingId: string;
+	bindingGeneration: number;
+	projectId: string;
+	missionId: string;
+	missionHome: OperationHost;
+	observedOn: OperationHost;
+	title?: string;
+	status?: import("./index.ts").MissionStatus;
+	complete: boolean;
+	sequence: number;
+	consistency: "committed";
+	replicaSyncedAt?: number;
+	replicaAgeMs: number | null;
+	snapshotCapturedAt?: number;
+	pendingCount: number;
+	conflictCount: number;
+	availability: ControlHostAvailability;
+}
+export interface ControlArchiveInfo {
+	source: import("./shared-context.ts").SharedSessionRef;
+	archivedAt: number;
+	roleEpoch: number;
+	readOnly: true;
+}
+export interface ControlArchiveRead<T> {
+	archive: ControlArchiveInfo;
+	value: T;
+}
+export interface ControlArchiveHistoryPage {
+	entries: import("./index.ts").EntryRecord[];
+	next?: number;
+}
+export interface ControlOperationLifecycle {
+	operationId: string;
+	kind: ControlOperationKind;
+	targetId: string;
+	delivery: "queued" | "unknown" | "pending" | "accepted" | "rejected";
+	possiblyTransmitted: boolean;
+}
+export interface ControlHostLifecycleResponse {
+	bindingId: string;
+	generation: number;
+	host: OperationHost;
+	capturedAt: number;
+	updateReady: boolean;
+	operations: ControlOperationLifecycle[];
+	blockers: Array<{
+		kind: "control.operation" | "control.approval" | "control.archive" | "control.journal" | "control.sync";
+		id: string;
+	}>;
+	truncated: boolean;
+}
+
+/** Machine-readable errors for the reserved Control-host routes, not generic operation receipts. */
+export interface ControlHostErrorResponse {
+	code:
+		| "invalid_request"
+		| "approval_required"
+		| "approval_expired"
+		| "not_found"
+		| "incompatible_peer"
+		| "identity_mismatch"
+		| "stale_role"
+		| "stale_generation"
+		| "reconciliation_required"
+		| "snapshot_restart_required"
+		| "not_ready"
+		| "capacity";
+	error: string;
+	syncState?: ControlHostSyncState;
 }

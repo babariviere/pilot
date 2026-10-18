@@ -4,6 +4,9 @@ import Foundation
 /// Cached daemon state, no worker starts. Text is untrusted. Lists and encoded size are bounded;
 /// totals precede clipping. Next always contains global Control instructions, including scoped requests.
 public struct ControlDashboardResponse: Codable, Equatable, Sendable {
+    public let sharedTasks: [ControlDashboardSharedTask]?
+    public let replicaMissions: [ControlDashboardReplicaMission]?
+    public let hosts: [ControlHostObservation]?
     public struct Project: Codable, Equatable, Sendable {
         public let id: String
         public let name: String
@@ -31,6 +34,8 @@ public struct ControlDashboardResponse: Codable, Equatable, Sendable {
         public let followUpsTotal: Int?
     }
     public struct Totals: Codable, Equatable, Sendable {
+        public let sharedTasks: Int?
+        public let replicaMissions: Int?
         public let projects: Int
         public let chats: Int
         public let missions: Int

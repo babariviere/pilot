@@ -11,6 +11,7 @@ public struct ControlHostConfiguration: Codable, Equatable, Sendable {
         public let archivedAt: Double
     }
     public let schemaVersion: Int
+    public let roleEpoch: Int
     public let home: OperationHost
     public let host: OperationHost
     public let role: ControlDaemonRole
@@ -37,6 +38,10 @@ public struct ControlHostCutover: Codable, Equatable, Sendable {
     public let bindingId: String
     public let generation: UInt64
     public let contractVersion: Int
+    public let roleFence: ControlRoleFence
+    public let compatibleRoutes: Bool
+    public let archiveReady: Bool
+    public let acceptance: ControlAcceptanceProof?
     public let home: OperationHost
     public let executor: OperationHost
     public let state: State
@@ -49,24 +54,34 @@ public struct ControlHostCutover: Codable, Equatable, Sendable {
 }
 public struct ControlHomeEnrollmentRequest: Codable, Equatable, Sendable {
     public let enrollment: ControlHomeEnrollment
+    public let approvalRequestId: String
+    public let expectedRoleEpoch: Int
     public let peerHello: DaemonHello
     /// Explicit null asserts that no enrollment is present. Unlike other optional fields, null is required.
     public let expectedGeneration: UInt64?
-    public init(enrollment: ControlHomeEnrollment, peerHello: DaemonHello, expectedGeneration: UInt64?) {
+    public init(enrollment: ControlHomeEnrollment, peerHello: DaemonHello, expectedGeneration: UInt64?,
+                approvalRequestId: String, expectedRoleEpoch: Int) {
         self.enrollment = enrollment; self.expectedGeneration = expectedGeneration
         self.peerHello = peerHello
+        self.approvalRequestId = approvalRequestId; self.expectedRoleEpoch = expectedRoleEpoch
     }
-    private enum CodingKeys: String, CodingKey { case enrollment, peerHello, expectedGeneration }
+    private enum CodingKeys: String, CodingKey {
+        case enrollment, peerHello, expectedGeneration, approvalRequestId, expectedRoleEpoch
+    }
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         enrollment = try values.decode(ControlHomeEnrollment.self, forKey: .enrollment)
         peerHello = try values.decode(DaemonHello.self, forKey: .peerHello)
+        approvalRequestId = try values.decode(String.self, forKey: .approvalRequestId)
+        expectedRoleEpoch = try values.decode(Int.self, forKey: .expectedRoleEpoch)
         expectedGeneration = try values.decode(UInt64?.self, forKey: .expectedGeneration)
     }
     public func encode(to encoder: Encoder) throws {
         var values = encoder.container(keyedBy: CodingKeys.self)
         try values.encode(enrollment, forKey: .enrollment)
         try values.encode(peerHello, forKey: .peerHello)
+        try values.encode(approvalRequestId, forKey: .approvalRequestId)
+        try values.encode(expectedRoleEpoch, forKey: .expectedRoleEpoch)
         try values.encode(expectedGeneration, forKey: .expectedGeneration)
     }
 }
@@ -77,15 +92,20 @@ public struct ControlHostStateResponse: Codable, Equatable, Sendable {
     public let cutover: ControlHostCutover?
 }
 public struct ControlArchiveRequest: Codable, Equatable, Sendable {
+    public let approvalRequestId: String
+    public let expectedRoleEpoch: Int
     public let expectedGeneration: UInt64
     public let sessionId: String
     public let idempotencyKey: String
-    public init(expectedGeneration: UInt64, sessionId: String, idempotencyKey: String) {
+    public init(expectedGeneration: UInt64, sessionId: String, idempotencyKey: String,
+                approvalRequestId: String, expectedRoleEpoch: Int) {
         self.expectedGeneration = expectedGeneration; self.sessionId = sessionId
         self.idempotencyKey = idempotencyKey
+        self.approvalRequestId = approvalRequestId; self.expectedRoleEpoch = expectedRoleEpoch
     }
 }
 public struct ControlArchiveOperationPayload: Codable, Equatable, Sendable {
+    public let roleFence: ControlRoleFence
     public let idempotencyKey: String
     public let sessionId: String
     public let readiness: ControlHostCutover
@@ -117,6 +137,7 @@ public struct ControlBudgetReservation: Codable, Equatable, Sendable {
     public let followUps: Int
 }
 public struct ControlOperationAuthority: Codable, Equatable, Sendable {
+    public let roleFence: ControlRoleFence
     public let authorizationId: String
     public let levelCeiling: ControlAuthorizationLevel
     public let budgetReservation: ControlBudgetReservation
@@ -150,6 +171,7 @@ public enum ControlStartTarget: Codable, Equatable, Sendable {
     }
 }
 public struct ControlStartOperationPayload: Codable, Equatable, Sendable {
+    public let roleFence: ControlRoleFence
     public let authorizationId: String
     public let levelCeiling: ControlAuthorizationLevel
     public let budgetReservation: ControlBudgetReservation
@@ -161,6 +183,7 @@ public struct ControlStartOperationPayload: Codable, Equatable, Sendable {
     public let thinking: String?
 }
 public struct ControlSendOperationPayload: Codable, Equatable, Sendable {
+    public let roleFence: ControlRoleFence
     public let authorizationId: String
     public let levelCeiling: ControlAuthorizationLevel
     public let budgetReservation: ControlBudgetReservation
@@ -171,6 +194,7 @@ public struct ControlSendOperationPayload: Codable, Equatable, Sendable {
     public let direct: Bool?
 }
 public struct ControlRunOperationPayload: Codable, Equatable, Sendable {
+    public let roleFence: ControlRoleFence
     public let authorizationId: String
     public let levelCeiling: ControlAuthorizationLevel
     public let budgetReservation: ControlBudgetReservation
@@ -184,6 +208,7 @@ public struct ControlRunOperationPayload: Codable, Equatable, Sendable {
     public let message: String?
 }
 public struct ControlWatchOperationPayload: Codable, Equatable, Sendable {
+    public let roleFence: ControlRoleFence
     public let authorizationId: String
     public let levelCeiling: ControlAuthorizationLevel
     public let budgetReservation: ControlBudgetReservation
@@ -192,6 +217,7 @@ public struct ControlWatchOperationPayload: Codable, Equatable, Sendable {
     public let watch: WatchInput
 }
 public struct ControlUnwatchOperationPayload: Codable, Equatable, Sendable {
+    public let roleFence: ControlRoleFence
     public let authorizationId: String
     public let levelCeiling: ControlAuthorizationLevel
     public let budgetReservation: ControlBudgetReservation
@@ -200,6 +226,7 @@ public struct ControlUnwatchOperationPayload: Codable, Equatable, Sendable {
     public let watchId: String
 }
 public struct ControlRevokeOperationPayload: Codable, Equatable, Sendable {
+    public let roleFence: ControlRoleFence
     public let authorizationId: String
     public let levelCeiling: ControlAuthorizationLevel
     public let budgetReservation: ControlBudgetReservation
@@ -316,20 +343,7 @@ public struct ControlRemoteEventQuery: Codable, Equatable, Sendable {
     public let limit: Int?
     public init(after: Int, limit: Int? = nil) { self.after = after; self.limit = limit }
 }
-public struct ControlRemoteMissionTask: Codable, Equatable, Sendable {
-    public enum State: String, Codable, Sendable {
-        case offered, accepted, sealed
-        case cancelRequested = "cancel-requested"
-    }
-    public enum Context: String, Codable, Sendable { case committed, provisional }
-    public let missionHome: OperationHost
-    public let missionId: String
-    public let taskId: String
-    public let executionHost: OperationHost
-    public let epoch: Int
-    public let state: State
-    public let context: Context
-}
+public typealias ControlRemoteMissionTask = ControlDashboardSharedTask
 public struct ControlRemoteStatusSnapshot: Codable, Equatable, Sendable {
     public let sourceHost: OperationHost
     public let snapshotId: String
@@ -354,4 +368,252 @@ public struct ControlRemoteStatusImportResponse: Codable, Equatable, Sendable {
     public let snapshotId: String
     public let state: State
     public let next: String?
+}
+
+public struct ControlRoleFence: Codable, Equatable, Sendable {
+    public let home: Int
+    public let executor: Int
+    public init(home: Int, executor: Int) { self.home = home; self.executor = executor }
+}
+public struct ControlAcceptanceProof: Codable, Equatable, Sendable {
+    public let suite: String
+    public let homeBuildId: String
+    public let executorBuildId: String
+}
+public struct ControlHostInvalidation: Codable, Equatable, Sendable {
+    public enum Change: String, Codable, Sendable { case outbox, receipts, events, status, enrollment, readiness, archive }
+    public let type: String
+    public let bindingId: String
+    public let generation: UInt64
+    public let changes: [Change]
+}
+public struct ControlHostApprovalInput: Codable, Equatable, Sendable {
+    public enum Action: String, Codable, Sendable { case enroll, unpair, archive }
+    public let action: Action
+    public let appKeyId: String
+    public let intentPayload: String
+    public init(action: Action, appKeyId: String, intentPayload: String) {
+        self.action = action; self.appKeyId = appKeyId; self.intentPayload = intentPayload
+    }
+}
+public struct ControlHostApprovalRequest: Codable, Equatable, Sendable {
+    public enum State: String, Codable, Sendable { case pending, approved, denied, consumed }
+    public let requestId: String
+    public let action: ControlHostApprovalInput.Action
+    public let appKeyId: String
+    public let requestingHost: OperationHost
+    public let home: OperationHost
+    public let executor: OperationHost
+    public let bindingId: String
+    public let generation: UInt64
+    public let expectedRoleEpoch: Int
+    public let intentHash: String
+    public let expiresAt: Double
+    public let state: State
+    public let signingPayload: String
+}
+public struct ControlHostApprovalDecision: Codable, Equatable, Sendable {
+    public let allow: Bool
+    public let appKeyId: String
+    public let signature: String
+    public init(allow: Bool, appKeyId: String, signature: String) {
+        self.allow = allow; self.appKeyId = appKeyId; self.signature = signature
+    }
+}
+public struct ControlUnpairRequest: Codable, Equatable, Sendable {
+    public let approvalRequestId: String
+    public let expectedGeneration: UInt64
+    public let expectedRoleEpoch: Int
+    public let idempotencyKey: String
+    public init(approvalRequestId: String, expectedGeneration: UInt64, expectedRoleEpoch: Int, idempotencyKey: String) {
+        self.approvalRequestId = approvalRequestId; self.expectedGeneration = expectedGeneration
+        self.expectedRoleEpoch = expectedRoleEpoch; self.idempotencyKey = idempotencyKey
+    }
+}
+public struct ControlUnpairResponse: Codable, Equatable, Sendable {
+    public let enrollment: ControlHomeEnrollment
+    public let configuration: ControlHostConfiguration
+    public let revokedAt: Double
+    public let peerAcknowledged: Bool
+}
+public struct ControlEventImportCursor: Codable, Equatable, Sendable {
+    public let sourceHost: OperationHost
+    public let importedThrough: Int
+    public let lastEventId: String?
+    public let acknowledgedThrough: Int
+    public let head: Int
+}
+public struct ControlHostSyncState: Codable, Equatable, Sendable {
+    public struct Status: Codable, Equatable, Sendable {
+        public let snapshotId: String
+        public let next: String?
+        public let state: ControlRemoteStatusImportResponse.State
+        public let importedAt: Double
+    }
+    public let bindingId: String
+    public let generation: UInt64
+    public let host: OperationHost
+    public let events: ControlEventImportCursor
+    public let status: Status?
+    public let reconciliationRequired: Bool
+}
+public enum ControlHostAvailability: String, Codable, Sendable { case available, disconnected, unknown }
+public struct ControlHostObservation: Codable, Equatable, Sendable {
+    public let host: OperationHost
+    public let availability: ControlHostAvailability
+    public let capturedAt: Double?
+    public let importedAt: Double?
+    public let snapshotAgeMs: Double?
+    private enum CodingKeys: String, CodingKey { case host, availability, capturedAt, importedAt, snapshotAgeMs }
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(host, forKey: .host)
+        try values.encode(availability, forKey: .availability)
+        try values.encodeIfPresent(capturedAt, forKey: .capturedAt)
+        try values.encodeIfPresent(importedAt, forKey: .importedAt)
+        try values.encode(snapshotAgeMs, forKey: .snapshotAgeMs)
+    }
+}
+public struct ControlTaskConflict: Codable, Equatable, Sendable {
+    public enum State: String, Codable, Sendable { case pending, conflict, rejected }
+    public let proposalId: String?
+    public let operationId: String?
+    public let origin: SharedSessionRef?
+    public let state: State
+    public let reason: String?
+    public let evidenceId: String?
+}
+public struct ControlDashboardSharedTask: Codable, Equatable, Sendable {
+    public enum Source: String, Codable, Sendable {
+        case missionHome = "mission-home", executionFact = "execution-fact", replica, proposal
+    }
+    public enum Consistency: String, Codable, Sendable { case committed, provisional }
+    public let id: String
+    public let bindingId: String
+    public let bindingGeneration: UInt64
+    public let projectId: String
+    public let missionId: String
+    public let missionHome: OperationHost
+    public let observedOn: OperationHost
+    public let source: Source
+    public let consistency: Consistency
+    public let taskId: String?
+    public let taskNumber: Int?
+    public let title: String?
+    public let status: MissionTaskStatus?
+    public let definitionRevision: Int?
+    public let proposalId: String?
+    public let proposalState: ControlTaskConflict.State?
+    public let proposalOrigin: SharedSessionRef?
+    public let conflicts: [ControlTaskConflict]?
+    public let delegationId: String?
+    public let grantBindingId: String?
+    public let grantBindingGeneration: UInt64?
+    public let executionHost: OperationHost?
+    public let executionEpoch: Int?
+    public let grantState: DelegationGrant.State?
+    public let running: Bool?
+    public let replicaSyncedAt: Double?
+    public let replicaAgeMs: Double?
+    public let snapshotCapturedAt: Double?
+    public let availability: ControlHostAvailability
+}
+public struct ControlDashboardReplicaMission: Codable, Equatable, Sendable {
+    public enum Consistency: String, Codable, Sendable { case committed }
+    public let id: String
+    public let bindingId: String
+    public let bindingGeneration: UInt64
+    public let projectId: String
+    public let missionId: String
+    public let missionHome: OperationHost
+    public let observedOn: OperationHost
+    public let title: String?
+    public let status: MissionStatus?
+    public let complete: Bool
+    public let sequence: Int
+    public let consistency: Consistency
+    public let replicaSyncedAt: Double?
+    public let replicaAgeMs: Double?
+    public let snapshotCapturedAt: Double?
+    public let pendingCount: Int
+    public let conflictCount: Int
+    public let availability: ControlHostAvailability
+    private enum CodingKeys: String, CodingKey {
+        case id, bindingId, bindingGeneration, projectId, missionId, missionHome, observedOn, title, status
+        case complete, sequence, consistency, replicaSyncedAt, replicaAgeMs, snapshotCapturedAt
+        case pendingCount, conflictCount, availability
+    }
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(bindingId, forKey: .bindingId)
+        try values.encode(bindingGeneration, forKey: .bindingGeneration)
+        try values.encode(projectId, forKey: .projectId)
+        try values.encode(missionId, forKey: .missionId)
+        try values.encode(missionHome, forKey: .missionHome)
+        try values.encode(observedOn, forKey: .observedOn)
+        try values.encodeIfPresent(title, forKey: .title)
+        try values.encodeIfPresent(status, forKey: .status)
+        try values.encode(complete, forKey: .complete)
+        try values.encode(sequence, forKey: .sequence)
+        try values.encode(consistency, forKey: .consistency)
+        try values.encodeIfPresent(replicaSyncedAt, forKey: .replicaSyncedAt)
+        try values.encode(replicaAgeMs, forKey: .replicaAgeMs)
+        try values.encodeIfPresent(snapshotCapturedAt, forKey: .snapshotCapturedAt)
+        try values.encode(pendingCount, forKey: .pendingCount)
+        try values.encode(conflictCount, forKey: .conflictCount)
+        try values.encode(availability, forKey: .availability)
+    }
+}
+public struct ControlArchiveInfo: Codable, Equatable, Sendable {
+    public let source: SharedSessionRef
+    public let archivedAt: Double
+    public let roleEpoch: Int
+    public let readOnly: Bool
+}
+public struct ControlArchiveRead<Value: Codable & Equatable & Sendable>: Codable, Equatable, Sendable {
+    public let archive: ControlArchiveInfo
+    public let value: Value
+}
+public struct ControlArchiveHistoryPage: Codable, Equatable, Sendable {
+    public let entries: [JSONValue]
+    public let next: Int?
+}
+public struct ControlOperationLifecycle: Codable, Equatable, Sendable {
+    public enum Delivery: String, Codable, Sendable { case queued, unknown, pending, accepted, rejected }
+    public let operationId: String
+    public let kind: ControlOperationKind
+    public let targetId: String
+    public let delivery: Delivery
+    public let possiblyTransmitted: Bool
+}
+public struct ControlHostLifecycleResponse: Codable, Equatable, Sendable {
+    public struct Blocker: Codable, Equatable, Sendable {
+        public enum Kind: String, Codable, Sendable {
+            case operation = "control.operation", approval = "control.approval", archive = "control.archive"
+            case journal = "control.journal", sync = "control.sync"
+        }
+        public let kind: Kind
+        public let id: String
+    }
+    public let bindingId: String
+    public let generation: UInt64
+    public let host: OperationHost
+    public let capturedAt: Double
+    public let updateReady: Bool
+    public let operations: [ControlOperationLifecycle]
+    public let blockers: [Blocker]
+    public let truncated: Bool
+}
+public struct ControlHostErrorResponse: Codable, Equatable, Sendable {
+    public enum Code: String, Codable, Sendable {
+        case invalidRequest = "invalid_request", approvalRequired = "approval_required"
+        case approvalExpired = "approval_expired", notFound = "not_found", incompatiblePeer = "incompatible_peer"
+        case identityMismatch = "identity_mismatch", staleRole = "stale_role", staleGeneration = "stale_generation"
+        case reconciliationRequired = "reconciliation_required", snapshotRestartRequired = "snapshot_restart_required"
+        case notReady = "not_ready", capacity
+    }
+    public let code: Code
+    public let error: String
+    public let syncState: ControlHostSyncState?
 }

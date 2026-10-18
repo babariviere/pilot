@@ -171,15 +171,18 @@ retained floor, never regresses it; a different eventId for an acknowledged curs
 Status import replay returns the same snapshot/cursor state without publishing an older capture
 over a newer one. Status is cache data, not permission to retire a factual event journal.
 
-All selectors reject duplicate/unknown query fields and foreign enrollment identities. Invalid
-payload/selectors are 400; missing state 404; identity, CAS, not-ready, cursor-gap or stale-capture
+All selectors reject duplicate/unknown query fields and foreign enrollment identities.
+Control-host route errors use ControlHostErrorResponse (code, bounded error, optional syncState).
+The generic operations endpoints keep OperationReceipt/unknown semantics, not this error DTO.
+Invalid payload/selectors are 400; missing state 404; identity, CAS, not-ready, cursor-gap or stale-capture
 conflicts 409 with an explicit reconciliation/restart reason; capacity backpressure is 503.
 Unsupported contract versions fail closed. None is an implicit successful mutation. Error prose
 is bounded to 1024 UTF-8 bytes, redacted and untrusted, never an authorization source.
 
 ### Accepted-home enrollment API
 
-The enrollment PUT accepts `{enrollment,peerHello,expectedGeneration}`. `peerHello` is the original
+The enrollment PUT accepts `{enrollment,peerHello,expectedGeneration,expectedRoleEpoch,approvalRequestId}`.
+It requires the authenticated structured approval described below. `peerHello` is the original
 hello copied from the other app-verified endpoint. Validate its installation/lineage, general
 protocol compatibility, Control version/configuration and home against the enrolled peer, then
 retain that last verified handshake in `ControlHostStateResponse.peerHello`. It is local-user
@@ -259,8 +262,9 @@ sections and mission-task projections. All pages of a capture retain the same id
 pre-clipping totals. Each page carries partial section arrays; concatenate by section in cursor
 order, deduplicating only exact repeated pages. The producer uses a frozen capture, not a live offset.
 Only the final page makes the capture visible at home. Opaque next cursors pin the snapshot;
-expired/missing captures fail with restart-required, never mix captures. Staging is cache data and
-may be dropped on restart; keep the last fully imported capture and its original capturedAt.
+expired/missing captures fail with restart-required, never mix captures. Staging pages and their
+cursor persist together. If the producer capture has expired, discard only that incomplete cache
+stage and capture anew; keep the last fully imported capture and its original capturedAt.
 Timestamps measure age, not conflict resolution; clock skew is reported rather than made fresh.
 
 Both dashboard.truncated and snapshot.truncated disclose omissions in the captured inventory, not
@@ -268,10 +272,10 @@ just pagination. Transport next means more pages of that inventory; absent next 
 that a clipped inventory is exhaustive. Availability and last import time remain home-local metadata.
 Unknown or disconnected state cannot overwrite a known outcome.
 
-Mission-task rows carry missionHome, executionHost, epoch, offered/accepted/cancel-requested/sealed
-and committed/provisional context. Include remote-delegated tasks from the mission-home store and
-remote-home missions from replicas. These are read-only projections of shared-context authority;
-idle/settled chat, a stale capture or provisional task status is not completion or seal proof.
+Mission-task rows use the single ControlDashboardSharedTask projection defined below, including
+optional existing grant references and explicit committed/provisional provenance. Include
+remote-delegated tasks from the mission-home store and remote-home missions from replicas.
+Idle/settled chat, stale capture or provisional task status is not completion or seal proof.
 
 ## Bounds and backpressure
 
@@ -324,7 +328,8 @@ not just the Mac or a cached app version. Capability support alone never hides a
 5. `taskSnapshotId` names a completely imported capture proving the required task visibility with
    mission/execution host and epoch. A partial capture or provisional completion is insufficient.
 
-Only all five conditions permit state ready. GET `/api/control-hosts/:bindingId` on home reports
+Only all five conditions plus the machine-readable route/build/archive checks below permit state ready.
+GET `/api/control-hosts/:bindingId` on home reports
 this home-verified evidence; there is no API to POST app/model-supplied readiness booleans.
 Evidence is local trusted rollout state, never a
 model-supplied permission, and is invalidated by changed enrollment, version or lineage. The app's
@@ -340,7 +345,7 @@ authoritative identity and the archives; do not undo cutover or promote the exec
 
 After the readiness GET reports ready, the app persists a single idempotency key and calls
 POST `/api/control-hosts/:bindingId/archive` **on home** with `ControlArchiveRequest`:
-`{expectedGeneration,sessionId,idempotencyKey}`. This is an administrative rollout request, not
+`{expectedGeneration,expectedRoleEpoch,sessionId,idempotencyKey,approvalRequestId}`. This is an administrative rollout request, not
 a pilot action or grant-authorized delegation. Home checks both negotiated roles/versions, the
 active matching enrollment/generation, the selected legacy session on the executor and its own
 durable action/watch/task evidence. The app cannot supply that evidence or choose a different home.
@@ -348,7 +353,7 @@ durable action/watch/task evidence. The app cannot supply that evidence or choos
 Home reserves an immutable `DurableOperation` with kind `control.archive`, origin home,
 destination executor, that enrollment's binding/generation, operationId equal to idempotencyKey
 and targetId equal to the exact legacy sessionId. Its `ControlArchiveOperationPayload` is
-`{idempotencyKey,sessionId,readiness}`; home seals its verified readiness snapshot, not app booleans.
+`{roleFence,idempotencyKey,sessionId,readiness}`; home seals its verified readiness snapshot, not app booleans.
 It carries no authorization grant, budget reservation, model instruction or spending capability.
 `ControlArchiveResponse` returns that same queued envelope. It is not an archive acknowledgment.
 
@@ -406,3 +411,294 @@ revocation during preparation, foreign homes/lineages, snapshot restart and no w
 
 Review is required from both Control and Remote devbox coordinators before adopting this contract.
 The contract intentionally does not claim personal-devbox deployment or transport verification.
+
+## Audit contract: durable ownership, approval, UI and lifecycle
+
+This section is normative v1, not a claim that these routes, keys or stores already exist.
+The app adapter consumes these DTOs; it must not create parallel protocol, router, watch-dedupe
+or task models. Existing paths above remain reserved. The additions below close the integration
+audit; they supersede any earlier description of an unauthenticated "local-user" write.
+
+### Invalidation and exact recovery state
+
+The reserved socket invalidation is `ControlHostInvalidation`:
+`{type:"control-hosts.changed",bindingId,generation,changes:[...]}`, on the existing `/api/ws`.
+Changes are outbox, receipts, events, status, enrollment, readiness or archive. Emit only after
+durable changes, coalesce to at most once/second/binding, and send at most the seven distinct flags.
+An event flag means a journal page is available, not that the socket payload is the event.
+No cursor or result is trusted from a socket. Existing `dashboard.changed` remains the home
+merged-view invalidation. Reconnect re-verifies hello/pins/role epochs and drains bounded HTTP reads.
+
+Add GET `/api/control-hosts/:bindingId/sync-state` on either peer → `ControlHostSyncState`.
+It reports the owner host, durable importedThrough/lastEventId, acknowledgedThrough/head, snapshot
+stage/publication cursor, and reconciliationRequired. An executor's importedThrough is zero (it
+is the source); its acknowledgment floor is authoritative there. Home's importedThrough and exact
+lastEventId are authoritative for its imports. It is an inspection response, never permission to
+set a cursor. The app stores only an advisory outbox scan position and its own UI intent keys.
+
+Required durable ownership, implemented through bounded off-event-loop workers:
+
+| State | Owner/store | Commit before returning |
+| --- | --- | --- |
+| Home grant reservations, outgoing Control intents, adopted receipts, event import cursor/dedupe, notice intent and audit | Home `$PILOT_HOME/memory/control-chat/chat.sqlite`, new host-scoped tables in the existing Control-memory owner | One domain transaction for each reservation+intent or event+cursor+notice/audit commit. Generic filesystem operation-journal reservation is a separate prepared/materialized step with stable IDs; never claim a cross-store atomic commit. |
+| Home snapshot staging cursor and pages, last published snapshot and local importedAt | Same home Control-memory database, separate cache tables | Persist stage/page/cursor together; final page atomically publishes the entire capture. |
+| Accepted home, enrollment tombstones, roleEpoch, native approval records and replay floors | Each daemon `$PILOT_HOME/control-hosts/state.sqlite`, exclusive daemon owner | Enrollment/approval consumption or role change and its replay evidence commit together. |
+| Executor remote-watch authority, once consumption, frozen matches, contiguous events and ack floor | Same executor Control-hosts state database, separate tables | Once consumption and event append are one transaction; retirement floor commits before deleting a prefix. These are not the frozen legacy watch store. |
+| Immutable envelopes, handler admission and receipts | Existing durable-operation journal | Original journal reservation/receipt rules still apply, with domain idempotency for recovery. |
+
+Receipts/outbox adoption cannot rely on an app preference or a metadata JSON write as a durability
+barrier. Prepared cross-store transitions recover by ID/hash; home acknowledges only after its
+domain receipt, accounting and audit/notice state are durable. Executor role fences are held across
+asynchronous preparation and rechecked before domain commit. Restore/clone rotates storage lineage;
+the app never silently copies a cursor to another installation.
+
+Reconciliation cases:
+
+- Lost import response: re-read home sync-state or replay the same page; its exact event IDs return
+  the original durable acknowledgment without a second notice. Lost executor ack response: resend
+  that acknowledgment; its persisted floor makes retirement idempotent.
+- Home import cursor ahead of executor ack floor: resend home's stored through/eventId acknowledgment.
+  An executor floor ahead of home's committed import cursor indicates restoration/data loss, not
+  ordinary reconnect. Mark reconciliationRequired and stop orchestration/cutover. Do not jump forward.
+- A missing/noncontiguous event, same cursor with different ID/content, or unknown lineage returns
+  409 reconciliation-required. V1 has no event-content checkpoint that authorizes skipping facts.
+  The ack floor is only a replay-rejection checkpoint. Explicit repair must retain audit and restore
+  missing evidence or reenroll under a new lineage; a status snapshot cannot replace it.
+- Restart retains import/dedupe/floors and fully published snapshots. A snapshot stage resumes only
+  if both the durable stage and producer's pinned capture still exist. Expired capture returns 409
+  snapshot-restart-required: discard only the incomplete cache stage, capture anew, retain the last
+  published snapshot and its original time. Never reset the event stream with a snapshot.
+- Outbox scan cursors are not authority and may restart at the beginning after restart/invalidation.
+  No scan read, exact ack replay or caught-up sync-state read emits a change, avoiding courier loops.
+
+### Native approval, enrollment and unpair
+
+A structured request ID prevents message confusion but **does not authenticate a native caller**.
+Loopback, SSH connectivity, an HTTP Origin/header, possession of a request ID or a JSON
+`userApproved:true` field is insufficient. Neither an agent message nor a watch, tool/MCP call,
+imported result or copied approval text may grant enrollment, unpair or archive authority.
+
+V1 requires a native-app Ed25519 signing key, private material retained under the stable signed
+app's Keychain access policy and unavailable to agent workers, never an agent-readable file,
+environment or daemon-supplied key. Keychain access must not allow arbitrary same-user executables.
+Setup installs only its public-key/key-ID pin on both daemons through
+the independently user-confirmed native bootstrap/management channel and verified SSH identity.
+There is no public API that accepts a new approval key alongside an enrollment request. A key
+suggested by the request itself is never trusted. Until that authenticated channel/key provisioning
+exists, these writes fail closed, not as ordinary loopback mutations. This contract adds no key
+installation or transport implementation. A future equivalent authenticated native channel requires
+an explicit contract review, not a silent authentication downgrade.
+Daemon key pins and approval/role stores must also be outside agent-writable namespaces. A mode-0600
+file is not isolation from arbitrary unsandboxed code running as the same OS user; an implementation
+that cannot protect this native/daemon boundary must report pairing unavailable rather than claim
+authenticated user approval. Native key possession never bypasses the preview/gesture checks.
+
+Reserved native approval API on the daemon whose state will change:
+
+| Route | Type / rule |
+| --- | --- |
+| POST `/api/control-hosts/:bindingId/approval-requests` | `ControlHostApprovalInput` → daemon-issued `ControlHostApprovalRequest`. An unapproved request changes no enrollment, role or execution. |
+| GET `/api/control-hosts/:bindingId/approval-requests/:requestId` | Same request/status, scoped to that daemon and binding. |
+| POST `/api/control-hosts/:bindingId/approval-requests/:requestId/decision` | `ControlHostApprovalDecision` → same request/status after durable native-signature verification. |
+| POST `/api/control-hosts/:bindingId/unpair` | Approved `ControlUnpairRequest` → `ControlUnpairResponse`; durably revokes locally and increments local roleEpoch. |
+| POST `/api/control-hosts/:bindingId/unpair/ack` on home | Original verified executor `ControlUnpairResponse` → home response with peerAcknowledged true after durable reconciliation. |
+
+The app first serializes the intended enrollment/unpair/archive request **without**
+approvalRequestId into exact UTF-8 intentPayload bytes. The issuing daemon parses strict known
+fields and stores those original bytes and SHA-256 intentHash, native app key ID, pinned home and
+executor, binding/generation, its requestingHost, expectedRoleEpoch, a random 256-bit request ID
+and expiry (at most five minutes). Its signingPayload is exact UTF-8 JSON containing those issued
+fields (not mutable state/signingPayload itself). No cross-language canonical reserialization is
+required: the native app decodes and verifies all issued fields and the original intent hash,
+displays the exact target pins and consequences, then signs the original returned bytes prefixed
+by UTF-8 `approve\n` or `deny\n`. Decision.allow must match the signed prefix. Signature is base64
+Ed25519; daemon verifies it only against its previously installed app-key pin.
+
+Native UI responds only to its own outstanding request and actual user gesture, never an agent
+"yes" or an unsolicited event. Changed digest, pin, role epoch, binding/generation, key, expiry
+or decision fails with 403/409. Unknown keys cannot enroll. Missing authenticated approval is 403;
+expired requests are 409 and require a new preview/decision. A repeated identical signed decision
+returns its stored result. A mutation consumes its matching approved request with the same domain
+commit, before any effect; exact retries reconcile that original consumed intent, never authorize a
+different request. Denied/expired/consumed records cannot authorize new mutations. Cap pending
+requests at 64 per daemon, intent at 64 KiB and signing payload at 4 KiB; exhausted retained approval
+replay evidence backpressures writes, never expires a consumed mutation's safety floor.
+
+`expectedRoleEpoch` is required on enrollment/unpair/archive requests. `ControlHostConfiguration.roleEpoch`
+starts at one and monotonically advances on explicit role changes, unpair/revocation and archive.
+Restart/reconnect/update never resets it. Every executable envelope's payload carries
+`ControlRoleFence {home,executor}`; its epochs and generation must match current trusted policy.
+Archive increments the executor epoch atomically with freeze; receipt adoption records the new epoch
+at home. A replayed already-conclusive operation is looked up by original receipt before current-role
+admission checks, so an epoch change does not erase its acknowledgment. New operations use the new
+fence; old unadmitted envelopes cannot acquire authority under it. Event cursor namespaces remain
+binding+generation+source lineage, so old factual evidence can still reconcile after archive/unpair.
+
+Pairing approves and persists each exact peer intent independently, reads both back, then permits
+dispatch. Unpair immediately fences new local dispatch/admission, retains revocation tombstones,
+freezes relevant watch authority and keeps archives/audit/receipts readable. It neither stops accepted
+ordinary work nor restores the legacy Control. If the other daemon is unreachable, peerAcknowledged
+stays false and UI says revocation pending there. Retain the signed native consent and exact unpair
+intent durably; on reconnect the native management path obtains/answers the peer request only for
+that same already-user-approved pinned intent, or asks again if scope changed. The courier must not
+turn a model result into such consent. Peer unpair uses its own current epoch/approval request and
+the original scoped intent key; home records its verified response through unpair/ack. Losing an ack
+replays that same response. No second active home is created while peer revocation is uncertain.
+
+Daemon reinstall/data restore changes lineage and invalidates enrollment, epochs and cursor authority;
+explicit repair is required. An SSH host-key change fails before daemon hello and requires explicit
+native re-verification, not a new host inferred from names. App reinstall/key loss requires explicit
+native management rekey; agents cannot replace the pinned key. Key rotation invalidates pending
+approvals, preserves consumed decisions/receipts/tombstones and does not revive grants or archives.
+Incompatible peers can be inspected/read-only but cannot become ready or execute cross-host work.
+An already enrolled peer may always be monotonically unpaired using its authenticated native
+management API, even if ordinary Control versions are incompatible; otherwise record local revoke
+and show peer pending. No implicit downgrade or failover.
+
+### Machine-readable rollout proof and archived reads
+
+`ControlHostCutover` now includes roleFence, compatibleRoutes, archiveReady and optional
+`ControlAcceptanceProof`. GET state on home reports preparing unless all are satisfied:
+
+- Both installed builds have trusted packaged test evidence for suite
+  `control-hosts-two-daemon-v1` (the two-daemon acceptance test), recorded as homeBuildId and
+  executorBuildId. The test covers admission/refusal, stop receipt, revocation, disconnect/replay
+  watch delivery, qualified task visibility and non-destructive archive/readback. A build without
+  this passing evidence must not advertise Control v1 capability. This is a release/build gate,
+  not an app-supplied `testsPassed` flag, and this contract does not claim the future suite has passed.
+- compatibleRoutes means both verified hellos/epochs and registered versioned enrollment, approval,
+  exchange/receipt, events/import/ack, status/import, sync-state, lifecycle and archive-read routes
+  satisfy the contract. Missing handlers or unsupported route versions keep preparing.
+- Actual runtime actionReceiptOperationId, reconnect watchEventId and fully imported taskSnapshotId
+  are verified against home durable stores for this exact enrollment and role fence.
+- archiveReady means the executor's legacy session/source stores are identified, all archive read
+  routes are available and active/uncertain legacy Control mutations can be reconciled by the
+  archive handler. It is not proof that freeze has already happened.
+
+The app shows separate legacy Controls while preparing/ready or while archive is pending/unknown.
+Only adopted accepted control.archive plus matching archived role/epoch and usable history-read
+routes allows one active row. Already archived executors without legacy content use their explicit
+executor role only after the same capability/enrollment/route/test gate, not by hiding an unknown row.
+Any build, pin, generation or epoch change invalidates stale ready evidence. A post-cutover disconnect
+retains the one authoritative home row as disconnected and keeps archived history navigation.
+
+Read-only archive API, all on the original executor, never the current home singleton:
+
+| GET path below `/api/control-hosts/:bindingId/archives/:sessionId` | Response |
+| --- | --- |
+| base path | `ControlArchiveInfo`: original SharedSessionRef, archivedAt, roleEpoch, readOnly true |
+| `/history?before&limit` | `ControlArchiveRead<ControlArchiveHistoryPage>`, full retained transcript from newest page backward (entries oldest-first within a page); next is oldest returned entry ID, absent at end |
+| `/memory/view` | `ControlArchiveRead<ControlMemoryViewResponse>` |
+| `/memory/nodes/:id/:n?offset` | `ControlArchiveRead<ControlMemoryNodeResponse>` |
+| `/memory/messages?before&limit&q` | `ControlArchiveRead<ControlMemoryMessagesResponse>` |
+| `/memory/stats` | `ControlArchiveRead<ControlMemoryStats>` |
+| `/audit?before&limit` | `ControlArchiveRead<ControlAuditResponse>` |
+| `/authorizations?after&limit` | `ControlArchiveRead<ControlAuthorizationsResponse>` |
+
+Resolve binding/session to its frozen original source stores, even if unpaired/revoked. Keep the
+original host/lineage in every wrapper; wrong-source IDs are 404/409, never a current-home fallback.
+These pages do not ensure a singleton, start/recover a worker, compact memory, resume a watch,
+consume a grant, rewrite raw records or import old grants into home. Read-only archive access uses
+the verified pinned native connection even after active enrollment is revoked; no new execution
+authority follows. If source storage is absent, return unavailable/not found rather than synthesize
+an empty archive. Original timestamps, audit phases and authorization revocation fields are preserved;
+the archive wrapper makes even old non-revoked grant rows visibly frozen and non-executable.
+
+History defaults to 100 entries, at most 500, 1 MiB encoded; other endpoints retain their existing
+bounded page/query semantics with a 1-MiB envelope ceiling. Oversize individual entry blocks explicitly
+rather than truncating authorization/history evidence. No transcript/thought payload is exported
+through the remote watch journal; archive browsing is an explicit native read of retained history.
+The source databases are preserved. Pending watches stop/audit without new delivery; fired notices,
+audit and frozen grants remain readable, never silently executed or imported.
+
+### One task/status DTO and merge precedence
+
+`ControlDashboardSharedTask` is the sole thin row for both optional dashboard.sharedTasks and
+snapshot.missionTasks (`ControlRemoteMissionTask` is an alias). `ControlDashboardReplicaMission`
+is the remote-home replica summary. They derive authority from existing `SharedContextSummary`,
+`DelegationGrant`, `SharedTaskRef` and shared proposal/freshness records; no new executable grant
+or copied grant.request is introduced. Dashboard fields/counts stay optional for older producers,
+and a negotiated v1 producer supplies explicit empty lists/counts.
+
+Committed identity is exactly the tuple (missionHome.daemonId, missionHome.lineageId, missionId,
+taskId). Stable display id is the compact JSON encoding of that array; binding, source, epoch and
+execution host are not part of it. Proposal identity uses ["proposal",origin host daemon/lineage,
+bindingId,bindingGeneration,proposalId]; new proposals have no canonical taskId/taskNumber. Known
+existing-task proposals may reference the committed task but stay separate provisional evidence.
+Do not count a proposed new task as a committed task or display it as a second committed row.
+
+Rows carry title/status/number when known, observedOn source host, source
+mission-home|execution-fact|replica|proposal, consistency committed|provisional, and binding/generation.
+Optional delegationId/grantBindingId/grantBindingGeneration/executionEpoch/grantState are thin
+references to the existing grant, distinct from the observer's replica binding; map
+reserved/accepted/cancel_requested/sealed without inventing a second state machine. Optional
+definitionRevision fences execution-fact eligibility. Proposal state/origin and up to 16 conflicts
+retain bounded reason/evidence IDs, never executable proposal args. Omitted values are unknown.
+`projectId` is the producer-local canonical or execution project, not cross-host task identity.
+
+Merge before clipping/counting:
+1. Prefer current mission-home canonical task definition/status and its tombstones.
+2. Supplement only eligible execution facts matching the current grant's binding/generation,
+   delegationId, definition revision and executionEpoch. A running fact is the last imported fact,
+   not live liveness; idle/disconnect/stop receipt never proves seal/release/completion.
+3. Use a complete committed replica only when canonical data is unavailable; select the greatest
+   contiguous authorized mission sequence, never wall-clock newest. Equal-sequence conflicts remain
+   explicit evidence, with stable binding-ID tie-break only for presentation. An incomplete replica
+   is labelled incomplete, not used as proof of missing/deleted tasks.
+4. Retain proposals/conflicts alongside committed state without applying them. Old-epoch execution
+   facts stay audit evidence, not replacements. One committed row/count per identity across all
+   home grants, execution snapshots and replicas. New-epoch data supersedes old execution display
+   only through the authoritative current grant, never because a socket reconnected.
+
+replicaSyncedAt/replicaAgeMs describe **local mission replica import**, unknown for legacy missing
+timestamps; snapshotCapturedAt is the producer's remote capture time and remains distinct.
+`ControlHostObservation` joins verified host availability/import time to rows: available,
+disconnected or unknown is explicit, never inferred from age or outcome. For a delegated task row
+availability refers to executionHost, otherwise observedOn. Missing transport evidence means unknown.
+A stale capture remains stale even after import; clock skew is reported, not used to pick authority.
+Replica summaries expose complete/sequence, pendingCount/conflictCount and age. Local/home/native
+producers use these same DTOs; the app does not deduplicate by binding or mutate status based on a timer.
+totals.sharedTasks and snapshot.missionTasksTotal count deduplicated display rows, including separate
+provisional proposal rows. They are not canonical mission progress counts: never feed proposals into
+missions.tasksTotal/tasksDone. Keep committed/provisional labels and count canonical progress only
+from the authoritative mission/committed task identity set. Conflict text is at most 512 UTF-8 bytes
+per item and 16 items per row; evidence IDs reference existing shared-context records, not copied args.
+
+### Updates, transport shutdown and Stop presentation
+
+Add GET `/api/control-hosts/:bindingId/lifecycle` on either peer →
+`ControlHostLifecycleResponse`. It reports bounded operation delivery and update blockers;
+at most 128 operations/blockers and 64 KiB, with truncated implying updateReady false.
+These blockers join existing RuntimeUpdateStatus.blockers and existing process/terminal/job/transfer
+drain proofs. They never replace the updater's target-side admission barrier.
+
+| Control state | Remote update rule |
+| --- | --- |
+| queued and durably never exported/possibly transmitted | Does not by itself block target update; fence dispatcher until verified reconnect and retain original envelope. |
+| unknown and possiblyTransmitted | Blocks initiating an update until original receipt is reconciled; timeout is not clearance. |
+| pending/admitted handler, any control.* kind | Blocks readiness until its domain mutation is durably conclusive/recoverably drained; never kill a handler to make it look complete. |
+| accepted/rejected, durable receipt and no in-flight domain commit | Does not by itself block; accepted running chats/jobs/PTYs still obey existing target resource blockers. |
+| archive freeze or enrollment/native-approval commit in progress, journal fault or reconciliationRequired | Blocks, including after app disconnect/restart. |
+| unacknowledged events or cached snapshot stage only | No blocker if retained durably and update preserves compatible journal/schema/lineage. Capacity/fault or incompatible migration blocks instead. |
+
+The app reconciles possibly-transmitted unknowns before requesting update. Once a target-owned update
+is accepted, its own durable admission barrier/drain controls progress independently of app liveness;
+it cannot depend on a future Mac reply. New arrivals during that barrier remain pending/rejected
+by explicit policy, never half-admitted. A mixed-version update rechecks hello, route/test evidence
+and role epochs before courier dispatch resumes; unsupported schema work stays fenced. Never repair
+an unknown operation by making a new ID, dropping its reservation or assuming the target is idle.
+
+On sleep/quit, stop starting transfers, cancel bounded read/HTTP/SSH work and await owned-forward
+cleanup plus native intent persistence. Interrupted responses are unknown; retain original envelope,
+home ownership and any remote journal entries. Closing the courier quiesces transport only: no
+remote Stop/Pause, service shutdown, role change, epoch bump, ownership release, cursor advancement
+or fabricated failed outcome. Target agents and accepted update services continue independently.
+Reconnect creates freshly verified endpoint clients and reconciles receipts before same-ID delivery.
+These Control orchestration rules do not change the ordinary composer receipt-only reconnect policy.
+
+For a Control-issued stop, lifecycle delivery queued/unknown/pending is shown as **Stop requested**;
+only adopted matching accepted receipt is **Stop acknowledged**; rejected is an explicit refusal.
+The UI keys this to operationId/target/host, persists requested across restart and does not infer
+acknowledgment from an idle session, cancelled HTTP request or a later snapshot. Acknowledgment is
+durable command admission, not quiescence or permission to reassign. Ordinary legacy native Stop
+still has its documented lost-reply limits and is not retroactively given a durable receipt.
