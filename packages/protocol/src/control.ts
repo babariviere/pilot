@@ -100,8 +100,9 @@ export interface ControlMemoryStats {
 	count: number;
 	/** Summaries waiting to be built (queued or running). */
 	pendingJobs: number;
-	/** Summaries that failed; they retry with the next message. */
+	/** Summaries that failed; background retries use bounded exponential backoff. */
 	failedJobs: number;
+	compactionFailure?: { id: number; n: number; attempts: number; errorClass: string; reason: string; retryAt: number };
 	viewBytes: number;
 	merging: boolean;
 	/** chat.sqlite plus its write-ahead log. */

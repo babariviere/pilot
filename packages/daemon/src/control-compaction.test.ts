@@ -184,13 +184,20 @@ test("ready queues bound concurrency to eight, context has no placeholders, pare
 	assert.ok(started > 20, "parent nodes were built too");
 	assert.ok(max <= 8);
 });
-test("failure waits for the next message; shutdown cancels an uncooperative provider", async (t) => {
+test("failure retries in the background with backoff; shutdown cancels an uncooperative provider", {
+	timeout: 10_000,
+}, async (t) => {
 	const { memory } = await fixture(t);
 	let fail = true,
 		calls = 0;
+	let retried!: () => void;
+	const retryStarted = new Promise<void>((resolve) => {
+		retried = resolve;
+	});
 	const compactor = new ControlCompactor(memory, async () => {
 		calls++;
 		if (fail) throw new Error("offline");
+		retried();
 		return "summary";
 	});
 	t.after(() => compactor.stop());
@@ -204,7 +211,11 @@ test("failure waits for the next message; shutdown cancels an uncooperative prov
 	fail = false;
 	await compactor.append({ kind: "user", text: "retry" });
 	await compactor.settled();
+	assert.equal(calls, 1, "a new message must not bypass retry backoff");
+	await retryStarted;
+	await compactor.settled();
 	assert.equal((await memory.state()).pending, 0);
+	assert.equal((await memory.state()).failure, undefined);
 	await compactor.stop();
 	let started!: () => void, signal: AbortSignal | undefined;
 	const ready = new Promise<void>((resolve) => {

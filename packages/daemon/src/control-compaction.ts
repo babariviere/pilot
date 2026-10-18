@@ -43,7 +43,9 @@ export async function compactControlNode(
 		});
 		signal.throwIfAborted();
 		if (result.stopReason !== "stop" || result.content.some((block) => block.type === "toolCall"))
-			throw new Error("Control compaction failed or attempted a tool call");
+			throw new Error(
+				`Control compaction failed or attempted a tool call (${result.stopReason})${result.errorMessage ? `: ${result.errorMessage}` : ""}`,
+			);
 		const text = result.content
 			.filter((block) => block.type === "text")
 			.map((block) => block.text)
@@ -71,6 +73,7 @@ export class ControlCompactor {
 	private pumping?: Promise<void>;
 	private requested = false;
 	private stopped = false;
+	private retryTimer?: ReturnType<typeof setTimeout>;
 	private readonly listeners = new Set<() => void>();
 	private readonly memory: ControlMemory;
 	private readonly complete: ControlCompletion;
@@ -93,7 +96,28 @@ export class ControlCompactor {
 				this.pumping = undefined;
 				if (this.requested) this.wake();
 				this.emit();
+				void this.scheduleRetry().catch(() => {});
 			});
+	}
+	private async scheduleRetry(): Promise<void> {
+		if (this.stopped) return;
+		const { retryAt } = await this.memory.state();
+		if (this.stopped) return;
+		clearTimeout(this.retryTimer);
+		this.retryTimer = undefined;
+		if (retryAt === undefined) return;
+		this.retryTimer = setTimeout(
+			() => {
+				this.retryTimer = undefined;
+				if (!this.stopped)
+					void this.memory
+						.retry()
+						.then(() => this.wake())
+						.catch(() => {});
+			},
+			Math.max(1, retryAt - Date.now()),
+		);
+		this.retryTimer.unref();
 	}
 	onChange(listener: () => void): () => void {
 		this.listeners.add(listener);
@@ -137,8 +161,13 @@ export class ControlCompactor {
 			const text = await Promise.race([this.complete(job, lines, controller.signal), abort]);
 			controller.signal.throwIfAborted();
 			await this.memory.put(job.id, job.n, text);
-		} catch {
-			await this.memory.fail(job.id, job.n).catch(() => {});
+		} catch (error) {
+			await this.memory
+				.fail(job.id, job.n, {
+					errorClass: error instanceof Error ? error.name : "Error",
+					reason: error instanceof Error ? error.message : "Unknown compaction error",
+				})
+				.catch(() => {});
 		} finally {
 			clearTimeout(timer);
 			if (onAbort) controller.signal.removeEventListener("abort", onAbort);
@@ -158,6 +187,7 @@ export class ControlCompactor {
 	}
 	async stop(): Promise<void> {
 		this.stopped = true;
+		clearTimeout(this.retryTimer);
 		for (const { controller } of this.running.values()) controller.abort();
 		await this.pumping;
 		await Promise.all([...this.running.values()].map(({ done }) => done));

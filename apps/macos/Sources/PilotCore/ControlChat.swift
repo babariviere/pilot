@@ -186,12 +186,21 @@ public struct ControlMemoryMessagesResponse: Codable, Equatable, Sendable {
     }
 }
 /// GET /api/control-chat/memory/stats.
+public struct ControlCompactionFailure: Codable, Equatable, Sendable {
+    public let id: Int
+    public let n: Int
+    public let attempts: Int
+    public let errorClass: String
+    public let reason: String
+    public let retryAt: Double
+}
 public struct ControlMemoryStats: Codable, Equatable, Sendable {
     public let count: Int
     /// Summaries waiting to be built (queued or running).
     public let pendingJobs: Int
-    /// Summaries that failed; they retry with the next message.
+    /// Summaries that failed; background retries use bounded exponential backoff.
     public let failedJobs: Int
+    public let compactionFailure: ControlCompactionFailure?
     public let viewBytes: Int
     public let merging: Bool
     /// chat.sqlite plus its write-ahead log.
@@ -199,10 +208,12 @@ public struct ControlMemoryStats: Codable, Equatable, Sendable {
     public let oldestAt: Double?
     public let newestAt: Double?
     public init(count: Int, pendingJobs: Int, failedJobs: Int, viewBytes: Int, merging: Bool, dbBytes: Int,
-                oldestAt: Double? = nil, newestAt: Double? = nil) {
+                oldestAt: Double? = nil, newestAt: Double? = nil,
+                compactionFailure: ControlCompactionFailure? = nil) {
         self.count = count
         self.pendingJobs = pendingJobs
         self.failedJobs = failedJobs
+        self.compactionFailure = compactionFailure
         self.viewBytes = viewBytes
         self.merging = merging
         self.dbBytes = dbBytes

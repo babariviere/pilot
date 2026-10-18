@@ -19,6 +19,7 @@ import {
 	controlLine,
 	mergeControlView,
 } from "./control-view.ts";
+import { redactDiagnosticText } from "./diagnostic-redaction.ts";
 
 export type ControlMessageKind = "user" | "assistant" | "tool" | "echo" | "event" | "note";
 export interface ControlMessageInput {
@@ -38,13 +39,25 @@ export interface ControlJob {
 	id: number;
 	n: number;
 	source: string;
+	attempts?: number;
+}
+export interface ControlCompactionFailure {
+	id: number;
+	n: number;
+	attempts: number;
+	errorClass: string;
+	reason: string;
+	retryAt: number;
 }
 export interface ControlMemoryState {
 	count: number;
 	pending: number;
 	viewBytes: number;
 	merging: boolean;
+	failure?: ControlCompactionFailure;
+	retryAt?: number;
 }
+export const CONTROL_TURN_HISTORY_BYTES = 128_000;
 const PENDING = "(not summarized yet: zoom it)";
 export const CONTROL_NODE_BYTES = 512;
 /** Rows one log search examines before returning a continuation cursor, so a miss cannot hold the worker. */
@@ -119,6 +132,19 @@ export class ControlMemoryDisk {
 				INSERT INTO compact_view SELECT * FROM view WHERE NOT EXISTS (SELECT 1 FROM meta WHERE key='compactBytes');
 				INSERT OR IGNORE INTO meta VALUES ('count',0), ('bytes',0), ('merging',0), ('compactBytes',0);
 				UPDATE jobs SET state=0 WHERE state=1;`);
+			const columns = new Set(
+				this.db
+					.prepare("PRAGMA table_info(jobs)")
+					.all()
+					.map((row) => row.name),
+			);
+			for (const [name, declaration] of Object.entries({
+				attempts: "INTEGER NOT NULL DEFAULT 0",
+				error_class: "TEXT",
+				reason: "TEXT",
+				retry_at: "INTEGER NOT NULL DEFAULT 0",
+			}))
+				if (!columns.has(name)) this.db.exec(`ALTER TABLE jobs ADD COLUMN ${name} ${declaration}`);
 			this.setMeta(
 				"compactBytes",
 				this.compactLines().reduce((sum, line) => sum + Buffer.byteLength(controlLine(line)), 0),
@@ -146,15 +172,23 @@ export class ControlMemoryDisk {
 		this.db.prepare("UPDATE meta SET value=? WHERE key=?").run(value, key);
 	}
 	state(): ControlMemoryState {
+		const failure = this.db
+			.prepare(
+				"SELECT id,n,attempts,error_class AS errorClass,reason,retry_at AS retryAt FROM jobs WHERE reason IS NOT NULL ORDER BY retry_at DESC LIMIT 1",
+			)
+			.get() as unknown as ControlCompactionFailure | undefined;
+		const retryAt = this.db.prepare("SELECT min(retry_at) AS at FROM jobs WHERE state=2").get()?.at;
 		return {
 			count: this.meta("count"),
 			pending: Number(this.db.prepare("SELECT count(*) AS n FROM jobs").get()!.n),
 			viewBytes: this.meta("bytes"),
 			merging: !!this.meta("merging"),
+			...(failure ? { failure } : {}),
+			...(typeof retryAt === "number" ? { retryAt } : {}),
 		};
 	}
-	retry(): void {
-		this.db.exec("UPDATE jobs SET state=0 WHERE state=2");
+	retry(now = Date.now()): void {
+		this.db.prepare("UPDATE jobs SET state=0 WHERE state=2 AND retry_at<=?").run(now);
 	}
 	auditAppend(entry: Omit<ControlAuditEntry, "seq">): ControlAuditEntry {
 		const payload = JSON.stringify(entry);
@@ -249,13 +283,36 @@ export class ControlMemoryDisk {
 		if (typeof key !== "string" || !key || key.length > 128) throw new Error("Invalid turn key");
 		const row = this.db.prepare("SELECT key,view FROM turn_view WHERE slot=1").get();
 		if (row?.key === key) return JSON.parse(String(row.view)) as ControlLine[];
-		const view = this.view();
+		const view: ControlLine[] = [];
+		let bytes = 0;
+		for (const row of this.db
+			.prepare(`WITH lines AS (
+			SELECT v.id,v.n,coalesce(t.text, CASE WHEN v.n=1 THEN CASE m.kind
+				WHEN 'tool' THEN 'tool: ' || json_extract(m.payload,'$.name') || ' ' || (m.payload -> '$.input')
+				ELSE m.kind || ': ' || json_extract(m.payload,'$.text') END END) AS text
+			FROM view v LEFT JOIN nodes t ON v.id=t.id AND v.n=t.n LEFT JOIN messages m ON v.id=m.id)
+			SELECT id,n,length(cast(text AS BLOB)) AS bytes,
+			CASE WHEN length(cast(text AS BLOB))<=? THEN text END AS text FROM lines ORDER BY id`)
+			.iterate(CONTROL_TURN_HISTORY_BYTES)) {
+			if (Number(row.bytes) > CONTROL_TURN_HISTORY_BYTES) throw this.historyOverflow();
+			if (typeof row.text !== "string") throw new Error("Control history has an unresolved range");
+			const line = { id: Number(row.id), n: Number(row.n), text: row.text };
+			bytes += Buffer.byteLength(controlLine(line));
+			if (bytes > CONTROL_TURN_HISTORY_BYTES) throw this.historyOverflow();
+			view.push(line);
+		}
 		this.db
 			.prepare(
 				"INSERT INTO turn_view VALUES(1,?,?) ON CONFLICT(slot) DO UPDATE SET key=excluded.key,view=excluded.view",
 			)
 			.run(key, JSON.stringify(view));
 		return view;
+	}
+	private historyOverflow(): Error {
+		const failure = this.state().failure;
+		return new Error(
+			`Control history exceeds the ${CONTROL_TURN_HISTORY_BYTES}-byte context cap while compaction is pending${failure ? `: ${failure.errorClass}, attempt ${failure.attempts}: ${failure.reason}` : ""}. Send a new message after compaction recovers; no input was replayed.`,
+		);
 	}
 	append(input: ControlMessageInput): ControlMessage[] {
 		if (!input || !kinds.has(input.kind) || typeof input.text !== "string" || input.text.includes("\0"))
@@ -290,7 +347,7 @@ export class ControlMemoryDisk {
 					.all(input.key, `${input.key.replace(/[[*?]/g, "[$&]")}:part:*`);
 				if (existing.length) return existing.map((row) => JSON.parse(String(row.payload)) as ControlMessage);
 			}
-			this.db.exec("UPDATE jobs SET state=0 WHERE state=2"); // Failed calls retry only on the next message.
+			this.retry();
 			const out: ControlMessage[] = [];
 			for (const [part, text] of parts.entries()) {
 				const id = this.meta("count"),
@@ -425,10 +482,10 @@ export class ControlMemoryDisk {
 	next(): ControlJob | undefined {
 		const job = this.db
 			.prepare(
-				"SELECT id,n,source FROM jobs WHERE state=0 AND (n>1 OR id<=coalesce((SELECT id FROM jobs WHERE n=1 ORDER BY id LIMIT 1 OFFSET 7),9223372036854775807)) ORDER BY id,n LIMIT 1",
+				"SELECT id,n,source,attempts+1 AS attempts FROM jobs WHERE state=0 AND (n>1 OR id<=coalesce((SELECT id FROM jobs WHERE n=1 ORDER BY id LIMIT 1 OFFSET 7),9223372036854775807)) ORDER BY id,n LIMIT 1",
 			)
 			.get() as unknown as ControlJob | undefined;
-		if (job) this.db.prepare("UPDATE jobs SET state=1 WHERE id=? AND n=?").run(job.id, job.n);
+		if (job) this.db.prepare("UPDATE jobs SET state=1,attempts=attempts+1 WHERE id=? AND n=?").run(job.id, job.n);
 		return job;
 	}
 	put(id: number, n: number, text: string): void {
@@ -443,8 +500,25 @@ export class ControlMemoryDisk {
 			this.reduceCompact();
 		});
 	}
-	fail(id: number, n: number): void {
-		this.db.prepare("UPDATE jobs SET state=2 WHERE id=? AND n=? AND state=1").run(id, n);
+	fail(
+		id: number,
+		n: number,
+		failure: { errorClass: string; reason: string } = { errorClass: "Error", reason: "Compaction interrupted" },
+	): void {
+		const clean = (value: string, cap: number) =>
+			redactDiagnosticText(value.length > 64_000 ? "Oversized error omitted" : value).slice(0, cap);
+		const attempts = Number(
+			this.db.prepare("SELECT attempts FROM jobs WHERE id=? AND n=?").get(id, n)?.attempts ?? 1,
+		);
+		this.db
+			.prepare("UPDATE jobs SET state=2,error_class=?,reason=?,retry_at=? WHERE id=? AND n=? AND state=1")
+			.run(
+				clean(failure.errorClass, 80),
+				clean(failure.reason, 500),
+				Date.now() + Math.min(300_000, 1_000 * 2 ** Math.min(9, attempts - 1)),
+				id,
+				n,
+			);
 	}
 	/** Raw log reads are paged and never used to reconstruct the persisted view. */
 	message(
@@ -540,6 +614,7 @@ export class ControlMemoryDisk {
 		};
 	}
 	stats(): ControlMemoryStats {
+		const failure = this.state().failure;
 		const jobs = this.db
 			.prepare("SELECT coalesce(sum(state<2),0) AS pending, coalesce(sum(state=2),0) AS failed FROM jobs")
 			.get()!;
@@ -556,6 +631,7 @@ export class ControlMemoryDisk {
 			count: this.meta("count"),
 			pendingJobs: Number(jobs.pending),
 			failedJobs: Number(jobs.failed),
+			...(failure ? { compactionFailure: failure } : {}),
 			viewBytes: this.meta("bytes"),
 			merging: !!this.meta("merging"),
 			dbBytes: size(this.path) + size(`${this.path}-wal`),
