@@ -57,23 +57,27 @@ extension AppModel {
     }
 
     var selectedMission: Mission? {
-        if let id = selectedMissionId, let ref = resourceRef(id, kind: .mission), ref.host != localHost {
-            return hosts.missions.first { $0.ref == ref }?.value
-        }
-        return client.mission(selectedMissionId)
+        guard selectedMissionId != nil else { return nil }
+        return currentMission
     }
 
     func openMission(_ id: String, tab: MissionTab? = nil, context: HostViewContext? = nil) {
         beginNavigation()
         defer { endNavigation() }
-        if let ref = resourceRef(id, kind: .mission, context: context), ref.host != localHost {
-            if let tab { missionTab = tab }; navigate(.mission, id: ref.storageKey); return
-        }
-        hosts.selection = nil
+        // A qualified mission is a pinned destination, never the composer's execution host.
+        let ref = resourceRef(id, kind: .mission, context: context)
+        if id.hasPrefix("hostref1:"), ref == nil { return }
+        let qualified = context != nil || id.hasPrefix("hostref1:")
+        let key = ref.map { qualified || $0.host != localHost ? $0.storageKey : $0.localId } ?? id
+        hosts.selection = ref?.host == localHost ? nil : ref
         showingArchive = false
+        showingInbox = false
+        showingControl = false
+        clearProjectSubpage()
         selectedSessionId = nil
-        if let tab { missionTab = tab } else if selectedMissionId != id { missionTab = .overview }
-        selectedMissionId = id
+        selectedProjectId = nil
+        if let tab { missionTab = tab } else if selectedMissionId != key { missionTab = .overview }
+        selectedMissionId = key
     }
 
     func members(of mission: Mission, context: HostViewContext? = nil) -> [SessionSummary] {

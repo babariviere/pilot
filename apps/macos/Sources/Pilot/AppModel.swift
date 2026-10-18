@@ -38,6 +38,7 @@ final class AppModel: ObservableObject {
     let client: PilotClient
     /// Host-qualified facade for remote surfaces. The existing client remains Local only.
     let hosts: HostClients
+    let missionRegistry = MissionRegistry()
     @Published private(set) var localHost: HostRef?
     let feeds = SessionFeedCache()
     let subagentFeeds = SubagentFeeds()
@@ -1355,7 +1356,7 @@ extension AppModel {
                 switch kind {
                 case .session: return hosts.sessions.contains { $0.ref == ref }
                 case .project: return hosts.projects.contains { $0.ref == ref }
-                case .mission: return hosts.missions.contains { $0.ref == ref }
+                case .mission: return hosts.missions.contains { $0.ref == ref } || missionRegistry.row(for: ref) != nil
                 default: return false
                 }
             }

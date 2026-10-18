@@ -12,7 +12,8 @@ struct SessionSidebar: View {
     @Environment(\.hostViewContext) private var hostContext
     @ObservedObject var model: AppModel
     @ObservedObject var client: PilotClient
-    @ObservedObject private var hosts = AppModel.shared.hosts
+    @ObservedObject private var hosts: HostClients
+    @ObservedObject private var missionRegistry: MissionRegistry
     @StateObject private var folderEditor = ProjectFolderEditorState()
 
     @FocusState private var searchFocused: Bool
@@ -20,6 +21,11 @@ struct SessionSidebar: View {
     /// Lines the Missions header's + up with the compose button and Inbox badge above it. The header stays full
     /// width under the scroll bar, so without this inset the + sat beneath it and lost clicks.
     private static let missionsAddTrailingInset: CGFloat = 16
+
+    init(model: AppModel, client: PilotClient) {
+        self.model = model; self.client = client
+        self.hosts = model.hosts; self.missionRegistry = model.missionRegistry
+    }
 
     var body: some View {
         let known = Set(client.projects.map(\.id))
@@ -35,15 +41,16 @@ struct SessionSidebar: View {
             guard let key else { return }
             model.navigate(.session, id: key)
         })) {
+            if model.localHost != nil { unifiedMissions(query: model.sidebarQuery) }
             if !hosts.offlineHosts.isEmpty {
                 unifiedRows
             } else if let focused {
-                missionsSection(visible: visible, searching: searching, projectId: focused.id)
+                if model.localHost == nil { missionsSection(visible: visible, searching: searching, projectId: focused.id) }
                 urgencyGroups(visible.filter { $0.projectId == focused.id }, searching: searching,
                               recentListId: focused.id, hasArchivedMatches: !archived.isEmpty)
                 archivedMatches(archived)
             } else {
-                missionsSection(visible: visible, searching: searching)
+                if model.localHost == nil { missionsSection(visible: visible, searching: searching) }
                 let names = Dictionary(client.projects.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
                 urgencyGroups(visible, searching: searching, recentListId: Self.recentListId,
                               hasArchivedMatches: !archived.isEmpty, projectNames: names)
@@ -158,22 +165,6 @@ struct SessionSidebar: View {
                 && (model.focusedProjectRef == nil || (hosted.ref.host == model.focusedProjectRef?.host && hosted.value.projectId == model.focusedProjectRef?.localId))
         }.sorted { $0.value.listActivityAt > $1.value.listActivityAt }
         // Each host's control chat lives in the fixed slot above the list (`SidebarControlSlot`).
-        let missions = hosts.missions.filter {
-            $0.value.status == .active && (query.isEmpty || $0.value.title.lowercased().contains(query))
-                && (model.focusedProjectRef == nil || ($0.ref.host == model.focusedProjectRef?.host && $0.value.projectId == model.focusedProjectRef?.localId))
-        }
-        if !missions.isEmpty {
-            Section {
-                ForEach(missions) { item in
-                    Button { model.navigate(.mission, id: item.ref.storageKey) } label: {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(item.value.title).font(.pilot(.body)).lineLimit(1)
-                            Text(HostViewContext(host: item.ref.host, hosts: hosts).name).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
-                        }
-                    }.rowButtonStyle()
-                }
-            } header: { SidebarSectionHeader(title: "Missions") }
-        }
         ForEach(["Pinned", "Needs you", "Ready to merge", "Working", "Recent", "Archived"], id: \.self) { title in
             let rows = values.filter { !$0.value.isControl && group($0) == title }
             if !rows.isEmpty {
@@ -188,6 +179,36 @@ struct SessionSidebar: View {
                     }
                 } header: { SidebarSectionHeader(title: title) }
             }
+        }
+    }
+
+    @ViewBuilder private func unifiedMissions(query: String) -> some View {
+        let missions = missionRegistry.rows.filter { query.isEmpty || ($0.title ?? "Mission").localizedCaseInsensitiveContains(query) }
+        let active = missions.filter { $0.status == .active || $0.status == nil }
+        let inactive = missions.filter { $0.status != .active && $0.status != nil }
+        if !missions.isEmpty || missionRegistry.truncated || !missionRegistry.failures.isEmpty {
+            Section {
+                ForEach(active) { LogicalMissionSidebarRow(mission: $0, model: model, registry: missionRegistry) }
+                if active.isEmpty, query.isEmpty {
+                    Text("No active missions").font(.pilot(.small)).foregroundStyle(Theme.faintForeground)
+                        .selectionDisabled(true)
+                }
+                if !inactive.isEmpty {
+                    let showing = !query.isEmpty || model.showingInactiveMissions
+                    SidebarDisclosureRow(title: "Done and archived (\(inactive.count))", expanded: showing) {
+                        model.showingInactiveMissions.toggle()
+                    }.selectionDisabled(true)
+                    if showing { ForEach(inactive) { LogicalMissionSidebarRow(mission: $0, model: model, registry: missionRegistry) } }
+                }
+                if missionRegistry.truncated {
+                    Text("More missions may be available").font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                        .selectionDisabled(true)
+                }
+                if !missionRegistry.failures.isEmpty {
+                    Text("Some mission summaries could not refresh").font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                        .selectionDisabled(true)
+                }
+            } header: { SidebarSectionHeader(title: "Missions") }
         }
     }
 

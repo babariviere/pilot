@@ -216,8 +216,7 @@ extension AppModel {
             selectedSessionId = nil; selectedMissionId = nil; selectedProjectId = key
             hosts.selection = ref
         case .mission:
-            selectedSessionId = nil; selectedProjectId = nil; selectedMissionId = key
-            hosts.selection = ref
+            openMission(ref.storageKey)
         default: return
         }
     }

@@ -198,7 +198,6 @@ struct HomeOverview: View {
                                        sessions: client.sessions, missions: client.missions)
         let remoteRows = remoteProjects
         let remoteWorking = hosts.sessions.filter { $0.ref.host != app.localHost && hosts.available.contains($0.ref.host) && $0.value.isWorking && !$0.value.isArchived }
-        let remoteMissions = hosts.missions.filter { $0.ref.host != app.localHost && $0.value.status == .active }
         let working = HomeStatus.working(client.sessions)
         let missions = HomeStatus.missions(client.missions)
         let sessionIds = Set(client.sessions.map(\.id))
@@ -264,7 +263,10 @@ struct HomeOverview: View {
             }
 
             section {
-                PageSectionHeader(title: "Missions", count: missions.count + remoteMissions.count)
+                if app.localHost != nil {
+                    LogicalMissionHomeSection(model: app, registry: app.missionRegistry, expanded: $allMissions)
+                } else {
+                PageSectionHeader(title: "Missions", count: missions.count)
                 if missions.isEmpty {
                     quietLine(client.hasProjectSnapshot ? "No missions yet." : "Loading missions…")
                 }
@@ -273,11 +275,8 @@ struct HomeOverview: View {
                     if index > 0 { HairlineDivider(leading: 30) }
                     missionRow(mission, sessionIds: sessionIds)
                 }
-                ForEach(allMissions ? remoteMissions : Array(remoteMissions.prefix(HomeStatus.previewLimit))) { item in
-                    HairlineDivider(leading: 30)
-                    missionRow(item.value, sessionIds: Set(hosts.sessions.filter { $0.ref.host == item.ref.host }.map { $0.value.id }), context: HostViewContext(host: item.ref.host, hosts: hosts))
+                if missions.count > HomeStatus.previewLimit { listToggle(count: missions.count, expanded: $allMissions) }
                 }
-                if missions.count + remoteMissions.count > HomeStatus.previewLimit { listToggle(count: missions.count + remoteMissions.count, expanded: $allMissions) }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

@@ -171,12 +171,7 @@ struct CommandPaletteCatalog {
                 title: item.value.name, keywords: [HostViewContext(host: item.ref.host, hosts: hosts).name]), icon: .project,
                 detail: HostViewContext(host: item.ref.host, hosts: hosts).name) { model.navigate(.project, id: item.ref.storageKey) }
         }
-        let missions = hosts.missions.filter { $0.ref.host != model.localHost }.map { item in
-            CommandPaletteEntry(item: CommandPaletteItem(id: "mission:" + item.ref.storageKey, kind: .mission,
-                title: item.value.title, keywords: [HostViewContext(host: item.ref.host, hosts: hosts).name]), icon: .mission,
-                detail: HostViewContext(host: item.ref.host, hosts: hosts).name) { model.navigate(.mission, id: item.ref.storageKey) }
-        }
-        return chats + projects + missions
+        return chats + projects
     }
 
     /// Tasks of the active missions, open ones first. A task's pull requests are the ones linked to it.
@@ -199,6 +194,7 @@ struct CommandPaletteCatalog {
     }
 
     private func missions() -> [CommandPaletteEntry] {
+        if model.localHost != nil { return hostedMissions() }
         let missions = model.client.missions.filter { $0.status != .archived }.sorted { lhs, rhs in
             lhs.status == rhs.status ? lhs.updatedAt > rhs.updatedAt : lhs.status == .active
         }
@@ -217,6 +213,21 @@ struct CommandPaletteCatalog {
                 detail: [project, mission.status == .done ? "Done" : nil, progress].compactMap { $0 }
                     .joined(separator: " · ")
             ) { [model] in model.showMission(mission) }
+        }
+    }
+
+    private func hostedMissions() -> [CommandPaletteEntry] {
+        var suggested = 0
+        return model.missionRegistry.rows.filter { $0.status != .archived }.map { mission in
+            let reference = model.missionRegistry.destination(mission, model: model)
+            let suggest = (mission.status == .active || mission.status == nil) && suggested < Self.suggestedMissions
+            if suggest { suggested += 1 }
+            return CommandPaletteEntry(
+                item: CommandPaletteItem(id: "mission:\(mission.id)", kind: .mission, title: mission.title ?? "Mission",
+                    suggested: suggest), icon: .mission,
+                detail: LogicalMissionPresentation.line(mission, registry: model.missionRegistry,
+                    available: model.missionAvailable(reference)), reference: reference
+            ) { [model] in model.openLogicalMission(mission) }
         }
     }
 
@@ -308,13 +319,14 @@ struct CommandPaletteCatalog {
             ) { [model] in model.showAgents() })
         }
         // The open mission's tabs, beyond G M, G T and G B.
-        if let missionId = model.currentMissionId, let mission = model.client.mission(missionId) {
+        if let missionId = model.currentMissionId, let title = model.selectedLogicalMission?.title ?? model.currentMission?.title {
+            let context = model.currentMissionReference.map { HostViewContext(host: $0.host, hosts: model.hosts) }
             for tab in MissionTab.allCases {
                 entries.append(CommandPaletteEntry(
                     item: CommandPaletteItem(id: "page:mission-tab:\(tab.rawValue)", kind: .page, title: "Mission \(tab.title)",
-                                             keywords: ["mission", tab.title, mission.title]),
-                    icon: .mission, suffix: mission.title
-                ) { [model] in model.openMission(missionId, tab: tab) })
+                                             keywords: ["mission", tab.title, title]),
+                    icon: .mission, suffix: title
+                ) { [model] in model.openMission(missionId, tab: tab, context: context) })
             }
         }
         return entries
@@ -460,9 +472,9 @@ struct CommandPaletteCatalog {
 
 extension AppModel {
     /// Opens a mission, widening a focused sidebar that does not hold it, as reveal(session:) does for chats.
-    func showMission(_ mission: Mission, tab: MissionTab? = nil) {
-        if let scope = sidebarScope, scope != mission.projectId { focus(on: nil) }
-        openMission(mission.id, tab: tab)
+    func showMission(_ mission: Mission, tab: MissionTab? = nil, context: HostViewContext? = nil) {
+        // Missions stay visible across project/execution scopes, so opening one need not change scope.
+        openMission(mission.id, tab: tab, context: context)
     }
 
     /// A mission's Tasks tab, scrolled to one task.
@@ -504,6 +516,7 @@ final class CommandPaletteModel: ObservableObject {
     private var loading: Task<Void, Never>?
     private weak var client: PilotClient?
     private var hostObservation: AnyCancellable?
+    private var missionObservation: AnyCancellable?
     /// Slack messages pilotd found for the current query, and the query they answer.
     private var reports: (query: String, items: [TrackedItem]) = ("", [])
     private var searching: Task<Void, Never>?
@@ -524,6 +537,9 @@ final class CommandPaletteModel: ObservableObject {
                                         openKeyboardShortcuts: openKeyboardShortcuts)
         client = model.client
         hostObservation = model.hosts.objectWillChange
+            .debounce(for: .milliseconds(30), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in self?.rebuild() }
+        missionObservation = model.missionRegistry.objectWillChange
             .debounce(for: .milliseconds(30), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in self?.rebuild() }
         rebuild()
@@ -551,6 +567,7 @@ final class CommandPaletteModel: ObservableObject {
 
     func stop() {
         hostObservation = nil
+        missionObservation = nil
         loading?.cancel()
         loading = nil
         searching?.cancel()
