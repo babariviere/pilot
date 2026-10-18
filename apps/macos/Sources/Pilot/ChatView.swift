@@ -335,6 +335,7 @@ struct ChatView: View {
     @StateObject private var transcriptKeyboard = TranscriptKeyboard()
     @State private var showingJobs = false
     @State private var retryingStartup = false
+    @State private var dismissedRepairProposalId: String?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let bottomPadding: CGFloat = 8
     /// Offline performance checks report this, so redundant transcript invalidations are countable.
@@ -554,6 +555,16 @@ struct ChatView: View {
                         // Each question starts with nothing highlighted or ticked.
                         .id(question.entryID)
                         .transition(Theme.Motion.replacement(reduceMotion: reduceMotion))
+                } else if let repair = pendingRepairPrompt(transcript) {
+                    DiagnosticRepairPrompt(presentation: repair, onReview: {
+                        model.prepareDiagnosticRepair(session, context: context)
+                    }, onDismiss: {
+                        dismissedRepairProposalId = repair.proposal.id
+                        guard let reference = model.resourceRef(session.id, kind: .session, context: context) else { return }
+                        model.dismissDiagnosticRepairProposal(repair.proposal.id, for: reference)
+                    })
+                    .id("repair:\(repair.proposal.id):\(repair.pendingProposalId ?? "ready")")
+                    .transition(Theme.Motion.replacement(reduceMotion: reduceMotion))
                 } else {
                     Composer(
                         state: composer,
@@ -586,7 +597,7 @@ struct ChatView: View {
                     .transition(Theme.Motion.replacement(reduceMotion: reduceMotion))
                 }
             }
-            .animation(Theme.Motion.standard(reduceMotion: reduceMotion), value: pendingQuestion(transcript)?.entryID)
+            .animation(Theme.Motion.standard(reduceMotion: reduceMotion), value: composerPromptID(transcript))
             // The transcript scrolls behind this inset, including the gaps around its controls.
             .background(Theme.background)
         }
@@ -611,6 +622,30 @@ struct ChatView: View {
     private func perform<Value>(_ action: (PilotClient, String) async throws -> Value) async throws -> Value {
         if let context { return try await context.perform(.session, session.id, action) }
         return try await action(endpoint, session.id)
+    }
+
+    private func pendingRepairPrompt(_ transcript: TranscriptStatus) -> DiagnosticRepairPromptPresentation? {
+        guard session.isDiagnosticsSpecialist,
+              let host = context?.host ?? model.localHost,
+              let reference = model.resourceRef(session.id, kind: .session, context: context) else { return nil }
+        let target = DiagnosticRepairTarget(specialist: session, reference: reference)
+        let pending = try? model.pendingDiagnosticRepairStart(for: target)
+        let pendingProposalId = pending?.admission.proposalId
+        let dismissed = dismissedRepairProposalId ?? model.dismissedDiagnosticRepairProposal(for: reference)
+        let admittedTarget = session.diagnosticTargetId.flatMap { endpoint.session($0) }
+        return DiagnosticRepair.prompt(
+            specialist: session, specialistHost: host, admittedTarget: admittedTarget,
+            available: context?.available ?? model.client.connected,
+            dismissedProposalId: dismissed, pendingProposalId: pendingProposalId,
+            hasLiveQuestion: pendingQuestion(transcript) != nil,
+            working: transcript.working || session.state == "starting"
+        )
+    }
+
+    private func composerPromptID(_ transcript: TranscriptStatus) -> String? {
+        if let question = pendingQuestion(transcript) { return "question:\(question.entryID)" }
+        guard let repair = pendingRepairPrompt(transcript) else { return nil }
+        return "repair:\(repair.proposal.id):\(repair.pendingProposalId ?? "ready")"
     }
 
     private func stop() {

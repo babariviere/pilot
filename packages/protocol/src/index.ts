@@ -1454,6 +1454,14 @@ export interface ModelList {
 	defaultModel?: string;
 }
 
+/** Native-confirmed source authority for a separate Build spawned from a diagnostics proposal. */
+export interface DiagnosticRepairAdmission {
+	specialistSessionId: string;
+	proposalId: string;
+	/** Exact target identity admitted to the specialist when it published the proposal. */
+	target: DiagnosticTargetReference;
+}
+
 /** POST /api/sessions. Needs a missionId, projectId or cwd (cwd overrides a non-mission project's path). */
 /** Returns a durable `starting` session before workspace preparation and kernel startup finish. */
 export interface SpawnRequest {
@@ -1467,6 +1475,8 @@ export interface SpawnRequest {
 	diagnosticHistoryAccess?: boolean;
 	/** Diagnostics-only title hint: ignore the fixed opening instruction and wait for substantive assistant text. */
 	diagnosticTitleFromReply?: boolean;
+	/** Native-reviewed proposal authority. Accepted only by a durable repair-create operation. */
+	diagnosticRepair?: DiagnosticRepairAdmission;
 	/** Omitted means Build. */
 	mode?: ChatMode;
 	/** Per-chat Build override. Omitted uses project settings; cwd-only cannot request a clone. */

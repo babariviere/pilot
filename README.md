@@ -1040,9 +1040,12 @@ its selected host. Missing app text logs, journal history or crash reports remai
 that no failure occurred. The reader rejects symbolic links and arbitrary files, uses opaque bounded continuations
 and excerpts, never wakes or probes the target, and does not copy logs into telemetry or repair handoffs. Logs and
 history stay local, are treated as untrusted data, and grant no attachment, child-session, shell or mutation access.
-When asked, the specialist can publish a bounded, cited repair proposal for review; publishing or cancelling never
-starts work. Only explicit confirmation sends the reviewed proposal to a separate ordinary Build chat in a valid
-chosen project.
+When asked, the specialist can publish a bounded, cited repair proposal. After the turn settles, its chat shows a
+native Review repair tray without displacing a live question or stealing focus; Not now is remembered for that exact
+proposal, while the context menu can reopen it. Publishing, viewing, reconnecting, dismissing or cancelling never
+starts work. Only explicit confirmation in the review sheet sends the proposal to a separate ordinary Build chat in
+a valid chosen project. That start uses one durable, host-qualified operation, revalidates the current proposal and
+target at daemon admission, and reconciles an unknown response before any retry or replacement intent.
 [Tool-call diagnostics](docs/tool-call-diagnostics.md) add bounded in-flight and completed lifecycle evidence for
 built-ins, MCP and nested `codemode` calls while keeping raw names, arguments, output and commands out of diagnostics
 and opt-in telemetry. Liveness and useful progress remain separate observations; Pilot does not automatically retry,

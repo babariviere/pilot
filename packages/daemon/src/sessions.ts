@@ -4249,6 +4249,36 @@ export class SessionManager {
 		};
 	}
 
+	private assertDiagnosticRepairAdmission(request: SpawnRequest): void {
+		const repair = request.diagnosticRepair;
+		if (!repair) return;
+		if (request.role !== undefined || (request.mode ?? "build") !== "build")
+			throw new Conflict("Diagnostic repair requires an ordinary Build chat");
+		if (
+			typeof repair.specialistSessionId !== "string" ||
+			!repair.specialistSessionId ||
+			typeof repair.proposalId !== "string" ||
+			!repair.proposalId
+		)
+			throw new Conflict("Invalid diagnostic repair authority");
+		const specialist = this.require(repair.specialistSessionId);
+		const target = this.diagnosticReference(specialist);
+		const proposal = specialist.diagnosticRepairProposal;
+		if (
+			specialist.role !== "diagnostics" ||
+			!target ||
+			!proposal ||
+			proposal.id !== repair.proposalId ||
+			proposal.targetSessionId !== target.sessionId ||
+			repair.target.sessionId !== target.sessionId ||
+			repair.target.chatUrl !== target.chatUrl ||
+			repair.target.host.hostId !== target.host.hostId ||
+			repair.target.host.daemonId !== target.host.daemonId ||
+			repair.target.host.lineageId !== target.host.lineageId
+		)
+			throw new Conflict("Diagnostic repair proposal is stale or belongs to another target");
+	}
+
 	private async spawnAdmitted(
 		request: SpawnRequest,
 		coordinator: boolean,
@@ -4283,6 +4313,9 @@ export class SessionManager {
 			throw new Error("Diagnostic-only fields require role=diagnostics");
 		if (request.diagnosticTitleFromReply === true && request.title?.trim())
 			throw new Error("diagnosticTitleFromReply cannot be combined with an explicit title");
+		if (request.diagnosticRepair !== undefined && !admission)
+			throw new Error("Diagnostic repair requires durable native confirmation");
+		this.assertDiagnosticRepairAdmission(request);
 		const controlPermission = this.controlStartOrigin.getStore()?.permission;
 		const mode =
 			request.role === "diagnostics" || controlPermission?.level === "investigate"
@@ -4363,6 +4396,9 @@ export class SessionManager {
 			this.newSessionAdmissions.delete(folded);
 			throw error;
 		}
+		// Revalidate after every asynchronous preparation step and immediately before the first create side effect.
+		// A replaced proposal cannot borrow an earlier native confirmation.
+		this.assertDiagnosticRepairAdmission(request);
 		this.controlStartSideEffect();
 		try {
 			await mkdir(this.dir(id), { recursive: true, mode: 0o700 });

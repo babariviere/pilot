@@ -180,6 +180,8 @@ final class AppModel: ObservableObject {
     @Published var diagnosingSessions: Set<String> = []
     @Published var diagnosticSetupTarget: DiagnosticSetupTarget?
     @Published var diagnosticRepairTarget: DiagnosticRepairTarget?
+    /// One proposal ID per host-qualified specialist. Proposal text and evidence never enter app preferences.
+    private var diagnosticRepairDismissals: [String: String] = [:]
     @Published var projectActionError: String?
     @Published private(set) var openingGitHubProjectId: String?
     @Published var pendingSessionActions: Set<String> = []
@@ -234,6 +236,8 @@ final class AppModel: ObservableObject {
         self.hosts = hosts ?? HostClients()
         self.client = client ?? PilotClient()
         self.projectFolderDefaults = projectFolderDefaults
+        diagnosticRepairDismissals = projectFolderDefaults.dictionary(forKey: "pilot.diagnosticRepairDismissals.v1")
+            as? [String: String] ?? [:]
         // The sidebar always groups chats by urgency now; drop the old choice.
         projectFolderDefaults.removeObject(forKey: "pilot.sidebarGroupsByUrgency")
         // Subagent answers are no longer tracked as read or unread; drop the old marks.
@@ -246,6 +250,20 @@ final class AppModel: ObservableObject {
         newSessionForm.branches.onSelectionChanged = { [weak self] in self?.saveDrafts() }
         restoringDrafts = false
         attention.onReview = { [weak self] mark in self?.reviewForwarder.review(mark) }
+    }
+
+    func dismissedDiagnosticRepairProposal(for reference: HostResourceRef) -> String? {
+        diagnosticRepairDismissals[reference.storageKey]
+    }
+
+    func dismissDiagnosticRepairProposal(_ proposalId: String, for reference: HostResourceRef) {
+        let key = reference.storageKey
+        if diagnosticRepairDismissals[key] == nil, diagnosticRepairDismissals.count >= 256,
+           let evictionKey = diagnosticRepairDismissals.keys.sorted().first {
+            diagnosticRepairDismissals[evictionKey] = nil
+        }
+        diagnosticRepairDismissals[key] = proposalId
+        projectFolderDefaults.set(diagnosticRepairDismissals, forKey: "pilot.diagnosticRepairDismissals.v1")
     }
 
     var selectedSession: SessionSummary? {

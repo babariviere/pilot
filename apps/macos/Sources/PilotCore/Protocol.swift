@@ -574,6 +574,20 @@ public struct ModelList: Codable, Equatable, Sendable {
     }
 }
 
+/// Native-confirmed source authority for a separate Build spawned from a diagnostics proposal.
+public struct DiagnosticRepairAdmission: Codable, Equatable, Sendable {
+    public let specialistSessionId: String
+    public let proposalId: String
+    /// Exact target identity admitted to the specialist when it published the proposal.
+    public let target: DiagnosticTargetReference
+
+    public init(specialistSessionId: String, proposalId: String, target: DiagnosticTargetReference) {
+        self.specialistSessionId = specialistSessionId
+        self.proposalId = proposalId
+        self.target = target
+    }
+}
+
 /// GET /api/projects/:id/branches. Only real branches advertised by origin.
 public struct RemoteBranchList: Codable, Equatable, Sendable {
     public let branches: [String]
@@ -598,6 +612,8 @@ public struct SpawnRequest: Codable, Sendable {
     public var diagnosticHistoryAccess: Bool?
     /// Diagnostics-only hint to title from substantive specialist text instead of the fixed opening instruction.
     public var diagnosticTitleFromReply: Bool?
+    /// Native-reviewed proposal authority. Accepted only by a durable repair-create operation.
+    public var diagnosticRepair: DiagnosticRepairAdmission?
     public var projectId: String?
     public var cwd: String?
     public var message: String
@@ -613,13 +629,15 @@ public struct SpawnRequest: Codable, Sendable {
         projectId: String? = nil, cwd: String? = nil, message: String, title: String? = nil, model: String? = nil,
         thinking: String? = nil, baseBranch: String? = nil, mode: ChatMode? = nil, workspace: WorkspaceMode? = nil,
         missionId: String? = nil, role: SessionRole? = nil, diagnosticTarget: DiagnosticTargetReference? = nil,
-        diagnosticHistoryAccess: Bool? = nil, diagnosticTitleFromReply: Bool? = nil
+        diagnosticHistoryAccess: Bool? = nil, diagnosticTitleFromReply: Bool? = nil,
+        diagnosticRepair: DiagnosticRepairAdmission? = nil
     ) {
         self.missionId = missionId
         self.role = role
         self.diagnosticTarget = diagnosticTarget
         self.diagnosticHistoryAccess = diagnosticHistoryAccess
         self.diagnosticTitleFromReply = diagnosticTitleFromReply
+        self.diagnosticRepair = diagnosticRepair
         self.projectId = projectId
         self.cwd = cwd
         self.message = message

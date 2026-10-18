@@ -417,8 +417,13 @@ export function createDaemonServer(
 				throw new OperationRejected("message is required");
 			if (op.kind === "diagnostics-create" && request.role !== "diagnostics")
 				throw new OperationRejected("diagnostics-create requires a diagnostics specialist");
-			if (op.kind === "repair-create" && (request.role !== undefined || request.mode !== "build"))
+			if (
+				op.kind === "repair-create" &&
+				(request.role !== undefined || request.mode !== "build" || request.diagnosticRepair === undefined)
+			)
 				throw new OperationRejected("repair-create requires an ordinary Build chat");
+			if (op.kind !== "repair-create" && request.diagnosticRepair !== undefined)
+				throw new OperationRejected("diagnostic repair authority requires repair-create");
 			const session = await sessions.spawnDurable(request, op.targetId, op.operationId);
 			return { sessionId: session.id };
 		}

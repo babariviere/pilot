@@ -9,6 +9,11 @@ struct DiagnosticRepairTarget: Identifiable {
     var id: String { reference.storageKey }
 }
 
+struct PendingDiagnosticRepairStart {
+    let operation: DurableOperation
+    let admission: DiagnosticRepairAdmission
+}
+
 struct DiagnosticSetupTarget: Identifiable {
     let id = UUID()
     let reference: HostResourceRef
@@ -155,9 +160,23 @@ struct DiagnosticSpecialistHeader: View {
 }
 
 enum DiagnosticRepair {
-    static func spawnRequest(handoff: DiagnosticsHandoff, destinationProjectId: String) throws -> SpawnRequest {
+    static func admission(specialist: SessionSummary, specialistHost: HostRef,
+                          proposal: DiagnosticRepairProposal) throws -> DiagnosticRepairAdmission {
+        guard specialist.isDiagnosticsSpecialist, specialist.diagnosticRepairProposal?.id == proposal.id,
+              proposal.targetSessionId == specialist.diagnosticTargetId,
+              let target = specialist.diagnosticTarget, target.host == specialistHost,
+              target.sessionId == proposal.targetSessionId else {
+            throw ClientError("The repair proposal is stale or no longer matches this diagnostics chat.")
+        }
+        return DiagnosticRepairAdmission(specialistSessionId: specialist.id, proposalId: proposal.id, target: target)
+    }
+
+    static func spawnRequest(handoff: DiagnosticsHandoff, destinationProjectId: String,
+                             admission: DiagnosticRepairAdmission) throws -> SpawnRequest {
         let projectId = destinationProjectId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !projectId.isEmpty, handoff.projectId == nil || handoff.projectId == projectId else {
+        guard !projectId.isEmpty, handoff.projectId == nil || handoff.projectId == projectId,
+              handoff.proposalId == admission.proposalId,
+              handoff.targetSessionId == admission.target.sessionId else {
             throw ClientError("Choose the diagnosed project as the repair destination.")
         }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
@@ -165,30 +184,141 @@ enum DiagnosticRepair {
         return SpawnRequest(
             projectId: projectId,
             message: "Investigate and repair the diagnosed issue. Use only the reviewed specialist proposal and cited bounded evidence below as operational context. Verify the findings and suggested repair, add the requested regression coverage, and do not retry, restart, replay, or mutate the diagnosed chat.\n\n\(material)",
-            title: "Repair diagnosed issue", mode: .build
+            title: "Repair diagnosed issue", mode: .build, diagnosticRepair: admission
         )
     }
 
-    static func problem(specialist: SessionSummary, specialistHost: HostRef, admittedTarget: SessionSummary?,
-                        available: Bool, destinationAvailable: Bool) -> String? {
+    static func targetProblem(specialist: SessionSummary, specialistHost: HostRef,
+                              admittedTarget: SessionSummary?, available: Bool) -> String? {
         if specialist.isArchived { return "Restore this diagnostics chat before requesting or starting a repair." }
         if !available { return "Reconnect to this chat's host before requesting or starting a repair." }
         guard let targetId = specialist.diagnosticTargetId else { return "This diagnostics chat has no admitted target." }
         guard admittedTarget != nil else { return "The admitted target is no longer available on this host." }
-        if let reference = specialist.diagnosticTarget,
-           reference.sessionId != targetId || reference.host.daemonId != specialistHost.daemonId ||
-            reference.host.lineageId != specialistHost.lineageId {
+        guard let reference = specialist.diagnosticTarget else {
+            return "This diagnostics chat predates verified repair target identity. Start a new diagnosis before repairing."
+        }
+        if reference.sessionId != targetId || reference.host != specialistHost {
             return "The admitted target belongs to a different host identity."
         }
         if let proposal = specialist.diagnosticRepairProposal, proposal.targetSessionId != targetId {
             return "The repair proposal no longer matches this chat's target."
         }
+        return nil
+    }
+
+    static func problem(specialist: SessionSummary, specialistHost: HostRef, admittedTarget: SessionSummary?,
+                        available: Bool, destinationAvailable: Bool) -> String? {
+        if let problem = targetProblem(specialist: specialist, specialistHost: specialistHost,
+                                       admittedTarget: admittedTarget, available: available) { return problem }
         if specialist.diagnosticRepairProposal != nil, !destinationAvailable {
             return specialist.projectId == nil
                 ? "Choose a project for the separate Build chat."
                 : "The diagnosed project is no longer available on this host."
         }
         return nil
+    }
+
+    static func prompt(specialist: SessionSummary, specialistHost: HostRef, admittedTarget: SessionSummary?,
+                       available: Bool, dismissedProposalId: String?, pendingProposalId: String?,
+                       hasLiveQuestion: Bool, working: Bool) -> DiagnosticRepairPromptPresentation? {
+        guard specialist.isDiagnosticsSpecialist, let proposal = specialist.diagnosticRepairProposal,
+              !hasLiveQuestion, !working,
+              dismissedProposalId != proposal.id || pendingProposalId != nil else { return nil }
+        return DiagnosticRepairPromptPresentation(
+            proposal: proposal,
+            problem: targetProblem(specialist: specialist, specialistHost: specialistHost,
+                                   admittedTarget: admittedTarget, available: available),
+            pendingProposalId: pendingProposalId
+        )
+    }
+}
+
+struct DiagnosticRepairPromptPresentation: Equatable {
+    let proposal: DiagnosticRepairProposal
+    let problem: String?
+    let pendingProposalId: String?
+
+    var pendingStart: Bool { pendingProposalId != nil }
+    var pendingReplacement: Bool { pendingProposalId != nil && pendingProposalId != proposal.id }
+    var primaryTitle: String { pendingStart ? "Check repair start…" : "Review repair…" }
+}
+
+/// Native action tray for a published proposal. It grants no authority until the review sheet is confirmed.
+struct DiagnosticRepairPrompt: View {
+    let presentation: DiagnosticRepairPromptPresentation
+    let onReview: () -> Void
+    let onDismiss: () -> Void
+
+    private var proposal: DiagnosticRepairProposal { presentation.proposal }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    PilotSymbol(PilotIcon.buildMode, context: .inline).foregroundStyle(Theme.mutedForeground)
+                    Text("Repair proposal ready")
+                        .font(.pilot(.headline, weight: .semibold)).foregroundStyle(Theme.foreground)
+                    Spacer(minLength: 8)
+                    MetaText("\(proposal.uncertainty.rawValue.capitalized) uncertainty")
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Findings").font(.pilot(.label, weight: .semibold)).foregroundStyle(Theme.mutedForeground)
+                    Text(proposal.findings).font(.pilot(.body)).foregroundStyle(Theme.foreground)
+                        .lineLimit(4).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Suggested repair")
+                        .font(.pilot(.label, weight: .semibold)).foregroundStyle(Theme.mutedForeground)
+                    Text(proposal.suggestedRepair).font(.pilot(.body)).foregroundStyle(Theme.foreground)
+                        .lineLimit(4).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                }
+                Label("\(proposal.evidenceRefs.count) cited evidence \(proposal.evidenceRefs.count == 1 ? "item" : "items")",
+                      icon: PilotIcon.link)
+                    .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                if presentation.pendingReplacement {
+                    Label("A start confirmed from the previous proposal still needs checking before this replacement can start.",
+                          icon: PilotIcon.warning)
+                        .font(.pilot(.caption)).foregroundStyle(Theme.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if presentation.pendingStart {
+                    Label("The confirmed start has not been resolved. Check the original durable request; do not start another.",
+                          icon: PilotIcon.warning)
+                        .font(.pilot(.caption)).foregroundStyle(Theme.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let problem = presentation.problem {
+                    Text(problem).font(.pilot(.caption)).foregroundStyle(Theme.destructive)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                HStack(spacing: 8) {
+                    Button(presentation.primaryTitle, action: onReview)
+                        .buttonStyle(.borderedProminent)
+                        .disabled(presentation.problem != nil && !presentation.pendingStart)
+                        .accessibilityIdentifier("diagnostic-repair-review")
+                    if !presentation.pendingStart {
+                        Button("Not now", action: onDismiss)
+                            .accessibilityIdentifier("diagnostic-repair-dismiss")
+                    }
+                    Spacer()
+                    Text("Review destination and model before a separate Build starts.")
+                        .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                }
+            }
+            .padding(14)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.tray)
+                    .fill(Theme.tray)
+                    .shadow(color: .black.opacity(0.06), radius: 12, y: 4)
+            )
+            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.tray).strokeBorder(Theme.border))
+        }
+        .frame(maxWidth: Theme.column)
+        .padding(.horizontal, 24)
+        .padding(.bottom, 16)
+        .padding(.top, 6)
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Repair proposal ready")
     }
 }
 
@@ -263,6 +393,81 @@ extension AppModel {
         guard specialist.isDiagnosticsSpecialist,
               let reference = resourceRef(specialist.id, kind: .session, context: context) else { return }
         diagnosticRepairTarget = DiagnosticRepairTarget(specialist: specialist, reference: reference)
+    }
+
+    func pendingDiagnosticRepairStart(for target: DiagnosticRepairTarget) throws -> PendingDiagnosticRepairStart? {
+        let matches = hosts.pendingOperations.values.compactMap { operation -> PendingDiagnosticRepairStart? in
+            guard operation.kind == "repair-create", operation.destination == target.reference.host,
+                  let data = operation.payload.data(using: .utf8),
+                  let request = try? JSONDecoder().decode(SpawnRequest.self, from: data),
+                  let admission = request.diagnosticRepair,
+                  admission.specialistSessionId == target.reference.localId else { return nil }
+            return PendingDiagnosticRepairStart(operation: operation, admission: admission)
+        }.sorted { $0.operation.sequence < $1.operation.sequence }
+        guard matches.count <= 1 else {
+            throw ClientError("More than one repair start is awaiting confirmation. Reconnect to the original host before continuing.")
+        }
+        return matches.first
+    }
+
+    /// Executes one newly reviewed durable intent. Any uncertain prior intent must be reconciled first.
+    func startDiagnosticRepair(_ request: SpawnRequest, target: DiagnosticRepairTarget) async throws -> HostResourceRef {
+        guard let admission = request.diagnosticRepair,
+              admission.specialistSessionId == target.reference.localId,
+              admission.target.host == target.reference.host,
+              admission.target == target.specialist.diagnosticTarget,
+              target.reference.host == localHost || hosts.available.contains(target.reference.host),
+              try pendingDiagnosticRepairStart(for: target) == nil,
+              let origin = localHost else {
+            throw ClientError("A previous repair start may still be pending, or this diagnostics host changed. Check it before starting another.")
+        }
+        let (operation, delivery) = try await hosts.deliver(host: target.reference.host, kind: "repair-create",
+                                                            targetId: nil, payload: request, origin: origin)
+        return try await finishDiagnosticRepairStart(operation, delivery: delivery, target: target)
+    }
+
+    /// An explicit user retry checks the immutable original operation before re-sending it.
+    func resumeDiagnosticRepair(_ pending: PendingDiagnosticRepairStart,
+                                target: DiagnosticRepairTarget) async throws -> HostResourceRef {
+        guard pending.operation.destination == target.reference.host,
+              pending.admission.specialistSessionId == target.reference.localId,
+              pending.admission.target.host == target.reference.host,
+              pending.admission.target == target.specialist.diagnosticTarget else {
+            throw HostRoutingError.invalidReference
+        }
+        try await hosts.retryOperation(pending.operation)
+        let delivery = hosts.operationDeliveries[pending.operation.operationId] ?? .unknown
+        return try await finishDiagnosticRepairStart(pending.operation, delivery: delivery, target: target)
+    }
+
+    private func finishDiagnosticRepairStart(_ operation: DurableOperation, delivery: OperationDelivery,
+                                             target: DiagnosticRepairTarget) async throws -> HostResourceRef {
+        guard case let .receipt(receipt) = delivery, receipt.state != .pending else {
+            throw ClientError("Repair start is not confirmed. Reconnect to this host, then choose Check repair start. The original request was kept and a new one will not be created.")
+        }
+        try receipt.validate(operation)
+        guard receipt.state == .accepted else {
+            try await acknowledgeAdopted(operation, receipt: receipt)
+            throw ClientError("The repair chat was not started: \(receipt.reason ?? "request not accepted"). Review the current proposal before trying again.")
+        }
+        guard receipt.result?["sessionId"]?.string == nil || receipt.result?["sessionId"]?.string == operation.targetId else {
+            throw HostRoutingError.identityChanged
+        }
+        try await hosts.createdSession(operation)
+        guard let data = operation.payload.data(using: .utf8),
+              let request = try? JSONDecoder().decode(SpawnRequest.self, from: data),
+              let admission = request.diagnosticRepair,
+              admission.specialistSessionId == target.reference.localId,
+              admission.target.host == target.reference.host,
+              admission.target == target.specialist.diagnosticTarget else {
+            throw HostRoutingError.invalidReference
+        }
+        let created = HostResourceRef(host: operation.destination, kind: .session, localId: operation.targetId)
+        // Persist handled state and navigation before retiring the only idempotent operation record.
+        dismissDiagnosticRepairProposal(admission.proposalId, for: target.reference)
+        try selectSession(created)
+        try await acknowledgeAdopted(operation, receipt: receipt)
+        return created
     }
 
     func requestDiagnosticRepairProposal(_ target: DiagnosticRepairTarget) async throws {
@@ -494,6 +699,13 @@ struct DiagnosticRepairSheet: View {
     }
 
     private var proposal: DiagnosticRepairProposal? { specialist.diagnosticRepairProposal }
+    private var pendingStart: PendingDiagnosticRepairStart? {
+        try? model.pendingDiagnosticRepairStart(for: target)
+    }
+    private var pendingStartError: String? {
+        do { _ = try model.pendingDiagnosticRepairStart(for: target); return nil }
+        catch { return error.localizedDescription }
+    }
     private var projects: [Project] { endpoint.projects }
     private var admittedTarget: SessionSummary? {
         specialist.diagnosticTargetId.flatMap { endpoint.session($0) }
@@ -511,9 +723,14 @@ struct DiagnosticRepairSheet: View {
     }
 
     private var targetProblem: String? {
-        DiagnosticRepair.problem(specialist: specialist, specialistHost: target.reference.host,
-                                 admittedTarget: admittedTarget, available: available,
-                                 destinationAvailable: destinationProjectId != nil)
+        if let pendingStartError { return pendingStartError }
+        if pendingStart != nil {
+            return DiagnosticRepair.targetProblem(specialist: specialist, specialistHost: target.reference.host,
+                                                  admittedTarget: admittedTarget, available: available)
+        }
+        return DiagnosticRepair.problem(specialist: specialist, specialistHost: target.reference.host,
+                                        admittedTarget: admittedTarget, available: available,
+                                        destinationAvailable: destinationProjectId != nil)
     }
 
     private var proposedEvidence: [DiagnosticEvidence]? {
@@ -524,6 +741,7 @@ struct DiagnosticRepairSheet: View {
     }
 
     private var canStart: Bool {
+        if pendingStart != nil { return !busy && targetProblem == nil }
         !busy && proposal != nil && proposedEvidence != nil && targetProblem == nil && destinationProjectId != nil &&
             !findings.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
             !suggestedRepair.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
@@ -531,6 +749,10 @@ struct DiagnosticRepairSheet: View {
     }
 
     private var primary: SheetPrimaryAction {
+        if pendingStart != nil {
+            return SheetPrimaryAction(title: busy ? "Checking…" : "Check repair start",
+                                      key: .commandReturn, enabled: canStart, action: startRepair)
+        }
         if proposal == nil {
             return SheetPrimaryAction(title: busy ? "Requesting…" : "Ask specialist",
                                       enabled: !busy && targetProblem == nil,
@@ -541,8 +763,11 @@ struct DiagnosticRepairSheet: View {
     }
 
     var body: some View {
-        SheetScaffold(proposal == nil ? "Ask for a repair suggestion" : "Review the repair proposal",
-                      subtitle: proposal == nil
+        SheetScaffold(pendingStart != nil ? "Check the confirmed repair start"
+                                      : proposal == nil ? "Ask for a repair suggestion" : "Review the repair proposal",
+                      subtitle: pendingStart != nil
+                        ? "Pilot will check and, only if needed, retry the same durable request. It cannot create a new intent."
+                        : proposal == nil
                         ? "The diagnostics specialist must author the technical proposal."
                         : "Review or optionally edit the specialist's bounded suggestion before any Build chat starts.",
                       error: error,
@@ -563,7 +788,17 @@ struct DiagnosticRepairSheet: View {
                 if let targetProblem {
                     Text(targetProblem).font(.pilot(.caption)).foregroundStyle(Theme.destructive)
                 }
-                Text(proposal == nil
+                if let pendingStart {
+                    let replaced = pendingStart.admission.proposalId != proposal?.id
+                    Text(replaced
+                         ? "This is the earlier confirmed proposal, not the replacement now shown above. Check it before reviewing a new start."
+                         : "This checks the original confirmed start. No second repair intent is created.")
+                        .font(.pilot(.caption)).foregroundStyle(Theme.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Text(pendingStart != nil
+                     ? "Cancel leaves the original request unchanged for a later check."
+                     : proposal == nil
                      ? "Cancel sends nothing and creates no chat."
                      : "Only Start separate repair creates an ordinary Build chat. Reviewing or cancelling does not retry, restart, replay, wake, or otherwise change the diagnosed chat.")
                     .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
@@ -617,6 +852,7 @@ struct DiagnosticRepairSheet: View {
             Text("Proposal \(proposal.id.suffix(8)) · \(proposal.createdAt)")
                 .font(.pilot(.caption)).foregroundStyle(Theme.faintForeground)
         }
+        .disabled(pendingStart != nil)
     }
 
     private func loadProposal() async {
@@ -651,7 +887,19 @@ struct DiagnosticRepairSheet: View {
     }
 
     private func startRepair() {
-        guard canStart, let proposal, let destinationProjectId else { return }
+        guard canStart else { return }
+        if let pendingStart {
+            busy = true; error = nil
+            Task {
+                defer { busy = false }
+                do {
+                    _ = try await model.resumeDiagnosticRepair(pendingStart, target: target)
+                    dismiss()
+                } catch { self.error = error.localizedDescription }
+            }
+            return
+        }
+        guard let proposal, let destinationProjectId else { return }
         busy = true; error = nil
         let request = DiagnosticsHandoffRequest(targetSessionId: proposal.targetSessionId,
                                                 proposalId: proposal.id,
@@ -662,6 +910,9 @@ struct DiagnosticRepairSheet: View {
         Task {
             defer { busy = false }
             do {
+                let admission = try DiagnosticRepair.admission(specialist: specialist,
+                                                               specialistHost: target.reference.host,
+                                                               proposal: proposal)
                 let handoff: DiagnosticsHandoff
                 if target.reference.host == model.localHost {
                     handoff = try await model.client.diagnosticsHandoff(specialist.id, request: request)
@@ -670,18 +921,15 @@ struct DiagnosticRepairSheet: View {
                         try await client.diagnosticsHandoff(specialistId, request: request)
                     }
                 }
-                let spawn = try DiagnosticRepair.spawnRequest(handoff: handoff,
-                                                               destinationProjectId: destinationProjectId)
-                let created: HostResourceRef
-                if target.reference.host == model.localHost {
-                    let session = try await model.client.spawn(spawn)
-                    guard let localHost = model.localHost else { throw HostRoutingError.invalidReference }
-                    created = HostResourceRef(host: localHost, kind: .session, localId: session.id)
-                } else {
-                    created = try await model.createHostedSession(spawn, on: target.reference.host)
+                guard self.proposal == proposal,
+                      specialist.diagnosticTarget == admission.target else {
+                    throw ClientError("The specialist replaced this proposal while it was being reviewed. Review the current proposal before starting.")
                 }
+                let spawn = try DiagnosticRepair.spawnRequest(handoff: handoff,
+                                                               destinationProjectId: destinationProjectId,
+                                                               admission: admission)
+                _ = try await model.startDiagnosticRepair(spawn, target: target)
                 dismiss()
-                try model.selectSession(created)
             } catch { self.error = error.localizedDescription }
         }
     }

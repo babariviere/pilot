@@ -297,7 +297,23 @@ test("dedicated diagnostics and repair operations admit only their matching chat
 			},
 			1,
 		),
-		operation("repair-create", { message: "Repair", mode: "build" }, 2),
+		operation(
+			"repair-create",
+			{
+				message: "Repair",
+				mode: "build",
+				diagnosticRepair: {
+					specialistSessionId: "00000000-0000-4000-8000-000000000002",
+					proposalId: "diagnostic-proposal:v1:test",
+					target: {
+						host: { hostId: "local", daemonId: "daemon", lineageId: "lineage" },
+						sessionId: "00000000-0000-4000-8000-000000000001",
+						chatUrl: "pilot://chat/00000000-0000-4000-8000-000000000001",
+					},
+				},
+			},
+			2,
+		),
 	]) {
 		const response = await fetch(base, {
 			method: "POST",
