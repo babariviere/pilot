@@ -28,6 +28,73 @@ private func diagnosticSession(_ id: String, _ title: String = "Private chat tit
     #expect(request.diagnosticTarget?.chatURL == "pilot://chat/\(diagnosticRemoteID)")
     #expect(!request.message.contains("Secret transcript title"))
     #expect(!request.message.contains("/private/path"))
+    #expect(!request.message.contains(diagnosticRemoteID), "trusted target metadata stays out of the user message")
+    #expect(!request.message.contains(diagnosticRemoteHost.hostId))
+}
+
+@Test func askAboutPilotForwardsQuestionAsUserContentSeparateFromLocalTargetAuthority() throws {
+    let privateReport = "The app freezes after I reconnect. Secret note: north-star."
+    let control = diagnosticSession(diagnosticControlID, "Control")
+    let controlRef = HostResourceRef(host: diagnosticLocalHost, kind: .session, localId: control.id)
+    let setup = DiagnosticSetupTarget(reference: controlRef, askingAboutPilot: true, tracksFeature: false)
+
+    for link in ["", " \n\t "] {
+        let target = try DiagnosticSetup.resolve(link, setup: setup, localHost: diagnosticLocalHost,
+                                                 local: [control], hosted: [])
+        let request = try DiagnosticSetup.spawnRequest(target: target, model: "anthropic/diagnostic",
+                                                       thinking: "medium", askingAboutPilot: true,
+                                                       question: privateReport)
+        #expect(request.message == privateReport)
+        #expect(request.model == "anthropic/diagnostic")
+        #expect(request.thinking == "medium")
+        #expect(request.diagnosticTarget?.host == diagnosticLocalHost)
+        #expect(request.diagnosticTarget?.sessionId == diagnosticControlID)
+        #expect(request.diagnosticTarget?.chatURL == "pilot://chat/\(diagnosticControlID)")
+        #expect(request.diagnosticTarget?.chatURL.contains("north-star") == false,
+                "question text cannot become target authority")
+    }
+}
+
+@Test func askAboutPilotRoutesQuestionToLinkedOrSelectedDevboxWithoutLocalFallback() throws {
+    let localControl = diagnosticSession(diagnosticControlID, "Local control")
+    let remoteControl = diagnosticSession(diagnosticRemoteID, "Remote control")
+    let localRef = HostResourceRef(host: diagnosticLocalHost, kind: .session, localId: localControl.id)
+    let remoteRef = HostResourceRef(host: diagnosticRemoteHost, kind: .session, localId: remoteControl.id)
+    let hosted = [Hosted(ref: remoteRef, value: remoteControl)]
+
+    let localSetup = DiagnosticSetupTarget(reference: localRef, askingAboutPilot: true, tracksFeature: false)
+    let linked = try DiagnosticSetup.resolve(DiagnosticSetup.link(diagnosticRemoteID), setup: localSetup,
+                                             localHost: diagnosticLocalHost, local: [localControl], hosted: hosted)
+    let linkedRequest = try DiagnosticSetup.spawnRequest(target: linked, model: "remote/model", thinking: "high",
+                                                         askingAboutPilot: true, question: "Why is this chat stuck?")
+    #expect(linkedRequest.message == "Why is this chat stuck?")
+    #expect(linkedRequest.diagnosticTarget?.host == diagnosticRemoteHost)
+    #expect(linkedRequest.diagnosticTarget?.sessionId == diagnosticRemoteID)
+
+    let remoteSetup = DiagnosticSetupTarget(reference: remoteRef, askingAboutPilot: true, tracksFeature: false)
+    let selectedHost = try DiagnosticSetup.resolve("  ", setup: remoteSetup, localHost: diagnosticLocalHost,
+                                                   local: [localControl], hosted: hosted)
+    #expect(selectedHost.reference == remoteRef)
+}
+
+@Test func diagnosticQuestionUsesAnExplicitUTF8BoundWithoutTruncation() throws {
+    let session = diagnosticSession(diagnosticControlID, "Control")
+    let reference = HostResourceRef(host: diagnosticLocalHost, kind: .session, localId: session.id)
+    let target = DiagnosticResolvedTarget(reference: reference, session: session)
+    let exact = String(repeating: "é", count: DiagnosticSetup.maxQuestionBytes / 2)
+    let accepted = try DiagnosticSetup.spawnRequest(target: target, model: "", thinking: "",
+                                                    askingAboutPilot: true, question: exact)
+    #expect(accepted.message == exact)
+    #expect(accepted.message.utf8.count == DiagnosticSetup.maxQuestionBytes)
+
+    #expect(throws: DiagnosticQuestionValidationError.tooLarge(maxBytes: DiagnosticSetup.maxQuestionBytes)) {
+        try DiagnosticSetup.spawnRequest(target: target, model: "", thinking: "", askingAboutPilot: true,
+                                         question: exact + "é")
+    }
+    let generic = try DiagnosticSetup.spawnRequest(target: target, model: "", thinking: "",
+                                                   askingAboutPilot: true, question: " \n ")
+    #expect(!generic.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            "an empty optional question retains generic Ask behavior")
 }
 
 @Test func diagnosticSetupResolvesTrustedDefaultsAndRejectsMalformedMissingAmbiguousOrSpecialistLinks() throws {
@@ -84,4 +151,33 @@ private func diagnosticSession(_ id: String, _ title: String = "Private chat tit
     #expect(client.fixtureSpawnRequests.isEmpty)
     app.diagnosticSetupTarget = nil
     #expect(client.fixtureSpawnRequests.isEmpty)
+}
+
+@Test @MainActor func diagnosticStartRejectsDuplicateAdmissionAndClearsFailedAdmission() async throws {
+    let control = diagnosticSession(diagnosticControlID, "Control")
+    let reference = HostResourceRef(host: diagnosticLocalHost, kind: .session, localId: control.id)
+    let target = DiagnosticResolvedTarget(reference: reference, session: control)
+    let request = try DiagnosticSetup.spawnRequest(target: target, model: "", thinking: "",
+                                                   askingAboutPilot: true, question: "Why did startup fail?")
+
+    let fixture = PilotClient()
+    fixture.loadFixture(projects: [], sessions: [control])
+    let duplicateApp = AppModel(client: fixture)
+    try duplicateApp.registerLocal(diagnosticLocalHost)
+    duplicateApp.diagnosingSessions.insert(reference.storageKey)
+    do {
+        _ = try await duplicateApp.spawnDiagnostics(request, target: reference, tracksFeature: false)
+        Issue.record("duplicate diagnostics admission unexpectedly spawned")
+    } catch {}
+    #expect(fixture.fixtureSpawnRequests.isEmpty)
+
+    let disconnected = PilotClient()
+    let failedApp = AppModel(client: disconnected)
+    try failedApp.registerLocal(diagnosticLocalHost)
+    do {
+        _ = try await failedApp.spawnDiagnostics(request, target: reference, tracksFeature: false)
+        Issue.record("disconnected diagnostics admission unexpectedly spawned")
+    } catch {}
+    #expect(!failedApp.diagnosingSessions.contains(reference.storageKey),
+            "a failed start must release duplicate-submit protection")
 }

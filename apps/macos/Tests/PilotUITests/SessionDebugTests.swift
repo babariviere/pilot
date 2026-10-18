@@ -54,13 +54,17 @@ private func sourceSession(control: Bool? = nil) -> SessionSummary {
     let resolved = try DiagnosticSetup.resolve("", setup: setup, localHost: app.localHost,
                                                local: app.client.sessions, hosted: [])
     let prepared = try DiagnosticSetup.spawnRequest(target: resolved, model: "test/diagnostic",
-                                                    thinking: "medium", askingAboutPilot: true)
+                                                    thinking: "medium", askingAboutPilot: true,
+                                                    question: "Why did Pilot stop responding after reconnect?")
     _ = try await app.spawnDiagnostics(prepared, target: resolved.reference, tracksFeature: false)
 
     let request = try #require(app.client.fixtureSpawnRequests.first)
     #expect(request.title == "Pilot diagnostics")
     #expect(request.role == .diagnostics)
     #expect(request.diagnosticTarget?.sessionId == control.id)
+    #expect(request.model == "test/diagnostic")
+    #expect(request.thinking == "medium")
+    #expect(request.message == "Why did Pilot stop responding after reconnect?")
 }
 
 @Test @MainActor func repairRequiresASeparateExplicitHandoffAndOrdinaryBuildRequest() async throws {

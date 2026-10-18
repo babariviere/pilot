@@ -35,8 +35,29 @@ enum DiagnosticTargetResolutionError: LocalizedError, Equatable {
     }
 }
 
+enum DiagnosticQuestionValidationError: LocalizedError, Equatable {
+    case tooLarge(maxBytes: Int)
+
+    var errorDescription: String? {
+        switch self {
+        case let .tooLarge(maxBytes):
+            "Keep the question or bug report at most \(maxBytes / 1_024) KB."
+        }
+    }
+}
+
 enum DiagnosticSetup {
+    static let maxQuestionBytes = 8 * 1_024
+
     static func link(_ sessionId: String) -> String { "pilot://chat/\(sessionId.lowercased())" }
+
+    /// User-authored content stays in the new specialist chat's opening message. It is never target authority.
+    static func submittedQuestion(_ value: String) throws -> String? {
+        guard value.utf8.count <= maxQuestionBytes else {
+            throw DiagnosticQuestionValidationError.tooLarge(maxBytes: maxQuestionBytes)
+        }
+        return value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : value
+    }
 
     static func available(_ reference: HostResourceRef, localHost: HostRef?, localConnected: Bool,
                           availableHosts: Set<HostRef>) -> Bool {
@@ -81,14 +102,15 @@ enum DiagnosticSetup {
     }
 
     static func spawnRequest(target: DiagnosticResolvedTarget, model: String, thinking: String,
-                             askingAboutPilot: Bool) throws -> SpawnRequest {
+                             askingAboutPilot: Bool, question: String = "") throws -> SpawnRequest {
         guard let admitted = DiagnosticTargetReference(host: target.reference.host,
                                                        sessionId: target.reference.localId) else {
             throw HostRoutingError.invalidReference
         }
-        let message = askingAboutPilot
-            ? "Open an Ask about Pilot diagnostics conversation for the canonical target \(admitted.chatURL) on host \(admitted.host.hostId). Use the diagnostics tool for that admitted target without asking for its reference. Inspect only bounded operational evidence, cite evidence refs, distinguish observations from likely causes, and do not retry, restart, replay, or change the target."
-            : "Diagnose the canonical target chat \(admitted.chatURL) on host \(admitted.host.hostId). Use the diagnostics tool for that admitted target without asking for its reference. Inspect only bounded operational evidence, cite evidence refs, distinguish observations from likely causes, and do not retry, restart, replay, or change the target."
+        let submitted = try submittedQuestion(question)
+        let message = submitted ?? (askingAboutPilot
+            ? "Inspect Pilot using bounded operational evidence for your admitted target. Cite evidence references, distinguish observations from likely causes, and do not retry, restart, replay, or change the target."
+            : "Diagnose your admitted target chat using bounded operational evidence. Cite evidence references, distinguish observations from likely causes, and do not retry, restart, replay, or change the target.")
         return SpawnRequest(message: message, title: "Pilot diagnostics",
                             model: model.isEmpty ? nil : model, thinking: thinking.isEmpty ? nil : thinking,
                             mode: .ask, role: .diagnostics, diagnosticTarget: admitted)
@@ -247,6 +269,7 @@ struct DiagnosticSetupSheet: View {
     @EnvironmentObject private var app: AppModel
     @Environment(\.dismiss) private var dismiss
     @State private var link: String
+    @State private var question = ""
     @State private var selectedModel = ""
     @State private var thinking = ""
     @State private var models = ModelList(models: [])
@@ -285,27 +308,61 @@ struct DiagnosticSetupSheet: View {
         return id.flatMap { value in models.models.first { $0.id == value } }
     }
 
+    private var questionError: String? {
+        guard setup.askingAboutPilot else { return nil }
+        do {
+            _ = try DiagnosticSetup.submittedQuestion(question)
+            return nil
+        } catch { return error.localizedDescription }
+    }
+
     private var canStart: Bool {
-        guard !busy, resolved != nil, available, !loadingModels, modelError == nil, !models.models.isEmpty else { return false }
+        guard !busy, resolved != nil, available, questionError == nil,
+              !loadingModels, modelError == nil, !models.models.isEmpty else { return false }
         if !selectedModel.isEmpty, !models.models.contains(where: { $0.id == selectedModel }) { return false }
         return thinking.isEmpty || (chosenOption?.thinkingLevels ?? []).contains(thinking)
     }
 
     var body: some View {
         SheetScaffold(setup.askingAboutPilot ? "Ask about Pilot" : "Diagnose this chat",
-                      subtitle: "Start a read-only diagnostics specialist for one exact chat.",
+                      subtitle: setup.askingAboutPilot
+                        ? "Ask about the app, or optionally scope diagnostics to one exact chat."
+                        : "Start a read-only diagnostics specialist for this chat.",
                       error: startError,
                       primary: SheetPrimaryAction(title: busy ? "Starting…" : "Start diagnostics",
                                                   enabled: canStart, action: start),
                       cancel: { dismiss() }, width: 520) {
             VStack(alignment: .leading, spacing: 14) {
+                if setup.askingAboutPilot {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Question or bug report (optional)").font(.pilot(.headline))
+                        MissionTextArea(prompt: "What would you like the diagnostics specialist to investigate?",
+                                        text: $question, minLines: 3, maxLines: 8,
+                                        label: "Question or bug report") { if canStart { start() } }
+                            .disabled(busy)
+                        HStack(alignment: .firstTextBaseline) {
+                            if let questionError {
+                                Text(questionError).foregroundStyle(Theme.destructive)
+                            } else {
+                                Text("Sent only as the specialist chat's opening message.")
+                                    .foregroundStyle(Theme.mutedForeground)
+                            }
+                            Spacer()
+                            Text("\(question.utf8.count) / \(DiagnosticSetup.maxQuestionBytes) bytes")
+                                .foregroundStyle(Theme.mutedForeground)
+                        }
+                        .font(.pilot(.caption))
+                    }
+                }
+
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Target chat link").font(.pilot(.headline))
+                    Text(setup.askingAboutPilot ? "Chat link (optional)" : "Target chat link")
+                        .font(.pilot(.headline))
                     TextField("pilot://chat/…", text: $link)
                         .textFieldStyle(.roundedBorder)
                         .disabled(busy)
                     if setup.askingAboutPilot && link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        Text("No link uses the Pilot control chat on the current host.")
+                        Text("No link asks about Pilot on \(hostName(setup.reference.host)); a link scopes the report to that chat.")
                             .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
                     }
                     if let resolved {
@@ -337,7 +394,9 @@ struct DiagnosticSetupSheet: View {
                     if let modelError { InlineProblem(modelError) { Task { await loadModels() } } }
                 }
 
-                Text("The linked chat is not opened, changed, restarted, retried, or added as transcript context. The specialist receives only its canonical reference and bounded operational evidence.")
+                Text(setup.askingAboutPilot
+                    ? "Your report is user content, not telemetry, diagnostic evidence, or permission to inspect another chat. A linked chat is not opened, changed, restarted, retried, or copied into the specialist conversation."
+                    : "The linked chat is not opened, changed, restarted, retried, or added as transcript context. The specialist receives only its canonical reference and bounded operational evidence.")
                     .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -385,7 +444,8 @@ struct DiagnosticSetupSheet: View {
             do {
                 let request = try DiagnosticSetup.spawnRequest(target: target, model: selectedModel,
                                                                thinking: thinking,
-                                                               askingAboutPilot: setup.askingAboutPilot)
+                                                               askingAboutPilot: setup.askingAboutPilot,
+                                                               question: question)
                 let created = try await app.spawnDiagnostics(request, target: target.reference,
                                                              tracksFeature: setup.tracksFeature)
                 dismiss()
