@@ -4,10 +4,10 @@ import Testing
 
 struct ControlChatProtocolTests {
     @Test func watchNoticesRenderAsEventsAndControlInputStaysAutomatic() async throws {
-        let source = #"{"type":"snapshot","entries":[{"id":1,"kind":"pi.user","origin":"watch","data":{"event":{"kind":"watch_notice","text":"1 watch fired"}},"model":[{"role":"user","timestamp":1,"content":"Saved note and quoted event"}]},{"id":2,"kind":"pi.user","origin":"control","model":[{"role":"user","timestamp":2,"content":"Continue the work"}]}]}"#
+        let source = #"{"type":"snapshot","entries":[{"id":1,"kind":"pi.user","origin":"watch","data":{"event":{"kind":"watch_notice","text":"1 event fired"}},"model":[{"role":"user","timestamp":1,"content":"Saved note and quoted event"}]},{"id":2,"kind":"pi.user","origin":"control","model":[{"role":"user","timestamp":2,"content":"Continue the work"}]}]}"#
         let result = try await TranscriptProcessor().apply([try JSONValue.decode(Data(source.utf8))])
         #expect(result.rows == [
-            .event(ChatEvent(id: "1-0", kind: "watch_notice", text: "1 watch fired", timestamp: 1, detail: "Saved note and quoted event")),
+            .event(ChatEvent(id: "1-0", kind: "watch_notice", text: "1 event fired", timestamp: 1, detail: "Saved note and quoted event")),
             .automatic(id: "2-0", text: "Continue the work", origin: .control, timestamp: 2),
         ])
     }
@@ -77,9 +77,9 @@ struct ControlChatProtocolTests {
         guard case .controlAuditChanged = try ServerUpdate.decode(Data(#"{"type":"control-audit.changed"}"#.utf8)) else {
             Issue.record("Missing audit invalidation"); return
         }
-        let summary = ChatEventSummary(json: try JSONValue.decode(Data(#"{"kind":"watch_notice","text":"Watch fired"}"#.utf8)))
+        let summary = ChatEventSummary(json: try JSONValue.decode(Data(#"{"kind":"watch_notice","text":"1 event fired"}"#.utf8)))
         #expect(summary?.kind == "watch_notice")
-        #expect(summary?.text == "Watch fired")
+        #expect(summary?.text == "1 event fired")
     }
 
     @Test func controlChatListsApartWithoutArchiveOrPinActions() throws {
