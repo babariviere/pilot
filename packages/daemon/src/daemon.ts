@@ -16,6 +16,7 @@ import { ControlHostStore } from "./control-host-store.ts";
 import { ControlHosts } from "./control-hosts.ts";
 import { CredentialBroker } from "./credential-broker.ts";
 import { EnvironmentService } from "./environment.ts";
+import { EnvironmentStateStore } from "./environment-state.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import { daemonPerformance, EventLoopWatchdog } from "./event-loop-watchdog.ts";
 import { GitHubImportService } from "./github-import.ts";
@@ -407,7 +408,19 @@ maintenance?.onOpen(() => {
 	schedules.start();
 });
 // Environment setup stays off until its user-facing parts ship (hello.capabilities.environmentSetup).
-const environment = hello.capabilities.environmentSetup ? new EnvironmentService(projects) : undefined;
+const environment = hello.capabilities.environmentSetup
+	? await (async () => {
+			const state = new EnvironmentStateStore(config.home);
+			await state.load();
+			await state.retain(projects.list().map((project) => project.id));
+			projects.onChange((list) => void state.retain(list.map((project) => project.id)).catch(() => undefined));
+			return new EnvironmentService(projects, {
+				home: config.home,
+				host: { daemonId: hello.daemonId, lineageId: hello.lineageId, platform: hello.platform, arch: hello.arch },
+				state,
+			});
+		})()
+	: undefined;
 const server = createDaemonServer(
 	config,
 	sessions,

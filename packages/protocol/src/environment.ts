@@ -241,6 +241,15 @@ export interface EnvironmentPlan {
 	planHash: string;
 	computedAt: number;
 	items: EnvironmentPlanItem[];
+	/** The probe budget ran out before every location was checked; some installs may be unnecessary. */
+	incomplete?: true;
+}
+
+/** GET /api/environment/tools. Names from the host's mise registry; tools are added from it. Read-only. */
+export interface EnvironmentToolCatalog {
+	/** mise was found on the host. Without it the list is empty and tools can still be entered by name. */
+	mise: boolean;
+	tools: string[];
 }
 
 export type EnvironmentReadinessState = "ready" | "setting_up" | "not_ready" | "unknown";

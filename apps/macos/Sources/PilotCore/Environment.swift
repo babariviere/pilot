@@ -540,10 +540,12 @@ public struct EnvironmentPlan: Codable, Equatable, Hashable, Sendable {
     public let planHash: String
     public let computedAt: Double
     public let items: [EnvironmentPlanItem]
+    /// The probe budget ran out before every location was checked; some installs may be unnecessary.
+    public let incomplete: Bool?
 
     public init(
         host: EnvironmentHostRef, projectId: String, profileRevision: Int, overrideRevision: Int? = 0,
-        planHash: String, computedAt: Double, items: [EnvironmentPlanItem]
+        planHash: String, computedAt: Double, items: [EnvironmentPlanItem], incomplete: Bool? = nil
     ) {
         self.host = host
         self.projectId = projectId
@@ -552,11 +554,24 @@ public struct EnvironmentPlan: Codable, Equatable, Hashable, Sendable {
         self.planHash = planHash
         self.computedAt = computedAt
         self.items = items
+        self.incomplete = incomplete
     }
 }
 
 public enum EnvironmentReadinessState: String, Codable, Hashable, Sendable {
     case ready, settingUp = "setting_up", notReady = "not_ready", unknown
+}
+
+/// GET /api/environment/tools. Names from the host's mise registry, which tools are added from.
+public struct EnvironmentToolCatalog: Codable, Equatable, Sendable {
+    /// mise was found on the host. Without it the list is empty and tools can still be entered by name.
+    public let mise: Bool
+    public let tools: [String]
+
+    public init(mise: Bool, tools: [String]) {
+        self.mise = mise
+        self.tools = tools
+    }
 }
 
 public struct EnvironmentItemReadiness: Codable, Equatable, Hashable, Sendable {

@@ -141,6 +141,16 @@ let goServiceProfileJSON = """
     #expect(String(decoding: request, as: UTF8.self).contains(#""copyFiles":[".env.local"]"#))
 }
 
+@Test func environmentToolCatalogAndDockerInstallerDecode() throws {
+    let catalog = try JSONDecoder().decode(EnvironmentToolCatalog.self, from: Data(#"{"mise":true,"tools":["go","node"]}"#.utf8))
+    #expect(catalog == EnvironmentToolCatalog(mise: true, tools: ["go", "node"]))
+    let item = try JSONDecoder().decode(EnvironmentPlanItem.self, from: Data("""
+    {"subject":"postgres","required":"16","action":"start","installer":"docker","commands":[],"approval":"plan",
+     "impact":{"network":["docker.io"]}}
+    """.utf8))
+    #expect(item.installer == .docker)
+}
+
 @Test func environmentDiscoveryDecodesDaemonOutput() throws {
     let discovery = try JSONDecoder().decode(EnvironmentDiscovery.self, from: Data("""
     {"projectId":"p","computedAt":1,"truncated":false,"skipped":[{"path":"go.sum","reason":"too_large"}],"localFiles":[".env"],

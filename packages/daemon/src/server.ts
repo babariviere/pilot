@@ -1082,6 +1082,12 @@ export function createDaemonServer(
 			if (!environment) return json(res, 404, { error: "environment_unavailable" });
 			if (parts.length === 5 && parts[4] === "discovery" && req.method === "GET")
 				return json(res, 200, await environment.discover(parts[2]!));
+			if (parts.length === 5 && parts[4] === "plan" && req.method === "GET")
+				return json(res, 200, await environment.plan(parts[2]!));
+		}
+		if (parts[1] === "environment" && parts.length === 3 && parts[2] === "tools" && req.method === "GET") {
+			if (!environment) return json(res, 404, { error: "environment_unavailable" });
+			return json(res, 200, await environment.tools());
 		}
 		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "dashboard" && req.method === "GET") {
 			const rawLimit = url.searchParams.get("limit");
