@@ -99,11 +99,17 @@ async function fixture(t: TestContext, home: string) {
 	return { sessions, post, close };
 }
 
+async function shutdownAndRemoveHome(home: string, shutdown: () => Promise<void>) {
+	// node:test runs after hooks in registration order, not stack order. Keep the
+	// writer drain and removal in one hook so metadata/usage writes cannot race rm.
+	await shutdown();
+	await rm(home, { recursive: true, force: true });
+}
+
 test("native uppercase create returns a durable receipt and lost-response lookup opens the exact one chat", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-native-create-"));
-	t.after(() => rm(home, { recursive: true, force: true }));
 	const f = await fixture(t, home);
-	t.after(f.close);
+	t.after(() => shutdownAndRemoveHome(home, f.close));
 	const op = intent(home);
 	assert.deepEqual(await f.post(op, true), { state: "unknown" });
 	const receipt = await f.post(op);
@@ -123,7 +129,6 @@ test("native uppercase create returns a durable receipt and lost-response lookup
 
 test("startup recovers an already-pending uppercase create without rewriting identity or duplicating input", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-native-create-recover-"));
-	t.after(() => rm(home, { recursive: true, force: true }));
 	const op = intent(home);
 	const journal = new OperationJournal(join(home, "operations"), host);
 	await journal.execute(op, async () => {
@@ -143,7 +148,7 @@ test("startup recovers an already-pending uppercase create without rewriting ide
 		await first.close();
 	}
 	const restarted = await fixture(t, home);
-	t.after(restarted.close);
+	t.after(() => shutdownAndRemoveHome(home, restarted.close));
 	assert.equal((await restarted.post(op, true)).state, "accepted");
 	assert.deepEqual(
 		restarted.sessions.list().map((session) => session.id),
@@ -157,9 +162,8 @@ test("startup recovers an already-pending uppercase create without rewriting ide
 
 test("not found is not rejection; a rejected ordinary create has a durable reason and no chat", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-native-create-reject-"));
-	t.after(() => rm(home, { recursive: true, force: true }));
 	const f = await fixture(t, home);
-	t.after(f.close);
+	t.after(() => shutdownAndRemoveHome(home, f.close));
 	const op = intent(home, "");
 	assert.deepEqual(await f.post(op, true), { state: "unknown" });
 	const receipt = await f.post(op);
@@ -171,9 +175,8 @@ test("not found is not rejection; a rejected ordinary create has a durable reaso
 
 test("reserved targets still reject malformed, path-like and wrong-length IDs before creating a chat", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-native-create-invalid-"));
-	t.after(() => rm(home, { recursive: true, force: true }));
 	const sessions = new SessionManager(home, new ProjectStore(home));
-	t.after(() => sessions.shutdown());
+	t.after(() => shutdownAndRemoveHome(home, () => sessions.shutdown()));
 	for (const id of [
 		"../ABCDEF01-2345-4678-9ABC-DEF012345678",
 		"G".repeat(36),
@@ -192,7 +195,6 @@ test("reserved targets still reject malformed, path-like and wrong-length IDs be
 for (const firstCase of ["upper", "lower"] as const) {
 	test(`case-alias create cannot overwrite ${firstCase}-case admission, concurrently or after restart`, async (t) => {
 		const home = await mkdtemp(join(tmpdir(), "pilot-native-create-alias-"));
-		t.after(() => rm(home, { recursive: true, force: true }));
 		const original = intent(home);
 		const id = firstCase === "upper" ? original.targetId : original.targetId.toLowerCase();
 		const alias = firstCase === "upper" ? id.toLowerCase() : id.toUpperCase();
@@ -232,7 +234,7 @@ for (const firstCase of ["upper", "lower"] as const) {
 		const restarted = new SessionManager(home, new ProjectStore(home));
 		t.mock.method(restarted as unknown as { start(): Promise<Map<string, Error>> }, "start", async () => new Map());
 		await restarted.load();
-		t.after(() => restarted.shutdown());
+		t.after(() => shutdownAndRemoveHome(home, () => restarted.shutdown()));
 		await assert.rejects(
 			restarted.spawnDurable({ ...request, message: "overwrite after restart" }, alias, randomUUID()),
 			/aliases/,
@@ -256,7 +258,6 @@ for (const firstCase of ["upper", "lower"] as const) {
 
 test("uppercase workspace origins and continuation recovery preserve exact ownership and reject case substitutions", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-native-create-ownership-"));
-	t.after(() => rm(home, { recursive: true, force: true }));
 	const op = intent(home);
 	const sessions = new SessionManager(home, new ProjectStore(home));
 	t.mock.method(sessions as unknown as { start(): Promise<Map<string, Error>> }, "start", async () => new Map());
@@ -282,7 +283,7 @@ test("uppercase workspace origins and continuation recovery preserve exact owner
 	const restarted = new SessionManager(home, new ProjectStore(home));
 	t.mock.method(restarted as unknown as { start(): Promise<Map<string, Error>> }, "start", async () => new Map());
 	await restarted.load();
-	t.after(() => restarted.shutdown());
+	t.after(() => shutdownAndRemoveHome(home, () => restarted.shutdown()));
 	assert.equal(restarted.get(source.id)?.continuedTo, target.id);
 	assert.equal(restarted.get(target.id)?.continuationOf, source.id);
 	const persisted = JSON.parse(await readFile(join(home, "sessions", target.id, "meta.json"), "utf8"));
@@ -449,11 +450,10 @@ test("failure after metadata save rolls back membership and disk before releasin
 
 test("mkdir failure releases only its own new-ID fence so the original operation can retry", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-native-create-mkdir-failure-"));
-	t.after(() => rm(home, { recursive: true, force: true }));
 	const op = intent(home);
 	const sessions = new SessionManager(home, new ProjectStore(home));
 	t.mock.method(sessions as unknown as { start(): Promise<Map<string, Error>> }, "start", async () => new Map());
-	t.after(() => sessions.shutdown());
+	t.after(() => shutdownAndRemoveHome(home, () => sessions.shutdown()));
 	await writeFile(join(home, "sessions"), "disposable directory blocker");
 	const request = { cwd: home, message: "original input" };
 	await assert.rejects(sessions.spawnDurable(request, op.targetId, op.operationId), { code: "ENOTDIR" });
@@ -462,4 +462,26 @@ test("mkdir failure releases only its own new-ID fence so the original operation
 	await rm(join(home, "sessions"));
 	assert.equal((await sessions.spawnDurable(request, op.targetId, op.operationId)).id, op.targetId);
 	assert.deepEqual(await readdir(join(home, "sessions")), [op.targetId]);
+});
+
+test("fixture home removal waits for shutdown's final write without retrying deletion", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "pilot-native-create-cleanup-order-"));
+	const entered = barrier(),
+		release = barrier();
+	const proof = join(home, "shutdown-write");
+	const cleanup = shutdownAndRemoveHome(home, async () => {
+		entered.resolve();
+		await release.promise;
+		await writeFile(proof, "last retained write");
+	});
+	t.after(async () => {
+		release.resolve();
+		await cleanup;
+		await rm(home, { recursive: true, force: true });
+	});
+	await entered.promise;
+	assert.deepEqual(await readdir(home), [], "The fixture home remains available while shutdown is pending");
+	release.resolve();
+	await cleanup;
+	await assert.rejects(readdir(home), { code: "ENOENT" });
 });
