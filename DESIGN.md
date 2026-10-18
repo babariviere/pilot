@@ -124,9 +124,10 @@ attention badge), then the project selector ("All projects" or one project) head
 project's Overview as its first row. Archived chats, search (⌘F) and project folders (New Folder…, Move to folder)
 live in the selector's menu; folders are headings there and on Home, never a sidebar scope.
 
-All projects starts with the Control chat's own row, without a header: its antenna symbol before the title and "All
-projects" as its line, never Ask, a branch or a pin mark. It belongs to no project, so a focused project never lists
-it, and it offers no pin, archive or mission actions. Its window subtitle is "All projects" and its transcript opens
+The Control chat has its own fixed row under the project selector, without a header: its antenna symbol before the
+title and "All projects" as its line, never Ask, a branch or a pin mark. It never scrolls with the list and shows in
+every scope; opening it from a focused project keeps the scope. Arrow keys and J/K reach it as the list's first row.
+It offers no pin, archive or mission actions. Its window subtitle is "All projects" and its transcript opens
 with a one-sentence header on what it can see and do; the Ask badge and the Build-handoff row stay hidden.
 Its inspector adds a Watching pane: active watches (target, "When … · Once/Every time", the saved note) with Cancel
 under the pointer, then Actions, its audited starts, messages, missions and memory notes, one row per operation.

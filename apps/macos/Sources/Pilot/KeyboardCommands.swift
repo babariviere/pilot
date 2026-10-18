@@ -91,8 +91,8 @@ extension AppModel {
     /// The local daemon's global Control chat, once pilotd has created it.
     var controlChat: SessionSummary? { client.sessions.first(where: \.isControl) }
 
-    /// G then C, the Go menu or the palette: the local Control chat, widening a project-scoped sidebar to all
-    /// projects, with its composer focused.
+    /// G then C, the Go menu or the palette: the local Control chat, with its composer focused. Its sidebar row shows
+    /// in every scope, so the scope stays.
     func openControlChat() {
         guard let control = controlChat else { return }
         reveal(session: control.id)

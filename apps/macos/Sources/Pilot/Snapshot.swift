@@ -79,6 +79,12 @@ enum Snapshot {
             exit(0)
         }
 
+        if CommandLine.arguments.contains("--control-sidebar-only") {
+            await renderControlSidebar(model: model, to: directory)
+            print("snapshots written to \(directory.path)")
+            exit(0)
+        }
+
         if CommandLine.arguments.contains("--home-overview-only") {
             let now = Fixtures.now
             let sessions = [

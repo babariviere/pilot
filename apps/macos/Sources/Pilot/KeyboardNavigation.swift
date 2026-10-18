@@ -171,6 +171,16 @@ final class KeyboardFocus: ObservableObject {
     /// Composers offering their controls to the palette, oldest first.
     private(set) var composerProviders: [(id: UUID, provide: @MainActor () -> [ComposerCommand])] = []
 
+    /// Rows fixed above the sidebar's list (the Control chat), which arrow keys and J/K reach as the list's first
+    /// items (`SidebarStickyNavigation`). Set by the sidebar while it is on screen.
+    struct StickyRows {
+        let keys: @MainActor () -> [String]
+        let current: @MainActor () -> String?
+        let select: @MainActor (String) -> Void
+    }
+
+    var sidebarStickyRows: StickyRows?
+
     func setComposerProvider(_ id: UUID, _ provide: @escaping @MainActor () -> [ComposerCommand]) {
         if let index = composerProviders.firstIndex(where: { $0.id == id }) {
             composerProviders[index].provide = provide
@@ -453,6 +463,26 @@ final class KeyboardRouter {
            [125, 126].contains(event.keyCode) || ["j", "k"].contains(event.charactersIgnoringModifiers ?? "") {
             focus.noteListKey()
         }
+        if context == .navigation, !focus.sequenceIsPending, let table = window.firstResponder as? NSTableView,
+           let down = Self.verticalStep(event), let sticky = focus.sidebarStickyRows, focus.currentRegion() == .sidebar {
+            let step = SidebarStickyNavigation.step(down: down, sticky: sticky.keys(), current: sticky.current(),
+                                                    listHasSelection: table.selectedRow >= 0)
+            switch step {
+            case .native:
+                break
+            case .stay:
+                return nil
+            case let .select(key):
+                sticky.select(key)
+                return nil
+            case let .nativeOr(key):
+                // The list's own move first: only when its first row was already selected does up reach the slot.
+                let before = table.selectedRow
+                table.keyDown(with: Self.arrowEvent(down: down, like: event) ?? event)
+                if table.selectedRow == before { sticky.select(key) }
+                return nil
+            }
+        }
         let route = KeyboardRoute.decide(KeyboardChord(event), context: context, pending: focus.sequenceIsPending)
         switch route {
         case .pass:
@@ -487,6 +517,22 @@ final class KeyboardRouter {
                                 timestamp: event.timestamp, windowNumber: event.windowNumber, context: nil,
                                 characters: characters, charactersIgnoringModifiers: characters,
                                 isARepeat: event.isARepeat, keyCode: down ? 125 : 126)
+    }
+
+    /// Down (true) or up (false) for an unmodified arrow, J or K; nil for any other key.
+    static func verticalStep(_ event: NSEvent) -> Bool? {
+        let chord = KeyboardChord(event)
+        guard chord.modifiers.isEmpty else { return nil }
+        switch chord.keyCode {
+        case 125: return true
+        case 126: return false
+        default: break
+        }
+        switch chord.characters {
+        case "j": return true
+        case "k": return false
+        default: return nil
+        }
     }
 
     /// Moves focus from web or terminal content to the window's first other control, or to the window itself.

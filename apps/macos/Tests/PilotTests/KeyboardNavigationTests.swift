@@ -294,7 +294,7 @@ private func keyEvent(_ characters: String, keyCode: UInt16, modifiers: NSEvent.
     #expect(!model.performKeyboardRoute(.toggleTerminal))
 }
 
-@Test @MainActor func goToControlNeedsTheControlChatAndWidensAProjectScope() {
+@Test @MainActor func goToControlNeedsTheControlChatAndKeepsAProjectScope() {
     let defaults = UserDefaults(suiteName: "keyboard-go-control-\(UUID().uuidString)")!
     let model = AppModel(projectFolderDefaults: defaults)
     let project = Project(id: "p1", name: "pilot", path: "/tmp/pilot", createdAt: 1)
@@ -314,7 +314,7 @@ private func keyEvent(_ characters: String, keyCode: UInt16, modifiers: NSEvent.
     #expect(model.canGo(to: .control))
     #expect(model.performKeyboardRoute(.go("c")))
     #expect(model.selectedSessionId == "ctl")
-    #expect(model.sidebarScope == nil)
+    #expect(model.sidebarScope == "p1")
 }
 
 @Test func shortcutReferenceListsRegionAndGoKeys() {
