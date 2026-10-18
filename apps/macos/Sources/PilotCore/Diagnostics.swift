@@ -3,7 +3,7 @@ import Foundation
 /// Mirrors packages/protocol/src/diagnostics.ts. Diagnostic payloads contain only bounded operational fields.
 public enum DiagnosticFreshness: String, Codable, Sendable { case fresh, stale, unavailable }
 public enum DiagnosticSource: String, Codable, Sendable {
-    case lifecycle, requestTiming = "request_timing", tool, daemon, os
+    case lifecycle, requestTiming = "request_timing", tool, daemon, os, app
 }
 public enum DiagnosticPauseReason: String, Codable, Sendable { case sleep, update, quota, connectivity, user }
 public enum DiagnosticErrorCode: String, Codable, Sendable {
@@ -61,18 +61,44 @@ public struct DiagnosticEvidence: Codable, Sendable {
     public let dispatchMs: Double?
     public let executionMs: Double?
     public let cancellationWaitMs: Double?
+    public let attemptRef: String?
+    public let stage: String?
+    public let sequence: Int?
 }
 
-/// Content-free metadata delivered by macOS MetricKit. No report body or call stack is represented.
+public enum DevboxSetupDiagnosticStage: String, Codable, CaseIterable, Sendable {
+    case configuration, package, sshTransport = "ssh_transport", remoteBootstrap = "remote_bootstrap"
+    case remoteHandshake = "remote_handshake", enrollment, adoption
+}
+
+public enum DevboxSetupDiagnosticOutcome: String, Codable, Sendable {
+    case started, succeeded, failed, cancelled
+}
+
+public enum DevboxSetupDiagnosticReason: String, Codable, Sendable {
+    case invalidConfiguration = "invalid_configuration"
+    case packageUnavailable = "package_unavailable", packageUntrusted = "package_untrusted"
+    case sshTimeout = "ssh_timeout", sshLaunchFailed = "ssh_launch_failed"
+    case sshTransportUnknown = "ssh_transport_unknown", remotePrerequisite = "remote_prerequisite"
+    case remoteSetup = "remote_setup", remoteIdentity = "remote_identity", identityChanged = "identity_changed"
+    case incompatible, sandboxUnavailable = "sandbox_unavailable", handshakeRejected = "handshake_rejected"
+    case enrollmentFailed = "enrollment_failed", adoptionFailed = "adoption_failed", cancelled, unknown
+}
+
+/// Content-free metadata from macOS MetricKit or the app-owned devbox setup timeline.
 public struct NativeDiagnosticEvidence: Codable, Equatable, Sendable {
     public let ref: String
     public let source: DiagnosticSource
     public let at: String
     public let kind: String
-    public let reason: String
-    public let windowMs: Double
-    public let releaseRelation: String
+    public let reason: String?
+    public let windowMs: Double?
+    public let releaseRelation: String?
     public let durationMs: Double?
+    public let attemptRef: String?
+    public let sequence: Int?
+    public let stage: String?
+    public let outcome: String?
 
     public init(ref: String, at: String, kind: String, reason: String, windowMs: Double, releaseRelation: String,
                 durationMs: Double? = nil) {
@@ -84,6 +110,26 @@ public struct NativeDiagnosticEvidence: Codable, Equatable, Sendable {
         self.windowMs = windowMs
         self.releaseRelation = releaseRelation
         self.durationMs = durationMs
+        attemptRef = nil
+        sequence = nil
+        stage = nil
+        outcome = nil
+    }
+
+    public init(ref: String, attemptRef: String, sequence: Int, at: String, stage: DevboxSetupDiagnosticStage,
+                outcome: DevboxSetupDiagnosticOutcome, reason: DevboxSetupDiagnosticReason? = nil) {
+        self.ref = ref
+        self.attemptRef = attemptRef
+        self.sequence = sequence
+        source = .app
+        self.at = at
+        kind = "devbox.setup"
+        self.stage = stage.rawValue
+        self.outcome = outcome.rawValue
+        self.reason = reason?.rawValue
+        windowMs = nil
+        releaseRelation = nil
+        durationMs = nil
     }
 }
 

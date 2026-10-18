@@ -13,6 +13,17 @@ private func nativeEvidence(_ index: Int, at: Date, kind: String = "native.crash
                                     durationMs: kind == "native.hang" ? 2_000 : nil)
 }
 
+private func setupEvidence(_ index: Int, at: Date, outcome: DevboxSetupDiagnosticOutcome = .failed,
+                           reason: DevboxSetupDiagnosticReason? = .sshTimeout) -> NativeDiagnosticEvidence {
+    let suffix = String(format: "%024x", index)
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return NativeDiagnosticEvidence(ref: "diagnostic:v1:setup:\(suffix)",
+                                    attemptRef: "diagnostic:v1:setup-attempt:0123456789abcdef01234567",
+                                    sequence: index, at: formatter.string(from: at), stage: .sshTransport,
+                                    outcome: outcome, reason: reason)
+}
+
 @Test func nativeArchiveKeepsOnlyClosedBoundedRecentEvidence() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -39,6 +50,21 @@ private func nativeEvidence(_ index: Int, at: Date, kind: String = "native.crash
     #expect(try await archive.snapshot(now: now).evidence.map(\.ref) == [nativeEvidence(2, at: now).ref])
     try await archive.clear()
     #expect(try await archive.snapshot(now: now).evidence.isEmpty)
+}
+
+@Test func nativeArchiveRetainsOnlyClosedContentFreeDevboxSetupEvidence() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let archive = NativeDiagnosticArchive(directory: directory)
+    let now = Date(timeIntervalSince1970: 2_000_000_000)
+    #expect(try await archive.append([setupEvidence(1, at: now)], now: now))
+    let batch = try await archive.snapshot(now: now)
+    let item = try #require(batch.evidence.first)
+    #expect(item.source == .app && item.stage == "ssh_transport" && item.reason == "ssh_timeout")
+    #expect(item.attemptRef == "diagnostic:v1:setup-attempt:0123456789abcdef01234567")
+
+    let invalid = setupEvidence(2, at: now, outcome: .succeeded, reason: .unknown)
+    #expect(try await archive.append([invalid], now: now) == false)
 }
 
 @Test func nativeArchiveFailsClosedOnOpenFields() async throws {

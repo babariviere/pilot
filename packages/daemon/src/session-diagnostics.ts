@@ -470,6 +470,25 @@ async function native(path: string | undefined): Promise<SourceRead<DiagnosticEv
 	}
 }
 
+function nativeSource(read: SourceRead<DiagnosticEvidence>, source: "app" | "os"): SourceRead<DiagnosticEvidence> {
+	const items = read.items.filter((item) => item.source === source);
+	return {
+		items,
+		available: items.length,
+		invalid: read.invalid,
+		dropped: read.dropped,
+		truncated: read.truncated,
+		...(items.length
+			? {
+					newestAt: items
+						.map((item) => item.at)
+						.sort()
+						.at(-1),
+				}
+			: {}),
+	};
+}
+
 /** Build a content-free snapshot. Evidence is newest-first and bounded by both item count and encoded size. */
 export async function readSessionDiagnostics(input: SessionDiagnosticInput): Promise<SessionDiagnostics> {
 	const now = input.now ?? Date.now();
@@ -483,6 +502,8 @@ export async function readSessionDiagnostics(input: SessionDiagnosticInput): Pro
 		native(input.nativeDiagnosticsPath),
 	]);
 	const daemonRead = daemonEvidence(input.performance, now);
+	const appRead = nativeSource(nativeRead, "app");
+	const osRead = nativeSource(nativeRead, "os");
 	const reads = [lifecycleRead, timingRead, toolRead, daemonRead, nativeRead];
 	const available = reads.reduce((sum, read) => sum + read.available, 0);
 	const dropped = reads.reduce((sum, read) => sum + read.dropped, 0);
@@ -496,7 +517,8 @@ export async function readSessionDiagnostics(input: SessionDiagnosticInput): Pro
 		sourceStatus("request_timing", timingRead, now),
 		sourceStatus("tool", toolRead, now),
 		sourceStatus("daemon", daemonRead, now),
-		sourceStatus("os", nativeRead, now),
+		sourceStatus("app", appRead, now),
+		sourceStatus("os", osRead, now),
 	];
 	const resources = input.performance
 		? {

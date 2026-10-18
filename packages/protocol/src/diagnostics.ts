@@ -3,7 +3,7 @@ import type { OperationHost } from "./operations.ts";
 export const DIAGNOSTIC_SCHEMA_VERSION = 1 as const;
 
 export type DiagnosticFreshness = "fresh" | "stale" | "unavailable";
-export type DiagnosticSource = "lifecycle" | "request_timing" | "tool" | "daemon" | "os";
+export type DiagnosticSource = "lifecycle" | "request_timing" | "tool" | "daemon" | "os" | "app";
 export type ToolDiagnosticCategory =
 	| "shell"
 	| "filesystem"
@@ -156,18 +156,60 @@ export interface NativeDiagnosticEvidence {
 	durationMs?: number;
 }
 
+export type DevboxSetupDiagnosticStage =
+	| "configuration"
+	| "package"
+	| "ssh_transport"
+	| "remote_bootstrap"
+	| "remote_handshake"
+	| "enrollment"
+	| "adoption";
+export type DevboxSetupDiagnosticOutcome = "started" | "succeeded" | "failed" | "cancelled";
+export type DevboxSetupDiagnosticReason =
+	| "invalid_configuration"
+	| "package_unavailable"
+	| "package_untrusted"
+	| "ssh_timeout"
+	| "ssh_launch_failed"
+	| "ssh_transport_unknown"
+	| "remote_prerequisite"
+	| "remote_setup"
+	| "remote_identity"
+	| "identity_changed"
+	| "incompatible"
+	| "sandbox_unavailable"
+	| "handshake_rejected"
+	| "enrollment_failed"
+	| "adoption_failed"
+	| "cancelled"
+	| "unknown";
+
+/** Local app-owned setup timeline. Attempts and refs are random opaque values, never host or alias hashes. */
+export interface DevboxSetupDiagnosticEvidence {
+	ref: string;
+	attemptRef: string;
+	sequence: number;
+	source: "app";
+	at: string;
+	kind: "devbox.setup";
+	stage: DevboxSetupDiagnosticStage;
+	outcome: DevboxSetupDiagnosticOutcome;
+	reason?: DevboxSetupDiagnosticReason;
+}
+
 export type DiagnosticEvidence =
 	| LifecycleDiagnosticEvidence
 	| RequestTimingDiagnosticEvidence
 	| ToolInFlightDiagnosticEvidence
 	| ToolCallDiagnosticEvidence
 	| StallDiagnosticEvidence
-	| NativeDiagnosticEvidence;
+	| NativeDiagnosticEvidence
+	| DevboxSetupDiagnosticEvidence;
 
 /** PUT /api/diagnostics/native. Full bounded replacement from the local native app. */
 export interface NativeDiagnosticsBatch {
 	schemaVersion: typeof DIAGNOSTIC_SCHEMA_VERSION;
-	evidence: NativeDiagnosticEvidence[];
+	evidence: Array<NativeDiagnosticEvidence | DevboxSetupDiagnosticEvidence>;
 	dropped: number;
 }
 

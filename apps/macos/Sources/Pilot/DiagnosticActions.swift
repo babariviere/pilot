@@ -211,7 +211,7 @@ private struct DiagnosticEvidenceSelectionRow: View {
             HStack(alignment: .top, spacing: 8) {
                 if suspected { PilotSymbol(PilotIcon.warning, context: .inline).foregroundStyle(Theme.warning) }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(assessmentLabel ?? evidence.kind).font(.pilot(.body, weight: .medium))
+                    Text(assessmentLabel ?? evidenceLabel).font(.pilot(.body, weight: .medium))
                         .foregroundStyle(suspected ? Theme.warning : Theme.foreground)
                     Text(detail).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).lineLimit(2)
                 }
@@ -228,6 +228,7 @@ private struct DiagnosticEvidenceSelectionRow: View {
     }
 
     private var suspected: Bool { evidence.assessment?.hasPrefix("suspected_") == true }
+    private var evidenceLabel: String { evidence.kind == "devbox.setup" ? "Devbox setup" : evidence.kind }
 
     private var assessmentLabel: String? {
         switch evidence.assessment {
@@ -248,6 +249,12 @@ private struct DiagnosticEvidenceSelectionRow: View {
     }
 
     private var detail: String {
+        if evidence.kind == "devbox.setup" {
+            let stage = evidence.stage.map { $0.replacingOccurrences(of: "_", with: " ").capitalized } ?? "Unknown stage"
+            let outcome = evidence.outcome?.capitalized ?? "Unknown outcome"
+            let reason = evidence.reason.map { $0.replacingOccurrences(of: "_", with: " ").capitalized }
+            return [stage, outcome, reason].compactMap { $0 }.joined(separator: " · ")
+        }
         let category = evidence.category.map { $0 == "mcp" ? "MCP" : $0.capitalized }
         var parts = [category, evidence.nested == true ? "Nested call" : nil].compactMap { $0 }
         if let age = evidence.progressAgeMs, evidence.kind == "tool.in_flight" {

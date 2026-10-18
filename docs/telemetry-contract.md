@@ -161,6 +161,13 @@ and optional cancellation-wait age. Completed `tool.call` items add a reviewed o
 dispatch/execution/cancellation-wait durations. Raw call IDs, tool/server names, arguments, results, commands and
 errors are never schema fields. A liveness update is not useful progress, and neither age proves a deadlock.
 
+Devbox setup evidence is a separate closed local app source. `devbox.setup` contains random opaque evidence and
+attempt refs, a per-attempt sequence from 0 through 31, one of the reviewed setup stages, a
+`started`/`succeeded`/`failed`/`cancelled` outcome and, only when required, an allowlisted reason. It contains no
+SSH alias, hostname, host identity, path, command, plan, credential, raw output or arbitrary error. Local daemon,
+SSH/bootstrap and verified remote-handshake observations remain independent. This evidence is retained under the
+native local bound and consent, is never exported through OTLP and cannot trigger setup, probes, retries or restarts.
+
 Agent-facing access is limited to an explicitly admitted diagnostics session role. That runtime profile exposes only
 the bounded diagnostic read tool, is bound to one exact chat on its qualified host, and has no shell, source,
 transcript, write, restart, retry, replay or child-agent authority. A user-authorized repair handoff selects at most

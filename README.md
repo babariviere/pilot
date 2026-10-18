@@ -968,9 +968,10 @@ Chats also expose durable, content-free AI usage accounting from committed provi
 catalog estimates, billed-spend availability and subscription coverage semantically distinct. Observed context
 headroom, cache denominators, compaction pairs, request retries and worker relaunch reasons help diagnose efficiency
 without changing model, context, compaction, retry or restart behavior.
-[Native crash and hang diagnostics](docs/native-diagnostics.md) use Apple's delayed MetricKit delivery and retain
-only bounded content-free incident metadata locally. Pilot does not ingest stacks or report bodies, upload to a
-crash vendor, or treat historical hang evidence as a live restart signal.
+[Native and devbox setup diagnostics](docs/native-diagnostics.md) use Apple's delayed MetricKit delivery for crash
+and hang observations and a closed app-owned timeline for setup stages through verified remote handshake. They
+retain only bounded content-free metadata locally. Pilot does not ingest stacks, report bodies, SSH output, aliases
+or arbitrary errors, upload these records, or treat historical evidence as a retry or restart signal.
 The [diagnostics and telemetry contract](docs/telemetry-contract.md) defines the versioned privacy, identity,
 correlation, retention and resource budgets for local diagnostics and opt-in OpenTelemetry export. Remote export and
 product analytics are disabled by default, and no telemetry backend is selected by the repository.

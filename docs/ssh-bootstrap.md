@@ -17,7 +17,7 @@ devbox claim. Stable signing configuration and complete release assets remain op
    version/tag and archive size/SHA256 are mandatory. No source/unsigned fallback exists.
    `LinuxRuntimePackage.verified` supports already-downloaded assets with a host-configured pinned key,
    including disposable signed fixtures. Never obtain its key from a release asset or remote host.
-2. Call `LinuxSSHBootstrap.install(configuration:package:hostId:pinnedHost:)` after explicit setup
+2. Call `LinuxSSHBootstrap.install(configuration:package:hostId:pinnedHost:progress:)` after explicit setup
    authorization. Initial service setup uses the distribution interface's fixed loopback port 4319.
    The API rehashes the local archive before transfer and sends only archive bytes plus the bundled
    helper. Python 3.9+ is a detected setup prerequisite, not a global Node/package-manager requirement.
@@ -56,6 +56,12 @@ be repaired outside the app. Python detection reports the available dnf/apt-get/
 Service probes report actual missing capabilities and explicit package/linger privilege plans.
 Private Node/loader/ABI errors reference the signed manifest's libc/C++ floors, not a distro name.
 Unknown package managers require explicit manual prerequisite setup, not guessing a distribution.
+
+The optional progress callback exposes only the closed SSH transport, remote bootstrap and verified handshake
+boundaries. The app combines those with configuration, package, enrollment and adoption into local
+`devbox.setup` evidence. Failures use allowlisted categories such as timeout, prerequisite, sandbox, identity and
+handshake rejection; unsupported distinctions are `unknown`. The evidence contains no alias or raw SSH failure and
+is never a reason to automatically retry, restart, reconnect or probe the host.
 
 For a sandbox blocker, review the service-policy probe detail, install bubblewrap if missing using the
 reported manager (including dnf), and inspect per-service namespaces/AppArmor/SELinux/seccomp policy.
