@@ -35,6 +35,12 @@ private final class BlockingSpanExporter: SpanExporter, @unchecked Sendable {
     func shutdown(explicitTimeout _: TimeInterval?) { release() }
 }
 
+private final class FailingSpanExporter: SpanExporter, @unchecked Sendable {
+    func export(spans _: [SpanData], explicitTimeout _: TimeInterval?) -> SpanExporterResultCode { .failure }
+    func flush(explicitTimeout _: TimeInterval?) -> SpanExporterResultCode { .success }
+    func shutdown(explicitTimeout _: TimeInterval?) {}
+}
+
 private final class CapturingHTTPClient: HTTPClient, @unchecked Sendable {
     private let lock = NSLock()
     private var value: URLRequest?
@@ -211,6 +217,16 @@ private func configuration(exporter: any SpanExporter) -> PilotTelemetryConfigur
     let deadline = Date(timeIntervalSinceNow: 15)
     repeat { await telemetry.flush() } while telemetry.stats.queued > 0 && Date() < deadline
     #expect(telemetry.stats.queued == 0)
+    await telemetry.shutdown()
+}
+
+@Test func swiftTelemetryDropsFailedExportsWithoutRetainingAQueue() async {
+    let telemetry = PilotTelemetry(configuration: configuration(exporter: FailingSpanExporter()))
+    for _ in 0 ..< pilotSwiftSpanBatchLimit + 1 { telemetry.startSpan(.daemonRequest).finish() }
+    await telemetry.flush()
+    #expect(telemetry.stats.queued == 0)
+    #expect(telemetry.stats.dropped == pilotSwiftSpanBatchLimit + 1)
+    #expect(telemetry.stats.exportFailures >= 2)
     await telemetry.shutdown()
 }
 
