@@ -87,3 +87,82 @@ provider-output enforcement, model/profile availability, trusted context resolut
 findings publication, UI, host lifecycle scheduling and cross-process erasure notifications. The
 daemon remains the sole store owner. Do not wire the synthetic seam to real accounts, enable entry
 points or infer semantic quality from these permission tests. No product calls/evaluation ran.
+
+## Read-only PR capture (disabled, synthetic qualification only)
+
+`critical-review-pr-intake.ts`, `critical-review-pr-objects.ts` and
+`critical-review-pr-capture.ts` provide a separate internal capture lane. They do not import the chat
+PR binder, create a target/run, discover accounts, open an author checkout, create/move refs, or
+enable HTTP/UI/model entry points. `ReviewPRReader` has only two host read operations and **no live
+implementation**. Fake responses are explicit synthetic fixtures, not recordings from real accounts.
+
+Intake requires the canonical GitHub host, authenticated account ID/login, immutable repository ID
+with owner/name, and PR ID/number. Names are normalized; IDs remain exact. Every object response must
+match host/account/repository and requested object type and SHA-1. Fork head objects are requested in
+the fork's scope, not silently from the target repository. Metadata is checked again before sealing;
+account changes, tip movement, deleted refs and inconsistent identity fail instead of retargeting.
+The adapter must supply **the current target-ref tip B**, not a historical `baseRefOid` or default
+branch. Null, inaccessible or ambiguous targets are unavailable. This contract still needs an
+authorized real GitHub capability check; the fake seam does not prove API availability or access.
+
+Capture imports the complete H/B commit-parent closure, requiring every parent object, into an
+owner-private object-only database under the existing vault's tracked `.part` staging. It verifies
+object payload hashes/types, requires a single `merge-base --all` result M, and checks M is an
+ancestor of both H and B. Unrelated, shallow/missing and criss-cross/ambiguous histories fail closed.
+Only the H/B/M trees and their immutable blobs are then acquired. There is no fallback to main,
+synthetic merge commit, or mutable PR patch endpoint. SHA-256-format Git repositories are not yet
+supported and are rejected, not shortened to SHA-1.
+
+Git runs only the fixed `/usr/bin/git` executable against this disposable bare database, with an
+allowlisted environment, no ambient config/replacement/graft/shallow/alternate store, hooks disabled,
+system/user attributes disabled, external diff and textconv disabled, and all transports forbidden.
+No fetch/clone, shell, checkout, index/worktree operation, templates, credential helper, filter,
+submodule traversal, LFS hydration, package install, build or reviewed-code execution is performed.
+Executable-mode regular files are captured as text data only, never installed with executable mode.
+Symlinks/gitlinks have inventory records but omitted surrounding source; symlink blobs may appear as
+literal diff data, never filesystem links. LFS pointers remain pointers, not hydrated source.
+
+Sealed evidence contains a versioned `pr/capture.json` receipt naming H/B/M and tree OIDs, ordered
+per-path H/B/M inventory records, regular surrounding source for all three trees, and canonical
+M-to-H per-path Git patches. Patches use Myers, full indexes, three context lines, no renames, and
+UTF-8 byte path order. Literal pathspecs exclude descendants to avoid duplicate patches during
+file/directory replacements. The diff is the ordered concatenation of retained `pr/diff/` entries,
+**only complete when none of its selections were omitted**. Path-specific labels allow the vault
+to omit secret filenames, secret patch/source text and binary content without retaining those names
+in a global index. Vault omissions are authoritative: a partial capture never claims full inspection.
+No discussions/checks or trusted project-policy resolution are implemented by these modules.
+
+Ceilings: 128 MiB acquired object payloads and separately 128 MiB assembled evidence, 8 MiB/object,
+40,000 objects, 20,000 cumulative H/B/M tree entries (directories included), 20,000 vault selections
+including metadata, 8 MiB total patches, 64 KiB metadata/read, 10 seconds/read or Git command, and
+60-second capture deadline including seal (late seal/revocation/cleanup is awaited, so this is not
+a guaranteed response-time bound). A repeated tree consumes the cumulative path budget again.
+These conservative bounds can reject repositories below the nominal source-path ceiling. Unsupported
+tree modes, non-UTF-8/unsafe paths, depth over 64 and paths over 400 UTF-8 bytes fail explicitly.
+No truncated acquisition is promoted to a complete snapshot. Object scratch space and simultaneous
+vault sealing both count against existing project/host storage quotas, with no eviction. Startup
+`vault.recover()` removes interrupted object stages, without replaying acquisition. Memory can include
+assembled evidence, per-object buffers and vault sealing copies; limit-size RSS/latency is not qualified.
+
+Each capture owner admits one capture at a time, without a queue, and retains at most three actual
+transport reads even if cancelled adapters ignore their signal. There is no automatic retry. The
+future host service must keep one owner per vault, honor access revocation, and terminate transport
+resources on cancellation. Atomic vault sealing is not interruptible: a late cancelled/timed-out
+seal is revoked and unlinked before capture returns an error. Account/repository/PR scope hashes
+and a unique capture source participate in existing linked erasure. Host lifecycle/access hooks
+remain unwired; this does not grant acquisition or reviewer authority.
+
+Focused acceptance: `node --test --test-force-exit packages/daemon/src/critical-review-pr-capture.test.ts`.
+Cases cover fork/stack identity and exact patches, deleted/ambiguous/unrelated bases, missing and forged
+objects, account/host/repository mismatch, tip races, acquisition/storage quotas, cancellation during
+reads/sealing, non-cooperative adapters, hostile Git config, literal/file-directory paths, unsafe trees,
+binary/secret/symlink/gitlink/LFS coverage, immutable reads after source removal and startup cleanup.
+The small synthetic many-path measurement is not production performance or full-ceiling qualification.
+
+Before any live capability probe, obtain separate authorization naming the host, account, repositories
+(including forks), private-data owners, read scopes, retention and finite acquisition limits. Then
+qualify current target-tip/deleted-ref behavior, exact object retrieval and complete parent visibility,
+fork access, account-switch detection, rate limits and cancellation with those authorized resources.
+Do not add write scopes, default-branch fallbacks or execution as a workaround. No such probe, live
+acquisition, real provider/evaluation call or activation has run. Publishing this capture code does
+not authorize live access, review submission, provider/evaluation spend or production activation.
