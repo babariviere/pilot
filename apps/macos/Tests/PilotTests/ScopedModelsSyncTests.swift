@@ -138,7 +138,8 @@ import Testing
     await sync.save(.all, joining: [a.host: baselineA, b.host: baselineB])
     try await scopeWait { sync.state.entry(a.host)?.status == .conflict && sync.state.entry(b.host)?.status == .conflict }
     #expect(a.writes.isEmpty && b.writes.isEmpty)
-    await sync.useEverywhere(a.host, shown: a.baseline)
+    let useA = try #require(sync.review(a.host))
+    await sync.useEverywhere(useA)
     try await scopeWait { sync.state.entry(a.host)?.status == .synced && sync.checking.isEmpty }
     #expect(sync.state.revision == 2)
     #expect(sync.state.entry(b.host)?.status == .conflict && b.writes.isEmpty)
@@ -146,7 +147,8 @@ import Testing
     b.generation = UUID(); sync.update([a.host: a.endpoint(), b.host: b.endpoint()])
     try await scopeWait { sync.checking.isEmpty }
     #expect(sync.state.entry(b.host)?.status == .divergent && b.writes.isEmpty)
-    await sync.join(b.host, shown: b.baseline)
+    let overwriteB = try #require(sync.review(b.host))
+    await sync.join(overwriteB)
     try await scopeWait { sync.state.entry(b.host)?.status == .synced }
     #expect(b.writes.first?.1 == "b-edit")
     sync.stop()
@@ -255,5 +257,48 @@ import Testing
     try await scopeWait { sync.checking.isEmpty }
     #expect(maximum == 2)
     #expect(fixtures.allSatisfy { sync.state.entry($0.host)?.status == .synced })
+    sync.stop()
+}
+
+@Test @MainActor func scopedModelsConflictConsentCannotFollowNewIntentOrConnection() async throws {
+    let (directory, _, sync) = scopeSetup()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let remote = ScopeHostFixture("remote")
+    sync.update([remote.host: remote.endpoint()]); await sync.start()
+    try await scopeWait { sync.observations[remote.host] != nil && sync.checking.isEmpty }
+    let oldBaseline = remote.baseline
+    remote.patterns = ["external"]; remote.hash = "external"
+    await sync.save(.all, joining: [remote.host: oldBaseline])
+    try await scopeWait { sync.state.entry(remote.host)?.status == .conflict && sync.checking.isEmpty }
+    let oldRevision = try #require(sync.review(remote.host))
+    await sync.save(.init(patterns: ["new-intent"]), joining: [:])
+    await sync.join(oldRevision)
+    await sync.useEverywhere(oldRevision)
+    #expect(sync.state.revision == 2 && remote.writes.isEmpty)
+    try await scopeWait { sync.checking.isEmpty }
+    let oldConnection = try #require(sync.review(remote.host))
+    remote.generation = UUID(); sync.update([remote.host: remote.endpoint()])
+    #expect(!sync.isCurrent(oldConnection))
+    await sync.join(oldConnection)
+    try await scopeWait { sync.checking.isEmpty }
+    #expect(sync.state.entry(remote.host)?.status == .conflict && remote.writes.isEmpty)
+    sync.stop()
+}
+
+@Test @MainActor func scopedModelsReadFailureCannotErasePersistedLeaveAsIs() async throws {
+    let (directory, _, sync) = scopeSetup()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let remote = ScopeHostFixture("remote")
+    sync.update([remote.host: remote.endpoint()]); await sync.start()
+    try await scopeWait { sync.observations[remote.host] != nil && sync.checking.isEmpty }
+    await sync.save(.all, joining: [remote.host: remote.baseline])
+    try await scopeWait { sync.state.entry(remote.host)?.status == .synced && sync.checking.isEmpty }
+    await sync.leave(remote.host)
+    remote.failure = .unavailable
+    remote.generation = UUID(); sync.update([remote.host: remote.endpoint()])
+    try await scopeWait { remote.reads >= 4 && sync.checking.isEmpty }
+    #expect(sync.state.entry(remote.host)?.status == .divergent)
+    #expect(sync.state.entry(remote.host)?.participates == false)
+    #expect(remote.writes.count == 1)
     sync.stop()
 }
