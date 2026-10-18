@@ -33,26 +33,45 @@ private func settingsDirectory() throws -> URL {
     let directory = try settingsDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
     let package = try await settingsPackage(directory)
     var actions: [String] = []
+    var diagnostics: [String] = [], diagnosticSequences: [Int] = []
     let configuration = try SSHConnectionConfiguration(alias: "fixture-box")
     let connection = LinuxBootstrapConnection(host: settingsHost, tunnel: ManagedSSHTunnel(configuration: configuration, validateHello: { _ in }))
     let model = DevboxSetupModel(loadPackage: { package }, actions: DevboxSetupActions(
-        bootstrap: { value, _, _, pin in #expect(value == configuration); #expect(pin == nil); actions.append("bootstrap"); return connection },
+        bootstrap: { value, _, _, pin, progress in
+            #expect(value == configuration); #expect(pin == nil); actions.append("bootstrap")
+            await progress(.sshTransport); await progress(.remoteBootstrap); await progress(.remoteHandshake)
+            return connection
+        },
         enroll: { host, value in #expect(host == settingsHost); #expect(value == configuration); actions.append("enroll") },
-        adopt: { _, _ in #expect(actions.last == "enroll"); actions.append("adopt") }, dispose: { _ in actions.append("dispose") }))
+        adopt: { _, _ in #expect(actions.last == "enroll"); actions.append("adopt") }, dispose: { _ in actions.append("dispose") },
+        record: { _, sequence, stage, outcome, reason in
+            diagnosticSequences.append(sequence)
+            diagnostics.append("\(stage.rawValue):\(outcome.rawValue):\(reason?.rawValue ?? "-")")
+        }))
     await model.prepare(alias: "fixture-box")
     #expect(model.phase == .awaitingTrust)
     #expect(actions == ["bootstrap"])
     await model.confirmEnrollment()
     #expect(actions == ["bootstrap", "enroll", "adopt"])
     #expect(model.completed == settingsHost)
+    #expect(diagnostics == [
+        "configuration:started:-", "configuration:succeeded:-", "package:started:-", "package:succeeded:-",
+        "ssh_transport:started:-", "ssh_transport:succeeded:-", "remote_bootstrap:started:-",
+        "remote_bootstrap:succeeded:-", "remote_handshake:started:-", "remote_handshake:succeeded:-",
+        "enrollment:started:-", "enrollment:succeeded:-", "adoption:started:-", "adoption:succeeded:-",
+    ])
+    #expect(diagnosticSequences == Array(0...13))
     await model.cancel()
     #expect(!actions.contains("dispose"))
 }
 
 @Test @MainActor func missingTrustInvalidAliasAndFailedPinPersistenceCannotAdoptOrLeakDiagnostics() async throws {
-    var touched = false
-    let actions = DevboxSetupActions(bootstrap: { _, _, _, _ in touched = true; throw DevboxProblem.storage },
-        enroll: { _, _ in touched = true }, adopt: { _, _ in touched = true }, dispose: { _ in touched = true })
+    var touched = false, evidence: [String] = []
+    let actions = DevboxSetupActions(bootstrap: { _, _, _, _, _ in touched = true; throw DevboxProblem.storage },
+        enroll: { _, _ in touched = true }, adopt: { _, _ in touched = true }, dispose: { _ in touched = true },
+        record: { _, _, stage, outcome, reason in
+            evidence.append("\(stage.rawValue):\(outcome.rawValue):\(reason?.rawValue ?? "-")")
+        })
     let missing = DevboxSetupModel(loadPackage: { throw DevboxPackageFailure.trust }, actions: actions)
     await missing.prepare(alias: "fixture-box")
     #expect(!touched)
@@ -61,6 +80,10 @@ private func settingsDirectory() throws -> URL {
     await invalid.prepare(alias: "box;send-secrets")
     #expect(!touched)
     #expect(invalid.problem?.contains("box;send-secrets") == false)
+    #expect(evidence == [
+        "configuration:started:-", "configuration:succeeded:-", "package:started:-", "package:failed:package_untrusted",
+        "configuration:started:-", "configuration:failed:invalid_configuration",
+    ])
     let secret = NSError(domain: "fixture", code: 1, userInfo: [NSLocalizedDescriptionKey: "private-token-server-body"])
     #expect(!DevboxProblemText.setup(secret).contains("private-token"))
     #expect(!DevboxProblemText.update(secret).contains("private-token"))
@@ -73,7 +96,7 @@ private func settingsDirectory() throws -> URL {
     let connection = LinuxBootstrapConnection(host: settingsHost, tunnel: ManagedSSHTunnel(configuration: configuration, validateHello: { _ in }))
     var disposed = 0, pins: [HostRef?] = [], adopted = false
     let model = DevboxSetupModel(loadPackage: { package }, actions: DevboxSetupActions(
-        bootstrap: { _, _, _, pin in pins.append(pin); return connection },
+        bootstrap: { _, _, _, pin, _ in pins.append(pin); return connection },
         enroll: { _, _ in throw DevboxProblem.storage }, adopt: { _, _ in adopted = true }, dispose: { _ in disposed += 1 }))
     await model.prepare(alias: "fixture-box"); await model.confirmEnrollment()
     #expect(!adopted && disposed == 1)
@@ -84,12 +107,33 @@ private func settingsDirectory() throws -> URL {
     #expect(disposed == 2)
 }
 
+@Test @MainActor func setupDiagnosticsClassifySupportedSSHFailuresAndCollapseArbitraryErrorsToUnknown() async throws {
+    let directory = try settingsDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
+    let package = try await settingsPackage(directory)
+    var reasons: [String] = []
+    func actions(_ error: Error) -> DevboxSetupActions {
+        DevboxSetupActions(bootstrap: { _, _, _, _, progress in await progress(.sshTransport); throw error },
+                           enroll: { _, _ in }, adopt: { _, _ in },
+                           dispose: { _ in }, record: { _, _, stage, outcome, reason in
+            if outcome == .failed { reasons.append("\(stage.rawValue):\(reason?.rawValue ?? "-")") }
+        })
+    }
+    let timeout = DevboxSetupModel(loadPackage: { package },
+                                   actions: actions(LinuxBootstrapFailure("ssh_timeout", "private raw detail")))
+    await timeout.prepare(alias: "fixture-box")
+    let unknown = DevboxSetupModel(loadPackage: { package }, actions: actions(
+        NSError(domain: "secret.host", code: 7, userInfo: [NSLocalizedDescriptionKey: "private stderr"])))
+    await unknown.prepare(alias: "fixture-box")
+    #expect(reasons == ["ssh_transport:ssh_timeout", "ssh_transport:unknown"])
+    #expect(timeout.problem?.contains("private") == false && unknown.problem?.contains("private") == false)
+}
+
 @Test @MainActor func cancellingBeforePackageLoadFinishesCannotStartRemoteSetupLater() async throws {
     let directory = try settingsDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
     let package = try await settingsPackage(directory)
     var release: CheckedContinuation<LinuxRuntimePackage, Error>?, touched = false
     let model = DevboxSetupModel(loadPackage: { try await withCheckedThrowingContinuation { release = $0 } },
-        actions: DevboxSetupActions(bootstrap: { _, _, _, _ in touched = true; throw DevboxProblem.storage },
+        actions: DevboxSetupActions(bootstrap: { _, _, _, _, _ in touched = true; throw DevboxProblem.storage },
             enroll: { _, _ in touched = true }, adopt: { _, _ in touched = true }, dispose: { _ in touched = true }))
     let operation = Task { await model.prepare(alias: "fixture-box") }
     for _ in 0..<100 where release == nil { await Task.yield() }

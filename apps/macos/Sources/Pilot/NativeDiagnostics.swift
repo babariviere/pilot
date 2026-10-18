@@ -67,7 +67,8 @@ actor NativeDiagnosticArchive {
             let batch = try JSONDecoder().decode(NativeDiagnosticsBatch.self, from: data)
             guard batch.schemaVersion == 1, batch.evidence.count <= nativeDiagnosticLimit,
                   (0 ... 1_000_000).contains(batch.dropped), batch.evidence.allSatisfy(Self.valid),
-                  Set(batch.evidence.map(\.ref)).count == batch.evidence.count else { loadFailed = true; return }
+                  Set(batch.evidence.map(\.ref)).count == batch.evidence.count,
+                  Self.uniqueSetupSequences(batch.evidence) else { loadFailed = true; return }
             evidence = batch.evidence.sorted { $0.at > $1.at }
             dropped = batch.dropped
         } catch { loadFailed = true }
@@ -105,26 +106,60 @@ actor NativeDiagnosticArchive {
     }
 
     private static func valid(_ item: NativeDiagnosticEvidence) -> Bool {
-        let ref = item.ref.range(of: #"^diagnostic:v1:native:[0-9a-f]{24}$"#, options: .regularExpression) != nil
-        guard ref, item.source == .os, date(item.at) != nil, item.windowMs.isFinite,
-              (0 ... 7 * 24 * 60 * 60 * 1_000).contains(item.windowMs),
-              item.releaseRelation == "current" || item.releaseRelation == "other_or_unknown" else { return false }
+        guard date(item.at) != nil else { return false }
         switch item.kind {
-        case "native.crash": return item.reason == "process_exit" && item.durationMs == nil
-        case "native.hang":
+        case "native.crash", "native.hang":
+            let ref = item.ref.range(of: #"^diagnostic:v1:native:[0-9a-f]{24}$"#,
+                                     options: .regularExpression) != nil
+            guard ref, item.source == .os, let window = item.windowMs, window.isFinite,
+                  (0 ... 7 * 24 * 60 * 60 * 1_000).contains(window),
+                  item.releaseRelation == "current" || item.releaseRelation == "other_or_unknown",
+                  item.attemptRef == nil, item.sequence == nil, item.stage == nil, item.outcome == nil else { return false }
+            if item.kind == "native.crash" { return item.reason == "process_exit" && item.durationMs == nil }
             guard item.reason == "unresponsive", let duration = item.durationMs else { return false }
             return duration.isFinite && (0 ... 86_400_000).contains(duration)
+        case "devbox.setup":
+            let ref = item.ref.range(of: #"^diagnostic:v1:setup:[0-9a-f]{24}$"#,
+                                     options: .regularExpression) != nil
+            let attempt = item.attemptRef?.range(of: #"^diagnostic:v1:setup-attempt:[0-9a-f]{24}$"#,
+                                                 options: .regularExpression) != nil
+            guard ref, attempt, item.source == .app, item.windowMs == nil, item.releaseRelation == nil,
+                  item.durationMs == nil, let rawStage = item.stage,
+                  DevboxSetupDiagnosticStage(rawValue: rawStage) != nil, let rawOutcome = item.outcome,
+                  let outcome = DevboxSetupDiagnosticOutcome(rawValue: rawOutcome), let sequence = item.sequence,
+                  (0 ... 31).contains(sequence) else { return false }
+            let reason = item.reason.flatMap(DevboxSetupDiagnosticReason.init(rawValue:))
+            if item.reason != nil, reason == nil { return false }
+            switch outcome {
+            case .started, .succeeded: return item.reason == nil
+            case .failed: return reason != nil && reason != .cancelled
+            case .cancelled: return reason == .cancelled
+            }
         default: return false
         }
+    }
+
+    private static func uniqueSetupSequences(_ items: [NativeDiagnosticEvidence]) -> Bool {
+        let setup = items.filter { $0.kind == "devbox.setup" }
+        let keys = setup.compactMap { item in item.attemptRef.flatMap { attempt in item.sequence.map { "\(attempt):\($0)" } } }
+        return keys.count == setup.count && Set(keys).count == keys.count
     }
 
     private static func closedSchema(_ data: Data) -> Bool {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               Set(root.keys) == ["schemaVersion", "evidence", "dropped"],
               let evidence = root["evidence"] as? [[String: Any]] else { return false }
-        let required: Set<String> = ["ref", "source", "at", "kind", "reason", "windowMs", "releaseRelation"]
-        let allowed = required.union(["durationMs"])
-        return evidence.allSatisfy { Set($0.keys).isSubset(of: allowed) && required.isSubset(of: Set($0.keys)) }
+        let nativeRequired: Set<String> = ["ref", "source", "at", "kind", "reason", "windowMs", "releaseRelation"]
+        let nativeAllowed = nativeRequired.union(["durationMs"])
+        let setupRequired: Set<String> = ["ref", "attemptRef", "sequence", "source", "at", "kind", "stage", "outcome"]
+        let setupAllowed = setupRequired.union(["reason"])
+        return evidence.allSatisfy { item in
+            let keys = Set(item.keys)
+            if item["kind"] as? String == "devbox.setup" {
+                return keys.isSubset(of: setupAllowed) && setupRequired.isSubset(of: keys)
+            }
+            return keys.isSubset(of: nativeAllowed) && nativeRequired.isSubset(of: keys)
+        }
     }
 
     private static func date(_ value: String) -> Date? {
@@ -134,7 +169,7 @@ actor NativeDiagnosticArchive {
     }
 }
 
-/// MetricKit delivers OS-owned diagnostics after the incident. Pilot keeps only type, time and hang duration.
+/// Stores bounded MetricKit observations and app-owned setup stages without raw diagnostic payloads.
 final class NativeDiagnostics: NSObject, MXMetricManagerSubscriber, @unchecked Sendable {
     static let shared = NativeDiagnostics()
     private let archive: NativeDiagnosticArchive
@@ -173,6 +208,23 @@ final class NativeDiagnostics: NSObject, MXMetricManagerSubscriber, @unchecked S
 
     func snapshot() async throws -> NativeDiagnosticsBatch { try await archive.snapshot() }
     func clear() async throws { try await archive.clear() }
+
+    static func setupAttemptReference() -> String {
+        "diagnostic:v1:setup-attempt:" + String(UUID().uuidString.lowercased()
+            .replacingOccurrences(of: "-", with: "").prefix(24))
+    }
+
+    func recordSetup(attemptRef: String, sequence: Int, stage: DevboxSetupDiagnosticStage,
+                     outcome: DevboxSetupDiagnosticOutcome, reason: DevboxSetupDiagnosticReason? = nil,
+                     now: Date = Date()) async {
+        guard isEnabled else { return }
+        let suffix = String(UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "").prefix(24))
+        let item = NativeDiagnosticEvidence(ref: "diagnostic:v1:setup:" + suffix, attemptRef: attemptRef,
+                                            sequence: sequence, at: Self.timestamp(now), stage: stage,
+                                            outcome: outcome, reason: reason)
+        guard (try? await archive.append([item], now: now)) == true else { return }
+        lock.withLock { changeHandler }?()
+    }
 
     func didReceive(_ payloads: [MXDiagnosticPayload]) {
         let observations = Self.observations(payloads)

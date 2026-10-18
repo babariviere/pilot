@@ -24,18 +24,40 @@ const hang = {
 	releaseRelation: "other_or_unknown",
 	durationMs: 5_000,
 } as const;
+const setup = {
+	ref: "diagnostic:v1:setup:abcdef0123456789abcdef01",
+	attemptRef: "diagnostic:v1:setup-attempt:0123456789abcdef01234567",
+	sequence: 3,
+	source: "app",
+	at: "2026-10-17T08:02:00.000Z",
+	kind: "devbox.setup",
+	stage: "ssh_transport",
+	outcome: "failed",
+	reason: "ssh_timeout",
+} as const;
 
 test("native diagnostic batches accept only the closed content-free schema", () => {
 	assert.deepEqual(parseNativeDiagnostics({ schemaVersion: 1, evidence: [crash, hang], dropped: 2 }).evidence, [
 		crash,
 		hang,
 	]);
+	assert.deepEqual(parseNativeDiagnostics({ schemaVersion: 1, evidence: [setup], dropped: 0 }).evidence, [setup]);
 	for (const value of [
 		{ schemaVersion: 1, evidence: [{ ...crash, path: "/private/source" }], dropped: 0 },
 		{ schemaVersion: 1, evidence: [{ ...crash, stack: "secret stack" }], dropped: 0 },
 		{ schemaVersion: 1, evidence: [{ ...hang, durationMs: Number.POSITIVE_INFINITY }], dropped: 0 },
 		{ schemaVersion: 1, evidence: [{ ...hang, reason: "raw watchdog reason" }], dropped: 0 },
 		{ schemaVersion: 1, evidence: [crash, crash], dropped: 0 },
+		{ schemaVersion: 1, evidence: [{ ...setup, alias: "private-box" }], dropped: 0 },
+		{ schemaVersion: 1, evidence: [{ ...setup, outcome: "succeeded" }], dropped: 0 },
+		{ schemaVersion: 1, evidence: [{ ...setup, reason: "raw ssh output" }], dropped: 0 },
+		{ schemaVersion: 1, evidence: [{ ...setup, attemptRef: "private-box" }], dropped: 0 },
+		{ schemaVersion: 1, evidence: [{ ...setup, sequence: 32 }], dropped: 0 },
+		{
+			schemaVersion: 1,
+			evidence: [setup, { ...setup, ref: "diagnostic:v1:setup:abcdef0123456789abcdef02" }],
+			dropped: 0,
+		},
 	])
 		assert.throws(() => parseNativeDiagnostics(value));
 });

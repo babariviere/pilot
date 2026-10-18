@@ -104,6 +104,17 @@ test("diagnostics combine strict local sources without exposing retained content
 			schemaVersion: 1,
 			evidence: [
 				{
+					ref: "diagnostic:v1:setup:abcdef0123456789abcdef01",
+					attemptRef: "diagnostic:v1:setup-attempt:0123456789abcdef01234567",
+					sequence: 8,
+					source: "app",
+					at: "2026-01-02T00:00:09.000Z",
+					kind: "devbox.setup",
+					stage: "remote_handshake",
+					outcome: "failed",
+					reason: "handshake_rejected",
+				},
+				{
 					ref: "diagnostic:v1:native:0123456789abcdef01234567",
 					source: "os",
 					at: "2026-01-02T00:00:08.000Z",
@@ -130,8 +141,9 @@ test("diagnostics combine strict local sources without exposing retained content
 	assert.equal(result.freshness, "fresh");
 	assert.deepEqual(
 		result.evidence.map((item) => item.source),
-		["os", "daemon", "request_timing", "lifecycle"],
+		["app", "os", "daemon", "request_timing", "lifecycle"],
 	);
+	assert.equal(result.sources.find((source) => source.source === "app")?.freshness, "fresh");
 	assert.equal(result.sources.find((source) => source.source === "lifecycle")?.invalid, 1);
 	assert.equal(result.sources.find((source) => source.source === "request_timing")?.invalid, 1);
 	assert.equal(result.resources.inFlightRequests, 1);
@@ -139,6 +151,50 @@ test("diagnostics combine strict local sources without exposing retained content
 	assert.equal(JSON.stringify(result).includes("conversation secret"), false);
 	assert.equal(JSON.stringify(result).includes("secret route"), false);
 	assert.ok(result.truncation.encodedBytes <= MAX_DIAGNOSTIC_BYTES);
+});
+
+test("a healthy local daemon keeps failed remote setup evidence separate and marks old setup evidence stale", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-diagnostics-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	await mkdir(join(root, "durable"));
+	const now = Date.parse("2026-01-02T00:10:00.000Z");
+	const native = join(root, "native-diagnostics.json");
+	await writeFile(
+		native,
+		JSON.stringify({
+			schemaVersion: 1,
+			evidence: [
+				{
+					ref: "diagnostic:v1:setup:abcdef0123456789abcdef01",
+					attemptRef: "diagnostic:v1:setup-attempt:0123456789abcdef01234567",
+					sequence: 4,
+					source: "app",
+					at: "2026-01-02T00:00:00.000Z",
+					kind: "devbox.setup",
+					stage: "ssh_transport",
+					outcome: "failed",
+					reason: "ssh_timeout",
+				},
+			],
+			dropped: 0,
+		}),
+	);
+	const result = await readSessionDiagnostics({
+		host,
+		sessionId: "session",
+		storageDir: root,
+		current,
+		connectivity: { state: "online", observedAt: new Date(now).toISOString() },
+		performance: performance(now),
+		nativeDiagnosticsPath: native,
+		now,
+	});
+	assert.equal(result.sources.find((source) => source.source === "daemon")?.freshness, "fresh");
+	assert.equal(result.sources.find((source) => source.source === "app")?.freshness, "stale");
+	assert.equal(result.sources.find((source) => source.source === "os")?.freshness, "unavailable");
+	const setup = result.evidence.find((item) => item.kind === "devbox.setup");
+	assert.ok(setup && setup.kind === "devbox.setup");
+	assert.equal(setup.reason, "ssh_timeout");
 });
 
 test("diagnostics bound items, bytes and report stale, missing and dropped evidence", async (t) => {

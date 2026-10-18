@@ -119,7 +119,8 @@ public enum LinuxSSHBootstrap {
     /// Repeating with the same package never replaces credentials/data or restarts a running unit.
     /// Persist the returned HostRef only after user-confirmed enrollment, then always supply it on retry.
     public static func install(configuration: SSHConnectionConfiguration, package: LinuxRuntimePackage,
-                               hostId: String, pinnedHost: HostRef? = nil) async throws -> LinuxBootstrapConnection {
+                               hostId: String, pinnedHost: HostRef? = nil,
+                               progress: @escaping @Sendable (DevboxSetupDiagnosticStage) async -> Void = { _ in }) async throws -> LinuxBootstrapConnection {
         guard configuration.remotePort == 4319, pinnedHost == nil || pinnedHost?.hostId == hostId else {
             throw LinuxBootstrapFailure("configuration", "Initial runtime setup uses port 4319 and the configured host identity. Custom service ports require separate explicit configuration.")
         }
@@ -128,7 +129,9 @@ public enum LinuxSSHBootstrap {
         try Task.checkCancellation()
         let script = try scriptSource()
         let args = try commandArguments(configuration: configuration, package: package, pinnedHost: pinnedHost, script: script)
+        await progress(.sshTransport)
         let output = try await LinuxBootstrapSSH.run(arguments: args, input: package.archiveURL)
+        await progress(.remoteBootstrap)
         let report: Report
         do { report = try JSONDecoder().decode(Report.self, from: output) }
         catch { throw LinuxBootstrapFailure("ssh", "SSH setup returned no valid result. Check the working alias/authentication and Python 3, then retry the same package to reconcile partial setup.") }
@@ -137,6 +140,7 @@ public enum LinuxSSHBootstrap {
         }
         let host = HostRef(hostId: hostId, daemonId: identity.daemonId, lineageId: identity.lineageId)
         if let pinnedHost, pinnedHost != host { throw HostRoutingError.identityChanged }
+        await progress(.remoteHandshake)
         let tunnel = ManagedSSHTunnel(configuration: configuration) { data in
             try validateHello(data, host: host, version: package.manifest.version)
         }
@@ -221,6 +225,8 @@ private final class BootstrapChild: @unchecked Sendable {
     private let lock = NSLock()
     private let process = Process()
     private var cancelled = false
+    private var timedOut = false
+    private var outputExceeded = false
     private var launched = false
 
     func cancel() {
@@ -243,9 +249,15 @@ private final class BootstrapChild: @unchecked Sendable {
         var environment = ProcessInfo.processInfo.environment
         environment["SSH_ASKPASS_REQUIRE"] = "never"
         process.environment = environment
-        try lock.withLock {
-            guard !cancelled else { throw CancellationError() }
-            try process.run(); launched = true
+        do {
+            try lock.withLock {
+                guard !cancelled else { throw CancellationError() }
+                try process.run(); launched = true
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw LinuxBootstrapFailure("ssh_launch", "Could not launch system SSH.")
         }
         // A deadline and escalation cover hung reads/TERM-resistant SSH without retaining diagnostics.
         let timer = DispatchSource.makeTimerSource(queue: .global())
@@ -253,7 +265,7 @@ private final class BootstrapChild: @unchecked Sendable {
         timer.schedule(deadline: .now() + 0.1, repeating: 0.1)
         timer.setEventHandler { [self] in
             lock.withLock {
-                if ProcessInfo.processInfo.systemUptime >= deadline { cancelled = true }
+                if ProcessInfo.processInfo.systemUptime >= deadline { cancelled = true; timedOut = true }
                 if cancelled && process.isRunning { Darwin.kill(process.processIdentifier, SIGKILL) }
             }
         }
@@ -262,12 +274,24 @@ private final class BootstrapChild: @unchecked Sendable {
         var output = Data()
         while let chunk = try pipe.fileHandleForReading.read(upToCount: 4096), !chunk.isEmpty {
             output.append(chunk)
-            if output.count > 65_536 { cancel(); break }
+            if output.count > 65_536 {
+                lock.withLock {
+                    outputExceeded = true; cancelled = true
+                    if process.isRunning { Darwin.kill(process.processIdentifier, SIGKILL) }
+                }
+                break
+            }
         }
         process.waitUntilExit()
         try? pipe.fileHandleForReading.close()
         if lock.withLock({ cancelled }) {
-            throw LinuxBootstrapFailure("ssh", "SSH setup was cancelled or timed out. Remote setup may have progressed. Reconnect and repeat with the same package to reconcile; no service stop was sent.")
+            if lock.withLock({ timedOut }) {
+                throw LinuxBootstrapFailure("ssh_timeout", "SSH setup timed out. Remote setup may have progressed. Reconnect and repeat with the same package to reconcile; no service stop was sent.")
+            }
+            if lock.withLock({ outputExceeded }) {
+                throw LinuxBootstrapFailure("ssh", "SSH setup returned an oversized result. Remote setup may have progressed. Retry the same package to reconcile.")
+            }
+            throw CancellationError()
         }
         guard !output.isEmpty else {
             throw LinuxBootstrapFailure("ssh", "SSH setup produced no result. Check the existing alias, host trust and non-interactive authentication outside the app, then retry.")
