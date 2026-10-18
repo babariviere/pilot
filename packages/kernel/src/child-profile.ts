@@ -8,8 +8,10 @@ import { installCredentialBrokerHooks } from "./credential-hooks.ts";
 import { subscriptionRecovery } from "./subscription-limit.ts";
 import { callParentSubscriptionLimit, callParentTodo } from "./todo-bridge.ts";
 import { createTodoTool } from "./todo-tool.ts";
+import { inheritedControlPermission, nativeToolPolicy } from "./tool-policy.ts";
 
 export default async function childProfile(pi: ExtensionAPI): Promise<void> {
+	nativeToolPolicy(inheritedControlPermission(process.env.PILOT_CONTROL_PERMISSION))(pi);
 	await installCredentialBrokerHooks();
 	for (const name of ["sandbox", "apply-patch", "web", "browser"]) {
 		const path = fileURLToPath(new URL(`../extensions/${name}/index.ts`, pathToFileURL(PILOT_CHILD_PROFILE_PATH)));

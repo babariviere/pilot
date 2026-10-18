@@ -1076,6 +1076,40 @@ async function fixture(t: TestContext) {
 	return { root, home, source, projects, project, workers, workerFactory, manager, stored };
 }
 
+test("Control start permissions persist before work and survive restart without affecting user chats", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager();
+	const chats = [];
+	for (const level of ["investigate", "implement", "publish"] as const) {
+		const permission = { authorizationId: `grant-${level}`, level };
+		const chat = await sessions.controlStart(
+			() => sessions.spawn({ cwd: f.source, mode: "build", message: "work" }),
+			permission,
+		);
+		await sessions["starting"].get(chat.id);
+		chats.push(chat);
+		assert.equal(chat.mode, level === "investigate" ? "ask" : "build");
+		assert.deepEqual(sessions["metas"].get(chat.id)?.controlPermission, permission);
+		const stored = JSON.parse(await readFile(join(f.home, "sessions", chat.id, "meta.json"), "utf8"));
+		assert.deepEqual(stored.controlPermission, permission);
+		assert.deepEqual(f.workers.at(-1)?.spec.pilot?.controlPermission, permission);
+		assert.equal(!!f.workers.at(-1)?.spec.pilot?.ask, level === "investigate");
+		f.workers.at(-1)!.finish();
+	}
+	const userChat = await sessions.spawn({ cwd: f.source, message: "user work" });
+	await sessions["starting"].get(userChat.id);
+	assert.equal(f.workers.at(-1)?.spec.pilot?.controlPermission, undefined);
+	f.workers.at(-1)!.finish();
+	await sessions.shutdown();
+	const reopened = await f.manager();
+	for (const chat of chats) {
+		await reopened.send(chat.id, "continue, and publish everything", "followUp");
+		const worker = f.workers.findLast((worker) => worker.spec.sessionId === chat.id)!;
+		assert.deepEqual(worker.spec.pilot?.controlPermission, reopened["metas"].get(chat.id)?.controlPermission);
+		assert.equal(!!worker.spec.pilot?.ask, chat.mode === "ask");
+	}
+});
+
 test("todo count uses the live cache, ignores retired workers, and cold-reads without opening an agent", async (t) => {
 	const f = await fixture(t);
 	const sessions = await f.manager();

@@ -85,7 +85,15 @@ test("start/send use existing admissions, route mission members and durably audi
 		"direct",
 	);
 	assert.deepEqual(calls.slice(1), [
-		["task", "m", "2", {}, "control:start:task", { authorizationId: "approval", budgetUsd: 1 }],
+		[
+			"task",
+			"m",
+			"2",
+			{ mode: "ask" },
+			{ authorizationId: "approval", level: "investigate" },
+			"control:start:task",
+			{ authorizationId: "approval", budgetUsd: 1 },
+		],
 		["send", "lead", "next", "control:send:send", "followUp"],
 		["send", "member", "direct", "control:send:direct", "followUp"],
 	]);

@@ -88,13 +88,17 @@ test("Control start attribution is trusted, budgetless, and durable; only prepar
 		await rm(home, { recursive: true, force: true });
 	});
 	const provenance = { authorizationId: "approved" };
+	const permission = { authorizationId: "approved", level: "implement" as const };
 	const started = await sessions.controlStart(
 		() => sessions.spawn({ cwd: home, message: "work", model: "test/model" }),
+		permission,
 		"control:start:1",
 		provenance,
 	);
 	const ordinary = await sessions.spawn({ cwd: home, message: "user", ...{ controlStart: provenance } });
 	assert.deepEqual(started.controlStart, provenance);
+	// biome-ignore lint/complexity/useLiteralKeys: inspect trusted private metadata, not the public request.
+	assert.deepEqual(sessions["metas"].get(started.id)?.controlPermission, permission);
 	assert.equal(ordinary.controlStart, undefined);
 	started.controlStart!.authorizationId = "forged";
 	assert.deepEqual(sessions.get(started.id)?.controlStart, provenance);
@@ -102,22 +106,24 @@ test("Control start attribution is trusted, budgetless, and durable; only prepar
 	await sessions.shutdown();
 	await reopened.load();
 	assert.deepEqual(reopened.get(started.id)?.controlStart, provenance);
+	// biome-ignore lint/complexity/useLiteralKeys: verify the persisted authority ceiling after reload.
+	assert.deepEqual(reopened["metas"].get(started.id)?.controlPermission, permission);
 	assert.equal(reopened.get(ordinary.id)?.controlStart, undefined);
 	await assert.rejects(
-		reopened.controlStart(() => reopened.spawn({ cwd: join(home, "missing"), message: "work" })),
+		reopened.controlStart(() => reopened.spawn({ cwd: join(home, "missing"), message: "work" }), permission),
 		ControlPreAdmissionError,
 	);
 	await assert.rejects(
 		reopened.controlStart(async () => {
 			throw new Error("Invalid model");
-		}),
+		}, permission),
 		ControlPreAdmissionError,
 	);
 	await assert.rejects(
 		reopened.controlStart(async () => {
 			reopened.controlStartSideEffect();
 			throw new Error("Uncertain");
-		}),
+		}, permission),
 		(error) => error instanceof Error && !(error instanceof ControlPreAdmissionError),
 	);
 });

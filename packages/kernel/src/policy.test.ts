@@ -11,6 +11,7 @@ import {
 	pilotPrompt,
 	withPilotPolicy,
 } from "./policy.ts";
+import { inheritedControlPermission } from "./tool-policy.ts";
 
 const mission: MissionContext = {
 	id: "m1",
@@ -21,6 +22,107 @@ const mission: MissionContext = {
 	tasks: [{ number: 2, title: "Auth endpoints", status: "in_progress" }],
 	decisions: ["IDs are opaque strings"],
 };
+
+test("authorization ceilings gate shell, jobs and nested publication at every level", async () => {
+	for (const level of ["investigate", "implement", "publish", "merge"] as const) {
+		const extension = withPilotPolicy({ name: "test" }, { controlPermission: { authorizationId: "grant", level } });
+		const before = (extension.hooks![0]!.handlers as Pick<ToolHooks, "beforeTool">).beforeTool;
+		const check = (name: string, args: Record<string, string>) =>
+			before(
+				{ type: "toolCall", id: "permission-test", name, arguments: args },
+				undefined as never,
+				undefined as never,
+			);
+		for (const command of [
+			"git push origin fix/example",
+			"git -C /repo push",
+			"git --no-pager -c color.ui=false push",
+			"jj git push --bookmark fix/example",
+			"jj --repository /repo git push",
+			"gh pr create --fill",
+			"gh pr edit 12 --body update",
+			"gh api repos/o/r/pulls -X POST",
+			"gh api graphql -f query='mutation { createPullRequest }'",
+		]) {
+			for (const [name, args] of [
+				["bash", { command }],
+				["jobs", { action: "start", command }],
+				["codemode", { code: `await tools.bash({ command: ${JSON.stringify(command)} });` }],
+				["codemode", { code: `await tools.jobs({ action: "start", command: ${JSON.stringify(command)} });` }],
+			] as const) {
+				assert.equal(
+					!!(await check(name, args))?.block,
+					level === "investigate" || level === "implement",
+					`${level}: ${name}: ${command}`,
+				);
+			}
+		}
+		for (const command of [
+			"gh pr merge 12 --squash",
+			"gh pr merge 12 --auto",
+			"gh api repos/o/r/pulls/12/merge -X PUT",
+			"gh api graphql -f query='mutation { mergePullRequest }'",
+		])
+			assert.ok((await check("bash", { command }))?.block, `${level}: ${command}`);
+		for (const command of [
+			"pnpm test",
+			"jj commit -m 'fix: local change'",
+			"git log --grep push",
+			"git --no-pager log --grep push",
+			"gh pr view 12",
+			"gh api repos/o/r/pulls/12",
+		])
+			assert.equal(!!(await check("bash", { command }))?.block, level === "investigate", `${level}: ${command}`);
+		assert.equal(
+			!!(await check("write", { path: "/repo/new.ts", content: "gh pr create" }))?.block,
+			level === "investigate",
+		);
+		assert.equal(
+			!!(await check("mcp__github__create_pull_request", { title: "Change" }))?.block,
+			level === "investigate" || level === "implement",
+		);
+		assert.equal(await check("read", { path: "gh pr create" }), undefined);
+		assert.equal(await check("artifact", { source: "git push" }), undefined);
+		assert.equal(
+			await check("codemode", {
+				code: 'await tools.artifact({ action: "create", source: "git push; gh pr create" });',
+			}),
+			undefined,
+		);
+		assert.equal(!!(await check("jobs", { action: "stop", command: "git push" }))?.block, level === "investigate");
+	}
+});
+
+test("local-only prompts override project and task delivery instructions", async () => {
+	for (const level of ["investigate", "implement"] as const) {
+		for (const requirePullRequest of [true, false]) {
+			const extension = withPilotPolicy(
+				{ name: "test" },
+				{
+					controlPermission: { authorizationId: "grant", level },
+					requirePullRequest,
+					workspace: { source: "/source", base: "main", jj: true },
+				},
+				() => false,
+				() => mission,
+			);
+			const prompt = await extension.sections![0]!.render(undefined as never, BACKGROUND_CONTEXT);
+			assert.match(prompt!, /permission/);
+			assert.doesNotMatch(prompt!, /gh pr create|jj git push|may commit and push|Open one pull request per task/);
+		}
+	}
+});
+
+test("children parse inherited authority fail-closed", () => {
+	assert.equal(inheritedControlPermission(undefined), undefined);
+	for (const level of ["investigate", "implement", "publish", "merge"] as const)
+		assert.deepEqual(inheritedControlPermission(JSON.stringify({ authorizationId: "grant", level })), {
+			authorizationId: "grant",
+			level,
+		});
+	for (const value of ["{", "null", "{}", '{"authorizationId":"grant","level":"all"}'])
+		assert.throws(() => inheritedControlPermission(value));
+});
 
 test("ticket prompt scopes bounded links as untrusted context and distinguishes explicit contributions", () => {
 	const tickets: MissionContext["tickets"] = [

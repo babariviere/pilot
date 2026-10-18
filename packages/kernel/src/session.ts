@@ -106,6 +106,7 @@ import {
 	validateTodoArgs,
 } from "./todos.ts";
 import { TOOL_ACTIVITY_FILE } from "./tool-activity.ts";
+import { nativeToolPolicy } from "./tool-policy.ts";
 import type { KernelUsage } from "./usage.ts";
 
 const context: Context = BACKGROUND_CONTEXT;
@@ -456,6 +457,7 @@ export class KernelSession {
 					publish: (activity) => hooks.onToolActivity?.(activity),
 				},
 				hostExtensions: [
+					nativeToolPolicy(pilot.controlPermission),
 					jobs.native,
 					...(provenance ? [provenance.native] : []),
 					...(refs ? [refs.native] : []),

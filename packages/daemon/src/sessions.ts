@@ -11,6 +11,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { ArtifactNotFound, ArtifactStore } from "@pilot/artifacts";
 import {
 	type AskContext,
+	type ControlPermission,
 	type EarlierEntriesRead,
 	formatFailure,
 	inputOrigin,
@@ -309,6 +310,8 @@ export interface SessionFactories {
 
 interface SessionMeta extends OutcomeMeta {
 	controlStart?: SessionSummary["controlStart"];
+	/** Persisted authority ceiling, independent of prompts, model and worker lifetime. */
+	controlPermission?: ControlPermission;
 	control?: boolean;
 	/** Runtime-enforced specialist profile. Omitted for ordinary chats. */
 	role?: "diagnostics";
@@ -1297,6 +1300,7 @@ export class SessionManager {
 	private controlProjectMemory?: ControlProjectMemory;
 	private watches?: WatchService;
 	private readonly controlStartOrigin = new AsyncLocalStorage<{
+		permission: ControlPermission;
 		requestId: string;
 		provenance?: SessionSummary["controlStart"];
 		sideEffectAttempted: boolean;
@@ -1304,10 +1308,12 @@ export class SessionManager {
 	/** Propagates only across the explicit start path, never unrelated concurrent user work. */
 	controlStart<T>(
 		work: () => Promise<T>,
+		permission: ControlPermission,
 		requestId = `control:start:${randomUUID()}`,
 		provenance?: SessionSummary["controlStart"],
 	): Promise<T> {
 		const origin = {
+			permission: { ...permission },
 			requestId,
 			...(provenance ? { provenance: { ...provenance } } : {}),
 			sideEffectAttempted: false,
@@ -3551,6 +3557,7 @@ export class SessionManager {
 						title: meta.title,
 						cwd: meta.cwd,
 						mode: meta.mode,
+						controlPermission: structuredClone(meta.controlPermission),
 						projectId: meta.projectId,
 						ask: structuredClone(meta.ask),
 						workspace: structuredClone(meta.workspace),
@@ -4199,7 +4206,11 @@ export class SessionManager {
 			throw new Error("Diagnostics specialists require a target-scoped read-only session");
 		if (request.role !== "diagnostics" && request.diagnosticTarget !== undefined)
 			throw new Error("diagnosticTarget requires role=diagnostics");
-		const mode = request.role === "diagnostics" ? "ask" : (request.mode ?? "build");
+		const controlPermission = this.controlStartOrigin.getStore()?.permission;
+		const mode =
+			request.role === "diagnostics" || controlPermission?.level === "investigate"
+				? "ask"
+				: (request.mode ?? "build");
 		let projectId = request.projectId;
 		let diagnosticTarget: SessionMeta | undefined;
 		let diagnosticReference: DiagnosticTargetReference | undefined;
@@ -4284,6 +4295,7 @@ export class SessionManager {
 				? { controlStart: { ...this.controlStartOrigin.getStore()!.provenance! } }
 				: {}),
 			id,
+			...(controlPermission ? { controlPermission: { ...controlPermission } } : {}),
 			...(request.role ? { role: request.role } : {}),
 			...(diagnosticTarget && diagnosticReference
 				? { diagnosticTargetId: diagnosticTarget.id, diagnosticTarget: diagnosticReference }
@@ -6334,6 +6346,7 @@ export class SessionManager {
 				agentDir: this.agentDir,
 				...(meta.workspace ? { trustDirectory: meta.workspace.source } : {}),
 				pilot: {
+					...(meta.controlPermission ? { controlPermission: meta.controlPermission } : {}),
 					...(meta.role ? { role: meta.role } : {}),
 					...(diagnosticTarget ? { diagnosticTarget } : {}),
 					...(meta.ask ? { ask: meta.ask } : {}),
