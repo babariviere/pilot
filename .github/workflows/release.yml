@@ -214,6 +214,7 @@ jobs:
         run: |
           fixture_home="$(mktemp -d "$RUNNER_TEMP/delegated-home.XXXXXX")"
           HOME="$fixture_home" CFFIXED_USER_HOME="$fixture_home" apps/macos/build/Pilot.app/Contents/MacOS/Pilot --snapshot "$RUNNER_TEMP/delegated-screenshots" --delegated-tasks-only
+          HOME="$fixture_home" CFFIXED_USER_HOME="$fixture_home" apps/macos/build/Pilot.app/Contents/MacOS/Pilot --snapshot "$RUNNER_TEMP/delegated-screenshots" --control-sidebar-only
       - name: Upload delegated task screenshots
         if: ${{ !cancelled() && steps.pr-fixtures.outcome == 'success' }}
         uses: actions/upload-artifact@v4

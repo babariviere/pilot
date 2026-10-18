@@ -18,8 +18,8 @@ enum SidebarSelection: Equatable {
     /// Key for `AppModel.scopeSelections`: the project id, or "" for every project.
     static func scopeKey(_ scope: String?) -> String { scope ?? "" }
 
-    /// The saved selection when it still exists and belongs to `scope`. Otherwise the scope's first row: the
-    /// focused project's Overview, or Home for every project.
+    /// The saved selection when it still exists and belongs to `scope` (the control chat belongs to every scope).
+    /// Otherwise the scope's first row: the focused project's Overview, or Home for every project.
     static func restoring(_ saved: SidebarSelection?, in scope: String?, sessions: [SessionSummary],
                           missions: [Mission], projectIds: Set<String>) -> SidebarSelection {
         let fallback: SidebarSelection = scope.map { .project($0) } ?? .home
@@ -29,7 +29,7 @@ enum SidebarSelection: Equatable {
             return saved
         case let .session(id):
             guard let session = sessions.first(where: { $0.id == id }),
-                  scope == nil || session.projectId == scope else { return fallback }
+                  scope == nil || session.projectId == scope || session.isControl else { return fallback }
             return saved
         case let .mission(id):
             guard let mission = missions.first(where: { $0.id == id }),

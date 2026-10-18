@@ -2,10 +2,10 @@ import AppKit
 import PilotCore
 import SwiftUI
 
-/// The control chat's own row first (All projects only), then missions, then chats by urgency (Pinned, Needs you,
-/// Ready to merge, Working, Recent), each in PR status and stable activity order. The scope switcher at the top lists
-/// every project (the default) or focuses on one, which then shows only that project's missions and chats, without
-/// project names; the control chat belongs to no project, so it never shows there. Project folders are headings in the
+/// Missions, then chats by urgency (Pinned, Needs you, Ready to merge, Working, Recent), each in PR status and stable
+/// activity order. The scope switcher at the top lists every project (the default) or focuses on one, which then shows
+/// only that project's missions and chats, without project names. The control chat sits in a fixed slot under the
+/// switcher in every scope (`SidebarControlSlot`), never in the scrolling list. Project folders are headings in the
 /// scope switcher and on Home, never a sidebar grouping. Search appears on ⌘F, and the footer only when the
 /// connection to pilotd needs attention. Each chat's state is its dithered corner (`DitherCorner`).
 struct SessionSidebar: View {
@@ -43,7 +43,6 @@ struct SessionSidebar: View {
                               recentListId: focused.id, hasArchivedMatches: !archived.isEmpty)
                 archivedMatches(archived)
             } else {
-                controlSection(visible)
                 missionsSection(visible: visible, searching: searching)
                 let names = Dictionary(client.projects.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
                 urgencyGroups(visible, searching: searching, recentListId: Self.recentListId,
@@ -80,6 +79,7 @@ struct SessionSidebar: View {
             let archivedCount = focused.map { project in
                 client.archivedSessions.filter { $0.projectId == project.id }.count
             } ?? client.archivedSessions.count
+            let controls = model.sidebarControlRows
             VStack(spacing: 6) {
                 SidebarHeader(model: model, client: client, counts: counts, homeSelected: homeSelected,
                               inboxSelected: inboxSelected, overviewSelected: overviewSelected(focused),
@@ -87,6 +87,9 @@ struct SessionSidebar: View {
                               needsYouHelp: SidebarScopeCounts.needsYouReasons(total: needsYou,
                                                                                reasons: needsYouReasons, counts: counts),
                               archivedCount: archivedCount, folderEditor: folderEditor)
+                if !controls.isEmpty {
+                    SidebarControlSlot(rows: controls, model: model)
+                }
                 if showsSearch {
                     SearchField(text: $model.sidebarQuery, focused: $searchFocused) { model.hideSidebarSearch() }
                         .transition(.opacity.combined(with: .move(edge: .top)))
@@ -95,6 +98,8 @@ struct SessionSidebar: View {
             .padding(.horizontal, 10)
             .padding(.top, 8)
             .padding(.bottom, 6)
+            // The list scrolls beneath this inset; keep its rows from showing through the fixed rows.
+            .background(Theme.sidebar)
             .animation(Theme.Motion.quick, value: showsSearch)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -123,7 +128,14 @@ struct SessionSidebar: View {
                 model.hideSidebarSearch()
             }
         }
-        .onAppear { model.validateSidebarScope() }
+        .onAppear {
+            model.validateSidebarScope()
+            model.keyboard.sidebarStickyRows = KeyboardFocus.StickyRows(
+                keys: { [model] in model.sidebarControlRows.map(\.key) },
+                current: { [model] in model.selectedSessionId },
+                select: { [model] key in model.navigate(.session, id: key) })
+        }
+        .onDisappear { model.keyboard.sidebarStickyRows = nil }
         .onChange(of: known) { model.validateSidebarScope() }
         .sheet(isPresented: $folderEditor.presented) {
             ProjectFolderEditor(editor: folderEditor) {
@@ -144,18 +156,7 @@ struct SessionSidebar: View {
             (!hosted.value.isArchived || !query.isEmpty) && (query.isEmpty || hosted.value.title.lowercased().contains(query))
                 && (model.focusedProjectRef == nil || (hosted.ref.host == model.focusedProjectRef?.host && hosted.value.projectId == model.focusedProjectRef?.localId))
         }.sorted { $0.value.listActivityAt > $1.value.listActivityAt }
-        // Each host's control chat, the local one first, in its own section without a header.
-        let controls = values.filter(\.value.isControl)
-            .sorted { ($0.ref.host == model.localHost ? 0 : 1) < ($1.ref.host == model.localHost ? 0 : 1) }
-        if !controls.isEmpty {
-            Section {
-                ForEach(controls) { item in
-                    SessionRow(session: item.value, reference: item.ref)
-                        .environment(\.hostViewContext, HostViewContext(host: item.ref.host, hosts: hosts))
-                        .tag(item.ref.host == model.localHost ? item.ref.localId : item.ref.storageKey)
-                }
-            }
-        }
+        // Each host's control chat lives in the fixed slot above the list (`SidebarControlSlot`).
         let missions = hosts.missions.filter {
             $0.value.status == .active && (query.isEmpty || $0.value.title.lowercased().contains(query))
                 && (model.focusedProjectRef == nil || ($0.ref.host == model.focusedProjectRef?.host && $0.value.projectId == model.focusedProjectRef?.localId))
@@ -224,18 +225,6 @@ struct SessionSidebar: View {
     private var inboxSelected: Bool {
         model.showingInbox && model.selectedSessionId == nil && model.selectedMissionId == nil
             && model.selectedProjectId == nil
-    }
-
-    /// The control chat's own row at the top of All projects, without a header: like Home, it is a place rather
-    /// than one chat among others. It is in no urgency group; its corner still shows its state.
-    @ViewBuilder
-    private func controlSection(_ sessions: [SessionSummary]) -> some View {
-        if let control = sessions.first(where: \.isControl) {
-            Section {
-                SessionRow(session: control)
-                    .tag(control.id)
-            }
-        }
     }
 
     /// Chats by urgency, pinned chats first in their own group. Mission chats are listed like any chat, their

@@ -1192,8 +1192,9 @@ final class AppModel: ObservableObject {
     func reveal(session id: String) {
         beginNavigation()
         defer { endNavigation() }
-        // Notifications stay global: a chat outside the focused project widens the sidebar to all projects.
-        if let scope = sidebarScope, let session = client.session(id), session.projectId != scope {
+        // Notifications stay global: a chat outside the focused project widens the sidebar to all projects. The
+        // control chat shows in every scope, so it keeps the scope.
+        if let scope = sidebarScope, let session = client.session(id), session.projectId != scope, !session.isControl {
             focus(on: nil)
         }
         selectedSessionId = id
