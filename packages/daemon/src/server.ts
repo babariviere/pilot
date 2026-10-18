@@ -319,6 +319,7 @@ export function createDaemonServer(
 	githubSetup?: GitHubSetupService,
 	githubImport?: GitHubImportService,
 	control?: { hosts: ControlHosts; executor: ControlExecutor },
+	environment?: import("./environment.ts").EnvironmentService,
 ): Server & { runtimeResources: RuntimeResources } {
 	sessions.setWorkspaceProcessGuard((id) => terminals.isRunning(id));
 	const machine = new MachineInformationReader(_config.home, hello?.daemonVersion ?? "unknown");
@@ -1076,6 +1077,12 @@ export function createDaemonServer(
 			return json(res, 200, await projects.github(parts[2]!));
 		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "origin" && req.method === "GET")
 			return json(res, 200, await projects.origin(parts[2]!));
+		if (parts[1] === "projects" && parts[3] === "environment") {
+			// Off unless this host advertises DaemonCapabilities.environmentSetup.
+			if (!environment) return json(res, 404, { error: "environment_unavailable" });
+			if (parts.length === 5 && parts[4] === "discovery" && req.method === "GET")
+				return json(res, 200, await environment.discover(parts[2]!));
+		}
 		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "dashboard" && req.method === "GET") {
 			const rawLimit = url.searchParams.get("limit");
 			if (rawLimit !== null && (!/^\d+$/.test(rawLimit) || Number(rawLimit) < 1 || Number(rawLimit) > 100))

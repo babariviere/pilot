@@ -317,6 +317,152 @@ public struct ProjectEnvironmentUpdateRequest: Encodable, Equatable, Sendable {
     }
 }
 
+/// Where a finding was read. excerpt is at most 120 characters of the cited line.
+public struct EnvironmentFindingSource: Codable, Equatable, Hashable, Sendable {
+    public let path: String
+    public let line: Int
+    public let excerpt: String
+    public let sha256: String
+
+    public init(path: String, line: Int, excerpt: String, sha256: String) {
+        self.path = path
+        self.line = line
+        self.excerpt = excerpt
+        self.sha256 = sha256
+    }
+
+    /// "go.mod:5".
+    public var citation: String { "\(path):\(line)" }
+}
+
+public enum EnvironmentFindingKind: String, Codable, Hashable, Sendable {
+    case exact, minimum, range, major, hint, unknown
+}
+
+/// One declaration read from a repository file. Discovery never executes anything.
+public struct EnvironmentFinding: Codable, Equatable, Hashable, Sendable {
+    public let subject: String
+    public let kind: EnvironmentFindingKind
+    public let value: String?
+    public let source: EnvironmentFindingSource
+    public let note: String?
+
+    public init(
+        subject: String, kind: EnvironmentFindingKind, value: String? = nil, source: EnvironmentFindingSource,
+        note: String? = nil
+    ) {
+        self.subject = subject
+        self.kind = kind
+        self.value = value
+        self.source = source
+        self.note = note
+    }
+}
+
+public enum EnvironmentSubjectStatus: String, Codable, Hashable, Sendable {
+    case proposed, conflict, needsVersion = "needs_version", hintOnly = "hint_only"
+}
+
+public struct EnvironmentSubject: Codable, Equatable, Hashable, Sendable, Identifiable {
+    public enum Category: String, Codable, Hashable, Sendable { case tool, service }
+    public struct Citation: Codable, Equatable, Hashable, Sendable {
+        public let path: String
+        public let line: Int
+        public init(path: String, line: Int) {
+            self.path = path
+            self.line = line
+        }
+    }
+
+    public let subject: String
+    public let category: Category
+    public let status: EnvironmentSubjectStatus
+    public let value: String?
+    public let from: Citation?
+    public let findings: [EnvironmentFinding]
+    public let notes: [String]
+    public let goTool: Bool?
+
+    public var id: String { subject }
+
+    public init(
+        subject: String, category: Category, status: EnvironmentSubjectStatus, value: String? = nil,
+        from: Citation? = nil, findings: [EnvironmentFinding] = [], notes: [String] = [], goTool: Bool? = nil
+    ) {
+        self.subject = subject
+        self.category = category
+        self.status = status
+        self.value = value
+        self.from = from
+        self.findings = findings
+        self.notes = notes
+        self.goTool = goTool
+    }
+}
+
+/// A setup step or post-run check proposed from a Makefile or justfile target. Never run by discovery.
+public struct EnvironmentStepCandidate: Codable, Equatable, Hashable, Sendable, Identifiable {
+    public enum Purpose: String, Codable, Hashable, Sendable { case setup, check }
+    public struct Run: Codable, Equatable, Hashable, Sendable {
+        public let argv: [String]
+        public init(argv: [String]) { self.argv = argv }
+    }
+
+    public let id: String
+    public let title: String
+    public let run: Run
+    public let purpose: Purpose
+    public let proposed: Bool
+    public let source: EnvironmentFindingSource
+
+    public init(id: String, title: String, run: Run, purpose: Purpose, proposed: Bool, source: EnvironmentFindingSource) {
+        self.id = id
+        self.title = title
+        self.run = run
+        self.purpose = purpose
+        self.proposed = proposed
+        self.source = source
+    }
+}
+
+/// GET /api/projects/:id/environment/discovery. Read-only and bounded on the project's host.
+public struct EnvironmentDiscovery: Codable, Equatable, Hashable, Sendable {
+    public struct Skipped: Codable, Equatable, Hashable, Sendable {
+        public let path: String
+        /// too_large, not_regular, limit or unreadable.
+        public let reason: String
+        public init(path: String, reason: String) {
+            self.path = path
+            self.reason = reason
+        }
+    }
+
+    public let projectId: String
+    public let computedAt: Double
+    public let subjects: [EnvironmentSubject]
+    public let steps: [EnvironmentStepCandidate]
+    public let sources: [EnvironmentSourcePin]
+    public let skipped: [Skipped]
+    public let truncated: Bool
+    /// Root .env files Git ignores, by name only: suggestions for copyFiles.
+    public let localFiles: [String]?
+
+    public init(
+        projectId: String, computedAt: Double, subjects: [EnvironmentSubject] = [],
+        steps: [EnvironmentStepCandidate] = [], sources: [EnvironmentSourcePin] = [], skipped: [Skipped] = [],
+        truncated: Bool = false, localFiles: [String]? = nil
+    ) {
+        self.projectId = projectId
+        self.computedAt = computedAt
+        self.subjects = subjects
+        self.steps = steps
+        self.sources = sources
+        self.skipped = skipped
+        self.truncated = truncated
+        self.localFiles = localFiles
+    }
+}
+
 /// The daemon that computed a plan or raised an error. Clients add the host name they know.
 public struct EnvironmentHostRef: Codable, Equatable, Hashable, Sendable {
     public let daemonId: String

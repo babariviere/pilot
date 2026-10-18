@@ -15,6 +15,7 @@ import { controlSessionBackend } from "./control-executor-sessions.ts";
 import { ControlHostStore } from "./control-host-store.ts";
 import { ControlHosts } from "./control-hosts.ts";
 import { CredentialBroker } from "./credential-broker.ts";
+import { EnvironmentService } from "./environment.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import { daemonPerformance, EventLoopWatchdog } from "./event-loop-watchdog.ts";
 import { GitHubImportService } from "./github-import.ts";
@@ -405,6 +406,8 @@ maintenance?.onOpen(() => {
 	missionService.compaction.start();
 	schedules.start();
 });
+// Environment setup stays off until its user-facing parts ship (hello.capabilities.environmentSetup).
+const environment = hello.capabilities.environmentSetup ? new EnvironmentService(projects) : undefined;
 const server = createDaemonServer(
 	config,
 	sessions,
@@ -436,6 +439,7 @@ const server = createDaemonServer(
 			controlSessionBackend(sessions, projects, (id) => missionStore.get(id)?.coordinatorSessionId),
 		),
 	},
+	environment,
 );
 server.listen(config.port, config.host, () => {
 	console.log(`pilotd listening on http://${config.host}:${config.port} (data: ${config.home})`);
@@ -483,6 +487,7 @@ async function stop(): Promise<void> {
 	await controlHostStore.close();
 	await power?.stop();
 	await untrackedStats.close();
+	await environment?.close();
 	await nodeTelemetry().shutdown();
 	missionStore.close();
 	process.exit(0);
