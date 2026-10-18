@@ -114,8 +114,9 @@ export class CriticalReviewVault {
 		this.queue = next;
 		return next;
 	}
-	async capture(input: ReviewCapture): Promise<CriticalReviewEvidence> {
+	async capture(input: ReviewCapture, signal?: AbortSignal): Promise<CriticalReviewEvidence> {
 		return this.serial(async () => {
+			signal?.throwIfAborted();
 			if (
 				![input.id, input.projectId, input.hostId, ...input.sourceIds].every(
 					(id) => typeof id === "string" && opaqueId.test(id),
@@ -138,6 +139,7 @@ export class CriticalReviewVault {
 			let published = false;
 			try {
 				for (const selection of input.selections) {
+					signal?.throwIfAborted();
 					if (
 						!opaqueId.test(selection.selectionId) ||
 						!opaqueId.test(selection.sourceId) ||
@@ -248,6 +250,7 @@ export class CriticalReviewVault {
 				} finally {
 					await stagedDirectory.close();
 				}
+				signal?.throwIfAborted();
 				await rename(staging, join(this.root, input.id));
 				published = true;
 				const directory = await open(this.root, "r");
@@ -256,6 +259,8 @@ export class CriticalReviewVault {
 				} finally {
 					await directory.close();
 				}
+				// Sealing is the cancellation linearization point. Once put starts, its durable result wins.
+				signal?.throwIfAborted();
 				await this.store.put(manifest);
 				return manifest;
 			} catch (error) {

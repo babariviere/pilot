@@ -20,7 +20,8 @@ See [screenshot notes](docs/screenshots/README.md) to regenerate them.*
 ## What you can do
 
 Critical code review is not available yet. The disabled [review foundation](docs/critical-review-foundation.md)
-has separate storage and transport contracts; it does not change chat-result read tracking.
+has separate storage, transport contracts and a synthetic-only committed-history capture seam;
+it does not change chat-result read tracking or enable review entry points.
 
 - **Run several agents at once.** Follow progress across projects, send follow-ups, queue messages or stop
   a run. Every session has its own worker process.
