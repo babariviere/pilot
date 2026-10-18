@@ -4,8 +4,6 @@ import Foundation
 /// Cached daemon state, no worker starts. Text is untrusted. Lists and encoded size are bounded;
 /// totals precede clipping. Next always contains global Control instructions, including scoped requests.
 public struct ControlDashboardResponse: Codable, Equatable, Sendable {
-    public let sharedTasks: [ControlDashboardSharedTask]?
-    public let replicaMissions: [ControlDashboardReplicaMission]?
     public let hosts: [ControlHostObservation]?
     public struct Project: Codable, Equatable, Sendable {
         public let id: String
@@ -34,8 +32,6 @@ public struct ControlDashboardResponse: Codable, Equatable, Sendable {
         public let followUpsTotal: Int?
     }
     public struct Totals: Codable, Equatable, Sendable {
-        public let sharedTasks: Int?
-        public let replicaMissions: Int?
         public let projects: Int
         public let chats: Int
         public let missions: Int
@@ -169,6 +165,27 @@ public struct ControlDashboardReplicaMission: Codable, Identifiable, Equatable, 
     public let replicaSyncedAt: Double?
     /// Unknown for legacy or missing replicas. Age does not imply execution failure.
     public let replicaAgeMs: Double?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, bindingId, projectId, missionId, missionHome, title, status
+        case complete, sequence, consistency, replicaSyncedAt, replicaAgeMs
+    }
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(bindingId, forKey: .bindingId)
+        try values.encode(projectId, forKey: .projectId)
+        try values.encode(missionId, forKey: .missionId)
+        try values.encode(missionHome, forKey: .missionHome)
+        try values.encodeIfPresent(title, forKey: .title)
+        try values.encodeIfPresent(status, forKey: .status)
+        try values.encode(complete, forKey: .complete)
+        try values.encode(sequence, forKey: .sequence)
+        try values.encode(consistency, forKey: .consistency)
+        try values.encodeIfPresent(replicaSyncedAt, forKey: .replicaSyncedAt)
+        // The shared wire contract requires an explicit null for unknown replica age.
+        try values.encode(replicaAgeMs, forKey: .replicaAgeMs)
+    }
 }
 
 public struct ControlDashboardSharedTask: Codable, Identifiable, Equatable, Sendable {

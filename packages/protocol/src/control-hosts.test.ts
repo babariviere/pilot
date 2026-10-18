@@ -115,6 +115,7 @@ interface Fixtures {
 	invalidations: C.ControlHostInvalidation[];
 	syncStates: C.ControlHostSyncState[];
 	sharedTasks: C.ControlDashboardSharedTask[];
+	proposalStates: C.ControlDashboardSharedTask[];
 	replicaMissions: C.ControlDashboardReplicaMission[];
 	hostObservations: C.ControlHostObservation[];
 	dashboardProjection: C.ControlDashboardResponse;
@@ -373,9 +374,15 @@ test("remote journal and frozen status pages round trip without losing source, c
 	const pages = roundTrip(fixture.statusPages);
 	assert.equal(pages[0].snapshot.snapshotId, pages[1].snapshot.snapshotId);
 	assert.equal(pages[0].snapshot.capturedAt, pages[1].snapshot.capturedAt);
-	assert.equal(pages[0].snapshot.missionTasksTotal, 2);
-	assert.equal(pages[0].snapshot.missionTasks[0].grantState, "accepted");
-	assert.equal(pages[1].snapshot.missionTasks[0].consistency, "provisional");
+	assert.equal(pages[0].snapshot.dashboard.totals.sharedTasks, 2);
+	assert.equal(pages[0].snapshot.dashboard.sharedTasks[0].grantState, "accepted");
+	assert.equal(pages[1].snapshot.dashboard.sharedTasks[0].consistency, "provisional");
+	for (const { snapshot } of pages) {
+		assert.equal("missionTasks" in snapshot, false);
+		assert.equal("missionTasksTotal" in snapshot, false);
+		assert.equal(snapshot.dashboard.totals.replicaMissions, 0);
+		assert.deepEqual(snapshot.dashboard.replicaMissions, []);
+	}
 	assert.equal(pages[1].next, undefined);
 });
 
@@ -436,7 +443,11 @@ test("audit contract preserves approval scope, durable cursors, task provenance,
 	assert.equal(f.sharedTasks[0].id, f.sharedTasks[2].id);
 	assert.equal(f.sharedTasks[3].taskId, undefined);
 	assert.equal(f.sharedTasks[3].taskNumber, undefined);
-	assert.equal(f.sharedTasks[3].proposalOrigin?.host.daemonId, "executor-daemon");
+	assert.equal(f.sharedTasks[3].proposalState, "conflict");
+	assert.deepEqual(
+		f.proposalStates.map((row) => row.proposalState),
+		["pending", "conflict", "rejected"],
+	);
 	assert.equal(f.replicaMissions[1].replicaAgeMs, null);
 	assert.deepEqual(
 		f.hostObservations.map((h) => h.availability),
@@ -449,7 +460,7 @@ test("audit contract preserves approval scope, durable cursors, task provenance,
 	assert.equal(f.errors[0].syncState?.reconciliationRequired, true);
 	assert.equal(f.dashboardProjection.sharedTasks?.length, 2);
 	assert.notEqual(f.sharedTasks[0].bindingId, f.sharedTasks[2].bindingId);
-	assert.equal(f.sharedTasks[2].grantBindingId, f.sharedTasks[0].grantBindingId);
+	assert.equal(f.sharedTasks[2].delegationId, f.sharedTasks[0].delegationId);
 	assert.deepEqual(
 		f.lifecycles[0].operations.map((o) => o.delivery),
 		["queued", "unknown", "pending", "accepted", "rejected"],

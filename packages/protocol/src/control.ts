@@ -233,9 +233,7 @@ export interface ControlAuthorizationNeeded {
 	createdAt: number;
 }
 export interface ControlDashboardResponse {
-	/** Additive until the host-aware status producer is enabled. */
-	sharedTasks?: ControlDashboardSharedTask[];
-	replicaMissions?: ControlDashboardReplicaMission[];
+	/** Host-aware transport metadata, independent of task outcome and replica freshness. */
 	hosts?: ControlHostObservation[];
 	untrusted: true;
 	source: "daemon-memory";
@@ -572,8 +570,6 @@ export interface ControlRemoteEventAcknowledgment {
 	/** Omitted only for through=0 on a fresh empty stream. */
 	eventId?: string;
 }
-/** Projection only; never an executable allocation, ownership transfer or completion proof. */
-export type ControlRemoteMissionTask = ControlDashboardSharedTask;
 /** A bounded captured inventory. Across pages the identity, capture time and totals stay fixed. */
 export interface ControlRemoteStatusSnapshot {
 	sourceHost: OperationHost;
@@ -581,9 +577,8 @@ export interface ControlRemoteStatusSnapshot {
 	/** Durable per-binding capture counter, not mission intent revision or wall-clock order. */
 	revision: number;
 	capturedAt: number;
+	/** Task/replica rows and totals live only inside this capture's dashboard. */
 	dashboard: ControlDashboardResponse;
-	missionTasks: ControlRemoteMissionTask[];
-	missionTasksTotal: number;
 	truncated: boolean;
 }
 export interface ControlRemoteStatusPage {
@@ -740,67 +735,6 @@ export interface ControlHostObservation {
 	capturedAt?: number;
 	importedAt?: number;
 	snapshotAgeMs: number | null;
-}
-export interface ControlTaskConflict {
-	proposalId?: string;
-	operationId?: string;
-	origin?: import("./shared-context.ts").SharedSessionRef;
-	state: "pending" | "conflict" | "rejected";
-	reason?: string;
-	evidenceId?: string;
-}
-/** Thin display projection from SharedContextSummary/DelegationGrant, never an execution grant. */
-export interface ControlDashboardSharedTask {
-	id: string;
-	bindingId: string;
-	bindingGeneration: number;
-	projectId: string;
-	missionId: string;
-	missionHome: OperationHost;
-	observedOn: OperationHost;
-	source: "mission-home" | "execution-fact" | "replica" | "proposal";
-	consistency: "committed" | "provisional";
-	taskId?: string;
-	taskNumber?: number;
-	title?: string;
-	status?: import("./index.ts").MissionTaskStatus;
-	definitionRevision?: number;
-	proposalId?: string;
-	proposalState?: "pending" | "conflict" | "rejected";
-	proposalOrigin?: import("./shared-context.ts").SharedSessionRef;
-	conflicts?: ControlTaskConflict[];
-	delegationId?: import("./shared-context.ts").DelegationGrant["delegationId"];
-	/** The grant binding can differ from the observing replica's binding above. */
-	grantBindingId?: import("./shared-context.ts").DelegationGrant["bindingId"];
-	grantBindingGeneration?: import("./shared-context.ts").DelegationGrant["bindingGeneration"];
-	executionHost?: OperationHost;
-	executionEpoch?: import("./shared-context.ts").DelegationGrant["executionEpoch"];
-	grantState?: import("./shared-context.ts").DelegationGrant["state"];
-	running?: boolean;
-	replicaSyncedAt?: number;
-	replicaAgeMs?: number | null;
-	snapshotCapturedAt?: number;
-	availability: ControlHostAvailability;
-}
-export interface ControlDashboardReplicaMission {
-	id: string;
-	bindingId: string;
-	bindingGeneration: number;
-	projectId: string;
-	missionId: string;
-	missionHome: OperationHost;
-	observedOn: OperationHost;
-	title?: string;
-	status?: import("./index.ts").MissionStatus;
-	complete: boolean;
-	sequence: number;
-	consistency: "committed";
-	replicaSyncedAt?: number;
-	replicaAgeMs: number | null;
-	snapshotCapturedAt?: number;
-	pendingCount: number;
-	conflictCount: number;
-	availability: ControlHostAvailability;
 }
 export interface ControlArchiveInfo {
 	source: import("./shared-context.ts").SharedSessionRef;
