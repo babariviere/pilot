@@ -173,6 +173,13 @@ Repository-wide lint still reports pre-existing assignment-expression errors in 
 
 ## Provider error recovery
 
+`shell-deadline.test.ts` uses isolated real shell process groups plus fake-clock deadline boundaries.
+It covers a nonterminating process and child, explicit cancellation, silent valid work with an extended
+deadline, quick failure, process cleanup, elapsed notices without invented progress, and timer/listener
+release. `model.integration.test.ts` drives both direct and nested codemode shell timeouts through the
+real Harness/native adapter with faux models, then reopens only those synthetic sessions to assert no
+retry/replay and admit subsequent work. No diagnosed chat is opened or changed.
+
 `control-preparation.test.ts` injects a history-summarization boundary failure using an isolated faux provider.
 It checks the correlated content-free event and explicit failed outcome, unchanged retained entries, zero action
 dispatches and no automatic retry. The success case records `prepared`, not task success. `control-chat.test.ts`

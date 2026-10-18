@@ -23,7 +23,7 @@ import {
 	ModelRuntime,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { ConversationBusy, Harness, InboxDoc, LiveDoc } from "@earendil-works/pi-durable";
+import { ConversationBusy, Harness, InboxDoc, type JsonObject, LiveDoc } from "@earendil-works/pi-durable";
 import type { SessionCompletion, SessionJob } from "@pilot/protocol";
 import { userText } from "./attempts.ts";
 import { MAX_FAILURE_CHARS } from "./failure.ts";
@@ -31,6 +31,7 @@ import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import type { PerformanceRecord } from "./performance.ts";
 import { KernelSession } from "./session.ts";
 import { readSessionSnapshot } from "./snapshot.ts";
+import { TOOL_ACTIVITY_FILE } from "./tool-activity.ts";
 import type { KernelUsage } from "./usage.ts";
 
 const context = BACKGROUND_CONTEXT;
@@ -575,6 +576,68 @@ test("bash nonzero exits retain command, output and their structured contract wi
 	assert.match(JSON.stringify(result.details), /"exit_code":7/);
 	assert.equal(session.completion?.outcome, "done");
 });
+
+for (const nested of [false, true])
+	test(`shell deadline through ${nested ? "codemode" : "direct calls"} records timeout once without replay on reopen`, {
+		timeout: 15_000,
+	}, async (t) => {
+		const f = await fixture(t, nested ? [createCodemodeExtension({ mode: "on" })] : []);
+		const session = await f.open();
+		const adapter = f.adapters[0]!;
+		adapter.setToolActive(nested ? "codemode" : "bash", true);
+		adapter.setToolActive("bash", true);
+		assert.match(JSON.stringify(adapter.session.getToolDefinition("bash")!.parameters), /default 120/);
+		// Accelerate only the display notice, keeping real process execution and deadlines.
+		const schedule = globalThis.setTimeout;
+		t.mock.method(globalThis, "setTimeout", (...parameters: Parameters<typeof setTimeout>) => {
+			const [callback, ms, ...args] = parameters;
+			return schedule(callback, ms === 30_000 ? 50 : ms, ...args);
+		});
+		const status = deferred();
+		await session.watch("shell-status", (events) => {
+			if (JSON.stringify(events).includes("Command still running")) status.resolve();
+		});
+		const command = "printf once >> executions; printf began; sleep 60";
+		const args: JsonObject = nested
+			? {
+					code: `try { await tools.bash(${JSON.stringify({ command, timeout: 1 })}); } catch (error) { text(String(error)); }`,
+				}
+			: { command, timeout: 1 };
+		f.a.setResponses([
+			fauxAssistantMessage(fauxToolCall(nested ? "codemode" : "bash", args), { stopReason: "toolUse" }),
+			fauxAssistantMessage("Inspect partial output, do not retry."),
+		]);
+		await session.submit("deadline", "Run the isolated deadline fixture", "followUp");
+		await status.promise;
+		assert.equal(session.working, true, "elapsed status reaches the client before terminal completion");
+		await session.conversation.waitForIdle(context);
+		await f.completed;
+		const view = await session.conversation.context(context);
+		assert.match(JSON.stringify(view.messages), /Command timed out after 1 seconds/);
+		assert.match(JSON.stringify(view.messages), /began/);
+		assert.equal(await readFile(join(f.spec.cwd, "executions"), "utf8"), "once");
+		await session.close();
+		const records = (await readFile(join(f.spec.storageDir, TOOL_ACTIVITY_FILE), "utf8"))
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line));
+		const shell = records.filter((record) => record.kind === "finished" && record.category === "shell");
+		assert.equal(shell.length, 1);
+		assert.equal(shell[0].outcome, "timeout");
+		assert.equal(shell[0].nested, nested);
+		const reopened = await f.open();
+		await reopened.conversation.waitForIdle(context);
+		assert.equal(await readFile(join(f.spec.cwd, "executions"), "utf8"), "once");
+		assert.equal(f.a.state.callCount, 2, "reopen does not replay the command or automatically request another turn");
+		f.adapters.at(-1)!.setToolActive("bash", true);
+		f.a.setResponses([
+			fauxAssistantMessage(fauxToolCall("bash", { command: "printf subsequent" }), { stopReason: "toolUse" }),
+			fauxAssistantMessage("Subsequent work completed."),
+		]);
+		await reopened.submit("subsequent", "Run separate subsequent work", "followUp");
+		await reopened.conversation.waitForIdle(context);
+		assert.match(JSON.stringify((await reopened.conversation.context(context)).messages), /subsequent/);
+	});
 
 test("direct and nested tool exceptions keep step and command without turning a recovered run into failure", async (t) => {
 	const f = await fixture(t, [

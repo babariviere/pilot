@@ -428,6 +428,13 @@ Finish or stop background jobs and close live terminals before changing the mode
 | Purpose | Understand code, discuss options, plan | Implement, test and deliver changes |
 | Code source | Current checkout or a pinned origin-branch snapshot | Project workspace setting, with a per-chat override |
 | Tools | Pilot's read/search tools, bundled web and session-local artifacts | Pi tools, bundled capabilities, compatible extensions, MCP and shell tools |
+
+Built-in shell tool calls have a 120-second execution deadline. Set `timeout` (seconds) explicitly
+for intentionally longer commands, or use session-owned `jobs` for long-running work. A command
+still running after 30 seconds reports elapsed time and its deadline; silence alone never cancels it.
+Stop and deadlines use the SDK's process-group cleanup, and deadline expiry is recorded as `timeout`,
+separately from an ordinary nonzero exit. Pilot does not automatically retry or replay a failed shell
+call. These limits apply to the built-in shell tools, not custom extension shell implementations or jobs.
 | Repository writes | No | Yes |
 | Diff inspector and terminal | No | Yes |
 
