@@ -367,6 +367,48 @@ final class HostClients: ObservableObject {
         onOperationDeliveryChanged?(operation, delivery)
     }
 
+    /// A user Check reads only this immutable intent. Keep one connection fence for the whole
+    /// bounded check, including waits. Pending/unknown never authorize a POST or imply failure.
+    func checkOperation(_ operation: DurableOperation, attempts: Int = 3,
+                        delay: Duration = .milliseconds(500)) async throws -> OperationDelivery {
+        guard (1...3).contains(attempts), try await operations.contains(operation) else {
+            throw HostRoutingError.invalidReference
+        }
+        let client = try endpoint(operation.destination), fence = try token(for: operation.destination)
+        for attempt in 0..<attempts {
+            try Task.checkCancellation()
+            try validate(fence)
+            if case let .receipt(receipt)? = operationDeliveries[operation.operationId], receipt.state != .pending {
+                return .receipt(receipt)
+            }
+            do {
+                let delivery = try await client.operation(operation, lookup: true)
+                try validate(fence)
+                guard try await operations.contains(operation) else { throw HostRoutingError.invalidReference }
+                try validate(fence)
+                recordDelivery(delivery, operation: operation)
+            } catch {
+                recordDelivery(.unknown, operation: operation)
+                throw error
+            }
+            if case let .receipt(receipt)? = operationDeliveries[operation.operationId], receipt.state != .pending {
+                return .receipt(receipt)
+            }
+            if attempt + 1 < attempts { try await Task.sleep(for: delay) }
+        }
+        return operationDeliveries[operation.operationId] ?? .unknown
+    }
+
+    func createdSession(_ operation: DurableOperation) async throws {
+        let host = operation.destination
+        let client = try endpoint(host), fence = try token(for: host)
+        let session = try await client.createdSession(operation.targetId)
+        try validate(fence)
+        guard session.id == operation.targetId, let entry = entries[host] else { throw HostRoutingError.invalidReference }
+        // Publish synchronously before navigation, not on the next coalesced list refresh.
+        refresh(host, token: entry.token)
+    }
+
     /// Reconnect performs bounded receipt reads only. No timers, POST retry, adoption or draft clearing.
     func reconcileOperations(_ host: HostRef) async throws {
         let client = try endpoint(host)

@@ -56,8 +56,12 @@ extension AppModel {
     func createHostedChat(form: NewSessionForm, host: HostRef, project: Project, revision: UUID) async throws {
         guard let origin = localHost else { throw HostRoutingError.invalidReference }
         _ = try hosts.endpoint(host)
-        try await finishAdopted(on: host)
+        let fence = try hosts.token(for: host)
         let images = form.attachments.items
+        // Freeze the submitted draft before any suspension. A later edit is not part of this intent.
+        let request = form.spawnRequest(in: project, rawAttachments: true)
+        try await finishAdopted(on: host)
+        try hosts.validate(fence)
         let operation: DurableOperation
         let receipt: OperationReceipt
         if form.pendingOperationId == nil {
@@ -74,8 +78,10 @@ extension AppModel {
         } else {
             try persistDrafts()
             var staged: [HostedAttachment] = []
-            for image in images { staged.append(try await hosts.upload(image, host: host, origin: origin)) }
-            let request = form.spawnRequest(in: project, rawAttachments: true)
+            for image in images {
+                staged.append(try await hosts.upload(image, host: host, origin: origin))
+                try hosts.validate(fence)
+            }
             let result: (DurableOperation, OperationDelivery)
             if staged.isEmpty {
                 result = try await hosts.deliver(host: host, kind: "chat-create", targetId: nil, payload: request, origin: origin)
@@ -91,6 +97,45 @@ extension AppModel {
             operation = result.0; receipt = known
         }
         try await adoptCreatedChat(operation, receipt: receipt, form: form, revision: revision)
+    }
+
+    /// The Home Check action owns visible progress and recovery. It never creates a fresh intent.
+    /// Explicit retry is separately confirmed by the UI and still looks up the original receipt first.
+    func checkHostedChat(_ operation: DurableOperation, form: NewSessionForm, retryOriginal: Bool = false,
+                         openConfirmed: Bool = false, attempts: Int = 3,
+                         delay: Duration = .milliseconds(500)) async {
+        guard !form.checkingStart, !form.busy else { return }
+        form.checkingStart = true
+        form.error = nil
+        form.startRecoveryMessage = nil
+        let revision = form.revision
+        defer { form.checkingStart = false }
+        do {
+            guard operation.kind == "chat-create" || operation.kind == "chat-create-attached",
+                  form.pendingOperationId == nil || form.pendingOperationId == operation.operationId else {
+                throw HostRoutingError.invalidReference
+            }
+            form.pendingOperationId = operation.operationId
+            try persistDrafts()
+            if retryOriginal { try await hosts.retryOperation(operation) }
+            let delivery = try await hosts.checkOperation(operation, attempts: attempts, delay: delay)
+            switch delivery {
+            case let .receipt(receipt) where receipt.state != .pending:
+                try await adoptCreatedChat(operation, receipt: receipt, form: form, revision: revision,
+                                           openWhenDraftChanged: openConfirmed)
+            case .receipt:
+                form.startRecoveryMessage = "The devbox has the request, but chat start is still unconfirmed. Check again shortly. Your draft is kept."
+            case .unknown:
+                form.startRecoveryMessage = "No receipt was found on the original devbox. This does not prove the chat failed. Check again, or retry only the saved original start."
+            }
+        } catch {
+            if case let .receipt(receipt)? = hosts.operationDeliveries[operation.operationId], receipt.state == .accepted {
+                form.error = "Chat start was confirmed, but the existing chat could not be opened: \(error.localizedDescription) Reconnect and choose Open chat. Do not resend. Your draft is kept."
+            } else {
+                form.error = hosts.pendingOperations[operation.operationId] == nil ? error.localizedDescription
+                    : "Could not confirm chat start: \(error.localizedDescription) Your draft is kept. Reconnect to the original devbox and Check again."
+            }
+        }
     }
 
     /// A deterministic, draft-free create. The outbox reuses the exact intent after an uncertain delivery.
@@ -110,25 +155,40 @@ extension AppModel {
                                localId: receipt.result?["sessionId"]?.string ?? operation.targetId)
     }
 
-    func adoptCreatedChat(_ operation: DurableOperation, receipt: OperationReceipt, form: NewSessionForm, revision: UUID) async throws {
+    func adoptCreatedChat(_ operation: DurableOperation, receipt: OperationReceipt, form: NewSessionForm, revision: UUID,
+                          openWhenDraftChanged: Bool = false) async throws {
         try receipt.validate(operation)
+        guard receipt.state != .pending else { throw ClientError("Chat start is still unconfirmed. Check again shortly.") }
         let host = operation.destination
         if receipt.state == .accepted {
+            guard receipt.result?["sessionId"]?.string == nil || receipt.result?["sessionId"]?.string == operation.targetId else {
+                throw HostRoutingError.identityChanged
+            }
+            try await hosts.createdSession(operation)
             let payload = try JSONDecoder().decode(JSONValue.self, from: Data(operation.payload.utf8))
             let request = payload["request"] ?? payload
             let imageIDs = Set((payload["attachments"]?.array ?? []).compactMap { $0["uploadId"]?.string })
+            let project = hosts.presentationClient(host).project(request["projectId"]?.string)
+            let current = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(form.spawnRequest(in: project, rawAttachments: true)))
             // A late result must not erase a newer draft, even after an app restart.
-            if request["message"]?.string == form.message, imageIDs == Set(form.attachments.items.map { $0.id.uuidString }), form.revision == revision {
-                _ = form.completeSubmission(revision: revision)
+            let matches = request == current && imageIDs == Set(form.attachments.items.map { $0.id.uuidString })
+                && form.revision == revision && (form.executionHost ?? localHost) == host
+                && (draftProjectId == nil || draftProjectId == request["projectId"]?.string)
+            guard matches || openWhenDraftChanged else {
+                form.startRecoveryMessage = "Chat started. Your newer draft is kept. Open the existing chat to view its result."
+                return
             }
+            if matches { _ = form.completeSubmission(revision: revision) }
+            // Persist navigation before retiring the outbox, so a crash cannot lose the result.
+            try selectSession(HostResourceRef(host: host, kind: .session, localId: operation.targetId))
         }
         form.pendingOperationId = nil
+        form.error = nil
+        form.startRecoveryMessage = nil
         try persistDrafts()
         try await acknowledgeAdopted(operation, receipt: receipt)
-        if receipt.state == .rejected { throw ClientError("The chat was not started. Your draft has been kept.") }
-        if form.message.isEmpty {
-            try selectSession(HostResourceRef(host: host, kind: .session,
-                localId: receipt.result?["sessionId"]?.string ?? operation.targetId))
+        if receipt.state == .rejected {
+            throw ClientError("The devbox rejected the chat start: \(receipt.reason ?? "request not accepted"). Your draft has been kept. You can edit it and start again.")
         }
     }
 

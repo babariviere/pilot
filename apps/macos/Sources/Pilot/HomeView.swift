@@ -6,7 +6,9 @@ import SwiftUI
 @MainActor
 final class NewSessionForm: ObservableObject {
     @Published var executionHost: HostRef? { didSet { onDraftChanged?() } }
-    var pendingOperationId: String? { didSet { onDraftChanged?() } }
+    @Published var pendingOperationId: String? { didSet { onDraftChanged?() } }
+    @Published var checkingStart = false
+    @Published var startRecoveryMessage: String?
     let branches = BranchSelectorState()
     private(set) var revision = UUID()
     var onDraftChanged: (() -> Void)?
@@ -159,7 +161,7 @@ struct HomeView: View {
                     .frame(height: 440)
                 VStack(spacing: 0) {
                     // No heading: the composer sits where it did below the old 24 pt title (290 + ~29 + 16).
-                    TaskComposer(form: app.newSessionForm, client: app.client)
+                    TaskComposer(form: app.newSessionForm, client: app.client, hosts: app.hosts)
                         .frame(maxWidth: 640)
                         .padding(.top, 335)
                     HomeOverview()
@@ -178,7 +180,7 @@ struct HomeView: View {
 struct TaskComposer: View {
     @EnvironmentObject private var app: AppModel
     @EndpointClient private var localClient
-    @ObservedObject private var hosts = AppModel.shared.hosts
+    @ObservedObject private var hosts: HostClients
     @State private var choosingRepository = false
     @State private var retryingCreate: DurableOperation?
     @Environment(\.pilotFonts) private var fonts
@@ -192,11 +194,13 @@ struct TaskComposer: View {
     /// Bumped by ⌘K's "Send later: At a time…".
     @State private var scheduleAtTime = 0
 
-    @MainActor init(branches: BranchSelectorState? = nil, form: NewSessionForm? = nil, client: PilotClient? = nil) {
+    @MainActor init(branches: BranchSelectorState? = nil, form: NewSessionForm? = nil, client: PilotClient? = nil,
+                    hosts: HostClients? = nil) {
         let form = form ?? NewSessionForm()
         _form = StateObject(wrappedValue: form)
         _branches = StateObject(wrappedValue: branches ?? form.branches)
         _localClient = EndpointClient(client)
+        _hosts = ObservedObject(wrappedValue: hosts ?? AppModel.shared.hosts)
     }
 
     private var destinationHost: HostRef? { form.executionHost ?? app.localHost }
@@ -263,7 +267,7 @@ struct TaskComposer: View {
         }
         .composerCommands(revision: commandsRevision) { taskCommandList() }
         .confirmationDialog("Retry the original chat start?", isPresented: Binding(get: { retryingCreate != nil }, set: { if !$0 { retryingCreate = nil } }), presenting: retryingCreate) { operation in
-            Button("Retry original start") { Task { do { try await hosts.retryOperation(operation) } catch { form.error = error.localizedDescription } } }
+            Button("Retry original start") { Task { await app.checkHostedChat(operation, form: form, retryOriginal: true) } }
         } message: { _ in Text("Only the original saved request is retried on its original devbox. Your newer draft is not sent.") }
         .sheet(isPresented: $choosingRepository) {
             if let host = destinationHost {
@@ -276,25 +280,42 @@ struct TaskComposer: View {
         }
         .onChange(of: app.draftRevision) { _, _ in consumeDraft() }
         .onChange(of: app.draftMessage) { _, message in if message != nil { consumeDraft() } }
+        .task(id: pendingCreateDelivery) {
+            // Reconnect may recover a receipt without another click. Adopt only a conclusive
+            // result here, never replay or continuously poll an unresolved operation.
+            if let operation = pendingCreate, case let .receipt(receipt)? = pendingCreateDelivery, receipt.state != .pending {
+                await app.checkHostedChat(operation, form: form)
+            }
+        }
+    }
+
+    private var pendingCreateDelivery: OperationDelivery? {
+        pendingCreate.flatMap { hosts.operationDeliveries[$0.operationId] }
     }
 
     private var newTask: some View {
         VStack(alignment: .leading, spacing: 0) {
             if let operation = pendingCreate {
-                HStack {
-                    Text("Chat start needs confirmation. Your draft has been kept.").font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
-                    Button("Check") { Task { try? await hosts.reconcileOperations(operation.destination) } }
-                    if case let .receipt(receipt)? = hosts.operationDeliveries[operation.operationId], receipt.state != .pending {
-                        Button("Save result") {
-                            Task {
-                                do { try await app.adoptCreatedChat(operation, receipt: receipt, form: form, revision: form.revision) }
-                                catch { form.error = error.localizedDescription }
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text(form.checkingStart ? "Checking chat start…" : form.startRecoveryMessage ?? "Chat start needs confirmation. Your draft has been kept.")
+                            .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 8)
+                        if case let .receipt(receipt)? = pendingCreateDelivery, receipt.state == .accepted {
+                            Button("Open chat") { Task { await app.checkHostedChat(operation, form: form, openConfirmed: true) } }
+                        } else {
+                            Button(form.checkingStart ? "Checking…" : "Check") { Task { await app.checkHostedChat(operation, form: form) } }
+                            if case .unknown? = pendingCreateDelivery {
+                                Button("Retry original start…") { retryingCreate = operation }
                             }
                         }
-                    } else if case .unknown? = hosts.operationDeliveries[operation.operationId] {
-                        Button("Retry original start…") { retryingCreate = operation }
                     }
+                    .disabled(form.busy || form.checkingStart)
                 }.padding(8)
+            }
+            if let error = form.error {
+                InlineProblem(error).padding(.horizontal, 12).padding(.bottom, 8)
             }
             VStack(alignment: .leading, spacing: 10) {
                 ImageAttachmentPreviews(attachments: $form.attachments)
@@ -388,9 +409,6 @@ struct TaskComposer: View {
                     .disabled(form.busy)
                     .help("Build workspace for this chat only. Defaults to the project's settings.")
                 }
-                if let error = form.error {
-                    Text(error).font(.caption).foregroundStyle(Theme.destructive).lineLimit(1)
-                }
                 Spacer()
                 if form.busy { ProgressView().controlSize(.small) }
                 if !remote { SendLaterMenu(disabled: !canStart, schedule: scheduleNewChat, atTimeRequest: scheduleAtTime) }
@@ -420,7 +438,8 @@ struct TaskComposer: View {
     }
 
     private var canStart: Bool {
-        form.canStart(in: project, branches: branches) && (!remote || (project != nil && destinationHost.map { hosts.available.contains($0) } == true))
+        pendingCreate == nil && !form.checkingStart && form.canStart(in: project, branches: branches)
+            && (!remote || (project != nil && destinationHost.map { hosts.available.contains($0) } == true))
     }
 
     /// `/model`, `/mode` and `/help` before a chat exists: they open the palette's choices or the shortcut
