@@ -1,0 +1,1485 @@
+{
+	"configurations": [
+		{
+			"schemaVersion": 1,
+			"home": {
+				"hostId": "daemon",
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage"
+			},
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage"
+			},
+			"role": "home",
+			"controlSessionId": "control"
+		},
+		{
+			"schemaVersion": 1,
+			"home": {
+				"hostId": "daemon",
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage"
+			},
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"role": "executor"
+		},
+		{
+			"schemaVersion": 1,
+			"home": {
+				"hostId": "daemon",
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage"
+			},
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"role": "archived-control",
+			"archive": {
+				"sessionId": "old-control",
+				"archivedAt": 2000
+			}
+		}
+	],
+	"enrollments": [
+		{
+			"schemaVersion": 1,
+			"bindingId": "control:binding:1",
+			"generation": 1,
+			"home": {
+				"hostId": "daemon",
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage"
+			},
+			"executor": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"state": "active"
+		},
+		{
+			"schemaVersion": 1,
+			"bindingId": "control:binding:1",
+			"generation": 1,
+			"home": {
+				"hostId": "daemon",
+				"daemonId": "home-daemon",
+				"lineageId": "home-lineage"
+			},
+			"executor": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"state": "revoked"
+		}
+	],
+	"requests": [
+		{
+			"action": "status",
+			"args": {}
+		},
+		{
+			"action": "status",
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"args": {
+				"sessionId": "chat:1"
+			}
+		},
+		{
+			"action": "health",
+			"args": {}
+		},
+		{
+			"action": "health",
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"args": {
+				"sessionId": "chat:1"
+			}
+		},
+		{
+			"action": "logs",
+			"args": {}
+		},
+		{
+			"action": "logs",
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"args": {
+				"sessionId": "chat:1"
+			}
+		},
+		{
+			"action": "telemetry",
+			"args": {}
+		},
+		{
+			"action": "telemetry",
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"args": {
+				"sessionId": "chat:1"
+			}
+		},
+		{
+			"action": "read",
+			"args": {}
+		},
+		{
+			"action": "read",
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"args": {
+				"sessionId": "chat:1"
+			}
+		},
+		{
+			"action": "checks",
+			"args": {}
+		},
+		{
+			"action": "checks",
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"args": {
+				"sessionId": "chat:1"
+			}
+		},
+		{
+			"action": "authorize",
+			"args": {}
+		},
+		{
+			"action": "authorize",
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"args": {
+				"sessionId": "chat:1"
+			}
+		},
+		{
+			"action": "authorizations",
+			"args": {}
+		},
+		{
+			"action": "authorizations",
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"args": {
+				"sessionId": "chat:1"
+			}
+		},
+		{
+			"action": "revoke",
+			"args": {}
+		},
+		{
+			"action": "revoke",
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"args": {
+				"sessionId": "chat:1"
+			}
+		},
+		{
+			"action": "resolve_authorization",
+			"args": {}
+		},
+		{
+			"action": "resolve_authorization",
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"args": {
+				"sessionId": "chat:1"
+			}
+		},
+		{
+			"action": "start",
+			"args": {}
+		},
+		{
+			"action": "start",
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"args": {
+				"sessionId": "chat:1"
+			}
+		},
+		{
+			"action": "send",
+			"args": {}
+		},
+		{
+			"action": "send",
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"args": {
+				"sessionId": "chat:1"
+			}
+		},
+		{
+			"action": "stop",
+			"args": {}
+		},
+		{
+			"action": "stop",
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"args": {
+				"sessionId": "chat:1"
+			}
+		},
+		{
+			"action": "pause",
+			"args": {}
+		},
+		{
+			"action": "pause",
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"args": {
+				"sessionId": "chat:1"
+			}
+		},
+		{
+			"action": "resume",
+			"args": {}
+		},
+		{
+			"action": "resume",
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"args": {
+				"sessionId": "chat:1"
+			}
+		},
+		{
+			"action": "redirect",
+			"args": {}
+		},
+		{
+			"action": "redirect",
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"args": {
+				"sessionId": "chat:1"
+			}
+		},
+		{
+			"action": "mission_create",
+			"args": {}
+		},
+		{
+			"action": "mission_create",
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"args": {
+				"sessionId": "chat:1"
+			}
+		},
+		{
+			"action": "mission_attach",
+			"args": {}
+		},
+		{
+			"action": "mission_attach",
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"args": {
+				"sessionId": "chat:1"
+			}
+		},
+		{
+			"action": "watch",
+			"args": {}
+		},
+		{
+			"action": "watch",
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"args": {
+				"sessionId": "chat:1"
+			}
+		},
+		{
+			"action": "unwatch",
+			"args": {}
+		},
+		{
+			"action": "unwatch",
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"args": {
+				"sessionId": "chat:1"
+			}
+		},
+		{
+			"action": "watches",
+			"args": {}
+		},
+		{
+			"action": "watches",
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"args": {
+				"sessionId": "chat:1"
+			}
+		}
+	],
+	"authorizations": [
+		{
+			"id": "auth:1",
+			"hosts": [
+				{
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				{
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				}
+			],
+			"userMessage": {
+				"conversationId": "control",
+				"submissionId": 1,
+				"entryId": 2,
+				"requestId": "user:1"
+			},
+			"scope": "Investigate and fix",
+			"level": "implement",
+			"targets": [
+				{
+					"host": {
+						"hostId": "daemon",
+						"daemonId": "executor-daemon",
+						"lineageId": "executor-lineage"
+					},
+					"kind": "project",
+					"id": "p"
+				}
+			],
+			"limits": {
+				"followUps": 2,
+				"budgetUsd": 4
+			},
+			"createdAt": 1000,
+			"expiresAt": 10000,
+			"usage": {
+				"followUps": 1,
+				"budgetUsd": 1
+			}
+		},
+		{
+			"id": "auth:1",
+			"userMessage": {
+				"conversationId": "control",
+				"submissionId": 1,
+				"entryId": 2,
+				"requestId": "user:1"
+			},
+			"scope": "Investigate and fix",
+			"level": "implement",
+			"targets": [
+				{
+					"host": {
+						"hostId": "daemon",
+						"daemonId": "executor-daemon",
+						"lineageId": "executor-lineage"
+					},
+					"kind": "project",
+					"id": "p"
+				}
+			],
+			"limits": {
+				"followUps": 2,
+				"budgetUsd": 4
+			},
+			"createdAt": 1000,
+			"expiresAt": 10000,
+			"usage": {
+				"followUps": 1,
+				"budgetUsd": 1
+			}
+		},
+		{
+			"id": "auth:1",
+			"hosts": [],
+			"userMessage": {
+				"conversationId": "control",
+				"submissionId": 1,
+				"entryId": 2,
+				"requestId": "user:1"
+			},
+			"scope": "Investigate and fix",
+			"level": "implement",
+			"targets": [
+				{
+					"host": {
+						"hostId": "daemon",
+						"daemonId": "executor-daemon",
+						"lineageId": "executor-lineage"
+					},
+					"kind": "project",
+					"id": "p"
+				}
+			],
+			"limits": {
+				"followUps": 2,
+				"budgetUsd": 4
+			},
+			"createdAt": 1000,
+			"expiresAt": 10000,
+			"usage": {
+				"followUps": 1,
+				"budgetUsd": 1
+			}
+		}
+	],
+	"payloads": [
+		{
+			"kind": "control.start",
+			"payload": {
+				"authorizationId": "auth:1",
+				"levelCeiling": "implement",
+				"budgetReservation": {
+					"reservationId": "reservation:1",
+					"budgetUsd": 1,
+					"followUps": 1
+				},
+				"idempotencyKey": "operation:1",
+				"authorization": {
+					"id": "auth:1",
+					"hosts": [
+						{
+							"hostId": "daemon",
+							"daemonId": "home-daemon",
+							"lineageId": "home-lineage"
+						},
+						{
+							"hostId": "daemon",
+							"daemonId": "executor-daemon",
+							"lineageId": "executor-lineage"
+						}
+					],
+					"userMessage": {
+						"conversationId": "control",
+						"submissionId": 1,
+						"entryId": 2,
+						"requestId": "user:1"
+					},
+					"scope": "Investigate and fix",
+					"level": "implement",
+					"targets": [
+						{
+							"host": {
+								"hostId": "daemon",
+								"daemonId": "executor-daemon",
+								"lineageId": "executor-lineage"
+							},
+							"kind": "project",
+							"id": "p"
+						}
+					],
+					"limits": {
+						"followUps": 2,
+						"budgetUsd": 4
+					},
+					"createdAt": 1000,
+					"expiresAt": 10000,
+					"usage": {
+						"followUps": 1,
+						"budgetUsd": 1
+					}
+				},
+				"target": {
+					"kind": "project",
+					"projectId": "p"
+				},
+				"message": "Investigate",
+				"model": "fake/model",
+				"thinking": "high"
+			}
+		},
+		{
+			"kind": "control.start",
+			"payload": {
+				"authorizationId": "auth:1",
+				"levelCeiling": "implement",
+				"budgetReservation": {
+					"reservationId": "reservation:1",
+					"budgetUsd": 1,
+					"followUps": 1
+				},
+				"idempotencyKey": "operation:1",
+				"authorization": {
+					"id": "auth:1",
+					"hosts": [
+						{
+							"hostId": "daemon",
+							"daemonId": "home-daemon",
+							"lineageId": "home-lineage"
+						},
+						{
+							"hostId": "daemon",
+							"daemonId": "executor-daemon",
+							"lineageId": "executor-lineage"
+						}
+					],
+					"userMessage": {
+						"conversationId": "control",
+						"submissionId": 1,
+						"entryId": 2,
+						"requestId": "user:1"
+					},
+					"scope": "Investigate and fix",
+					"level": "implement",
+					"targets": [
+						{
+							"host": {
+								"hostId": "daemon",
+								"daemonId": "executor-daemon",
+								"lineageId": "executor-lineage"
+							},
+							"kind": "project",
+							"id": "p"
+						}
+					],
+					"limits": {
+						"followUps": 2,
+						"budgetUsd": 4
+					},
+					"createdAt": 1000,
+					"expiresAt": 10000,
+					"usage": {
+						"followUps": 1,
+						"budgetUsd": 1
+					}
+				},
+				"target": {
+					"kind": "task",
+					"missionId": "m",
+					"taskId": "t"
+				},
+				"message": "Investigate task",
+				"model": "fake/model"
+			}
+		},
+		{
+			"kind": "control.send",
+			"payload": {
+				"authorizationId": "auth:1",
+				"levelCeiling": "implement",
+				"budgetReservation": {
+					"reservationId": "reservation:1",
+					"budgetUsd": 1,
+					"followUps": 1
+				},
+				"idempotencyKey": "operation:1",
+				"authorization": {
+					"id": "auth:1",
+					"hosts": [
+						{
+							"hostId": "daemon",
+							"daemonId": "home-daemon",
+							"lineageId": "home-lineage"
+						},
+						{
+							"hostId": "daemon",
+							"daemonId": "executor-daemon",
+							"lineageId": "executor-lineage"
+						}
+					],
+					"userMessage": {
+						"conversationId": "control",
+						"submissionId": 1,
+						"entryId": 2,
+						"requestId": "user:1"
+					},
+					"scope": "Investigate and fix",
+					"level": "implement",
+					"targets": [
+						{
+							"host": {
+								"hostId": "daemon",
+								"daemonId": "executor-daemon",
+								"lineageId": "executor-lineage"
+							},
+							"kind": "project",
+							"id": "p"
+						}
+					],
+					"limits": {
+						"followUps": 2,
+						"budgetUsd": 4
+					},
+					"createdAt": 1000,
+					"expiresAt": 10000,
+					"usage": {
+						"followUps": 1,
+						"budgetUsd": 1
+					}
+				},
+				"sessionId": "chat:1",
+				"message": "Continue",
+				"direct": true
+			}
+		},
+		{
+			"kind": "control.run",
+			"payload": {
+				"authorizationId": "auth:1",
+				"levelCeiling": "implement",
+				"budgetReservation": {
+					"reservationId": "reservation:1",
+					"budgetUsd": 0,
+					"followUps": 0
+				},
+				"idempotencyKey": "operation:1",
+				"authorization": {
+					"id": "auth:1",
+					"hosts": [
+						{
+							"hostId": "daemon",
+							"daemonId": "home-daemon",
+							"lineageId": "home-lineage"
+						},
+						{
+							"hostId": "daemon",
+							"daemonId": "executor-daemon",
+							"lineageId": "executor-lineage"
+						}
+					],
+					"userMessage": {
+						"conversationId": "control",
+						"submissionId": 1,
+						"entryId": 2,
+						"requestId": "user:1"
+					},
+					"scope": "Investigate and fix",
+					"level": "implement",
+					"targets": [
+						{
+							"host": {
+								"hostId": "daemon",
+								"daemonId": "executor-daemon",
+								"lineageId": "executor-lineage"
+							},
+							"kind": "project",
+							"id": "p"
+						}
+					],
+					"limits": {
+						"followUps": 2,
+						"budgetUsd": 4
+					},
+					"createdAt": 1000,
+					"expiresAt": 10000,
+					"usage": {
+						"followUps": 1,
+						"budgetUsd": 1
+					}
+				},
+				"sessionId": "chat:1",
+				"action": "stop"
+			}
+		},
+		{
+			"kind": "control.run",
+			"payload": {
+				"authorizationId": "auth:1",
+				"levelCeiling": "implement",
+				"budgetReservation": {
+					"reservationId": "reservation:1",
+					"budgetUsd": 0,
+					"followUps": 0
+				},
+				"idempotencyKey": "operation:1",
+				"authorization": {
+					"id": "auth:1",
+					"hosts": [
+						{
+							"hostId": "daemon",
+							"daemonId": "home-daemon",
+							"lineageId": "home-lineage"
+						},
+						{
+							"hostId": "daemon",
+							"daemonId": "executor-daemon",
+							"lineageId": "executor-lineage"
+						}
+					],
+					"userMessage": {
+						"conversationId": "control",
+						"submissionId": 1,
+						"entryId": 2,
+						"requestId": "user:1"
+					},
+					"scope": "Investigate and fix",
+					"level": "implement",
+					"targets": [
+						{
+							"host": {
+								"hostId": "daemon",
+								"daemonId": "executor-daemon",
+								"lineageId": "executor-lineage"
+							},
+							"kind": "project",
+							"id": "p"
+						}
+					],
+					"limits": {
+						"followUps": 2,
+						"budgetUsd": 4
+					},
+					"createdAt": 1000,
+					"expiresAt": 10000,
+					"usage": {
+						"followUps": 1,
+						"budgetUsd": 1
+					}
+				},
+				"sessionId": "chat:1",
+				"action": "pause"
+			}
+		},
+		{
+			"kind": "control.run",
+			"payload": {
+				"authorizationId": "auth:1",
+				"levelCeiling": "implement",
+				"budgetReservation": {
+					"reservationId": "reservation:1",
+					"budgetUsd": 1,
+					"followUps": 0
+				},
+				"idempotencyKey": "operation:1",
+				"authorization": {
+					"id": "auth:1",
+					"hosts": [
+						{
+							"hostId": "daemon",
+							"daemonId": "home-daemon",
+							"lineageId": "home-lineage"
+						},
+						{
+							"hostId": "daemon",
+							"daemonId": "executor-daemon",
+							"lineageId": "executor-lineage"
+						}
+					],
+					"userMessage": {
+						"conversationId": "control",
+						"submissionId": 1,
+						"entryId": 2,
+						"requestId": "user:1"
+					},
+					"scope": "Investigate and fix",
+					"level": "implement",
+					"targets": [
+						{
+							"host": {
+								"hostId": "daemon",
+								"daemonId": "executor-daemon",
+								"lineageId": "executor-lineage"
+							},
+							"kind": "project",
+							"id": "p"
+						}
+					],
+					"limits": {
+						"followUps": 2,
+						"budgetUsd": 4
+					},
+					"createdAt": 1000,
+					"expiresAt": 10000,
+					"usage": {
+						"followUps": 1,
+						"budgetUsd": 1
+					}
+				},
+				"sessionId": "chat:1",
+				"action": "resume"
+			}
+		},
+		{
+			"kind": "control.run",
+			"payload": {
+				"authorizationId": "auth:1",
+				"levelCeiling": "implement",
+				"budgetReservation": {
+					"reservationId": "reservation:1",
+					"budgetUsd": 1,
+					"followUps": 1
+				},
+				"idempotencyKey": "operation:1",
+				"authorization": {
+					"id": "auth:1",
+					"hosts": [
+						{
+							"hostId": "daemon",
+							"daemonId": "home-daemon",
+							"lineageId": "home-lineage"
+						},
+						{
+							"hostId": "daemon",
+							"daemonId": "executor-daemon",
+							"lineageId": "executor-lineage"
+						}
+					],
+					"userMessage": {
+						"conversationId": "control",
+						"submissionId": 1,
+						"entryId": 2,
+						"requestId": "user:1"
+					},
+					"scope": "Investigate and fix",
+					"level": "implement",
+					"targets": [
+						{
+							"host": {
+								"hostId": "daemon",
+								"daemonId": "executor-daemon",
+								"lineageId": "executor-lineage"
+							},
+							"kind": "project",
+							"id": "p"
+						}
+					],
+					"limits": {
+						"followUps": 2,
+						"budgetUsd": 4
+					},
+					"createdAt": 1000,
+					"expiresAt": 10000,
+					"usage": {
+						"followUps": 1,
+						"budgetUsd": 1
+					}
+				},
+				"sessionId": "chat:1",
+				"action": "redirect",
+				"message": "Change direction",
+				"direct": true
+			}
+		},
+		{
+			"kind": "control.watch",
+			"payload": {
+				"authorizationId": "auth:1",
+				"levelCeiling": "implement",
+				"budgetReservation": {
+					"reservationId": "reservation:1",
+					"budgetUsd": 0,
+					"followUps": 0
+				},
+				"idempotencyKey": "operation:1",
+				"authorization": {
+					"id": "auth:1",
+					"hosts": [
+						{
+							"hostId": "daemon",
+							"daemonId": "home-daemon",
+							"lineageId": "home-lineage"
+						},
+						{
+							"hostId": "daemon",
+							"daemonId": "executor-daemon",
+							"lineageId": "executor-lineage"
+						}
+					],
+					"userMessage": {
+						"conversationId": "control",
+						"submissionId": 1,
+						"entryId": 2,
+						"requestId": "user:1"
+					},
+					"scope": "Investigate and fix",
+					"level": "implement",
+					"targets": [
+						{
+							"host": {
+								"hostId": "daemon",
+								"daemonId": "executor-daemon",
+								"lineageId": "executor-lineage"
+							},
+							"kind": "project",
+							"id": "p"
+						}
+					],
+					"limits": {
+						"followUps": 2,
+						"budgetUsd": 4
+					},
+					"createdAt": 1000,
+					"expiresAt": 10000,
+					"usage": {
+						"followUps": 1,
+						"budgetUsd": 1
+					}
+				},
+				"watch": {
+					"authorizationId": "auth:1",
+					"event": "chat.settled",
+					"target": {
+						"host": {
+							"hostId": "daemon",
+							"daemonId": "executor-daemon",
+							"lineageId": "executor-lineage"
+						},
+						"kind": "chat",
+						"id": "chat:1"
+					},
+					"mode": "once",
+					"note": "Read the result",
+					"expiresAt": 10000
+				}
+			}
+		},
+		{
+			"kind": "control.unwatch",
+			"payload": {
+				"authorizationId": "auth:1",
+				"levelCeiling": "implement",
+				"budgetReservation": {
+					"reservationId": "reservation:1",
+					"budgetUsd": 0,
+					"followUps": 0
+				},
+				"idempotencyKey": "operation:1",
+				"authorization": {
+					"id": "auth:1",
+					"hosts": [
+						{
+							"hostId": "daemon",
+							"daemonId": "home-daemon",
+							"lineageId": "home-lineage"
+						},
+						{
+							"hostId": "daemon",
+							"daemonId": "executor-daemon",
+							"lineageId": "executor-lineage"
+						}
+					],
+					"userMessage": {
+						"conversationId": "control",
+						"submissionId": 1,
+						"entryId": 2,
+						"requestId": "user:1"
+					},
+					"scope": "Investigate and fix",
+					"level": "implement",
+					"targets": [
+						{
+							"host": {
+								"hostId": "daemon",
+								"daemonId": "executor-daemon",
+								"lineageId": "executor-lineage"
+							},
+							"kind": "project",
+							"id": "p"
+						}
+					],
+					"limits": {
+						"followUps": 2,
+						"budgetUsd": 4
+					},
+					"createdAt": 1000,
+					"expiresAt": 10000,
+					"usage": {
+						"followUps": 1,
+						"budgetUsd": 1
+					}
+				},
+				"watchId": "watch:1"
+			}
+		},
+		{
+			"kind": "control.revoke",
+			"payload": {
+				"authorizationId": "auth:1",
+				"levelCeiling": "implement",
+				"budgetReservation": {
+					"reservationId": "reservation:1",
+					"budgetUsd": 0,
+					"followUps": 0
+				},
+				"idempotencyKey": "operation:1",
+				"authorization": {
+					"id": "auth:1",
+					"hosts": [
+						{
+							"hostId": "daemon",
+							"daemonId": "home-daemon",
+							"lineageId": "home-lineage"
+						},
+						{
+							"hostId": "daemon",
+							"daemonId": "executor-daemon",
+							"lineageId": "executor-lineage"
+						}
+					],
+					"userMessage": {
+						"conversationId": "control",
+						"submissionId": 1,
+						"entryId": 2,
+						"requestId": "user:1"
+					},
+					"scope": "Investigate and fix",
+					"level": "implement",
+					"targets": [
+						{
+							"host": {
+								"hostId": "daemon",
+								"daemonId": "executor-daemon",
+								"lineageId": "executor-lineage"
+							},
+							"kind": "project",
+							"id": "p"
+						}
+					],
+					"limits": {
+						"followUps": 2,
+						"budgetUsd": 4
+					},
+					"createdAt": 1000,
+					"expiresAt": 10000,
+					"usage": {
+						"followUps": 1,
+						"budgetUsd": 1
+					}
+				},
+				"revokedAt": 2000
+			}
+		}
+	],
+	"exchangeRequest": {
+		"peer": {
+			"hostId": "daemon",
+			"daemonId": "executor-daemon",
+			"lineageId": "executor-lineage"
+		}
+	},
+	"exchange": {
+		"bindingId": "control:binding:1",
+		"generation": 1,
+		"operations": [
+			{
+				"schemaVersion": 1,
+				"operationId": "operation:1",
+				"producerId": "producer:1",
+				"sequence": 1,
+				"origin": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"destination": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"kind": "control.start",
+				"targetId": "chat:1",
+				"payload": "{\"authorizationId\":\"auth:1\",\"levelCeiling\":\"implement\",\"budgetReservation\":{\"reservationId\":\"reservation:1\",\"budgetUsd\":1,\"followUps\":1},\"idempotencyKey\":\"operation:1\",\"authorization\":{\"id\":\"auth:1\",\"hosts\":[{\"hostId\":\"daemon\",\"daemonId\":\"home-daemon\",\"lineageId\":\"home-lineage\"},{\"hostId\":\"daemon\",\"daemonId\":\"executor-daemon\",\"lineageId\":\"executor-lineage\"}],\"userMessage\":{\"conversationId\":\"control\",\"submissionId\":1,\"entryId\":2,\"requestId\":\"user:1\"},\"scope\":\"Investigate and fix\",\"level\":\"implement\",\"targets\":[{\"host\":{\"hostId\":\"daemon\",\"daemonId\":\"executor-daemon\",\"lineageId\":\"executor-lineage\"},\"kind\":\"project\",\"id\":\"p\"}],\"limits\":{\"followUps\":2,\"budgetUsd\":4},\"createdAt\":1000,\"expiresAt\":10000,\"usage\":{\"followUps\":1,\"budgetUsd\":1}},\"target\":{\"kind\":\"project\",\"projectId\":\"p\"},\"message\":\"Investigate\",\"model\":\"fake/model\",\"thinking\":\"high\"}",
+				"payloadHash": "fixture-sha256-not-for-admission",
+				"bindingId": "control:binding:1",
+				"bindingGeneration": 1
+			}
+		],
+		"more": false
+	},
+	"acknowledgments": [
+		{
+			"operation": {
+				"schemaVersion": 1,
+				"operationId": "operation:1",
+				"producerId": "producer:1",
+				"sequence": 1,
+				"origin": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"destination": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"kind": "control.start",
+				"targetId": "chat:1",
+				"payload": "{\"authorizationId\":\"auth:1\",\"levelCeiling\":\"implement\",\"budgetReservation\":{\"reservationId\":\"reservation:1\",\"budgetUsd\":1,\"followUps\":1},\"idempotencyKey\":\"operation:1\",\"authorization\":{\"id\":\"auth:1\",\"hosts\":[{\"hostId\":\"daemon\",\"daemonId\":\"home-daemon\",\"lineageId\":\"home-lineage\"},{\"hostId\":\"daemon\",\"daemonId\":\"executor-daemon\",\"lineageId\":\"executor-lineage\"}],\"userMessage\":{\"conversationId\":\"control\",\"submissionId\":1,\"entryId\":2,\"requestId\":\"user:1\"},\"scope\":\"Investigate and fix\",\"level\":\"implement\",\"targets\":[{\"host\":{\"hostId\":\"daemon\",\"daemonId\":\"executor-daemon\",\"lineageId\":\"executor-lineage\"},\"kind\":\"project\",\"id\":\"p\"}],\"limits\":{\"followUps\":2,\"budgetUsd\":4},\"createdAt\":1000,\"expiresAt\":10000,\"usage\":{\"followUps\":1,\"budgetUsd\":1}},\"target\":{\"kind\":\"project\",\"projectId\":\"p\"},\"message\":\"Investigate\",\"model\":\"fake/model\",\"thinking\":\"high\"}",
+				"payloadHash": "fixture-sha256-not-for-admission",
+				"bindingId": "control:binding:1",
+				"bindingGeneration": 1
+			},
+			"receipt": {
+				"operationId": "operation:1",
+				"payloadHash": "fixture-sha256-not-for-admission",
+				"destination": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"targetId": "chat:1",
+				"state": "pending"
+			}
+		},
+		{
+			"operation": {
+				"schemaVersion": 1,
+				"operationId": "operation:1",
+				"producerId": "producer:1",
+				"sequence": 1,
+				"origin": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"destination": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"kind": "control.start",
+				"targetId": "chat:1",
+				"payload": "{\"authorizationId\":\"auth:1\",\"levelCeiling\":\"implement\",\"budgetReservation\":{\"reservationId\":\"reservation:1\",\"budgetUsd\":1,\"followUps\":1},\"idempotencyKey\":\"operation:1\",\"authorization\":{\"id\":\"auth:1\",\"hosts\":[{\"hostId\":\"daemon\",\"daemonId\":\"home-daemon\",\"lineageId\":\"home-lineage\"},{\"hostId\":\"daemon\",\"daemonId\":\"executor-daemon\",\"lineageId\":\"executor-lineage\"}],\"userMessage\":{\"conversationId\":\"control\",\"submissionId\":1,\"entryId\":2,\"requestId\":\"user:1\"},\"scope\":\"Investigate and fix\",\"level\":\"implement\",\"targets\":[{\"host\":{\"hostId\":\"daemon\",\"daemonId\":\"executor-daemon\",\"lineageId\":\"executor-lineage\"},\"kind\":\"project\",\"id\":\"p\"}],\"limits\":{\"followUps\":2,\"budgetUsd\":4},\"createdAt\":1000,\"expiresAt\":10000,\"usage\":{\"followUps\":1,\"budgetUsd\":1}},\"target\":{\"kind\":\"project\",\"projectId\":\"p\"},\"message\":\"Investigate\",\"model\":\"fake/model\",\"thinking\":\"high\"}",
+				"payloadHash": "fixture-sha256-not-for-admission",
+				"bindingId": "control:binding:1",
+				"bindingGeneration": 1
+			},
+			"receipt": {
+				"operationId": "operation:1",
+				"payloadHash": "fixture-sha256-not-for-admission",
+				"destination": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"targetId": "chat:1",
+				"state": "accepted",
+				"result": {
+					"kind": "control.start",
+					"authorizationId": "auth:1",
+					"sessionId": "chat:1"
+				}
+			}
+		},
+		{
+			"operation": {
+				"schemaVersion": 1,
+				"operationId": "operation:1",
+				"producerId": "producer:1",
+				"sequence": 1,
+				"origin": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"destination": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"kind": "control.start",
+				"targetId": "chat:1",
+				"payload": "{\"authorizationId\":\"auth:1\",\"levelCeiling\":\"implement\",\"budgetReservation\":{\"reservationId\":\"reservation:1\",\"budgetUsd\":1,\"followUps\":1},\"idempotencyKey\":\"operation:1\",\"authorization\":{\"id\":\"auth:1\",\"hosts\":[{\"hostId\":\"daemon\",\"daemonId\":\"home-daemon\",\"lineageId\":\"home-lineage\"},{\"hostId\":\"daemon\",\"daemonId\":\"executor-daemon\",\"lineageId\":\"executor-lineage\"}],\"userMessage\":{\"conversationId\":\"control\",\"submissionId\":1,\"entryId\":2,\"requestId\":\"user:1\"},\"scope\":\"Investigate and fix\",\"level\":\"implement\",\"targets\":[{\"host\":{\"hostId\":\"daemon\",\"daemonId\":\"executor-daemon\",\"lineageId\":\"executor-lineage\"},\"kind\":\"project\",\"id\":\"p\"}],\"limits\":{\"followUps\":2,\"budgetUsd\":4},\"createdAt\":1000,\"expiresAt\":10000,\"usage\":{\"followUps\":1,\"budgetUsd\":1}},\"target\":{\"kind\":\"project\",\"projectId\":\"p\"},\"message\":\"Investigate\",\"model\":\"fake/model\",\"thinking\":\"high\"}",
+				"payloadHash": "fixture-sha256-not-for-admission",
+				"bindingId": "control:binding:1",
+				"bindingGeneration": 1
+			},
+			"receipt": {
+				"operationId": "operation:1",
+				"payloadHash": "fixture-sha256-not-for-admission",
+				"destination": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"targetId": "chat:1",
+				"state": "rejected",
+				"reason": "Authorization revoked"
+			}
+		}
+	],
+	"eventPages": [
+		{
+			"bindingId": "control:binding:1",
+			"generation": 1,
+			"sourceHost": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"after": 0,
+			"head": 2,
+			"events": [
+				{
+					"sourceHost": {
+						"hostId": "daemon",
+						"daemonId": "executor-daemon",
+						"lineageId": "executor-lineage"
+					},
+					"eventId": "event:1",
+					"cursor": 1,
+					"watchId": "watch:1",
+					"authorizationId": "auth:1",
+					"kind": "chat.result",
+					"occurredAt": 3000,
+					"watch": {
+						"authorizationId": "auth:1",
+						"event": "chat.settled",
+						"target": {
+							"host": {
+								"hostId": "daemon",
+								"daemonId": "executor-daemon",
+								"lineageId": "executor-lineage"
+							},
+							"kind": "chat",
+							"id": "chat:1"
+						},
+						"mode": "once",
+						"note": "Read the result",
+						"expiresAt": 10000,
+						"id": "watch:1",
+						"createdAt": 1000
+					},
+					"operationId": "operation:1",
+					"sessionId": "chat:1",
+					"resultTail": {
+						"untrusted": true,
+						"text": "Result <untrusted> café 🛠",
+						"truncated": true
+					}
+				}
+			],
+			"next": 1
+		},
+		{
+			"bindingId": "control:binding:1",
+			"generation": 1,
+			"sourceHost": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"after": 2,
+			"head": 2,
+			"events": []
+		}
+	],
+	"eventAcknowledgment": {
+		"bindingId": "control:binding:1",
+		"generation": 1,
+		"sourceHost": {
+			"hostId": "daemon",
+			"daemonId": "executor-daemon",
+			"lineageId": "executor-lineage"
+		},
+		"through": 1,
+		"eventId": "event:1"
+	},
+	"statusPages": [
+		{
+			"bindingId": "control:binding:1",
+			"generation": 1,
+			"snapshot": {
+				"sourceHost": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"snapshotId": "snapshot:1",
+				"capturedAt": 4000,
+				"dashboard": {
+					"untrusted": true,
+					"source": "daemon-memory",
+					"projects": [],
+					"chats": [],
+					"missions": [],
+					"pullRequests": [],
+					"linear": [],
+					"runningAgents": [],
+					"activeMissions": [],
+					"blockers": [],
+					"pendingDecisions": [],
+					"next": {
+						"watches": [],
+						"total": 0
+					},
+					"totals": {
+						"projects": 0,
+						"chats": 0,
+						"missions": 0,
+						"pullRequests": 0,
+						"linear": 0,
+						"runningAgents": 0,
+						"activeMissions": 0,
+						"blockers": 0,
+						"pendingDecisions": 0
+					},
+					"truncated": false
+				},
+				"missionTasks": [
+					{
+						"missionHome": {
+							"hostId": "daemon",
+							"daemonId": "home-daemon",
+							"lineageId": "home-lineage"
+						},
+						"missionId": "m",
+						"taskId": "t",
+						"executionHost": {
+							"hostId": "daemon",
+							"daemonId": "executor-daemon",
+							"lineageId": "executor-lineage"
+						},
+						"epoch": 2,
+						"state": "accepted",
+						"context": "committed"
+					}
+				],
+				"missionTasksTotal": 2,
+				"truncated": false
+			},
+			"next": "snapshot:1/page:2"
+		},
+		{
+			"bindingId": "control:binding:1",
+			"generation": 1,
+			"snapshot": {
+				"sourceHost": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"snapshotId": "snapshot:1",
+				"capturedAt": 4000,
+				"dashboard": {
+					"untrusted": true,
+					"source": "daemon-memory",
+					"projects": [],
+					"chats": [],
+					"missions": [],
+					"pullRequests": [],
+					"linear": [],
+					"runningAgents": [],
+					"activeMissions": [],
+					"blockers": [],
+					"pendingDecisions": [],
+					"next": {
+						"watches": [],
+						"total": 0
+					},
+					"totals": {
+						"projects": 0,
+						"chats": 0,
+						"missions": 0,
+						"pullRequests": 0,
+						"linear": 0,
+						"runningAgents": 0,
+						"activeMissions": 0,
+						"blockers": 0,
+						"pendingDecisions": 0
+					},
+					"truncated": false
+				},
+				"missionTasks": [
+					{
+						"missionHome": {
+							"hostId": "daemon",
+							"daemonId": "home-daemon",
+							"lineageId": "home-lineage"
+						},
+						"missionId": "m",
+						"taskId": "t2",
+						"executionHost": {
+							"hostId": "daemon",
+							"daemonId": "executor-daemon",
+							"lineageId": "executor-lineage"
+						},
+						"epoch": 2,
+						"state": "sealed",
+						"context": "provisional"
+					}
+				],
+				"missionTasksTotal": 2,
+				"truncated": false
+			}
+		}
+	]
+}

@@ -1,3 +1,5 @@
+import type { DurableOperation, OperationHost, OperationReceipt } from "./operations.ts";
+
 /** Global control APIs. All timestamps are epoch milliseconds. */
 export type WatchEvent =
 	| "chat.settled"
@@ -9,6 +11,8 @@ export type WatchEvent =
 	| "mission.task_done"
 	| "mission.done";
 export interface WatchTarget {
+	/** Contract-only routing extension. Omitted means the configured Control home, never the receiving daemon. */
+	host?: OperationHost;
 	kind: "chat" | "project" | "mission" | "pr" | "chat_prs" | "linear" | "task";
 	id: string;
 	missionId?: string;
@@ -276,6 +280,8 @@ export interface ControlAuthorizationLimits {
 }
 export interface ControlAuthorization {
 	id: string;
+	/** Contract-only host allowlist. Omitted means home only; empty grants no hosts. */
+	hosts?: OperationHost[];
 	userMessage?: ControlUserMessageRef;
 	/** Only grandfathered watch authorizations omit userMessage. */
 	watchId?: string;
@@ -296,4 +302,189 @@ export interface ControlAuthorizationsResponse {
 /** DELETE /api/control-chat/authorizations/:id. Local app only, idempotent. */
 export interface RevokeControlAuthorizationResponse {
 	revoked: boolean;
+}
+
+/** Cross-host contract only. Requires negotiated enrollment/handlers; does not enable remote actions.
+ * See docs/control-hosts.md for validation, bounds, recovery and archive rules. */
+export type ControlDaemonRole = "home" | "executor" | "archived-control";
+export interface ControlHostConfiguration {
+	schemaVersion: 1;
+	home: OperationHost;
+	host: OperationHost;
+	role: ControlDaemonRole;
+	controlSessionId?: string;
+	/** Present only after the explicit, end-to-end-gated archive migration. */
+	archive?: { sessionId: string; archivedAt: number };
+}
+export interface ControlHomeEnrollment {
+	schemaVersion: 1;
+	bindingId: string;
+	generation: number;
+	home: OperationHost;
+	executor: OperationHost;
+	state: "active" | "revoked";
+}
+export type ControlPilotAction =
+	| "status"
+	| "health"
+	| "logs"
+	| "telemetry"
+	| "read"
+	| "checks"
+	| "authorize"
+	| "authorizations"
+	| "revoke"
+	| "resolve_authorization"
+	| "start"
+	| "send"
+	| "stop"
+	| "pause"
+	| "resume"
+	| "redirect"
+	| "mission_create"
+	| "mission_attach"
+	| "watch"
+	| "unwatch"
+	| "watches";
+/** Future daemon routing envelope, not a replacement for today's flat tool arguments.
+ * All actions resolve host before resolving any daemon-local IDs. Home-owned actions reject remote hosts. */
+export interface ControlHostRequest {
+	action: ControlPilotAction;
+	host?: OperationHost;
+	args: Record<string, unknown>;
+}
+export interface ControlBudgetReservation {
+	reservationId: string;
+	budgetUsd: number;
+	followUps: number;
+}
+export interface ControlOperationAuthority {
+	authorizationId: string;
+	levelCeiling: ControlAuthorizationLevel;
+	budgetReservation: ControlBudgetReservation;
+	/** Equals DurableOperation.operationId; retries retain the original payload bytes. */
+	idempotencyKey: string;
+	/** Trusted home-admitted snapshot, not authority accepted from model/tool arguments. */
+	authorization: ControlAuthorization;
+}
+export type ControlStartTarget =
+	| { kind: "project"; projectId: string }
+	| { kind: "task"; missionId: string; taskId: string };
+export interface ControlStartOperationPayload extends ControlOperationAuthority {
+	target: ControlStartTarget;
+	message: string;
+	model: string;
+	thinking?: string;
+}
+export interface ControlSendOperationPayload extends ControlOperationAuthority {
+	sessionId: string;
+	message: string;
+	direct?: boolean;
+}
+export type ControlRunOperationPayload = ControlOperationAuthority & { sessionId: string; direct?: boolean } & (
+		| { action: "stop" | "pause" | "resume" }
+		| { action: "redirect"; message: string }
+	);
+export interface ControlWatchOperationPayload extends ControlOperationAuthority {
+	watch: WatchInput;
+}
+export interface ControlUnwatchOperationPayload extends ControlOperationAuthority {
+	watchId: string;
+}
+export interface ControlRevokeOperationPayload extends ControlOperationAuthority {
+	revokedAt: number;
+}
+export interface ControlOperationPayloads {
+	"control.start": ControlStartOperationPayload;
+	"control.send": ControlSendOperationPayload;
+	"control.run": ControlRunOperationPayload;
+	"control.watch": ControlWatchOperationPayload;
+	"control.unwatch": ControlUnwatchOperationPayload;
+	"control.revoke": ControlRevokeOperationPayload;
+}
+export type ControlOperationKind = keyof ControlOperationPayloads;
+/** Payload remains an exact JSON string in the existing immutable envelope. */
+export type ControlDurableOperation = Omit<DurableOperation, "kind"> & { kind: ControlOperationKind };
+export interface ControlOperationResult {
+	kind: ControlOperationKind;
+	authorizationId: string;
+	sessionId?: string;
+	watchId?: string;
+	removed?: boolean;
+	revokedAt?: number;
+}
+export interface ControlOperationExchangeRequest {
+	peer: OperationHost;
+}
+export interface ControlOperationExchangeResponse {
+	bindingId: string;
+	generation: number;
+	operations: ControlDurableOperation[];
+	more: boolean;
+}
+export interface ControlOperationAcknowledgment {
+	operation: ControlDurableOperation;
+	receipt: OperationReceipt;
+}
+export interface ControlUntrustedResultTail {
+	untrusted: true;
+	text: string;
+	truncated: boolean;
+}
+export interface ControlRemoteEvent {
+	sourceHost: OperationHost;
+	eventId: string;
+	cursor: number;
+	watchId: string;
+	authorizationId: string;
+	kind: WatchEvent | "chat.result" | "watch.removed";
+	occurredAt: number;
+	/** Frozen at match time, including for consumed once-watches. */
+	watch: Watch;
+	operationId?: string;
+	sessionId?: string;
+	resultTail?: ControlUntrustedResultTail;
+}
+export interface ControlRemoteEventPage {
+	bindingId: string;
+	generation: number;
+	sourceHost: OperationHost;
+	after: number;
+	head: number;
+	events: ControlRemoteEvent[];
+	next?: number;
+}
+export interface ControlRemoteEventAcknowledgment {
+	bindingId: string;
+	generation: number;
+	sourceHost: OperationHost;
+	through: number;
+	eventId: string;
+}
+/** Projection only; never an executable allocation, ownership transfer or completion proof. */
+export interface ControlRemoteMissionTask {
+	missionHome: OperationHost;
+	missionId: string;
+	taskId: string;
+	executionHost: OperationHost;
+	epoch: number;
+	state: "offered" | "accepted" | "cancel-requested" | "sealed";
+	context: "committed" | "provisional";
+}
+/** A bounded captured inventory. Across pages the identity, capture time and totals stay fixed. */
+export interface ControlRemoteStatusSnapshot {
+	sourceHost: OperationHost;
+	snapshotId: string;
+	capturedAt: number;
+	dashboard: ControlDashboardResponse;
+	missionTasks: ControlRemoteMissionTask[];
+	missionTasksTotal: number;
+	truncated: boolean;
+}
+export interface ControlRemoteStatusPage {
+	bindingId: string;
+	generation: number;
+	snapshot: ControlRemoteStatusSnapshot;
+	/** Opaque cursor pinned to the captured snapshot; absent on its final page. */
+	next?: string;
 }
