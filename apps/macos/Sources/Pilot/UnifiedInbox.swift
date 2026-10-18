@@ -34,6 +34,11 @@ import SwiftUI
     private func configure() {
         guard let hosts else { return }
         for host in Array(entries.keys) where !hosts.available.contains(host) { detach(host); errors.insert(host) }
+        // A removed host has nothing left to say; an unreachable one keeps its last-known rows.
+        let kept = UnifiedInboxPresentation.retained(values: values, errors: errors,
+                                                     known: Set(hosts.available).union(hosts.offlineHosts.keys))
+        if kept.values.count != values.count { values = kept.values }
+        if kept.errors != errors { errors = kept.errors }
         for host in hosts.available {
             guard let client = try? hosts.endpoint(host) else { continue }
             if entries[host]?.client === client, entries[host]?.generation == client.connectionGeneration { continue }
@@ -80,45 +85,53 @@ import SwiftUI
     }
 }
 
-/// Existing Inbox rows and order, now carrying their owning endpoint through every action.
+/// The Inbox across hosts: pilotd's own order and counts (`UnifiedInboxPresentation`), each row carrying its owning
+/// endpoint through every action.
 struct UnifiedInboxContent: View {
     @ObservedObject var hosts: HostClients
     @StateObject private var source = UnifiedInboxSource()
     var body: some View {
+        let page = UnifiedInboxPresentation(source.values)
+        let unavailable = knownUnavailable
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
-                let needs = needsYou
-                if !needs.isEmpty {
+                if !page.needsYou.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
-                        PageSectionHeader(title: "Needs you", count: source.values.values.reduce(0) { $0 + $1.needsYou.total }, countStyle: .attention)
-                        ForEach(needs) { row in
+                        PageSectionHeader(title: "Needs you", count: page.needsYou.total, countStyle: .attention)
+                        ForEach(page.needsYou.rows) { row in
                             ProjectNeedsYouRow(item: row.value.item, now: Date(), context: place(row.ref.host, row.value.projectId))
+                                .inboxCorner(row.value.item.signal)
                                 .environment(\.hostViewContext, HostViewContext(host: row.ref.host, hosts: hosts))
                             HairlineDivider(leading: InboxRowLayout.dividerInset)
                         }
+                        capNote(shown: page.needsYou.rows.count, total: page.needsYou.total)
                     }
                 }
-                let ready = readyToMerge
-                if !ready.isEmpty {
+                if !page.readyToMerge.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
-                        PageSectionHeader(title: "Ready to merge", count: source.values.values.reduce(0) { $0 + $1.readyToMerge.total })
-                        ForEach(ready) { row in
+                        PageSectionHeader(title: "Ready to merge", count: page.readyToMerge.total)
+                        ForEach(page.readyToMerge.rows) { row in
                             InboxReadyToMergeRow(pr: row.value.pullRequest, context: place(row.ref.host, row.value.projectId))
+                                .inboxCorner(.readyToMerge)
                                 .environment(\.hostViewContext, HostViewContext(host: row.ref.host, hosts: hosts))
                             HairlineDivider(leading: InboxRowLayout.dividerInset)
                         }
+                        capNote(shown: page.readyToMerge.rows.count, total: page.readyToMerge.total)
                     }
                 }
-                tracked(.linear, title: "Linear")
-                tracked(.slack, title: "Slack")
-                ForEach(knownUnavailable, id: \.self) { host in
-                    Text("Reconnect to \(HostViewContext(host: host, hosts: hosts).name) to check what needs you. Last-known chats remain in the sidebar.")
+                tracked(page.linear, title: "Linear")
+                tracked(page.slack, title: "Slack")
+                ForEach(unavailable, id: \.self) { host in
+                    Text(UnifiedInboxPresentation.unavailableNote(
+                        host: HostViewContext(host: host, hosts: hosts).name, hasLastKnownRows: source.values[host] != nil))
                         .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
                 }
-                if needs.isEmpty, ready.isEmpty, trackedRows(.linear).isEmpty, trackedRows(.slack).isEmpty,
-                   knownUnavailable.isEmpty, !source.values.isEmpty {
+                if let hidden = InboxText.hiddenFooter(page.hidden) {
+                    Text(hidden).font(.pilot(.caption)).foregroundStyle(Theme.faintForeground).padding(.horizontal, 8)
+                }
+                if page.isEmpty, unavailable.isEmpty, !source.values.isEmpty {
                     Text("Nothing is waiting on you.").font(.pilot(.headline)).foregroundStyle(Theme.mutedForeground)
-                } else if source.values.isEmpty, knownUnavailable.isEmpty { ProgressView("Loading Inbox…") }
+                } else if source.values.isEmpty, unavailable.isEmpty { ProgressView("Loading Inbox…") }
             }.padding(32).frame(maxWidth: Theme.column).frame(maxWidth: .infinity)
         }
         .onAppear { source.start(hosts) }
@@ -126,36 +139,24 @@ struct UnifiedInboxContent: View {
     }
 
     private var knownUnavailable: [HostRef] {
-        Set(hosts.offlineHosts.keys).subtracting(hosts.available).union(source.errors).sorted { $0.hostId < $1.hostId }
+        Set(hosts.offlineHosts.keys).subtracting(hosts.available).union(source.errors).sorted(by: UnifiedInboxPresentation.hostOrder)
     }
-    private var needsYou: [Hosted<InboxNeedsYouItem>] {
-        source.values.flatMap { host, value in value.needsYou.items.map {
-            Hosted(ref: HostResourceRef(host: host, kind: .project, localId: $0.id), value: $0)
-        } }.sorted { $0.value.item.id < $1.value.item.id }
-    }
-    private var readyToMerge: [Hosted<InboxReadyToMergeItem>] {
-        source.values.flatMap { host, value in value.readyToMerge.items.map {
-            Hosted(ref: HostResourceRef(host: host, kind: .project, localId: $0.id), value: $0)
-        } }
-    }
-    private func trackedRows(_ kind: TrackedKind) -> [Hosted<TrackedItem>] {
-        source.values.flatMap { host, value in
-            (kind == .linear ? value.linear?.items ?? [] : value.slack?.items ?? []).map {
-                Hosted(ref: HostResourceRef(host: host, kind: .project, localId: $0.id), value: $0)
-            }
-        }
-    }
-    @ViewBuilder private func tracked(_ kind: TrackedKind, title: String) -> some View {
-        let rows = trackedRows(kind)
-        if !rows.isEmpty {
+    @ViewBuilder private func tracked(_ section: UnifiedInboxSection<TrackedItem>, title: String) -> some View {
+        if !section.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
-                PageSectionHeader(title: title, count: rows.count)
-                ForEach(rows) { row in
+                PageSectionHeader(title: title, count: section.total)
+                ForEach(section.rows) { row in
                     TrackedItemRow(item: row.value, actions: source.actions(on: row.ref.host), now: Date(), context: place(row.ref.host, row.value.projectId))
                         .environment(\.hostViewContext, HostViewContext(host: row.ref.host, hosts: hosts))
                     HairlineDivider()
                 }
+                capNote(shown: section.rows.count, total: section.total)
             }
+        }
+    }
+    @ViewBuilder private func capNote(shown: Int, total: Int) -> some View {
+        if let note = UnifiedInboxPresentation.capNote(shown: shown, total: total) {
+            Text(note).font(.pilot(.caption)).foregroundStyle(Theme.faintForeground).padding(.leading, 34)
         }
     }
     private func place(_ host: HostRef, _ projectId: String) -> String {
