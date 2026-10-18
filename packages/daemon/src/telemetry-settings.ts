@@ -2,7 +2,7 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { DaemonHello, TelemetrySettings, TelemetrySettingsPatch } from "@pilot/protocol";
+import type { AIUsageBudget, DaemonHello, TelemetrySettings, TelemetrySettingsPatch } from "@pilot/protocol";
 import { type NodeTelemetryOptions, validateOtlpEndpoint } from "@pilot/telemetry";
 
 const FILE = "telemetry.json";
@@ -14,6 +14,7 @@ interface StoredTelemetrySettings {
 	remoteOperational: boolean;
 	productAnalytics: boolean;
 	endpoint?: string;
+	aiUsageBudget?: AIUsageBudget;
 	updatedAt?: string;
 	hostKey: string;
 	analyticsId: string;
@@ -48,6 +49,24 @@ function defaults(): StoredTelemetrySettings {
 	};
 }
 
+function usageBudget(value: unknown): AIUsageBudget | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return;
+	const input = value as Record<string, unknown>;
+	if (
+		Object.keys(input).some((key) => !["basis", "limitUsdMicros", "window"].includes(key)) ||
+		(input.basis !== "catalog_estimate" && input.basis !== "billed") ||
+		!Number.isSafeInteger(input.limitUsdMicros) ||
+		(input.limitUsdMicros as number) <= 0 ||
+		input.window !== "retained_chat"
+	)
+		return;
+	return {
+		basis: input.basis,
+		limitUsdMicros: input.limitUsdMicros as number,
+		window: input.window,
+	};
+}
+
 function stored(value: unknown): StoredTelemetrySettings | undefined {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return;
 	const input = value as Record<string, unknown>;
@@ -74,12 +93,15 @@ function stored(value: unknown): StoredTelemetrySettings | undefined {
 		}
 	}
 	if (input.remoteOperational && !endpoint) return;
+	const aiUsageBudget = input.aiUsageBudget === undefined ? undefined : usageBudget(input.aiUsageBudget);
+	if (input.aiUsageBudget !== undefined && !aiUsageBudget) return;
 	return {
 		schemaVersion: SCHEMA,
 		localDiagnostics: input.localDiagnostics,
 		remoteOperational: input.remoteOperational,
 		productAnalytics: input.productAnalytics,
 		...(endpoint ? { endpoint } : {}),
+		...(aiUsageBudget ? { aiUsageBudget } : {}),
 		...(input.updatedAt ? { updatedAt: input.updatedAt } : {}),
 		hostKey: input.hostKey,
 		analyticsId: input.analyticsId,
@@ -91,7 +113,8 @@ function patch(value: unknown): TelemetrySettingsPatch {
 	const input = value as Record<string, unknown>;
 	if (
 		Object.keys(input).some(
-			(key) => !["localDiagnostics", "remoteOperational", "productAnalytics", "endpoint"].includes(key),
+			(key) =>
+				!["localDiagnostics", "remoteOperational", "productAnalytics", "endpoint", "aiUsageBudget"].includes(key),
 		) ||
 		typeof input.localDiagnostics !== "boolean" ||
 		typeof input.remoteOperational !== "boolean" ||
@@ -103,11 +126,15 @@ function patch(value: unknown): TelemetrySettingsPatch {
 	if (typeof input.endpoint === "string" && input.endpoint.trim())
 		endpoint = validateOtlpEndpoint(input.endpoint.trim());
 	if (input.remoteOperational && !endpoint) throw new Error("An OTLP endpoint is required for remote reporting");
+	const hasBudget = Object.hasOwn(input, "aiUsageBudget");
+	const aiUsageBudget = input.aiUsageBudget === null || !hasBudget ? undefined : usageBudget(input.aiUsageBudget);
+	if (hasBudget && input.aiUsageBudget !== null && !aiUsageBudget) throw new Error("Invalid AI usage budget");
 	return {
 		localDiagnostics: input.localDiagnostics,
 		remoteOperational: input.remoteOperational,
 		productAnalytics: input.productAnalytics,
 		...(endpoint ? { endpoint } : {}),
+		...(hasBudget ? { aiUsageBudget: aiUsageBudget ?? null } : {}),
 	};
 }
 
@@ -147,6 +174,7 @@ export class TelemetrySettingsService {
 			productAnalytics: this.value.productAnalytics,
 			...(this.hostKind === "local" && this.value.productAnalytics ? { analyticsId: this.value.analyticsId } : {}),
 			...(this.value.endpoint ? { endpoint: this.value.endpoint } : {}),
+			...(this.value.aiUsageBudget ? { aiUsageBudget: this.value.aiUsageBudget } : {}),
 			...(this.value.updatedAt ? { updatedAt: this.value.updatedAt } : {}),
 		};
 	}
@@ -154,10 +182,14 @@ export class TelemetrySettingsService {
 	async update(input: unknown): Promise<TelemetrySettings> {
 		const next = patch(input);
 		const revokedAnalytics = this.value.productAnalytics && !next.productAnalytics;
+		const aiUsageBudget = Object.hasOwn(next, "aiUsageBudget")
+			? (next.aiUsageBudget ?? undefined)
+			: this.value.aiUsageBudget;
 		this.value = {
 			...this.value,
 			...next,
 			endpoint: next.endpoint,
+			aiUsageBudget,
 			updatedAt: new Date().toISOString(),
 			...(revokedAnalytics ? { analyticsId: randomIdentifier() } : {}),
 		};

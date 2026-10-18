@@ -35,8 +35,8 @@ test("telemetry API keeps controls host-scoped, validates mutations and clears w
 		},
 	};
 	const telemetry = await TelemetrySettingsService.open(home, hello);
-	sessions.configureTelemetry(telemetry.kernelSettings());
-	telemetry.onChange(() => sessions.configureTelemetry(telemetry.kernelSettings()));
+	sessions.configureTelemetry(telemetry.kernelSettings(), telemetry.settings().aiUsageBudget);
+	telemetry.onChange((settings) => sessions.configureTelemetry(telemetry.kernelSettings(), settings.aiUsageBudget));
 	const server = createDaemonServer(
 		{ home, host: "127.0.0.1", port: 0 },
 		sessions,
@@ -107,10 +107,13 @@ test("telemetry API keeps controls host-scoped, validates mutations and clears w
 			remoteOperational: true,
 			productAnalytics: false,
 			endpoint: "http://127.0.0.1:4318",
+			aiUsageBudget: { basis: "catalog_estimate", limitUsdMicros: 1_000_000, window: "retained_chat" },
 		}),
 	});
 	assert.equal(configured.status, 200);
-	assert.equal(((await configured.json()) as TelemetrySettings).endpoint, "http://127.0.0.1:4318/v1/traces");
+	const configuredSettings = (await configured.json()) as TelemetrySettings;
+	assert.equal(configuredSettings.endpoint, "http://127.0.0.1:4318/v1/traces");
+	assert.equal(configuredSettings.aiUsageBudget?.limitUsdMicros, 1_000_000);
 	const ignoredWhileDisabled = await fetch(`${origin}/api/diagnostics/native`, {
 		method: "PUT",
 		headers: { "content-type": "application/json" },
@@ -134,5 +137,10 @@ test("telemetry API keeps controls host-scoped, validates mutations and clears w
 	assert.equal(cleared.status, 200);
 	assert.deepEqual(await cleared.json(), { cleared: true });
 	await assert.rejects(stat(join(home, "native-diagnostics.json")));
+	assert.equal(
+		telemetry.settings().aiUsageBudget?.limitUsdMicros,
+		1_000_000,
+		"clearing evidence does not rewrite settings",
+	);
 	assert.equal(sessions.list().length, 0);
 });

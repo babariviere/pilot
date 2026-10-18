@@ -31,6 +31,7 @@ test("telemetry settings default off, persist privately and expose only pseudony
 	assert.equal(initial.localDiagnostics, true);
 	assert.equal(initial.remoteOperational, false);
 	assert.equal(initial.productAnalytics, false);
+	assert.equal(initial.aiUsageBudget, undefined, "there is no invented monetary default");
 	assert.match(initial.hostId, /^[a-z0-9_-]{22}$/);
 	assert.equal(JSON.stringify(initial).includes(hello.daemonId), false);
 	assert.equal((await stat(join(home, "telemetry.json"))).mode & 0o777, 0o600);
@@ -40,6 +41,7 @@ test("telemetry settings default off, persist privately and expose only pseudony
 		remoteOperational: true,
 		productAnalytics: true,
 		endpoint: "http://127.0.0.1:4318",
+		aiUsageBudget: { basis: "catalog_estimate", limitUsdMicros: 2_500_000, window: "retained_chat" },
 	});
 	assert.equal(updated.endpoint, "http://127.0.0.1:4318/v1/traces");
 	const reopened = await TelemetrySettingsService.open(home, hello);
@@ -47,6 +49,8 @@ test("telemetry settings default off, persist privately and expose only pseudony
 	assert.equal(reopened.kernelSettings().enabled, true);
 	assert.equal(reopened.kernelSettings().localDiagnostics, false);
 	assert.equal(reopened.kernelSettings().hostId, initial.hostId);
+	assert.equal(JSON.stringify(reopened.kernelSettings()).includes("aiUsageBudget"), false);
+	assert.equal(JSON.stringify(reopened.nodeOptions("pilot.daemon")).includes("aiUsageBudget"), false);
 
 	const privateFile = JSON.parse(await readFile(join(home, "telemetry.json"), "utf8"));
 	assert.equal(typeof privateFile.hostKey, "string");
@@ -54,6 +58,60 @@ test("telemetry settings default off, persist privately and expose only pseudony
 	assert.equal(JSON.stringify(updated).includes(privateFile.hostKey), false);
 	if (updated.hostKind === "local") assert.equal(updated.analyticsId, privateFile.analyticsId);
 	else assert.equal(JSON.stringify(updated).includes(privateFile.analyticsId), false);
+});
+
+test("AI usage budget configuration is optional, bounded, preservable by old clients and explicitly clearable", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "pilot-telemetry-budget-"));
+	t.after(() => import("node:fs/promises").then(({ rm }) => rm(home, { recursive: true, force: true })));
+	const service = await TelemetrySettingsService.open(home, hello);
+	const configured = await service.update({
+		localDiagnostics: true,
+		remoteOperational: false,
+		productAnalytics: false,
+		aiUsageBudget: { basis: "billed", limitUsdMicros: 1, window: "retained_chat" },
+	});
+	assert.deepEqual(configured.aiUsageBudget, { basis: "billed", limitUsdMicros: 1, window: "retained_chat" });
+	const otherHost = await TelemetrySettingsService.open(join(home, "other-host"), hello);
+	assert.equal(otherHost.settings().aiUsageBudget, undefined, "host-local settings do not flow to another Pilot home");
+
+	const preserved = await service.update({
+		localDiagnostics: false,
+		remoteOperational: false,
+		productAnalytics: false,
+	});
+	assert.deepEqual(
+		preserved.aiUsageBudget,
+		configured.aiUsageBudget,
+		"an older client omission cannot erase the setting",
+	);
+
+	for (const aiUsageBudget of [
+		{},
+		{ basis: "catalog_estimate", limitUsdMicros: 0, window: "retained_chat" },
+		{ basis: "catalog_estimate", limitUsdMicros: -1, window: "retained_chat" },
+		{ basis: "catalog_estimate", limitUsdMicros: 1.5, window: "retained_chat" },
+		{ basis: "provider-specific", limitUsdMicros: 1, window: "retained_chat" },
+		{ basis: "billed", limitUsdMicros: 1, window: "calendar_month" },
+		{ basis: "billed", limitUsdMicros: 1, window: "retained_chat", provider: "private" },
+	]) {
+		await assert.rejects(
+			service.update({
+				localDiagnostics: true,
+				remoteOperational: false,
+				productAnalytics: false,
+				aiUsageBudget,
+			}),
+			/Invalid AI usage budget/,
+		);
+	}
+	const cleared = await service.update({
+		localDiagnostics: true,
+		remoteOperational: false,
+		productAnalytics: false,
+		aiUsageBudget: null,
+	});
+	assert.equal(cleared.aiUsageBudget, undefined);
+	assert.equal(JSON.parse(await readFile(join(home, "telemetry.json"), "utf8")).aiUsageBudget, undefined);
 });
 
 test("telemetry settings reject unsafe endpoints and rotate analytics identity on revocation", async (t) => {

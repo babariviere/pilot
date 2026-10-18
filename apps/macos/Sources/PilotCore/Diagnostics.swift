@@ -200,6 +200,7 @@ public struct SessionDiagnostics: Codable, Sendable {
     public let current: SessionDiagnosticCurrent
     public let resources: SessionDiagnosticResources
     public let ai: AIUsageAccounting?
+    public let aiBudget: AIUsageBudgetComparison?
     public let sources: [DiagnosticSourceStatus]
     public let evidence: [DiagnosticEvidence]
     public let truncation: SessionDiagnosticTruncation

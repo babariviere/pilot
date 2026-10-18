@@ -139,13 +139,14 @@ const sessions = new SessionManager(
 	},
 );
 let appliedTelemetry = telemetry.settings();
+sessions.configureTelemetry(telemetry.kernelSettings(), appliedTelemetry.aiUsageBudget);
 telemetry.onChange((settings) => {
 	const exportChanged =
 		settings.remoteOperational !== appliedTelemetry.remoteOperational ||
 		settings.endpoint !== appliedTelemetry.endpoint;
 	appliedTelemetry = settings;
 	if (exportChanged) configureNodeTelemetry(telemetry.nodeOptions("pilot.daemon"));
-	sessions.configureTelemetry(telemetry.kernelSettings());
+	sessions.configureTelemetry(telemetry.kernelSettings(), settings.aiUsageBudget);
 });
 const maintenance = process.platform === "linux" ? new RuntimeMaintenance(config.home, hello, sessions) : undefined;
 await maintenance?.load();

@@ -195,6 +195,13 @@ is labeled as at least that amount; zero or absent prices are unavailable, never
 unless an authoritative billed source exists, and subscription coverage remains `unknown` unless explicitly
 reported. The initial implementation has no billed-spend source and never claims exact marginal spend.
 
+An optional host-local diagnostic budget has no default and is not a telemetry signal. Its fixed comparison window
+is retained per-chat accounting, and its basis is either catalog estimate or authoritative billed spend. The
+diagnostic projection includes the configured USD-micro limit, observed amount when available, complete/partial/
+unavailable coverage, subscription coverage and below/equal/above/indeterminate/unavailable comparison. Partial
+amounts are lower bounds and can prove above only when already greater than the limit. The setting and comparison
+are forbidden from OTLP and analytics payloads and are never consumed by admission or execution policy.
+
 ## OpenTelemetry signal schema v3
 
 ### Spans

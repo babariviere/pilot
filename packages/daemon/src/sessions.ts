@@ -31,6 +31,7 @@ import {
 import { credentialEnvironment } from "@pilot/kernel/credential-client";
 import type {
 	AgentEvent,
+	AIUsageBudget,
 	AIWorkerLaunchReason,
 	ArtifactRevision,
 	ArtifactSummary,
@@ -68,6 +69,7 @@ import type {
 } from "@pilot/protocol";
 import { nodeTelemetry, type TraceCarrier } from "@pilot/telemetry";
 import { AIUsageLedger } from "./ai-usage.ts";
+import { compareAIUsageBudget } from "./ai-usage-budget.ts";
 import { prepareAskSnapshot } from "./ask-snapshots.ts";
 import { chatTitleContext } from "./chat-title.ts";
 import { ColdViewReader } from "./cold-view-reader.ts";
@@ -1043,6 +1045,8 @@ export class SessionManager {
 	private internetOnline?: boolean;
 	private internetObservedAt?: number;
 	private telemetry?: KernelTelemetryConfiguration;
+	/** Host-local diagnostic comparison only. Never sent to a worker or consulted by admission/execution paths. */
+	private aiUsageBudget?: AIUsageBudget;
 	/** Ephemeral input contexts. Never written into session metadata; bounded loss after restart is intentional. */
 	private readonly inputTraces = new Map<string, TraceCarrier>();
 
@@ -1057,9 +1061,10 @@ export class SessionManager {
 		while (this.inputTraces.size > 512) this.inputTraces.delete(this.inputTraces.keys().next().value!);
 	}
 
-	configureTelemetry(configuration: KernelTelemetryConfiguration): void {
+	configureTelemetry(configuration: KernelTelemetryConfiguration, aiUsageBudget?: AIUsageBudget): void {
 		const previous = this.telemetry;
 		this.telemetry = { ...configuration };
+		this.aiUsageBudget = aiUsageBudget ? { ...aiUsageBudget } : undefined;
 		this.lifecycle.setEnabled(configuration.localDiagnostics);
 		this.nativeDiagnostics.setEnabled(configuration.localDiagnostics);
 		const exportChanged =
@@ -5000,6 +5005,7 @@ export class SessionManager {
 		else if (this.kernelErrors.has(id)) errorCode = "worker_failure";
 		else if (meta.kernelRestartPending) errorCode = "recovery_pending";
 		else if (summary.state === "failed") errorCode = "unknown";
+		const ai = this.aiUsage.summary(id, true);
 		return readSessionDiagnostics({
 			host,
 			sessionId: id,
@@ -5028,7 +5034,10 @@ export class SessionManager {
 					: { observedAt: new Date(this.internetObservedAt).toISOString() }),
 			},
 			performance: daemonPerformance(),
-			ai: this.aiUsage.summary(id, true),
+			ai,
+			...(this.telemetry?.localDiagnostics && this.aiUsageBudget
+				? { aiBudget: compareAIUsageBudget(ai, this.aiUsageBudget) }
+				: {}),
 			toolActivity: worker?.toolActivity,
 			...(options.limit === undefined ? {} : { limit: options.limit }),
 		});

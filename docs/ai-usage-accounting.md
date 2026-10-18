@@ -44,6 +44,30 @@ agent behavior:
 These are measurements, not control signals. They do not trigger compaction, alter context, switch models, retry a
 request, restart a worker or change parking/recovery policy.
 
+## Informational budgets
+
+Diagnostics settings can optionally configure one positive USD limit for this host. There is no default. The
+comparison window is the existing bounded accounting retained with one chat, not a calendar month, provider billing
+period or account-wide total. The selected basis is either:
+
+- **Catalog estimate**, which compares the catalog estimate and continues to label it as an estimate; or
+- **Billed spend**, which compares only authoritative billed amounts. Billed comparison is currently unavailable
+  because Pilot has no billing source.
+
+Complete retained observations report below, equal or above. A partial amount is a lower bound: it reports above
+only when that lower bound already exceeds the limit, and otherwise reports indeterminate. Missing usage or pricing
+reports unavailable, never zero. Subscription coverage remains a separate covered/not-covered/unknown field and
+does not turn a catalog estimate into marginal or billed spend.
+
+The comparison is derived only when diagnostics are read. It adds no ledger, background monitor or exported
+telemetry attribute. The private limit stays in this host's telemetry settings file and host settings API; it is not
+sent to the kernel or OTLP collector. Turning off local diagnostics withholds the comparison from the diagnostics
+specialist. Clearing local diagnostics adds no budget record to clear and does not change settings or the existing
+authoritative per-chat accounting.
+
+An above result is informational. It is not consulted by admission, model requests, tool execution, subscription
+quota handling, retries, context/compaction, parking or recovery, and it cannot pause, stop or reroute an agent.
+
 ## Cost semantics
 
 - Token classes stay separate. Reasoning is a reported subset of output, not an additional token class.

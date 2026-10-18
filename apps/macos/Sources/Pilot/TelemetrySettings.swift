@@ -40,6 +40,8 @@ struct TelemetrySettingsSection: View {
     @State private var remoteOperational = false
     @State private var productAnalytics = false
     @State private var endpoint = "http://127.0.0.1:4318/v1/traces"
+    @State private var budgetBasis: AIUsageBudgetBasis = .catalogEstimate
+    @State private var budgetUSD = ""
     @State private var saving = false
     @State private var clearing = false
     @State private var confirmClear = false
@@ -66,6 +68,21 @@ struct TelemetrySettingsSection: View {
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 260)
                         .accessibilityLabel("OTLP collector endpoint")
+                }
+                SettingsRow("Informational AI cost budget", detail: "Optional comparison against this chat’s retained usage. Empty means unset. Diagnostics only; it never pauses work or changes providers.") {
+                    HStack(spacing: 8) {
+                        Picker("Cost basis", selection: $budgetBasis) {
+                            Text("Catalog estimate").tag(AIUsageBudgetBasis.catalogEstimate)
+                            Text("Billed spend").tag(AIUsageBudgetBasis.billed)
+                        }
+                        .labelsHidden()
+                        .frame(width: 142)
+                        TextField("Not set", text: $budgetUSD)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 92)
+                            .accessibilityLabel("AI cost budget in US dollars")
+                        Text("USD").font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                    }
                 }
                 SettingsRow {
                     HStack(spacing: 10) {
@@ -97,6 +114,8 @@ struct TelemetrySettingsSection: View {
             remoteOperational = settings.remoteOperational
             productAnalytics = settings.productAnalytics
             endpoint = settings.endpoint ?? "http://127.0.0.1:4318/v1/traces"
+            budgetBasis = settings.aiUsageBudget?.basis ?? .catalogEstimate
+            budgetUSD = settings.aiUsageBudget.map { formattedBudget($0.limitUsdMicros) } ?? ""
             problem = nil
             if localApp { NativeTelemetrySettings.apply(settings) }
         } catch {
@@ -113,11 +132,35 @@ struct TelemetrySettingsSection: View {
         defer { saving = false }
         do {
             let trimmed = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedBudget = budgetUSD.trimmingCharacters(in: .whitespacesAndNewlines)
+            let aiUsageBudget: AIUsageBudget?
+            if trimmedBudget.isEmpty {
+                aiUsageBudget = nil
+            } else {
+                guard trimmedBudget.count <= 24,
+                      trimmedBudget.range(
+                        of: #"^(?:0|[1-9][0-9]*)(?:[.][0-9]{1,6})?$"#,
+                        options: .regularExpression
+                      ) != nil,
+                      let dollars = Decimal(string: trimmedBudget, locale: Locale(identifier: "en_US_POSIX"))
+                else {
+                    problem = "Enter a positive USD amount with at most six decimal places, or leave the budget empty."
+                    return
+                }
+                let micros = NSDecimalNumber(decimal: dollars * 1_000_000).doubleValue
+                guard micros.isFinite, micros >= 1, micros <= 9_007_199_254_740_991,
+                      micros.rounded() == micros else {
+                    problem = "Enter a positive USD amount with at most six decimal places, or leave the budget empty."
+                    return
+                }
+                aiUsageBudget = AIUsageBudget(basis: budgetBasis, limitUsdMicros: micros)
+            }
             let settings = try await client.updateTelemetrySettings(TelemetrySettingsPatch(
                 localDiagnostics: localDiagnostics,
                 remoteOperational: remoteOperational,
                 productAnalytics: productAnalytics,
-                endpoint: trimmed.isEmpty ? nil : trimmed
+                endpoint: trimmed.isEmpty ? nil : trimmed,
+                aiUsageBudget: aiUsageBudget
             ))
             loaded = settings; problem = nil; saved = true
             if localApp { NativeTelemetrySettings.apply(settings) }
@@ -139,6 +182,16 @@ struct TelemetrySettingsSection: View {
             problem = nil
         }
         catch { problem = "Could not clear this host’s local diagnostic files. No chat was changed or started." }
+    }
+
+    private func formattedBudget(_ micros: Double) -> String {
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.numberStyle = .decimal
+        formatter.usesGroupingSeparator = false
+        formatter.minimumFractionDigits = 0
+        formatter.maximumFractionDigits = 6
+        return formatter.string(from: NSNumber(value: micros / 1_000_000)) ?? ""
     }
 }
 

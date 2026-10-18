@@ -2462,6 +2462,93 @@ test("worker context is live-only while aggregate AI accounting survives worker 
 	assert.equal(reopened.get(created.id)?.usage?.ai?.efficiency?.relaunch.count, 1);
 });
 
+test("an above-budget diagnostic comparison is consent-gated and never affects execution", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager({}, { diagnosticHost });
+	const telemetry = {
+		enabled: false,
+		serviceVersion: "test",
+		environment: "test" as const,
+		hostKind: "local" as const,
+		hostId: "host",
+		localDiagnostics: true,
+	};
+	sessions.configureTelemetry(telemetry, {
+		basis: "catalog_estimate",
+		limitUsdMicros: 100,
+		window: "retained_chat",
+	});
+	const created = await sessions.spawn({ cwd: f.source, message: "usage" });
+	await until(() => sessions.get(created.id)?.state === "working");
+	assert.equal(JSON.stringify(f.workers[0]!.spec.telemetry).includes("aiUsageBudget"), false);
+	const scope = (kind: "model_requests" | "child_operations", active: boolean) => ({
+		tokens: {
+			input: active ? 10 : 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			reasoningStatus: "unavailable" as const,
+		},
+		cost: active
+			? {
+					estimateStatus: "catalog_estimate" as const,
+					estimatedUsdMicros: 101,
+					pricingRevision: "pi-ai@1.3.0",
+					billedStatus: "unavailable" as const,
+					subscriptionCoverage: "unknown" as const,
+				}
+			: {
+					estimateStatus: "unavailable" as const,
+					billedStatus: "unavailable" as const,
+					subscriptionCoverage: "unknown" as const,
+				},
+		activity: {
+			kind,
+			count: active ? 1 : 0,
+			success: active ? 1 : 0,
+			failure: 0,
+			cancelled: 0,
+			usageReports: active ? 1 : 0,
+			providerAttemptsObserved: active ? 1 : 0,
+			requestRetriesObserved: 0,
+			elapsedMsObserved: active ? 10 : 0,
+			activeMsObserved: active ? 8 : 0,
+			outcomeCoverage: "partial" as const,
+			timingCoverage: "partial" as const,
+		},
+	});
+	f.workers[0]!.reportUsage({
+		accounting: {
+			conversationId: "0",
+			timingBoot: "00000000-0000-4000-8000-000000000001",
+			activityEpoch: "initial",
+			epochKind: "initial",
+			observedAt: Date.now(),
+			direct: scope("model_requests", true),
+			child: scope("child_operations", false),
+		},
+	});
+	const diagnostic = await sessions.diagnostics(created.id);
+	assert.equal(diagnostic.aiBudget?.comparison, "above");
+	assert.equal(diagnostic.aiBudget?.informational, true);
+	assert.equal(sessions.get(created.id)?.subscriptionPause, undefined);
+
+	const before = f.workers[0]!.requests.length;
+	await sessions.send(created.id, "continue normally", "steer", "over-budget-still-runs");
+	assert.equal(f.workers[0]!.requests.length, before + 1);
+	assert.equal(f.workers[0]!.requests.at(-1)?.requestId, "over-budget-still-runs");
+
+	sessions.configureTelemetry(
+		{ ...telemetry, localDiagnostics: false },
+		{
+			basis: "catalog_estimate",
+			limitUsdMicros: 100,
+			window: "retained_chat",
+		},
+	);
+	assert.equal((await sessions.diagnostics(created.id)).aiBudget, undefined);
+});
+
 test("history reads entries hidden by compaction from the session's durable storage", async (t) => {
 	const f = await fixture(t);
 	const reads: Array<[string, number, number]> = [];
