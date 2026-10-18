@@ -1760,6 +1760,7 @@ export type {
 	ControlRemoteEventPage,
 	ControlRemoteEventQuery,
 	ControlRemoteMissionTask,
+	ControlRemoteStatusImportRequest,
 	ControlRemoteStatusImportResponse,
 	ControlRemoteStatusPage,
 	ControlRemoteStatusQuery,

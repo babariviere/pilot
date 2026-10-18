@@ -1249,7 +1249,8 @@
 				"bindingGeneration": 1
 			}
 		],
-		"more": false
+		"more": false,
+		"lane": "ordinary"
 	},
 	"acknowledgments": [
 		{
@@ -1524,7 +1525,8 @@
 					}
 				],
 				"missionTasksTotal": 2,
-				"truncated": false
+				"truncated": false,
+				"revision": 1
 			},
 			"next": "snapshot:1/page:2"
 		},
@@ -1619,7 +1621,8 @@
 					}
 				],
 				"missionTasksTotal": 2,
-				"truncated": false
+				"truncated": false,
+				"revision": 1
 			}
 		}
 	],
@@ -2550,7 +2553,8 @@
 				}
 			],
 			"more": true,
-			"next": "outbox:1/after:1"
+			"next": "outbox:1/after:1",
+			"lane": "ordinary"
 		},
 		{
 			"bindingId": "control:binding:1",
@@ -2579,7 +2583,8 @@
 					"bindingGeneration": 1
 				}
 			],
-			"more": false
+			"more": false,
+			"lane": "ordinary"
 		}
 	],
 	"outboxQueries": [
@@ -2628,11 +2633,13 @@
 		{
 			"snapshotId": "snapshot:1",
 			"state": "staged",
-			"next": "snapshot:1/page:2"
+			"next": "snapshot:1/page:2",
+			"publishedRevision": 0
 		},
 		{
 			"snapshotId": "snapshot:1",
-			"state": "published"
+			"state": "published",
+			"publishedRevision": 1
 		}
 	],
 	"sharedTasks": [
@@ -3117,7 +3124,9 @@
 				"snapshotId": "snapshot:1",
 				"next": "snapshot:1/page:2",
 				"state": "staged",
-				"importedAt": 4001
+				"importedAt": 4001,
+				"revision": 1,
+				"publishedRevision": 0
 			},
 			"reconciliationRequired": false
 		},
@@ -3715,7 +3724,9 @@
 					"snapshotId": "snapshot:1",
 					"next": "snapshot:1/page:2",
 					"state": "staged",
-					"importedAt": 4001
+					"importedAt": 4001,
+					"revision": 1,
+					"publishedRevision": 0
 				},
 				"reconciliationRequired": true
 			}
@@ -3727,6 +3738,242 @@
 		{
 			"code": "approval_required",
 			"error": "Native approval is required"
+		},
+		{
+			"code": "snapshot_cas_mismatch",
+			"error": "Another complete capture was published"
+		},
+		{
+			"code": "stale_snapshot",
+			"error": "Older source revision"
 		}
-	]
+	],
+	"statusImportRequests": [
+		{
+			"page": {
+				"bindingId": "control:binding:1",
+				"generation": 1,
+				"snapshot": {
+					"sourceHost": {
+						"hostId": "daemon",
+						"daemonId": "executor-daemon",
+						"lineageId": "executor-lineage"
+					},
+					"snapshotId": "snapshot:1",
+					"capturedAt": 4000,
+					"dashboard": {
+						"untrusted": true,
+						"source": "daemon-memory",
+						"projects": [],
+						"chats": [],
+						"missions": [],
+						"pullRequests": [],
+						"linear": [],
+						"runningAgents": [],
+						"activeMissions": [],
+						"blockers": [],
+						"pendingDecisions": [],
+						"next": {
+							"watches": [],
+							"total": 0
+						},
+						"totals": {
+							"projects": 0,
+							"chats": 0,
+							"missions": 0,
+							"pullRequests": 0,
+							"linear": 0,
+							"runningAgents": 0,
+							"activeMissions": 0,
+							"blockers": 0,
+							"pendingDecisions": 0
+						},
+						"truncated": false
+					},
+					"missionTasks": [
+						{
+							"id": "[\"home-daemon\",\"home-lineage\",\"m\",\"t\"]",
+							"bindingId": "shared:replica-binding:2",
+							"bindingGeneration": 1,
+							"projectId": "p",
+							"missionId": "m",
+							"missionHome": {
+								"hostId": "daemon",
+								"daemonId": "home-daemon",
+								"lineageId": "home-lineage"
+							},
+							"observedOn": {
+								"hostId": "daemon",
+								"daemonId": "executor-daemon",
+								"lineageId": "executor-lineage"
+							},
+							"source": "replica",
+							"consistency": "committed",
+							"taskId": "t",
+							"taskNumber": 7,
+							"title": "Investigate",
+							"status": "in_progress",
+							"definitionRevision": 3,
+							"delegationId": "delegation:1",
+							"executionHost": {
+								"hostId": "daemon",
+								"daemonId": "executor-daemon",
+								"lineageId": "executor-lineage"
+							},
+							"executionEpoch": 2,
+							"grantState": "accepted",
+							"running": true,
+							"availability": "unknown",
+							"replicaSyncedAt": 3900,
+							"replicaAgeMs": 100,
+							"snapshotCapturedAt": 4000,
+							"grantBindingId": "shared:binding:1",
+							"grantBindingGeneration": 1
+						}
+					],
+					"missionTasksTotal": 2,
+					"truncated": false,
+					"revision": 1
+				},
+				"next": "snapshot:1/page:2"
+			},
+			"expectedPublishedRevision": 0
+		},
+		{
+			"page": {
+				"bindingId": "control:binding:1",
+				"generation": 1,
+				"snapshot": {
+					"sourceHost": {
+						"hostId": "daemon",
+						"daemonId": "executor-daemon",
+						"lineageId": "executor-lineage"
+					},
+					"snapshotId": "snapshot:1",
+					"capturedAt": 4000,
+					"dashboard": {
+						"untrusted": true,
+						"source": "daemon-memory",
+						"projects": [],
+						"chats": [],
+						"missions": [],
+						"pullRequests": [],
+						"linear": [],
+						"runningAgents": [],
+						"activeMissions": [],
+						"blockers": [],
+						"pendingDecisions": [],
+						"next": {
+							"watches": [],
+							"total": 0
+						},
+						"totals": {
+							"projects": 0,
+							"chats": 0,
+							"missions": 0,
+							"pullRequests": 0,
+							"linear": 0,
+							"runningAgents": 0,
+							"activeMissions": 0,
+							"blockers": 0,
+							"pendingDecisions": 0
+						},
+						"truncated": false
+					},
+					"missionTasks": [
+						{
+							"id": "[\"proposal\",\"executor-daemon\",\"executor-lineage\",\"shared:binding:1\",1,\"proposal:1\"]",
+							"bindingId": "shared:binding:1",
+							"bindingGeneration": 1,
+							"projectId": "p",
+							"missionId": "m",
+							"missionHome": {
+								"hostId": "daemon",
+								"daemonId": "home-daemon",
+								"lineageId": "home-lineage"
+							},
+							"observedOn": {
+								"hostId": "daemon",
+								"daemonId": "executor-daemon",
+								"lineageId": "executor-lineage"
+							},
+							"source": "proposal",
+							"consistency": "provisional",
+							"title": "Proposed task",
+							"status": "todo",
+							"proposalId": "proposal:1",
+							"proposalState": "conflict",
+							"proposalOrigin": {
+								"host": {
+									"hostId": "daemon",
+									"daemonId": "executor-daemon",
+									"lineageId": "executor-lineage"
+								},
+								"sessionId": "chat:1"
+							},
+							"conflicts": [
+								{
+									"proposalId": "proposal:1",
+									"origin": {
+										"host": {
+											"hostId": "daemon",
+											"daemonId": "executor-daemon",
+											"lineageId": "executor-lineage"
+										},
+										"sessionId": "chat:1"
+									},
+									"state": "conflict",
+									"reason": "Definition changed",
+									"evidenceId": "proposal:1"
+								}
+							],
+							"availability": "unknown"
+						}
+					],
+					"missionTasksTotal": 2,
+					"truncated": false,
+					"revision": 1
+				}
+			},
+			"expectedPublishedRevision": 0
+		}
+	],
+	"safetyQuery": {
+		"peer": {
+			"hostId": "daemon",
+			"daemonId": "executor-daemon",
+			"lineageId": "executor-lineage"
+		},
+		"lane": "revocation"
+	},
+	"safetyExchange": {
+		"bindingId": "control:binding:1",
+		"generation": 1,
+		"lane": "revocation",
+		"operations": [
+			{
+				"schemaVersion": 1,
+				"operationId": "revoke:1",
+				"producerId": "producer:1",
+				"sequence": 3,
+				"origin": {
+					"hostId": "daemon",
+					"daemonId": "home-daemon",
+					"lineageId": "home-lineage"
+				},
+				"destination": {
+					"hostId": "daemon",
+					"daemonId": "executor-daemon",
+					"lineageId": "executor-lineage"
+				},
+				"kind": "control.revoke",
+				"targetId": "auth:1",
+				"payload": "{\"authorizationId\":\"auth:1\",\"levelCeiling\":\"implement\",\"budgetReservation\":{\"reservationId\":\"reservation:1\",\"budgetUsd\":0,\"followUps\":0},\"idempotencyKey\":\"revoke:1\",\"authorization\":{\"id\":\"auth:1\",\"hosts\":[{\"hostId\":\"daemon\",\"daemonId\":\"home-daemon\",\"lineageId\":\"home-lineage\"},{\"hostId\":\"daemon\",\"daemonId\":\"executor-daemon\",\"lineageId\":\"executor-lineage\"}],\"userMessage\":{\"conversationId\":\"control\",\"submissionId\":1,\"entryId\":2,\"requestId\":\"user:1\"},\"scope\":\"Investigate and fix\",\"level\":\"implement\",\"targets\":[{\"host\":{\"hostId\":\"daemon\",\"daemonId\":\"executor-daemon\",\"lineageId\":\"executor-lineage\"},\"kind\":\"project\",\"id\":\"p\"}],\"limits\":{\"followUps\":2,\"budgetUsd\":4},\"createdAt\":1000,\"expiresAt\":10000,\"usage\":{\"followUps\":1,\"budgetUsd\":1}},\"revokedAt\":2000,\"roleFence\":{\"home\":1,\"executor\":2}}",
+				"payloadHash": "fixture-sha256-not-for-admission",
+				"bindingId": "control:binding:1",
+				"bindingGeneration": 1
+			}
+		],
+		"more": false
+	}
 }

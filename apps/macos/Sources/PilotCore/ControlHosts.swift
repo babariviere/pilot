@@ -276,12 +276,17 @@ public struct ControlOperationResult: Codable, Equatable, Sendable {
 }
 public struct ControlOperationExchangeRequest: Codable, Equatable, Sendable {
     public let peer: OperationHost
+    public let lane: ControlOperationExchangeResponse.Lane?
     public let cursor: String?
-    public init(peer: OperationHost, cursor: String? = nil) { self.peer = peer; self.cursor = cursor }
+    public init(peer: OperationHost, cursor: String? = nil, lane: ControlOperationExchangeResponse.Lane? = nil) {
+        self.peer = peer; self.cursor = cursor; self.lane = lane
+    }
 }
 public struct ControlOperationExchangeResponse: Codable, Equatable, Sendable {
+    public enum Lane: String, Codable, Sendable { case revocation, ordinary }
     public let bindingId: String
     public let generation: UInt64
+    public let lane: Lane
     public let operations: [ControlDurableOperation]
     public let more: Bool
     public let next: String?
@@ -347,6 +352,7 @@ public typealias ControlRemoteMissionTask = ControlDashboardSharedTask
 public struct ControlRemoteStatusSnapshot: Codable, Equatable, Sendable {
     public let sourceHost: OperationHost
     public let snapshotId: String
+    public let revision: Int
     public let capturedAt: Double
     public let dashboard: ControlDashboardResponse
     public let missionTasks: [ControlRemoteMissionTask]
@@ -363,10 +369,18 @@ public struct ControlRemoteStatusQuery: Codable, Equatable, Sendable {
     public let cursor: String?
     public init(cursor: String? = nil) { self.cursor = cursor }
 }
+public struct ControlRemoteStatusImportRequest: Codable, Equatable, Sendable {
+    public let page: ControlRemoteStatusPage
+    public let expectedPublishedRevision: Int
+    public init(page: ControlRemoteStatusPage, expectedPublishedRevision: Int) {
+        self.page = page; self.expectedPublishedRevision = expectedPublishedRevision
+    }
+}
 public struct ControlRemoteStatusImportResponse: Codable, Equatable, Sendable {
     public enum State: String, Codable, Sendable { case staged, published }
     public let snapshotId: String
     public let state: State
+    public let publishedRevision: Int
     public let next: String?
 }
 
@@ -446,6 +460,8 @@ public struct ControlEventImportCursor: Codable, Equatable, Sendable {
 public struct ControlHostSyncState: Codable, Equatable, Sendable {
     public struct Status: Codable, Equatable, Sendable {
         public let snapshotId: String
+        public let revision: Int
+        public let publishedRevision: Int
         public let next: String?
         public let state: ControlRemoteStatusImportResponse.State
         public let importedAt: Double
@@ -612,6 +628,7 @@ public struct ControlHostErrorResponse: Codable, Equatable, Sendable {
         case identityMismatch = "identity_mismatch", staleRole = "stale_role", staleGeneration = "stale_generation"
         case reconciliationRequired = "reconciliation_required", snapshotRestartRequired = "snapshot_restart_required"
         case notReady = "not_ready", capacity
+        case staleSnapshot = "stale_snapshot", snapshotCASMismatch = "snapshot_cas_mismatch"
     }
     public let code: Code
     public let error: String

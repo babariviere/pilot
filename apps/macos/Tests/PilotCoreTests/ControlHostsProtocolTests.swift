@@ -141,6 +141,17 @@ struct ControlHostsProtocolTests {
         #expect(ControlRemoteStatusQuery() == statuses[0])
         let imports = try roundTrip([ControlRemoteStatusImportResponse].self, #require(f["statusImports"]))
         #expect(imports.map(\.state) == [.staged, .published])
+        #expect(imports.map(\.publishedRevision) == [0, 1])
+        let requests = try roundTrip([ControlRemoteStatusImportRequest].self, #require(f["statusImportRequests"]))
+        #expect(requests.map(\.expectedPublishedRevision) == [0, 0])
+        #expect(requests.map { $0.page.snapshot.revision } == [1, 1])
+        #expect(ControlRemoteStatusImportRequest(page: requests[0].page, expectedPublishedRevision: 0) == requests[0])
+        let safetyQuery = try roundTrip(ControlOperationExchangeRequest.self, #require(f["safetyQuery"]))
+        #expect(safetyQuery.lane == .revocation)
+        #expect(ControlOperationExchangeRequest(peer: safetyQuery.peer, lane: .revocation) == safetyQuery)
+        let safetyPage = try roundTrip(ControlOperationExchangeResponse.self, #require(f["safetyExchange"]))
+        #expect(safetyPage.lane == .revocation)
+        #expect(safetyPage.operations.first?.kind == .revoke)
         #expect(statuses[1].cursor == imports[0].next)
     }
 
