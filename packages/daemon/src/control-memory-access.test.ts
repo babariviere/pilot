@@ -17,13 +17,13 @@ test("only control declares history, and caller authorization is live on every r
 	});
 	let control = true;
 	const access = new ControlMemoryAccess(memory, (id) => id === "control" && control);
-	const call = async (action: "zoom" | "date", args: Record<string, unknown>) =>
+	const call = async (action: "zoom" | "date" | "file", args: Record<string, unknown>) =>
 		(await access.call("control", action, args)) as JsonValue;
 	assert.deepEqual(createControlMemoryTools(false, call), []);
 	const tools = createControlMemoryTools(true, call);
 	assert.deepEqual(
 		tools.map((tool) => tool.name),
-		["history"],
+		["history", "read_file"],
 	);
 	assert.ok(tools.every((tool) => tool.description.length < 300));
 	const read = async (args: Record<string, unknown>) =>

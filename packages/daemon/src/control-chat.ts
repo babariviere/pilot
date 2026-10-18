@@ -1,5 +1,9 @@
+import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { Tool } from "@earendil-works/pi-ai";
 import { ControlCompactor } from "./control-compaction.ts";
+import { ControlFiles } from "./control-files.ts";
 import { ControlMemory } from "./control-memory.ts";
 import { ControlMemoryAccess } from "./control-memory-access.ts";
 import type { ControlMessageInput } from "./control-memory-disk.ts";
@@ -9,6 +13,7 @@ export class ControlChat {
 	readonly memory: ControlMemory;
 	private readonly compactor: ControlCompactor;
 	private readonly access: ControlMemoryAccess;
+	private readonly files: ControlFiles;
 	private tools: Tool[] = [];
 	private provider = "";
 	private readonly model: () => string | undefined;
@@ -25,17 +30,40 @@ export class ControlChat {
 		models: ModelCatalog,
 		isControl: (id: string) => boolean,
 		model: () => string | undefined,
+		fileRoots: (path: string) => readonly string[] = () => [],
 	) {
 		this.isControl = isControl;
 		this.model = model;
 		this.memory = new ControlMemory(home);
 		this.access = new ControlMemoryAccess(this.memory, isControl);
+		this.files = new ControlFiles(
+			isControl,
+			(path) => [
+				join(home, "attachments"),
+				...(process.platform === "darwin"
+					? [join(homedir(), "Library", "Application Support", "Pilot", "Attachments")]
+					: []),
+				...fileRoots(path),
+			],
+			async (entry) => {
+				await this.memory.auditAppend({
+					operationId: `file:${randomUUID()}`,
+					action: "read_file",
+					phase: entry.outcome === "read" ? "succeeded" : "failed",
+					at: Date.now(),
+					caller: entry.caller,
+					args: { path: entry.path },
+					result: { ...entry },
+				});
+			},
+		);
 		this.compactor = new ControlCompactor(this.memory, (job, lines, signal) =>
 			models.compactControl(cwd, this.provider, this.tools, job, lines, signal),
 		);
 	}
 	async call(id: string, action: string, args: Record<string, unknown>): Promise<unknown> {
 		if (!this.isControl(id)) throw new Error("Only the control chat may use this service");
+		if (action === "file") return this.files.read(id, args);
 		if (action === "zoom" || action === "date") return this.access.call(id, action, args);
 		if (action === "record") {
 			if (!args.message || typeof args.message !== "object" || Array.isArray(args.message))
