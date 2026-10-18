@@ -734,6 +734,16 @@ final class ProjectEditor: ObservableObject {
     @Published var linearStateMappings: [String: LinearStateMapping] = [:]
     @Published var error: String?
     @Published private var loaded: Fields?
+    /// The newest project value seen from the server. Fields only follow it while the form has no unsaved edits.
+    @Published private(set) var latest: Project?
+    @Published private(set) var isSaving = false
+    /// Changes when the editor moves to another project, so a late save response cannot touch the new form.
+    private var generation = 0
+    /// The last project value that arrived while a save was in flight. Project has no version, so its order against
+    /// the save response is unknown.
+    private var observedDuringSave: Project?
+    /// A save response was set aside because a different value arrived while it was in flight.
+    private var setAsideResponse = false
 
     /// The editable values, to tell whether there is anything to save.
     private struct Fields: Equatable {
@@ -747,6 +757,28 @@ final class ProjectEditor: ObservableObject {
         var team: String?
         var stateMappings: [String: LinearStateMapping]
         var labels: [SlackProjectLabel]
+
+        init(name: String, model: String, privateClones: Bool, requirePullRequest: Bool, channels: [String],
+             mentionOnlyChannels: Set<String>, groupHandles: String, team: String?,
+             stateMappings: [String: LinearStateMapping], labels: [SlackProjectLabel]) {
+            self.name = name; self.model = model; self.privateClones = privateClones
+            self.requirePullRequest = requirePullRequest; self.channels = channels
+            self.mentionOnlyChannels = mentionOnlyChannels; self.groupHandles = groupHandles; self.team = team
+            self.stateMappings = stateMappings; self.labels = labels
+        }
+
+        /// What `load` puts in the form for this project.
+        init(_ project: Project) {
+            let tracking = project.tracking
+            self.init(name: project.name, model: project.model ?? "", privateClones: project.usesPrivateClones,
+                      requirePullRequest: project.effectiveRequirePullRequest,
+                      channels: tracking?.slackChannels ?? [],
+                      mentionOnlyChannels: Set(tracking?.slackMentionOnlyChannels ?? []),
+                      groupHandles: (tracking?.slackGroupHandles ?? []).joined(separator: ", "),
+                      team: tracking?.linearTeam.flatMap { $0.isEmpty ? nil : $0 },
+                      stateMappings: tracking?.linearStateMappings ?? [:],
+                      labels: (tracking?.slackLabels ?? []).filter { !$0.name.isEmpty })
+        }
     }
 
     private var fields: Fields {
@@ -762,7 +794,63 @@ final class ProjectEditor: ObservableObject {
 
     var hasChanges: Bool { loaded != nil && loaded != fields }
 
+    /// The server's project differs from the one the form was loaded from while the form has unsaved edits.
+    var hasIncomingChanges: Bool {
+        guard hasChanges, let latest, let loaded else { return false }
+        return setAsideResponse || Fields(latest) != loaded
+    }
+
+    /// Takes an updated project value. A clean form follows it. A form with unsaved edits keeps them and only
+    /// remembers the update, so Revert can load it and the save bar can say it arrived.
+    func refresh(_ project: Project) {
+        guard loaded != nil, latest?.id == project.id else { return load(project) }
+        latest = project
+        if isSaving { observedDuringSave = project }
+        if !hasChanges || fields == Fields(project) { load(project) }
+    }
+
+    /// Drops unsaved edits and loads the latest server value.
+    func revert() {
+        guard !isSaving, let latest else { return }
+        load(latest)
+    }
+
+    /// Sends the form as it is now. Edits made while the request is in flight stay unsaved, and a failure keeps every field.
+    /// If a different project value arrived meanwhile, the response may be older or newer than it. Nothing is
+    /// overwritten: the form keeps its fields, the arrived value becomes the baseline, and the bar says it was updated
+    /// elsewhere, so Revert loads it and Save sends the form again.
+    func save(_ send: (ProjectRequest) async throws -> Project) async {
+        guard !isSaving, hasChanges else { return }
+        let submitted = fields, token = generation
+        isSaving = true
+        observedDuringSave = nil
+        defer { isSaving = false; observedDuringSave = nil }
+        do {
+            let saved = try await send(request)
+            guard token == generation else { return }
+            error = nil
+            if let observed = observedDuringSave, Fields(observed) != Fields(saved) {
+                latest = observed
+                loaded = Fields(observed)
+                setAsideResponse = true
+                return
+            }
+            latest = saved
+            if fields == submitted {
+                load(saved)
+            } else {
+                loaded = Fields(saved)
+            }
+        } catch {
+            guard token == generation else { return }
+            self.error = error.localizedDescription
+        }
+    }
+
     func load(_ project: Project) {
+        setAsideResponse = false
+        if latest?.id != project.id { generation += 1 }
+        latest = project
         name = project.name
         model = project.model ?? ""
         privateClones = project.usesPrivateClones
@@ -826,7 +914,6 @@ private struct ProjectSettings: View {
     let project: Project
     @EndpointClient private var client
     @StateObject private var editor = ProjectEditor()
-    @State private var saving = false
     @State private var confirmingRemoval = false
     @State private var removeError: String?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -868,14 +955,14 @@ private struct ProjectSettings: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if editor.hasChanges {
-                SettingsSaveBar(error: editor.error, saving: saving,
-                                revert: { editor.load(project) }, save: { Task { await save() } })
+                SettingsSaveBar(error: editor.error, updatedElsewhere: editor.hasIncomingChanges, saving: editor.isSaving,
+                                revert: { editor.revert() }, save: { Task { await save() } })
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
         .animation(Theme.Motion.standard(reduceMotion: reduceMotion), value: editor.hasChanges)
         .onAppear { editor.load(project) }
-        .onChange(of: project) { _, updated in editor.load(updated) }
+        .onChange(of: project) { _, updated in editor.refresh(updated) }
         .confirmationDialog("Remove \(project.name)?", isPresented: $confirmingRemoval) {
             Button("Remove Project", role: .destructive) { Task { await remove() } }
         } message: {
@@ -884,14 +971,8 @@ private struct ProjectSettings: View {
     }
 
     private func save() async {
-        saving = true
-        defer { saving = false }
-        do {
-            _ = try await client.updateProject(project.id, editor.request)
-            editor.error = nil
-        } catch {
-            editor.error = error.localizedDescription
-        }
+        let id = project.id
+        await editor.save { try await client.updateProject(id, $0) }
     }
 
     private func remove() async {
@@ -904,9 +985,11 @@ private struct ProjectSettings: View {
     }
 }
 
-/// Pinned below a project page while it has unsaved edits: a save error if any, then Revert and Save.
-private struct SettingsSaveBar: View {
+/// Pinned below a project page while it has unsaved edits: a save error or an update from elsewhere if any, then
+/// Revert and Save. Revert loads the latest saved values.
+struct SettingsSaveBar: View {
     let error: String?
+    var updatedElsewhere = false
     let saving: Bool
     let revert: () -> Void
     let save: () -> Void
@@ -919,6 +1002,11 @@ private struct SettingsSaveBar: View {
                     InlineProblem(error)
                         .lineLimit(2)
                         .help(error)
+                } else if updatedElsewhere {
+                    Text("Updated elsewhere. Revert loads it; Save replaces it.")
+                        .font(.pilot(.label))
+                        .foregroundStyle(Theme.mutedForeground)
+                        .lineLimit(2)
                 } else {
                     Text("Unsaved changes")
                         .font(.pilot(.label))
