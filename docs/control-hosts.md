@@ -21,7 +21,10 @@ The configuration also identifies this daemon and its role:
 
 `controlSessionId` identifies the active Control only on home. An archived Control is identified
 by `archive.sessionId`, never an active Control. Roles are persisted setup policy, not inferred
-from connectivity, a sidebar row or a matching session ID. Until migration's gate is met, existing
+from connectivity. While executor policy is staged, `legacyControlSessionId` identifies its
+still-visible former independent Control; only the final archive clears this field and fills archive.
+Role labels do not authorize the app to hide that legacy Control. Never infer authority from a
+sidebar row or a matching session ID. Until migration's gate is met, existing
 independent Controls remain unchanged; this contract is not permission to hide them early.
 
 Follow [host routing](host-routing.md): daemon installation and storage lineage identify authority,
@@ -73,7 +76,9 @@ create or extend a grant. Merge still requires explicit user confirmation in the
 
 Reuse [durable operations](durable-operations.md), including exact UTF-8 payload/hash, producer
 sequence, preallocated target, fsynced admission and receipt reconciliation. The following six
-kinds are reserved; unsupported kinds cannot execute. Payload DTOs are JSON inside the existing
+kinds are reserved for authorized agent actions; unsupported kinds cannot execute. The separate
+app-only `control.archive` transition is specified below and carries no agent authorization.
+Payload DTOs are JSON inside the existing
 `DurableOperation.payload` string, not extra mutable envelope fields.
 
 | Kind | Payload-specific fields | Envelope targetId |
@@ -118,7 +123,7 @@ new dispatch immediately. An offline executor cannot know an unseen revocation: 
 work can continue, and a previously transmitted operation may be admitted before the tombstone
 arrives. Revocation is not an instant remote kill; request stop separately. No connectivity lease.
 
-`OperationReceipt.result` on acceptance is `ControlOperationResult`, with the matching kind,
+`OperationReceipt.result` on acceptance of these six actions is `ControlOperationResult`, with the matching kind,
 authorization and session/watch/removal/revocation outcome. Receipts retain the generic operation ID,
 payload hash, destination and target fences. Accepted means admitted, not successful agent execution.
 Only explicit rejection is terminal; pending/unknown retains original ownership and bytes.
@@ -127,25 +132,83 @@ journals, not exactly-once arbitrary tool effects.
 
 ## Courier-facing exchange
 
-These are proposed loopback API shapes for implementation, **not routes installed by this change**.
+These are the reserved v1 loopback API surfaces for implementation, **not routes installed by this change**.
 No daemon-to-daemon connection, reverse tunnel or new public listener is added. The app courier
 already has verified connections to both daemons; it relays immutable data and never makes policy.
 
-| Proposed route | Request / response and owner |
+| Reserved route | Request / response and owner |
 | --- | --- |
-| POST `/api/control-hosts/:bindingId/exchange` on home | `ControlOperationExchangeRequest {peer}` → `ControlOperationExchangeResponse`, up to 16 original envelopes and more. Export durably fences possible transmission. |
+| GET `/api/control-hosts/:bindingId` on either peer | `ControlHostStateResponse`: persisted configuration/enrollment; home additionally supplies its trusted cutover evidence. Unknown binding is 404, never an implicit enrollment. |
+| PUT `/api/control-hosts/:bindingId/enrollment` on either peer | Local-user `ControlHomeEnrollmentRequest` → durable `ControlHostStateResponse`. On executor this records the only accepted Control home. See enrollment rules below. |
+| POST `/api/control-hosts/:bindingId/exchange` on home | `ControlOperationExchangeRequest {peer,cursor?}` → `ControlOperationExchangeResponse`, up to 16 original envelopes and `more`/`next`. Export durably fences possible transmission. |
 | POST `/api/operations/receipt` on executor | Existing immutable operation receipt lookup, before attempting delivery. |
 | POST `/api/operations` on executor | Existing operation envelope → matching pending/accepted/rejected receipt. |
-| POST `/api/control-hosts/:bindingId/ack` on home | `ControlOperationAcknowledgment {operation,receipt}`; home durably adopts conclusive matching receipt before courier drops ownership. |
-| GET `/api/control-hosts/:bindingId/events?after=N&limit=128` on executor | `ControlRemoteEventPage`, ascending contiguous cursors for that enrollment. |
+| POST `/api/control-hosts/:bindingId/ack` on home | `ControlOperationAcknowledgment {operation,receipt}` → `ControlReceiptAdoptionResponse`; home durably adopts conclusive matching receipt before courier drops ownership. |
+| GET `/api/control-hosts/:bindingId/events?after=N&limit=128` on executor | `ControlRemoteEventQuery` → `ControlRemoteEventPage`, ascending contiguous cursors for that enrollment. |
 | POST `/api/control-hosts/:bindingId/events/import` on home | Original event page; atomically dedupe, stage eligible notice/audit and advance imported cursor. Returns `ControlRemoteEventAcknowledgment` only after durable commit. |
-| POST `/api/control-hosts/:bindingId/events/ack` on executor | That acknowledgment; validates binding/generation/source and exact through/eventId before retirement. |
-| GET `/api/control-hosts/:bindingId/status?cursor=...` on executor | `ControlRemoteStatusPage`; omit cursor to capture, otherwise resume that capture. |
-| POST `/api/control-hosts/:bindingId/status/import` on home | Original status page; stage until final page, then atomically replace that host's cached snapshot. |
+| POST `/api/control-hosts/:bindingId/events/ack` on executor | That acknowledgment → durably retained `ControlRemoteEventAcknowledgment` floor; validates binding/generation/source and exact through/eventId before retirement. |
+| GET `/api/control-hosts/:bindingId/status?cursor=...` on executor | `ControlRemoteStatusQuery` → `ControlRemoteStatusPage`; omit cursor to capture, otherwise resume that capture. |
+| POST `/api/control-hosts/:bindingId/status/import` on home | Original status page → `ControlRemoteStatusImportResponse` (`staged` with original next, or `published` on the last page); only then replace that host's cached snapshot. |
+| POST `/api/control-hosts/:bindingId/archive` on home | Local-user app rollout `ControlArchiveRequest` → `ControlArchiveResponse`; creates the original durable `control.archive` envelope only after verified readiness. Delivery uses the same exchange/receipt/adoption flow. |
 
 Enrollment UI persists the same `ControlHomeEnrollment` on both sides via explicit local-user setup.
 Its confirmation, credentials and transport implementation belong to enrollment, not these operations.
 Each route resolves its peer from active enrollment, not arbitrary supplied projects or endpoints.
+
+An exchange cursor is opaque, scoped to enrollment/generation and a stable outbox ordering; it
+allows scanning past a still-pending prefix rather than returning those same 16 operations forever.
+`more` is true exactly when `next` is present. It is not a removal/acknowledgment cursor. After
+reaching the end, wait for invalidation/reconnect, then scan again from the start, including old
+pending items. New arrivals during a scan are handled by that next invalidated scan. A stale cursor
+fails with 409 and restarts the scan without replacing any existing operation. No snapshot or
+exactly-once execution claim follows from listing an outbox page.
+
+Receipt adoption returns 200 only for a matching conclusive accepted/rejected receipt, after its
+outcome, reservation accounting, audit and follow-through intent are durable at home. Replaying
+that receipt returns the same adoption; pending/unknown cannot retire ownership. Event import/ack
+also returns only after durable commit. Repeating an older exact event ack returns the current
+retained floor, never regresses it; a different eventId for an acknowledged cursor is a conflict.
+Status import replay returns the same snapshot/cursor state without publishing an older capture
+over a newer one. Status is cache data, not permission to retire a factual event journal.
+
+All selectors reject duplicate/unknown query fields and foreign enrollment identities. Invalid
+payload/selectors are 400; missing state 404; identity, CAS, not-ready, cursor-gap or stale-capture
+conflicts 409 with an explicit reconciliation/restart reason; capacity backpressure is 503.
+Unsupported contract versions fail closed. None is an implicit successful mutation. Error prose
+is bounded to 1024 UTF-8 bytes, redacted and untrusted, never an authorization source.
+
+### Accepted-home enrollment API
+
+The enrollment PUT accepts `{enrollment,peerHello,expectedGeneration}`. `peerHello` is the original
+hello copied from the other app-verified endpoint. Validate its installation/lineage, general
+protocol compatibility, Control version/configuration and home against the enrolled peer, then
+retain that last verified handshake in `ControlHostStateResponse.peerHello`. It is local-user
+setup evidence, not a model-asserted identity. The executor receives home's hello; home receives
+executor's hello, including its staged legacy session ID. Unsupported peers cannot activate a pair.
+An update/reconnect re-verifies both current hellos before using readiness; setup may refresh
+the same-binding peerHello with unchanged identity, without reviving a revoked binding.
+`expectedGeneration` is required:
+JSON null asserts no record, otherwise it must equal the current generation. The URL binding ID
+must equal the body; schemaVersion is 1, generations are positive safe integers, home/executor
+are distinct normalized pinned hosts, and this endpoint must be one of those exact hosts.
+Persist the confirmed accepted home before returning, including on the executor. Reads expose
+that persisted record, not a cached app pairing suggestion.
+
+An exact replay returns the existing durable state before CAS is considered, including after a
+lost PUT response. For an existing binding, peers, generation and schema are immutable; the only
+state change is active → revoked. Reject revoked → active, home replacement and scope edits with
+409. A new home/generation requires a fresh explicitly confirmed binding and retirement/revocation
+of the former enrollment; an executor cannot have two active Control enrollments, even for the
+same home. Retain revoked
+tombstones and old receipt/journal namespaces. Never copy old cursor or grant authority to a new
+binding. Revocation fences new admissions, but allows old receipts/facts to reconcile read-only.
+
+The app verifies both hellos and user confirmation, persists executor enrollment, then matching
+home enrollment, and reads both back before declaring enrollment usable. A lost reply or a
+partial pair remains setup-pending and is reconciled by GET/exact replay, not automatic failover
+or rollback of accepted work. Neither PUT starts, archives or hides a Control, and neither is
+available as a pilot tool action. The setup/update UI uses this API; the executor's durable
+accepted-home validation and archive handler are daemon responsibilities.
 
 Read-only host-targeted `read/health/logs/telemetry/checks` use the same verified courier connection
 as request/response reads, not mutation replay or worker starts. Requests remain scoped to the
@@ -215,6 +278,7 @@ idle/settled chat, a stale capture or provisional task status is not completion 
 All byte bounds are encoded UTF-8, enforced before expensive parsing/hydration and after serialization.
 IDs/cursors are validated; numbers are finite safe integers where integral, generations/epochs
 positive, timestamps epoch milliseconds, reservation USD finite and nonnegative.
+Opaque cursors are at most 512 UTF-8 bytes and interpreted only by the issuing daemon.
 
 - Keep existing operation limits: 64 KiB payload, 4096 journal records, four handlers, 64 requests.
   Outgoing Control operations share the domain's 4096-envelope/64-MiB retained budget; exchange at most
@@ -260,7 +324,9 @@ not just the Mac or a cached app version. Capability support alone never hides a
 5. `taskSnapshotId` names a completely imported capture proving the required task visibility with
    mission/execution host and epoch. A partial capture or provisional completion is insufficient.
 
-Only all five conditions permit state ready. Evidence is local trusted rollout state, never a
+Only all five conditions permit state ready. GET `/api/control-hosts/:bindingId` on home reports
+this home-verified evidence; there is no API to POST app/model-supplied readiness booleans.
+Evidence is local trusted rollout state, never a
 model-supplied permission, and is invalidated by changed enrollment, version or lineage. The app's
 rollout trigger requests the final archive transition only after ready; that transition reconciles
 the old Control and durably freezes every ingress, watches and grants before recording archived.
@@ -269,6 +335,44 @@ Lost acknowledgments reconcile this same transition; they do not repeat mutation
 the old Control. Only verified archived state permits the app to show exactly one active Control
 and move the old one to read-only history. If home is disconnected afterwards, retain its one
 authoritative identity and the archives; do not undo cutover or promote the executor.
+
+### Explicit archive operation
+
+After the readiness GET reports ready, the app persists a single idempotency key and calls
+POST `/api/control-hosts/:bindingId/archive` **on home** with `ControlArchiveRequest`:
+`{expectedGeneration,sessionId,idempotencyKey}`. This is an administrative rollout request, not
+a pilot action or grant-authorized delegation. Home checks both negotiated roles/versions, the
+active matching enrollment/generation, the selected legacy session on the executor and its own
+durable action/watch/task evidence. The app cannot supply that evidence or choose a different home.
+
+Home reserves an immutable `DurableOperation` with kind `control.archive`, origin home,
+destination executor, that enrollment's binding/generation, operationId equal to idempotencyKey
+and targetId equal to the exact legacy sessionId. Its `ControlArchiveOperationPayload` is
+`{idempotencyKey,sessionId,readiness}`; home seals its verified readiness snapshot, not app booleans.
+It carries no authorization grant, budget reservation, model instruction or spending capability.
+`ControlArchiveResponse` returns that same queued envelope. It is not an archive acknowledgment.
+
+The app courier relays it through `/api/operations/receipt` then `/api/operations`, exactly like
+the six agent-operation kinds. The executor validates the pinned home, generation, target/session
+and home-issued ready evidence, fences new Control ingresses and reconciles any live/uncertain
+Control mutation before durably freezing history/watches/grants. Until reconciliation succeeds
+its receipt stays pending, the old Control stays visible, and no second archive intent is created.
+Ordinary accepted execution is not stopped or reassigned by this transition.
+
+Only after the complete freeze transaction succeeds does the executor publish accepted with
+`ControlArchiveResult {kind:"control.archive",configuration,cutover}`. Configuration names role
+archived-control and the original archive session/time; cutover names state archived and the same
+enrollment/evidence. Replaying the same operation returns the same result and original archivedAt,
+without reappending watch-removal audits or altering history. Conflicting targets or payloads
+under the same key are rejected, and a crash recovers the original journaled transition.
+
+Home receipt adoption durably records that archived result before returning its adoption response.
+The app must observe that conclusive result (via adoption/readback), not infer it from a hidden row,
+an empty watch page, a queued response or a transport timeout, before showing a single Control.
+An already archived same-binding/session transition reconciles without deleting or reviving anything.
+Retain the original keyed intent, receipt and replay floor; never substitute a fresh ID after an
+unknown/pending result. The archive operation shares the existing payload, journal and retention
+bounds; failure to retain evidence backpressures rollout rather than partially hiding Controls.
 
 ### Preserving legacy state
 
@@ -292,9 +396,11 @@ non-authoritative. Reenrollment/update does not reactivate them.
 
 ## Verification and review
 
-This change supplies shared JSON round-trip fixtures for TypeScript and PilotCore, including all six
-operation kinds, every run action, host defaults/explicit scope, roles, event cursors, status capture
-pages and pending/accepted/rejected receipts. DTO decoding is not runtime policy enforcement.
+This change supplies shared JSON round-trip fixtures for TypeScript and PilotCore, including the six
+authorized operation kinds plus app-only archive, every run action, host defaults/explicit scope,
+roles/hello negotiation, explicit-null enrollment CAS, courier queries/adoption, event cursors,
+status capture/import pages and pending/accepted/rejected receipts. DTO decoding is not runtime
+policy enforcement (apart from preserving the required explicit-null wire field).
 Handler/courier work must test lost receipt/event acknowledgment, duplicate delivery, journal bounds,
 revocation during preparation, foreign homes/lineages, snapshot restart and no wake after archive.
 

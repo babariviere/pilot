@@ -3,27 +3,48 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import type { DaemonHello } from "./hello.ts";
 import type {
+	ControlArchiveRequest,
+	ControlArchiveResponse,
+	ControlArchiveResult,
 	ControlAuthorization,
 	ControlBudgetReservation,
 	ControlHomeEnrollment,
+	ControlHomeEnrollmentRequest,
 	ControlHostConfiguration,
 	ControlHostCutover,
 	ControlHostRequest,
+	ControlHostStateResponse,
 	ControlOperationAcknowledgment,
 	ControlOperationAuthority,
 	ControlOperationExchangeRequest,
 	ControlOperationExchangeResponse,
 	ControlOperationKind,
 	ControlOperationPayloads,
+	ControlReceiptAdoptionResponse,
 	ControlRemoteEventAcknowledgment,
 	ControlRemoteEventPage,
+	ControlRemoteEventQuery,
+	ControlRemoteStatusImportResponse,
 	ControlRemoteStatusPage,
+	ControlRemoteStatusQuery,
 } from "./index.ts";
 
 type PayloadFixture = {
 	[K in ControlOperationKind]: { kind: K; payload: ControlOperationPayloads[K] };
 }[ControlOperationKind];
 interface Fixtures {
+	enrollmentRequests: ControlHomeEnrollmentRequest[];
+	hostStates: ControlHostStateResponse[];
+	archiveRequest: ControlArchiveRequest;
+	archiveResponse: ControlArchiveResponse;
+	archiveResult: ControlArchiveResult;
+	archiveAcknowledgments: ControlOperationAcknowledgment[];
+	outboxQueries: ControlOperationExchangeRequest[];
+	outboxPages: ControlOperationExchangeResponse[];
+	receiptAdoptions: ControlReceiptAdoptionResponse[];
+	eventQueries: ControlRemoteEventQuery[];
+	statusQueries: ControlRemoteStatusQuery[];
+	statusImports: ControlRemoteStatusImportResponse[];
 	hellos: DaemonHello[];
 	cutovers: ControlHostCutover[];
 	configurations: ControlHostConfiguration[];
@@ -141,9 +162,69 @@ test("all durable Control payloads retain the admission authority and typed body
 		},
 		{ kind: "control.unwatch", payload: { ...authority, budgetReservation: free, watchId: "watch:1" } },
 		{ kind: "control.revoke", payload: { ...authority, budgetReservation: free, revokedAt: 2000 } },
+		{
+			kind: "control.archive",
+			payload: { idempotencyKey: "archive:1", sessionId: "old-control", readiness: fixture.cutovers[1] },
+		},
 	];
 	assert.deepEqual(roundTrip(expected), fixture.payloads);
-	assert.equal(new Set(expected.map((p) => p.kind)).size, 6);
+	assert.equal(new Set(expected.map((p) => p.kind)).size, 7);
+});
+test("enrollment CAS, courier page queries and app-only archive HTTP contracts round trip", () => {
+	const f = roundTrip(fixture);
+	const create: ControlHomeEnrollmentRequest = {
+		enrollment: f.enrollments[0],
+		peerHello: f.hellos[1],
+		expectedGeneration: null,
+	};
+	assert.deepEqual(f.enrollmentRequests[0], create);
+	assert.ok(Object.hasOwn(f.enrollmentRequests[0], "expectedGeneration"));
+	assert.equal(f.enrollmentRequests[2].expectedGeneration, 1);
+	assert.equal(f.enrollmentRequests[2].enrollment.state, "revoked");
+	assert.equal(f.hostStates[0].cutover, undefined);
+	assert.equal(f.hostStates[1].cutover?.state, "ready");
+	assert.equal(f.hostStates[2].configuration.archive?.sessionId, "old-control");
+	const request: ControlArchiveRequest = {
+		expectedGeneration: 1,
+		sessionId: "old-control",
+		idempotencyKey: "archive:1",
+	};
+	assert.deepEqual(f.archiveRequest, request);
+	const operation = f.archiveResponse.operation;
+	assert.equal(operation.kind, "control.archive");
+	assert.equal(operation.operationId, request.idempotencyKey);
+	assert.equal(operation.targetId, request.sessionId);
+	const payload: ControlOperationPayloads["control.archive"] = JSON.parse(operation.payload);
+	assert.deepEqual(payload.readiness, f.cutovers[1]);
+	assert.equal(Object.hasOwn(payload, "authorization"), false);
+	assert.equal(Object.hasOwn(payload, "budgetReservation"), false);
+	assert.equal(f.archiveResult.kind, "control.archive");
+	assert.equal(f.archiveResult.cutover.state, "archived");
+	assert.deepEqual(
+		f.archiveAcknowledgments.map((a) => a.receipt.state),
+		["pending", "accepted", "rejected"],
+	);
+	for (const ack of f.archiveAcknowledgments) {
+		assert.deepEqual(ack.operation, operation);
+		assert.equal(ack.receipt.operationId, operation.operationId);
+		assert.equal(ack.receipt.targetId, operation.targetId);
+	}
+	assert.equal(f.outboxQueries[1].cursor, f.outboxPages[0].next);
+	assert.ok(f.outboxPages[0].more);
+	assert.equal(f.outboxPages[1].more, false);
+	assert.equal(f.outboxPages[1].next, undefined);
+	assert.deepEqual(
+		f.receiptAdoptions.map((a) => a.state),
+		["accepted", "rejected"],
+	);
+	assert.equal(f.eventQueries[0].after, 0);
+	assert.equal(f.eventQueries[0].limit, 128);
+	assert.equal(f.statusQueries[0].cursor, undefined);
+	assert.equal(f.statusQueries[1].cursor, f.statusImports[0].next);
+	assert.deepEqual(
+		f.statusImports.map((s) => s.state),
+		["staged", "published"],
+	);
 });
 test("courier envelope and pending, accepted, rejected receipts retain immutable matching fields", () => {
 	const exchange = roundTrip(fixture.exchange);
