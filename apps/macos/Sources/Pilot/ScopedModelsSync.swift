@@ -29,6 +29,14 @@ struct ScopedModelsObservation: Sendable {
         let isCurrent: () -> Bool
     }
 
+    struct Consent: Equatable, Sendable {
+        let host: HostRef
+        let baseline: ScopedModelsBaseline
+        let revision: UInt64
+        let desired: ScopedModelsSelection
+        let token: HostConnectionToken
+    }
+
     @Published private(set) var state = ScopedModelsState()
     @Published private(set) var observations: [HostRef: ScopedModelsObservation] = [:]
     @Published private(set) var checking: Set<HostRef> = []
@@ -84,12 +92,29 @@ struct ScopedModelsObservation: Sendable {
         } catch { storageFailed() }
     }
 
-    func join(_ host: HostRef, shown: ScopedModelsBaseline) async {
-        // Explicit first join or overwrite THIS host. A changed observation needs fresh consent.
-        guard observations[host]?.baseline == shown else { return }
+    func review(_ host: HostRef) -> Consent? {
+        guard let desired = state.desired, let endpoint = endpoints[host], endpoint.isCurrent(),
+              let observation = observations[host] else { return nil }
+        return Consent(host: host, baseline: observation.baseline, revision: state.revision,
+                       desired: desired, token: endpoint.token)
+    }
+
+    func isCurrent(_ consent: Consent) -> Bool {
+        !stopped && state.revision == consent.revision && state.desired == consent.desired &&
+            observations[consent.host]?.baseline == consent.baseline &&
+            endpoints[consent.host]?.token == consent.token && endpoints[consent.host]?.isCurrent() == true
+    }
+
+    func join(_ consent: Consent) async {
+        // Consent covers the exact host value, desired revision and verified connection shown.
+        guard isCurrent(consent) else { return }
         do {
-            publish(try await store.update { try $0.join(host, baseline: shown) })
-            refresh(host)
+            publish(try await store.update {
+                guard $0.revision == consent.revision else { throw ScopedModelsFailure.stale }
+                try $0.join(consent.host, baseline: consent.baseline)
+            })
+            refresh(consent.host)
+        } catch ScopedModelsFailure.stale {
         } catch { storageFailed() }
     }
 
@@ -98,10 +123,18 @@ struct ScopedModelsObservation: Sendable {
         catch { storageFailed() }
     }
 
-    func useEverywhere(_ host: HostRef, shown: ScopedModelsBaseline) async {
-        guard observations[host]?.baseline == shown else { return }
+    func useEverywhere(_ consent: Consent) async {
+        guard isCurrent(consent) else { return }
         // A new intent, NOT permission to rebase other hosts' established CAS baselines.
-        await save(shown.selection, joining: [:])
+        do {
+            publish(try await store.update {
+                guard $0.revision == consent.revision else { throw ScopedModelsFailure.stale }
+                try $0.save(consent.baseline.selection, joining: [:])
+            })
+            pending.formUnion(endpoints.keys)
+            drain()
+        } catch ScopedModelsFailure.stale {
+        } catch { storageFailed() }
     }
 
     func stop() {
@@ -249,7 +282,11 @@ struct ScopedModelsObservation: Sendable {
             case ScopedModelsFailure.readOnly: status = .readOnly
             default: status = .failed
             }
-            do { try await record(endpoint, revision: expectedRevision, decision: expectedDecision) { $0.status = status } }
+            do {
+                try await record(endpoint, revision: expectedRevision, decision: expectedDecision) {
+                    if $0.status != .divergent { $0.status = status }
+                }
+            }
             catch ScopedModelsFailure.stale {}
             catch { if current(endpoint) { storageFailed() } }
         }

@@ -57,7 +57,7 @@ struct ScopedModelsHostRow: Identifiable {
     private struct HostReview: Identifiable {
         let id = UUID()
         let row: ScopedModelsHostRow
-        let baseline: ScopedModelsBaseline
+        let consent: ScopedModelsSync.Consent
         let useEverywhere: Bool
     }
 
@@ -143,15 +143,16 @@ struct ScopedModelsHostRow: Identifiable {
             SheetScaffold(value.useEverywhere ? "Use this host’s list everywhere" : "Sync this host",
                 subtitle: value.row.title,
                 primary: SheetPrimaryAction(title: value.useEverywhere ? "Save new list" : "Apply saved list",
-                    enabled: sync.observations[value.row.host]?.baseline == value.baseline && value.row.connected,
+                    enabled: sync.isCurrent(value.consent),
                     action: {
                         Task {
-                            if value.useEverywhere { await sync.useEverywhere(value.row.host, shown: value.baseline) }
-                            else { await sync.join(value.row.host, shown: value.baseline) }
+                            if value.useEverywhere { await sync.useEverywhere(value.consent) }
+                            else { await sync.join(value.consent) }
                             review = nil
                         }
                     }), cancel: { review = nil }, width: 480) {
-                SettingsNote("Current host value: \(Self.describe(value.baseline))")
+                SettingsNote("Current host value: \(Self.describe(value.consent.baseline))")
+                SettingsNote("Saved Mac list (revision \(value.consent.revision)): \(value.consent.desired.patterns?.joined(separator: ", ") ?? "All authenticated models")")
                 SettingsNote(value.useEverywhere
                     ? "This creates a new saved Mac revision. Other hosts still use normal conflict checks; their conflicts are not overwritten."
                     : "Replace only this host’s global model scope with the saved Mac list, using the shown baseline. A change elsewhere will require another review.")
@@ -173,10 +174,10 @@ struct ScopedModelsHostRow: Identifiable {
                 if let observation, sync.state.desired != nil {
                     Menu(status == .conflict ? "Resolve…" : "Options") {
                         Button(status == .conflict ? "Overwrite this host…" : "Join saved list…") {
-                            review = HostReview(row: row, baseline: observation.baseline, useEverywhere: false)
+                            if let consent = sync.review(row.host) { review = HostReview(row: row, consent: consent, useEverywhere: false) }
                         }.disabled(!observation.writable)
                         Button("Use this host’s list everywhere…") {
-                            review = HostReview(row: row, baseline: observation.baseline, useEverywhere: true)
+                            if let consent = sync.review(row.host) { review = HostReview(row: row, consent: consent, useEverywhere: true) }
                         }
                         Button("Leave as is") { Task { await sync.leave(row.host) } }
                     }.disabled(!row.connected || sync.checking.contains(row.host))
