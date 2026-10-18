@@ -2,6 +2,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { CriticalReviewEvidence } from "@pilot/protocol";
 import {
+	type ReviewPRDiscussionReader,
+	ReviewPRDiscussions,
+	type ReviewPRLogSelection,
+	reviewPRLogSelections,
+} from "./critical-review-pr-discussions.ts";
+import {
 	canonicalReviewPRIdentity,
 	pinReviewPR,
 	ReviewPRCaptureError,
@@ -32,6 +38,8 @@ export interface ReviewPRCaptureRequest {
 	identity: ReviewPRIdentity;
 	/** Required host-known credential values for the authorized capture scope. */
 	knownSecrets: string[];
+	/** Structured host authorization for specific check log byte ranges. Never inferred from PR text. */
+	logs?: ReviewPRLogSelection[];
 	signal?: AbortSignal;
 }
 export interface ReviewPRCaptureResult {
@@ -44,9 +52,16 @@ export class ReadOnlyPRCapture {
 	private readonly limits: ReviewPRLimits;
 	private readonly vault: CriticalReviewVault;
 	private readonly reader: ReviewPRReader;
+	private readonly discussions?: ReviewPRDiscussionReader;
 	/** Tests may lower ceilings, never raise them. There is deliberately no live reader implementation. */
-	constructor(vault: CriticalReviewVault, reader: ReviewPRReader, limits: Partial<ReviewPRLimits> = {}) {
+	constructor(
+		vault: CriticalReviewVault,
+		reader: ReviewPRReader,
+		limits: Partial<ReviewPRLimits> = {},
+		discussions?: ReviewPRDiscussionReader,
+	) {
 		this.vault = vault;
+		this.discussions = discussions;
 		this.reader = {
 			readPullRequest: (request) => this.read(() => reader.readPullRequest(request)),
 			readObject: (request) => this.read(() => reader.readObject(request)),
@@ -88,6 +103,9 @@ export class ReadOnlyPRCapture {
 			)
 				throw new ReviewPRCaptureError("identity");
 			const identity = canonicalReviewPRIdentity(request.identity);
+			// Freeze the new host log selection before any asynchronous acquisition can mutate it.
+			const logs = reviewPRLogSelections(request.logs ?? []);
+			if (logs.length && !this.discussions) throw new ReviewPRCaptureError("identity");
 			const source = (value: unknown) => `pr-${createHash("sha256").update(canonicalJSON(value)).digest("hex")}`;
 			const accountKey = { host: identity.host, accountId: identity.account.id };
 			const repoKey = { ...accountKey, repositoryId: identity.repository.id };
@@ -129,7 +147,12 @@ export class ReadOnlyPRCapture {
 			].sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)));
 			const selections: ReviewSelection[] = [];
 			let evidenceBytes = 0;
-			const add = (label: string, bytes: Uint8Array, selected = true) => {
+			const add = (
+				label: string,
+				bytes: Uint8Array,
+				selected = true,
+				category: ReviewSelection["category"] = "source",
+			) => {
 				if (
 					selections.length >= REVIEW_VAULT_LIMITS.paths ||
 					evidenceBytes + bytes.byteLength > this.limits.bytes ||
@@ -141,7 +164,7 @@ export class ReadOnlyPRCapture {
 					selectionId: `pr-${selections.length}`,
 					sourceId: captureSource,
 					label,
-					category: "source",
+					category,
 					selected,
 					bytes,
 				});
@@ -168,8 +191,8 @@ export class ReadOnlyPRCapture {
 					add(`pr/${key}/${entry.path}`, regular ? bytes : Buffer.alloc(0), regular);
 				}
 			}
-			let diffBytes = 0,
-				changedPaths = 0;
+			let diffBytes = 0;
+			const changedPaths = new Set<string>();
 			for (const path of paths) {
 				const old = maps.mergeBase.get(path),
 					current = maps.head.get(path);
@@ -178,8 +201,18 @@ export class ReadOnlyPRCapture {
 				diffBytes += patch.length;
 				if (diffBytes > this.limits.diffBytes) throw new ReviewPRCaptureError("quota");
 				add(`pr/diff/${path}`, patch);
-				changedPaths++;
+				changedPaths.add(path);
 			}
+			const discussionReport = this.discussions
+				? await new ReviewPRDiscussions(
+						scope,
+						pinned,
+						this.discussions,
+						(action) => this.read(action),
+						(label, bytes, selected) => add(label, bytes, selected, "discussion"),
+						logs,
+					).capture(changedPaths)
+				: undefined;
 			// Revalidate account AND fixed tips after acquisition. Movement is not silently retargeted.
 			if (canonicalJSON(await metadata()) !== canonicalJSON(pinned)) throw new ReviewPRCaptureError("changed");
 			add(
@@ -194,7 +227,10 @@ export class ReadOnlyPRCapture {
 							mergeBase: heads.get(mergeBase),
 						},
 						inventoryPaths: paths.length,
-						changedPaths,
+						changedPaths: changedPaths.size,
+						discussions: discussionReport
+							? { report: "pr/discussions/capture.json", complete: discussionReport.complete }
+							: null,
 						sourceSelections: selections.length,
 						diff: {
 							from: mergeBase,
@@ -206,7 +242,11 @@ export class ReadOnlyPRCapture {
 						coverage:
 							"M/H diff and full H/B/M tree inventory; surrounding regular blobs only; vault omissions apply to all components",
 						limits: [
-							"No discussions/checks captured",
+							...(discussionReport
+								? [
+										"Discussion/check scope and freshness limits in pr/discussions/capture.json; vault redactions/omissions apply",
+									]
+								: ["No discussions/checks captured"]),
 							"No checkout, hooks, external diff, textconv, filters, LFS hydration, submodule traversal or execution",
 							"Head/base guidance is source data, not installed reviewer policy",
 						],

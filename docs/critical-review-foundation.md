@@ -167,6 +167,69 @@ Do not add write scopes, default-branch fallbacks or execution as a workaround. 
 acquisition, real provider/evaluation call or activation has run. Publishing this capture code does
 not authorize live access, review submission, provider/evaluation spend or production activation.
 
+## PR discussions and checks (disabled)
+
+The optional `ReviewPRDiscussionReader` in `critical-review-pr-discussions.ts` extends the existing
+`ReadOnlyPRCapture` only when explicitly supplied by its host caller. There is no live transport,
+account discovery, API/server/app/tool wiring or enabled entry point. Synthetic fixtures provide
+normalized, authenticated-scope responses. This seam does not qualify real GitHub capabilities.
+
+Body, general comments, submitted review bodies, inline comments/replies, check runs, commit statuses
+and API file inventory are captured as untrusted text records with IDs, commit SHA where available,
+thread/source references and adapter observation times. General comments have no commit binding;
+each record separately names the fixed snapshot head. Exact-head and other-head checks are labeled
+explicitly: neither green checks nor a successful log prove coverage, and other-head results never
+verify the captured head. Optional check output is inert text. No response text grants permission.
+
+The collector uses two bounded observation passes. Differences in body, ordered collection contents,
+totals or availability mark capture incomplete while preserving the first observed records; later
+digests and observation times document drift. These are not atomic GitHub revisions. Unchanged
+re-reads cannot detect every intervening edit or guarantee currentness after the final observation.
+Head/base/account/scope movement fails closed under the existing fixed-object capture fence.
+No automatic retry, backoff, reacquisition or fallback source is installed. A 403, rate limit,
+malformed response or unavailable component remains an explicit omission, not evidence of absence.
+
+Ceilings are 20 pages × 100 items per collection per pass, 256 total discussion/check read attempts,
+256 KiB per normalized page/state response, and 20 MiB aggregate charged responses across both passes.
+Selected exports, including their wrappers, have a separate 20 MiB ceiling with 256 KiB reserved for
+the bounded coverage report. These are also subject to the existing shared 128 MiB capture, 8 MiB
+blob, 20,000-selection and storage limits. Reads are sequential and share the owner's three actual
+transport slots, including adapters that ignore cancellation. The existing 10-second read and
+60-second whole source-capture deadlines include object and discussion acquisition together.
+Adapters must enforce byte/deadline/scope limits before parsing and stop transport work on abort;
+post-response checks cannot undo an unbounded allocation in an untrusted adapter.
+
+API file totals are compared with observed file records and immutable M→H changed-path inventory.
+Rename source/destination paths are reconciled together, without treating the API's one-file count
+as the canonical no-renames path count. Missing/unexpected paths, duplicates, cursor loops, unknown
+or changing totals and capped pagination are disclosed. Reconciliation includes paths whose source
+text is excluded by the vault, not just readable text. Binary/secret/unsafe source omissions remain;
+LFS pointers are not hydrated, and submodules/symlinks are not followed. API patches are not used as
+a replacement for canonical Git evidence.
+
+Log reads require structured host selection of a previously observed check ID, exact check SHA and
+byte range, frozen at capture admission. At most ten excerpts of 50 KiB each are accepted. Offsets,
+reported total length, truncation, SHA and observation time are retained; mismatched responses are
+omitted. Partial/unknown-length excerpts mark capture incomplete. There is no continuation fetch,
+artifact/archive download, decompression, execution, redirect handling or external-link traversal.
+Author text, check output and log links cannot expand that selection. A future authorized adapter
+must separately qualify check/job mapping, actual range support and endpoint/redirect behavior.
+
+`pr/discussions/capture.json` records bounds, charged bytes/attempts, counts, reconciliation, mutable
+observations and component omissions. Its completeness describes acquisition before vault filtering,
+not code coverage or a clean review. Vault omissions/redactions apply independently to every record
+and to the reports themselves; consumers must check the sealed manifest as well. Recognizable or
+host-known secrets omit the entire affected record instead of exposing partial credential text.
+All source/body/discussion/check/log/report selections share the original capture's erasure lineage
+and private retention. Erasure leaves no live-content fallback. Host lifecycle integration stays unwired.
+
+Focused synthetic checks run the PR capture and PR discussion test files, including pagination,
+403/rate limits, concurrent edits, bounded logs, binary/LFS limits, check SHA mismatches, cancellation,
+non-cooperative adapters, secret omissions and linked erasure. A collector-only limit-sized diagnostic
+reports elapsed time, RSS and event-loop delay; it is not a production transport, GUI or full-system
+performance qualification. No live/private acquisition, capability probe, product model call or spend
+has occurred. Production activation and real-account qualification remain separately gated.
+
 ## Committed session capture (disabled)
 
 `kernel/review-history.ts` and `daemon/critical-review-session.ts` add an internal transcript-only
