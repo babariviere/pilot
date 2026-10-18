@@ -10,7 +10,7 @@ head on macOS and Linux; local checks deliberately use faux providers, in-memory
 | --- | --- |
 | OTLP schema | `packages/telemetry/src/index.test.ts` rejects prompts, responses, paths, chat URLs, raw host identity, errors, provider/model names and raw tool names, then inspects the accepted exporter payload. |
 | Native schema | `PilotTelemetryTests`, `NativeDiagnosticsTests` and `TelemetrySettingsTests` cover closed enums, separate analytics identity/consent, unsafe endpoint rejection, private host settings and revocation. |
-| Diagnostic read | `session-diagnostics.test.ts` and `control-diagnostics.test.ts` cover content-free operational projections. `sessions.test.ts`, `cold-snapshot-reader.test.ts`, `diagnostic-history-tool.test.ts` and `diagnostics-role.integration.test.ts` cover explicit target-history grants, no-link/legacy denial, fixed host/session scope, bounds, redaction, unavailable storage and no target wake or mutation. |
+| Diagnostic read | `session-diagnostics.test.ts` and `control-diagnostics.test.ts` cover content-free operational projections. `diagnostic-logs.test.ts`, `sessions.test.ts`, `cold-snapshot-reader.test.ts`, `diagnostic-history-tool.test.ts` and `diagnostics-role.integration.test.ts` cover fixed log catalogues, literal bounded search/excerpts, rotation/stale cursors, unsafe-source denial, redaction, explicit target-history grants, no-link/legacy denial, host/session scope, unavailable coverage and no target wake or mutation. |
 | Diagnostic titles | `DiagnosticSetupTests`, `chat-title.test.ts` and `sessions.test.ts` cover reason-seeded and reply-based titles, substantive-reply gating, reopen, provider fallback, user-rename protection and no linked-target mutation. Title inputs and results are absent from the telemetry allowlist. |
 | Devbox setup | `NativeDiagnosticsTests` and `DevboxSettingsInteractionTests` reject aliases, raw stderr and unknown reasons while retaining pre-registration stage evidence separately from remote connection state. |
 | Clipboard | `SessionClipboardActionsTests` keeps the authoritative session root in the user-invoked clipboard action only. Missing path metadata does not disable a canonical host-aware chat link; neither value enters diagnostic or OTLP schemas. |
@@ -103,6 +103,7 @@ node --import tsx --test packages/telemetry/src/index.test.ts
 node --import tsx --test packages/daemon/src/telemetry-settings.test.ts packages/daemon/src/server-telemetry.test.ts
 node --import tsx --test packages/daemon/src/ai-usage.test.ts packages/daemon/src/tool-stalls.test.ts
 node --import tsx --test packages/daemon/src/native-diagnostics.test.ts packages/daemon/src/session-diagnostics.test.ts
+node --import tsx --test packages/daemon/src/diagnostic-logs.test.ts packages/kernel/src/diagnostic-log-tool.test.ts
 node --import tsx --test packages/kernel/src/usage.integration.test.ts packages/kernel/src/diagnostics-role.integration.test.ts
 pnpm typecheck
 ```

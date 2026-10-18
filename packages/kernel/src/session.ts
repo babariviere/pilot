@@ -61,6 +61,7 @@ import { createControlMemoryTools } from "./control-memory-tools.ts";
 import { type ControlCall, ControlTurn } from "./control-turn.ts";
 import { createDatabaseTool, type DatabaseCall } from "./database-tool.ts";
 import { createDiagnosticHistoryTool, type DiagnosticHistoryCall } from "./diagnostic-history-tool.ts";
+import { createDiagnosticLogTool, type DiagnosticLogCall } from "./diagnostic-log-tool.ts";
 import { createDiagnosticsTool, type DiagnosticsCall } from "./diagnostics-tool.ts";
 import { detectGhStack } from "./gh-stack.ts";
 import { appendGitHubAction, GitHubActionsDoc, githubActions } from "./github-actions.ts";
@@ -184,6 +185,8 @@ export interface KernelSessionHooks {
 	callDiagnostics?: DiagnosticsCall;
 	/** Reads bounded history only for an explicitly authorized diagnostic target. */
 	callDiagnosticHistory?: DiagnosticHistoryCall;
+	/** Reads fixed-catalogue Pilot logs on the diagnostics specialist's admitted host. */
+	callDiagnosticLogs?: DiagnosticLogCall;
 	/** Publishes a bounded, non-executing specialist proposal for explicit user review. */
 	callRepairProposal?: RepairProposalCall;
 	/** Read-only artifact references, authorized by pilotd on every call. */
@@ -480,10 +483,12 @@ export class KernelSession {
 				hostTools: [
 					...(spec.role === "diagnostics" &&
 					hooks.callDiagnostics &&
+					hooks.callDiagnosticLogs &&
 					hooks.callRepairProposal &&
 					spec.diagnosticTarget
 						? [
 								createDiagnosticsTool(hooks.callDiagnostics, spec.diagnosticTarget),
+								createDiagnosticLogTool(hooks.callDiagnosticLogs, spec.diagnosticTarget),
 								...(spec.diagnosticHistoryAccess && hooks.callDiagnosticHistory
 									? [createDiagnosticHistoryTool(hooks.callDiagnosticHistory, spec.diagnosticTarget)]
 									: []),

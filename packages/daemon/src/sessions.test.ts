@@ -535,6 +535,13 @@ class FakeWorker implements SessionWorker {
 		this.onPacket({ type: "diagnostics.proposal", callId, proposal });
 	}
 
+	readDiagnosticLogs(
+		callId: string,
+		request: Extract<KernelPacket, { type: "diagnostics.logs.call" }>["request"],
+	): void {
+		this.onPacket({ type: "diagnostics.logs.call", callId, request });
+	}
+
 	finish(completion?: SessionCompletion): void {
 		this.state = "idle";
 		this.onPacket({ type: "working", working: false, ...(completion ? { completion } : {}) });
@@ -1486,6 +1493,101 @@ test("only a diagnostics specialist can inspect its parked admitted target", asy
 	assert.match(denied?.error ?? "", /host-admitted target/);
 });
 
+test("diagnostic log IPC stays fixed to the persisted host and parked target", async (t) => {
+	const f = await fixture(t);
+	const daemonLog = join(f.home, "logs", "pilotd.log");
+	await mkdir(join(f.home, "logs"), { recursive: true });
+	await writeFile(daemonLog, "[2026-10-18T10:00:00.000Z] daemon ready\n");
+	const sessions = await f.manager(
+		{},
+		{
+			diagnosticHost,
+			diagnosticLogs: { daemonLog, platform: "darwin" },
+		},
+	);
+	const target = await sessions.spawn({ cwd: f.source, projectId: f.project.id, message: "Target" });
+	const specialist = await sessions.spawn({
+		projectId: f.project.id,
+		message: "Inspect logs",
+		role: "diagnostics",
+		diagnosticTarget: diagnosticTarget(target.id, { ...diagnosticHost, hostId: "selected-alias" }),
+	});
+	await Promise.all([sessions["starting"].get(target.id), sessions["starting"].get(specialist.id)]);
+	const targetWorker = sessions["workers"].get(target.id)! as FakeWorker;
+	const specialistWorker = sessions["workers"].get(specialist.id)! as FakeWorker;
+	targetWorker.readDiagnosticLogs("ordinary", { action: "inventory" });
+	await until(() => targetWorker.sent.some((command) => command.type === "diagnostics.logs.result"));
+	const ordinary = targetWorker.sent.find(
+		(command): command is Extract<KernelCommand, { type: "diagnostics.logs.result" }> =>
+			command.type === "diagnostics.logs.result" && command.callId === "ordinary",
+	);
+	assert.match(ordinary?.error ?? "", /diagnostics specialist/);
+
+	sessions["workers"].delete(target.id);
+	specialistWorker.readDiagnosticLogs("inventory", { action: "inventory" });
+	await until(() =>
+		specialistWorker.sent.some(
+			(command) => command.type === "diagnostics.logs.result" && command.callId === "inventory",
+		),
+	);
+	const allowed = specialistWorker.sent.find(
+		(command): command is Extract<KernelCommand, { type: "diagnostics.logs.result" }> =>
+			command.type === "diagnostics.logs.result" && command.callId === "inventory",
+	);
+	assert.ok(allowed?.result, allowed?.error);
+	assert.equal(allowed.result.host.hostId, "selected-alias");
+	assert.equal(allowed.result.targetSessionId, target.id);
+	const daemonSource = allowed.result.sources?.find((source) => source.id === "daemon");
+	assert.equal(daemonSource?.availability, "available", JSON.stringify(daemonSource));
+	assert.equal(f.workers.length, 2, "log reads never construct a replacement target worker");
+	const targetMeta = sessions["metas"].get(target.id)!;
+	targetMeta.failure = "synthetic failure";
+	specialistWorker.readDiagnosticLogs("failed-target", { action: "search", source: "daemon", q: "ready" });
+	await until(() =>
+		specialistWorker.sent.some(
+			(command) => command.type === "diagnostics.logs.result" && command.callId === "failed-target",
+		),
+	);
+	assert.ok(
+		specialistWorker.sent.find(
+			(command): command is Extract<KernelCommand, { type: "diagnostics.logs.result" }> =>
+				command.type === "diagnostics.logs.result" && command.callId === "failed-target",
+		)?.result,
+	);
+	delete targetMeta.failure;
+	targetMeta.archivedAt = Date.now();
+	specialistWorker.readDiagnosticLogs("archived-target", { action: "inventory" });
+	await until(() =>
+		specialistWorker.sent.some(
+			(command) => command.type === "diagnostics.logs.result" && command.callId === "archived-target",
+		),
+	);
+	assert.ok(
+		specialistWorker.sent.find(
+			(command): command is Extract<KernelCommand, { type: "diagnostics.logs.result" }> =>
+				command.type === "diagnostics.logs.result" && command.callId === "archived-target",
+		)?.result,
+		"failed and archived targets remain read-only readable without worker startup",
+	);
+
+	const meta = sessions["metas"].get(specialist.id)!;
+	meta.diagnosticTarget = {
+		...meta.diagnosticTarget!,
+		host: { ...meta.diagnosticTarget!.host, lineageId: "wrong-lineage" },
+	};
+	specialistWorker.readDiagnosticLogs("wrong-host", { action: "inventory" });
+	await until(() =>
+		specialistWorker.sent.some(
+			(command) => command.type === "diagnostics.logs.result" && command.callId === "wrong-host",
+		),
+	);
+	const wrongHost = specialistWorker.sent.find(
+		(command): command is Extract<KernelCommand, { type: "diagnostics.logs.result" }> =>
+			command.type === "diagnostics.logs.result" && command.callId === "wrong-host",
+	);
+	assert.match(wrongHost?.error ?? "", /target host|does not match this daemon/);
+});
+
 test("target history requires a durable explicit grant and stays fixed to the parked admitted target", async (t) => {
 	const f = await fixture(t);
 	const reads: Array<{ directory: string; hostId: string; sessionId: string; before?: number; limit: number }> = [];
@@ -1852,6 +1954,23 @@ test("diagnostics role survives reopen and prepares only a bounded read-only han
 				command.type === "diagnostics.proposal.result" && command.callId === "stale",
 		)?.error ?? "",
 		/no longer available/,
+	);
+	specialistWorker.publishRepairProposal("raw-log-ref", {
+		...proposalDraft,
+		evidenceRefs: ["diagnostic-log:v1:opaque"],
+	});
+	await until(() =>
+		specialistWorker.sent.some(
+			(command) => command.type === "diagnostics.proposal.result" && command.callId === "raw-log-ref",
+		),
+	);
+	assert.match(
+		specialistWorker.sent.find(
+			(command): command is Extract<KernelCommand, { type: "diagnostics.proposal.result" }> =>
+				command.type === "diagnostics.proposal.result" && command.callId === "raw-log-ref",
+		)?.error ?? "",
+		/requires .* diagnostic evidence refs/,
+		"raw log refs cannot enter an unreviewed proposal or handoff",
 	);
 	specialistWorker.publishRepairProposal("proposal", proposalDraft);
 	await until(() =>

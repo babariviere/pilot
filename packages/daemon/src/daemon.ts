@@ -146,6 +146,16 @@ const sessions = new SessionManager(
 		models,
 		credentials,
 		diagnosticHost: { hostId: "daemon", daemonId: hello.daemonId, lineageId: hello.lineageId },
+		diagnosticLogs: {
+			...(process.platform === "darwin"
+				? {
+						daemonLog: join(homedir(), "Library", "Logs", "Pilot", "pilotd.log"),
+						diagnosticReports: join(homedir(), "Library", "Logs", "DiagnosticReports"),
+					}
+				: {}),
+			daemonTail: daemonLogTail,
+			platform: process.platform,
+		},
 		telemetry: telemetry.kernelSettings(),
 	},
 );

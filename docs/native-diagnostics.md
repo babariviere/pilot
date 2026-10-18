@@ -46,7 +46,9 @@ record is historical evidence, not a live liveness check. Pilot does not automat
 sample an unresponsive process.
 
 Pilot intentionally cannot symbolicate its bounded records because they contain no addresses or stack. For a manual
-investigation, use the original Apple diagnostic report from Console or
-`~/Library/Logs/DiagnosticReports` and the exact archived release dSYM/build. Xcode Organizer can symbolicate a
-matching archive; `atos` requires the matching architecture, load address and dSYM. Keep that report outside Pilot's
-diagnostic handoff because it can contain paths, symbols and other private process data.
+investigation, use the original Apple diagnostic report from Console or `~/Library/Logs/DiagnosticReports` and the
+exact archived release dSYM/build. A diagnostics specialist can inventory and read only Pilot-named reports in that
+user directory through the fixed, bounded, sanitized `diagnostic_logs` catalogue; missing reports remain unknown, not
+proof that no crash occurred. Xcode Organizer can symbolicate a matching archive; `atos` requires the matching
+architecture, load address and dSYM. Raw report text, paths and excerpts stay outside Pilot's diagnostic evidence,
+telemetry and repair handoff because they can contain symbols and other private process data.

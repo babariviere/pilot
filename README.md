@@ -1027,10 +1027,15 @@ generation is unavailable, and a user rename always wins. Titles and title conte
 creates nothing, and supplied unavailable,
 missing or ambiguous links fail without falling back to Local. Diagnose this chat and an explicitly supplied link
 also grant a bounded, paginated cold read of that exact chat's committed conversation and tool history. Generic
-no-link Ask about Pilot cannot read the Control transcript. History stays local, is treated as untrusted data, is not
-telemetry, and does not grant file, attachment, child-session, shell or mutation access. When asked, the specialist can publish a bounded,
-cited repair proposal for review; publishing or cancelling never starts work. Only explicit confirmation sends the
-reviewed proposal to a separate ordinary Build chat in a valid chosen project.
+no-link Ask about Pilot cannot read the Control transcript. Every specialist can inventory and search a fixed,
+path-free catalogue of bounded sanitized Pilot daemon, worker, native report and admitted-target operational logs on
+its selected host. Missing app text logs, journal history or crash reports remain explicit coverage gaps, not proof
+that no failure occurred. The reader rejects symbolic links and arbitrary files, uses opaque bounded continuations
+and excerpts, never wakes or probes the target, and does not copy logs into telemetry or repair handoffs. Logs and
+history stay local, are treated as untrusted data, and grant no attachment, child-session, shell or mutation access.
+When asked, the specialist can publish a bounded, cited repair proposal for review; publishing or cancelling never
+starts work. Only explicit confirmation sends the reviewed proposal to a separate ordinary Build chat in a valid
+chosen project.
 [Tool-call diagnostics](docs/tool-call-diagnostics.md) add bounded in-flight and completed lifecycle evidence for
 built-ins, MCP and nested `codemode` calls while keeping raw names, arguments, output and commands out of diagnostics
 and opt-in telemetry. Liveness and useful progress remain separate observations; Pilot does not automatically retry,
@@ -1044,8 +1049,10 @@ retained per-chat catalog estimates or authoritative billed spend with an explic
 exists by default, missing or partial data is not zero-filled, and the result never gates or changes execution.
 [Native and devbox setup diagnostics](docs/native-diagnostics.md) use Apple's delayed MetricKit delivery for crash
 and hang observations and a closed app-owned timeline for setup stages through verified remote handshake. They
-retain only bounded content-free metadata locally. Pilot does not ingest stacks, report bodies, SSH output, aliases
-or arbitrary errors, upload these records, or treat historical evidence as a retry or restart signal.
+retain only bounded content-free metadata locally. Pilot does not ingest stacks or report bodies into those
+aggregates, SSH output, aliases or arbitrary errors; it does not upload these records or treat historical evidence as
+a retry or restart signal. The separate on-demand log catalogue may return bounded sanitized Pilot report excerpts
+inside a diagnostics specialist chat, never as aggregate evidence or telemetry.
 The [diagnostics and telemetry contract](docs/telemetry-contract.md) defines the versioned privacy, identity,
 correlation, retention and resource budgets for local diagnostics and opt-in OpenTelemetry export. Remote export and
 product analytics are disabled by default, and no telemetry backend is selected by the repository.

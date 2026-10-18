@@ -241,6 +241,8 @@ export function runKernelWorker(): void {
 			...(before === undefined ? {} : { before }),
 			...(limit === undefined ? {} : { limit }),
 		}));
+	const callDiagnosticLogs: import("./diagnostic-log-tool.ts").DiagnosticLogCall = (request) =>
+		callDaemon((callId) => ({ type: "diagnostics.logs.call", callId, request }));
 	const callRepairProposal: import("./repair-proposal-tool.ts").RepairProposalCall = (proposal) =>
 		callDaemon((callId) => ({ type: "diagnostics.proposal", callId, proposal }));
 
@@ -410,6 +412,7 @@ export function runKernelWorker(): void {
 			command.type === "slack.result" ||
 			command.type === "diagnostics.result" ||
 			command.type === "diagnostics.history.result" ||
+			command.type === "diagnostics.logs.result" ||
 			command.type === "diagnostics.proposal.result" ||
 			command.type === "subscription.limit.result" ||
 			command.type === "artifact.reference.result"
@@ -518,6 +521,7 @@ export function runKernelWorker(): void {
 					callSlackStatus,
 					callDiagnostics,
 					callDiagnosticHistory,
+					callDiagnosticLogs,
 					callRepairProposal,
 					readArtifactReference: (id, revision) =>
 						callDaemon((callId) => ({ type: "artifact.reference.get", callId, id, revision })),
