@@ -125,6 +125,7 @@ test("GET /api/inbox and the sidebar counts follow sources, scope and hidden lab
 		setWorkspaceProcessGuard() {},
 		onControlAudit: () => () => {},
 		onControlMemory: () => () => {},
+		onControlDashboardChange: () => () => {},
 	} as unknown as SessionManager;
 	const server = createDaemonServer(
 		{ home, host: "127.0.0.1", port: 0 },
