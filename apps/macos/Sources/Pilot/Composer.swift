@@ -359,9 +359,7 @@ struct Composer: View {
                 slashCommands: slashCommands,
                 onSlashCommandsNeeded: onSlashCommandsNeeded,
                 onAppCommand: onAppCommand
-            ) { flags in
-                send(flags.contains(.option) ? .followUp : .steer)
-            }
+            ) { submit($0) }
             HStack(spacing: 10) {
                 KeyHints(working: working, queued: !remainingQueuedMessages.isEmpty)
                 Spacer()
@@ -380,23 +378,41 @@ struct Composer: View {
             }
             Spacer(minLength: 8)
             if let session { ContextUsageIndicator(usage: session.usage ?? SessionUsage()) }
-            if let onSchedule {
-                ComposerSendLater(state: state, draft: state.draftState, modelPicker: modelPicker) { when in
-                    guard hostAvailable, state.canSend(changingModel: modelPicker.changing) else { return }
-                    onSchedule(state.attachments.message(text: state.trimmed), when)
+            if onSchedule != nil {
+                ComposerSendLater(state: state, draft: state.draftState, modelPicker: modelPicker,
+                                  disabled: !hostAvailable) { when in
+                    schedule(when)
                 }
             }
+            if !hostAvailable {
+                Label("Reconnect to send", systemImage: "wifi.slash")
+                    .font(.pilot(.caption))
+                    .foregroundStyle(Theme.mutedForeground)
+                    .accessibilityLabel("This chat is disconnected. Reconnect to send.")
+            }
             ComposerSendButtons(state: state, draft: state.draftState, modelPicker: modelPicker,
-                                working: working, onStop: onStop, onSend: { send(.steer) })
+                                working: working, hostAvailable: hostAvailable,
+                                reconnectHostName: hostContext?.name,
+                                onStop: onStop, onSend: { send(.steer) })
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
     }
 
-    private func send(_ mode: DeliveryMode) {
+    func send(_ mode: DeliveryMode) {
         let message = rawAttachments ? state.trimmed : state.attachments.message(text: state.trimmed)
         guard hostAvailable, state.canSend(changingModel: modelPicker.changing) else { return }
         onSend(message, mode)
+    }
+
+    /// The action supplied to the editor's Return handler. Kept as one production seam for keyboard and button tests.
+    func submit(_ flags: NSEvent.ModifierFlags) {
+        send(flags.contains(.option) ? .followUp : .steer)
+    }
+
+    func schedule(_ when: ScheduleWhen) {
+        guard hostAvailable, state.canSend(changingModel: modelPicker.changing), let onSchedule else { return }
+        onSchedule(state.attachments.message(text: state.trimmed), when)
     }
 
     private func modelControls(_ session: SessionSummary) -> some View {
@@ -527,6 +543,8 @@ private struct ComposerSendButtons: View {
     @ObservedObject var draft: ComposerDraftState
     @ObservedObject var modelPicker: ChatModelPickerState
     let working: Bool
+    let hostAvailable: Bool
+    let reconnectHostName: String?
     let onStop: () -> Void
     let onSend: () -> Void
 
@@ -539,8 +557,11 @@ private struct ComposerSendButtons: View {
             }
             Button(action: onSend) { PilotSymbol(PilotIcon.send, context: .toolbar) }
                 .buttonStyle(CircleIconButtonStyle())
-                .disabled(!state.canSend(changingModel: modelPicker.changing))
-                .help(working ? "Steer (↩)" : "Send (↩)")
+                .accessibilityLabel(hostAvailable ? "Send" : "Send unavailable. Reconnect to send")
+                .accessibilityIdentifier("composer.send")
+                .disabled(!hostAvailable || !state.canSend(changingModel: modelPicker.changing))
+                .help(hostAvailable ? (working ? "Steer (↩)" : "Send (↩)")
+                     : "Reconnect\(reconnectHostName.map { " to \($0)" } ?? "") to send")
         }
     }
 }
@@ -550,10 +571,11 @@ private struct ComposerSendLater: View {
     @ObservedObject var state: ComposerState
     @ObservedObject var draft: ComposerDraftState
     @ObservedObject var modelPicker: ChatModelPickerState
+    var disabled = false
     let schedule: (ScheduleWhen) -> Void
 
     var body: some View {
-        SendLaterMenu(disabled: !state.canSend(changingModel: modelPicker.changing), schedule: schedule,
+        SendLaterMenu(disabled: disabled || !state.canSend(changingModel: modelPicker.changing), schedule: schedule,
                       atTimeRequest: state.scheduleAtTime)
     }
 }
