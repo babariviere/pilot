@@ -1361,24 +1361,7 @@ export class SessionManager {
 	}
 	/** Idempotent copy from the watch worker's durable removal outbox. */
 	async auditWatchRemoval(removal: import("./watch-delivery.ts").WatchRemoval): Promise<void> {
-		const memory = this.controlMemory();
-		const operationId = `watch-removed:${removal.watch.id}`;
-		if (!(await memory.auditOperation(operationId))) {
-			await memory.auditAppend({
-				operationId,
-				action: "unwatch",
-				phase: "succeeded",
-				at: removal.at,
-				caller: "daemon",
-				args: {
-					watchId: removal.watch.id,
-					event: removal.watch.event,
-					target: removal.watch.target,
-					mode: removal.watch.mode,
-					note: removal.watch.note,
-				},
-				result: { removed: true, reason: `removed: ${removal.reason}` },
-			});
+		if (await this.controlMemory().auditWatchRemoval(removal)) {
 			for (const listener of this.controlAuditListeners) listener();
 		}
 	}

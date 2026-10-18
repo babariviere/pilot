@@ -86,6 +86,12 @@ export class ControlMemory {
 	authorizationRevoke(id: string): Promise<boolean> {
 		return this.rpc("authorizationRevoke", { id });
 	}
+	revokeWatchAuthorization(watchId: string, reason: string): Promise<boolean> {
+		return this.rpc("revokeWatchAuthorization", { watchId, reason });
+	}
+	auditWatchRemoval(removal: import("./watch-delivery.ts").WatchRemoval): Promise<boolean> {
+		return this.rpc("auditWatchRemoval", { removal });
+	}
 	authorizationPage(after?: string, limit?: number): Promise<import("@pilot/protocol").ControlAuthorizationsResponse> {
 		return this.rpc("authorizationPage", { after, limit });
 	}

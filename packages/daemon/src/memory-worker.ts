@@ -89,6 +89,12 @@ if (workerData.replicaRecall) {
 					case "control.authorizationRevoke":
 						value = control.authorizations.revoke(args.id);
 						break;
+					case "control.revokeWatchAuthorization":
+						value = control.revokeWatchAuthorization(args.watchId, args.reason);
+						break;
+					case "control.auditWatchRemoval":
+						value = control.auditWatchRemoval(args.removal);
+						break;
 					case "control.authorizationPage":
 						value = control.authorizations.page(args.after, args.limit);
 						break;

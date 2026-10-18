@@ -313,7 +313,7 @@ sessions.setWatchService(watches);
 await sessions.load(maintenance?.frozen);
 await sessions.ensureControlChat();
 watches.bindRemovalAudit((removal) => sessions.auditWatchRemoval(removal));
-const watchLifecycle = new WatchLifecycle(watches, sessions, missionStore);
+const watchLifecycle = new WatchLifecycle(watches, sessions, missionStore, () => sessions.controlAuthorizations());
 await watchLifecycle.reconcile();
 const { importLegacyWatchAuthorizations } = await import("./control-authorizations.ts");
 await importLegacyWatchAuthorizations(() => sessions.controlAuthorizations(), watches);
