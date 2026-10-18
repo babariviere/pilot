@@ -586,7 +586,8 @@ chat history or the offline index.
   binaries, Homebrew or Docker, apt/dnf/yum detected like devbox bootstrap with sudo items shown for the user to
   run.
 - A new `DaemonCapabilities.environmentSetup: 1` flag gates the feature. Older runtimes show "Update the
-  devbox to use environment setup", with no fallback to another host.
+  devbox to use environment setup", with no fallback to another host. Until the user-facing parts land, a daemon
+  advertises the flag only when started with `PILOT_ENVIRONMENT_SETUP=1`, and environment routes stay off otherwise.
 - **Offline or disconnected devbox**: the offline host index stores a small summary per project
   (readiness state, `checkedAt`, item IDs, versions and states; no commands, paths or output). The app shows
   "Last known · 2 h ago · devbox-1 disconnected". A last-known Ready shows as "Was ready at 14:02", never as

@@ -614,6 +614,10 @@ export interface Project {
 	/** Require branch/PR delivery. Defaults to true; false permits direct default-branch pushes. */
 	requirePullRequest?: boolean;
 	tracking?: ProjectTrackingConfig;
+	/** Environment profile. Edited through PUT /api/projects/:id/environment, never through project updates. */
+	environment?: import("./environment.ts").ProjectEnvironment;
+	/** This host's own environment layer, never synced. Edited through PUT /api/projects/:id/environment/override. */
+	environmentOverride?: import("./environment.ts").ProjectEnvironmentOverride;
 	createdAt: number;
 }
 
@@ -1893,6 +1897,7 @@ export type {
 	WatchInput,
 	WatchTarget,
 } from "./control.ts";
+export type * from "./environment.ts";
 export * from "./feature-events.ts";
 export type { DaemonCapabilities, DaemonHello } from "./hello.ts";
 export { DAEMON_PROTOCOL_VERSION, MINIMUM_CLIENT_PROTOCOL_VERSION } from "./hello.ts";

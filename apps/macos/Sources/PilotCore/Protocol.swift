@@ -464,6 +464,10 @@ public struct Project: Codable, Identifiable, Equatable, Hashable, Sendable {
     /// Whether publishing requires a pull request. Omitted by older daemons; defaults to true.
     public let requirePullRequest: Bool?
     public let tracking: ProjectTrackingConfig?
+    /// Environment profile. Edited through PUT /api/projects/:id/environment only.
+    public let environment: ProjectEnvironment?
+    /// This host's own environment layer, never synced. Edited through PUT /api/projects/:id/environment/override.
+    public let environmentOverride: ProjectEnvironmentOverride?
     public let createdAt: Double
 
     public var usesPrivateClones: Bool { workspace != "direct" }
@@ -471,7 +475,9 @@ public struct Project: Codable, Identifiable, Equatable, Hashable, Sendable {
 
     public init(
         id: String, name: String, path: String, model: String? = nil, workspace: String? = nil,
-        requirePullRequest: Bool? = nil, tracking: ProjectTrackingConfig? = nil, createdAt: Double
+        requirePullRequest: Bool? = nil, tracking: ProjectTrackingConfig? = nil,
+        environment: ProjectEnvironment? = nil, environmentOverride: ProjectEnvironmentOverride? = nil,
+        createdAt: Double
     ) {
         self.id = id
         self.name = name
@@ -480,7 +486,28 @@ public struct Project: Codable, Identifiable, Equatable, Hashable, Sendable {
         self.workspace = workspace
         self.requirePullRequest = requirePullRequest
         self.tracking = tracking
+        self.environment = environment
+        self.environmentOverride = environmentOverride
         self.createdAt = createdAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, path, model, workspace, requirePullRequest, tracking, environment, environmentOverride, createdAt
+    }
+
+    /// A profile from a newer daemon that this app cannot read never hides the project itself.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        path = try container.decode(String.self, forKey: .path)
+        model = try container.decodeIfPresent(String.self, forKey: .model)
+        workspace = try container.decodeIfPresent(String.self, forKey: .workspace)
+        requirePullRequest = try container.decodeIfPresent(Bool.self, forKey: .requirePullRequest)
+        tracking = try container.decodeIfPresent(ProjectTrackingConfig.self, forKey: .tracking)
+        environment = try? container.decodeIfPresent(ProjectEnvironment.self, forKey: .environment)
+        environmentOverride = try? container.decodeIfPresent(ProjectEnvironmentOverride.self, forKey: .environmentOverride)
+        createdAt = try container.decode(Double.self, forKey: .createdAt)
     }
 }
 

@@ -33,4 +33,6 @@ export interface DaemonCapabilities {
 	runtimeUpdates?: 1;
 	/** Cross-host Control contract version, independent of the general daemon protocol. */
 	controlHosts?: 1;
+	/** Project environment setup (docs/environment-setup.md). Absent on older runtimes and while the feature is off. */
+	environmentSetup?: 1;
 }
