@@ -1064,7 +1064,7 @@ struct DiagnosticRepairSheet: View {
 
     private var canStart: Bool {
         if pendingStart != nil { return !busy && targetProblem == nil }
-        !busy && proposal != nil && proposedEvidence != nil && targetProblem == nil && destinationProjectId != nil &&
+        return !busy && proposal != nil && proposedEvidence != nil && targetProblem == nil && destinationProjectId != nil &&
             !findings.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
             !suggestedRepair.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
             !regressionGuidance.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

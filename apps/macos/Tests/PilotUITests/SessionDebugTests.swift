@@ -59,7 +59,8 @@ private func sourceSession(control: Bool? = nil) -> SessionSummary {
     _ = try await app.spawnDiagnostics(prepared, target: resolved.reference, tracksFeature: false)
 
     let request = try #require(app.client.fixtureSpawnRequests.first)
-    #expect(request.title == "Pilot diagnostics")
+    #expect(request.title == nil)
+    #expect(request.diagnosticTitleFromReply == nil, "the submitted question supplies the descriptive title")
     #expect(request.role == .diagnostics)
     #expect(request.diagnosticTarget?.sessionId == control.id)
     #expect(request.model == "test/diagnostic")
@@ -71,15 +72,20 @@ private func sourceSession(control: Bool? = nil) -> SessionSummary {
     let evidenceRef = "diagnostic:v1:lifecycle:1"
     let handoff = try JSONDecoder().decode(DiagnosticsHandoff.self, from: Data("""
     {"schemaVersion":1,"host":{"hostId":"local","daemonId":"daemon","lineageId":"lineage"},
-    "targetSessionId":"target","projectId":"project","evidence":[{"ref":"\(evidenceRef)",
+    "targetSessionId":"\(sourceSession().id)","projectId":"project","evidence":[{"ref":"\(evidenceRef)",
     "source":"lifecycle","at":"2026-01-01T00:00:00.000Z","kind":"kernel.exit",
     "reason":"process_exit","state":"failed"}],"proposalId":"proposal","findings":"Worker exited.",
     "uncertainty":"medium","suggestedRepair":"Preserve the failure evidence.",
     "regressionTestGuidance":"Cover supervised exit."}
     """.utf8))
-    let request = try DiagnosticRepair.spawnRequest(handoff: handoff, destinationProjectId: project.id)
+    let admission = DiagnosticRepairAdmission(
+        specialistSessionId: "11111111-1111-4111-8111-111111111111", proposalId: handoff.proposalId,
+        target: try #require(DiagnosticTargetReference(host: localHost, sessionId: handoff.targetSessionId)))
+    let request = try DiagnosticRepair.spawnRequest(handoff: handoff, destinationProjectId: project.id,
+                                                    admission: admission)
     #expect(request.mode == .build)
     #expect(request.role == nil)
+    #expect(request.diagnosticRepair == admission)
     #expect(request.diagnosticTarget == nil)
     #expect(request.projectId == project.id)
     #expect(request.cwd == nil)
@@ -118,12 +124,16 @@ private func sourceSession(control: Bool? = nil) -> SessionSummary {
 }
 
 @Test func projectlessRepairRequiresAnExplicitBuildDestination() throws {
-    let handoff = try JSONDecoder().decode(DiagnosticsHandoff.self, from: Data(#"{"schemaVersion":1,"host":{"hostId":"local","daemonId":"daemon","lineageId":"lineage"},"targetSessionId":"target","evidence":[],"proposalId":"proposal","findings":"Finding","uncertainty":"high","suggestedRepair":"Repair","regressionTestGuidance":"Test"}"#.utf8))
-    let request = try DiagnosticRepair.spawnRequest(handoff: handoff, destinationProjectId: project.id)
+    let handoff = try JSONDecoder().decode(DiagnosticsHandoff.self, from: Data(#"{"schemaVersion":1,"host":{"hostId":"local","daemonId":"daemon","lineageId":"lineage"},"targetSessionId":"01234567-89ab-4cde-8fab-0123456789ab","evidence":[],"proposalId":"proposal","findings":"Finding","uncertainty":"high","suggestedRepair":"Repair","regressionTestGuidance":"Test"}"#.utf8))
+    let admission = DiagnosticRepairAdmission(
+        specialistSessionId: "11111111-1111-4111-8111-111111111111", proposalId: handoff.proposalId,
+        target: try #require(DiagnosticTargetReference(host: localHost, sessionId: handoff.targetSessionId)))
+    let request = try DiagnosticRepair.spawnRequest(handoff: handoff, destinationProjectId: project.id,
+                                                    admission: admission)
     #expect(request.projectId == project.id)
     #expect(request.cwd == nil)
     #expect(throws: ClientError.self) {
-        try DiagnosticRepair.spawnRequest(handoff: handoff, destinationProjectId: "")
+        try DiagnosticRepair.spawnRequest(handoff: handoff, destinationProjectId: "", admission: admission)
     }
 }
 
