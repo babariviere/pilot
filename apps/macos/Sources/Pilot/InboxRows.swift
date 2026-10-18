@@ -6,11 +6,12 @@ import SwiftUI
 // projects, read like the chat's sidebar row on their second line, and carry the sidebar's dithered corner.
 
 extension View {
-    /// The sidebar's dithered status corner on an Inbox or Overview row. The same trailing room on every row keeps
-    /// actions aligned and off the corner's densest cells, so they stay readable and a state change never shifts
-    /// them. `background` draws the subtler working corner of a chat that only waits on its jobs.
+    /// Keep the corner, selection and hit target on the same row bounds. HoverRow reserves the trailing room
+    /// inside its content, so actions stay aligned without detaching the corner from the row's fill. Unlike the
+    /// sidebar, these rows have no native selection outsets. Corner size and hover recession stay unchanged.
     func inboxCorner(_ signal: SessionSignal?, background: Bool = false) -> some View {
-        padding(.trailing, 24).ditherCorner(signal, background: background)
+        ditherCorner(signal, background: background, outset: EdgeInsets())
+            .environment(\.rowTrailingGutter, InboxRowLayout.cornerGutter)
     }
 }
 
@@ -72,6 +73,9 @@ struct NeedsYouRow<Detail: View>: View {
 }
 
 enum InboxRowLayout {
+    /// Added inside HoverRow, not around the selectable row. Keep the action close to the trailing edge;
+    /// the full-sized corner recedes only on hover, rather than permanently shrinking to clear the action.
+    static let cornerGutter: CGFloat = 24
     /// Lines dividers up with the text of rows without a leading icon, which starts at the row's own padding.
     static let dividerInset: CGFloat = 8
 }

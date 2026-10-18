@@ -60,6 +60,18 @@ struct PageSectionLinkChoice: Identifiable {
     let action: () -> Void
 }
 
+extension EnvironmentValues {
+    /// Space reserved inside a row's fill and hit target, for a trailing status corner. Ordinary rows use none.
+    var rowTrailingGutter: CGFloat {
+        get { self[RowTrailingGutterKey.self] }
+        set { self[RowTrailingGutterKey.self] = newValue }
+    }
+}
+
+private struct RowTrailingGutterKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 0
+}
+
 /// A list row with a soft fill under the pointer. The content closure receives the hover state so rows
 /// can reveal secondary controls with `revealed(_:)`. Put every revealed action in a context menu too,
 /// so it stays reachable from the keyboard and VoiceOver. Inside a `ditherCorner` the row draws no fill: its
@@ -69,11 +81,15 @@ struct HoverRow<Content: View>: View {
     var verticalPadding: CGFloat = 6
     @ViewBuilder let content: (Bool) -> Content
     @Environment(\.rowHasDitherCorner) private var hasCorner
+    @Environment(\.rowTrailingGutter) private var trailingGutter
     @State private var hovered = false
 
     var body: some View {
         content(hovered)
-            .padding(.horizontal, horizontalPadding)
+            // Only this row consumes its gutter; a nested row must not reserve the same space again.
+            .environment(\.rowTrailingGutter, 0)
+            .padding(.leading, horizontalPadding)
+            .padding(.trailing, horizontalPadding + trailingGutter)
             .padding(.vertical, verticalPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: Theme.Radius.row).fill(hovered && !hasCorner ? Theme.muted : .clear))
