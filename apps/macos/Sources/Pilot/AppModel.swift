@@ -163,6 +163,8 @@ final class AppModel: ObservableObject {
     @Published var showingArchive = false
     /// The Inbox page: what waits on the user across every project. Below chats, missions and project pages.
     @Published var showingInbox = false
+    /// The Control screen: the control chat's memory, log, watches and health. Global, like the Inbox.
+    @Published var showingControl = false
     /// The Inbox's project filter (nil lists every project). Preset to the focused project each time the Inbox
     /// opens, and never saved.
     @Published var inboxProjectId: String?
@@ -561,6 +563,7 @@ final class AppModel: ObservableObject {
         hosts.selection = nil
         showingArchive = false
         showingInbox = false
+        showingControl = false
         if projectId != nil || message != nil { newSessionForm.mission = nil }
         let fresh = message != nil || !newSessionForm.hasUnsubmittedDraft
         if let projectId, draftProjectId != projectId {
@@ -703,6 +706,7 @@ final class AppModel: ObservableObject {
         chooseArchiveMission(missionId)
         showingArchive = true
         showingInbox = false
+        showingControl = false
         selectedSessionId = nil
         selectedMissionId = nil
         selectedProjectId = nil
@@ -720,7 +724,21 @@ final class AppModel: ObservableObject {
         selectedMissionId = nil
         selectedProjectId = nil
         inboxProjectId = projectId ?? focusedProject?.id
+        showingControl = false
         showingInbox = true
+    }
+
+    /// The Control screen, in place of the detail. Read-only; the sidebar keeps its scope.
+    func openControlScreen() {
+        beginNavigation()
+        defer { endNavigation() }
+        hosts.selection = nil
+        showingArchive = false
+        showingInbox = false
+        selectedSessionId = nil
+        selectedMissionId = nil
+        selectedProjectId = nil
+        showingControl = true
     }
 
     func clearProjectSubpage() {
@@ -740,6 +758,7 @@ final class AppModel: ObservableObject {
         hosts.selection = nil
         showingArchive = false
         showingInbox = false
+        showingControl = false
         selectedSessionId = nil
         // Local pages select the plain project id, even when given a qualified key.
         selectedProjectId = ref?.localId ?? id
@@ -846,6 +865,7 @@ final class AppModel: ObservableObject {
         if let id = selectedSessionId { return .session(id) }
         if let id = selectedMissionId { return .mission(id) }
         if let id = selectedProjectId { return .project(id) }
+        if showingControl { return .control }
         if showingInbox { return .inbox }
         if showingArchive { return .archive(projectId: archiveProjectId, missionId: archiveMissionId) }
         return .home
@@ -911,6 +931,7 @@ final class AppModel: ObservableObject {
         case .home:
             showingArchive = false
             showingInbox = false
+            showingControl = false
             selectedSessionId = nil
             selectedMissionId = nil
             selectedProjectId = nil
@@ -925,6 +946,8 @@ final class AppModel: ObservableObject {
             showArchive(in: projectId, missionId: missionId)
         case .inbox:
             showInbox()
+        case .control:
+            openControlScreen()
         }
     }
 
@@ -1257,6 +1280,7 @@ extension AppModel {
         hosts.selection = nil
         showingArchive = false
         showingInbox = false
+        showingControl = false
         selectedSessionId = nil
         selectedMissionId = nil
         selectedProjectId = nil
@@ -1283,6 +1307,8 @@ extension AppModel {
             showInbox(for: location.inboxProjectId, context: context)
             inboxProjectId = location.inboxProjectId
             inboxHost = location.filterHost
+        case .control:
+            showingControl = true
         }
         saveDrafts()
     }
@@ -1293,7 +1319,7 @@ extension AppModel {
         case let .session(id): return navigationResourceExists(id, kind: .session)
         case let .mission(id): return navigationResourceExists(id, kind: .mission)
         case let .project(id): return navigationResourceExists(id, kind: .project)
-        case .home, .inbox, .archive: return true
+        case .home, .inbox, .archive, .control: return true
         }
     }
 

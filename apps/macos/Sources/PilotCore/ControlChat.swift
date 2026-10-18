@@ -99,6 +99,7 @@ public struct ControlMemoryLine: Codable, Identifiable, Hashable, Sendable {
 /// GET /api/control-chat/memory/view. Oldest first.
 public struct ControlMemoryViewResponse: Codable, Equatable, Sendable {
     public let lines: [ControlMemoryLine]
+    public init(lines: [ControlMemoryLine]) { self.lines = lines }
 }
 /// One page of a whole message. Tool rows are JSON `{name,input,text}` with `format == "json"`.
 public struct ControlMemoryMessagePage: Codable, Equatable, Sendable {
@@ -108,11 +109,23 @@ public struct ControlMemoryMessagePage: Codable, Equatable, Sendable {
         public let kind: ControlMemoryKind
         public let text: String
         public let name: String?
+        public init(id: Int, at: Double, kind: ControlMemoryKind, text: String, name: String? = nil) {
+            self.id = id
+            self.at = at
+            self.kind = kind
+            self.text = text
+            self.name = name
+        }
     }
     public let message: Message
     public let format: String?
     /// Offset of the next page of the same message.
     public let next: Int?
+    public init(message: Message, format: String? = nil, next: Int? = nil) {
+        self.message = message
+        self.format = format
+        self.next = next
+    }
 }
 /// GET /api/control-chat/memory/nodes/:id/:n. n > 1 sets `lines` (the two halves); n = 1 sets `message`
 /// (paged with `offset`).
@@ -121,6 +134,18 @@ public struct ControlMemoryNodeResponse: Codable, Equatable, Sendable {
     public let message: ControlMemoryMessagePage.Message?
     public let format: String?
     public let next: Int?
+    public init(lines: [ControlMemoryLine]) {
+        self.lines = lines
+        message = nil
+        format = nil
+        next = nil
+    }
+    public init(_ page: ControlMemoryMessagePage) {
+        lines = nil
+        message = page.message
+        format = page.format
+        next = page.next
+    }
     public var page: ControlMemoryMessagePage? {
         message.map { ControlMemoryMessagePage(message: $0, format: format, next: next) }
     }
@@ -134,12 +159,26 @@ public struct ControlMemoryLogEntry: Codable, Identifiable, Equatable, Sendable 
     public let name: String?
     public let input: String?
     public let clipped: Bool?
+    public init(id: Int, at: Double, kind: ControlMemoryKind, text: String, name: String? = nil, input: String? = nil,
+                clipped: Bool? = nil) {
+        self.id = id
+        self.at = at
+        self.kind = kind
+        self.text = text
+        self.name = name
+        self.input = input
+        self.clipped = clipped
+    }
 }
 /// GET /api/control-chat/memory/messages?before=<id>&limit=50&q=<text>. Newest first, limit 1...100, q at most
 /// 200 characters. A search scans a bounded window, so a page may hold fewer matches; continue with `next`.
 public struct ControlMemoryMessagesResponse: Codable, Equatable, Sendable {
     public let messages: [ControlMemoryLogEntry]
     public let next: Int?
+    public init(messages: [ControlMemoryLogEntry], next: Int? = nil) {
+        self.messages = messages
+        self.next = next
+    }
 }
 /// GET /api/control-chat/memory/stats.
 public struct ControlMemoryStats: Codable, Equatable, Sendable {
@@ -154,6 +193,17 @@ public struct ControlMemoryStats: Codable, Equatable, Sendable {
     public let dbBytes: Int
     public let oldestAt: Double?
     public let newestAt: Double?
+    public init(count: Int, pendingJobs: Int, failedJobs: Int, viewBytes: Int, merging: Bool, dbBytes: Int,
+                oldestAt: Double? = nil, newestAt: Double? = nil) {
+        self.count = count
+        self.pendingJobs = pendingJobs
+        self.failedJobs = failedJobs
+        self.viewBytes = viewBytes
+        self.merging = merging
+        self.dbBytes = dbBytes
+        self.oldestAt = oldestAt
+        self.newestAt = newestAt
+    }
 }
 /// POST /api/sessions/:id/model. Incompatible context becomes a restorable attempt with reason=model.
 public typealias ChangeModelResponse = SessionSummary

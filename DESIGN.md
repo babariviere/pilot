@@ -130,6 +130,10 @@ it, and it offers no pin, archive or mission actions. Its window subtitle is "Al
 with a one-sentence header on what it can see and do; the Ask badge and the Build-handoff row stay hidden.
 Its inspector adds a Watching pane: active watches (target, "When … · Once/Every time", the saved note) with Cancel
 under the pointer, then Actions, its audited starts, messages, missions and memory notes, one row per operation.
+Its transcript header and ⌘K ("Control screen") open the Control screen, a read-only page with four sections:
+Summaries (the current view, oldest first; a disclosure opens a line into its halves down to the original message),
+Log (newest first, searchable, "Show more"), Watches & actions (the Watching pane's rows) and Health (hairline rows).
+Agent and event text sits in a quote block as plain text, and memory is never edited from it.
 
 Below that, both scopes use the same order: Missions, then chats grouped only by urgency (Pinned, Needs you, Ready to
 merge, Working, Recent). All projects names each row's project; a focused project leaves it out. Missions never sit in

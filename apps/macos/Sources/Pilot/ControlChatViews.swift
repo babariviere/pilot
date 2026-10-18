@@ -6,6 +6,8 @@ import SwiftUI
 /// chat's own (pilotd names it), never a second copy here.
 struct ControlChatHeader: View {
     let title: String
+    /// Opens the Control screen (memory, log, watches and health).
+    var openScreen: (() -> Void)? = nil
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -25,9 +27,18 @@ struct ControlChatHeader: View {
                     .foregroundStyle(Theme.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if let openScreen {
+                Spacer(minLength: 8)
+                Button(action: openScreen) {
+                    Text("Open Control screen").font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
+                        .padding(.horizontal, 8).padding(.vertical, 4).contentShape(Rectangle())
+                }
+                .rowButtonStyle()
+                .help("Memory summaries, the message log, watches and health")
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: openScreen == nil ? .combine : .contain)
     }
 }
 
@@ -188,7 +199,6 @@ struct ControlDetailsPane: View {
     @ObservedObject var client: PilotClient
     let context: HostViewContext?
     @StateObject private var details = ControlDetailsModel()
-    @EnvironmentObject private var model: AppModel
 
     var body: some View {
         VStack(spacing: 0) {
@@ -197,12 +207,7 @@ struct ControlDetailsPane: View {
             }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    watchingSection
-                    SectionLabel(title: "Actions")
-                        .padding(.horizontal, 12)
-                        .padding(.top, 18)
-                        .padding(.bottom, 4)
-                    actionsSection
+                    ControlDetailsList(details: details, client: client, context: context)
                 }
                 .padding(.horizontal, 4)
                 .padding(.vertical, 4)
@@ -212,6 +217,31 @@ struct ControlDetailsPane: View {
         .onAppear { details.attach(client) }
         .onDisappear { details.detach() }
         .onChange(of: client.connected) { _, connected in if connected { details.reload() } }
+    }
+}
+
+/// The watches, each with Cancel, then the audited actions: the Watching pane's content, shared with the Control
+/// screen. The owner attaches and detaches `details`.
+struct ControlDetailsList: View {
+    @ObservedObject var details: ControlDetailsModel
+    @ObservedObject var client: PilotClient
+    let context: HostViewContext?
+    /// The Control screen labels the watches; the pane's header already does.
+    var labelsWatches = false
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        if labelsWatches {
+            SectionLabel(title: "Watching")
+                .padding(.horizontal, 12)
+                .padding(.bottom, 4)
+        }
+        watchingSection
+        SectionLabel(title: "Actions")
+            .padding(.horizontal, 12)
+            .padding(.top, 18)
+            .padding(.bottom, 4)
+        actionsSection
     }
 
     @ViewBuilder private var watchingSection: some View {

@@ -11,6 +11,7 @@ enum AppRoute: Hashable {
     case memory(String)
     case mission(String, MissionTab)
     case session(String)
+    case control
 
     /// Stable text for per-page memory, such as the highlighted list row.
     var key: String {
@@ -23,6 +24,7 @@ enum AppRoute: Hashable {
         case let .memory(id): "memory:\(id)"
         case let .mission(id, tab): "mission:\(id):\(tab.rawValue)"
         case let .session(id): "session:\(id)"
+        case .control: "control"
         }
     }
 }
@@ -38,6 +40,7 @@ extension AppModel {
             if memoryProjectId == id { return .memory(id) }
             return .project(id)
         }
+        if showingControl { return .control }
         if showingInbox { return .inbox(projectId: inboxProjectId) }
         if showingArchive { return .archive(projectId: archiveProjectId, missionId: archiveMissionId) }
         return .home

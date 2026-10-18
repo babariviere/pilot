@@ -34,6 +34,8 @@ struct MainWindow: View {
                     ProjectPage(projectId: projectId)
                         .id(projectId)
                 }
+            } else if model.showingControl {
+                ControlScreen()
             } else if model.showingInbox {
                 InboxPage().environment(\.hostViewContext, model.inboxHost.map { HostViewContext(host: $0, hosts: hosts) } ?? model.localHost.map { HostViewContext(host: $0, hosts: hosts) })
             } else if model.showingArchive {
