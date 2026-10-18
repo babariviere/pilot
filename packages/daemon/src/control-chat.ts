@@ -9,6 +9,9 @@ import { ControlMemoryAccess } from "./control-memory-access.ts";
 import type { ControlMessageInput } from "./control-memory-disk.ts";
 import type { ModelCatalog } from "./models.ts";
 
+/** How long a turn waits for summaries already being built. Afterwards it uses the unsummarized source. */
+export const CONTROL_PREPARE_WAIT_MS = 15_000;
+
 export class ControlChat {
 	readonly memory: ControlMemory;
 	private readonly compactor: ControlCompactor;
@@ -21,6 +24,7 @@ export class ControlChat {
 	/** Notice origin belongs to the active turn, not to a model-supplied action argument. */
 	private notice = true;
 	private preparedKey?: string;
+	private readonly prepareWaitMs: number;
 	get handlingNotice(): boolean {
 		return this.notice;
 	}
@@ -31,7 +35,9 @@ export class ControlChat {
 		isControl: (id: string) => boolean,
 		model: () => string | undefined,
 		fileRoots: (path: string) => readonly string[] = () => [],
+		prepareWaitMs = CONTROL_PREPARE_WAIT_MS,
 	) {
+		this.prepareWaitMs = prepareWaitMs;
 		this.isControl = isControl;
 		this.model = model;
 		this.memory = new ControlMemory(home);
@@ -83,6 +89,8 @@ export class ControlChat {
 		if (this.preparedKey === args.key) return { lines: await this.memory.turnView(args.key) };
 		await this.memory.retry();
 		this.compactor.wake();
+		// Summaries keep the turn small, but a slow or failing provider never holds or fails the turn.
+		await this.compactor.settled(this.prepareWaitMs);
 		const lines = await this.memory.turnView(args.key);
 		this.preparedKey = args.key;
 		return { lines };

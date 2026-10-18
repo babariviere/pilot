@@ -283,24 +283,7 @@ export class ControlMemoryDisk {
 		if (typeof key !== "string" || !key || key.length > 128) throw new Error("Invalid turn key");
 		const row = this.db.prepare("SELECT key,view FROM turn_view WHERE slot=1").get();
 		if (row?.key === key) return JSON.parse(String(row.view)) as ControlLine[];
-		const view: ControlLine[] = [];
-		let bytes = 0;
-		for (const row of this.db
-			.prepare(`WITH lines AS (
-			SELECT v.id,v.n,coalesce(t.text, CASE WHEN v.n=1 THEN CASE m.kind
-				WHEN 'tool' THEN 'tool: ' || json_extract(m.payload,'$.name') || ' ' || (m.payload -> '$.input')
-				ELSE m.kind || ': ' || json_extract(m.payload,'$.text') END END) AS text
-			FROM view v LEFT JOIN nodes t ON v.id=t.id AND v.n=t.n LEFT JOIN messages m ON v.id=m.id)
-			SELECT id,n,length(cast(text AS BLOB)) AS bytes,
-			CASE WHEN length(cast(text AS BLOB))<=? THEN text END AS text FROM lines ORDER BY id`)
-			.iterate(CONTROL_TURN_HISTORY_BYTES)) {
-			if (Number(row.bytes) > CONTROL_TURN_HISTORY_BYTES) throw this.historyOverflow();
-			if (typeof row.text !== "string") throw new Error("Control history has an unresolved range");
-			const line = { id: Number(row.id), n: Number(row.n), text: row.text };
-			bytes += Buffer.byteLength(controlLine(line));
-			if (bytes > CONTROL_TURN_HISTORY_BYTES) throw this.historyOverflow();
-			view.push(line);
-		}
+		const view = this.boundedTurnView();
 		this.db
 			.prepare(
 				"INSERT INTO turn_view VALUES(1,?,?) ON CONFLICT(slot) DO UPDATE SET key=excluded.key,view=excluded.view",
@@ -308,11 +291,34 @@ export class ControlMemoryDisk {
 			.run(key, JSON.stringify(view));
 		return view;
 	}
-	private historyOverflow(): Error {
-		const failure = this.state().failure;
-		return new Error(
-			`Control history exceeds the ${CONTROL_TURN_HISTORY_BYTES}-byte context cap while compaction is pending${failure ? `: ${failure.errorClass}, attempt ${failure.attempts}: ${failure.reason}` : ""}. Send a new message after compaction recovers; no input was replayed.`,
-		);
+	/** Always fits the cap, whatever compaction state: a turn never waits on or fails because of summaries.
+	 * Ranges without a summary keep the zoomable placeholder. When failed summaries keep the view over the cap,
+	 * the oldest ranges merge structurally (due order) into placeholders; built summaries reappear once their
+	 * parents build. Then unsummarized messages show their complete source, newest first, while it fits. Raw
+	 * text is never truncated: a message that does not fit keeps its placeholder. */
+	private boundedTurnView(): ControlLine[] {
+		const size = (line: ControlLine) => Buffer.byteLength(controlLine(line));
+		let lines = this.view(),
+			bytes = lines.reduce((sum, line) => sum + size(line), 0);
+		if (bytes > CONTROL_TURN_HISTORY_BYTES) {
+			lines = mergeControlView(lines, this.meta("count"), (id, n) => this.node(id, n) ?? PENDING, {
+				bytes: CONTROL_TURN_HISTORY_BYTES,
+			}).lines;
+			bytes = lines.reduce((sum, line) => sum + size(line), 0);
+		}
+		const raw = this.db.prepare("SELECT payload FROM messages WHERE id=?");
+		for (let i = lines.length - 1; i >= 0; i--) {
+			const line = lines[i]!;
+			if (line.n !== 1 || line.text !== PENDING) continue;
+			const row = raw.get(line.id);
+			if (!row) continue;
+			const full = { ...line, text: source(JSON.parse(String(row.payload)) as ControlMessage) };
+			const next = bytes - size(line) + size(full);
+			if (next > CONTROL_TURN_HISTORY_BYTES) continue;
+			lines[i] = full;
+			bytes = next;
+		}
+		return lines;
 	}
 	append(input: ControlMessageInput): ControlMessage[] {
 		if (!input || !kinds.has(input.kind) || typeof input.text !== "string" || input.text.includes("\0"))

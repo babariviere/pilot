@@ -48,8 +48,11 @@ so even an uncooperative provider cannot hold daemon shutdown open. Storage clos
 `ModelCatalog.compactControl` chooses the cheapest authenticated model in the turn's scope and
 provider, never a cross-provider fallback. `control-context.ts` owns the stable system prompt and
 tool/context construction shared with turns. Compactions declare the same tools but cannot execute
-them. A 512-dash ruler and up to five correction retries enforce a 512-byte line. The shortest valid
-line wins; oversized output is never silently truncated into memory.
+them. The prompt asks for about 400 bytes, states the input size and the share to cut, and keeps
+512 bytes as the hard limit; cheap models miscount bytes and, asked for 512, tend to copy dense input.
+Up to five corrections each name the overage and the bytes to cut. The shortest valid line wins;
+oversized output is never silently truncated into memory. Transient provider errors (429, 5xx,
+network) retry twice inside the call, within the 60-second job timeout.
 
 A second persisted range list is the compaction view, merged from 32,000 to 16,000 bytes, or when
 the main view merges. Its context ends at the target node (before a leaf), and stops at the first
@@ -58,12 +61,13 @@ prefix; the Anthropic payload hook marks the last whole block and the request en
 requests or artificial cache retention are used. Faux-provider tests cover retries, tools, same-provider
 selection, concurrency, parent readiness, failure recovery, cache blocks and shutdown cancellation.
 
-Turn preparation does not wait for the compaction queue. For missing leaf summaries it uses the
-complete raw source, with a hard 128,000-byte rendered history cap, and freezes that view for the
-input's tool rounds/recovery. Escaped JSON bytes are not mistaken for rendered UTF-8 bytes. It
-never sends placeholder summaries or silently truncates raw history. Over-cap preparation fails
-with the last recorded compaction reason and an explicit new-message retry instruction; failed
-inputs are never replayed automatically. Memory stats include the bounded failure diagnostics.
+Compaction never fails or blocks a turn. Preparation waits at most 15 seconds for summaries already
+being built, then builds a view that always fits a hard 128,000-byte rendered history cap, and freezes
+it for the input's tool rounds/recovery. When failed summaries keep the view over the cap, the oldest
+ranges merge structurally (due order) into zoomable placeholders; their summaries reappear once built.
+Unsummarized messages then show their complete source, newest first, while it fits; a source that
+does not fit keeps its placeholder and is never truncated. Escaped JSON bytes are not mistaken for
+rendered UTF-8 bytes. Memory stats include the bounded failure diagnostics.
 
 ## Session and turns
 

@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { ControlChat } from "./control-chat.ts";
-import { ControlMemoryDisk } from "./control-memory-disk.ts";
+import { CONTROL_TURN_HISTORY_BYTES, ControlMemoryDisk } from "./control-memory-disk.ts";
+import { controlLine } from "./control-view.ts";
 import type { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
 import { SessionManager } from "./sessions.ts";
@@ -87,19 +88,22 @@ test("failed compaction records a redacted cause while an under-cap turn proceed
 	assert.equal((await control.memory.stats()).compactionFailure?.attempts, 1);
 });
 
-test("over-cap raw history faults with its cause; success clears failures without replay or duplication", async (t) => {
+test("over-cap raw history keeps the newest sources whole and older ones zoomable; success clears failures", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "control-raw-cap-"));
 	const disk = new ControlMemoryDisk(home);
 	t.after(async () => {
 		disk.close();
 		await rm(home, { recursive: true, force: true });
 	});
-	for (let i = 0; i < 5; i++) disk.append({ kind: "user", text: "x".repeat(29_000), key: `input-${i}` });
+	for (let i = 0; i < 5; i++) disk.append({ kind: "user", text: `${i}`.repeat(29_000), key: `input-${i}` });
 	for (let job = disk.next(); job; job = disk.next())
 		disk.fail(job.id, job.n, { errorClass: "NetworkError", reason: "Provider unreachable" });
-	assert.throws(
-		() => disk.turnView("too-large"),
-		/128000-byte context cap.*NetworkError, attempt 1: Provider unreachable/,
+	const capped = disk.turnView("too-large");
+	assert.ok(capped.reduce((n, line) => n + Buffer.byteLength(controlLine(line)), 0) <= CONTROL_TURN_HISTORY_BYTES);
+	assert.deepEqual(
+		capped.map((line) => (line.text.startsWith("user: ") ? line.text.length - 6 : line.text)),
+		["(not summarized yet: zoom it)", 29_000, 29_000, 29_000, 29_000],
+		"newest sources stay whole; the oldest keeps its zoomable placeholder, never a truncated source",
 	);
 	const count = disk.state().count;
 	disk.retry(Number.MAX_SAFE_INTEGER);
@@ -109,6 +113,31 @@ test("over-cap raw history faults with its cause; success clears failures withou
 	assert.equal(disk.state().count, count);
 	assert.match(JSON.stringify(disk.turnView("retry-explicitly")), /Recovered summary/);
 	assert.equal(disk.state().count, count);
+});
+
+test("persistently failing compaction never pushes a turn over the history cap", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "control-raw-failing-"));
+	const disk = new ControlMemoryDisk(home);
+	t.after(async () => {
+		disk.close();
+		await rm(home, { recursive: true, force: true });
+	});
+	// Short messages build without a model; every parent summary fails, so no persisted merge is possible.
+	for (let i = 0; i < 600; i++) {
+		disk.append({ kind: "user", text: `${i} ${"x".repeat(450)}` });
+		for (let job = disk.next(); job; job = disk.next())
+			disk.fail(job.id, job.n, { errorClass: "Error", reason: "down" });
+	}
+	assert.ok(disk.state().viewBytes > CONTROL_TURN_HISTORY_BYTES, "fixture must exceed the cap");
+	const lines = disk.turnView("stuck");
+	assert.ok(lines.reduce((n, line) => n + Buffer.byteLength(controlLine(line)), 0) <= CONTROL_TURN_HISTORY_BYTES);
+	assert.equal(lines.at(-1)!.text, `user: 599 ${"x".repeat(450)}`, "recent history stays verbatim");
+	assert.equal(lines[0]!.id, 0, "the view still covers the whole log");
+	assert.equal(
+		lines.reduce((n, line) => n + line.n, 0),
+		600,
+	);
+	assert.match(lines[0]!.text, /not summarized yet: zoom it/);
 });
 
 test("raw fallback measures decoded UTF-8, not escaped JSON payload bytes", async (t) => {
@@ -124,6 +153,44 @@ test("raw fallback measures decoded UTF-8, not escaped JSON payload bytes", asyn
 		lines.reduce((n, line) => n + line.text.replace(/^user: /, "").length, 0),
 		75_000,
 	);
+});
+
+test("a hanging summary call delays a turn by the bounded wait only, never fails it", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "control-hanging-"));
+	let calls = 0;
+	const control = new ControlChat(
+		home,
+		home,
+		{
+			compactControl: (
+				_cwd: string,
+				_provider: string,
+				_tools: unknown,
+				_job: unknown,
+				_lines: unknown,
+				signal: AbortSignal,
+			) => {
+				calls++;
+				return new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason)));
+			},
+		} as unknown as ModelCatalog,
+		(id) => id === "control",
+		() => "test/model",
+		() => [],
+		50,
+	);
+	t.after(async () => {
+		await control.stop();
+		await rm(home, { recursive: true, force: true });
+	});
+	await control.call("control", "record", { message: { kind: "user", text: "slow ".repeat(200), key: "slow" } });
+	const started = Date.now();
+	const view = (await control.call("control", "prepare", { key: "1", requestId: "typed", tools: [] })) as {
+		lines: { text: string }[];
+	};
+	assert.ok(Date.now() - started < 5_000);
+	assert.ok(calls >= 1, "the summary call was still running");
+	assert.equal(view.lines[0]!.text, `user: ${"slow ".repeat(200)}`);
 });
 test("turn view survives record/retry, and daemon remembers notice origin independently of actions", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "control-turn-service-"));
@@ -150,7 +217,7 @@ test("turn view survives record/retry, and daemon remembers notice origin indepe
 	assert.equal(control.handlingNotice, true);
 });
 
-test("a failed summarization faults preparation without changing retained messages or retrying the failed job", {
+test("a failed summarization never faults preparation, changes retained messages or retries the failed job", {
 	timeout: 10_000,
 }, async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "control-summary-failure-"));
@@ -200,7 +267,8 @@ test("a failed summarization faults preparation without changing retained messag
 	const preparation = control.call("synthetic", "prepare", { key: "turn", requestId: "typed", tools: [] });
 	await retryDone; // fail during this request, not before its existing explicit-turn retry boundary
 	release();
-	await assert.rejects(preparation, /Earlier chat messages could not be summarized/);
+	const { lines } = (await preparation) as { lines: { text: string }[] };
+	assert.equal(lines[0]!.text, `user: ${"PRIVATE_HISTORY ".repeat(60)}`, "the turn uses the complete source");
 	assert.equal(calls, 1);
 	assert.equal((await control.memory.state()).pending, 1, "failed summary stays pending, not silently discarded");
 	assert.deepEqual(await control.memory.messages(), before);

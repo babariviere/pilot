@@ -57,7 +57,7 @@ async function fixture(t: TestContext) {
 	});
 	return { home, memory };
 }
-test("compaction shares the turn prefix/tools, uses a 512-byte ruler and UTF-8 feedback", async () => {
+test("compaction shares the turn prefix/tools, asks for a target below the limit and gives UTF-8 cut feedback", async () => {
 	let calls = 0;
 	const runtime = {
 		completeSimple: async (
@@ -72,10 +72,11 @@ test("compaction shares the turn prefix/tools, uses a 512-byte ruler and UTF-8 f
 				controlContext([], String(context.messages[1]!.content), tools).messages,
 			);
 			assert.equal(options?.toolChoice, "none");
-			assert.equal(options?.maxRetries, 0);
-			assert.match(String(context.messages[1]!.content), new RegExp("-".repeat(512)));
+			assert.ok((options?.maxRetries ?? 0) > 0, "transient provider failures retry inside the call");
+			assert.match(String(context.messages[1]!.content), /about 400 bytes .*512 bytes is the hard limit/);
+			assert.match(String(context.messages[1]!.content), /input is 606 bytes, so cut at least 206 bytes/);
 			if (calls++) {
-				assert.match(String(context.messages.at(-1)!.content), /514 bytes/);
+				assert.match(String(context.messages.at(-1)!.content), /514 bytes.*cut at least 114 bytes \(about 23%\)/);
 				assert.doesNotMatch(String(context.messages.at(-1)!.content), /�/);
 				return answer("shortest");
 			}
