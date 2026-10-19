@@ -59,6 +59,31 @@ test("a stall without main-thread CPU is waiting, not proven event-loop blocking
 	assert.equal(stalls.totalMs, 3_000, "likely sleep is excluded from stalled time");
 });
 
+test("equally long sleep and CPU pauses remain distinct in regression measurements", () => {
+	let now = 0,
+		cpu = 0;
+	const watchdog = new EventLoopWatchdog({
+		intervalMs: 5,
+		thresholdMs: 200,
+		now: () => now,
+		cpu: () => cpu,
+		log: () => {},
+	});
+	watchdog.start();
+	watchdog.stop();
+	now += 65_005;
+	cpu += 64_000;
+	watchdog.tick();
+	now += 65_005;
+	cpu += 5;
+	watchdog.tick();
+	const { stalls } = watchdog.snapshot();
+	assert.equal(stalls.busy, 1, "a long CPU stall is not sleep");
+	assert.equal(stalls.sleep, 1, "the same elapsed pause with negligible CPU is tracked separately");
+	assert.equal(stalls.waiting, 0);
+	assert.equal(stalls.totalMs, 65_000, "sleep cannot inflate the CPU-stall regression total");
+});
+
 test("operations describe slow sections and the oldest in-flight work", () => {
 	let now = 0;
 	let cpu = 0;
@@ -99,4 +124,28 @@ test("slow-section totals group session IDs into one bounded kind", () => {
 		{ label: "kernel working packet for :id", count: 2, ms: 2_000, cpuMs: 40, maxMs: 1_100 },
 	]);
 	assert.equal(recentSlow.length, 2);
+});
+
+test("slow timing preserves thrown errors and bounded content-free bookkeeping", () => {
+	let now = 0;
+	const tracker = new DaemonOperations(
+		() => now,
+		() => now,
+	);
+	const failure = new Error("synthetic failure");
+	for (let i = 0; i < 100; i++) {
+		assert.throws(
+			() =>
+				tracker.time("diagnostics.redact", () => {
+					now += 150;
+					throw failure;
+				}),
+			(error) => error === failure,
+		);
+	}
+	const snapshot = tracker.snapshot();
+	assert.equal(snapshot.recentSlow.length, 16);
+	assert.deepEqual(snapshot.slowByKind, [
+		{ label: "diagnostics.redact", count: 100, ms: 15_000, cpuMs: 15_000, maxMs: 150 },
+	]);
 });

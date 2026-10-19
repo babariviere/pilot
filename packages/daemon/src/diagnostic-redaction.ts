@@ -28,7 +28,9 @@ export function redactDiagnosticText(text: string): string {
 			for (const field of check.matchAll(/(?<![\w-])([\w-]+)[\\"' \t]*[:=]/g)) {
 				if (isCredentialField(field[1]!)) return "[REDACTED credential-bearing record]";
 			}
-			return /\b(?:Bearer|Basic)\s+\S+|:\/\/[^\s/@]+:[^\s/@]+@|[?&](?:sig|signature|key|auth)=|\b(?:sk-|gh[pousr]_|github_pat_|xox[baprs]-|AKIA)[A-Za-z0-9_-]+/i.test(
+			// Prove the authority ends in @ before trying user:password. Otherwise a colon-rich
+			// noncredential URL makes the two overlapping character classes backtrack quadratically.
+			return /\b(?:Bearer|Basic)\s+\S+|:\/\/(?=[^\s/@]*@)[^\s/@]+:[^\s/@]+@|[?&](?:sig|signature|key|auth)=|\b(?:sk-|gh[pousr]_|github_pat_|xox[baprs]-|AKIA)[A-Za-z0-9_-]+/i.test(
 				check,
 			)
 				? "[REDACTED credential-bearing record]"

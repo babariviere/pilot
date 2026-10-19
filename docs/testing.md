@@ -191,6 +191,35 @@ persists a codemode image-then-error, reopens the failed chat and completes thro
 serializer with offline SSE, checking that the error result is text-only, the image is still sent, and
 history, request hooks and already-committed tool effects remain intact.
 
+## Diagnostic redaction responsiveness
+
+`diagnostic-redaction.stress.test.ts` runs twelve ordered synthetic records (six colon-rich URL-like
+records just below 64 KB and six credential-bearing counterparts) through the production log sanitizer,
+with a 5 ms heartbeat, event-loop histogram and unrelated loopback HTTP requests on the same thread.
+All three maximum-delay budgets are 200 ms. It checks unchanged results/order and requires both heartbeat
+and HTTP activity. The watchdog reports CPU stalls, waiting and likely sleep separately; sleep makes the
+measurement inconclusive and skips the latency assertions, never counting as a CPU regression or a repair success.
+`event-loop-watchdog.test.ts` also checks equal-duration CPU and sleep pauses using deterministic clocks.
+
+An offline macOS arm64/Node 24.21.0 reproduction on 2026-10-19 recorded six CPU stalls before the fix,
+with maximum heartbeat/HTTP/event-loop delays of 1,604/1,604/1,604 ms (8,163 ms total main-thread CPU).
+The same isolated fixture after the fix measured 7/6/6 ms and 45 ms CPU, with no CPU stalls or sleep pauses.
+These are single local samples, not a production latency guarantee. The URL credential matcher tried
+overlapping user/password classes at every colon when no terminal `@` existed. A bounded lookahead now
+rejects that case in one scan without changing credential rules, avoiding the need to introduce async
+ordering or worker ownership into this bounded operation. Log-reader redaction timings use the fixed
+`diagnostics.redact` label in the existing bounded slow-section tracker (100 ms threshold), never log content.
+
+This fixture measures the sanitizer and a minimal HTTP server, not complete pilotd, GUI responsiveness,
+provider streaming or disk I/O. It confirms a reproducible blocking path, not the cause of any historical
+stall: the reviewed evidence did not identify a callback, and no diagnosed chat or user history is read.
+
+Run it alone, without competing builds, for comparable before/after measurements:
+
+```sh
+node --test packages/daemon/src/diagnostic-redaction.stress.test.ts
+```
+
 ## Daemon activity hot path
 
 ```sh
