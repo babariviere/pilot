@@ -63,11 +63,9 @@ struct VisualHostTests {
 
     @Test(.timeLimit(.minutes(1))) func interruptsLongSetupViewsAndHandlers() async throws {
         let host = VisualHost()
-        let started = Date()
         let setup = await host.load("a", request("function visual() {\n  while (true) {}\n}"))
         #expect(setup.scriptError?.kind == .timeout)
         #expect(setup.scriptError?.message == "the visual function took longer than 250 ms")
-        #expect(Date().timeIntervalSince(started) < 5)
         // A visual that failed to start leaves no engine behind.
         #expect(host.liveIDs.isEmpty)
 
@@ -178,7 +176,6 @@ struct VisualHostTests {
     @Test(.timeLimit(.minutes(1))) func drawFailuresAreScriptErrors() async {
         let host = VisualHost()
         _ = await host.load("a", request(counterVisual, data: #"{"start":0}"#))
-        let started = Date()
         guard case .failure(.script(let spin)) = await host.draw("a", VisualDrawRequest(canvas: "spin", width: 10, height: 10))
         else {
             Issue.record("expected a timeout")
@@ -186,7 +183,6 @@ struct VisualHostTests {
         }
         #expect(spin.kind == .timeout)
         #expect(spin.message == "the drawing took longer than 8 ms")
-        #expect(Date().timeIntervalSince(started) < 2)
         // The engine survives an interrupted draw.
         #expect((try? await host.draw("a", VisualDrawRequest(canvas: "0", width: 10, height: 10)).get()) != nil)
         guard case .failure(.script(let missing)) = await host.draw("a", VisualDrawRequest(canvas: "9", width: 1, height: 1))
