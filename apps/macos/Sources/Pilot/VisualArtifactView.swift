@@ -81,6 +81,8 @@ final class VisualArtifactModel: ObservableObject {
     private var drawings: [String: VisualDrawing] = [:]
     /// The revision's Metal translations, by input names and GLSL.
     private var shaders: [String: ArtifactVisualShader] = [:]
+    /// Native Mermaid layouts by source, nil for sources that draw in a web view, prepared with each tree.
+    private(set) var mermaidLayouts: [String: NativeMermaidLayout?] = [:]
 
     init(engine: VisualEngineClient = .shared) {
         self.engine = engine
@@ -144,6 +146,11 @@ final class VisualArtifactModel: ObservableObject {
         shaders[shader.translationKey]
     }
 
+    /// Remembers a layout prepared by a node itself, for trees restored from memory before the engine answered.
+    func remember(_ layout: NativeMermaidLayout?, for source: String) {
+        mermaidLayouts[source] = .some(layout)
+    }
+
     private func load() {
         guard var request, !busy else { return }
         request.state = VisualReaderMemory.state(for: memoryKey)
@@ -189,10 +196,19 @@ final class VisualArtifactModel: ObservableObject {
         case .success(let frame):
             // Decoding a large tree stays off the main thread.
             let decoded = await Task.detached(priority: .userInitiated) {
-                Result { try VisualTree(frame.tree) }
+                Result { () throws -> (VisualTree, [String: NativeMermaidLayout?]) in
+                    let tree = try VisualTree(frame.tree)
+                    // Mermaid parses and lays out here too, so the diagram has its height when the tree shows.
+                    var layouts: [String: NativeMermaidLayout?] = [:]
+                    for source in tree.root.mermaidSources where layouts[source] == nil {
+                        layouts[source] = .some(NativeMermaid.layout(source))
+                    }
+                    return (tree, layouts)
+                }
             }.value
             switch decoded {
-            case .success(let tree):
+            case .success(let (tree, layouts)):
+                for (source, layout) in layouts { mermaidLayouts[source] = .some(layout) }
                 if tree != self.tree { self.tree = tree }
                 failure = nil
                 if let artifactID { ArtifactRenderTiming.rendered?(artifactID) }
@@ -397,6 +413,12 @@ struct VisualNodeView: View, Equatable {
                 VisualShaderStill(shader: shader, model: model)
             } else {
                 VisualShaderView(shader: shader, model: model)
+            }
+        case .mermaid(let source):
+            if still {
+                VisualMermaidStill(source: source, model: model)
+            } else {
+                VisualMermaidView(source: source, model: model)
             }
         }
     }

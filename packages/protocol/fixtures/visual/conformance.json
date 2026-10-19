@@ -2192,6 +2192,71 @@
 				}
 			],
 			"finalState": "[{\"speed\":2.5}]"
+		},
+		{
+			"name": "mermaid diagrams",
+			"source": "function visual({ ui, state }) {\n  const s = state({ detail: false });\n  return () => ui.column([\n    ui.toggle({ label: \"Detail\", value: s.detail, onChange: (v) => (s.detail = v) }),\n    ui.mermaid(s.detail ? \"flowchart LR\\n  A[Request] --> B{Cached?}\\n  B -->|yes| C[Reply]\\n  B -->|no| D[Render] --> C\" : \"flowchart LR\\n  A[Request] --> C[Reply]\", { key: \"flow\" }),\n    ui.mermaid(\"---\\ntitle: Turn\\n---\\n%% a comment\\nsequenceDiagram\\n  User->>Agent: ask\\n  Agent-->>User: answer\"),\n  ]);\n}",
+			"data": null,
+			"id": "00000000-0000-4000-8000-000000000007",
+			"now": 1792411200000,
+			"steps": [
+				{
+					"tree": {
+						"api": 1,
+						"root": {
+							"type": "column",
+							"children": [
+								{
+									"type": "toggle",
+									"label": "Detail",
+									"value": false,
+									"id": "0.0"
+								},
+								{
+									"type": "mermaid",
+									"key": "flow",
+									"source": "flowchart LR\n  A[Request] --> C[Reply]"
+								},
+								{
+									"type": "mermaid",
+									"source": "---\ntitle: Turn\n---\n%% a comment\nsequenceDiagram\n  User->>Agent: ask\n  Agent-->>User: answer"
+								}
+							]
+						}
+					}
+				},
+				{
+					"event": {
+						"id": "0.0",
+						"value": true
+					},
+					"changed": ["detail"],
+					"tree": {
+						"api": 1,
+						"root": {
+							"type": "column",
+							"children": [
+								{
+									"type": "toggle",
+									"label": "Detail",
+									"value": true,
+									"id": "0.0"
+								},
+								{
+									"type": "mermaid",
+									"key": "flow",
+									"source": "flowchart LR\n  A[Request] --> B{Cached?}\n  B -->|yes| C[Reply]\n  B -->|no| D[Render] --> C"
+								},
+								{
+									"type": "mermaid",
+									"source": "---\ntitle: Turn\n---\n%% a comment\nsequenceDiagram\n  User->>Agent: ask\n  Agent-->>User: answer"
+								}
+							]
+						}
+					}
+				}
+			],
+			"finalState": "[{\"detail\":true}]"
 		}
 	],
 	"errors": [
@@ -2533,6 +2598,24 @@
 				}
 			],
 			"error": "no canvas with id 0 in the current view"
+		},
+		{
+			"name": "mermaid type",
+			"source": "({ ui }) => () =>\n  ui.mermaid(\"A --> B\")",
+			"data": null,
+			"error": "line 2: mermaid: source must start with a diagram type such as flowchart, sequenceDiagram or classDiagram, got \"A\""
+		},
+		{
+			"name": "mermaid source",
+			"source": "({ ui }) => () => ui.mermaid(42)",
+			"data": null,
+			"error": "line 1: mermaid: source must be a string of Mermaid, got number"
+		},
+		{
+			"name": "mermaid too long",
+			"source": "({ ui }) => () => ui.mermaid(\"graph TD\\n\" + \"A-->B\\n\".repeat(4000))",
+			"data": null,
+			"error": "line 1: mermaid: source is longer than 20480 characters"
 		},
 		{
 			"name": "shader without mainImage",

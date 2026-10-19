@@ -740,6 +740,29 @@
 					},
 					"additionalProperties": false,
 					"description": "A fragment shader as wide as the column, drawn with Metal."
+				},
+				{
+					"type": "object",
+					"required": ["type", "source"],
+					"properties": {
+						"type": {
+							"type": "string",
+							"const": "mermaid"
+						},
+						"key": {
+							"type": "string",
+							"minLength": 1,
+							"maxLength": 200,
+							"description": "Identity among siblings, unique within one children list. Numbers become strings."
+						},
+						"source": {
+							"type": "string",
+							"maxLength": 20480,
+							"description": "Mermaid source starting with a diagram type (flowchart, sequenceDiagram...). Drawn natively, or by Mermaid in a web view when the native renderer cannot read it faithfully."
+						}
+					},
+					"additionalProperties": false,
+					"description": "A Mermaid diagram at its natural size, shrunk to fit the column and 480 pt."
 				}
 			],
 			"description": "One node, discriminated by type.",

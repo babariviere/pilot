@@ -30,6 +30,8 @@ export interface VisualCheckReport {
 	interactions: number;
 	/** Canvas draws the check ran. */
 	draws: number;
+	/** Different Mermaid diagrams the views show; absent without any. */
+	mermaid?: number;
 	/** console output of the visual, bounded. */
 	logs: string[];
 }
@@ -95,6 +97,11 @@ export async function runVisualCheck(input: VisualCheckInput): Promise<VisualChe
 			}
 		};
 		collect(first);
+		const diagrams = new Set<string>();
+		const collectDiagrams = (tree: VisualTree) => {
+			for (const node of mermaidOf(tree.root)) diagrams.add(node.source);
+		};
+		collectDiagrams(first);
 		let draws = 0;
 		const drawAll = (tree: VisualTree, steps: Step[]) => {
 			for (const canvas of canvasesOf(tree.root))
@@ -162,6 +169,7 @@ export async function runVisualCheck(input: VisualCheckInput): Promise<VisualChe
 					if (!replay) {
 						interactions++;
 						collect(tree);
+						collectDiagrams(tree);
 						drawAll(tree, steps);
 						// Controls a step reveals are exercised later, after replaying the steps that revealed them.
 						discover(tree, [...steps]);
@@ -172,7 +180,14 @@ export async function runVisualCheck(input: VisualCheckInput): Promise<VisualChe
 		return {
 			ok: true,
 			engine: session.engine,
-			report: { nodes: countNodes(first.root), controls: seen.size, interactions, draws, logs: session.logs },
+			report: {
+				nodes: countNodes(first.root),
+				controls: seen.size,
+				interactions,
+				draws,
+				...(diagrams.size ? { mermaid: diagrams.size } : {}),
+				logs: session.logs,
+			},
 			shaders: [...shaders.values()],
 		};
 	} catch (error) {
@@ -204,6 +219,15 @@ export function canvasesOf(node: VisualNode, into: Canvas[] = []): Canvas[] {
 export function shadersOf(node: VisualNode, into: Shader[] = []): Shader[] {
 	if (node.type === "shader") into.push(node);
 	if ("children" in node) for (const child of node.children) shadersOf(child as VisualNode, into);
+	return into;
+}
+
+export function mermaidOf(
+	node: VisualNode,
+	into: Extract<VisualNode, { type: "mermaid" }>[] = [],
+): Extract<VisualNode, { type: "mermaid" }>[] {
+	if (node.type === "mermaid") into.push(node);
+	if ("children" in node) for (const child of node.children) mermaidOf(child as VisualNode, into);
 	return into;
 }
 

@@ -120,6 +120,15 @@ const shader = `function visual({ ui, state }) {
   ]);
 }`;
 
+const diagram = `function visual({ ui, state }) {
+  const s = state({ detail: false });
+  return () => ui.column([
+    ui.toggle({ label: "Detail", value: s.detail, onChange: (v) => (s.detail = v) }),
+    ui.mermaid(s.detail ? "flowchart LR\\n  A[Request] --> B{Cached?}\\n  B -->|yes| C[Reply]\\n  B -->|no| D[Render] --> C" : "flowchart LR\\n  A[Request] --> C[Reply]", { key: "flow" }),
+    ui.mermaid("---\\ntitle: Turn\\n---\\n%% a comment\\nsequenceDiagram\\n  User->>Agent: ask\\n  Agent-->>User: answer"),
+  ]);
+}`;
+
 const regions = [
 	{ region: "eu", p95: 120, p99: 180 },
 	{ region: "us", p95: 140, p99: 210 },
@@ -231,6 +240,14 @@ export const CASES: Case[] = [
 		now: NOW,
 		events: [{ id: "0.0", value: 2.5 }],
 	},
+	{
+		name: "mermaid diagrams",
+		source: diagram,
+		data: null,
+		id: "00000000-0000-4000-8000-000000000007",
+		now: NOW,
+		events: [{ id: "0.0", value: true }],
+	},
 ];
 
 const lines = (...parts: string[]) => parts.join("\n");
@@ -317,6 +334,13 @@ export const ERRORS: ErrorCase[] = [
 	},
 	{ name: "link scheme", source: '({ ui }) => () => ui.link("x", { href: "file:///etc/passwd" })', data: null },
 	...drawErrors(),
+	{ name: "mermaid type", source: '({ ui }) => () =>\n  ui.mermaid("A --> B")', data: null },
+	{ name: "mermaid source", source: "({ ui }) => () => ui.mermaid(42)", data: null },
+	{
+		name: "mermaid too long",
+		source: '({ ui }) => () => ui.mermaid("graph TD\\n" + "A-->B\\n".repeat(4000))',
+		data: null,
+	},
 	{
 		name: "shader without mainImage",
 		source: lines("({ ui }) => () =>", '  ui.shader({ glsl: "void main() {}" })'),

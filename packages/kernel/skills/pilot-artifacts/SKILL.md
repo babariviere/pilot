@@ -5,10 +5,10 @@ description: Author native visuals and offline HTML, React, image, shader and Sw
 
 # Pilot artifacts
 
-The `artifact` tool publishes session-local, offline artifacts. Pass source directly in tool arguments; no companion files are needed. This page covers what applies to every artifact. Read the reference for the kind you are authoring. **Choose a native visual first** (`kind: "visual"`) for charts, stats, tables, small dashboards, controls, 2D drawings, animations and shader effects. Pilot draws it natively in the chat, in light and dark, with no web page. Use HTML or React only for what visuals can't express: custom layouts, rich documents, wide content and web libraries such as Mermaid, d3 force graphs or three.js.
+The `artifact` tool publishes session-local, offline artifacts. Pass source directly in tool arguments; no companion files are needed. This page covers what applies to every artifact. Read the reference for the kind you are authoring. **Choose a native visual first** (`kind: "visual"`) for charts, stats, tables, small dashboards, controls, Mermaid diagrams, 2D drawings, animations and shader effects. Pilot draws it natively in the chat, in light and dark, with no web page. Use HTML or React only for what visuals can't express: custom layouts, rich documents, wide content and web libraries such as d3 force graphs or three.js.
 
-- Native visuals (charts, stats, tables, controls, 2D canvas, shaders): [references/visuals.md](references/visuals.md), with the API in [references/visual.d.ts](references/visual.d.ts)
-- HTML and React pages, Mermaid diagrams and other web libraries: [references/web.md](references/web.md)
+- Native visuals (charts, stats, tables, controls, Mermaid diagrams, 2D canvas, shaders): [references/visuals.md](references/visuals.md), with the API in [references/visual.d.ts](references/visual.d.ts)
+- HTML and React pages and web libraries: [references/web.md](references/web.md)
 - Native SwiftUI layouts and UI previews: [references/swiftui.md](references/swiftui.md)
 - PNG, JPEG, GIF or WebP images: [references/images.md](references/images.md)
 - Standalone GLSL shader artifacts (Shadertoy-style `mainImage`; inside a visual use `ui.shader`): [references/shaders.md](references/shaders.md)

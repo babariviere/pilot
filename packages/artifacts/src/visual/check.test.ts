@@ -125,6 +125,22 @@ test("console output is kept, bounded in lines and length", async () => {
 	assert.equal(result.report.logs[1], '{"i":1}');
 });
 
+test("the check counts the different Mermaid diagrams its views show", async () => {
+	const result = await run(`({ ui, state }) => {
+  const s = state({ more: false });
+  return () => ui.column([
+    ui.toggle({ label: "More", value: s.more, onChange: (v) => (s.more = v) }),
+    ui.mermaid(s.more ? "graph TD\\n  A --> B --> C" : "graph TD\\n  A --> B"),
+    ui.mermaid("graph TD\\n  A --> B", { key: "same" }),
+  ]);
+}`);
+	assert.ok(result.ok, JSON.stringify(result));
+	assert.equal(result.report.mermaid, 2);
+	const none = await run('({ ui }) => () => ui.text("x")');
+	assert.ok(none.ok);
+	assert.equal(none.report.mermaid, undefined);
+});
+
 test("shader nodes report the shaders their views show", async () => {
 	const result = await run(
 		'({ ui }) => () => ui.shader({ label: "Glow", inputs: { b: 2, a: 1 }, glsl: "void mainImage(out vec4 c, in vec2 p) { c = vec4(a); }" })',

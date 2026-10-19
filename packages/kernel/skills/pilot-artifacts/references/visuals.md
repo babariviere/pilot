@@ -1,9 +1,9 @@
 # Native visual artifacts
 
 `kind: "visual"` is the **first choice** for charts, stats, tables, small dashboards, controls (tabs, toggles,
-sliders, buttons) and 2D drawings or animations (`ui.canvas`). Pilot draws visuals natively in the chat: light and
+sliders, buttons), Mermaid diagrams (`ui.mermaid`) and 2D drawings or animations (`ui.canvas`). Pilot draws visuals natively in the chat: light and
 dark, the chat's fonts, selectable text and no web page. Use HTML or React only for what visuals can't express: custom
-layouts, rich documents, wide content and web libraries such as Mermaid, d3 force graphs or three.js. For GLSL effects
+layouts, rich documents, wide content and web libraries such as d3 force graphs or three.js. For GLSL effects
 inside a visual, use `ui.shader`; a standalone shader artifact suits a shader on its own.
 
 The API is in [visual.d.ts](visual.d.ts). A visual is a **plain JavaScript function** defined in your codemode script
@@ -76,6 +76,27 @@ ui.canvas({
 `draw` runs again on resize and pointer moves and, when `animated`, every display frame while the canvas is visible
 (`t` is seconds; it stays 0 under Reduce Motion). It may read state but never assign it, and must finish within 8 ms:
 two slow frames in a row stop the canvas with the error. Keep frames to a few thousand commands.
+
+## Mermaid
+
+`ui.mermaid(source)` draws a Mermaid diagram natively at its natural size, shrunk to fit the column and 480 pt;
+readers expand it to zoom. Use it for flowcharts, sequence, class, state and ER diagrams, alone or beside other
+nodes. The source must start with a diagram type (`flowchart`, `sequenceDiagram`...), at most 20 KiB.
+
+```js
+function visual({ ui }) {
+  return () =>
+    ui.column({ gap: 12 }, [
+      ui.text("Request path", { size: "lg", weight: 600 }),
+      ui.mermaid(`flowchart LR
+  A[Request] --> B{Cached?}
+  B -->|yes| C[Reply]
+  B -->|no| D[Render] --> C`),
+    ]);
+}
+```
+
+Pilot draws the diagram with Mermaid in a web view instead when its native renderer can't read it faithfully.
 
 ## Shader
 

@@ -770,6 +770,8 @@ export interface ArtifactVisual {
 		draws?: number;
 		/** Distinct shaders the check translated to Metal. */
 		shaders?: number;
+		/** Distinct Mermaid diagrams the exercised views show. */
+		mermaid?: number;
 		/** Bounded console output of the visual during the check. */
 		logs: string[];
 	};

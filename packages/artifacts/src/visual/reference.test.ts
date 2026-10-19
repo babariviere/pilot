@@ -113,6 +113,7 @@ const unknownProp: Record<string, string> = {
 	span: 'ui.text([ui.span("x", { zzz: 1 })])',
 	link: 'ui.link("x", { zzz: 1 })',
 	space: "ui.space({ zzz: 1 })",
+	mermaid: 'ui.mermaid("graph TD", { zzz: 1 })',
 };
 
 test("visual.d.ts declares every ui function and exactly the props the runtime accepts", async () => {
@@ -185,14 +186,24 @@ test("visual.d.ts tokens and the quoted limits match schema.ts", async () => {
 
 test("the examples in visuals.md pass the publication check", async () => {
 	const blocks = [...(await guide()).matchAll(/```js\n([\s\S]*?)```/g)].map((match) => match[1]!);
-	const visual = blocks.map((block) => block.match(/^function visual[\s\S]*?^}$/m)?.[0]).find(Boolean);
-	assert.ok(visual, "visuals.md has no function visual example");
+	const visuals = blocks.map((block) => block.match(/^function visual[\s\S]*?^}$/m)?.[0]).filter(Boolean) as string[];
+	assert.ok(visuals.length >= 2, "visuals.md has no function visual examples");
+	const [visual, ...others] = visuals as [string, ...string[]];
 	const rows = [
 		{ region: "eu", p95: 120, p99: 180 },
 		{ region: "us", p95: 140, p99: 210 },
 	];
 	const main = await check(visual, rows);
 	assert.ok(main.ok, JSON.stringify(main));
+	// The other function examples (the Mermaid one) need no data.
+	for (const other of others) {
+		const result = await check(other);
+		assert.ok(result.ok, JSON.stringify(result));
+	}
+	assert.ok(
+		others.some((other) => other.includes("ui.mermaid(")),
+		"visuals.md has no ui.mermaid example",
+	);
 	const canvas = blocks.find((block) => block.startsWith("ui.canvas("));
 	assert.ok(canvas, "visuals.md has no ui.canvas example");
 	const drawn = await check(`({ ui }) => () => ${canvas.trim()}`);

@@ -157,6 +157,11 @@ interface UI {
 		draw: (g: Pen, frame: Frame) => void;
 	}): VisualNode;
 	/**
+	 * A Mermaid diagram at its natural size, shrunk to fit the column and 480 pt. source starts with a diagram type
+	 * (flowchart, sequenceDiagram, classDiagram...), at most 20 KiB.
+	 */
+	mermaid(source: string, props?: { key?: Key }): VisualNode;
+	/**
 	 * A Shadertoy-style fragment shader as wide as the column, drawn with Metal. glsl defines mainImage (GLSL ES 3.00,
 	 * no #version) with iResolution, iTime, iTimeDelta, iFrame and iMouse declared, plus one float uniform per input.
 	 * Inputs are numbers set from state on every view, so sliders can drive the shader without republishing.
