@@ -6,7 +6,7 @@ import Testing
 
 @Suite(.serialized) @MainActor
 struct DiagnosticRepairFooterTests {
-    @Test(arguments: [420.0, 800.0])
+    @Test(arguments: [420.0, 800.0, 1400.0])
     func productionFooterStaysFixedWhileReadingLongHistoryAndKeepsTheComposer(width: CGFloat) async throws {
         let fixture = try FooterFixture(width: width)
         defer { fixture.close() }
@@ -21,6 +21,7 @@ struct DiagnosticRepairFooterTests {
         let originalFrame = anchor.convert(anchor.bounds, to: fixture.hosting)
         #expect(fixture.hosting.bounds.contains(originalFrame))
         let editor = try #require(fixture.views(SubmitTextView.self).first)
+        fixture.expectActionAlignedWithComposer(anchor, editor: editor)
         #expect(fixture.window.makeFirstResponder(editor))
         fixture.window.update()
         let responder = fixture.window.firstResponder
@@ -59,8 +60,9 @@ struct DiagnosticRepairFooterTests {
         #expect(fixture.client.fixtureSpawnRequests.isEmpty, "Review alone cannot start a Build")
     }
 
-    @Test func questionWorkingPendingAndErrorTransitionsLeaveTheFooterReachable() async throws {
-        let fixture = try FooterFixture(width: 420)
+    @Test(arguments: [420.0, 1400.0])
+    func questionWorkingPendingAndErrorTransitionsLeaveTheFooterReachable(width: CGFloat) async throws {
+        let fixture = try FooterFixture(width: width)
         defer { fixture.close() }
         fixture.seedHistory()
         try await fixture.settle { fixture.feed.status.hasRows }
@@ -87,6 +89,9 @@ struct DiagnosticRepairFooterTests {
         request.performClick(nil); request.performClick(nil)
         try await fixture.settle { fixture.client.fixtureSendRequests.count == 1 }
         #expect(fixture.model.diagnosticRepairRequest(for: fixture.reference)?.isPending == true)
+        let pendingAnchor = try #require(fixture.anchor(.primary))
+        let editor = try #require(fixture.views(SubmitTextView.self).first)
+        fixture.expectActionAlignedWithComposer(pendingAnchor, editor: editor)
         #expect(fixture.client.fixtureSpawnRequests.isEmpty)
         #expect(!fixture.views(SubmitTextView.self).isEmpty, "working/request state keeps the normal composer and Stop region")
 
@@ -96,6 +101,8 @@ struct DiagnosticRepairFooterTests {
         try await fixture.settle()
         #expect(fixture.anchor(.primary) != nil)
         #expect(fixture.model.diagnosticRepairRequest(for: fixture.reference)?.error == failed.error)
+        let failedAnchor = try #require(fixture.anchor(.primary))
+        fixture.expectActionAlignedWithComposer(failedAnchor, editor: editor)
         #expect(fixture.client.fixtureSendRequests.count == 1 && fixture.client.fixtureSpawnRequests.isEmpty)
     }
 
@@ -231,6 +238,15 @@ private struct FooterChat: View {
     func button(at anchor: NSView) -> NSButton? {
         let frame = anchor.convert(anchor.bounds, to: hosting)
         return views(NSButton.self).first { $0.convert($0.bounds, to: hosting).contains(NSPoint(x: frame.midX, y: frame.midY)) }
+    }
+    func expectActionAlignedWithComposer(_ anchor: NSView, editor: NSView,
+                                        sourceLocation: SourceLocation = #_sourceLocation) {
+        let actionFrame = anchor.convert(anchor.bounds, to: hosting)
+        let editorFrame = editor.convert(editor.bounds, to: hosting)
+        #expect(actionFrame.minX >= editorFrame.minX, sourceLocation: sourceLocation)
+        #expect(abs(actionFrame.maxX - editorFrame.maxX) <= 12,
+                "repair actions share the centered composer column even in a wide window",
+                sourceLocation: sourceLocation)
     }
     func settle(until ready: () -> Bool = { true }) async throws {
         for pass in 0..<150 {
