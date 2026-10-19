@@ -5,6 +5,8 @@ import { loadConfig } from "./config.ts";
 test("read-only hosts explicitly deny model scope writes", () => {
 	assert.equal(loadConfig({}).modelScopeReadOnly, undefined);
 	assert.equal(loadConfig({ PILOT_MODEL_SCOPE_READ_ONLY: "1" }).modelScopeReadOnly, true);
+	assert.equal(loadConfig({}).mcpSetupReadOnly, undefined);
+	assert.equal(loadConfig({ PILOT_MCP_SETUP_READ_ONLY: "1" }).mcpSetupReadOnly, true);
 });
 
 test("shared workspace retention defaults to 1 day and zero disables automatic cleanup", () => {

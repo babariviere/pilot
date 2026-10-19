@@ -101,6 +101,32 @@ test("status lists servers needing the user first and merges checks requested wh
 	await service.close();
 });
 
+test("MCP cancellation fences distinguish a newer attempt even in the same clock millisecond", async (t) => {
+	t.mock.method(Date, "now", () => 1234);
+	const { probe, calls } = manualProbe();
+	const service = new McpStatusService({
+		probe,
+		login: async (_name, { signal }) => {
+			signal.throwIfAborted();
+		},
+	});
+	service.start();
+	calls[0]!.finish({
+		complete: true,
+		configProblems: 0,
+		servers: [server("example", "needs_sign_in", { canSignIn: true })],
+	});
+	await until(service, (status) => !status.checking);
+	const first = service.signIn("example");
+	service.cancelSignIn("example", first.startedAt);
+	const second = service.signIn("example");
+	assert.notEqual(second.startedAt, first.startedAt);
+	assert.throws(() => service.cancelSignIn("example", first.startedAt), SignInUnavailable);
+	assert.equal(service.get("example")?.signIn?.state, "waiting");
+	service.cancelSignIn("example", second.startedAt);
+	await service.close();
+});
+
 test("sign-in runs only for servers that use it, reports progress and rechecks the server when done", async () => {
 	const { probe, calls } = manualProbe();
 	const logins: Array<{ server: string; again: boolean; finish: () => void }> = [];

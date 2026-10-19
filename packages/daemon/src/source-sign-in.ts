@@ -35,7 +35,8 @@ export class SourceSignIns<K extends string = TrackedKind> {
 		if (this.stopped) throw new Error("Sign-in is stopped");
 		const previous = this.runs.get(kind);
 		if (previous?.state.state === "waiting") return { ...previous.state };
-		const startedAt = Date.now();
+		// Also a native cancellation/result fence. Rapid retries must not share one marker.
+		const startedAt = Math.max(Date.now(), (previous?.state.startedAt ?? 0) + 1);
 		const controller = new AbortController();
 		const state: SignInState<K> = {
 			kind,
@@ -88,7 +89,12 @@ export class SourceSignIns<K extends string = TrackedKind> {
 	}
 	private finish(kind: K, run: Run<K>, state: SourceSignIn["state"], error?: string): void {
 		if (run.state.state !== "waiting" || this.runs.get(kind) !== run) return;
-		run.state = { ...run.state, state, finishedAt: Date.now(), ...(error ? { error } : {}) };
+		run.state = {
+			...run.state,
+			state,
+			finishedAt: Math.max(Date.now(), run.state.startedAt),
+			...(error ? { error } : {}),
+		};
 		run.controller = undefined;
 		this.changed({ ...run.state });
 	}

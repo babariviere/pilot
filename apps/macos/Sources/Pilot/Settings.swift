@@ -247,9 +247,7 @@ struct SettingsView: View {
         case .notifications:
             SettingsPage("Notifications", subtitle: "Pilot only interrupts you for things that need you.") { NotificationSettings() }
         case .connections:
-            SettingsPage("Connections", subtitle: "The pi MCP servers your chats use.") {
-                McpCheckButton()
-            } content: {
+            SettingsPage("Connections", subtitle: "MCP servers and sign-in on Local and your devboxes.") {
                 ConnectionSettings()
             }
         case .models:

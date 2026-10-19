@@ -18,6 +18,7 @@ export type * from "./diagnostic-repair.ts";
 export type * from "./diagnostics.ts";
 export type * from "./github-import.ts";
 export type * from "./github-setup.ts";
+export type * from "./mcp-setup.ts";
 export type * from "./model-scope.ts";
 export type * from "./refresh-health.ts";
 

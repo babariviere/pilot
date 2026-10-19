@@ -98,6 +98,10 @@ test("MCP API reports status, rechecks, signs in and pushes changes over the con
 	assert.equal(((await signIn.json()) as { state: string }).state, "waiting");
 	await waiting;
 	assert.deepEqual(logins, ["datadog"]);
+	const staleCancel = await request("/api/mcp/servers/datadog/sign-in", "DELETE", { expectedStartedAt: 0 });
+	assert.equal(staleCancel.status, 409);
+	await staleCancel.arrayBuffer();
+	assert.equal(mcp.get("datadog")?.signIn?.state, "waiting");
 	const cancelled = await request("/api/mcp/servers/datadog/sign-in", "DELETE");
 	assert.equal(((await cancelled.json()) as { state: string }).state, "cancelled");
 

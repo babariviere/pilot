@@ -719,12 +719,15 @@ available. Ask loads only its restricted tools and bundled web, never personal/p
 factories. [pi-anthropic-auth](https://github.com/gotgenes/pi-anthropic-auth) is required in Build, Ask,
 child workers and daemon model calls, without modifying personal settings.
 
-**Settings → Connections** lists the MCP servers in your global `~/.pi/agent/mcp.json` and whether each
-is connected, needs sign-in or fails to start. pilotd checks them when it starts and whenever pi's MCP
-files change (including `pi mcp login` in a terminal), never on a timer. Servers that use OAuth get a
-**Sign in** button that runs pi's browser sign-in; chats pick up the new sign-in on their next turn. The
-sidebar shows a quiet footer while a server waits for sign-in. Errors stay short; run `pi mcp list` for
-the full message.
+**Settings → Connections** groups global Pi MCP servers by Local and saved devbox, with each host's
+connection/sign-in/error state and recheck/cancellation controls. Disconnected hosts retain last-known
+state while it is available, never a claim that their agents stopped. pilotd checks at startup and when
+Pi's MCP files change, never on a timer. Local OAuth uses the existing browser flow. Remote **Sign in…**
+shows exact-host interactive Pi CLI/manual-redirect instructions; Mac browser callback forwarding is
+not implemented. The Pi CLI must be available on that devbox and use its pilotd agent directory.
+Chats pick up new credentials on their next turn. Errors stay short; use that host's `pi mcp list` for
+details. The [initial setup sharing implementation](docs/devboxes.md#mcp-connections-and-initial-setup-sharing)
+is deliberately partial: existing configuration files are never merged or replaced.
 A chat whose tool call reached for a server that needs sign-in (or fails to connect) moves to **Needs
 you** with that server named, and shows a one-line notice above its composer with the same action. It
 clears once the server works again, you write in the chat, or you archive it.

@@ -83,6 +83,19 @@ automatic_update_tests=(
 )
 printf -v automatic_updates '%s|' "${automatic_update_tests[@]}"
 automatic_updates="${automatic_updates%|}"
+# Host-specific HTTP fault fixtures need MainActor scheduling, not AppKit event loops.
+mcp_tests=(
+	hostMcpRosterCoalescesUnchangedPresentationWithoutStartingChecks
+	hostMcpActionsRouteDuplicateNamesAndCancelToTheExactHost
+	hostMcpReviewedSetupUsesHostCapabilitiesAndReconcilesCommitted503WithoutReplay
+	hostMcpSourceAndTargetEditsOrExistingNamespacesRequireNewReview
+	hostMcpDisconnectDuringCapabilityReadCannotDispatchToReplacement
+	hostMcpUncertainApplyOnlyLooksUpTheSamePinAfterReconnect
+	hostMcpNativeProjectionRejectsSecretsAndLocalPaths
+	hostMcpDelayedResultsAndReplacementPinsCannotPublishOrRetarget
+)
+printf -v host_mcps '%s|' "${mcp_tests[@]}"
+host_mcps="${host_mcps%|}"
 # Mounted repair history and settings exercise native layout/run loops. Keep them
 # apart from each other and from scheduler tests whose deadlines/cache TTLs keep
 # elapsing while unrelated MainActor work is running. Preserve every assertion.
@@ -112,7 +125,7 @@ run_tests() {
 		| python3 "$here/scripts/check-test-output.py" ${guards[@]+"${guards[@]}"}
 }
 if [ "$partition" = 1 ]; then
-	run_tests "" "$@" --skip "$isolated|$devbox|$terminal|$callbacks|$journeys|$github|$scoped_models|$scoped_model_native|$automatic_updates|$repair_footer|$settings_bar|$scheduler_regressions"
+	run_tests "" "$@" --skip "$isolated|$devbox|$terminal|$callbacks|$journeys|$github|$scoped_models|$scoped_model_native|$automatic_updates|$host_mcps|$repair_footer|$settings_bar|$scheduler_regressions"
 	run_tests "$isolated" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$isolated"
 	run_tests "$devbox" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$devbox"
 	run_tests "$terminal" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$terminal"
@@ -130,6 +143,7 @@ if [ "$partition" = 1 ]; then
 		run_tests "$name" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$name"
 	done
 	run_tests "$automatic_updates" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$automatic_updates"
+	run_tests "$host_mcps" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$host_mcps"
 	run_tests "$repair_footer" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$repair_footer"
 	run_tests "$settings_bar" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$settings_bar"
 	run_tests "$scheduler_regressions" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$scheduler_regressions"
