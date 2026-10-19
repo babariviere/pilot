@@ -801,8 +801,9 @@ away as you link or unlink them. You can also pick Waiting yourself. Waiting mes
 Inbox. On Slack refreshes, Pilot reads each waiting thread for new replies at most every ten minutes, sharing the
 daily Slack budget. A reply from anyone but you resumes the message's latest chat with the new replies, quoted
 as context, and moves the message back to In progress; without a chat to resume, the message reopens. Your own
-replies, including ones an agent posts as you, never end a wait. The tool can only switch a chat's own messages
-between In progress and Waiting; the other statuses stay yours.
+replies, including ones an agent posts as you, never end a wait. The same tool marks the message **Done** once
+the request is resolved, with a short outcome shown as “Done · answered in thread”. It only changes a chat's own
+messages while they are In progress or Waiting: Open, Done and Dismissed stay yours, so only you reopen a message.
 During normal Slack refreshes, up to eight Open, In progress or Waiting parents are checked for a ✅ reaction, each
 at most once an hour, sharing the daily Slack budget. A spent budget pauses only these checks.
 A ✅ from anyone marks the item Done with “Done · ✅ in Slack”. Reopening keeps it open while

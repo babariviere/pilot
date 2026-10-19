@@ -260,7 +260,7 @@ export class TrackedItemStore {
 	/** A chat's slack_status tool call. Applies only to Slack messages whose latest chat it is. */
 	agentSlackStatus(
 		sessionId: string,
-		status: "waiting" | "in_progress",
+		status: import("./tracked-items-disk.ts").SlackAgentStatus,
 		reason?: string,
 	): Promise<SlackAgentStatusResult> {
 		return this.rpc("agentSlackStatus", { sessionId, status, reason });

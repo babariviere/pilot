@@ -18,6 +18,17 @@ test("slack_status forwards only the status and reason to pilotd", async () => {
 		{} as never,
 	);
 	await tool.execute("call-2", { status: "in_progress" } as never, undefined, undefined, {} as never);
-	assert.deepEqual(calls, [{ status: "waiting", reason: "CSM to confirm the org" }, { status: "in_progress" }]);
+	await tool.execute(
+		"call-3",
+		{ status: "done", reason: "answered in thread" } as never,
+		undefined,
+		undefined,
+		{} as never,
+	);
+	assert.deepEqual(calls, [
+		{ status: "waiting", reason: "CSM to confirm the org" },
+		{ status: "in_progress" },
+		{ status: "done", reason: "answered in thread" },
+	]);
 	assert.equal(JSON.parse((result.content[0] as { text: string }).text).updated[0].status, "waiting");
 });

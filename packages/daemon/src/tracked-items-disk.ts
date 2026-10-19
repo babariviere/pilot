@@ -69,6 +69,9 @@ export interface SlackAgentStatusResult {
 	unchanged: Array<{ title: string; status: SlackTriage["status"] }>;
 }
 type SlackWaiting = { since: number; reason?: string; afterTs?: string; checkedAt?: number };
+/** What a chat's agent may set with slack_status. */
+export type SlackAgentStatus = "waiting" | "in_progress" | "done";
+const SLACK_AGENT_STATUSES: readonly string[] = ["waiting", "in_progress", "done"];
 
 export type TrackedInput = Pick<TrackedItem, "externalId" | "title" | "url" | "status" | "metadata" | "updatedAt"> & {
 	/** Slack only: the thread's text, kept locally for search and never returned to clients. */
@@ -893,13 +896,14 @@ export class TrackedItemDisk {
 	}
 
 	/**
-	 * The agent of a chat reports its Slack messages as waiting for a reply, or back in progress. Only messages whose
-	 * latest chat is this one, and only between In progress and Waiting: other statuses are the user's.
+	 * The agent of a chat reports its Slack messages as waiting for a reply, back in progress, or done. Only messages
+	 * whose latest chat is this one, and only while they are In progress or Waiting: Open, Done and Dismissed are the
+	 * user's (a message the agent finished is reopened by the user, never by the agent). Done keeps the reason, shown
+	 * as "Done · reason", and follows the same completion path as any other Done.
 	 */
-	agentSlackStatus(sessionId: string, status: "waiting" | "in_progress", reason?: string): SlackAgentStatusResult {
+	agentSlackStatus(sessionId: string, status: SlackAgentStatus, reason?: string): SlackAgentStatusResult {
 		if (typeof sessionId !== "string" || !sessionId || sessionId.length > 200) throw new Error("Invalid chat");
-		if (status !== "waiting" && status !== "in_progress")
-			throw new Error('status must be "waiting" or "in_progress"');
+		if (!SLACK_AGENT_STATUSES.includes(status)) throw new Error('status must be "waiting", "in_progress" or "done"');
 		if (reason !== undefined && (typeof reason !== "string" || reason.length > 200))
 			throw new Error("reason must be at most 200 characters");
 		const text = reason
@@ -920,11 +924,22 @@ export class TrackedItemDisk {
 					result.unchanged.push({ title: row.title, status: row.slack_status });
 					continue;
 				}
-				const waiting: SlackWaiting | null =
-					status === "waiting" ? { since: Date.now(), ...(text ? { reason: text } : {}) } : null;
-				this.db
-					.prepare("UPDATE tracked_items SET slack_status=?, slack_waiting=coalesce(?, slack_waiting) WHERE id=?")
-					.run(status, waiting && JSON.stringify(waiting), row.id);
+				if (status === "done") {
+					const done = text ? `Done · ${text}` : null;
+					this.db
+						.prepare(`UPDATE tracked_items SET slack_status='done', closed_by_label=NULL,
+						slack_completion=CASE WHEN ? IS NULL THEN json_remove(slack_completion, '$.reason')
+						ELSE json_set(slack_completion, '$.reason', ?) END WHERE id=?`)
+						.run(done, done, row.id);
+				} else {
+					const waiting: SlackWaiting | null =
+						status === "waiting" ? { since: Date.now(), ...(text ? { reason: text } : {}) } : null;
+					this.db
+						.prepare(
+							"UPDATE tracked_items SET slack_status=?, slack_waiting=coalesce(?, slack_waiting) WHERE id=?",
+						)
+						.run(status, waiting && JSON.stringify(waiting), row.id);
+				}
 				result.updated.push({ title: row.title, status });
 				projects.add(row.project_id);
 			}
