@@ -120,6 +120,7 @@ public struct VisualNode: Hashable, Sendable, Identifiable {
         case toggle(Toggle)
         case slider(Slider)
         case button(Button)
+        case canvas(Canvas)
     }
 
     public struct Column: Hashable, Sendable {
@@ -225,6 +226,19 @@ public struct VisualNode: Hashable, Sendable, Identifiable {
         public var label: String
         public var primary: Bool
         public var disabled: Bool
+    }
+
+    /// A 2D drawing as wide as the column. Its commands come from the engine's draw(), not the tree.
+    public struct Canvas: Hashable, Sendable {
+        public var height: Double
+        public var animated: Bool
+        public var label: String?
+
+        public init(height: Double, animated: Bool, label: String?) {
+            self.height = height
+            self.animated = animated
+            self.label = label
+        }
     }
 }
 
@@ -348,6 +362,9 @@ extension VisualNode {
         case "button":
             kind = .button(Button(label: string("label") ?? "", primary: flag("primary") ?? false,
                                   disabled: flag("disabled") ?? false))
+        case "canvas":
+            kind = .canvas(Canvas(height: Swift.max(24, Swift.min(600, number("height") ?? 240)),
+                                  animated: flag("animated") ?? false, label: string("label")))
         default:
             throw VisualTree.DecodingError.invalid("unknown node type \(type) at \(path)")
         }

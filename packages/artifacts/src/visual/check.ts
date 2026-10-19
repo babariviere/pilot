@@ -1,11 +1,19 @@
 /**
  * The visual pre-check (docs/native-visuals.md): set up the visual, render the first view, then exercise every
- * control once, re-rendering and validating after each event. Synchronous once the VM exists, so the kernel runs
- * it in a worker thread (check-worker.ts).
+ * control once, re-rendering and validating after each event, and run every canvas draw of the views it sees.
+ * Synchronous once the VM exists, so the kernel runs it in a worker thread (check-worker.ts).
  */
 import type { VisualNode, VisualTree } from "./schema.ts";
 import { VISUAL_LIMITS } from "./schema.ts";
-import { VisualFailure, VisualSession, type VisualSessionOptions } from "./session.ts";
+import { type VisualDrawInput, VisualFailure, VisualSession, type VisualSessionOptions } from "./session.ts";
+
+/**
+ * quickjs-wasi runs draws about two to three times slower than the app's native engine, so the check interrupts a
+ * draw only past this multiple of the per-frame limit. A draw that misses it twice in a row fails, as in the app.
+ */
+const CHECK_DRAW_SLOWDOWN = 3;
+/** Widths the check draws at: the reading column and a narrow window. */
+const CHECK_DRAW_WIDTHS = [760, 360];
 
 export interface VisualCheckInput extends VisualSessionOptions {
 	source: string;
@@ -20,6 +28,8 @@ export interface VisualCheckReport {
 	controls: number;
 	/** Control events the check sent. */
 	interactions: number;
+	/** Canvas draws the check ran. */
+	draws: number;
 	/** console output of the visual, bounded. */
 	logs: string[];
 }
@@ -28,7 +38,8 @@ export type VisualCheckResult =
 	| { ok: true; engine: string; report: VisualCheckReport }
 	| { ok: false; error: string; logs: string[] };
 
-type Control = Extract<VisualNode, { id: string }>;
+type Control = Exclude<Extract<VisualNode, { id: string }>, { type: "canvas" }>;
+type Canvas = Extract<VisualNode, { type: "canvas" }>;
 
 interface Step {
 	id: string;
@@ -56,6 +67,29 @@ export async function runVisualCheck(input: VisualCheckInput): Promise<VisualChe
 			return session.render().tree;
 		};
 		const first = fresh();
+		let draws = 0;
+		const drawAll = (tree: VisualTree, steps: Step[]) => {
+			for (const canvas of canvasesOf(tree.root))
+				for (const width of CHECK_DRAW_WIDTHS)
+					for (const t of canvas.animated ? [0, 1.5] : [0])
+						for (const pointer of [undefined, { x: width / 2, y: canvas.height / 2 }]) {
+							if (draws >= VISUAL_LIMITS.checkedDraws) return;
+							draws++;
+							const input: VisualDrawInput = { width, height: canvas.height, t, pointer };
+							try {
+								drawTwice(session, canvas.id, input);
+							} catch (error) {
+								const failed = error instanceof VisualFailure ? error : new VisualFailure(String(error));
+								const where =
+									`drawing canvas ${JSON.stringify(canvas.key ?? canvas.label ?? canvas.id)} at width ${width}` +
+									(canvas.animated ? `, t = ${t}` : "") +
+									(pointer ? `, pointer at ${pointer.x},${pointer.y}` : "") +
+									(steps.length ? `, after ${steps.map(describeStep).join(", ")}` : "");
+								throw new VisualFailure(`${failed.message} (${where})`, failed.line);
+							}
+						}
+		};
+		drawAll(first, []);
 		const seen = new Set<string>();
 		const queue: Array<{ prefix: Step[]; control: Control }> = [];
 		const discover = (tree: VisualTree, prefix: Step[]) => {
@@ -99,6 +133,7 @@ export async function runVisualCheck(input: VisualCheckInput): Promise<VisualChe
 					}
 					if (!replay) {
 						interactions++;
+						drawAll(tree, steps);
 						// Controls a step reveals are exercised later, after replaying the steps that revealed them.
 						discover(tree, [...steps]);
 					}
@@ -108,7 +143,7 @@ export async function runVisualCheck(input: VisualCheckInput): Promise<VisualChe
 		return {
 			ok: true,
 			engine: session.engine,
-			report: { nodes: countNodes(first.root), controls: seen.size, interactions, logs: session.logs },
+			report: { nodes: countNodes(first.root), controls: seen.size, interactions, draws, logs: session.logs },
 		};
 	} catch (error) {
 		const failed = error instanceof VisualFailure ? error : new VisualFailure(String(error));
@@ -125,9 +160,37 @@ export function countNodes(node: VisualNode): number {
 }
 
 export function controlsOf(node: VisualNode, into: Control[] = []): Control[] {
-	if ("id" in node) into.push(node as Control);
+	if ("id" in node && node.type !== "canvas") into.push(node as Control);
 	if ("children" in node) for (const child of node.children) controlsOf(child as VisualNode, into);
 	return into;
+}
+
+export function canvasesOf(node: VisualNode, into: Canvas[] = []): Canvas[] {
+	if (node.type === "canvas") into.push(node);
+	if ("children" in node) for (const child of node.children) canvasesOf(child as VisualNode, into);
+	return into;
+}
+
+/** Draw once; after a miss of the (slowed) frame limit, draw again, and fail on a second miss in a row. */
+function drawTwice(session: VisualSession, id: string, input: VisualDrawInput): void {
+	const limit = VISUAL_LIMITS.drawMs * CHECK_DRAW_SLOWDOWN;
+	const missed = (error: unknown) =>
+		error instanceof VisualFailure && error.message.startsWith("the drawing took longer");
+	try {
+		session.draw(id, input, limit);
+		return;
+	} catch (error) {
+		if (!missed(error)) throw error;
+	}
+	try {
+		session.draw(id, input, limit);
+	} catch (error) {
+		if (!missed(error)) throw error;
+		throw new VisualFailure(
+			`the drawing took longer than ${VISUAL_LIMITS.drawMs} ms twice in a row, which stops the canvas`,
+			(error as VisualFailure).line,
+		);
+	}
 }
 
 function nameOf(control: Control): string {

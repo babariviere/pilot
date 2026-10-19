@@ -13,12 +13,29 @@ export const VISUAL_FILENAME = "visual.js";
 export const VISUAL_PREFIX = '"use strict";(';
 const RUNTIME_FILENAME = "pilot-visual-runtime.js";
 
-export type VisualPhase = "setup" | "view" | "handler";
+export type VisualPhase = "setup" | "view" | "handler" | "draw";
 const PHASE_MS: Record<VisualPhase, number> = {
 	setup: VISUAL_LIMITS.setupMs,
 	view: VISUAL_LIMITS.viewMs,
 	handler: VISUAL_LIMITS.handlerMs,
+	draw: VISUAL_LIMITS.drawMs,
 };
+
+/** A canvas draw's inputs, as the app passes them. */
+export interface VisualDrawInput {
+	width: number;
+	height: number;
+	/** Seconds since the canvas started animating; 0 when it does not animate. */
+	t: number;
+	pointer?: { x: number; y: number };
+}
+
+/** The commands of one draw (DRAW_FORMAT in runtime.js). */
+export interface VisualDrawing {
+	commands: number;
+	ops: number[];
+	strings: string[];
+}
 
 const treeCheck = Compile(VisualTreeSchema);
 
@@ -196,16 +213,41 @@ export class VisualSession {
 		return this.call(undefined, "state", () => []);
 	}
 
+	/**
+	 * Run the draw function of canvas id from the last view. limitMs overrides the per-frame limit, for callers that
+	 * measure slower engines. Returns the commands it recorded.
+	 */
+	draw(id: string, input: VisualDrawInput, limitMs?: number): VisualDrawing {
+		const { vm } = this;
+		const commands = this.call(
+			"draw",
+			"draw",
+			() => [
+				vm.newString(id),
+				vm.newNumber(input.width),
+				vm.newNumber(input.height),
+				vm.newNumber(input.t),
+				input.pointer ? vm.newNumber(input.pointer.x) : vm.undefined,
+				input.pointer ? vm.newNumber(input.pointer.y) : vm.undefined,
+			],
+			limitMs,
+		);
+		const frame = JSON.parse(this.call(undefined, "frameJson", () => [])) as Omit<VisualDrawing, "commands">;
+		return { commands: Number(commands), ...frame };
+	}
+
 	dispose(): void {
 		this.vm.dispose();
 	}
 
 	/** Run one runtime call under a phase's time limit, turning engine errors into failures. */
-	private call(phase: VisualPhase | undefined, name: string, args: () => JSValueHandle[]): string {
+	private call(phase: VisualPhase | undefined, name: string, args: () => JSValueHandle[], limitMs?: number): string {
 		const { vm, api } = this;
 		try {
-			return this.run(phase, () =>
-				vm.withScope(() => vm.callFunction(api.getProp(name), api, ...args()).toString()),
+			return this.run(
+				phase,
+				() => vm.withScope(() => vm.callFunction(api.getProp(name), api, ...args()).toString()),
+				limitMs,
 			);
 		} finally {
 			const lines = JSON.parse(vm.withScope(() => vm.callFunction(api.getProp("logs"), api).toString())) as string[];
@@ -213,19 +255,19 @@ export class VisualSession {
 		}
 	}
 
-	private run<T>(phase: VisualPhase | undefined, body: () => T): T {
-		this.clock.deadline = phase ? performance.now() + PHASE_MS[phase] : Number.POSITIVE_INFINITY;
+	private run<T>(phase: VisualPhase | undefined, body: () => T, limitMs?: number): T {
+		this.clock.deadline = phase ? performance.now() + (limitMs ?? PHASE_MS[phase]) : Number.POSITIVE_INFINITY;
 		try {
 			return body();
 		} catch (error) {
-			throw failure(error, phase);
+			throw failure(error, phase, limitMs);
 		} finally {
 			this.clock.deadline = Number.POSITIVE_INFINITY;
 		}
 	}
 }
 
-function failure(error: unknown, phase?: VisualPhase): VisualFailure {
+function failure(error: unknown, phase?: VisualPhase, limitMs?: number): VisualFailure {
 	if (error instanceof VisualFailure) return error;
 	if (!(error instanceof JSException))
 		return new VisualFailure(error instanceof Error ? error.message : String(error));
@@ -238,8 +280,10 @@ function failure(error: unknown, phase?: VisualPhase): VisualFailure {
 				? "the visual function took longer than "
 				: phase === "view"
 					? "the view took longer than "
-					: "the handler took longer than ") +
-				PHASE_MS[phase] +
+					: phase === "handler"
+						? "the handler took longer than "
+						: "the drawing took longer than ") +
+				(limitMs ?? PHASE_MS[phase]) +
 				" ms",
 			line,
 		);

@@ -763,6 +763,8 @@ export interface ArtifactVisual {
 		controls: number;
 		/** Control events the check sent. */
 		interactions: number;
+		/** Canvas draws the check ran. Absent in revisions published before canvases. */
+		draws?: number;
 		/** Bounded console output of the visual during the check. */
 		logs: string[];
 	};

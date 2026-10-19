@@ -20,6 +20,20 @@ struct VisualConformanceTests {
         try JSONSerialization.data(withJSONObject: value ?? NSNull(), options: [.fragmentsAllowed])
     }
 
+    static func drawRequest(_ item: [String: Any]) throws -> VisualDrawRequest {
+        let input = try #require(item["input"] as? [String: Any])
+        let pointer = (input["pointer"] as? [String: Any]).flatMap { point -> VisualPoint? in
+            guard let x = (point["x"] as? NSNumber)?.doubleValue, let y = (point["y"] as? NSNumber)?.doubleValue else {
+                return nil
+            }
+            return VisualPoint(x: x, y: y)
+        }
+        return VisualDrawRequest(canvas: try #require(item["id"] as? String),
+                                 width: try #require((input["width"] as? NSNumber)?.doubleValue),
+                                 height: try #require((input["height"] as? NSNumber)?.doubleValue),
+                                 time: (input["t"] as? NSNumber)?.doubleValue ?? 0, pointer: pointer)
+    }
+
     @Test func fixturesComeFromTheVendoredEngine() throws {
         #expect(try Self.fixture().cases["engine"] as? String == "quickjs-ng \(VisualHost.engineVersion)")
     }
@@ -62,6 +76,21 @@ struct VisualConformanceTests {
             if let finalState = item["finalState"] as? String {
                 #expect(last.map { String(decoding: $0.state, as: UTF8.self) } == finalState, "\(name)")
             }
+            for (index, expected) in (item["drawings"] as? [[String: Any]] ?? []).enumerated() {
+                // Alternate between the shared-memory path and the reply, which must carry the same drawing.
+                let result = await host.draw(id, try Self.drawRequest(expected), capacity: index.isMultiple(of: 2) ? 1 << 20 : 0)
+                guard case .success(let drawing) = result else {
+                    Issue.record("\(name) drawing \(index): \(result)")
+                    continue
+                }
+                let ops = try #require(expected["ops"] as? [NSNumber]).map(\.doubleValue)
+                #expect(drawing.ops == ops, "\(name) drawing \(index)")
+                #expect(drawing.strings == expected["strings"] as? [String], "\(name) drawing \(index)")
+                #expect(drawing.commands == (expected["commands"] as? NSNumber)?.intValue, "\(name) drawing \(index)")
+                var commands = 0
+                #expect(drawing.forEach { _ in commands += 1 }, "\(name) drawing \(index)")
+                #expect(commands == drawing.commands, "\(name) drawing \(index)")
+            }
             host.release(id)
         }
     }
@@ -76,18 +105,28 @@ struct VisualConformanceTests {
             let request = VisualLoadRequest(runtime: runtime, source: try #require(item["source"] as? String),
                                             data: try Self.json(item["data"]), seed: "", now: 0)
             let id = "error\(index)"
-            var result = await host.load(id, request)
-            for event in item["events"] as? [[String: Any]] ?? [] {
-                guard case .success = result else { break }
-                result = await host.event(id, try #require(event["id"] as? String),
-                                          try VisualValue(json: Self.json(event["value"])))
+            // A case that sets drawMs must not depend on the engine's speed: it gets its own limit.
+            var configuration = VisualHost.Configuration()
+            if let drawMs = (item["drawMs"] as? NSNumber)?.uint32Value { configuration.drawMilliseconds = drawMs }
+            let caseHost = item["drawMs"] == nil ? host : VisualHost(configuration: configuration)
+            var result = await caseHost.load(id, request)
+            var failure: VisualFailure?
+            if case .failure(let error) = result { failure = error }
+            for draw in item["draws"] as? [[String: Any]] ?? [] where failure == nil {
+                if case .failure(let error) = await caseHost.draw(id, try Self.drawRequest(draw)) { failure = error }
             }
-            guard case .failure(let failure) = result else {
+            for event in item["events"] as? [[String: Any]] ?? [] {
+                guard failure == nil else { break }
+                result = await caseHost.event(id, try #require(event["id"] as? String),
+                                              try VisualValue(json: Self.json(event["value"])))
+                if case .failure(let error) = result { failure = error }
+            }
+            guard let failure else {
                 Issue.record("\(name): expected an error")
                 continue
             }
             #expect(failure.message == item["error"] as? String, "\(name)")
-            host.release(id)
+            caseHost.release(id)
         }
     }
 }

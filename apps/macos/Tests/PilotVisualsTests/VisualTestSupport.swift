@@ -3,7 +3,8 @@ import PilotVisualsHost
 import PilotVisualsKit
 
 /// A minimal stand-in for the shared visual runtime (packages/artifacts/src/visual/runtime.js) with its host
-/// contract: evaluating it returns { load, render, event, state, logs }. Handlers become their path in the tree.
+/// contract: evaluating it returns { load, render, event, state, logs, draw, frame }. Handlers become their path in
+/// the tree; draw records one filled rect over the area and the time as text.
 let testRuntime = #"""
 (() => {
   "use strict";
@@ -12,6 +13,8 @@ let testRuntime = #"""
   let saved = {};
   let seed = 0;
   let now = 0;
+  let ops = new Float64Array(0);
+  let strings = [];
   const RealDate = Date;
   Math.random = () => {
     seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
@@ -64,6 +67,14 @@ let testRuntime = #"""
     },
     state() { return JSON.stringify(saved); },
     logs() { return "[]"; },
+    draw(id, width, height, t, pointerX, pointerY) {
+      if (id === "spin") for (;;);
+      if (id !== "0") throw new Error("no canvas with id " + id);
+      ops = new Float64Array([10, 1, 7, 1, 0, 0, 0, width, height, 0, 20, 0, 1, pointerX ?? -1, pointerY ?? -1, 0, 2, 400, 0, 1, 0]);
+      strings = ["t=" + t];
+      return 2;
+    },
+    frame() { return { ops, strings }; },
   };
 })();
 """#
@@ -97,6 +108,22 @@ extension VisualHost {
     func event(_ id: String, _ handler: String, _ value: VisualValue = nil) async -> Result<VisualFrame, VisualFailure> {
         await withCheckedContinuation { continuation in
             event(id, handler: handler, value: value.jsonData) { continuation.resume(returning: VisualReply.decode($0)) }
+        }
+    }
+
+    /// Draws into a fresh buffer of capacity bytes, or into the reply when capacity is 0, and decodes the result.
+    func draw(_ id: String, _ request: VisualDrawRequest, capacity: Int = 0) async -> Result<VisualDrawing, VisualFailure> {
+        let storage = UnsafeMutableRawBufferPointer.allocate(byteCount: max(capacity, 1), alignment: 16)
+        defer { storage.deallocate() }
+        let target = capacity > 0 ? DrawTarget(buffer: storage, owner: nil) : nil
+        let (written, data): (Int, Data?) = await withCheckedContinuation { continuation in
+            draw(id, request, into: target) { continuation.resume(returning: ($0, $1)) }
+        }
+        let bytes = written > 0 ? Data(bytes: storage.baseAddress!, count: written) : data ?? Data()
+        if let drawing = VisualDrawing(bytes) { return .success(drawing) }
+        switch VisualReply.decode(bytes) {
+        case .success: return .failure(.invalidReply)
+        case .failure(let failure): return .failure(failure)
         }
     }
 }
@@ -160,5 +187,11 @@ final class InProcessTransport: VisualTransport, @unchecked Sendable {
 
     func release(_ id: String) {
         host.release(id)
+    }
+
+    func draw(_ id: String, _ request: VisualDrawRequest) async -> Result<Data, VisualFailure> {
+        await withCheckedContinuation { continuation in
+            host.draw(id, request) { _, data in continuation.resume(returning: .success(data ?? Data())) }
+        }
     }
 }

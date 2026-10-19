@@ -19,6 +19,8 @@ export const VISUAL_LIMITS = Object.freeze({
 	setupMs: 250,
 	viewMs: 250,
 	handlerMs: 100,
+	/** One canvas draw: one 120 Hz frame. In the app, two misses in a row stop the canvas with the error. */
+	drawMs: 8,
 	/** Nodes in one tree. */
 	nodes: 5000,
 	/** UTF-16 code units of text in one tree (labels, runs, cells, options). */
@@ -30,6 +32,14 @@ export const VISUAL_LIMITS = Object.freeze({
 	/** console lines kept per check, and characters per line. */
 	logLines: 50,
 	logLineChars: 500,
+	/** Commands one canvas draw may record. */
+	drawCommands: 20_000,
+	/** Path points one canvas draw may record. */
+	drawPoints: 100_000,
+	/** UTF-16 code units of text one canvas draw may record. */
+	drawTextChars: 64 * 1024,
+	/** Canvas draws the pre-check runs, across every view it renders. */
+	checkedDraws: 96,
 });
 
 export const VISUAL_COLORS = [
@@ -271,6 +281,23 @@ const nodes = {
 		},
 		{ ...strict, description: "Event value: null." },
 	),
+	Canvas: Type.Object(
+		{
+			type: Type.Literal("canvas"),
+			key: Type.Optional(Key),
+			id: Id,
+			height: Type.Number({ minimum: 24, maximum: 600, description: "Height in points. Default 240." }),
+			animated: Type.Optional(
+				Type.Boolean({ description: "Redraw every display frame while visible, with t in seconds." }),
+			),
+			label: Type.Optional(Type.String({ maxLength: 500, description: "Accessibility description." })),
+		},
+		{
+			...strict,
+			description:
+				"2D drawing, as wide as the column. The host calls draw(id, width, height, t, pointer) for its commands; it redraws on resize and pointer moves, and every frame when animated.",
+		},
+	),
 };
 
 const Node = Type.Union(
@@ -289,6 +316,7 @@ const Node = Type.Union(
 		nodes.Toggle,
 		nodes.Slider,
 		nodes.Button,
+		nodes.Canvas,
 	],
 	{ description: "One node, discriminated by type." },
 );

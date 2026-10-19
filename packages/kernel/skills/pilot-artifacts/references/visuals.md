@@ -1,10 +1,10 @@
 # Native visual artifacts
 
-`kind: "visual"` is the **first choice** for charts, stats, tables, small dashboards and controls (tabs, toggles,
-sliders, buttons). Pilot draws visuals natively in the chat: light and dark, the chat's fonts, selectable text and no
-web page. Use HTML or React only for what visuals can't express: custom layouts, rich documents, wide content and web
-libraries such as Mermaid, d3 force graphs or three.js. 2D canvas and shader nodes are not available yet; use a shader
-artifact for GLSL.
+`kind: "visual"` is the **first choice** for charts, stats, tables, small dashboards, controls (tabs, toggles,
+sliders, buttons) and 2D drawings or animations (`ui.canvas`). Pilot draws visuals natively in the chat: light and
+dark, the chat's fonts, selectable text and no web page. Use HTML or React only for what visuals can't express: custom
+layouts, rich documents, wide content and web libraries such as Mermaid, d3 force graphs or three.js. Shader nodes
+are not available yet; use a shader artifact for GLSL.
 
 The API is in [visual.d.ts](visual.d.ts). A visual is a **plain JavaScript function** defined in your codemode script
 and published as its text with `String(visual)` (tool arguments are JSON, so a function passed directly arrives
@@ -34,7 +34,7 @@ try {
   const { artifact, check } = await tools.artifact({
     action: "create", kind: "visual", title: "Latency", source: String(visual), data: rows,
   });
-  text(check); // nodes, controls, interactions and any console.log lines
+  text(check); // nodes, controls, interactions, canvas draws and any console.log lines
 } catch (error) {
   // "Visual check failed. Nothing was published. line 10: chart series "p95" value 2 must be a finite number
   // or null, got bad"
@@ -55,13 +55,35 @@ try {
   `height` (80-480). Taller visuals scroll inside above 720 pt.
 - **Keys.** Give children that move or appear conditionally a `key`, unique among siblings.
 
+## Canvas
+
+`ui.canvas` draws with a pen when Swift Charts can't express the picture: gauges, timelines, diagrams of a few
+hundred shapes, small animations. Colors are tokens here too.
+
+```js
+ui.canvas({
+  height: 160, animated: true, label: "Request rate",
+  draw: (g, { width, height, t, pointer }) => {
+    const points = [];
+    for (let x = 0; x <= width; x += 6) points.push(x, height / 2 + Math.sin(x / 40 + t * 2) * 40);
+    g.path(points, { stroke: "chart1", width: 2 });
+    if (pointer) g.text(pointer.x + 8, 12, Math.round(pointer.x) + " req/s", { size: "xs", baseline: "top" });
+  },
+})
+```
+
+`draw` runs again on resize and pointer moves and, when `animated`, every display frame while the canvas is visible
+(`t` is seconds; it stays 0 under Reduce Motion). It may read state but never assign it, and must finish within 8 ms:
+two slow frames in a row stop the canvas with the error. Keep frames to a few thousand commands.
+
 ## Publication check
 
 Before saving, Pilot runs the function, renders the first view, validates the tree (known nodes and props, token
 names, finite numbers, one series value per x, unique keys) and exercises every control once (each tab, both toggle
-states, slider min and max, each button; up to 24 interactions). The first failure comes back as an error with the
-line inside your function and what triggered it. Nothing is saved until the check passes, so catch the error, fix the
-function or the data and publish again in the same script.
+states, slider min and max, each button; up to 24 interactions). It draws every canvas at widths 760 and 360, with and
+without a pointer, and at `t` 0 and 1.5 when animated. The first failure comes back as an error with the line inside
+your function and what triggered it. Nothing is saved until the check passes, so catch the error, fix the function or
+the data and publish again in the same script.
 
 | Limit | Value |
 | --- | --- |
@@ -70,6 +92,7 @@ function or the data and publish again in the same script.
 | Heap | 32 MiB |
 | Setup, view | 250 ms each |
 | Handler | 100 ms |
+| Canvas draw | 8 ms; 20,000 commands |
 | Tree | 5,000 nodes, 64 KiB of text |
 | State | 64 KiB of JSON |
 

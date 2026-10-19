@@ -17,13 +17,14 @@ public final class VisualHost: @unchecked Sendable {
         public var setupMilliseconds = VisualLimits.setupMilliseconds
         public var viewMilliseconds = VisualLimits.viewMilliseconds
         public var handlerMilliseconds = VisualLimits.handlerMilliseconds
+        public var drawMilliseconds = VisualLimits.drawMilliseconds
         public var capacity = VisualLimits.liveEngines
 
         public init() {}
 
         var limits: PVLimits {
             PVLimits(heap_bytes: heapBytes, stack_bytes: stackBytes, setup_ms: setupMilliseconds,
-                     view_ms: viewMilliseconds, handler_ms: handlerMilliseconds)
+                     view_ms: viewMilliseconds, handler_ms: handlerMilliseconds, draw_ms: drawMilliseconds)
         }
     }
 
@@ -89,6 +90,36 @@ public final class VisualHost: @unchecked Sendable {
         engine.close()
     }
 
+    /// Where a draw may write its drawing: shared memory the caller keeps alive until the reply.
+    public struct DrawTarget: @unchecked Sendable {
+        public var buffer: UnsafeMutableRawBufferPointer
+        /// Keeps the memory alive while the engine writes.
+        public var owner: AnyObject?
+
+        public init(buffer: UnsafeMutableRawBufferPointer, owner: AnyObject?) {
+            self.buffer = buffer
+            self.owner = owner
+        }
+    }
+
+    /// Runs canvas request.canvas of visual id. Replies the byte count written to target, or 0 and the drawing
+    /// ("PD") or an error envelope as data.
+    public func draw(_ id: String, _ request: VisualDrawRequest, into target: DrawTarget? = nil,
+                     reply: @escaping (Int, Data?) -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let engine = engines[id] else {
+            reply(0, VisualReply.error(.unloaded, "This visual is not loaded."))
+            return
+        }
+        order.removeAll { $0 == id }
+        order.append(id)
+        engine.executor.submit {
+            let (written, data) = engine.draw(request, into: target?.buffer)
+            withExtendedLifetime(target?.owner) { reply(written, data) }
+        }
+    }
+
     private func discard(_ id: String, _ engine: Engine) {
         lock.lock()
         defer { lock.unlock() }
@@ -149,6 +180,20 @@ public final class VisualHost: @unchecked Sendable {
                 }
             }
             return Self.take(&buffer)
+        }
+
+        func draw(_ request: VisualDrawRequest, into target: UnsafeMutableRawBufferPointer?) -> (Int, Data?) {
+            guard let engine else { return (0, VisualReply.error(.unloaded, "This visual is not loaded.")) }
+            var buffer = PVBuffer()
+            var written = 0
+            let status = Self.withBytes(Data(request.canvas.utf8)) { canvas, canvasLength in
+                pv_engine_draw(engine, canvas, canvasLength, request.width, request.height, request.time,
+                               request.pointer == nil ? 0 : 1, request.pointer?.x ?? 0, request.pointer?.y ?? 0,
+                               target?.baseAddress?.assumingMemoryBound(to: UInt8.self), target?.count ?? 0,
+                               &written, &buffer)
+            }
+            if status == 0, written > 0 { return (written, nil) }
+            return (0, Self.take(&buffer))
         }
 
         private static func take(_ buffer: inout PVBuffer) -> Data {

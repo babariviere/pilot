@@ -157,4 +157,49 @@ struct VisualHostTests {
         #expect(results == Array(repeating: true, count: VisualLimits.liveEngines))
         #expect(host.liveIDs.count == VisualLimits.liveEngines)
     }
+
+    @Test(.timeLimit(.minutes(1))) func drawsIntoSharedMemoryOrTheReply() async throws {
+        let host = VisualHost()
+        _ = await host.load("a", request(counterVisual, data: #"{"start":0}"#))
+        let input = VisualDrawRequest(canvas: "0", width: 300, height: 120, time: 1.5, pointer: VisualPoint(x: 4, y: 5))
+        let shared = await host.draw("a", input, capacity: 4096)
+        let drawing = try shared.get()
+        #expect(drawing.commands == 2)
+        #expect(drawing.ops == [10, 1, 7, 1, 0, 0, 0, 300, 120, 0, 20, 0, 1, 4, 5, 0, 2, 400, 0, 1, 0])
+        #expect(drawing.strings == ["t=1.5"])
+        // Without a buffer, or one too small, the same drawing comes back in the reply.
+        #expect(await host.draw("a", input) == shared)
+        #expect(await host.draw("a", input, capacity: 16) == shared)
+        let still = try await host.draw("a", VisualDrawRequest(canvas: "0", width: 10, height: 10)).get()
+        #expect(still.ops[13...14] == [-1, -1])
+        #expect(still.strings == ["t=0"])
+    }
+
+    @Test(.timeLimit(.minutes(1))) func drawFailuresAreScriptErrors() async {
+        let host = VisualHost()
+        _ = await host.load("a", request(counterVisual, data: #"{"start":0}"#))
+        let started = Date()
+        guard case .failure(.script(let spin)) = await host.draw("a", VisualDrawRequest(canvas: "spin", width: 10, height: 10))
+        else {
+            Issue.record("expected a timeout")
+            return
+        }
+        #expect(spin.kind == .timeout)
+        #expect(spin.message == "the drawing took longer than 8 ms")
+        #expect(Date().timeIntervalSince(started) < 2)
+        // The engine survives an interrupted draw.
+        #expect((try? await host.draw("a", VisualDrawRequest(canvas: "0", width: 10, height: 10)).get()) != nil)
+        guard case .failure(.script(let missing)) = await host.draw("a", VisualDrawRequest(canvas: "9", width: 1, height: 1))
+        else {
+            Issue.record("expected a script error")
+            return
+        }
+        #expect(missing.message == "Error: no canvas with id 9")
+        guard case .failure(.script(let unloaded)) = await host.draw("b", VisualDrawRequest(canvas: "0", width: 1, height: 1))
+        else {
+            Issue.record("expected an unloaded error")
+            return
+        }
+        #expect(unloaded.kind == .unloaded)
+    }
 }

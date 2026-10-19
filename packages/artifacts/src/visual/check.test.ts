@@ -54,7 +54,13 @@ test("every control is exercised once: each other tab, toggles both ways, slider
   ]);
 }`);
 	assert.ok(result.ok, JSON.stringify(result));
-	assert.deepEqual(result.report, { nodes: 6, controls: 5, interactions: 2 + 2 + 2 + 1, logs: ["clicked 1"] });
+	assert.deepEqual(result.report, {
+		nodes: 6,
+		controls: 5,
+		interactions: 2 + 2 + 2 + 1,
+		draws: 0,
+		logs: ["clicked 1"],
+	});
 	assert.equal(result.engine, "quickjs-ng 0.17.0");
 });
 
@@ -119,9 +125,67 @@ test("console output is kept, bounded in lines and length", async () => {
 	assert.equal(result.report.logs[1], '{"i":1}');
 });
 
-test("canvas and shader nodes are not supported yet", async () => {
-	assert.equal(failed(await run("({ ui }) => () =>\n  ui.canvas({})")), "line 2: canvas nodes are not yet supported");
+test("shader nodes are not supported yet", async () => {
 	assert.equal(failed(await run("({ ui }) => () =>\n  ui.shader({})")), "line 2: shader nodes are not yet supported");
+});
+
+test("every canvas draws at both widths, with and without a pointer, and at two times when animated", async () => {
+	const result = await run(`({ ui }) => {
+  const seen = [];
+  return () => ui.column([
+    ui.canvas({ key: "still", height: 100, draw: (g, f) => { console.log("still", f.width, f.height, f.t, JSON.stringify(f.pointer)); } }),
+    ui.canvas({ height: 50, animated: true, draw: (g, f) => { console.log("moving", f.width, f.t, f.pointer ? "pointer" : "none"); } }),
+  ]);
+}`);
+	assert.ok(result.ok, JSON.stringify(result));
+	assert.equal(result.report.draws, 4 + 8);
+	assert.deepEqual(result.report.logs, [
+		"still 760 100 0 null",
+		'still 760 100 0 {"x":380,"y":50}',
+		"still 360 100 0 null",
+		'still 360 100 0 {"x":180,"y":50}',
+		"moving 760 0 none",
+		"moving 760 0 pointer",
+		"moving 760 1.5 none",
+		"moving 760 1.5 pointer",
+		"moving 360 0 none",
+		"moving 360 0 pointer",
+		"moving 360 1.5 none",
+		"moving 360 1.5 pointer",
+	]);
+	const many = await run("({ ui }) => () => ui.column(Array.from({ length: 40 }, () => ui.canvas({ draw() {} })))");
+	assert.ok(many.ok);
+	assert.equal(many.report.draws, VISUAL_LIMITS.checkedDraws);
+});
+
+test("draw failures name the canvas, its inputs and the interactions before them", async () => {
+	assert.equal(
+		failed(
+			await run(
+				'({ ui }) => () => ui.canvas({ key: "plot", animated: true, draw: (g, { t, pointer }) => {\n  if (t > 1 && pointer) g.circle(0, 0, -1, { fill: "text" });\n} })',
+			),
+		),
+		'line 2: g.circle: r must not be negative, got -1 (drawing canvas "plot" at width 760, t = 1.5, pointer at 380,120)',
+	);
+	assert.equal(
+		failed(
+			await run(`({ ui, state }) => {
+  const s = state({ on: false });
+  return () => ui.column([
+    ui.toggle({ label: "Grid", value: s.on, onChange: (v) => (s.on = v) }),
+    ui.canvas({ label: "Plot", draw: (g) => { if (s.on) g.line(0, 0, 1, 1); } }),
+  ]);
+}`),
+		),
+		'line 5: g.line needs stroke, for example { stroke: "muted" } (drawing canvas "Plot" at width 760, after toggle "on" = true)',
+	);
+});
+
+test("a draw that misses the frame limit twice in a row fails, as it stops the canvas in the app", async () => {
+	assert.equal(
+		failed(await run("({ ui }) => () => ui.canvas({ draw: () => {\n  for (;;);\n} })")),
+		`line 1: the drawing took longer than ${VISUAL_LIMITS.drawMs} ms twice in a row, which stops the canvas (drawing canvas "0" at width 760)`,
+	);
 });
 
 test("publication limits and source shape are checked before the engine starts", () => {
@@ -159,7 +223,7 @@ test("the worker check reports errors with console output and accepts valid visu
 	assert.deepEqual(visual, {
 		api: 1,
 		engine: "quickjs-ng 0.17.0",
-		check: { nodes: 4, controls: 1, interactions: 1, logs: [] },
+		check: { nodes: 4, controls: 1, interactions: 1, draws: 0, logs: [] },
 	});
 });
 
