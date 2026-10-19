@@ -394,13 +394,15 @@ chats, a stream still receiving data keeps running, and a stream that goes silen
 Chats resume when the network returns, a check passes, or any chat receives model data. Pilot sends
 no periodic checks while things work.
 Queued messages and unfinished requests survive restarts. Running native tools finish their current
-round; they are never killed or replayed for an outage. Sleep, update, subscription and manual Stop
+round, including every nested call in an active codemode script. The chat stays working until the call
+finishes; tools are never killed or replayed for an outage. Sleep, update, subscription and manual Stop
 holds remain independent. Authentication, quota and provider errors are not treated as offline.
 
 ### Subscription limits
 
 Chats pause new model requests and tool calls at **95%** of any subscription window. Active tools finish
-safely, and subagents respect their own provider's limits, even when it differs from the parent chat.
+safely, including nested calls in an active codemode script, before the chat shows as paused. Subagents
+respect their own provider's limits, even when it differs from the parent chat.
 Work resumes automatically when the blocked windows reset or a fresh usage reading drops below 95%.
 Known pauses survive restarts and unavailable readings. Usage comes from pi's shared cache, without
 additional provider polling; unknown usage cannot predict a limit, and in-flight requests may still use tokens.

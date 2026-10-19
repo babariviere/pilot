@@ -157,6 +157,7 @@ export interface KernelSessionHooks {
 	onCompacting?(compacting: boolean): void;
 	onJobsChanged?(jobs: SessionJob[]): void;
 	onToolActivity?(activity: import("@pilot/protocol").ToolActivitySnapshot): void;
+	onToolsRunningChanged?(running: boolean): void;
 	onTodosChanged?(openCount: number): void;
 	onUsageChanged?(usage: KernelUsage): void;
 	/** Called after an artifact revision has been committed to the session store. */
@@ -452,6 +453,7 @@ export class KernelSession {
 			if (!spec.pilot?.ask && !spec.control)
 				todoBridge = await startTodoBridge(callTodo, hooks.reportSubscriptionLimit);
 			adapter = await NativeAdapter.open({
+				onToolsRunningChanged: hooks.onToolsRunningChanged,
 				subscriptionPolicy: spec.subscriptionPolicy,
 				reportSubscriptionLimit: hooks.reportSubscriptionLimit,
 				connectivityPolicy: spec.connectivityPolicy,
@@ -1032,6 +1034,10 @@ export class KernelSession {
 
 	get usage(): KernelUsage {
 		return this.adapter.usage.current;
+	}
+
+	get toolsRunning(): boolean {
+		return this.adapter.toolsRunning;
 	}
 
 	get completion(): SessionCompletion | undefined {

@@ -254,6 +254,7 @@ export interface SessionWorker {
 	/** Stop one running job for the user. The kernel tells the agent, whose follow-up turn ends the wait. */
 	stopJob?(jobId: string): Promise<void>;
 	runningJobs?: SessionJob[];
+	toolsRunning?: boolean;
 	toolActivity?: ToolActivitySnapshot;
 	toolStallKey?: string;
 	/** Committed chat todo count, supplied on ready and after every mutation. */
@@ -667,6 +668,7 @@ export class Worker implements SessionWorker {
 	/** Ephemeral context estimate and physical provider, reported by the live kernel. */
 	usage?: KernelUsage;
 	runningJobs?: SessionJob[];
+	toolsRunning?: boolean;
 	toolActivity?: ToolActivitySnapshot;
 	toolStallKey?: string;
 	openTodoCount?: number;
@@ -740,6 +742,7 @@ export class Worker implements SessionWorker {
 			if (packet.type === "ready") {
 				clearTimeout(this.startupTimer);
 				this.usage = packet.usage;
+				this.toolsRunning = packet.toolsRunning;
 				this.openTodoCount = packet.openTodoCount;
 				this.initialized = true;
 				this.state = packet.working ? "working" : "idle";
@@ -749,6 +752,8 @@ export class Worker implements SessionWorker {
 				this.openTodoCount = packet.openCount;
 			} else if (packet.type === "tool.activity") {
 				this.toolActivity = packet.activity;
+			} else if (packet.type === "tools.running") {
+				this.toolsRunning = packet.running;
 			} else if (packet.type === "compacting") {
 				this.compacting = packet.compacting;
 			} else if (packet.type === "usage") {
@@ -7435,6 +7440,13 @@ export class SessionManager {
 			this.emit(meta, worker);
 			return;
 		}
+		if (packet.type === "tools.running") {
+			if (this.workers.get(meta.id) !== worker) return;
+			worker.toolsRunning = packet.running;
+			// No extra summary fan-out in ordinary streaming work.
+			if (this.internetOnline === false || this.subscriptionPaused(meta.id)) this.emit(meta, worker);
+			return;
+		}
 		if (packet.type === "tool.activity") {
 			if (this.workers.get(meta.id) === worker) {
 				worker.toolActivity = packet.activity;
@@ -7609,8 +7621,12 @@ export class SessionManager {
 		// An unanswered ask_user question needs the user, so background jobs and subagents do not count as work.
 		const questionWaits = !mainActive && meta.outcome === "question";
 		const mainBusy = mainActive || (!questionWaits && !!worker?.awaitingJobFollowUp);
+		// Auto-pauses hold the next admission, not a call already executing. In particular,
+		// a codemode script must finish all nested calls before its chat looks paused.
+		const toolsRunning = worker?.toolsRunning === true;
 		const offlinePaused =
 			this.internetOnline === false &&
+			!toolsRunning &&
 			meta.archivedAt === undefined &&
 			!meta.failure &&
 			!meta.recoveryStopped &&
@@ -7633,7 +7649,9 @@ export class SessionManager {
 			!meta.recoveryStopped &&
 			!paused &&
 			!offlinePaused &&
-			((!mainQuotaPaused && mainBusy) || (!questionWaits && (runnableChildren || !!worker?.runningJobs?.length)));
+			(toolsRunning ||
+				(!mainQuotaPaused && mainBusy) ||
+				(!questionWaits && (runnableChildren || !!worker?.runningJobs?.length)));
 		const heldAtQuota =
 			!meta.failure &&
 			!meta.recoveryStopped &&

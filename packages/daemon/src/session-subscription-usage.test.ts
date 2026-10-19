@@ -138,6 +138,10 @@ test("a 95% reading holds durable work, not idle results, and force is chat/chil
 	assert.equal(f.sessions.get(first)?.state, "working", "the kernel still owns a recoverable durable run");
 	assert.equal(f.sessions.get(first)?.outcome, undefined);
 	assert.equal(f.sessions.get(second)?.outcome, "done", "an unrelated usage warning cannot hide a finished result");
+	worker.toolsRunning = true;
+	assert.equal(f.sessions.get(first)?.working, true, "the current call drains before showing the usage pause");
+	worker.toolsRunning = false;
+	assert.equal(f.sessions.get(first)?.working, false, "the pause takes effect as soon as the call finishes");
 	const policyFile = (id: string) => join(f.home, "sessions", id, "subscription-policy.json");
 	const blocked = JSON.parse(await readFile(policyFile(first), "utf8"));
 	assert.equal(blocked.windows.length, 1);

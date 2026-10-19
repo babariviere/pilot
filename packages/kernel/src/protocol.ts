@@ -269,6 +269,7 @@ export type KernelPacket =
 	| { type: "systemMessageState"; event: import("./held-inputs.ts").SystemMessageStateEvent }
 	| {
 			type: "ready";
+			toolsRunning?: boolean;
 			execution?: ExecutionEvidence;
 			model: string;
 			thinking?: string;
@@ -286,6 +287,8 @@ export type KernelPacket =
 	  }
 	| { type: "jobs.changed"; jobs: SessionJob[] }
 	| { type: "tool.activity"; activity: ToolActivitySnapshot }
+	/** Active top-level call, including its entire codemode script. Never gated by diagnostics. */
+	| { type: "tools.running"; running: boolean }
 	| { type: "todos.changed"; openCount: number }
 	| { type: "usage"; usage: KernelUsage }
 	/** Confirm a provider-reported usage hold before retrying only its pending request. */
