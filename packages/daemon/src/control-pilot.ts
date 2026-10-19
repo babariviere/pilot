@@ -148,10 +148,10 @@ export class ControlPilot {
 				action,
 				args,
 				operationId,
-				() => this.options.mutations!.upgradePermission!(id, use.authorizationId),
+				() => this.options.mutations!.upgradePermission!(id, use.authorizationId, operationId),
 				{ ...use, publishUpgradeChatId: id },
 				(error) => this.authorizationNeeded(caller, action, args, operationId, error),
-				() => this.options.mutations!.upgradePermission!(id, use.authorizationId),
+				() => this.options.mutations!.upgradePermission!(id, use.authorizationId, operationId),
 			);
 		}
 		if (action === "watch" || action === "unwatch" || action === "watches") {
@@ -613,7 +613,7 @@ export class ControlPilot {
 						permission: "permission unchanged",
 						controlPermission: ceiling,
 						permissionNote:
-							"Send does not raise the chat ceiling. Use upgrade_permission with an exact-chat publish grant; it applies at the next run boundary.",
+							"Send does not raise the chat ceiling. Use upgrade_permission to request app approval with an exact-chat publish grant; only Allow approves it for the next fresh run.",
 					}
 				: {}),
 			sessionId: target,

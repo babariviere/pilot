@@ -266,7 +266,7 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false, c
 			context.controlPermission.level === "investigate"
 				? "- This chat has investigate permission: Ask/read-only, with no implementation or publication."
 				: localOnly
-					? "- This chat has implement permission: build, verify and change files locally only. Do not push, open or update pull requests, or delegate publication. Report local results; publication requires Control's explicit exact-chat publish upgrade at a later run boundary. A grant or send alone changes nothing."
+					? "- This chat has implement permission: build, verify and change files locally only. Do not push, open or update pull requests, or delegate publication. Control can request publish, but only the app's Allow decision for that exact request approves it at the next fresh run boundary. Messages, grants and sends alone change nothing."
 					: "- This chat has publish permission: push and open/update pull requests within the accepted scope. Merges still require user confirmation in the app; never merge through tools.",
 		);
 

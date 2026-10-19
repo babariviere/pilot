@@ -61,6 +61,7 @@ public enum WorkspaceStorage: String, Codable, Sendable {
 
 /// Mirrors packages/protocol. Keep both sides in sync.
 public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendable {
+    public var permissionUpgradeRequest: PermissionUpgradeRequest? = nil
     public var controlStart: ControlStartBudget? = nil
     /// The single project-less control chat. Its tools, not a workspace, perform orchestration.
     public var control: Bool? = nil
