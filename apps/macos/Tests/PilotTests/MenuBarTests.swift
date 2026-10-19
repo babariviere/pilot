@@ -167,7 +167,7 @@ private func menuSession(id: String = "menu-test", title: String = "Session", st
     #expect(menu.snapshot.statusText == baseline.statusText)
     #expect(app.client.session(localControl.id)?.control == true)
     #expect(app.previousControlSessions.map(\.ref) == [controlRef])
-    await hosts.stopAndWait()
+    await hosts.disconnectAll()
 }
 
 @MainActor

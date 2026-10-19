@@ -79,7 +79,7 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         #expect(PreviousHistoryHTTP.requests.count == 2)
         #expect(PreviousHistoryHTTP.requests.allSatisfy { $0.host == "box.previous-control.invalid" && $0.path == "/api/sessions/same/history" && $0.method == "GET" })
         model.stop()
-        await hosts.stopAndWait()
+        await hosts.disconnectAll()
     }
 
     @Test @MainActor func paletteKeyboardAndActionEntrypointsCannotWriteHistoricalControlButKeepOrdinaryChats() async throws {
@@ -112,7 +112,7 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         #expect(PreviousHistoryHTTP.requests.isEmpty)
         app.openControlChat()
         #expect(app.hosts.selection?.host == local && app.selectedSessionId == "same")
-        await hosts.stopAndWait()
+        await hosts.disconnectAll()
     }
 
     @Test @MainActor func persistedOfflineControlKeepsIdentityAndHistoryAcrossReconnect() async throws {
@@ -148,7 +148,7 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         try hosts.install(previousClient("box", sessions: [original, ordinary]), host: box)
         await model.load()
         #expect(model.loaded && model.error == nil && app.previousControlSessions.map(\.ref) == [ref])
-        model.stop(); await hosts.stopAndWait()
+        model.stop(); await hosts.disconnectAll()
     }
 
     @Test @MainActor func replacedHostRejectsLateOldGenerationReadAndUsesOnlyNewEndpoint() async throws {
@@ -176,7 +176,7 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         #expect(model.error == nil && model.entries.first?.messages.first?.text.contains("replacement.previous-control.invalid") == true)
         #expect(PreviousHistoryHTTP.requests.map(\.host) == ["box.previous-control.invalid", "box.previous-control.invalid", "replacement.previous-control.invalid"])
         #expect(PreviousHistoryHTTP.requests.allSatisfy { $0.method == "GET" })
-        model.stop(); await hosts.stopAndWait()
+        model.stop(); await hosts.disconnectAll()
     }
 
     @Test @MainActor func mountedHistoricalDestinationHasNoEditableComposer() async throws {
@@ -210,7 +210,7 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         #expect(Mirror(reflecting: chats.value).children.isEmpty)
         #expect(Mirror(reflecting: subscriptions.value).children.isEmpty)
         #expect(PreviousHistoryHTTP.requests.allSatisfy { $0.method == "GET" && $0.path == "/api/sessions/same/history" })
-        await hosts.stopAndWait()
+        await hosts.disconnectAll()
     }
 
     @Test @MainActor func sourceQualifiedChatLinkCannotFallBackToTheSameIdOnMac() async throws {
@@ -235,6 +235,6 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         #expect(PreviousHistoryHTTP.requests.count == 1)
         #expect(PreviousHistoryHTTP.requests.first?.host == "box.previous-control.invalid")
         #expect(PreviousHistoryHTTP.requests.first?.path == "/api/sessions/\(id)/history")
-        model.stop(); await hosts.stopAndWait()
+        model.stop(); await hosts.disconnectAll()
     }
 }
