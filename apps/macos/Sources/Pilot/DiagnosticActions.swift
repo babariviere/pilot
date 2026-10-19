@@ -1416,7 +1416,7 @@ struct DiagnosticRepairSheet: View {
             let items = try await model.hosts.perform(target.reference, kind: .session) { client, _ in
                 if let sessionId = subject.sessionId {
                     let snapshot = try await client.diagnostics(sessionId, limit: 128)
-                    guard snapshot.host.envelopeIdentity == subject.host else { throw HostRoutingError.identityChanged }
+                    guard snapshot.host == subject.host else { throw HostRoutingError.identityChanged }
                     return snapshot.evidence
                 }
                 let snapshot = try await client.appDiagnosticEvidence()
