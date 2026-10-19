@@ -186,6 +186,7 @@ private struct FooterChat: View {
         client.loadFixture(projects: [], sessions: [session])
         client.fixtureModels = ModelList(models: [])
         try model.registerLocal(host)
+        try hosts.install(client, host: host)
         context = HostViewContext(host: host, hosts: model.hosts)
         reference = context.ref(.session, id)
         feed = SessionFeed(sessionId: id, transcript: Transcript())

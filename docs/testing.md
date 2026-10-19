@@ -543,6 +543,11 @@ The timed Stop-routing tests also run in a separate process. This keeps unrelate
 MainActor run loops from consuming their two-minute deadlines. Every selected Stop function must start;
 their assertions and time limits are unchanged.
 
+The repair-footer fixtures and mounted settings save bar each run in a separate process. Visual event
+ordering/coalescing, mission reconnect navigation and repository branch-cache scheduling fixtures run
+together away from those native layout/run loops. Their deadlines, cache TTLs and assertions are unchanged;
+the output guard requires every selected function to start, and explicit filters still use one invocation.
+
 The CI-only keyboard journeys run last, one journey per process. Each activates `NSApp`'s process-global key
 window and pumps nested main run loops; separate processes prevent the tests from interleaving at those yields
 and stealing focus from each other. A runner without a key window records known focus issues, but still executes
