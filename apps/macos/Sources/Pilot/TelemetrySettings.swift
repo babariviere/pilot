@@ -7,6 +7,8 @@ import SwiftUI
 enum NativeTelemetrySettings {
     static func apply(_ settings: TelemetrySettings) {
         NativeDiagnostics.shared.setEnabled(settings.localDiagnostics)
+        LocalFeatureUsage.shared.configure(enabled: settings.hostKind == .local && settings.localFeatureUsage == true,
+                                           epoch: settings.featureUsageEpoch)
         guard settings.hostKind == .local, settings.remoteOperational,
               let endpoint = settings.endpoint.flatMap(URL.init(string:)) else {
             try? PilotTelemetry.shared.configure(.disabled)
@@ -37,6 +39,7 @@ struct TelemetrySettingsSection: View {
     let localApp: Bool
     @State private var loaded: TelemetrySettings?
     @State private var localDiagnostics = true
+    @State private var localFeatureUsage = false
     @State private var remoteOperational = false
     @State private var productAnalytics = false
     @State private var endpoint = "http://127.0.0.1:4318/v1/traces"
@@ -61,6 +64,7 @@ struct TelemetrySettingsSection: View {
                 }
             } else {
                 SettingsToggle("Local operational diagnostics", detail: "Keep bounded lifecycle, timing and native crash/hang evidence on this host for Diagnose this. On by default.", isOn: $localDiagnostics)
+                SettingsToggle("Local feature usage", detail: "Keep content-free daily UI counts across chats for seven UTC days on this host. Off by default, independent of uploads. Disabling or clearing deletes the aggregates. Missing observations are unknown, not zero.", isOn: $localFeatureUsage)
                 SettingsToggle("Remote operational reporting", detail: "Send allowlisted traces to the OTLP collector below. Off by default.", isOn: $remoteOperational)
                 SettingsToggle("Product analytics", detail: "Allow only cataloged feature events. This remains separate and requires remote reporting to have any effect.", isOn: $productAnalytics)
                 SettingsRow("OTLP/HTTP endpoint", detail: "HTTPS, or literal loopback HTTP. Credentials, query parameters and custom headers are not accepted.") {
@@ -102,7 +106,7 @@ struct TelemetrySettingsSection: View {
             Button("Clear diagnostics", role: .destructive) { Task { await clear() } }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This removes retained lifecycle, timing and native crash/hang evidence without deleting chats or changing remote reporting.")
+            Text("This removes retained lifecycle, timing, native crash/hang evidence and local feature-usage aggregates without deleting chats or changing remote reporting.")
         }
     }
 
@@ -111,6 +115,7 @@ struct TelemetrySettingsSection: View {
             let settings = try await client.telemetrySettings()
             loaded = settings
             localDiagnostics = settings.localDiagnostics
+            localFeatureUsage = settings.localFeatureUsage == true
             remoteOperational = settings.remoteOperational
             productAnalytics = settings.productAnalytics
             endpoint = settings.endpoint ?? "http://127.0.0.1:4318/v1/traces"
@@ -160,7 +165,8 @@ struct TelemetrySettingsSection: View {
                 remoteOperational: remoteOperational,
                 productAnalytics: productAnalytics,
                 endpoint: trimmed.isEmpty ? nil : trimmed,
-                aiUsageBudget: aiUsageBudget
+                aiUsageBudget: aiUsageBudget,
+                localFeatureUsage: localFeatureUsage
             ))
             loaded = settings; problem = nil; saved = true
             if localApp { NativeTelemetrySettings.apply(settings) }
@@ -179,6 +185,7 @@ struct TelemetrySettingsSection: View {
         do {
             try await client.clearDiagnostics()
             if localApp { try await NativeDiagnostics.shared.clear() }
+            await load()
             problem = nil
         }
         catch { problem = "Could not clear this host’s local diagnostic files. No chat was changed or started." }

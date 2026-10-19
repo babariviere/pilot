@@ -495,6 +495,7 @@ async function stop(): Promise<void> {
 	watches.bindRemovalAudit(undefined);
 	await githubImport.close();
 	await Promise.all([setup.close(), githubSetup.close(), terminals.shutdown(), sessions.shutdown()]);
+	await telemetry.featureUsage.close();
 	await credentials.close();
 	stopSlackCompletions();
 	await Promise.all(completionWrites);

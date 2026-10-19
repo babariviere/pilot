@@ -187,6 +187,7 @@ public struct SessionDiagnosticTruncation: Codable, Sendable {
 }
 
 public struct SessionDiagnostics: Codable, Sendable {
+    public let featureUsage: FeatureUsageSnapshot?
     public struct Connectivity: Codable, Sendable {
         public let state: String
         public let observedAt: String?
@@ -210,6 +211,7 @@ public struct SessionDiagnostics: Codable, Sendable {
 
 /// Host/app diagnostics with no attached chat or transcript authority.
 public struct AppDiagnostics: Codable, Sendable {
+    public let featureUsage: FeatureUsageSnapshot?
     public struct Connectivity: Codable, Sendable {
         public let state: String
         public let observedAt: String?
