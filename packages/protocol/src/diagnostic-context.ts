@@ -9,7 +9,18 @@ export type DiagnosticContextValue =
 
 /** Selector fields locate evidence. Only trusted runtime role/native capability authorizes reads. */
 export interface DiagnosticContextRequest {
-	action: "hosts" | "chats" | "chat" | "history" | "search" | "logs" | "projects" | "missions" | "mission" | "issues" | "features";
+	action:
+		| "hosts"
+		| "chats"
+		| "chat"
+		| "history"
+		| "search"
+		| "logs"
+		| "projects"
+		| "missions"
+		| "mission"
+		| "issues"
+		| "features";
 	host?: OperationHost;
 	sessionId?: string;
 	projectId?: string;

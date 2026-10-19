@@ -1070,8 +1070,12 @@ selected verified host through an explicit app scope, with no hidden Control row
 only the specialist chat's bounded
 opening user message, never telemetry, diagnostic evidence or target authority. The created chat is visibly labeled
 **Diagnostics** in the sidebar and chat header, with its admitted app or host-qualified chat scope and read-only
-boundary. Its
-descriptive chat title remains independent and is generated through the normal
+boundary.
+
+Diagnostics can also read opt-in, local-only daily feature-usage aggregates across chats, independently of remote
+export. Settings → Diagnostics → Local feature usage explains its seven-day retention and clear/disable controls.
+Missing, dropped or disabled observations remain unknown, not zero. See [feature evidence](docs/feature-adoption.md).
+Its descriptive chat title remains independent and is generated through the normal
 bounded title lifecycle: a submitted reason seeds the title, while a reasonless setup waits for the first substantive
 specialist reply rather than naming the fixed diagnostic instruction. The readable fallback remains if title
 generation is unavailable, and a user rename always wins. Titles and title context stay out of telemetry. Cancel

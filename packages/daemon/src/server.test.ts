@@ -25,6 +25,99 @@ import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
 import { NotFound, SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { TelemetrySettingsService } from "./telemetry-settings.ts";
+
+test("native local feature aggregate delivery and diagnostic reads work with export off and survive clear safely", async (t) => {
+	const home = mkdtempSync(join(tmpdir(), "native-feature-api-"));
+	const host = { hostId: "local", daemonId: "daemon", lineageId: "lineage" };
+	const projects = new ProjectStore(home);
+	const sessions = new SessionManager(home, projects, undefined, {}, {}, { diagnosticHost: host });
+	const telemetry = await TelemetrySettingsService.open(home, {
+		daemonId: "daemon",
+		lineageId: "lineage",
+		daemonVersion: "1.0.0",
+	} as DaemonHello);
+	const terminals = new TerminalManager();
+	const args: Parameters<typeof createDaemonServer> = [
+		{ home, host: "127.0.0.1", port: 0 },
+		sessions,
+		projects,
+		new ModelCatalog("/unused"),
+		terminals,
+	];
+	args[17] = telemetry;
+	args[18] = {
+		authenticate: async (value: unknown) => {
+			if (value !== "native-fixture") throw new Conflict("Native only");
+		},
+	} as unknown as NonNullable<(typeof args)[18]>;
+	const server = createDaemonServer(...args);
+	t.after(async () => {
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+		terminals.shutdown();
+		await sessions.shutdown();
+		await telemetry.featureUsage.close();
+		rmSync(home, { recursive: true, force: true });
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
+	const put = (body: unknown, native = true) =>
+		fetch(`${base}/diagnostics/feature-usage`, {
+			method: "PUT",
+			headers: {
+				"content-type": "application/json",
+				...(native ? { "x-pilot-github-capability": "native-fixture" } : {}),
+			},
+			body: JSON.stringify(body),
+		});
+	assert.equal(sessions.appDiagnostics().featureUsage?.status, "disabled");
+	await telemetry.update({
+		localDiagnostics: false,
+		localFeatureUsage: true,
+		remoteOperational: false,
+		productAnalytics: false,
+	});
+	const day = new Date().toISOString().slice(0, 10);
+	const batch = {
+		schemaVersion: 1,
+		epoch: telemetry.settings().featureUsageEpoch,
+		producer: randomUUID(),
+		revision: 1,
+		startedAt: new Date().toISOString(),
+		observedAt: new Date().toISOString(),
+		dropped: 0,
+		cells: [{ catalogVersion: 1, feature: "diagnose_chat", stage: "attempt", day, count: 3 }],
+	};
+	const unauthorized = await put(batch, false);
+	assert.equal(unauthorized.status, 409);
+	await unauthorized.arrayBuffer();
+	for (let i = 0; i < 2; i++) {
+		const response = await put(batch);
+		assert.equal(response.status, 200);
+		await response.arrayBuffer();
+	}
+	const evidence = await sessions.readDiagnosticContext({
+		action: "features",
+		query: "diagnose_chat",
+		since: day,
+		until: day,
+	});
+	assert.match(JSON.stringify(evidence), /native_ui_observations_across_chats/);
+	assert.match(JSON.stringify(evidence), /"count":3/);
+	assert.equal(sessions.appDiagnostics().featureUsage?.cells[0]?.count, 3);
+	assert.equal(telemetry.settings().remoteOperational, false);
+	assert.equal(telemetry.settings().productAnalytics, false);
+	const cleared = await fetch(`${base}/diagnostics`, { method: "DELETE" });
+	assert.equal(cleared.status, 200);
+	await cleared.arrayBuffer();
+	const stale = await put(batch);
+	assert.equal(stale.status, 409);
+	await stale.arrayBuffer();
+	assert.deepEqual(sessions.appDiagnostics().featureUsage?.cells, []);
+	assert.equal(sessions.appDiagnostics().featureUsage?.reason, "no_producer");
+	assert.equal(sessions.list().length, 0);
+});
 
 test("project database settings require native authority and fence revisions without exposing URLs", async (t) => {
 	const home = mkdtempSync(join(tmpdir(), "pilot-database-api-"));

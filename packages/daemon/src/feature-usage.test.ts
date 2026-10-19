@@ -11,14 +11,24 @@ import { TelemetrySettingsService } from "./telemetry-settings.ts";
 const host = { hostId: "local", daemonId: "daemon", lineageId: "lineage" };
 const now = Date.parse("2026-10-19T12:00:00Z");
 function batch(epoch: string): FeatureUsageBatch {
-	return { schemaVersion: 1, epoch, producer: randomUUID(), revision: 1,
-		startedAt: new Date(now).toISOString(), observedAt: new Date(now).toISOString(), dropped: 0,
-		cells: [{ catalogVersion: 1, feature: "diagnose_chat", stage: "attempt", day: "2026-10-19", count: 3 }] };
+	return {
+		schemaVersion: 1,
+		epoch,
+		producer: randomUUID(),
+		revision: 1,
+		startedAt: new Date(now).toISOString(),
+		observedAt: new Date(now).toISOString(),
+		dropped: 0,
+		cells: [{ catalogVersion: 1, feature: "diagnose_chat", stage: "attempt", day: "2026-10-19", count: 3 }],
+	};
 }
-test("local feature aggregates default off, deduplicate revisions, clear/fence and persist without raw events", async t => {
+test("local feature aggregates default off, deduplicate revisions, clear/fence and persist without raw events", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "feature-usage-"));
 	const store = new FeatureUsageStore(home, () => now);
-	t.after(async () => { await store.close(); await rm(home, { recursive: true, force: true }); });
+	t.after(async () => {
+		await store.close();
+		await rm(home, { recursive: true, force: true });
+	});
 	await store.load(false);
 	assert.equal(store.snapshot(host).status, "disabled");
 	assert.deepEqual(store.snapshot(host).cells, []);
@@ -26,7 +36,8 @@ test("local feature aggregates default off, deduplicate revisions, clear/fence a
 	await store.configure(true);
 	assert.equal(store.snapshot(host).reason, "no_producer");
 	const input = batch(store.collectionEpoch!);
-	await store.replace(input); await store.replace(input);
+	await store.replace(input);
+	await store.replace(input);
 	await store.replace({ ...input, revision: 0, cells: [] });
 	assert.equal(store.snapshot(host).cells[0]?.count, 3);
 	assert.equal(store.snapshot(host).status, "partial");
@@ -44,20 +55,47 @@ test("local feature aggregates default off, deduplicate revisions, clear/fence a
 });
 test("feature aggregate parser is closed and bounded", () => {
 	const input = batch(randomUUID());
-	for (const value of [{ ...input, transcript: "secret-canary" },
+	for (const value of [
+		{ ...input, transcript: "secret-canary" },
 		{ ...input, cells: [{ ...input.cells[0], raw: "secret-canary" }] },
 		{ ...input, cells: [{ ...input.cells[0], count: 70_001 }] },
 		{ ...input, cells: Array(337).fill(input.cells[0]) },
 		{ ...input, cells: [input.cells[0], input.cells[0]] },
 		{ ...input, cells: [{ ...input.cells[0], feature: "arbitrary" }] },
-		{ ...input, observedAt: "2099-01-01T00:00:00Z" }]) assert.throws(() => parseFeatureUsageBatch(value, now));
+		{ ...input, observedAt: "2099-01-01T00:00:00Z" },
+	])
+		assert.throws(() => parseFeatureUsageBatch(value, now));
 	assert.equal(parseFeatureUsageBatch(input, now).cells[0]?.count, 3);
 });
-test("retention and producer caps report missing observations, never complete zero", async t => {
+
+test("idle expiry removes aged daily cells and closing drains its write", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const home = await mkdtemp(join(tmpdir(), "feature-expiry-"));
+	let clock = now;
+	const store = new FeatureUsageStore(home, () => clock);
+	t.after(async () => {
+		await store.close();
+		await rm(home, { recursive: true, force: true });
+	});
+	await store.configure(true);
+	const input = batch(store.collectionEpoch!);
+	input.cells[0]!.day = new Date(clock - 6 * 86_400_000).toISOString().slice(0, 10);
+	input.startedAt = new Date(clock - 6 * 86_400_000).toISOString();
+	await store.replace(input);
+	clock += 43_200_002;
+	t.mock.timers.tick(43_200_002);
+	await store.close();
+	const stored = JSON.parse(await readFile(store.file, "utf8"));
+	assert.deepEqual(stored.batches[0].cells, []);
+});
+test("retention and producer caps report missing observations, never complete zero", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "feature-retention-"));
 	let clock = now;
 	const store = new FeatureUsageStore(home, () => clock);
-	t.after(async () => { await store.close(); await rm(home, { recursive: true, force: true }); });
+	t.after(async () => {
+		await store.close();
+		await rm(home, { recursive: true, force: true });
+	});
 	await store.configure(true);
 	for (let i = 0; i < 17; i++) await store.replace(batch(store.collectionEpoch!));
 	assert.equal(store.snapshot(host).prunedProducers, 1);
@@ -72,29 +110,54 @@ test("retention and producer caps report missing observations, never complete ze
 	assert.equal(JSON.parse(await readFile(expired.file, "utf8")).batches.length, 0);
 	await expired.close();
 });
-test("unsafe or oversized aggregate storage reports unavailable without exposing content", async t => {
+test("unsafe or oversized aggregate storage reports unavailable without exposing content", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "feature-unsafe-"));
 	const store = new FeatureUsageStore(home, () => now);
-	t.after(async () => { await store.close(); await rm(home, { recursive: true, force: true }); });
+	t.after(async () => {
+		await store.close();
+		await rm(home, { recursive: true, force: true });
+	});
 	const outside = join(home, "outside");
-	await writeFile(outside, "secret-canary"); await symlink(outside, store.file);
+	await writeFile(outside, "secret-canary");
+	await symlink(outside, store.file);
 	await store.load(true);
 	assert.equal(store.snapshot(host).reason, "storage_unavailable");
 	assert.doesNotMatch(JSON.stringify(store.snapshot(host)), /secret-canary/);
 	assert.equal(await readFile(outside, "utf8"), "secret-canary");
+	await rm(store.file);
+	await writeFile(store.file, Buffer.alloc(1024 * 1024 + 1, 120));
+	await store.load(true);
+	assert.equal(store.snapshot(host).reason, "storage_unavailable");
+	assert.deepEqual(store.snapshot(host).cells, []);
 });
-test("local feature consent is independent of export and old-client writes preserve it", async t => {
+test("local feature consent is independent of export and old-client writes preserve it", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "feature-consent-"));
-	const service = await TelemetrySettingsService.open(home, { daemonId: host.daemonId, lineageId: host.lineageId,
-		daemonVersion: "1.0.0" } as Parameters<typeof TelemetrySettingsService.open>[1]);
-	t.after(async () => { await service.featureUsage.close(); await rm(home, { recursive: true, force: true }); });
+	const service = await TelemetrySettingsService.open(home, {
+		daemonId: host.daemonId,
+		lineageId: host.lineageId,
+		daemonVersion: "1.0.0",
+	} as Parameters<typeof TelemetrySettingsService.open>[1]);
+	t.after(async () => {
+		await service.featureUsage.close();
+		await rm(home, { recursive: true, force: true });
+	});
 	assert.equal(service.settings().localFeatureUsage, false);
-	await service.update({ localDiagnostics: false, localFeatureUsage: true, remoteOperational: false, productAnalytics: false });
+	await service.update({
+		localDiagnostics: false,
+		localFeatureUsage: true,
+		remoteOperational: false,
+		productAnalytics: false,
+	});
 	assert.ok(service.settings().featureUsageEpoch);
 	assert.equal(service.settings().remoteOperational, false);
 	await service.update({ localDiagnostics: true, remoteOperational: false, productAnalytics: false });
 	assert.equal(service.settings().localFeatureUsage, true);
 	assert.equal(service.kernelSettings().enabled, false);
-	await service.update({ localDiagnostics: true, localFeatureUsage: false, remoteOperational: false, productAnalytics: false });
+	await service.update({
+		localDiagnostics: true,
+		localFeatureUsage: false,
+		remoteOperational: false,
+		productAnalytics: false,
+	});
 	assert.equal(service.settings().featureUsageEpoch, undefined);
 });

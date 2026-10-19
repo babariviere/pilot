@@ -12,13 +12,23 @@ export function createDiagnosticContextTool(call: DiagnosticContextCall): ToolDe
 		name: DIAGNOSTIC_CONTEXT_TOOL,
 		label: "Pilot context",
 		description:
-			"Read bounded app-wide chats, history/search, usage/budgets, failures, mission context and Pilot logs. Discover trusted hosts first. Focus is not authority. No wake, writes, credentials or uploads.",
+			"Read app-wide chats/history/search, usage/budgets, feature counts, failures, missions/issues and Pilot logs. Trusted-host, bounded and sanitized. No wake, writes, credentials or uploads.",
 		promptSnippet: "Read app-wide evidence through trusted diagnostics capability",
 		parameters: Type.Object({
 			action: Type.Union(
-				["hosts", "chats", "chat", "history", "search", "logs", "projects", "missions", "mission", "issues", "features"].map(
-					(v) => Type.Literal(v),
-				),
+				[
+					"hosts",
+					"chats",
+					"chat",
+					"history",
+					"search",
+					"logs",
+					"projects",
+					"missions",
+					"mission",
+					"issues",
+					"features",
+				].map((v) => Type.Literal(v)),
 			),
 			host: Type.Optional(
 				Type.Object({
@@ -36,8 +46,12 @@ export function createDiagnosticContextTool(call: DiagnosticContextCall): ToolDe
 			after: Type.Optional(
 				Type.String({ maxLength: 36, description: "Prior page.after; retain with page.before when present." }),
 			),
-			since: Type.Optional(Type.String({ maxLength: 10, description: "features only: inclusive UTC day YYYY-MM-DD" })),
-			until: Type.Optional(Type.String({ maxLength: 10, description: "features only: inclusive UTC day YYYY-MM-DD" })),
+			since: Type.Optional(
+				Type.String({ maxLength: 10, description: "features only: inclusive UTC day YYYY-MM-DD" }),
+			),
+			until: Type.Optional(
+				Type.String({ maxLength: 10, description: "features only: inclusive UTC day YYYY-MM-DD" }),
+			),
 			before: Type.Optional(Type.Integer({ minimum: 0 })),
 			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
 			log: Type.Optional(

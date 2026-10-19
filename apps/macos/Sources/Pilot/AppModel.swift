@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import PilotCore
+import PilotTelemetry
 
 enum InspectorTab: Hashable {
     case changes
@@ -1482,6 +1483,7 @@ final class AppModel: ObservableObject {
             openWindowAction?()
         }
     }
+    deinit { featureUsageSyncTask?.cancel() }
 }
 
 extension AppModel {
@@ -1625,7 +1627,6 @@ private final class DraftImageRetention {
     }
 
     deinit {
-        featureUsageSyncTask?.cancel()
         // Unsaved reservations are not durable drafts. Submitted history markers still win.
         for (id, image) in images where !persisted.contains(id) { image.discardPersistedDraft() }
     }

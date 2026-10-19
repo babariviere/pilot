@@ -28,6 +28,8 @@ export interface FeatureUsageSnapshot {
 	retentionDays: 7;
 	retainedFrom: string;
 	producerLimit: 16;
+	observedProducers: number;
+	dropCoverage: "retained_producer_reports_only";
 	prunedProducers: number;
 	dropped: number;
 	/** Only positive observed cells. Missing cells/stages/days are unknown, NOT zero. */

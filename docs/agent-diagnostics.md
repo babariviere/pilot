@@ -129,11 +129,13 @@ files, links or secrets.
 ## App-wide context reader
 
 `diagnostic_context` uses closed actions: `hosts`, `chats`, `chat`, `history`, `search`, `logs`, `projects`,
-`missions`, `mission` and `issues`. Chat discovery includes archives; title and history filters are literal, not
+`missions`, `mission`, `issues` and `features`. Chat discovery includes archives; title and history filters are literal, not
 regular expressions. Chat detail includes content-free operational evidence, retained usage/comparisons, the
 configured informational budget and available member mission context. Projects expose IDs/names, not checkout
 paths. Mission detail exposes the retained brief and paginated tasks. Issues read only the current integration
 binding's retained local records, without a new account, credential or external network fetch.
+Feature evidence is a separately controlled, content-free local aggregate with explicit observer/time/host coverage,
+positive observed cells only, and independent remote-export consent. See [local feature evidence](feature-adoption.md).
 
 Each response carries a qualified source host, collection time, availability and page bounds. Discovery scans at
 most 200 metadata rows, returning at most 20; history/search reads one bounded history page from one chat at a time,
