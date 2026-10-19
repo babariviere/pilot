@@ -355,7 +355,7 @@ struct ControlWatchRow: View {
     }
 
     private var when: String {
-        "When \(WatchPresentation.event(watch.event, filter: watch.filter).lowercasedFirst) · \(WatchPresentation.mode(watch))"
+        "\(WatchPresentation.trigger(watch.event, filter: watch.filter)) · \(WatchPresentation.mode(watch))"
     }
 }
 
@@ -412,8 +412,4 @@ struct ControlAuditRow: View {
         return [chatTitle, project, state, SessionTimeFormatting.relative(operation.at, now: now)]
             .compactMap { $0 }.joined(separator: " · ")
     }
-}
-
-private extension String {
-    var lowercasedFirst: String { prefix(1).lowercased() + dropFirst() }
 }

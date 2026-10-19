@@ -52,9 +52,21 @@ struct ControlDetailsTests {
         #expect(operation.missionId == "m")
     }
 
+    @Test func watchTriggersPreserveAcronymsAndProperNames() {
+        #expect(WatchPresentation.trigger(.prReady) == "When PR is ready to merge")
+        #expect(WatchPresentation.trigger(.prMerged) == "When PR merges")
+        #expect(WatchPresentation.trigger(.prClosed) == "When PR closes")
+        #expect(WatchPresentation.trigger(.linearDone) == "When Linear issue is done")
+        #expect(WatchPresentation.trigger(.chatSettled) == "When chat settles")
+        #expect(WatchPresentation.trigger(.chatFailed) == "When chat fails")
+        #expect(WatchPresentation.trigger(.missionTaskDone) == "When task is done")
+        #expect(WatchPresentation.trigger(.missionDone) == "When mission is done")
+    }
+
     @Test func watchesReadAsWhenAndWhat() throws {
         let watch = try JSONDecoder().decode(Watch.self, from: Data(#"{"id":"w","createdAt":1,"event":"chat.settled","target":{"kind":"chat","id":"s"},"filter":{"outcome":"failed"},"mode":"once","note":"  Retry   it  "}"#.utf8))
         #expect(WatchPresentation.event(watch.event, filter: watch.filter) == "Chat fails")
+        #expect(WatchPresentation.trigger(watch.event, filter: watch.filter) == "When chat fails")
         #expect(WatchPresentation.event(.chatSettled) == "Chat settles")
         #expect(WatchPresentation.mode(watch) == "Once")
         #expect(WatchPresentation.note(watch) == "Retry it")
