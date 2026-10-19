@@ -1,5 +1,32 @@
 # Changelog
 
+## [1.56.0](https://github.com/babariviere/pilot/compare/v1.55.0...v1.56.0) (2026-10-19)
+
+
+### Features
+
+* **artifacts:** define the visual node tree API 1 ([7b0e2c6](https://github.com/babariviere/pilot/commit/7b0e2c6d062dd2c5b090eb424dce66a8553ea91a))
+* **artifacts:** publish visual artifacts after a QuickJS pre-check ([8666edc](https://github.com/babariviere/pilot/commit/8666edc83c5f7c9831fc76bcd1fb66d44a1dcc67))
+* draw canvas nodes in native visuals ([e78afbd](https://github.com/babariviere/pilot/commit/e78afbdc03193f1131293bc3e3760726f6347599))
+* draw shader nodes in native visuals with Metal ([4985932](https://github.com/babariviere/pilot/commit/498593259e5cf271c818cc5ac4f909ba9f6143ea))
+* **kernel:** offer native visuals by default and steer agents to them ([90c960f](https://github.com/babariviere/pilot/commit/90c960f56ceef569668129054bb3a44b5e826a25))
+* **macos:** parse Markdown tables into header, alignment and cells ([70811be](https://github.com/babariviere/pilot/commit/70811be94ab523fcb1a5a52c99da4a1a2fda7272))
+* **macos:** render chat Markdown tables as native accessible tables ([0c4cbe7](https://github.com/babariviere/pilot/commit/0c4cbe7b99e294c813719199f13d40780b2bcadd))
+* **macos:** render visual artifacts natively ([f6df85c](https://github.com/babariviere/pilot/commit/f6df85c7a084e3d344bdf61a3a7929247d33c957))
+* **macos:** run visual scripts in a sandboxed QuickJS-NG service ([6c10288](https://github.com/babariviere/pilot/commit/6c102885968939ebf6bd4ce5e3a4d9b7c21302c4))
+* **slack:** let a chat's agent mark its Slack message done ([133a086](https://github.com/babariviere/pilot/commit/133a0864feb618a757c2627b119c32ede1b4082a))
+
+
+### Bug Fixes
+
+* **attention:** flag code changes without a pull request ([a02e0de](https://github.com/babariviere/pilot/commit/a02e0de767eec7894c9989cbaa0ca97df7085281))
+* **ci:** restore macOS build and Ask skill read on main ([d024f46](https://github.com/babariviere/pilot/commit/d024f46c611dfcab6cf0c789b7be6b6609f3f0ba))
+* **daemon:** allow explicit publish permission upgrades ([d9d21a9](https://github.com/babariviere/pilot/commit/d9d21a9774da7912def588e7fe0c09049d694af0))
+* **daemon:** archive coordinators with their missions ([313e3bd](https://github.com/babariviere/pilot/commit/313e3bd2bc78dcf605cb0f98f9f2bd4212d0f09c))
+* keep assistant handoffs, pending questions and coordinator compaction bounded ([04a755a](https://github.com/babariviere/pilot/commit/04a755a986ac4f1ab61e8d04941119bd29da07fa))
+* **macos:** compare session diagnostics hosts directly ([4d70902](https://github.com/babariviere/pilot/commit/4d709023421d74a187b0d42d64ec4a65b4fe57aa))
+* **macos:** pass the artifact decoder as a Sendable closure ([172103f](https://github.com/babariviere/pilot/commit/172103fcc1d9ed1d170d0ba933b5757321b98459))
+
 ## [1.55.0](https://github.com/babariviere/pilot/compare/v1.54.0...v1.55.0) (2026-10-19)
 
 
