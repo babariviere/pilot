@@ -91,7 +91,7 @@ public struct ControlAuditOperation: Identifiable, Equatable, Sendable {
 /// Words for a watch in the control chat's Watching list. Targets are named by the caller, which can resolve
 /// chats, projects and missions; these cover what needs no lookup.
 public enum WatchPresentation {
-    /// The event as "when …" reads it: "When a chat settles".
+    /// The event as a standalone label.
     public static func event(_ event: WatchEvent, filter: WatchFilter? = nil) -> String {
         switch event {
         case .chatSettled:
@@ -108,6 +108,17 @@ public enum WatchPresentation {
         case .linearDone: "Linear issue is done"
         case .missionTaskDone: "Task is done"
         case .missionDone: "Mission is done"
+        }
+    }
+
+    /// A trigger sentence, preserving acronyms and proper names after "When".
+    public static func trigger(_ event: WatchEvent, filter: WatchFilter? = nil) -> String {
+        let label = self.event(event, filter: filter)
+        switch event {
+        case .prMerged, .prClosed, .prReady, .linearDone:
+            return "When \(label)"
+        default:
+            return "When \(label.prefix(1).lowercased())\(label.dropFirst())"
         }
     }
 
