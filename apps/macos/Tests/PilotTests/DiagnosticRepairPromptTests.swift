@@ -120,7 +120,9 @@ private func repairSession(host: HostRef = repairLocalHost, proposal: Diagnostic
     let fixture = repairSession()
     let proposal = try #require(fixture.specialist.diagnosticRepairProposal)
     let admission = try DiagnosticRepair.admission(specialist: fixture.specialist,
-                                                   specialistHost: repairLocalHost, proposal: proposal)
+        specialistHost: repairLocalHost, proposal: proposal,
+        binding: DiagnosticRepairProjectBinding(id: "00000000-0000-4000-8000-000000000009", revision: 1,
+            host: repairLocalHost, projectId: "pilot-source", path: "/sources/pilot", configuredAt: "2026-10-19T00:00:00Z"))
     let handoffJSON = """
     {
       "schemaVersion": 1,
@@ -136,7 +138,7 @@ private func repairSession(host: HostRef = repairLocalHost, proposal: Diagnostic
     }
     """
     let handoff = try JSONDecoder().decode(DiagnosticsHandoff.self, from: Data(handoffJSON.utf8))
-    let request = try DiagnosticRepair.spawnRequest(handoff: handoff, destinationProjectId: "project",
+    let request = try DiagnosticRepair.spawnRequest(handoff: handoff, destinationProjectId: "pilot-source",
                                                     admission: admission)
     #expect(request.mode == .build && request.role == nil)
     #expect(request.diagnosticRepair == admission)
@@ -256,7 +258,8 @@ private func repairSession(host: HostRef = repairLocalHost, proposal: Diagnostic
         specialist: proposed.specialist, specialistHost: repairLocalHost, admittedTarget: proposed.target,
         available: true, destinationAvailable: false, request: nil
     )
-    #expect(missingDestination.title == "Review repair" && !missingDestination.enabled)
+    #expect(missingDestination.title == "Review repair" && missingDestination.enabled,
+            "review can explain setup without granting permission to start")
     #expect(missingDestination.detail?.contains("project") == true)
 }
 
@@ -295,11 +298,11 @@ private func repairSession(host: HostRef = repairLocalHost, proposal: Diagnostic
     let localTarget = try #require(localFixture.specialist.diagnosticTarget)
     let remoteTarget = try #require(remoteFixture.specialist.diagnosticTarget)
     app.diagnosticRepairRequests[local.storageKey] = DiagnosticRepairRequestState(
-        revision: UUID(), target: localTarget, sessionUpdatedAt: 1, queuedBehindWork: false,
+        revision: UUID(), target: .chat(localTarget), sessionUpdatedAt: 1, queuedBehindWork: false,
         phase: .queued, observedWorking: false, error: nil, operation: nil
     )
     let remoteState = DiagnosticRepairRequestState(
-        revision: UUID(), target: remoteTarget, sessionUpdatedAt: 1, queuedBehindWork: true,
+        revision: UUID(), target: .chat(remoteTarget), sessionUpdatedAt: 1, queuedBehindWork: true,
         phase: .queued, observedWorking: true, error: nil, operation: nil
     )
     app.diagnosticRepairRequests[remote.storageKey] = remoteState

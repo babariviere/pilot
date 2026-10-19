@@ -11,9 +11,30 @@ export function createRepairProposalTool(call: RepairProposalCall): ToolDefiniti
 		name: REPAIR_PROPOSAL_TOOL,
 		label: "Repair proposal",
 		description:
-			"Publish one bounded, non-executing repair suggestion after the user asks for it. Base every finding on diagnostics evidence, cite 1–16 exact evidence refs, state uncertainty plainly, and propose a regression test. This only saves a draft for user review; it cannot create a coding chat, execute a repair, read a transcript, change the target, or retry, restart or replay anything.",
+			"Publish a bounded repair draft with an issue title and 1–16 exact diagnostic evidence refs. User review and native confirmation are required; this cannot start a repair or change any chat.",
 		promptSnippet: "Publish a bounded repair suggestion for user review",
 		parameters: Type.Object({
+			repairTitle: Type.Optional(
+				Type.String({
+					minLength: 1,
+					maxLength: 160,
+					description: "Single-line issue-specific title, never raw logs or credentials.",
+				}),
+			),
+			subject: Type.Optional(
+				Type.Union([
+					Type.Object({
+						kind: Type.Literal("app"),
+						host: Type.Object({ hostId: Type.String(), daemonId: Type.String(), lineageId: Type.String() }),
+					}),
+					Type.Object({
+						kind: Type.Literal("chat"),
+						host: Type.Object({ hostId: Type.String(), daemonId: Type.String(), lineageId: Type.String() }),
+						sessionId: Type.String(),
+						chatUrl: Type.String(),
+					}),
+				]),
+			),
 			evidenceRefs: Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { minItems: 1, maxItems: 16 }),
 			findings: Type.String({ minLength: 1, maxLength: 1200 }),
 			uncertainty: Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")]),

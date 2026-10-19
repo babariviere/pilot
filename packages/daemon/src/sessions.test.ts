@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter, once } from "node:events";
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -2180,7 +2180,7 @@ test("diagnostics role survives reopen and prepares only a bounded read-only han
 			suggestedRepair: proposal.suggestedRepair,
 			regressionTestGuidance: "Test",
 		}),
-		/host-admitted target/,
+		/subject does not match/,
 	);
 	await assert.rejects(
 		sessions.diagnosticsHandoff(target.id, {
@@ -2193,13 +2193,31 @@ test("diagnostics role survives reopen and prepares only a bounded read-only han
 		}),
 		/Only a diagnostics specialist/,
 	);
+	const pilotPath = join(await realpath(f.root), "pilot-source");
+	await mkdir(pilotPath);
+	const pilotProject = await f.projects.create({ path: pilotPath, name: "Source checkout", model: "test/preferred" });
+	t.mock.method(f.projects, "origin", async (id: string) => ({
+		identity: id === pilotProject.id ? '["github.com","babariviere/pilot"]' : null,
+	}));
+	const configured = await sessions.configureDiagnosticRepairProject({
+		expectedRevision: 0,
+		host: remoteTarget.host,
+		projectId: pilotProject.id,
+		path: pilotPath,
+		origin: '["github.com","babariviere/pilot"]',
+	});
+	assert.equal(handoff.sourceProjectId, f.project.id, "the evidence project is not the repair destination");
 	const repairAdmission = {
 		specialistSessionId: specialist.id,
 		proposalId: proposal.id,
 		target: remoteTarget,
+		binding: configured.binding,
+		repairTitle: handoff.repairTitle,
 	};
 	const repairRequest = {
-		projectId: f.project.id,
+		projectId: pilotProject.id,
+		title: handoff.repairTitle,
+		workspace: "clone" as const,
 		message: "Apply the reviewed repair",
 		mode: "build" as const,
 		diagnosticRepair: repairAdmission,
@@ -2221,7 +2239,7 @@ test("diagnostics role survives reopen and prepares only a bounded read-only han
 			randomUUID(),
 			randomUUID(),
 		),
-		/stale or belongs to another target/,
+		/Cross-host|stale or belongs to another target/,
 	);
 	const repairId = randomUUID();
 	const repairOperationId = randomUUID();
@@ -2237,6 +2255,13 @@ test("diagnostics role survives reopen and prepares only a bounded read-only han
 	);
 	assert.equal(repair.mode, "build");
 	assert.equal(repair.role, undefined);
+	assert.equal(repair.projectId, pilotProject.id);
+	assert.equal(repair.title, handoff.repairTitle);
+	await assert.rejects(
+		sessions.spawnDurable(repairRequest, randomUUID(), randomUUID()),
+		/already has a confirmed repair/,
+		"different operation IDs cannot admit the same proposal twice",
+	);
 
 	specialistWorker.publishRepairProposal("replacement", {
 		...proposalDraft,
@@ -2308,6 +2333,144 @@ test("startup/update timing labels are fixed and exclude awaited readiness", asy
 	assert.doesNotMatch(JSON.stringify(snapshot), /private-preparation-content/);
 	assert.ok(!JSON.stringify(snapshot).includes(chat.id));
 	assert.ok(!JSON.stringify(snapshot).includes(f.source));
+});
+
+test("app evidence stays bounded, expires while idle and is erased on disable", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager({}, { diagnosticHost });
+	t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
+	for (let index = 0; index < 140; index++) sessions.appDiagnostics();
+	assert.equal(sessions["appEvidence"].size, 128);
+	assert.ok(Buffer.byteLength(JSON.stringify(sessions.appDiagnosticEvidence(diagnosticHost))) < 65536);
+	t.mock.timers.tick(30 * 60_000 + 1);
+	assert.equal(sessions["appEvidence"].size, 0, "idle expiry does not wait for another read");
+	sessions.appDiagnostics();
+	sessions.configureTelemetry({
+		enabled: false,
+		serviceVersion: "test",
+		environment: "test",
+		hostKind: "local",
+		hostId: "host",
+		localDiagnostics: false,
+	});
+	assert.equal(sessions["appEvidence"].size, 0);
+	assert.equal(sessions["appEvidenceExpiry"], undefined);
+	assert.deepEqual(sessions.appDiagnostics().evidence, []);
+	t.mock.timers.reset();
+});
+
+test("standalone app proposals use fixed source bindings, reject destination overrides and survive single-start recovery", async (t) => {
+	const f = await fixture(t);
+	const sourcePath = await realpath(f.source);
+	const pilot = await f.projects.update(f.project.id, { path: sourcePath, name: "Source checkout" });
+	t.mock.method(f.projects, "origin", async () => ({ identity: '["github.com","babariviere/pilot"]' }));
+	const sessions = await f.manager({}, { diagnosticHost });
+	const app = await sessions.spawn({
+		role: "diagnostics",
+		diagnosticScope: "app",
+		diagnosticHost,
+		message: "Why does the sidebar retain selection?",
+	});
+	await sessions["starting"].get(app.id);
+	const worker = f.workers.find((item) => item.spec.sessionId === app.id)!;
+	const observed = sessions.appDiagnostics().evidence![0]!;
+	const draft = {
+		evidenceRefs: [observed.ref],
+		repairTitle: "Sidebar retains an obsolete selection",
+		findings: "Selection persisted after a host changed. The snapshot supplies context, not proof of cause.",
+		uncertainty: "high" as const,
+		suggestedRepair: "Fence selection by the active host identity.",
+		regressionTestGuidance: "Mount the real sidebar and switch between distinct host identities.",
+	};
+	worker.publishRepairProposal("app-proposal", draft);
+	await until(() =>
+		worker.sent.some((item) => item.type === "diagnostics.proposal.result" && item.callId === "app-proposal"),
+	);
+	const proposal = sessions.get(app.id)!.diagnosticRepairProposal!;
+	assert.deepEqual(proposal.subject, { kind: "app", host: diagnosticHost });
+	assert.equal(proposal.targetSessionId, undefined);
+	assert.equal(sessions.list().length, 1, "publishing or viewing an app proposal creates no Build");
+	const handoff = await sessions.diagnosticsHandoff(app.id, {
+		subject: proposal.subject,
+		proposalId: proposal.id,
+		findings: proposal.findings,
+		uncertainty: proposal.uncertainty,
+		suggestedRepair: proposal.suggestedRepair,
+		regressionTestGuidance: proposal.regressionTestGuidance,
+		repairTitle: proposal.repairTitle,
+	});
+	assert.equal(handoff.targetSessionId, undefined);
+	assert.equal(handoff.projectId, undefined);
+	assert.deepEqual(handoff.evidence, [observed]);
+	const base = {
+		projectId: pilot.id,
+		workspace: "clone" as const,
+		mode: "build" as const,
+		message: JSON.stringify(handoff),
+		title: handoff.repairTitle,
+		diagnosticRepair: {
+			specialistSessionId: app.id,
+			proposalId: proposal.id,
+			subject: proposal.subject,
+			repairTitle: handoff.repairTitle,
+		},
+	};
+	await assert.rejects(sessions.spawnDurable(base, randomUUID(), randomUUID()), /binding/i);
+	const configured = await sessions.configureDiagnosticRepairProject({
+		expectedRevision: 0,
+		host: diagnosticHost,
+		projectId: pilot.id,
+		path: pilot.path,
+		origin: '["github.com","babariviere/pilot"]',
+	});
+	const request = { ...base, diagnosticRepair: { ...base.diagnosticRepair, binding: configured.binding } };
+	for (const override of [
+		{ projectId: "wrong" },
+		{ cwd: sourcePath },
+		{ missionId: "wrong" },
+		{ workspace: "direct" as const },
+		{ baseBranch: "main" },
+		{ title: "Unreviewed title" },
+	]) {
+		await assert.rejects(
+			sessions.spawnDurable({ ...request, ...override }, randomUUID(), randomUUID()),
+			/without overrides/,
+		);
+	}
+	const id = randomUUID(),
+		operation = randomUUID();
+	let reads = 0;
+	const changing = t.mock.method(f.projects, "origin", async () => ({
+		identity: ++reads < 3 ? '["github.com","babariviere/pilot"]' : '["github.com","fork/pilot"]',
+	}));
+	await assert.rejects(sessions.spawnDurable(request, id, operation), /changed during preparation/);
+	assert.equal(sessions.list().length, 1, "an origin race creates no repair chat");
+	assert.equal(sessions["newSessionAdmissions"].size, 0, "failed preparation releases the in-memory reservation");
+	assert.equal(
+		sessions["metas"].get(app.id)!.diagnosticRepairStart,
+		undefined,
+		"proven pre-commit rollback releases the claim",
+	);
+	changing.mock.restore();
+	const repair = await sessions.spawnDurable(request, id, operation);
+	assert.equal(repair.title, draft.repairTitle);
+	assert.equal(
+		(await f.stored(repair.id)).titlePending,
+		undefined,
+		"reviewed repair titles require no naming model call",
+	);
+	assert.equal(repair.role, undefined);
+	assert.equal(repair.projectId, pilot.id);
+	assert.equal(sessions.get(app.id)!.diagnosticTarget, undefined);
+	await assert.rejects(sessions.spawnDurable(request, randomUUID(), randomUUID()), /already has a confirmed repair/);
+	await sessions.rename(repair.id, "My own repair title");
+	await sessions.shutdown();
+	const reopened = await f.manager({}, { diagnosticHost });
+	assert.equal(reopened.get(app.id)!.role, "diagnostics");
+	assert.deepEqual(reopened.get(app.id)!.diagnosticHost, diagnosticHost);
+	assert.deepEqual(reopened.get(app.id)!.diagnosticRepairProposal, proposal);
+	assert.equal((await reopened.spawnDurable(request, id, operation)).title, "My own repair title");
+	await assert.rejects(reopened.spawnDurable(request, randomUUID(), randomUUID()), /already has a confirmed repair/);
 });
 
 test("large restart recovery keeps the daemon responsive and bounds cold starts without losing input IDs", async (t) => {

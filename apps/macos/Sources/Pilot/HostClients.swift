@@ -472,7 +472,7 @@ final class HostClients: ObservableObject {
                 recordDelivery(known, operation: operation)
                 return (operation, known)
             }
-            let delivery = try await client.operation(operation, lookup: false)
+            let delivery = try await submitOperation(operation, client: client)
             try validate(fence)
             recordDelivery(delivery, operation: operation)
             return (operation, delivery)
@@ -491,7 +491,7 @@ final class HostClients: ObservableObject {
             let known = try await client.operation(operation, lookup: true)
             try validate(fence)
             if case .receipt = known { recordDelivery(known, operation: operation); return }
-            let result = try await client.operation(operation, lookup: false)
+            let result = try await submitOperation(operation, client: client)
             try validate(fence)
             recordDelivery(result, operation: operation)
         } catch { recordDelivery(.unknown, operation: operation); throw error }
@@ -501,6 +501,14 @@ final class HostClients: ObservableObject {
         try await operations.acknowledge(operation, receipt: receipt)
         pendingOperations[operation.operationId] = nil
         operationDeliveries[operation.operationId] = nil
+    }
+
+    private func submitOperation(_ operation: DurableOperation, client: PilotClient) async throws -> OperationDelivery {
+        guard operation.kind == "repair-create" else { return try await client.operation(operation, lookup: false) }
+        let fence = try token(for: operation.destination)
+        let capability = try await readNativeCapability(operation.destination, offlineHosts[operation.destination]?.configuration)
+        try validate(fence)
+        return try await client.operation(operation, lookup: false, nativeCapability: capability)
     }
 
     private func recordDelivery(_ delivery: OperationDelivery, operation: DurableOperation) {

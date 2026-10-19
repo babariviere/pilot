@@ -125,6 +125,23 @@ export interface StallDiagnosticEvidence {
 	cpuMs?: number;
 }
 
+/** Content-free app health observed on demand. Not proof of an unobserved failure or its cause. */
+export interface HostSnapshotDiagnosticEvidence {
+	ref: string;
+	source: "daemon";
+	at: string;
+	kind: "host.snapshot";
+	health: {
+		totalSessions: number;
+		activeSessions: number;
+		workingSessions: number;
+		failedSessions: number;
+		archivedSessions: number;
+		rssBytes?: number;
+		heapUsedBytes?: number;
+	};
+}
+
 export interface ToolInFlightDiagnosticEvidence {
 	ref: string;
 	source: "tool";
@@ -212,6 +229,7 @@ export interface DevboxSetupDiagnosticEvidence {
 }
 
 export type DiagnosticEvidence =
+	| HostSnapshotDiagnosticEvidence
 	| LifecycleDiagnosticEvidence
 	| RequestTimingDiagnosticEvidence
 	| ControlPreparationDiagnosticEvidence
@@ -288,6 +306,8 @@ export interface SessionDiagnostics {
 
 /** Host/app diagnostics with no attached chat, transcript authority or session identifier. */
 export interface AppDiagnostics {
+	/** Bounded, process-local observations, available only under local diagnostic collection. */
+	evidence?: DiagnosticEvidence[];
 	featureUsage?: import("./feature-usage.ts").FeatureUsageSnapshot;
 	schemaVersion: typeof DIAGNOSTIC_SCHEMA_VERSION;
 	scope: "app";
@@ -313,6 +333,8 @@ export type DiagnosticRepairUncertainty = "low" | "medium" | "high";
 
 /** Closed, bounded specialist-authored suggestion. Publishing it cannot create or mutate a chat. */
 export interface DiagnosticRepairProposalDraft {
+	subject?: import("./diagnostic-repair.ts").DiagnosticEvidenceSubject;
+	repairTitle?: string;
 	evidenceRefs: string[];
 	findings: string;
 	uncertainty: DiagnosticRepairUncertainty;
@@ -323,13 +345,15 @@ export interface DiagnosticRepairProposalDraft {
 export interface DiagnosticRepairProposal extends DiagnosticRepairProposalDraft {
 	schemaVersion: typeof DIAGNOSTIC_SCHEMA_VERSION;
 	id: string;
-	targetSessionId: string;
+	targetSessionId?: string;
 	createdAt: string;
 }
 
 /** Explicit app action that reviews one persisted proposal for a separate repair chat. */
 export interface DiagnosticsHandoffRequest {
-	targetSessionId: string;
+	targetSessionId?: string;
+	subject?: import("./diagnostic-repair.ts").DiagnosticEvidenceSubject;
+	repairTitle?: string;
 	proposalId: string;
 	findings: string;
 	uncertainty: DiagnosticRepairUncertainty;
@@ -341,7 +365,11 @@ export interface DiagnosticsHandoffRequest {
 export interface DiagnosticsHandoff {
 	schemaVersion: typeof DIAGNOSTIC_SCHEMA_VERSION;
 	host: OperationHost;
-	targetSessionId: string;
+	targetSessionId?: string;
+	subject?: import("./diagnostic-repair.ts").DiagnosticEvidenceSubject;
+	repairTitle?: string;
+	/** Describes evidence only, never a destination. */
+	sourceProjectId?: string;
 	projectId?: string;
 	evidence: DiagnosticEvidence[];
 	proposalId: string;

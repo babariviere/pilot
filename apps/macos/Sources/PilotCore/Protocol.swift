@@ -76,6 +76,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public var diagnosticHistoryAccess: Bool? = nil
     /// Latest bounded specialist-authored repair suggestion. It cannot execute a repair.
     public var diagnosticRepairProposal: DiagnosticRepairProposal? = nil
+    public var diagnosticHost: HostRef? = nil
     public let id: String
     public let title: String
     public let cwd: String
@@ -622,12 +623,23 @@ public struct DiagnosticRepairAdmission: Codable, Equatable, Sendable {
     public let specialistSessionId: String
     public let proposalId: String
     /// Exact target identity admitted to the specialist when it published the proposal.
-    public let target: DiagnosticTargetReference
+    public let target: DiagnosticTargetReference?
+    public let subject: DiagnosticEvidenceSubject?
+    public let binding: DiagnosticRepairProjectBinding?
+    public let repairTitle: String?
+    public var evidenceSubject: DiagnosticEvidenceSubject? { subject ?? target.map(DiagnosticEvidenceSubject.chat) }
 
     public init(specialistSessionId: String, proposalId: String, target: DiagnosticTargetReference) {
         self.specialistSessionId = specialistSessionId
         self.proposalId = proposalId
         self.target = target
+        subject = nil; binding = nil; repairTitle = nil
+    }
+
+    public init(specialistSessionId: String, proposalId: String, subject: DiagnosticEvidenceSubject,
+                binding: DiagnosticRepairProjectBinding?, repairTitle: String) {
+        self.specialistSessionId = specialistSessionId; self.proposalId = proposalId
+        self.subject = subject; target = subject.target; self.binding = binding; self.repairTitle = repairTitle
     }
 }
 
@@ -659,6 +671,7 @@ public struct SpawnRequest: Codable, Sendable {
     public var diagnosticTitleFromReply: Bool?
     /// Native-reviewed proposal authority. Accepted only by a durable repair-create operation.
     public var diagnosticRepair: DiagnosticRepairAdmission?
+    public var diagnosticHost: HostRef?
     public var projectId: String?
     public var cwd: String?
     public var message: String
@@ -675,6 +688,7 @@ public struct SpawnRequest: Codable, Sendable {
         thinking: String? = nil, baseBranch: String? = nil, mode: ChatMode? = nil, workspace: WorkspaceMode? = nil,
         missionId: String? = nil, role: SessionRole? = nil, diagnosticTarget: DiagnosticTargetReference? = nil,
         diagnosticScope: DiagnosticScope? = nil,
+        diagnosticHost: HostRef? = nil,
         diagnosticHistoryAccess: Bool? = nil, diagnosticTitleFromReply: Bool? = nil,
         diagnosticRepair: DiagnosticRepairAdmission? = nil
     ) {
@@ -682,6 +696,7 @@ public struct SpawnRequest: Codable, Sendable {
         self.role = role
         self.diagnosticTarget = diagnosticTarget
         self.diagnosticScope = diagnosticScope
+        self.diagnosticHost = diagnosticHost
         self.diagnosticHistoryAccess = diagnosticHistoryAccess
         self.diagnosticTitleFromReply = diagnosticTitleFromReply
         self.diagnosticRepair = diagnosticRepair

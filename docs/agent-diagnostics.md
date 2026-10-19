@@ -23,7 +23,7 @@ available mission/task/issue context. The selector sets investigation focus, not
 app-wide diagnosis, never an implicit Control target. There is no repeated per-chat consent. Existing authentic
 diagnostics sessions gain this capability on runtime reload without recreation; legacy history-grant flags do not
 gate reads. Ordinary Ask/Build and caller-supplied role fields cannot authorize these tools.
-A chat-focused specialist also gets the proposal-only `repair_proposal` publisher.
+App-wide and chat-focused specialists also get the proposal-only `repair_proposal` publisher.
 The app admits that persistent session role explicitly; Build, Ask, control and child agents receive neither. The
 kernel loads the specialist with no
 personal or project extensions, skills, MCP, codemode, shell, file, job, memory, mission, artifact, question or
@@ -183,10 +183,10 @@ or replays an action, changes the summarization algorithm or rewrites retained h
 
 ## Specialist-authored repair proposal and authorized handoff
 
-A specialist has no repair or spawn tool. For chat scope, when the user asks for a suggestion, its host-owned
+A specialist has no repair or spawn tool. When the user asks for a suggestion, its host-owned
 `repair_proposal` tool may persist one latest bounded proposal containing 1 to 16 currently available evidence refs, plain-language
-findings, low/medium/high uncertainty, a suggested repair and regression-test guidance. The daemon validates the
-closed fields, byte bounds, target and refs before replacing the previous proposal. Publishing only updates the
+findings, an issue-specific title, low/medium/high uncertainty, a suggested repair and regression-test guidance. The daemon validates the
+closed fields, byte bounds, qualified evidence subject and refs before replacing the previous proposal. Publishing only updates the
 specialist's proposal summary; it never starts, wakes, changes, retries, restarts or replays either chat.
 
 Diagnostics chats retain their generated descriptive title, while the sidebar, read-only toolbar badge and chat
@@ -215,17 +215,42 @@ The request identifies the latest persisted proposal and carries only the review
 fixed by that proposal rather than selected or invented by the app. The daemon re-reads diagnostics, rejects missing,
 changed or stale proposals and refs, and returns only those exact structured items plus the reviewed proposal. This
 step still never creates, starts, subscribes to, wakes or changes either chat. The specialist cannot call this
-endpoint or spawn a coding chat. For a projectless chat diagnosis, including an explicitly linked Control chat, the
-user must explicitly choose an
-available project on the same host; Pilot never treats a control or specialist working directory as a repair
-destination. Only the sheet's confirmation starts the separate Build chat. The resulting chat
+endpoint or spawn a coding chat. The evidence subject is independent of the repair destination, including when the
+diagnosed chat belongs to another project. App proposals have a real app/host subject, never a fabricated Control
+target. On-demand app snapshots expose content-free `host.snapshot` observations under Local operational
+diagnostics: at most 128 process-local records for 30 minutes, including idle expiry, erased on clear or disable.
+They contain only chat-state counts and available process-memory counters. They supply point-in-time context, not
+proof of a reported failure or its cause. Restart or eviction can make a reference unavailable; request a fresh
+proposal rather than substituting a log ref. No new background sampler or upload is enabled.
+
+Configure **Settings → Diagnostics → Repair project** once per execution host (or that devbox's settings).
+Explicitly choose an already registered canonical source checkout and confirm its host, directory and local Git
+origin. The origin must identify `github.com/babariviere/pilot`; a project name or an origin match alone never selects
+a checkout. Origin is local configuration evidence, not cryptographic ownership proof. The private, versioned
+`diagnostic-repair-project.json` stores an exact host/daemon/lineage, project ID, directory, origin and configuration
+ID/revision. No project is imported, cloned or created by setup. Unknown or corrupt configuration is preserved and
+disabled, not treated as an empty default. Symlink directories, missing/moved projects, changed origins or lineages
+block admission. Renaming the project does not change identity; another matching clone never substitutes for it.
+Host aliases stay pinned until explicit reconfiguration. Cross-host reads remain available through trusted routing,
+but cross-host repair handoffs require a separate design; this flow never switches a repair's execution host.
+
+Review displays that destination read-only, the issue title, evidence subject, model and thinking level. Missing or
+unavailable configuration requires setup rather than an arbitrary project picker or diagnosed/current-project
+fallback. Only the sheet's confirmation starts the separate private-clone Build chat. The resulting chat
 does not inherit the specialist role or diagnostics authority. The normal Ask “Start a Build chat with this
 context” path is unavailable for diagnostics specialists, so an unbounded transcript cannot substitute for this
 handoff. The confirmed start is an immutable `repair-create` operation. Pilot keeps it through an unknown response,
 checks that exact operation before an explicit retry, and blocks a second intent. At daemon admission the current
-specialist role, proposal ID, host/daemon/lineage and admitted target are checked again immediately before creation;
+specialist role, proposal ID, evidence subject, host/daemon/lineage, binding generation, registered path and Git origin
+are checked again after asynchronous preparation and immediately before creation. New repair starts and binding
+changes share an admission fence, and a private durable per-proposal claim rejects a second operation ID. Native
+host-action authentication protects configuration and new `repair-create` submissions. Existing committed receipts
+are reconciled before proposal/configuration revalidation, so a lost acknowledgement does not create another chat;
 a replaced proposal cannot borrow an older confirmation. An accepted chat is selected before the operation is
 retired. An unresolved start remains actionable after reconnect rather than being inferred as success or failure.
+The reviewed issue-specific title is bounded single-line text, not authority. Older proposals derive a safe title
+from reviewed findings without an extra model call. Immutable operation bytes retain it across recovery, while a
+later user rename of the created chat always wins.
 
 The operational diagnostic schema intentionally has no open attribute maps. It does not include messages, prompts,
 responses, tool input or output, model/provider names, paths, credentials, raw errors, event-loop labels or stall
