@@ -209,6 +209,8 @@ export interface SessionMissionBridge {
 	/** The chat's mission, its status and this member's coordinator role. */
 	membership(sessionId: string): { missionId: string; active: boolean; coordinator?: boolean } | undefined;
 	context(sessionId: string): MissionContext | undefined;
+	/** The archive generation lets a later explicit chat restore win, including across daemon restarts. */
+	missionArchivedAt?(missionId: string): number | undefined;
 	/** User title edits also rename the shared planning scope when this chat leads it. */
 	renameCoordinator?(sessionId: string, title: string): void;
 	call(sessionId: string, call: MissionCallPacket): Promise<unknown>;
@@ -1321,12 +1323,15 @@ export class SessionManager {
 			archived: boolean | "reclaim" | "pin" | "unpin";
 			autoArchivedPullRequest?: string;
 			staleBefore?: number;
+			coordinatorMissionId?: string;
 			promise: Promise<SessionSummary>;
 		}
 	>();
 	private closing = false;
 	private archiveTimer?: ReturnType<typeof setTimeout>;
 	private archiveSweep?: Promise<void>;
+	/** Rebuilt from mission context on load; only archived missions' coordinators are candidates. */
+	private readonly coordinatorArchiveMissions = new Map<string, { id: string; archivedAt: number }>();
 	/** Failed scans back off, then pause until restart. Explicit reclamation bypasses this budget. */
 	private readonly workspaceCleanupBackoff = new Map<
 		string,
@@ -2210,6 +2215,7 @@ export class SessionManager {
 		const staleBefore = Date.now() - WEEK_MS;
 		for (const meta of this.metas.values()) {
 			if (this.closing) break;
+			await this.archiveMissionCoordinator(meta);
 			try {
 				await this.archiveMergedPullRequest(meta);
 			} catch (error) {
@@ -3069,6 +3075,12 @@ export class SessionManager {
 	missionChanged(id: string, context = this.missions?.context(id)): void {
 		const meta = this.metas.get(id);
 		if (!meta) return;
+		if (context?.coordinator === "self" && context.status === "archived")
+			this.coordinatorArchiveMissions.set(id, {
+				id: context.id,
+				archivedAt: this.missions?.missionArchivedAt?.(context.id) ?? 0,
+			});
+		else this.coordinatorArchiveMissions.delete(id);
 		if (meta.continuedTo || meta.continuationPending) {
 			this.emit(meta);
 			return;
@@ -3125,7 +3137,10 @@ export class SessionManager {
 				});
 				await this.save(meta);
 			})
-			.finally(() => this.coordinatorUnbindings.delete(meta.id));
+			.finally(() => {
+				this.coordinatorUnbindings.delete(meta.id);
+				void this.archiveMissionCoordinator(meta);
+			});
 		this.coordinatorUnbindings.set(meta.id, task);
 		return task;
 	}
@@ -3241,6 +3256,7 @@ export class SessionManager {
 				this.roleTransitions.delete(id);
 				release();
 				end();
+				void this.archiveMissionCoordinator(meta);
 			});
 		this.roleTransitions.set(id, task);
 		await task;
@@ -3672,11 +3688,52 @@ export class SessionManager {
 		}
 	}
 
+	/** An archived mission waits for its coordinator's whole turn, including children and job follow-ups. */
+	private coordinatorArchiveReady(meta: SessionMeta): boolean {
+		const worker = this.workers.get(meta.id);
+		const target = this.coordinatorArchiveMissions.get(meta.id);
+		return !!(
+			target &&
+			(meta.restoredAt === undefined || meta.restoredAt < target.archivedAt) &&
+			!this.closing &&
+			!this.sleepPause &&
+			!this.updateGate.paused &&
+			meta.archivedAt === undefined &&
+			!meta.working &&
+			!meta.kernelRestartPending &&
+			!meta.sleepPaused &&
+			!meta.updatePaused &&
+			(meta.failure || (!meta.initializing && !meta.preparing && !meta.pending?.length)) &&
+			!this.backgroundWorking(meta, worker) &&
+			!worker?.toolsRunning &&
+			!worker?.compacting &&
+			!worker?.busy &&
+			worker?.state !== "starting" &&
+			worker?.state !== "working" &&
+			!this.starting.has(meta.id) &&
+			!this.sending.has(meta.id) &&
+			!this.changingModels.has(meta.id) &&
+			!this.roleTransitions.has(meta.id) &&
+			!this.coordinatorUnbindings.has(meta.id)
+		);
+	}
+
+	private async archiveMissionCoordinator(meta: SessionMeta): Promise<void> {
+		if (this.archiveTransitions.has(meta.id) || !this.coordinatorArchiveReady(meta)) return;
+		try {
+			await this.setArchived(meta.id, true, undefined, undefined, this.coordinatorArchiveMissions.get(meta.id)!.id);
+		} catch (error) {
+			if (!(error instanceof Conflict))
+				console.warn(`pilotd: could not archive mission coordinator ${meta.id}: ${error}`);
+		}
+	}
+
 	private setArchived(
 		id: string,
 		archived: boolean,
 		autoArchivedPullRequest?: string,
 		staleBefore?: number,
+		coordinatorMissionId?: string,
 	): Promise<SessionSummary> {
 		this.assertControlWritable(this.require(id));
 		if (this.isControlSession(id)) return Promise.reject(new Conflict("The control chat cannot be archived"));
@@ -3686,13 +3743,24 @@ export class SessionManager {
 		if (
 			previous?.archived === archived &&
 			previous.autoArchivedPullRequest === autoArchivedPullRequest &&
-			previous.staleBefore === staleBefore
+			previous.staleBefore === staleBefore &&
+			previous.coordinatorMissionId === coordinatorMissionId
 		)
 			return previous.promise;
 		const promise = (previous?.promise ?? Promise.resolve())
 			.catch(() => undefined)
 			.then(async () => {
 				const meta = this.require(id);
+				if (coordinatorMissionId !== undefined) {
+					await this.missions?.whenDurable?.();
+					// Restoration, reassignment or new work while the commit drained cancels this attempt.
+					if (
+						this.coordinatorArchiveMissions.get(id)?.id !== coordinatorMissionId ||
+						!this.coordinatorArchiveReady(meta)
+					)
+						return this.summary(meta);
+					this.mcpAttention?.clear(id);
+				}
 				if (this.sleepPause) {
 					await this.sleepTransition;
 					if (staleBefore !== undefined || autoArchivedPullRequest !== undefined) return this.summary(meta);
@@ -3763,7 +3831,13 @@ export class SessionManager {
 				this.emit(meta);
 				return this.summary(meta);
 			});
-		this.archiveTransitions.set(id, { archived, autoArchivedPullRequest, staleBefore, promise });
+		this.archiveTransitions.set(id, {
+			archived,
+			autoArchivedPullRequest,
+			staleBefore,
+			coordinatorMissionId,
+			promise,
+		});
 		const clear = () => {
 			if (this.archiveTransitions.get(id)?.promise === promise) this.archiveTransitions.delete(id);
 		};
@@ -7274,6 +7348,7 @@ export class SessionManager {
 			.then(() => rejected)
 			.finally(() => {
 				this.starting.delete(id);
+				void this.archiveMissionCoordinator(meta);
 			});
 		this.starting.set(id, task);
 		task.catch((error) => console.error(`pilotd: session ${id} startup failed: ${error}`));
@@ -9204,6 +9279,7 @@ export class SessionManager {
 				if (!this.closing && current) this.emit(current);
 			});
 		for (const listener of this.changeListeners) listener(summary);
+		if (this.coordinatorArchiveMissions.has(meta.id)) void this.archiveMissionCoordinator(meta);
 	}
 
 	private observeLifecycle(meta: SessionMeta, summary = this.summary(meta)): void {

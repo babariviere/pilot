@@ -198,6 +198,7 @@ export class MissionService {
 			},
 			leaveSpawn: (sessionId) => store.leave(sessionId),
 			context: (sessionId) => this.context(sessionId),
+			missionArchivedAt: (missionId) => store.get(missionId)?.archivedAt,
 			renameCoordinator: (sessionId, title) => {
 				const membership = store.membership(sessionId);
 				if (membership?.coordinator && store.require(membership.missionId).title !== title)

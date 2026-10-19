@@ -6,7 +6,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { type TestContext, test } from "node:test";
 import type { ServerMessage, SessionState, SessionSummary } from "@pilot/protocol";
 import { WebSocket } from "ws";
 import { Conflict, NotFound } from "./errors.ts";
@@ -36,6 +36,10 @@ class FakeWorker implements SessionWorker {
 	readonly ready = this.gate.promise;
 	state: SessionState = "idle";
 	busy = false;
+	toolsRunning = false;
+	compacting = false;
+	runningJobs: SessionWorker["runningJobs"] = [];
+	awaitingJobFollowUp = false;
 	readonly commands: Command[] = [];
 
 	send(): void {}
@@ -98,7 +102,10 @@ async function fixture(gitRunner?: (args: string[]) => string | undefined) {
 		);
 	}
 	const managers: SessionManager[] = [];
-	const manager = async (bridge?: Parameters<SessionManager["setMissionBridge"]>[0]) => {
+	const manager = async (
+		bridge?: Parameters<SessionManager["setMissionBridge"]>[0],
+		configure?: (sessions: SessionManager) => void,
+	) => {
 		const sessions = new SessionManager(
 			home,
 			projects,
@@ -117,6 +124,7 @@ async function fixture(gitRunner?: (args: string[]) => string | undefined) {
 			},
 		);
 		managers.push(sessions);
+		configure?.(sessions);
 		if (bridge) sessions.setMissionBridge(bridge);
 		await sessions.load();
 		await sessions["pullRequests"].settled();
@@ -135,6 +143,191 @@ async function fixture(gitRunner?: (args: string[]) => string | undefined) {
 	const sessions = await manager();
 	return { home, projects, first, second, sessions, ids, manager, cleanup };
 }
+
+async function coordinatorFixture(t: TestContext) {
+	const f = await fixture();
+	// Archival needs no repository role transition or real kernel.
+	t.mock.method(
+		f.sessions as unknown as { prepareCoordinatorRole(id: string): Promise<void> },
+		"prepareCoordinatorRole",
+		async () => {},
+	);
+	const store = new MissionStore(":memory:");
+	const service = new MissionService(store, f.sessions, f.projects);
+	t.after(async () => {
+		await service.notices.stop();
+		await f.cleanup();
+		store.close();
+	});
+	const mission = store.create({ projectId: f.first.id, title: "Shared work" });
+	const id = f.ids[0]!;
+	store.join(id, mission.id);
+	store.update(mission.id, { coordinatorSessionId: id });
+	await f.sessions["coordinatorUnbindings"].get(id);
+	return { ...f, store, mission, id, meta: f.sessions["metas"].get(id)! };
+}
+
+test("archiving a mission immediately archives its idle coordinator, even pinned, but not its members", async (t) => {
+	const f = await coordinatorFixture(t);
+	const member = f.ids[1]!;
+	f.store.join(member, f.mission.id);
+	await f.sessions.setPinned(f.id, true);
+	f.store.update(f.mission.id, { status: "done" });
+	assert.equal(f.sessions.get(f.id)?.archivedAt, undefined, "done is not archived");
+	f.store.update(f.mission.id, { status: "archived" });
+	await f.sessions["archiveTransitions"].get(f.id)?.promise;
+	assert.ok(f.sessions.get(f.id)?.archivedAt);
+	assert.equal(f.sessions.get(f.id)?.pinned, true);
+	assert.equal(f.sessions.get(member)?.archivedAt, undefined);
+	assert.equal(f.sessions.get(f.id)?.missionId, f.mission.id);
+	assert.equal(await readFile(join(f.home, "sessions", f.id, "durable", "history"), "utf8"), "retained transcript");
+	assert.equal(f.sessions["workers"].size, 0);
+});
+
+test("a working coordinator archives on completion without aborting its turn", async (t) => {
+	const f = await coordinatorFixture(t);
+	const worker = new FakeWorker();
+	f.sessions["workers"].set(f.id, worker);
+	f.meta.working = true;
+	worker.state = "working";
+	f.store.update(f.mission.id, { status: "archived" });
+	assert.equal(f.sessions.get(f.id)?.archivedAt, undefined);
+	assert.deepEqual(worker.commands, []);
+	f.meta.working = false;
+	worker.state = "idle";
+	f.sessions["emit"](f.meta);
+	await f.sessions["archiveTransitions"].get(f.id)?.promise;
+	assert.ok(f.sessions.get(f.id)?.archivedAt);
+	assert.deepEqual(worker.commands, [], "archival must not send Stop or reopen the worker");
+});
+
+test("coordinator archival waits for children, tools, compaction and background-job follow-ups", async (t) => {
+	const f = await coordinatorFixture(t);
+	const worker = new FakeWorker();
+	f.sessions["workers"].set(f.id, worker);
+	f.meta.working = true;
+	f.store.update(f.mission.id, { status: "archived" });
+	f.meta.working = false;
+	const holds: Array<[() => void, () => void]> = [
+		[() => (worker.toolsRunning = true), () => (worker.toolsRunning = false)],
+		[() => (worker.compacting = true), () => (worker.compacting = false)],
+		[() => (worker.awaitingJobFollowUp = true), () => (worker.awaitingJobFollowUp = false)],
+		[
+			() =>
+				(f.meta.subagents = [
+					{ name: "child", task: "Work", createdAt: 1, cwd: f.home, storage: f.home, state: "working" },
+				]),
+			() => delete f.meta.subagents,
+		],
+		[
+			() =>
+				(worker.runningJobs = [
+					{ id: "job", name: "Work", state: "running", startedAt: 1, outputPath: join(f.home, "job.log") },
+				]),
+			() => (worker.runningJobs = []),
+		],
+		[
+			() => (f.meta.pending = [{ type: "input", requestId: "follow-up", content: "Finish", mode: "followUp" }]),
+			() => delete f.meta.pending,
+		],
+	];
+	for (const [hold, release] of holds) {
+		hold();
+		f.sessions["emit"](f.meta);
+		await f.sessions["archiveMissionCoordinator"](f.meta);
+		assert.equal(f.sessions.get(f.id)?.archivedAt, undefined);
+		release();
+	}
+	f.sessions["emit"](f.meta);
+	await f.sessions["archiveTransitions"].get(f.id)?.promise;
+	assert.ok(f.sessions.get(f.id)?.archivedAt);
+});
+
+for (const change of ["restore", "leave", "coordinator", "work"] as const) {
+	test(`queued coordinator archival rechecks ${change} after mission durability`, async (t) => {
+		const f = await coordinatorFixture(t);
+		const gate = deferred();
+		const entered = deferred();
+		f.sessions["missions"]!.whenDurable = () => {
+			entered.resolve();
+			return gate.promise;
+		};
+		try {
+			f.store.update(f.mission.id, { status: "archived" });
+			const pending = f.sessions["archiveTransitions"].get(f.id)!.promise;
+			await entered.promise;
+			assert.equal(f.meta.archivedAt, undefined, "mission commit must be durable first");
+			if (change === "restore") f.store.update(f.mission.id, { status: "active" });
+			else if (change === "leave") f.store.leave(f.id);
+			else if (change === "coordinator") f.store.update(f.mission.id, { coordinatorSessionId: null });
+			else f.meta.working = true;
+			gate.resolve();
+			await pending;
+			assert.equal(f.sessions.get(f.id)?.archivedAt, undefined);
+		} finally {
+			gate.resolve();
+		}
+	});
+}
+
+test("explicit coordinator restore wins until its mission is archived again", async (t) => {
+	const f = await coordinatorFixture(t);
+	let now = Date.now();
+	t.mock.method(Date, "now", () => now);
+	f.store.update(f.mission.id, { status: "archived" });
+	await f.sessions["archiveTransitions"].get(f.id)?.promise;
+	assert.ok(f.meta.archivedAt);
+	now += 1;
+	await f.sessions.restore(f.id);
+	await f.sessions["archiveMissionCoordinator"](f.meta);
+	assert.equal(f.meta.archivedAt, undefined);
+	await f.sessions.shutdown();
+	const reopened = await f.manager(f.sessions["missions"]!, (sessions) => {
+		t.mock.method(
+			sessions as unknown as { prepareCoordinatorRole(id: string): Promise<void> },
+			"prepareCoordinatorRole",
+			async () => {},
+		);
+	});
+	await reopened["archiveMissionCoordinator"](reopened["metas"].get(f.id)!);
+	assert.equal(reopened.get(f.id)?.archivedAt, undefined, "manual restoration survives restart");
+	// The original bridge still routes updates to the first manager; test the next archive there.
+	now += 1;
+	f.store.update(f.mission.id, { status: "active" });
+	now += 1;
+	f.store.update(f.mission.id, { status: "archived" });
+	await reopened.shutdown();
+	const again = await f.manager(f.sessions["missions"]!, (sessions) => {
+		t.mock.method(
+			sessions as unknown as { prepareCoordinatorRole(id: string): Promise<void> },
+			"prepareCoordinatorRole",
+			async () => {},
+		);
+	});
+	await again["archiveTransitions"].get(f.id)?.promise;
+	assert.ok(again.get(f.id)?.archivedAt, "a new mission archive supersedes the earlier chat restore");
+});
+
+test("pending coordinator archival recovers on restart without launching a kernel", async (t) => {
+	const f = await coordinatorFixture(t);
+	f.meta.working = true;
+	f.store.update(f.mission.id, { status: "archived" });
+	f.meta.working = false;
+	await f.sessions["save"](f.meta);
+	await f.sessions.shutdown();
+	const reopened = await f.manager(f.sessions["missions"]!, (sessions) => {
+		t.mock.method(
+			sessions as unknown as { prepareCoordinatorRole(id: string): Promise<void> },
+			"prepareCoordinatorRole",
+			async () => {},
+		);
+	});
+	await reopened["coordinatorUnbindings"].get(f.id);
+	await reopened["roleTransitions"].get(f.id);
+	await reopened["archiveTransitions"].get(f.id)?.promise;
+	assert.ok(reopened.get(f.id)?.archivedAt);
+	assert.equal(reopened["workers"].size, 0);
+});
 
 test("archives and restores durably, retaining history, workspace and project association", async () => {
 	const { home, first, sessions, ids, manager, cleanup } = await fixture();
@@ -263,9 +456,12 @@ for (const release of ["done", "archived", "role", "leave"] as const) {
 				assert.equal(sessions.get(next)?.activeMissionCoordinator, true);
 			} else if (release === "leave") store.leave(id);
 			else store.update(mission.id, { status: release });
+			await sessions["roleTransitions"].get(id)?.catch(() => undefined);
 			await sessions["archiveTransitions"].get(id)?.promise;
 			assert.equal(sessions.get(id)?.activeMissionCoordinator, undefined);
-			assert.equal(sessions.get(id)?.archivedAt, undefined, "the unbound PR cannot archive its former owner");
+			if (release === "archived")
+				assert.ok(sessions.get(id)?.archivedAt, "mission archival archives its coordinator");
+			else assert.equal(sessions.get(id)?.archivedAt, undefined, "the unbound PR cannot archive its former owner");
 			assert.equal(meta.autoArchivedPullRequest, undefined);
 		} finally {
 			await cleanup();
