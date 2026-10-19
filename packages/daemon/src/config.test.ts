@@ -1,6 +1,17 @@
 import assert from "node:assert/strict";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
-import { loadConfig } from "./config.ts";
+import { getPilotConfigDir, loadConfig } from "./config.ts";
+
+test("Pilot configuration lives outside pi's agent directory and runtime data", () => {
+	assert.equal(getPilotConfigDir({}), join(homedir(), ".config", "pilot"));
+	assert.equal(getPilotConfigDir({ XDG_CONFIG_HOME: "/custom/config" }), "/custom/config/pilot");
+	assert.equal(
+		getPilotConfigDir({ PILOT_AGENT_DIR: "/agent", PILOT_HOME: "/data", XDG_CONFIG_HOME: "" }),
+		join(homedir(), ".config", "pilot"),
+	);
+});
 
 test("read-only hosts explicitly deny model scope writes", () => {
 	assert.equal(loadConfig({}).modelScopeReadOnly, undefined);

@@ -51,7 +51,7 @@ commands as context it never runs; both are later work (section 15).
 | `runtimeEnvironment` (`packages/kernel/src/runtime-environment.ts`): sparse PATH, never sources login files | Probes use the same rule. Resolved tool directories are prepended to the agent's and checks' PATH instead of relying on shell activation |
 | Native host-action capability (`x-pilot-github-capability`, read over verified SSH or the local filesystem), used by model scope and GitHub setup | Required for saving approvals, confirming plans and approving scripts. Never exposed to agents |
 | Database grants: app decision → pilotd request ID, messages never grant | Same rule for install and script approvals |
-| `db` tool and `pilot-databases.json` (`databases.ts`): per-project environments, read and write connections, `allow` or `ask` | The chat's built-in database is added as an environment in memory; the user's file is never edited |
+| `db` tool and `~/.config/pilot/database.json` (`databases.ts`): per-project environments, read and write connections, `allow` or `ask` | The chat's built-in database is added as an environment in memory; the user's file is never edited |
 | Scoped models sync (`docs/devboxes.md`): saved intent on the Mac, per-host apply with hash checks, Synced, Pending and Conflict states | Same saved intent and per-host apply for the shared profile layer, without a Conflict state (section 2) |
 | mise registry and install records (`mise registry`, `<mise data>/installs/<tool>/<version>`) | Tool IDs and the app's tool picker come from the host's registry; presence is read from install records |
 | `RepositoryBindings` and **Set up on devbox**: explicit, host-qualified links between a project's placements | Defines which projects share a profile. Matching names or paths never link projects |
@@ -434,7 +434,7 @@ the repository. Exports offer both forms:
 There are no Pilot-built or third-party portable binaries. Pilot never runs sudo.
 
 **Agent `db` tool.** pilotd adds an environment named `pilot` to the `db` tool configuration in memory, next
-to what `pilot-databases.json` defines. It targets the calling chat's own database (the project database in
+to what `database.json` defines. It targets the calling chat's own database (the project database in
 direct mode); chats without their own workspace, such as Ask chats and coordinators, do not get it. Reads use the
 read-only role and writes the owner role, both `allow` by default and switchable to `ask` in the Environment
 section. The user file is never edited. If it already defines an environment named `pilot`, the file wins and

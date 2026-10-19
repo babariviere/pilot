@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -69,13 +69,13 @@ test("local route owns a strict HTTP server definition with explicit key auth an
 	try {
 		await assert.rejects(loadSlackRemovalRoute(home), /unconfigured or invalid/);
 		for (const text of ["invalid private fixture", "x".repeat(16 * 1024 + 1), "{}"]) {
-			await writeFile(join(home, "pilot-tracking.json"), text);
+			await writeFile(join(home, "tracking.json"), text);
 			await assert.rejects(
 				loadSlackRemovalRoute(home),
 				/^Error: Slack eyes removal route is unconfigured or invalid$/,
 			);
 		}
-		await writeFile(join(home, "pilot-tracking.json"), JSON.stringify({ slackEyesRemoval: route }));
+		await writeFile(join(home, "tracking.json"), JSON.stringify({ slackEyesRemoval: route }));
 		assert.deepEqual(await loadSlackRemovalRoute(home), route);
 	} finally {
 		await rm(home, { recursive: true, force: true });
@@ -161,10 +161,12 @@ test("daemon calls only its inline server with a Bearer key, independently of mc
 	await once(server, "listening");
 	const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/mcp`;
 	const local = { ...route, server: { ...route.server, url } };
-	const client = new PiSourceMcpClient(home);
+	const configDir = join(home, "config", "pilot");
+	await mkdir(configDir, { recursive: true });
+	const client = new PiSourceMcpClient(home, { configDir });
 	const signal = new AbortController().signal;
 	const configure = (value: unknown) =>
-		writeFile(join(home, "pilot-tracking.json"), JSON.stringify({ slackEyesRemoval: value }));
+		writeFile(join(configDir, "tracking.json"), JSON.stringify({ slackEyesRemoval: value }));
 	const authFile = JSON.stringify({
 		[`mcp__pilot-slack-removal|${url}`]: {
 			tokens: { access_token: "fixture-old-oauth-token", token_type: "Bearer" },
@@ -172,6 +174,7 @@ test("daemon calls only its inline server with a Bearer key, independently of mc
 		},
 	});
 	try {
+		await writeFile(join(home, "pilot-tracking.json"), JSON.stringify({ slackEyesRemoval: local }));
 		await writeFile(
 			join(home, "mcp.json"),
 			JSON.stringify({

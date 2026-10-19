@@ -1,5 +1,8 @@
 import { type FileHandle, open } from "node:fs/promises";
 import { join } from "node:path";
+import { getPilotConfigDir } from "./config.ts";
+
+export const TRACKING_CONFIG_FILE = "tracking.json";
 
 /** Local opt-in only. Never resolved from project settings, replicated state or MCP auto-discovery. */
 export interface SlackRemovalRoute {
@@ -84,10 +87,10 @@ export function parseSlackRemovalRoute(value: unknown): SlackRemovalRoute {
 }
 
 /** Read afresh per once-only Done attempt, off the daemon loop. No config values enter errors/logs. */
-export async function loadSlackRemovalRoute(agentDir: string): Promise<SlackRemovalRoute> {
+export async function loadSlackRemovalRoute(configDir = getPilotConfigDir()): Promise<SlackRemovalRoute> {
 	let file: FileHandle | undefined;
 	try {
-		file = await open(join(agentDir, "pilot-tracking.json"), "r");
+		file = await open(join(configDir, TRACKING_CONFIG_FILE), "r");
 		const buffer = Buffer.alloc(16 * 1024 + 1);
 		const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
 		if (bytesRead > 16 * 1024) throw new Error();

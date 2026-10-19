@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -32,6 +32,29 @@ const project = "/work/app";
 const config = {
 	projects: { [project]: { environments }, "~/other": { environments: { local: environments.local } } },
 };
+
+test("database reads and settings writes use only database.json in the Pilot config directory", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-config-database-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const dir = join(root, "config", "pilot");
+	const service = new DatabaseService(dir);
+	await service.updateSettings(project, {
+		revision: "missing",
+		environments: [{ name: "local", read: { url: "postgres://ro@localhost/app" } }],
+	});
+	const path = join(dir, "database.json");
+	assert.equal((await stat(path)).mode & 0o777, 0o600);
+	assert.equal((await stat(dir)).mode & 0o777, 0o700);
+	assert.equal(service.configured(project), true);
+	const legacy = join(root, "agent");
+	await mkdir(legacy);
+	await writeFile(join(legacy, "pilot-databases.json"), JSON.stringify(config), { mode: 0o600 });
+	await rm(path);
+	await service.refresh();
+	assert.equal(service.configured(project), false, "no fallback to pi configuration");
+	await writeFile(path, JSON.stringify(config), { mode: 0o600 });
+	assert.ok((await loadDatabaseConfig(dir))?.has(project));
+});
 
 test("database settings round-trip preserves secrets, omitted access, unknown fields and other projects", async () => {
 	const raw = structuredClone(config) as Record<string, any>;

@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
 import type { LoadedMcpConfig, McpServerEntry, McpTransportFactory } from "@earendil-works/pi-coding-agent";
 import { installCredentialBrokerHooks } from "@pilot/kernel/credential-hooks";
-import { loadSlackRemovalRoute, slackRemovalCall } from "./slack-removal-route.ts";
+import { getPilotConfigDir } from "./config.ts";
+import { loadSlackRemovalRoute, slackRemovalCall, TRACKING_CONFIG_FILE } from "./slack-removal-route.ts";
 import {
 	decodeMcpResult,
 	dedicatedSourceTool,
@@ -77,7 +78,8 @@ try {
 	if (!validSourceArguments(logicalTool, args)) throw new SetupError("Invalid Linear or Slack start update");
 	const removal = kind === "slack" && logicalTool === "removeSlackEyes";
 	const agentDir = workerData.agentDir ?? paths.getAgentDir();
-	const removalConfig = removal ? await loadSlackRemovalRoute(agentDir) : undefined;
+	const configDir = workerData.configDir ?? getPilotConfigDir();
+	const removalConfig = removal ? await loadSlackRemovalRoute(configDir) : undefined;
 	if (removalConfig?.enabled === false) throw new SetupError("Slack eyes removal is disabled");
 	const route = removalConfig ? slackRemovalCall(removalConfig, args.channel_id, args.message_ts) : undefined;
 	const name = route?.tool ?? dedicatedSourceTool(kind, logicalTool);
@@ -87,7 +89,7 @@ try {
 	const entry: McpServerEntry | undefined = route
 		? {
 				name: "pilot-slack-removal",
-				source: join(agentDir, "pilot-tracking.json"),
+				source: join(configDir, TRACKING_CONFIG_FILE),
 				config: { type: "http", ...route.server },
 			}
 		: config

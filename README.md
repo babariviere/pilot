@@ -822,7 +822,7 @@ When an item with a successful eyes reaction becomes Done (manually, from a merg
 once. Already reacted counts as success; failures show a quiet row error without changing Done. Reopening never
 writes reactions. Adding ✅ always uses the dedicated Slack server. That server has no remove-reaction tool.
 To opt in to removing only the eyes reaction Pilot successfully added, create a local
-`~/.pi/agent/pilot-tracking.json` (or under `PILOT_AGENT_DIR`) with an explicit MCP route:
+`~/.config/pilot/tracking.json` (or `$XDG_CONFIG_HOME/pilot/tracking.json`) with an explicit MCP route:
 
 ```json
 {
@@ -838,7 +838,7 @@ To opt in to removing only the eyes reaction Pilot successfully added, create a 
 ```
 
 Names and URL above are placeholders. Use the exact tool names from your server; omit `dispatcher` for a direct
-tool. The daemon owns this MCP-over-HTTP connection entirely from `pilot-tracking.json`: it never reads or
+tool. The daemon owns this MCP-over-HTTP connection entirely from `tracking.json`: it never reads or
 registers a removal server in pi's `mcp.json`, and the tools do not appear in agent tool listings. Your existing
 general-purpose MCP connections and their permissions are unchanged.
 Use an API key scoped only to the removal tool. HTTPS is required, except for loopback development servers.
@@ -874,8 +874,8 @@ devbox's daemon and file. Reload after a hand edit or a revision conflict. Inval
 duplicate-project or insecure files disable editing instead of being replaced; Pilot does not repair permissions
 automatically. Saving preserves other projects and existing chat grants and does not connect to Postgres.
 
-You can also create or hand-edit `~/.pi/agent/pilot-databases.json` (or under
-`PILOT_AGENT_DIR`), readable only by you (`chmod 600`; Pilot refuses a file others can read):
+You can also create or hand-edit `~/.config/pilot/database.json` (or
+`$XDG_CONFIG_HOME/pilot/database.json`), readable only by you (`chmod 600`; Pilot refuses a file others can read):
 
 ```json
 {
@@ -920,6 +920,12 @@ Agent shells still run as you and can reach pilotd's local API, so this is a gua
 a secret store or a hard boundary. With the bundled sandbox in
 `workspace-write` or `read-only` mode, add the file to `denyRead` in `~/.pi/agent/sandbox.json` to keep shells
 from reading it; with the sandbox off (the default), they can.
+
+On startup, Pilot moves the old `pilot-databases.json` and `pilot-tracking.json` from pi's agent directory
+(`PILOT_AGENT_DIR` when set) to these new locations, keeping their contents and permissions. Existing destination
+files are never replaced; if both locations contain a file, the new one wins and the old one stays untouched.
+These Pilot settings no longer follow `PILOT_AGENT_DIR` or `PILOT_HOME`. Update any sandbox `denyRead` entries
+that refer to the old paths.
 
 ## Development
 
@@ -1059,6 +1065,7 @@ toolbar) lists active watches with Cancel, then its audited actions, newest firs
 | `PILOT_HOME` | `~/.local/share/pilot` (or `$XDG_DATA_HOME/pilot`) | Local session data and managed repositories |
 | `PILOT_PORT` | `4319` | Daemon port |
 | `PILOT_AGENT_DIR` | pi's agent directory | Pi settings, packages and authentication |
+| `XDG_CONFIG_HOME` | `~/.config` | Pilot settings in `pilot/database.json` and `pilot/tracking.json` |
 | `PILOT_WORKSPACE_RETENTION_DAYS` | `1` | Archived workspace cleanup delay; `0` disables cleanup |
 | `PILOT_PERF_TIMINGS` | enabled | Set to `0` to disable local, content-free request timing logs for new workers |
 
