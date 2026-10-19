@@ -20,6 +20,7 @@ import type {
 	SessionPullRequest,
 	SessionState,
 	SessionSummary,
+	SessionTrackedSource,
 } from "@pilot/protocol";
 import { WebSocket } from "ws";
 import { DATABASE_CONFIG_FILE, DatabaseService } from "./databases.ts";
@@ -4674,6 +4675,43 @@ test("database access: only configured projects get db, and only the app's decis
 	const unrelated = await sessions.spawn({ projectId: project.id, workspace: "direct", message: "Start" });
 	await sessions["starting"].get(unrelated.id);
 	assert.equal(f.workers.at(-1)!.spec.databases, undefined);
+});
+
+test("chat summaries carry their triage source and follow link changes", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager();
+	const sources = new Map<string, SessionTrackedSource>();
+	const reads: string[] = [];
+	sessions.setTrackedSources(async (projectId) => {
+		reads.push(projectId);
+		return projectId === f.project.id ? [...sources].map(([sessionId, source]) => ({ sessionId, source })) : [];
+	});
+	const created = await sessions.spawn({ projectId: f.project.id, workspace: "direct", message: "Start" });
+	const other = await sessions.spawn({ projectId: f.project.id, workspace: "direct", message: "Start" });
+	const emitted: SessionSummary[] = [];
+	sessions.onChange((summary) => emitted.push(summary));
+	assert.equal(sessions.get(created.id)?.trackedSource, undefined);
+
+	const source: SessionTrackedSource = {
+		kind: "slack",
+		itemId: "item-1",
+		label: "#support",
+		title: "Login broken",
+		url: "https://example.slack.com/archives/C1/p1",
+	};
+	sources.set(created.id, source);
+	sessions.refreshTrackedSources(f.project.id);
+	await until(() => sessions.get(created.id)?.trackedSource !== undefined);
+	assert.deepEqual(sessions.get(created.id)?.trackedSource, source);
+	assert.deepEqual(sessions.list({ projectId: f.project.id }).find((s) => s.id === created.id)?.trackedSource, source);
+	assert.ok(emitted.some((summary) => summary.id === created.id && summary.trackedSource?.itemId === "item-1"));
+	assert.equal(sessions.get(other.id)?.trackedSource, undefined);
+	assert.ok(!emitted.some((summary) => summary.id === other.id && summary.trackedSource));
+
+	sources.delete(created.id);
+	sessions.refreshTrackedSources(f.project.id);
+	await until(() => sessions.get(created.id)?.trackedSource === undefined);
+	assert.ok(reads.every((id) => id === f.project.id));
 });
 
 test("slack_status: only chats attached to a Slack triage message declare it, and calls carry the chat's ID", async (t) => {

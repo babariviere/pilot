@@ -227,10 +227,13 @@ struct SessionDetail: View {
         let showsAsk = session.isAsk && !session.isControl
         if RemoteChatBadgeText(context: context) != nil
             || (context.map { model.isUnread(session, on: $0.host) } ?? model.isUnread(session)) || showsAsk
-            || AttemptsMenu.label(for: session.attempts ?? []) != nil {
+            || AttemptsMenu.label(for: session.attempts ?? []) != nil || session.trackedSource != nil {
             ToolbarItem(placement: .primaryAction) {
                 HStack(spacing: 8) {
                     RemoteChatBadge(context: context)
+                    if let source = session.trackedSource {
+                        TrackedSourceBadge(source: source, projectId: session.projectId, context: context)
+                    }
                     if (context.map { model.isUnread(session, on: $0.host) } ?? model.isUnread(session)) { UnreadBadge() }
                     AttemptsMenu(session: session)
                     // Ask has no Changes pane, so its read-only boundary stays visible here.

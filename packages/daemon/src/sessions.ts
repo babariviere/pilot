@@ -63,6 +63,7 @@ import type {
 	SessionState,
 	SessionSubagent,
 	SessionSummary,
+	SessionTrackedSource,
 	SessionUsage,
 	SpawnRequest,
 	StopResponse,
@@ -989,6 +990,19 @@ function liveAttempts(meta: { pullRequestAttempts?: number[] }, now: number): nu
 	return (meta.pullRequestAttempts ?? []).filter((at) => at <= now + ATTEMPT_SKEW_MS && now - at < ATTEMPT_WINDOW_MS);
 }
 
+function sameTrackedSource(a?: SessionTrackedSource, b?: SessionTrackedSource): boolean {
+	return (
+		a === b ||
+		(!!a &&
+			!!b &&
+			a.kind === b.kind &&
+			a.itemId === b.itemId &&
+			a.label === b.label &&
+			a.title === b.title &&
+			a.url === b.url)
+	);
+}
+
 export class SessionManager {
 	private pullRequestObserver?: (
 		observation: import("./tracked-items-disk.ts").SlackPullRequestObservation,
@@ -1005,6 +1019,12 @@ export class SessionManager {
 	private readonly slackLinkedSent = new WeakMap<SessionWorker, boolean>();
 	/** Coalesced per project: a change during a refresh runs it once more. */
 	private readonly slackLinkRefresh = new Map<string, { again: boolean }>();
+	/** Reads the triage item behind each of a project's linked chats. */
+	private trackedSourceReader?: (projectId: string) => Promise<{ sessionId: string; source: SessionTrackedSource }[]>;
+	/** Last read triage source per chat, shown in summaries without a disk read. */
+	private readonly trackedSources = new Map<string, SessionTrackedSource>();
+	/** Coalesced per project like slackLinkRefresh. */
+	private readonly trackedSourceRefresh = new Map<string, { again: boolean }>();
 
 	/** Receives durable chat PR state, never streaming transcript updates. Install before load. */
 	setPullRequestObserver(observer: NonNullable<SessionManager["pullRequestObserver"]>): void {
@@ -1013,6 +1033,42 @@ export class SessionManager {
 
 	setSlackStatus(handler: NonNullable<SessionManager["slackStatus"]>): void {
 		this.slackStatus = handler;
+	}
+
+	setTrackedSources(reader: NonNullable<SessionManager["trackedSourceReader"]>): void {
+		this.trackedSourceReader = reader;
+	}
+
+	/** Rereads which triage item each of a project's chats came from, and emits the chats whose source changed. */
+	refreshTrackedSources(projectId: string): void {
+		if (!this.trackedSourceReader || this.closing) return;
+		const running = this.trackedSourceRefresh.get(projectId);
+		if (running) {
+			running.again = true;
+			return;
+		}
+		const state = { again: false };
+		this.trackedSourceRefresh.set(projectId, state);
+		const read = this.trackedSourceReader;
+		void (async () => {
+			do {
+				state.again = false;
+				const found = new Map((await read(projectId)).map(({ sessionId, source }) => [sessionId, source]));
+				if (this.closing) return;
+				for (const meta of this.metas.values()) {
+					if (meta.projectId !== projectId) continue;
+					const next = found.get(meta.id);
+					const previous = this.trackedSources.get(meta.id);
+					if (sameTrackedSource(previous, next)) continue;
+					if (next) this.trackedSources.set(meta.id, next);
+					else this.trackedSources.delete(meta.id);
+					this.emit(meta);
+				}
+				for (const id of this.trackedSources.keys()) if (!this.metas.has(id)) this.trackedSources.delete(id);
+			} while (state.again);
+		})()
+			.catch((error: unknown) => console.warn(`pilotd: could not refresh chat sources: ${error}`))
+			.finally(() => this.trackedSourceRefresh.delete(projectId));
 	}
 
 	/** Declares slack_status in a project's live chats attached to a Slack triage message, and withdraws it elsewhere. */
@@ -7605,6 +7661,7 @@ export class SessionManager {
 			...(meta.diagnosticRepairProposal ? { diagnosticRepairProposal: meta.diagnosticRepairProposal } : {}),
 			...(meta.continuationOf ? { continuationOf: meta.continuationOf } : {}),
 			...(meta.continuedTo ? { continuedTo: meta.continuedTo } : {}),
+			...(this.trackedSources.has(meta.id) ? { trackedSource: { ...this.trackedSources.get(meta.id)! } } : {}),
 			mode: meta.mode === "ask" ? "ask" : "build",
 			...(meta.mode !== "ask" ? { workspace: meta.workspace || meta.preparing ? "clone" : "direct" } : {}),
 			...(!coordinator && sourceBranch ? { sourceBranch } : {}),

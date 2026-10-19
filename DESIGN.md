@@ -86,6 +86,9 @@ Each top-level view has one role. Keep new content in the view whose role it ser
 - **Lists stay light.** Sidebar rows, the Inbox, Overviews and Home show the PR badge, branch and reason, never file
   or line diff counts. Changes live in the chat's Changes pane and the row tooltip.
 - Name sources (Linear, Slack, GitHub), never an umbrella word for "items Pilot follows".
+- A chat started from or linked to a Slack message or Linear ticket in triage shows that service's mark after its
+  sidebar title, and a header chip with the channel or ticket. The chip opens the Slack message in triage, or the
+  ticket in Linear.
 
 ## State vocabulary
 

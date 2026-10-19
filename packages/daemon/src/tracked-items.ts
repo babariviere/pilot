@@ -29,6 +29,7 @@ import type {
 	SourceCheckpoint,
 	TrackedInput,
 	TrackedQuery,
+	TrackedSessionSource,
 } from "./tracked-items-disk.ts";
 
 export type { InboxQuery, InboxTracked, SourceCheckpoint, TrackedInput, TrackedQuery } from "./tracked-items-disk.ts";
@@ -251,6 +252,10 @@ export class TrackedItemStore {
 	/** Which of these chats are the latest chat of one of the project's Slack messages. */
 	slackLinkedSessions(projectId: string, sessionIds: string[]): Promise<string[]> {
 		return this.rpc("slackLinkedSessions", { projectId, sessionIds });
+	}
+	/** The triage item behind each of a project's linked chats. */
+	sessionSources(projectId: string): Promise<TrackedSessionSource[]> {
+		return this.rpc("sessionSources", { projectId });
 	}
 	/** A chat's slack_status tool call. Applies only to Slack messages whose latest chat it is. */
 	agentSlackStatus(

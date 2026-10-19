@@ -200,4 +200,9 @@ test("GET /api/inbox and the sidebar counts follow sources, scope and hidden lab
 		["Product"],
 	);
 	assert.equal((await fetch(`${root}/tracked-items?projectId=${project.id}&closedByLabel=yes`)).status, 400);
+
+	// One item by ID, as a chat's source chip opens it in triage.
+	const one = list.items[0] as { id: string; title: string };
+	assert.deepEqual(await get<{ id: string; title: string }>(`/tracked-items/${one.id}`), await items.require(one.id));
+	assert.equal((await fetch(`${root}/tracked-items/missing`)).status, 404);
 });

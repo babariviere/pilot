@@ -132,6 +132,9 @@ parentPort!.on("message", ({ id, method, args }) => {
 			case "slackLinkedSessions":
 				value = disk.slackLinkedSessions(args.projectId, args.sessionIds);
 				break;
+			case "sessionSources":
+				value = disk.sessionSources(args.projectId);
+				break;
 			case "agentSlackStatus":
 				value = disk.agentSlackStatus(args.sessionId, args.status, args.reason);
 				projectIds = [...emitted];

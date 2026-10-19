@@ -111,6 +111,9 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public var continuationOf: String? = nil
     /// The chat that took over this one's work. Set means this chat is read-only and never resumes.
     public var continuedTo: String? = nil
+    /// Slack message or Linear ticket the chat was started from or linked to in triage. Omitted when none,
+    /// or by older daemons.
+    public var trackedSource: SessionTrackedSource? = nil
     /// Worker startup failed. Retry reloads it without replacing queued messages or history.
     public let canRetryStartup: Bool?
     /// Live jobs owned by this worker. Nil when none.

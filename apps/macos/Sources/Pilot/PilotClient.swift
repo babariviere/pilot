@@ -1175,6 +1175,15 @@ final class PilotClient: ObservableObject {
         try await missionRequest(["tracked-items", id, "prefill"])
     }
 
+    /// One triage item, as a chat's source chip opens it in triage.
+    func trackedItem(_ id: String) async throws -> TrackedItem {
+        if let fixture = fixtureTracking {
+            guard let item = fixture.items.first(where: { $0.id == id }) else { throw URLError(.fileDoesNotExist) }
+            return item
+        }
+        return try await missionRequest(["tracked-items", id])
+    }
+
     /// The Slack message behind a triage item, read from Slack on demand and never stored.
     func slackExcerpt(_ id: String) async throws -> SlackExcerpt {
         try await missionRequest(["tracked-items", id, "excerpt"])
