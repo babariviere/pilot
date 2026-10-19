@@ -8,6 +8,7 @@ extension AppModel {
                               localStart: @MainActor () async -> Void) async {
         hosts.startScopedModels()
         hosts.startAutomaticDevboxUpdates()
+        hosts.startControlCourier()
         await hosts.projectCheckouts.start()
         do {
             try await hosts.restoreOffline(from: offlineStore)

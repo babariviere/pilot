@@ -66,6 +66,7 @@ final class PilotClient: ObservableObject {
     var onDiagnosticRead: ((DiagnosticReadDispatch) -> Void)?
     /// Invalidation only. The courier fetches bounded daemon-owned exchange pages.
     var onSharedContextsChanged: (() -> Void)?
+    var onControlHostChanged: ((ControlHostInvalidation) -> Void)?
 
     // The WebSocket includes ALL sessions, including archives, for readable subscriptions.
     var activeSessions: [SessionSummary] { sessions.unarchivedSessions }
@@ -364,6 +365,77 @@ final class PilotClient: ObservableObject {
     }
 
     private var activeSharedRequests = 0
+
+    private var activeControlRequests = 0
+
+    /// Same verified endpoint and bounded redirect-free transport. Never uses native management
+    /// authority, changes operation kinds, or accepts a caller-supplied server URL.
+    func controlCourierRequest(_ descriptor: ControlCourierRequest, signing: ControlCourierSigning) async throws -> Data {
+        guard connected, !disconnected, let hostIdentity, signing.permits(descriptor, on: hostIdentity),
+              descriptor.maximumBytes > 0, descriptor.maximumBytes <= 2 * 1024 * 1024 else { throw HostRoutingError.invalidReference }
+        let generation = connectionGeneration
+        let url = try missionURL(descriptor.path, query: descriptor.query)
+        let components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        let path = components.percentEncodedPath + (components.percentEncodedQuery.map { "?" + $0 } ?? "")
+        let authentication = try await signing.authentication(method: descriptor.method, path: path, body: descriptor.body)
+        guard connected, !disconnected, connectionGeneration == generation, self.hostIdentity == hostIdentity else { throw HostRoutingError.staleGeneration }
+        return try await controlRequestData(path: path, method: descriptor.method, body: descriptor.body,
+                                            authentication: authentication, maximumBytes: descriptor.maximumBytes)
+    }
+
+    /// Header carrier shared with native management. Callers own the distinct M/C signer and policy;
+    /// transport neither creates credentials nor edits the signed body or follows a redirect.
+    func controlRequest<Response: Decodable & Sendable>(path: String, method: String, body: Data? = nil,
+                                                       authentication: ControlCourierAuthentication) async throws -> Response {
+        let generation = connectionGeneration, identity = hostIdentity
+        let data = try await controlRequestData(path: path, method: method, body: body, authentication: authentication)
+        let value = try await Task.detached(priority: .utility) { try JSONDecoder().decode(Response.self, from: data) }.value
+        guard connected, !disconnected, connectionGeneration == generation, hostIdentity == identity else { throw HostRoutingError.staleGeneration }
+        try Task.checkCancellation()
+        return value
+    }
+
+    private func controlRequestData(path: String, method: String, body: Data?, authentication: ControlCourierAuthentication,
+                                    maximumBytes: Int = 2 * 1024 * 1024) async throws -> Data {
+        guard connected, !disconnected, let hostIdentity, let baseURL, activeControlRequests < 4,
+              path.hasPrefix("/"), !path.hasPrefix("//"), path.utf8.count <= 4096,
+              let url = URL(string: path, relativeTo: baseURL)?.absoluteURL,
+              url.scheme == baseURL.scheme, url.host == baseURL.host, url.port == baseURL.port,
+              url.fragment == nil, (body?.count ?? 0) <= 2 * 1024 * 1024,
+              authentication.signedPayload.utf8.count <= 16_384,
+              Data(authentication.signedPayload.utf8).base64EncodedString().utf8.count <= 8192,
+              Data(base64Encoded: authentication.signature)?.count == 64,
+              let configuration = commandConfiguration.copy() as? URLSessionConfiguration else { throw HostRoutingError.invalidReference }
+        configuration.httpAdditionalHeaders = nil
+        configuration.httpCookieStorage = nil; configuration.httpShouldSetCookies = false
+        configuration.urlCredentialStorage = nil; configuration.urlCache = nil
+        activeControlRequests += 1
+        defer { activeControlRequests -= 1 }
+        let generation = connectionGeneration
+        try Task.checkCancellation()
+        var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.httpMethod = method; request.httpBody = body
+        request.setValue(Data(authentication.signedPayload.utf8).base64EncodedString(), forHTTPHeaderField: "x-pilot-control-proof")
+        request.setValue(authentication.signature, forHTTPHeaderField: "x-pilot-control-signature")
+        if body != nil { request.setValue("application/json", forHTTPHeaderField: "content-type") }
+        let (data, response) = try await BoundedHTTPData.read(request, maximumBytes: maximumBytes, configuration: configuration)
+        guard connected, !disconnected, connectionGeneration == generation, self.hostIdentity == hostIdentity else { throw HostRoutingError.staleGeneration }
+        try Task.checkCancellation()
+        guard (200..<300).contains(response.statusCode) else {
+            let error = try? await Task.detached(priority: .utility) { try JSONDecoder().decode(ControlHostErrorResponse.self, from: data) }.value
+            guard connected, !disconnected, connectionGeneration == generation, self.hostIdentity == hostIdentity else { throw HostRoutingError.staleGeneration }
+            try Task.checkCancellation()
+            let code = error?.code
+            let kind: ControlCourierFailure.Kind
+            if [401, 403].contains(response.statusCode) || code == .capabilityExpired { kind = .authenticationRequired }
+            else if [404, 405, 501].contains(response.statusCode) { kind = .incompatible }
+            else if response.statusCode == 409 { kind = .reconciliationRequired }
+            else { kind = .unavailable }
+            throw ControlCourierFailure(kind, status: response.statusCode, code: code)
+        }
+        return data
+    }
 
     private func sharedContextRequest<Response: Decodable & Sendable>(
         _ path: [String], method: String = "GET", body: Data? = nil,
@@ -2265,6 +2337,10 @@ final class PilotClient: ObservableObject {
         guard !disconnected, let url = socketURL("/api/ws", controlSocket: true) else { return }
         let reader = SocketReader(
             task: StreamSocket.task(url), label: "pilot.control-socket",
+            controlChanged: { [weak self] reader, change in
+                guard let self, self.control === reader, self.connected, !self.disconnected else { return }
+                self.onControlHostChanged?(change)
+            },
             deliver: { [weak self] reader, updates in
                 guard let self, self.control === reader else { return }
                 if !self.connected { self.didConnect() }
