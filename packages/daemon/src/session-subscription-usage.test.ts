@@ -228,8 +228,8 @@ test("the reset timer releases work and expires force without a new provider rea
 	const forcedPolicy = JSON.parse(await readFile(policyFile, "utf8"));
 	assert.equal(forcedPolicy.windows.length, 1);
 	assert.equal(forcedPolicy.forced.length, 1);
-	// Only the reset timer's post-persistence event may release this wait. A force notification
-	// after a real-time deadline can show an expired pause while the old policy is still on disk.
+	// Summary notifications use the current clock; unrelated notifications can show the reset
+	// before its policy write completes. Observe the notification and persistence separately.
 	const resumed = new Promise<void>((resolve) =>
 		f.sessions.onChange((summary) => {
 			if (summary.id === id && !summary.subscriptionPause) resolve();
@@ -238,7 +238,10 @@ test("the reset timer releases work and expires force without a new provider rea
 	t.mock.timers.tick(59_999);
 	assert.equal(f.sessions.get(id)?.subscriptionPause?.forced, true, "force lasts until the reset boundary");
 	t.mock.timers.tick(1);
+	// Exercise an unrelated update before asynchronous policy persistence can finish.
+	f.sessions["emit"](f.sessions["metas"].get(id)!);
 	await resumed;
+	await f.sessions["subscriptionPolicyWrites"];
 	assert.equal(f.sessions.get(id)?.subscriptionPause, undefined);
 	const policy = JSON.parse(await readFile(policyFile, "utf8"));
 	assert.deepEqual(policy.windows, []);
