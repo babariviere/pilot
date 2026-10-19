@@ -15,6 +15,7 @@ export type * from "./critical-review.ts";
 export type * from "./databases.ts";
 export type * from "./diagnostics.ts";
 export type * from "./diagnostic-context.ts";
+export type * from "./refresh-health.ts";
 export type * from "./github-import.ts";
 export type * from "./github-setup.ts";
 export type * from "./model-scope.ts";

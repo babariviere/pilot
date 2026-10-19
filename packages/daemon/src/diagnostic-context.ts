@@ -29,6 +29,7 @@ export function parseDiagnosticContext(value: unknown): DiagnosticContextRequest
 					"query",
 					"since",
 					"until",
+					"channelOffset",
 					"after",
 					"before",
 					"limit",
@@ -47,6 +48,7 @@ export function parseDiagnosticContext(value: unknown): DiagnosticContextRequest
 			"mission",
 			"issues",
 			"features",
+			"refresh_health",
 		].includes(String(v.action))
 	)
 		return invalid();
@@ -71,6 +73,16 @@ export function parseDiagnosticContext(value: unknown): DiagnosticContextRequest
 	if ((v.action === "issues" && v.projectId === undefined) || (v.action === "mission" && v.missionId === undefined))
 		return invalid();
 	if (v.query !== undefined && (typeof v.query !== "string" || v.query.length > 200)) return invalid();
+	if (v.action === "refresh_health" && v.query !== undefined && v.query !== "slack" && v.query !== "linear")
+		return invalid();
+	if (
+		v.channelOffset !== undefined &&
+		(v.action !== "refresh_health" ||
+			!Number.isSafeInteger(v.channelOffset) ||
+			(v.channelOffset as number) < 0 ||
+			(v.channelOffset as number) > 100)
+	)
+		return invalid();
 	if (v.action === "features" && v.query !== undefined && !FEATURE_NAMES.includes(v.query as never)) return invalid();
 	for (const key of ["since", "until"])
 		if (

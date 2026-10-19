@@ -331,6 +331,16 @@ export function createDaemonServer(
 			offset = request.before ?? 0;
 		const response = (data: unknown, count: number, more: boolean) =>
 			diagnosticContextResponse(host, data, { scanned: count, more, ...(more ? { before: offset + count } : {}) });
+		if (request.action === "refresh_health" && tracking) {
+			const snapshot = tracking.refreshHealth({
+				projectId: request.projectId,
+				kind: request.query as "slack" | "linear" | undefined,
+				offset,
+				limit,
+				channelOffset: request.channelOffset,
+			});
+			return response(snapshot, snapshot.scanned, snapshot.more);
+		}
 		if (request.action === "features" && telemetry) {
 			const snapshot = telemetry.featureUsage.snapshot(host);
 			const cells = snapshot.cells.filter(
@@ -1091,6 +1101,7 @@ export function createDaemonServer(
 		if (parts[1] === "diagnostics" && parts.length === 2 && req.method === "DELETE") {
 			await sessions.clearDiagnostics();
 			await telemetry?.featureUsage.clear();
+			tracking?.refreshDiagnostics?.clear();
 			return json(res, 200, { cleared: true });
 		}
 		if (parts[1] === "update" && parts[2] === "prepare" && parts.length === 3 && req.method === "POST")

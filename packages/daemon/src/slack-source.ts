@@ -79,7 +79,8 @@ async function classifierContextFor(store: CacheStore, context: SourcePollContex
 export function slackChannelProgress(
 	value: TrackingJson | undefined,
 	channels: string[],
-): Array<{ pulledAt?: number; failedAt?: number }> {
+	includeCoverage = false,
+): Array<{ pulledAt?: number; failedAt?: number; hasMore?: boolean }> {
 	let cursor: Cursor | undefined;
 	try {
 		cursor = value === undefined ? undefined : readCursor(value, channels, 0);
@@ -91,6 +92,7 @@ export function slackChannelProgress(
 		return {
 			...(state?.[3] ? { pulledAt: state[3] } : {}),
 			...(state?.[4] ? { failedAt: state[4] } : {}),
+			...(includeCoverage && state && state[3] !== null ? { hasMore: state[2] !== null } : {}),
 		};
 	});
 }
@@ -114,6 +116,8 @@ export function createSlackPoller(
 		const cursor = readCursor(context.cursor, names, now());
 		const last = cursor.last === null ? -1 : names.findIndex((name) => channelKey(name) === cursor.last);
 		const name = names[(last + 1) % names.length]!;
+		const channelIndex = (last + 1) % names.length;
+		context.observe?.({ stage: "discovery", phase: "started", channelIndex });
 		const key = channelKey(name);
 		const filtered = context.config.slackMentionOnlyChannels?.includes(name) ?? false;
 		const groups = context.config.slackGroupHandles ?? [];
@@ -168,6 +172,14 @@ export function createSlackPoller(
 			);
 			if (/^[CDG][A-Z0-9]+$/.test(name) && name !== page.channel) throw new SlackFormatChanged();
 			if (!/^[CDG][A-Z0-9]+$/.test(name) && name.replace(/^#/, "") !== page.name) throw new SlackFormatChanged();
+			context.observe?.({
+				stage: "discovery",
+				phase: "completed",
+				outcome: "success",
+				channelIndex,
+				count: page.messages.length,
+			});
+			context.observe?.({ stage: "classification", phase: "started" });
 			let classifierContext: SlackClassifierContext | undefined;
 			let classify: ((text: string) => Promise<SlackClassification>) | undefined;
 			const seen = new Set<string>();
@@ -206,6 +218,11 @@ export function createSlackPoller(
 					context.signal.throwIfAborted();
 					const reservation = await store.reserveSlack(page.channel, message.threadTs, now(), context.project.id);
 					if (reservation.state === "budget") {
+						context.observe?.({
+							stage: "classification",
+							phase: "partial",
+							reason: "local_classification_budget",
+						});
 						issue = "slack_budget";
 						deferred = true;
 						break;
@@ -273,10 +290,26 @@ export function createSlackPoller(
 		} catch (error) {
 			// Only the tool's own refusal is channel-specific. Sign-in, limits and format changes stop the source.
 			if (!(error instanceof SourceToolError) || context.signal.aborted) throw error;
+			context.observe?.({
+				stage: "discovery",
+				phase: "completed",
+				outcome: "partial",
+				reason: "channel_read",
+				channelIndex,
+			});
 			cursor.channels[key] = [oldest, savedLatest, next, pulledAt, now()];
 			return { items: [], cursor: cursor as unknown as TrackingJson, issue: "slack_channel" };
 		}
 		const pulled = now();
+		context.observe?.({
+			stage: "classification",
+			phase: "completed",
+			outcome:
+				issue === "slack_budget" ? "budget_limited" : issue === "slack_classification" ? "partial" : "success",
+			...(issue
+				? { reason: issue === "slack_budget" ? "local_classification_budget" : "classification_failed" }
+				: {}),
+		});
 		cursor.channels[key] = deferred
 			? [oldest, latest, next, pulled, null]
 			: page.next

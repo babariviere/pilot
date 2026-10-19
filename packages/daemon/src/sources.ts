@@ -20,6 +20,8 @@ import type {
 	TrackingJson,
 	TrackingLookup,
 	TrackingSource,
+	RefreshObservation,
+	RefreshReason,
 } from "@pilot/protocol";
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { linearParentHeaders, linearPrefill, linearStart } from "./linear-source.ts";
@@ -37,8 +39,12 @@ import type { SourceCheckpoint, TrackedInput, TrackedItemStore, TrackedQuery } f
 import { SLACK_REACTION_RECHECK_MS } from "./tracked-items-disk.ts";
 import { lookupLinearTeams, lookupSlackChannels } from "./tracking-lookup.ts";
 import type { TriageGroomer } from "./triage-grooming.ts";
+import { SOURCE_REFRESH_CADENCE_MS, SOURCE_REFRESH_TIMEOUT_MS, SourceRefreshDiagnostics, refreshAssessment } from "./source-refresh-diagnostics.ts";
+import { redactDiagnosticText } from "./diagnostic-redaction.ts";
 
 export interface SourcePollContext {
+	/** Closed process-local observation only. Never carries source content or model/tool arguments. */
+	observe?(event: RefreshObservation): void;
 	project: Project;
 	config: ProjectTrackingConfig;
 	cursor?: TrackingJson;
@@ -56,7 +62,13 @@ export interface SourcePollResult {
 }
 export type SourcePoller = (context: SourcePollContext) => Promise<SourcePollResult>;
 export type TrackingChange = { type: "sources" | "items"; projectId: string };
-type Run = { key: string; controller: AbortController; promise: Promise<TrackingSource>; allowed?: () => boolean };
+type Run = {
+	key: string;
+	startedAt: number;
+	controller: AbortController;
+	promise: Promise<TrackingSource>;
+	allowed?: () => boolean;
+};
 type Health = {
 	key: string;
 	status: "ok" | "sign_in_required" | "error";
@@ -70,6 +82,7 @@ type Health = {
 
 /** Bounded manual and background polling. Only explicitly registered sources do work. */
 export class SourceRegistry {
+	readonly refreshDiagnostics = new SourceRefreshDiagnostics();
 	/** Optional read-only consumer. Runs only after a validated Linear poll is committed. */
 	linearObserved?: (projectId: string, items: TrackedInput[], activeIds: string[]) => Promise<void>;
 	triage?: TriageGroomer;
@@ -176,6 +189,7 @@ export class SourceRegistry {
 						run.controller.abort(new Conflict("Tracking configuration changed"));
 				for (const id of this.health.keys())
 					if (this.currentKey(id) !== this.health.get(id)?.key) this.health.delete(id);
+				this.refreshDiagnostics.prune((id) => this.currentKey(id));
 				for (const project of projects.list()) this.emit({ type: "sources", projectId: project.id });
 				this.schedule();
 			}),
@@ -219,7 +233,7 @@ export class SourceRegistry {
 		);
 		if (!sources.length) return;
 		const dueAt = (source: TrackingSource) =>
-			this.due.has(source.id) ? 0 : (source.nextPollAt ?? (source.lastPolledAt ?? 0) + 300_000);
+			this.due.has(source.id) ? 0 : (source.nextPollAt ?? (source.lastPolledAt ?? 0) + SOURCE_REFRESH_CADENCE_MS);
 		const next = Math.min(...sources.map(dueAt));
 		this.timer = setTimeout(
 			() => {
@@ -255,6 +269,194 @@ export class SourceRegistry {
 		if (split < 1 || (kind !== "linear" && kind !== "slack")) throw new NotFound(`Unknown source: ${id}`);
 		return this.describe(this.projects.require(id.slice(0, split)), kind);
 	}
+	/** Pure local projection. Never schedules, reserves work, polls MCP or writes product state. */
+	refreshHealth(
+		options: { projectId?: string; kind?: TrackedKind; offset?: number; limit?: number; channelOffset?: number } = {},
+	) {
+		const coverage = this.refreshDiagnostics.coverage();
+		const now = Date.now();
+		if (!coverage.enabled)
+			return {
+				schemaVersion: 1,
+				collectedAt: now,
+				coverage,
+				availability: "disabled",
+				sources: [],
+				total: 0,
+				more: false,
+				scanned: 0,
+			};
+		const projects = options.projectId ? [this.projects.require(options.projectId)] : this.projects.list();
+		const kinds: TrackedKind[] = options.kind ? [options.kind] : ["linear", "slack"];
+		const offset = options.offset ?? 0,
+			limit = Math.min(5, options.limit ?? 5),
+			channelOffset = options.channelOffset ?? 0;
+		const total = projects.length * kinds.length;
+		const slots = this.busy();
+		const sources = [];
+		for (let position = offset; position < Math.min(total, offset + limit); position++) {
+			const project = projects[Math.floor(position / kinds.length)]!,
+				kind = kinds[position % kinds.length]!;
+			const id = `${project.id}:${kind}`,
+				key = configKey(project, kind);
+			const configured = isConfigured(project, kind),
+				adapter = this.pollers.has(kind),
+				automatic = this.automatic.has(kind);
+			const run = this.running.get(id);
+			const health = this.health.get(id)?.key === key ? this.health.get(id) : undefined;
+			const checkpoint = this.items.checkpoint(id);
+			const currentCheckpoint = checkpoint?.configKey === key ? checkpoint : undefined;
+			const live = this.refreshDiagnostics.read(id, key);
+			const explicitDueAt = this.refreshDiagnostics.dueAt(id, key);
+			const nextDueAt = this.due.has(id)
+				? (explicitDueAt ?? now)
+				: (health?.nextPollAt ?? (currentCheckpoint?.lastPolledAt ?? 0) + SOURCE_REFRESH_CADENCE_MS);
+			const backoff = health?.localBudget
+				? "local_budget"
+				: health?.limited
+					? "provider_rate_limit"
+					: health?.status === "sign_in_required"
+						? "sign_in"
+							: health?.status === "error" && health.failures > 0
+							? "failure_backoff"
+							: undefined;
+			const channels = kind === "slack" ? (project.tracking?.slackChannels ?? []).slice(0, 100) : [];
+			const progress = slackChannelProgress(currentCheckpoint?.cursor, channels, true);
+			const channelRows = channels.slice(channelOffset, channelOffset + 20).map((channel, index) => {
+				const ordinal = channelOffset + index,
+					value = progress[ordinal]!;
+				const clockSkew =
+					(value.pulledAt !== undefined && value.pulledAt > now) ||
+					(value.failedAt !== undefined && value.failedAt > now);
+				const pageAgeMs = value.pulledAt === undefined || clockSkew ? undefined : Math.max(0, now - value.pulledAt);
+				return {
+					ref: `refresh-channel:v1:${createHash("sha256").update(`${project.id}\0${channel}`).digest("hex").slice(0, 24)}`,
+					index: ordinal,
+					...(/^[CDG][A-Z0-9]{1,199}$/.test(channel) ? { channelId: channel } : {}),
+					lastPulledAt: value.pulledAt,
+					failedAt: value.failedAt,
+					hasMore: value.hasMore,
+					provenance: "retained_checkpoint_page_only_not_full_channel_freshness",
+					pageAgeMs,
+					clockSkew,
+					coverage: clockSkew
+						? "unknown_clock"
+						: value.failedAt !== undefined && (value.pulledAt === undefined || value.failedAt >= value.pulledAt)
+							? "failed_page"
+							: value.pulledAt === undefined
+								? "unknown"
+								: value.hasMore
+									? "partial_backlog"
+									: "one_page_observed",
+					...(pageAgeMs !== undefined && pageAgeMs > channels.length * SOURCE_REFRESH_CADENCE_MS + SOURCE_REFRESH_TIMEOUT_MS
+						? { nominallyOverdue: true }
+						: {}),
+				};
+			});
+			const stages = live?.stages ?? [];
+			const error = health?.error;
+			sources.push({
+				id,
+				projectId: project.id,
+				kind,
+				configured,
+				adapterAvailable: adapter,
+				scheduler: {
+					automatic,
+					stopped: this.stopped,
+					timerInstalled: this.timer !== undefined,
+					timerScope: "shared_registry",
+					cadenceMs: SOURCE_REFRESH_CADENCE_MS,
+					sharedSlots: 2,
+					busySlots: slots,
+					timeoutMs: SOURCE_REFRESH_TIMEOUT_MS,
+					...(configured && automatic && !this.stopped ? { nextDueAt } : {}),
+				},
+				assessment: refreshAssessment(
+					{
+						configured,
+						adapter,
+						automatic,
+						stopped: this.stopped,
+						...(run
+							? {
+									running: {
+										startedAt: run.startedAt,
+										cancelling: run.controller.signal.aborted || run.key !== key,
+									},
+								}
+							: {}),
+						nextDueAt,
+						busySlots: slots,
+						live,
+						backoff,
+						checkpointAt: currentCheckpoint?.lastPolledAt,
+						unobservedDueOverride: this.due.has(id) && explicitDueAt === undefined,
+					},
+					now,
+				),
+				live,
+				checkpointCommittedAt: currentCheckpoint?.lastPolledAt,
+				checkpointProvenance: "retained_only_not_live_scheduler_or_all_channel_success",
+				...(backoff ? { backoff: { reason: backoff, until: health?.nextPollAt } } : {}),
+				...(error ? { error: error.length <= 512 ? redactDiagnosticText(error) : "[Error detail withheld]" } : {}),
+				stageCoverage: [
+					"discovery",
+					"classification",
+					"commit",
+					...(kind === "slack" ? ["waiting_replies", "reaction_reads"] : []),
+				].map((stage) => ({
+					stage,
+					availability:
+						stage === "waiting_replies" && !this.slackWaiting
+							? "not_installed"
+							: stages.some((s) => s.stage === stage)
+								? "observed_this_process"
+								: "unknown",
+				})),
+				...(kind === "slack"
+					? {
+							channelCoverage: {
+								total: project.tracking?.slackChannels.length ?? 0,
+								returned: channelRows.length,
+								offset: channelOffset,
+								more: channelOffset + channelRows.length < (project.tracking?.slackChannels.length ?? 0),
+								nominalRoundRobinMs: channels.length * SOURCE_REFRESH_CADENCE_MS,
+								unit: "one_history_page_per_poll_shared_slot_and_backoff_delays_possible",
+								channels: channelRows,
+							},
+						}
+					: {}),
+			});
+		}
+		return {
+			schemaVersion: 1,
+			collectedAt: now,
+			availability: "partial",
+			coverage,
+			sources,
+			total,
+			more: offset + sources.length < total,
+			scanned: sources.length,
+			coverageGaps: [
+				"linked_linear_mission_sync",
+				"linear_parent_header_refresh",
+				"manual_discovery_lookups",
+				"slack_done_writes",
+				"triage_guide_rebuilds",
+			],
+			stageCountMeaning: {
+				discovery: "returned_items_or_messages",
+				classification: "classifier_attempts_when_reported",
+				commit: "committed_items",
+				waiting_replies: "reserved_batch_size_not_read_count",
+				reaction_reads: "reserved_batch_size_not_read_count",
+			},
+			freshnessRule:
+				"Only process-local attempts/completions and successful commits establish observed progress; checkpoints and silence never prove live scheduling or all-channel freshness.",
+		};
+	}
+
 	/** Single flight per source, at most two sources. No unbounded backlog from repeated clicks. */
 	poll(id: string): Promise<TrackingSource> {
 		if (this.stopped) throw new ServiceUnavailable("Tracking is stopped");
@@ -281,10 +483,11 @@ export class SourceRegistry {
 		this.due.delete(id);
 		const project = structuredClone(this.projects.require(source.projectId));
 		const controller = new AbortController();
-		const timer = setTimeout(() => controller.abort(new Error("Poll timed out")), 90_000);
+		const timer = setTimeout(() => controller.abort(new Error("Poll timed out")), SOURCE_REFRESH_TIMEOUT_MS);
 		const checkpoint = this.items.checkpoint(id);
 		const run: Run = {
 			key,
+			startedAt: Date.now(),
 			controller,
 			promise: Promise.resolve(source),
 			...(source.kind === "slack"
@@ -296,8 +499,23 @@ export class SourceRegistry {
 				: {}),
 		};
 		this.running.set(id, run);
+		this.refreshDiagnostics.begin(id, key);
+		let discoveryObserved = false;
+		const observe = (event: RefreshObservation) => {
+			if (
+				this.running.get(id) !== run ||
+				controller.signal.aborted ||
+				this.currentKey(id) !== key ||
+				run.allowed?.() === false
+			)
+				return;
+			if (event.stage === "discovery" && event.phase === "completed") discoveryObserved = true;
+			this.refreshDiagnostics.observe(id, key, event);
+		};
+		observe({ stage: "discovery", phase: "started" });
 		const work = Promise.resolve().then(() =>
 			poller({
+				observe,
 				project,
 				config: project.tracking!,
 				signal: controller.signal,
@@ -308,6 +526,14 @@ export class SourceRegistry {
 		run.promise = abortable(work, controller.signal)
 			.then(async (result) => {
 				if (controller.signal.aborted || this.currentKey(id) !== key || run.allowed?.() === false) return;
+				if (!discoveryObserved)
+					observe({
+						stage: "discovery",
+						phase: "completed",
+						outcome: result.issue ? "partial" : "success",
+						count: result.items.length,
+					});
+				observe({ stage: "commit", phase: "started" });
 				const checkpoint: SourceCheckpoint = {
 					configKey: key,
 					lastPolledAt: Date.now(),
@@ -315,6 +541,7 @@ export class SourceRegistry {
 					...(result.linear ? { linear: result.linear } : {}),
 				};
 				await this.items.commit(project.id, source.kind, result.items, checkpoint, result.activeIds);
+				observe({ stage: "commit", phase: "completed", outcome: "success", count: result.items.length });
 				if (source.kind === "linear")
 					await this.linearObserved?.(
 						project.id,
@@ -328,21 +555,24 @@ export class SourceRegistry {
 					);
 				if (source.kind === "slack") {
 					const context: SourcePollContext = {
+						observe,
 						project,
 						config: project.tracking!,
 						signal: controller.signal,
 						call: (tool, args) => this.readCall("slack", tool, args, controller.signal),
 					};
 					// Replies to waiting messages resume work, so they go before reaction checks in the shared budget.
+					if (this.slackWaiting) observe({ stage: "waiting_replies", phase: "started" });
 					const waiting = this.slackWaiting ? await this.slackWaiting(context) : false;
 					// A budget spent by reaction checks only defers them. New messages keep being read.
+					observe({ stage: "reaction_reads", phase: "started" });
 					await refreshSlackReactions(this.items, context, this.slackReactionRecheckMs);
 					if (waiting) result.issue = "slack_budget";
 				}
 				const nextPollAt =
 					result.issue === "slack_budget"
 						? (Math.floor(Date.now() / 86_400_000) + 1) * 86_400_000
-						: Date.now() + 300_000;
+						: Date.now() + SOURCE_REFRESH_CADENCE_MS;
 				this.health.set(id, {
 					key,
 					failures: 0,
@@ -360,8 +590,30 @@ export class SourceRegistry {
 							}
 						: {}),
 				});
+				this.refreshDiagnostics.end(
+					id,
+					key,
+					controller.signal.aborted ? "cancelled" : result.issue ? "partial" : "success",
+					controller.signal.aborted ? (this.stopped ? "stopped" : "config_changed") : undefined,
+				);
 			})
-			.catch((error) => this.failed(id, key, error))
+			.catch((error) => {
+				const reason: RefreshReason = controller.signal.aborted
+					? this.stopped
+						? "stopped"
+						: this.currentKey(id) !== key || run.allowed?.() === false
+							? "config_changed"
+							: "timeout"
+					: error instanceof SourceSignInRequired
+						? "sign_in"
+						: error instanceof SourceRateLimited
+							? "provider_rate_limit"
+							: error instanceof SlackModelUnavailable
+								? "classifier_unavailable"
+								: "read_failed";
+				this.refreshDiagnostics.end(id, key, controller.signal.aborted ? "cancelled" : "failure", reason);
+				this.failed(id, key, error);
+			})
 			.finally(() => {
 				clearTimeout(timer);
 				this.running.delete(id);
@@ -931,6 +1183,8 @@ export class SourceRegistry {
 			if (health?.status === "error" && health.nextPollAt > now) continue;
 			if (health?.status === "sign_in_required") this.health.delete(source.id);
 			this.due.add(source.id);
+			const key = this.currentKey(source.id);
+			if (key) this.refreshDiagnostics.requestDue(source.id, key);
 		}
 		this.schedule();
 	}
@@ -1024,7 +1278,7 @@ export class SourceRegistry {
 				Math.max(
 					error instanceof SourceRateLimited ? error.retryAfterMs : 0,
 					error instanceof SourceSignInRequired
-						? 300_000
+						? SOURCE_REFRESH_CADENCE_MS
 						: Math.min(30 * 60_000, 30_000 * 2 ** Math.min(failures - 1, 6)),
 				),
 			status: error instanceof SourceSignInRequired ? "sign_in_required" : "error",

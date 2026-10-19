@@ -20,6 +20,13 @@ export async function refreshSlackReactions(
 		if (!value || typeof value.present !== "boolean") throw new SourceToolError("Invalid Slack reactions response");
 		await items.recordSlackReaction(item.id, value.present, version);
 	}
+	context.observe?.({
+		stage: "reaction_reads",
+		phase: "completed",
+		outcome: batch.budget ? "budget_limited" : "success",
+		...(batch.budget ? { reason: "local_read_budget" } : {}),
+		count: batch.reads.length,
+	});
 	return batch.budget;
 }
 

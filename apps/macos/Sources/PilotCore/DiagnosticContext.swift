@@ -10,6 +10,7 @@ public struct DiagnosticContextRequest: Codable, Sendable {
     public let query: String?
     public let since: String?
     public let until: String?
+    public let channelOffset: Int?
     public let after: String?
     public let before: Int?
     public let limit: Int?
