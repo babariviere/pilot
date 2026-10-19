@@ -96,6 +96,39 @@ enum DiagnosticQuestionValidationError: LocalizedError, Equatable {
 enum DiagnosticSetup {
     static let maxQuestionBytes = 8 * 1_024
 
+    /// Selection authority is the complete host reference, never a title, alias or bare UUID.
+    static func chatChoices(localHost: HostRef?, local: [SessionSummary],
+                            hosted: [Hosted<SessionSummary>]) -> [Hosted<SessionSummary>] {
+        var choices = hosted
+        if let localHost {
+            choices += local.map {
+                Hosted(ref: HostResourceRef(host: localHost, kind: .session, localId: $0.id), value: $0)
+            }
+        }
+        var seen = Set<HostResourceRef>()
+        return choices.filter {
+            $0.ref.kind == .session && !$0.value.isDiagnosticsSpecialist && seen.insert($0.ref).inserted
+        }.sorted {
+            if $0.value.title != $1.value.title { return $0.value.title < $1.value.title }
+            return $0.ref.storageKey < $1.ref.storageKey
+        }
+    }
+
+    static func resolve(selected: HostResourceRef?, setup: DiagnosticSetupTarget, localHost: HostRef?,
+                        local: [SessionSummary], hosted: [Hosted<SessionSummary>]) throws -> DiagnosticResolvedTarget {
+        guard let selected else {
+            guard setup.askingAboutPilot else { throw DiagnosticTargetResolutionError.missing }
+            return DiagnosticResolvedTarget(host: setup.host)
+        }
+        guard selected.kind == .session else { throw HostRoutingError.invalidReference }
+        let session = selected.host == localHost
+            ? local.first { $0.id == selected.localId }
+            : hosted.first { $0.ref == selected }?.value
+        guard let session else { throw DiagnosticTargetResolutionError.missing }
+        guard !session.isDiagnosticsSpecialist else { throw DiagnosticTargetResolutionError.specialist }
+        return DiagnosticResolvedTarget(reference: selected, session: session, historyAccess: true)
+    }
+
     static func link(_ sessionId: String) -> String { "pilot://chat/\(sessionId.lowercased())" }
 
     /// User-authored content stays in the new specialist chat's opening message. It is never target authority.
@@ -155,7 +188,7 @@ enum DiagnosticSetup {
         guard unique.count == 1, let result = unique.first else {
             throw unique.isEmpty ? DiagnosticTargetResolutionError.missing : DiagnosticTargetResolutionError.ambiguous
         }
-        if result.session.isDiagnosticsSpecialist { throw DiagnosticTargetResolutionError.specialist }
+        if result.session?.isDiagnosticsSpecialist == true { throw DiagnosticTargetResolutionError.specialist }
         return result
     }
 
@@ -830,7 +863,7 @@ struct DiagnosticSetupSheet: View {
     let setup: DiagnosticSetupTarget
     @EnvironmentObject private var app: AppModel
     @Environment(\.dismiss) private var dismiss
-    @State private var link: String
+    @State private var selectedChat: HostResourceRef?
     @State private var question = ""
     @State private var selectedModel = ""
     @State private var thinking = ""
@@ -842,19 +875,17 @@ struct DiagnosticSetupSheet: View {
 
     init(setup: DiagnosticSetupTarget) {
         self.setup = setup
-        _link = State(initialValue: setup.askingAboutPilot ? "" : setup.reference.map {
-            DiagnosticSetup.link($0.localId)
-        } ?? "")
+        _selectedChat = State(initialValue: setup.reference)
     }
 
     private var resolved: DiagnosticResolvedTarget? {
-        try? DiagnosticSetup.resolve(link, setup: setup, localHost: app.localHost,
+        try? DiagnosticSetup.resolve(selected: selectedChat, setup: setup, localHost: app.localHost,
                                      local: app.client.sessions, hosted: app.hosts.sessions)
     }
 
     private var resolutionError: String? {
         do {
-            _ = try DiagnosticSetup.resolve(link, setup: setup, localHost: app.localHost,
+            _ = try DiagnosticSetup.resolve(selected: selectedChat, setup: setup, localHost: app.localHost,
                                             local: app.client.sessions, hosted: app.hosts.sessions)
             return nil
         } catch { return error.localizedDescription }
@@ -920,13 +951,25 @@ struct DiagnosticSetupSheet: View {
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(setup.askingAboutPilot ? "Chat link (optional)" : "Target chat link")
+                    Text(setup.askingAboutPilot ? "Chat (optional)" : "Target chat")
                         .font(.pilot(.headline))
-                    TextField("pilot://chat/…", text: $link)
-                        .textFieldStyle(.roundedBorder)
+                    if setup.askingAboutPilot {
+                        Picker("Chat", selection: $selectedChat) {
+                            Text("No chat · Pilot on \(hostName(setup.host))")
+                                .tag(Optional<HostResourceRef>.none)
+                            ForEach(DiagnosticSetup.chatChoices(localHost: app.localHost,
+                                                               local: app.client.sessions,
+                                                               hosted: app.hosts.sessions)) { choice in
+                                Text("\(hostName(choice.ref.host)) · \(choice.value.title) · \(choice.ref.localId.prefix(8))")
+                                    .tag(Optional(choice.ref))
+                            }
+                        }
+                        .labelsHidden()
+                        .accessibilityLabel("Optional diagnostic chat, qualified by host")
                         .disabled(busy)
-                    if setup.askingAboutPilot && link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        Text("No link asks about Pilot on \(hostName(setup.host)); a link explicitly adds that chat and its bounded history.")
+                    }
+                    if setup.askingAboutPilot && selectedChat == nil {
+                        Text("No chat diagnoses Pilot on \(hostName(setup.host)). Selecting a chat explicitly grants access to that chat's bounded history.")
                             .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
                     }
                     if let resolved, let session = resolved.session, let reference = resolved.reference {
@@ -984,7 +1027,7 @@ struct DiagnosticSetupSheet: View {
         if resolved?.historyAccess == true {
             return "The specialist may read bounded sanitized Pilot logs on the selected host, plus bounded conversation and tool history only from this exact linked chat. It cannot read arbitrary files or attachments, browse other hosts or chats, or open, change, restart, retry, or replay the target. Logs and transcript content are not telemetry."
         }
-        return "Your report is user content, not telemetry, diagnostic evidence, or permission to inspect a chat transcript. The specialist may read bounded sanitized Pilot logs on the selected host, but no arbitrary files; without a link it cannot read the Control conversation."
+        return "Your report is user content, not telemetry, diagnostic evidence, or permission to inspect a chat transcript. The specialist may read bounded sanitized Pilot logs on the selected host, but no arbitrary files. No chat grants no transcript access."
     }
 
     private func loadModels() async {
