@@ -132,6 +132,7 @@ public struct ControlArchiveResult: Codable, Equatable, Sendable {
 public enum ControlPilotAction: String, Codable, CaseIterable, Sendable {
     case status, health, logs, telemetry, read, checks, authorize, authorizations, revoke
     case resolveAuthorization = "resolve_authorization"
+    case upgradePermission = "upgrade_permission"
     case start, send, stop, pause, resume, redirect
     case missionCreate = "mission_create", missionAttach = "mission_attach"
     case watch, unwatch, watches

@@ -52,6 +52,18 @@ export interface ControlAuthorizationUse {
 	budgetUsd: number;
 	/** Grandfathered watches are valid only for their saved note, in their delivery turn. */
 	legacyWatch?: { watchId: string; note: string };
+	/** Permission upgrades require an exact user-approved chat, never an enclosing scope. */
+	publishUpgradeChatId?: string;
+}
+export function checkPublishUpgradeAuthorization(record: ControlAuthorization, chatId: string): void {
+	checkAuthorization(record, {
+		authorizationId: record.id,
+		level: "publish",
+		targets: [[{ kind: "chat", id: chatId }]],
+		followUps: 0,
+		budgetUsd: 0,
+		publishUpgradeChatId: chatId,
+	});
 }
 export function authorizationLevel(value: unknown): ControlAuthorizationLevel {
 	if (!CONTROL_LEVELS.includes(value as ControlAuthorizationLevel)) throw new Error("Invalid authorization level");
@@ -113,6 +125,17 @@ export function createAuthorization(
 	};
 }
 export function checkAuthorization(record: ControlAuthorization, use: ControlAuthorizationUse, now = Date.now()): void {
+	if (use.publishUpgradeChatId !== undefined) {
+		if (
+			!record.userMessage ||
+			record.watchId ||
+			record.level !== "publish" ||
+			!record.targets.some((target) => target.kind === "chat" && target.id === use.publishUpgradeChatId)
+		)
+			throw new Error(
+				"Permission upgrade requires a user-request publish authorization for that exact chat (never merge)",
+			);
+	}
 	if (record.revokedAt !== undefined) throw new Error("Authorization revoked");
 	if (record.expiresAt !== undefined && record.expiresAt <= now) throw new Error("Authorization expired");
 	// Merge is a recorded user intent, never an executable agent capability.

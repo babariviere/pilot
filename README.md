@@ -297,6 +297,12 @@ reads appear in `next.followUps`. A notice or result never grants new authority.
 Control-started chats keep their admitted permission level across restarts and follow-ups:
 **investigate** uses read-only Ask, **implement** allows local Build changes and checks but blocks
 pushes and PR publication, and **publish** allows pushing and opening/updating PRs. Agents never
+raise a chat's ceiling through an authorization record or a send. Control can explicitly call
+`upgrade_permission` for an existing local implement Build chat using a live user-request publish
+grant targeting that exact chat ID. The audited upgrade is durable and applies at the next fresh
+run boundary, not during active work or recovery. Project/mission-only grants, remote chats,
+Ask/investigate chats and Control itself cannot be upgraded. A send above the current ceiling
+reports **permission unchanged**. Agents never
 merge, even with a recorded merge authorization; merges still require confirmation in the app.
 See [control chat internals](docs/control-chat.md) for storage, compaction and recovery details.
 

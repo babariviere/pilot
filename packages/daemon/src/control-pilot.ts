@@ -16,6 +16,7 @@ import type {
 import { type ControlActions, ControlPreAdmissionError } from "./control-actions.ts";
 import {
 	authorizationLevel,
+	CONTROL_LEVELS,
 	type ControlAuthorizationUse,
 	createAuthorization,
 	legacyWatchAuthorization,
@@ -47,6 +48,7 @@ export interface ControlPilotOptions extends ControlDashboardSources {
 	taskSession?: (missionId: string, taskId: string) => string | undefined;
 	isControl: (id: string) => boolean;
 	sessions: Pick<SessionManager, "list" | "get" | "history">;
+	controlPermission?: SessionManager["controlPermission"];
 	/** Cached projections only. These callbacks must not perform storage or network reads. */
 	missions: () => Mission[];
 	projects: () => Project[];
@@ -71,6 +73,7 @@ export interface ControlPilotOptions extends ControlDashboardSources {
 		send: SessionManager["sendReported"];
 		stop?: SessionManager["stop"];
 		controlInputs?: SessionManager["controlInputs"];
+		upgradePermission?: SessionManager["upgradeControlPermission"];
 		organizeAllowed?: () => boolean;
 		createMission?: (request: CreateMissionRequest) => Promise<Mission>;
 		startCoordinator?: (missionId: string, request: StartMissionCoordinatorRequest) => Promise<SessionSummary>;
@@ -128,6 +131,28 @@ export class ControlPilot {
 				.perform(caller, action, { ...args, authorizationId: id }, operationId, () =>
 					memory.authorizationCreate(record),
 				);
+		}
+		if (action === "upgrade_permission") {
+			if (!this.options.mutations?.upgradePermission) throw new Error("Permission upgrades unavailable");
+			// This action is local and exact-target only, with no mission/coordinator routing.
+			if (Object.keys(args).some((key) => !["sessionId", "authorizationId", "level"].includes(key)))
+				throw new Error("Permission upgrades are same-host only and accept no routing or enclosing scope");
+			if (args.level !== "publish")
+				throw new Error("Only implement to publish upgrades are supported (never merge)");
+			const id = string(args, "sessionId", true)!;
+			if (this.options.isControl(id)) throw new Error("Cannot upgrade the Control chat");
+			if (!this.options.sessions.get(id)) throw new Error("Unknown local chat");
+			const use = await this.authorizationOrNeed(caller, args, action, [[{ kind: "chat", id }]], operationId);
+			return this.options.mutations.audit().perform(
+				caller,
+				action,
+				args,
+				operationId,
+				() => this.options.mutations!.upgradePermission!(id, use.authorizationId),
+				{ ...use, publishUpgradeChatId: id },
+				(error) => this.authorizationNeeded(caller, action, args, operationId, error),
+				() => this.options.mutations!.upgradePermission!(id, use.authorizationId),
+			);
 		}
 		if (action === "watch" || action === "unwatch" || action === "watches") {
 			const watches = this.options.watches;
@@ -553,6 +578,12 @@ export class ControlPilot {
 	) {
 		const target = this.chatTarget(args);
 		const mutations = this.options.mutations!;
+		const ceiling = this.options.controlPermission?.(target);
+		const permissionUnchanged =
+			(action === "send" || action === "redirect") &&
+			ceiling &&
+			CONTROL_LEVELS.indexOf(authorizationLevel(args.level ?? "investigate")) >
+				CONTROL_LEVELS.indexOf(ceiling.level);
 		let result: unknown;
 		if (action === "stop" || action === "redirect") {
 			if (!mutations.stop) throw new Error("Chat controls unavailable");
@@ -577,6 +608,14 @@ export class ControlPilot {
 		}
 		return {
 			...(result as object),
+			...(permissionUnchanged
+				? {
+						permission: "permission unchanged",
+						controlPermission: ceiling,
+						permissionNote:
+							"Send does not raise the chat ceiling. Use upgrade_permission with an exact-chat publish grant; it applies at the next run boundary.",
+					}
+				: {}),
 			sessionId: target,
 			requestedSessionId: args.sessionId,
 			chatUrl: `pilot://chat/${target}`,

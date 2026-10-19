@@ -118,6 +118,7 @@ async function fixture(t: TestContext) {
 	const faux = fauxProvider({ provider: "pilot-pr-test", models: [{ id: "offline", contextWindow: 128_000 }] });
 	runtime.registerNativeProvider(faux.provider);
 	const calls: string[] = [];
+	const toolGates = new Map<string, { entered(): void; wait: Promise<void> }>();
 	const adapters: NativeAdapter[] = [];
 	const openAdapter = NativeAdapter.open;
 	t.mock.method(NativeAdapter, "open", async (options: NativeAdapterOptions) => {
@@ -148,6 +149,9 @@ async function fixture(t: TestContext) {
 							outputSchema: Type.Object({ output: Type.String(), exit_code: Type.Number() }),
 							execute: async (_id, { command }) => {
 								calls.push(command);
+								const gate = toolGates.get(command);
+								gate?.entered();
+								await gate?.wait;
 								let output = url(Number(command.match(/--id (\d+)/)?.[1] ?? 1));
 								if (command.includes("--throw")) throw new Error(`failed ${output}`);
 								const followUpFailed = command.includes("; gh pr view --head");
@@ -208,8 +212,84 @@ async function fixture(t: TestContext) {
 		await session.submit(name, "Execute the offline test", "followUp");
 		await session.conversation.waitForIdle(context);
 	};
-	return { open, run, calls, adapters, faux, root };
+	return { open, run, calls, adapters, faux, root, toolGates };
 }
+
+test("a resident kernel upgrades both policies only on the next queued run, not during tools", {
+	timeout: 20_000,
+}, async (t) => {
+	const f = await fixture(t);
+	const inherited = process.env.PILOT_CONTROL_PERMISSION;
+	t.after(() => {
+		if (inherited === undefined) delete process.env.PILOT_CONTROL_PERMISSION;
+		else process.env.PILOT_CONTROL_PERMISSION = inherited;
+	});
+	let pending = false;
+	let preparations = 0;
+	const session = await f.open(
+		{
+			prepareControlPermission: async () => {
+				preparations++;
+				return {
+					authorizationId: pending ? "publish-grant" : "build-grant",
+					level: pending ? "publish" : "implement",
+				};
+			},
+		},
+		true,
+		{ authorizationId: "build-grant", level: "implement" },
+	);
+	await f.run(session, "before-upgrade", "bash", { command: "git push" });
+	assert.deepEqual(f.calls, []);
+	let entered!: () => void;
+	const insideTool = new Promise<void>((resolve) => {
+		entered = resolve;
+	});
+	let release!: () => void;
+	const wait = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	t.after(() => release());
+	f.toolGates.set("pnpm test", { entered, wait });
+	f.faux.setResponses([
+		fauxAssistantMessage(fauxToolCall("bash", { command: "pnpm test" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage(
+			fauxToolCall("codemode", {
+				code: 'const cmd = ["git", "push"].join(" "); await tools.bash({ command: cmd });',
+			}),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage("Local work done"),
+		fauxAssistantMessage(
+			fauxToolCall("codemode", {
+				code: 'const cmd = ["gh", "pr", "create"].join(" "); await tools.bash({ command: cmd });',
+			}),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage("Published"),
+	]);
+	await session.submit("busy", "Verify locally", "followUp");
+	await insideTool;
+	pending = true;
+	await session.submit("queued-publish", "Publish after this run", "followUp");
+	release();
+	await session.conversation.waitForIdle(context);
+	assert.deepEqual(
+		f.calls,
+		["pnpm test", "gh pr create"],
+		"old run's dynamic native push stayed blocked; queued run published",
+	);
+	assert.equal(preparations, 3, "one handshake per fresh run, none during tool rounds");
+	assert.deepEqual(JSON.parse(process.env.PILOT_CONTROL_PERMISSION!), {
+		authorizationId: "publish-grant",
+		level: "publish",
+	});
+	await f.adapters.at(-1)!.session.reload();
+	f.adapters.at(-1)!.refreshTools();
+	await f.run(session, "publish-after-reload", "bash", { command: "git push" });
+	await f.run(session, "merge-still-blocked", "bash", { command: ["gh", "pr", "merge", "1"].join(" ") });
+	assert.deepEqual(f.calls, ["pnpm test", "gh pr create", "git push"]);
+});
 
 test("native publication gates catch dynamic nested calls after reload and recovery", {
 	timeout: 20_000,

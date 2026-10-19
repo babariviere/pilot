@@ -41,6 +41,8 @@ export class ControlActions {
 		work: () => Promise<T>,
 		admission?: ControlAuthorizationUse,
 		onDenied?: (error: unknown) => Promise<void>,
+		/** Only for independently idempotent durable setters. Never retry a start, send or uncertain tool effect. */
+		recover?: () => Promise<T>,
 	): Promise<T> {
 		if (!this.isControl(caller)) return Promise.reject(new Error("Only the control chat may perform global actions"));
 		if (typeof operationId !== "string" || !operationId || operationId.length > 256)
@@ -59,6 +61,14 @@ export class ControlActions {
 				if (prior.action !== action || JSON.stringify(prior.args) !== JSON.stringify(args))
 					throw new Error("Action identity reused with different arguments");
 				if (prior.phase === "succeeded") return prior.result as T;
+				if (prior.phase === "requested" && recover) {
+					if (!this.isControl(caller)) throw new Error("Control role changed");
+					const result = JSON.parse(JSON.stringify(await recover())) as T;
+					const entry = await this.memory.auditAppend({ ...prior, phase: "succeeded", at: Date.now(), result });
+					this.changed();
+					await this.publish(entry).catch(() => {});
+					return result;
+				}
 				throw new Error(
 					"This action failed or its outcome is uncertain; inspect the audit before requesting a new action",
 				);

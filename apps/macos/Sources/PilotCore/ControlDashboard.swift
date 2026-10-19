@@ -78,7 +78,7 @@ public struct ControlFollowUp: Codable, Equatable, Sendable {
 
 public struct ControlAuthorizationNeeded: Codable, Identifiable, Equatable, Sendable {
     public let id: String
-    /// start, send, watch, stop, pause, resume or redirect.
+    /// start, send, watch, stop, pause, resume, redirect or upgrade_permission.
     public let action: String
     /// Exact JSON request, untrusted data. No action was taken.
     public let request: String

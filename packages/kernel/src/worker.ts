@@ -423,6 +423,7 @@ export function runKernelWorker(): void {
 			command.type === "control.result" ||
 			command.type === "pilot.result" ||
 			command.type === "watch.run.result" ||
+			command.type === "control.permission.result" ||
 			command.type === "database.result" ||
 			command.type === "slack.result" ||
 			command.type === "diagnostics.result" ||
@@ -497,6 +498,7 @@ export function runKernelWorker(): void {
 					process.env.PILOT_CONTROL_PERMISSION = JSON.stringify(command.spec.pilot.controlPermission);
 				else delete process.env.PILOT_CONTROL_PERMISSION;
 				const opened = await KernelSession.open(command.spec, {
+					prepareControlPermission: () => callDaemon((callId) => ({ type: "control.permission.prepare", callId })),
 					onSystemMessageState: (event) => {
 						void send({ type: "systemMessageState", event });
 					},
