@@ -2117,6 +2117,81 @@
 					"strings": ["t = 1.5", "42"]
 				}
 			]
+		},
+		{
+			"name": "shader inputs follow state",
+			"source": "function visual({ ui, state }) {\n  const s = state({ speed: 1 });\n  return () => ui.column([\n    ui.slider({ label: \"Speed\", min: 0, max: 4, value: s.speed, onChange: (v) => (s.speed = v) }),\n    ui.shader({ key: \"plasma\", height: 200, animated: true, label: \"Plasma\", inputs: { speed: s.speed, glow: 0.5 }, glsl: \"void mainImage(out vec4 fragColor, in vec2 fragCoord) {\\n  fragColor = vec4(fragCoord / iResolution.xy, 0.5 + 0.5 * sin(iTime * speed), glow);\\n}\" }),\n  ]);\n}",
+			"data": null,
+			"id": "00000000-0000-4000-8000-000000000006",
+			"now": 1792411200000,
+			"steps": [
+				{
+					"tree": {
+						"api": 1,
+						"root": {
+							"type": "column",
+							"children": [
+								{
+									"type": "slider",
+									"label": "Speed",
+									"min": 0,
+									"max": 4,
+									"value": 1,
+									"id": "0.0"
+								},
+								{
+									"type": "shader",
+									"key": "plasma",
+									"height": 200,
+									"animated": true,
+									"label": "Plasma",
+									"glsl": "void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n  fragColor = vec4(fragCoord / iResolution.xy, 0.5 + 0.5 * sin(iTime * speed), glow);\n}",
+									"inputs": {
+										"glow": 0.5,
+										"speed": 1
+									}
+								}
+							]
+						}
+					}
+				},
+				{
+					"event": {
+						"id": "0.0",
+						"value": 2.5
+					},
+					"changed": ["speed"],
+					"tree": {
+						"api": 1,
+						"root": {
+							"type": "column",
+							"children": [
+								{
+									"type": "slider",
+									"label": "Speed",
+									"min": 0,
+									"max": 4,
+									"value": 2.5,
+									"id": "0.0"
+								},
+								{
+									"type": "shader",
+									"key": "plasma",
+									"height": 200,
+									"animated": true,
+									"label": "Plasma",
+									"glsl": "void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n  fragColor = vec4(fragCoord / iResolution.xy, 0.5 + 0.5 * sin(iTime * speed), glow);\n}",
+									"inputs": {
+										"glow": 0.5,
+										"speed": 2.5
+									}
+								}
+							]
+						}
+					}
+				}
+			],
+			"finalState": "[{\"speed\":2.5}]"
 		}
 	],
 	"errors": [
@@ -2460,10 +2535,28 @@
 			"error": "no canvas with id 0 in the current view"
 		},
 		{
-			"name": "shader",
-			"source": "({ ui }) => () => ui.shader({ glsl: \"\" })",
+			"name": "shader without mainImage",
+			"source": "({ ui }) => () =>\n  ui.shader({ glsl: \"void main() {}\" })",
 			"data": null,
-			"error": "line 1: shader nodes are not yet supported"
+			"error": "line 2: shader: glsl must define void mainImage(out vec4 fragColor, in vec2 fragCoord)"
+		},
+		{
+			"name": "shader input name",
+			"source": "({ ui }) => () => ui.shader({ glsl: \"void mainImage(out vec4 c, in vec2 p) {}\", inputs: { \"a-b\": 1 } })",
+			"data": null,
+			"error": "line 1: shader: input \"a-b\" is not a usable GLSL name"
+		},
+		{
+			"name": "shader input value",
+			"source": "({ ui }) => () => ui.shader({ glsl: \"void mainImage(out vec4 c, in vec2 p) {}\", inputs: { speed: \"fast\" } })",
+			"data": null,
+			"error": "line 1: shader: input \"speed\" must be a finite number, got fast"
+		},
+		{
+			"name": "shader too long",
+			"source": "({ ui }) => () => ui.shader({ glsl: \"void mainImage(out vec4 c, in vec2 p) {}\" + \" \".repeat(16384) })",
+			"data": null,
+			"error": "line 1: shader: glsl is longer than 16384 characters"
 		},
 		{
 			"name": "script error",

@@ -27,6 +27,19 @@ struct VisualTreeTests {
         #expect(VisualRuntime.source + "\n" == runtime)
     }
 
+    @Test func decodesShadersWithSortedInputsAndDefaults() throws {
+        let json = #"{"api":1,"root":{"type":"shader","glsl":"void mainImage(out vec4 c, in vec2 p) {}","inputs":{"speed":2,"glow":0.5}}}"#
+        let tree = try VisualTree(VisualValue(json: Data(json.utf8)))
+        guard case .shader(let shader) = tree.root.kind else {
+            Issue.record("expected a shader")
+            return
+        }
+        #expect(shader.height == 240)
+        #expect(shader.animated)
+        #expect(shader.inputs == [.init(name: "glow", value: 0.5), .init(name: "speed", value: 2)])
+        #expect(shader.translationKey == "glow,speed\nvoid mainImage(out vec4 c, in vec2 p) {}")
+    }
+
     @Test func newerAPIsAskForAnUpdate() {
         #expect(throws: VisualTree.DecodingError.unsupportedAPI(2)) {
             try VisualTree(["api": 2, "root": ["type": "future"]])

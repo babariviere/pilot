@@ -3,8 +3,8 @@
 `kind: "visual"` is the **first choice** for charts, stats, tables, small dashboards, controls (tabs, toggles,
 sliders, buttons) and 2D drawings or animations (`ui.canvas`). Pilot draws visuals natively in the chat: light and
 dark, the chat's fonts, selectable text and no web page. Use HTML or React only for what visuals can't express: custom
-layouts, rich documents, wide content and web libraries such as Mermaid, d3 force graphs or three.js. Shader nodes
-are not available yet; use a shader artifact for GLSL.
+layouts, rich documents, wide content and web libraries such as Mermaid, d3 force graphs or three.js. For GLSL effects
+inside a visual, use `ui.shader`; a standalone shader artifact suits a shader on its own.
 
 The API is in [visual.d.ts](visual.d.ts). A visual is a **plain JavaScript function** defined in your codemode script
 and published as its text with `String(visual)` (tool arguments are JSON, so a function passed directly arrives
@@ -76,14 +76,36 @@ ui.canvas({
 (`t` is seconds; it stays 0 under Reduce Motion). It may read state but never assign it, and must finish within 8 ms:
 two slow frames in a row stop the canvas with the error. Keep frames to a few thousand commands.
 
+## Shader
+
+`ui.shader` draws a Shadertoy-style `mainImage` with Metal, as wide as the column. The GLSL is the same as a shader
+artifact's ([shaders.md](shaders.md)): GLSL ES 3.00 without `#version`, `iResolution`, `iTime`, `iTimeDelta`,
+`iFrame` and `iMouse` declared (`iMouse.xy` is the pointer while it is over the shader). Each `inputs` entry adds a
+`float` uniform of that name, set from state on every view:
+
+```js
+ui.shader({
+  height: 200, label: "Plasma", inputs: { speed: s.speed },
+  glsl: `void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  vec2 uv = (fragCoord - 0.5 * iResolution.xy) / iResolution.y;
+  float v = sin(uv.x * 6.0 + iTime * speed) + sin(length(uv) * 9.0 - iTime);
+  fragColor = vec4(0.5 + 0.5 * cos(vec3(0.0, 2.0, 4.0) + v), 1.0);
+}`,
+})
+```
+
+It animates while visible (`animated: false` draws once) and shows a still frame at `iTime` 0 under Reduce Motion.
+Publication compiles every shader the views show with glslang and translates it to Metal; errors name the shader and
+the line in its GLSL. Keep per-pixel work modest: it runs on the reader's GPU every frame.
+
 ## Publication check
 
 Before saving, Pilot runs the function, renders the first view, validates the tree (known nodes and props, token
 names, finite numbers, one series value per x, unique keys) and exercises every control once (each tab, both toggle
 states, slider min and max, each button; up to 24 interactions). It draws every canvas at widths 760 and 360, with and
-without a pointer, and at `t` 0 and 1.5 when animated. The first failure comes back as an error with the line inside
-your function and what triggered it. Nothing is saved until the check passes, so catch the error, fix the function or
-the data and publish again in the same script.
+without a pointer, and at `t` 0 and 1.5 when animated, and compiles every shader. The first failure comes back as an
+error with the line inside your function (or shader) and what triggered it. Nothing is saved until the check passes,
+so catch the error, fix the function or the data and publish again in the same script.
 
 | Limit | Value |
 | --- | --- |

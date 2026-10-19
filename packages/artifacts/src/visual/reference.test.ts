@@ -9,6 +9,7 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { loadQuickJSWasm } from "@earendil-works/pi-codemode";
 import { runVisualCheck } from "./check.ts";
+import { checkVisual } from "./index.ts";
 import { VISUAL_COLORS, VISUAL_LIMITS, VISUAL_TEXT_SIZES, VISUAL_WEIGHTS } from "./schema.ts";
 import { visualRuntime } from "./session.ts";
 
@@ -197,4 +198,12 @@ test("the examples in visuals.md pass the publication check", async () => {
 	const drawn = await check(`({ ui }) => () => ${canvas.trim()}`);
 	assert.ok(drawn.ok, JSON.stringify(drawn));
 	assert.equal(drawn.report.draws, 8);
+	const shader = blocks.find((block) => block.startsWith("ui.shader("));
+	assert.ok(shader, "visuals.md has no ui.shader example");
+	const shaded = await checkVisual({
+		source: `({ ui, state }) => { const s = state({ speed: 1 }); return () => ${shader.trim()}; }`,
+		data: "null",
+		id: "reference",
+	});
+	assert.equal(shaded.shaders?.length, 1);
 });

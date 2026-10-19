@@ -23,10 +23,11 @@ const PRELUDE = [
 export const SHADER_VERTEX_SOURCE =
 	"#version 300 es\nvoid main(){vec2 p=vec2(float((gl_VertexID<<1)&2),float(gl_VertexID&2));gl_Position=vec4(p*2.0-1.0,0.0,1.0);}";
 
-/** Wrap mainImage so compiler line numbers match the agent's source. */
-export function shaderFragmentSource(source: string): string {
+/** Wrap mainImage so compiler line numbers match the agent's source. inputs are extra float uniforms (visuals). */
+export function shaderFragmentSource(source: string, inputs: readonly string[] = []): string {
 	return (
 		PRELUDE +
+		inputs.map((name) => `\nuniform float ${name};`).join("") +
 		"\n#line 1\n" +
 		source +
 		"\n#line " +
@@ -96,11 +97,11 @@ export function formatShaderErrors(errors: ShaderDiagnostic[], source: string): 
 /** Compile in a worker, so a pathological shader can be stopped without blocking the event loop. */
 export async function checkShader(
 	source: string,
-	options: { signal?: AbortSignal; timeoutMs?: number } = {},
+	options: { signal?: AbortSignal; timeoutMs?: number; inputs?: readonly string[] } = {},
 ): Promise<ShaderDiagnostic[]> {
 	options.signal?.throwIfAborted();
 	const worker = new Worker(new URL("./shader-check-worker.ts", import.meta.url), {
-		workerData: { vertex: SHADER_VERTEX_SOURCE, fragment: shaderFragmentSource(source) },
+		workerData: { vertex: SHADER_VERTEX_SOURCE, fragment: shaderFragmentSource(source, options.inputs) },
 		resourceLimits: { maxOldGenerationSizeMb: 64 },
 		stdout: true,
 		stderr: true,

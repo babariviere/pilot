@@ -40,6 +40,12 @@ export const VISUAL_LIMITS = Object.freeze({
 	drawTextChars: 64 * 1024,
 	/** Canvas draws the pre-check runs, across every view it renders. */
 	checkedDraws: 96,
+	/** UTF-16 code units of one shader's GLSL. */
+	shaderChars: 16 * 1024,
+	/** Named number inputs of one shader. */
+	shaderInputs: 16,
+	/** Different shaders (GLSL and input names) one visual may show across its views. */
+	shaders: 4,
 });
 
 export const VISUAL_COLORS = [
@@ -298,6 +304,28 @@ const nodes = {
 				"2D drawing, as wide as the column. The host calls draw(id, width, height, t, pointer) for its commands; it redraws on resize and pointer moves, and every frame when animated.",
 		},
 	),
+	Shader: Type.Object(
+		{
+			type: Type.Literal("shader"),
+			key: Type.Optional(Key),
+			height: Type.Number({ minimum: 24, maximum: 600, description: "Height in points. Default 240." }),
+			animated: Type.Optional(
+				Type.Boolean({ description: "Draw every display frame while visible. Default true; false draws once." }),
+			),
+			label: Type.Optional(Type.String({ maxLength: 500, description: "Accessibility description." })),
+			glsl: Type.String({
+				maxLength: 16 * 1024,
+				description:
+					"Shadertoy-style GLSL ES 3.00 defining mainImage. The revision carries its Metal translation, keyed by this text and the input names.",
+			}),
+			inputs: Type.Optional(
+				Type.Record(Type.String({ pattern: "^[A-Za-z_][A-Za-z0-9_]{0,31}$" }), Type.Number(), {
+					description: "Float uniforms by name, in name order, set from state on every view.",
+				}),
+			),
+		},
+		{ ...strict, description: "A fragment shader as wide as the column, drawn with Metal." },
+	),
 };
 
 const Node = Type.Union(
@@ -317,6 +345,7 @@ const Node = Type.Union(
 		nodes.Slider,
 		nodes.Button,
 		nodes.Canvas,
+		nodes.Shader,
 	],
 	{ description: "One node, discriminated by type." },
 );

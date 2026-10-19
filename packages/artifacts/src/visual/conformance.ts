@@ -112,6 +112,14 @@ const deterministic = `({ ui, state }) => {
   ]);
 }`;
 
+const shader = `function visual({ ui, state }) {
+  const s = state({ speed: 1 });
+  return () => ui.column([
+    ui.slider({ label: "Speed", min: 0, max: 4, value: s.speed, onChange: (v) => (s.speed = v) }),
+    ui.shader({ key: "plasma", height: 200, animated: true, label: "Plasma", inputs: { speed: s.speed, glow: 0.5 }, glsl: "void mainImage(out vec4 fragColor, in vec2 fragCoord) {\\n  fragColor = vec4(fragCoord / iResolution.xy, 0.5 + 0.5 * sin(iTime * speed), glow);\\n}" }),
+  ]);
+}`;
+
 const regions = [
 	{ region: "eu", p95: 120, p99: 180 },
 	{ region: "us", p95: 140, p99: 210 },
@@ -215,6 +223,14 @@ export const CASES: Case[] = [
 			{ id: "0.1", input: { width: 360, height: 160, t: 1.5, pointer: { x: 180, y: 80 } } },
 		],
 	},
+	{
+		name: "shader inputs follow state",
+		source: shader,
+		data: null,
+		id: "00000000-0000-4000-8000-000000000006",
+		now: NOW,
+		events: [{ id: "0.0", value: 2.5 }],
+	},
 ];
 
 const lines = (...parts: string[]) => parts.join("\n");
@@ -301,7 +317,27 @@ export const ERRORS: ErrorCase[] = [
 	},
 	{ name: "link scheme", source: '({ ui }) => () => ui.link("x", { href: "file:///etc/passwd" })', data: null },
 	...drawErrors(),
-	{ name: "shader", source: '({ ui }) => () => ui.shader({ glsl: "" })', data: null },
+	{
+		name: "shader without mainImage",
+		source: lines("({ ui }) => () =>", '  ui.shader({ glsl: "void main() {}" })'),
+		data: null,
+	},
+	{
+		name: "shader input name",
+		source: '({ ui }) => () => ui.shader({ glsl: "void mainImage(out vec4 c, in vec2 p) {}", inputs: { "a-b": 1 } })',
+		data: null,
+	},
+	{
+		name: "shader input value",
+		source:
+			'({ ui }) => () => ui.shader({ glsl: "void mainImage(out vec4 c, in vec2 p) {}", inputs: { speed: "fast" } })',
+		data: null,
+	},
+	{
+		name: "shader too long",
+		source: '({ ui }) => () => ui.shader({ glsl: "void mainImage(out vec4 c, in vec2 p) {}" + " ".repeat(16384) })',
+		data: null,
+	},
 	{ name: "script error", source: lines("({ ui, data }) => () =>", "  ui.text(data.missing.field)"), data: {} },
 	{
 		name: "handler error",

@@ -209,7 +209,8 @@ labels (after tabs "metric" = "p99")`. Success returns node, draw and interactio
   shared display clock (the one the motion tasks introduce), which stops when nothing animates, when the
   view is off-screen or the window hidden, and under Reduce Motion.
 - **Shaders.** A `CAMetalLayer` view draws straight to its drawable, with no CPU readback. MSL
-  comes from the revision and compiles once per revision, off the main thread. Uniforms follow the
+  comes from the revision (translated at publish by naga, pinned as `naga-wasm`) and compiles once per
+  revision, off the main thread. Uniforms follow the
   shader artifact kind (`iResolution`, `iTime`, `iTimeDelta`, `iFrame`, `iMouse`) plus named inputs
   bound to state. The same visibility and Reduce Motion rules apply. 3D scenes are out of scope.
 - **Height.** Heights come from the tree: charts, canvases and shaders carry explicit heights, and

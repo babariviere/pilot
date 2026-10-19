@@ -34,12 +34,26 @@ export interface VisualCheckReport {
 	logs: string[];
 }
 
+/** A shader node's GLSL and input names, which together select its Metal translation. */
+export interface VisualShaderSpec {
+	glsl: string;
+	inputs: string[];
+	/** The node's key, label or path, for errors. */
+	name: string;
+}
+
 export type VisualCheckResult =
-	| { ok: true; engine: string; report: VisualCheckReport }
+	| { ok: true; engine: string; report: VisualCheckReport; shaders: VisualShaderSpec[] }
 	| { ok: false; error: string; logs: string[] };
 
 type Control = Exclude<Extract<VisualNode, { id: string }>, { type: "canvas" }>;
 type Canvas = Extract<VisualNode, { type: "canvas" }>;
+type Shader = Extract<VisualNode, { type: "shader" }>;
+
+/** The key that selects a shader's translation: input names, then the GLSL. */
+export function visualShaderKey(glsl: string, inputs: readonly string[]): string {
+	return `${inputs.join(",")}\n${glsl}`;
+}
 
 interface Step {
 	id: string;
@@ -67,6 +81,20 @@ export async function runVisualCheck(input: VisualCheckInput): Promise<VisualChe
 			return session.render().tree;
 		};
 		const first = fresh();
+		const shaders = new Map<string, VisualShaderSpec>();
+		const collect = (tree: VisualTree) => {
+			for (const node of shadersOf(tree.root)) {
+				const inputs = Object.keys(node.inputs ?? {});
+				const key = visualShaderKey(node.glsl, inputs);
+				if (shaders.has(key)) continue;
+				if (shaders.size >= VISUAL_LIMITS.shaders)
+					throw new VisualFailure(
+						`the visual uses more than ${VISUAL_LIMITS.shaders} different shaders (GLSL and input names)`,
+					);
+				shaders.set(key, { glsl: node.glsl, inputs, name: node.key ?? node.label ?? `shader ${shaders.size + 1}` });
+			}
+		};
+		collect(first);
 		let draws = 0;
 		const drawAll = (tree: VisualTree, steps: Step[]) => {
 			for (const canvas of canvasesOf(tree.root))
@@ -133,6 +161,7 @@ export async function runVisualCheck(input: VisualCheckInput): Promise<VisualChe
 					}
 					if (!replay) {
 						interactions++;
+						collect(tree);
 						drawAll(tree, steps);
 						// Controls a step reveals are exercised later, after replaying the steps that revealed them.
 						discover(tree, [...steps]);
@@ -144,6 +173,7 @@ export async function runVisualCheck(input: VisualCheckInput): Promise<VisualChe
 			ok: true,
 			engine: session.engine,
 			report: { nodes: countNodes(first.root), controls: seen.size, interactions, draws, logs: session.logs },
+			shaders: [...shaders.values()],
 		};
 	} catch (error) {
 		const failed = error instanceof VisualFailure ? error : new VisualFailure(String(error));
@@ -168,6 +198,12 @@ export function controlsOf(node: VisualNode, into: Control[] = []): Control[] {
 export function canvasesOf(node: VisualNode, into: Canvas[] = []): Canvas[] {
 	if (node.type === "canvas") into.push(node);
 	if ("children" in node) for (const child of node.children) canvasesOf(child as VisualNode, into);
+	return into;
+}
+
+export function shadersOf(node: VisualNode, into: Shader[] = []): Shader[] {
+	if (node.type === "shader") into.push(node);
+	if ("children" in node) for (const child of node.children) shadersOf(child as VisualNode, into);
 	return into;
 }
 

@@ -125,8 +125,14 @@ test("console output is kept, bounded in lines and length", async () => {
 	assert.equal(result.report.logs[1], '{"i":1}');
 });
 
-test("shader nodes are not supported yet", async () => {
-	assert.equal(failed(await run("({ ui }) => () =>\n  ui.shader({})")), "line 2: shader nodes are not yet supported");
+test("shader nodes report the shaders their views show", async () => {
+	const result = await run(
+		'({ ui }) => () => ui.shader({ label: "Glow", inputs: { b: 2, a: 1 }, glsl: "void mainImage(out vec4 c, in vec2 p) { c = vec4(a); }" })',
+	);
+	assert.ok(result.ok, JSON.stringify(result));
+	assert.deepEqual(result.shaders, [
+		{ glsl: "void mainImage(out vec4 c, in vec2 p) { c = vec4(a); }", inputs: ["a", "b"], name: "Glow" },
+	]);
 });
 
 test("every canvas draws at both widths, with and without a pointer, and at two times when animated", async () => {

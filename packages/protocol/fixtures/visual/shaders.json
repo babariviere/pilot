@@ -1,0 +1,49 @@
+{
+	"translator": "naga 30.0.1",
+	"layout": {
+		"iMouse": 0,
+		"iResolution": 16,
+		"iTime": 32,
+		"iTimeDelta": 36,
+		"iFrame": 40,
+		"inputs": 44
+	},
+	"shaders": [
+		{
+			"glsl": "void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n  float m = length(fragCoord - iMouse.xy) < 1.0 ? 1.0 : 0.0;\n  fragColor = vec4(fragCoord.x / iResolution.x, fragCoord.y / iResolution.y, speed / 4.0 + m * 0.25, glow);\n}",
+			"inputs": ["glow", "speed"],
+			"msl": "// language: metal2.4\n#include <metal_stdlib>\n#include <simd/simd.h>\n\nusing metal::uint;\n\nstruct PilotUniforms {\n    metal::float4 iMouse;\n    metal::float4 pilotResolution;\n    float iTime;\n    float iTimeDelta;\n    int iFrame;\n    float glow;\n    float speed;\n    char _pad7[12];\n};\nstruct FragmentOutput {\n    metal::float4 pilotFragColor;\n};\n\nvoid mainImage(\n    thread metal::float4& fragColor,\n    metal::float2 fragCoord,\n    constant PilotUniforms& global\n) {\n    metal::float2 fragCoord_1 = {};\n    float local = {};\n    float m = {};\n    fragCoord_1 = fragCoord;\n    metal::float2 _e18 = fragCoord_1;\n    metal::float4 _e19 = global.iMouse;\n    if (metal::length(_e18 - _e19.xy) < 1.0) {\n        local = 1.0;\n    } else {\n        local = 0.0;\n    }\n    float _e28 = local;\n    m = _e28;\n    metal::float2 _e30 = fragCoord_1;\n    metal::float4 _e32 = global.pilotResolution;\n    metal::float2 _e36 = fragCoord_1;\n    metal::float4 _e38 = global.pilotResolution;\n    float _e42 = global.speed;\n    float _e45 = m;\n    float _e49 = global.glow;\n    fragColor = metal::float4(_e30.x / _e32.x, _e36.y / _e38.y, (_e42 / 4.0) + (_e45 * 0.25), _e49);\n    return;\n}\n\nvoid main_1(\n    thread metal::float4& pilotFragColor,\n    constant PilotUniforms& global,\n    thread metal::float4& gl_FragCoord_1\n) {\n    metal::float4 color = metal::float4(0.0);\n    metal::float4 _e20 = gl_FragCoord_1;\n    metal::float4 _e22 = global.pilotResolution;\n    metal::float4 _e24 = gl_FragCoord_1;\n    mainImage(color, metal::float2(_e20.x, _e22.y - _e24.y), global);\n    metal::float4 _e29 = color;\n    metal::float4 _e31 = color;\n    metal::float3 _e33 = _e29.xyz * _e31.w;\n    metal::float4 _e34 = color;\n    pilotFragColor = metal::float4(_e33.x, _e33.y, _e33.z, _e34.w);\n    return;\n}\n\nstruct main_Input {\n};\nstruct main_Output {\n    metal::float4 pilotFragColor [[color(0)]];\n};\nfragment main_Output main_(\n  metal::float4 gl_FragCoord [[position]]\n, constant PilotUniforms& global [[buffer(0)]]\n) {\n    metal::float4 pilotFragColor = {};\n    metal::float4 gl_FragCoord_1 = {};\n    gl_FragCoord_1 = gl_FragCoord;\n    main_1(pilotFragColor, global, gl_FragCoord_1);\n    metal::float4 _e19 = pilotFragColor;\n    const auto _tmp = FragmentOutput {_e19};\n    return main_Output { _tmp.pilotFragColor };\n}\n",
+			"entry": "main_",
+			"uniforms": {
+				"width": 64,
+				"height": 32,
+				"time": 1.5,
+				"frame": 7,
+				"mouse": [10, 20, 0, 0],
+				"inputs": [0.5, 2]
+			},
+			"pixels": [
+				{
+					"x": 0,
+					"y": 0,
+					"rgba": [0.00390625, 0.4921875, 0.25, 0.5]
+				},
+				{
+					"x": 0,
+					"y": 31,
+					"rgba": [0.00390625, 0.0078125, 0.25, 0.5]
+				},
+				{
+					"x": 63,
+					"y": 0,
+					"rgba": [0.49609375, 0.4921875, 0.25, 0.5]
+				},
+				{
+					"x": 10,
+					"y": 11,
+					"rgba": [0.08203125, 0.3203125, 0.375, 0.5]
+				}
+			]
+		}
+	]
+}

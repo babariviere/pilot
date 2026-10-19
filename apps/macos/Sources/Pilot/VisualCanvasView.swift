@@ -212,7 +212,8 @@ final class VisualCanvasDrawer: ObservableObject {
 }
 
 extension VisualDisplayClock {
-    fileprivate func unsubscribe(id: ObjectIdentifier) {
+    /// Unsubscribes an owner that is going away, from its deinit.
+    func unsubscribe(id: ObjectIdentifier) {
         subscribers[id] = nil
         if subscribers.isEmpty { link?.isPaused = true }
     }
@@ -298,7 +299,7 @@ private struct VisualCanvasFailure: View {
 
 /// Reports whether the canvas can be seen: in a window on screen and not occluded, not hidden, and at least partly
 /// inside its scroll view. Rechecked when the window's occlusion changes or any of its clip views scrolls.
-private struct VisualCanvasVisibility: NSViewRepresentable {
+struct VisualCanvasVisibility: NSViewRepresentable {
     let changed: (Bool) -> Void
 
     func makeNSView(context: Context) -> VisibilityView { VisibilityView() }

@@ -37,6 +37,8 @@
 		drawCommands: 20000,
 		drawPoints: 100000,
 		drawTextChars: 64 * 1024,
+		shaderChars: 16 * 1024,
+		shaderInputs: 16,
 	});
 	const COLORS = [
 		"text",
@@ -824,7 +826,40 @@
 		},
 	});
 
-	const unsupported = (name) => () => fail(`${name} nodes are not yet supported`);
+	// Names the shader prelude declares, and GLSL's own prefixes, which inputs can't take.
+	const SHADER_RESERVED = /^(?:iResolution|iTime|iTimeDelta|iFrame|iMouse|main|mainImage|pilot.*|gl_.*)$/;
+
+	function shader(options) {
+		const p = props("shader", options, ["key", "height", "animated", "label", "glsl", "inputs"], true);
+		const glsl = str("shader", "glsl", p.glsl);
+		if (!glsl.includes("mainImage"))
+			fail("shader: glsl must define void mainImage(out vec4 fragColor, in vec2 fragCoord)");
+		if (glsl.length > LIMITS.shaderChars) fail(`shader: glsl is longer than ${LIMITS.shaderChars} characters`);
+		let inputs;
+		if (p.inputs !== undefined) {
+			if (!isPlain(p.inputs)) fail(`shader: inputs must be an object of numbers, got ${describe(p.inputs)}`);
+			const names = keys(p.inputs).sort();
+			if (names.length > LIMITS.shaderInputs) fail(`shader: at most ${LIMITS.shaderInputs} inputs`);
+			inputs = {};
+			for (let index = 0; index < names.length; index++) {
+				const name = names[index];
+				if (!/^[A-Za-z_][A-Za-z0-9_]{0,31}$/.test(name) || SHADER_RESERVED.test(name) || name.includes("__"))
+					fail(`shader: input "${name}" is not a usable GLSL name`);
+				inputs[name] = num("shader", `input "${name}"`, p.inputs[name]);
+			}
+			if (!names.length) inputs = undefined;
+		}
+		const out = {
+			type: "shader",
+			key: key("shader", p.key),
+			height: num("shader", "height", p.height ?? 240, false, 24, 600),
+			animated: bool("shader", "animated", p.animated),
+			label: str("shader", "label", p.label, true),
+			glsl,
+			inputs,
+		};
+		return node(out, textLength(out.label));
+	}
 
 	const ui = freeze({
 		column: (...args) => {
@@ -880,7 +915,7 @@
 		slider,
 		button,
 		canvas,
-		shader: unsupported("shader"),
+		shader,
 	});
 
 	// Reader state: plain JSON slots, one per state() call in setup, restored by call order.
