@@ -2,6 +2,9 @@ import Foundation
 
 public enum ArtifactKind: String, Codable, Hashable, Sendable {
     case html, react, image, swiftui, shader
+    /// A native agent visual: a JavaScript function the app runs in its sandboxed visual service
+    /// (docs/native-visuals.md).
+    case visual
 
     public var sourceLanguage: String {
         switch self {
@@ -9,6 +12,7 @@ public enum ArtifactKind: String, Codable, Hashable, Sendable {
         case .react: return "jsx"
         case .swiftui: return "swift"
         case .shader: return "glsl"
+        case .visual: return "javascript"
         }
     }
 }
@@ -49,6 +53,45 @@ public struct ArtifactRevision: Codable, Identifiable, Equatable, Sendable {
     public let libraries: [ArtifactLibrary]
     /// Library versions used when the revision was prepared. Absent on older revisions.
     public var libraryVersions: [String: String]? = nil
+    /// Visuals only: the JSON value the visual function receives as `data`.
+    public var data: JSONValue? = nil
+    /// Visuals only: the engine and API the revision was checked with.
+    public var visual: ArtifactVisual? = nil
+    /// Visuals only: `data` exactly as pilotd sent it. JSONValue drops object key order, which a visual can observe
+    /// (Object.keys(data)), so the visual runs on this text. Set by decoding(_:), never encoded.
+    public var dataJSON: Data? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case id, sessionId, projectId, title, kind, revision, createdAt, updatedAt, source, html, libraries
+        case libraryVersions, data, visual
+    }
+
+    /// Decodes a revision and, for visuals, keeps the raw text of its data.
+    public static func decoding(_ json: Data) throws -> ArtifactRevision {
+        var revision = try JSONDecoder().decode(ArtifactRevision.self, from: json)
+        if revision.kind == .visual { revision.dataJSON = RawJSONMember.value(of: "data", in: json) }
+        return revision
+    }
+
+    /// The visual's data as JSON text, in the order the agent wrote it.
+    public var visualDataJSON: Data {
+        if let dataJSON { return dataJSON }
+        guard let data, let encoded = try? JSONEncoder().encode(data) else { return Data("null".utf8) }
+        return encoded
+    }
+}
+
+/// A visual revision's runtime versions and publish-time check.
+public struct ArtifactVisual: Codable, Equatable, Hashable, Sendable {
+    /// Node tree API version the visual was checked against.
+    public let api: Int
+    /// For example "quickjs-ng 0.17.0".
+    public let engine: String
+
+    public init(api: Int, engine: String) {
+        self.api = api
+        self.engine = engine
+    }
 }
 
 public struct ArtifactReference: Codable, Identifiable, Equatable, Hashable, Sendable {

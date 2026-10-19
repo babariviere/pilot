@@ -9,6 +9,8 @@ final class ArtifactRenderState: ObservableObject {
     @Published var error: String?
     @Published var contentSize: CGSize?
     weak var webView: WKWebView?
+    /// Native artifacts (visuals) draw their own screenshot instead of the web view's.
+    var nativeSnapshot: (@MainActor () throws -> Data)?
 
     /// Longest captured side, in points. Taller or wider documents are scaled down to bound bitmap memory.
     static let maxSnapshotSide: CGFloat = 8192
@@ -17,6 +19,7 @@ final class ArtifactRenderState: ObservableObject {
     /// `takeSnapshot` only paints the visible tiles, so render the full page to PDF and rasterize it.
     /// No JS/native bridge is exposed to the artifact.
     func snapshotPNG() async throws -> Data {
+        if let nativeSnapshot { return try nativeSnapshot() }
         guard !loading, error == nil, let webView else { throw ClientError("Preview is not ready") }
         let pdf = try await webView.pdf(configuration: WKPDFConfiguration())
         let scale = webView.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2

@@ -1451,7 +1451,8 @@ final class PilotClient: ObservableObject {
         var components = URLComponents(url: try artifactURL(["sessions", reference.sessionId, "artifacts", reference.id]),
                                        resolvingAgainstBaseURL: false)!
         if !latest { components.queryItems = [URLQueryItem(name: "revision", value: String(reference.revision))] }
-        let result: ArtifactRevision = try await get(components.url!)
+        // Keeps a visual's data text, whose key order the visual can observe.
+        let result: ArtifactRevision = try await get(components.url!, decode: ArtifactRevision.decoding)
         guard result.id == reference.id, result.sessionId == reference.sessionId,
               latest || result.revision == reference.revision else { throw ClientError("Invalid artifact revision") }
         return result
@@ -1475,7 +1476,10 @@ final class PilotClient: ObservableObject {
         return url
     }
 
-    private func get<Response: Decodable & Sendable>(_ url: URL) async throws -> Response {
+    private func get<Response: Decodable & Sendable>(
+        _ url: URL,
+        decode: @escaping @Sendable (Data) throws -> Response = { try JSONDecoder().decode(Response.self, from: $0) }
+    ) async throws -> Response {
         guard !disconnected else { throw HostRoutingError.disconnected }
         guard activeReads < 4 else { throw ClientError("Host reads are busy") }
         activeReads += 1
@@ -1497,7 +1501,7 @@ final class PilotClient: ObservableObject {
             throw ClientError(error ?? "HTTP \(status)")
         }
         let value = try await Task.detached(priority: .userInitiated) {
-            try JSONDecoder().decode(Response.self, from: data)
+            try decode(data)
         }.value
         guard generation == connectionGeneration, !disconnected else { throw HostRoutingError.staleGeneration }
         return value
