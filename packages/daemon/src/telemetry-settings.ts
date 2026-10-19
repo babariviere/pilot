@@ -4,6 +4,7 @@ import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { AIUsageBudget, DaemonHello, TelemetrySettings, TelemetrySettingsPatch } from "@pilot/protocol";
 import { type NodeTelemetryOptions, validateOtlpEndpoint } from "@pilot/telemetry";
+import { FeatureUsageStore } from "./feature-usage.ts";
 
 const FILE = "telemetry.json";
 const SCHEMA = 1;
@@ -11,6 +12,7 @@ const SCHEMA = 1;
 interface StoredTelemetrySettings {
 	schemaVersion: 1;
 	localDiagnostics: boolean;
+	localFeatureUsage?: boolean;
 	remoteOperational: boolean;
 	productAnalytics: boolean;
 	endpoint?: string;
@@ -72,6 +74,7 @@ function stored(value: unknown): StoredTelemetrySettings | undefined {
 	const input = value as Record<string, unknown>;
 	if (
 		input.schemaVersion !== SCHEMA ||
+		(input.localFeatureUsage !== undefined && typeof input.localFeatureUsage !== "boolean") ||
 		typeof input.localDiagnostics !== "boolean" ||
 		typeof input.remoteOperational !== "boolean" ||
 		typeof input.productAnalytics !== "boolean" ||
@@ -98,6 +101,7 @@ function stored(value: unknown): StoredTelemetrySettings | undefined {
 	return {
 		schemaVersion: SCHEMA,
 		localDiagnostics: input.localDiagnostics,
+		localFeatureUsage: input.localFeatureUsage === true,
 		remoteOperational: input.remoteOperational,
 		productAnalytics: input.productAnalytics,
 		...(endpoint ? { endpoint } : {}),
@@ -114,7 +118,7 @@ function patch(value: unknown): TelemetrySettingsPatch {
 	if (
 		Object.keys(input).some(
 			(key) =>
-				!["localDiagnostics", "remoteOperational", "productAnalytics", "endpoint", "aiUsageBudget"].includes(key),
+				!["localDiagnostics", "localFeatureUsage", "remoteOperational", "productAnalytics", "endpoint", "aiUsageBudget"].includes(key),
 		) ||
 		typeof input.localDiagnostics !== "boolean" ||
 		typeof input.remoteOperational !== "boolean" ||
@@ -122,6 +126,8 @@ function patch(value: unknown): TelemetrySettingsPatch {
 		(input.endpoint !== undefined && typeof input.endpoint !== "string")
 	)
 		throw new Error("Invalid telemetry settings");
+	if (input.localFeatureUsage !== undefined && typeof input.localFeatureUsage !== "boolean")
+		throw new Error("Invalid local feature collection setting");
 	let endpoint: string | undefined;
 	if (typeof input.endpoint === "string" && input.endpoint.trim())
 		endpoint = validateOtlpEndpoint(input.endpoint.trim());
@@ -131,6 +137,7 @@ function patch(value: unknown): TelemetrySettingsPatch {
 	if (hasBudget && input.aiUsageBudget !== null && !aiUsageBudget) throw new Error("Invalid AI usage budget");
 	return {
 		localDiagnostics: input.localDiagnostics,
+		...(input.localFeatureUsage === undefined ? {} : { localFeatureUsage: input.localFeatureUsage as boolean }),
 		remoteOperational: input.remoteOperational,
 		productAnalytics: input.productAnalytics,
 		...(endpoint ? { endpoint } : {}),
@@ -139,6 +146,7 @@ function patch(value: unknown): TelemetrySettingsPatch {
 }
 
 export class TelemetrySettingsService {
+	readonly featureUsage: FeatureUsageStore;
 	private value: StoredTelemetrySettings;
 	private readonly file: string;
 	private readonly hostKind: TelemetrySettings["hostKind"];
@@ -147,6 +155,7 @@ export class TelemetrySettingsService {
 	private saving = Promise.resolve();
 
 	private constructor(home: string, hello: DaemonHello, value: StoredTelemetrySettings) {
+		this.featureUsage = new FeatureUsageStore(home);
 		this.file = join(home, FILE);
 		this.hello = hello;
 		this.value = value;
@@ -161,6 +170,7 @@ export class TelemetrySettingsService {
 		const service = new TelemetrySettingsService(home, hello, value ?? defaults());
 		if (!value) await service.persist();
 		else await chmod(service.file, 0o600);
+		await service.featureUsage.load(value?.localFeatureUsage === true);
 		return service;
 	}
 
@@ -170,6 +180,8 @@ export class TelemetrySettingsService {
 			hostKind: this.hostKind,
 			hostId: this.hostId(),
 			localDiagnostics: this.value.localDiagnostics,
+			localFeatureUsage: this.value.localFeatureUsage === true,
+			...(this.featureUsage.collectionEpoch ? { featureUsageEpoch: this.featureUsage.collectionEpoch } : {}),
 			remoteOperational: this.value.remoteOperational,
 			productAnalytics: this.value.productAnalytics,
 			...(this.hostKind === "local" && this.value.productAnalytics ? { analyticsId: this.value.analyticsId } : {}),
@@ -194,6 +206,7 @@ export class TelemetrySettingsService {
 			...(revokedAnalytics ? { analyticsId: randomIdentifier() } : {}),
 		};
 		await this.persist();
+		await this.featureUsage.configure(this.value.localFeatureUsage === true);
 		const settings = this.settings();
 		for (const listener of this.listeners) {
 			try {

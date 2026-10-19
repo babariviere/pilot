@@ -2500,6 +2500,7 @@ export class SessionManager {
 
 	readonly diagnosticReadBroker = new DiagnosticReadBroker();
 	diagnosticDomainRead?: (request: DiagnosticContextRequest) => Promise<DiagnosticContextResponse>;
+	diagnosticFeatureUsage?: (host: OperationHost) => import("@pilot/protocol").FeatureUsageSnapshot;
 	private diagnosticContextReads = new Map<string, AbortController>();
 
 	/** Authorization comes only from supervised worker identity, never request fields. */
@@ -2592,7 +2593,7 @@ export class SessionManager {
 		const limit = request.limit ?? 8;
 		if (request.action === "hosts")
 			return diagnosticContextResponse(host, { hosts: [{ host, availability: "available" }] });
-		if (["projects", "missions", "mission", "issues"].includes(request.action)) {
+		if (["projects", "missions", "mission", "issues", "features"].includes(request.action)) {
 			if (!this.diagnosticDomainRead)
 				return { ...diagnosticContextResponse(host, null), status: "unavailable", reason: "unsupported" };
 			return this.diagnosticDomainRead({ ...request, host });
@@ -5666,6 +5667,7 @@ export class SessionManager {
 					: { observedAt: new Date(this.internetObservedAt).toISOString() }),
 			},
 			localDiagnostics: { enabled: this.telemetry?.localDiagnostics ?? true, coverage: "host" },
+			...(this.diagnosticFeatureUsage ? { featureUsage: this.diagnosticFeatureUsage(this.diagnosticHost) } : {}),
 			sessions: {
 				total: this.metas.size,
 				active,

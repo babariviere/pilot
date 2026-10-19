@@ -38,6 +38,8 @@ public struct TelemetrySettings: Codable, Equatable, Sendable {
     public let hostKind: TelemetryHostKind
     public let hostId: String
     public let localDiagnostics: Bool
+    public let localFeatureUsage: Bool?
+    public let featureUsageEpoch: String?
     public let remoteOperational: Bool
     public let productAnalytics: Bool
     public let analyticsId: String?
@@ -47,11 +49,14 @@ public struct TelemetrySettings: Codable, Equatable, Sendable {
 
     public init(schemaVersion: Int = 1, hostKind: TelemetryHostKind, hostId: String, localDiagnostics: Bool,
                 remoteOperational: Bool, productAnalytics: Bool, endpoint: String? = nil,
-                analyticsId: String? = nil, aiUsageBudget: AIUsageBudget? = nil, updatedAt: String? = nil) {
+                analyticsId: String? = nil, aiUsageBudget: AIUsageBudget? = nil, updatedAt: String? = nil,
+                localFeatureUsage: Bool? = nil, featureUsageEpoch: String? = nil) {
         self.schemaVersion = schemaVersion
         self.hostKind = hostKind
         self.hostId = hostId
         self.localDiagnostics = localDiagnostics
+        self.localFeatureUsage = localFeatureUsage
+        self.featureUsageEpoch = featureUsageEpoch
         self.remoteOperational = remoteOperational
         self.productAnalytics = productAnalytics
         self.analyticsId = analyticsId
@@ -65,18 +70,20 @@ public enum TelemetryHostKind: String, Codable, Sendable { case local, devbox }
 
 public struct TelemetrySettingsPatch: Codable, Equatable, Sendable {
     public let localDiagnostics: Bool
+    public let localFeatureUsage: Bool?
     public let remoteOperational: Bool
     public let productAnalytics: Bool
     public let endpoint: String?
     public let aiUsageBudget: AIUsageBudget?
 
     private enum CodingKeys: String, CodingKey {
-        case localDiagnostics, remoteOperational, productAnalytics, endpoint, aiUsageBudget
+        case localDiagnostics, localFeatureUsage, remoteOperational, productAnalytics, endpoint, aiUsageBudget
     }
 
     public init(localDiagnostics: Bool, remoteOperational: Bool, productAnalytics: Bool, endpoint: String? = nil,
-                aiUsageBudget: AIUsageBudget? = nil) {
+                aiUsageBudget: AIUsageBudget? = nil, localFeatureUsage: Bool? = nil) {
         self.localDiagnostics = localDiagnostics
+        self.localFeatureUsage = localFeatureUsage
         self.remoteOperational = remoteOperational
         self.productAnalytics = productAnalytics
         self.endpoint = endpoint
@@ -86,6 +93,7 @@ public struct TelemetrySettingsPatch: Codable, Equatable, Sendable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(localDiagnostics, forKey: .localDiagnostics)
+        try container.encodeIfPresent(localFeatureUsage, forKey: .localFeatureUsage)
         try container.encode(remoteOperational, forKey: .remoteOperational)
         try container.encode(productAnalytics, forKey: .productAnalytics)
         try container.encodeIfPresent(endpoint, forKey: .endpoint)

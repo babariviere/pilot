@@ -8,6 +8,7 @@ import type {
 	OperationHost,
 } from "@pilot/protocol";
 import { Conflict, ServiceUnavailable } from "./errors.ts";
+import { FEATURE_NAMES } from "@pilot/protocol";
 import { isCredentialField, redactDiagnosticText } from "./diagnostic-redaction.ts";
 
 export function parseDiagnosticContext(value: unknown): DiagnosticContextRequest {
@@ -26,13 +27,15 @@ export function parseDiagnosticContext(value: unknown): DiagnosticContextRequest
 					"projectId",
 					"missionId",
 					"query",
+					"since",
+					"until",
 					"after",
 					"before",
 					"limit",
 					"log",
 				].includes(k),
 		) ||
-		!["hosts", "chats", "chat", "history", "search", "logs", "projects", "missions", "mission", "issues"].includes(
+		!["hosts", "chats", "chat", "history", "search", "logs", "projects", "missions", "mission", "issues", "features"].includes(
 			String(v.action),
 		)
 	)
@@ -58,6 +61,11 @@ export function parseDiagnosticContext(value: unknown): DiagnosticContextRequest
 	if ((v.action === "issues" && v.projectId === undefined) || (v.action === "mission" && v.missionId === undefined))
 		return invalid();
 	if (v.query !== undefined && (typeof v.query !== "string" || v.query.length > 200)) return invalid();
+	if (v.action === "features" && v.query !== undefined && !FEATURE_NAMES.includes(v.query as never)) return invalid();
+	for (const key of ["since", "until"]) if (v[key] !== undefined && (v.action !== "features" ||
+		typeof v[key] !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(v[key] as string) ||
+		!Number.isFinite(Date.parse(v[key] as string)) || new Date(v[key] as string).toISOString().slice(0, 10) !== v[key])) return invalid();
+	if (typeof v.since === "string" && typeof v.until === "string" && v.since > v.until) return invalid();
 	if (v.after !== undefined && (typeof v.after !== "string" || !/^[0-9a-f-]{36}$/i.test(v.after))) return invalid();
 	if (v.before !== undefined && (!Number.isSafeInteger(v.before) || (v.before as number) < 0)) return invalid();
 	if (v.action === "issues" && ((v.before as number | undefined) ?? 0) > 10_000) return invalid();

@@ -324,12 +324,21 @@ export function createDaemonServer(
 	environment?: import("./environment.ts").EnvironmentService,
 ): Server & { runtimeResources: RuntimeResources } {
 	sessions.setWorkspaceProcessGuard((id) => terminals.isRunning(id));
+	sessions.diagnosticFeatureUsage = telemetry ? host => telemetry.featureUsage.snapshot(host) : undefined;
 	sessions.diagnosticDomainRead = async (request) => {
 		const host = request.host!;
 		const limit = request.limit ?? 8,
 			offset = request.before ?? 0;
 		const response = (data: unknown, count: number, more: boolean) =>
 			diagnosticContextResponse(host, data, { scanned: count, more, ...(more ? { before: offset + count } : {}) });
+		if (request.action === "features" && telemetry) {
+			const snapshot = telemetry.featureUsage.snapshot(host);
+			const cells = snapshot.cells.filter(cell => (!request.query || cell.feature === request.query) &&
+				(!request.since || cell.day >= request.since) && (!request.until || cell.day <= request.until));
+			const rows = cells.slice(offset, offset + limit);
+			return response({ ...snapshot, cells: rows, requestedWindow: { since: request.since, until: request.until },
+				coverage: "partial_native_ui_observations_only_missing_cells_are_unknown_not_zero" }, rows.length, offset + rows.length < cells.length);
+		}
 		if (request.action === "projects") {
 			const list = projects.list();
 			const rows = list.slice(offset, offset + limit).map((p) => ({ id: p.id, name: p.name }));
@@ -1039,6 +1048,12 @@ export function createDaemonServer(
 			sessions.diagnosticReadBroker.respond(response.id, response.result);
 			return json(res, 200, { accepted: true });
 		}
+		if (parts[1] === "diagnostics" && parts[2] === "feature-usage" && parts.length === 3 && req.method === "PUT") {
+			if (!telemetry || !githubSetup) throw new ServiceUnavailable("Native feature collection is unavailable");
+			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			await telemetry.featureUsage.replace(await readJson(req, 96 * 1024));
+			return json(res, 200, { accepted: true });
+		}
 		if (parts[1] === "diagnostics" && parts[2] === "performance" && parts.length === 3 && req.method === "GET") {
 			const performance = daemonPerformance();
 			if (!performance) throw new ServiceUnavailable("Performance diagnostics are not running");
@@ -1063,6 +1078,7 @@ export function createDaemonServer(
 		}
 		if (parts[1] === "diagnostics" && parts.length === 2 && req.method === "DELETE") {
 			await sessions.clearDiagnostics();
+			await telemetry?.featureUsage.clear();
 			return json(res, 200, { cleared: true });
 		}
 		if (parts[1] === "update" && parts[2] === "prepare" && parts.length === 3 && req.method === "POST")

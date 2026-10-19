@@ -9,8 +9,8 @@ import { Conflict } from "./errors.ts";
 
 const DAY = 86_400_000;
 const LIMIT = 16;
-const BYTES = 512 * 1024;
-const UUID = /^[0-9a-f-]{36}$/;
+const BYTES = 1024 * 1024;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 function exact(value: Record<string, unknown>, keys: string[]): boolean {
 	return Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
 }
@@ -21,12 +21,12 @@ export function parseFeatureUsageBatch(value: unknown, now = Date.now()): Featur
 	if (!exact(v, ["schemaVersion", "epoch", "producer", "revision", "startedAt", "observedAt", "cells", "dropped"]) ||
 		v.schemaVersion !== 1 || typeof v.epoch !== "string" || !UUID.test(v.epoch) ||
 		typeof v.producer !== "string" || !UUID.test(v.producer) ||
-		!Number.isSafeInteger(v.revision) || (v.revision as number) < 0 || (v.revision as number) > 1_000_000 ||
+		!Number.isSafeInteger(v.revision) || (v.revision as number) < 0 ||
 		!Number.isSafeInteger(v.dropped) || (v.dropped as number) < 0 || (v.dropped as number) > 1_000_000 ||
 		typeof v.startedAt !== "string" || typeof v.observedAt !== "string" ||
 		!Number.isFinite(Date.parse(v.startedAt)) || !Number.isFinite(Date.parse(v.observedAt)) ||
 		Date.parse(v.startedAt) > Date.parse(v.observedAt) || Date.parse(v.observedAt) > now + 60_000 ||
-		!Array.isArray(v.cells) || v.cells.length > 128) return fail();
+		!Array.isArray(v.cells) || v.cells.length > 336) return fail();
 	const seen = new Set<string>();
 	let total = 0;
 	const cells = v.cells.map((input): FeatureUsageCell => {
@@ -36,7 +36,7 @@ export function parseFeatureUsageBatch(value: unknown, now = Date.now()): Featur
 		if (!parsed || typeof day !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(day) ||
 			!Number.isFinite(Date.parse(day)) || new Date(day).toISOString().slice(0, 10) !== day ||
 			day > v.observedAt!.toString().slice(0, 10) || !Number.isSafeInteger(count) || (count as number) <= 0 ||
-			(total += count as number) > 128) return fail();
+			(total += count as number) > 70_000) return fail();
 		const key = JSON.stringify({ day, ...parsed });
 		if (seen.has(key)) return fail();
 		seen.add(key);
@@ -49,14 +49,18 @@ export function parseFeatureUsageBatch(value: unknown, now = Date.now()): Featur
 
 export class FeatureUsageStore {
 	private enabled = false;
-	private epoch = randomUUID();
+	private epoch: string = randomUUID();
 	private enabledAt = new Date().toISOString();
 	private batches = new Map<string, FeatureUsageBatch>();
 	private pruned = 0;
 	private unavailable = false;
 	private saving = Promise.resolve();
 	readonly file: string;
-	constructor(home: string, private readonly now = () => Date.now()) { this.file = join(home, "feature-usage.json"); }
+	private readonly now: () => number;
+	private expiry?: NodeJS.Timeout;
+	constructor(home: string, now = () => Date.now()) {
+		this.file = join(home, "feature-usage.json"); this.now = now; this.enabledAt = new Date(now()).toISOString();
+	}
 	get collectionEpoch(): string | undefined { return this.enabled ? this.epoch : undefined; }
 	async load(enabled: boolean): Promise<void> {
 		this.enabled = enabled;
@@ -94,6 +98,7 @@ export class FeatureUsageStore {
 		await this.clear();
 	}
 	async clear(): Promise<void> {
+		clearTimeout(this.expiry); this.expiry = undefined;
 		this.epoch = randomUUID(); this.enabledAt = new Date(this.now()).toISOString();
 		this.batches.clear(); this.pruned = 0; this.unavailable = false;
 		await this.saving.catch(() => undefined);
@@ -103,6 +108,8 @@ export class FeatureUsageStore {
 	async replace(input: unknown): Promise<void> {
 		const batch = parseFeatureUsageBatch(input, this.now());
 		if (!this.enabled || batch.epoch !== this.epoch) throw new Conflict("Feature collection is disabled or changed");
+		if (batch.observedAt.slice(0, 10) < this.cutoff()) throw new Conflict("Feature aggregates expired");
+		batch.cells = batch.cells.filter(cell => cell.day >= this.cutoff());
 		const previous = this.batches.get(batch.producer);
 		if (previous && batch.revision <= previous.revision) return;
 		this.prune();
@@ -141,6 +148,7 @@ export class FeatureUsageStore {
 		}
 	}
 	private async persist(): Promise<void> {
+		this.scheduleExpiry();
 		const value = JSON.stringify({ schemaVersion: 1, epoch: this.epoch, enabledAt: this.enabledAt,
 			pruned: this.pruned, batches: [...this.batches.values()] });
 		if (Buffer.byteLength(value) > BYTES) { this.unavailable = true; throw new Error("Aggregate limit"); }
@@ -152,4 +160,15 @@ export class FeatureUsageStore {
 		}).catch(error => { this.unavailable = true; throw error; });
 		await this.saving;
 	}
+	private scheduleExpiry(): void {
+		if (!this.enabled || this.expiry) return;
+		const delay = DAY - this.now() % DAY + 1;
+		this.expiry = setTimeout(() => {
+			this.expiry = undefined;
+			this.prune();
+			void this.persist().catch(() => undefined);
+		}, delay);
+		this.expiry.unref();
+	}
+	async close(): Promise<void> { clearTimeout(this.expiry); this.expiry = undefined; await this.saving.catch(() => undefined); }
 }

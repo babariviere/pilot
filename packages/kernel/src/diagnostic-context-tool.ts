@@ -16,7 +16,7 @@ export function createDiagnosticContextTool(call: DiagnosticContextCall): ToolDe
 		promptSnippet: "Read app-wide evidence through trusted diagnostics capability",
 		parameters: Type.Object({
 			action: Type.Union(
-				["hosts", "chats", "chat", "history", "search", "logs", "projects", "missions", "mission", "issues"].map(
+				["hosts", "chats", "chat", "history", "search", "logs", "projects", "missions", "mission", "issues", "features"].map(
 					(v) => Type.Literal(v),
 				),
 			),
@@ -36,6 +36,8 @@ export function createDiagnosticContextTool(call: DiagnosticContextCall): ToolDe
 			after: Type.Optional(
 				Type.String({ maxLength: 36, description: "Prior page.after; retain with page.before when present." }),
 			),
+			since: Type.Optional(Type.String({ maxLength: 10, description: "features only: inclusive UTC day YYYY-MM-DD" })),
+			until: Type.Optional(Type.String({ maxLength: 10, description: "features only: inclusive UTC day YYYY-MM-DD" })),
 			before: Type.Optional(Type.Integer({ minimum: 0 })),
 			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
 			log: Type.Optional(

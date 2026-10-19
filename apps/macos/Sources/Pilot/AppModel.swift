@@ -38,6 +38,7 @@ final class AppModel: ObservableObject {
     let client: PilotClient
     /// Host-qualified facade for remote surfaces. The existing client remains Local only.
     let hosts: HostClients
+    private var featureUsageSyncTask: Task<Void, Never>?
     let missionRegistry = MissionRegistry()
     @Published private(set) var localHost: HostRef?
     let feeds = SessionFeedCache()
@@ -582,6 +583,9 @@ final class AppModel: ObservableObject {
             Task { @MainActor in await self?.synchronizeNativeDiagnostics() }
         }
         NativeDiagnostics.shared.start()
+        LocalFeatureUsage.shared.onChange { [weak self] in
+            Task { @MainActor in self?.scheduleFeatureUsageSync() }
+        }
         // Snapshot/test modes never start the live app, so they cannot overwrite real drafts.
         if draftStore == nil {
             draftStore = DraftStore()
@@ -675,7 +679,33 @@ final class AppModel: ObservableObject {
         guard client.hostIdentity?.hostId == "local",
               let settings = try? await client.telemetrySettings() else { return }
         NativeTelemetrySettings.apply(settings)
+        scheduleFeatureUsageSync()
         if settings.localDiagnostics { await synchronizeNativeDiagnostics() }
+    }
+
+    private func scheduleFeatureUsageSync() {
+        guard featureUsageSyncTask == nil, client.connected else { return }
+        featureUsageSyncTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard let self else { return }
+            var submitted: FeatureUsageBatch?, succeeded = false
+            defer {
+                featureUsageSyncTask = nil
+                if let submitted, let latest = LocalFeatureUsage.shared.snapshot(), !Task.isCancelled,
+                   latest.epoch != submitted.epoch || succeeded && latest.revision > submitted.revision {
+                    scheduleFeatureUsageSync()
+                }
+            }
+            guard !Task.isCancelled, client.connected, let host = localHost, host.hostId == "local",
+                  client.hostIdentity == host, let batch = LocalFeatureUsage.shared.snapshot() else { return }
+            submitted = batch
+            struct Accepted: Decodable { let accepted: Bool }
+            do {
+                let result: Accepted = try await hosts.githubRequest(on: host,
+                    path: "api/diagnostics/feature-usage", body: batch, method: "PUT")
+                succeeded = result.accepted
+            } catch { /* Keep the bounded aggregate in memory; next activity/reconnect can retry. */ }
+        }
     }
 
     private func synchronizeNativeDiagnostics() async {
@@ -1595,6 +1625,7 @@ private final class DraftImageRetention {
     }
 
     deinit {
+        featureUsageSyncTask?.cancel()
         // Unsaved reservations are not durable drafts. Submitted history markers still win.
         for (id, image) in images where !persisted.contains(id) { image.discardPersistedDraft() }
     }

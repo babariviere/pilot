@@ -450,6 +450,7 @@ public final class PilotTelemetry: @unchecked Sendable {
     /// Emits one cataloged, content-free feature event only when the isolated analytics tracer is configured.
     public func recordFeature(_ event: FeatureEvent) {
         guard let values = featureAttributes(event) else { counters.recordInvalid(); return }
+        LocalFeatureUsage.shared.record(event)
         var capped = false
         let tracer = lock.withLock { () -> (any Tracer)? in
             guard !sleeping, let tracer = runtime?.analyticsTracer else { return nil }

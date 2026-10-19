@@ -8,6 +8,8 @@ public struct DiagnosticContextRequest: Codable, Sendable {
     public let projectId: String?
     public let missionId: String?
     public let query: String?
+    public let since: String?
+    public let until: String?
     public let after: String?
     public let before: Int?
     public let limit: Int?
