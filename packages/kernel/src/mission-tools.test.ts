@@ -58,6 +58,7 @@ for (const busy of [false, true]) {
 			decisionEntries: [{ id: "rule", text: "Original binding rule" }],
 			remainingDecisions: 10,
 			decisionVersion: "first",
+			decisionState: [{ id: "rule", number: 7, text: "Original binding rule", audience: "all", selected: true }],
 		};
 		const calls: unknown[] = [];
 		const session = await KernelSession.open(
@@ -115,6 +116,9 @@ for (const busy of [false, true]) {
 			decisionEntries: [{ id: "rule", text: "Revised binding rule" }],
 			remainingDecisions: 11,
 			decisionVersion: "second",
+			decisionState: [
+				{ id: "rule", number: 7, text: "Revised binding rule", audience: "all" as const, selected: true },
+			],
 		};
 		session.setMission(changed);
 		session.setMission(changed);
@@ -130,6 +134,23 @@ for (const busy of [false, true]) {
 		assert.doesNotMatch(prompts[1]!, /Revised binding rule/);
 		const entries = (await session.conversation.entries({}, 100, undefined, BACKGROUND_CONTEXT)).items;
 		assert.equal(entries.filter((entry) => entry.kind === "pilot.activity").length, 1);
+		const notice = entries.find((entry) => entry.kind === "pilot.activity")!;
+		assert.match(JSON.stringify(notice.data), /D7 updated: Revised binding rule/);
+		assert.match(JSON.stringify(notice.data), /Before:.*Original binding rule.*After:.*Revised binding rule/);
+		// Later changes compare against the latest live snapshot, not the original cached prompt.
+		session.setMission({
+			...changed,
+			decisionVersion: "third",
+			decisionState: [{ ...changed.decisionState[0]!, text: "Final binding rule" }],
+		});
+		await Promise.all(writes);
+		const updated = (await session.conversation.entries({}, 100, undefined, BACKGROUND_CONTEXT)).items;
+		const notices = updated.filter((entry) => entry.kind === "pilot.activity");
+		assert.equal(notices.length, 2);
+		const latestNotice = notices.find((entry) => JSON.stringify(entry.data).includes("Final binding rule"));
+		assert.ok(latestNotice);
+		assert.match(JSON.stringify(latestNotice.data), /Before:.*Revised binding rule.*After:.*Final binding rule/);
+		assert.doesNotMatch(JSON.stringify(latestNotice.data), /Original binding rule/);
 		const codemode = adapter.session.agent.state.tools.find((tool) => tool.name === "codemode")!;
 		const result = await codemode.execute(
 			"read-decisions",

@@ -194,6 +194,8 @@ test("real stores/bridges admit one bounded remote session, retain offline propo
 		tasks: [{ title: "Only accepted task" }, { title: "Sibling" }],
 	});
 	home.store.writeBrief(mission.id, "Mandatory offline brief", 0);
+	const reference = home.store.addDecision(mission.id, "Reference rule");
+	const sharedDecision = home.store.addDecision(mission.id, "Shared rule", {}, "all");
 	await home.memory.note(home.project.id, "Canonical memory survives without the Mac", "local");
 	await target.memory.note(target.project.id, "Unrelated target-local memory", "target-local");
 	const binding: SharedContextBinding = {
@@ -226,6 +228,10 @@ test("real stores/bridges admit one bounded remote session, retain offline propo
 	const worker = target.workers.get(grant.session.sessionId)!;
 	assert.equal(worker.spec.mission?.coordinator, "other");
 	assert.equal(worker.spec.mission?.sharedContext, true);
+	assert.deepEqual(worker.spec.mission?.decisionState, [
+		{ id: reference.id, number: 1, text: "Reference rule", audience: "reference", selected: false },
+		{ id: sharedDecision.id, number: 2, text: "Shared rule", audience: "all", selected: true },
+	]);
 	assert.equal(target.store.list().length, 0, "replica must not be a writable synthetic local mission");
 	assert.equal(target.sessions.get(grant.session.sessionId)?.projectId, target.project.id);
 	assert.equal(

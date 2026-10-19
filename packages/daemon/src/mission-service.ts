@@ -346,6 +346,7 @@ export class MissionService {
 				.filter((task) => task.sessionId === sessionId && isOpen(task))
 				.map((task) => [task.id, task.number]),
 		);
+		const selectedIds = new Set(selected.map((decision) => decision.id));
 		return {
 			id: mission.id,
 			title: mission.title,
@@ -361,6 +362,13 @@ export class MissionService {
 				.map((task) => ({ number: task.number, title: task.title, status: task.status })),
 			decisions: selected.map((decision) => `D${decision.number}: ${decision.text}`),
 			decisionEntries: selected.map(({ id, text }) => ({ id, text })),
+			decisionState: detail.decisions.map(({ id, number, text, audience }) => ({
+				id,
+				number,
+				text,
+				audience,
+				selected: selectedIds.has(id),
+			})),
 			remainingDecisions: detail.decisions.length - selected.length,
 			tickets: detail.resources
 				.filter(

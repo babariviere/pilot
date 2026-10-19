@@ -1923,6 +1923,7 @@ export class SharedContextService {
 			task = detail.tasks.find((task) => task.id === execution.grant.task.taskId),
 			pins = new Set(task?.decisionIds ?? []);
 		const decisions = detail.decisions.filter((decision) => decision.audience === "all" || pins.has(decision.id));
+		const selectedIds = new Set(decisions.map((decision) => decision.id));
 		return {
 			id: detail.mission.id,
 			title: detail.mission.title,
@@ -1932,6 +1933,13 @@ export class SharedContextService {
 			tasks: task ? [{ number: task.number, title: task.title, status: task.status }] : [],
 			decisions: decisions.map((decision) => `D${decision.number}: ${decision.text}`),
 			decisionEntries: decisions.map(({ id, text }) => ({ id, text })),
+			decisionState: detail.decisions.map(({ id, number, text, audience }) => ({
+				id,
+				number,
+				text,
+				audience,
+				selected: selectedIds.has(id),
+			})),
 			decisionVersion: digest([snapshot.sequence, decisions]),
 			sharedContext: true,
 		};
