@@ -150,10 +150,10 @@ struct ArtifactCard: View {
         VStack(alignment: .leading, spacing: 0) {
             if state.preview {
                 let image = state.revision?.kind == .image || state.revision?.kind == .swiftui
-                // Reserve the measured size while offscreen, so the web view coming and going
-                // never changes the row height under the user's scroll position.
-                // Pages taller than the inline ceiling scroll inside the card.
-                InlineArtifactLayout(contentSize: render.contentSize, image: image) {
+                // Reserve the measured size while offscreen, so recreating the renderer never changes the row
+                // height under the user's scroll position. Native visuals grow with the transcript;
+                // web pages taller than the inline ceiling still scroll inside the card.
+                InlineArtifactLayout(contentSize: render.contentSize, image: image, visual: state.revision?.kind == .visual) {
                     if state.visible {
                         ArtifactContent(reference: reference, latest: false, inline: true, onOpen: { state.viewer = true },
                                         state: state, render: render)
@@ -187,13 +187,15 @@ struct ArtifactCard: View {
     }
 }
 
-/// Start with a bounded viewport, then let measured content request more room.
+/// Start with a bounded viewport, then let measured content request more room. Only native visuals grow uncapped.
 struct InlineArtifactLayout: Layout {
     var contentSize: CGSize? = nil
     var image = false
+    var visual = false
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        ArtifactViewerLayout.inlineSize(availableWidth: proposal.width ?? Theme.column, contentSize: contentSize, image: image)
+        ArtifactViewerLayout.inlineSize(availableWidth: proposal.width ?? Theme.column, contentSize: contentSize,
+                                        image: image, visual: visual)
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {

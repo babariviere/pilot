@@ -11,6 +11,9 @@ shaders. Pilot renders them with SwiftUI, Swift Charts and Metal, using Theme to
 visual should feel like part of the reply: it follows light and dark mode, uses Pilot's fonts, scrolls
 and selects like the transcript, and costs no WebKit process.
 
+Inline visuals grow to their full content height without an overall cap or nested scroll area. Charts,
+canvases and shaders retain their explicit heights. The expanded viewer still scrolls within its viewport.
+
 HTML, React and shader artifacts stay as they are. Visuals are a new artifact kind for the common cases
 where native rendering is smoother, lighter and better integrated:
 

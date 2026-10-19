@@ -169,6 +169,24 @@ private let artifactJSON = #"{"id":"a","sessionId":"s","title":"Chart","revision
     #expect(!ArtifactViewerLayout.inlineScrollsInside(contentSize: CGSize(width: 760, height: 9000), image: true))
 }
 
+@Test func nativeVisualsKeepTheirFullMeasuredHeightWithinTheReadingColumn() {
+    for width: CGFloat in [320, 760, 1200] {
+        for height: CGFloat in [1, 120, 720, 721, 2000, 9000, 100_000] {
+            let content = CGSize(width: 240, height: height)
+            let size = ArtifactViewerLayout.inlineSize(availableWidth: width, contentSize: content, visual: true)
+            #expect(size == CGSize(width: min(width, 760), height: max(48, height)))
+            // The exception is native-only: web pages keep their ceiling.
+            #expect(ArtifactViewerLayout.inlineSize(availableWidth: width, contentSize: content).height
+                    == min(720, max(48, height)))
+        }
+        let fallback = ArtifactViewerLayout.inlineSize(availableWidth: width)
+        #expect(ArtifactViewerLayout.inlineSize(availableWidth: width, visual: true) == fallback)
+        for invalid in [CGSize.zero, CGSize(width: 240, height: CGFloat.infinity), CGSize(width: CGFloat.nan, height: 120)] {
+            #expect(ArtifactViewerLayout.inlineSize(availableWidth: width, contentSize: invalid, visual: true) == fallback)
+        }
+    }
+}
+
 @Test func compactMeasurementsAcceptShrinkingContentAndIgnoreHostOnlyChanges() {
     var measurement = ArtifactContentMeasurement()
     #expect(measurement.record(content: CGSize(width: 760, height: 120), viewport: CGSize(width: 760, height: 570))

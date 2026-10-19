@@ -51,8 +51,9 @@ try {
 - **Style with tokens.** Colors are token names (`text`, `muted`, `accent`, `success`, `warning`, `danger`,
   `border`, `chart1`...`chart6`), text sizes are steps (`xs`...`xl`). Layout nodes have no fills, borders or
   shadows: visuals sit on the chat, not in cards.
-- **Size for the chat.** Design for the 760 pt column and about 160-600 pt of height; give charts an explicit
-  `height` (80-480). Taller visuals scroll inside above 720 pt.
+- **Size for the chat.** Design for the 760 pt column; aim for about 160-600 pt for compact visuals. Taller visuals
+  grow with their content and scroll with the chat, without an overall height cap. Give charts an explicit
+  `height` (80-480); canvases and shaders also keep their explicit heights.
 - **Keys.** Give children that move or appear conditionally a `key`, unique among siblings.
 
 ## Canvas

@@ -684,7 +684,9 @@ workspace, but does not rebind those PRs automatically.
 
 ### Artifacts and integrations
 
-Artifacts open in an isolated, offline WebKit viewer. HTML and React previews can use bundled libraries
+Native visual artifacts use the chat's fonts and appearance, grow to their full content height and scroll
+with the conversation, without a nested scroll area. Charts, canvases and shaders retain their explicit heights.
+Other artifacts open in an isolated, offline WebKit viewer. HTML and React previews can use bundled libraries
 such as Mermaid, ECharts and Motion, with D3 and Three.js available on request. Published revisions are
 retained: a chat card opens the revision sent there, while the sidebar opens the latest version.
 Inline `artifact://<id>` links open the latest revision directly in the artifact popup, with an artifact

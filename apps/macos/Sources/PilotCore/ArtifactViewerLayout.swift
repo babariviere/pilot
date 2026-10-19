@@ -18,10 +18,11 @@ public enum ArtifactViewerLayout {
     /// displays 90% leaves most of the sheet empty; wider content still requests more room.
     public static let viewerDefaultMaxWidth: CGFloat = 1600
 
-    /// A bounded 4:3 fallback until measurement, then hug content height within the limits, always
-    /// within the reading column.
+    /// A bounded 4:3 fallback until measurement, then hug content height within the reading column.
+    /// Native visuals grow to their full measured height and scroll with the transcript.
     /// Measured images instead hug their aspect-fitted size, so the card has no empty bands.
-    public static func inlineSize(availableWidth: CGFloat, contentSize: CGSize? = nil, image: Bool = false) -> CGSize {
+    public static func inlineSize(availableWidth: CGFloat, contentSize: CGSize? = nil, image: Bool = false,
+                                  visual: Bool = false) -> CGSize {
         let available = availableWidth.isFinite ? min(inlineColumnWidth, max(0, availableWidth)) : inlineColumnWidth
         let content = contentSize.flatMap { size in
             size.width.isFinite && size.height.isFinite && size.width > 0 && size.height > 0 ? size : nil
@@ -35,7 +36,7 @@ public enum ArtifactViewerLayout {
         let width = available
         let defaultHeight = min(720, max(360, width * 0.75))
         let height = content.map { max(inlineMinHeight, $0.height) } ?? defaultHeight
-        return CGSize(width: width, height: min(inlineMaxHeight, height))
+        return CGSize(width: width, height: visual ? height : min(inlineMaxHeight, height))
     }
 
     /// Measured HTML/React content taller than the inline ceiling scrolls inside the card.
