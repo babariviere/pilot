@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import type { KernelCommand, KernelSpec } from "@pilot/kernel";
+import type { KernelCommand, KernelPacket, KernelSpec } from "@pilot/kernel";
 import type { SessionState } from "@pilot/protocol";
 import { ProjectStore } from "./projects.ts";
 import { SessionManager } from "./sessions.ts";
@@ -23,9 +23,11 @@ test("offline is a quiet projection; clearing it cannot admit work past sleep, u
 	const home = await mkdtemp(join(tmpdir(), "pilot-sessions-offline-"));
 	const commands: KernelCommand[] = [],
 		specs: KernelSpec[] = [];
+	let publish!: (packet: KernelPacket) => void;
 	const sessions = new SessionManager(home, new ProjectStore(home), undefined, {
 		title: async () => undefined,
 		worker(spec, packet, exit) {
+			publish = packet;
 			specs.push(spec);
 			const worker = {
 				state: "idle" as SessionState,
@@ -74,6 +76,15 @@ test("offline is a quiet projection; clearing it cannot admit work past sleep, u
 	sessions.setConnectivity(true);
 	assert.equal(sessions.get(chat.id)?.working, true);
 	assert.equal(commands.length, count, "connectivity never resubmits input or sends a resume command");
+	publish({ type: "tools.running", running: true });
+	sessions.setConnectivity(false);
+	assert.equal(sessions.get(chat.id)?.working, true, "an active call finishes before the offline projection");
+	assert.equal(sessions.get(chat.id)?.offlinePaused, undefined);
+	assert.equal(commands.length, count, "an outage never sends abort to the active call");
+	publish({ type: "tools.running", running: false });
+	assert.equal(sessions.get(chat.id)?.working, false);
+	assert.equal(sessions.get(chat.id)?.offlinePaused, true);
+	sessions.setConnectivity(true);
 	sessions.setConnectivity(false);
 	await sessions.pauseForSleep();
 	const starts = specs.length;

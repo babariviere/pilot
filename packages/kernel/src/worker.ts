@@ -502,6 +502,7 @@ export function runKernelWorker(): void {
 					onCompacting: (compacting) => notify({ type: "compacting", compacting }),
 					onJobsChanged: (jobs) => notify({ type: "jobs.changed", jobs }),
 					onToolActivity: (activity) => notify({ type: "tool.activity", activity }),
+					onToolsRunningChanged: (running) => notify({ type: "tools.running", running }),
 					onTodosChanged: (openCount) => notify({ type: "todos.changed", openCount }),
 					onUsageChanged: (usage) => notify({ type: "usage", usage }),
 					reportSubscriptionLimit: (limit) =>
@@ -532,6 +533,7 @@ export function runKernelWorker(): void {
 				session = opened;
 				await send({
 					type: "ready",
+					toolsRunning: session.toolsRunning,
 					model: session.model,
 					thinking: session.thinkingLevel,
 					working: session.working,

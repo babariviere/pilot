@@ -139,6 +139,8 @@ export interface NativeAdapterOptions {
 	sessionFile?: string;
 	/** Live display data, independent from the durable transcript. */
 	onUsageChanged?: (usage: KernelUsage) => void;
+	/** Execution state, independent of optional diagnostic collection. */
+	onToolsRunningChanged?: (running: boolean) => void;
 	/** Host-owned, local-only content-free timings. Omitted for standalone SDK callers. */
 	performance?: PerformanceSink;
 	/** Host-owned bounded tool lifecycle projection and local log. */
@@ -283,6 +285,8 @@ export class NativeAdapter {
 	#nextInteraction?: { requestId: string; trace: TraceCarrier };
 	#currentInteraction?: { requestId: string; trace: TraceCarrier };
 	#toolFinished?: number;
+	#activeTools = 0;
+	#onToolsRunningChanged?: (running: boolean) => void;
 	readonly #toolActivity?: ToolActivityTracker;
 	readonly #preparations = new WeakMap<AbortSignal, PreparationMark>();
 	readonly #subscriptionGate: SubscriptionGate;
@@ -619,6 +623,7 @@ export class NativeAdapter {
 			!!options.control,
 			toolActivity,
 		);
+		adapter.#onToolsRunningChanged = options.onToolsRunningChanged;
 		// The SDK loop never runs here. Its default getter would report idle throughout
 		// Harness model/tool work, causing extensions (notably jobs) to notify too early.
 		// bindExtensions reads the committed activity source dynamically, including
@@ -1082,6 +1087,7 @@ export class NativeAdapter {
 					const current = this.session.agent.state.tools.find((candidate) => candidate.name === tool.name);
 					if (!current) throw new Error(`Native tool withdrawn: ${tool.name}`);
 					const before = new Set(this.session.sessionManager.getEntries().map((entry) => entry.id));
+					this.toolRunning(1);
 					try {
 						let result: AgentToolResult<unknown>;
 						const started = performance.now();
@@ -1105,7 +1111,11 @@ export class NativeAdapter {
 						await this.persistCustomEntries(before, context);
 						return durableResult(result);
 					} finally {
-						this.refreshTools();
+						try {
+							this.refreshTools();
+						} finally {
+							this.toolRunning(-1);
+						}
 					}
 				},
 			}));
@@ -1263,6 +1273,21 @@ export class NativeAdapter {
 
 	waitForSubscription(signal?: AbortSignal): Promise<void> {
 		return this.#subscriptionGate.wait(this.#physicalSubscriptionProvider ?? this.model.provider, signal);
+	}
+
+	get toolsRunning(): boolean {
+		return this.#activeTools > 0;
+	}
+
+	private toolRunning(delta: 1 | -1): void {
+		const wasRunning = this.toolsRunning;
+		this.#activeTools += delta;
+		if (wasRunning === this.toolsRunning) return;
+		try {
+			this.#onToolsRunningChanged?.(this.toolsRunning);
+		} catch {
+			// Display observers cannot interrupt tool execution.
+		}
 	}
 
 	/** Startup cancellation may enable the scheduler. Block dispatch until its old checkpoints settle. */
