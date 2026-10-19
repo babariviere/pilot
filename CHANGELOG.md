@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.53.1](https://github.com/babariviere/pilot/compare/v1.53.0...v1.53.1) (2026-10-19)
+
+
+### Bug Fixes
+
+* **diagnostics:** bound URL credential redaction work ([8063aac](https://github.com/babariviere/pilot/commit/8063aac38ab5c4f68ffa5fabe889baa2a86106b4))
+
 ## [1.53.0](https://github.com/babariviere/pilot/compare/v1.52.0...v1.53.0) (2026-10-19)
 
 
