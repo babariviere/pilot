@@ -921,7 +921,7 @@ struct DiagnosticSetupSheet: View {
     var body: some View {
         SheetScaffold(setup.askingAboutPilot ? "Ask about Pilot" : "Diagnose this chat",
                       subtitle: setup.askingAboutPilot
-                        ? "Ask about the app, or optionally scope diagnostics to one exact chat."
+                        ? "Ask about the app, or choose a chat as the investigation focus."
                         : "Start a read-only diagnostics specialist for this chat.",
                       error: startError,
                       primary: SheetPrimaryAction(title: busy ? "Starting…" : "Start diagnostics",
@@ -951,7 +951,7 @@ struct DiagnosticSetupSheet: View {
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(setup.askingAboutPilot ? "Chat (optional)" : "Target chat")
+                    Text(setup.askingAboutPilot ? "Chat focus (optional)" : "Chat focus")
                         .font(.pilot(.headline))
                     if setup.askingAboutPilot {
                         Picker("Chat", selection: $selectedChat) {
@@ -965,11 +965,11 @@ struct DiagnosticSetupSheet: View {
                             }
                         }
                         .labelsHidden()
-                        .accessibilityLabel("Optional diagnostic chat, qualified by host")
+                        .accessibilityLabel("Optional investigation focus, qualified by host")
                         .disabled(busy)
                     }
                     if setup.askingAboutPilot && selectedChat == nil {
-                        Text("No chat diagnoses Pilot on \(hostName(setup.host)). Selecting a chat explicitly grants access to that chat's bounded history.")
+                        Text("No chat starts app-wide diagnosis on \(hostName(setup.host)). Selecting a chat sets the focus, not an access boundary.")
                             .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
                     }
                     if let resolved, let session = resolved.session, let reference = resolved.reference {
@@ -1024,10 +1024,7 @@ struct DiagnosticSetupSheet: View {
     }
 
     private var disclosure: String {
-        if resolved?.historyAccess == true {
-            return "The specialist may read bounded sanitized Pilot logs on the selected host, plus bounded conversation and tool history only from this exact linked chat. It cannot read arbitrary files or attachments, browse other hosts or chats, or open, change, restart, retry, or replay the target. Logs and transcript content are not telemetry."
-        }
-        return "Your report is user content, not telemetry, diagnostic evidence, or permission to inspect a chat transcript. The specialist may read bounded sanitized Pilot logs on the selected host, but no arbitrary files. No chat grants no transcript access."
+        "Diagnostics has read-only access to bounded, sanitized chat history and available Pilot evidence, including usage, informational budgets and failures. A selected chat sets the focus only. Access uses trusted host identities; unavailable hosts remain unavailable. It cannot read arbitrary files or credentials, wake or change chats, or execute repairs without native confirmation. History and logs are not telemetry."
     }
 
     private func loadModels() async {
