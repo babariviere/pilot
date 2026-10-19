@@ -384,6 +384,48 @@ module startup from the read budget rather than merely replacing one timeout num
 isolates cold startup of a tiny transcript, not disk-cold OS caches, large-history rendering or GUI
 responsiveness. It does not claim a fixed speedup under arbitrary machine load.
 
+## Startup/update stall attribution
+
+`sessions.ts` times synchronous metadata load/capture/parse/encode, context construction, worker acquisition,
+factory invocation, publication, IPC sends and update prepare/pause/resume. These use fixed content-free labels
+in the existing bounded `DaemonOperations` tracker (100 ms threshold, 16 recent sections, at most 64 aggregate
+kinds). Factory timing covers only its synchronous prefix. It does not count awaited isolation, worker readiness,
+filesystem waits or provider time as synchronous preparation. No prompt, path, session ID, command payload or
+error text is added to these labels. Thrown errors and return values pass through unchanged.
+
+```sh
+node --test packages/daemon/src/startup-preparation.stress.test.ts
+node scripts/bench/startup-preparation.ts 1264a9e29168b24b42e3a274a9ac61af69bf5e36 3
+```
+
+The offline probe uses real session metadata recovery, durable outbox handling, lifecycle diagnostics and
+`GET /api/sessions`, with synthetic workers and pending inputs. It covers eight 8 KB inputs and 150 256 KB
+inputs. A 5 ms heartbeat and event-loop histogram run throughout startup, queued cancellation and update
+pause/resume. Each maximum delay must stay below 250 ms. It checks two-start admission, exact once-only input
+IDs, cancellation before admission, update exclusion during startup, completed startup and lifecycle/pause
+ordering. Sleep makes the latency result inconclusive, never a successful repair. Unit tests check fixed timing
+labels, IPC content exclusion and that a simulated 2,041 ms asynchronous wait does not inflate synchronous timing.
+
+On macOS arm64, Node 24.21.0, three alternating baseline/current pairs after one discarded warmup pair gave:
+
+| Large synthetic cohort | Baseline | Instrumented |
+| --- | ---: | ---: |
+| Median local startup, including metadata/outbox and cancellation | 2,432 ms | 2,446 ms |
+| Median update pause/resume including metadata persistence | 363 ms | 314 ms |
+| Median main-thread CPU, startup through update | 2,554 ms | 2,500 ms |
+| Largest heartbeat gap across measured pairs | 31 ms | 14 ms |
+| Largest daemon HTTP read latency across measured pairs | 43 ms | 17 ms |
+| Largest event-loop histogram sample across measured pairs | 31 ms | 14 ms |
+| CPU stalls above 250 ms / sleep pauses | 0 / 0 | 0 / 0 |
+| Provider time (no provider calls) | 0 ms | 0 ms |
+
+This is attribution and regression coverage, not a verified repair of a historical stall. Neither revision
+reproduced the reported approximately two-second synchronous interval. Differences between these small samples
+are not a speedup claim. Total cohort CPU is not one uninterrupted callback. The probe excludes real kernel
+imports/extensions, production IPC serialization, workspace preparation, OS isolation, provider requests and
+native GUI responsiveness. No diagnosed chat, history, credentials or live service is read or changed. Without
+a reproduced blocker or a correlated slow-section label, moving work to a thread would be speculative.
+
 ## Worker recovery admission
 
 `subagent-activity.test.ts` covers idle-parent activity and completion replay, update/sleep recovery,
