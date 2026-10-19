@@ -955,6 +955,37 @@ final class AppModel: ObservableObject {
         slackTriageAdd = SlackTriageAdd(projectId: item.projectId, link: nil, state: .added(item))
     }
 
+    /// A chat's source chip: a Slack message opens in its project's triage, selected; a Linear ticket opens in
+    /// Linear. If the message can't be read, it opens in Slack instead.
+    func showTrackedSource(_ source: SessionTrackedSource, projectId: String?, context: HostViewContext? = nil) {
+        let url = URL(string: source.url)
+        guard source.kind == .slack, let projectId else {
+            if let url { BrowserLinkOpener.shared.open(url) }
+            return
+        }
+        let client = client
+        Task { [weak self] in
+            let item: TrackedItem
+            do {
+                if let context {
+                    item = try await context.perform(.project, projectId) { client, _ in try await client.trackedItem(source.itemId) }
+                } else {
+                    item = try await client.trackedItem(source.itemId)
+                }
+            } catch {
+                if let url { BrowserLinkOpener.shared.open(url) }
+                return
+            }
+            guard let self else { return }
+            if context == nil || context?.host == localHost {
+                showSlackTriageItem(item)
+            } else {
+                openSlackTriage(projectId, context: context)
+                slackTriageAdd = SlackTriageAdd(projectId: item.projectId, link: nil, state: .added(item))
+            }
+        }
+    }
+
     /// The triage view has shown the result of an add, or the user dismissed its failure.
     func clearSlackTriageAdd(_ id: UUID) {
         if slackTriageAdd?.id == id { slackTriageAdd = nil }

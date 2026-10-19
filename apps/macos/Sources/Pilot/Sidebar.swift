@@ -540,6 +540,7 @@ struct SessionRow: View {
                     .foregroundStyle(Theme.foreground)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                if let source = session.trackedSource { TrackedSourceGlyph(source: source) }
                 RemoteChatBadge(context: owner.map { HostViewContext(host: $0.host, hosts: model.hosts) })
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     // The control chat is always pinned and always first, so the mark would say nothing.
@@ -580,7 +581,8 @@ struct SessionRow: View {
         .animation(Theme.Motion.quick, value: hovered)
         .help([draft?.help,
                [session.isDiagnosticsSpecialist ? "Diagnostics · Read-only" : nil,
-                reason ?? signal?.label, missionTitle.map { "Mission: \($0)" }, session.cwd.abbreviatingHome]
+                reason ?? signal?.label, missionTitle.map { "Mission: \($0)" }, session.trackedSource?.summary,
+                session.cwd.abbreviatingHome]
                 .compactMap { $0 }.joined(separator: " · "), RowLineSegments.pullRequestSummary(session), repositoryHelp]
             .compactMap { $0 }.joined(separator: "\n"))
         .accessibilityElement(children: .contain)

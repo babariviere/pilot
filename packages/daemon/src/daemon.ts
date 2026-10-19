@@ -188,8 +188,13 @@ sessions.setSlackStatus({
 	},
 	linked: (projectId, sessionIds) => trackedItems.slackLinkedSessions(projectId, sessionIds),
 });
-// Linking a chat to a Slack message (or unlinking it) declares or withdraws its slack_status tool.
-trackedItems.onChange((projectId) => sessions.refreshSlackLinks(projectId));
+sessions.setTrackedSources((projectId) => trackedItems.sessionSources(projectId));
+// Linking a chat to a Slack message (or unlinking it) declares or withdraws its slack_status tool, and changes the
+// source the chat shows.
+trackedItems.onChange((projectId) => {
+	sessions.refreshSlackLinks(projectId);
+	sessions.refreshTrackedSources(projectId);
+});
 // Membership is read while sessions load (auto-archiving, worker specs), so the bridge comes first.
 const missionStore = new MissionStore(join(config.home, "missions.sqlite"));
 const missionLinear = new MissionLinearSource(missionStore, sourceMcp);
@@ -345,6 +350,7 @@ await power?.start();
 // Frozen legacy follow-through must not participate in independent accepted work's recovery.
 if (controlHosts.legacyAllowed()) sessions.setWatchService(watches);
 await sessions.load(maintenance?.frozen);
+for (const project of projects.list()) sessions.refreshTrackedSources(project.id);
 if (controlHosts.legacyAllowed()) await sessions.ensureControlChat();
 if (controlHosts.legacyAllowed()) watches.bindRemovalAudit((removal) => sessions.auditWatchRemoval(removal));
 const watchLifecycle = controlHosts.legacyAllowed()

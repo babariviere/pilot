@@ -2,6 +2,29 @@ import Foundation
 
 // Mirrors packages/protocol/src/tracking.ts.
 public enum TrackedKind: String, Codable, Hashable, Sendable { case linear, slack }
+
+/// The Slack message or Linear ticket a chat was started from or linked to in triage (SessionSummary.trackedSource).
+public struct SessionTrackedSource: Codable, Equatable, Hashable, Sendable {
+    public let kind: TrackedKind
+    /// Tracked item ID, for opening the item in triage.
+    public let itemId: String
+    /// "#channel" for Slack ("Slack" without a channel name), the ticket identifier for Linear.
+    public let label: String
+    /// Message or ticket title, at most 200 characters.
+    public let title: String
+    public let url: String
+
+    public init(kind: TrackedKind, itemId: String, label: String, title: String, url: String) {
+        self.kind = kind; self.itemId = itemId; self.label = label; self.title = title; self.url = url
+    }
+
+    public var serviceName: String { kind == .slack ? "Slack" : "Linear" }
+    /// One line for tooltips and accessibility, e.g. "From Slack #support: Login broken".
+    public var summary: String {
+        let label = label == serviceName ? serviceName : "\(serviceName) \(label)"
+        return title.isEmpty ? "From \(label)" : "From \(label): \(title)"
+    }
+}
 public struct SlackCommonCase: Codable, Identifiable, Equatable, Sendable {
     public let id: String
     public let name: String

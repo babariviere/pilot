@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
-import { TrackedItemStore, type TrackedInput } from "./tracked-items.ts";
+import { test } from "node:test";
+import { type TrackedInput, TrackedItemStore } from "./tracked-items.ts";
 
 export function trackedInput(externalId = "issue-1", updatedAt = 10): TrackedInput {
 	return {
@@ -143,6 +143,83 @@ test("links keep a bounded history; the latest shows on the row and null clears 
 		assert.equal(item.sessionId, undefined);
 		assert.equal(item.sessionIds, undefined);
 		assert.equal(item.missionId, "m1");
+	} finally {
+		await store.close();
+	}
+});
+test("chat sources name the Slack channel or Linear ticket, preferring the item whose latest chat it is", async () => {
+	const store = new TrackedItemStore(":memory:");
+	try {
+		await store.load(["p", "other"]);
+		// The ticket is the most recently updated item, so only the latest-chat rule can rank the Slack message first.
+		await store.commit("p", "linear", [{ ...trackedInput("issue-1", 40), metadata: { identifier: "ENG-1" } }]);
+		await store.commit("p", "slack", [
+			{
+				...trackedInput("C1/1.000001", 20),
+				title: "Login broken",
+				url: "https://example.slack.com/p1",
+				metadata: { channelName: "support" },
+			},
+			{ ...trackedInput("C1/2.000001", 30), title: "No channel", url: "https://example.slack.com/p2", metadata: {} },
+		]);
+		await store.commit("other", "linear", [trackedInput("issue-9")]);
+		const items = (await store.list({ projectId: "p" })).items;
+		const linear = items.find((item) => item.kind === "linear")!;
+		const slack = items.find((item) => item.title === "Login broken")!;
+		const bare = items.find((item) => item.title === "No channel")!;
+		const other = (await store.list({ projectId: "other" })).items[0]!;
+		assert.deepEqual(await store.sessionSources("p"), []);
+		await store.patch(linear.id, { sessionId: "chat-a" });
+		await store.patch(slack.id, { sessionId: "chat-b" });
+		await store.patch(bare.id, { sessionId: "chat-c" });
+		await store.patch(other.id, { sessionId: "chat-d" });
+		// chat-a stays in the Linear ticket's history, but it is now the Slack message's latest chat.
+		await store.patch(slack.id, { sessionId: "chat-a" });
+		await store.patch(linear.id, { sessionId: "chat-e" });
+		const fromSlack = {
+			kind: "slack",
+			itemId: slack.id,
+			label: "#support",
+			title: "Login broken",
+			url: "https://example.slack.com/p1",
+		};
+		assert.deepEqual(await store.sessionSources("p"), [
+			{ sessionId: "chat-a", source: fromSlack },
+			{ sessionId: "chat-b", source: fromSlack },
+			{
+				sessionId: "chat-c",
+				source: {
+					kind: "slack",
+					itemId: bare.id,
+					label: "Slack",
+					title: "No channel",
+					url: "https://example.slack.com/p2",
+				},
+			},
+			{
+				sessionId: "chat-e",
+				source: {
+					kind: "linear",
+					itemId: linear.id,
+					label: "ENG-1",
+					title: "Fix crash",
+					url: "https://linear.app/team/issue/1",
+				},
+			},
+		]);
+		await store.patch(slack.id, { sessionId: null });
+		assert.deepEqual(
+			(await store.sessionSources("p")).map(({ sessionId, source }) => [sessionId, source.label]),
+			[
+				["chat-a", "ENG-1"],
+				["chat-c", "Slack"],
+				["chat-e", "ENG-1"],
+			],
+		);
+		assert.deepEqual(
+			(await store.sessionSources("other")).map(({ sessionId, source }) => [sessionId, source.label]),
+			[["chat-d", "issue-9"]],
+		);
 	} finally {
 		await store.close();
 	}

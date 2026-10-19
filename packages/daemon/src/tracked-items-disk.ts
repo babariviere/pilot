@@ -5,6 +5,7 @@ import type {
 	InboxHiddenLabel,
 	LinearSourceSummary,
 	SessionPullRequest,
+	SessionTrackedSource,
 	SlackCorrection,
 	SlackOverrides,
 	SlackTriage,
@@ -35,6 +36,13 @@ export interface SlackGroupId {
 	id: string | null;
 	checkedAt: number;
 }
+/** A chat's triage source. See SessionTrackedSource. */
+export interface TrackedSessionSource {
+	sessionId: string;
+	source: SessionTrackedSource;
+}
+/** Linked chats read per project refresh. Chats beyond it show no source rather than slowing the refresh. */
+const SESSION_SOURCE_LIMIT = 5_000;
 export interface SlackReactionRead {
 	item: TrackedItem;
 	version: number;
@@ -938,6 +946,44 @@ export class TrackedItemDisk {
 			AND session_id IN (SELECT value FROM json_each(?))`)
 			.all(projectId, JSON.stringify(sessionIds))
 			.map((row) => String(row.session_id));
+	}
+
+	/**
+	 * The triage item behind each of a project's linked chats: the item whose latest chat it is first, then the most
+	 * recently updated. Reads only chat links, never thread text.
+	 */
+	sessionSources(projectId: string): TrackedSessionSource[] {
+		if (typeof projectId !== "string" || !projectId || projectId.length > 200) throw new Error("Invalid project");
+		// CROSS JOIN keeps the small chat-link set outermost instead of scanning the project's items.
+		const rows = this.db
+			.prepare(`SELECT l.target AS chat, i.id, i.kind, i.title, i.url, i.external_id, i.metadata
+				FROM tracked_item_links l CROSS JOIN tracked_items i ON i.id=l.item_id
+				WHERE l.kind='sessions' AND i.project_id=?
+				ORDER BY l.target, (i.session_id IS l.target) DESC, i.updated_at DESC, i.id LIMIT ?`)
+			.all(projectId, SESSION_SOURCE_LIMIT) as (Pick<
+			Row,
+			"id" | "kind" | "title" | "url" | "external_id" | "metadata"
+		> & {
+			chat: string;
+		})[];
+		const sources: TrackedSessionSource[] = [];
+		for (const row of rows) {
+			if (sources.at(-1)?.sessionId === row.chat) continue;
+			const metadata = JSON.parse(row.metadata) as Record<string, TrackingJson>;
+			const label =
+				row.kind === "linear"
+					? typeof metadata.identifier === "string"
+						? metadata.identifier
+						: row.external_id
+					: typeof metadata.channelName === "string"
+						? `#${metadata.channelName}`
+						: "Slack";
+			sources.push({
+				sessionId: row.chat,
+				source: { kind: row.kind, itemId: row.id, label, title: row.title.slice(0, 200), url: row.url },
+			});
+		}
+		return sources;
 	}
 
 	/** Waiting messages due for a reply check, least recently checked first, reserved against the daily budget. */

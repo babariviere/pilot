@@ -283,6 +283,8 @@ export interface SessionSummary {
 	continuedTo?: string;
 	/** Original chat whose workspace and task ownership this fresh chat continues. */
 	continuationOf?: string;
+	/** Slack message or Linear ticket the chat was started from or linked to in triage. Omitted when none. */
+	trackedSource?: SessionTrackedSource;
 	/** Durable work paused by the Mac sleep policy, awaiting a later full wake with connectivity. */
 	sleepPaused?: boolean;
 	/** Durable model work waiting for confirmed internet connectivity. */
@@ -390,6 +392,21 @@ export interface SessionSummary {
 
 /** How an attempt was started: retrying a failed turn, editing a sent message, or restoring an earlier point. */
 export type RewindAction = "retry" | "edit" | "restore";
+
+/**
+ * The triage item a chat came from. When several items link to one chat, the one whose latest chat it is wins, then
+ * the most recently updated.
+ */
+export interface SessionTrackedSource {
+	kind: import("./tracking.ts").TrackedKind;
+	/** Tracked item ID, for opening it in triage. */
+	itemId: string;
+	/** "#channel" for Slack (or "Slack" without a channel name), the ticket identifier for Linear. */
+	label: string;
+	/** Message or ticket title, at most 200 characters. */
+	title: string;
+	url: string;
+}
 
 /** One conversation of a session. The session shows and continues exactly one, its active attempt. */
 export interface SessionAttempt {
