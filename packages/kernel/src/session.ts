@@ -452,6 +452,9 @@ export class KernelSession {
 			};
 			if (!spec.pilot?.ask && !spec.control)
 				todoBridge = await startTodoBridge(callTodo, hooks.reportSubscriptionLimit);
+			const diagnosticScope = spec.diagnosticTarget
+				? ({ kind: "chat", target: spec.diagnosticTarget } as const)
+				: spec.diagnosticScope;
 			adapter = await NativeAdapter.open({
 				onToolsRunningChanged: hooks.onToolsRunningChanged,
 				subscriptionPolicy: spec.subscriptionPolicy,
@@ -483,18 +486,16 @@ export class KernelSession {
 				],
 				subagents,
 				hostTools: [
-					...(spec.role === "diagnostics" &&
-					hooks.callDiagnostics &&
-					hooks.callDiagnosticLogs &&
-					hooks.callRepairProposal &&
-					spec.diagnosticTarget
+					...(spec.role === "diagnostics" && hooks.callDiagnostics && hooks.callDiagnosticLogs && diagnosticScope
 						? [
-								createDiagnosticsTool(hooks.callDiagnostics, spec.diagnosticTarget),
-								createDiagnosticLogTool(hooks.callDiagnosticLogs, spec.diagnosticTarget),
+								createDiagnosticsTool(hooks.callDiagnostics, diagnosticScope),
+								createDiagnosticLogTool(hooks.callDiagnosticLogs, diagnosticScope),
 								...(spec.diagnosticHistoryAccess && hooks.callDiagnosticHistory
-									? [createDiagnosticHistoryTool(hooks.callDiagnosticHistory, spec.diagnosticTarget)]
+									? [createDiagnosticHistoryTool(hooks.callDiagnosticHistory, spec.diagnosticTarget!)]
 									: []),
-								createRepairProposalTool(hooks.callRepairProposal),
+								...(spec.diagnosticTarget && hooks.callRepairProposal
+									? [createRepairProposalTool(hooks.callRepairProposal)]
+									: []),
 							]
 						: []),
 					...(spec.control && hooks.callMemory ? createMemoryTools(hooks.callMemory, spec.sessionId, true) : []),

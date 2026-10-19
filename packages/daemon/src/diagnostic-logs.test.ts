@@ -65,7 +65,8 @@ async function fixture(t: TestContext) {
 		platform: "darwin",
 		now: () => new Date(stamp),
 	});
-	const call = (request: DiagnosticLogRequest) => reader.call(host, id, target, true, request);
+	const call = (request: DiagnosticLogRequest) =>
+		reader.call(host, { sessionId: id, directory: target }, true, request);
 	return { home, target, durable, daemonLog, reports, reader, call };
 }
 
@@ -100,6 +101,21 @@ test("inventory exposes only the closed path-free Pilot catalogue and explicit g
 	assert.equal(JSON.stringify(result).includes(f.home), false, "inventory never reveals roots or file names");
 });
 
+test("app scope exposes host logs while target-only sources stay explicitly unavailable", async (t) => {
+	const f = await fixture(t);
+	const result = await f.reader.call(host, undefined, true, { action: "inventory" });
+	assert.equal(result.scope, "app");
+	assert.equal(result.targetSessionId, undefined);
+	assert.equal(result.sources?.find((source) => source.id === "daemon")?.availability, "available");
+	for (const id of ["lifecycle", "request_timing", "tool_activity"] as const) {
+		const item = result.sources?.find((candidate) => candidate.id === id) as
+			| NonNullable<typeof result.sources>[number]
+			| undefined;
+		assert.equal(item?.availability, "unavailable");
+		assert.equal(item?.reason, "no_target");
+	}
+});
+
 test("a bounded daemon ring is explicit partial coverage and never claims worker journal history", async (t) => {
 	const f = await fixture(t);
 	const reader = new DiagnosticLogReader({
@@ -107,7 +123,7 @@ test("a bounded daemon ring is explicit partial coverage and never claims worker
 		platform: "linux",
 		daemonTail: () => ({ text: `[${stamp}] current daemon\n`, available: true, truncated: true }),
 	});
-	const inventory = await reader.call(host, id, f.target, true, { action: "inventory" });
+	const inventory = await reader.call(host, { sessionId: id, directory: f.target }, true, { action: "inventory" });
 	const daemon = inventory.sources?.find((source) => source.id === "daemon");
 	assert.equal(daemon?.availability, "available");
 	assert.equal(daemon?.retention, "current_process");
@@ -217,7 +233,7 @@ test("oversized records, symlinks, missing sources and disabled target diagnosti
 	await rm(`${f.daemonLog}.1`);
 	await symlink(outside, f.daemonLog);
 	const reader = new DiagnosticLogReader({ home: f.home, daemonLog: f.daemonLog, platform: "linux" });
-	const inventory = await reader.call(host, id, f.target, true, { action: "inventory" });
+	const inventory = await reader.call(host, { sessionId: id, directory: f.target }, true, { action: "inventory" });
 	const daemon = inventory.sources?.find((source) => source.id === "daemon");
 	assert.equal(daemon?.availability, "unavailable");
 	assert.equal(daemon?.reason, "unsafe_source");
@@ -225,9 +241,9 @@ test("oversized records, symlinks, missing sources and disabled target diagnosti
 
 	await rm(join(f.target, "lifecycle.jsonl"));
 	await symlink(outside, join(f.target, "lifecycle.jsonl"));
-	const unsafe = await reader.call(host, id, f.target, true, { action: "inventory" });
+	const unsafe = await reader.call(host, { sessionId: id, directory: f.target }, true, { action: "inventory" });
 	assert.equal(unsafe.sources?.find((source) => source.id === "lifecycle")?.reason, "unsafe_source");
-	const disabled = await reader.call(host, id, f.target, false, { action: "inventory" });
+	const disabled = await reader.call(host, { sessionId: id, directory: f.target }, false, { action: "inventory" });
 	for (const source of disabled.sources?.filter((item) => item.scope === "target") ?? [])
 		assert.equal(source.availability, "disabled");
 

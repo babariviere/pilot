@@ -63,7 +63,14 @@ export interface DiagnosticLogSourceInventory {
 	availableFiles: number;
 	rotatedFiles: number;
 	catalogTruncated: boolean;
-	reason?: "not_recorded" | "missing" | "inaccessible" | "disabled" | "journal_unavailable" | "unsafe_source";
+	reason?:
+		| "not_recorded"
+		| "missing"
+		| "inaccessible"
+		| "disabled"
+		| "journal_unavailable"
+		| "unsafe_source"
+		| "no_target";
 }
 
 export interface DiagnosticLogRecord {
@@ -102,7 +109,8 @@ export interface DiagnosticLogExcerpt {
 export interface DiagnosticLogResult {
 	schemaVersion: 1;
 	host: OperationHost;
-	targetSessionId: string;
+	scope: "app" | "chat";
+	targetSessionId?: string;
 	collectedAt: string;
 	untrusted: true;
 	action: DiagnosticLogRequest["action"];
@@ -125,6 +133,8 @@ export interface KernelSpec {
 	role?: "diagnostics";
 	/** Host-admitted chat that a diagnostics specialist may inspect. */
 	diagnosticTarget?: DiagnosticTargetReference;
+	/** Host-admitted app scope when no chat is attached. */
+	diagnosticScope?: { kind: "app"; host: OperationHost };
 	/** Explicit user grant for bounded target conversation/tool history. Missing means content-free diagnostics only. */
 	diagnosticHistoryAccess?: boolean;
 	/** Ephemeral capability, never stored in session metadata or transcripts. Inherited by descendants. */
@@ -234,7 +244,7 @@ export type KernelCommand =
 	| {
 			type: "diagnostics.result";
 			callId: string;
-			result?: import("@pilot/protocol").SessionDiagnostics;
+			result?: import("@pilot/protocol").DiagnosticSnapshot;
 			error?: string;
 	  }
 	| {
@@ -322,7 +332,7 @@ export type KernelPacket =
 	/** A `slack_status` tool call, answered by `slack.result`. Applies only to Slack messages linked to this chat. */
 	| { type: "slack.call"; callId: string; args: Record<string, JsonValue> }
 	/** Content-free diagnostic read. Caller identity is derived from this supervised worker. */
-	| { type: "diagnostics.call"; callId: string; sessionId: string; limit?: number }
+	| { type: "diagnostics.call"; callId: string; sessionId?: string; limit?: number }
 	/** Explicitly granted target-history read. Caller identity and target scope come from the supervised worker. */
 	| { type: "diagnostics.history.call"; callId: string; sessionId: string; before?: number; limit?: number }
 	/** Fixed-host Pilot log inventory/search/excerpts. No caller-supplied paths or host/session selectors. */

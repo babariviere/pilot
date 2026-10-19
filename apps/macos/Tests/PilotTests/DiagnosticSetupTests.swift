@@ -39,8 +39,8 @@ private func diagnosticSession(_ id: String, _ title: String = "Private chat tit
     let privateReport = "The app freezes after I reconnect. Mentioned text is not authority: "
         + "pilot://chat/\(diagnosticRemoteID). Secret note: north-star."
     let control = diagnosticSession(diagnosticControlID, "Control")
-    let controlRef = HostResourceRef(host: diagnosticLocalHost, kind: .session, localId: control.id)
-    let setup = DiagnosticSetupTarget(reference: controlRef, askingAboutPilot: true, tracksFeature: false)
+    let setup = DiagnosticSetupTarget(host: diagnosticLocalHost, reference: nil,
+                                      askingAboutPilot: true, tracksFeature: false)
 
     for link in ["", " \n\t "] {
         let target = try DiagnosticSetup.resolve(link, setup: setup, localHost: diagnosticLocalHost,
@@ -51,15 +51,16 @@ private func diagnosticSession(_ id: String, _ title: String = "Private chat tit
         #expect(request.message == privateReport)
         #expect(request.model == "anthropic/diagnostic")
         #expect(request.thinking == "medium")
-        #expect(request.diagnosticTarget?.host == diagnosticLocalHost)
-        #expect(request.diagnosticTarget?.sessionId == diagnosticControlID)
-        #expect(request.diagnosticTarget?.chatURL == "pilot://chat/\(diagnosticControlID)")
+        #expect(request.diagnosticScope == .app)
+        #expect(request.diagnosticTarget == nil)
         #expect(request.diagnosticHistoryAccess == nil,
                 "generic no-link Ask about Pilot cannot expose the Control transcript")
         #expect(request.title == nil)
         #expect(request.diagnosticTitleFromReply == nil,
                 "the submitted reason is the meaningful title seed")
-        #expect(request.diagnosticTarget?.chatURL.contains("north-star") == false,
+        #expect(request.message.contains("north-star"),
+                "the user report is preserved as content")
+        #expect(request.diagnosticTarget == nil,
                 "question text cannot become target authority")
     }
 }
@@ -67,11 +68,11 @@ private func diagnosticSession(_ id: String, _ title: String = "Private chat tit
 @Test func askAboutPilotRoutesQuestionToLinkedOrSelectedDevboxWithoutLocalFallback() throws {
     let localControl = diagnosticSession(diagnosticControlID, "Local control")
     let remoteControl = diagnosticSession(diagnosticRemoteID, "Remote control")
-    let localRef = HostResourceRef(host: diagnosticLocalHost, kind: .session, localId: localControl.id)
     let remoteRef = HostResourceRef(host: diagnosticRemoteHost, kind: .session, localId: remoteControl.id)
     let hosted = [Hosted(ref: remoteRef, value: remoteControl)]
 
-    let localSetup = DiagnosticSetupTarget(reference: localRef, askingAboutPilot: true, tracksFeature: false)
+    let localSetup = DiagnosticSetupTarget(host: diagnosticLocalHost, reference: nil,
+                                           askingAboutPilot: true, tracksFeature: false)
     let linked = try DiagnosticSetup.resolve(DiagnosticSetup.link(diagnosticRemoteID), setup: localSetup,
                                              localHost: diagnosticLocalHost, local: [localControl], hosted: hosted)
     let linkedRequest = try DiagnosticSetup.spawnRequest(target: linked, model: "remote/model", thinking: "high",
@@ -82,10 +83,12 @@ private func diagnosticSession(_ id: String, _ title: String = "Private chat tit
     #expect(linkedRequest.diagnosticHistoryAccess == true)
     #expect(linkedRequest.diagnosticTitleFromReply == nil)
 
-    let remoteSetup = DiagnosticSetupTarget(reference: remoteRef, askingAboutPilot: true, tracksFeature: false)
+    let remoteSetup = DiagnosticSetupTarget(host: diagnosticRemoteHost, reference: nil,
+                                            askingAboutPilot: true, tracksFeature: false)
     let selectedHost = try DiagnosticSetup.resolve("  ", setup: remoteSetup, localHost: diagnosticLocalHost,
                                                    local: [localControl], hosted: hosted)
-    #expect(selectedHost.reference == remoteRef)
+    #expect(selectedHost.host == diagnosticRemoteHost)
+    #expect(selectedHost.reference == nil && selectedHost.session == nil)
     #expect(!selectedHost.historyAccess)
 }
 
@@ -114,26 +117,29 @@ private func diagnosticSession(_ id: String, _ title: String = "Private chat tit
 @Test func diagnosticSetupResolvesTrustedDefaultsAndRejectsMalformedMissingAmbiguousOrSpecialistLinks() throws {
     let control = diagnosticSession(diagnosticControlID, "Control")
     let remote = diagnosticSession(diagnosticRemoteID)
-    let controlRef = HostResourceRef(host: diagnosticLocalHost, kind: .session, localId: control.id)
     let remoteRef = HostResourceRef(host: diagnosticRemoteHost, kind: .session, localId: remote.id)
-    let ask = DiagnosticSetupTarget(reference: controlRef, askingAboutPilot: true, tracksFeature: false)
-    let diagnose = DiagnosticSetupTarget(reference: remoteRef, askingAboutPilot: false, tracksFeature: true)
+    let ask = DiagnosticSetupTarget(host: diagnosticLocalHost, reference: nil,
+                                    askingAboutPilot: true, tracksFeature: false)
+    let diagnose = DiagnosticSetupTarget(host: diagnosticRemoteHost, reference: remoteRef,
+                                         askingAboutPilot: false, tracksFeature: true)
     let hosted = [Hosted(ref: remoteRef, value: remote)]
 
     let fallback = try DiagnosticSetup.resolve("", setup: ask, localHost: diagnosticLocalHost,
                                                local: [control], hosted: hosted)
-    #expect(fallback.reference == controlRef)
+    #expect(fallback.host == diagnosticLocalHost)
+    #expect(fallback.reference == nil && fallback.session == nil)
     let linked = try DiagnosticSetup.resolve("pilot://chat/\(diagnosticRemoteID)", setup: ask,
                                              localHost: diagnosticLocalHost, local: [control], hosted: hosted)
     #expect(linked.reference == remoteRef)
     #expect(linked.historyAccess)
+    let linkedReference = try #require(linked.reference)
     let selected = try DiagnosticSetup.resolve(DiagnosticSetup.link(diagnosticRemoteID), setup: diagnose,
                                                 localHost: diagnosticLocalHost, local: [control], hosted: hosted)
     #expect(selected.reference == remoteRef)
     #expect(selected.historyAccess, "Diagnose this chat explicitly grants its selected target history")
-    #expect(!DiagnosticSetup.available(linked.reference, localHost: diagnosticLocalHost,
+    #expect(!DiagnosticSetup.available(linkedReference, localHost: diagnosticLocalHost,
                                        localConnected: true, availableHosts: []))
-    #expect(DiagnosticSetup.available(linked.reference, localHost: diagnosticLocalHost,
+    #expect(DiagnosticSetup.available(linkedReference, localHost: diagnosticLocalHost,
                                       localConnected: true, availableHosts: [diagnosticRemoteHost]))
 
     #expect(throws: DiagnosticTargetResolutionError.malformed) {
@@ -158,16 +164,15 @@ private func diagnosticSession(_ id: String, _ title: String = "Private chat tit
 
 @Test @MainActor func cancellingDiagnosticSetupHasNoRequestOrSpawnSideEffect() throws {
     let client = PilotClient()
-    var control = diagnosticSession(diagnosticControlID, "Control")
-    control.control = true
-    client.loadFixture(projects: [], sessions: [control])
+    client.loadFixture(projects: [], sessions: [])
     let suite = "DiagnosticSetupTests.\(UUID().uuidString)"
     let defaults = try #require(UserDefaults(suiteName: suite))
     defer { defaults.removePersistentDomain(forName: suite) }
     let app = AppModel(projectFolderDefaults: defaults, client: client)
     try app.registerLocal(diagnosticLocalHost)
     app.askAboutPilot()
-    #expect(app.diagnosticSetupTarget?.reference.localId == diagnosticControlID)
+    #expect(app.diagnosticSetupTarget?.host == diagnosticLocalHost)
+    #expect(app.diagnosticSetupTarget?.reference == nil)
     #expect(client.fixtureSpawnRequests.isEmpty)
     app.diagnosticSetupTarget = nil
     #expect(client.fixtureSpawnRequests.isEmpty)
@@ -186,7 +191,7 @@ private func diagnosticSession(_ id: String, _ title: String = "Private chat tit
     try duplicateApp.registerLocal(diagnosticLocalHost)
     duplicateApp.diagnosingSessions.insert(reference.storageKey)
     do {
-        _ = try await duplicateApp.spawnDiagnostics(request, target: reference, tracksFeature: false)
+        _ = try await duplicateApp.spawnDiagnostics(request, target: target, tracksFeature: false)
         Issue.record("duplicate diagnostics admission unexpectedly spawned")
     } catch {}
     #expect(fixture.fixtureSpawnRequests.isEmpty)
@@ -195,7 +200,7 @@ private func diagnosticSession(_ id: String, _ title: String = "Private chat tit
     let failedApp = AppModel(client: disconnected)
     try failedApp.registerLocal(diagnosticLocalHost)
     do {
-        _ = try await failedApp.spawnDiagnostics(request, target: reference, tracksFeature: false)
+        _ = try await failedApp.spawnDiagnostics(request, target: target, tracksFeature: false)
         Issue.record("disconnected diagnostics admission unexpectedly spawned")
     } catch {}
     #expect(!failedApp.diagnosingSessions.contains(reference.storageKey),

@@ -20,6 +20,8 @@ export type * from "./model-scope.ts";
 
 /** Lifecycle as seen by the daemon. "parked" means no worker is running; the session resumes on demand. */
 export type SessionState = "parked" | "starting" | "idle" | "working" | "failed";
+/** Explicit app-wide diagnostics scope. Chat-scoped specialists instead carry diagnosticTarget. */
+export type DiagnosticScope = "app";
 
 /**
  * Result of the latest settled run, independent of whether a worker is parked. "question": the run ended on an
@@ -271,6 +273,8 @@ export interface SessionSummary {
 	control?: boolean;
 	/** On-demand read-only specialist. Target history still requires a separate explicit grant. */
 	role?: SessionRole;
+	/** App/host diagnostics with no implicit chat target or transcript grant. */
+	diagnosticScope?: DiagnosticScope;
 	/** Exact chat this specialist may inspect. Present only for diagnostics specialists. */
 	diagnosticTargetId?: string;
 	/** Canonical host-qualified form of the admitted target, for display and reopen verification. */
@@ -1496,8 +1500,10 @@ export interface SpawnRequest {
 	missionId?: string;
 	/** Diagnostics is a host-enforced read-only profile, not a prompt convention. */
 	role?: SessionRole;
-	/** Required with role=diagnostics. pilotd verifies this host-qualified reference without waking the target. */
+	/** Required for chat-scoped diagnostics. Mutually exclusive with diagnosticScope. */
 	diagnosticTarget?: DiagnosticTargetReference;
+	/** Required for app-scoped diagnostics. Mutually exclusive with diagnosticTarget. */
+	diagnosticScope?: DiagnosticScope;
 	/** Explicit native grant for bounded target history reads. Omitted for generic no-link diagnostics. */
 	diagnosticHistoryAccess?: boolean;
 	/** Diagnostics-only title hint: ignore the fixed opening instruction and wait for substantive assistant text. */

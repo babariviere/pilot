@@ -230,7 +230,7 @@ export function runKernelWorker(): void {
 		callDaemon((callId) => ({
 			type: "diagnostics.call",
 			callId,
-			sessionId,
+			...(sessionId === undefined ? {} : { sessionId }),
 			...(limit === undefined ? {} : { limit }),
 		}));
 	const callDiagnosticHistory: DiagnosticHistoryCall = (sessionId, before, limit) =>

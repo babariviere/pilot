@@ -14,16 +14,20 @@ test("diagnostic logs exposes only inventory, catalogue search and returned-ref 
 	const result: DiagnosticLogResult = {
 		schemaVersion: 1,
 		host: target.host,
+		scope: "chat",
 		targetSessionId: target.sessionId,
 		collectedAt: "2026-10-18T10:00:00.000Z",
 		untrusted: true,
 		action: "inventory",
 		sources: [],
 	};
-	const tool = createDiagnosticLogTool(async (request) => {
-		calls.push(request);
-		return { ...result, action: request.action };
-	}, target);
+	const tool = createDiagnosticLogTool(
+		async (request) => {
+			calls.push(request);
+			return { ...result, action: request.action };
+		},
+		{ kind: "chat", target },
+	);
 	assert.equal(tool.name, DIAGNOSTIC_LOG_TOOL);
 	assert.equal(tool.annotations?.readOnlyHint, true);
 	assert.equal(tool.annotations?.destructiveHint, false);

@@ -539,6 +539,7 @@ final class PilotClient: ObservableObject {
                 id: "fixture-spawn-\(fixtureSpawnRequests.count)", title: request.title ?? "New chat",
                 cwd: request.cwd ?? project(request.projectId)?.path ?? "/tmp", projectId: request.projectId,
                 createdAt: now, updatedAt: now, state: "working", mode: request.mode, role: request.role,
+                diagnosticScope: request.diagnosticScope,
                 diagnosticTargetId: request.diagnosticTarget?.sessionId, diagnosticTarget: request.diagnosticTarget
             )
             update(session)

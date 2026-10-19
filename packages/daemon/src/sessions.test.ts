@@ -1493,6 +1493,7 @@ test("only a diagnostics specialist can inspect its parked admitted target", asy
 			command.type === "diagnostics.result" && command.callId === "peer-read",
 	);
 	assert.ok(allowed?.result, allowed?.error);
+	assert.ok("sessionId" in allowed.result);
 	assert.equal(allowed.result.sessionId, peer.id);
 	assert.equal(f.workers.length, 2, "reading the parked peer never constructs a worker");
 
@@ -1796,6 +1797,58 @@ test("spawning target-scoped diagnostics does not wake or change a parked target
 	assert.deepEqual(sessions.get(target.id), before);
 });
 
+test("app-scoped diagnostics starts without a control row, project or hidden chat target", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager({}, { diagnosticHost });
+	const before = sessions.list().length;
+	const specialist = await sessions.spawn({
+		message: "Inspect the app",
+		role: "diagnostics",
+		diagnosticScope: "app",
+	});
+	await sessions["starting"].get(specialist.id);
+	assert.equal(sessions.list().length, before + 1);
+	assert.equal(specialist.role, "diagnostics");
+	assert.equal(specialist.diagnosticScope, "app");
+	assert.equal(specialist.diagnosticTarget, undefined);
+	assert.equal(specialist.diagnosticTargetId, undefined);
+	assert.equal(specialist.projectId, undefined);
+	const worker = f.workers.find((candidate) => candidate.spec.sessionId === specialist.id)!;
+	assert.deepEqual(worker.spec.diagnosticScope, { kind: "app", host: diagnosticHost });
+	assert.equal(worker.spec.diagnosticTarget, undefined);
+
+	sessions["onPacket"](sessions["metas"].get(specialist.id)!, worker, {
+		type: "diagnostics.call",
+		callId: "app-snapshot",
+	});
+	await until(() =>
+		worker.sent.some((command) => command.type === "diagnostics.result" && command.callId === "app-snapshot"),
+	);
+	const result = worker.sent.find(
+		(command): command is Extract<KernelCommand, { type: "diagnostics.result" }> =>
+			command.type === "diagnostics.result" && command.callId === "app-snapshot",
+	);
+	assert.ok(result?.result && "scope" in result.result);
+	assert.equal(result.result.scope, "app");
+	assert.equal("sessionId" in result.result, false);
+
+	sessions["onPacket"](sessions["metas"].get(specialist.id)!, worker, {
+		type: "diagnostics.logs.call",
+		callId: "app-logs",
+		request: { action: "inventory" },
+	});
+	await until(() =>
+		worker.sent.some((command) => command.type === "diagnostics.logs.result" && command.callId === "app-logs"),
+	);
+	const logs = worker.sent.find(
+		(command): command is Extract<KernelCommand, { type: "diagnostics.logs.result" }> =>
+			command.type === "diagnostics.logs.result" && command.callId === "app-logs",
+	);
+	assert.equal(logs?.result?.scope, "app");
+	assert.equal(logs?.result?.targetSessionId, undefined);
+	assert.equal(logs?.result?.sources?.find((source) => source.id === "lifecycle")?.reason, "no_target");
+});
+
 test("diagnostics role survives reopen and prepares only a bounded read-only handoff", async (t) => {
 	const f = await fixture(t);
 	const sessions = await f.manager({}, { diagnosticHost });
@@ -1805,7 +1858,16 @@ test("diagnostics role survives reopen and prepares only a bounded read-only han
 	);
 	await assert.rejects(
 		sessions.spawn({ projectId: f.project.id, message: "Unscoped", role: "diagnostics" }),
-		/host-qualified target chat/i,
+		/exactly one app scope or chat target/i,
+	);
+	await assert.rejects(
+		sessions.spawn({
+			message: "Conflicting scope",
+			role: "diagnostics",
+			diagnosticScope: "app",
+			diagnosticTarget: diagnosticTarget(randomUUID()),
+		}),
+		/exactly one app scope or chat target/i,
 	);
 	const target = await sessions.spawn({ projectId: f.project.id, message: "Target" });
 	const remoteTarget = diagnosticTarget(target.id, { ...diagnosticHost, hostId: "remote-box" });

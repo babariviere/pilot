@@ -75,13 +75,14 @@ private let clipboardSessionID = "abee494b-d1a8-484c-a57b-669148815d37"
                                                      localId: remoteSession.id).storageKey)
     #expect(app.hosts.selection?.host == clipboardRemote)
 
-    let setup = DiagnosticSetupTarget(reference: HostResourceRef(host: clipboardRemote, kind: .session,
-                                                                  localId: remoteSession.id),
+    let setup = DiagnosticSetupTarget(host: clipboardRemote,
+                                      reference: HostResourceRef(host: clipboardRemote, kind: .session,
+                                                                 localId: remoteSession.id),
                                       askingAboutPilot: true, tracksFeature: false)
     let resolved = try DiagnosticSetup.resolve(remoteLink, setup: setup,
                                                localHost: clipboardLocal, local: localClient.sessions,
                                                hosted: app.hosts.sessions)
-    #expect(resolved.reference.host == clipboardRemote)
+    #expect(resolved.reference?.host == clipboardRemote)
     #expect(app.client.fixtureSpawnRequests.isEmpty)
     #expect(remoteClient.fixtureSpawnRequests.isEmpty)
 }

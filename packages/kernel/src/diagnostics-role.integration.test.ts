@@ -46,6 +46,7 @@ export default (pi) => {
 	const calls: string[] = [];
 	const diagnostic = createDiagnosticsTool(
 		async (sessionId) => {
+			assert.ok(sessionId);
 			calls.push(sessionId);
 			return {
 				schemaVersion: 1,
@@ -86,9 +87,12 @@ export default (pi) => {
 			};
 		},
 		{
-			host: { hostId: "remote-box", daemonId: "daemon", lineageId: "lineage" },
-			sessionId: "01234567-89ab-4cde-8fab-0123456789ab",
-			chatUrl: "pilot://chat/01234567-89ab-4cde-8fab-0123456789ab",
+			kind: "chat",
+			target: {
+				host: { hostId: "remote-box", daemonId: "daemon", lineageId: "lineage" },
+				sessionId: "01234567-89ab-4cde-8fab-0123456789ab",
+				chatUrl: "pilot://chat/01234567-89ab-4cde-8fab-0123456789ab",
+			},
 		},
 	);
 	const proposal = createRepairProposalTool(async (draft) => ({
@@ -105,6 +109,7 @@ export default (pi) => {
 			return {
 				schemaVersion: 1,
 				host: { hostId: "remote-box", daemonId: "daemon", lineageId: "lineage" },
+				scope: "chat",
 				targetSessionId: "01234567-89ab-4cde-8fab-0123456789ab",
 				collectedAt: "2026-01-01T00:00:00.000Z",
 				untrusted: true,
@@ -113,9 +118,12 @@ export default (pi) => {
 			};
 		},
 		{
-			host: { hostId: "remote-box", daemonId: "daemon", lineageId: "lineage" },
-			sessionId: "01234567-89ab-4cde-8fab-0123456789ab",
-			chatUrl: "pilot://chat/01234567-89ab-4cde-8fab-0123456789ab",
+			kind: "chat",
+			target: {
+				host: { hostId: "remote-box", daemonId: "daemon", lineageId: "lineage" },
+				sessionId: "01234567-89ab-4cde-8fab-0123456789ab",
+				chatUrl: "pilot://chat/01234567-89ab-4cde-8fab-0123456789ab",
+			},
 		},
 	);
 	const historyCalls: string[] = [];

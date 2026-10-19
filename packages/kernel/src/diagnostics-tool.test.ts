@@ -48,10 +48,14 @@ const target = {
 
 test("diagnostics is declared read-only and fixed to the admitted target chat", async () => {
 	const calls: Array<[string, number | undefined]> = [];
-	const tool = createDiagnosticsTool(async (sessionId, limit) => {
-		calls.push([sessionId, limit]);
-		return { ...result, sessionId };
-	}, target);
+	const tool = createDiagnosticsTool(
+		async (sessionId, limit) => {
+			assert.ok(sessionId);
+			calls.push([sessionId, limit]);
+			return { ...result, sessionId };
+		},
+		{ kind: "chat", target },
+	);
 	assert.equal(tool.name, DIAGNOSTICS_TOOL);
 	assert.equal(tool.annotations?.readOnlyHint, true);
 	assert.equal(tool.annotations?.destructiveHint, false);
@@ -63,4 +67,29 @@ test("diagnostics is declared read-only and fixed to the admitted target chat", 
 		[target.sessionId, 12],
 	]);
 	assert.equal(JSON.parse((first.content[0] as { text: string }).text).sessionId, target.sessionId);
+});
+
+test("app diagnostics has no implicit session target", async () => {
+	const calls: Array<[string | undefined, number | undefined]> = [];
+	const host = { hostId: "local", daemonId: "daemon", lineageId: "lineage" };
+	const tool = createDiagnosticsTool(
+		async (sessionId, limit) => {
+			calls.push([sessionId, limit]);
+			return {
+				schemaVersion: 1,
+				scope: "app",
+				host,
+				release: "1.0.0",
+				collectedAt: "2026-01-01T00:00:00.000Z",
+				connectivity: { state: "unknown" },
+				localDiagnostics: { enabled: true, coverage: "host" },
+				sessions: { total: 0, active: 0, archived: 0, working: 0, failed: 0, workers: 0 },
+				resources: {},
+			};
+		},
+		{ kind: "app", host },
+	);
+	await tool.execute("call", { limit: 4 } as never, undefined, undefined, {} as never);
+	assert.deepEqual(calls, [[undefined, 4]]);
+	assert.match(tool.description, /no attached chat/);
 });

@@ -208,6 +208,36 @@ public struct SessionDiagnostics: Codable, Sendable {
     public let truncation: SessionDiagnosticTruncation
 }
 
+/// Host/app diagnostics with no attached chat or transcript authority.
+public struct AppDiagnostics: Codable, Sendable {
+    public struct Connectivity: Codable, Sendable {
+        public let state: String
+        public let observedAt: String?
+    }
+    public struct LocalDiagnostics: Codable, Sendable {
+        public let enabled: Bool
+        public let coverage: String
+    }
+    public struct Sessions: Codable, Sendable {
+        public let total: Int
+        public let active: Int
+        public let archived: Int
+        public let working: Int
+        public let failed: Int
+        public let workers: Int
+    }
+
+    public let schemaVersion: Int
+    public let scope: DiagnosticScope
+    public let host: HostRef
+    public let release: String
+    public let collectedAt: String
+    public let connectivity: Connectivity
+    public let localDiagnostics: LocalDiagnostics
+    public let sessions: Sessions
+    public let resources: SessionDiagnosticResources
+}
+
 public enum DiagnosticRepairUncertainty: String, Codable, CaseIterable, Hashable, Sendable {
     case low, medium, high
 }
