@@ -123,15 +123,22 @@ export class TrackedItemStore {
 		return this.rpc("slackCached", { channel, ts, projectId });
 	}
 	/** retry reclassifies a cached failure, for a message the user added by hand. */
-	reserveSlack(channel: string, ts: string, now: number, projectId: string, retry = false): Promise<SlackReservation> {
-		return this.rpc("reserveSlack", { channel, ts, now, projectId, retry });
+	reserveSlack(
+		channel: string,
+		ts: string,
+		now: number,
+		projectId: string,
+		retry = false,
+		force = false,
+	): Promise<SlackReservation> {
+		return this.rpc("reserveSlack", { channel, ts, now, projectId, retry, force });
 	}
 	finishSlack(channel: string, ts: string, result: SlackClassification | undefined, projectId: string): Promise<void> {
 		return this.rpc("finishSlack", { channel, ts, result, projectId });
 	}
-	/** One read against the shared daily Slack budget. */
-	reserveSlackRead(now: number): Promise<boolean> {
-		return this.rpc("reserveSlackRead", { now });
+	/** One read against the shared hourly Slack budget. */
+	reserveSlackRead(now: number, force = false): Promise<boolean> {
+		return this.rpc("reserveSlackRead", { now, force });
 	}
 	/** Learned IDs of Slack group handles, shared by all projects. */
 	slackGroups(handles: string[]): Promise<Record<string, SlackGroupId>> {
@@ -233,14 +240,19 @@ export class TrackedItemStore {
 	slackStartResult(id: string, outcome: "reacted" | "skipped" | "error"): Promise<void> {
 		return this.rpc("slackStartResult", { id, outcome });
 	}
-	reserveSlackReactions(projectId: string, now: number, recheckMs?: number): Promise<SlackReactionBatch> {
-		return this.rpc("reserveSlackReactions", { projectId, now, recheckMs });
+	reserveSlackReactions(
+		projectId: string,
+		now: number,
+		recheckMs?: number,
+		force = false,
+	): Promise<SlackReactionBatch> {
+		return this.rpc("reserveSlackReactions", { projectId, now, recheckMs, force });
 	}
 	recordSlackReaction(id: string, present: boolean, version: number): Promise<void> {
 		return this.rpc("recordSlackReaction", { id, present, version });
 	}
-	reserveSlackWaiting(projectId: string, now: number): Promise<SlackWaitingBatch> {
-		return this.rpc("reserveSlackWaiting", { projectId, now });
+	reserveSlackWaiting(projectId: string, now: number, force = false): Promise<SlackWaitingBatch> {
+		return this.rpc("reserveSlackWaiting", { projectId, now, force });
 	}
 	slackWaitingResult(
 		id: string,

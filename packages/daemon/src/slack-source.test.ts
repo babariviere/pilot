@@ -15,10 +15,10 @@ import {
 	SLACK_EXCERPT_LINES,
 	slackChannelProgress,
 } from "./slack-source.ts";
-import { SourceSignInRequired, SourceToolError } from "./source-mcp.ts";
+import { SourceRateLimited, SourceSignInRequired, SourceToolError } from "./source-mcp.ts";
 import { type SourcePollContext, SourceRegistry } from "./sources.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
-import { SLACK_DAILY_BUDGET } from "./tracked-items-disk.ts";
+import { SLACK_HOURLY_BUDGET } from "./tracked-items-disk.ts";
 
 const now = Date.UTC(2026, 9, 13, 12);
 const bug: SlackClassification = {
@@ -205,9 +205,9 @@ test("bounded pages rotate channels; pagination pins time range and resumes acro
 	assert.ok(third.cursor);
 	await assert.rejects(poll({ ...context, cursor: { version: 99 } }), /Invalid Slack checkpoint/);
 });
-test("daily budget defers the page without losing cursor; next UTC day resumes; malformed output is cached once", async (t) => {
+test("hourly budget defers the page without losing cursor; next UTC hour resumes; malformed output is cached once", async (t) => {
 	const f = await fixture(t);
-	for (let i = 0; i < SLACK_DAILY_BUDGET; i++) await f.store.reserveSlack("C9", `${i + 1}.000001`, now, "budget");
+	for (let i = 0; i < SLACK_HOURLY_BUDGET; i++) await f.store.reserveSlack("C9", `${i + 1}.000001`, now, "budget");
 	let clock = now,
 		calls = 0;
 	const poll = createSlackPoller(
@@ -228,7 +228,7 @@ test("daily budget defers the page without losing cursor; next UTC day resumes; 
 	const [pinned] = Object.values(cursor.channels);
 	assert.ok(pinned?.[1]);
 	assert.notEqual(pinned?.[0], pinned?.[1]);
-	clock += 86_400_000;
+	clock += 3_600_000;
 	const resumed = await poll({ ...context, cursor: limited.cursor });
 	assert.equal(resumed.issue, "slack_classification");
 	assert.equal(calls, 1);
@@ -297,6 +297,64 @@ test("same-project concurrent polls share the classification; cancellation and c
 		cancelled({ ...context, signal: controller.signal, call: async () => standalone("C000000001", 3) }),
 	);
 	assert.equal((await f.store.slackCached("C000000001", "1791892802.000001", f.project.id))?.state, "error");
+});
+
+test("force resumes a pinned budget page for one pass, without enabling future polls or bypassing Slack rate limits", async (t) => {
+	const f = await fixture(t);
+	t.mock.timers.enable({ apis: ["Date"], now });
+	const projects = new ProjectStore(f.home);
+	await projects.load();
+	const project = await projects.create({ path: f.home, tracking: { slackChannels: ["C000000001"] } });
+	await f.store.load([project.id]);
+	for (let i = 0; i < SLACK_HOURLY_BUDGET; i++) await f.store.reserveSlackRead(now);
+	let classified = 0;
+	const registry = new SourceRegistry(projects, f.store, {
+		call: async (_kind, tool) => (tool === "reactions" ? { present: false } : standalone()),
+	});
+	t.after(() => registry.stop());
+	const poller = createSlackPoller(
+		f.store,
+		{
+			classifySlack: async () => {
+				classified++;
+				return bug;
+			},
+		},
+		() => now,
+	);
+	let mode = "poll";
+	registry.register("slack", async (context) => {
+		if (mode === "rate") throw new SourceRateLimited(120_000);
+		if (mode === "budget") {
+			assert.equal(context.force, false, "ordinary refresh does not inherit force");
+			return { items: [], issue: "slack_budget" };
+		}
+		return poller(context);
+	});
+	let waitingForced: boolean | undefined;
+	registry.slackWaiting = async (context) => {
+		waitingForced = context.force;
+		return false;
+	};
+	const id = `${project.id}:slack`;
+	const limited = await registry.poll(id);
+	assert.equal(limited.budgetLimited, true);
+	assert.equal(classified, 0);
+	assert.throws(() => registry.poll(id), /hourly budget/);
+	const forced = await registry.poll(id, true);
+	assert.equal(forced.status, "ok");
+	assert.equal(forced.budgetLimited, undefined);
+	assert.equal(waitingForced, true);
+	assert.equal(classified, 1);
+	assert.equal((await f.store.list({ projectId: project.id })).items.length, 1);
+	assert.equal(await f.store.reserveSlackRead(now), false, "forced classifications do not reset shared usage");
+	mode = "budget";
+	assert.equal((await registry.poll(id)).budgetLimited, true);
+	assert.throws(() => registry.poll(id), /hourly budget/);
+	mode = "rate";
+	const rateLimited = await registry.poll(id, true);
+	assert.equal(rateLimited.budgetLimited, undefined);
+	assert.throws(() => registry.poll(id, true), /limiting requests/);
 });
 test("format errors are visible through registry health, retain last data, and never expose external text", async (t) => {
 	const f = await fixture(t);
@@ -547,7 +605,7 @@ test("registry reports per-channel status and hides items of removed channels wi
 	assert.equal(registry.require(id).channels?.[1]?.status, "ok");
 });
 
-test("shared scheduler polls Slack only when configured, preserves partial checkpoints, and resumes a budget pause at UTC midnight", async (t) => {
+test("shared scheduler polls Slack only when configured, preserves partial checkpoints, and resumes a budget pause at the next UTC hour", async (t) => {
 	const f = await fixture(t);
 	const projects = new ProjectStore(f.home);
 	await projects.load();
@@ -574,13 +632,13 @@ test("shared scheduler polls Slack only when configured, preserves partial check
 	const limited = await registry.poll(`${project.id}:slack`);
 	assert.equal(calls, 1, "manual and background polling share the same single flight");
 	assert.equal(limited.status, "error");
-	assert.match(limited.error!, /daily budget/);
+	assert.match(limited.error!, /hourly budget/);
 	assert.deepEqual(f.store.checkpoint(limited.id)?.cursor, { remaining: true });
-	const midnight = Date.UTC(2026, 9, 14);
-	assert.equal(limited.nextPollAt, midnight);
-	assert.throws(() => registry.poll(limited.id), /daily budget/);
+	const nextHour = Date.UTC(2026, 9, 13, 13);
+	assert.equal(limited.nextPollAt, nextHour);
+	assert.throws(() => registry.poll(limited.id), /hourly budget/);
 	assert.equal((await registry.poll(`${project.id}:linear`)).status, "ok", "Slack budget does not block Linear");
-	t.mock.timers.tick(midnight - Date.now() - 1);
+	t.mock.timers.tick(nextHour - Date.now() - 1);
 	assert.equal(calls, 1);
 	t.mock.timers.tick(1);
 	assert.equal((await registry.poll(limited.id)).status, "ok");

@@ -664,6 +664,11 @@ struct SlackTriagePage: View {
         }
         ToolbarItem(placement: .primaryAction) {
             Menu {
+                if let source = client.source(projectId: project.id, kind: .slack) {
+                    Button("Force sync (ignore hourly budget)") { actions.sync(source, client: client, force: true) }
+                        .disabled(!client.connected || !source.configured || source.status == .syncing || actions.syncing.contains(source.id))
+                    Divider()
+                }
                 Button { openTrackingSettings(project) } label: { Label("Linear and Slack Settings…", icon: PilotIcon.settings) }
             } label: {
                 PilotSymbol(PilotIcon.more, context: .toolbar)

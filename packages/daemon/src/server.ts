@@ -48,6 +48,7 @@ import type {
 	SessionHistoryPage,
 	SessionJobsResponse,
 	SessionSummary,
+	SourcePollRequest,
 	SourceSignInRequest,
 	SpawnRequest,
 	StartMissionCoordinatorRequest,
@@ -70,8 +71,8 @@ import { controlBody, controlHeaders, controlHostRoute, controlJSON } from "./co
 import { ControlHostError } from "./control-host-policy.ts";
 import type { ControlHosts } from "./control-hosts.ts";
 import { DatabaseSettingsError } from "./databases.ts";
-import { EnvironmentApprovalRequired } from "./environment-profile.ts";
 import { awaitDiagnosticRead, diagnosticContextResponse } from "./diagnostic-context.ts";
+import { EnvironmentApprovalRequired } from "./environment-profile.ts";
 import { Conflict, ServiceUnavailable } from "./errors.ts";
 import { daemonPerformance, operations } from "./event-loop-watchdog.ts";
 import type { GitHubImportService } from "./github-import.ts";
@@ -915,8 +916,16 @@ export function createDaemonServer(
 			} else if (parts[1] === "sources") {
 				if (parts.length === 2 && req.method === "GET")
 					return json(res, 200, tracking.list(url.searchParams.get("projectId") ?? undefined));
-				if (parts.length === 4 && parts[3] === "poll" && req.method === "POST")
-					return json(res, 200, await tracking.poll(decodeURIComponent(parts[2]!)));
+				if (parts.length === 4 && parts[3] === "poll" && req.method === "POST") {
+					const hasBody =
+						req.headers["transfer-encoding"] !== undefined || Number(req.headers["content-length"] ?? 0) > 0;
+					const body = hasBody ? await readJson<SourcePollRequest | null>(req) : null;
+					if (body !== null && (typeof body !== "object" || Array.isArray(body)))
+						throw new HttpError(400, "Expected an object");
+					if (body?.force !== undefined && typeof body.force !== "boolean")
+						throw new HttpError(400, "force must be a boolean");
+					return json(res, 200, await tracking.poll(decodeURIComponent(parts[2]!), body?.force === true));
+				}
 			} else {
 				if (parts.length === 2 && req.method === "GET") {
 					const projectId = url.searchParams.get("projectId");

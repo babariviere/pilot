@@ -271,6 +271,11 @@ export interface SlackChannelStatus {
 	lastPulledAt?: number;
 	error?: string;
 }
+/** POST /api/sources/:id/poll. Empty body keeps ordinary admission. */
+export interface SourcePollRequest {
+	/** Slack only, for this bounded pass. Provider rate limits still apply. */
+	force?: boolean;
+}
 export interface TrackingSource {
 	/** Stable project-scoped identifier, <projectId>:<kind>. */
 	id: string;
@@ -284,6 +289,8 @@ export interface TrackingSource {
 	/** Terminal fallback. Clients offer Sign in (POST /api/tracking/:kind/sign-in) instead. */
 	signInCommand?: string;
 	nextPollAt?: number;
+	/** Slack's local hourly budget is spent. A manual forced poll can bypass it. */
+	budgetLimited?: boolean;
 	linear?: LinearSourceSummary;
 	/** Slack only: one entry per configured channel, in configuration order. */
 	channels?: SlackChannelStatus[];

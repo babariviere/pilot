@@ -562,13 +562,13 @@ final class TrackedItemActions: ObservableObject {
         }
     }
 
-    func sync(_ source: TrackingSource, client: PilotClient) {
+    func sync(_ source: TrackingSource, client: PilotClient, force: Bool = false) {
         guard !syncing.contains(source.id) else { return }
         syncing.insert(source.id)
         sourceErrors[source.id] = nil
         Task {
             defer { syncing.remove(source.id) }
-            do { _ = try await client.pollSource(source.id) }
+            do { _ = try await client.pollSource(source.id, force: force) }
             catch { sourceErrors[source.id] = error.localizedDescription }
         }
     }
@@ -929,6 +929,12 @@ struct TrackedSourceStatusLine: View {
             if waiting || needsSignIn {
                 SourceSignInButton(kind: source.kind, label: source.label)
             } else if !syncing {
+                if source.kind == .slack, source.budgetLimited == true {
+                    Button("Force sync") { actions.sync(source, client: endpoint, force: true) }
+                        .buttonStyle(.plain)
+                        .fixedSize()
+                        .help("Bypass the hourly budget for one sync. Slack rate limits still apply.")
+                }
                 Button { actions.sync(source, client: endpoint) } label: { PilotSymbol(PilotIcon.refresh, context: .toolbar) }
                     .rowIconButtonStyle()
                     .help("Sync now")

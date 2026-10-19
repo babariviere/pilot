@@ -108,6 +108,20 @@ test("tracking HTTP, WS invalidation and DashboardProviders.tracked share projec
 	const auth = (await (await api(`/sources/${project.id}:linear/poll`, {})).json()) as TrackingSource;
 	assert.equal(auth.status, "sign_in_required");
 	assert.equal(auth.signInCommand, "pi mcp login linear");
+	const slackPoll = `/sources/${project.id}:slack/poll`;
+	for (const body of [{ force: "true" }, [], true]) assert.equal((await api(slackPoll, body)).status, 400);
+	assert.equal((await api(`/sources/${project.id}:linear/poll`, { force: true })).status, 409);
+	const forcedCalls: boolean[] = [];
+	tracking.register("slack", async (context) => {
+		forcedCalls.push(context.force === true);
+		return { items: [], issue: "slack_budget" };
+	});
+	const limited = (await (await api(slackPoll, {})).json()) as TrackingSource;
+	assert.equal(limited.budgetLimited, true);
+	assert.equal((await api(slackPoll, {})).status, 409);
+	assert.equal((await api(slackPoll, { force: true })).status, 200);
+	assert.equal((await api(slackPoll, { force: false })).status, 409);
+	assert.deepEqual(forcedCalls, [false, true]);
 	const teams = await (await api("/tracking/linear/teams")).json();
 	assert.equal((await api("/tracking/linear/states")).status, 400);
 	assert.equal((await api(`/tracking/linear/states?team=${"a".repeat(201)}`)).status, 400);
