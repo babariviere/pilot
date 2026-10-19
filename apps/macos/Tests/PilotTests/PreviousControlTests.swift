@@ -119,25 +119,39 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = OfflineHostStore(directory: directory.appendingPathComponent("offline"))
+        let original = try previousSession()
+        let ordinary = try previousSession("ordinary", control: false, title: "Control")
         try await store.save([OfflineHostSnapshot(host: box, configuration: SSHConnectionConfiguration(alias: "fixture"),
-            sessions: [try previousSession(), try previousSession("ordinary", control: false)])])
+            sessions: [original, ordinary])])
+        let disk = try await store.load()
+        let sanitized = try #require(disk.first { $0.host == box })
+        #expect(sanitized.sessions.first { $0.id == original.id }?.control == true)
+        #expect(sanitized.sessions.first { $0.id == ordinary.id }?.control == false)
+        #expect(sanitized.sessions.first { $0.id == ordinary.id }?.title == "Control")
+        #expect(original.control == true && ordinary.control == false)
         let hosts = HostClients(operationDirectory: directory.appendingPathComponent("operations"))
         try await hosts.restoreOffline(from: store)
         let app = AppModel(projectFolderDefaults: UserDefaults(suiteName: "previous-control-\(UUID())")!, hosts: hosts)
+        app.client.loadFixture(projects: [], sessions: [original])
         try app.registerLocal(local)
+        try hosts.install(app.client, host: local)
         let ref = HostResourceRef(host: box, kind: .session, localId: "same")
         #expect(app.previousControlSessions.map(\.ref) == [ref])
+        #expect(app.sidebarControlRows.map(\.key) == [original.id] && app.client.session(original.id)?.isControl == true)
+        let ordinaryRef = HostResourceRef(host: box, kind: .session, localId: ordinary.id)
+        #expect(app.canMutateSession(ordinaryRef.storageKey))
+        #expect(hosts.sessions.first { $0.ref == ordinaryRef }?.value.isControl == false)
         #expect(!app.canMutateSession(ref.storageKey))
         let model = PreviousControlHistoryModel(source: PreviousControlReader(reference: ref, hosts: hosts))
         await model.load()
         #expect(!model.loaded && model.error?.contains("Reconnect") == true)
-        try hosts.install(previousClient("box", sessions: [previousSession(), previousSession("ordinary", control: false)]), host: box)
+        try hosts.install(previousClient("box", sessions: [original, ordinary]), host: box)
         await model.load()
         #expect(model.loaded && model.error == nil && app.previousControlSessions.map(\.ref) == [ref])
         model.stop(); await hosts.stopAndWait()
     }
 
-    @Test @MainActor func disconnectedHeldReadCannotPublishLateDataOrClearEarlierMessages() async throws {
+    @Test @MainActor func replacedHostRejectsLateOldGenerationReadAndUsesOnlyNewEndpoint() async throws {
         PreviousHistoryHTTP.reset()
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -146,14 +160,22 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         let model = PreviousControlHistoryModel(source: PreviousControlReader(reference: .init(host: box, kind: .session, localId: "same"), hosts: hosts))
         await model.load()
         let entries = model.entries
+        let oldToken = try hosts.token(for: box)
         PreviousHistoryHTTP.holdNext()
         let task = Task { await model.load(older: true) }
         let deadline = ContinuousClock.now.advanced(by: .seconds(5))
         while PreviousHistoryHTTP.requests.count < 2 {
             guard ContinuousClock.now < deadline else { throw URLError(.timedOut) }; await Task.yield()
         }
-        await hosts.disconnect(box); PreviousHistoryHTTP.release(); await task.value
-        #expect(model.entries == entries && model.error?.contains("Reconnect") == true)
+        try hosts.install(previousClient("replacement", sessions: [previousSession()]), host: box)
+        let replacementToken = try hosts.token(for: box)
+        #expect(oldToken != replacementToken)
+        PreviousHistoryHTTP.release(); await task.value
+        #expect(model.entries == entries && model.error != nil)
+        await model.load()
+        #expect(model.error == nil && model.entries.first?.messages.first?.text.contains("replacement.previous-control.invalid") == true)
+        #expect(PreviousHistoryHTTP.requests.map(\.host) == ["box.previous-control.invalid", "box.previous-control.invalid", "replacement.previous-control.invalid"])
+        #expect(PreviousHistoryHTTP.requests.allSatisfy { $0.method == "GET" })
         model.stop(); await hosts.stopAndWait()
     }
 
@@ -163,16 +185,56 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         defer { try? FileManager.default.removeItem(at: directory) }
         let hosts = HostClients(operationDirectory: directory)
         let session = try previousSession()
-        try hosts.install(previousClient("box", sessions: [session]), host: box)
+        let client = previousClient("box", sessions: [session])
+        try hosts.install(client, host: box)
         let app = AppModel(projectFolderDefaults: UserDefaults(suiteName: "previous-control-\(UUID())")!, hosts: hosts)
         try app.registerLocal(local)
         let ref = HostResourceRef(host: box, kind: .session, localId: session.id)
         try app.selectSession(ref)
         let view = NSHostingView(rootView: SessionDetail(session: session, context: HostViewContext(host: box, hosts: hosts)).environmentObject(app))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 500), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = view
+        defer { window.close() }
+        window.orderFront(nil)
         view.setFrameSize(NSSize(width: 760, height: 500)); view.layoutSubtreeIfNeeded()
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while PreviousHistoryHTTP.requests.isEmpty {
+            guard ContinuousClock.now < deadline else { throw URLError(.timedOut) }; await Task.yield()
+        }
         func editors(_ view: NSView) -> [NSTextView] { (view as? NSTextView).map { [$0] } ?? view.subviews.flatMap(editors) }
         #expect(editors(view).allSatisfy { !$0.isEditable })
         #expect(!app.canToggleTerminal && !app.canStopSelectedChat)
+        // Inspect only this fixture's private collections, avoiding a production instrumentation hook.
+        let chats = try #require(Mirror(reflecting: client).children.first { $0.label == "chats" })
+        let subscriptions = try #require(Mirror(reflecting: hosts).children.first { $0.label == "subscriptions" })
+        #expect(Mirror(reflecting: chats.value).children.isEmpty)
+        #expect(Mirror(reflecting: subscriptions.value).children.isEmpty)
+        #expect(PreviousHistoryHTTP.requests.allSatisfy { $0.method == "GET" && $0.path == "/api/sessions/same/history" })
         await hosts.stopAndWait()
+    }
+
+    @Test @MainActor func sourceQualifiedChatLinkCannotFallBackToTheSameIdOnMac() async throws {
+        PreviousHistoryHTTP.reset()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let id = "d9edf76b-4f75-4abb-a09f-e313fc05ae39"
+        let session = try previousSession(id)
+        let hosts = HostClients(operationDirectory: directory)
+        let app = AppModel(projectFolderDefaults: UserDefaults(suiteName: "previous-control-\(UUID())")!, hosts: hosts)
+        app.client.loadFixture(projects: [], sessions: [session])
+        try app.registerLocal(local); try hosts.install(app.client, host: local)
+        try hosts.install(previousClient("box", sessions: [session]), host: box)
+        let link = try #require(ChatDestination(url: URL(string: "pilot://chat/\(id)")!))
+        // The same source qualification used by HostViewContext.openURL before native navigation.
+        let reference = HostViewContext(host: box, hosts: hosts).ref(.session, link.sessionId)
+        app.navigate(.session, id: reference.storageKey)
+        #expect(hosts.selection == reference && app.selectedSessionId == reference.storageKey && app.isPreviousControlSelected)
+        let model = PreviousControlHistoryModel(source: PreviousControlReader(reference: reference, hosts: hosts))
+        await model.load()
+        #expect(model.loaded && model.error == nil)
+        #expect(PreviousHistoryHTTP.requests.count == 1)
+        #expect(PreviousHistoryHTTP.requests.first?.host == "box.previous-control.invalid")
+        #expect(PreviousHistoryHTTP.requests.first?.path == "/api/sessions/\(id)/history")
+        model.stop(); await hosts.stopAndWait()
     }
 }
