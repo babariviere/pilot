@@ -38,11 +38,13 @@ import Testing
 }
 
 @MainActor private func controlSchedulerUntil(_ predicate: () -> Bool) async throws {
-    let deadline = ContinuousClock.now.advanced(by: .seconds(10))
-    while !predicate() {
-        guard ContinuousClock.now < deadline else { throw URLError(.timedOut) }
-        try await Task.sleep(for: .milliseconds(5))
+    // These probes do no I/O. Bound scheduler turns, not wall time spent in other mounted UI tests.
+    for _ in 0..<10_000 {
+        if predicate() { return }
+        try Task.checkCancellation()
+        await Task.yield()
     }
+    throw URLError(.timedOut)
 }
 
 @Suite struct ControlCourierSchedulerTests {
