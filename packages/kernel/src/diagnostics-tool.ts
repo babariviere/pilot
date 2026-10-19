@@ -12,21 +12,23 @@ export type DiagnosticsScope =
 export function createDiagnosticsTool(call: DiagnosticsCall, scope: DiagnosticsScope): ToolDefinition {
 	const target = scope.kind === "chat" ? scope.target : undefined;
 	const host = scope.kind === "chat" ? scope.target.host : scope.host;
-	const description = target
-		? `Read bounded operational evidence for the host-admitted target ${target.chatUrl} on ${target.host.hostId}. This never starts or changes the target and never returns conversation history, prompts, tool data, paths, credentials or raw errors. OS native crash/hang evidence is host-level and must not be attributed to the target without other evidence. Check host, freshness, source availability and truncation before drawing conclusions; cite evidence refs when reporting findings.`
-		: `Read a bounded content-free app/host snapshot for ${host.hostId}, including connectivity, aggregate chat state and daemon resource evidence. There is no attached chat, session identifier or transcript authority. This never starts, opens or changes a chat. Check local collection coverage and unavailable fields before drawing conclusions.`;
+	const description =
+		"Read bounded content-free operational evidence for a known chat on this host or initial focus/app health. No wake or mutation. Use diagnostic_context for app-wide discovery, history and linked hosts.";
 	return defineTool({
 		name: DIAGNOSTICS_TOOL,
 		label: "Diagnostics",
 		description,
 		promptSnippet: target ? `Inspect bounded evidence for ${target.chatUrl}` : `Inspect ${host.hostId} app health`,
 		parameters: Type.Object({
+			sessionId: Type.Optional(
+				Type.String({ maxLength: 36, description: "Known chat on this host; omit for focus/app health." }),
+			),
 			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 128, description: "Maximum evidence items." })),
 		}),
 		executionMode: "sequential",
 		annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 		async execute(_callId, params): Promise<AgentToolResult<DiagnosticSnapshot>> {
-			const result = await call(target?.sessionId, params.limit);
+			const result = await call(params.sessionId ?? target?.sessionId, params.limit);
 			return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
 		},
 	});

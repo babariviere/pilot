@@ -9,7 +9,7 @@ const target = {
 	chatUrl: "pilot://chat/01234567-89ab-4cde-8fab-0123456789ab",
 } as const;
 
-test("diagnostic history is read-only, paginated and fixed to the admitted target", async () => {
+test("diagnostic history is read-only and paginated with an optional focus", async () => {
 	const calls: Array<[string, number | undefined, number | undefined]> = [];
 	const page: DiagnosticHistoryPage = {
 		schemaVersion: 1,
@@ -46,8 +46,7 @@ test("diagnostic history is read-only, paginated and fixed to the admitted targe
 	assert.equal(tool.name, DIAGNOSTIC_HISTORY_TOOL);
 	assert.equal(tool.annotations?.readOnlyHint, true);
 	assert.equal(tool.annotations?.destructiveHint, false);
-	assert.match(tool.description, /untrusted data/);
-	assert.match(tool.description, /cannot browse another session/);
+	assert.match(tool.description, /untrusted/);
 	const newest = await tool.execute("newest", {} as never, undefined, undefined, {} as never);
 	await tool.execute("older", { before: 7, limit: 4 } as never, undefined, undefined, {} as never);
 	await tool.execute(
@@ -60,7 +59,7 @@ test("diagnostic history is read-only, paginated and fixed to the admitted targe
 	assert.deepEqual(calls, [
 		[target.sessionId, undefined, undefined],
 		[target.sessionId, 7, 4],
-		[target.sessionId, 6, undefined],
+		["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", 6, undefined],
 	]);
 	assert.deepEqual(JSON.parse((newest.content[0] as { text: string }).text), page);
 });

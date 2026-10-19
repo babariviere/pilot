@@ -1,6 +1,13 @@
 /** Session registry and kernel worker supervision. */
 
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { DiagnosticContextRequest, DiagnosticContextResponse } from "@pilot/protocol";
+import {
+	DiagnosticReadBroker,
+	awaitDiagnosticRead,
+	diagnosticContextResponse,
+	parseDiagnosticContext,
+} from "./diagnostic-context.ts";
 import { type ChildProcess, fork } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -2489,6 +2496,210 @@ export class SessionManager {
 	onChange(listener: (session: SessionSummary) => void): () => void {
 		this.changeListeners.add(listener);
 		return () => this.changeListeners.delete(listener);
+	}
+
+	readonly diagnosticReadBroker = new DiagnosticReadBroker();
+	diagnosticDomainRead?: (request: DiagnosticContextRequest) => Promise<DiagnosticContextResponse>;
+	private diagnosticContextReads = new Map<string, AbortController>();
+
+	/** Authorization comes only from supervised worker identity, never request fields. */
+	async diagnosticContext(callerId: string, input: unknown, signal?: AbortSignal): Promise<DiagnosticContextResponse> {
+		const caller = this.require(callerId);
+		this.validateMode(caller);
+		if (caller.role !== "diagnostics") throw new Conflict("Only diagnostics may read app-wide evidence");
+		const request = parseDiagnosticContext(input);
+		const host = request.host ?? this.diagnosticHost;
+		if (!host || !this.diagnosticHost) throw new ServiceUnavailable("Diagnostic host identity is unavailable");
+		if (
+			request.action === "hosts" ||
+			host.daemonId !== this.diagnosticHost.daemonId ||
+			host.lineageId !== this.diagnosticHost.lineageId
+		) {
+			try {
+				const result = await this.diagnosticReadBroker.read(request, signal);
+				if (signal?.aborted || this.require(callerId).role !== "diagnostics")
+					throw new Conflict("Diagnostic read cancelled");
+				if (request.action === "hosts")
+					return { ...diagnosticContextResponse(this.diagnosticHost, result), status: "partial" };
+				const remote = result as DiagnosticContextResponse;
+				if (remote?.status === "unavailable")
+					return {
+						...diagnosticContextResponse(host, null),
+						status: "unavailable",
+						reason: remote.reason === "offline" ? "offline" : "read_failed",
+					};
+				if (
+					remote?.schemaVersion !== 1 ||
+					remote.host?.hostId !== host.hostId ||
+					remote.host.daemonId !== host.daemonId ||
+					remote.host.lineageId !== host.lineageId ||
+					!["available", "partial", "missing"].includes(remote.status) ||
+					!remote.page
+				)
+					throw new Conflict("Diagnostic remote provenance changed");
+				const page = remote.page;
+				if (
+					typeof page.more !== "boolean" ||
+					!Number.isSafeInteger(page.scanned) ||
+					page.scanned < 0 ||
+					page.scanned > 200 ||
+					typeof page.truncated !== "boolean" ||
+					page.maxBytes !== 65536 ||
+					(page.after !== undefined && !/^[0-9a-f-]{36}$/i.test(page.after)) ||
+					(page.before !== undefined && (!Number.isSafeInteger(page.before) || page.before < 0))
+				)
+					throw new Conflict("Diagnostic remote page is invalid");
+				const response = diagnosticContextResponse(host, remote.data, page);
+				return {
+					...response,
+					collectedAt:
+						typeof remote.collectedAt === "string" && Number.isFinite(Date.parse(remote.collectedAt))
+							? remote.collectedAt
+							: response.collectedAt,
+					status: remote.status === "missing" ? "missing" : "partial",
+					...(remote.status === "missing" ? { reason: "deleted" as const } : {}),
+				};
+			} catch {
+				const data =
+					request.action === "hosts"
+						? {
+								hosts: [{ host: this.diagnosticHost, availability: "available" }],
+								linkedCoverage: "native_unavailable",
+							}
+						: null;
+				return {
+					...diagnosticContextResponse(host, data),
+					status: "unavailable",
+					reason: signal?.aborted ? "cancelled" : "native_unavailable",
+				};
+			}
+		}
+		return awaitDiagnosticRead(this.readDiagnosticContext(request, signal), signal);
+	}
+
+	/** Local role-checked dispatch or protected native endpoint only. No wake, subscription or external fetch. */
+	async readDiagnosticContext(input: unknown, signal?: AbortSignal): Promise<DiagnosticContextResponse> {
+		const request = parseDiagnosticContext(input);
+		const host = request.host ?? this.diagnosticHost;
+		if (
+			!host ||
+			!this.diagnosticHost ||
+			host.daemonId !== this.diagnosticHost.daemonId ||
+			host.lineageId !== this.diagnosticHost.lineageId
+		)
+			throw new Conflict("Diagnostic receiver identity changed");
+		if (signal?.aborted) throw new Conflict("Diagnostic read cancelled");
+		const limit = request.limit ?? 8;
+		if (request.action === "hosts")
+			return diagnosticContextResponse(host, { hosts: [{ host, availability: "available" }] });
+		if (["projects", "missions", "mission", "issues"].includes(request.action)) {
+			if (!this.diagnosticDomainRead)
+				return { ...diagnosticContextResponse(host, null), status: "unavailable", reason: "unsupported" };
+			return this.diagnosticDomainRead({ ...request, host });
+		}
+		if (request.sessionId && !this.metas.has(request.sessionId))
+			return { ...diagnosticContextResponse(host, null), status: "missing", reason: "deleted" };
+		const summary = (meta: SessionMeta) => {
+			const s = this.summary(meta, this.workers.get(meta.id));
+			return {
+				id: s.id,
+				title: s.title,
+				state: s.state,
+				working: s.working,
+				role: s.role,
+				mode: s.mode,
+				archivedAt: s.archivedAt,
+				createdAt: s.createdAt,
+				updatedAt: s.updatedAt,
+				projectId: s.projectId,
+				error: s.error,
+				mission: this.missions?.context(meta.id),
+			};
+		};
+		if (request.action === "chats") {
+			const rows: unknown[] = [];
+			let scanned = 0,
+				after = request.after,
+				found = !after,
+				more = false;
+			for (const meta of this.metas.values()) {
+				if (!found) {
+					if (meta.id === after) found = true;
+					continue;
+				}
+				if (scanned >= 200 || rows.length >= limit) {
+					more = true;
+					break;
+				}
+				scanned++;
+				after = meta.id;
+				if (request.query) {
+					const title = diagnosticContextResponse(host, this.summary(meta, this.workers.get(meta.id)).title).data;
+					if (typeof title !== "string" || !title.toLowerCase().includes(request.query.toLowerCase())) continue;
+				}
+				rows.push(summary(meta));
+			}
+			if (!found) return { ...diagnosticContextResponse(host, null), status: "missing", reason: "deleted" };
+			return diagnosticContextResponse(
+				host,
+				{ chats: rows, includesArchived: true },
+				{ scanned, more, ...(more && after ? { after } : {}) },
+			);
+		}
+		if (request.action === "logs") {
+			const target = request.sessionId ? this.require(request.sessionId) : undefined;
+			const logs = await this.diagnosticLogs.call(
+				host,
+				target ? { sessionId: target.id, directory: this.dir(target.id) } : undefined,
+				this.telemetry?.localDiagnostics ?? true,
+				request.log!,
+			);
+			if (signal?.aborted) throw new Conflict("Diagnostic read cancelled");
+			return diagnosticContextResponse(host, logs);
+		}
+		if (request.action === "chat") {
+			const meta = this.require(request.sessionId!);
+			const diagnostics = await this.diagnostics(meta.id, { host, limit });
+			if (signal?.aborted) throw new Conflict("Diagnostic read cancelled");
+			return diagnosticContextResponse(host, {
+				chat: summary(meta),
+				diagnostics,
+				informationalBudget: this.aiUsageBudget,
+				coverage: { issues: "retained_chat_failures_and_mission_context", externalIssueDetails: "not_fetched" },
+			});
+		}
+		let id = request.sessionId;
+		if (request.action === "search" && !id) {
+			let found = request.after === undefined;
+			for (const meta of this.metas.values()) {
+				if (!found) {
+					if (meta.id === request.after) found = true;
+					continue;
+				}
+				id = meta.id;
+				break;
+			}
+			if (!found) return { ...diagnosticContextResponse(host, null), status: "missing", reason: "deleted" };
+			if (!id) return diagnosticContextResponse(host, { matches: [] });
+		}
+		if (!id) throw new Conflict("A chat reference is required");
+		const page = await this.readDiagnosticHistory(id, request.before, limit, host);
+		if (signal?.aborted) throw new Conflict("Diagnostic read cancelled");
+		const entries = request.query
+			? page.entries.filter((v) => v.excerpt.toLowerCase().includes(request.query!.toLowerCase()))
+			: page.entries;
+		const anotherChat = request.action === "search" && !request.sessionId;
+		return diagnosticContextResponse(
+			host,
+			{ ...page, entries },
+			{
+				scanned: page.pagination.scannedEntries,
+				more: page.pagination.more || anotherChat,
+				...(page.pagination.nextBefore === undefined ? {} : { before: page.pagination.nextBefore }),
+				...(anotherChat ? { after: page.pagination.more ? request.after : id } : {}),
+				truncated: page.pagination.truncatedEntries > 0,
+			},
+		);
 	}
 
 	onArtifactsChanged(listener: (sessionId: string, artifacts: ArtifactSummary[]) => void): () => void {
@@ -5638,7 +5849,7 @@ export class SessionManager {
 		return { entries: read.entries, more: read.more };
 	}
 
-	/** Fixed-target, bounded storage read for one authorized specialist. Never starts or subscribes to the target. */
+	/** Role-authorized bounded storage read. Legacy focus/history flags are not access gates. */
 	private async diagnosticHistory(
 		specialist: SessionMeta,
 		sessionId: string,
@@ -5646,14 +5857,24 @@ export class SessionManager {
 		requestedLimit: number | undefined,
 	): Promise<DiagnosticHistoryPage> {
 		this.validateMode(specialist);
-		if (specialist.role !== "diagnostics" || specialist.diagnosticHistoryAccess !== true)
-			throw new Error("Target history was not explicitly authorized for this diagnostics specialist");
-		const reference = this.diagnosticReference(specialist);
-		if (!reference || reference.sessionId !== sessionId)
-			throw new Error("Diagnostic history is limited to the host-admitted target chat");
+		if (specialist.role !== "diagnostics") throw new Conflict("Only diagnostics may read chat history");
+		if (!this.diagnosticHost) throw new Conflict("Diagnostic host identity is unavailable");
+		return this.readDiagnosticHistory(
+			sessionId,
+			before,
+			requestedLimit,
+			this.diagnosticReference(specialist)?.host ?? this.diagnosticHost,
+		);
+	}
+
+	private async readDiagnosticHistory(
+		sessionId: string,
+		before: number | undefined,
+		requestedLimit: number | undefined,
+		host: OperationHost,
+	): Promise<DiagnosticHistoryPage> {
 		const target = this.require(sessionId);
-		if (target.role === "diagnostics")
-			throw new Conflict("A diagnostics specialist cannot inspect another specialist");
+		const reference = { host, sessionId: target.id, chatUrl: `pilot://chat/${target.id}` };
 		if (before !== undefined && (!Number.isSafeInteger(before) || before < 0))
 			throw new Error("Invalid diagnostic history cursor");
 		const limit = requestedLimit ?? 8;
@@ -6472,6 +6693,9 @@ export class SessionManager {
 	}
 
 	async shutdown(): Promise<void> {
+		for (const controller of this.diagnosticContextReads.values()) controller.abort();
+		this.diagnosticContextReads.clear();
+		this.diagnosticReadBroker.close();
 		this.closing = true;
 		this.workerStarts.close();
 		this.recoveryStops.close();
@@ -7193,19 +7417,53 @@ export class SessionManager {
 				);
 			return;
 		}
+		if (packet.type === "diagnostics.context.cancel") {
+			this.diagnosticContextReads.get(`${meta.id}:${packet.callId}`)?.abort();
+			return;
+		}
+		if (packet.type === "diagnostics.context.call") {
+			const key = `${meta.id}:${packet.callId}`;
+			const controller = new AbortController();
+			const timer = setTimeout(() => controller.abort(), 10_000);
+			if (this.diagnosticContextReads.size >= 8 || this.diagnosticContextReads.has(key)) {
+				clearTimeout(timer);
+				worker.send({
+					type: "diagnostics.context.result",
+					callId: packet.callId,
+					error: "Diagnostic reads are busy",
+				});
+				return;
+			}
+			this.diagnosticContextReads.set(key, controller);
+			void this.diagnosticContext(meta.id, packet.request, controller.signal)
+				.then(
+					(result) => {
+						if (this.workers.get(meta.id) === worker && !controller.signal.aborted)
+							worker.send({ type: "diagnostics.context.result", callId: packet.callId, result });
+					},
+					() => {
+						if (this.workers.get(meta.id) === worker)
+							worker.send({
+								type: "diagnostics.context.result",
+								callId: packet.callId,
+								error: "Diagnostic evidence is unavailable",
+							});
+					},
+				)
+				.finally(() => {
+					clearTimeout(timer);
+					this.diagnosticContextReads.delete(key);
+				});
+			return;
+		}
 		if (packet.type === "diagnostics.call") {
 			void Promise.resolve()
 				.then(async (): Promise<AppDiagnostics | SessionDiagnostics> => {
 					if (meta.role !== "diagnostics")
 						throw new Error("Only an admitted diagnostics specialist may read agent diagnostics");
-					if (meta.diagnosticScope === "app") {
-						if (packet.sessionId !== undefined) throw new Error("App diagnostics cannot select a chat");
-						return this.appDiagnostics();
-					}
-					if (!packet.sessionId) throw new Error("Chat diagnostics require the admitted target");
+					this.validateMode(meta);
+					if (!packet.sessionId) return this.appDiagnostics();
 					const target = this.require(packet.sessionId);
-					if (target.id !== (this.diagnosticReference(meta)?.sessionId ?? meta.id))
-						throw new Error("Diagnostics are limited to the host-admitted target chat");
 					return await this.diagnostics(target.id, {
 						...(packet.limit === undefined ? {} : { limit: packet.limit }),
 					});

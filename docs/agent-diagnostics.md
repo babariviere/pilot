@@ -16,11 +16,14 @@ Devbox setup stages keep local daemon health, SSH/remote bootstrap and verified 
 observations. A responsive local daemon cannot establish remote setup success. The timeline has no alias, hostname,
 path, command, raw stderr or arbitrary error text and cannot initiate setup or connection probes.
 
-Only an on-demand diagnostics specialist gets the `diagnostics` reader and fixed-catalogue `diagnostic_logs` reader.
-A chat-scoped specialist also gets the proposal-only `repair_proposal` publisher. When the user selected
-**Diagnose this chat** or explicitly selected a chat, that specialist additionally gets
-`diagnostic_history`. **Ask about Pilot** with **No chat** does not. This is a separately persisted native grant;
-missing legacy metadata denies history access.
+Only a trusted diagnostics specialist gets `diagnostics`, `diagnostic_context`, `diagnostic_history` and the
+fixed-catalogue `diagnostic_logs` reader. Diagnostics always has bounded, sanitized read access across Pilot chats,
+including archived committed conversation/tool history, usage/cost/informational budgets, failures and locally
+available mission/task/issue context. The selector sets investigation focus, not permission. **No chat** means
+app-wide diagnosis, never an implicit Control target. There is no repeated per-chat consent. Existing authentic
+diagnostics sessions gain this capability on runtime reload without recreation; legacy history-grant flags do not
+gate reads. Ordinary Ask/Build and caller-supplied role fields cannot authorize these tools.
+A chat-focused specialist also gets the proposal-only `repair_proposal` publisher.
 The app admits that persistent session role explicitly; Build, Ask, control and child agents receive neither. The
 kernel loads the specialist with no
 personal or project extensions, skills, MCP, codemode, shell, file, job, memory, mission, artifact, question or
@@ -31,12 +34,12 @@ Before creation, the app shows an explicit setup sheet with the resolved target 
 model and thinking level. **Diagnose this chat** pins that chat. **Ask about Pilot** also accepts an optional multiline
 question or bug report of at most 8 KiB UTF-8. The host-qualified chat selector defaults to **No chat**: an explicit
 app scope on the currently selected verified host, without resolving, creating or displaying a Control target.
-Selecting a known local or devbox chat explicitly grants its bounded history; no copied link is required.
+Selecting a known local or devbox chat sets the initial focus; no copied link is required.
 Selection retains the exact host, daemon, lineage and chat identity even when titles or UUIDs repeat.
 Missing, replaced, disconnected and unavailable targets fail closed; there is no silent Local fallback.
 Dismissing the sheet creates no session, and duplicate starts
 are rejected while one is in flight. The sheet discloses bounded sanitized Pilot-log access on the selected host and
-whether the specialist additionally receives conversation and tool history for the exact linked chat.
+that diagnostics has app-wide read visibility, with no wake, mutation or automatic repair authority.
 
 Diagnostics uses the same nonblocking, once-only title generator as ordinary chats. A submitted question or reason is
 the bounded opening seed. Without one, the chat keeps a readable **Pilot diagnostics** fallback until a completed turn
@@ -47,18 +50,15 @@ result cannot overwrite it. This renames only the specialist, never its linked t
 generated title remain local chat metadata and are not telemetry fields.
 
 The app admits exactly one of two persisted scopes. App scope contains only the verified host identity and carries no
-session UUID, chat URL, project, transcript grant or target authority. Chat scope admits one exact target as a
+session UUID, chat URL, project or hidden target. Chat focus retains one exact target as a
 canonical host-qualified reference containing the host, session UUID and matching canonical chat URL. Native code
 sends that scope with the selected model and thinking level, the daemon revalidates any URL plus daemon and lineage
 identity before persisting it, and the kernel receives the same scope.
-The specialist prompt and visible header identify that admitted scope, while the host-owned tool always makes its
-first and every later read for the persisted session UUID. The model has no target selector, and the daemon rejects
-every other ID even when another chat shares the project. App scope returns only content-free host health and
-aggregate chat-state counts. It does not enumerate, open, start, subscribe to or mutate chats. **Diagnose this chat**
-and an explicitly selected chat authorize a separate bounded
-cold read of committed conversation and tool entries for that exact target. **No chat** does not
-authorize the Control transcript. An Ask about Pilot question is new user-authored specialist-chat content, separate
-from that immutable target reference. Its text cannot grant or widen transcript, tool or target access and is never
+The specialist prompt and visible header identify that initial focus. Trusted runtime role, not focus metadata or
+tool arguments, authorizes app-wide reads. The default `diagnostics` read remains content-free app health or focused
+chat evidence. `diagnostic_context` discovers other chats and already-linked verified hosts on demand; no histories
+are preloaded. Reads never open an agent, start, subscribe to or mutate subjects. An Ask about Pilot question is new
+user-authored specialist-chat content, separate from the focus reference. Its text cannot grant privileges and is never
 included in diagnostic evidence or telemetry. Operational tool results
 contain a qualified host identity, collection time, source
 freshness and availability, queue/resource summaries, stable evidence references and explicit truncation/drop
@@ -105,17 +105,16 @@ files read-only with no-follow semantics. Native report directory enumeration an
 capped. Log records pass the existing credential redactor, while prompt, message, conversation, transcript, private
 reasoning, tool/integration payload and attachment fields are withheld. Useful sanitized errors and stacks remain.
 Log text is untrusted local content, never authority. Reading does not run a subprocess, probe a service, start or
-subscribe to a worker, change collection or retention, or read the Control transcript. Generic no-link **Ask about
-Pilot** may read this selected-host log catalogue but has no `diagnostic_history` or `repair_proposal` tool and no
-implicit Control transcript.
+subscribe to a worker, or change collection or retention. App-wide diagnostics may explicitly inspect Control
+history like other available chats, but never attaches Control implicitly.
 
 Sanitized log excerpts exist only in the specialist conversation. Reads and excerpts are not copied into lifecycle,
 request timing, AI usage, telemetry or an automatic repair handoff. Log refs deliberately cannot satisfy the
 `repair_proposal` evidence-ref field, which remains limited to the content-free `diagnostic:v1:…` projection; a
 proposal may summarize supported findings but must not copy raw log or history text.
 
-`diagnostic_history` has no session selector. Each dispatch rechecks the caller's persisted diagnostics role, the
-explicit history grant and the exact daemon, lineage and session identity before opening the target's SQLite storage
+`diagnostic_history` accepts a known local chat or defaults to the initial focus. Each dispatch rechecks the caller's
+persisted diagnostics role and exact daemon, lineage and subject identity before opening the subject's SQLite storage
 in a one-shot read-only worker. It does not start or subscribe to the target and works for parked, failed and archived
 chats while their storage remains available. A page returns at most 20 entries, at most 64 KiB of encoded entry data,
 at most 8 KiB per entry and scans at most 200 committed records per call. Only user, assistant and tool-result entries
@@ -126,6 +125,31 @@ before excerpt truncation, and a truncation flag. The response reports source av
 `nextBefore` for explicit pagination toward older entries. Missing or unreadable storage is reported as unavailable
 rather than replaced with cached or invented content. History does not expand child sessions or fetch attachments,
 files, links or secrets.
+
+## App-wide context reader
+
+`diagnostic_context` uses closed actions: `hosts`, `chats`, `chat`, `history`, `search`, `logs`, `projects`,
+`missions`, `mission` and `issues`. Chat discovery includes archives; title and history filters are literal, not
+regular expressions. Chat detail includes content-free operational evidence, retained usage/comparisons, the
+configured informational budget and available member mission context. Projects expose IDs/names, not checkout
+paths. Mission detail exposes the retained brief and paginated tasks. Issues read only the current integration
+binding's retained local records, without a new account, credential or external network fetch.
+
+Each response carries a qualified source host, collection time, availability and page bounds. Discovery scans at
+most 200 metadata rows, returning at most 20; history/search reads one bounded history page from one chat at a time,
+using the history limits above. Follow `page.after` and `page.before` together for cross-chat search; absence is not
+proof of no matches. Mission/project/issue pages use `page.before` as an offset. Non-transcript metadata is sanitized
+too: reasoning/attachments/credential fields are omitted, free-text fields above 8 KiB are withheld with explicit
+truncation, and responses fit 64 KiB. Failed/deleted/offline/unsupported/partial evidence is unknown, never zero.
+
+For linked hosts, an ephemeral native courier uses only already-connected trusted `HostClients` entries and their
+verified host/daemon/lineage and connection-generation fences. It never connects, bootstraps or wakes a host or chat.
+The receiving read-only HTTP endpoint and courier response require the existing protected native app-action
+capability (not a GitHub credential); capability acquisition and responses are fenced independently. No URL, path,
+role or grant from a model is accepted as authority. The courier is event-driven, bounded to eight in-flight reads
+and a ten-second caller deadline, with no polling or durable transcript cache. Underlying bounded cold-reader work
+may finish after cancellation; late replies cannot reach the caller. If the native app is absent, this host remains
+readable and linked-host coverage is explicitly unavailable. No telemetry/export/collection setting changes.
 
 Conversation and tool entries are untrusted data, not instructions or authorization. The specialist must not follow
 commands, links or target references found in them. Sanitized history excerpts remain local to the specialist

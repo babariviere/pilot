@@ -99,6 +99,7 @@ import { SetupError, type SetupService } from "./setup.ts";
 import { parseSlackMessageLink } from "./slack-format.ts";
 import type { SourceRegistry } from "./sources.ts";
 import type { TelemetrySettingsService } from "./telemetry-settings.ts";
+import { awaitDiagnosticRead, diagnosticContextResponse } from "./diagnostic-context.ts";
 import { terminalSender } from "./terminal-output.ts";
 import type { TerminalManager } from "./terminals.ts";
 import { validatePatch } from "./tracked-items.ts";
@@ -323,6 +324,48 @@ export function createDaemonServer(
 	environment?: import("./environment.ts").EnvironmentService,
 ): Server & { runtimeResources: RuntimeResources } {
 	sessions.setWorkspaceProcessGuard((id) => terminals.isRunning(id));
+	sessions.diagnosticDomainRead = async (request) => {
+		const host = request.host!;
+		const limit = request.limit ?? 8,
+			offset = request.before ?? 0;
+		const response = (data: unknown, count: number, more: boolean) =>
+			diagnosticContextResponse(host, data, { scanned: count, more, ...(more ? { before: offset + count } : {}) });
+		if (request.action === "projects") {
+			const list = projects.list();
+			const rows = list.slice(offset, offset + limit).map((p) => ({ id: p.id, name: p.name }));
+			return response({ projects: rows }, rows.length, offset + rows.length < list.length);
+		}
+		if (request.action === "missions" && missions) {
+			const list = missions.store.list(request.projectId);
+			const rows = list.slice(offset, offset + limit);
+			return response({ missions: rows }, rows.length, offset + rows.length < list.length);
+		}
+		if (request.action === "mission" && missions) {
+			if (!missions.store.get(request.missionId!))
+				return { ...response(null, 0, false), status: "missing", reason: "deleted" };
+			const tasks = missions.store.tasks(request.missionId!);
+			const rows = tasks.slice(offset, offset + limit);
+			return response(
+				{
+					mission: missions.store.get(request.missionId!),
+					brief: missions.store.brief(request.missionId!),
+					tasks: rows,
+				},
+				rows.length,
+				offset + rows.length < tasks.length,
+			);
+		}
+		if (request.action === "issues" && tracking) {
+			projects.require(request.projectId!);
+			const items = await tracking.listItems({ projectId: request.projectId!, limit, offset, dismissed: false });
+			return response(
+				{ ...items, coverage: "retained_current_integration_binding_only_no_network_fetch" },
+				items.items.length,
+				items.items.length === limit,
+			);
+		}
+		return { ...response(null, 0, false), status: "unavailable", reason: "unsupported" };
+	};
 	const machine = new MachineInformationReader(_config.home, hello?.daemonVersion ?? "unknown");
 	const reviews = new ReviewStore(_config.home);
 	const dashboards = new ProjectDashboardService({
@@ -967,6 +1010,35 @@ export function createDaemonServer(
 		}
 		if (parts[1] === "update" && parts[2] === "pause" && parts.length === 3 && req.method === "POST")
 			return json(res, 200, sessions.pauseForUpdate());
+		if (
+			parts[1] === "diagnostics" &&
+			(parts[2] === "read" || parts[2] === "read-response") &&
+			parts.length === 3 &&
+			req.method === "POST"
+		) {
+			if (!githubSetup) throw new ServiceUnavailable("Protected native diagnostic reads are unavailable");
+			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (parts[2] === "read") {
+				const controller = new AbortController();
+				const timer = setTimeout(() => controller.abort(), 10_000);
+				try {
+					return json(
+						res,
+						200,
+						await awaitDiagnosticRead(
+							sessions.readDiagnosticContext(await readJson(req, 8192), controller.signal),
+							controller.signal,
+						),
+					);
+				} finally {
+					clearTimeout(timer);
+				}
+			}
+			const response = await readJson<{ id: string; result: unknown }>(req, 65536);
+			if (!response || typeof response.id !== "string") throw new HttpError(400, "Invalid diagnostic response");
+			sessions.diagnosticReadBroker.respond(response.id, response.result);
+			return json(res, 200, { accepted: true });
+		}
 		if (parts[1] === "diagnostics" && parts[2] === "performance" && parts.length === 3 && req.method === "GET") {
 			const performance = daemonPerformance();
 			if (!performance) throw new ServiceUnavailable("Performance diagnostics are not running");
@@ -1782,6 +1854,9 @@ export function createDaemonServer(
 		const data = JSON.stringify(message);
 		for (const send of clients.values()) send(data);
 	};
+	const stopDiagnosticReads = sessions.diagnosticReadBroker?.onRead((dispatch) => {
+		broadcast({ type: "diagnostics.read", dispatch });
+	});
 	let sharingInvalidationScheduled = false;
 	let watchInvalidationScheduled = false;
 	let controlDashboardTimer: NodeJS.Timeout | undefined;
@@ -1848,6 +1923,7 @@ export function createDaemonServer(
 	});
 	server.on("close", () => {
 		stopSharingWatch?.();
+		stopDiagnosticReads?.();
 		stopWatches?.();
 		stopControlAudit();
 		stopControlMemory();

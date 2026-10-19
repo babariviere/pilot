@@ -75,6 +75,8 @@ final class HostClients: ObservableObject {
         var observations: [AnyCancellable]
     }
     private var entries: [HostRef: Entry] = [:]
+    private var diagnosticReads: [String: Task<Void, Never>] = [:]
+    private let readNativeCapability: @MainActor (HostRef, SSHConnectionConfiguration?) async throws -> String
     @Published private(set) var sharedRevision = 0
     let sharedContextCourier = SharedContextCourier()
     private var sharedContextGenerations: [HostRef: UUID] = [:]
@@ -232,6 +234,9 @@ final class HostClients: ObservableObject {
          readScopedModelCapability: @escaping @MainActor (HostRef, SSHConnectionConfiguration?) async throws -> String = {
              try await GitHubNativeAccess.read(host: $0, configuration: $1)
          },
+         readNativeCapability: @escaping @MainActor (HostRef, SSHConnectionConfiguration?) async throws -> String = {
+             try await GitHubNativeAccess.read(host: $0, configuration: $1)
+         },
          automaticUpdates: DevboxAutomaticUpdateConfiguration? = nil,
          readRuntimeHello: @escaping @MainActor (PilotClient, HostRef) async throws -> DaemonHello = { client, _ in
              try await client.hello()
@@ -240,6 +245,7 @@ final class HostClients: ObservableObject {
         self.connectClient = connectClient
         self.readRuntimeHello = readRuntimeHello
         self.readScopedModelCapability = readScopedModelCapability
+        self.readNativeCapability = readNativeCapability
         scopedModels = ScopedModelsSync(store: scopedModelsStore ?? ScopedModelsStore(directory:
             operationDirectory?.appendingPathComponent("scoped-models", isDirectory: true) ??
                 FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -657,6 +663,11 @@ final class HostClients: ObservableObject {
             client.$hasProjectSnapshot, client.$hasSessionSnapshot, client.$hasMissionSnapshot
         ).sink { [weak self] _ in self?.enqueueRefresh(host) })
         entries[host] = entry
+        client.onDiagnosticRead = { [weak self, weak client] dispatch in
+            guard let self, let client, self.entries[host]?.token == token,
+                  self.entries[host]?.client === client, client.connected, !self.shuttingDown else { return }
+            self.routeDiagnosticRead(dispatch, source: host, token: token)
+        }
         client.onSharedContextsChanged = { [weak self, weak client] in
             guard let self, let client, self.entries[host]?.token == token, client.connected,
                   self.entries[host]?.client === client, !self.shuttingDown else { return }
@@ -850,6 +861,10 @@ final class HostClients: ObservableObject {
         reconciliationGenerations[host] = nil
         for subscription in subscriptions.values where subscription.ref.host == host { subscription.detach() }
         let removed = entries.removeValue(forKey: host)
+        removed?.client.onDiagnosticRead = nil
+        for key in diagnosticReads.keys.filter({ $0.hasPrefix(hostKey(host) + ":") }) {
+            diagnosticReads.removeValue(forKey: key)?.cancel()
+        }
         removed?.client.onSharedContextsChanged = nil
         removed?.client.disconnect()
         if let removed { presentationClients[host] = removed.client }
@@ -953,13 +968,66 @@ final class HostClients: ObservableObject {
         return value
     }
 
+    private func routeDiagnosticRead(_ dispatch: DiagnosticReadDispatch, source: HostRef, token: HostConnectionToken) {
+        let key = hostKey(source) + ":" + dispatch.id
+        guard diagnosticReads[key] == nil, diagnosticReads.count < 8,
+              UUID(uuidString: dispatch.id) != nil else { return }
+        diagnosticReads[key] = Task { [weak self] in
+            guard let self else { return }
+            defer { diagnosticReads[key] = nil }
+            let result: JSONValue
+            do {
+                if dispatch.request.action == "hosts" {
+                    let known = Set(offlineHosts.keys).union(entries.keys)
+                    let rows = try known.sorted { self.hostKey($0) < self.hostKey($1) }.prefix(32).map { host in
+                        let value = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(host))
+                        return JSONValue.object(["host": value,
+                            "availability": .string(self.available.contains(host) ? "available" : "offline"),
+                            "freshness": .string(self.available.contains(host) ? "verified_connection" : "cached_identity")])
+                    }
+                    result = .object(["hosts": .array(rows), "truncated": .bool(known.count > rows.count),
+                                      "coverage": .string("user_trusted_linked_hosts_only")])
+                } else {
+                    guard let destination = dispatch.request.host,
+                          entries[destination] != nil || offlineHosts[destination] != nil else {
+                        throw HostRoutingError.invalidReference
+                    }
+                    guard entries[destination] != nil, available.contains(destination) else {
+                        throw HostRoutingError.disconnected
+                    }
+                    let response: DiagnosticContextResponse = try await githubRequest(on: destination,
+                        path: "api/diagnostics/read", body: dispatch.request)
+                    guard response.schemaVersion == 1, response.host == destination else {
+                        throw HostRoutingError.identityChanged
+                    }
+                    result = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(response))
+                }
+            } catch {
+                let reason: String
+                if let routing = error as? HostRoutingError, case .disconnected = routing { reason = "offline" }
+                else { reason = "read_failed" }
+                result = .object(["status": .string("unavailable"), "reason": .string(reason)])
+            }
+            guard !Task.isCancelled, !shuttingDown, entries[source]?.token == token,
+                  entries[source]?.client.connected == true else { return }
+            struct Reply: Encodable { let id: String; let result: JSONValue }
+            struct Accepted: Decodable { let accepted: Bool }
+            let _: Accepted? = try? await githubRequest(on: source, path: "api/diagnostics/read-response",
+                body: Reply(id: dispatch.id, result: result))
+        }
+    }
+
+    private func hostKey(_ host: HostRef) -> String {
+        HostResourceRef(host: host, kind: .session, localId: "diagnostic-read").storageKey
+    }
+
     /// Capability acquisition and the response are both fenced to this installation and connection.
     func githubRequest<Body: Encodable, Response: Decodable>(on host: HostRef, path: String = "api/setup/github",
                                                             body: Body?, method: String = "POST") async throws -> Response {
         let client = try endpoint(host), fence = try token(for: host)
         let configuration = offlineHosts[host]?.configuration
         guard configuration != nil || host.hostId == "local" else { throw HostRoutingError.invalidReference }
-        let capability = try await GitHubNativeAccess.read(host: host, configuration: configuration)
+        let capability = try await readNativeCapability(host, configuration)
         try validate(fence)
         let value: Response = try await client.githubRequest(path, capability: capability, body: body, method: method)
         try validate(fence)
