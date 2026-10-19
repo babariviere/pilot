@@ -10,11 +10,11 @@ A project's environment goes through five stages. The profile is shared by the p
 other stage runs on the host that runs the chats:
 
 1. **Discover** declared versions, services and setup entry points by reading repository files. Nothing runs.
-2. **Profile**: the user confirms what the project needs. It is saved in daemon project settings and synced to
-   the project's linked hosts.
+2. **Profile**: the user confirms what the project needs. It is saved in daemon project settings as a shared
+   layer synced to the project's linked hosts, plus an optional override layer per host.
 3. **Plan**: the host's daemon checks what is present and proposes installs, without changing anything.
-4. **Apply**: after confirmation in the app, the daemon installs missing tools, starts the built-in database and
-   runs reviewed project steps.
+4. **Apply**: after confirmation in the app, the daemon installs missing tools and starts the built-in database.
+   Each new or restored workspace then gets the listed local files, its own database and the reviewed project steps.
 5. **Ready**: readiness checks say whether the workspace can build and test, and post-run checks rely on them.
 
 ## Goals and boundaries
@@ -23,10 +23,20 @@ other stage runs on the host that runs the chats:
 - Every install or script run is previewed per host and confirmed in the app. Chat messages and agents never
   approve anything.
 - Steps are idempotent, so reruns after restore, version bumps and failures are safe.
-- Setup never touches existing databases, credentials or secrets. Services it creates belong to Pilot.
-- A built-in Postgres database is available on any host, for setup steps, checks and the agent's `db` tool.
+- Setup never touches existing databases, credentials or secrets. Services it creates belong to Pilot. It copies
+  the local files the user lists (such as `.env`) without reading, storing or syncing their contents.
+- Toolchains come from mise. Pilot keeps no table of known tools: tool IDs are mise registry names.
+- Each chat workspace gets its own built-in Postgres database on any host, for setup steps, checks and the agent's
+  `db` tool, so parallel chats never share migrations.
 - Not in scope: teardown or cleanup on archive, copying installs or plans between hosts, cloud
   environments, container images for whole workspaces, and services other than Postgres in the first version.
+
+Prior art: Berth gives each worktree its own ports and a slug used in database names, layers repository config,
+kits and each machine's own config (most specific wins), and pins repository config by hash. Pilot follows the
+same shape with per-workspace databases (section 5), a shared profile with a per-host override (section 2) and
+hash-pinned script review (section 4). Conductor copies ignored files such as `.env` into new workspaces, as
+local files do here (section 2). Cursor and Devin recommend agent-led setup, and Devin keeps lint and test
+commands as context it never runs; both are later work (section 15).
 
 ## What this builds on
 
@@ -35,13 +45,14 @@ other stage runs on the host that runs the chats:
 | `ProjectStore` (`packages/daemon/src/projects.ts`), `projects.json` with atomic writes and validated sub-objects such as `tracking` | The profile is a new validated `environment` object on `Project`, like other automation settings |
 | Workspace preparation in `SessionManager` (`meta.preparing` → `meta.workspace` saved → `dissociate` → worker start) | The `workspace.created` trigger fires after `meta.workspace` is saved, before the first turn is admitted |
 | Workspace restore (`restoreWorkspaceHeld`, `meta.workspaceReset`) and legacy clone pruning | The `workspace.restored` trigger fires where `workspaceReset` is set today. The kernel already tells the agent that dependencies are gone; setup reinstalls them instead |
-| `copyLocalConfigs` copies ignored `mise.local.toml` variants into new workspaces | Discovery reads those copies as user-level declarations, never runs mise on them |
+| `copyLocalConfigs` copies ignored `mise.local.toml` variants into new workspaces | Discovery reads those copies as user-level declarations, never runs mise on them. Local files (section 2) extend the same copy rules to the files a profile lists |
 | `subprocesses` pool and `run` (`subprocess.ts`, `workspaces.ts`): off-thread, detached process groups, timeouts, output caps | Probes, installs and steps run through the planned bounded shell runner, built on this pool |
 | `runtimeEnvironment` (`packages/kernel/src/runtime-environment.ts`): sparse PATH, never sources login files | Probes use the same rule. Resolved tool directories are prepended to the agent's and checks' PATH instead of relying on shell activation |
 | Native host-action capability (`x-pilot-github-capability`, read over verified SSH or the local filesystem), used by model scope and GitHub setup | Required for saving approvals, confirming plans and approving scripts. Never exposed to agents |
 | Database grants: app decision → pilotd request ID, messages never grant | Same rule for install and script approvals |
-| `db` tool and `pilot-databases.json` (`databases.ts`): per-project environments, read and write connections, `allow` or `ask` | The built-in database is added as an environment in memory; the user's file is never edited |
-| Scoped models sync (`docs/devboxes.md`): saved intent on the Mac, per-host apply with hash checks, Synced, Pending and Conflict states | Same pattern for syncing the profile between hosts |
+| `db` tool and `pilot-databases.json` (`databases.ts`): per-project environments, read and write connections, `allow` or `ask` | The chat's built-in database is added as an environment in memory; the user's file is never edited |
+| Scoped models sync (`docs/devboxes.md`): saved intent on the Mac, per-host apply with hash checks, Synced, Pending and Conflict states | Same saved intent and per-host apply for the shared profile layer, without a Conflict state (section 2) |
+| mise registry and install records (`mise registry`, `<mise data>/installs/<tool>/<version>`) | Tool IDs and the app's tool picker come from the host's registry; presence is read from install records |
 | `RepositoryBindings` and **Set up on devbox**: explicit, host-qualified links between a project's placements | Defines which projects share a profile. Matching names or paths never link projects |
 | Linux bootstrap prerequisite plans (`docs/ssh-bootstrap.md`): detects apt/dnf/yum, reports argv plans, never runs sudo | Same installer detection and the same "show, never run sudo" rule |
 | `DaemonCapabilities` in hello, offline host index (`docs/remote-lifecycle.md`) | A new capability flag gates the feature per host; the offline index keeps a small readiness summary |
@@ -75,20 +86,28 @@ same rules as the session file route: regular files only, no symlinks or travers
 daemon event loop. Secret values are never kept: compose environment values, `.env` files and anything
 that looks like a credential are not read into findings.
 
+Discovery also suggests **local files** (section 2): ignored files at the checkout root named `.env` or
+`.env.*`, listed by name only with the same `git ls-files --others --ignored` call `copyLocalConfigs` uses.
+Their contents are never opened.
+
 ### Findings and conflicts
 
 Each finding cites its source:
 
 ```ts
 interface EnvironmentFinding {
-	subject: string; // normalized: "go", "golangci-lint", "node", "pnpm", "postgres"
+	subject: string; // mise registry name ("go", "golangci-lint", "node", "pnpm"), or "postgres"
 	kind: "exact" | "minimum" | "range" | "major" | "hint" | "unknown";
 	value?: string; // normalized: "go1.23.4" and "v1.23.4" become "1.23.4"
 	source: { path: string; line: number; excerpt: string; sha256: string }; // excerpt ≤ 120 chars
 }
 ```
 
-Aliases are normalized (`golang` → `go`, `nodejs` → `node`, `postgresql` → `postgres`). Each subject
+Tool subjects are mise registry names; there is no Pilot table of known tools. Discovery maps the files it
+understands to registry names (`go.mod` → `go`, `.nvmrc` → `node`, `packageManager` → `pnpm`), resolves
+aliases the way mise does (`golang` → `go`), and lower-cases Makefile `*_VERSION` names with dashes
+(`GOLANGCI_LINT_VERSION` → `golangci-lint`). A name the host's registry does not know is shown as unknown, not
+dropped. Postgres is not a tool: `postgresql` findings become the `postgres` service subject. Each subject
 resolves to one of:
 
 - **Proposed**: all exact findings agree and satisfy every minimum, range and major finding.
@@ -120,14 +139,14 @@ interface ProjectEnvironment {
 	env?: Record<string, string>;
 	/** Cited inputs the profile was confirmed against; drift is a mismatch against these. */
 	confirmedSources: { path: string; sha256: string }[];
+	/** Ignored local files copied from the main checkout into each workspace (see Local files). Paths only. */
+	copyFiles?: string[]; // e.g. [".env", ".env.local"]
 }
 
 interface EnvironmentTool {
-	id: string; // "go", "golangci-lint"
+	id: string; // mise registry name: "go", "golangci-lint"
 	version: string; // exact, as confirmed
 	from: { path: string; line: number } | "user";
-	/** Fixed argv to print the version, run with a neutral cwd. Defaults per known tool. */
-	versionCommand?: string[];
 }
 
 interface EnvironmentService {
@@ -135,7 +154,7 @@ interface EnvironmentService {
 	kind: "postgres";
 	version: string; // major, e.g. "16"
 	provider: "pilot" | "compose"; // pilot: built-in database (section 5); compose: reviewed compose file
-	database?: string; // logical name for provider "pilot", defaults to the project name
+	database?: string; // logical name for provider "pilot", at most 32 characters, defaults to the project name
 	/** Agent db tool access to the built-in database; false hides it from the tool. */
 	dbTool?: { read: "allow" | "ask"; write: "allow" | "ask" } | false; // default allow, allow
 	/** Variables exposed to steps, checks and agents, e.g. { DATABASE_URL: "url" }. */
@@ -160,50 +179,92 @@ interface ReviewPin {
 	files: { path: string; sha256: string }[];
 	reviewedAt: number;
 }
+
+/** One host's layer. Stored only in that host's projects.json, never synced. It wins over the shared profile. */
+interface ProjectEnvironmentOverride {
+	revision: number;
+	tools?: EnvironmentTool[]; // replace or add, matched by id
+	services?: EnvironmentService[]; // replace or add, matched by id
+	steps?: EnvironmentStep[]; // replace or add, matched by id; review pins here are this host's own
+	remove?: string[]; // shared tool, service or step IDs this host does not use
+	env?: Record<string, string>; // merged by key
+	copyFiles?: string[]; // added to the shared list
+}
 ```
 
-Installers are not part of the profile: they depend on the host, so the plan chooses them (section 3).
+Tools are added in the app from the host's mise registry, so any tool mise knows can be pinned. Installers are not
+part of the profile: they depend on the host, so the plan chooses them (section 3).
 
-**Synced across hosts.** A Local project and a devbox project for the same repository are different projects on
-different daemons. When they are explicitly linked (a `RepositoryBindings` placement, for example created by
-**Set up on devbox**), they share one profile. Sync follows the scoped models pattern:
+**Layered sync across hosts.** A Local project and a devbox project for the same repository are different projects
+on different daemons. When they are explicitly linked (a `RepositoryBindings` placement, for example created by
+**Set up on devbox**), they share one profile layer, and each host can add its own override layer on top. The
+**effective profile** on a host is the shared layer with that host's override applied: override entries replace
+shared entries with the same ID, `remove` drops shared entries, `env` merges by key and `copyFiles` adds paths.
+Plans, readiness and setup always use the effective profile. This mirrors Berth's repository, kit and machine
+layers, where the most specific layer wins.
 
-- The app saves the profile intent for the linked project first, then writes it to each host's project with the
-  host's current revision.
-- Each host shows **Synced**, **Pending** (offline; applied after a verified reconnect) or **Conflict** (the
-  host's profile changed there, for example by the automation agent). A conflict offers: overwrite that host,
-  use that host's version everywhere, or leave it divergent. Startup and verified reconnect reconcile pending
-  work without polling.
-- Synced: tools, services, steps, `env`, `confirmedSources` and review pins. Not synced: plans, probe
-  results, installs, plan confirmations, readiness, logs and the built-in database's passwords.
+- **Shared layer**: the app saves the intent for the linked project first, then writes it to each host's project
+  with the host's current revision, as scoped models do. Each host shows **Synced** or **Pending** (offline;
+  applied after a verified reconnect). Startup and verified reconnect reconcile pending work without polling.
+- **Override layer**: edited in the Environment section with **This host only** on a row, written directly to that
+  host and never synced. Overridden rows say so ("Go 1.23.2 on devbox-1, overrides 1.23.4"), and removing the
+  override restores the shared value. Shared updates never touch an override.
+- **No conflict prompts.** Each layer has one writer: the shared layer is written only from the saved intent, and
+  writers that act on one host (the user's host-only edits, the planned automation agent running there) write that
+  host's override. If a host's shared copy still differs from the intent at reconcile (an older client, a restored
+  `projects.json`), the intent wins and the Environment section notes it once. A stale revision on either layer is
+  the existing 409: re-read and retry, never an automatic overwrite.
+- Synced: the shared layer's tools, services, steps, `env`, `copyFiles`, `confirmedSources` and review pins.
+  Not synced: override layers, plans, probe results, installs, plan confirmations, readiness, logs, local file
+  contents and the built-in database's passwords.
 - A synced profile never runs anything by itself. A host installs tools and runs steps only after the user
   has confirmed a plan for that host at least once (section 3).
 
 Unlinked projects keep independent profiles. Matching names, paths or repository URLs never link them.
 
+**Local files.** `copyFiles` lists checkout-relative paths of ignored files a workspace needs but Git does not
+carry, such as `.env` or `.env.local`. At `workspace.created` and `workspace.restored`, before any step runs,
+setup copies each one from the project's main checkout on the same host (`project.path`) into the workspace, with
+the rules `copyLocalConfigs` already applies to `mise.local.toml`:
+
+- Only regular files that Git ignores in the main checkout: no symlinks, directories, tracked files, traversal or
+  `.git`/`.jj` paths. At most 32 entries and 1 MiB per file.
+- A file that already exists in the workspace is never replaced, so a restored workspace or an agent's edit keeps
+  its version. The copy keeps the source's mode, and the path is added to the workspace's `info/exclude` so it
+  stays ignored.
+- A missing source is a one-line note in the chat (`.env not found in the main checkout`), not an error; setup
+  continues. Files are not copied again later; a changed source reaches new and restored workspaces only.
+
+Pilot copies the bytes without reading them into findings, logs or state, and never syncs or stores the contents:
+the profile holds only the list, and each host copies from its own main checkout. Direct-mode projects run in the
+main checkout and copy nothing.
+
 **Who can change what.** The app edits the profile through the host's daemon. The planned automation agent
-may edit tools, services and steps, but any change to a step's `run` or a service's `compose` source clears
-the related `review`. Writing a `review` or confirming a plan requires the native
+may edit tools, services and steps in its host's override layer, but any change to a step's `run` or a service's
+`compose` source clears the related `review`. Writing a `review` or confirming a plan requires the native
 host-action capability, so only the user in the app can do it.
 
 Projects in **direct** mode have no per-chat workspace: tools and services still apply, and steps run only
-when the user chooses **Run setup** in project settings. Ask chats and coordinators never run steps.
+when the user chooses **Run setup** in project settings. They use one project database instead of one per
+workspace (section 5). Ask chats and coordinators never run steps.
 
 ## 3. Install plan preview
 
-The plan is computed by the execution host's daemon from the profile and fixed, read-only probes. It is a
-preview: computing it changes nothing.
+The plan is computed by the execution host's daemon from the effective profile and fixed, read-only probes. It
+is a preview: computing it changes nothing.
 
 ### Probes
 
-- Each tool is looked up at known user-level locations (mise installs, `~/.local/bin`, `~/go/bin`,
-  `/opt/homebrew/bin` on macOS, `/usr/local/go/bin`, the daemon's PATH). Login files are never sourced,
-  as in `runtimeEnvironment`.
-- Version commands run by the tool's real install path (not a version-manager shim) with a neutral working
-  directory (a private Pilot temp directory, never the repository) and with toolchain downloads disabled
-  (`GOTOOLCHAIN=local`), so a probe cannot fetch or execute project-selected content.
+- Tools are detected from mise's own install records (`<mise data>/installs/<tool>/<version>`, honouring
+  `MISE_DATA_DIR`). No tool runs, so a probe cannot fetch or execute project-selected content. Tools installed
+  some other way do not count; the plan installs the pinned version with mise.
+- Postgres server binaries are looked up at known locations (Homebrew `postgresql@<major>`, `/usr/lib/postgresql`,
+  Postgres.app, the daemon's PATH) and their version command runs by absolute path with a neutral working
+  directory (a private Pilot temp directory, never the repository). Login files are never sourced, as in
+  `runtimeEnvironment`.
 - Installer availability: `mise`, `brew` (macOS, or Linux when present), and on Linux the package manager detected the same way
-  as devbox bootstrap (apt-get, dnf, yum). Docker and compose only when a compose provider is configured.
+  as devbox bootstrap (apt-get, dnf, yum). Docker when a compose provider is configured, or when the built-in
+  database has no Postgres binaries and no Homebrew (section 5).
 - Bounds: at most 16 probes, four at a time, five seconds each, 64 KiB output each.
 
 ### Plan items
@@ -214,7 +275,7 @@ interface EnvironmentPlanItem {
 	required: string;
 	present?: { version: string; path: string }; // what the probe found
 	action: "none" | "install" | "start" | "review" | "run" | "manual";
-	installer?: "mise" | "go-tool" | "homebrew" | "portable" | "system" | "compose" | "pilot";
+	installer?: "mise" | "go-tool" | "homebrew" | "docker" | "system" | "compose" | "pilot";
 	/** Exact argv Pilot would run. For "manual", the commands the user would run. */
 	commands: string[][];
 	approval: "plan" | "user-runs"; // "plan": covered by confirming the plan
@@ -225,8 +286,9 @@ interface EnvironmentPlanItem {
 interface EnvironmentPlan {
 	host: HostRef;
 	projectId: string;
-	profileRevision: number;
-	planHash: string; // covers profile revision, probe results and items
+	profileRevision: number; // shared layer
+	overrideRevision: number; // this host's layer, 0 when absent
+	planHash: string; // covers both revisions, probe results and items
 	computedAt: number;
 	items: EnvironmentPlanItem[];
 }
@@ -234,18 +296,18 @@ interface EnvironmentPlan {
 
 ### Installer choice
 
-In order, per tool:
+Tools come only from mise, in order:
 
-1. **Already present** at a matching version anywhere the probes look: no action, use that path.
+1. **Already installed** by mise at the exact version: no action.
 2. **Go tool directive** for tools declared in `go.mod`: nothing to install, `go tool <name>` uses the
    module version.
 3. **mise**: `mise install <tool>@<version>`, user-level, no sudo. When mise is missing and Homebrew is
-   present, the plan adds `brew install mise` first.
-4. **Homebrew** (macOS, or Linux when present): user-level like mise.
-5. **System packages** (apt, dnf, yum) and anything else needing root: Pilot **never runs sudo**. The item
-   shows the exact commands, which the user can copy or open in the workspace terminal and run themselves.
-   The plan rechecks afterwards.
-6. Otherwise **manual**, with a short instruction.
+   present (user-level too, so the plan confirmation covers it), the plan adds `brew install mise` first.
+4. Otherwise **manual**: install mise (mise.jdx.dev), then check again.
+
+The built-in database has its own order (section 5). Anything needing root is shown, never run: Pilot **never
+runs sudo**. Such items list the exact commands, which the user can copy or open in the workspace terminal, and
+the plan rechecks afterwards.
 
 Impact shows the network hosts involved and download or disk size when the installer can report it without
 side effects; otherwise "size unknown". Pilot does not guess sizes.
@@ -259,7 +321,7 @@ host it shows the profile, then the plan:
 Environment · devbox-1                               Last checked 14:02
   Go 1.23.4            missing      Install with mise (go.dev)
   golangci-lint 1.61.0 missing      Install with mise (github.com)
-  Postgres 16          missing      Install portable build (Pilot release)
+  Postgres 16          missing      Run in Docker (postgres:16)
   make setup           needs review Review Makefile, scripts/bootstrap.sh
                                                     [Review and apply…]
 ```
@@ -299,19 +361,30 @@ directories, the profile's `env`, service exports, and no provider keys, broker 
 ## 5. Built-in database
 
 Pilot has built-in Postgres support that works on any host, Local or devbox, with or without a full profile.
-In a project's Environment section, **Database · Postgres 16 · Enable** is enough to get one; discovery fills in
-the major version when the repository declares it. The compose provider remains for projects that need their
-exact image.
+It has its own **Database** section in the Environment settings; Postgres is not a mise tool. **Database ·
+Postgres 16 · Enable** is enough to get one; discovery fills in the major version when the repository declares
+it. The compose provider remains for projects that need their exact image.
 
 **One long-running server per host.** Each host runs at most one Pilot-owned server per Postgres major version,
-in `<Pilot data>/database/postgres-<major>`. It starts the first time a project needs it, stays running, and the
-daemon starts it again after a reboot or restart when any project on that host has the database enabled. There
-is no stop, cleanup or archive hook. Disabling the database for a project never drops its data.
+either native (data in `<Pilot data>/database/postgres-<major>`) or a Docker container (below). It starts the
+first time a project needs it, stays running, and the daemon starts it again after a reboot or restart when any
+project on that host has the database enabled. There is no stop, cleanup or archive hook. Disabling the database
+for a project never drops its data.
 
-**One database per project.** Each project gets its own database and two roles inside that server: an owner
-role and a read-only role (with default privileges so new tables stay readable). The physical name is
-`<name>_<project id prefix>`, so two projects asking for `orders` never collide; the exported variables carry
-the real name.
+**One database per chat workspace.** Each project gets two roles inside that server: an owner role and a
+read-only role (with default privileges so new tables stay readable). Workspace setup creates one database per
+chat workspace, owned by the project's owner role, so parallel chats run their own migrations. The physical name
+is `<name>_<project id prefix>_<workspace slug>` (the slug is the first 8 hex characters of the chat ID, like
+Berth's worktree slug), so two projects asking for `orders` never collide and the name stays under Postgres's
+63-byte limit; the exported variables carry the real name. A new database starts empty: migrations and seeds are
+ordinary project steps. A restored workspace finds its database still there, since nothing drops it, and its
+steps bring it up to date.
+
+Direct-mode projects have no per-chat workspace and keep one project database, `<name>_<project id prefix>`,
+created by **Apply** or **Run setup**.
+
+Databases are never dropped (setup has no teardown), so archived and deleted chats leave theirs behind. The
+Database section lists each Pilot database with its size and chat, so the user can see what accumulates.
 
 **Socket and TCP.** The server listens on a Unix socket in a private 0700 directory and on a loopback TCP port
 that Pilot picks once per host and keeps. Socket connections need no password. TCP uses `scram-sha-256` with
@@ -319,41 +392,58 @@ passwords that Pilot generates per project role and keeps in the daemon's privat
 Pilot's own credentials for its own server; they never leave the host, are not synced and are not written to
 the repository. Exports offer both forms:
 
-- `url`: `postgres://p_1a2b3c4d:…@127.0.0.1:54016/orders_1a2b3c4d`
-- `socketUrl`: `postgres:///orders_1a2b3c4d?host=<socket dir>`
+- `url`: `postgres://p_1a2b3c4d:…@127.0.0.1:54016/orders_1a2b3c4d_5e6f7a8b`
+- `socketUrl`: `postgres:///orders_1a2b3c4d_5e6f7a8b?host=<socket dir>` (native servers only)
 
-**Binaries**, in order: already installed at the right major version (mise, Homebrew, system) → `mise` →
-Homebrew (macOS, or Linux when Homebrew is present) → a Pilot-pinned portable Postgres build for that platform,
-downloaded with a checksum pinned in the app release and kept under Pilot's data directory (see open questions)
-→ the system package commands for the user to run. Pilot never runs sudo, so this order reaches a working
-database on a devbox without root whenever the portable build covers its platform.
+**Server source**, in order:
 
-**Agent `db` tool.** pilotd adds an environment named `pilot` to the project's `db` tool configuration in
-memory, next to what `pilot-databases.json` defines: read through the read-only role and write through the owner
-role, both `allow` by default and switchable to `ask` in the Environment section. The user file is never
-edited. If it already defines an environment named `pilot`, the file wins and the Environment section says so.
-Because the tool runs in each host's daemon, it works the same on Local and devboxes.
+1. Postgres binaries already installed at the right major version (Homebrew, system packages, Postgres.app):
+   a native server.
+2. Homebrew present: `brew install postgresql@<major>`, then a native server. mise is not used for Postgres
+   because its plugin compiles from source.
+3. Docker present: one long-lived container per major, `pilot-postgres-<major>`, from the official
+   `postgres:<major>` image, with a named volume of the same name, the port published on `127.0.0.1` only, a
+   restart policy and a `pilot.daemon` label. The plan shows the image; its digest is recorded at first pull and
+   Pilot pulls again only for a newly confirmed plan. The container offers TCP only, so `socketUrl` exports fall
+   back to `url`.
+4. Otherwise **manual**: the plan explains what to install (Docker or Homebrew) and shows the system package
+   commands for the user to run.
 
-**Never touched**: other clusters, Homebrew or systemd Postgres services, existing databases and roles,
-`~/.pgpass`. If Pilot's data directory exists without Pilot's marker file, setup stops with an error instead of
+There are no Pilot-built or third-party portable binaries. Pilot never runs sudo.
+
+**Agent `db` tool.** pilotd adds an environment named `pilot` to the `db` tool configuration in memory, next
+to what `pilot-databases.json` defines. It targets the calling chat's own database (the project database in
+direct mode); chats without their own workspace, such as Ask chats and coordinators, do not get it. Reads use the
+read-only role and writes the owner role, both `allow` by default and switchable to `ask` in the Environment
+section. The user file is never edited. If it already defines an environment named `pilot`, the file wins and
+the Environment section says so. Because the tool runs in each host's daemon, it works the same on Local and
+devboxes.
+
+**Never touched**: other clusters, Homebrew or systemd Postgres services, other Docker containers and volumes,
+existing databases and roles, `~/.pgpass`. If Pilot's data directory exists without Pilot's marker file, or a
+`pilot-postgres-<major>` container or volume exists without Pilot's label, setup stops with an error instead of
 reusing or replacing it.
 
 **Compose provider.** Uses the project's reviewed compose file with a Pilot project name
 (`docker compose -p pilot-<projectId> up -d <service>`), so containers and volumes are namespaced. The compose
 file's own credentials stay in the file; Pilot does not copy them. Host ports come from the file, so a port
 conflict is reported, not resolved by stopping anything. Compose services are not added to the `db` tool.
+They stay per project: all of the project's workspaces share them. Per-workspace databases are a built-in
+database feature.
 
-Migrations and seed data are ordinary project steps; they target the project's database through the exported
-variables. Pilot only controls the variables it passes: a project that reads its own `.env` could still point
-elsewhere, and the review view mentions `.env` usage when it sees it.
+Migrations and seed data are ordinary project steps; they target the workspace's database through the exported
+variables. Pilot only controls the variables it passes: a project that reads its own `.env` (including a copied
+local file) could still point elsewhere, and the review view mentions `.env` usage when it sees it.
 
 ## 6. Applying and rerunning safely
 
 Every item follows **check → act → verify**:
 
-- Tool: version probe matches → skip; otherwise install, then probe again.
-- Service: readiness check passes → skip; otherwise create the server if absent, start it, wait for readiness
-  (bounded), then create the project's database and roles if missing.
+- Tool: mise install record matches → skip; otherwise install, then check again.
+- Service: readiness check passes → skip; otherwise create the server or container if absent, start it, wait for
+  readiness (bounded), then create the project's roles if missing. Workspace setup then creates the workspace's
+  database if missing (the project database in direct mode).
+- Local files: copied when absent from the workspace (section 2), never replaced.
 - Step: review pin matches, and `check` passes or the recorded input hashes are unchanged → skip; otherwise
   run, then record input hashes on success.
 
@@ -361,8 +451,8 @@ Triggers:
 
 | When | What runs |
 | --- | --- |
-| `workspace.created` | Readiness of tools and services; start the built-in database if needed; workspace steps |
-| `workspace.restored`, including pruned legacy clones | Same. Steps whose outputs were removed (dependencies, builds) fail their check and run again |
+| `workspace.created` | Copy local files; readiness of tools and services; start the built-in database if needed and create the workspace's database; workspace steps |
+| `workspace.restored`, including pruned legacy clones | Same. The workspace's database is reused if present. Steps whose outputs were removed (dependencies, builds) fail their check and run again |
 | User clicks **Apply** or **Run setup** | The confirmed plan, then steps for the selected workspace |
 | Drift: a confirmed source file changed (seen at `run.finished`, on restore, or on main refresh) | Nothing automatic. The chat shows a one-line event and the Environment section offers a new plan |
 
@@ -380,14 +470,15 @@ Automatic reruns are limited to one per trigger, like every automated loop.
 
 Never done: dropping or resetting databases, deleting volumes or data directories, stopping services Pilot
 did not start, editing credential files (`~/.pgpass`, cloud configs, `.env`), changing global shell or Git
-configuration, or running sudo.
+configuration, replacing a workspace's existing local files, or running sudo.
 
 ## 7. Readiness
 
 | Item | Check | Scope |
 | --- | --- | --- |
-| Tool | version command by absolute path, neutral cwd, version equals the profile | host, cached until an install or a failed use |
-| Postgres (built-in) | `pg_isready -h <socket dir> -d <database>` | host, checked live (two-second timeout) |
+| Tool | mise install record for the exact version, with its `bin` directory present | host, cached until an install or a failed use |
+| Postgres (built-in, native) | `pg_isready -h <socket dir> -d <workspace database>` | server: host; database: workspace. Checked live (two-second timeout) |
+| Postgres (built-in, Docker) | `docker exec pilot-postgres-<major> pg_isready -d <workspace database>` | same |
 | Postgres (compose) | `pg_isready` against the mapped port, or the container health status | host, checked live |
 | Step | review pin matches, plus `check` or recorded input hashes | workspace |
 
@@ -450,6 +541,8 @@ Suggested fixes come from a fixed table keyed by item kind and failure class, no
 | mise not found, no Homebrew | "Install mise or Homebrew on devbox-1 (see mise.jdx.dev), then check again." |
 | Download failed | "Couldn't reach github.com from devbox-1. Check the network, then retry." |
 | Database directory not Pilot's | "<path> exists but wasn't created by Pilot. Move it aside yourself; Pilot won't reuse or delete it." |
+| Docker not running | "Docker isn't running on devbox-1. Start it, then retry." |
+| Container or volume not Pilot's | "pilot-postgres-16 exists on devbox-1 but wasn't created by Pilot. Rename or remove it yourself; Pilot won't reuse or delete it." |
 | Built-in database port taken | "Port 54016 on devbox-1 is used by another process. Pilot won't stop it. Choose **Use another port** (this changes DATABASE_URL)." |
 | Port already in use (compose) | "Port 5432 is in use on devbox-1. Pilot won't stop the other server. Use the built-in database or change the port in your compose file." |
 | Script changed since review | "scripts/bootstrap.sh changed since you reviewed it. Review the new version to run setup." |
@@ -463,11 +556,12 @@ chat history or the offline index.
 
 - Plans, probes, installs and readiness are computed by the **execution host's daemon** through
   `HostClients.perform(ref, …)`, using that host's platform, architecture and installers. Nothing is
-  computed on the Mac for a devbox. Only the profile syncs (section 2); plans, installs and plan confirmations
-  stay with each host.
-- macOS: arm64 or x86-64, mise and Homebrew, Postgres binaries from mise, Homebrew or the portable build.
-- Linux devbox: x86-64, mise, Homebrew if present, the portable Postgres build, apt/dnf/yum detected like
-  devbox bootstrap with sudo items shown for the user to run, Docker only if present.
+  computed on the Mac for a devbox. Only the shared profile layer syncs (section 2); override layers, plans,
+  installs and plan confirmations stay with each host.
+- macOS: arm64 or x86-64, tools from mise, Postgres from existing binaries, Homebrew or Docker.
+- Linux devbox: x86-64, tools from mise (installed through Homebrew when present), Postgres from existing
+  binaries, Homebrew or Docker, apt/dnf/yum detected like devbox bootstrap with sudo items shown for the user to
+  run.
 - A new `DaemonCapabilities.environmentSetup: 1` flag gates the feature. Older runtimes show "Update the
   devbox to use environment setup", with no fallback to another host.
 - **Offline or disconnected devbox**: the offline host index stores a small summary per project
@@ -506,6 +600,7 @@ refuses new starts while paused, and reports a crash during a run as `interrupte
 and can hold first-turn admission for a bounded time. `workspace.restored` fires after a successful restore
 or legacy prune (where `workspaceReset` is set). Pending trigger work is durable and resumes after a daemon
 restart. Neither fires for Ask chats or coordinators. There is no archive trigger.
+Both copy local files before any step runs.
 
 **A3. Run finished.** The modified-file list is available to the environment service, which compares it
 with `confirmedSources` to detect drift without another full diff.
@@ -514,8 +609,9 @@ with `confirmedSources` to detect drift without another full diff.
 plumbing. Environment errors use their own reason kind `environment`.
 
 **A5. Configuration.** `Project.environment` sits beside the automation definitions in `projects.json`,
-with the same validation-before-mutation pattern and revision checks. If automation definitions also sync
-between linked hosts, they should share the profile's sync mechanism. Approval fields require the native
+with the same validation-before-mutation pattern and revision checks; `Project.environmentOverride` holds the
+host's own layer. If automation definitions also sync between linked hosts, they should share the profile's
+layered sync. Approval fields require the native
 capability; the automation agent cannot write them.
 
 **A6. Post-run checks.** Checks accept `requires` and an environment provider that returns readiness and
@@ -538,6 +634,7 @@ Makefile           GOLANGCI_LINT_VERSION ?= v1.60.3
 scripts/bootstrap.sh   go mod download, then make migrate
 compose.yaml       services.db.image: postgres:16-alpine, ports 5432:5432, POSTGRES_DB
 README.md          "Requires Go 1.22+ and PostgreSQL 15 or later."
+.env               ignored; local API keys for the dev server
 ```
 
 **Discovery** (no commands run):
@@ -548,6 +645,7 @@ README.md          "Requires Go 1.22+ and PostgreSQL 15 or later."
 | golangci-lint | .tool-versions:2 exact 1.61.0; Makefile:1 exact 1.60.3 | **Conflict**: both shown, the user picks 1.61.0 |
 | postgres | compose.yaml:3 major 16; README hint 15+ | Proposed 16 |
 | steps | Makefile targets setup, migrate, lint, test | Proposed step `make setup`; `lint` and `test` offered as post-run checks |
+| local files | `.env` is ignored at the root (name only) | Suggested for `copyFiles` |
 
 **Profile**, confirmed once and synced to both linked hosts:
 
@@ -590,32 +688,38 @@ README.md          "Requires Go 1.22+ and PostgreSQL 15 or later."
 		{ "path": ".tool-versions", "sha256": "…" },
 		{ "path": "Makefile", "sha256": "…" },
 		{ "path": "compose.yaml", "sha256": "…" }
-	]
+	],
+	"copyFiles": [".env"]
 }
 ```
 
+devbox-1 is smaller, so it adds an override layer there: `{ "revision": 1, "env": { "GOFLAGS": "-p=2" } }`.
+
 **Plan on Local (macOS arm64)**: Go 1.23.4 present via mise, no action. golangci-lint missing:
 `mise install golangci-lint@1.61.0`. Postgres 16 binaries present from Homebrew
-(`/opt/homebrew/opt/postgresql@16/bin`); action: create and start the built-in server for Postgres 16, then
-create `orders_1a2b3c4d` and its roles. Step `make setup` reviewed. The user confirms once. The agent's `db`
-tool now lists a `pilot` environment for this project.
+(`/opt/homebrew/opt/postgresql@16/bin`); action: create and start the built-in server for Postgres 16 and the
+project's roles. Step `make setup` reviewed. The user confirms once. Each chat's `db` tool then lists a `pilot`
+environment pointing at that chat's own database.
 
 **Plan on devbox-1 (Linux x86-64, mise present, no Homebrew, apt)**: the synced profile arrives as **Synced**.
-Go and golangci-lint: install with mise. Postgres 16 binaries missing: install the portable build, with
-`sudo apt-get install postgresql-16` shown as the alternative to run yourself. The synced review of
+Go and golangci-lint: install with mise. Postgres 16 binaries missing and no Homebrew, but Docker is present: run
+the `pilot-postgres-16` container from `postgres:16`, with `sudo apt-get install postgresql-16` shown as the
+alternative to run yourself. The effective profile includes the host's `GOFLAGS`. The synced review of
 `make setup` applies because the files' hashes match, but nothing runs on devbox-1 until the user confirms
 this host's plan once.
 
-**First chat on devbox-1**: after the workspace is created, setup checks tools (cached), starts Postgres if
-needed, sees `go.sum` and `migrations` have no recorded hashes, and runs `make setup` (about 40 s). The
-first turn is held meanwhile; the chat shows "Setting up environment". The agent then gets
+**First chat on devbox-1**: after the workspace is created, setup copies `.env` from the main checkout, checks
+tools (cached), starts Postgres if needed, creates `orders_1a2b3c4d_5e6f7a8b` for this chat, sees `go.sum` and
+`migrations` have no recorded hashes, and runs `make setup` (about 40 s), which migrates that database. A second
+chat started meanwhile gets its own database and migrates it independently. The first turn is held meanwhile;
+the chat shows "Setting up environment". The agent then gets
 `Project environment: ready (Go 1.23.4, golangci-lint 1.61.0, Postgres 16 via DATABASE_URL).`
 
 **Post-run check**: the agent edited files, so `make lint` (requires golangci-lint) and `make test`
 (requires go, postgres) run. devbox-1 rebooted earlier, and the daemon's start of the database failed with
 `No space left on device`. Before the checks, Pilot tries once more and gets the same error. `make test` is skipped and the chat shows
 `Environment not ready: Postgres 16 on devbox-1`, with the trimmed server log and the fix "Free disk space on
-devbox-1 (Postgres data is under <Pilot data>/database/postgres-16), then retry." No follow-up goes to the agent.
+devbox-1 (Postgres data is in the Docker volume pilot-postgres-16), then retry." No follow-up goes to the agent.
 
 **Script change**: the agent edits `scripts/bootstrap.sh` in its workspace. On the next restore of that
 chat, the hash differs, `make setup` is not run, and Needs you says `Setup script changed: review
@@ -633,26 +737,49 @@ In order. Each is one PR with its own tests, and each keeps the feature off unti
 lands.
 
 1. **Protocol and store**: `ProjectEnvironment`, plan, readiness and error types in `packages/protocol` and
-   `PilotCore`; validation in `ProjectStore`; daemon state file; capability flag. No behavior.
-2. **Discovery**: bounded reader, parsers and resolution with conflicts; read-only discovery endpoint.
-   Fixture tests including this worked example. Never executes anything.
-3. **Probes and plan**: neutral-cwd probes, installer detection, plan computation and plan endpoint.
-4. **App: Environment section**: findings with citations, conflict resolution, profile editing and per-host
-   plan preview, with offline last-known display. SwiftUI mock first.
-5. **Profile sync**: saved intent per linked project in the app, per-host write with revision checks, Synced,
-   Pending and Conflict states, reconcile on startup and verified reconnect.
+   `PilotCore`, including `copyFiles` and the per-host override layer; validation in `ProjectStore`; daemon state
+   file; capability flag. No behavior.
+2. **Discovery**: bounded reader, parsers mapping to mise registry names, resolution with conflicts, local file
+   suggestions; read-only discovery endpoint. Fixture tests including this worked example. Never executes
+   repository content.
+3. **Probes and plan**: mise install records, Postgres and installer probes (Docker for the built-in database),
+   plan computation from the effective profile and plan endpoint.
+4. **App: Environment section**: findings with citations, conflict resolution, tools from the host's mise
+   registry, a Database section, local files, profile editing and per-host plan preview, with offline last-known
+   display. SwiftUI mock first.
+5. **Layered profile sync**: saved intent for the shared layer per linked project in the app, per-host write with
+   revision checks, Synced and Pending states, reconcile on startup and verified reconnect; **This host only**
+   editing of the override layer.
 6. **Apply installs**: native-capability apply with plan-hash fencing, mise and Homebrew installers (including
    mise through Homebrew), sudo items as shown commands, per-host serialization, update gate and pause handling.
    Needs the shell runner.
 7. **Script review**: review view, hash pins, re-review on change, private script copies.
-8. **Built-in database**: per-host long-running server, per-project databases and roles, socket and TCP,
-   restart on daemon start, readiness probes, `db` tool environment. Portable binaries once their source is
-   chosen. The compose provider follows behind review.
-9. **Workspace setup**: steps on `workspace.created` and `workspace.restored`, first-turn hold, PATH and
-   exports for agents, agent prompt line. Needs the setup triggers.
+8. **Built-in database**: per-host long-running native server or Docker container, per-project roles, the
+   per-workspace database helper (one project database in direct mode), socket (native) and TCP, restart on
+   daemon start, readiness probes, `db` tool environment targeting the chat's database. The compose provider
+   follows behind review.
+9. **Workspace setup**: on `workspace.created` and `workspace.restored`, copy local files, create the
+   workspace's database, then run steps; first-turn hold, PATH and exports for agents, agent prompt line. Needs
+   the setup triggers.
 10. **Readiness and errors**: timeline events, `environment` Needs you reason, offline summary in the host
     index, and the `requires` gate for post-run checks.
 11. **Drift**: compare confirmed sources at `run.finished`, restore and main refresh; outdated state and new plan.
+
+Agent-led setup and project commands (section 15) are not scheduled.
+
+**Adjustments to steps 1–4** for per-workspace databases, local files and layered sync (the mise and Docker
+changes are tracked separately):
+
+- Protocol and store: add `ProjectEnvironment.copyFiles?: string[]` (safe relative paths, no `.git`/`.jj`
+  segments, unique, at most 32), included in sync. Add `Project.environmentOverride?: ProjectEnvironmentOverride`
+  with its own revision, validation and `PUT /api/projects/:id/environment/override` route (same 409 and native
+  capability rules for review pins), never synced. Cap `EnvironmentService.database` at 32 characters (from 48)
+  so `<name>_<8>_<8>` stays under 63 bytes. Mirror all of it in `PilotCore`.
+- Plan: compute from the effective profile, add `EnvironmentPlan.overrideRevision` (0 when absent) and cover it
+  in `planHash`. Built-in database notes say the database is created per chat workspace.
+- Discovery: add `EnvironmentDiscovery.localFiles: string[]`, root `.env` and `.env.*` names that Git ignores.
+- App: say "its own database for each chat" in the Database row, and add a local files list. Override editing can
+  wait for step 5.
 
 ## 13. Decisions from review
 
@@ -665,6 +792,18 @@ lands.
 - The built-in Postgres server is long-running. No teardown is designed.
 - Profiles sync across linked projects on all hosts; plans, installs and readiness stay per host.
 - The built-in database is offered to the agent's `db` tool.
+- Toolchains come from mise with no built-in tool table: tool IDs are mise registry names, the app adds tools
+  from the host's mise registry, and detection reads mise's install records. Postgres keeps a dedicated
+  Database section.
+- Postgres without existing binaries or Homebrew runs in one long-lived Docker container per host and major
+  version, published on loopback only. No Pilot-built or third-party portable binaries. Without Docker either,
+  the plan explains what to install.
+- Each chat workspace gets its own database, created by workspace setup. Direct-mode projects keep one project
+  database. The `db` tool targets the chat's database.
+- Workspace setup copies listed ignored local files from the main checkout into new and restored workspaces,
+  before steps run. Pilot never stores or syncs their contents.
+- Sync is layered: a shared profile synced to every linked host, plus a per-host override layer that always wins
+  on its host. No conflict prompts.
 
 ## 14. Open questions
 
@@ -672,9 +811,18 @@ lands.
    CI pins turn out to be the most reliable source.
 2. **Version bumps.** Default: a new version always needs a confirmed plan, even for an already approved tool.
    Revisit if confirming routine toolchain bumps becomes tedious.
-3. **Portable Postgres builds.** Reaching a database on a devbox without root and without Homebrew needs a
-   prebuilt Postgres. Pilot would pin each build's checksum in the app release. Is a third-party portable
-   build acceptable, or should Pilot build and sign its own, or skip this and show the sudo commands?
-4. **Sync conflicts.** When a host's profile was changed there (for example by the automation agent), the
-   proposal follows scoped models: overwrite that host, adopt its version everywhere, or leave it divergent.
-   Is that enough, or should host edits always win?
+3. **Leftover workspace databases.** Databases of archived or deleted chats stay, since setup never drops data.
+   Default: list them with sizes in the Database section and leave dropping to the user. Revisit if they grow
+   enough to need a confirmed cleanup action.
+
+Resolved: portable Postgres builds (now Docker, section 5) and sync conflicts (now layered sync, section 2).
+
+## 15. Later work
+
+Planned after the plan UI, design only for now:
+
+- **Agent-led setup.** An agent proposes the profile and the repository changes it needs (for example a missing
+  setup target), and the user confirms them in the app, as Cursor and Devin recommend. The agent never approves
+  plans or reviews.
+- **Project commands.** Test, lint and build commands stored once in the profile, given to the agent as context
+  (like Devin's commands, which it never runs on its own) and used as defaults for post-run checks.
