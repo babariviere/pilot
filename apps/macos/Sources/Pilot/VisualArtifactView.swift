@@ -209,7 +209,7 @@ final class VisualArtifactModel: ObservableObject {
     }
 }
 
-/// A visual in the chat or the viewer. Inline, it hugs the tree's height and scrolls inside above the card's ceiling;
+/// A visual in the chat or the viewer. Inline, it grows to the tree's full height and scrolls with the transcript;
 /// the card remembers the height, so the row keeps its size when it is recreated.
 struct VisualArtifactView: View {
     let revision: ArtifactRevision
@@ -217,7 +217,6 @@ struct VisualArtifactView: View {
     var inline = true
     @ObservedObject var render: ArtifactRenderState
     @StateObject private var model = VisualArtifactModel()
-    @State private var contentHeight: CGFloat?
     @Environment(\.pilotFonts) private var fonts
 
     var body: some View {
@@ -225,7 +224,7 @@ struct VisualArtifactView: View {
             if model.unsupportedAPI != nil {
                 VisualNotice(text: "This visual needs a newer version of Pilot. Update Pilot to view it.")
             } else if let tree = model.tree {
-                content(tree)
+                VisualArtifactContent(tree: tree, model: model, inline: inline, render: render)
             } else if let failure = model.failure {
                 VisualFailureLine(failure: failure, retry: model.retry)
             } else {
@@ -242,10 +241,16 @@ struct VisualArtifactView: View {
             }
         }
     }
+}
 
-    @ViewBuilder
-    private func content(_ tree: VisualTree) -> some View {
-        let tall = inline && (contentHeight ?? 0) > ArtifactViewerLayout.inlineMaxHeight
+/// Inline content has no nested scroller. The expanded viewer owns a viewport and still scrolls internally.
+struct VisualArtifactContent: View {
+    let tree: VisualTree
+    @ObservedObject var model: VisualArtifactModel
+    var inline = true
+    @ObservedObject var render: ArtifactRenderState
+
+    var body: some View {
         let drawn = VStack(alignment: .leading, spacing: 8) {
             VisualNodeView(node: tree.root, model: model).equatable()
             if let failure = model.failure {
@@ -255,14 +260,14 @@ struct VisualArtifactView: View {
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { height in
-            guard height > 0, height != contentHeight else { return }
-            contentHeight = height
-            render.contentSize = CGSize(width: ArtifactViewerLayout.inlineColumnWidth, height: height.rounded(.up))
+            guard height.isFinite, height > 0 else { return }
+            let size = CGSize(width: ArtifactViewerLayout.inlineColumnWidth, height: height.rounded(.up))
+            if render.contentSize != size { render.contentSize = size }
         }
-        if tall || !inline {
-            ScrollView(.vertical) { drawn.padding(inline ? 0 : 16) }
+        if inline {
+            drawn
         } else {
-            drawn.frame(maxHeight: .infinity, alignment: .top)
+            ScrollView(.vertical) { drawn.padding(16) }
         }
     }
 }
