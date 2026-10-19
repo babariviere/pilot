@@ -183,8 +183,8 @@ sessions.setPullRequestObserver((observation) => trackedItems.observeSlackPullRe
 sessions.setSlackStatus({
 	call: (sessionId, args) => {
 		const { status, reason } = args;
-		if (status !== "waiting" && status !== "in_progress")
-			throw new Error('status must be "waiting" or "in_progress"');
+		if (status !== "waiting" && status !== "in_progress" && status !== "done")
+			throw new Error('status must be "waiting", "in_progress" or "done"');
 		if (reason !== undefined && typeof reason !== "string") throw new Error("reason must be a string");
 		return trackedItems.agentSlackStatus(sessionId, status, reason);
 	},

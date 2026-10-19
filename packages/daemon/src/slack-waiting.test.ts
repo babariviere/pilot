@@ -127,6 +127,32 @@ test("a chat lists the Slack messages whose latest chat it is, dismissed ones to
 	await assert.rejects(f.items.list({ projectId: f.project.id, sessionId: "" }), /Invalid chat/);
 });
 
+test("a chat's agent marks its message done with an outcome, and only the user reopens it", async (t) => {
+	const f = await fixture(t);
+	await f.items.patch(f.item.id, { sessionId: "chat-1", start: true });
+	await f.items.agentSlackStatus("chat-1", "waiting", "CSM");
+	assert.deepEqual(await f.items.agentSlackStatus("chat-1", "done", "Answered\nin thread"), {
+		updated: [{ title: "Invented question", status: "done" }],
+		unchanged: [],
+	});
+	const done = await f.items.require(f.item.id);
+	assert.equal(done.slack?.status, "done");
+	assert.equal(done.slack?.doneReason, "Done · Answered in thread");
+	// Done is final for the agent.
+	assert.deepEqual(await f.items.agentSlackStatus("chat-1", "in_progress"), {
+		updated: [],
+		unchanged: [{ title: "Invented question", status: "done" }],
+	});
+	// The user reopens it; the agent can then finish it again, without a reason this time.
+	await f.items.patch(f.item.id, { slack: { status: "in_progress" } });
+	assert.equal((await f.items.require(f.item.id)).slack?.doneReason, undefined);
+	await f.items.agentSlackStatus("chat-1", "done");
+	const again = await f.items.require(f.item.id);
+	assert.equal(again.slack?.status, "done");
+	assert.equal(again.slack?.doneReason, undefined);
+	await assert.rejects(f.items.agentSlackStatus("chat-1", "open" as never), /status must be/);
+});
+
 test("a reply from someone else resumes the waiting chat; the user's own replies do not", async (t) => {
 	const f = await fixture(t);
 	await f.items.patch(f.item.id, { sessionId: "chat-1", start: true });

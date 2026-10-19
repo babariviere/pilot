@@ -1,4 +1,4 @@
-/** The `slack_status` tool: a chat started from a Slack message reports that it waits for someone else. Executed by pilotd. */
+/** The `slack_status` tool: a chat started from a Slack message reports its message as waiting, in progress or done. Executed by pilotd. */
 import type { JsonValue } from "@earendil-works/chord";
 import { Type } from "@earendil-works/pi-ai";
 import { type AgentToolResult, defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -11,14 +11,15 @@ export function createSlackStatusTool(call: SlackStatusCall): ToolDefinition {
 		name: SLACK_STATUS_TOOL,
 		label: "Slack status",
 		description:
-			'Only for a chat started from a Slack message. Set "waiting" with a short reason when you can\'t continue until someone outside Pilot answers in the thread (a CSM, the reporter): ask them in Slack first if needed, then end your turn. Their next reply resumes this chat with the new messages. Set "in_progress" when you continue without waiting. The user owns other statuses.',
-		promptSnippet: "Mark the chat's Slack message as waiting for a reply",
+			'Only for a chat started from a Slack message. Set "waiting" with a short reason when you can\'t continue until someone outside Pilot answers in the thread (a CSM, the reporter): ask them in Slack first if needed, then end your turn. Their next reply resumes this chat with the new messages. Set "in_progress" when you continue without waiting. Set "done" with a short outcome once the request is resolved and nothing is left for you. Only the user reopens a done message.',
+		promptSnippet: "Mark the chat's Slack message as waiting, in progress or done",
 		parameters: Type.Object({
-			status: Type.Union([Type.Literal("waiting"), Type.Literal("in_progress")]),
+			status: Type.Union([Type.Literal("waiting"), Type.Literal("in_progress"), Type.Literal("done")]),
 			reason: Type.Optional(
 				Type.String({
 					maxLength: 200,
-					description: 'waiting: who and what you wait for, e.g. "CSM to confirm the org ID".',
+					description:
+						'waiting: who and what you wait for, e.g. "CSM to confirm the org ID". done: the outcome, e.g. "answered in thread".',
 				}),
 			),
 		}),
