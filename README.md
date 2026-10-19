@@ -719,6 +719,7 @@ clears once the server works again, you write in the chat, or you archive it.
 Linear and Slack tracking use the configured
 pi MCP servers named `linear` and `slack` and their existing OAuth sign-in, not separate Pilot API tokens.
 Configure sources in project settings. Tracking is not a blanket promise of autonomous fixes or replies.
+Slack triage has a Refresh button in its toolbar to sync new messages on demand. It is disabled while syncing.
 
 Linear sub-issues appear under their parent in the Inbox, the Overview's current cycle and the full list,
 with a collapsible "N sub-issues" count on the parent, one level deep. When the parent is not one of your

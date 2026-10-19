@@ -656,12 +656,14 @@ struct SlackTriagePage: View {
             SlackTriageLayoutPicker(layout: $layout)
         }
         ToolbarItem(placement: .primaryAction) {
+            let source = client.source(projectId: project.id, kind: .slack)
+            SlackTriageRefreshButton(source: source, connected: client.connected,
+                                     syncing: source.map { actions.syncing.contains($0.id) } ?? false) {
+                if let source { actions.sync(source, client: client) }
+            }
+        }
+        ToolbarItem(placement: .primaryAction) {
             Menu {
-                if let source = client.source(projectId: project.id, kind: .slack) {
-                    Button { actions.sync(source, client: client) } label: {
-                        Label("Sync Now", icon: PilotIcon.refresh)
-                    }
-                }
                 Button { openTrackingSettings(project) } label: { Label("Linear and Slack Settings…", icon: PilotIcon.settings) }
             } label: {
                 PilotSymbol(PilotIcon.more, context: .toolbar)
@@ -1063,6 +1065,26 @@ struct SlackTriagePage: View {
     private func openTrackingSettings(_ project: Project) {
         model.settingsTab = .project(project.id)
         openSettings()
+    }
+}
+
+/// A discoverable source refresh, shared by every triage layout without resetting its filters or selection.
+struct SlackTriageRefreshButton: View {
+    let source: TrackingSource?
+    let connected: Bool
+    let syncing: Bool
+    let refresh: () -> Void
+
+    private var refreshing: Bool { syncing || source?.status == .syncing }
+
+    var body: some View {
+        Button(action: refresh) {
+            Label(refreshing ? "Refreshing Slack triage…" : "Refresh Slack triage", icon: PilotIcon.refresh)
+        }
+        .labelStyle(.iconOnly)
+        .disabled(!connected || source?.configured != true || refreshing)
+        .help(refreshing ? "Refreshing Slack triage…" : "Refresh Slack triage")
+        .accessibilityLabel(refreshing ? "Refreshing Slack triage" : "Refresh Slack triage")
     }
 }
 
