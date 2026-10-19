@@ -66,7 +66,7 @@ private func eventJSON(_ text: String) -> JSONValue { try! JSONValue.decode(Data
 }
 
 @Test func decisionChangeNoticesKeepSpecificSummariesAndBeforeAfterDisclosureOnReplay() {
-    let snapshot = eventJSON(#"{"type":"snapshot","entries":[{"id":1,"kind":"pilot.activity","data":{"text":"Mission decisions changed.\n\n### D7 updated\n\nBefore:\n> Original rule\n\nAfter:\n> Revised rule","event":{"kind":"mission_decisions_changed","text":"Mission decisions changed: D7 updated: Revised rule"}},"model":[]},{"id":2,"kind":"pilot.activity","data":{"text":"### D7 removed\n\n> Revised rule","event":{"kind":"mission_decisions_changed","text":"Mission decisions changed: D7 removed: Revised rule"}},"model":[]}]}"#)
+    let snapshot = eventJSON(####"{"type":"snapshot","entries":[{"id":1,"kind":"pilot.activity","data":{"text":"Mission decisions changed.\n\n### D7 updated\n\nBefore:\n> Original rule\n\nAfter:\n> Revised rule","event":{"kind":"mission_decisions_changed","text":"Mission decisions changed: D7 updated: Revised rule"}},"model":[]},{"id":2,"kind":"pilot.activity","data":{"text":"### D7 removed\n\n> Revised rule","event":{"kind":"mission_decisions_changed","text":"Mission decisions changed: D7 removed: Revised rule"}},"model":[]}]}"####)
     var transcript = Transcript()
     for _ in 0..<2 {
         transcript.apply(snapshot)
