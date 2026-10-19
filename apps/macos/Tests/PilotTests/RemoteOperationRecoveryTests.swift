@@ -501,6 +501,12 @@ private final class RecoveryHTTPStub: URLProtocol {
         #expect(payload["projectId"]?.string == project.id)
         #expect(payload["cwd"] == nil, "Use the daemon's registered checkout, not a Mac path")
         #expect(hosts.projectCheckouts.groups(local: origin).count == 1)
+        #expect(try await OperationOutbox(directory: directory.appendingPathComponent("operations")).pending().isEmpty,
+                "saved checkout matches must not be decoded as pending operations")
+        let saved = try await RepositoryAssociationStore(file: directory
+            .appendingPathComponent("operations/project-checkouts/project-checkouts.json")).load()
+        #expect(saved.bindings.mapping(logicalProjectId: source.storageKey, host: target)?.project == destination,
+                "isolating the stores must still persist the explicit checkout match")
         await hosts.disconnectAll()
     }
 
