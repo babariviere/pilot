@@ -398,6 +398,25 @@ struct CommandPaletteCatalog {
                 model.setPinned(!session.isPinned, sessionId: id)
             }
         }
+        // The open chat's Slack messages, as in its toolbar's Slack menu.
+        if suggested, let links = SessionSlackLinks.onScreen, links.sessionId == session.id {
+            for item in links.items {
+                let current = SlackTriageText.triage(item).status
+                for status in SessionSlackText.choices(current: current) where status != current {
+                    let title = links.items.count == 1 ? "Mark Slack message as \(status.title)"
+                        : "Mark “\(item.title)” as \(status.title)"
+                    let icon: PilotIcon = switch status {
+                    case .done: .complete
+                    case .waiting: .pending
+                    case .inProgress: .inProgress
+                    default: .slackChannel
+                    }
+                    add("slack-\(status.rawValue)-\(item.id)", title, icon) {
+                        links.set(status, on: item, model: model)
+                    }
+                }
+            }
+        }
         if session.canArchive {
             add("archive", "Archive", .archive) { model.setArchived(true, sessionId: id) }
         }

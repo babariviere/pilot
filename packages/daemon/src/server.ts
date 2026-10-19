@@ -851,6 +851,10 @@ export function createDaemonServer(
 					const closedByLabel = url.searchParams.get("closedByLabel");
 					if (closedByLabel !== null && closedByLabel !== "true" && closedByLabel !== "false")
 						throw new HttpError(400, "Invalid closedByLabel filter");
+					// A chat's own Slack messages, for its header: the ones whose latest chat it is, dismissed or not.
+					const sessionId = url.searchParams.get("sessionId") ?? undefined;
+					if (sessionId !== undefined && (!sessionId || sessionId.length > 200))
+						throw new HttpError(400, "Invalid sessionId filter");
 					return json(
 						res,
 						200,
@@ -860,6 +864,7 @@ export function createDaemonServer(
 							caseId: url.searchParams.get("caseId") ?? undefined,
 							dismissed: dismissed === "true",
 							...(closedByLabel === "true" ? { closedByLabel: true } : {}),
+							...(sessionId ? { sessionId } : {}),
 							limit: url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : 100,
 							offset: url.searchParams.has("offset") ? Number(url.searchParams.get("offset")) : 0,
 						}),

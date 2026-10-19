@@ -190,6 +190,7 @@ struct SessionDetail: View {
     var context: HostViewContext? = nil
     @EnvironmentObject private var model: AppModel
     @EndpointClient private var client
+    @StateObject private var slack = SessionSlackLinks()
 
 
     var body: some View {
@@ -200,8 +201,19 @@ struct SessionDetail: View {
         }
         .navigationTitle(session.title)
         .navigationSubtitle(subtitle)
+        .task(id: SessionSlackLinks.Key(client: ObjectIdentifier(client), sessionId: session.id,
+                                        projectId: session.isAsk ? nil : session.projectId)) {
+            // Ask chats never take a Slack message's work, and the control chat has no project.
+            slack.attach(client: client, sessionId: session.id, projectId: session.isAsk ? nil : session.projectId)
+        }
+        .onDisappear { slack.detach() }
         .toolbar {
             contextToolbar
+            if !slack.items.isEmpty {
+                ToolbarItem(placement: .primaryAction) {
+                    SessionSlackMenu(links: slack, context: context)
+                }
+            }
             SessionInspectorActions(session: session)
             if #available(macOS 26.0, *) {
                 ToolbarSpacer(.fixed, placement: .primaryAction)
