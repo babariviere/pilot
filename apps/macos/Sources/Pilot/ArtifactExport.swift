@@ -24,6 +24,7 @@ enum ArtifactExport {
         case .swiftui: return File(name: "\(name).swift", data: Data(revision.source.utf8), type: .swiftSource)
         case .shader: return File(name: "\(name).frag", data: Data(revision.source.utf8),
                                   type: UTType(filenameExtension: "frag") ?? .plainText)
+        case .visual: return File(name: "\(name).js", data: Data(revision.source.utf8), type: .javaScript)
         case .image:
             let formats: [(String, String, UTType)] = [
                 ("png", "png", .png), ("jpeg", "jpg", .jpeg), ("gif", "gif", .gif), ("webp", "webp", .webP)
@@ -59,6 +60,11 @@ enum ArtifactExport {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let url = folder.appendingPathComponent(file.name)
         try file.data.write(to: url, options: .atomic)
+        // A visual's function and its data belong together: the data sits beside the script as JSON.
+        if revision.kind == .visual {
+            let data = folder.appendingPathComponent((file.name as NSString).deletingPathExtension + ".json")
+            try revision.visualDataJSON.write(to: data, options: .atomic)
+        }
         return url
     }
 

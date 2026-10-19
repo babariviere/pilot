@@ -120,6 +120,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { @MainActor in
             if Snapshot.runIfRequested() { return }
             ArtifactInlineCache.enablePersistence()
+            VisualReaderMemory.enablePersistence()
             AppModel.shared.start()
             AppUpdater.shared.start()
         }
@@ -128,6 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_: NSApplication) -> NSApplication.TerminateReply {
         AppModel.shared.flushDrafts()
         ArtifactInlineCache.flush()
+        VisualReaderMemory.flush()
         if AppUpdater.shared.shouldDelayTermination() { return .terminateCancel }
         if finishedTermination { return .terminateNow }
         if terminationTask == nil {

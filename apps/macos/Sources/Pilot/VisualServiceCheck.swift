@@ -1,24 +1,10 @@
 import AppKit
 import PilotVisualsKit
 
-/// Packaging smoke test for the visual service: it launches from this app's XPCServices, runs a visual on the
-/// vendored engine and stays sandboxed (no network, no files outside its container).
+/// Packaging smoke test for the visual service: it launches from this app's XPCServices, runs a visual through the
+/// bundled runtime on the vendored engine and stays sandboxed (no network, no files outside its container).
 @MainActor
 enum VisualServiceCheck {
-    /// A stand-in for the shared visual runtime with just its host API, so the check depends on packaging only.
-    static let runtime = """
-    (() => {
-      let view;
-      return {
-        load(fn, source, dataJson) { const data = JSON.parse(dataJson); view = () => fn(data); },
-        render() { return JSON.stringify({ api: 1, root: view() }); },
-        event() { throw new Error("no controls"); },
-        state() { return "[]"; },
-        logs() { return "[]"; },
-      };
-    })();
-    """
-
     static func run() async {
         func fail(_ message: String) -> Never {
             print("visuals-check failed: \(message)")
@@ -37,12 +23,15 @@ enum VisualServiceCheck {
                 + "files: \(probe["files"]?.stringValue ?? "?"))")
         }
         let request = VisualLoadRequest(
-            runtime: runtime, source: "(data) => ({ type: \"text\", text: \"engine \" + data.n })",
+            runtime: VisualRuntime.source,
+            source: "function visual({ ui, data }) { return () => ui.text(\"engine \" + data.n); }",
             data: Data(#"{"n":1}"#.utf8), seed: "visuals-check", now: 0
         )
         switch await client.load("visuals-check", request) {
         case .success(let frame):
-            guard frame.tree["root"]?["text"]?.stringValue == "engine 1" else { fail("unexpected tree \(frame.tree)") }
+            guard frame.tree["root"]?["runs"]?.arrayValue?.first?["text"]?.stringValue == "engine 1" else {
+                fail("unexpected tree \(frame.tree)")
+            }
         case .failure(let failure):
             fail("the visual did not run: \(failure.message)")
         }

@@ -55,7 +55,7 @@ enum ArtifactInlineCache {
 
     static func store(_ revision: ArtifactRevision, for artifact: ArtifactReference, host: HostRef? = nil) {
         let reference = Key(host: host, reference: artifact)
-        let bytes = revision.html.utf8.count + revision.source.utf8.count
+        let bytes = revision.html.utf8.count + revision.source.utf8.count + (revision.dataJSON?.count ?? 0)
         // A single oversized revision is not retained; the visible card already holds it.
         guard bytes <= byteLimit else { return }
         if revisions.updateValue(revision, forKey: reference) != nil {
@@ -162,7 +162,9 @@ struct ArtifactCard: View {
                     }
                 }
                 // Artifacts are light documents. In dark, transparent inline ones sit on light paper to stay readable.
-                .background(RoundedRectangle(cornerRadius: Theme.Radius.control).fill(state.visible ? Theme.artifactPaper : .clear))
+                // Visuals follow the appearance and sit on the chat itself.
+                .background(RoundedRectangle(cornerRadius: Theme.Radius.control)
+                    .fill(state.visible && state.revision?.kind != .visual ? Theme.artifactPaper : .clear))
                 .clipped()
                 // Share prose's leading edge. Small images keep their natural size, without a card.
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -291,6 +293,28 @@ private struct ArtifactContent: View {
                     Button("Retry") { Task { await state.load(reference, latest: latest, client: endpoint) } }
                 }
                 .padding().frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let revision = state.revision, revision.kind == .visual {
+                // Native visuals run in the sandboxed visual service and are always interactive in place.
+                let host = hostContext?.host ?? endpoint.hostIdentity
+                let pinned = ArtifactReference(id: revision.id, sessionId: revision.sessionId, title: revision.title,
+                                               revision: revision.revision)
+                VisualArtifactView(revision: revision, memoryKey: ArtifactInlineCache.sizeKey(pinned, host),
+                                   inline: inline, render: render)
+                    .id("\(revision.id)-\(revision.revision)")
+                    .overlay(alignment: .topTrailing) {
+                        if inline {
+                            Button { onOpen?() } label: {
+                                PilotSymbol(PilotIcon.expand, context: .row)
+                                    .padding(6)
+                                    .background(Circle().fill(Theme.card))
+                                    .overlay(Circle().stroke(Theme.border))
+                            }
+                            .buttonStyle(.plain)
+                            .padding(4)
+                            .help("Open in the viewer")
+                            .accessibilityLabel("Open \(reference.title) in the viewer")
+                        }
+                    }
             } else if let revision = state.revision {
                 // Pages are used in place; snapshots (images, SwiftUI) open the viewer on click.
                 let interactive = !inline || revision.kind == .html || revision.kind == .react

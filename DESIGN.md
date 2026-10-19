@@ -37,7 +37,9 @@ Calm is not plain. The app should look sleek and feel pleasant to the eye, like 
   centrally. Dark keeps the light hierarchy: a darker sidebar beside the page, lifted cards and trays, light primary
   buttons with `onPrimary` text, text-weight colours lightened for contrast. Dithered scenes dim to dusk; status
   corners keep one translucent tint set. Home instead uses separate daytime clouds and evening sea pictures, preserving
-  their own colours. Artifacts are light documents and keep a light page in both.
+  their own colours. Artifacts are light documents and keep a light page in both. Native visuals are the exception:
+  they sit on the chat itself, without a card, and follow the appearance through Theme tokens (`accent`, the
+  `successInk`/`warningInk` text colours and the `chart1`...`chart6` palette).
 - **Typography carries the page.** Weight and size separate headline, section and row. Use secondary and
   tertiary text colors for meta information, and keep line lengths comfortable.
 - **Delight without noise.** Motion and effects are subtle and purposeful (a soft transition, a gentle highlight).

@@ -18,6 +18,12 @@ struct HostedArtifactViewer: View {
             Divider()
             if state.loading {
                 ProgressView("Loading artifact…").frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let revision = state.revision, revision.kind == .visual {
+                let pinned = ArtifactReference(id: revision.id, sessionId: revision.sessionId, title: revision.title,
+                                               revision: revision.revision)
+                VisualArtifactView(revision: revision, memoryKey: ArtifactInlineCache.sizeKey(pinned, reference.host),
+                                   inline: false, render: render)
+                    .id(reference)
             } else if let revision = state.revision, let client {
                 ArtifactWebView(revision: revision, client: client, state: render)
                     .id(reference)
@@ -41,4 +47,3 @@ struct HostedArtifactViewer: View {
         }
     }
 }
-

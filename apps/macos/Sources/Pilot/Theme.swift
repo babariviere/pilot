@@ -77,6 +77,20 @@ enum Theme {
     static let pullRequestMerged = Color(light: 0x7C3AED, dark: 0xA78BFA)
     static let pullRequestClosed = Color(light: 0xB91C1C, dark: 0xF87171)
 
+    /// Agent visuals' text tokens (docs/native-visuals.md): ink readable on the chat background in both appearances.
+    /// `accent` marks links and emphasized figures; `danger` uses `error`. Chrome keeps its neutral palette.
+    static let accent = Color(light: 0x2563EB, dark: 0x60A5FA)
+    static let successInk = Color(light: 0x047857, dark: 0x34D399)
+    static let warningInk = Color(light: 0xB45309, dark: 0xFBBF24)
+    /// Agent visuals' categorical chart palette, in series order: blue, amber, emerald, violet, rose and cyan, tuned
+    /// per appearance so neighbors differ in hue and lightness.
+    static let chart1 = Color(light: 0x2563EB, dark: 0x60A5FA)
+    static let chart2 = Color(light: 0xD97706, dark: 0xFBBF24)
+    static let chart3 = Color(light: 0x059669, dark: 0x34D399)
+    static let chart4 = Color(light: 0x7C3AED, dark: 0xA78BFA)
+    static let chart5 = Color(light: 0xE11D48, dark: 0xFB7185)
+    static let chart6 = Color(light: 0x0891B2, dark: 0x22D3EE)
+
     /// Syntax colors with contrast against the code surface in either appearance.
     static func syntaxColor(_ kind: CodeSyntax.Kind?) -> Color {
         switch kind {
