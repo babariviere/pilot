@@ -105,7 +105,8 @@ public struct UnifiedInboxPresentation: Sendable {
         case .longJob: 4
         case .mcp: 5
         case .prStuck: 6
-        case .unread: 7
+        case .noPR: 7
+        case .unread: 8
         }
     }
     static func linearStatusRank(_ item: TrackedItem) -> Int { item.metadata["statusType"]?.string == "started" ? 0 : 1 }

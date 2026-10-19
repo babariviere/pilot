@@ -22,7 +22,7 @@ import {
 	type SessionSummary,
 } from "@pilot/protocol";
 import type { MissionStore, MissionTaskProgress } from "./missions.ts";
-import { reasonLine, sessionNeedsYouReason } from "./needs-you-reason.ts";
+import { hasMissingPullRequest, reasonLine, sessionNeedsYouReason } from "./needs-you-reason.ts";
 import type { ProjectStore } from "./projects.ts";
 import { readinessReasonLabel } from "./pull-request-readiness.ts";
 import type { ReviewStore } from "./reviews.ts";
@@ -63,7 +63,8 @@ const KIND_RANK = {
 	long_job: 4,
 	mcp: 5,
 	pr_stuck: 6,
-	unread: 7,
+	no_pr: 7,
+	unread: 8,
 } as const;
 const isTerminal = (pr: SessionPullRequest) => pr.state === "merged" || pr.state === "closed";
 const isWorking = (session: SessionSummary) =>
@@ -106,6 +107,7 @@ function needsReview(session: SessionSummary, isUnread: DashboardInput["isUnread
 	// A scheduled follow-up message is the user's answer: the chat now waits on that schedule.
 	if (session.scheduledMessage) return false;
 	if (session.attentionReason?.kind === "pr_stuck") return true;
+	if (hasMissingPullRequest(session)) return true;
 	// A question waits until it is answered, not until the chat is viewed.
 	if (session.outcome === "question") return true;
 	if (hasTerminalPullRequest(session)) return false;
@@ -143,6 +145,7 @@ export function buildProjectDashboard(input: DashboardInput, limit = DASHBOARD_S
 		const attention =
 			attentionReason.kind === "long_job" ||
 			attentionReason.kind === "pr_stuck" ||
+			attentionReason.kind === "no_pr" ||
 			attentionReason.kind === "mcp" ||
 			attentionReason.kind === "tool_stall"
 				? attentionReason.kind

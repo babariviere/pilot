@@ -23,6 +23,13 @@ public enum SessionSignal: String, CaseIterable, Hashable, Sendable {
 }
 
 extension SessionSummary {
+    /// Mirror pilotd's cached workspace evidence. Push history does not say whether a PR exists.
+    public var hasMissingPullRequest: Bool {
+        hasUnpublishedWork && mode != .ask && !isControl && !isMissionCoordinator && !isActiveMissionCoordinator
+            && continuedTo == nil && !isArchived && pullRequest == nil
+            && (pullRequests ?? []).isEmpty && (boundPullRequests ?? []).isEmpty
+    }
+
     /// The chat's current PR is open, not a draft, and GitHub reports no blockers.
     public var isReadyToMerge: Bool {
         guard offlinePaused != true, !isMissionCoordinator, attentionReason?.kind != .prStuck,
@@ -38,7 +45,7 @@ extension SessionSummary {
         if scheduledMessage == true { return isReadyToMerge ? .readyToMerge : nil }
         if status == .failed && !hasTerminalPullRequest { return .failed }
         // A question waits on the user until answered, even once viewed or after its PRs settled.
-        if status == .question || attentionReason?.kind == .prStuck { return .needsYou }
+        if status == .question || attentionReason?.kind == .prStuck || hasMissingPullRequest { return .needsYou }
         if isReadyToMerge { return .readyToMerge }
         if unread { return .needsYou }
         return nil
@@ -48,7 +55,7 @@ extension SessionSummary {
     /// only ones a long sidebar list folds away.
     public var isQuiet: Bool {
         !isWorking && offlinePaused != true && !isActiveMissionCoordinator && status != .failed && status != .question
-            && !linkedPullRequests.contains { !$0.isTerminal }
+            && !hasMissingPullRequest && !linkedPullRequests.contains { !$0.isTerminal }
     }
 }
 

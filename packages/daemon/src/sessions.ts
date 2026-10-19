@@ -8224,8 +8224,9 @@ export class SessionManager {
 				void this.refreshCoordinatorWorkspace(meta.id).catch((error: unknown) =>
 					console.warn(`pilotd: base refresh failed: ${error}`),
 				);
-			// A finished turn may have added work after a merge, or published it.
-			if (!packet.working && wasWorking && hasSettledPullRequests(meta)) this.checkUnpublishedWork(meta, 0);
+			// A finished turn may have left changes without a PR, added work after a merge, or published it.
+			if (!packet.working && wasWorking && (!sessionPullRequests(meta).length || hasSettledPullRequests(meta)))
+				this.checkUnpublishedWork(meta, 0);
 		} else if (packet.type === "error" && !packet.requestId && worker.state === "failed" && !this.closing) {
 			this.fail(meta, packet.message);
 		}
@@ -8676,8 +8677,9 @@ export class SessionManager {
 		// Health was looked up by the sync before this result was applied. Stale lookups are dropped here.
 		if (!result.error && healthFresh && health.checks.length)
 			await this.followUpPullRequests(meta, health.context.branch, health.context.generation, health.checks);
-		// A merge or close makes unpublished work the only reason to keep the chat active.
-		if (hasSettledPullRequests(meta)) this.checkUnpublishedWork(meta, changed ? 0 : UNPUBLISHED_CHECK_MS);
+		// Without a PR, cached workspace evidence also tells the user that no PR has been created.
+		if (!sessionPullRequests(meta).length || hasSettledPullRequests(meta))
+			this.checkUnpublishedWork(meta, changed ? 0 : UNPUBLISHED_CHECK_MS);
 		await this.archiveMergedPullRequest(meta);
 	}
 

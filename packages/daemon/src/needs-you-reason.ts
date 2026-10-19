@@ -29,7 +29,24 @@ export function sessionNeedsYouReason(session: SessionSummary, now = Date.now())
 	if (session.outcome === "question")
 		return { kind: "asks", detail: reasonLine(session.outcomeReason) ?? "A question is waiting for your answer" };
 	if (session.attentionReason) return session.attentionReason;
+	if (hasMissingPullRequest(session)) return { kind: "no_pr" };
 	return { kind: "not_reviewed" };
+}
+
+/** Use cached workspace evidence, not push history. Any known PR (including a draft or settled one) counts. */
+export function hasMissingPullRequest(session: SessionSummary): boolean {
+	return (
+		session.unpublishedWork === true &&
+		session.mode !== "ask" &&
+		!session.control &&
+		!session.missionCoordinator &&
+		!session.activeMissionCoordinator &&
+		!session.continuedTo &&
+		session.archivedAt === undefined &&
+		!session.pullRequest &&
+		!session.pullRequests?.length &&
+		!session.boundPullRequests?.length
+	);
 }
 
 /** Health already cached for display, even when automatic follow-ups are unavailable. No new GitHub reads. */

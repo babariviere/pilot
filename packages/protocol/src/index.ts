@@ -1264,6 +1264,7 @@ export type DashboardNeedsYouKind =
 	| "mcp"
 	| "tool_stall"
 	| "pr_stuck"
+	| "no_pr"
 	| "unread";
 
 export type NeedsYouReasonKind =
@@ -1274,6 +1275,7 @@ export type NeedsYouReasonKind =
 	| "mission"
 	| "limit"
 	| "pr_stuck"
+	| "no_pr"
 	| "long_job"
 	| "mcp"
 	| "tool_stall";
@@ -1283,6 +1285,7 @@ export type NeedsYouReasonKind =
  * `limit`: a failed chat stopped by a subscription limit ("Limit reached · resumes at 18:00").
  * `mcp`: the chat reached for an MCP server that needs the user ("datadog needs sign-in"); live-only.
  * `tool_stall`: bounded evidence suspects an unfinished tool is not progressing; live-only and uncertain.
+ * `no_pr`: cached workspace changes exist, but no pull request has been created or attached.
  */
 export interface NeedsYouReason {
 	kind: NeedsYouReasonKind;

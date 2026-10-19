@@ -1137,6 +1137,38 @@ test("unpublished work keeps merged and inactive chats active until it is publis
 	}
 });
 
+test("a finished turn without a PR refreshes and broadcasts cached code changes", async () => {
+	let dirty = true;
+	const { sessions, ids, cleanup } = await fixture((args) => {
+		if (args[0] === "rev-parse") return "true";
+		if (args[0] === "status") return dirty ? " M work.txt\0" : "";
+		if (args[0] === "for-each-ref" || args[0] === "rev-list") return "";
+		return undefined;
+	});
+	try {
+		const id = ids[0]!;
+		const meta = sessions["metas"].get(id)!;
+		delete meta.pullRequest;
+		delete meta.previousPullRequests;
+		const worker = new FakeWorker();
+		sessions["workers"].set(id, worker);
+		const updates: SessionSummary[] = [];
+		sessions.onChange((session) => updates.push(session));
+		for (const expected of [true, undefined]) {
+			meta.working = true;
+			sessions["onPacket"](meta, worker, { type: "working", working: false });
+			await sessions["unpublishedChecks"].get(id)?.promise;
+			assert.equal(sessions.get(id)?.unpublishedWork, expected);
+			assert.equal(updates.at(-1)?.unpublishedWork, expected);
+			const persisted = JSON.parse(await readFile(join(sessions["dir"](id), "meta.json"), "utf8")) as Meta;
+			assert.equal(persisted.unpublishedWork, expected);
+			dirty = false;
+		}
+	} finally {
+		await cleanup();
+	}
+});
+
 test("settled PRs check unpublished work after a finished turn and keep the last result while working", async () => {
 	let dirty = false;
 	const { sessions, ids, cleanup } = await fixture((args) => {
