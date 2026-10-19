@@ -81,6 +81,7 @@ struct ArtifactWebView: NSViewRepresentable {
             }
         }
         context.coordinator.measurementKind = revision.kind
+        context.coordinator.artifactID = revision.id
         context.coordinator.awaitingMermaid = revision.libraries.contains(.mermaid)
         context.coordinator.install(in: view, document: ArtifactPreviewDocument.document(revision, inline: inline))
         return view
@@ -144,6 +145,8 @@ struct ArtifactWebView: NSViewRepresentable {
         /// Inline diagrams wait for their asynchronous renderer after navigation finishes.
         var onLoad: ((WKWebView) -> Void)?
         var measurementKind: ArtifactKind?
+        /// For ArtifactRenderTiming: which artifact finished loading.
+        var artifactID: String?
         var awaitingMermaid = false
         var measurementTask: Task<Void, Never>?
         private var measurement = ArtifactContentMeasurement()
@@ -188,6 +191,7 @@ struct ArtifactWebView: NSViewRepresentable {
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             if let onLoad { onLoad(webView) } else { state.loading = false }
+            if let artifactID { ArtifactRenderTiming.rendered?(artifactID) }
             // The loaded document starts without the host's visibility flag.
             (webView as? InlineArtifactWebView)?.updateHostVisibility(force: true)
             startMeasuring(webView)
@@ -440,6 +444,8 @@ final class ArtifactLibraryCache {
 /// a declared, fixed library can cause a native HTTP request. Redirects are forbidden.
 @MainActor
 final class ArtifactLibraryHandler: NSObject, WKURLSchemeHandler {
+    /// Benchmarks without a daemon serve library bundles from here instead of pilotd. Never set in the app.
+    static var benchmarkSources: [ArtifactLibrary: Data] = [:]
     var onError: ((String) -> Void)?
     private let libraries: Set<ArtifactLibrary>
     private let client: PilotClient
@@ -457,6 +463,13 @@ final class ArtifactLibraryHandler: NSObject, WKURLSchemeHandler {
             return
         }
         let key = ObjectIdentifier(urlSchemeTask)
+        if let data = Self.benchmarkSources[library] {
+            urlSchemeTask.didReceive(URLResponse(url: url, mimeType: "application/javascript", expectedContentLength: data.count,
+                                                textEncodingName: "utf-8"))
+            urlSchemeTask.didReceive(data)
+            urlSchemeTask.didFinish()
+            return
+        }
         pending[key] = Task { [weak self] in
             guard let self else { return }
             do {

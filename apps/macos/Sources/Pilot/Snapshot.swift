@@ -18,6 +18,10 @@ enum Snapshot {
             Task { await ArtifactScrollCheck.run() }
             return true
         }
+        if arguments.contains("--visual-artifact-bench") {
+            Task { await VisualArtifactBenchmark.run() }
+            return true
+        }
         if arguments.contains("--performance-check") {
             Task { await PerformanceCheck.run() }
             return true

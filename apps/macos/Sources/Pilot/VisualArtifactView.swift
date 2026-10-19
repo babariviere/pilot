@@ -71,6 +71,7 @@ final class VisualArtifactModel: ObservableObject {
     private let instance = "visual-\(UUID().uuidString)"
     private var request: VisualLoadRequest?
     private var memoryKey = ""
+    private var artifactID: String?
     private var started = false
     private var busy = false
     private var queued: [(id: String, value: VisualValue)] = []
@@ -95,6 +96,7 @@ final class VisualArtifactModel: ObservableObject {
         guard !started else { return }
         started = true
         self.memoryKey = memoryKey
+        artifactID = revision.id
         for shader in revision.visual?.shaders ?? [] {
             shaders[VisualNode.Shader.translationKey(glsl: shader.glsl, inputs: shader.inputs)] = shader
         }
@@ -193,6 +195,7 @@ final class VisualArtifactModel: ObservableObject {
             case .success(let tree):
                 if tree != self.tree { self.tree = tree }
                 failure = nil
+                if let artifactID { ArtifactRenderTiming.rendered?(artifactID) }
                 frames += 1
                 VisualReaderMemory.store(state: frame.state, tree: tree, for: memoryKey)
             case .failure(VisualTree.DecodingError.unsupportedAPI(let api)):
