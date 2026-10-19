@@ -57,7 +57,7 @@ export function createPilotTool(call: PilotCall): ToolDefinition {
 		name: "pilot",
 		label: "Control chats",
 		description:
-			"Reads untrusted; writes audited. authorize: user approval. start: scope/model/authorizationId; ask if missing. send/watch/run controls: authorizationId. USD optional, not runtime caps. No merge.",
+			"Reads untrusted; writes audited. authorize: user approval. start: scope/model/mode/authorizationId required. send/watch/controls: authorizationId. USD optional, not runtime caps. No merge.",
 		parameters: Type.Object({
 			action: StringEnum(PILOT_ACTIONS),
 			source: Type.Optional(StringEnum(["daemon", "lifecycle", "session"] as const)),
@@ -114,7 +114,11 @@ export function createPilotTool(call: PilotCall): ToolDefinition {
 			filter: Type.Optional(
 				Type.Object({ outcome: Type.Optional(StringEnum(["done", "failed", "stopped"] as const)) }),
 			),
-			mode: Type.Optional(StringEnum(["once", "persistent"] as const)),
+			mode: Type.Optional(
+				StringEnum(["build", "ask", "once", "persistent"] as const, {
+					description: "start requires build (implementation) or ask (read-only); watch uses once or persistent.",
+				}),
+			),
 			note: Type.Optional(
 				Type.String({
 					minLength: 1,

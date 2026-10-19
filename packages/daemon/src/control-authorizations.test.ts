@@ -76,6 +76,7 @@ async function fixture(t: TestContext, selectModel?: (model?: string) => Promise
 						id: "new",
 						projectId: "p",
 						model: request.model,
+						mode: request.mode,
 						controlStart: provenance,
 					} as SessionSummary;
 					chats.set(chat.id, chat);
@@ -84,7 +85,7 @@ async function fixture(t: TestContext, selectModel?: (model?: string) => Promise
 				startTask: async (...args) => {
 					await selectModel?.(args[2].model);
 					effects.push(["task", ...args]);
-					return { id: "new" } as SessionSummary;
+					return { id: "new", mode: args[2].mode } as SessionSummary;
 				},
 				send: async (...args) => {
 					effects.push(["send", ...args]);
@@ -136,58 +137,123 @@ async function fixture(t: TestContext, selectModel?: (model?: string) => Promise
 			service.call("control", "authorize", args, operation) as Promise<ControlAuthorization>,
 	};
 }
-test("starts propagate the admitted level and mode, never model-supplied authority", async (t) => {
+test("starts derive use level from explicit mode and preserve project/task model choices and permission", async (t) => {
 	const f = await fixture(t);
-	const record = await f.authorize({ ...approval, level: "publish", limits: { followUps: 10, budgetUsd: 10 } });
-	for (const level of ["investigate", "implement", "publish"] as const) {
-		const permission = { authorizationId: record.id, level };
-		await f.service.call(
-			"control",
-			"start",
-			{ ...permission, projectId: "p", message: "work", model: "test/model", budgetUsd: 1, mode: "build" },
-			`project-${level}`,
-		);
-		await f.service.call(
-			"control",
-			"start",
-			{ ...permission, missionId: "m", taskId: "2", model: "test/model", budgetUsd: 1, mode: "build" },
-			`task-${level}`,
-		);
-		assert.deepEqual(f.effects.at(-2), [
-			"start",
-			{ projectId: "p", message: "work", model: "test/model", mode: level === "investigate" ? "ask" : "build" },
-			permission,
-			`control:start:project-${level}`,
-			{ authorizationId: record.id, budgetUsd: 1 },
-		]);
-		assert.deepEqual(f.effects.at(-1), [
-			"task",
-			"m",
-			"2",
-			{ model: "test/model", mode: level === "investigate" ? "ask" : "build" },
-			permission,
-			`control:start:task-${level}`,
-			{ authorizationId: record.id, budgetUsd: 1 },
-		]);
+	for (const grantLevel of ["investigate", "implement", "publish", "merge"] as const) {
+		const record = await f.authorize({ ...approval, level: grantLevel, limits: { followUps: 10 } }, grantLevel);
+		for (const mode of ["build", "ask"] as const) {
+			if (grantLevel === "investigate" && mode === "build") continue;
+			const level = mode === "build" ? "implement" : "investigate";
+			const permission = { authorizationId: record.id, level };
+			const choice = { model: "test/exact-model", thinking: "high", mode };
+			for (const task of [false, true]) {
+				const operation = `${grantLevel}-${mode}-${task}`;
+				const result = (await f.service.call(
+					"control",
+					"start",
+					{
+						authorizationId: record.id,
+						...choice,
+						...(task ? { missionId: "m", taskId: "2" } : { projectId: "p", message: "work" }),
+						// Both omitted and matching explicit levels are accepted.
+						...(task ? { level } : {}),
+					},
+					operation,
+				)) as { id: string; mode: string; model?: string };
+				assert.equal(result.id, "new");
+				assert.equal(result.mode, mode);
+				if (!task) assert.equal(result.model, choice.model);
+				assert.deepEqual(f.effects.at(-1), [
+					...(task ? ["task", "m", "2", choice] : ["start", { projectId: "p", message: "work", ...choice }]),
+					permission,
+					`control:start:${operation}`,
+					{ authorizationId: record.id },
+				]);
+			}
+		}
 	}
-	const merge = await f.authorize({ ...approval, level: "merge" }, "merge");
+});
+
+test("starts reject missing/invalid mode and contradictory levels before effects or reservations", async (t) => {
+	const f = await fixture(t);
+	const record = await f.authorize({ ...approval, level: "publish" });
+	const args = { authorizationId: record.id, model: "test/model", budgetUsd: 1 };
+	for (const target of [
+		{ projectId: "p", message: "work" },
+		{ missionId: "m", taskId: "2" },
+	]) {
+		for (const mode of [undefined, null, "once", "persistent", "BUILD"])
+			await assert.rejects(
+				f.service.call(
+					"control",
+					"start",
+					{ ...args, ...target, mode },
+					`invalid-${JSON.stringify(target)}-${mode}`,
+				),
+				/start requires explicit mode: "build" or "ask"/,
+			);
+		for (const mode of ["build", "ask"])
+			for (const level of ["investigate", "implement", "publish", "merge"]) {
+				if (level === (mode === "build" ? "implement" : "investigate")) continue;
+				await assert.rejects(
+					f.service.call("control", "start", { ...args, ...target, mode, level }, `conflict-${mode}-${level}`),
+					/explicit level contradicts mode/,
+				);
+			}
+	}
+	assert.equal(f.effects.length, 0);
+	assert.deepEqual((await f.memory.authorizationGet(record.id))?.usage, { followUps: 0, budgetUsd: 0 });
+	assert.equal((await f.memory.auditPage()).filter((entry) => entry.action === "start").length, 0);
+	assert.equal(f.watches.dashboard().followUpsTotal, 0);
+});
+
+test("Build cannot exceed an investigate grant, while Ask remains allowed", async (t) => {
+	const f = await fixture(t);
+	const record = await f.authorize({ ...approval, level: "investigate" });
+	const args = { authorizationId: record.id, projectId: "p", message: "work", model: "test/model" };
 	await assert.rejects(
-		f.service.call(
-			"control",
-			"start",
-			{
-				authorizationId: merge.id,
-				level: "merge",
-				projectId: "p",
-				message: "merge",
-				model: "test/model",
-				budgetUsd: 1,
-			},
-			"merge-start",
-		),
-		/user confirmation in the app/,
+		f.service.call("control", "start", { ...args, mode: "build" }, "denied"),
+		/exceeds authorization level/,
 	);
-	assert.equal(f.effects.length, 6);
+	assert.equal(f.effects.length, 0);
+	assert.deepEqual((await f.memory.authorizationGet(record.id))?.usage, { followUps: 0, budgetUsd: 0 });
+	assert.equal(f.watches.dashboard().followUpsTotal, 0);
+	assert.equal(JSON.parse(f.watches.dashboard().authorizationNeeded[0]!.request).mode, "build");
+	const result = (await f.service.call("control", "start", { ...args, mode: "ask" }, "allowed")) as { mode: string };
+	assert.equal(result.mode, "ask");
+});
+
+test("start mode mismatch reports the created chat ID and actual mode, never success or a safe refund", async (t) => {
+	for (const task of [false, true])
+		for (const mode of ["build", "ask"] as const)
+			for (const actualMode of [mode === "build" ? "ask" : "build", undefined]) {
+				const f = await fixture(t);
+				const record = await f.authorize();
+				const created = { id: "created-wrong-mode", mode: actualMode } as SessionSummary;
+				const mutations = f.service.options.mutations!;
+				mutations.startProject = async () => created;
+				mutations.startTask = async () => created;
+				await assert.rejects(
+					f.service.call(
+						"control",
+						"start",
+						{
+							authorizationId: record.id,
+							model: "test/model",
+							mode,
+							budgetUsd: 1,
+							...(task ? { missionId: "m", taskId: "2" } : { projectId: "p", message: "work" }),
+						},
+						"mismatch",
+					),
+					new RegExp(
+						`Chat ${created.id} was created with mode ${actualMode ?? "unknown"}, requested ${mode}; start failed`,
+					),
+				);
+				const audit = (await f.memory.auditPage()).filter((entry) => entry.action === "start");
+				assert.deepEqual(audit.map((entry) => entry.phase).sort(), ["failed", "requested"]);
+				assert.deepEqual((await f.memory.authorizationGet(record.id))?.usage, { followUps: 0, budgetUsd: 1 });
+			}
 });
 
 for (const action of ["stop", "pause", "resume", "redirect"] as const) {
@@ -421,7 +487,7 @@ test("budgets are diagnostic by default, optional on start/send, and do not bypa
 	await f.service.call(
 		"control",
 		"start",
-		{ authorizationId: record.id, projectId: "p", message: "work", model: "test/model" },
+		{ authorizationId: record.id, projectId: "p", message: "work", model: "test/model", mode: "ask" },
 		"start",
 	);
 	await f.service.call(
@@ -440,7 +506,7 @@ test("budgets are diagnostic by default, optional on start/send, and do not bypa
 		f.service.call(
 			"control",
 			"start",
-			{ authorizationId: record.id, projectId: "p", message: "again", model: "test/model" },
+			{ authorizationId: record.id, projectId: "p", message: "again", model: "test/model", mode: "ask" },
 			"again",
 		),
 		/follow-up limit/,
@@ -454,7 +520,7 @@ test("budgets are diagnostic by default, optional on start/send, and do not bypa
 test("invalid start/send arguments consume no use or reservation; corrected retry succeeds", async (t) => {
 	const f = await fixture(t);
 	const record = await f.authorize({ ...approval, limits: { followUps: 0, budgetUsd: 15 } });
-	const args = { authorizationId: record.id, projectId: "p", budgetUsd: 15, model: "test/model" };
+	const args = { authorizationId: record.id, projectId: "p", budgetUsd: 15, model: "test/model", mode: "ask" };
 	for (const [i, invalid] of [
 		{},
 		{ message: "" },
@@ -490,7 +556,14 @@ test("invalid start/send arguments consume no use or reservation; corrected retr
 test("proven pre-admission failure appends a release, frees the initial action, and never replays; uncertainty does not refund", async (t) => {
 	const f = await fixture(t);
 	const record = await f.authorize({ ...approval, limits: { followUps: 0, budgetUsd: 15 } });
-	const args = { authorizationId: record.id, projectId: "p", message: "work", budgetUsd: 15, model: "test/model" };
+	const args = {
+		authorizationId: record.id,
+		projectId: "p",
+		message: "work",
+		budgetUsd: 15,
+		model: "test/model",
+		mode: "ask",
+	};
 	f.setStartError(new ControlPreAdmissionError("Model unavailable before spawn"));
 	await assert.rejects(f.service.call("control", "start", args, "failed"), /Model unavailable/);
 	let stored = (await f.memory.authorizationGet(record.id))!;
@@ -574,7 +647,7 @@ test("a routing race after reservation releases follow-up and USD accounting bef
 test("only the initial start is free of follow-up accounting; repeated starts cannot bypass the limit", async (t) => {
 	const f = await fixture(t),
 		record = await f.authorize({ ...approval, limits: { followUps: 0, budgetUsd: 10 } });
-	const args = { authorizationId: record.id, projectId: "p", message: "work", model: "test/model" };
+	const args = { authorizationId: record.id, projectId: "p", message: "work", model: "test/model", mode: "ask" };
 	await f.service.call("control", "start", args, "first");
 	await f.restart();
 	await assert.rejects(f.service.call("control", "start", args, "second"), /follow-up limit/);
@@ -583,7 +656,14 @@ test("only the initial start is free of follow-up accounting; repeated starts ca
 test("starts require explicit scope, authorization and model, honoring only explicit budget limits", async (t) => {
 	const f = await fixture(t),
 		record = await f.authorize();
-	const args = { authorizationId: record.id, budgetUsd: 1, projectId: "p", message: "work", model: "test/model" };
+	const args = {
+		authorizationId: record.id,
+		budgetUsd: 1,
+		projectId: "p",
+		message: "work",
+		model: "test/model",
+		mode: "ask",
+	};
 	for (const [key, pattern] of [
 		["authorizationId", /authorizationId/],
 		["projectId", /projectId/],
@@ -656,7 +736,7 @@ test("Control starts retain the real project's scoped and price-capped model adm
 	);
 	catalog = new ModelCatalog(f.home);
 	const record = await f.authorize();
-	const args = { authorizationId: record.id, budgetUsd: 0.5, projectId: "p", message: "work" };
+	const args = { authorizationId: record.id, budgetUsd: 0.5, projectId: "p", message: "work", mode: "ask" };
 	await assert.rejects(
 		f.service.call("control", "start", { ...args, model: "test/outside" }, "outside"),
 		/not available in the project's scope/,
@@ -729,7 +809,14 @@ test("revocation, expiry and completed task scopes fail closed and survive resta
 	assert.equal(await f.memory.authorizationRevoke(record.id), false);
 	assert.equal(await f.memory.authorizationRevoke("missing"), false);
 	await f.restart();
-	const args = { authorizationId: record.id, budgetUsd: 1, projectId: "p", message: "work", model: "test/model" };
+	const args = {
+		authorizationId: record.id,
+		budgetUsd: 1,
+		projectId: "p",
+		message: "work",
+		model: "test/model",
+		mode: "ask",
+	};
 	await assert.rejects(f.service.call("control", "start", args, "revoked"), /revoked/);
 	const defaults = await f.authorize(
 		{ scope: "work", level: "implement", targets: [{ kind: "project", id: "p" }] },
@@ -903,7 +990,7 @@ test("legacy watches retain note-and-target authority only in their actual deliv
 		f.service.call(
 			"control",
 			"start",
-			{ ...args, projectId: "p", model: "test/model", budgetUsd: 1 },
+			{ ...args, projectId: "p", model: "test/model", budgetUsd: 1, mode: "ask" },
 			"legacy-start",
 		),
 		/targets/,
