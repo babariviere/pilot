@@ -1826,8 +1826,7 @@ export class SessionManager {
 		this.projects = projects;
 		this.agentDir = agentDir;
 		this.factories = factories;
-		this.databases =
-			options.databases ?? (factories.worker ? undefined : new DatabaseService(agentDir ?? getAgentDir()));
+		this.databases = options.databases ?? (factories.worker ? undefined : new DatabaseService());
 		this.modelCatalog = options.models ?? new ModelCatalog(agentDir);
 		this.runner = pullRequests.runner ?? run;
 		this.pullRequestMerger = new PullRequestMerger(this.runner);

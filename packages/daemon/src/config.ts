@@ -2,6 +2,11 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { DEFAULT_PORT } from "@pilot/protocol";
 
+/** Pilot-owned settings are independent of pi's agent directory and Pilot's runtime data. */
+export function getPilotConfigDir(env: NodeJS.ProcessEnv = process.env): string {
+	return resolve(env.XDG_CONFIG_HOME || join(homedir(), ".config"), "pilot");
+}
+
 export interface DaemonConfig {
 	home: string;
 	host: string;

@@ -8,6 +8,7 @@ import { credentialEnvironment } from "@pilot/kernel/credential-client";
 import { installCredentialBrokerHooks } from "@pilot/kernel/credential-hooks";
 import { configureNodeTelemetry, nodeTelemetry } from "@pilot/telemetry";
 import { loadConfig } from "./config.ts";
+import { migratePilotConfig } from "./config-migration.ts";
 import { ConnectivityService } from "./connectivity.ts";
 import { ControlDiagnostics } from "./control-diagnostics.ts";
 import { ControlExecutor } from "./control-executor.ts";
@@ -61,6 +62,7 @@ import { WatchService } from "./watch-service.ts";
 import { SessionWatchSource } from "./watch-sessions.ts";
 
 const config = loadConfig();
+await migratePilotConfig(config.agentDir ?? getAgentDir());
 await mkdir(config.agentDir ?? getAgentDir(), { recursive: true, mode: 0o700 });
 const credentials = new CredentialBroker(await realpath(config.agentDir ?? getAgentDir()));
 await credentials.start();

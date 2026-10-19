@@ -11,8 +11,9 @@ import type { JsonValue } from "@earendil-works/chord";
 import type { ProjectDatabaseSettings } from "@pilot/protocol";
 import pg from "pg";
 import Cursor from "pg-cursor";
+import { getPilotConfigDir } from "./config.ts";
 
-export const DATABASE_CONFIG_FILE = "pilot-databases.json";
+export const DATABASE_CONFIG_FILE = "database.json";
 export const DATABASE_MODES = ["read", "write"] as const;
 export type DatabaseMode = (typeof DATABASE_MODES)[number];
 export type DatabaseAccessPolicy = "allow" | "ask";
@@ -133,8 +134,8 @@ export function parseDatabaseConfig(value: unknown, home = homedir()): DatabaseP
 }
 
 /** Read afresh on every call, so edits apply without restarting pilotd. Undefined when the file is missing. */
-export async function loadDatabaseConfig(agentDir: string): Promise<DatabaseProjects | undefined> {
-	const path = join(agentDir, DATABASE_CONFIG_FILE);
+export async function loadDatabaseConfig(configDir = getPilotConfigDir()): Promise<DatabaseProjects | undefined> {
+	const path = join(configDir, DATABASE_CONFIG_FILE);
 	let file: Awaited<ReturnType<typeof open>> | undefined;
 	try {
 		file = await open(path, "r");
@@ -170,11 +171,11 @@ export class DatabaseSettingsError extends Error {
 	}
 }
 
-async function settingsFile(agentDir: string) {
+async function settingsFile(configDir: string) {
 	let file: Awaited<ReturnType<typeof open>>;
 	try {
 		file = await open(
-			join(agentDir, DATABASE_CONFIG_FILE),
+			join(configDir, DATABASE_CONFIG_FILE),
 			constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
 		);
 	} catch (error) {
@@ -307,7 +308,7 @@ function parameters(value: unknown): JsonValue[] {
 }
 
 export class DatabaseService {
-	readonly #agentDir: string;
+	readonly #configDir: string;
 	readonly #run: QueryRunner;
 	#active = 0;
 	#settingsSaving = false;
@@ -315,13 +316,13 @@ export class DatabaseService {
 	/** Configured project folders, cached for synchronous worker specs and refreshed before each kernel start. */
 	#projects = new Set<string>();
 
-	constructor(agentDir: string, run: QueryRunner = runPostgres) {
-		this.#agentDir = agentDir;
+	constructor(configDir = getPilotConfigDir(), run: QueryRunner = runPostgres) {
+		this.#configDir = configDir;
 		this.#run = run;
 	}
 
 	async settings(path: string): Promise<ProjectDatabaseSettings> {
-		const { raw, revision } = await settingsFile(this.#agentDir);
+		const { raw, revision } = await settingsFile(this.#configDir);
 		return settingsView(raw, path, revision);
 	}
 
@@ -329,9 +330,9 @@ export class DatabaseService {
 		if (this.#settingsSaving)
 			throw new DatabaseSettingsError(409, "Database settings are being saved. Reload and try again.");
 		this.#settingsSaving = true;
-		const temp = join(this.#agentDir, `.${DATABASE_CONFIG_FILE}.${randomUUID()}.tmp`);
+		const temp = join(this.#configDir, `.${DATABASE_CONFIG_FILE}.${randomUUID()}.tmp`);
 		try {
-			const { raw, revision } = await settingsFile(this.#agentDir);
+			const { raw, revision } = await settingsFile(this.#configDir);
 			const { projects, key, project } = existingProject(raw, path);
 			if (!record(input) || typeof input.revision !== "string" || !Array.isArray(input.environments))
 				throw new DatabaseSettingsError(400, "Database settings need a revision and environments list.");
@@ -380,7 +381,7 @@ export class DatabaseService {
 			if (bytes.length > DATABASE_LIMITS.configBytes)
 				throw new DatabaseSettingsError(400, "Database settings exceed 64 KiB.");
 			const result = settingsView(raw, path, createHash("sha256").update(bytes).digest("hex"));
-			await mkdir(this.#agentDir, { recursive: true, mode: 0o700 });
+			await mkdir(this.#configDir, { recursive: true, mode: 0o700 });
 			const file = await open(temp, "wx", 0o600);
 			try {
 				await file.writeFile(bytes);
@@ -389,9 +390,9 @@ export class DatabaseService {
 				await file.close();
 			}
 			// Recheck after staging, including permissions and validity, before the atomic replacement.
-			if ((await settingsFile(this.#agentDir)).revision !== revision)
+			if ((await settingsFile(this.#configDir)).revision !== revision)
 				throw new DatabaseSettingsError(409, "Database settings changed on disk. Reload before saving.");
-			const destination = join(this.#agentDir, DATABASE_CONFIG_FILE);
+			const destination = join(this.#configDir, DATABASE_CONFIG_FILE);
 			if (revision === "missing") {
 				// Exclusive publication: a racing file creation must never be overwritten.
 				try {
@@ -404,7 +405,7 @@ export class DatabaseService {
 			} else {
 				await rename(temp, destination);
 			}
-			const directory = await open(this.#agentDir, "r");
+			const directory = await open(this.#configDir, "r");
 			try {
 				await directory.sync();
 			} finally {
@@ -424,7 +425,7 @@ export class DatabaseService {
 	/** An unreadable or invalid config exposes no tool. The reason is logged without config values. */
 	async refresh(): Promise<void> {
 		try {
-			this.#projects = new Set((await loadDatabaseConfig(this.#agentDir))?.keys());
+			this.#projects = new Set((await loadDatabaseConfig(this.#configDir))?.keys());
 		} catch (error) {
 			this.#projects = new Set();
 			console.warn(`pilotd: database access is off: ${error instanceof Error ? error.message : error}`);
@@ -443,7 +444,9 @@ export class DatabaseService {
 		args: Record<string, JsonValue>,
 		store: DatabaseStateStore,
 	): Promise<JsonValue> {
-		const config = projectPath ? (await loadDatabaseConfig(this.#agentDir))?.get(projectKey(projectPath)) : undefined;
+		const config = projectPath
+			? (await loadDatabaseConfig(this.#configDir))?.get(projectKey(projectPath))
+			: undefined;
 		if (!config) throw new Error(`No databases are configured for this project (${DATABASE_CONFIG_FILE})`);
 		if (action === "access") return this.#access(config, args, store);
 		if (action === "query") return this.#query(sessionId, config, args, store);

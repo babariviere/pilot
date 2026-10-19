@@ -1,5 +1,6 @@
 import { Worker } from "node:worker_threads";
 import type { TrackedKind, TrackingJson } from "@pilot/protocol";
+import { getPilotConfigDir } from "./config.ts";
 import { SourceSignInCancelled, SourceSignInFailed } from "./source-sign-in.ts";
 
 /** Fixed dedicated tools. Linear start/synchronization writes change state only; Slack writes are reactions. */
@@ -127,9 +128,11 @@ export class PiSourceMcpClient implements SourceMcpClient {
 	private readonly signIns = new Set<Worker>();
 	private stopped = false;
 	private readonly agentDir?: string;
+	private readonly configDir: string;
 	private readonly openUrl: OpenUrl;
-	constructor(agentDir?: string, options: { openUrl?: OpenUrl } = {}) {
+	constructor(agentDir?: string, options: { openUrl?: OpenUrl; configDir?: string } = {}) {
 		this.agentDir = agentDir;
+		this.configDir = options.configDir ?? getPilotConfigDir();
 		this.openUrl = options.openUrl ?? openBrowser;
 	}
 	signIn(kind: TrackedKind, options: { again: boolean; signal: AbortSignal }): Promise<void> {
@@ -192,7 +195,7 @@ export class PiSourceMcpClient implements SourceMcpClient {
 		if (!dedicatedSourceTool(kind, tool) && !(kind === "slack" && tool === "removeSlackEyes"))
 			return Promise.reject(new Error("Unknown dedicated MCP source tool"));
 		const worker = new Worker(new URL("./source-mcp-worker.ts", import.meta.url), {
-			workerData: { agentDir: this.agentDir, kind, tool, args },
+			workerData: { agentDir: this.agentDir, configDir: this.configDir, kind, tool, args },
 		});
 		this.running.add(worker);
 		return new Promise((resolve, reject) => {

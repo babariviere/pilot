@@ -36,8 +36,11 @@ test("headless daemon runs native tools after clients disconnect and keeps ident
 	});
 	const home = join(root, "data");
 	const agent = join(root, "agent");
+	const configHome = join(root, "config");
 	const cwd = join(root, "work");
 	await Promise.all([mkdir(agent), mkdir(cwd)]);
+	await writeFile(join(agent, "pilot-databases.json"), '{"projects":{}}\n', { mode: 0o600 });
+	await writeFile(join(agent, "pilot-tracking.json"), "{}\n", { mode: 0o600 });
 	const provider = join(agent, "offline.ts");
 	const release = join(cwd, "release");
 	const started = join(cwd, "started");
@@ -90,6 +93,7 @@ export default pi => {
 			stdio: ["ignore", "pipe", "pipe"],
 			env: {
 				HOME: root,
+				XDG_CONFIG_HOME: configHome,
 				PATH: "/usr/bin:/bin",
 				SHELL: "/bin/sh",
 				PI_OFFLINE: "1",
@@ -133,6 +137,10 @@ export default pi => {
 		return { stop, log: () => log };
 	}
 	const first = await start();
+	assert.equal(await readFile(join(configHome, "pilot", "database.json"), "utf8"), '{"projects":{}}\n');
+	assert.equal(await readFile(join(configHome, "pilot", "tracking.json"), "utf8"), "{}\n");
+	await assert.rejects(access(join(agent, "pilot-databases.json")), { code: "ENOENT" });
+	await assert.rejects(access(join(agent, "pilot-tracking.json")), { code: "ENOENT" });
 	const helloResponse = await fetch(`${base}/hello`);
 	assert.equal(helloResponse.status, 200);
 	const hello = (await helloResponse.json()) as DaemonHello;
