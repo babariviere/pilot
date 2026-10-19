@@ -842,7 +842,11 @@ export function createDaemonServer(
 						let expectedStartedAt: number | undefined;
 						if (req.headers["content-type"]?.startsWith("application/json")) {
 							const body = await readJson<{ expectedStartedAt?: unknown }>(req);
-							if (!body || typeof body.expectedStartedAt !== "number" || !Number.isFinite(body.expectedStartedAt))
+							if (
+								!body ||
+								typeof body.expectedStartedAt !== "number" ||
+								!Number.isFinite(body.expectedStartedAt)
+							)
 								throw new HttpError(400, "Invalid sign-in cancellation");
 							expectedStartedAt = body.expectedStartedAt;
 						}
@@ -1703,6 +1707,19 @@ export function createDaemonServer(
 				if (!body || typeof body.id !== "string" || !body.id || typeof body.allow !== "boolean")
 					throw new HttpError(400, "id and allow are required");
 				await sessions.decideDatabaseAccess(id, body.id, body.allow);
+				return json(res, 202, { ok: true });
+			}
+			if (parts[3] === "permission-upgrade") {
+				if (!githubSetup) return json(res, 503, { error: "native_action_unavailable" });
+				try {
+					await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				} catch {
+					return json(res, 403, { error: "native_action_required" });
+				}
+				const body = await readJson<import("@pilot/protocol").PermissionUpgradeDecision | null>(req);
+				if (!body || typeof body.id !== "string" || !body.id || typeof body.allow !== "boolean")
+					throw new HttpError(400, "id and allow are required");
+				await sessions.decideControlPermission(id, body.id, body.allow);
 				return json(res, 202, { ok: true });
 			}
 			if (parts[3] === "stop") {

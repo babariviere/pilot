@@ -345,8 +345,8 @@ Successful retries return the original result without another charge. Start/send
 runs before admission. Proven failures before any delegation effect append a release in the same
 transaction as the failure audit. Uncertain outcomes retain their reservation and never replay.
 Audit phases link `authorizationId`.
-The idempotent `upgrade_permission` setter alone can reconcile a requested-only audit after a
-lost final acknowledgement. It revalidates the grant and durably records the same ceiling;
+The idempotent `upgrade_permission` request alone can reconcile a requested-only audit after a
+lost final acknowledgement. It revalidates the grant and returns the same app-approval request;
 this does not make starts, sends or other uncertain effects replay-safe.
 The first start is initial work; later starts and all sends consume follow-ups. Concurrent actions
 share the same durable counters, including after daemon replacement.
@@ -357,10 +357,16 @@ implement Build chat, Control must call `upgrade_permission` with `sessionId`, `
 and a live user-request publish `authorizationId` targeting that exact chat ID. Enclosing
 project/mission/task scopes, legacy watches, merge grants, remote hosts, Ask/investigate chats,
 ordinary unrestricted chats and Control itself are rejected. This action consumes no follow-up
-and starts no work. Its requested/outcome audit and durable `pendingControlPermission` metadata
-survive retries and daemon replacement.
+and starts no work. Its requested/outcome audit and durable `permissionRequest` metadata survive
+retries and daemon replacement. The result contains a request ID, not upgraded permission.
+The target chat shows its name, publish level, scope and Allow/Deny controls. Only the native app
+can POST `{id, allow}` to `/api/sessions/:id/permission-upgrade`, authenticated with the shared
+native host-action capability. The exact pending request must belong to that chat and be unexpired;
+stale and reused IDs are refused. Allow durably records `pendingControlPermission` with the approved
+request ID; Deny/expiry leaves the ceiling unchanged. Both are audited and delivered to Control as
+non-user decision notices through a bounded durable outbox. One expiry timer covers pending requests.
 Only the kernel's first prompt preparation for a fresh run can apply the pending permission.
-The daemon rechecks revocation/expiry, fsyncs `controlPermission` before acknowledgement, and
+The daemon verifies the matching app approval, rechecks grant revocation/expiry, fsyncs `controlPermission` before acknowledgement, and
 clears the pending field. Harness policy, native nested-tool policy and newly spawned child
 inheritance then share the new ceiling. Active tool rounds, steers and recovered in-flight runs
 keep the previous ceiling. Existing children are not upgraded, and merges remain blocked.

@@ -20,6 +20,7 @@ export type * from "./github-import.ts";
 export type * from "./github-setup.ts";
 export type * from "./mcp-setup.ts";
 export type * from "./model-scope.ts";
+export type * from "./permission-upgrade.ts";
 export type * from "./refresh-health.ts";
 
 /** Lifecycle as seen by the daemon. "parked" means no worker is running; the session resumes on demand. */
@@ -272,6 +273,7 @@ export interface UpdatePreparation {
 }
 
 export interface SessionSummary {
+	permissionUpgradeRequest?: import("./permission-upgrade.ts").PermissionUpgradeRequest;
 	controlStart?: import("./control.ts").ControlStartBudget;
 	/** The one project-less, pinned orchestration chat. */
 	control?: boolean;

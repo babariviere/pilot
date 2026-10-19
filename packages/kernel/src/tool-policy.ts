@@ -44,7 +44,7 @@ export function controlPermissionBlock(
 		(/\bgh\s+api\b/.test(executable) && (API_WRITE.test(` ${executable}`) || /\bmutation\b/.test(executable))) ||
 		/\bmcp__github\w*__\w*(?:push|create|update|delete|fork)\w*/i.test(name)
 	)
-		return "Pilot policy: implement permission allows local changes and verification only, not push or pull request publication. Control must explicitly upgrade this chat using an exact-chat publish authorization, effective at the next run boundary.";
+		return "Pilot policy: implement permission allows local changes and verification only, not push or pull request publication. Control may request an exact-chat publish upgrade, but only the app's Allow decision approves it, effective at the next fresh run boundary.";
 	return undefined;
 }
 
