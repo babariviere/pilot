@@ -342,24 +342,29 @@ struct ChatView: View {
     static var bodyEvaluations = 0
 
     private let context: HostViewContext?
-    @ObservedObject private var hosts = AppModel.shared.hosts
+    @ObservedObject private var hosts: HostClients
     @EndpointClient private var endpoint
 
-    init(session: SessionSummary, feed: SessionFeed? = nil, composer: ComposerState? = nil, context: HostViewContext? = nil) {
+    init(session: SessionSummary, feed: SessionFeed? = nil, composer: ComposerState? = nil, context: HostViewContext? = nil,
+         appModel: AppModel? = nil) {
+        let model = appModel ?? AppModel.shared
+        self.model = model
+        _hosts = ObservedObject(wrappedValue: model.hosts)
+        _endpoint = EndpointClient(model.client)
         self.context = context
         self.session = session
         let selectedFeed = feed ?? context.map {
-            AppModel.shared.feeds.feed(ref: $0.ref(.session, session.id), hosts: $0.hosts)
-        } ?? AppModel.shared.feeds.feed(sessionId: session.id, client: AppModel.shared.client)
+            model.feeds.feed(ref: $0.ref(.session, session.id), hosts: $0.hosts)
+        } ?? model.feeds.feed(sessionId: session.id, client: model.client)
         selectedFeed.beginOpen()
         _feed = StateObject(wrappedValue: selectedFeed)
-        _composerOwner = StateObject(wrappedValue: ChatComposerOwner(composer ?? context.flatMap { try? AppModel.shared.composer(for: $0.ref(.session, session.id)) } ?? AppModel.shared.composer(for: session.id)))
+        _composerOwner = StateObject(wrappedValue: ChatComposerOwner(composer ?? context.flatMap { try? model.composer(for: $0.ref(.session, session.id)) } ?? model.composer(for: session.id)))
     }
 
     private var composer: ComposerState { composerOwner.state }
     /// Actions only. Observing the app model would re-evaluate the transcript for unrelated
     /// changes such as sidebar search or selection elsewhere.
-    private var model: AppModel { AppModel.shared }
+    private let model: AppModel
 
     var body: some View {
         let _ = Self.bodyEvaluations &+= 1
@@ -542,6 +547,15 @@ struct ChatView: View {
                         .padding(.horizontal, 24)
                         .padding(.bottom, 2)
                 }
+                if session.isDiagnosticsSpecialist {
+                    DiagnosticRepairFooter(session: session, context: context, proposalPrompt: pendingRepairPrompt(transcript),
+                        onDismissProposal: {
+                            guard let repair = pendingRepairPrompt(transcript) else { return }
+                            dismissedRepairProposalId = repair.proposal.id
+                            guard let reference = model.resourceRef(session.id, kind: .session, context: context) else { return }
+                            model.dismissDiagnosticRepairProposal(repair.proposal.id, for: reference)
+                        })
+                }
                 if session.isArchived {
                     ArchivedComposer(session: session)
                 } else if let next = session.continuedTo {
@@ -554,16 +568,6 @@ struct ChatView: View {
                         // Each question starts with nothing highlighted or ticked.
                         .id(question.entryID)
                         .transition(Theme.Motion.replacement(reduceMotion: reduceMotion))
-                } else if let repair = pendingRepairPrompt(transcript) {
-                    DiagnosticRepairPrompt(presentation: repair, onReview: {
-                        model.prepareDiagnosticRepair(session, context: context)
-                    }, onDismiss: {
-                        dismissedRepairProposalId = repair.proposal.id
-                        guard let reference = model.resourceRef(session.id, kind: .session, context: context) else { return }
-                        model.dismissDiagnosticRepairProposal(repair.proposal.id, for: reference)
-                    })
-                    .id("repair:\(repair.proposal.id):\(repair.pendingProposalId ?? "ready")")
-                    .transition(Theme.Motion.replacement(reduceMotion: reduceMotion))
                 } else {
                     Composer(
                         state: composer,
@@ -643,8 +647,7 @@ struct ChatView: View {
 
     private func composerPromptID(_ transcript: TranscriptStatus) -> String? {
         if let question = pendingQuestion(transcript) { return "question:\(question.entryID)" }
-        guard let repair = pendingRepairPrompt(transcript) else { return nil }
-        return "repair:\(repair.proposal.id):\(repair.pendingProposalId ?? "ready")"
+        return nil
     }
 
     private func stop() {

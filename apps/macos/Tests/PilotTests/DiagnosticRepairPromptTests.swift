@@ -315,14 +315,14 @@ private func repairSession(host: HostRef = repairLocalHost, proposal: Diagnostic
             "a late result is fenced to its original host and specialist")
 }
 
-@Test @MainActor func mountedDiagnosticsHeaderSubmitsOnceAndNeverStartsRepair() async throws {
+@Test @MainActor func mountedDiagnosticsFooterSubmitsOnceAndNeverStartsRepair() async throws {
     _ = NSApplication.shared
     let client = PilotClient()
     let fixture = repairSession(proposal: nil)
     client.loadFixture(projects: [], sessions: [fixture.specialist, fixture.target])
     let app = AppModel(client: client)
     try app.registerLocal(repairLocalHost)
-    let header = DiagnosticSpecialistHeader(session: fixture.specialist, context: nil, client: client)
+    let header = DiagnosticRepairFooter(session: fixture.specialist, context: nil, client: client)
         .environmentObject(app)
     let hosting = NSHostingView(rootView: header)
     let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 180),
@@ -339,7 +339,7 @@ private func repairSession(host: HostRef = repairLocalHost, proposal: Diagnostic
         try await Task.sleep(for: .milliseconds(20))
     }
     let controls = mountedButtons(hosting)
-    try #require(controls.count == 1, "the production diagnostics header has one repair action")
+    try #require(controls.count == 1, "the production diagnostics footer has one repair action")
     let action = controls[0]
     action.performClick(nil)
     action.performClick(nil)
@@ -353,7 +353,7 @@ private func repairSession(host: HostRef = repairLocalHost, proposal: Diagnostic
     #expect(client.fixtureSpawnRequests.isEmpty, "Suggest never starts a Build chat")
 }
 
-@Test @MainActor func mountedDiagnosticsHeaderReviewsAnExistingProposalWithoutStartingWork() async throws {
+@Test @MainActor func mountedDiagnosticsFooterReviewsAnExistingProposalWithoutStartingWork() async throws {
     _ = NSApplication.shared
     let client = PilotClient()
     let fixture = repairSession()
@@ -362,7 +362,7 @@ private func repairSession(host: HostRef = repairLocalHost, proposal: Diagnostic
     let app = AppModel(client: client)
     try app.registerLocal(repairLocalHost)
     let hosting = NSHostingView(rootView:
-        DiagnosticSpecialistHeader(session: fixture.specialist, context: nil, client: client)
+        DiagnosticRepairFooter(session: fixture.specialist, context: nil, client: client)
             .environmentObject(app))
     let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 180),
                           styleMask: [.titled], backing: .buffered, defer: false)
@@ -377,7 +377,7 @@ private func repairSession(host: HostRef = repairLocalHost, proposal: Diagnostic
         try await Task.sleep(for: .milliseconds(20))
     }
     let controls = mountedButtons(hosting)
-    try #require(controls.count == 1, "the production diagnostics header has one repair action")
+    try #require(controls.count == 1, "the production diagnostics footer has one repair action")
     controls[0].performClick(nil)
     #expect(app.diagnosticRepairTarget?.reference.localId == fixture.specialist.id)
     #expect(client.fixtureSendRequests.isEmpty && client.fixtureSpawnRequests.isEmpty)

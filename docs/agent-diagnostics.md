@@ -191,19 +191,25 @@ specialist's proposal summary; it never starts, wakes, changes, retries, restart
 
 Diagnostics chats retain their generated descriptive title, while the sidebar, read-only toolbar badge and chat
 header identify the persisted **Diagnostics** role instead of presenting it as ordinary Ask. Before a proposal exists,
-the header's directly visible **Suggest a repair** action sends one host-qualified follow-up asking the specialist to
+the fixed composer-adjacent footer's **Suggest a repair** action sends one host-qualified follow-up asking the specialist to
 author it. Requesting and busy-queue states prevent duplicate submission; a failed completed attempt offers an
 explicit retry. Missing target identity, destination or connectivity is explained without another-host fallback or
 probing. The action does not open a manual authoring form, and the app does not ask the user to invent a cause, choose
 raw event IDs or write a regression test.
 
-Once published, the header action becomes **Review repair**, and the specialist chat replaces its ordinary composer
-with a native proposal tray after the current turn settles. A live agent question stays in front. The tray summarizes
+Once published, that same footer action becomes **Review repair**. It lives outside transcript scrolling, not in the
+scrolling header or at history's end. The ordinary composer and its draft/Send/Stop controls remain mounted. A compact
+native summary appears above the action after the current turn settles; a live agent question stays in front without
+hiding the fixed repair action. The summary shows
 findings, uncertainty, suggested repair and cited-evidence count without taking focus or navigating from another
-chat. **Not now** persists only that proposal ID; a replacement appears again, and the header or context menu can
+chat. **Not now** persists only that proposal ID and hides its summary, never the fixed **Review repair** action;
+a replacement appears again, and the footer or context menu can
 always reopen review. Viewing, reconnecting, dismissing or reopening never creates work. The review sheet shows
 labeled prefilled fields and distinguishable safe source/time/evidence summaries. The user may optionally edit the
 bounded text and uncertainty. Cancelling creates nothing.
+The single footer action also preserves requesting/queued/error states and **Check repair start** for an unresolved
+original intent, even if its proposal is replaced or unavailable. It does not take focus, request a scroll or recreate
+the composer on proposal changes. Offline/invalid identities keep the action visible but disabled.
 
 A repair is always a separate ordinary coding chat. Only explicit confirmation after review may call:
 
