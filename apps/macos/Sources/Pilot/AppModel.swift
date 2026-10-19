@@ -1193,6 +1193,7 @@ final class AppModel: ObservableObject {
     }
 
     func setPinned(_ pinned: Bool, sessionId: String) {
+        guard canMutateSession(sessionId) else { return }
         if let ref = try? HostResourceRef.decodeKey(sessionId) {
             Task {
                 do { _ = try await hosts.perform(ref, kind: .session) { client, id in if pinned { try await client.pin(id) } else { try await client.unpin(id) } } }
@@ -1215,6 +1216,7 @@ final class AppModel: ObservableObject {
     }
 
     func renameSession(_ sessionId: String, title: String) {
+        guard canMutateSession(sessionId) else { return }
         if let ref = try? HostResourceRef.decodeKey(sessionId) {
             Task {
                 do { _ = try await hosts.perform(ref, kind: .session) { client, id in try await client.rename(id, title: title) } }
@@ -1233,6 +1235,7 @@ final class AppModel: ObservableObject {
     }
 
     func setArchived(_ archived: Bool, sessionId: String) {
+        guard canMutateSession(sessionId) else { return }
         if let ref = try? HostResourceRef.decodeKey(sessionId) {
             Task {
                 do { _ = try await hosts.perform(ref, kind: .session) { client, id in if archived { try await client.archive(id) } else { try await client.restore(id) } } }
@@ -1256,6 +1259,7 @@ final class AppModel: ObservableObject {
 
     @discardableResult
     func stopSession(_ id: String) -> Task<Void, Never>? {
+        guard canMutateSession(id) else { return nil }
         let sessionId: String
         if id.hasPrefix("hostref1:") {
             guard let ref = try? HostResourceRef.decodeKey(id), ref.kind == .session else {
@@ -1294,6 +1298,7 @@ final class AppModel: ObservableObject {
     /// Retries a failed chat: its startup when that failed, otherwise its last failed turn, which the chat's
     /// transcript runs once it is open and shows Retry.
     func retry(_ session: SessionSummary, context: HostViewContext? = nil) {
+        guard !PreviousControl.isHistory(session, reference: context?.ref(.session, session.id), localHost: localHost) else { return }
         guard session.status == .failed, !session.isArchived else { return }
         if let context, context.host != localHost {
             guard context.available else { sessionActionError = "Disconnected. Reconnect before retrying."; return }
@@ -1321,6 +1326,7 @@ final class AppModel: ObservableObject {
 
     /// The open chat's subagents, in the inspector's Agents tab.
     func showAgents() {
+        guard !isPreviousControlSelected else { return }
         guard let session = selectedSession, InspectorTab.agents.isAvailable(for: session) else { return }
         inspectorTab = .agents
         inspectorVisible = true
