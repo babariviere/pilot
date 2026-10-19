@@ -26,6 +26,10 @@ export interface TelemetrySettings {
 	/** Pseudonymous host correlation. This is never a raw HostRef field. */
 	hostId: string;
 	localDiagnostics: boolean;
+	/** Independent local-only aggregate collection, off by default. */
+	localFeatureUsage?: boolean;
+	/** Fences pending native snapshots after clear/revocation; never exported. */
+	featureUsageEpoch?: string;
 	remoteOperational: boolean;
 	productAnalytics: boolean;
 	/** Local app/daemon analytics identity. Present only on the local host while analytics consent is on. */
@@ -39,6 +43,8 @@ export interface TelemetrySettings {
 
 export interface TelemetrySettingsPatch {
 	localDiagnostics: boolean;
+	/** Omit to preserve older clients' setting. */
+	localFeatureUsage?: boolean;
 	remoteOperational: boolean;
 	productAnalytics: boolean;
 	endpoint?: string;

@@ -267,6 +267,7 @@ export interface SessionDiagnosticTruncation {
 
 /** GET /api/sessions/:id/diagnostics. Contains operational enums and numbers, never conversation history. */
 export interface SessionDiagnostics {
+	featureUsage?: import("./feature-usage.ts").FeatureUsageSnapshot;
 	schemaVersion: typeof DIAGNOSTIC_SCHEMA_VERSION;
 	host: OperationHost;
 	sessionId: string;
@@ -287,6 +288,7 @@ export interface SessionDiagnostics {
 
 /** Host/app diagnostics with no attached chat, transcript authority or session identifier. */
 export interface AppDiagnostics {
+	featureUsage?: import("./feature-usage.ts").FeatureUsageSnapshot;
 	schemaVersion: typeof DIAGNOSTIC_SCHEMA_VERSION;
 	scope: "app";
 	host: OperationHost;
