@@ -1,0 +1,2169 @@
+{
+	"api": 1,
+	"engine": "quickjs-ng 0.17.0",
+	"cases": [
+		{
+			"name": "every node and prop",
+			"source": "function visual({ ui, state, data }) {\n  const s = state({ tab: \"bar\", on: true, level: 40, clicks: 0 });\n  return () =>\n    ui.column({ gap: 12, align: \"start\" }, [\n      ui.text([\"Release \", ui.span(\"1.54\", { weight: 600, color: \"accent\", mono: true }), \" is \", ui.span(\"ready\", { italic: true, strike: false })], { size: \"lg\", weight: 500, color: \"text\", align: \"start\", lines: 2 }),\n      ui.row({ gap: 8, align: \"baseline\", justify: \"between\" }, [\n        ui.stat({ label: \"Builds\", value: data.builds, unit: \"runs\", delta: \"+12%\", tone: \"success\", caption: \"last 7 days\" }),\n        ui.stat({ key: \"p95\", label: \"p95\", value: \"184\", unit: \"ms\" }),\n        ui.space(),\n      ]),\n      ui.grid({ columns: 2, gap: 8 }, [ui.text(\"Left\", { color: \"muted\", size: \"sm\" }), ui.text(\"Right\", { mono: true, italic: true, size: \"xs\" })]),\n      ui.table({ key: \"table\", columns: [\"Region\", { label: \"p95\", align: \"end\" }], rows: [[\"eu\", 120], [\"us\", null]] }),\n      ui.tabs({ options: [\"bar\", { value: \"line\", label: \"Line\" }, \"area\", \"scatter\"], value: s.tab, onChange: (v) => (s.tab = v) }),\n      ui.chart({\n        type: s.tab, height: 200, unit: \"ms\", xLabel: \"Day\", yLabel: \"Latency\", yMin: 0, yMax: 400,\n        stacked: s.tab === \"bar\" || s.tab === \"area\" ? true : undefined,\n        x: s.tab === \"scatter\" ? [1, 2, 3] : [\"Mon\", \"Tue\", \"Wed\"],\n        series: [{ name: \"p95\", values: [120, null, 180], color: \"chart2\" }, { name: \"p99\", values: [200, 210, 260] }],\n      }),\n      ui.rule(),\n      ui.space({ size: 24 }),\n      ui.space(4),\n      ui.link(\"Dashboard\", { href: \"https://example.com/dash\" }),\n      ui.toggle({ key: \"on\", label: \"Live\", value: s.on, onChange: (v) => (s.on = v) }),\n      ui.slider({ label: \"Level\", min: 0, max: 100, step: 10, value: s.level, unit: \"%\", onChange: (v) => (s.level = v) }),\n      ui.row([\n        ui.button({ label: \"Clicked \" + s.clicks, primary: true, onClick: () => s.clicks++ }),\n        ui.button({ label: \"Disabled\", disabled: true, onClick: () => (s.clicks = 100) }),\n      ]),\n      \"Plain strings become text\",\n      s.on && ui.text(\"Live is on\"),\n    ]);\n}",
+			"data": {
+				"builds": 42
+			},
+			"id": "00000000-0000-4000-8000-000000000001",
+			"now": 1792411200000,
+			"steps": [
+				{
+					"tree": {
+						"api": 1,
+						"root": {
+							"type": "column",
+							"gap": 12,
+							"align": "start",
+							"children": [
+								{
+									"type": "text",
+									"runs": [
+										{
+											"text": "Release "
+										},
+										{
+											"text": "1.54",
+											"weight": 600,
+											"color": "accent",
+											"mono": true
+										},
+										{
+											"text": " is "
+										},
+										{
+											"text": "ready",
+											"italic": true,
+											"strike": false
+										}
+									],
+									"size": "lg",
+									"weight": 500,
+									"color": "text",
+									"align": "start",
+									"lines": 2
+								},
+								{
+									"type": "row",
+									"gap": 8,
+									"align": "baseline",
+									"justify": "between",
+									"children": [
+										{
+											"type": "stat",
+											"label": "Builds",
+											"value": "42",
+											"unit": "runs",
+											"delta": "+12%",
+											"tone": "success",
+											"caption": "last 7 days"
+										},
+										{
+											"type": "stat",
+											"key": "p95",
+											"label": "p95",
+											"value": "184",
+											"unit": "ms"
+										},
+										{
+											"type": "space"
+										}
+									]
+								},
+								{
+									"type": "grid",
+									"columns": 2,
+									"gap": 8,
+									"children": [
+										{
+											"type": "text",
+											"runs": [
+												{
+													"text": "Left"
+												}
+											],
+											"size": "sm",
+											"color": "muted"
+										},
+										{
+											"type": "text",
+											"runs": [
+												{
+													"text": "Right"
+												}
+											],
+											"size": "xs",
+											"mono": true,
+											"italic": true
+										}
+									]
+								},
+								{
+									"type": "table",
+									"key": "table",
+									"columns": [
+										{
+											"label": "Region"
+										},
+										{
+											"label": "p95",
+											"align": "end"
+										}
+									],
+									"rows": [["eu", 120], ["us", null]]
+								},
+								{
+									"type": "tabs",
+									"options": [
+										{
+											"value": "bar",
+											"label": "bar"
+										},
+										{
+											"value": "line",
+											"label": "Line"
+										},
+										{
+											"value": "area",
+											"label": "area"
+										},
+										{
+											"value": "scatter",
+											"label": "scatter"
+										}
+									],
+									"value": "bar",
+									"id": "0.4"
+								},
+								{
+									"type": "chart",
+									"kind": "bar",
+									"x": ["Mon", "Tue", "Wed"],
+									"series": [
+										{
+											"name": "p95",
+											"values": [120, null, 180],
+											"color": "chart2"
+										},
+										{
+											"name": "p99",
+											"values": [200, 210, 260]
+										}
+									],
+									"height": 200,
+									"unit": "ms",
+									"stacked": true,
+									"yMin": 0,
+									"yMax": 400,
+									"xLabel": "Day",
+									"yLabel": "Latency"
+								},
+								{
+									"type": "rule"
+								},
+								{
+									"type": "space",
+									"size": 24
+								},
+								{
+									"type": "space",
+									"size": 4
+								},
+								{
+									"type": "link",
+									"label": "Dashboard",
+									"href": "https://example.com/dash"
+								},
+								{
+									"type": "toggle",
+									"key": "on",
+									"label": "Live",
+									"value": true,
+									"id": "0.10"
+								},
+								{
+									"type": "slider",
+									"label": "Level",
+									"min": 0,
+									"max": 100,
+									"step": 10,
+									"value": 40,
+									"unit": "%",
+									"id": "0.11"
+								},
+								{
+									"type": "row",
+									"children": [
+										{
+											"type": "button",
+											"label": "Clicked 0",
+											"primary": true,
+											"id": "0.12.0"
+										},
+										{
+											"type": "button",
+											"label": "Disabled",
+											"disabled": true,
+											"id": "0.12.1"
+										}
+									]
+								},
+								{
+									"type": "text",
+									"runs": [
+										{
+											"text": "Plain strings become text"
+										}
+									]
+								},
+								{
+									"type": "text",
+									"runs": [
+										{
+											"text": "Live is on"
+										}
+									]
+								}
+							]
+						}
+					}
+				},
+				{
+					"event": {
+						"id": "0.4",
+						"value": "scatter"
+					},
+					"changed": ["tab"],
+					"tree": {
+						"api": 1,
+						"root": {
+							"type": "column",
+							"gap": 12,
+							"align": "start",
+							"children": [
+								{
+									"type": "text",
+									"runs": [
+										{
+											"text": "Release "
+										},
+										{
+											"text": "1.54",
+											"weight": 600,
+											"color": "accent",
+											"mono": true
+										},
+										{
+											"text": " is "
+										},
+										{
+											"text": "ready",
+											"italic": true,
+											"strike": false
+										}
+									],
+									"size": "lg",
+									"weight": 500,
+									"color": "text",
+									"align": "start",
+									"lines": 2
+								},
+								{
+									"type": "row",
+									"gap": 8,
+									"align": "baseline",
+									"justify": "between",
+									"children": [
+										{
+											"type": "stat",
+											"label": "Builds",
+											"value": "42",
+											"unit": "runs",
+											"delta": "+12%",
+											"tone": "success",
+											"caption": "last 7 days"
+										},
+										{
+											"type": "stat",
+											"key": "p95",
+											"label": "p95",
+											"value": "184",
+											"unit": "ms"
+										},
+										{
+											"type": "space"
+										}
+									]
+								},
+								{
+									"type": "grid",
+									"columns": 2,
+									"gap": 8,
+									"children": [
+										{
+											"type": "text",
+											"runs": [
+												{
+													"text": "Left"
+												}
+											],
+											"size": "sm",
+											"color": "muted"
+										},
+										{
+											"type": "text",
+											"runs": [
+												{
+													"text": "Right"
+												}
+											],
+											"size": "xs",
+											"mono": true,
+											"italic": true
+										}
+									]
+								},
+								{
+									"type": "table",
+									"key": "table",
+									"columns": [
+										{
+											"label": "Region"
+										},
+										{
+											"label": "p95",
+											"align": "end"
+										}
+									],
+									"rows": [["eu", 120], ["us", null]]
+								},
+								{
+									"type": "tabs",
+									"options": [
+										{
+											"value": "bar",
+											"label": "bar"
+										},
+										{
+											"value": "line",
+											"label": "Line"
+										},
+										{
+											"value": "area",
+											"label": "area"
+										},
+										{
+											"value": "scatter",
+											"label": "scatter"
+										}
+									],
+									"value": "scatter",
+									"id": "0.4"
+								},
+								{
+									"type": "chart",
+									"kind": "scatter",
+									"x": [1, 2, 3],
+									"series": [
+										{
+											"name": "p95",
+											"values": [120, null, 180],
+											"color": "chart2"
+										},
+										{
+											"name": "p99",
+											"values": [200, 210, 260]
+										}
+									],
+									"height": 200,
+									"unit": "ms",
+									"yMin": 0,
+									"yMax": 400,
+									"xLabel": "Day",
+									"yLabel": "Latency"
+								},
+								{
+									"type": "rule"
+								},
+								{
+									"type": "space",
+									"size": 24
+								},
+								{
+									"type": "space",
+									"size": 4
+								},
+								{
+									"type": "link",
+									"label": "Dashboard",
+									"href": "https://example.com/dash"
+								},
+								{
+									"type": "toggle",
+									"key": "on",
+									"label": "Live",
+									"value": true,
+									"id": "0.10"
+								},
+								{
+									"type": "slider",
+									"label": "Level",
+									"min": 0,
+									"max": 100,
+									"step": 10,
+									"value": 40,
+									"unit": "%",
+									"id": "0.11"
+								},
+								{
+									"type": "row",
+									"children": [
+										{
+											"type": "button",
+											"label": "Clicked 0",
+											"primary": true,
+											"id": "0.12.0"
+										},
+										{
+											"type": "button",
+											"label": "Disabled",
+											"disabled": true,
+											"id": "0.12.1"
+										}
+									]
+								},
+								{
+									"type": "text",
+									"runs": [
+										{
+											"text": "Plain strings become text"
+										}
+									]
+								},
+								{
+									"type": "text",
+									"runs": [
+										{
+											"text": "Live is on"
+										}
+									]
+								}
+							]
+						}
+					}
+				},
+				{
+					"event": {
+						"id": "0.10",
+						"value": false
+					},
+					"changed": ["on"],
+					"tree": {
+						"api": 1,
+						"root": {
+							"type": "column",
+							"gap": 12,
+							"align": "start",
+							"children": [
+								{
+									"type": "text",
+									"runs": [
+										{
+											"text": "Release "
+										},
+										{
+											"text": "1.54",
+											"weight": 600,
+											"color": "accent",
+											"mono": true
+										},
+										{
+											"text": " is "
+										},
+										{
+											"text": "ready",
+											"italic": true,
+											"strike": false
+										}
+									],
+									"size": "lg",
+									"weight": 500,
+									"color": "text",
+									"align": "start",
+									"lines": 2
+								},
+								{
+									"type": "row",
+									"gap": 8,
+									"align": "baseline",
+									"justify": "between",
+									"children": [
+										{
+											"type": "stat",
+											"label": "Builds",
+											"value": "42",
+											"unit": "runs",
+											"delta": "+12%",
+											"tone": "success",
+											"caption": "last 7 days"
+										},
+										{
+											"type": "stat",
+											"key": "p95",
+											"label": "p95",
+											"value": "184",
+											"unit": "ms"
+										},
+										{
+											"type": "space"
+										}
+									]
+								},
+								{
+									"type": "grid",
+									"columns": 2,
+									"gap": 8,
+									"children": [
+										{
+											"type": "text",
+											"runs": [
+												{
+													"text": "Left"
+												}
+											],
+											"size": "sm",
+											"color": "muted"
+										},
+										{
+											"type": "text",
+											"runs": [
+												{
+													"text": "Right"
+												}
+											],
+											"size": "xs",
+											"mono": true,
+											"italic": true
+										}
+									]
+								},
+								{
+									"type": "table",
+									"key": "table",
+									"columns": [
+										{
+											"label": "Region"
+										},
+										{
+											"label": "p95",
+											"align": "end"
+										}
+									],
+									"rows": [["eu", 120], ["us", null]]
+								},
+								{
+									"type": "tabs",
+									"options": [
+										{
+											"value": "bar",
+											"label": "bar"
+										},
+										{
+											"value": "line",
+											"label": "Line"
+										},
+										{
+											"value": "area",
+											"label": "area"
+										},
+										{
+											"value": "scatter",
+											"label": "scatter"
+										}
+									],
+									"value": "scatter",
+									"id": "0.4"
+								},
+								{
+									"type": "chart",
+									"kind": "scatter",
+									"x": [1, 2, 3],
+									"series": [
+										{
+											"name": "p95",
+											"values": [120, null, 180],
+											"color": "chart2"
+										},
+										{
+											"name": "p99",
+											"values": [200, 210, 260]
+										}
+									],
+									"height": 200,
+									"unit": "ms",
+									"yMin": 0,
+									"yMax": 400,
+									"xLabel": "Day",
+									"yLabel": "Latency"
+								},
+								{
+									"type": "rule"
+								},
+								{
+									"type": "space",
+									"size": 24
+								},
+								{
+									"type": "space",
+									"size": 4
+								},
+								{
+									"type": "link",
+									"label": "Dashboard",
+									"href": "https://example.com/dash"
+								},
+								{
+									"type": "toggle",
+									"key": "on",
+									"label": "Live",
+									"value": false,
+									"id": "0.10"
+								},
+								{
+									"type": "slider",
+									"label": "Level",
+									"min": 0,
+									"max": 100,
+									"step": 10,
+									"value": 40,
+									"unit": "%",
+									"id": "0.11"
+								},
+								{
+									"type": "row",
+									"children": [
+										{
+											"type": "button",
+											"label": "Clicked 0",
+											"primary": true,
+											"id": "0.12.0"
+										},
+										{
+											"type": "button",
+											"label": "Disabled",
+											"disabled": true,
+											"id": "0.12.1"
+										}
+									]
+								},
+								{
+									"type": "text",
+									"runs": [
+										{
+											"text": "Plain strings become text"
+										}
+									]
+								}
+							]
+						}
+					}
+				},
+				{
+					"event": {
+						"id": "0.11",
+						"value": 33.4
+					},
+					"changed": ["level"],
+					"tree": {
+						"api": 1,
+						"root": {
+							"type": "column",
+							"gap": 12,
+							"align": "start",
+							"children": [
+								{
+									"type": "text",
+									"runs": [
+										{
+											"text": "Release "
+										},
+										{
+											"text": "1.54",
+											"weight": 600,
+											"color": "accent",
+											"mono": true
+										},
+										{
+											"text": " is "
+										},
+										{
+											"text": "ready",
+											"italic": true,
+											"strike": false
+										}
+									],
+									"size": "lg",
+									"weight": 500,
+									"color": "text",
+									"align": "start",
+									"lines": 2
+								},
+								{
+									"type": "row",
+									"gap": 8,
+									"align": "baseline",
+									"justify": "between",
+									"children": [
+										{
+											"type": "stat",
+											"label": "Builds",
+											"value": "42",
+											"unit": "runs",
+											"delta": "+12%",
+											"tone": "success",
+											"caption": "last 7 days"
+										},
+										{
+											"type": "stat",
+											"key": "p95",
+											"label": "p95",
+											"value": "184",
+											"unit": "ms"
+										},
+										{
+											"type": "space"
+										}
+									]
+								},
+								{
+									"type": "grid",
+									"columns": 2,
+									"gap": 8,
+									"children": [
+										{
+											"type": "text",
+											"runs": [
+												{
+													"text": "Left"
+												}
+											],
+											"size": "sm",
+											"color": "muted"
+										},
+										{
+											"type": "text",
+											"runs": [
+												{
+													"text": "Right"
+												}
+											],
+											"size": "xs",
+											"mono": true,
+											"italic": true
+										}
+									]
+								},
+								{
+									"type": "table",
+									"key": "table",
+									"columns": [
+										{
+											"label": "Region"
+										},
+										{
+											"label": "p95",
+											"align": "end"
+										}
+									],
+									"rows": [["eu", 120], ["us", null]]
+								},
+								{
+									"type": "tabs",
+									"options": [
+										{
+											"value": "bar",
+											"label": "bar"
+										},
+										{
+											"value": "line",
+											"label": "Line"
+										},
+										{
+											"value": "area",
+											"label": "area"
+										},
+										{
+											"value": "scatter",
+											"label": "scatter"
+										}
+									],
+									"value": "scatter",
+									"id": "0.4"
+								},
+								{
+									"type": "chart",
+									"kind": "scatter",
+									"x": [1, 2, 3],
+									"series": [
+										{
+											"name": "p95",
+											"values": [120, null, 180],
+											"color": "chart2"
+										},
+										{
+											"name": "p99",
+											"values": [200, 210, 260]
+										}
+									],
+									"height": 200,
+									"unit": "ms",
+									"yMin": 0,
+									"yMax": 400,
+									"xLabel": "Day",
+									"yLabel": "Latency"
+								},
+								{
+									"type": "rule"
+								},
+								{
+									"type": "space",
+									"size": 24
+								},
+								{
+									"type": "space",
+									"size": 4
+								},
+								{
+									"type": "link",
+									"label": "Dashboard",
+									"href": "https://example.com/dash"
+								},
+								{
+									"type": "toggle",
+									"key": "on",
+									"label": "Live",
+									"value": false,
+									"id": "0.10"
+								},
+								{
+									"type": "slider",
+									"label": "Level",
+									"min": 0,
+									"max": 100,
+									"step": 10,
+									"value": 30,
+									"unit": "%",
+									"id": "0.11"
+								},
+								{
+									"type": "row",
+									"children": [
+										{
+											"type": "button",
+											"label": "Clicked 0",
+											"primary": true,
+											"id": "0.12.0"
+										},
+										{
+											"type": "button",
+											"label": "Disabled",
+											"disabled": true,
+											"id": "0.12.1"
+										}
+									]
+								},
+								{
+									"type": "text",
+									"runs": [
+										{
+											"text": "Plain strings become text"
+										}
+									]
+								}
+							]
+						}
+					}
+				},
+				{
+					"event": {
+						"id": "0.11",
+						"value": 1000
+					},
+					"changed": ["level"],
+					"tree": {
+						"api": 1,
+						"root": {
+							"type": "column",
+							"gap": 12,
+							"align": "start",
+							"children": [
+								{
+									"type": "text",
+									"runs": [
+										{
+											"text": "Release "
+										},
+										{
+											"text": "1.54",
+											"weight": 600,
+											"color": "accent",
+											"mono": true
+										},
+										{
+											"text": " is "
+										},
+										{
+											"text": "ready",
+											"italic": true,
+											"strike": false
+										}
+									],
+									"size": "lg",
+									"weight": 500,
+									"color": "text",
+									"align": "start",
+									"lines": 2
+								},
+								{
+									"type": "row",
+									"gap": 8,
+									"align": "baseline",
+									"justify": "between",
+									"children": [
+										{
+											"type": "stat",
+											"label": "Builds",
+											"value": "42",
+											"unit": "runs",
+											"delta": "+12%",
+											"tone": "success",
+											"caption": "last 7 days"
+										},
+										{
+											"type": "stat",
+											"key": "p95",
+											"label": "p95",
+											"value": "184",
+											"unit": "ms"
+										},
+										{
+											"type": "space"
+										}
+									]
+								},
+								{
+									"type": "grid",
+									"columns": 2,
+									"gap": 8,
+									"children": [
+										{
+											"type": "text",
+											"runs": [
+												{
+													"text": "Left"
+												}
+											],
+											"size": "sm",
+											"color": "muted"
+										},
+										{
+											"type": "text",
+											"runs": [
+												{
+													"text": "Right"
+												}
+											],
+											"size": "xs",
+											"mono": true,
+											"italic": true
+										}
+									]
+								},
+								{
+									"type": "table",
+									"key": "table",
+									"columns": [
+										{
+											"label": "Region"
+										},
+										{
+											"label": "p95",
+											"align": "end"
+										}
+									],
+									"rows": [["eu", 120], ["us", null]]
+								},
+								{
+									"type": "tabs",
+									"options": [
+										{
+											"value": "bar",
+											"label": "bar"
+										},
+										{
+											"value": "line",
+											"label": "Line"
+										},
+										{
+											"value": "area",
+											"label": "area"
+										},
+										{
+											"value": "scatter",
+											"label": "scatter"
+										}
+									],
+									"value": "scatter",
+									"id": "0.4"
+								},
+								{
+									"type": "chart",
+									"kind": "scatter",
+									"x": [1, 2, 3],
+									"series": [
+										{
+											"name": "p95",
+											"values": [120, null, 180],
+											"color": "chart2"
+										},
+										{
+											"name": "p99",
+											"values": [200, 210, 260]
+										}
+									],
+									"height": 200,
+									"unit": "ms",
+									"yMin": 0,
+									"yMax": 400,
+									"xLabel": "Day",
+									"yLabel": "Latency"
+								},
+								{
+									"type": "rule"
+								},
+								{
+									"type": "space",
+									"size": 24
+								},
+								{
+									"type": "space",
+									"size": 4
+								},
+								{
+									"type": "link",
+									"label": "Dashboard",
+									"href": "https://example.com/dash"
+								},
+								{
+									"type": "toggle",
+									"key": "on",
+									"label": "Live",
+									"value": false,
+									"id": "0.10"
+								},
+								{
+									"type": "slider",
+									"label": "Level",
+									"min": 0,
+									"max": 100,
+									"step": 10,
+									"value": 100,
+									"unit": "%",
+									"id": "0.11"
+								},
+								{
+									"type": "row",
+									"children": [
+										{
+											"type": "button",
+											"label": "Clicked 0",
+											"primary": true,
+											"id": "0.12.0"
+										},
+										{
+											"type": "button",
+											"label": "Disabled",
+											"disabled": true,
+											"id": "0.12.1"
+										}
+									]
+								},
+								{
+									"type": "text",
+									"runs": [
+										{
+											"text": "Plain strings become text"
+										}
+									]
+								}
+							]
+						}
+					}
+				},
+				{
+					"event": {
+						"id": "0.12.0",
+						"value": null
+					},
+					"changed": ["clicks"],
+					"tree": {
+						"api": 1,
+						"root": {
+							"type": "column",
+							"gap": 12,
+							"align": "start",
+							"children": [
+								{
+									"type": "text",
+									"runs": [
+										{
+											"text": "Release "
+										},
+										{
+											"text": "1.54",
+											"weight": 600,
+											"color": "accent",
+											"mono": true
+										},
+										{
+											"text": " is "
+										},
+										{
+											"text": "ready",
+											"italic": true,
+											"strike": false
+										}
+									],
+									"size": "lg",
+									"weight": 500,
+									"color": "text",
+									"align": "start",
+									"lines": 2
+								},
+								{
+									"type": "row",
+									"gap": 8,
+									"align": "baseline",
+									"justify": "between",
+									"children": [
+										{
+											"type": "stat",
+											"label": "Builds",
+											"value": "42",
+											"unit": "runs",
+											"delta": "+12%",
+											"tone": "success",
+											"caption": "last 7 days"
+										},
+										{
+											"type": "stat",
+											"key": "p95",
+											"label": "p95",
+											"value": "184",
+											"unit": "ms"
+										},
+										{
+											"type": "space"
+										}
+									]
+								},
+								{
+									"type": "grid",
+									"columns": 2,
+									"gap": 8,
+									"children": [
+										{
+											"type": "text",
+											"runs": [
+												{
+													"text": "Left"
+												}
+											],
+											"size": "sm",
+											"color": "muted"
+										},
+										{
+											"type": "text",
+											"runs": [
+												{
+													"text": "Right"
+												}
+											],
+											"size": "xs",
+											"mono": true,
+											"italic": true
+										}
+									]
+								},
+								{
+									"type": "table",
+									"key": "table",
+									"columns": [
+										{
+											"label": "Region"
+										},
+										{
+											"label": "p95",
+											"align": "end"
+										}
+									],
+									"rows": [["eu", 120], ["us", null]]
+								},
+								{
+									"type": "tabs",
+									"options": [
+										{
+											"value": "bar",
+											"label": "bar"
+										},
+										{
+											"value": "line",
+											"label": "Line"
+										},
+										{
+											"value": "area",
+											"label": "area"
+										},
+										{
+											"value": "scatter",
+											"label": "scatter"
+										}
+									],
+									"value": "scatter",
+									"id": "0.4"
+								},
+								{
+									"type": "chart",
+									"kind": "scatter",
+									"x": [1, 2, 3],
+									"series": [
+										{
+											"name": "p95",
+											"values": [120, null, 180],
+											"color": "chart2"
+										},
+										{
+											"name": "p99",
+											"values": [200, 210, 260]
+										}
+									],
+									"height": 200,
+									"unit": "ms",
+									"yMin": 0,
+									"yMax": 400,
+									"xLabel": "Day",
+									"yLabel": "Latency"
+								},
+								{
+									"type": "rule"
+								},
+								{
+									"type": "space",
+									"size": 24
+								},
+								{
+									"type": "space",
+									"size": 4
+								},
+								{
+									"type": "link",
+									"label": "Dashboard",
+									"href": "https://example.com/dash"
+								},
+								{
+									"type": "toggle",
+									"key": "on",
+									"label": "Live",
+									"value": false,
+									"id": "0.10"
+								},
+								{
+									"type": "slider",
+									"label": "Level",
+									"min": 0,
+									"max": 100,
+									"step": 10,
+									"value": 100,
+									"unit": "%",
+									"id": "0.11"
+								},
+								{
+									"type": "row",
+									"children": [
+										{
+											"type": "button",
+											"label": "Clicked 1",
+											"primary": true,
+											"id": "0.12.0"
+										},
+										{
+											"type": "button",
+											"label": "Disabled",
+											"disabled": true,
+											"id": "0.12.1"
+										}
+									]
+								},
+								{
+									"type": "text",
+									"runs": [
+										{
+											"text": "Plain strings become text"
+										}
+									]
+								}
+							]
+						}
+					}
+				},
+				{
+					"event": {
+						"id": "0.12.1",
+						"value": null
+					},
+					"changed": [],
+					"tree": {
+						"api": 1,
+						"root": {
+							"type": "column",
+							"gap": 12,
+							"align": "start",
+							"children": [
+								{
+									"type": "text",
+									"runs": [
+										{
+											"text": "Release "
+										},
+										{
+											"text": "1.54",
+											"weight": 600,
+											"color": "accent",
+											"mono": true
+										},
+										{
+											"text": " is "
+										},
+										{
+											"text": "ready",
+											"italic": true,
+											"strike": false
+										}
+									],
+									"size": "lg",
+									"weight": 500,
+									"color": "text",
+									"align": "start",
+									"lines": 2
+								},
+								{
+									"type": "row",
+									"gap": 8,
+									"align": "baseline",
+									"justify": "between",
+									"children": [
+										{
+											"type": "stat",
+											"label": "Builds",
+											"value": "42",
+											"unit": "runs",
+											"delta": "+12%",
+											"tone": "success",
+											"caption": "last 7 days"
+										},
+										{
+											"type": "stat",
+											"key": "p95",
+											"label": "p95",
+											"value": "184",
+											"unit": "ms"
+										},
+										{
+											"type": "space"
+										}
+									]
+								},
+								{
+									"type": "grid",
+									"columns": 2,
+									"gap": 8,
+									"children": [
+										{
+											"type": "text",
+											"runs": [
+												{
+													"text": "Left"
+												}
+											],
+											"size": "sm",
+											"color": "muted"
+										},
+										{
+											"type": "text",
+											"runs": [
+												{
+													"text": "Right"
+												}
+											],
+											"size": "xs",
+											"mono": true,
+											"italic": true
+										}
+									]
+								},
+								{
+									"type": "table",
+									"key": "table",
+									"columns": [
+										{
+											"label": "Region"
+										},
+										{
+											"label": "p95",
+											"align": "end"
+										}
+									],
+									"rows": [["eu", 120], ["us", null]]
+								},
+								{
+									"type": "tabs",
+									"options": [
+										{
+											"value": "bar",
+											"label": "bar"
+										},
+										{
+											"value": "line",
+											"label": "Line"
+										},
+										{
+											"value": "area",
+											"label": "area"
+										},
+										{
+											"value": "scatter",
+											"label": "scatter"
+										}
+									],
+									"value": "scatter",
+									"id": "0.4"
+								},
+								{
+									"type": "chart",
+									"kind": "scatter",
+									"x": [1, 2, 3],
+									"series": [
+										{
+											"name": "p95",
+											"values": [120, null, 180],
+											"color": "chart2"
+										},
+										{
+											"name": "p99",
+											"values": [200, 210, 260]
+										}
+									],
+									"height": 200,
+									"unit": "ms",
+									"yMin": 0,
+									"yMax": 400,
+									"xLabel": "Day",
+									"yLabel": "Latency"
+								},
+								{
+									"type": "rule"
+								},
+								{
+									"type": "space",
+									"size": 24
+								},
+								{
+									"type": "space",
+									"size": 4
+								},
+								{
+									"type": "link",
+									"label": "Dashboard",
+									"href": "https://example.com/dash"
+								},
+								{
+									"type": "toggle",
+									"key": "on",
+									"label": "Live",
+									"value": false,
+									"id": "0.10"
+								},
+								{
+									"type": "slider",
+									"label": "Level",
+									"min": 0,
+									"max": 100,
+									"step": 10,
+									"value": 100,
+									"unit": "%",
+									"id": "0.11"
+								},
+								{
+									"type": "row",
+									"children": [
+										{
+											"type": "button",
+											"label": "Clicked 1",
+											"primary": true,
+											"id": "0.12.0"
+										},
+										{
+											"type": "button",
+											"label": "Disabled",
+											"disabled": true,
+											"id": "0.12.1"
+										}
+									]
+								},
+								{
+									"type": "text",
+									"runs": [
+										{
+											"text": "Plain strings become text"
+										}
+									]
+								}
+							]
+						}
+					}
+				}
+			],
+			"finalState": "[{\"tab\":\"scatter\",\"on\":false,\"level\":100,\"clicks\":1}]"
+		},
+		{
+			"name": "doc example",
+			"source": "function visual({ ui, state, data }) {\n  const s = state({ metric: \"p95\" });\n  return () =>\n    ui.column({ gap: 16 }, [\n      ui.text(\"Latency by region\", { size: \"lg\", weight: 600 }),\n      ui.tabs({ options: [\"p95\", \"p99\"], value: s.metric, onChange: (v) => (s.metric = v) }),\n      ui.chart({\n        type: \"bar\", height: 220, unit: \"ms\",\n        x: data.map((d) => d.region),\n        series: [{ name: s.metric, values: data.map((d) => d[s.metric]) }],\n      }),\n    ]);\n}",
+			"data": [
+				{
+					"region": "eu",
+					"p95": 120,
+					"p99": 180
+				},
+				{
+					"region": "us",
+					"p95": 140,
+					"p99": 210
+				},
+				{
+					"region": "ap",
+					"p95": 190,
+					"p99": 260
+				}
+			],
+			"id": "00000000-0000-4000-8000-000000000002",
+			"now": 1792411200000,
+			"steps": [
+				{
+					"tree": {
+						"api": 1,
+						"root": {
+							"type": "column",
+							"gap": 16,
+							"children": [
+								{
+									"type": "text",
+									"runs": [
+										{
+											"text": "Latency by region"
+										}
+									],
+									"size": "lg",
+									"weight": 600
+								},
+								{
+									"type": "tabs",
+									"options": [
+										{
+											"value": "p95",
+											"label": "p95"
+										},
+										{
+											"value": "p99",
+											"label": "p99"
+										}
+									],
+									"value": "p95",
+									"id": "0.1"
+								},
+								{
+									"type": "chart",
+									"kind": "bar",
+									"x": ["eu", "us", "ap"],
+									"series": [
+										{
+											"name": "p95",
+											"values": [120, 140, 190]
+										}
+									],
+									"height": 220,
+									"unit": "ms"
+								}
+							]
+						}
+					}
+				},
+				{
+					"event": {
+						"id": "0.1",
+						"value": "p99"
+					},
+					"changed": ["metric"],
+					"tree": {
+						"api": 1,
+						"root": {
+							"type": "column",
+							"gap": 16,
+							"children": [
+								{
+									"type": "text",
+									"runs": [
+										{
+											"text": "Latency by region"
+										}
+									],
+									"size": "lg",
+									"weight": 600
+								},
+								{
+									"type": "tabs",
+									"options": [
+										{
+											"value": "p95",
+											"label": "p95"
+										},
+										{
+											"value": "p99",
+											"label": "p99"
+										}
+									],
+									"value": "p99",
+									"id": "0.1"
+								},
+								{
+									"type": "chart",
+									"kind": "bar",
+									"x": ["eu", "us", "ap"],
+									"series": [
+										{
+											"name": "p99",
+											"values": [180, 210, 260]
+										}
+									],
+									"height": 220,
+									"unit": "ms"
+								}
+							]
+						}
+					}
+				}
+			],
+			"finalState": "[{\"metric\":\"p99\"}]"
+		},
+		{
+			"name": "restored state",
+			"source": "function visual({ ui, state, data }) {\n  const s = state({ metric: \"p95\" });\n  return () =>\n    ui.column({ gap: 16 }, [\n      ui.text(\"Latency by region\", { size: \"lg\", weight: 600 }),\n      ui.tabs({ options: [\"p95\", \"p99\"], value: s.metric, onChange: (v) => (s.metric = v) }),\n      ui.chart({\n        type: \"bar\", height: 220, unit: \"ms\",\n        x: data.map((d) => d.region),\n        series: [{ name: s.metric, values: data.map((d) => d[s.metric]) }],\n      }),\n    ]);\n}",
+			"data": [
+				{
+					"region": "eu",
+					"p95": 120,
+					"p99": 180
+				},
+				{
+					"region": "us",
+					"p95": 140,
+					"p99": 210
+				},
+				{
+					"region": "ap",
+					"p95": 190,
+					"p99": 260
+				}
+			],
+			"id": "00000000-0000-4000-8000-000000000002",
+			"now": 1792411200000,
+			"state": "[{\"metric\":\"p99\",\"stale\":true}]",
+			"steps": [
+				{
+					"tree": {
+						"api": 1,
+						"root": {
+							"type": "column",
+							"gap": 16,
+							"children": [
+								{
+									"type": "text",
+									"runs": [
+										{
+											"text": "Latency by region"
+										}
+									],
+									"size": "lg",
+									"weight": 600
+								},
+								{
+									"type": "tabs",
+									"options": [
+										{
+											"value": "p95",
+											"label": "p95"
+										},
+										{
+											"value": "p99",
+											"label": "p99"
+										}
+									],
+									"value": "p99",
+									"id": "0.1"
+								},
+								{
+									"type": "chart",
+									"kind": "bar",
+									"x": ["eu", "us", "ap"],
+									"series": [
+										{
+											"name": "p99",
+											"values": [180, 210, 260]
+										}
+									],
+									"height": 220,
+									"unit": "ms"
+								}
+							]
+						}
+					}
+				}
+			],
+			"finalState": "[{\"metric\":\"p99\"}]"
+		},
+		{
+			"name": "restored state ignores values of another type",
+			"source": "function visual({ ui, state, data }) {\n  const s = state({ metric: \"p95\" });\n  return () =>\n    ui.column({ gap: 16 }, [\n      ui.text(\"Latency by region\", { size: \"lg\", weight: 600 }),\n      ui.tabs({ options: [\"p95\", \"p99\"], value: s.metric, onChange: (v) => (s.metric = v) }),\n      ui.chart({\n        type: \"bar\", height: 220, unit: \"ms\",\n        x: data.map((d) => d.region),\n        series: [{ name: s.metric, values: data.map((d) => d[s.metric]) }],\n      }),\n    ]);\n}",
+			"data": [
+				{
+					"region": "eu",
+					"p95": 120,
+					"p99": 180
+				},
+				{
+					"region": "us",
+					"p95": 140,
+					"p99": 210
+				},
+				{
+					"region": "ap",
+					"p95": 190,
+					"p99": 260
+				}
+			],
+			"id": "00000000-0000-4000-8000-000000000002",
+			"now": 1792411200000,
+			"state": "[{\"metric\":7}]",
+			"steps": [
+				{
+					"tree": {
+						"api": 1,
+						"root": {
+							"type": "column",
+							"gap": 16,
+							"children": [
+								{
+									"type": "text",
+									"runs": [
+										{
+											"text": "Latency by region"
+										}
+									],
+									"size": "lg",
+									"weight": 600
+								},
+								{
+									"type": "tabs",
+									"options": [
+										{
+											"value": "p95",
+											"label": "p95"
+										},
+										{
+											"value": "p99",
+											"label": "p99"
+										}
+									],
+									"value": "p95",
+									"id": "0.1"
+								},
+								{
+									"type": "chart",
+									"kind": "bar",
+									"x": ["eu", "us", "ap"],
+									"series": [
+										{
+											"name": "p95",
+											"values": [120, 140, 190]
+										}
+									],
+									"height": 220,
+									"unit": "ms"
+								}
+							]
+						}
+					}
+				}
+			],
+			"finalState": "[{\"metric\":\"p95\"}]"
+		},
+		{
+			"name": "deterministic globals",
+			"source": "({ ui, state }) => {\n  const s = state({ rolls: [] });\n  return () => ui.column([\n    ui.text(\"now \" + Date.now() + \" \" + new Date().toISOString() + \" perf \" + performance.now()),\n    ui.text(\"random \" + Math.random().toFixed(6) + \" \" + Math.random().toFixed(6)),\n    ui.text(\"rolls \" + s.rolls.join(\",\")),\n    ui.button({ label: \"Roll\", onClick: () => { s.rolls = [...s.rolls, Math.floor(Math.random() * 6) + 1]; console.log(\"rolled\", s.rolls); } }),\n    ui.text(typeof WeakRef + \" \" + typeof FinalizationRegistry),\n  ]);\n}",
+			"data": null,
+			"id": "00000000-0000-4000-8000-000000000003",
+			"now": 1792411200000,
+			"steps": [
+				{
+					"tree": {
+						"api": 1,
+						"root": {
+							"type": "column",
+							"children": [
+								{
+									"type": "text",
+									"runs": [
+										{
+											"text": "now 1792411200000 2026-10-19T12:00:00.000Z perf 0"
+										}
+									]
+								},
+								{
+									"type": "text",
+									"runs": [
+										{
+											"text": "random 0.650755 0.061102"
+										}
+									]
+								},
+								{
+									"type": "text",
+									"runs": [
+										{
+											"text": "rolls "
+										}
+									]
+								},
+								{
+									"type": "button",
+									"label": "Roll",
+									"id": "0.3"
+								},
+								{
+									"type": "text",
+									"runs": [
+										{
+											"text": "undefined undefined"
+										}
+									]
+								}
+							]
+						}
+					}
+				},
+				{
+					"event": {
+						"id": "0.3",
+						"value": null
+					},
+					"changed": ["rolls"],
+					"tree": {
+						"api": 1,
+						"root": {
+							"type": "column",
+							"children": [
+								{
+									"type": "text",
+									"runs": [
+										{
+											"text": "now 1792411200000 2026-10-19T12:00:00.000Z perf 0"
+										}
+									]
+								},
+								{
+									"type": "text",
+									"runs": [
+										{
+											"text": "random 0.894410 0.653588"
+										}
+									]
+								},
+								{
+									"type": "text",
+									"runs": [
+										{
+											"text": "rolls 5"
+										}
+									]
+								},
+								{
+									"type": "button",
+									"label": "Roll",
+									"id": "0.3"
+								},
+								{
+									"type": "text",
+									"runs": [
+										{
+											"text": "undefined undefined"
+										}
+									]
+								}
+							]
+						}
+					}
+				},
+				{
+					"event": {
+						"id": "0.3",
+						"value": null
+					},
+					"changed": ["rolls"],
+					"tree": {
+						"api": 1,
+						"root": {
+							"type": "column",
+							"children": [
+								{
+									"type": "text",
+									"runs": [
+										{
+											"text": "now 1792411200000 2026-10-19T12:00:00.000Z perf 0"
+										}
+									]
+								},
+								{
+									"type": "text",
+									"runs": [
+										{
+											"text": "random 0.529569 0.845739"
+										}
+									]
+								},
+								{
+									"type": "text",
+									"runs": [
+										{
+											"text": "rolls 5,4"
+										}
+									]
+								},
+								{
+									"type": "button",
+									"label": "Roll",
+									"id": "0.3"
+								},
+								{
+									"type": "text",
+									"runs": [
+										{
+											"text": "undefined undefined"
+										}
+									]
+								}
+							]
+						}
+					}
+				}
+			],
+			"finalState": "[{\"rolls\":[5,4]}]"
+		},
+		{
+			"name": "static view returned directly",
+			"source": "({ ui }) => ui.text(\"Hello\")",
+			"data": null,
+			"id": "00000000-0000-4000-8000-000000000004",
+			"now": 1792411200000,
+			"steps": [
+				{
+					"tree": {
+						"api": 1,
+						"root": {
+							"type": "text",
+							"runs": [
+								{
+									"text": "Hello"
+								}
+							]
+						}
+					}
+				}
+			],
+			"finalState": "[]"
+		}
+	],
+	"errors": [
+		{
+			"name": "not a function",
+			"source": "42",
+			"data": null,
+			"error": "source must be a function expression, as String(visual) returns"
+		},
+		{
+			"name": "two expressions",
+			"source": "function a() {}, function b() {}",
+			"data": null,
+			"error": "source must be exactly one function expression, as String(visual) returns"
+		},
+		{
+			"name": "async function",
+			"source": "async ({ ui }) => () => ui.text(\"x\")",
+			"data": null,
+			"error": "the visual function must be a plain function, not an async function or generator"
+		},
+		{
+			"name": "syntax error",
+			"source": "({ ui }) => {\n  return () => ui.text(\"x\";\n}",
+			"data": null,
+			"error": "line 2: SyntaxError: Unexpected token ';'"
+		},
+		{
+			"name": "unknown prop",
+			"source": "({ ui }) => () =>\n  ui.text(\"x\", { colour: \"red\" })",
+			"data": null,
+			"error": "line 2: text: unknown prop \"colour\" (allowed: key, size, weight, color, mono, italic, align, lines)"
+		},
+		{
+			"name": "color token",
+			"source": "({ ui }) => () =>\n  ui.text(\"x\", { color: \"red\" })",
+			"data": null,
+			"error": "line 2: text: color \"red\" is not a color token: text, muted, accent, success, warning, danger, border, chart1, chart2, chart3, chart4, chart5, chart6"
+		},
+		{
+			"name": "duplicate key",
+			"source": "({ ui }) => () => ui.column([\n  ui.text(\"a\", { key: 1 }),\n  ui.text(\"b\", { key: \"1\" }),\n])",
+			"data": null,
+			"error": "line 3: column: duplicate key \"1\" among children"
+		},
+		{
+			"name": "not a node",
+			"source": "({ ui }) => () => ui.column([{ type: \"text\" }])",
+			"data": null,
+			"error": "line 1: column: child 0 is an object, not a ui node"
+		},
+		{
+			"name": "series length",
+			"source": "({ ui, state, data }) => {\n  const s = state({ metric: \"p95\" });\n  return () => ui.column([\n    ui.tabs({ options: [\"p95\", \"p99\"], value: s.metric, onChange: (v) => (s.metric = v) }),\n    ui.chart({\n      type: \"bar\",\n      x: data.labels,\n      series: [{ name: s.metric, values: data[s.metric] }],\n    }),\n  ]);\n}",
+			"data": {
+				"labels": ["eu", "us", "ap", "sa"],
+				"p95": [1, 2, 3, 4],
+				"p99": [5, 6, 7]
+			},
+			"events": [
+				{
+					"id": "0.0",
+					"value": "p99"
+				}
+			],
+			"error": "line 8: chart series \"p99\" has 3 values for 4 labels"
+		},
+		{
+			"name": "table row length",
+			"source": "({ ui }) => () => ui.table({\n  columns: [\"a\", \"b\"],\n  rows: [[1]],\n})",
+			"data": null,
+			"error": "line 1: table: row 0 has 1 cell for 2 columns"
+		},
+		{
+			"name": "state in view",
+			"source": "({ ui, state }) => {\n  const s = state({ n: 0 });\n  return () => {\n    s.n = 1;\n    return ui.text(\"x\");\n  };\n}",
+			"data": null,
+			"error": "line 4: state can only change in handlers, not while the view renders (state.n)"
+		},
+		{
+			"name": "state outside setup",
+			"source": "({ ui, state }) => () => {\n  state({ n: 0 });\n  return ui.text(\"x\");\n}",
+			"data": null,
+			"error": "line 2: state() can only be called while the visual function sets up, before it returns the view"
+		},
+		{
+			"name": "state must be JSON",
+			"source": "({ ui, state }) => {\n  const s = state({ n: 0 });\n  return () => ui.button({ label: \"x\", onClick: () => { s.n = () => 1; } });\n}",
+			"data": null,
+			"events": [
+				{
+					"id": "0",
+					"value": null
+				}
+			],
+			"error": "line 3: state.n must be JSON, got function"
+		},
+		{
+			"name": "tabs value",
+			"source": "({ ui }) => () => ui.tabs({ options: [\"a\"], value: \"b\", onChange() {} })",
+			"data": null,
+			"error": "line 1: tabs: value \"b\" is not one of the options"
+		},
+		{
+			"name": "slider range",
+			"source": "({ ui }) => () => ui.slider({ min: 0, max: 10, value: 11, onChange() {} })",
+			"data": null,
+			"error": "line 1: slider: value 11 is outside 0...10"
+		},
+		{
+			"name": "link scheme",
+			"source": "({ ui }) => () => ui.link(\"x\", { href: \"file:///etc/passwd\" })",
+			"data": null,
+			"error": "line 1: link: href must be an http or https URL"
+		},
+		{
+			"name": "canvas",
+			"source": "({ ui }) => () => ui.canvas({ height: 100, draw() {} })",
+			"data": null,
+			"error": "line 1: canvas nodes are not yet supported"
+		},
+		{
+			"name": "shader",
+			"source": "({ ui }) => () => ui.shader({ glsl: \"\" })",
+			"data": null,
+			"error": "line 1: shader nodes are not yet supported"
+		},
+		{
+			"name": "script error",
+			"source": "({ ui, data }) => () =>\n  ui.text(data.missing.field)",
+			"data": {},
+			"error": "line 2: TypeError: cannot read property 'field' of undefined"
+		},
+		{
+			"name": "handler error",
+			"source": "({ ui }) => () => ui.button({\n  label: \"x\",\n  onClick: () => { throw new Error(\"boom\"); },\n})",
+			"data": null,
+			"events": [
+				{
+					"id": "0",
+					"value": null
+				}
+			],
+			"error": "line 3: Error: boom"
+		},
+		{
+			"name": "data is frozen",
+			"source": "({ ui, data }) => {\n  data.x = 1;\n  return () => ui.text(\"x\");\n}",
+			"data": {},
+			"error": "line 2: TypeError: object is not extensible"
+		},
+		{
+			"name": "too many nodes",
+			"source": "({ ui }) => () => ui.column(Array.from({ length: 5001 }, () => ui.rule()))",
+			"data": null,
+			"error": "the view has more than 5000 nodes"
+		},
+		{
+			"name": "too much text",
+			"source": "({ ui }) => () => ui.text(\"x\".repeat(70000))",
+			"data": null,
+			"error": "the view has more than 65536 characters of text"
+		}
+	]
+}
