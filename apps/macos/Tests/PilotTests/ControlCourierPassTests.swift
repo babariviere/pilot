@@ -24,6 +24,9 @@ private func courierObject(_ value: JSONValue, _ fields: [String: JSONValue?]) -
     var loseImportReply = false
     var holdLookup = false
     var held: CheckedContinuation<Void, Never>?
+    private var lookupObserver: CheckedContinuation<Void, Never>?
+    private var lookupFinished = false
+    var foreignCheckpoint = false
     var imported = 0
     var retained = 0
     var notices = 0
@@ -58,13 +61,26 @@ private func courierObject(_ value: JSONValue, _ fields: [String: JSONValue?]) -
         return try ControlCourierPass(binding: binding, home: homeAPI, target: executorAPI, lane: lane)
     }
 
+    func waitForHeldLookup() async {
+        if held != nil || lookupFinished { return }
+        await withCheckedContinuation { lookupObserver = $0 }
+    }
+
+    func finishLookupWait() {
+        lookupFinished = true; lookupObserver?.resume(); lookupObserver = nil
+    }
+
     private func reply(_ request: ControlCourierRequest, home: Bool) async throws -> Data {
         let path = request.path.joined(separator: "/")
         calls.append((home ? "home:" : "target:") + path)
         let body = try request.body.map(JSONValue.decode)
         let result: JSONValue
         if request.path == ["operations", "receipt"] {
-            if holdLookup { await withCheckedContinuation { held = $0 } }
+            if holdLookup {
+                await withCheckedContinuation {
+                    held = $0; lookupObserver?.resume(); lookupObserver = nil
+                }
+            }
             result = accepted ? receipt() : .object(["state": .string("unknown")])
         } else if request.path == ["operations"] {
             deliveries += 1; accepted = true
@@ -85,7 +101,8 @@ private func courierObject(_ value: JSONValue, _ fields: [String: JSONValue?]) -
                     "next": statusNext.map(JSONValue.string), "publishedRevision": .number(Double(publishedRevision)),
                     "state": .string(statusNext == nil ? "published" : "staged"),
                 ]) : nil
-            result = courierObject(fixture["syncStates"]!.array![1], ["events": events, "reconciliationRequired": .bool(false), "status": status])
+            // Slot 0 is home, slot 1 is executor. Their cursors can match while owner pins cannot.
+            result = courierObject(fixture["syncStates"]!.array![foreignCheckpoint ? 1 : 0], ["events": events, "reconciliationRequired": .bool(false), "status": status])
         } else if path.hasSuffix("/events/ack") {
             retained = Int(body?["through"]?.number ?? -1); result = body!
         } else if path.hasSuffix("/events/import") {
@@ -154,9 +171,16 @@ private func courierObject(_ value: JSONValue, _ fields: [String: JSONValue?]) -
         let probe = try CourierWireProbe()
         probe.accepted = true; probe.holdLookup = true
         let pass = try probe.pass()
-        let task = Task { try await pass.step(.init(check: { if !probe.current { throw HostRoutingError.staleGeneration } })) }
-        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
-        while probe.held == nil { guard ContinuousClock.now < deadline else { throw URLError(.timedOut) }; await Task.yield() }
+        let task = Task {
+            defer { probe.finishLookupWait() }
+            return try await pass.step(.init(check: { if !probe.current { throw HostRoutingError.staleGeneration } }))
+        }
+        await probe.waitForHeldLookup()
+        guard probe.held != nil else {
+            _ = try await task.value
+            Issue.record("Pass completed without reaching the held receipt lookup")
+            return
+        }
         probe.current = false; probe.held?.resume(); probe.held = nil
         do { _ = try await task.value; Issue.record("Stale receipt was adopted") } catch {}
         #expect(!probe.adopted && probe.deliveries == 0)
@@ -217,5 +241,17 @@ private func courierObject(_ value: JSONValue, _ fields: [String: JSONValue?]) -
         #expect(probe.readOutcome?["requestId"] == probe.fixture["readRequests"]!.array![0]["requestId"])
         #expect(probe.readOutcome?["response"] == nil)
         #expect(probe.readOutcome?["error"]?["code"]?.string == "read_unavailable")
+    }
+
+    @Test @MainActor func executorCheckpointCannotStandInForHomeDurableImportState() async throws {
+        let probe = try CourierWireProbe()
+        probe.adopted = true; probe.foreignCheckpoint = true
+        let pass = try probe.pass()
+        _ = try await pass.step(.init(check: {}))
+        do {
+            _ = try await pass.step(.init(check: {}))
+            Issue.record("Executor checkpoint was accepted as home ownership")
+        } catch let error as ControlCourierFailure { #expect(error.kind == .reconciliationRequired) }
+        #expect(probe.queries.isEmpty && probe.imported == 0 && probe.retained == 0 && probe.notices == 0)
     }
 }
