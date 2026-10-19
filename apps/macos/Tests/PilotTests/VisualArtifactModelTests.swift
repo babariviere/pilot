@@ -41,6 +41,10 @@ private final class RecordingTransport: VisualTransport, @unchecked Sendable {
     }
 
     func release(_ id: String) {}
+
+    func draw(_ id: String, _ request: VisualDrawRequest) async -> Result<Data, VisualFailure> {
+        .success(VisualDrawing(commands: 0, ops: [], strings: []).encoded)
+    }
 }
 
 private func visualRevision(api: Int = 1) -> ArtifactRevision {

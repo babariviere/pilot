@@ -1,10 +1,10 @@
 /**
  * Conformance cases for visual hosts. The kernel's tests run them and keep
  * packages/protocol/fixtures/visual/conformance.json current; the app's helper replays the same file and must
- * produce the same trees, changed keys, state and errors.
+ * produce the same trees, changed keys, state, canvas drawings and errors.
  */
 import type { VisualTree } from "./schema.ts";
-import { VisualFailure, type VisualSession } from "./session.ts";
+import { type VisualDrawInput, VisualFailure, type VisualSession } from "./session.ts";
 
 type ArtifactData = null | boolean | number | string | ArtifactData[] | { [key: string]: ArtifactData };
 
@@ -18,6 +18,8 @@ interface Case {
 	/** Saved state passed to load(). */
 	state?: string;
 	events?: Array<{ id: string; value: ArtifactData }>;
+	/** Canvas draws after the last event. */
+	draws?: Array<{ id: string; input: VisualDrawInput }>;
 }
 
 interface ErrorCase {
@@ -26,6 +28,10 @@ interface ErrorCase {
 	data: ArtifactData;
 	/** Events to send after the first view; the error may come from any step. */
 	events?: Array<{ id: string; value: ArtifactData }>;
+	/** Canvas draws after the first view, before the events. */
+	draws?: Array<{ id: string; input: VisualDrawInput }>;
+	/** The per-frame draw limit for this case, when it must not depend on the engine's speed. Default 8 ms. */
+	drawMs?: number;
 }
 
 export interface ConformanceFile {
@@ -33,10 +39,12 @@ export interface ConformanceFile {
 	/** The QuickJS-NG release the cases were produced with. Hosts embed the same release. */
 	engine: string;
 	cases: Array<
-		Omit<Case, "events"> & {
+		Omit<Case, "events" | "draws"> & {
 			steps: Array<{ event?: { id: string; value: ArtifactData }; changed?: string[]; tree: VisualTree }>;
 			/** state() after the last step. */
 			finalState: string;
+			/** Each draw's input and the commands it recorded (DRAW_FORMAT in runtime.js). */
+			drawings?: Array<{ id: string; input: VisualDrawInput; commands: number; ops: number[]; strings: string[] }>;
 		}
 	>;
 	/** The first error, formatted "line N: message" like the pre-check reports it. Seed text "", now 0. */
@@ -110,6 +118,33 @@ const regions = [
 	{ region: "ap", p95: 190, p99: 260 },
 ];
 
+const canvas = `function visual({ ui, state }) {
+  const s = state({ bars: 3 });
+  return () => ui.column([
+    ui.slider({ label: "Bars", min: 1, max: 6, step: 1, value: s.bars, onChange: (v) => (s.bars = v) }),
+    ui.canvas({ key: "plot", height: 160, animated: true, label: "Bars and a ring", draw: (g, { width, height, t, pointer }) => {
+      g.rect(0, 0, width, height, { stroke: "border", width: 1, radius: 6 });
+      for (let i = 0; i < s.bars; i++)
+        g.rect(12 + i * 40, height - 20 - i * 15, 30, 20 + i * 15, { fill: "chart" + (i + 1), stroke: "text", opacity: 0.75, width: 0.5 });
+      g.save();
+      g.translate(width - 80, height / 2);
+      g.rotate(t * 2);
+      g.scale(1.5, 0.5);
+      g.opacity(0.5);
+      g.arc(0, 0, 30, 0, 3, { fill: "accent", inner: 18 });
+      g.arc(0, 0, 34, 1, 2, { stroke: "warning", width: 3 });
+      g.restore();
+      g.circle(width / 2, 30, 8 + t, { fill: "success" });
+      g.line(0, height, width, 0, { stroke: "muted", width: 2 });
+      g.path([[10, 10], [40, 25], [70, 10]], { stroke: "danger", close: true, fill: "danger", opacity: 0.25 });
+      g.path([100, 10, 130, 30, 160, 10], { stroke: "chart6" });
+      g.text(width / 2, height - 4, "t = " + t, { color: "muted", size: "xs", weight: 600, align: "center", baseline: "bottom", mono: true, opacity: 0.9 });
+      g.text(4, 4, 42, { baseline: "top" });
+      if (pointer) g.circle(pointer.x, pointer.y, 4, { stroke: "accent" });
+    } }),
+  ]);
+}`;
+
 export const CASES: Case[] = [
 	{
 		name: "every node and prop",
@@ -167,6 +202,18 @@ export const CASES: Case[] = [
 		data: null,
 		id: "00000000-0000-4000-8000-000000000004",
 		now: NOW,
+	},
+	{
+		name: "canvas drawing",
+		source: canvas,
+		data: null,
+		id: "00000000-0000-4000-8000-000000000005",
+		now: NOW,
+		events: [{ id: "0.0", value: 4 }],
+		draws: [
+			{ id: "0.1", input: { width: 760, height: 160, t: 0 } },
+			{ id: "0.1", input: { width: 360, height: 160, t: 1.5, pointer: { x: 180, y: 80 } } },
+		],
 	},
 ];
 
@@ -253,7 +300,7 @@ export const ERRORS: ErrorCase[] = [
 		data: null,
 	},
 	{ name: "link scheme", source: '({ ui }) => () => ui.link("x", { href: "file:///etc/passwd" })', data: null },
-	{ name: "canvas", source: "({ ui }) => () => ui.canvas({ height: 100, draw() {} })", data: null },
+	...drawErrors(),
 	{ name: "shader", source: '({ ui }) => () => ui.shader({ glsl: "" })', data: null },
 	{ name: "script error", source: lines("({ ui, data }) => () =>", "  ui.text(data.missing.field)"), data: {} },
 	{
@@ -281,6 +328,59 @@ export const ERRORS: ErrorCase[] = [
 ];
 
 /** Run a case through a session and record what a host must reproduce. */
+function drawErrors(): ErrorCase[] {
+	const draw = (name: string, ...body: string[]): ErrorCase => ({
+		name,
+		source: lines(
+			"({ ui, state }) => {",
+			"  const s = state({ n: 0 });",
+			"  return () => ui.canvas({ draw: (g, f) => {",
+			...body.map((line) => `    ${line}`),
+			"  } });",
+			"}",
+		),
+		data: null,
+		draws: [{ id: "0", input: { width: 300, height: 100, t: 0 } }],
+	});
+	return [
+		{ name: "canvas without draw", source: "({ ui }) => () => ui.canvas({ height: 100 })", data: null },
+		{ name: "canvas height", source: "({ ui }) => () => ui.canvas({ height: 1000, draw() {} })", data: null },
+		draw("draw style", 'g.rect(0, 0, 10, 10, { fill: "chart1", color: "red" });'),
+		draw("draw color", 'g.circle(5, 5, 5, { fill: "#f00" });'),
+		draw("draw needs paint", "g.rect(0, 0, 10, 10);"),
+		draw("draw coordinate", 'g.rect(0, f.missing, 10, 10, { fill: "text" });'),
+		draw("draw line fill", 'g.line(0, 0, 10, 10, { fill: "text" });'),
+		draw("draw path points", 'g.path([1, 2, 3], { stroke: "text" });'),
+		draw("draw restore", "g.restore();"),
+		draw("draw text", "g.text(0, 0, {}, {});"),
+		draw("draw changes state", "s.n = 1;"),
+		{ ...draw("draw commands", "for (let i = 0; i < 20001; i++) g.translate(1, 0);"), drawMs: 5000 },
+		draw("draw time", "for (;;);"),
+		{
+			name: "pen outside draw",
+			source: lines(
+				"({ ui }) => {",
+				"  let pen;",
+				"  return () => ui.column([",
+				"    ui.canvas({ draw: (g) => { pen = g; } }),",
+				'    ui.button({ label: "x", onClick: () => pen.rect(0, 0, 1, 1, { fill: "text" }) }),',
+				"  ]);",
+				"}",
+			),
+			data: null,
+			draws: [{ id: "0.0", input: { width: 300, height: 100, t: 0 } }],
+			events: [{ id: "0.1", value: null }],
+		},
+		{
+			name: "draw unknown canvas",
+			source: '({ ui }) => () => ui.text("x")',
+			data: null,
+			draws: [{ id: "0", input: { width: 300, height: 100, t: 0 } }],
+		},
+	];
+}
+
+/** Run a case through a session and record what a host must reproduce. */
 export function runCase(session: VisualSession, value: Case): ConformanceFile["cases"][number] {
 	session.load(value.source, JSON.stringify(value.data), value.state);
 	const steps: ConformanceFile["cases"][number]["steps"] = [{ tree: session.render().tree }];
@@ -288,8 +388,9 @@ export function runCase(session: VisualSession, value: Case): ConformanceFile["c
 		const changed = session.event(event.id, event.value);
 		steps.push({ event, changed, tree: session.render().tree });
 	}
-	const { events: _events, ...rest } = value;
-	return { ...rest, steps, finalState: session.state() };
+	const drawings = value.draws?.map(({ id, input }) => ({ id, input, ...session.draw(id, input) }));
+	const { events: _events, draws: _draws, ...rest } = value;
+	return { ...rest, steps, finalState: session.state(), ...(drawings ? { drawings } : {}) };
 }
 
 /** Run an error case through a session; returns the error as "line N: message". */
@@ -297,6 +398,7 @@ export function runErrorCase(session: VisualSession, value: ErrorCase): string {
 	try {
 		session.load(value.source, JSON.stringify(value.data));
 		session.render();
+		for (const draw of value.draws ?? []) session.draw(draw.id, draw.input, value.drawMs);
 		for (const event of value.events ?? []) {
 			session.event(event.id, event.value);
 			session.render();

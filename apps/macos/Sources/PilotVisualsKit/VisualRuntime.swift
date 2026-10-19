@@ -22,6 +22,11 @@ public enum VisualRuntime {
  *   {"changed":[state keys assigned]}. Call render() afterwards.
  * - state(): the reader state as JSON, at most limits.stateChars.
  * - logs(): console lines since the last call, as a JSON array of strings.
+ * - draw(id, width, height, t, pointerX, pointerY): runs the draw function of canvas id (from the last tree) for a
+ *   width x height point area at t seconds; pointerX and pointerY are numbers, or undefined without a pointer.
+ *   Returns the number of commands it recorded; state is read-only meanwhile.
+ * - frame(): the commands of the last draw as { ops: Float64Array, strings: string[] }, encoded as DRAW_FORMAT
+ *   below describes. frameJson() returns the same as JSON, with ops as an array, for tests.
  * Errors are thrown as exceptions. VisualError names a broken rule; the first "visual.js:LINE" frame of an error's
  * stack is the line inside the visual function.
  */
@@ -35,6 +40,9 @@ public enum VisualRuntime {
 		stateChars: 64 * 1024,
 		logLines: 50,
 		logLineChars: 500,
+		drawCommands: 20000,
+		drawPoints: 100000,
+		drawTextChars: 64 * 1024,
 	});
 	const COLORS = [
 		"text",
@@ -68,6 +76,8 @@ public enum VisualRuntime {
 	const RealProxy = Proxy;
 	const functionToString = Function.prototype.toString;
 	const WeakMapRef = WeakMap;
+	const Float64ArrayRef = Float64Array;
+	const arrayFrom = Array.from;
 
 	class VisualError extends Error {}
 	VisualError.prototype.name = "VisualError";
@@ -510,6 +520,316 @@ public enum VisualRuntime {
 		return node(out, out.label.length, undefined, { handler: handler("button", "onClick", p.onClick) });
 	}
 
+	function canvas(options) {
+		const p = props("canvas", options, ["key", "height", "animated", "label", "draw"], true);
+		const out = {
+			type: "canvas",
+			key: key("canvas", p.key),
+			height: num("canvas", "height", p.height ?? 240, false, 24, 600),
+			animated: bool("canvas", "animated", p.animated),
+			label: str("canvas", "label", p.label, true),
+		};
+		return node(out, textLength(out.label), undefined, { draw: handler("canvas", "draw", p.draw) });
+	}
+
+	/*
+	 * DRAW_FORMAT: a draw records commands into one Float64Array, each a run of numbers starting with its op:
+	 *   SAVE 1 | RESTORE 2 | TRANSLATE 3 x y | ROTATE 4 radians | SCALE 5 x y | OPACITY 6 factor
+	 *   Shapes: op, mode (1 fill, 2 stroke), color (index in COLORS), opacity, line width (0 when filling), then
+	 *   RECT 10 x y w h radius | CIRCLE 11 cx cy r | LINE 12 x1 y1 x2 y2 | PATH 13 closed n x1 y1 ... xn yn |
+	 *   ARC 14 cx cy r inner start end (fill: a wedge, or a ring segment when inner > 0; stroke: the arc at r)
+	 *   TEXT 20 color opacity x y string size weight align baseline mono, where string indexes frame().strings,
+	 *   size indexes SIZES, align ALIGN and baseline BASELINES, and mono is 0 or 1.
+	 * A shape with both fill and stroke records twice, fill first. Every record counts as one command.
+	 */
+	const BASELINES = ["top", "middle", "bottom"];
+	const lookup = (list) => {
+		const map = Object.create(null);
+		for (let index = 0; index < list.length; index++) map[list[index]] = index;
+		return map;
+	};
+	const COLOR_INDEX = lookup(COLORS);
+	const SIZE_INDEX = lookup(SIZES);
+	const ALIGN_INDEX = lookup(ALIGN);
+	const BASELINE_INDEX = lookup(BASELINES);
+	const WEIGHT_INDEX = lookup(WEIGHTS);
+
+	let canvases = new Map();
+	let ops = new Float64ArrayRef(4096);
+	let used = 0;
+	let strings = [];
+	let commands = 0;
+	let points = 0;
+	let textChars = 0;
+	let depth = 0;
+	let drawing = false;
+	// The current call's style, parsed without allocating.
+	let fillColor = -1;
+	let strokeColor = -1;
+	let alpha = 1;
+	let lineWidth = 1;
+	let extraValue;
+
+	function room(count) {
+		if (used + count <= ops.length) return;
+		let size = ops.length * 2;
+		while (size < used + count) size *= 2;
+		const next = new Float64ArrayRef(size);
+		next.set(ops.subarray(0, used));
+		ops = next;
+	}
+	function begin(name) {
+		if (!drawing) fail(`g.${name} can only be called while its canvas draws`);
+		if (++commands > LIMITS.drawCommands) fail(`the drawing has more than ${LIMITS.drawCommands} commands`);
+	}
+	function coord(name, prop, value) {
+		if (typeof value !== "number" || !finite(value))
+			fail(`g.${name}: ${prop} must be a finite number, got ${show(value)}`);
+		return value;
+	}
+	function token(name, prop, value) {
+		if (value === undefined) return -1;
+		const index = typeof value === "string" ? COLOR_INDEX[value] : undefined;
+		if (index === undefined)
+			fail(`g.${name}: ${prop} ${stringify(value) ?? String(value)} is not a color token: ${COLORS.join(", ")}`);
+		return index;
+	}
+	function fraction(name, prop, value, max) {
+		if (value === undefined) return undefined;
+		coord(name, prop, value);
+		if (value < 0 || value > max) fail(`g.${name}: ${prop} must be between 0 and ${max}, got ${value}`);
+		return value;
+	}
+	/** Parse a shape's style: fill, stroke, width, opacity and one extra prop for some shapes. */
+	function style(name, value, extra) {
+		fillColor = -1;
+		strokeColor = -1;
+		alpha = 1;
+		lineWidth = 1;
+		extraValue = undefined;
+		if (value === undefined) return;
+		if (!isPlain(value)) fail(`g.${name} expects a style object, got ${describe(value)}`);
+		const names = keys(value);
+		for (let index = 0; index < names.length; index++) {
+			const prop = names[index];
+			const item = value[prop];
+			if (prop === "fill") fillColor = token(name, prop, item);
+			else if (prop === "stroke") strokeColor = token(name, prop, item);
+			else if (prop === "opacity") alpha = fraction(name, prop, item, 1) ?? 1;
+			else if (prop === "width") lineWidth = fraction(name, prop, item, 100) ?? 1;
+			else if (prop === extra) extraValue = item;
+			else
+				fail(
+					`g.${name}: unknown style "${prop}" (allowed: fill, stroke, width, opacity${extra ? `, ${extra}` : ""})`,
+				);
+		}
+	}
+	function paint(name) {
+		if (fillColor < 0 && strokeColor < 0) fail(`g.${name} needs fill or stroke, for example { fill: "chart1" }`);
+	}
+	function head(name, op, mode, size) {
+		begin(name);
+		room(5 + size);
+		ops[used++] = op;
+		ops[used++] = mode;
+		ops[used++] = mode === 1 ? fillColor : strokeColor;
+		ops[used++] = alpha;
+		ops[used++] = mode === 1 ? 0 : lineWidth;
+	}
+	function shape(name, op, a, b, c, d, e, f, size) {
+		paint(name);
+		for (let mode = 1; mode <= 2; mode++) {
+			if ((mode === 1 ? fillColor : strokeColor) < 0) continue;
+			head(name, op, mode, size);
+			ops[used++] = a;
+			ops[used++] = b;
+			ops[used++] = c;
+			if (size > 3) ops[used++] = d;
+			if (size > 4) ops[used++] = e;
+			if (size > 5) ops[used++] = f;
+		}
+	}
+	function transform(name, op, a, b, size) {
+		begin(name);
+		room(1 + size);
+		ops[used++] = op;
+		if (size > 0) ops[used++] = a;
+		if (size > 1) ops[used++] = b;
+	}
+
+	const pen = freeze({
+		rect(x, y, w, h, options) {
+			style("rect", options, "radius");
+			const radius = fraction("rect", "radius", extraValue, 10000) ?? 0;
+			shape(
+				"rect",
+				10,
+				coord("rect", "x", x),
+				coord("rect", "y", y),
+				coord("rect", "w", w),
+				coord("rect", "h", h),
+				radius,
+				0,
+				5,
+			);
+		},
+		circle(cx, cy, r, options) {
+			style("circle", options);
+			const radius = coord("circle", "r", r);
+			if (radius < 0) fail(`g.circle: r must not be negative, got ${radius}`);
+			shape("circle", 11, coord("circle", "cx", cx), coord("circle", "cy", cy), radius, 0, 0, 0, 3);
+		},
+		line(x1, y1, x2, y2, options) {
+			style("line", options);
+			if (fillColor >= 0) fail("g.line draws with stroke only, not fill");
+			if (strokeColor < 0) fail('g.line needs stroke, for example { stroke: "muted" }');
+			shape(
+				"line",
+				12,
+				coord("line", "x1", x1),
+				coord("line", "y1", y1),
+				coord("line", "x2", x2),
+				coord("line", "y2", y2),
+				0,
+				0,
+				4,
+			);
+		},
+		path(list, options) {
+			style("path", options, "close");
+			const closed = bool("g.path", "close", extraValue) ? 1 : 0;
+			if (!isArray(list)) fail(`g.path expects an array of points, got ${describe(list)}`);
+			const pairs = list.length > 0 && isArray(list[0]);
+			const count = pairs ? list.length : list.length / 2;
+			if (!pairs && !isInteger(count)) fail("g.path: a flat point list needs an even number of values");
+			if (count < 2) fail("g.path needs at least 2 points");
+			points += count;
+			if (points > LIMITS.drawPoints) fail(`the drawing has more than ${LIMITS.drawPoints} path points`);
+			for (let index = 0; index < list.length; index++) {
+				const item = list[index];
+				if (pairs) {
+					if (!isArray(item) || item.length !== 2) fail(`g.path: point ${index} must be [x, y]`);
+					coord("path", `point ${index} x`, item[0]);
+					coord("path", `point ${index} y`, item[1]);
+				} else coord("path", `value ${index}`, item);
+			}
+			paint("path");
+			for (let mode = 1; mode <= 2; mode++) {
+				if ((mode === 1 ? fillColor : strokeColor) < 0) continue;
+				head("path", 13, mode, 2 + count * 2);
+				ops[used++] = closed;
+				ops[used++] = count;
+				if (pairs)
+					for (let index = 0; index < count; index++) {
+						ops[used++] = list[index][0];
+						ops[used++] = list[index][1];
+					}
+				else for (let index = 0; index < list.length; index++) ops[used++] = list[index];
+			}
+		},
+		arc(cx, cy, r, start, end, options) {
+			style("arc", options, "inner");
+			const radius = coord("arc", "r", r);
+			if (radius < 0) fail(`g.arc: r must not be negative, got ${radius}`);
+			const inner = fraction("arc", "inner", extraValue, radius) ?? 0;
+			paint("arc");
+			for (let mode = 1; mode <= 2; mode++) {
+				if ((mode === 1 ? fillColor : strokeColor) < 0) continue;
+				head("arc", 14, mode, 6);
+				ops[used++] = coord("arc", "cx", cx);
+				ops[used++] = coord("arc", "cy", cy);
+				ops[used++] = radius;
+				ops[used++] = inner;
+				ops[used++] = coord("arc", "start", start);
+				ops[used++] = coord("arc", "end", end);
+			}
+		},
+		text(x, y, content, options) {
+			let value = content;
+			if (typeof value === "number" && finite(value)) value = String(value);
+			if (typeof value !== "string") fail(`g.text: text must be a string or number, got ${describe(content)}`);
+			let colorIndex = 0;
+			let opacity = 1;
+			let size = 1;
+			let weight = 400;
+			let align = 0;
+			let baseline = 1;
+			let mono = 0;
+			if (options !== undefined) {
+				if (!isPlain(options)) fail(`g.text expects a style object, got ${describe(options)}`);
+				const names = keys(options);
+				for (let index = 0; index < names.length; index++) {
+					const prop = names[index];
+					const item = options[prop];
+					if (item === undefined) continue;
+					if (prop === "color") colorIndex = token("text", prop, item);
+					else if (prop === "opacity") opacity = fraction("text", prop, item, 1);
+					else if (prop === "size") {
+						size = SIZE_INDEX[item];
+						if (typeof item !== "string" || size === undefined)
+							fail(`g.text: size ${show(item)} is not a text size: ${SIZES.join(", ")}`);
+					} else if (prop === "weight") {
+						if (WEIGHT_INDEX[item] === undefined || typeof item !== "number")
+							fail(`g.text: weight ${show(item)} is not a weight: ${WEIGHTS.join(", ")}`);
+						weight = item;
+					} else if (prop === "align") {
+						align = ALIGN_INDEX[item];
+						if (typeof item !== "string" || align === undefined)
+							fail(`g.text: align ${show(item)} is not one of ${ALIGN.join(", ")}`);
+					} else if (prop === "baseline") {
+						baseline = BASELINE_INDEX[item];
+						if (typeof item !== "string" || baseline === undefined)
+							fail(`g.text: baseline ${show(item)} is not one of ${BASELINES.join(", ")}`);
+					} else if (prop === "mono") mono = bool("g.text", "mono", item) ? 1 : 0;
+					else
+						fail(
+							`g.text: unknown style "${prop}" (allowed: color, opacity, size, weight, align, baseline, mono)`,
+						);
+				}
+			}
+			begin("text");
+			textChars += value.length;
+			if (textChars > LIMITS.drawTextChars)
+				fail(`the drawing has more than ${LIMITS.drawTextChars} characters of text`);
+			room(11);
+			ops[used++] = 20;
+			ops[used++] = colorIndex;
+			ops[used++] = opacity;
+			ops[used++] = coord("text", "x", x);
+			ops[used++] = coord("text", "y", y);
+			ops[used++] = strings.length;
+			ops[used++] = size;
+			ops[used++] = weight;
+			ops[used++] = align;
+			ops[used++] = baseline;
+			ops[used++] = mono;
+			strings.push(value);
+		},
+		save() {
+			if (depth >= 64) fail("g.save is nested more than 64 deep");
+			transform("save", 1, 0, 0, 0);
+			depth++;
+		},
+		restore() {
+			if (drawing && depth === 0) fail("g.restore has no matching g.save");
+			transform("restore", 2, 0, 0, 0);
+			depth--;
+		},
+		translate(x, y) {
+			transform("translate", 3, coord("translate", "x", x), coord("translate", "y", y), 2);
+		},
+		rotate(radians) {
+			transform("rotate", 4, coord("rotate", "radians", radians), 0, 1);
+		},
+		scale(x, y) {
+			const sx = coord("scale", "x", x);
+			transform("scale", 5, sx, y === undefined ? sx : coord("scale", "y", y), 2);
+		},
+		opacity(factor) {
+			transform("opacity", 6, fraction("opacity", "factor", factor, 1) ?? coord("opacity", "factor", factor), 0, 1);
+		},
+	});
+
 	const unsupported = (name) => () => fail(`${name} nodes are not yet supported`);
 
 	const ui = freeze({
@@ -565,7 +885,7 @@ public enum VisualRuntime {
 		toggle,
 		slider,
 		button,
-		canvas: unsupported("canvas"),
+		canvas,
 		shader: unsupported("shader"),
 	});
 
@@ -610,6 +930,7 @@ public enum VisualRuntime {
 		const write = (name) => {
 			if (typeof name !== "string") fail("state keys must be strings");
 			if (phase === "view") fail(`state can only change in handlers, not while the view renders (state.${name})`);
+			if (phase === "draw") fail(`state can only change in handlers, not while a canvas draws (state.${name})`);
 			if (phase === "handler" && !changed.includes(name)) changed.push(name);
 		};
 		return new RealProxy(target, {
@@ -652,6 +973,7 @@ public enum VisualRuntime {
 		slots = [];
 		changed = [];
 		controls = new Map();
+		canvases = new Map();
 		view = undefined;
 		saved = [];
 		if (typeof stateJson === "string") {
@@ -711,6 +1033,7 @@ public enum VisualRuntime {
 		const top = root(result);
 		const count = { nodes: 0, text: 0 };
 		const next = new Map();
+		const nextCanvases = new Map();
 		const walk = (value, path) => {
 			if (++count.nodes > LIMITS.nodes) fail(`the view has more than ${LIMITS.nodes} nodes`);
 			const record = records.get(value);
@@ -721,7 +1044,8 @@ public enum VisualRuntime {
 			for (let index = 0; index < names.length; index++) out[names[index]] = record.out[names[index]];
 			if (record.control) {
 				out.id = path;
-				next.set(path, { out, handler: record.control.handler });
+				if (record.control.draw) nextCanvases.set(path, record.control.draw);
+				else next.set(path, { out, handler: record.control.handler });
 			}
 			if (record.children) {
 				const list = [];
@@ -733,6 +1057,7 @@ public enum VisualRuntime {
 		};
 		const tree = { api: API, root: walk(top, "0") };
 		controls = next;
+		canvases = nextCanvases;
 		return stringify(tree);
 	}
 
@@ -780,7 +1105,48 @@ public enum VisualRuntime {
 		return value;
 	}
 
-	return freeze({ api: API, limits: LIMITS, load, render, event, state: stateJson, logs });
+	function draw(id, width, height, t, pointerX, pointerY) {
+		const fn = canvases.get(id);
+		if (!fn) fail(`no canvas with id ${id} in the current view`);
+		if (!finite(width) || !finite(height) || !finite(t)) fail("draw needs a finite width, height and time");
+		used = 0;
+		strings = [];
+		commands = 0;
+		points = 0;
+		textChars = 0;
+		depth = 0;
+		const pointer =
+			typeof pointerX === "number" && typeof pointerY === "number" && finite(pointerX) && finite(pointerY)
+				? freeze({ x: pointerX, y: pointerY })
+				: null;
+		phase = "draw";
+		drawing = true;
+		let result;
+		try {
+			result = fn(pen, freeze({ width, height, t, pointer }));
+		} catch (error) {
+			used = 0;
+			strings = [];
+			commands = 0;
+			throw error;
+		} finally {
+			phase = "idle";
+			drawing = false;
+		}
+		if (result !== null && typeof result === "object" && typeof result.then === "function")
+			fail("canvas: draw must be synchronous");
+		return commands;
+	}
+
+	function frame() {
+		return { ops: ops.subarray(0, used), strings };
+	}
+
+	function frameJson() {
+		return stringify({ ops: arrayFrom(ops.subarray(0, used)), strings });
+	}
+
+	return freeze({ api: API, limits: LIMITS, load, render, event, state: stateJson, logs, draw, frame, frameJson });
 })();
 """##
 }

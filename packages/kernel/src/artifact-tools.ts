@@ -60,6 +60,7 @@ const referenceSchema = Type.Object({
 			nodes: Type.Integer(),
 			controls: Type.Integer(),
 			interactions: Type.Integer(),
+			draws: Type.Optional(Type.Integer()),
 			logs: Type.Optional(Type.Array(Type.String())),
 		}),
 	),
@@ -164,6 +165,7 @@ export function createArtifactTools(options: ArtifactToolOptions): ToolDefinitio
 					nodes: value.visual.check.nodes,
 					controls: value.visual.check.controls,
 					interactions: value.visual.check.interactions,
+					...(value.visual.check.draws ? { draws: value.visual.check.draws } : {}),
 					...(value.visual.check.logs.length ? { logs: [...value.visual.check.logs] } : {}),
 				}
 			: undefined;
@@ -199,9 +201,9 @@ ${previewDescription}Source must be self-contained and offline. Text source: 512
 ${options.ask ? "Ask images accept only inline base64 data:image/... URLs, never file paths." : "Images accept local PNG, JPEG, GIF or WebP paths, or inline data URLs; never remote URLs."}
 SwiftUI requires the macOS Swift toolchain and renders a static screenshot, not project views. Publication does not require the Pilot app to be running.
 Shaders are Shadertoy-style GLSL (mainImage); publication fails with line-numbered compile errors.
-${visuals ? "Visuals (kind visual) come first for charts, stats, tables and controls: source String(fn) of ({ ui, state, data }) => view, data any JSON (1 MiB). Publication fails with line-numbered errors; fix and republish in the same script.\n" : ""}Get the current source before updating, and pass its revision as expectedRevision.`,
+${visuals ? "Visuals (kind visual) come first for charts, stats, tables, controls and 2D canvas: source String(fn) of ({ ui, state, data }) => view, data any JSON (1 MiB). Publication fails with line-numbered errors; fix and republish in the same script.\n" : ""}Get the current source before updating, and pass its revision as expectedRevision.`,
 			promptSnippet: visuals
-				? "Publish native visuals (charts, stats, tables, controls) or offline HTML, React, shader, image and SwiftUI artifacts"
+				? "Publish native visuals (charts, stats, tables, controls, 2D canvas) or offline HTML, React, shader, image and SwiftUI artifacts"
 				: "Publish and inspect offline HTML, React, shader, image or native SwiftUI artifacts",
 			executionMode: "sequential",
 			annotations: { openWorldHint: false, destructiveHint: false },

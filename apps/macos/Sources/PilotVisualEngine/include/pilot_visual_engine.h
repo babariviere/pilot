@@ -24,6 +24,7 @@ typedef struct PVLimits {
     uint32_t setup_ms;
     uint32_t view_ms;
     uint32_t handler_ms;
+    uint32_t draw_ms;
 } PVLimits;
 
 /// Creates an engine. Returns NULL on allocation failure.
@@ -50,6 +51,17 @@ int pv_engine_event(PVEngine *engine,
                     const char *id, size_t id_length,
                     const char *value_json, size_t value_length,
                     double now, PVBuffer *result);
+
+/// Runs the draw function of canvas id (from the last tree) for a width x height area at t seconds, with the pointer
+/// when has_pointer. On success returns 0 and writes the drawing ("PD" encoding, see pilot_visual_engine.c) into
+/// out when it fits in capacity, setting *written, else into *result. On failure returns 1 with an error envelope in
+/// *result.
+int pv_engine_draw(PVEngine *engine,
+                   const char *id, size_t id_length,
+                   double width, double height, double t,
+                   int has_pointer, double pointer_x, double pointer_y,
+                   uint8_t *out, size_t capacity, size_t *written,
+                   PVBuffer *result);
 
 /// Bytes the engine's heap currently holds.
 size_t pv_engine_memory_used(PVEngine *engine);

@@ -6,6 +6,8 @@ import PilotVisualsKit
 /// network and no files. An engine crash ends this process only; launchd relaunches it on Pilot's next request.
 final class VisualServiceEndpoint: NSObject, VisualServiceProtocol {
     private let host: VisualHost
+    private let lock = NSLock()
+    private var region: VisualSharedRegion?
 
     init(host: VisualHost) {
         self.host = host
@@ -23,6 +25,25 @@ final class VisualServiceEndpoint: NSObject, VisualServiceProtocol {
 
     func release(_ id: String) {
         host.release(id)
+    }
+
+    func attach(_ region: VisualSharedRegion) {
+        lock.lock()
+        defer { lock.unlock() }
+        self.region = region
+    }
+
+    func draw(_ id: String, canvas: String, width: Double, height: Double, time: Double, pointerX: Double,
+              pointerY: Double, hasPointer: Bool, slot: Int, reply: @escaping (Int, Data?) -> Void) {
+        lock.lock()
+        let region = region
+        lock.unlock()
+        let target = region.flatMap { region in
+            VisualDrawRing.slot(slot, in: region).map { VisualHost.DrawTarget(buffer: $0, owner: region) }
+        }
+        let request = VisualDrawRequest(canvas: canvas, width: width, height: height, time: time,
+                                        pointer: hasPointer ? VisualPoint(x: pointerX, y: pointerY) : nil)
+        host.draw(id, request, into: target, reply: reply)
     }
 
     func probe(_ reply: @escaping (Data) -> Void) {

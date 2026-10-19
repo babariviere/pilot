@@ -10,6 +10,8 @@ public enum VisualMessage: Sendable {
 /// Carries messages to the visual service. VisualXPCTransport is the real one; tests run the engine in process.
 public protocol VisualTransport: Sendable {
     func send(_ message: VisualMessage) async -> Result<Data, VisualFailure>
+    /// Runs one canvas draw. The data is a drawing ("PD") or an error envelope.
+    func draw(_ id: String, _ request: VisualDrawRequest) async -> Result<Data, VisualFailure>
     func release(_ id: String)
 }
 
@@ -46,6 +48,11 @@ public actor VisualEngineClient {
         await serialized(id) { client in await client.performEvent(id, handler: handler, value: value.jsonData) }
     }
 
+    /// Runs a canvas's draw function and returns its commands.
+    public func draw(_ id: String, _ request: VisualDrawRequest) async -> Result<VisualDrawing, VisualFailure> {
+        await serialized(id) { client in await client.performDraw(id, request) }
+    }
+
     /// Forgets visual id and releases its engine.
     public func release(_ id: String) {
         sessions[id] = nil
@@ -63,11 +70,11 @@ public actor VisualEngineClient {
         }
     }
 
-    private func serialized(
-        _ id: String, _ operation: @escaping @Sendable (VisualEngineClient) async -> Result<VisualFrame, VisualFailure>
-    ) async -> Result<VisualFrame, VisualFailure> {
+    private func serialized<T: Sendable>(
+        _ id: String, _ operation: @escaping @Sendable (VisualEngineClient) async -> T
+    ) async -> T {
         let previous = tails[id]
-        let task = Task { () -> Result<VisualFrame, VisualFailure> in
+        let task = Task { () -> T in
             await previous?.value
             return await operation(self)
         }
@@ -106,6 +113,31 @@ public actor VisualEngineClient {
         return retried
     }
 
+    private func performDraw(_ id: String, _ request: VisualDrawRequest) async -> Result<VisualDrawing, VisualFailure> {
+        let result = await sendDraw(id, request)
+        guard case .failure(.script(let error)) = result, error.kind == .unloaded else { return result }
+        // As for events: start the engine again from the saved state, then draw once more.
+        guard let session = sessions[id] else { return .failure(.unavailable("This visual is no longer loaded.")) }
+        switch await send(.load(id: id, session.request)) {
+        case .success(let frame): record(id, .success(frame))
+        case .failure(let failure): return .failure(failure)
+        }
+        return await sendDraw(id, request)
+    }
+
+    private func sendDraw(_ id: String, _ request: VisualDrawRequest) async -> Result<VisualDrawing, VisualFailure> {
+        switch await transport.draw(id, request) {
+        case .success(let data):
+            if VisualDrawing.isDrawing(data) { return VisualDrawing(data).map { .success($0) } ?? .failure(.invalidReply) }
+            switch VisualReply.decode(data) {
+            case .success: return .failure(.invalidReply)
+            case .failure(let failure): return .failure(failure)
+            }
+        case .failure(let failure):
+            return .failure(failure)
+        }
+    }
+
     private func send(_ message: VisualMessage) async -> Result<VisualFrame, VisualFailure> {
         switch await transport.send(message) {
         case .success(let data): return VisualReply.decode(data)
@@ -141,6 +173,8 @@ public final class VisualXPCTransport: VisualTransport, @unchecked Sendable {
     private var connection: NSXPCConnection?
     private var generation = 0
     private let timeout: TimeInterval
+    /// Created on the first draw and shared with every connection after it.
+    private var ring: VisualDrawRing?
 
     /// timeout bounds a whole request. The engine interrupts scripts within a second; this catches a stuck
     /// service. It exceeds launchd's 10 second relaunch throttle, so a request sent right after a crash waits for
@@ -150,6 +184,50 @@ public final class VisualXPCTransport: VisualTransport, @unchecked Sendable {
     }
 
     public func send(_ message: VisualMessage) async -> Result<Data, VisualFailure> {
+        await request { proxy, reply in
+            switch message {
+            case .load(let id, let request):
+                proxy.load(id, runtime: request.runtime, source: request.source, data: request.data,
+                           state: request.state, seed: request.seed, now: request.now, reply: reply)
+            case .event(let id, let handler, let value):
+                proxy.event(id, handler: handler, value: value, reply: reply)
+            case .probe:
+                proxy.probe(reply)
+            }
+        }
+    }
+
+    public func draw(_ id: String, _ request: VisualDrawRequest) async -> Result<Data, VisualFailure> {
+        let ring = drawRing()
+        let slot = ring?.acquire()
+        defer { if let slot { ring?.release(slot) } }
+        return await self.request { proxy, reply in
+            proxy.draw(id, canvas: request.canvas, width: request.width, height: request.height, time: request.time,
+                       pointerX: request.pointer?.x ?? 0, pointerY: request.pointer?.y ?? 0,
+                       hasPointer: request.pointer != nil, slot: slot ?? -1) { written, data in
+                if written > 0, let slot, let copied = ring?.copy(slot: slot, count: written) {
+                    reply(copied)
+                } else {
+                    reply(data ?? Data())
+                }
+            }
+        }
+    }
+
+    private func drawRing() -> VisualDrawRing? {
+        lock.lock()
+        defer { lock.unlock() }
+        if ring == nil, let created = VisualDrawRing() {
+            ring = created
+            // The current connection gets the region now; new connections get it when they are made.
+            (connection?.remoteObjectProxyWithErrorHandler { _ in } as? VisualServiceProtocol)?.attach(created.region)
+        }
+        return ring
+    }
+
+    private func request(
+        _ body: @escaping (VisualServiceProtocol, @escaping (Data) -> Void) -> Void
+    ) async -> Result<Data, VisualFailure> {
         await withCheckedContinuation { continuation in
             let once = VisualOnce(continuation)
             let (connection, generation) = current()
@@ -160,16 +238,7 @@ public final class VisualXPCTransport: VisualTransport, @unchecked Sendable {
                 once.resume(.failure(.unavailable("The visual engine could not be reached.")))
                 return
             }
-            let reply: (Data) -> Void = { data in once.resume(.success(data)) }
-            switch message {
-            case .load(let id, let request):
-                proxy.load(id, runtime: request.runtime, source: request.source, data: request.data,
-                           state: request.state, seed: request.seed, now: request.now, reply: reply)
-            case .event(let id, let handler, let value):
-                proxy.event(id, handler: handler, value: value, reply: reply)
-            case .probe:
-                proxy.probe(reply)
-            }
+            body(proxy) { data in once.resume(.success(data)) }
             DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout) { [weak self] in
                 if once.resume(.failure(.timedOut)) { self?.reset(generation) }
             }
@@ -193,6 +262,7 @@ public final class VisualXPCTransport: VisualTransport, @unchecked Sendable {
         let generation = generation
         connection.invalidationHandler = { [weak self] in self?.reset(generation) }
         connection.resume()
+        if let ring { (connection.remoteObjectProxyWithErrorHandler { _ in } as? VisualServiceProtocol)?.attach(ring.region) }
         self.connection = connection
         return (connection, generation)
     }

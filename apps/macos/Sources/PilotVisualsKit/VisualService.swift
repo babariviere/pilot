@@ -11,6 +11,12 @@ import Foundation
     func event(_ id: String, handler: String, value: Data, reply: @escaping (Data) -> Void)
     /// Releases visual id's engine.
     func release(_ id: String)
+    /// Shares the region canvas drawings are written to (VisualDrawRing). Sent once per connection, before any draw.
+    func attach(_ region: VisualSharedRegion)
+    /// Runs the draw function of canvas `canvas` in visual id's last tree. Replies the drawing's byte count when it
+    /// was written to ring slot `slot`; otherwise 0 and the drawing ("PD") or an error envelope ("PV") as data.
+    func draw(_ id: String, canvas: String, width: Double, height: Double, time: Double, pointerX: Double,
+              pointerY: Double, hasPointer: Bool, slot: Int, reply: @escaping (Int, Data?) -> Void)
     /// Reports the engine version and whether the service is sandboxed. Used by packaging smoke tests.
     func probe(_ reply: @escaping (Data) -> Void)
 }
@@ -23,6 +29,8 @@ public enum VisualLimits {
     public static let setupMilliseconds: UInt32 = 250
     public static let viewMilliseconds: UInt32 = 250
     public static let handlerMilliseconds: UInt32 = 100
+    /// One canvas draw: a 120 Hz frame. Two misses in a row stop the canvas.
+    public static let drawMilliseconds: UInt32 = 8
     /// Live engines in the service; the least recently used one is released first.
     public static let liveEngines = 8
 }
@@ -54,6 +62,34 @@ public struct VisualLoadRequest: Hashable, Sendable {
         self.state = state
         self.seed = seed
         self.now = now
+    }
+}
+
+/// One canvas draw: the canvas's id (its path in the tree), the area in points, the time in seconds since the canvas
+/// started animating (0 when it does not), and the pointer over it, if any.
+public struct VisualDrawRequest: Hashable, Sendable {
+    public var canvas: String
+    public var width: Double
+    public var height: Double
+    public var time: Double
+    public var pointer: VisualPoint?
+
+    public init(canvas: String, width: Double, height: Double, time: Double = 0, pointer: VisualPoint? = nil) {
+        self.canvas = canvas
+        self.width = width
+        self.height = height
+        self.time = time
+        self.pointer = pointer
+    }
+}
+
+public struct VisualPoint: Hashable, Sendable {
+    public var x: Double
+    public var y: Double
+
+    public init(x: Double, y: Double) {
+        self.x = x
+        self.y = y
     }
 }
 

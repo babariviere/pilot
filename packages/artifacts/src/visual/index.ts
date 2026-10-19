@@ -8,7 +8,7 @@ import { visualRuntime } from "./session.ts";
 
 export { visualRuntime };
 
-/** setup + first view + 24 interactions at their limits stay well below this; it only stops a stuck worker. */
+/** setup, views, 24 interactions and 96 draws at their limits stay well below this; it only stops a stuck worker. */
 const CHECK_TIMEOUT_MS = 30_000;
 
 /** Check sizes and serialize data. Returns the data as JSON text. */

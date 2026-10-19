@@ -64,6 +64,8 @@ final class VisualArtifactModel: ObservableObject {
     @Published private(set) var failure: VisualFailure?
     @Published private(set) var unsupportedAPI: Int?
     @Published private(set) var loading = false
+    /// Counts rendered trees, so canvases redraw when state their draw functions read may have changed.
+    @Published private(set) var frames = 0
 
     private let engine: VisualEngineClient
     private let instance = "visual-\(UUID().uuidString)"
@@ -74,6 +76,8 @@ final class VisualArtifactModel: ObservableObject {
     private var queued: [(id: String, value: VisualValue)] = []
     private var slider: (id: String, value: Double)?
     private lazy var pacer = DisplayFramePacer { [weak self] in self?.flushSlider() }
+    /// Each canvas's last drawing, by path: shown at once when a canvas view is recreated, and in screenshots.
+    private var drawings: [String: VisualDrawing] = [:]
 
     init(engine: VisualEngineClient = .shared) {
         self.engine = engine
@@ -115,6 +119,17 @@ final class VisualArtifactModel: ObservableObject {
     func slide(_ id: String, to value: Double) {
         slider = (id, value)
         pump()
+    }
+
+    /// Runs a canvas's draw function in the visual service.
+    func draw(_ request: VisualDrawRequest) async -> Result<VisualDrawing, VisualFailure> {
+        await engine.draw(instance, request)
+    }
+
+    func drawing(for path: String) -> VisualDrawing? { drawings[path] }
+
+    func remember(_ drawing: VisualDrawing, for path: String) {
+        drawings[path] = drawing
     }
 
     private func load() {
@@ -168,6 +183,7 @@ final class VisualArtifactModel: ObservableObject {
             case .success(let tree):
                 if tree != self.tree { self.tree = tree }
                 failure = nil
+                frames += 1
                 VisualReaderMemory.store(state: frame.state, tree: tree, for: memoryKey)
             case .failure(VisualTree.DecodingError.unsupportedAPI(let api)):
                 unsupportedAPI = api
@@ -253,7 +269,7 @@ private struct VisualNotice: View {
 }
 
 /// The visual's error and, when it may help, a retry: a handler that threw, a limit, or the service stopping.
-private struct VisualFailureLine: View {
+struct VisualFailureLine: View {
     let failure: VisualFailure
     let retry: () -> Void
 
@@ -275,6 +291,7 @@ struct VisualNodeView: View, Equatable {
     let node: VisualNode
     let model: VisualArtifactModel
     @Environment(\.visualAxis) private var axis
+    @Environment(\.visualStill) private var still
 
     nonisolated static func == (lhs: VisualNodeView, rhs: VisualNodeView) -> Bool {
         lhs.node.fingerprint == rhs.node.fingerprint && lhs.node.id == rhs.node.id && lhs.node.path == rhs.node.path
@@ -351,6 +368,12 @@ struct VisualNodeView: View, Equatable {
             VisualSliderView(slider: slider, path: node.path, model: model)
         case .button(let button):
             VisualButtonView(button: button) { model.send(node.path, nil) }
+        case .canvas(let canvas):
+            if still {
+                VisualCanvasStill(canvas: canvas, drawing: model.drawing(for: node.path))
+            } else {
+                VisualCanvasView(canvas: canvas, path: node.path, model: model)
+            }
         }
     }
 
@@ -370,11 +393,21 @@ private struct VisualAxisKey: EnvironmentKey {
     static let defaultValue = Axis.vertical
 }
 
+private struct VisualStillKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
 extension EnvironmentValues {
     /// The axis of the stack a visual node sits in.
     fileprivate var visualAxis: Axis {
         get { self[VisualAxisKey.self] }
         set { self[VisualAxisKey.self] = newValue }
+    }
+
+    /// Draws canvases from their last drawing instead of running them, for screenshots.
+    fileprivate var visualStill: Bool {
+        get { self[VisualStillKey.self] }
+        set { self[VisualStillKey.self] = newValue }
     }
 }
 
@@ -515,7 +548,7 @@ extension VisualNode.Row.Justify {
     }
 }
 
-private func visualWeight(_ weight: Int) -> Font.Weight {
+func visualWeight(_ weight: Int) -> Font.Weight {
     switch weight {
     case ..<450: .regular
     case ..<550: .medium
@@ -808,6 +841,7 @@ enum VisualSnapshot {
             .fixedSize(horizontal: false, vertical: true)
             .background(Theme.background)
             .environment(\.pilotFonts, fonts)
+            .environment(\.visualStill, true)
         let renderer = ImageRenderer(content: content)
         renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
         guard let image = renderer.cgImage else { throw ClientError("Cannot draw the visual") }

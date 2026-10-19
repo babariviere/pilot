@@ -145,10 +145,73 @@ interface UI {
 	}): VisualNode;
 	button(props: { key?: Key; label: string; onClick: () => void; primary?: boolean; disabled?: boolean }): VisualNode;
 
-	/** Not yet supported: publication fails. */
-	canvas(...args: unknown[]): never;
+	/**
+	 * 2D drawing as wide as the column. draw runs on resize and pointer moves, and every display frame while animated
+	 * and visible; it reads state but never assigns it. 8 ms per frame: two slow frames in a row stop the canvas.
+	 */
+	canvas(props: {
+		key?: Key;
+		height?: number; // 24-600, default 240
+		animated?: boolean; // redraw every frame with t advancing
+		label?: string; // describes the drawing for VoiceOver
+		draw: (g: Pen, frame: Frame) => void;
+	}): VisualNode;
 	/** Not yet supported: publication fails. */
 	shader(...args: unknown[]): never;
+}
+
+/** What a canvas's draw function gets with the pen. Coordinates are points from the top left. */
+interface Frame {
+	width: number;
+	height: number;
+	/** Seconds since the canvas started animating; 0 when not animated or under Reduce Motion. */
+	t: number;
+	/** The pointer over the canvas, or null. */
+	pointer: { x: number; y: number } | null;
+}
+
+/** Shapes take fill, stroke or both (fill first). width is the stroke width, 1 by default; opacity is 0-1. */
+interface Paint {
+	fill?: Color;
+	stroke?: Color;
+	width?: number;
+	opacity?: number;
+}
+
+/** Records draw commands, at most 20,000 per frame (100,000 path points, 64 KiB of text). Numbers must be finite. */
+interface Pen {
+	rect(x: number, y: number, w: number, h: number, paint: Paint & { radius?: number }): void;
+	circle(cx: number, cy: number, r: number, paint: Paint): void;
+	line(x1: number, y1: number, x2: number, y2: number, paint: Paint /* stroke only */): void;
+	/** Points as [[x, y], ...] or a flat [x, y, x, y, ...]; at least 2. close joins the last point to the first. */
+	path(points: number[] | [number, number][], paint: Paint & { close?: boolean }): void;
+	/**
+	 * Angles in radians, clockwise from 3 o'clock. Fill draws a wedge, or a ring segment when inner > 0; stroke draws
+	 * the arc at r.
+	 */
+	arc(cx: number, cy: number, r: number, start: number, end: number, paint: Paint & { inner?: number }): void;
+	/** Not wrapped. align is horizontal around x (default "start"), baseline vertical around y (default "middle"). */
+	text(
+		x: number,
+		y: number,
+		text: string | number,
+		style?: {
+			color?: Color; // default "text"
+			size?: TextSize; // default "sm"
+			weight?: Weight;
+			align?: Align;
+			baseline?: "top" | "middle" | "bottom";
+			mono?: boolean;
+			opacity?: number;
+		},
+	): void;
+	/** save and restore bracket translate, rotate, scale and opacity (which multiplies). */
+	save(): void;
+	restore(): void;
+	translate(x: number, y: number): void;
+	rotate(radians: number): void;
+	scale(x: number, y?: number): void;
+	opacity(factor: number): void;
 }
 
 /**

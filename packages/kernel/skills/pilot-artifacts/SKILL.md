@@ -5,11 +5,9 @@ description: Author native visuals and offline HTML, React, image, shader and Sw
 
 # Pilot artifacts
 
-The `artifact` tool publishes session-local, offline artifacts. Pass source directly in tool arguments; no companion files are needed. This page covers what applies to every artifact. Read the reference for the kind you are authoring.
+The `artifact` tool publishes session-local, offline artifacts. Pass source directly in tool arguments; no companion files are needed. This page covers what applies to every artifact. Read the reference for the kind you are authoring. **Choose a native visual first** (`kind: "visual"`) for charts, stats, tables, small dashboards, controls and 2D drawings or animations. Pilot draws it natively in the chat, in light and dark, with no web page. Use HTML or React only for what visuals can't express: custom layouts, rich documents, wide content and web libraries such as Mermaid, d3 force graphs or three.js.
 
-**Choose a native visual first** (`kind: "visual"`) for charts, stats, tables, small dashboards and controls. Pilot draws it natively in the chat, in light and dark, with no web page. Use HTML or React only for what visuals can't express: custom layouts, rich documents, wide content and web libraries such as Mermaid, d3 force graphs or three.js.
-
-- Native visuals (charts, stats, tables, controls): [references/visuals.md](references/visuals.md), with the API in [references/visual.d.ts](references/visual.d.ts)
+- Native visuals (charts, stats, tables, controls, 2D canvas): [references/visuals.md](references/visuals.md), with the API in [references/visual.d.ts](references/visual.d.ts)
 - HTML and React pages, Mermaid diagrams and other web libraries: [references/web.md](references/web.md)
 - Native SwiftUI layouts and UI previews: [references/swiftui.md](references/swiftui.md)
 - PNG, JPEG, GIF or WebP images: [references/images.md](references/images.md)

@@ -9,6 +9,10 @@
 // 64 bytes join an intern table (up to 4096 entries) in order of appearance. Even n refers to entry n >> 1.
 // Values follow JSON.stringify: toJSON is applied, undefined, functions and symbols are skipped in objects and
 // become null in arrays, and non-finite numbers become null.
+//
+// Drawings (mirrored by VisualDrawing.swift) start with "PD", version 1 and a zero byte, then five little-endian
+// uint32: commands, op count, string count, string bytes and zero; then the ops as float64 (8-byte aligned at
+// offset 24), then each string as a uint32 byte count and its UTF-8 bytes. The ops follow DRAW_FORMAT in runtime.js.
 
 #include "pilot_visual_engine.h"
 
@@ -43,7 +47,10 @@ enum {
 #define PV_SOURCE_PREFIX "\"use strict\";("
 #define PV_RUNTIME_NAME "pilot-visual-runtime.js"
 
-typedef enum PVPhase { PV_PHASE_NONE, PV_PHASE_SETUP, PV_PHASE_VIEW, PV_PHASE_HANDLER } PVPhase;
+typedef enum PVPhase { PV_PHASE_NONE, PV_PHASE_SETUP, PV_PHASE_VIEW, PV_PHASE_HANDLER, PV_PHASE_DRAW } PVPhase;
+
+#define PV_DRAWING_HEADER 24u
+#define PV_MAX_DRAWING (64u << 20)
 
 struct PVEngine {
     JSRuntime *runtime;
@@ -56,6 +63,8 @@ struct PVEngine {
     JSValue event;
     JSValue state;
     JSValue logs;
+    JSValue draw;
+    JSValue frame;
     bool loaded;
     bool ready;
     uint64_t deadline;
@@ -344,6 +353,7 @@ PVEngine *pv_engine_create(PVLimits limits) {
     if (!engine) return NULL;
     engine->limits = limits;
     engine->api = engine->load = engine->render = engine->event = engine->state = engine->logs = JS_UNDEFINED;
+    engine->draw = engine->frame = JS_UNDEFINED;
     engine->runtime = JS_NewRuntime();
     if (!engine->runtime) {
         free(engine);
@@ -373,7 +383,8 @@ PVEngine *pv_engine_create(PVLimits limits) {
 
 void pv_engine_free(PVEngine *engine) {
     if (!engine) return;
-    JSValue *values[] = { &engine->api, &engine->load, &engine->render, &engine->event, &engine->state, &engine->logs };
+    JSValue *values[] = { &engine->api, &engine->load, &engine->render, &engine->event, &engine->state, &engine->logs,
+                          &engine->draw, &engine->frame };
     for (size_t i = 0; i < sizeof values / sizeof *values; i++) JS_FreeValue(engine->context, *values[i]);
     JS_FreeContext(engine->context);
     JS_FreeRuntime(engine->runtime);
@@ -398,6 +409,7 @@ static uint32_t pv_phase_ms(PVEngine *engine, PVPhase phase) {
     case PV_PHASE_SETUP: return engine->limits.setup_ms;
     case PV_PHASE_VIEW: return engine->limits.view_ms;
     case PV_PHASE_HANDLER: return engine->limits.handler_ms;
+    case PV_PHASE_DRAW: return engine->limits.draw_ms;
     default: return 0;
     }
 }
@@ -498,7 +510,10 @@ static int pv_exception(PVEngine *engine, PVBuffer *result) {
     if (timed_out && phase != PV_PHASE_NONE) {
         kind = "timeout";
         snprintf(message, sizeof message, "%s took longer than %u ms",
-                 phase == PV_PHASE_SETUP ? "the visual function" : phase == PV_PHASE_VIEW ? "the view" : "the handler",
+                 phase == PV_PHASE_SETUP  ? "the visual function"
+                 : phase == PV_PHASE_VIEW ? "the view"
+                 : phase == PV_PHASE_DRAW ? "the drawing"
+                                          : "the handler",
                  pv_phase_ms(engine, phase));
         body = message;
         body_length = strlen(message);
@@ -657,16 +672,17 @@ int pv_engine_load(PVEngine *engine, const char *runtime, size_t runtime_length,
     JSValue api = pv_eval(engine, PV_PHASE_SETUP, runtime, runtime_length, NULL, NULL, PV_RUNTIME_NAME);
     if (JS_IsException(api)) return pv_exception(engine, result);
     engine->api = api;
-    const char *names[] = { "load", "render", "event", "state", "logs" };
-    JSValue *functions[] = { &engine->load, &engine->render, &engine->event, &engine->state, &engine->logs };
-    for (int i = 0; i < 5; i++) {
+    const char *names[] = { "load", "render", "event", "state", "logs", "draw", "frame" };
+    JSValue *functions[] = { &engine->load, &engine->render, &engine->event, &engine->state, &engine->logs,
+                             &engine->draw, &engine->frame };
+    for (int i = 0; i < 7; i++) {
         *functions[i] = JS_IsObject(api) ? JS_GetPropertyStr(ctx, api, names[i]) : JS_UNDEFINED;
         if (JS_IsException(*functions[i])) {
             *functions[i] = JS_UNDEFINED;
             return pv_exception(engine, result);
         }
         if (!JS_IsFunction(ctx, *functions[i])) {
-            return pv_static_error(result, "state", "The visual runtime has no load, render, event, state and logs.");
+            return pv_static_error(result, "state", "The visual runtime is missing one of its host functions.");
         }
     }
 
@@ -734,6 +750,131 @@ int pv_engine_event(PVEngine *engine, const char *id, size_t id_length, const ch
     }
     int status = pv_frame(engine, now, changed, result);
     JS_FreeValue(ctx, changed);
+    pv_drain_logs(engine);
+    return status;
+}
+
+static void pv_put_u32(uint8_t *bytes, uint32_t value) {
+    for (int i = 0; i < 4; i++) bytes[i] = (uint8_t)(value >> (8 * i));
+}
+
+/// Encodes the runtime's last frame() as a drawing, into out when it fits, else into a new buffer in *result.
+static int pv_encode_drawing(PVEngine *engine, uint32_t commands, uint8_t *out, size_t capacity, size_t *written,
+                             PVBuffer *result) {
+    JSContext *ctx = engine->context;
+    JSValue frame = pv_call(engine, PV_PHASE_NONE, engine->frame, 0, NULL);
+    pv_end(engine);
+    if (JS_IsException(frame)) return pv_exception(engine, result);
+    JSValue ops = JS_GetPropertyStr(ctx, frame, "ops");
+    JSValue strings = JS_GetPropertyStr(ctx, frame, "strings");
+    JS_FreeValue(ctx, frame);
+    int status = 0;
+    const char **texts = NULL;
+    size_t *lengths = NULL;
+    int64_t count = 0;
+    size_t offset = 0, length = 0, element = 0, buffer_size = 0;
+    JSValue buffer = JS_UNDEFINED;
+    const uint8_t *bytes = NULL;
+    if (JS_GetTypedArrayType(ops) == JS_TYPED_ARRAY_FLOAT64) {
+        buffer = JS_GetTypedArrayBuffer(ctx, ops, &offset, &length, &element);
+        if (!JS_IsException(buffer)) bytes = JS_GetArrayBuffer(ctx, &buffer_size, buffer);
+    }
+    if (!bytes || offset + length > buffer_size || JS_GetLength(ctx, strings, &count) < 0 || count < 0 ||
+        count > 1000000) {
+        JS_FreeValue(ctx, JS_GetException(ctx));
+        status = pv_static_error(result, "result", "The visual runtime returned an invalid drawing.");
+        goto done;
+    }
+    texts = count ? calloc((size_t)count, sizeof *texts) : NULL;
+    lengths = count ? calloc((size_t)count, sizeof *lengths) : NULL;
+    if (count && (!texts || !lengths)) {
+        status = pv_static_error(result, "memory", "Out of memory while encoding the drawing.");
+        goto done;
+    }
+    size_t string_bytes = 0;
+    for (int64_t i = 0; i < count; i++) {
+        JSValue item = JS_GetPropertyInt64(ctx, strings, i);
+        texts[i] = JS_IsString(item) ? JS_ToCStringLen(ctx, &lengths[i], item) : NULL;
+        JS_FreeValue(ctx, item);
+        if (!texts[i]) {
+            JS_FreeValue(ctx, JS_GetException(ctx));
+            status = pv_static_error(result, "result", "The visual runtime returned an invalid drawing.");
+            goto done;
+        }
+        string_bytes += 4 + lengths[i];
+    }
+    size_t total = PV_DRAWING_HEADER + length + string_bytes;
+    if (total > PV_MAX_DRAWING) {
+        status = pv_static_error(result, "result", "The drawing is larger than 64 MiB.");
+        goto done;
+    }
+    uint8_t *target = out;
+    if (!out || total > capacity) {
+        target = malloc(total);
+        if (!target) {
+            status = pv_static_error(result, "memory", "Out of memory while encoding the drawing.");
+            goto done;
+        }
+        result->bytes = target;
+        result->length = total;
+    } else {
+        *written = total;
+    }
+    memcpy(target, "PD\x01\x00", 4);
+    pv_put_u32(target + 4, commands);
+    pv_put_u32(target + 8, (uint32_t)(length / 8));
+    pv_put_u32(target + 12, (uint32_t)count);
+    pv_put_u32(target + 16, (uint32_t)string_bytes);
+    pv_put_u32(target + 20, 0);
+    // Doubles are little endian on every Mac this runs on.
+    memcpy(target + PV_DRAWING_HEADER, bytes + offset, length);
+    uint8_t *cursor = target + PV_DRAWING_HEADER + length;
+    for (int64_t i = 0; i < count; i++) {
+        pv_put_u32(cursor, (uint32_t)lengths[i]);
+        memcpy(cursor + 4, texts[i], lengths[i]);
+        cursor += 4 + lengths[i];
+    }
+done:
+    if (texts) {
+        for (int64_t i = 0; i < count; i++) {
+            if (texts[i]) JS_FreeCString(ctx, texts[i]);
+        }
+    }
+    free(texts);
+    free(lengths);
+    JS_FreeValue(ctx, buffer);
+    JS_FreeValue(ctx, ops);
+    JS_FreeValue(ctx, strings);
+    return status;
+}
+
+int pv_engine_draw(PVEngine *engine, const char *id, size_t id_length, double width, double height, double t,
+                   int has_pointer, double pointer_x, double pointer_y, uint8_t *out, size_t capacity,
+                   size_t *written, PVBuffer *result) {
+    *result = (PVBuffer){ 0 };
+    *written = 0;
+    if (!engine->ready) return pv_static_error(result, "unloaded", "This visual is not loaded.");
+    JSContext *ctx = engine->context;
+    JSValue arguments[6] = {
+        JS_NewStringLen(ctx, id, id_length),
+        JS_NewFloat64(ctx, width),
+        JS_NewFloat64(ctx, height),
+        JS_NewFloat64(ctx, t),
+        has_pointer ? JS_NewFloat64(ctx, pointer_x) : JS_UNDEFINED,
+        has_pointer ? JS_NewFloat64(ctx, pointer_y) : JS_UNDEFINED,
+    };
+    JSValue commands = pv_call(engine, PV_PHASE_DRAW, engine->draw, 6, arguments);
+    for (int i = 0; i < 6; i++) JS_FreeValue(ctx, arguments[i]);
+    if (JS_IsException(commands)) {
+        int status = pv_exception(engine, result);
+        pv_drain_logs(engine);
+        return status;
+    }
+    double count = 0;
+    if (JS_ToFloat64(ctx, &count, commands) < 0) JS_FreeValue(ctx, JS_GetException(ctx));
+    JS_FreeValue(ctx, commands);
+    int status = pv_encode_drawing(engine, count > 0 && count < 4294967295.0 ? (uint32_t)count : 0, out, capacity,
+                                   written, result);
     pv_drain_logs(engine);
     return status;
 }

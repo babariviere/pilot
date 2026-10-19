@@ -133,7 +133,7 @@ test("visual revisions keep source, data, versions and the check, with a fallbac
 		assert.deepEqual(created.visual, {
 			api: 1,
 			engine: "quickjs-ng 0.17.0",
-			check: { nodes: 3, controls: 1, interactions: 2, logs: [] },
+			check: { nodes: 3, controls: 1, interactions: 2, draws: 0, logs: [] },
 		});
 		assert.deepEqual(created.libraries, []);
 		assert.match(created.html, /newer version of Pilot/);
