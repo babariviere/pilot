@@ -74,7 +74,7 @@ struct CommandPaletteCatalog {
         }
     }
 
-    /// Named alternatives to Ctrl-Tab, for regions on screen when the palette opened.
+    /// Moves focus to a region by name, for regions on screen when the palette opened.
     private func focusCommands() -> [CommandPaletteEntry] {
         let keyboard = model.keyboard
         return keyboard.visibleRegions.map { region in

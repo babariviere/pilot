@@ -35,12 +35,11 @@ enum KeyboardShortcuts {
             Entry(title: "Open settings", keys: "⌘,"),
         ]),
         Group(title: "Focus", entries: [
-            Entry(title: "Focus next region", keys: "⌃⇥"),
-            Entry(title: "Focus previous region", keys: "⌃⇧⇥"),
             Entry(title: "Focus composer or question", keys: "⌘L"),
+            Entry(title: "Focus the sidebar, page or inspector", keys: "⌘K, then Focus…"),
             Entry(title: "Move through a list or the transcript", keys: "↑ / ↓"),
             Entry(title: "Open the highlighted row", keys: "↩"),
-            Entry(title: "Leave the terminal or an artifact page", keys: "⌃⇥ / ⌘L / ⌘J"),
+            Entry(title: "Leave the terminal or an artifact page", keys: "⌘L / ⌘J"),
         ]),
         Group(title: "Chat", entries: [
             Entry(title: "New chat", keys: "⌘N"),

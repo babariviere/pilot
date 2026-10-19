@@ -43,8 +43,6 @@ private final class Journey {
         router.focus = keyboard
         router.perform = { [model] route in
             switch route {
-            case .focusNextRegion: keyboard.cycle(forward: true); return true
-            case .focusPreviousRegion: keyboard.cycle(forward: false); return true
             case .focusComposer: return keyboard.focus(.composer)
             default: return model.performKeyboardRoute(route)
             }
@@ -113,14 +111,16 @@ func keyboardOnlyStartSwitchTypeAndReturn() throws {
     #expect(model.currentRoute == .home)
 
     journey.run {
-        // ⌃⇥ walks the regions in order: sidebar, page, composer. The sidebar list may hold focus at launch, so the
-        // walk starts wherever focus is and must reach the sidebar within one round.
-        for _ in 0..<4 where !(journey.responder is NSTableView) { journey.press("\t", keyCode: 48, .control) }
+        // The sidebar list may hold focus at launch; otherwise give it focus as a click would.
+        if !(journey.responder is NSTableView) { _ = keyboard.focus(.sidebar) }
         #expect(journey.wait { journey.responder is NSTableView }, "the sidebar's outline takes focus")
         #expect(keyboard.currentRegion() == .sidebar)
+        // ⌃⇥ is not an app shortcut: it never moves focus to another region.
         journey.press("\t", keyCode: 48, .control)
-        #expect(journey.wait { keyboard.currentRegion() == .content })
-        journey.press("\t", keyCode: 48, .control)
+        journey.settle(0.2)
+        #expect(keyboard.currentRegion() == .sidebar)
+        // ⌘L puts the caret in the new-chat composer.
+        journey.press("l", keyCode: 37, .command)
         #expect(journey.wait { journey.responder is SubmitTextView }, "the new-chat editor takes focus")
 
         // In the editor, letters are text.
@@ -160,7 +160,7 @@ func keyboardOnlySidebarBrowsingKeepsFocusInTheSidebar() throws {
     let keyboard = model.keyboard
     #expect(journey.wait { keyboard.visibleRegions.contains(.sidebar) })
     journey.run {
-        for _ in 0..<4 where !(journey.responder is NSTableView) { journey.press("\t", keyCode: 48, .control) }
+        if !(journey.responder is NSTableView) { _ = keyboard.focus(.sidebar) }
         #expect(journey.wait { journey.responder is NSTableView })
         // J is not a navigation key; Down is. Arrowing onto a chat opens it, and its composer does not take the focus.
         journey.press("j", keyCode: 38)

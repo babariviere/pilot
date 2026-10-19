@@ -14,12 +14,6 @@ extension AppModel {
     /// Performs a route the keyboard router reserved. Returns false to deliver the key normally.
     func performKeyboardRoute(_ route: KeyboardRoute) -> Bool {
         switch route {
-        case .focusNextRegion:
-            keyboard.cycle(forward: true)
-            return true
-        case .focusPreviousRegion:
-            keyboard.cycle(forward: false)
-            return true
         case .focusComposer:
             return focusComposer()
         case .commandPalette:
@@ -141,10 +135,6 @@ struct KeyboardNavigationCommands: Commands {
                 .keyboardShortcut("]", modifiers: .command)
                 .disabled(!model.navigationHistory.canGoForward)
             Divider()
-            Button("Next Region") { model.keyboard.cycle(forward: true) }
-                .keyboardShortcut(.tab, modifiers: .control)
-            Button("Previous Region") { model.keyboard.cycle(forward: false) }
-                .keyboardShortcut(.tab, modifiers: [.control, .shift])
             Button("Focus Composer") { model.focusComposer() }
                 .keyboardShortcut("l", modifiers: .command)
             Divider()

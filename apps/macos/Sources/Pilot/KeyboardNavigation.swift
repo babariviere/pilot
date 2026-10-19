@@ -5,12 +5,11 @@ import WebKit
 // Shared keyboard navigation: named focus regions, input guards and the few reserved app-level keys.
 //
 // Ordinary shortcuts stay menu key equivalents, so a focused editor or embedded view keeps its own equivalents
-// first. Only the routes in `KeyboardRoute` are read before the focused view: ⌃⇥ region focus and ⌘L composer
-// focus everywhere, and the palette and terminal toggle out of embedded content. Plain letters are never taken from
-// the focused view, so typing, IME composition and native type-select behave as usual. Nothing is recorded or
-// replayed.
+// first. Only the routes in `KeyboardRoute` are read before the focused view: ⌘L composer focus everywhere, and the
+// palette and terminal toggle out of embedded content. Plain letters are never taken from the focused view, so
+// typing, IME composition and native type-select behave as usual. Nothing is recorded or replayed.
 
-/// The window's keyboard regions, in Ctrl-Tab order. Regions that are not on screen are skipped.
+/// The window's keyboard regions, in on-screen order. Regions that are not on screen are skipped.
 enum KeyboardRegion: String, CaseIterable {
     case sidebar
     case content
@@ -106,8 +105,6 @@ struct KeyboardChord: Equatable {
 enum KeyboardRoute: Equatable {
     /// Deliver normally.
     case pass
-    case focusNextRegion
-    case focusPreviousRegion
     case focusComposer
     case commandPalette
     case toggleTerminal
@@ -115,10 +112,6 @@ enum KeyboardRoute: Equatable {
     /// Only modified chords are reserved; every unmodified key reaches the focused view.
     static func decide(_ chord: KeyboardChord, context: KeyboardInputContext) -> KeyboardRoute {
         let mods = chord.modifiers
-        if chord.keyCode == KeyboardChord.tabKeyCode {
-            if mods == [.control] { return .focusNextRegion }
-            if mods == [.control, .shift] { return .focusPreviousRegion }
-        }
         if mods == [.command], chord.characters == "l" { return .focusComposer }
         if context == .embedded, mods == [.command] {
             if chord.characters == "k" { return .commandPalette }
@@ -263,7 +256,7 @@ final class KeyboardFocus: ObservableObject {
         anchor(for: region).map { $0.convert($0.bounds, to: nil) }
     }
 
-    /// Regions on screen, in Ctrl-Tab order.
+    /// Regions on screen, in sidebar, page, composer, inspector order.
     var visibleRegions: [KeyboardRegion] { KeyboardRegion.allCases.filter { anchor(for: $0) != nil } }
 
     /// The region holding the first responder, else the last one focused.
@@ -289,22 +282,6 @@ final class KeyboardFocus: ObservableObject {
     }
 
     // MARK: Focus commands
-
-    /// Moves to the next or previous region on screen. Returns false when there is none to move to.
-    @discardableResult
-    func cycle(forward: Bool) -> Bool {
-        let regions = visibleRegions
-        guard !regions.isEmpty else { return false }
-        let current = currentRegion().flatMap(regions.firstIndex(of:))
-        let start = current ?? (forward ? -1 : regions.count)
-        // Try each other region once, so one that cannot take focus is skipped rather than trapping the cycle.
-        for step in 1...regions.count {
-            let index = ((start + (forward ? step : -step)) % regions.count + regions.count) % regions.count
-            if index == current { break }
-            if focus(regions[index]) { return true }
-        }
-        return false
-    }
 
     /// Asks the region's views to take focus, falling back to its first native key view.
     @discardableResult
@@ -389,12 +366,12 @@ final class KeyboardRouter {
         }
         guard let focus, let window = event.window else { return event }
         if window !== focus.window || window.attachedSheet != nil {
-            // Sheets and other windows (an artifact viewer, a link preview) keep every key, except that ⌃⇥ always
-            // leaves web or terminal content, so the window's own controls and Escape are reachable again.
+            // Sheets and other windows (an artifact viewer, a link preview) keep every key, except that ⌘L leaves
+            // web or terminal content, so the window's own controls and Escape are reachable again.
             let target = window.attachedSheet ?? window
+            let chord = KeyboardChord(event)
             guard target === window, KeyboardInputGuard.context(for: window.firstResponder) == .embedded,
-                  event.keyCode == KeyboardChord.tabKeyCode,
-                  KeyboardChord(event).modifiers.subtracting(.shift) == [.control] else { return event }
+                  chord.modifiers == [.command], chord.characters == "l" else { return event }
             Self.leaveEmbeddedContent(in: window)
             return nil
         }

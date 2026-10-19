@@ -32,7 +32,6 @@ final class KeyboardCue: ObservableObject {
 
     /// True when a key press navigates rather than types.
     ///
-    /// - ⌃⇥ and ⌃⇧⇥ move between regions from anywhere, even out of terminals and web content.
     /// - Outside text, unmodified and ⌥ navigation keys browse: arrows, Return, Tab, Space, Escape, Home/End and
     ///   Page Up/Down. Letters, digits and menu shortcuts (⌘ or ⌃) do not.
     /// - In text, only leaving the field navigates: Tab out of a single-line field, or Escape back to the page.
@@ -41,7 +40,6 @@ final class KeyboardCue: ObservableObject {
     static func navigates(_ chord: KeyboardChord, context: KeyboardInputContext, fieldEditor: Bool) -> Bool {
         let mods = chord.modifiers
         let tab = chord.keyCode == KeyboardChord.tabKeyCode
-        if tab, mods.subtracting(.shift) == [.control] { return true }
         switch context {
         case .embedded:
             return false

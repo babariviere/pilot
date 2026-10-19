@@ -49,20 +49,19 @@ private func anchor(_ region: KeyboardRegion, _ frame: NSRect, focus: KeyboardFo
     router.focus = focus
     var routes: [KeyboardRoute] = []
     router.perform = { route in routes.append(route); return true }
-    for event in [try key("\t", 48, in: window), try key("\u{1b}", 53, in: window), try key("c", 8, .control, in: window),
-                  try key("g", 5, in: window), try key("j", 38, in: window), try key("?", 44, .shift, in: window),
-                  try key("w", 13, .command, in: window)] {
+    for event in [try key("\t", 48, in: window), try key("\t", 48, .control, in: window), try key("\u{1b}", 53, in: window),
+                  try key("c", 8, .control, in: window), try key("g", 5, in: window), try key("j", 38, in: window),
+                  try key("?", 44, .shift, in: window), try key("w", 13, .command, in: window)] {
         #expect(router.handle(event) === event, "web content keeps \(event.charactersIgnoringModifiers ?? "")")
     }
     #expect(routes.isEmpty)
     #expect(router.handle(try key("k", 40, .command, in: window)) == nil)
     #expect(router.handle(try key("l", 37, .command, in: window)) == nil)
-    #expect(router.handle(try key("\t", 48, .control, in: window)) == nil)
-    #expect(routes == [.commandPalette, .focusComposer, .focusNextRegion])
+    #expect(routes == [.commandPalette, .focusComposer])
     #expect(focus.currentRegion() == .inspector, "geometry places the web view in the inspector")
 }
 
-@Test @MainActor func controlTabLeavesWebContentInAnArtifactWindow() throws {
+@Test @MainActor func commandLLeavesWebContentInAnArtifactWindow() throws {
     let main = shownWindow()
     defer { main.close() }
     let focus = KeyboardFocus()
@@ -79,7 +78,10 @@ private func anchor(_ region: KeyboardRegion, _ frame: NSRect, focus: KeyboardFo
     router.perform = { _ in Issue.record("viewer keys never run main-window routes"); return true }
     let escape = try key("\u{1b}", 53, in: viewer)
     #expect(router.handle(escape) === escape, "Escape stays with the page")
-    #expect(router.handle(try key("\t", 48, .control, in: viewer)) == nil)
+    let controlTab = try key("\t", 48, .control, in: viewer)
+    #expect(router.handle(controlTab) === controlTab, "⌃⇥ stays with the page")
+    #expect(viewer.firstResponder === web)
+    #expect(router.handle(try key("l", 37, .command, in: viewer)) == nil)
     // Focus left the web view: for the window's own controls, or the window itself when buttons take no focus
     // (Keyboard navigation off), so Escape and Return reach its default buttons again.
     let responder = viewer.firstResponder

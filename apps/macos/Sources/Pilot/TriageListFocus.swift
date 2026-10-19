@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Lets the page region's focus (⌃⇥, a G destination, Escape from the composer) land on a board or tree that keeps
-/// its own keys, such as Slack triage's arrows and T/L/D or the memory tree's arrows.
+/// Lets the page region's focus (a Go menu destination, Escape from the composer) land on a board or tree that keeps
+/// its own keys, such as Slack triage's or the memory tree's arrows.
 struct TriageListFocus: ViewModifier {
     var focused: FocusState<Bool>.Binding
     @Environment(\.keyboardFocus) private var keyboard
