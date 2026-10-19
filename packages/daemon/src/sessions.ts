@@ -1371,9 +1371,11 @@ export class SessionManager {
 	}
 	/** Run binding must be available during kernel recovery, before the notice sink is enabled. */
 	setWatchService(watches: WatchService): void {
+		if (!this.controlRoleAllows()) return;
 		this.watches = watches;
 	}
 	setWatches(watches: WatchService): () => void {
+		this.assertControlActive();
 		this.setWatchService(watches);
 		watches.bindSink(
 			new ControlWatchSink(SessionManager.CONTROL_ID, this, {
@@ -1481,9 +1483,23 @@ export class SessionManager {
 	/** The control chat's name, shown as-is by every client. The only place it is spelled. */
 	static readonly CONTROL_TITLE = "Control";
 	private controlRoleAllows = () => true;
-	/** Installed from the durable effective policy before load. Staged pairing does not freeze. */
+	/** Installed from durable local conversation/effective host policy before load. */
 	setControlRoleGuard(allows: () => boolean): void {
 		this.controlRoleAllows = allows;
+	}
+	assertControlActive(): void {
+		if (!this.controlRoleAllows()) throw new Conflict("Control is read-only on this host");
+	}
+	private isArchivedControl(meta: SessionMeta): boolean {
+		return meta.control === true && !this.controlRoleAllows();
+	}
+	private assertControlWritable(meta: SessionMeta): void {
+		if (meta.control) this.assertControlActive();
+	}
+	/** Reading the singleton never allocates it or starts an archived conversation. */
+	getControlChat(): SessionSummary | undefined {
+		const meta = this.metas.get(SessionManager.CONTROL_ID);
+		return meta?.control ? this.summary(meta) : undefined;
 	}
 	controlPermission(id: string): ControlPermission | undefined {
 		const p = this.metas.get(id)?.controlPermission;
@@ -1813,6 +1829,10 @@ export class SessionManager {
 			try {
 				const meta = JSON.parse(await readFile(join(this.sessionsDir, id, "meta.json"), "utf8")) as SessionMeta;
 				if (meta.id !== id) throw new Error("Session metadata ID does not match its directory");
+				if (this.isArchivedControl(meta)) {
+					this.metas.set(meta.id, meta);
+					continue;
+				}
 				normalizeLegacyOutcome(meta);
 				const legacyRefresh =
 					meta.workspaceMainDue ||
@@ -3258,6 +3278,7 @@ export class SessionManager {
 
 	/** Serialize pin changes with archiving so automatic transitions recheck the committed pin. */
 	async setPinned(id: string, pinned: boolean): Promise<SessionSummary> {
+		this.assertControlWritable(this.require(id));
 		if (this.isControlSession(id) && !pinned) throw new Conflict("The control chat stays pinned");
 		const end = this.updateGate.begin();
 		try {
@@ -3295,6 +3316,7 @@ export class SessionManager {
 			if (!next) throw new Error("title is required");
 			const meta = this.require(id);
 			const unchanged = meta.title === next && !meta.titlePending;
+			this.assertControlWritable(meta);
 			this.missions?.renameCoordinator?.(id, next);
 			if (unchanged) return this.summary(meta);
 			meta.title = next;
@@ -3333,6 +3355,7 @@ export class SessionManager {
 		autoArchivedPullRequest?: string,
 		staleBefore?: number,
 	): Promise<SessionSummary> {
+		this.assertControlWritable(this.require(id));
 		if (this.isControlSession(id)) return Promise.reject(new Conflict("The control chat cannot be archived"));
 		if (this.closing) throw new Error("pilotd is shutting down");
 		this.require(id);
@@ -3749,6 +3772,7 @@ export class SessionManager {
 	}
 
 	private assertNotContinued(meta: SessionMeta, allowFenced = false): void {
+		this.assertControlWritable(meta);
 		if (!allowFenced) this.sharing?.assertAdmission(meta.id);
 		if (meta.delegationFenced && !allowFenced)
 			throw new Conflict("Delegated execution is fenced; reassignment requires a target seal receipt");
@@ -4572,6 +4596,7 @@ export class SessionManager {
 		const worker = this.workers.get(id);
 		return (
 			!!meta &&
+			!this.isArchivedControl(meta) &&
 			!meta.continuedTo &&
 			!meta.continuationPending &&
 			!this.closing &&
@@ -4861,6 +4886,7 @@ export class SessionManager {
 
 	/** Retry worker initialization, without forking history or replacing queued input IDs. */
 	async retryStartup(id: string): Promise<SessionSummary> {
+		this.assertControlWritable(this.require(id));
 		const end = this.updateGate.begin();
 		let locked = false;
 		let release!: () => void;
@@ -5221,6 +5247,7 @@ export class SessionManager {
 	 * listing reopens a parked session only the first time. Archived, preparing or failed sessions list none.
 	 */
 	async commands(id: string): Promise<SessionCommand[]> {
+		if (this.isArchivedControl(this.require(id))) return [];
 		const cached = this.commandLists.get(id);
 		if (cached) return cached;
 		const meta = this.require(id);
@@ -5668,6 +5695,7 @@ export class SessionManager {
 		id: string,
 		command: Extract<KernelCommand, { type: "rewind" | "activateAttempt" }>,
 	): Promise<{ switched: boolean; content?: string }> {
+		this.assertControlWritable(this.require(id));
 		const end = this.updateGate.begin();
 		let locked = false;
 		let release!: () => void;
@@ -5949,7 +5977,8 @@ export class SessionManager {
 			: listener;
 		// Preserve the update lease guard before registering a new cold subscription. Existing
 		// live subscriptions and terminal failed-session snapshots do not start new work.
-		if (!worker && !meta.failure && !meta.recoveryStopped) this.updateGate.assertOpen();
+		if (!worker && !meta.failure && !meta.recoveryStopped && !this.isArchivedControl(meta))
+			this.updateGate.assertOpen();
 		const watchId = randomUUID();
 		let watchers = this.watchers.get(id);
 		if (!watchers) {
@@ -5962,6 +5991,7 @@ export class SessionManager {
 		if (worker && !meta.failure) worker.send({ type: "watch", watchId });
 		else if (
 			!this.sleepPause &&
+			!this.isArchivedControl(meta) &&
 			!meta.failure &&
 			!meta.recoveryStopped &&
 			meta.archivedAt === undefined &&

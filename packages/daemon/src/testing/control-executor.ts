@@ -24,6 +24,7 @@ export async function executorFixture(t: { after(fn: () => Promise<void>): void 
 	let store = new ControlHostStore(path);
 	const keys = { publicKey: (id: string) => (id === "native" ? key.publicKey : undefined) };
 	let hosts = new ControlHosts(executorHost, store, keys);
+	await hosts.recoverConversationRole("darwin");
 	const configuration: ControlHostConfiguration = {
 		schemaVersion: 1,
 		roleEpoch: 1,
@@ -183,7 +184,7 @@ export async function executorFixture(t: { after(fn: () => Promise<void>): void 
 			await store.close();
 			store = new ControlHostStore(path);
 			hosts = new ControlHosts(executorHost, store, keys);
-			await hosts.configuration();
+			await hosts.recoverConversationRole("darwin");
 			handler = new ControlExecutor(store, backend);
 		},
 	};

@@ -1,6 +1,44 @@
 # One Control across hosts
 
-Contract v1, not an enabled feature. The types in
+## Current conversation policy
+
+Control runs only on the Mac that owns the app. Linux/devbox daemons never create or run a
+conversational Control. This restriction applies now, independently of cross-host enrollment,
+transport readiness or either end-to-end proof suite. It supersedes the older staged-rollout
+language below that kept remote Controls usable until remote orchestration was ready.
+
+Before session or watch recovery, `ControlHosts.recoverConversationRole` loads the local
+`control_conversation_role` record in `$PILOT_HOME/control-hosts/state.sqlite`. On first use,
+the daemon persists `app-home` for the macOS app host and `executor` for other platforms,
+including Linux. The record pins daemon installation and storage lineage. Subsequent starts use
+that persisted role, not hostname, SSH alias, connection state, selected devbox or a new platform
+hint. An identity mismatch or unreadable policy fails closed. This is local product configuration,
+not enrollment, consent to a remote home, or an automatic failover election.
+
+An `executor` conversation role always denies Control, even if older cross-host configuration
+calls that daemon `home`. On an `app-home` installation the existing Mac Control behavior is
+unchanged, except that explicit effective executor/archived-control, freeze or archive policy
+still denies execution. Missing cross-host enrollment does not disable the Mac singleton.
+
+Existing non-home Control metadata, queued input, transcript, memory, grants and audit remain
+on their original host, unchanged and readable. This is a policy-level read-only archive, not
+ordinary session archival: no `archivedAt` rewrite, history merge, deletion or workspace cleanup.
+`ensureControlChat` and input/configuration/worker mutations refuse; recovery, scheduled/user
+wakes, notice delivery, memory compaction and global Control actions cannot start a turn.
+GET `/api/control-chat` reads an existing singleton without ensuring it. Session history and
+subscriptions use cold storage, and existing Control memory/audit/authorization GET routes stay
+readable. Mutating Control HTTP routes refuse. A fresh executor has no singleton to read.
+
+The legacy watch service is frozen before sources start: no matching, expiry pruning, live source
+targets, delivery or follow-through; its existing records remain browseable. Executors skip
+legacy-grant import, watch reconciliation and the conversational sink. Independent accepted
+chats are not attached to that frozen service, so their recovery and continued work do not fail
+on old follow-through bookkeeping. Their permissions and provenance are not widened or changed.
+No accepted ordinary work is stopped. App-side hiding/archive presentation is a separate change.
+
+## Cross-host contract
+
+Contract v1 is not an enabled end-to-end feature. The types in
 [control.ts](../packages/protocol/src/control.ts) and
 [ControlHosts.swift](../apps/macos/Sources/PilotCore/ControlHosts.swift) add no handlers,
 transport, enrollment, migration, permission enforcement or UI behavior. Old daemons must not
@@ -41,11 +79,10 @@ The configuration also identifies this daemon and its role:
 
 `controlSessionId` identifies the active Control only on home. An archived Control is identified
 by `archive.sessionId`, never an active Control. Roles are persisted setup policy, not inferred
-from connectivity. While executor policy is staged, `legacyControlSessionId` identifies its
-still-visible former independent Control; only the final archive clears this field and fills archive.
-Role labels do not authorize the app to hide that legacy Control. Never infer authority from a
-sidebar row or a matching session ID. Until migration's gate is met, existing
-independent Controls remain unchanged; this contract is not permission to hide them early.
+from connectivity. `legacyControlSessionId` and the final versioned `archive` acknowledgment
+belong to the future enrollment migration. Neither can override the local conversation restriction
+above: a non-home legacy Control is read-only immediately, even before pairing or final archive
+acknowledgment. Never infer authority from a sidebar row or a matching session ID.
 
 Follow [host routing](host-routing.md): daemon installation and storage lineage identify authority,
 not paths, repository names or endpoint aliases. Wire `OperationHost.hostId` is normalized to
@@ -357,8 +394,8 @@ not just the Mac or a cached app version. Capability support alone never hides a
 
 1. Both verified hellos support contract v1, agree on the approved home through effective or
    stagedRole metadata as appropriate, and the authoritative home advertises role home.
-   Pairing may leave the effective legacy role active with a staged executor role. Only explicit
-   freeze applies executor policy before load/recovery. See pre-cutover staging below.
+   Pairing may leave the cross-host configuration's legacy role with a staged executor role.
+   This does not bypass the local conversation fence. See pre-cutover staging below.
 2. `homeReady` means the authoritative home Control, grant ledger, durable outbox and import stores
    are recovered and usable. `executorEnrolled` requires the same active confirmed enrollment on
    both sides and working registered Control handlers on the executor.
@@ -429,8 +466,9 @@ durably on the executor. Home's authorized orchestration operations can remain p
 durable outbox, visibly pending versus acknowledged. This exception is for Control orchestration,
 not an offline queue for ordinary composer sends. No second Control starts during disconnection.
 
-Only after two-daemon end-to-end start, refusal, watches/reconnect, stop receipt, revoke and status
-flows work may explicit migration set a non-home Control to archived-control. Preserve its chat,
+The current local policy archives non-home conversations immediately, without waiting for the
+two-daemon or real-courier tests. The future enrolled `control.archive` transition and its
+versioned acknowledgment still require the transport/readiness proofs below. Preserve its chat,
 transcript, memory, authorization records and audit on its original host/lineage. Block new turns,
 scheduled wakes, queued notices, automatic recovery inputs and mutations through every ingress,
 not just the sidebar. Stop its live watches with durable removal audits and freeze its grants.
@@ -624,10 +662,11 @@ and show peer pending. No implicit downgrade or failover.
   routes are available and active/uncertain legacy Control mutations can be reconciled by the
   archive handler. It is not proof that freeze has already happened.
 
-The app shows separate legacy Controls while preparing/ready or while archive is pending/unknown.
-Only adopted accepted control.archive plus matching archived role/epoch and usable history-read
-routes allows one active row. Already archived executors without legacy content use their explicit
-executor role only after the same capability/enrollment/route/test gate, not by hiding an unknown row.
+The current local policy permits no active non-home Control while preparing/ready or while an
+enrolled archive is pending/unknown. App-side hiding or read-only archive presentation follows
+that policy separately. The future enrolled archive protocol still requires adopted accepted
+control.archive, matching archived role/epoch and usable history-read routes before claiming
+that versioned transition complete; hiding a row is not protocol evidence.
 Any build, pin, generation or epoch change invalidates stale ready evidence. A post-cutover disconnect
 retains the one authoritative home row as disconnected and keeps archived history navigation.
 
@@ -829,8 +868,10 @@ Required startup contract for the enrollment/role owner and archive-transition o
 1. Open and recover the durable Control-host role/enrollment/freeze store **before SessionManager
    load, session recovery scheduling, input admission, watch observation or any callback that can
    start a Control worker**. Install a process-wide trusted role/roleEpoch admission guard first.
-   Missing, corrupt or uncertain policy fences Control creation/recovery/wakes; never default to
-   home based on platform, SSH configuration or an empty store. Ordinary independent chats may
+   The local conversation-role bootstrap above preserves the app Mac's existing behavior and
+   persists executor policy on fresh devboxes. Missing recovery, corrupt or uncertain policy
+   fences Control creation/recovery/wakes; never promote from SSH configuration, a hostname or
+   connectivity. Ordinary independent chats may
    recover when their own safety prerequisites hold.
 2. Load metadata/history for all chats, but executor and archived-control must suppress execution
    recovery of legacy conversational Controls, queued Control inputs, scheduled wakes and provider
@@ -854,9 +895,10 @@ Required startup contract for the enrollment/role owner and archive-transition o
    checks the guard, so changing a row/filter cannot reactivate a frozen Control.
 
 An explicit freeze intent applies the executor fence immediately, while the legacy row remains
-visible until acknowledged archive. Pairing alone stores stagedRole and leaves the effective legacy
-role active. Final archive is the last non-destructive step, not the first execution fence. Native
-filtering is insufficient. Staging alone cannot activate production remote orchestration or failover.
+visible until acknowledged archive. Pairing alone stores stagedRole but never reactivates a locally
+restricted conversation. Final enrolled archive is the last non-destructive step, not the first
+execution fence. Native filtering is insufficient. Staging alone cannot activate production remote
+orchestration or failover.
 
 Required implementation tests seed an old Control with a recoverable run, queued input, pending and
 already-fired watches, grants and audit, then restart as executor and archived-control. Assert zero
@@ -1249,18 +1291,21 @@ and remains the sole display projection with title/status/import time/conflict p
 
 Pairing is **pair-only**. Enrollment preview and approval store an accepted future home and
 `configuration.stagedRole {home,role:"executor",phase:"paired"}`, not an effective executor role.
-The existing legacy role, local starts/follow-ups/wakes and ordinary source stores stay active while
-proof/route readiness is assembled. Its current configuration.home may still name that legacy daemon;
+The existing cross-host configuration stays intact while proof/route readiness is assembled, but
+the local conversation-role restriction already blocks devbox starts/follow-ups/wakes.
+Its current configuration.home may still name that legacy daemon;
 compare the separately approved stagedRole.home to enrollment.home for pre-cutover readiness.
-No grant/history is merged and the native UI cannot hide anything. Missing proofs or incompatible
-peers leave the staged pair inactive; they cannot suppress the legacy Control early.
+No grant/history is merged. Local archive presentation is separate from enrolled cutover proof.
+Missing proofs or incompatible
+peers leave the staged pair inactive; they cannot reactivate a non-home legacy Control.
 An enrollment role acknowledgment can report the unchanged effective legacy role while home names
 the approved future home. StagedRole/enrollment pins disambiguate this state; it is not activation.
 Archive-role ack and both proofs remain mandatory. Archive-read routes return not_ready before
 the frozen source exists; they cannot label a live legacy store as a completed archive.
 
-Only the separately approved archive/freeze operation, after both proof suites and runtime readiness,
+The separately approved enrolled archive/freeze operation, after both proof suites and runtime readiness,
 persists `configuration.freeze {operationId,expectedRoleEpoch,phase}` and the effective executor role.
+It is not a prerequisite for the current local conversation fence.
 That durable freeze is loaded before sessions.load/recovery/ensure/import/sink/audit on every restart.
 The earlier boot guards apply to **effective frozen executor/archived policy**, not a stagedRole record.
 During freeze, block new legacy turns/inputs/wakes first, then quiesce its active model turn: interrupt
@@ -1293,7 +1338,9 @@ integration; the shared fixtures in this PR establish DTO/route/error compatibil
 
 ### Native-only role bootstrap before conversational startup
 
-Fresh daemons have no inferred Control home. GET `/api/control-role` under M authentication returns
+Fresh devboxes persist a local executor conversation role before any session recovery; fresh app
+Macs preserve local Control. Neither implies an enrolled cross-host home. The reserved future
+GET `/api/control-role` under M authentication returns
 `ControlRoleBootstrapStatus`: unconfigured (epoch 0), configured (persisted positive epoch/config/ack),
 or legacy-migration-required. Opening this management API or hello must not load/create a Control.
 Read the durable role/freeze guard before any conversation load/recovery, even in the unconfigured
