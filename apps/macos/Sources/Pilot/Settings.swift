@@ -943,6 +943,11 @@ private struct ProjectSettings: View {
             }
             TrackingSettingsSection(project: project, editor: editor)
             if let host = hostContext?.host ?? AppModel.shared.localHost {
+                ProjectDatabaseSettingsSection(projectId: project.id, host: host,
+                                               hosts: hostContext?.hosts ?? AppModel.shared.hosts)
+                    .id(HostResourceRef(host: host, kind: .project, localId: project.id).storageKey)
+            }
+            if let host = hostContext?.host ?? AppModel.shared.localHost {
                 ProjectSharingSection(project: HostResourceRef(host: host, kind: .project, localId: project.id), hosts: AppModel.shared.hosts)
             }
             ProjectRemoval(error: removeError) { confirmingRemoval = true }

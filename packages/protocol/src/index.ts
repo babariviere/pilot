@@ -12,6 +12,7 @@ export type {
 	ToolSlot,
 } from "@earendil-works/pi-durable";
 export type * from "./critical-review.ts";
+export type * from "./databases.ts";
 export type * from "./diagnostics.ts";
 export type * from "./github-import.ts";
 export type * from "./github-setup.ts";

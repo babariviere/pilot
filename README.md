@@ -848,7 +848,18 @@ Slack links without a workspace ID use Slack's active workspace.
 ### Databases
 
 Build chats of a project can query Postgres databases you configure for that project. Chats of other projects,
-Ask chats and subagents do not get the tool. Create `~/.pi/agent/pilot-databases.json` (or under
+Ask chats and subagents do not get the tool. In **Project Settings → Databases**, add an environment and its
+read connection, write connection, or both. Enter the connection URL (including any password) in the secure field,
+then choose **Save Databases**. New connections default to **Ask each chat**; enabling writes or automatic access
+requires an explicit choice. Existing URLs and credential query parameters are never returned to the app. Leave
+the replacement URL empty to keep them. Existing environment names are fixed; remove and add to rename one.
+
+These settings belong to the selected host, not replicated project settings. Remote project settings use that
+devbox's daemon and file. Reload after a hand edit or a revision conflict. Invalid, unreadable, oversized,
+duplicate-project or insecure files disable editing instead of being replaced; Pilot does not repair permissions
+automatically. Saving preserves other projects and existing chat grants and does not connect to Postgres.
+
+You can also create or hand-edit `~/.pi/agent/pilot-databases.json` (or under
 `PILOT_AGENT_DIR`), readable only by you (`chmod 600`; Pilot refuses a file others can read):
 
 ```json

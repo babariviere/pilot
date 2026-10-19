@@ -2,11 +2,13 @@
  * Agent access to user-configured Postgres databases. pilotd alone reads the config and opens connections; kernels
  * only see environment names. Grants live in session metadata and last for the session.
  */
-import { randomUUID } from "node:crypto";
-import { open } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { constants } from "node:fs";
+import { link, mkdir, open, rename, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { JsonValue } from "@earendil-works/chord";
+import type { ProjectDatabaseSettings } from "@pilot/protocol";
 import pg from "pg";
 import Cursor from "pg-cursor";
 
@@ -159,6 +161,100 @@ export async function loadDatabaseConfig(agentDir: string): Promise<DatabaseProj
 	}
 }
 
+/** Safe to return through the settings API, unlike raw filesystem/parser errors. */
+export class DatabaseSettingsError extends Error {
+	readonly status: number;
+	constructor(status: number, message: string) {
+		super(message);
+		this.status = status;
+	}
+}
+
+async function settingsFile(agentDir: string) {
+	let file: Awaited<ReturnType<typeof open>>;
+	try {
+		file = await open(
+			join(agentDir, DATABASE_CONFIG_FILE),
+			constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+		);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT")
+			return { revision: "missing", raw: { projects: {} } as Record<string, unknown> };
+		throw new DatabaseSettingsError(422, "Cannot read database settings. Check the file and its permissions.");
+	}
+	try {
+		const info = await file.stat();
+		if (!info.isFile() || (process.platform !== "win32" && info.mode & 0o077))
+			throw new DatabaseSettingsError(422, "Database settings must be a regular, owner-only file (chmod 600).");
+		if (info.size > DATABASE_LIMITS.configBytes) throw new Error("size");
+		const buffer = Buffer.alloc(DATABASE_LIMITS.configBytes + 1);
+		let bytesRead = 0;
+		while (bytesRead < buffer.length) {
+			const chunk = await file.read(buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+			if (!chunk.bytesRead) break;
+			bytesRead += chunk.bytesRead;
+		}
+		if (bytesRead > DATABASE_LIMITS.configBytes) throw new Error("size");
+		const bytes = buffer.subarray(0, bytesRead);
+		const raw: unknown = JSON.parse(bytes.toString("utf8"));
+		parseDatabaseConfig(raw);
+		return { revision: createHash("sha256").update(bytes).digest("hex"), raw: raw as Record<string, unknown> };
+	} catch (error) {
+		if (error instanceof DatabaseSettingsError) throw error;
+		throw new DatabaseSettingsError(
+			422,
+			"Database settings are invalid or exceed 64 KiB. Fix the file before editing.",
+		);
+	} finally {
+		await file.close();
+	}
+}
+
+function existingProject(raw: Record<string, unknown>, path: string) {
+	const projects = raw.projects as Record<string, Record<string, unknown>>;
+	const keys = Object.keys(projects).filter((key) => projectKey(key) === projectKey(path));
+	if (keys.length > 1)
+		throw new DatabaseSettingsError(
+			422,
+			"Multiple database project keys refer to this folder. Remove the duplicate before editing.",
+		);
+	return { projects, key: keys[0] ?? path, project: keys[0] ? projects[keys[0]]! : { environments: {} } };
+}
+
+function connectionSummary(url: string) {
+	try {
+		const parsed = new URL(url);
+		// Omit ALL query parameters, not just a credential-name denylist.
+		return {
+			scheme: parsed.protocol.slice(0, -1),
+			host: parsed.hostname,
+			port: parsed.port,
+			database: decodeURIComponent(parsed.pathname.slice(1)),
+			user: decodeURIComponent(parsed.username),
+			hasCredentials: !!parsed.password || !!parsed.search,
+		};
+	} catch {
+		throw new DatabaseSettingsError(422, "A database connection URL cannot be edited. Fix it in the settings file.");
+	}
+}
+
+function settingsView(raw: Record<string, unknown>, path: string, revision: string): ProjectDatabaseSettings {
+	const { project } = existingProject(raw, path);
+	const config = parseEnvironments(path, project.environments);
+	return {
+		revision,
+		environments: [...config].map(([name, modes]) => ({
+			name,
+			...Object.fromEntries(
+				DATABASE_MODES.flatMap((mode) => {
+					const target = modes[mode];
+					return target ? [[mode, { ...connectionSummary(target.url), access: target.access }]] : [];
+				}),
+			),
+		})),
+	};
+}
+
 function granted(state: DatabaseState | undefined, env: string, mode: DatabaseMode): boolean {
 	// Write access is the broader grant: it covers read-mode queries too.
 	return !!state?.grants?.some((grant) => grant.env === env && (grant.mode === mode || grant.mode === "write"));
@@ -214,6 +310,7 @@ export class DatabaseService {
 	readonly #agentDir: string;
 	readonly #run: QueryRunner;
 	#active = 0;
+	#settingsSaving = false;
 	readonly #waiting: (() => void)[] = [];
 	/** Configured project folders, cached for synchronous worker specs and refreshed before each kernel start. */
 	#projects = new Set<string>();
@@ -221,6 +318,107 @@ export class DatabaseService {
 	constructor(agentDir: string, run: QueryRunner = runPostgres) {
 		this.#agentDir = agentDir;
 		this.#run = run;
+	}
+
+	async settings(path: string): Promise<ProjectDatabaseSettings> {
+		const { raw, revision } = await settingsFile(this.#agentDir);
+		return settingsView(raw, path, revision);
+	}
+
+	async updateSettings(path: string, input: unknown): Promise<ProjectDatabaseSettings> {
+		if (this.#settingsSaving)
+			throw new DatabaseSettingsError(409, "Database settings are being saved. Reload and try again.");
+		this.#settingsSaving = true;
+		const temp = join(this.#agentDir, `.${DATABASE_CONFIG_FILE}.${randomUUID()}.tmp`);
+		try {
+			const { raw, revision } = await settingsFile(this.#agentDir);
+			const { projects, key, project } = existingProject(raw, path);
+			if (!record(input) || typeof input.revision !== "string" || !Array.isArray(input.environments))
+				throw new DatabaseSettingsError(400, "Database settings need a revision and environments list.");
+			if (input.revision !== revision)
+				throw new DatabaseSettingsError(409, "Database settings changed on disk. Reload before saving.");
+			const previous = project.environments as Record<string, Record<string, Record<string, unknown>>>;
+			const environments: Record<string, unknown> = Object.create(null);
+			for (const entry of input.environments) {
+				if (
+					!record(entry) ||
+					typeof entry.name !== "string" ||
+					!ENV_NAME.test(entry.name) ||
+					Object.hasOwn(environments, entry.name)
+				)
+					throw new DatabaseSettingsError(
+						400,
+						"Environment names must be unique, 1–64 letters, digits, dots, underscores or hyphens, starting with a letter or digit.",
+					);
+				if (Object.keys(entry).some((key) => !["name", "read", "write"].includes(key)))
+					throw new DatabaseSettingsError(400, "Only read and write database modes are supported.");
+				const modes: Record<string, unknown> = Object.create(null);
+				for (const mode of DATABASE_MODES) {
+					if (!Object.hasOwn(entry, mode)) continue;
+					const target = entry[mode];
+					if (!record(target) || Object.keys(target).some((key) => !["url", "access"].includes(key)))
+						throw new DatabaseSettingsError(400, "Each connection accepts only URL and access policy.");
+					const old = previous[entry.name]?.[mode];
+					const url = target.url === undefined ? old?.url : target.url;
+					if (typeof url !== "string" || !/^postgres(ql)?:\/\//.test(url))
+						throw new DatabaseSettingsError(400, "Each new connection needs a postgres:// or postgresql:// URL.");
+					try {
+						connectionSummary(url);
+					} catch {
+						throw new DatabaseSettingsError(400, "A connection URL is invalid.");
+					}
+					if (target.access !== undefined && target.access !== "ask" && target.access !== "allow")
+						throw new DatabaseSettingsError(400, "Connection access must be ask or allow.");
+					modes[mode] = { ...old, url, ...(target.access === undefined ? {} : { access: target.access }) };
+				}
+				if (!Object.keys(modes).length)
+					throw new DatabaseSettingsError(400, "Each environment needs a read or write connection.");
+				environments[entry.name] = modes;
+			}
+			projects[key] = { ...project, environments };
+			const bytes = Buffer.from(`${JSON.stringify(raw, null, 2)}\n`);
+			if (bytes.length > DATABASE_LIMITS.configBytes)
+				throw new DatabaseSettingsError(400, "Database settings exceed 64 KiB.");
+			const result = settingsView(raw, path, createHash("sha256").update(bytes).digest("hex"));
+			await mkdir(this.#agentDir, { recursive: true, mode: 0o700 });
+			const file = await open(temp, "wx", 0o600);
+			try {
+				await file.writeFile(bytes);
+				await file.sync();
+			} finally {
+				await file.close();
+			}
+			// Recheck after staging, including permissions and validity, before the atomic replacement.
+			if ((await settingsFile(this.#agentDir)).revision !== revision)
+				throw new DatabaseSettingsError(409, "Database settings changed on disk. Reload before saving.");
+			const destination = join(this.#agentDir, DATABASE_CONFIG_FILE);
+			if (revision === "missing") {
+				// Exclusive publication: a racing file creation must never be overwritten.
+				try {
+					await link(temp, destination);
+				} catch (error) {
+					if ((error as NodeJS.ErrnoException).code === "EEXIST")
+						throw new DatabaseSettingsError(409, "Database settings changed on disk. Reload before saving.");
+					throw error;
+				}
+			} else {
+				await rename(temp, destination);
+			}
+			const directory = await open(this.#agentDir, "r");
+			try {
+				await directory.sync();
+			} finally {
+				await directory.close();
+			}
+			await this.refresh();
+			return result;
+		} catch (error) {
+			if (error instanceof DatabaseSettingsError) throw error;
+			throw new DatabaseSettingsError(503, "Could not save database settings. Reload to check the current values.");
+		} finally {
+			await rm(temp, { force: true }).catch(() => {});
+			this.#settingsSaving = false;
+		}
 	}
 
 	/** An unreadable or invalid config exposes no tool. The reason is logged without config values. */

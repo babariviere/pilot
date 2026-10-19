@@ -69,6 +69,7 @@ import type { ControlExecutor } from "./control-executor.ts";
 import { controlBody, controlHeaders, controlHostRoute, controlJSON } from "./control-host-http.ts";
 import { ControlHostError } from "./control-host-policy.ts";
 import type { ControlHosts } from "./control-hosts.ts";
+import { DatabaseSettingsError } from "./databases.ts";
 import { Conflict, ServiceUnavailable } from "./errors.ts";
 import { daemonPerformance, operations } from "./event-loop-watchdog.ts";
 import type { GitHubImportService } from "./github-import.ts";
@@ -890,6 +891,25 @@ export function createDaemonServer(
 			throw new HttpError(404, "Unknown tracking operation");
 		}
 		if (missions && (await missionRoute(missions, parts, url, req, res))) return;
+		if (parts[1] === "projects" && parts[3] === "databases" && parts.length === 4) {
+			res.setHeader("cache-control", "no-store");
+			projects.require(parts[2]!);
+			if (!githubSetup) return json(res, 503, { error: "Native host actions are unavailable." });
+			try {
+				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			} catch {
+				return json(res, 403, { error: "Database settings require a native app action." });
+			}
+			try {
+				if (req.method === "GET") return json(res, 200, await sessions.projectDatabases(parts[2]!));
+				if (req.method === "PUT")
+					return json(res, 200, await sessions.updateProjectDatabases(parts[2]!, await readJson(req, 96 * 1024)));
+			} catch (error) {
+				if (error instanceof DatabaseSettingsError) return json(res, error.status, { error: error.message });
+				throw error;
+			}
+			throw new HttpError(405, "Method not allowed");
+		}
 		if (parts[1] === "projects" && parts[3] === "memory" && parts.length <= 5) {
 			const id = parts[2]!;
 			projects.require(id);

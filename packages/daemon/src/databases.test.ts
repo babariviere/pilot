@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -32,6 +32,191 @@ const project = "/work/app";
 const config = {
 	projects: { [project]: { environments }, "~/other": { environments: { local: environments.local } } },
 };
+
+test("database settings round-trip preserves secrets, omitted access, unknown fields and other projects", async () => {
+	const raw = structuredClone(config) as Record<string, any>;
+	raw.extra = { future: true };
+	raw.projects[project].future = 7;
+	raw.projects[project].environments.staging.write.extra = "keep";
+	raw.projects[project].environments.prod.read.url =
+		"postgresql://ro:secret@prod:5444/app?password=query-secret&sslkey=key-secret&sslpassword=ssl-secret&future_secret=hidden";
+	const f = await fixture(raw);
+	try {
+		const before = await f.service.settings(project);
+		const serialized = JSON.stringify(before);
+		for (const secret of ["secret", "sslkey", "password", "hidden", "postgresql://"])
+			assert.ok(!serialized.includes(secret));
+		assert.deepEqual(before.environments.find((env) => env.name === "prod")?.read, {
+			scheme: "postgresql",
+			host: "prod",
+			port: "5444",
+			database: "app",
+			user: "ro",
+			hasCredentials: true,
+			access: "ask",
+		});
+		const environments = before.environments.map((env) => ({
+			name: env.name,
+			...(env.read ? { read: {} } : {}),
+			...(env.write ? { write: {} } : {}),
+		}));
+		await f.service.updateSettings(project, { revision: before.revision, environments });
+		assert.deepEqual(JSON.parse(await readFile(join(f.dir, DATABASE_CONFIG_FILE), "utf8")), raw);
+		assert.equal((await stat(join(f.dir, DATABASE_CONFIG_FILE))).mode & 0o777, 0o600);
+		const saved = await f.service.settings(project);
+		await f.service.updateSettings(project, {
+			revision: saved.revision,
+			environments: [{ name: "new", read: { url: "postgres://new@localhost/db" } }],
+		});
+		const updated = JSON.parse(await readFile(join(f.dir, DATABASE_CONFIG_FILE), "utf8"));
+		assert.deepEqual(updated.projects["~/other"], raw.projects["~/other"]);
+		assert.equal(updated.projects[project].future, 7);
+		assert.equal(updated.projects[project].environments.new.read.access, undefined);
+		assert.equal((await f.service.settings(project)).environments[0]?.read?.access, "ask");
+		assert.equal(f.service.configured(project), true);
+	} finally {
+		await rm(f.dir, { recursive: true, force: true });
+	}
+});
+
+test("database settings never replace invalid, insecure, oversized, stale or duplicate configuration", async () => {
+	for (const [value, permissions] of [
+		["{ broken secret", 0o600],
+		[config, 0o644],
+		[" ".repeat(DATABASE_LIMITS.configBytes + 1), 0o600],
+	] as const) {
+		const f = await fixture(value, permissions);
+		try {
+			const path = join(f.dir, DATABASE_CONFIG_FILE),
+				before = await readFile(path);
+			await assert.rejects(f.service.settings(project));
+			await assert.rejects(f.service.updateSettings(project, { revision: "missing", environments: [] }));
+			assert.deepEqual(await readFile(path), before);
+			assert.equal((await stat(path)).mode & 0o777, permissions);
+		} finally {
+			await rm(f.dir, { recursive: true, force: true });
+		}
+	}
+	const f = await fixture();
+	try {
+		const before = await f.service.settings(project),
+			path = join(f.dir, DATABASE_CONFIG_FILE);
+		const changed = `${JSON.stringify(config)}\n`;
+		await writeFile(path, changed);
+		await assert.rejects(
+			f.service.updateSettings(project, { revision: before.revision, environments: [] }),
+			/changed on disk/,
+		);
+		assert.equal(await readFile(path, "utf8"), changed);
+		await writeFile(
+			path,
+			JSON.stringify({ projects: { [project]: { environments }, [`${project}/`]: { environments } } }),
+		);
+		const duplicate = await readFile(path, "utf8");
+		await assert.rejects(f.service.settings(project), /Multiple database project keys/);
+		await assert.rejects(
+			f.service.updateSettings(project, { revision: before.revision, environments: [] }),
+			/Multiple database project keys/,
+		);
+		assert.equal(await readFile(path, "utf8"), duplicate);
+	} finally {
+		await rm(f.dir, { recursive: true, force: true });
+	}
+});
+
+test("database settings create owner-only files and retain the existing normalized project key", async () => {
+	const f = await fixture({ projects: { [`${project}/`]: { environments: {} } } });
+	try {
+		const before = await f.service.settings(project);
+		await f.service.updateSettings(project, {
+			revision: before.revision,
+			environments: [
+				{
+					name: "local",
+					read: { url: "postgres://ro@local/app" },
+					write: { url: "postgres://rw@local/app", access: "allow" },
+				},
+			],
+		});
+		assert.deepEqual(Object.keys(JSON.parse(await readFile(join(f.dir, DATABASE_CONFIG_FILE), "utf8")).projects), [
+			`${project}/`,
+		]);
+		await rm(join(f.dir, DATABASE_CONFIG_FILE));
+		assert.deepEqual(await f.service.settings(project), { revision: "missing", environments: [] });
+		await f.service.updateSettings(project, {
+			revision: "missing",
+			environments: [{ name: "local", read: { url: "postgres://ro@local/app" } }],
+		});
+		assert.equal((await stat(join(f.dir, DATABASE_CONFIG_FILE))).mode & 0o777, 0o600);
+		const current = await f.service.settings(project);
+		await assert.rejects(
+			f.service.updateSettings(project, { revision: current.revision, environments: [{ name: "bad", read: {} }] }),
+			/new connection needs/,
+		);
+		await assert.rejects(
+			f.service.updateSettings(project, {
+				revision: current.revision,
+				environments: [{ name: "bad", read: { url: "postgres://secret:%invalid@host/app", access: "oops" } }],
+			}),
+			/invalid|access must/,
+		);
+		await assert.rejects(
+			f.service.updateSettings(project, {
+				revision: current.revision,
+				environments: [{ name: "local", admin: {} }],
+			}),
+			/Only read and write/,
+		);
+	} finally {
+		await rm(f.dir, { recursive: true, force: true });
+	}
+});
+
+test("database settings refuse symbolic links without altering the target", async () => {
+	const f = await fixture();
+	try {
+		const path = join(f.dir, DATABASE_CONFIG_FILE),
+			target = join(f.dir, "target.json");
+		await writeFile(target, JSON.stringify(config), { mode: 0o600 });
+		await rm(path);
+		await symlink(target, path);
+		await assert.rejects(f.service.settings(project), /Cannot read/);
+		await assert.rejects(f.service.updateSettings(project, { revision: "missing", environments: [] }), /Cannot read/);
+		assert.deepEqual(JSON.parse(await readFile(target, "utf8")), config);
+	} finally {
+		await rm(f.dir, { recursive: true, force: true });
+	}
+});
+
+test("database settings serialize overlapping saves and never repair an unreadable file", async () => {
+	await using f = await fixture();
+	const before = await f.service.settings(project);
+	const outcomes = await Promise.allSettled(
+		["first", "second"].map((name) =>
+			f.service.updateSettings(project, {
+				revision: before.revision,
+				environments: [{ name, read: { url: "postgres://ro@host/app" } }],
+			}),
+		),
+	);
+	assert.equal(outcomes.filter((result) => result.status === "fulfilled").length, 1);
+	const failure = outcomes.find((result) => result.status === "rejected");
+	assert.equal(failure?.status === "rejected" && failure.reason.status, 409);
+	const path = join(f.dir, DATABASE_CONFIG_FILE),
+		bytes = await readFile(path);
+	await chmod(path, 0o000);
+	try {
+		await assert.rejects(f.service.settings(project), /Cannot read/);
+		await assert.rejects(
+			f.service.updateSettings(project, { revision: before.revision, environments: [] }),
+			/Cannot read/,
+		);
+		assert.equal((await stat(path)).mode & 0o777, 0o000);
+	} finally {
+		await chmod(path, 0o600);
+	}
+	assert.deepEqual(await readFile(path), bytes);
+});
 
 async function fixture(value: unknown = config, mode = 0o600) {
 	const dir = await mkdtemp(join(tmpdir(), "pilot-databases-"));
