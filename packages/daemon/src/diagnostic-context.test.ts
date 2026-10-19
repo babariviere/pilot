@@ -11,6 +11,9 @@ import {
 const host = { hostId: "local", daemonId: "daemon", lineageId: "lineage" };
 test("diagnostic selectors reject forged authority, paths and unbounded queries", () => {
 	for (const value of [
+		{ action: "refresh_health", query: "arbitrary" },
+		{ action: "refresh_health", channelOffset: 101 },
+		{ action: "refresh_health", channelOffset: -1 },
 		{ action: "chat", role: "diagnostics" },
 		{ action: "history", sessionId: "../../secret" },
 		{ action: "chats", query: "x".repeat(201) },

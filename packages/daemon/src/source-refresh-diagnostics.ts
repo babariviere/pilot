@@ -1,10 +1,5 @@
 /** Last observations only, process-local and bounded. No content, tool arguments, cursor or event history. */
-import type {
-	RefreshLiveHealth,
-	RefreshObservation,
-	RefreshOutcome,
-	RefreshReason,
-} from "@pilot/protocol";
+import type { RefreshLiveHealth, RefreshObservation, RefreshOutcome, RefreshReason } from "@pilot/protocol";
 export const SOURCE_REFRESH_CADENCE_MS = 300_000;
 export const SOURCE_REFRESH_TIMEOUT_MS = 90_000;
 
@@ -12,6 +7,7 @@ export class SourceRefreshDiagnostics {
 	private enabled = true;
 	private readonly records = new Map<string, { key: string; value: RefreshLiveHealth }>();
 	private dropped = 0;
+	private droppedDue = 0;
 	private readonly due = new Map<string, { key: string; at: number }>();
 	readonly processStartedAt = Date.now();
 	private observedSince = this.processStartedAt;
@@ -24,6 +20,7 @@ export class SourceRefreshDiagnostics {
 		this.records.clear();
 		this.due.clear();
 		this.dropped = 0;
+		this.droppedDue = 0;
 		this.observedSince = Date.now();
 	}
 	coverage() {
@@ -34,6 +31,8 @@ export class SourceRefreshDiagnostics {
 			retention: "current_process_last_observation" as const,
 			sourceLimit: 256,
 			droppedSources: this.dropped,
+			dueRequestLimit: 256,
+			droppedDueRequests: this.droppedDue,
 		};
 	}
 	prune(currentKey: (id: string) => string | undefined): void {
@@ -42,7 +41,10 @@ export class SourceRefreshDiagnostics {
 	}
 	requestDue(id: string, key: string): void {
 		if (!this.enabled) return;
-		if (!this.due.has(id) && this.due.size >= 256) this.due.delete(this.due.keys().next().value!);
+		if (!this.due.has(id) && this.due.size >= 256) {
+			this.due.delete(this.due.keys().next().value!);
+			this.droppedDue = Math.min(1_000_000, this.droppedDue + 1);
+		}
 		this.due.set(id, { key, at: Date.now() });
 	}
 	dueAt(id: string, key: string): number | undefined {

@@ -12,7 +12,7 @@ export function createDiagnosticContextTool(call: DiagnosticContextCall): ToolDe
 		name: DIAGNOSTIC_CONTEXT_TOOL,
 		label: "Pilot context",
 		description:
-			"Read app-wide chats/history/search, usage/budgets, feature counts, failures, missions/issues and Pilot logs. Trusted-host, bounded and sanitized. No wake, writes, credentials or uploads.",
+			"Read app-wide chats/history/search, usage/budgets, feature counts, refresh health, missions/issues and Pilot logs. Trusted-host, bounded and sanitized. No wake, writes, credentials or uploads.",
 		promptSnippet: "Read app-wide evidence through trusted diagnostics capability",
 		parameters: Type.Object({
 			action: Type.Union(
