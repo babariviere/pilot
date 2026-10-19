@@ -67,8 +67,13 @@ struct VisualShaderTests {
     /// RGBA in 0...1 per pixel, read from the BGRA premultiplied image the renderer returns.
     static func premultipliedPixels(_ image: CGImage) throws -> [[Double]] {
         let data = try #require(image.dataProvider?.data as Data?)
-        return stride(from: 0, to: image.width * image.height * 4, by: 4).map { offset in
-            [data[offset + 2], data[offset + 1], data[offset], data[offset + 3]].map { Double($0) / 255 }
+        let byteCount = image.width * image.height * 4
+        return stride(from: 0, to: byteCount, by: 4).map { offset -> [Double] in
+            let red = Double(data[offset + 2]) / 255
+            let green = Double(data[offset + 1]) / 255
+            let blue = Double(data[offset]) / 255
+            let alpha = Double(data[offset + 3]) / 255
+            return [red, green, blue, alpha]
         }
     }
 }
