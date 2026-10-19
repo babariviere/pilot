@@ -41,7 +41,7 @@ struct SessionSidebar: View {
             guard let key else { return }
             model.navigate(.session, id: key)
         })) {
-            if model.localHost != nil { unifiedMissions(query: model.sidebarQuery) }
+            if model.localHost != nil { unifiedMissions }
             if !hosts.offlineHosts.isEmpty {
                 unifiedRows
             } else if let focused {
@@ -187,8 +187,9 @@ struct SessionSidebar: View {
         }
     }
 
-    @ViewBuilder private func unifiedMissions(query: String) -> some View {
-        let missions = missionRegistry.rows.filter { query.isEmpty || ($0.title ?? "Mission").localizedCaseInsensitiveContains(query) }
+    @ViewBuilder private var unifiedMissions: some View {
+        let query = model.sidebarQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        let missions = model.sidebarMissions(in: missionRegistry.rows)
         let active = missions.filter { $0.status == .active || $0.status == nil }
         let inactive = missions.filter { $0.status != .active && $0.status != nil }
         if !missions.isEmpty || missionRegistry.truncated || !missionRegistry.failures.isEmpty {

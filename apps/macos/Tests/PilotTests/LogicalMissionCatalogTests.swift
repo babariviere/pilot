@@ -33,8 +33,8 @@ private func logicalReplica(_ sequence: Int, title: String = "Synced", complete:
 }
 
 private func logicalMission(_ id: String = "same", title: String = "Canonical", status: MissionStatus = .active,
-                            done: Int? = nil, total: Int? = nil) -> Mission {
-    Mission(id: id, projectId: "project", title: title, goal: "", status: status, createdAt: 1, updatedAt: 2,
+                            done: Int? = nil, total: Int? = nil, projectId: String = "project") -> Mission {
+    Mission(id: id, projectId: projectId, title: title, goal: "", status: status, createdAt: 1, updatedAt: 2,
             tasksDone: done, tasksTotal: total)
 }
 
@@ -171,6 +171,103 @@ private func logicalMission(_ id: String = "same", title: String = "Canonical", 
         #expect(result.rows.contains { $0.title == "Canonical" && $0.mission.home.daemonId == logicalHome.daemonId })
         #expect(result.rows.contains { $0.title == "Other home" && $0.mission.home.daemonId == logicalBox.daemonId })
     }
+}
+
+@Test @MainActor func sidebarMissionsScopeEveryStatusAndSearchWithoutChangingTheGlobalCatalog() throws {
+    let suite = "mission-scope-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let model = AppModel(projectFolderDefaults: defaults)
+    try model.registerLocal(logicalHome)
+    model.client.loadFixture(projects: ["project", "other", "empty"].map {
+        Project(id: $0, name: $0, path: "/\($0)", createdAt: 1)
+    }, sessions: [])
+    let remote = PilotClient()
+    remote.loadFixture(projects: [Project(id: "project", name: "project", path: "/remote", createdAt: 1)], sessions: [])
+    try model.hosts.install(remote, host: logicalBox)
+    let rows = try LogicalMissionCatalog.normalize([
+        .init(host: logicalHome, missions: [logicalMission("active"), logicalMission("done", status: .done),
+            logicalMission("archived", status: .archived), logicalMission("other", projectId: "other")], dashboard: nil),
+        .init(host: logicalBox, missions: [logicalMission("active")], dashboard: nil),
+    ]).rows
+    #expect(model.sidebarMissions(in: rows) == rows)
+    model.focus(on: "project")
+    #expect(Set(model.sidebarMissions(in: rows).map { $0.mission.missionId }) == ["active", "done", "archived"])
+    #expect(model.sidebarMissions(in: rows).allSatisfy { $0.mission.home.daemonId == logicalHome.daemonId })
+    model.sidebarQuery = "  CANONICAL\n"
+    #expect(model.sidebarMissions(in: rows).count == 3)
+    model.sidebarQuery = "missing"
+    #expect(model.sidebarMissions(in: rows).isEmpty)
+    model.sidebarQuery = ""
+    model.focus(on: HostResourceRef(host: logicalBox, kind: .project, localId: "project").storageKey)
+    #expect(model.sidebarMissions(in: rows).count == 1)
+    #expect(model.sidebarMissions(in: rows).first?.mission.home.daemonId == logicalBox.daemonId)
+    model.focus(on: "empty")
+    #expect(model.sidebarMissions(in: rows).isEmpty)
+    model.focus(on: nil)
+    #expect(model.sidebarMissions(in: rows) == rows)
+    #expect(rows.count == 5, "Scoping must not mutate the global catalog used by Home and navigation")
+}
+
+@Test @MainActor func sidebarMissionsIncludeLinkedCheckoutsButNotSameNamedUnlinkedProjects() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let hosts = HostClients(operationDirectory: directory)
+    let suite = "mission-scope-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let model = AppModel(projectFolderDefaults: defaults, hosts: hosts)
+    try model.registerLocal(logicalHome)
+    let local = Project(id: "project", name: "Same name", path: "/local", createdAt: 1)
+    let remote = Project(id: "execution-project", name: "Same name", path: "/remote", createdAt: 1)
+    let unrelated = Project(id: "project", name: "Same name", path: "/unrelated", createdAt: 1)
+    model.client.loadFixture(projects: [local], sessions: [])
+    try hosts.install(model.client, host: logicalHome)
+    let remoteClient = PilotClient()
+    remoteClient.loadFixture(projects: [remote, unrelated], sessions: [])
+    try hosts.install(remoteClient, host: logicalBox)
+    let source = HostResourceRef(host: logicalHome, kind: .project, localId: local.id)
+    let target = HostResourceRef(host: logicalBox, kind: .project, localId: remote.id)
+    let rows = try LogicalMissionCatalog.normalize([
+        .init(host: logicalHome, missions: [logicalMission("home")], dashboard: nil),
+        .init(host: logicalBox, missions: [logicalMission("remote", projectId: remote.id), logicalMission("unrelated")], dashboard: nil),
+    ]).rows
+    model.focus(on: local.id)
+    #expect(model.sidebarMissions(in: rows).map { $0.mission.missionId } == ["home"])
+    try await hosts.projectCheckouts.confirm(source: source, target: target)
+    #expect(Set(model.sidebarMissions(in: rows).map { $0.mission.missionId }) == ["home", "remote"])
+    model.focus(on: target.storageKey)
+    #expect(Set(model.sidebarMissions(in: rows).map { $0.mission.missionId }) == ["home", "remote"])
+    // Cached checkout pins keep the scope intact while a linked host is offline.
+    await hosts.disconnect(logicalBox)
+    #expect(Set(model.sidebarMissions(in: rows).map { $0.mission.missionId }) == ["home", "remote"])
+}
+
+@Test @MainActor func sidebarMissionsUseReplicaProvenanceAndStableHostIdentity() throws {
+    let suite = "mission-scope-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let model = AppModel(projectFolderDefaults: defaults)
+    try model.registerLocal(logicalHome)
+    model.client.loadFixture(projects: [Project(id: "execution-project", name: "Project", path: "/local", createdAt: 1)], sessions: [])
+    let rows = try LogicalMissionCatalog.normalize([
+        .init(host: logicalHome, missions: [logicalMission()], dashboard: nil),
+        .init(host: logicalBox, missions: [], dashboard: logicalDashboard(replicas: [logicalReplica(3)])),
+    ]).rows
+    let alias = HostRef(hostId: "renamed-box", daemonId: logicalBox.daemonId, lineageId: logicalBox.lineageId)
+    let remote = PilotClient()
+    remote.loadFixture(projects: [Project(id: "execution-project", name: "Project", path: "/remote", createdAt: 1)], sessions: [])
+    try model.hosts.install(remote, host: alias)
+    model.focus(on: HostResourceRef(host: alias, kind: .project, localId: "execution-project").storageKey)
+    #expect(model.sidebarMissions(in: rows) == rows, "Replica provenance associates the canonical row with its execution project")
+    model.focus(on: "execution-project")
+    #expect(model.sidebarMissions(in: rows).isEmpty, "Project IDs alone cannot cross host boundaries")
+    let replaced = HostRef(hostId: alias.hostId, daemonId: alias.daemonId, lineageId: "replacement")
+    let replacement = PilotClient()
+    replacement.loadFixture(projects: remote.projects, sessions: [])
+    try model.hosts.install(replacement, host: replaced)
+    model.focus(on: HostResourceRef(host: replaced, kind: .project, localId: "execution-project").storageKey)
+    #expect(model.sidebarMissions(in: rows).isEmpty)
 }
 
 @MainActor private func logicalEventually(_ predicate: () -> Bool) async throws {
