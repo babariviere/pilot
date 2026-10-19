@@ -145,7 +145,8 @@ test("search is literal, bounded, sanitized and pages into retained rotations", 
 	assert.equal(encoded.includes("private prompt"), false);
 	assert.match(encoded, /REDACTED|WITHHELD/);
 
-	const future = await f.call({ action: "search", source: "daemon", since: "2026-10-19T00:00:00Z" });
+	const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+	const future = await f.call({ action: "search", source: "daemon", since: tomorrow });
 	assert.deepEqual(future.page?.records, []);
 	await assert.rejects(() => f.call({ action: "search", source: "daemon", since: "2026-10-18" }), /timezone/);
 	for (const source of ["lifecycle", "request_timing", "tool_activity"] as const) {
