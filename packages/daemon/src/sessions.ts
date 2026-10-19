@@ -86,6 +86,7 @@ import { prepareAskSnapshot } from "./ask-snapshots.ts";
 import { chatTitleContext, TITLE_OPENING_LIMIT } from "./chat-title.ts";
 import { ColdViewReader } from "./cold-view-reader.ts";
 import { ControlActions, ControlPreAdmissionError } from "./control-actions.ts";
+import { checkPublishUpgradeAuthorization } from "./control-authorizations.ts";
 import { ControlChat } from "./control-chat.ts";
 import type { ControlMemory } from "./control-memory.ts";
 import type { ControlPilot } from "./control-pilot.ts";
@@ -346,6 +347,8 @@ interface SessionMeta extends OutcomeMeta {
 	controlStart?: SessionSummary["controlStart"];
 	/** Persisted authority ceiling, independent of prompts, model and worker lifetime. */
 	controlPermission?: ControlPermission;
+	/** A committed grant awaiting a verified fresh run, never installed in an active run's spawn spec. */
+	pendingControlPermission?: ControlPermission;
 	control?: boolean;
 	/** Runtime-enforced specialist profile. Omitted for ordinary chats. */
 	role?: "diagnostics";
@@ -1620,6 +1623,75 @@ export class SessionManager {
 	controlPermission(id: string): ControlPermission | undefined {
 		const p = this.metas.get(id)?.controlPermission;
 		return p && { ...p };
+	}
+	private readonly permissionChanges = new Map<string, Promise<unknown>>();
+	private permissionChange<T>(id: string, work: () => Promise<T>): Promise<T> {
+		if (this.closing) return Promise.reject(new ServiceUnavailable("pilotd is shutting down"));
+		const task = (this.permissionChanges.get(id) ?? Promise.resolve()).catch(() => undefined).then(work);
+		this.permissionChanges.set(id, task);
+		void task
+			.finally(() => {
+				if (this.permissionChanges.get(id) === task) this.permissionChanges.delete(id);
+			})
+			.catch(() => {});
+		return task;
+	}
+	/** Called only by the audited local Control action. No input is sent and no worker is interrupted. */
+	upgradeControlPermission(id: string, authorizationId: string) {
+		return this.permissionChange(id, async () => {
+			this.assertControlActive();
+			const meta = this.require(id);
+			await this.saving.get(id);
+			this.assertNotContinued(meta);
+			if (meta.control || id === SessionManager.CONTROL_ID) throw new Error("Cannot upgrade the Control chat");
+			if (meta.ask || meta.mode === "ask" || meta.controlPermission?.level === "investigate")
+				throw new Error("Cannot upgrade an investigate/Ask chat to publish");
+			const record = await this.controlAuthorizations().authorizationGet(authorizationId);
+			if (!record) throw new Error("Unknown authorization");
+			checkPublishUpgradeAuthorization(record, id);
+			const current = meta.pendingControlPermission ?? meta.controlPermission;
+			if (current?.level === "publish") {
+				if (current.authorizationId !== authorizationId)
+					throw new Error("Chat already has a different publish grant");
+			} else {
+				if (current?.level !== "implement") throw new Error("Only implement to publish upgrades are supported");
+				await this.save(meta, undefined, undefined, true, {
+					permission: meta.controlPermission!,
+					pending: { authorizationId, level: "publish" },
+				});
+			}
+			return { sessionId: id, authorizationId, level: "publish" as const, appliesAt: "next_run_boundary" as const };
+		});
+	}
+	/** Worker-only handshake from first prompt preparation of a fresh run. Recovery is not a boundary. */
+	prepareControlPermission(id: string): Promise<ControlPermission | undefined> {
+		return this.permissionChange(id, async () => {
+			const meta = this.require(id);
+			await this.saving.get(id);
+			const pending = meta.pendingControlPermission;
+			if (!pending) return this.controlPermission(id);
+			const record = await this.controlAuthorizations().authorizationGet(pending.authorizationId);
+			try {
+				this.assertControlActive();
+				this.assertNotContinued(meta);
+				if (
+					meta.control ||
+					meta.ask ||
+					meta.mode === "ask" ||
+					meta.controlPermission?.level !== "implement" ||
+					pending.level !== "publish"
+				)
+					throw new Error("Chat is no longer eligible for a publish upgrade");
+				if (!record) throw new Error("Unknown authorization");
+				checkPublishUpgradeAuthorization(record, id);
+			} catch {
+				// An expired/revoked pending grant grants nothing. Keep its audit, discard only the pending effect.
+				await this.save(meta, undefined, undefined, true, { permission: meta.controlPermission! });
+				return this.controlPermission(id);
+			}
+			await this.save(meta, undefined, undefined, true, { permission: pending });
+			return this.controlPermission(id);
+		});
 	}
 	async remoteControlReconciled(op: import("@pilot/protocol").DurableOperation): Promise<boolean> {
 		const meta = this.metas.get(op.targetId);
@@ -7097,6 +7169,7 @@ export class SessionManager {
 		await Promise.allSettled(this.roleTransitions.values());
 		await Promise.all([...this.workers.values()].map((worker) => worker.close()));
 		await this.controlActions?.settled();
+		await Promise.allSettled(this.permissionChanges.values());
 		await this.controlChat?.stop();
 		await Promise.allSettled([...this.parking.values()]);
 		await this.coldReader.close();
@@ -7664,6 +7737,19 @@ export class SessionManager {
 							error: formatFailure(error, "Watch run attribution"),
 						}),
 				);
+			return;
+		}
+		if (packet.type === "control.permission.prepare") {
+			if (this.workers.get(meta.id) !== worker) return;
+			void this.prepareControlPermission(meta.id).then(
+				(result) => worker.send({ type: "control.permission.result", callId: packet.callId, result }),
+				(error: unknown) =>
+					worker.send({
+						type: "control.permission.result",
+						callId: packet.callId,
+						error: formatFailure(error, "Control permission preparation"),
+					}),
+			);
 			return;
 		}
 		if (packet.type === "systemMessageState") {
@@ -9507,6 +9593,7 @@ export class SessionManager {
 		archive?: { timestamp?: number; restoredAt?: number; autoArchivedPullRequest?: string },
 		pin?: { value: boolean },
 		durable = false,
+		control?: { permission: ControlPermission; pending?: ControlPermission },
 	): Promise<void> {
 		this.metas.set(meta.id, meta);
 		// Capture before joining the queue. The live meta can change while an earlier write awaits I/O.
@@ -9516,6 +9603,9 @@ export class SessionManager {
 			const file = join(this.dir(meta.id), "meta.json");
 			const temp = `${file}.${randomUUID()}.tmp`;
 			const persisted = operations.time("sessions.metadata.parse", () => JSON.parse(snapshot) as SessionMeta);
+			// Commit authority only after fsync/rename. Queued lifecycle snapshots cannot undo an upgrade.
+			persisted.controlPermission = control?.permission ?? meta.controlPermission;
+			persisted.pendingControlPermission = control ? control.pending : meta.pendingControlPermission;
 			// Continuation fencing must survive lifecycle snapshots queued before the ownership commit.
 			for (const key of ["continuedTo", "continuationOf", "continuationPending", "workspaceOriginId"] as const) {
 				if (meta[key] === undefined) delete persisted[key];
@@ -9593,6 +9683,11 @@ export class SessionManager {
 			if (pin) {
 				if (pin.value) meta.pinned = true;
 				else delete meta.pinned;
+			}
+			if (control) {
+				meta.controlPermission = { ...control.permission };
+				if (control.pending) meta.pendingControlPermission = { ...control.pending };
+				else delete meta.pendingControlPermission;
 			}
 			// Commit in memory before the next queued save can read the metadata.
 			if (archive) {

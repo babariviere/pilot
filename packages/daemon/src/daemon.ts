@@ -281,6 +281,7 @@ sessions.setPilot(
 		taskSession: (missionId, taskId) => missionStore.resolveTask(missionId, taskId).sessionId,
 		watches,
 		sessions,
+		controlPermission: sessions.controlPermission.bind(sessions),
 		projects: () => projects.list(),
 		missions: () => [...controlMissions.values()],
 		missionAttention: (id) => controlAttention.get(id),
@@ -326,6 +327,7 @@ sessions.setPilot(
 			send: sessions.sendReported.bind(sessions),
 			stop: sessions.stop.bind(sessions),
 			controlInputs: sessions.controlInputs.bind(sessions),
+			upgradePermission: sessions.upgradeControlPermission.bind(sessions),
 		},
 	}),
 );

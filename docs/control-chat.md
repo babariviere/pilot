@@ -345,8 +345,25 @@ Successful retries return the original result without another charge. Start/send
 runs before admission. Proven failures before any delegation effect append a release in the same
 transaction as the failure audit. Uncertain outcomes retain their reservation and never replay.
 Audit phases link `authorizationId`.
+The idempotent `upgrade_permission` setter alone can reconcile a requested-only audit after a
+lost final acknowledgement. It revalidates the grant and durably records the same ceiling;
+this does not make starts, sends or other uncertain effects replay-safe.
 The first start is initial work; later starts and all sends consume follow-ups. Concurrent actions
 share the same durable counters, including after daemon replacement.
+
+`authorize` records intent, and `send` never raises a chat's ceiling. A send whose explicit level
+exceeds the target's effective ceiling reports `permission unchanged`. To raise an existing local
+implement Build chat, Control must call `upgrade_permission` with `sessionId`, `level: "publish"`
+and a live user-request publish `authorizationId` targeting that exact chat ID. Enclosing
+project/mission/task scopes, legacy watches, merge grants, remote hosts, Ask/investigate chats,
+ordinary unrestricted chats and Control itself are rejected. This action consumes no follow-up
+and starts no work. Its requested/outcome audit and durable `pendingControlPermission` metadata
+survive retries and daemon replacement.
+Only the kernel's first prompt preparation for a fresh run can apply the pending permission.
+The daemon rechecks revocation/expiry, fsyncs `controlPermission` before acknowledgement, and
+clears the pending field. Harness policy, native nested-tool policy and newly spawned child
+inheritance then share the new ceiling. Active tool rounds, steers and recovered in-flight runs
+keep the previous ceiling. Existing children are not upgraded, and merges remain blocked.
 
 Provisional defaults are named constants: two follow-ups, diagnostic-only USD accounting,
 24-hour expiry or earlier on use of an already-completed task scope, and publish separate from

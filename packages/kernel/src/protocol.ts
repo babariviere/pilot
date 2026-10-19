@@ -22,6 +22,7 @@ import type { DatabaseAction } from "./database-tool.ts";
 import type { MissionAction } from "./mission-tools.ts";
 import type { PilotAction } from "./pilot-tool.ts";
 import type { MissionContext, PilotContext, WorkspaceContext } from "./policy.ts";
+import type { ControlPermission } from "./tool-policy.ts";
 import type { KernelUsage } from "./usage.ts";
 
 export type { KernelUsage } from "./usage.ts";
@@ -239,6 +240,7 @@ export type KernelCommand =
 	| { type: "control.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "pilot.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "watch.run.result"; callId: string; error?: string }
+	| { type: "control.permission.result"; callId: string; result?: ControlPermission; error?: string }
 	| { type: "database.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "slack.result"; callId: string; result?: JsonValue; error?: string }
 	| {
@@ -281,6 +283,7 @@ export type KernelCommand =
 export type KernelPacket =
 	/** Lifecycle admission, never mere queue placement. Acknowledged before publishing completion. */
 	| { type: "watch.run"; callId: string; controlCaused: boolean; requestIds?: string[]; recoveredOnly?: boolean }
+	| { type: "control.permission.prepare"; callId: string }
 	| { type: "update.paused"; id: string; error?: string }
 	| { type: "systemMessageState"; event: import("./held-inputs.ts").SystemMessageStateEvent }
 	| {

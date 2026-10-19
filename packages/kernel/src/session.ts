@@ -58,6 +58,7 @@ import { reconcileCompletion } from "./attention.ts";
 import { autoCompactionThreshold, shouldAutoCompact } from "./auto-compaction.ts";
 import { chatEvents, compactionEvents } from "./chat-events.ts";
 import { createControlMemoryTools } from "./control-memory-tools.ts";
+import { controlPermissionPreparation } from "./control-permission-preparation.ts";
 import { type ControlCall, ControlTurn } from "./control-turn.ts";
 import { createDatabaseTool, type DatabaseCall } from "./database-tool.ts";
 import { createDiagnosticContextTool, type DiagnosticContextCall } from "./diagnostic-context-tool.ts";
@@ -146,6 +147,7 @@ async function pinnedAgent(
 }
 
 export interface KernelSessionHooks {
+	prepareControlPermission?(): Promise<import("./tool-policy.ts").ControlPermission | undefined>;
 	onRunAdmitted?(controlCaused: boolean, requestIds: string[], recoveredOnly?: boolean): Promise<void>;
 	reportSubscriptionLimit?: import("./subscription-limit.ts").ReportSubscriptionLimit;
 	onSystemMessageState?(event: SystemMessageStateEvent): void;
@@ -420,6 +422,7 @@ export class KernelSession {
 			]);
 			const pilot = {
 				...spec.pilot,
+				...(spec.pilot?.controlPermission ? { controlPermission: { ...spec.pilot.controlPermission } } : {}),
 				...(spec.role ? { role: spec.role } : {}),
 				ghStack,
 				projectMemory: spec.role !== "diagnostics" && !!spec.projectId && !!hooks.callMemory,
@@ -431,6 +434,15 @@ export class KernelSession {
 						if (workspace) pilot.workspace = workspace;
 					}
 				: undefined;
+			const preparePermission = controlPermissionPreparation(
+				owned.storage,
+				pilot.controlPermission,
+				hooks.prepareControlPermission,
+				(permission) => {
+					// Newly spawned children inherit the run's ceiling; already-running children keep theirs.
+					process.env.PILOT_CONTROL_PERMISSION = JSON.stringify(permission);
+				},
+			);
 			const artifacts = new ArtifactStore(dirname(spec.storageDir), {
 				sessionId: spec.sessionId,
 				projectId: spec.projectId,
@@ -556,7 +568,10 @@ export class KernelSession {
 							adapter!.session.getCallableToolNames().includes("artifact") ||
 							adapter!.session.getActiveToolNames().includes("artifact"),
 						() => mission.current,
-						prepareWorkspace,
+						async (input, context) => {
+							await preparePermission(input, context);
+							await prepareWorkspace?.();
+						},
 					),
 				);
 				const audited = audit ? audit.prepare(prepared) : prepared;

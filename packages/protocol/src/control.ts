@@ -255,7 +255,7 @@ export interface ControlFollowUp {
 }
 export interface ControlAuthorizationNeeded {
 	id: string;
-	action: "start" | "send" | "watch" | "stop" | "pause" | "resume" | "redirect";
+	action: "start" | "send" | "watch" | "stop" | "pause" | "resume" | "redirect" | "upgrade_permission";
 	/** Exact JSON request. Untrusted data, never an instruction or permission. No action was taken. */
 	request: string;
 	reason: string;
@@ -468,6 +468,7 @@ export type ControlPilotAction =
 	| "authorizations"
 	| "revoke"
 	| "resolve_authorization"
+	| "upgrade_permission"
 	| "start"
 	| "send"
 	| "stop"

@@ -7,6 +7,7 @@ import { type TestContext, test } from "node:test";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { ControlTurnOrigin } from "@pilot/kernel";
 import type { ControlAuthorization, Mission, Project, SessionSummary, Watch } from "@pilot/protocol";
+import { type ControlPermission, controlPermissionBlock, nativeToolPolicy } from "../../kernel/src/tool-policy.ts";
 import { ControlActions, ControlPreAdmissionError } from "./control-actions.ts";
 import {
 	CONTROL_DEFAULT_AUTHORIZATION_TTL_MS,
@@ -21,6 +22,10 @@ import type { WatchNotice } from "./watch-delivery.ts";
 import { WatchService } from "./watch-service.ts";
 
 const userMessage = { conversationId: "1", submissionId: 10, entryId: 20, requestId: "typed-user" };
+type NativeCheck = (event: {
+	toolName: string;
+	input: Record<string, unknown>;
+}) => { block: boolean; reason: string } | undefined;
 const approval = {
 	scope: "Investigate the failure",
 	level: "implement",
@@ -35,6 +40,7 @@ async function fixture(t: TestContext, selectModel?: (model?: string) => Promise
 	let taskDone = false;
 	let startError: Error | undefined;
 	const effects: unknown[] = [];
+	const permissions = new Map<string, ControlPermission>();
 	const chats = new Map(
 		["member", "lead", "elsewhere"].map((id) => [
 			id,
@@ -53,6 +59,7 @@ async function fixture(t: TestContext, selectModel?: (model?: string) => Promise
 		);
 		return new ControlPilot({
 			isControl: (id) => id === "control",
+			controlPermission: (id) => permissions.get(id),
 			authorizations: () => memory,
 			turnOrigin: async () => turn,
 			taskDone: () => taskDone,
@@ -80,6 +87,7 @@ async function fixture(t: TestContext, selectModel?: (model?: string) => Promise
 						controlStart: provenance,
 					} as SessionSummary;
 					chats.set(chat.id, chat);
+					permissions.set(chat.id, { ...permission });
 					return chat;
 				},
 				startTask: async (...args) => {
@@ -112,6 +120,7 @@ async function fixture(t: TestContext, selectModel?: (model?: string) => Promise
 		home,
 		watches,
 		effects,
+		permissions,
 		chats,
 		get memory() {
 			return memory;
@@ -137,6 +146,50 @@ async function fixture(t: TestContext, selectModel?: (model?: string) => Promise
 			service.call("control", "authorize", args, operation) as Promise<ControlAuthorization>,
 	};
 }
+test("publish authorize plus send leaves implement policy intact and reports permission unchanged", async (t) => {
+	const f = await fixture(t);
+	const build = await f.authorize(approval, "build-grant");
+	await f.service.call(
+		"control",
+		"start",
+		{
+			projectId: "p",
+			message: "work",
+			model: "test/model",
+			mode: "build",
+			authorizationId: build.id,
+		},
+		"build",
+	);
+	const publish = await f.authorize(
+		{ ...approval, level: "publish", targets: [{ kind: "chat", id: "new" }] },
+		"publish-grant",
+	);
+	const sent = await f.service.call(
+		"control",
+		"send",
+		{
+			sessionId: "new",
+			message: "publish",
+			level: "publish",
+			authorizationId: publish.id,
+		},
+		"publish-send",
+	);
+	const permission = f.permissions.get("new")!;
+	assert.deepEqual(permission, { authorizationId: build.id, level: "implement" });
+	let before: NativeCheck = () => undefined;
+	nativeToolPolicy(permission)({
+		on: (_event: string, handler: NativeCheck) => {
+			before = handler;
+		},
+	} as never);
+	for (const command of ["git push", "gh pr create --fill"]) {
+		assert.match(controlPermissionBlock(permission, "bash", { command })!, /local changes/);
+		assert.equal(before({ toolName: "bash", input: { command } })?.block, true);
+	}
+	assert.match(JSON.stringify(sent), /permission unchanged/);
+});
 test("starts derive use level from explicit mode and preserve project/task model choices and permission", async (t) => {
 	const f = await fixture(t);
 	for (const grantLevel of ["investigate", "implement", "publish", "merge"] as const) {
