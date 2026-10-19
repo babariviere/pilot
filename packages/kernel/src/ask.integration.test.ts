@@ -329,7 +329,7 @@ for (const path of ['../secret.txt','escape']) {
   try { await tools.read({path}); text('ESCAPED'); } catch { text('rooted:'+path); }
 }
 text(await tools.read({path:'hello.txt'}));
-text(await tools.read({path:${JSON.stringify(ARTIFACT_SKILL_PATH)},limit:20}));
+text(await tools.read({path:${JSON.stringify(ARTIFACT_SKILL_PATH)}}));
 text(await tools['arti'+'fact']({action:'cre'+'ate',title:'Nested diagram',kind:'react',source:'export default function Card(){return <h1>Nested explanatory diagram</h1>;}' }));
 text(await tools['arti'+'fact']({action:'up'+'date',id:${JSON.stringify(seeded.id)},expectedRevision:2,title:'Nested update',kind:'html',source:'<h1>Nested session update</h1>'}));
 const draft = await tools['arti'+'fact']({action:'pre'+'view',title:'Nested draft',kind:'swiftui',source:'struct ArtifactView: View { var body: some View { Text("Sandboxed draft") } }'});
