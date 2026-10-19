@@ -4621,6 +4621,16 @@ test("database access: only configured projects get db, and only the app's decis
 		return [{ columns: ["n"], rows: [{ n: 1 }], rowCount: 1, truncated: false }];
 	});
 	const sessions = await f.manager({}, { databases });
+	const settings = await sessions.projectDatabases(f.project.id);
+	assert.equal(JSON.stringify(settings).includes("postgres://"), false);
+	await sessions.updateProjectDatabases(f.project.id, {
+		revision: settings.revision,
+		environments: [
+			{ name: "prod", read: {} },
+			{ name: "local", read: { url: "postgres://ro@local/app" }, write: { url: "postgres://rw@local/app" } },
+		],
+	});
+	assert.equal((await sessions.projectDatabases(f.project.id)).environments[1]?.write?.access, "ask");
 	const created = await sessions.spawn({ projectId: f.project.id, workspace: "direct", message: "Start" });
 	await sessions["starting"].get(created.id);
 	const worker = f.workers.at(-1)!;

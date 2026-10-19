@@ -5,6 +5,66 @@ import SwiftUI
 import Testing
 @testable import Pilot
 
+private func databaseSettingsFixture(_ revision: String = "baseline") throws -> ProjectDatabaseSettings {
+    try JSONDecoder().decode(ProjectDatabaseSettings.self, from: Data("""
+    {"revision":"\(revision)","environments":[{"name":"prod","read":{"scheme":"postgres","host":"db.example","port":"5432","database":"app","user":"reader","hasCredentials":true,"access":"ask"}}]}
+    """.utf8))
+}
+
+@Test @MainActor func databaseEditorKeepsSecretsOnConflictAndClearsThemAfterSave() async throws {
+    let editor = ProjectDatabaseEditor()
+    await editor.load { try databaseSettingsFixture() }
+    #expect(!editor.hasChanges && !editor.busy)
+    editor.environments[0].read.replacementURL = "postgres://reader:secret@host/app"
+    await editor.save { request in
+        #expect(request.revision == "baseline")
+        #expect(request.environments[0].read?.url == "postgres://reader:secret@host/app")
+        #expect(request.environments[0].read?.access == nil)
+        throw ClientError("Reload before saving.", status: 409)
+    }
+    #expect(editor.error == "Reload before saving.")
+    #expect(editor.hasChanges && !editor.busy)
+    #expect(editor.environments[0].read.replacementURL.contains("secret"))
+    await editor.save { _ in try databaseSettingsFixture("saved") }
+    #expect(editor.environments[0].read.replacementURL.isEmpty)
+    #expect(editor.snapshot?.revision == "saved")
+    #expect(!editor.hasChanges && editor.error == nil)
+}
+
+@Test @MainActor func databaseEditorUnreadableSettingsDisableEditingAndSaving() async throws {
+    let editor = ProjectDatabaseEditor()
+    await editor.load { try databaseSettingsFixture() }
+    editor.environments[0].read.access = "allow"
+    await editor.save { _ in throw ClientError("Fix the file first.", status: 422) }
+    #expect(editor.snapshot == nil && editor.environments.isEmpty && !editor.busy)
+    var wrote = false
+    await editor.save { _ in wrote = true; return try databaseSettingsFixture() }
+    #expect(!wrote)
+    await editor.load { throw ClientError("Cannot read settings.", status: 422) }
+    #expect(editor.snapshot == nil && editor.error == "Cannot read settings.")
+}
+
+@Test @MainActor func databaseEditorIgnoresRetiredLoadsAndDoesNotShareDrafts() async throws {
+    let editor = ProjectDatabaseEditor(), other = ProjectDatabaseEditor()
+    await editor.load {
+        editor.invalidate()
+        await editor.load { try databaseSettingsFixture("new host") }
+        return try databaseSettingsFixture("retired host")
+    }
+    #expect(editor.snapshot?.revision == "new host")
+    await other.load { try databaseSettingsFixture("other") }
+    editor.environments[0].read.replacementURL = "postgres://reader:secret@host/app"
+    #expect(other.environments[0].read.replacementURL.isEmpty)
+    await editor.save { _ in
+        editor.invalidate()
+        await editor.load { try databaseSettingsFixture("switched") }
+        return try databaseSettingsFixture("old save")
+    }
+    #expect(editor.snapshot?.revision == "switched")
+    #expect(editor.environments[0].read.replacementURL.isEmpty)
+    #expect(!editor.busy && !editor.hasChanges)
+}
+
 @Test @MainActor func projectEditorPreservesMentionFiltersAndGroups() {
     let editor = ProjectEditor()
     editor.load(Project(id: "p", name: "Repo", path: "/repo",

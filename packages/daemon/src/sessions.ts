@@ -4756,6 +4756,18 @@ export class SessionManager {
 		await this.send(id, message, "steer", `database-access:${requestId}`);
 	}
 
+	async projectDatabases(projectId: string) {
+		const project = this.projects.require(projectId);
+		if (!this.databases) throw new ServiceUnavailable("Database settings are unavailable");
+		return this.databases.settings(project.path);
+	}
+
+	async updateProjectDatabases(projectId: string, input: unknown) {
+		const project = this.projects.require(projectId);
+		if (!this.databases) throw new ServiceUnavailable("Database settings are unavailable");
+		return this.databases.updateSettings(project.path, input);
+	}
+
 	async sendDurable(
 		id: string,
 		message: string,
