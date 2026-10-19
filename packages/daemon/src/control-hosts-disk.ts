@@ -24,6 +24,7 @@ export class ControlHostsDisk {
 		this.db = db;
 		db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA max_page_count=32768;
 		CREATE TABLE IF NOT EXISTS control_policy (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
+		CREATE TABLE IF NOT EXISTS control_conversation_role (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
 		CREATE TABLE IF NOT EXISTS control_enrollments (id TEXT PRIMARY KEY, data TEXT NOT NULL);
 		CREATE TABLE IF NOT EXISTS control_approvals (id TEXT PRIMARY KEY, data TEXT NOT NULL, intent TEXT NOT NULL, consumed_by TEXT);
 		CREATE TABLE IF NOT EXISTS control_capabilities (id TEXT PRIMARY KEY, binding TEXT UNIQUE NOT NULL, data TEXT NOT NULL);
@@ -88,6 +89,18 @@ export class ControlHostsDisk {
 		return state;
 	}
 	call(method: string, args: unknown): unknown {
+		if (method === "conversationRole")
+			return this.transaction(() => {
+				const { host, platform } = args as { host: import("@pilot/protocol").OperationHost; platform: string };
+				const row = this.db.prepare("SELECT data FROM control_conversation_role WHERE id=1").get();
+				const value = row
+					? JSON.parse(String(row.data))
+					: { host, role: platform === "darwin" ? "app-home" : "executor" };
+				if (!sameControlHost(value.host, host) || !["app-home", "executor"].includes(value.role))
+					throw new ControlHostError("identity_mismatch", "Conversation role belongs to another installation");
+				this.db.prepare("INSERT OR IGNORE INTO control_conversation_role VALUES(1,?)").run(JSON.stringify(value));
+				return value.role;
+			});
 		if (method === "pairingAck")
 			return this.transaction(() => {
 				const a = args as { id: string; ack: import("@pilot/protocol").ControlPairingAcknowledgment };

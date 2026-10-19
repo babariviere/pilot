@@ -1114,7 +1114,14 @@ export function createDaemonServer(
 			return json(res, 200, sessions.controlDashboard(args));
 		}
 		if (parts[1] === "control-chat" && parts.length === 2 && (req.method === "POST" || req.method === "GET"))
-			return json(res, 200, await sessions.ensureControlChat());
+			return json(
+				res,
+				200,
+				req.method === "GET"
+					? (sessions.getControlChat() ?? (await sessions.ensureControlChat()))
+					: await sessions.ensureControlChat(),
+			);
+		if (parts[1] === "control-chat" && req.method !== "GET" && req.method !== "HEAD") sessions.assertControlActive();
 		// Local app HTTP surface only. There is deliberately no agent tool to revoke or edit a grant.
 		if (parts[1] === "control-chat" && parts[2] === "authorizations") {
 			if (parts.length === 3 && req.method === "GET")

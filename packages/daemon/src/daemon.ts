@@ -67,13 +67,13 @@ await installCredentialBrokerHooks();
 const capabilities = await detectPlatformCapabilities();
 const hello = await daemonHello(config.home, capabilities);
 if (!hello.lineageId) throw new Error("Storage lineage is required for sharing");
-// Recover effective policy before any session/watch recovery. No inferred home bootstrap here.
+// Recover local conversation role and effective policy before any session/watch recovery.
 const controlHostStore = new ControlHostStore(join(config.home, "control-hosts", "state.sqlite"));
 const controlHosts = new ControlHosts(
 	{ hostId: "daemon", daemonId: hello.daemonId, lineageId: hello.lineageId },
 	controlHostStore,
 );
-await controlHosts.configuration();
+await controlHosts.recoverConversationRole();
 const telemetry = await TelemetrySettingsService.open(config.home, hello);
 configureNodeTelemetry(telemetry.nodeOptions("pilot.daemon"));
 // Log long timer delays with context, without assuming sleep or descheduling is synchronous CPU work.
@@ -88,9 +88,10 @@ await watches.list();
 await trackedItems.load(projects.list().map((project) => project.id));
 const sourceMcp = new PiSourceMcpClient(config.agentDir);
 const linearWatches = new LinearWatchSource(watches, sourceMcp);
-linearWatches.start();
+if (controlHosts.legacyAllowed()) linearWatches.start();
 const tracking = new SourceRegistry(projects, trackedItems, sourceMcp);
-tracking.linearObserved = (projectId, items, activeIds) => linearWatches.tracked(projectId, items, activeIds);
+if (controlHosts.legacyAllowed())
+	tracking.linearObserved = (projectId, items, activeIds) => linearWatches.tracked(projectId, items, activeIds);
 tracking.triage = new TriageGroomer(projects, trackedItems, workerTriage(config.agentDir));
 // Shared MCP status for Settings and Needs you. Checks once now, then only when pi's MCP files change.
 const mcpStatus = new McpStatusService({
@@ -339,22 +340,25 @@ await connectivity.start();
 power?.onNetworkPath((path) => connectivity.setPath(path));
 // Recover global sleep overrides before any interrupted agent can reopen.
 await power?.start();
-sessions.setWatchService(watches);
+// Frozen legacy follow-through must not participate in independent accepted work's recovery.
+if (controlHosts.legacyAllowed()) sessions.setWatchService(watches);
 await sessions.load(maintenance?.frozen);
 if (controlHosts.legacyAllowed()) await sessions.ensureControlChat();
 if (controlHosts.legacyAllowed()) watches.bindRemovalAudit((removal) => sessions.auditWatchRemoval(removal));
-const watchLifecycle = new WatchLifecycle(watches, sessions, missionStore, () => sessions.controlAuthorizations());
-if (controlHosts.legacyAllowed()) await watchLifecycle.reconcile();
+const watchLifecycle = controlHosts.legacyAllowed()
+	? new WatchLifecycle(watches, sessions, missionStore, () => sessions.controlAuthorizations())
+	: undefined;
+await watchLifecycle?.reconcile();
 const { importLegacyWatchAuthorizations } = await import("./control-authorizations.ts");
 if (controlHosts.legacyAllowed())
 	await importLegacyWatchAuthorizations(() => sessions.controlAuthorizations(), watches);
 const stopControlWatches = controlHosts.legacyAllowed() ? sessions.setWatches(watches) : () => {};
-const missionWatches = new MissionWatchSource(missionStore, watches);
-const sessionWatches = new SessionWatchSource(watches, sessions);
-const prWatches = new PullRequestWatchSource(watches, config.home, (target) =>
-	sessions.refreshWatchedPullRequest(target),
-);
-sessions.setWatchPullRequests(prWatches);
+const missionWatches = controlHosts.legacyAllowed() ? new MissionWatchSource(missionStore, watches) : undefined;
+const sessionWatches = controlHosts.legacyAllowed() ? new SessionWatchSource(watches, sessions) : undefined;
+const prWatches = controlHosts.legacyAllowed()
+	? new PullRequestWatchSource(watches, config.home, (target) => sessions.refreshWatchedPullRequest(target))
+	: undefined;
+if (prWatches) sessions.setWatchPullRequests(prWatches);
 // A reply in a waiting Slack thread resumes the message's latest chat with it, once chats are loaded.
 tracking.slackWaiting = createSlackWaitingWatcher(trackedItems, async (sessionId, message, requestId) => {
 	const chat = sessions.get(sessionId);
@@ -464,7 +468,7 @@ async function stop(): Promise<void> {
 	stopControlMissions();
 	await missionService.notices.stop();
 	await missionService.compaction.stop();
-	await watchLifecycle.stop();
+	await watchLifecycle?.stop();
 	watches.bindRemovalAudit(undefined);
 	await githubImport.close();
 	await Promise.all([setup.close(), githubSetup.close(), terminals.shutdown(), sessions.shutdown()]);
@@ -472,9 +476,9 @@ async function stop(): Promise<void> {
 	stopSlackCompletions();
 	await Promise.all(completionWrites);
 	await trackedItems.close();
-	await sessionWatches.stop();
-	await missionWatches.stop();
-	await prWatches.stop();
+	await sessionWatches?.stop();
+	await missionWatches?.stop();
+	await prWatches?.stop();
 	await watches.close();
 	await controlHostStore.close();
 	await power?.stop();

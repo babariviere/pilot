@@ -48,6 +48,8 @@ function dispatch(op: string, args: unknown): unknown {
 		return;
 	}
 	if (legacyFrozen) {
+		// Archived records remain browseable, but must not register live source polling.
+		if (op === "targets") return [];
 		if (["activity", "deadline", "expiry"].includes(op)) return;
 		if (["observe", "transition", "consume"].includes(op)) return 0;
 		if (

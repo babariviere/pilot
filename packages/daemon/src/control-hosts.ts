@@ -35,6 +35,7 @@ export class ControlHosts {
 	readonly store: ControlHostStore;
 	private readonly keys?: ProtectedControlKeys;
 	private policy?: ControlHostConfiguration;
+	private conversationRole?: "app-home" | "executor";
 	constructor(host: OperationHost, store: ControlHostStore, keys?: ProtectedControlKeys) {
 		requireHost(host);
 		this.host = host;
@@ -186,9 +187,23 @@ export class ControlHosts {
 		this.policy = await this.store.call("configuration");
 		return this.policy;
 	}
-	/** Missing legacy bootstrap policy is deliberately left to the home-bootstrap owner. */
+	/** Local product policy, recovered before sessions/watches. This does not enroll a remote home. */
+	async recoverConversationRole(platform: NodeJS.Platform = process.platform): Promise<void> {
+		this.conversationRole = undefined;
+		const role = await this.store.call<"app-home" | "executor">("conversationRole", { host: this.host, platform });
+		await this.configuration();
+		this.conversationRole = role;
+	}
 	legacyAllowed(): boolean {
-		return !this.policy || (this.policy.role === "home" && !this.policy.freeze && !this.policy.archive);
+		return (
+			this.conversationRole === "app-home" &&
+			(!this.policy ||
+				(this.policy.role === "home" &&
+					sameControlHost(this.policy.host, this.host) &&
+					sameControlHost(this.policy.home, this.host) &&
+					!this.policy.freeze &&
+					!this.policy.archive))
+		);
 	}
 	/** Called by the protected role-bootstrap owner, not exposed as an agent or pairing API. */
 	async initialize(configuration: ControlHostConfiguration): Promise<ControlHostConfiguration> {
