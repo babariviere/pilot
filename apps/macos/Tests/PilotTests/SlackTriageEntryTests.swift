@@ -82,3 +82,31 @@ private let project = Project(id: "same", name: "Repository", path: "/repo",
         #expect(!app.showingInbox)
     }
 }
+
+@Test @MainActor func slackTriageEntryOnlyLabelsAmbiguousProjectNames() throws {
+    let app = try fixture()
+    let client = PilotClient()
+    let tools = Project(id: "tools", name: "Dev tools", path: "/tools",
+                        tracking: .init(slackChannels: ["C2"]), createdAt: 1)
+    let untracked = Project(id: "untracked", name: project.name, path: "/untracked", createdAt: 1)
+    client.loadFixture(projects: [tools, untracked], sessions: [])
+    try app.hosts.install(client, host: remote)
+    var choices = SlackTriageInboxHeader.choices(hosts: app.hosts, model: app)
+    #expect(choices.map(\.title) == ["Dev tools", "Repository"], "untracked projects do not cause ambiguity")
+    for choice in choices {
+        choice.action()
+        let ref = try HostResourceRef.decodeKey(choice.id)
+        let selected = try #require(app.selectedProjectId)
+        #expect(app.resourceRef(selected, kind: .project) == ref,
+                "a shorter label never changes the destination")
+    }
+
+    let duplicate = Project(id: project.id, name: "repository", path: "/remote-repo",
+                            tracking: .init(slackChannels: ["C3"]), createdAt: 1)
+    let replacement = PilotClient()
+    replacement.loadFixture(projects: [tools, duplicate], sessions: [])
+    try app.hosts.install(replacement, host: remote)
+    choices = SlackTriageInboxHeader.choices(hosts: app.hosts, model: app)
+    #expect(Set(choices.map(\.title)) == ["Dev tools", "Repository · Local", "repository · devbox"],
+            "only duplicate names need hosts, including names differing only by case")
+}
