@@ -65,7 +65,8 @@ struct CommandPaletteCatalog {
     /// The on-screen composer's controls (model, thinking, mode, project, branch, workspace, send later), found by
     /// searching. They run the composer's own handlers and never send the draft.
     private func composerEntries() -> [CommandPaletteEntry] {
-        model.keyboard.composerCommands.map { command in
+        guard !model.isPreviousControlSelected else { return [] }
+        return model.keyboard.composerCommands.map { command in
             CommandPaletteEntry(
                 item: CommandPaletteItem(id: "composer:\(command.id)", kind: .action, title: command.title,
                                          keywords: command.keywords + ["composer"]),
@@ -158,7 +159,7 @@ struct CommandPaletteCatalog {
 
     private func remoteResources() -> [CommandPaletteEntry] {
         let hosts = model.hosts
-        let chats = hosts.sessions.filter { $0.ref.host != model.localHost }.map { item in
+        let chats = hosts.sessions.filter { $0.ref.host != model.localHost && !$0.value.isControl }.map { item in
             let name = HostViewContext(host: item.ref.host, hosts: hosts).name
             return CommandPaletteEntry(item: CommandPaletteItem(id: "chat:" + item.ref.storageKey, kind: .chat,
                 title: item.value.title, keywords: [name, item.value.branch ?? ""], pullRequestNumbers: item.value.linkedPullRequests.map(\.number)),
@@ -166,7 +167,15 @@ struct CommandPaletteCatalog {
                     try? model.selectSession(item.ref)
                 }
         }
-        return chats
+        let history = model.previousControlSessions.map { item in
+            let name = HostViewContext(host: item.ref.host, hosts: hosts).name
+            return CommandPaletteEntry(item: CommandPaletteItem(id: "history:" + item.ref.storageKey, kind: .page,
+                title: "Previous Control", keywords: [name, "history", item.value.title]),
+                icon: .archive, suffix: name, detail: "Read-only history on its original host") {
+                    try? model.selectSession(item.ref)
+                }
+        }
+        return chats + history
     }
 
     /// Tasks of the active missions, open ones first. A task's pull requests are the ones linked to it.
@@ -307,7 +316,7 @@ struct CommandPaletteCatalog {
             item: CommandPaletteItem(id: "page:shortcuts", kind: .page, title: "Keyboard shortcuts",
                                      keywords: ["help", "hotkeys", "keys"]),
             icon: .info, shortcut: KeyboardShortcuts.hint, perform: openKeyboardShortcuts))
-        if let session = model.selectedSession, InspectorTab.agents.isAvailable(for: session) {
+        if !model.isPreviousControlSelected, let session = model.selectedSession, InspectorTab.agents.isAvailable(for: session) {
             entries.append(CommandPaletteEntry(
                 item: CommandPaletteItem(id: "page:agents", kind: .page, title: "Agents"),
                 icon: .subagents, suffix: session.title
@@ -358,6 +367,7 @@ struct CommandPaletteCatalog {
     /// What can be done to one chat: retry, stop, open or merge its PRs, pin or unpin, archive. For the open chat
     /// (suggested), the latest PR's row shows ⌘⇧P and the latest open PR's merge row shows ⌘⇧M.
     func chatActions(_ session: SessionSummary, suggested: Bool = false, reference: HostResourceRef? = nil) -> [CommandPaletteEntry] {
+        guard !PreviousControl.isHistory(session, reference: reference, localHost: model.localHost) else { return [] }
         guard !session.isArchived else { return [] }
         let id = reference?.storageKey ?? session.id
         let model = model

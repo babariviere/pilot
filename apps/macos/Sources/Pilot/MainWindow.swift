@@ -189,11 +189,19 @@ struct SessionDetail: View {
     var feed: SessionFeed?
     var context: HostViewContext? = nil
     @EnvironmentObject private var model: AppModel
+    @Environment(\.hostViewContext) private var hostContext
     @EndpointClient private var client
     @StateObject private var slack = SessionSlackLinks()
 
 
-    var body: some View {
+    @ViewBuilder var body: some View {
+        if let reference = (context ?? hostContext)?.ref(.session, session.id),
+           PreviousControl.isHistory(session, reference: reference, localHost: model.localHost) {
+            PreviousControlHistoryView(reference: reference, hosts: model.hosts)
+        } else { liveDetail }
+    }
+
+    private var liveDetail: some View {
         ChatInspectorSplit(showsInspector: model.inspectorVisible && model.inspectorTab.isAvailable(for: session)) {
             ChatView(session: session, feed: feed, context: context ?? model.localHost.map { HostViewContext(host: $0, hosts: model.hosts) })
         } inspector: {

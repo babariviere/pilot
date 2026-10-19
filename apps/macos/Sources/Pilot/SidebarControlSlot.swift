@@ -9,17 +9,15 @@ struct SidebarControlRow: Identifiable, Equatable {
     let key: String
     var id: String { key }
 
-    /// The Control chats the slot shows, whatever the sidebar's scope or search: the local one, or with `hosted`
-    /// (devboxes listed) every host's, the local one first.
+    /// Only the verified Mac Control belongs in normal navigation. Other histories keep their source.
     static func rows(sessions: [SessionSummary], hosted: [Hosted<SessionSummary>]?, localHost: HostRef?)
         -> [SidebarControlRow] {
         guard let hosted else {
             return sessions.first { $0.isControl && !$0.isArchived }
                 .map { [SidebarControlRow(session: $0, reference: nil, key: $0.id)] } ?? []
         }
-        let controls = hosted.filter { $0.value.isControl && !$0.value.isArchived }
-        let ordered = controls.filter { $0.ref.host == localHost } + controls.filter { $0.ref.host != localHost }
-        return ordered.map { item in
+        let controls = hosted.filter { $0.value.isControl && !$0.value.isArchived && $0.ref.host == localHost }
+        return controls.prefix(1).map { item in
             SidebarControlRow(session: item.value, reference: item.ref,
                               key: item.ref.host == localHost ? item.ref.localId : item.ref.storageKey)
         }
@@ -63,6 +61,7 @@ extension AppModel {
 /// `SessionRow`s (state corner, context menu), with the list's selection fill and insets.
 struct SidebarControlSlot: View {
     let rows: [SidebarControlRow]
+    var history: [Hosted<SessionSummary>] = []
     @ObservedObject var model: AppModel
     @Environment(\.hostViewContext) private var hostContext
 
@@ -80,6 +79,20 @@ struct SidebarControlSlot: View {
                     .onTapGesture { model.navigate(.session, id: row.key) }
                     .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
                     .accessibilityAction { model.navigate(.session, id: row.key) }
+            }
+            if !history.isEmpty {
+                Menu {
+                    ForEach(history) { item in
+                        Button("\(HostViewContext(host: item.ref.host, hosts: model.hosts).name) · \(item.value.title)") {
+                            try? model.selectSession(item.ref)
+                        }
+                    }
+                } label: {
+                    Text("Previous Control").font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                }
+                .menuStyle(.borderlessButton).fixedSize().frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 8).padding(.bottom, 3)
+                .help("Read previous Control conversations on their original hosts")
             }
         }
     }

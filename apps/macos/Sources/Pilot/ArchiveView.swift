@@ -13,8 +13,11 @@ struct ArchiveView: View {
 
     private var sessions: [SessionSummary] {
         let query = browser.query.trimmingCharacters(in: .whitespacesAndNewlines)
-        if query.isEmpty { return browser.sessions }
-        return browser.sessions.filter { session in
+        let inventory = browser.sessions.filter {
+            !PreviousControl.isHistory($0, reference: hostContext?.ref(.session, $0.id), localHost: model.localHost)
+        }
+        if query.isEmpty { return inventory }
+        return inventory.filter { session in
             [session.title, session.cwd, session.branch ?? "", client.project(session.projectId)?.name ?? ""]
                 .contains { $0.localizedCaseInsensitiveContains(query) }
         }

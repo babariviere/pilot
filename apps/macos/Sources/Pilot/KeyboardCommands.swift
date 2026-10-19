@@ -30,9 +30,9 @@ extension AppModel {
 
     /// ⌘L: the chat or new-chat composer, or the open question's answers. Nothing happens where there is none.
     @discardableResult
-    func focusComposer() -> Bool { keyboard.focus(.composer) }
+    func focusComposer() -> Bool { !isPreviousControlSelected && keyboard.focus(.composer) }
 
-    var canToggleTerminal: Bool { selectedSessionId != nil && selectedSession?.isAsk != true }
+    var canToggleTerminal: Bool { !isPreviousControlSelected && selectedSessionId != nil && selectedSession?.isAsk != true }
 
     /// No sheet, confirmation or palette is over the window.
     var hasNoModal: Bool {
@@ -42,7 +42,7 @@ extension AppModel {
 
     /// ⌘.: only the open chat, only while its agent works, and never under a dialog.
     var canStopSelectedChat: Bool {
-        hasNoModal && selectedSession?.isWorking == true && selectedSession?.isReadOnlyHistory != true
+        !isPreviousControlSelected && hasNoModal && selectedSession?.isWorking == true && selectedSession?.isReadOnlyHistory != true
     }
 
     func stopSelectedChat() {
@@ -61,6 +61,7 @@ extension AppModel {
     /// Shows an inspector pane (never hides it, unlike the toolbar toggle) and moves focus into it.
     @discardableResult
     func openInspector(_ tab: InspectorTab) -> Bool {
+        guard !isPreviousControlSelected else { return false }
         guard let session = selectedSession, tab.isAvailable(for: session) else { return false }
         inspectorTab = tab
         inspectorVisible = true

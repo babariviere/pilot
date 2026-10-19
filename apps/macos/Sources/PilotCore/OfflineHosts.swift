@@ -43,6 +43,7 @@ public struct OfflineHostSnapshot: Codable, Sendable {
             summary.continuationOf = value.continuationOf
             summary.continuedTo = value.continuedTo
             summary.trackedSource = value.trackedSource
+            summary.control = value.control
             return summary
         }
         snapshot.projects = projects.map {

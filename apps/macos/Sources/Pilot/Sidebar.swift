@@ -88,6 +88,7 @@ struct SessionSidebar: View {
                 client.archivedSessions.filter { $0.projectId == project.id }.count
             } ?? client.archivedSessions.count
             let controls = model.sidebarControlRows
+            let previousControls = model.previousControlSessions
             VStack(spacing: 6) {
                 SidebarHeader(model: model, client: client, counts: counts, homeSelected: homeSelected,
                               inboxSelected: inboxSelected, overviewSelected: overviewSelected(focused),
@@ -95,8 +96,8 @@ struct SessionSidebar: View {
                               needsYouHelp: SidebarScopeCounts.needsYouReasons(total: needsYou,
                                                                                reasons: needsYouReasons, counts: counts),
                               archivedCount: archivedCount, folderEditor: folderEditor)
-                if !controls.isEmpty {
-                    SidebarControlSlot(rows: controls, model: model)
+                if !controls.isEmpty || !previousControls.isEmpty {
+                    SidebarControlSlot(rows: controls, history: previousControls, model: model)
                 }
                 if showsSearch {
                     SearchField(text: $model.sidebarQuery, focused: $searchFocused) { model.hideSidebarSearch() }

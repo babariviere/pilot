@@ -221,7 +221,7 @@ struct HomeOverview: View {
         }.sorted { HomeStatus.precedes($0.status, $1.status) }
         let rows = app.localHost == nil || app.navigationProjectGroups.isEmpty ? localRows : united.filter { $0.ref.host == app.localHost }.map(\.status)
         let remoteRows = united.filter { $0.ref.host != app.localHost }
-        let remoteWorking = hosts.sessions.filter { $0.ref.host != app.localHost && hosts.available.contains($0.ref.host) && $0.value.isWorking && !$0.value.isArchived }
+        let remoteWorking = hosts.sessions.filter { $0.ref.host != app.localHost && !$0.value.isControl && hosts.available.contains($0.ref.host) && $0.value.isWorking && !$0.value.isArchived }
         let working = HomeStatus.working(client.sessions)
         let missions = HomeStatus.missions(client.missions)
         let sessionIds = Set(client.sessions.map(\.id))

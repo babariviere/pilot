@@ -36,14 +36,17 @@ private func chat(_ id: String, project: String?, control: Bool = false) throws 
     #expect(!scoped.contains { $0.isControl })
 }
 
-@Test func controlRowsPutTheLocalHostFirstAndSkipArchived() throws {
+@Test func controlRowsShowOnlyMacAndKeepSourceQualifiedHistoryOutsideTheNormalSlot() throws {
     let control = try chat("control", project: nil, control: true)
     let remote = Hosted(ref: HostResourceRef(host: box, kind: .session, localId: "control"), value: control)
     let mine = Hosted(ref: HostResourceRef(host: local, kind: .session, localId: "control"), value: control)
     let other = Hosted(ref: HostResourceRef(host: local, kind: .session, localId: "a"), value: try chat("a", project: "p1"))
     let rows = SidebarControlRow.rows(sessions: [], hosted: [remote, other, mine], localHost: local)
-    #expect(rows.map(\.key) == ["control", remote.ref.storageKey])
-    #expect(rows.map(\.reference) == [mine.ref, remote.ref])
+    #expect(rows.map(\.key) == ["control"])
+    #expect(rows.map(\.reference) == [mine.ref])
+    #expect(PreviousControl.isHistory(remote.value, reference: remote.ref, localHost: local))
+    #expect(!PreviousControl.isHistory(mine.value, reference: mine.ref, localHost: local))
+    #expect(SidebarControlRow.rows(sessions: [], hosted: [remote], localHost: nil).isEmpty)
     #expect(SidebarControlRow.rows(sessions: [try chat("a", project: "p1")], hosted: nil, localHost: local).isEmpty)
 }
 
