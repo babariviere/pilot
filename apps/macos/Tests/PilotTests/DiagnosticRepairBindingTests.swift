@@ -11,6 +11,7 @@ private let bindingProject = Project(id: "source", name: "Not selected by name",
     client.loadFixture(projects: [bindingProject], sessions: [])
     let app = AppModel(client: client)
     try app.registerLocal(bindingHost)
+    try app.hosts.install(client, host: bindingHost)
     #expect(try await app.diagnosticRepairProject(on: bindingHost).state == .missing)
     #expect(client.fixtureRepairProject == nil, "reading settings never configures a destination")
     let request = DiagnosticRepairProjectSetup(expectedRevision: 0, host: bindingHost, projectId: bindingProject.id,
