@@ -133,8 +133,8 @@ private struct BlockView: View, Equatable {
                                       monoFont: fonts.nsMono, color: .secondaryLabelColor, lineSpacing: 0,
                                       hugsContent: hugsContent)
             }
-        case let .table(rows):
-            SelectableMessageText(text: AttributedString(rows.joined(separator: "\n")),
+        case let .table(table):
+            SelectableMessageText(text: block.inline ?? AttributedString(table.source),
                                   font: fonts.nsMono, monoFont: fonts.nsMono, lineSpacing: 0)
                 // The table's fill is translucent, so no single colour can veil its text.
                 .environment(\.messageTextFade, nil)
