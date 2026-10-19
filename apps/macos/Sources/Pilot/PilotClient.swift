@@ -1337,7 +1337,7 @@ final class PilotClient: ObservableObject {
 
     func projectOrigin(_ projectId: String) async throws -> ProjectOrigin {
         if let fixture = fixtureProjectOrigins[projectId] { return fixture }
-        try await call(URLRequest(url: artifactURL(["projects", projectId, "origin"])))
+        return try await call(URLRequest(url: artifactURL(["projects", projectId, "origin"])))
     }
 
     /// Read-only discovery from the project's checkout on its host. Requires hello.capabilities.environmentSetup.
