@@ -11,9 +11,12 @@ import {
 	decodeMcpResult,
 	dedicatedSourceTool,
 	PiSourceMcpClient,
+	SourceConfigurationError,
 	SourceRateLimited,
 	SourceSignInRequired,
+	SourceToolError,
 	sourceRateLimit,
+	sourceToolFailure,
 	validSourceArguments,
 } from "./source-mcp.ts";
 
@@ -31,6 +34,40 @@ test("MCP decoding accepts structured data or JSON envelopes, not markdown or er
 	assert.throws(() => decodeMcpResult({ content: [{ type: "text", text: "# Issues\n1. example" }] }));
 	assert.throws(() => decodeMcpResult({ isError: true, structuredContent: { secret: "do not display" } }), /error/);
 	assert.throws(() => decodeMcpResult({ structuredContent: { text: "x".repeat(513 * 1024) } }), /512/);
+});
+
+test("MCP failures retain only recognized categories from bounded structured codes", () => {
+	for (const [code, category] of [
+		[403, "access_denied"],
+		["PERMISSION_DENIED", "access_denied"],
+		[404, "not_found"],
+		["entity_not_found", "not_found"],
+		["unknown", "tool_error"],
+	] as const) {
+		for (const response of [
+			{ isError: true, structuredContent: { error: { code, message: "private detail" } } },
+			{
+				isError: true,
+				content: [{ type: "text", text: JSON.stringify({ error: { code, message: "private detail" } }) }],
+			},
+			{ structuredContent: { success: false, error: { code, message: "private detail" } } },
+		]) {
+			assert.throws(
+				() => decodeMcpResult(response, "issue"),
+				(error) =>
+					error instanceof SourceToolError && error.category === category && !error.message.includes("private"),
+			);
+		}
+	}
+	assert.equal(sourceToolFailure({ code: 403, message: "private" }), "access_denied");
+	assert.equal(sourceToolFailure({ data: { code: "NOT_FOUND" } }), "not_found");
+	assert.equal(sourceToolFailure({ message: "403 forbidden private prose" }), "tool_error");
+	assert.equal(sourceToolFailure({ content: [{ type: "text", text: "x".repeat(8193) }] }), "tool_error");
+	assert.throws(() => decodeMcpResult({ structuredContent: { success: false } }, "startIssue"), SourceToolError);
+	assert.deepEqual(decodeMcpResult({ structuredContent: { id: "example", error: null } }, "issue"), {
+		id: "example",
+		error: null,
+	});
 });
 
 test("Linear exposes fixed read tools and exactly one narrow state write and preserves sanitized retry-after timing", () => {
@@ -280,6 +317,7 @@ test("pinned SDK wrapper calls fixed dedicated tools, reuses OAuth and detects r
 		hanging = false,
 		limited = false;
 	let reactionResponse: Parameters<typeof decodeMcpResult>[0] | undefined;
+	let linearResponse: Parameters<typeof decodeMcpResult>[0] | undefined;
 	let reactionThrows = false;
 	let called!: () => void;
 	const server = createServer(async (req, res) => {
@@ -348,14 +386,16 @@ test("pinned SDK wrapper calls fixed dedicated tools, reuses OAuth and detects r
 		}
 		if (message.method === "tools/call")
 			result =
-				message.params.name === "slack_add_reaction" && reactionResponse
-					? reactionResponse
-					: limited
-						? {
-								isError: true,
-								content: [{ type: "text", text: "Rate limit exceeded; retry-after: 120; secret" }],
-							}
-						: { content: [{ type: "text", text: '{"issues":[]}' }] };
+				message.params.name === "get_issue" && linearResponse
+					? linearResponse
+					: message.params.name === "slack_add_reaction" && reactionResponse
+						? reactionResponse
+						: limited
+							? {
+									isError: true,
+									content: [{ type: "text", text: "Rate limit exceeded; retry-after: 120; secret" }],
+								}
+							: { content: [{ type: "text", text: '{"issues":[]}' }] };
 		res.writeHead(200, { "content-type": "application/json" });
 		res.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
 	});
@@ -428,6 +468,22 @@ test("pinned SDK wrapper calls fixed dedicated tools, reuses OAuth and detects r
 				error instanceof SourceRateLimited && error.retryAfterMs === 120_000 && !error.message.includes("secret"),
 		);
 		limited = false;
+		for (const [code, category] of [
+			["FORBIDDEN", "access_denied"],
+			["NOT_FOUND", "not_found"],
+		] as const) {
+			linearResponse = {
+				isError: true,
+				structuredContent: { error: { code, message: "private detail" } },
+				content: [],
+			};
+			await assert.rejects(
+				client.call("linear", "issue", { id: "example" }, signal),
+				(error) =>
+					error instanceof SourceToolError && error.category === category && !error.message.includes("private"),
+			);
+		}
+		linearResponse = undefined;
 		await assert.rejects(client.call("alternative" as never, "issues", {}, signal), /Unknown dedicated MCP/);
 		await assert.rejects(client.call("linear", "history", {}, signal), /Unknown dedicated MCP/);
 		needsAuth = true;
@@ -502,7 +558,7 @@ test("pinned SDK wrapper calls fixed dedicated tools, reuses OAuth and detects r
 		writes = false;
 		const requestsBeforeMissing = seen.length;
 		await writeFile(join(home, "mcp.json"), JSON.stringify({ mcpServers: { alternative: { url } } }));
-		await assert.rejects(client.call("linear", "issues", {}, signal), /MCP request failed/);
+		await assert.rejects(client.call("linear", "issues", {}, signal), SourceConfigurationError);
 		await assert.rejects(client.call("slack", "startSlack", reactionArgs, signal), /MCP request failed/);
 		assert.equal(seen.length, requestsBeforeMissing, "a different server is never a fallback");
 		await writeFile(

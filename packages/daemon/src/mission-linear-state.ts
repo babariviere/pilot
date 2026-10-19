@@ -51,6 +51,7 @@ export function reconcileLinearRecord(
 	delete record.intent;
 	delete record.status.target;
 	delete record.status.error;
+	delete record.status.failure;
 	delete record.status.retryAt;
 	const structural =
 		previous &&

@@ -459,6 +459,11 @@ public enum MissionLinearRole: String, LenientStringEnum {
 }
 
 public struct MissionLinearSync: Codable, Equatable, Hashable, Sendable {
+    /// Fixed daemon labels, kept as strings so newer diagnostics remain readable by older clients.
+    public struct Failure: Codable, Equatable, Hashable, Sendable {
+        public let stage: String
+        public let category: String
+    }
     public enum State: String, LenientStringEnum {
         case idle, pending, synced, paused, error, terminal
         public static let fallback = State.paused
@@ -471,6 +476,7 @@ public struct MissionLinearSync: Codable, Equatable, Hashable, Sendable {
     public let target: Target?
     public let reason: String?
     public let error: String?
+    public let failure: Failure?
     public let issueId: String?
     public let teamId: String?
     public let observedStateId: String?

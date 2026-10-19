@@ -1077,6 +1077,21 @@ export interface MissionLinearSync {
 	target?: "inProgress" | "inReview" | "merged";
 	reason?: string;
 	error?: string;
+	/** Fixed, sanitized mission-sync diagnostics, independent of background discovery health. */
+	failure?: {
+		stage: "issue" | "states" | "configuration" | "prepare" | "write" | "confirm" | "cancellation";
+		category:
+			| "sign_in"
+			| "access_denied"
+			| "not_found"
+			| "configuration"
+			| "transport"
+			| "rate_limited"
+			| "invalid_response"
+			| "write_failed"
+			| "remote_error"
+			| "unknown";
+	};
 	issueId?: string;
 	teamId?: string;
 	observedStateId?: string;

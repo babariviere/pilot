@@ -10,9 +10,18 @@ import Testing
     #expect(sync.target == .merged)
     #expect(sync.observedStateName == "In progress")
     #expect(sync.retryAt == 3)
+    #expect(sync.failure == nil)
     #expect(try JSONDecoder().decode(MissionResource.self, from: JSONEncoder().encode(resource)) == resource)
     let write = MissionLinearSyncWrite(action: "resume")
     #expect(try JSONDecoder().decode(MissionLinearSyncWrite.self, from: JSONEncoder().encode(write)).action == "resume")
+}
+
+@Test func linearSyncFailureDiagnosticsRoundTripWithoutChangingLegacyDecoding() throws {
+    let data = Data(#"{"state":"error","error":"Linear denied access","failure":{"stage":"issue","category":"access_denied"},"updatedAt":1}"#.utf8)
+    let sync = try JSONDecoder().decode(MissionLinearSync.self, from: data)
+    #expect(sync.failure?.stage == "issue")
+    #expect(sync.failure?.category == "access_denied")
+    #expect(try JSONDecoder().decode(MissionLinearSync.self, from: JSONEncoder().encode(sync)) == sync)
 }
 
 @Test func linearResourceRolesDecodeSafelyAndWritesRemainExplicit() throws {

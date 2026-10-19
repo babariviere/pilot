@@ -2375,6 +2375,7 @@ export class MissionStore {
 		record.attempts = 0;
 		delete record.intent;
 		delete record.status.error;
+		delete record.status.failure;
 		delete record.status.retryAt;
 		delete record.status.target;
 		record.status.updatedAt = Date.now();

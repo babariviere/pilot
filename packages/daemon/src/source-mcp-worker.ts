@@ -15,6 +15,7 @@ import {
 	SourceToolError,
 	slackAlreadyReacted,
 	sourceRateLimit,
+	sourceToolFailure,
 	validSourceArguments,
 } from "./source-mcp.ts";
 
@@ -72,6 +73,8 @@ let reply: {
 	signIn?: boolean;
 	retryAfterMs?: number;
 	toolError?: boolean;
+	failureCategory?: ReturnType<typeof sourceToolFailure>;
+	configuration?: boolean;
 };
 try {
 	const { kind, tool: logicalTool, args } = workerData;
@@ -132,6 +135,7 @@ try {
 	reply = { value: decodeMcpResult(result, logicalTool) };
 } catch (error) {
 	const limited = error instanceof SourceRateLimited ? error : sourceRateLimit(error);
+	const category = error instanceof SourceToolError ? error.category : sourceToolFailure(error);
 	// Never forward external tool text, config values, or transport errors that can contain secrets.
 	reply =
 		workerData.kind === "slack" && ["startSlack", "doneSlack"].includes(workerData.tool) && slackAlreadyReacted(error)
@@ -149,7 +153,10 @@ try {
 								}`,
 					signIn: connection?.state === "needs-auth",
 					...(limited ? { retryAfterMs: limited.retryAfterMs } : {}),
-					...(!limited && error instanceof SourceToolError ? { toolError: true } : {}),
+					...(error instanceof SetupError ? { configuration: true } : {}),
+					...(!limited && (error instanceof SourceToolError || category !== "tool_error")
+						? { toolError: true, failureCategory: category }
+						: {}),
 				};
 } finally {
 	await close();
