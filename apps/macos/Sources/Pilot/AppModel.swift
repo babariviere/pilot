@@ -924,7 +924,8 @@ final class AppModel: ObservableObject {
         defer { endNavigation() }
         openProject(projectId, context: context)
         slackTriageCaseId = caseId
-        slackTriageProjectId = context.map { $0.ref(.project, projectId).storageKey } ?? projectId
+        // Match the page's normalized key: plain locally, host-qualified remotely.
+        slackTriageProjectId = selectedProjectId
     }
 
     /// Opens a project's Slack triage and adds the message behind a pasted Slack link to it. pilotd reads and
