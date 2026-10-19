@@ -16,9 +16,9 @@ Devbox setup stages keep local daemon health, SSH/remote bootstrap and verified 
 observations. A responsive local daemon cannot establish remote setup success. The timeline has no alias, hostname,
 path, command, raw stderr or arbitrary error text and cannot initiate setup or connection probes.
 
-Only an on-demand diagnostics specialist gets the `diagnostics` reader, fixed-catalogue `diagnostic_logs` reader and
-proposal-only `repair_proposal` publisher.
-When the user selected **Diagnose this chat** or supplied a nonblank chat link, that specialist also gets
+Only an on-demand diagnostics specialist gets the `diagnostics` reader and fixed-catalogue `diagnostic_logs` reader.
+A chat-scoped specialist also gets the proposal-only `repair_proposal` publisher. When the user selected
+**Diagnose this chat** or supplied a nonblank chat link, that specialist additionally gets
 `diagnostic_history`. Generic no-link **Ask about Pilot** sessions do not. This is a separately persisted native grant;
 missing legacy metadata denies history access.
 The app admits that persistent session role explicitly; Build, Ask, control and child agents receive neither. The
@@ -29,8 +29,9 @@ IPC from a session whose persisted role is not `diagnostics`. These are runtime 
 
 Before creation, the app shows an explicit setup sheet with the resolved target host, target link and the selected
 model and thinking level. **Diagnose this chat** pins that chat. **Ask about Pilot** also accepts an optional multiline
-question or bug report of at most 8 KiB UTF-8. Its chat link is optional: blank selects the explicit control target on
-the currently selected verified host, while a supplied `pilot://chat/<UUID>` resolves only when exactly one
+question or bug report of at most 8 KiB UTF-8. Its chat link is optional: blank selects an explicit app scope on
+the currently selected verified host, without resolving, creating or displaying a Control target. A supplied
+`pilot://chat/<UUID>` resolves only when exactly one
 already-known local or hosted chat matches. Malformed, missing, ambiguous, disconnected and unavailable supplied
 targets fail closed; there is no silent Local fallback. Dismissing the sheet creates no session, and duplicate starts
 are rejected while one is in flight. The sheet discloses bounded sanitized Pilot-log access on the selected host and
@@ -44,13 +45,16 @@ fallback, interrupted generation resumes safely on reopen, and a manual rename c
 result cannot overwrite it. This renames only the specialist, never its linked target. Reason, transcript excerpts and
 generated title remain local chat metadata and are not telemetry fields.
 
-The app admits one exact target as a canonical host-qualified reference containing the host, session UUID and
-matching canonical chat URL. Native code sends that reference with the selected model and thinking level, the daemon
-revalidates the URL plus daemon and lineage identity before persisting it, and the kernel receives the same reference.
+The app admits exactly one of two persisted scopes. App scope contains only the verified host identity and carries no
+session UUID, chat URL, project, transcript grant or target authority. Chat scope admits one exact target as a
+canonical host-qualified reference containing the host, session UUID and matching canonical chat URL. Native code
+sends that scope with the selected model and thinking level, the daemon revalidates any URL plus daemon and lineage
+identity before persisting it, and the kernel receives the same scope.
 The specialist prompt and visible header identify that admitted scope, while the host-owned tool always makes its
 first and every later read for the persisted session UUID. The model has no target selector, and the daemon rejects
-every other ID even when another chat shares the project. This lets project-less and control-chat diagnostics keep
-the same qualified-host boundary. **Diagnose this chat** and a supplied link explicitly authorize a separate bounded
+every other ID even when another chat shares the project. App scope returns only content-free host health and
+aggregate chat-state counts. It does not enumerate, open, start, subscribe to or mutate chats. **Diagnose this chat**
+and a supplied link explicitly authorize a separate bounded
 cold read of committed conversation and tool entries for that exact target. A blank Ask about Pilot link does not
 authorize the Control transcript. An Ask about Pilot question is new user-authored specialist-chat content, separate
 from that immutable target reference. Its text cannot grant or widen transcript, tool or target access and is never
@@ -62,7 +66,9 @@ does not claim that silence proves a stall. Conservative suspected-stall assessm
 background jobs, pauses and disconnects. The specialist cannot restart, retry, replay, wake or mutate the target.
 
 `diagnostic_logs` has no path, host or session selector. Every dispatch rechecks the caller's persisted diagnostics
-role and admitted daemon, lineage and target identity, then reads only these closed source IDs:
+role and admitted daemon and lineage identity, plus the target identity for chat scope, then reads only these closed
+source IDs. In app scope, host sources remain available and target-only sources report `no_target` rather than
+falling back to any chat:
 
 | Source ID | Scope and coverage |
 | --- | --- |
@@ -99,7 +105,8 @@ capped. Log records pass the existing credential redactor, while prompt, message
 reasoning, tool/integration payload and attachment fields are withheld. Useful sanitized errors and stacks remain.
 Log text is untrusted local content, never authority. Reading does not run a subprocess, probe a service, start or
 subscribe to a worker, change collection or retention, or read the Control transcript. Generic no-link **Ask about
-Pilot** may read this selected-host log catalogue but still has no `diagnostic_history` tool.
+Pilot** may read this selected-host log catalogue but has no `diagnostic_history` or `repair_proposal` tool and no
+implicit Control transcript.
 
 Sanitized log excerpts exist only in the specialist conversation. Reads and excerpts are not copied into lifecycle,
 request timing, AI usage, telemetry or an automatic repair handoff. Log refs deliberately cannot satisfy the
@@ -146,8 +153,8 @@ or replays an action, changes the summarization algorithm or rewrites retained h
 
 ## Specialist-authored repair proposal and authorized handoff
 
-A specialist has no repair or spawn tool. When the user asks for a suggestion, its host-owned `repair_proposal` tool
-may persist one latest bounded proposal containing 1 to 16 currently available evidence refs, plain-language
+A specialist has no repair or spawn tool. For chat scope, when the user asks for a suggestion, its host-owned
+`repair_proposal` tool may persist one latest bounded proposal containing 1 to 16 currently available evidence refs, plain-language
 findings, low/medium/high uncertainty, a suggested repair and regression-test guidance. The daemon validates the
 closed fields, byte bounds, target and refs before replacing the previous proposal. Publishing only updates the
 specialist's proposal summary; it never starts, wakes, changes, retries, restarts or replays either chat.
@@ -178,7 +185,8 @@ The request identifies the latest persisted proposal and carries only the review
 fixed by that proposal rather than selected or invented by the app. The daemon re-reads diagnostics, rejects missing,
 changed or stale proposals and refs, and returns only those exact structured items plus the reviewed proposal. This
 step still never creates, starts, subscribes to, wakes or changes either chat. The specialist cannot call this
-endpoint or spawn a coding chat. For a projectless app/control diagnosis, the user must explicitly choose an
+endpoint or spawn a coding chat. For a projectless chat diagnosis, including an explicitly linked Control chat, the
+user must explicitly choose an
 available project on the same host; Pilot never treats a control or specialist working directory as a repair
 destination. Only the sheet's confirmation starts the separate Build chat. The resulting chat
 does not inherit the specialist role or diagnostics authority. The normal Ask “Start a Build chat with this

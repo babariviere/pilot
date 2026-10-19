@@ -285,6 +285,28 @@ export interface SessionDiagnostics {
 	truncation: SessionDiagnosticTruncation;
 }
 
+/** Host/app diagnostics with no attached chat, transcript authority or session identifier. */
+export interface AppDiagnostics {
+	schemaVersion: typeof DIAGNOSTIC_SCHEMA_VERSION;
+	scope: "app";
+	host: OperationHost;
+	release: string;
+	collectedAt: string;
+	connectivity: { state: "online" | "offline" | "unknown"; observedAt?: string };
+	localDiagnostics: { enabled: boolean; coverage: "host" };
+	sessions: {
+		total: number;
+		active: number;
+		archived: number;
+		working: number;
+		failed: number;
+		workers: number;
+	};
+	resources: SessionDiagnosticResources;
+}
+
+export type DiagnosticSnapshot = SessionDiagnostics | AppDiagnostics;
+
 export type DiagnosticRepairUncertainty = "low" | "medium" | "high";
 
 /** Closed, bounded specialist-authored suggestion. Publishing it cannot create or mutate a chat. */

@@ -1066,9 +1066,11 @@ on-demand, runtime-restricted specialist and host-qualified read-only API that n
 **Diagnose this chat** from a chat's More menu, or **Ask about Pilot** from Help, to open
 an explicit setup sheet and choose the specialist's model and thinking level. Ask about Pilot accepts an optional
 question or bug report and an optional known `pilot://chat/<UUID>` link; without a link it diagnoses Pilot on the
-selected host through that host's explicit control target. The report becomes only the specialist chat's bounded
+selected verified host through an explicit app scope, with no hidden Control row or chat target. The report becomes
+only the specialist chat's bounded
 opening user message, never telemetry, diagnostic evidence or target authority. The created chat is visibly labeled
-**Diagnostics** in the sidebar and chat header, with its admitted host-qualified target and read-only boundary. Its
+**Diagnostics** in the sidebar and chat header, with its admitted app or host-qualified chat scope and read-only
+boundary. Its
 descriptive chat title remains independent and is generated through the normal
 bounded title lifecycle: a submitted reason seeds the title, while a reasonless setup waits for the first substantive
 specialist reply rather than naming the fixed diagnostic instruction. The readable fallback remains if title
@@ -1076,9 +1078,10 @@ generation is unavailable, and a user rename always wins. Titles and title conte
 creates nothing, and supplied unavailable,
 missing or ambiguous links fail without falling back to Local. Diagnose this chat and an explicitly supplied link
 also grant a bounded, paginated cold read of that exact chat's committed conversation and tool history. Generic
-no-link Ask about Pilot cannot read the Control transcript. Every specialist can inventory and search a fixed,
+no-link Ask about Pilot has no transcript authority at all. Every specialist can inventory and search a fixed,
 path-free catalogue of bounded sanitized Pilot daemon, worker, native report and admitted-target operational logs on
-its selected host. Missing app text logs, journal history or crash reports remain explicit coverage gaps, not proof
+its selected host. App-scoped sessions expose host sources while marking target-only lifecycle, request-timing and
+tool sources unavailable. Missing app text logs, journal history or crash reports remain explicit coverage gaps, not proof
 that no failure occurred. The reader rejects symbolic links and arbitrary files, uses opaque bounded continuations
 and excerpts, never wakes or probes the target, and does not copy logs into telemetry or repair handoffs. Logs and
 history stay local, are treated as untrusted data, and grant no attachment, child-session, shell or mutation access.

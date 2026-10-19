@@ -46,6 +46,10 @@ public enum SessionRole: String, Codable, Hashable, Sendable {
     case diagnostics
 }
 
+public enum DiagnosticScope: String, Codable, Hashable, Sendable {
+    case app
+}
+
 public enum WorkspaceMode: String, Codable, Hashable, Sendable {
     case clone
     case direct
@@ -62,6 +66,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public var control: Bool? = nil
     /// On-demand operational specialist with a runtime-enforced read-only tool profile.
     public var role: SessionRole? = nil
+    /// Explicit app/host scope with no attached chat or transcript grant.
+    public var diagnosticScope: DiagnosticScope? = nil
     /// Exact chat this specialist may inspect without waking or changing it.
     public var diagnosticTargetId: String? = nil
     /// Canonical host-qualified form of the admitted target.
@@ -235,12 +241,13 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         unpublishedWork: Bool? = nil, workspaceBase: String? = nil, workspaceUpdatedAt: Double? = nil,
         workspaceBehind: String? = nil, runningJobs: [SessionJob]? = nil, canRetryStartup: Bool? = nil,
         working: Bool? = nil, attentionReason: NeedsYouReason? = nil, attentionAt: Double? = nil,
-        role: SessionRole? = nil, diagnosticTargetId: String? = nil,
+        role: SessionRole? = nil, diagnosticScope: DiagnosticScope? = nil, diagnosticTargetId: String? = nil,
         diagnosticTarget: DiagnosticTargetReference? = nil, diagnosticHistoryAccess: Bool? = nil,
         diagnosticRepairProposal: DiagnosticRepairProposal? = nil
     ) {
         self.id = id
         self.role = role
+        self.diagnosticScope = diagnosticScope
         self.diagnosticTargetId = diagnosticTargetId
         self.diagnosticTarget = diagnosticTarget
         self.diagnosticHistoryAccess = diagnosticHistoryAccess
@@ -642,8 +649,10 @@ public struct SpawnRequest: Codable, Sendable {
     public var missionId: String?
     /// A host-enforced specialist profile. Omitted for ordinary Build and Ask chats.
     public var role: SessionRole?
-    /// Required for diagnostics. The daemon derives the specialist scope from this sleeping target.
+    /// Required for chat diagnostics. Mutually exclusive with diagnosticScope.
     public var diagnosticTarget: DiagnosticTargetReference?
+    /// Required for app diagnostics. Mutually exclusive with diagnosticTarget.
+    public var diagnosticScope: DiagnosticScope?
     /// Explicit grant for bounded target history reads. Omitted for generic no-link Ask about Pilot.
     public var diagnosticHistoryAccess: Bool?
     /// Diagnostics-only hint to title from substantive specialist text instead of the fixed opening instruction.
@@ -665,12 +674,14 @@ public struct SpawnRequest: Codable, Sendable {
         projectId: String? = nil, cwd: String? = nil, message: String, title: String? = nil, model: String? = nil,
         thinking: String? = nil, baseBranch: String? = nil, mode: ChatMode? = nil, workspace: WorkspaceMode? = nil,
         missionId: String? = nil, role: SessionRole? = nil, diagnosticTarget: DiagnosticTargetReference? = nil,
+        diagnosticScope: DiagnosticScope? = nil,
         diagnosticHistoryAccess: Bool? = nil, diagnosticTitleFromReply: Bool? = nil,
         diagnosticRepair: DiagnosticRepairAdmission? = nil
     ) {
         self.missionId = missionId
         self.role = role
         self.diagnosticTarget = diagnosticTarget
+        self.diagnosticScope = diagnosticScope
         self.diagnosticHistoryAccess = diagnosticHistoryAccess
         self.diagnosticTitleFromReply = diagnosticTitleFromReply
         self.diagnosticRepair = diagnosticRepair

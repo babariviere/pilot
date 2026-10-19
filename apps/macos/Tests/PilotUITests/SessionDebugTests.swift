@@ -27,7 +27,7 @@ private func sourceSession(control: Bool? = nil) -> SessionSummary {
                                                localHost: app.localHost, local: app.client.sessions, hosted: [])
     let prepared = try DiagnosticSetup.spawnRequest(target: resolved, model: "test/diagnostic",
                                                     thinking: "high", askingAboutPilot: false)
-    let created = try await app.spawnDiagnostics(prepared, target: resolved.reference, tracksFeature: false)
+    let created = try await app.spawnDiagnostics(prepared, target: resolved, tracksFeature: false)
     try app.selectSession(created)
 
     let request = try #require(app.client.fixtureSpawnRequests.first)
@@ -41,12 +41,10 @@ private func sourceSession(control: Bool? = nil) -> SessionSummary {
     #expect(app.selectedSession?.isDiagnosticsSpecialist == true)
 }
 
-@Test @MainActor func askAboutPilotUsesTheControlChatAsAnExplicitTarget() async throws {
+@Test @MainActor func askAboutPilotUsesAnExplicitAppScopeWithoutAControlTarget() async throws {
     let app = AppModel()
     try app.registerLocal(localHost)
-    var control = sourceSession(control: true)
-    control.control = true
-    app.client.loadFixture(projects: [], sessions: [control])
+    app.client.loadFixture(projects: [], sessions: [])
 
     app.askAboutPilot()
     let setup = try #require(app.diagnosticSetupTarget)
@@ -56,13 +54,14 @@ private func sourceSession(control: Bool? = nil) -> SessionSummary {
     let prepared = try DiagnosticSetup.spawnRequest(target: resolved, model: "test/diagnostic",
                                                     thinking: "medium", askingAboutPilot: true,
                                                     question: "Why did Pilot stop responding after reconnect?")
-    _ = try await app.spawnDiagnostics(prepared, target: resolved.reference, tracksFeature: false)
+    _ = try await app.spawnDiagnostics(prepared, target: resolved, tracksFeature: false)
 
     let request = try #require(app.client.fixtureSpawnRequests.first)
     #expect(request.title == nil)
     #expect(request.diagnosticTitleFromReply == nil, "the submitted question supplies the descriptive title")
     #expect(request.role == .diagnostics)
-    #expect(request.diagnosticTarget?.sessionId == control.id)
+    #expect(request.diagnosticScope == .app)
+    #expect(request.diagnosticTarget == nil && request.diagnosticHistoryAccess == nil)
     #expect(request.model == "test/diagnostic")
     #expect(request.thinking == "medium")
     #expect(request.message == "Why did Pilot stop responding after reconnect?")

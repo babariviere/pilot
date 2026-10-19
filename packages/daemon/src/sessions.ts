@@ -34,6 +34,7 @@ import {
 import { credentialEnvironment } from "@pilot/kernel/credential-client";
 import type {
 	AgentEvent,
+	AppDiagnostics,
 	AIUsageBudget,
 	AIWorkerLaunchReason,
 	ArtifactRevision,
@@ -73,6 +74,7 @@ import type {
 	UpdatePreparation,
 } from "@pilot/protocol";
 import { nodeTelemetry, type TraceCarrier } from "@pilot/telemetry";
+import release from "../../../package.json" with { type: "json" };
 import { AIUsageLedger } from "./ai-usage.ts";
 import { compareAIUsageBudget } from "./ai-usage-budget.ts";
 import { prepareAskSnapshot } from "./ask-snapshots.ts";
@@ -332,6 +334,8 @@ interface SessionMeta extends OutcomeMeta {
 	control?: boolean;
 	/** Runtime-enforced specialist profile. Omitted for ordinary chats. */
 	role?: "diagnostics";
+	/** App/host diagnostics without an attached chat. Mutually exclusive with diagnosticTarget. */
+	diagnosticScope?: "app";
 	/** Exact host-local chat admitted for this specialist. */
 	diagnosticTargetId?: string;
 	/** Canonical host-qualified target persisted for worker recovery and user-visible context. */
@@ -3987,6 +3991,13 @@ export class SessionManager {
 		if (
 			meta.role === "diagnostics" &&
 			(meta.mode !== "ask" ||
+				(meta.diagnosticScope !== undefined && meta.diagnosticScope !== "app") ||
+				(meta.diagnosticScope === "app" &&
+					(meta.diagnosticTargetId !== undefined ||
+						meta.diagnosticTarget !== undefined ||
+						meta.diagnosticHistoryAccess !== undefined ||
+						meta.diagnosticRepairProposal !== undefined)) ||
+				(meta.diagnosticScope !== "app" && meta.diagnosticTarget === undefined) ||
 				(meta.diagnosticHistoryAccess !== undefined && meta.diagnosticHistoryAccess !== true) ||
 				(meta.diagnosticHistoryAccess === true && !meta.diagnosticTarget) ||
 				(meta.diagnosticTargetId !== undefined &&
@@ -4020,7 +4031,8 @@ export class SessionManager {
 		}
 		if (
 			meta.role !== "diagnostics" &&
-			(meta.diagnosticTargetId !== undefined ||
+			(meta.diagnosticScope !== undefined ||
+				meta.diagnosticTargetId !== undefined ||
 				meta.diagnosticTarget !== undefined ||
 				meta.diagnosticHistoryAccess !== undefined ||
 				meta.diagnosticRepairProposal !== undefined)
@@ -4404,14 +4416,22 @@ export class SessionManager {
 				request.baseBranch !== undefined ||
 				request.cwd !== undefined)
 		)
-			throw new Error("Diagnostics specialists require a target-scoped read-only session");
+			throw new Error("Diagnostics specialists require a read-only session");
+		if (request.diagnosticScope !== undefined && request.diagnosticScope !== "app")
+			throw new Error("diagnosticScope must be app or omitted");
+		if (
+			request.role === "diagnostics" &&
+			(request.diagnosticScope === "app") === (request.diagnosticTarget !== undefined)
+		)
+			throw new Error("Diagnostics specialists require exactly one app scope or chat target");
 		if (request.diagnosticHistoryAccess !== undefined && request.diagnosticHistoryAccess !== true)
 			throw new Error("diagnosticHistoryAccess must be an explicit true grant or omitted");
 		if (request.diagnosticTitleFromReply !== undefined && request.diagnosticTitleFromReply !== true)
 			throw new Error("diagnosticTitleFromReply must be an explicit true hint or omitted");
 		if (
 			request.role !== "diagnostics" &&
-			(request.diagnosticTarget !== undefined ||
+			(request.diagnosticScope !== undefined ||
+				request.diagnosticTarget !== undefined ||
 				request.diagnosticHistoryAccess !== undefined ||
 				request.diagnosticTitleFromReply !== undefined)
 		)
@@ -4429,7 +4449,7 @@ export class SessionManager {
 		let projectId = request.projectId;
 		let diagnosticTarget: SessionMeta | undefined;
 		let diagnosticReference: DiagnosticTargetReference | undefined;
-		if (request.role === "diagnostics") {
+		if (request.role === "diagnostics" && request.diagnosticTarget) {
 			diagnosticReference = this.admittedDiagnosticTarget(request.diagnosticTarget);
 			diagnosticTarget = this.require(diagnosticReference.sessionId);
 			if (diagnosticTarget.role === "diagnostics")
@@ -4462,10 +4482,12 @@ export class SessionManager {
 			await validateBaseBranch(request.baseBranch, project.path);
 		}
 		// A target clone may still be preparing and its private cwd may not exist. Specialists have no file tools, so
-		// use the stable project root for kernel configuration while keeping the exact target as the only capability.
+		// use the stable project root for a chat scope, or the daemon home for an app scope. Neither path is a capability.
 		const directory = diagnosticTarget
 			? (project?.path ?? diagnosticTarget.cwd)
-			: request.cwd?.trim() || project?.path;
+			: request.role === "diagnostics" && request.diagnosticScope === "app"
+				? this.home
+				: request.cwd?.trim() || project?.path;
 		if (!directory) throw new Error("projectId or cwd is required");
 		if (this.closing) throw new Error("pilotd is shutting down");
 		let cwd = await requireDirectory(directory);
@@ -4534,6 +4556,7 @@ export class SessionManager {
 			id,
 			...(controlPermission ? { controlPermission: { ...controlPermission } } : {}),
 			...(request.role ? { role: request.role } : {}),
+			...(request.diagnosticScope === "app" ? { diagnosticScope: "app" as const } : {}),
 			...(diagnosticTarget && diagnosticReference
 				? { diagnosticTargetId: diagnosticTarget.id, diagnosticTarget: diagnosticReference }
 				: {}),
@@ -5401,6 +5424,60 @@ export class SessionManager {
 		};
 	}
 
+	/** Content-free host/app projection. It does not enumerate, open, subscribe to or wake chats. */
+	appDiagnostics(): AppDiagnostics {
+		if (!this.diagnosticHost) throw new ServiceUnavailable("Diagnostic host identity is unavailable");
+		let active = 0;
+		let archived = 0;
+		let working = 0;
+		let failed = 0;
+		for (const meta of this.metas.values()) {
+			if (meta.archivedAt !== undefined) {
+				archived++;
+				continue;
+			}
+			active++;
+			const summary = this.summary(meta, this.workers.get(meta.id));
+			if (summary.working === true) working++;
+			if (summary.state === "failed") failed++;
+		}
+		const performance = daemonPerformance();
+		return {
+			schemaVersion: 1,
+			scope: "app",
+			host: this.diagnosticHost,
+			release: release.version,
+			collectedAt: new Date().toISOString(),
+			connectivity: {
+				state: this.internetOnline === undefined ? "unknown" : this.internetOnline ? "online" : "offline",
+				...(this.internetObservedAt === undefined
+					? {}
+					: { observedAt: new Date(this.internetObservedAt).toISOString() }),
+			},
+			localDiagnostics: { enabled: this.telemetry?.localDiagnostics ?? true, coverage: "host" },
+			sessions: {
+				total: this.metas.size,
+				active,
+				archived,
+				working,
+				failed,
+				workers: this.workers.size,
+			},
+			resources: {
+				...(performance
+					? {
+							daemonUptimeMs: performance.uptimeMs,
+							eventLoopUtilization: performance.eventLoop.utilization,
+							eventLoopDelayP99Ms: performance.eventLoop.delayMs?.p99,
+							inFlightRequests: performance.operations.inFlight.length,
+							rssBytes: performance.process.rssBytes,
+							heapUsedBytes: performance.process.heapUsedBytes,
+						}
+					: {}),
+			},
+		};
+	}
+
 	/** Registered identity only. Never accepts a path and never starts a worker. */
 	controlDiagnosticDirectory(id: string): string {
 		this.require(id);
@@ -5604,9 +5681,17 @@ export class SessionManager {
 	): Promise<DiagnosticLogResult> {
 		this.validateMode(specialist);
 		if (specialist.role !== "diagnostics") throw new Conflict("Only a diagnostics specialist may read Pilot logs");
+		if (!this.diagnosticHost) throw new Conflict("Diagnostic host identity is unavailable");
+		if (specialist.diagnosticScope === "app") {
+			return this.diagnosticLogs.call(
+				this.diagnosticHost,
+				undefined,
+				this.telemetry?.localDiagnostics ?? true,
+				request,
+			);
+		}
 		const reference = this.diagnosticReference(specialist);
-		if (!reference || !this.diagnosticHost)
-			throw new Conflict("Diagnostics require an admitted host-qualified target");
+		if (!reference) throw new Conflict("Diagnostics require an admitted host-qualified target");
 		if (
 			reference.host.daemonId !== this.diagnosticHost.daemonId ||
 			reference.host.lineageId !== this.diagnosticHost.lineageId
@@ -5615,8 +5700,7 @@ export class SessionManager {
 		const target = this.require(reference.sessionId);
 		return this.diagnosticLogs.call(
 			reference.host,
-			target.id,
-			this.dir(target.id),
+			{ sessionId: target.id, directory: this.dir(target.id) },
 			this.telemetry?.localDiagnostics ?? true,
 			request,
 		);
@@ -6763,6 +6847,10 @@ export class SessionManager {
 			});
 		const mission = operations.time("worker.context", () => this.missions?.context(id));
 		const diagnosticTarget = this.diagnosticReference(meta);
+		const diagnosticScope =
+			meta.diagnosticScope === "app" && this.diagnosticHost
+				? ({ kind: "app", host: this.diagnosticHost } as const)
+				: undefined;
 		let published: SessionWorker | undefined;
 		const earlyPackets: KernelPacket[] = [];
 		let overflow = false;
@@ -6774,6 +6862,7 @@ export class SessionManager {
 					...(meta.control ? { control: true } : {}),
 					...(meta.role ? { role: meta.role } : {}),
 					...(diagnosticTarget ? { diagnosticTarget } : {}),
+					...(diagnosticScope ? { diagnosticScope } : {}),
 					...(meta.diagnosticHistoryAccess === true ? { diagnosticHistoryAccess: true } : {}),
 					...(meta.projectId ? { projectId: meta.projectId } : {}),
 					storageDir: join(this.dir(id), "durable"),
@@ -7106,13 +7195,18 @@ export class SessionManager {
 		}
 		if (packet.type === "diagnostics.call") {
 			void Promise.resolve()
-				.then(() => {
+				.then(async (): Promise<AppDiagnostics | SessionDiagnostics> => {
 					if (meta.role !== "diagnostics")
 						throw new Error("Only an admitted diagnostics specialist may read agent diagnostics");
+					if (meta.diagnosticScope === "app") {
+						if (packet.sessionId !== undefined) throw new Error("App diagnostics cannot select a chat");
+						return this.appDiagnostics();
+					}
+					if (!packet.sessionId) throw new Error("Chat diagnostics require the admitted target");
 					const target = this.require(packet.sessionId);
 					if (target.id !== (this.diagnosticReference(meta)?.sessionId ?? meta.id))
 						throw new Error("Diagnostics are limited to the host-admitted target chat");
-					return this.diagnostics(target.id, {
+					return await this.diagnostics(target.id, {
 						...(packet.limit === undefined ? {} : { limit: packet.limit }),
 					});
 				})
@@ -7700,6 +7794,7 @@ export class SessionManager {
 			...(meta.control ? { control: true } : {}),
 			...(meta.controlStart ? { controlStart: { ...meta.controlStart } } : {}),
 			...(meta.role ? { role: meta.role } : {}),
+			...(meta.diagnosticScope === "app" ? { diagnosticScope: "app" as const } : {}),
 			...(meta.diagnosticTargetId ? { diagnosticTargetId: meta.diagnosticTargetId } : {}),
 			...(this.diagnosticReference(meta) ? { diagnosticTarget: this.diagnosticReference(meta) } : {}),
 			...(meta.diagnosticHistoryAccess === true ? { diagnosticHistoryAccess: true } : {}),

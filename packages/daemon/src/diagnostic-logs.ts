@@ -218,8 +218,7 @@ export class DiagnosticLogReader {
 
 	async call(
 		host: OperationHost,
-		targetSessionId: string,
-		targetDirectory: string,
+		target: { sessionId: string; directory: string } | undefined,
 		localDiagnostics: boolean,
 		request: DiagnosticLogRequest,
 	): Promise<DiagnosticLogResult> {
@@ -231,29 +230,24 @@ export class DiagnosticLogReader {
 			const base = {
 				schemaVersion: 1 as const,
 				host: { ...host },
-				targetSessionId,
+				scope: target ? ("chat" as const) : ("app" as const),
+				...(target ? { targetSessionId: target.sessionId } : {}),
 				collectedAt: (this.options.now?.() ?? new Date()).toISOString(),
 				untrusted: true as const,
 				action: parsed.action,
 			};
 			if (parsed.action === "inventory") {
-				const sources = await this.sources(targetSessionId, targetDirectory, localDiagnostics);
+				const sources = await this.sources(target, localDiagnostics);
 				return { ...base, sources: [...sources.values()].map(inventory) };
 			}
 			if (parsed.action === "search") {
-				const sources = await this.sources(
-					targetSessionId,
-					targetDirectory,
-					localDiagnostics,
-					new Set([parsed.source]),
-				);
+				const sources = await this.sources(target, localDiagnostics, new Set([parsed.source]));
 				const descriptor = sources.get(parsed.source)!;
 				return { ...base, page: await this.search(descriptor, parsed) };
 			}
 			const ref = parseOpaque<RefPayload>(REF_PREFIX, parsed.ref, this.opaqueSecret);
 			const sources = await this.sources(
-				targetSessionId,
-				targetDirectory,
+				target,
 				localDiagnostics,
 				new Set(ref && SOURCE_IDS.has(ref.s) ? [ref.s] : []),
 			);
@@ -306,8 +300,7 @@ export class DiagnosticLogReader {
 	}
 
 	private async sources(
-		targetSessionId: string,
-		targetDirectory: string,
+		target: { sessionId: string; directory: string } | undefined,
 		localDiagnostics: boolean,
 		selected: ReadonlySet<DiagnosticLogSourceId> = SOURCE_IDS,
 	): Promise<Map<DiagnosticLogSourceId, SourceDescriptor>> {
@@ -389,9 +382,12 @@ export class DiagnosticLogReader {
 			selected.has(id as DiagnosticLogSourceId),
 		);
 		const sessionRoots =
-			needsTarget && localDiagnostics
-				? await this.sessionRoots(targetSessionId, targetDirectory)
-				: { target: "missing" as const, durable: "missing" as const };
+			needsTarget && localDiagnostics && target
+				? await this.sessionRoots(target.sessionId, target.directory)
+				: {
+						target: target ? ("missing" as const) : ("no_target" as const),
+						durable: target ? ("missing" as const) : ("no_target" as const),
+					};
 		const targetSources: Array<{
 			id: "lifecycle" | "request_timing" | "tool_activity";
 			file: string;
@@ -431,7 +427,7 @@ export class DiagnosticLogReader {
 				});
 				continue;
 			}
-			const current = join(targetDirectory, source.file);
+			const current = join(target!.directory, source.file);
 			const files = await this.fixedFiles([
 				{ token: "current", path: current, rotated: false },
 				{ token: "rotated", path: `${current}.1`, rotated: true },
