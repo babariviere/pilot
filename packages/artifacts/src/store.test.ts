@@ -120,3 +120,53 @@ test("revisions record the library versions they were prepared with", async () =
 		await rm(dir, { recursive: true, force: true });
 	}
 });
+
+test("visual revisions keep source, data, versions and the check, with a fallback page", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "pilot-artifacts-"));
+	try {
+		const store = new ArtifactStore(dir, { sessionId: "session" });
+		const source =
+			'function visual({ ui, state, data }) {\n  const s = state({ on: false });\n  return () => ui.column([ui.text(data?.title ?? "Untitled"), ui.toggle({ label: "On", value: s.on, onChange: (v) => (s.on = v) })]);\n}';
+		const created = await store.create({ title: "Toggle", kind: "visual", source, data: { title: "Hello" } });
+		assert.equal(created.source, source);
+		assert.deepEqual(created.data, { title: "Hello" });
+		assert.deepEqual(created.visual, {
+			api: 1,
+			engine: "quickjs-ng 0.17.0",
+			check: { nodes: 3, controls: 1, interactions: 2, logs: [] },
+		});
+		assert.deepEqual(created.libraries, []);
+		assert.match(created.html, /newer version of Pilot/);
+		const read = await new ArtifactStore(dir, { sessionId: "session" }).get(created.id);
+		assert.deepEqual(read, created);
+		const [summary] = await store.list();
+		assert.ok(summary && !("data" in summary) && !("visual" in summary));
+		const updated = await store.update(created.id, { title: "Toggle", kind: "visual", source }, 1);
+		assert.equal(updated.data, null);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("failing visuals, data on other kinds and libraries on visuals save nothing", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "pilot-artifacts-"));
+	try {
+		const store = new ArtifactStore(dir, { sessionId: "session" });
+		await assert.rejects(
+			store.create({
+				title: "Broken",
+				kind: "visual",
+				source: '({ ui }) => () =>\n  ui.text("x", { color: "red" })',
+			}),
+			/Nothing was published\. line 2: text: color "red" is not a color token/,
+		);
+		await assert.rejects(store.create({ ...document, data: { a: 1 } }), /Only visual artifacts take data/);
+		await assert.rejects(
+			store.create({ title: "Lib", kind: "visual", source: "() => () => null", libraries: ["d3"] }),
+			/Visual artifacts do not use libraries/,
+		);
+		assert.deepEqual(await store.list(), []);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});

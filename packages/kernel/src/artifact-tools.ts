@@ -11,12 +11,20 @@ import {
 	MAX_IMAGE_SOURCE_BYTES,
 	previewArtifact,
 } from "@pilot/artifacts";
-import type { ArtifactReference, ArtifactRevision, ArtifactSummary, ArtifactWrite } from "@pilot/protocol";
+import type {
+	ArtifactData,
+	ArtifactReference,
+	ArtifactRevision,
+	ArtifactSummary,
+	ArtifactWrite,
+} from "@pilot/protocol";
 import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
 
 const MAX_SOURCE_BYTES = 512 * 1024;
 const library = StringEnum(["react", "react-dom", "mermaid", "echarts", "motion", "d3", "three"] as const);
-const kind = StringEnum(["html", "react", "image", "swiftui", "shader"] as const);
+const kind = StringEnum(["html", "react", "image", "swiftui", "shader", "visual"] as const);
+const writeKind = StringEnum(["html", "react", "image", "swiftui", "shader"] as const);
+const visualWriteKind = kind;
 const writeProperties = {
 	title: Type.String({ minLength: 1, maxLength: 160, description: "Short human-readable artifact title." }),
 	kind,
@@ -47,6 +55,14 @@ const referenceSchema = Type.Object({
 		revision: Type.Integer(),
 	}),
 	warnings: Type.Optional(Type.Array(Type.String())),
+	check: Type.Optional(
+		Type.Object({
+			nodes: Type.Integer(),
+			controls: Type.Integer(),
+			interactions: Type.Integer(),
+			logs: Type.Optional(Type.Array(Type.String())),
+		}),
+	),
 });
 const revisionNumber = Type.Integer({ minimum: 1 });
 const diagnosticsProperties = {
@@ -68,6 +84,8 @@ export interface ArtifactToolOptions {
 	/** After publishing HTML/React/shaders, render once to report runtime errors as non-blocking warnings.
 	 * Defaults to the installed browser renderer; tests inject or disable it. */
 	diagnose?: ArtifactDiagnose | false;
+	/** Offer kind "visual" (native visuals). Off until the app renders them; PILOT_VISUAL_ARTIFACTS=1 turns it on. */
+	visuals?: boolean;
 }
 
 export type ArtifactDiagnose = (write: ArtifactWrite, signal?: AbortSignal) => Promise<string[]>;
@@ -109,6 +127,7 @@ function dataResult<T extends JsonValue>(data: T): AgentToolResult<T> {
 /** Register through createAgentSession(customTools), so codemode and extension hooks see these tools. */
 export function createArtifactTools(options: ArtifactToolOptions): ToolDefinition[] {
 	const { store } = options;
+	const visuals = options.visuals ?? process.env.PILOT_VISUAL_ARTIFACTS === "1";
 	const preview =
 		options.preview === false
 			? undefined
@@ -140,10 +159,18 @@ export function createArtifactTools(options: ArtifactToolOptions): ToolDefinitio
 		} catch (error) {
 			console.warn("pilot: artifact change notification failed", error);
 		}
-		return dataResult(warnings.length ? { artifact, warnings } : { artifact });
+		const check = value.visual
+			? {
+					nodes: value.visual.check.nodes,
+					controls: value.visual.check.controls,
+					interactions: value.visual.check.interactions,
+					...(value.visual.check.logs.length ? { logs: [...value.visual.check.logs] } : {}),
+				}
+			: undefined;
+		return dataResult({ artifact, ...(warnings.length ? { warnings } : {}), ...(check ? { check } : {}) });
 	};
 	const runtimeWarnings = async (write: ArtifactWrite, signal?: AbortSignal): Promise<string[]> => {
-		if (!diagnose || write.kind === "image" || write.kind === "swiftui") return [];
+		if (!diagnose || write.kind === "image" || write.kind === "swiftui" || write.kind === "visual") return [];
 		try {
 			const warnings = await diagnose(write, signal);
 			return warnings.length
@@ -173,7 +200,7 @@ ${previewDescription}Source must be self-contained and offline. Text source: 512
 ${options.ask ? "Ask images accept only inline base64 data:image/... URLs, never file paths." : "Images accept local PNG, JPEG, GIF or WebP paths, or inline data URLs; never remote URLs."}
 SwiftUI requires the macOS Swift toolchain and renders a static screenshot, not project views. Publication does not require the Pilot app to be running.
 Shaders are Shadertoy-style GLSL (mainImage); publication fails with line-numbered compile errors.
-Get the current source before updating, and pass its revision as expectedRevision.`,
+${visuals ? "Visuals: kind visual, source String(fn) of a function ({ ui, state, data }) => view, data any JSON (1 MiB). Publication runs it and fails with line-numbered errors.\n" : ""}Get the current source before updating, and pass its revision as expectedRevision.`,
 			promptSnippet: "Publish and inspect offline HTML, React, shader, image or native SwiftUI artifacts",
 			executionMode: "sequential",
 			annotations: { openWorldHint: false, destructiveHint: false },
@@ -181,7 +208,7 @@ Get the current source before updating, and pass its revision as expectedRevisio
 				action: StringEnum(actions),
 				id: Type.Optional(Type.String({ description: "Artifact ID, required for get and update." })),
 				title: Type.Optional(writeProperties.title),
-				kind: Type.Optional(kind),
+				kind: Type.Optional(visuals ? visualWriteKind : writeKind),
 				source: Type.Optional(
 					options.ask
 						? Type.String({
@@ -192,6 +219,13 @@ Get the current source before updating, and pass its revision as expectedRevisio
 						: writeProperties.source,
 				),
 				libraries: writeProperties.libraries,
+				...(visuals
+					? {
+							data: Type.Optional(
+								Type.Unknown({ description: "Visuals only: JSON passed to the function as data (1 MiB max)." }),
+							),
+						}
+					: {}),
 				expectedRevision: Type.Optional(revisionNumber),
 				revision: Type.Optional(revisionNumber),
 				...(preview
@@ -221,6 +255,8 @@ Get the current source before updating, and pass its revision as expectedRevisio
 						source: Type.String(),
 						libraries: Type.Array(library),
 						libraryVersions: Type.Optional(Type.Record(Type.String(), Type.String())),
+						data: Type.Optional(Type.Unknown()),
+						visual: Type.Optional(Type.Object({ api: Type.Integer(), engine: Type.String() })),
 					}),
 				}),
 				Type.Object({ artifacts: Type.Array(Type.Object(summaryProperties)) }),
@@ -262,6 +298,8 @@ Get the current source before updating, and pass its revision as expectedRevisio
 								source: value.source,
 								libraries: value.libraries,
 								...(value.libraryVersions ? { libraryVersions: { ...value.libraryVersions } } : {}),
+								...(value.data !== undefined ? { data: value.data } : {}),
+								...(value.visual ? { visual: { api: value.visual.api, engine: value.visual.engine } } : {}),
 							},
 						});
 					}
@@ -271,13 +309,23 @@ Get the current source before updating, and pass its revision as expectedRevisio
 					case "update":
 					case "preview": {
 						const { title, kind, source, libraries } = params;
+						if (kind === "visual" && !visuals) throw new Error("Visual artifacts are not available yet");
+						if (kind === "visual" && source === undefined)
+							throw new Error(
+								"Visual artifacts require source: String(visual). Tool arguments are JSON, so a function passed directly arrives empty",
+							);
 						if (title === undefined || kind === undefined || source === undefined)
 							throw new Error(`Artifact ${action} requires title, kind and source`);
+						if (kind === "visual" && action === "preview")
+							throw new Error(
+								"Preview does not render visuals. Publish with create: it runs the visual and reports errors with lines",
+							);
 						const write: ArtifactWrite = {
 							title,
 							kind,
 							source,
 							...(libraries === undefined ? {} : { libraries }),
+							...("data" in params && params.data !== undefined ? { data: params.data as ArtifactData } : {}),
 						};
 						if (write.kind === "image") {
 							// Check before any filesystem image loader, including forged direct/nested calls.
