@@ -14,6 +14,7 @@ import type {
 } from "@pilot/kernel";
 import type { OperationHost } from "@pilot/protocol";
 import { redactDiagnosticText } from "./diagnostic-redaction.ts";
+import { operations } from "./event-loop-watchdog.ts";
 
 export const DIAGNOSTIC_LOG_SCAN_BYTES = 128 * 1024;
 export const DIAGNOSTIC_LOG_OUTPUT_BYTES = 64 * 1024;
@@ -143,7 +144,7 @@ function logTimestamp(text: string, fallback?: string): string | undefined {
 
 /** Preserve useful errors/stacks while dropping fields known to carry model, transcript or integration payloads. */
 export function sanitizeDiagnosticLogLine(text: string): string {
-	const credentialSafe = redactDiagnosticText(text);
+	const credentialSafe = timedRedaction(text);
 	if (credentialSafe !== text) return credentialSafe;
 	if (
 		/(?<![\w-])(?:prompt|messages?|conversation|transcript|reasoning|thinking|tool[_-]?(?:arguments?|results?|output)|request[_-]?body|response[_-]?body|attachments?|input[_-]?text|output[_-]?text|content|payload|blocks?|body|data|text|(?:slack|linear|github|integration)[_-]?(?:event|payload|body|data))["' \t]*[:=]/i.test(
@@ -167,10 +168,15 @@ function clipped(text: string, bytes: number): { text: string; truncated: boolea
 }
 
 function wholeWindowRedaction(buffer: Buffer, start = 0, end = buffer.length): string | undefined {
-	const redacted = redactDiagnosticText(buffer.subarray(start, end).toString("utf8"));
+	const redacted = timedRedaction(buffer.subarray(start, end).toString("utf8"));
 	return redacted === "[REDACTED multiline credential record]" || redacted === "[REDACTED private-key material]"
 		? redacted
 		: undefined;
+}
+
+function timedRedaction(text: string): string {
+	// Fixed, content-free label. The shared tracker retains only bounded slow-section timings, not log text.
+	return operations.time("diagnostics.redact", () => redactDiagnosticText(text));
 }
 
 function inventory(descriptor: SourceDescriptor): DiagnosticLogSourceInventory {

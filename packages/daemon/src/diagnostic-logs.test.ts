@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import type { DiagnosticLogRequest } from "@pilot/kernel";
 import { DiagnosticLogReader, sanitizeDiagnosticLogLine } from "./diagnostic-logs.ts";
+import { operations } from "./event-loop-watchdog.ts";
 
 const id = "01234567-89ab-4cde-8fab-0123456789ab";
 const host = { hostId: "remote-box", daemonId: "daemon", lineageId: "lineage" } as const;
@@ -55,6 +56,8 @@ async function fixture(t: TestContext) {
 		),
 		writeFile(join(reports, "node_2026-10-18.crash"), "must not be catalogued\n"),
 	]);
+	// Redacted records use file mtime as their fallback timestamp. Keep it on the fixture clock too.
+	await utimes(daemonLog, new Date(stamp), new Date(stamp));
 	const reader = new DiagnosticLogReader({
 		home,
 		daemonLog,
@@ -258,4 +261,14 @@ test("sanitization retains useful errors while withholding credentials and conve
 		sanitizeDiagnosticLogLine('{"tool_result":{"content":"private output"}}'),
 		"[WITHHELD conversation-bearing log record]",
 	);
+});
+
+test("redaction timing labels never contain record content", (t) => {
+	const labels: unknown[] = [];
+	t.mock.method(operations, "time", (label: string, run: () => unknown) => {
+		labels.push(label);
+		return run();
+	});
+	assert.equal(sanitizeDiagnosticLogLine("password=timing-canary"), "[REDACTED credential-bearing record]");
+	assert.deepEqual(labels, ["diagnostics.redact"]);
 });
