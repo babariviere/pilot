@@ -174,12 +174,8 @@ try {
 	}, "independent local endpoint");
 	assert.notEqual((await api(localBase, "hello")).daemonId, hello.daemonId);
 	const localSessions = await api(localBase, "sessions");
-	assert.equal(localSessions.length, 1);
-	assert.equal(localSessions[0].control, true);
-	assert.equal(localSessions[0].projectId, undefined);
-	assert.equal(localSessions[0].pinned, true);
-	assert.equal(localSessions[0].state, "parked");
-	assert.notEqual(localSessions[0].id, sessionId, "local control metadata must not import the remote chat");
+	// Fresh Linux endpoints have no Control conversation and must not import remote chats.
+	assert.deepEqual(localSessions, []);
 	await reconnected.close();
 	assert.deepEqual(await api(localBase, "sessions"), localSessions);
 	console.log(

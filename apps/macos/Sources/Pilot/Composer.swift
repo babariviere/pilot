@@ -385,7 +385,7 @@ struct Composer: View {
                 }
             }
             if !hostAvailable {
-                Label("Reconnect to send", systemImage: "wifi.slash")
+                Label("Reconnect to send", icon: .disconnected)
                     .font(.pilot(.caption))
                     .foregroundStyle(Theme.mutedForeground)
                     .accessibilityLabel("This chat is disconnected. Reconnect to send.")

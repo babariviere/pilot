@@ -25,6 +25,8 @@ import Testing
     let host = NSHostingView(rootView: view.frame(width: 720))
     let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 320),
                           styleMask: .borderless, backing: .buffered, defer: false)
+    // Swift owns this window. close() must not also release it through AppKit.
+    window.isReleasedWhenClosed = false
     window.contentView = host
     window.orderFrontRegardless()
     defer { window.close() }

@@ -201,7 +201,9 @@ private final class RecoveryHTTPStub: URLProtocol {
         #expect(app.client.fixtureSpawnRequests.first?.projectId == localProject.id)
         #expect(app.selectedSessionId == session.id && form.pendingOperationId == nil)
         #expect(try await OperationOutbox(directory: operations).pending() == [original])
-        #expect(RecoveryHTTPStub.requests.filter { $0.path == "/api/operations" }.count == 1)
+        #expect(RecoveryHTTPStub.requests.filter { $0.path == "/api/operations/receipt" }.count == 1)
+        #expect(RecoveryHTTPStub.requests.filter { $0.path == "/api/operations" }.isEmpty,
+                "The fixture reports a pending durable owner on lookup, so neither path may POST it again")
         #expect(app.chooseNewChatHost(target))
         #expect(form.pendingOperationId == original.operationId && form.message == "newer remote draft")
         await hosts.disconnect(target)
@@ -484,6 +486,8 @@ private final class RecoveryHTTPStub: URLProtocol {
         let source = HostResourceRef(host: origin, kind: .project, localId: "p")
         let destination = HostResourceRef(host: target, kind: .project, localId: project.id)
         try await hosts.projectCheckouts.confirm(source: source, target: destination)
+        #expect(try await OperationOutbox(directory: directory.appendingPathComponent("operations")).pending().isEmpty,
+                "Saved checkout metadata must not be decoded as a pending operation")
         #expect(app.chooseNewChatHost(origin))
         app.draftProjectId = "p"
         app.newSessionForm.message = "Use the mapped checkout"
