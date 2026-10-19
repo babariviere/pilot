@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // Shared building blocks for calm status pages (missions first): lists without boxes, hairline
@@ -102,6 +103,7 @@ struct HoverRow<Content: View>: View {
 extension View {
     /// Shows secondary row controls only while the row is hovered, keeping their space so rows do not jump. A
     /// control that takes keyboard focus shows too, so tabbing through a row never lands on an invisible button.
+    /// Open menus keep their source controls active while the pointer travels into their submenus.
     func revealed(_ visible: Bool) -> some View {
         modifier(RevealedModifier(visible: visible))
     }
@@ -110,14 +112,35 @@ extension View {
 private struct RevealedModifier: ViewModifier {
     let visible: Bool
     @FocusState private var focused: Bool
+    @State private var menus = RowActionMenuTracking()
 
     func body(content: Content) -> some View {
-        let shown = visible || focused
+        let shown = visible || focused || menus.isTracking
         content
             .focused($focused)
             .opacity(shown ? 1 : 0)
             .allowsHitTesting(shown)
+            .onReceive(NotificationCenter.default.publisher(for: NSMenu.didBeginTrackingNotification)) { notification in
+                guard let menu = notification.object as? NSMenu, shown else { return }
+                menus.begin(menu)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSMenu.didEndTrackingNotification)) { notification in
+                guard let menu = notification.object as? NSMenu, menus.contains(menu) else { return }
+                menus.end(menu)
+            }
+            .onDisappear { menus = RowActionMenuTracking() }
     }
+}
+
+/// A menu may start nested tracking while its parent is still open. Do not hide its source on a submenu's
+/// close, or retain NSMenu instances (and their actions) after the row goes away. Only revealed rows enroll.
+struct RowActionMenuTracking {
+    private var active: Set<ObjectIdentifier> = []
+
+    var isTracking: Bool { !active.isEmpty }
+    func contains(_ menu: NSMenu) -> Bool { active.contains(ObjectIdentifier(menu)) }
+    mutating func begin(_ menu: NSMenu) { active.insert(ObjectIdentifier(menu)) }
+    mutating func end(_ menu: NSMenu) { active.remove(ObjectIdentifier(menu)) }
 }
 
 /// Hairline between list rows, inset to line up with the row text rather than its icon.
