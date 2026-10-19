@@ -1,13 +1,6 @@
 /** Session registry and kernel worker supervision. */
 
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { DiagnosticContextRequest, DiagnosticContextResponse } from "@pilot/protocol";
-import {
-	DiagnosticReadBroker,
-	awaitDiagnosticRead,
-	diagnosticContextResponse,
-	parseDiagnosticContext,
-} from "./diagnostic-context.ts";
 import { type ChildProcess, fork } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -41,15 +34,20 @@ import {
 import { credentialEnvironment } from "@pilot/kernel/credential-client";
 import type {
 	AgentEvent,
-	AppDiagnostics,
 	AIUsageBudget,
 	AIWorkerLaunchReason,
+	AppDiagnostics,
 	ArtifactRevision,
 	ArtifactSummary,
 	DeliveryMode,
+	DiagnosticContextRequest,
+	DiagnosticContextResponse,
 	DiagnosticErrorCode,
+	DiagnosticEvidence,
+	DiagnosticEvidenceSubject,
 	DiagnosticHistoryPage,
 	DiagnosticPauseReason,
+	DiagnosticRepairProjectSetup,
 	DiagnosticRepairProposal,
 	DiagnosticRepairProposalDraft,
 	DiagnosticsHandoff,
@@ -97,7 +95,15 @@ import { ControlWatchSink, controlResultTail } from "./control-watches.ts";
 import { coordinatorTrust } from "./coordinator-trust.ts";
 import type { CredentialBroker } from "./credential-broker.ts";
 import { DatabaseService, type DatabaseState, decideDatabaseRequest, declineDatabaseRequest } from "./databases.ts";
+import {
+	awaitDiagnosticRead,
+	DiagnosticReadBroker,
+	diagnosticContextResponse,
+	parseDiagnosticContext,
+} from "./diagnostic-context.ts";
 import { DiagnosticLogReader, type DiagnosticLogReaderOptions } from "./diagnostic-logs.ts";
+import { redactDiagnosticText } from "./diagnostic-redaction.ts";
+import { DiagnosticRepairProjectStore, diagnosticRepairTitle, repairHost } from "./diagnostic-repair-project.ts";
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { daemonPerformance, operations } from "./event-loop-watchdog.ts";
 import { githubRepository, linkedPullRequest, type PullRequestProblems } from "./github.ts";
@@ -351,6 +357,9 @@ interface SessionMeta extends OutcomeMeta {
 	diagnosticHistoryAccess?: true;
 	/** Latest bounded, non-executing suggestion published by this specialist. */
 	diagnosticRepairProposal?: DiagnosticRepairProposal;
+	diagnosticHost?: OperationHost;
+	/** Latest proposal only. Replaced proposals cannot admit new repairs, while committed create receipts survive. */
+	diagnosticRepairStart?: { proposalId: string; operationId: string; targetId: string; digest: string };
 	executionEvidence?: import("@pilot/kernel").ExecutionEvidence;
 	/** Durable execution-ownership fence. Never cleared by reconnect, restart or a fresh input. */
 	delegationFenced?: boolean;
@@ -569,15 +578,28 @@ function diagnosticProposalText(value: unknown, label: string, maxChars: number)
 	const text = value.trim();
 	if (!text || text.length > maxChars || Buffer.byteLength(text) > maxChars * 3 || PROPOSAL_CONTROL.test(text))
 		throw new Conflict(`${label} must be bounded plain text`);
-	return text;
+	const sanitized = redactDiagnosticText(text);
+	if (sanitized.length > maxChars || Buffer.byteLength(sanitized) > maxChars * 3)
+		throw new Conflict(`${label} must remain bounded after sanitization`);
+	return sanitized;
 }
 
 function validatedDiagnosticProposal(value: unknown): DiagnosticRepairProposalDraft {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Conflict("Invalid repair proposal");
 	const proposal = value as Record<string, unknown>;
 	if (
-		Object.keys(proposal).sort().join(",") !==
-		"evidenceRefs,findings,regressionTestGuidance,suggestedRepair,uncertainty"
+		Object.keys(proposal).some(
+			(key) =>
+				![
+					"evidenceRefs",
+					"findings",
+					"regressionTestGuidance",
+					"suggestedRepair",
+					"uncertainty",
+					"repairTitle",
+					"subject",
+				].includes(key),
+		)
 	)
 		throw new Conflict("Invalid repair proposal fields");
 	if (
@@ -593,6 +615,11 @@ function validatedDiagnosticProposal(value: unknown): DiagnosticRepairProposalDr
 	if (proposal.uncertainty !== "low" && proposal.uncertainty !== "medium" && proposal.uncertainty !== "high")
 		throw new Conflict("Repair proposal uncertainty must be low, medium or high");
 	return {
+		...(proposal.subject === undefined ? {} : { subject: proposal.subject as DiagnosticEvidenceSubject }),
+		repairTitle: diagnosticRepairTitle(
+			proposal.repairTitle,
+			diagnosticProposalText(proposal.findings, "Findings", 1_200),
+		),
 		evidenceRefs: proposal.evidenceRefs as string[],
 		findings: diagnosticProposalText(proposal.findings, "Findings", 1_200),
 		uncertainty: proposal.uncertainty,
@@ -1182,6 +1209,7 @@ export class SessionManager {
 		this.aiUsageBudget = aiUsageBudget ? { ...aiUsageBudget } : undefined;
 		this.lifecycle.setEnabled(configuration.localDiagnostics);
 		this.nativeDiagnostics.setEnabled(configuration.localDiagnostics);
+		if (!configuration.localDiagnostics) this.clearAppEvidence();
 		const exportChanged =
 			!previous ||
 			previous.enabled !== configuration.enabled ||
@@ -1195,6 +1223,7 @@ export class SessionManager {
 	}
 
 	async clearDiagnostics(): Promise<void> {
+		this.clearAppEvidence();
 		const enabled = this.telemetry?.localDiagnostics ?? true;
 		this.lifecycle.setEnabled(false);
 		this.nativeDiagnostics.setEnabled(false);
@@ -1396,6 +1425,9 @@ export class SessionManager {
 
 	private readonly home: string;
 	private readonly diagnosticHost?: OperationHost;
+	private readonly repairProject: DiagnosticRepairProjectStore;
+	private readonly appEvidence = new Map<string, DiagnosticEvidence>();
+	private appEvidenceExpiry?: ReturnType<typeof setTimeout>;
 	private readonly diagnosticLogs: DiagnosticLogReader;
 	private readonly lifecycle: LifecycleDiagnostics;
 	private readonly nativeDiagnostics: NativeDiagnosticsStore;
@@ -1706,6 +1738,7 @@ export class SessionManager {
 			(factories.worker ? undefined : new SubscriptionUsageCache(onUsage, { agentDir }));
 		this.home = home;
 		this.diagnosticHost = options.diagnosticHost;
+		this.repairProject = new DiagnosticRepairProjectStore(home, projects, this.diagnosticHost);
 		this.diagnosticLogs = new DiagnosticLogReader({ home, ...options.diagnosticLogs });
 		this.lifecycle = new LifecycleDiagnostics(home);
 		this.nativeDiagnostics = new NativeDiagnosticsStore(home);
@@ -4212,8 +4245,7 @@ export class SessionManager {
 				(meta.diagnosticScope === "app" &&
 					(meta.diagnosticTargetId !== undefined ||
 						meta.diagnosticTarget !== undefined ||
-						meta.diagnosticHistoryAccess !== undefined ||
-						meta.diagnosticRepairProposal !== undefined)) ||
+						meta.diagnosticHistoryAccess !== undefined)) ||
 				(meta.diagnosticScope !== "app" && meta.diagnosticTarget === undefined) ||
 				(meta.diagnosticHistoryAccess !== undefined && meta.diagnosticHistoryAccess !== true) ||
 				(meta.diagnosticHistoryAccess === true && !meta.diagnosticTarget) ||
@@ -4230,12 +4262,26 @@ export class SessionManager {
 				!proposal ||
 				typeof proposal !== "object" ||
 				Array.isArray(proposal) ||
-				Object.keys(proposal).sort().join(",") !==
-					"createdAt,evidenceRefs,findings,id,regressionTestGuidance,schemaVersion,suggestedRepair,targetSessionId,uncertainty" ||
+				Object.keys(proposal).some(
+					(key) =>
+						![
+							"createdAt",
+							"evidenceRefs",
+							"findings",
+							"id",
+							"regressionTestGuidance",
+							"schemaVersion",
+							"suggestedRepair",
+							"targetSessionId",
+							"uncertainty",
+							"subject",
+							"repairTitle",
+						].includes(key),
+				) ||
 				proposal.schemaVersion !== 1 ||
 				!/^diagnostic-proposal:v1:[0-9a-f-]{36}$/.test(proposal.id) ||
 				!Number.isFinite(Date.parse(proposal.createdAt)) ||
-				proposal.targetSessionId !== meta.diagnosticTargetId
+				(proposal.subject === undefined && proposal.targetSessionId !== meta.diagnosticTargetId)
 			)
 				throw new Error("Invalid diagnostic repair proposal metadata");
 			validatedDiagnosticProposal({
@@ -4244,7 +4290,29 @@ export class SessionManager {
 				uncertainty: proposal.uncertainty,
 				suggestedRepair: proposal.suggestedRepair,
 				regressionTestGuidance: proposal.regressionTestGuidance,
+				...(proposal.repairTitle === undefined ? {} : { repairTitle: proposal.repairTitle }),
 			});
+			const subject = this.diagnosticSubject(meta, proposal.subject, false);
+			if (proposal.targetSessionId !== (subject.kind === "chat" ? subject.sessionId : undefined))
+				throw new Error("Invalid diagnostic proposal subject metadata");
+		}
+		if (meta.diagnosticRepairStart !== undefined) {
+			const claim = meta.diagnosticRepairStart;
+			if (
+				meta.role !== "diagnostics" ||
+				!claim ||
+				typeof claim !== "object" ||
+				Array.isArray(claim) ||
+				Object.keys(claim).sort().join(",") !== "digest,operationId,proposalId,targetId" ||
+				typeof claim.proposalId !== "string" ||
+				!/^diagnostic-proposal:v1:[0-9a-f-]{36}$/u.test(claim.proposalId) ||
+				typeof claim.operationId !== "string" ||
+				claim.operationId.length > 128 ||
+				!claim.operationId ||
+				!ID_PATTERN.test(claim.targetId) ||
+				!/^[0-9a-f]{64}$/u.test(claim.digest)
+			)
+				throw new Error("Invalid diagnostic repair-start metadata");
 		}
 		if (
 			meta.role !== "diagnostics" &&
@@ -4330,7 +4398,40 @@ export class SessionManager {
 				this.recoverCreateMembership(existing);
 				return this.summary(existing);
 			}
-			return await this.spawnAdmitted(request, false, undefined, { targetId, operationId });
+			if (!request.diagnosticRepair)
+				return await this.spawnAdmitted(request, false, undefined, { targetId, operationId });
+			return this.repairProject.withBinding(request.diagnosticRepair.binding, async () => {
+				this.assertDiagnosticRepairAdmission(request);
+				const source = this.require(request.diagnosticRepair!.specialistSessionId);
+				const claim = {
+					proposalId: request.diagnosticRepair!.proposalId,
+					targetId,
+					operationId,
+					digest: createHash("sha256").update(JSON.stringify(request)).digest("hex"),
+				};
+				const prior = source.diagnosticRepairStart;
+				if (
+					prior?.proposalId === claim.proposalId &&
+					(prior.operationId !== operationId || prior.targetId !== targetId || prior.digest !== claim.digest)
+				)
+					throw new Conflict("This proposal already has a confirmed repair start; check its original receipt");
+				source.diagnosticRepairStart = claim;
+				await this.save(source, undefined, undefined, true);
+				try {
+					return await this.spawnAdmitted(request, false, undefined, { targetId, operationId });
+				} catch (error) {
+					// Only a proven pre-commit rollback releases a claim. Unknown outcomes retain the original identity.
+					if (!this.metas.has(targetId) && source.diagnosticRepairStart === claim) {
+						delete source.diagnosticRepairStart;
+						try {
+							await this.save(source, undefined, undefined, true);
+						} catch {
+							source.diagnosticRepairStart = claim;
+						}
+					}
+					throw error;
+				}
+			});
 		})();
 		this.durableCreateAdmissions.set(key, { targetId, operationId, result });
 		try {
@@ -4596,21 +4697,82 @@ export class SessionManager {
 		)
 			throw new Conflict("Invalid diagnostic repair authority");
 		const specialist = this.require(repair.specialistSessionId);
-		const target = this.diagnosticReference(specialist);
 		const proposal = specialist.diagnosticRepairProposal;
+		const subject = this.diagnosticSubject(specialist, proposal?.subject);
+		const supplied = repair.subject ?? (repair.target ? { kind: "chat" as const, ...repair.target } : undefined);
+		if (
+			!supplied ||
+			Object.keys(subject.host).some(
+				(key) => subject.host[key as keyof OperationHost] !== repairHost(supplied.host)[key as keyof OperationHost],
+			)
+		)
+			throw new Conflict("Diagnostic repair proposal is stale or belongs to another target host");
+		const reviewedSubject = this.diagnosticSubject(
+			specialist,
+			repair.subject ?? (repair.target ? { kind: "chat", ...repair.target } : undefined),
+		);
 		if (
 			specialist.role !== "diagnostics" ||
-			!target ||
+			specialist.archivedAt !== undefined ||
 			!proposal ||
 			proposal.id !== repair.proposalId ||
-			proposal.targetSessionId !== target.sessionId ||
-			repair.target.sessionId !== target.sessionId ||
-			repair.target.chatUrl !== target.chatUrl ||
-			repair.target.host.hostId !== target.host.hostId ||
-			repair.target.host.daemonId !== target.host.daemonId ||
-			repair.target.host.lineageId !== target.host.lineageId
+			JSON.stringify(subject) !== JSON.stringify(reviewedSubject)
 		)
 			throw new Conflict("Diagnostic repair proposal is stale or belongs to another target");
+		const destination = this.repairProject.assertCurrent(repair.binding);
+		const host = this.diagnosticExecutionHost(specialist);
+		if (
+			Object.keys(host).some(
+				(key) => host[key as keyof OperationHost] !== destination.host[key as keyof OperationHost],
+			) ||
+			request.projectId !== destination.projectId ||
+			request.cwd !== undefined ||
+			request.missionId !== undefined ||
+			request.baseBranch !== undefined ||
+			request.workspace !== "clone" ||
+			request.title !== diagnosticRepairTitle(repair.repairTitle, proposal.findings)
+		)
+			throw new Conflict("Repair must use the reviewed title and configured Pilot source project without overrides");
+	}
+
+	private diagnosticExecutionHost(meta: SessionMeta): OperationHost {
+		const host = meta.diagnosticHost ?? this.diagnosticReference(meta)?.host ?? this.diagnosticHost;
+		if (
+			!host ||
+			!this.diagnosticHost ||
+			host.daemonId !== this.diagnosticHost.daemonId ||
+			host.lineageId !== this.diagnosticHost.lineageId
+		)
+			throw new Conflict("Diagnostic source host identity changed");
+		return host;
+	}
+
+	private diagnosticSubject(meta: SessionMeta, value?: unknown, requireAvailable = true): DiagnosticEvidenceSubject {
+		const host = this.diagnosticExecutionHost(meta);
+		if (value === undefined) {
+			const target = this.diagnosticReference(meta);
+			return target ? { kind: "chat", ...target } : { kind: "app", host };
+		}
+		if (!value || typeof value !== "object" || Array.isArray(value)) throw new Conflict("Invalid evidence subject");
+		const record = value as DiagnosticEvidenceSubject;
+		const claimed = repairHost(record.host);
+		if (claimed.daemonId !== host.daemonId || claimed.lineageId !== host.lineageId)
+			throw new Conflict(
+				"Cross-host repair handoffs require a separate reviewed design; no host switch is inferred",
+			);
+		if (record.kind === "app" && Object.keys(record).sort().join(",") === "host,kind") return { kind: "app", host };
+		if (record.kind !== "chat" || Object.keys(record).sort().join(",") !== "chatUrl,host,kind,sessionId")
+			throw new Conflict("Invalid evidence subject");
+		const target = this.admittedDiagnosticTarget({ host, sessionId: record.sessionId, chatUrl: record.chatUrl });
+		if (requireAvailable) this.require(target.sessionId);
+		return { kind: "chat", ...target };
+	}
+
+	diagnosticRepairProjectStatus() {
+		return this.repairProject.status();
+	}
+	configureDiagnosticRepairProject(value: DiagnosticRepairProjectSetup) {
+		return this.repairProject.configure(value);
 	}
 
 	private async spawnAdmitted(
@@ -4655,9 +4817,17 @@ export class SessionManager {
 			throw new Error("Diagnostic-only fields require role=diagnostics");
 		if (request.diagnosticTitleFromReply === true && request.title?.trim())
 			throw new Error("diagnosticTitleFromReply cannot be combined with an explicit title");
+		if (request.diagnosticHost !== undefined && (request.role !== "diagnostics" || request.diagnosticScope !== "app"))
+			throw new Conflict("App diagnostic host requires an app-scoped specialist");
+		if (request.diagnosticHost !== undefined) {
+			const host = repairHost(request.diagnosticHost);
+			if (host.daemonId !== this.diagnosticHost?.daemonId || host.lineageId !== this.diagnosticHost?.lineageId)
+				throw new Conflict("App diagnostic host identity changed");
+		}
 		if (request.diagnosticRepair !== undefined && !admission)
 			throw new Error("Diagnostic repair requires durable native confirmation");
 		this.assertDiagnosticRepairAdmission(request);
+		if (request.diagnosticRepair) await this.repairProject.validateCurrent(request.diagnosticRepair.binding);
 		const controlPermission = this.controlStartOrigin.getStore()?.permission;
 		const mode =
 			request.role === "diagnostics" || controlPermission?.level === "investigate"
@@ -4736,6 +4906,9 @@ export class SessionManager {
 		this.newSessionAdmissions.add(folded);
 		try {
 			await this.controlStartOrigin.getStore()?.fence?.();
+			// Binding/origin work is asynchronous; keep failure cleanup inside the reservation fence.
+			if (request.diagnosticRepair) await this.repairProject.validateCurrent(request.diagnosticRepair.binding);
+			this.assertDiagnosticRepairAdmission(request);
 		} catch (error) {
 			this.newSessionAdmissions.delete(folded);
 			throw error;
@@ -4774,6 +4947,9 @@ export class SessionManager {
 			...(controlPermission ? { controlPermission: { ...controlPermission } } : {}),
 			...(request.role ? { role: request.role } : {}),
 			...(request.diagnosticScope === "app" ? { diagnosticScope: "app" as const } : {}),
+			...(request.diagnosticScope === "app" && this.diagnosticHost
+				? { diagnosticHost: request.diagnosticHost ?? this.diagnosticHost }
+				: {}),
 			...(diagnosticTarget && diagnosticReference
 				? { diagnosticTargetId: diagnosticTarget.id, diagnosticTarget: diagnosticReference }
 				: {}),
@@ -4804,7 +4980,11 @@ export class SessionManager {
 		};
 		try {
 			await this.controlStartOrigin.getStore()?.fence?.();
+			if (request.diagnosticRepair) await this.repairProject.validateCurrent(request.diagnosticRepair.binding);
+			this.assertDiagnosticRepairAdmission(request);
 			await this.save(meta, undefined, undefined, Boolean(admission));
+			if (request.diagnosticRepair) await this.repairProject.validateCurrent(request.diagnosticRepair.binding);
+			this.assertDiagnosticRepairAdmission(request);
 			if (request.missionId !== undefined) {
 				this.missions!.joinSpawn(id, request.missionId, coordinator, taskId);
 				// The new chat may act on its membership as soon as it starts.
@@ -5642,8 +5822,10 @@ export class SessionManager {
 	}
 
 	/** Content-free host/app projection. It does not enumerate, open, subscribe to or wake chats. */
-	appDiagnostics(): AppDiagnostics {
+	appDiagnostics(host = this.diagnosticHost): AppDiagnostics {
 		if (!this.diagnosticHost) throw new ServiceUnavailable("Diagnostic host identity is unavailable");
+		if (!host || host.daemonId !== this.diagnosticHost.daemonId || host.lineageId !== this.diagnosticHost.lineageId)
+			throw new Conflict("App diagnostic host identity changed");
 		let active = 0;
 		let archived = 0;
 		let working = 0;
@@ -5659,10 +5841,10 @@ export class SessionManager {
 			if (summary.state === "failed") failed++;
 		}
 		const performance = daemonPerformance();
-		return {
+		const snapshot: AppDiagnostics = {
 			schemaVersion: 1,
 			scope: "app",
-			host: this.diagnosticHost,
+			host,
 			release: release.version,
 			collectedAt: new Date().toISOString(),
 			connectivity: {
@@ -5694,6 +5876,72 @@ export class SessionManager {
 					: {}),
 			},
 		};
+		const now = Date.now();
+		for (const [key, item] of this.appEvidence)
+			if (now - Date.parse(item.at) > 30 * 60_000) this.appEvidence.delete(key);
+		if (snapshot.localDiagnostics.enabled && !this.closing) {
+			const ref = `diagnostic:v1:host:${randomUUID()}`;
+			this.appEvidence.set(ref, {
+				ref,
+				source: "daemon",
+				at: snapshot.collectedAt,
+				kind: "host.snapshot",
+				health: {
+					totalSessions: snapshot.sessions.total,
+					activeSessions: active,
+					workingSessions: working,
+					failedSessions: failed,
+					archivedSessions: archived,
+					...(snapshot.resources.rssBytes === undefined ? {} : { rssBytes: snapshot.resources.rssBytes }),
+					...(snapshot.resources.heapUsedBytes === undefined
+						? {}
+						: { heapUsedBytes: snapshot.resources.heapUsedBytes }),
+				},
+			});
+			while (this.appEvidence.size > 128) this.appEvidence.delete(this.appEvidence.keys().next().value!);
+		} else this.clearAppEvidence();
+		this.scheduleAppEvidenceExpiry();
+		snapshot.evidence = [...this.appEvidence.values()].slice(-16).reverse();
+		return snapshot;
+	}
+
+	private clearAppEvidence(): void {
+		clearTimeout(this.appEvidenceExpiry);
+		this.appEvidenceExpiry = undefined;
+		this.appEvidence.clear();
+	}
+
+	private scheduleAppEvidenceExpiry(): void {
+		clearTimeout(this.appEvidenceExpiry);
+		this.appEvidenceExpiry = undefined;
+		const oldest = this.appEvidence.values().next().value;
+		if (!oldest || this.closing) return;
+		this.appEvidenceExpiry = setTimeout(
+			() => {
+				const cutoff = Date.now() - 30 * 60_000;
+				for (const [key, item] of this.appEvidence) if (Date.parse(item.at) <= cutoff) this.appEvidence.delete(key);
+				this.scheduleAppEvidenceExpiry();
+			},
+			Math.max(1, Date.parse(oldest.at) + 30 * 60_000 - Date.now()),
+		);
+		this.appEvidenceExpiry.unref();
+	}
+
+	/** Small native review projection. No feature table, transcript, target selection or implicit Control dependency. */
+	appDiagnosticEvidence(host: OperationHost) {
+		const snapshot = this.appDiagnostics(host);
+		return {
+			schemaVersion: 1,
+			host,
+			collectedAt: snapshot.collectedAt,
+			evidence: [...this.appEvidence.values()].reverse(),
+		};
+	}
+
+	private async diagnosticSubjectEvidence(subject: DiagnosticEvidenceSubject): Promise<DiagnosticEvidence[]> {
+		return subject.kind === "chat"
+			? (await this.diagnostics(subject.sessionId, { host: subject.host, limit: 128 })).evidence
+			: this.appDiagnosticEvidence(subject.host).evidence;
 	}
 
 	/** Registered identity only. Never accepts a path and never starts a worker. */
@@ -5774,42 +6022,89 @@ export class SessionManager {
 			!request ||
 			typeof request !== "object" ||
 			Array.isArray(request) ||
-			Object.keys(request).sort().join(",") !==
-				"findings,proposalId,regressionTestGuidance,suggestedRepair,targetSessionId,uncertainty" ||
-			typeof request.targetSessionId !== "string" ||
-			request.targetSessionId === specialistId
+			Object.keys(request).some(
+				(key) =>
+					![
+						"findings",
+						"proposalId",
+						"regressionTestGuidance",
+						"suggestedRepair",
+						"targetSessionId",
+						"uncertainty",
+						"subject",
+						"repairTitle",
+					].includes(key),
+			)
 		)
-			throw new Conflict("A separate target chat is required");
-		const target = this.require(request.targetSessionId);
-		if (target.id !== specialist.diagnosticTargetId)
-			throw new Conflict("Diagnostics handoff is limited to the host-admitted target chat");
+			throw new Conflict("Invalid reviewed repair handoff fields");
 		const proposal = specialist.diagnosticRepairProposal;
 		if (!proposal || typeof request.proposalId !== "string" || proposal.id !== request.proposalId)
 			throw new Conflict("The reviewed repair proposal is missing or has changed");
-		if (proposal.targetSessionId !== target.id) throw new Conflict("Repair proposal target does not match");
+		const subject = this.diagnosticSubject(specialist, proposal.subject);
+		if (
+			request.subject &&
+			Object.keys(subject.host).some(
+				(key) =>
+					subject.host[key as keyof OperationHost] !==
+					repairHost(request.subject!.host)[key as keyof OperationHost],
+			)
+		)
+			throw new Conflict("Repair proposal subject host does not match");
+		if (
+			options.host &&
+			(options.host.hostId !== subject.host.hostId ||
+				options.host.daemonId !== subject.host.daemonId ||
+				options.host.lineageId !== subject.host.lineageId)
+		)
+			throw new Conflict("Diagnostic host identity changed");
+		const reviewedSubject = this.diagnosticSubject(
+			specialist,
+			request.subject ??
+				(request.targetSessionId
+					? {
+							kind: "chat",
+							host: subject.host,
+							sessionId: request.targetSessionId,
+							chatUrl: `pilot://chat/${request.targetSessionId}`,
+						}
+					: undefined),
+		);
+		if (JSON.stringify(subject) !== JSON.stringify(reviewedSubject))
+			throw new Conflict("Repair proposal subject does not match");
 		const reviewed = validatedDiagnosticProposal({
 			evidenceRefs: proposal.evidenceRefs,
 			findings: request.findings,
 			uncertainty: request.uncertainty,
 			suggestedRepair: request.suggestedRepair,
 			regressionTestGuidance: request.regressionTestGuidance,
+			repairTitle: request.repairTitle ?? proposal.repairTitle,
 		});
-		const diagnostics = await this.diagnostics(target.id, { ...options, limit: 128 });
-		const byRef = new Map(diagnostics.evidence.map((evidence) => [evidence.ref, evidence]));
+		const available = await this.diagnosticSubjectEvidence(subject);
+		if (specialist.diagnosticRepairProposal?.id !== proposal.id)
+			throw new Conflict("Repair proposal changed while preparing review");
+		const byRef = new Map(available.map((evidence) => [evidence.ref, evidence]));
 		const evidence = proposal.evidenceRefs.map((ref) => byRef.get(ref));
 		if (evidence.some((item) => item === undefined))
 			throw new Conflict("Proposed diagnostic evidence is no longer available");
 		return {
 			schemaVersion: 1,
-			host: diagnostics.host,
-			targetSessionId: target.id,
-			...(specialist.projectId ? { projectId: specialist.projectId } : {}),
+			host: subject.host,
+			subject,
+			...(subject.kind === "chat"
+				? {
+						targetSessionId: subject.sessionId,
+						...(this.require(subject.sessionId).projectId
+							? { sourceProjectId: this.require(subject.sessionId).projectId }
+							: {}),
+					}
+				: {}),
 			evidence: evidence as DiagnosticsHandoff["evidence"],
 			proposalId: proposal.id,
 			findings: reviewed.findings,
 			uncertainty: reviewed.uncertainty,
 			suggestedRepair: reviewed.suggestedRepair,
 			regressionTestGuidance: reviewed.regressionTestGuidance,
+			repairTitle: reviewed.repairTitle,
 		};
 	}
 
@@ -6700,10 +6995,12 @@ export class SessionManager {
 	}
 
 	async shutdown(): Promise<void> {
+		this.clearAppEvidence();
 		for (const controller of this.diagnosticContextReads.values()) controller.abort();
 		this.diagnosticContextReads.clear();
 		this.diagnosticReadBroker.close();
 		this.closing = true;
+		const drainRepairProjects = this.repairProject.close();
 		this.workerStarts.close();
 		this.recoveryStops.close();
 		this.longJobTimers.close();
@@ -6746,6 +7043,7 @@ export class SessionManager {
 		this.mainRepositories.clear();
 		await this.archiveSweep;
 		await Promise.allSettled([...this.archiveTransitions.values()].map((transition) => transition.promise));
+		await drainRepairProjects;
 		await Promise.all([...this.saving.values()]);
 		await this.aiUsage.close();
 		await this.lifecycle.close();
@@ -7080,7 +7378,7 @@ export class SessionManager {
 		const diagnosticTarget = this.diagnosticReference(meta);
 		const diagnosticScope =
 			meta.diagnosticScope === "app" && this.diagnosticHost
-				? ({ kind: "app", host: this.diagnosticHost } as const)
+				? ({ kind: "app", host: this.diagnosticExecutionHost(meta) } as const)
 				: undefined;
 		let published: SessionWorker | undefined;
 		const earlyPackets: KernelPacket[] = [];
@@ -7469,7 +7767,7 @@ export class SessionManager {
 					if (meta.role !== "diagnostics")
 						throw new Error("Only an admitted diagnostics specialist may read agent diagnostics");
 					this.validateMode(meta);
-					if (!packet.sessionId) return this.appDiagnostics();
+					if (!packet.sessionId) return this.appDiagnostics(this.diagnosticExecutionHost(meta));
 					const target = this.require(packet.sessionId);
 					return await this.diagnostics(target.id, {
 						...(packet.limit === undefined ? {} : { limit: packet.limit }),
@@ -7542,19 +7840,21 @@ export class SessionManager {
 				.then(async () => {
 					if (this.workers.get(meta.id) !== worker || meta.role !== "diagnostics")
 						throw new Error("Only the live diagnostics specialist may publish a repair proposal");
-					const targetId = this.diagnosticReference(meta)?.sessionId;
-					if (!targetId || targetId === meta.id) throw new Error("A host-admitted diagnostic target is required");
 					const draft = validatedDiagnosticProposal(packet.proposal);
-					const diagnostics = await this.diagnostics(targetId, { limit: 128 });
-					const refs = new Set(diagnostics.evidence.map((item) => item.ref));
+					const subject = this.diagnosticSubject(meta, draft.subject);
+					const evidence = await this.diagnosticSubjectEvidence(subject);
+					if (this.workers.get(meta.id) !== worker || meta.role !== "diagnostics")
+						throw new Conflict("Diagnostics specialist changed while preparing the proposal");
+					const refs = new Set(evidence.map((item) => item.ref));
 					if (draft.evidenceRefs.some((ref) => !refs.has(ref)))
 						throw new Conflict("Proposed diagnostic evidence is no longer available");
 					const proposal: DiagnosticRepairProposal = {
 						schemaVersion: 1,
 						id: `diagnostic-proposal:v1:${randomUUID()}`,
-						targetSessionId: targetId,
+						...(subject.kind === "chat" ? { targetSessionId: subject.sessionId } : {}),
 						createdAt: new Date().toISOString(),
 						...draft,
+						subject,
 					};
 					meta.diagnosticRepairProposal = proposal;
 					meta.updatedAt = Date.now();
@@ -8064,6 +8364,7 @@ export class SessionManager {
 			...(this.diagnosticReference(meta) ? { diagnosticTarget: this.diagnosticReference(meta) } : {}),
 			...(meta.diagnosticHistoryAccess === true ? { diagnosticHistoryAccess: true } : {}),
 			...(meta.diagnosticRepairProposal ? { diagnosticRepairProposal: meta.diagnosticRepairProposal } : {}),
+			...(meta.diagnosticHost ? { diagnosticHost: meta.diagnosticHost } : {}),
 			...(meta.continuationOf ? { continuationOf: meta.continuationOf } : {}),
 			...(meta.continuedTo ? { continuedTo: meta.continuedTo } : {}),
 			...(this.trackedSources.has(meta.id) ? { trackedSource: { ...this.trackedSources.get(meta.id)! } } : {}),

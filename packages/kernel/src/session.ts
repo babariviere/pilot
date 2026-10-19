@@ -60,10 +60,10 @@ import { chatEvents, compactionEvents } from "./chat-events.ts";
 import { createControlMemoryTools } from "./control-memory-tools.ts";
 import { type ControlCall, ControlTurn } from "./control-turn.ts";
 import { createDatabaseTool, type DatabaseCall } from "./database-tool.ts";
+import { createDiagnosticContextTool, type DiagnosticContextCall } from "./diagnostic-context-tool.ts";
 import { createDiagnosticHistoryTool, type DiagnosticHistoryCall } from "./diagnostic-history-tool.ts";
 import { createDiagnosticLogTool, type DiagnosticLogCall } from "./diagnostic-log-tool.ts";
 import { createDiagnosticsTool, type DiagnosticsCall } from "./diagnostics-tool.ts";
-import { createDiagnosticContextTool, type DiagnosticContextCall } from "./diagnostic-context-tool.ts";
 import { detectGhStack } from "./gh-stack.ts";
 import { appendGitHubAction, GitHubActionsDoc, githubActions } from "./github-actions.ts";
 import {
@@ -498,9 +498,7 @@ export class KernelSession {
 								...(hooks.callDiagnosticHistory
 									? [createDiagnosticHistoryTool(hooks.callDiagnosticHistory, spec.diagnosticTarget)]
 									: []),
-								...(spec.diagnosticTarget && hooks.callRepairProposal
-									? [createRepairProposalTool(hooks.callRepairProposal)]
-									: []),
+								...(hooks.callRepairProposal ? [createRepairProposalTool(hooks.callRepairProposal)] : []),
 							]
 						: []),
 					...(spec.control && hooks.callMemory ? createMemoryTools(hooks.callMemory, spec.sessionId, true) : []),

@@ -18,7 +18,7 @@ struct DiagnosticRepairRequestState: Equatable {
     enum Phase: Equatable { case requesting, queued, failed }
 
     let revision: UUID
-    let target: DiagnosticTargetReference
+    let target: DiagnosticEvidenceSubject
     let sessionUpdatedAt: Double
     let queuedBehindWork: Bool
     var phase: Phase
@@ -212,6 +212,7 @@ enum DiagnosticSetup {
                             model: model.isEmpty ? nil : model, thinking: thinking.isEmpty ? nil : thinking,
                             mode: .ask, role: .diagnostics, diagnosticTarget: admitted,
                             diagnosticScope: admitted == nil ? .app : nil,
+                            diagnosticHost: admitted == nil ? target.host : nil,
                             diagnosticHistoryAccess: target.historyAccess ? true : nil,
                             diagnosticTitleFromReply: submitted == nil ? true : nil)
     }
@@ -276,7 +277,8 @@ struct DiagnosticSpecialistHeader: View {
     }
 
     private var admittedTarget: SessionSummary? {
-        session.diagnosticTargetId.flatMap { endpoint.session($0) }
+        guard let reference else { return nil }
+        return DiagnosticRepair.subject(specialist: session, host: reference.host)?.sessionId.flatMap { endpoint.session($0) }
     }
 
     private var available: Bool {
@@ -287,12 +289,11 @@ struct DiagnosticSpecialistHeader: View {
     }
 
     private var destinationAvailable: Bool {
-        if let projectId = session.projectId { return endpoint.projects.contains { $0.id == projectId } }
-        return !endpoint.projects.isEmpty
+        // Review is non-executing. Only the sheet resolves the verified binding and enables Start.
+        true
     }
 
     private var presentation: DiagnosticRepairHeaderPresentation? {
-        guard session.diagnosticScope != .app else { return nil }
         guard let reference else {
             return DiagnosticRepairHeaderPresentation(
                 action: session.diagnosticRepairProposal == nil ? .request : .review,
@@ -353,31 +354,66 @@ private struct DiagnosticRepairHeaderAction: View {
 }
 
 enum DiagnosticRepair {
+    static func subject(specialist: SessionSummary, host: HostRef, includeProposal: Bool = true) -> DiagnosticEvidenceSubject? {
+        if includeProposal, let subject = specialist.diagnosticRepairProposal?.subject { return subject }
+        if specialist.diagnosticScope == .app { return .app(host: specialist.diagnosticHost ?? host) }
+        guard let target = specialist.diagnosticTarget, target.sessionId == specialist.diagnosticTargetId else { return nil }
+        return .chat(target)
+    }
+
+    static func title(_ proposal: DiagnosticRepairProposal) -> String {
+        if let title = proposal.repairTitle { return title }
+        let first = proposal.findings.split(whereSeparator: { $0.isNewline }).first.map(String.init) ?? ""
+        if first.range(of: #"(?i)(?:password|token|secret)\s*[:=]|bearer\s|https?://[^\s]*@"#, options: .regularExpression) != nil {
+            return "Investigate reported application issue"
+        }
+        var result = ""
+        for scalar in first.unicodeScalars where !CharacterSet.controlCharacters.contains(scalar) &&
+            ![0x202A...0x202E, 0x2066...0x2069].contains(where: { $0.contains(Int(scalar.value)) }) {
+            let part = String(scalar)
+            if result.utf16.count + part.utf16.count > 150 { break }
+            result += part
+        }
+        let plain = result.trimmingCharacters(in: CharacterSet(charactersIn: "#*>- "))
+        return plain.isEmpty ? "Investigate reported application issue" : plain
+    }
+
     static func admission(specialist: SessionSummary, specialistHost: HostRef,
-                          proposal: DiagnosticRepairProposal) throws -> DiagnosticRepairAdmission {
+                          proposal: DiagnosticRepairProposal, binding: DiagnosticRepairProjectBinding? = nil,
+                          repairTitle: String? = nil) throws -> DiagnosticRepairAdmission {
         guard specialist.isDiagnosticsSpecialist, specialist.diagnosticRepairProposal?.id == proposal.id,
-              proposal.targetSessionId == specialist.diagnosticTargetId,
-              let target = specialist.diagnosticTarget, target.host == specialistHost,
-              target.sessionId == proposal.targetSessionId else {
+              let subject = subject(specialist: specialist, host: specialistHost), subject.host == specialistHost,
+              proposal.targetSessionId == subject.sessionId else {
             throw ClientError("The repair proposal is stale or no longer matches this diagnostics chat.")
         }
-        return DiagnosticRepairAdmission(specialistSessionId: specialist.id, proposalId: proposal.id, target: target)
+        return DiagnosticRepairAdmission(specialistSessionId: specialist.id, proposalId: proposal.id,
+                                         subject: subject, binding: binding, repairTitle: repairTitle ?? title(proposal))
     }
 
     static func spawnRequest(handoff: DiagnosticsHandoff, destinationProjectId: String,
-                             admission: DiagnosticRepairAdmission) throws -> SpawnRequest {
+                             admission: DiagnosticRepairAdmission, model: String? = nil,
+                             thinking: String? = nil) throws -> SpawnRequest {
         let projectId = destinationProjectId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !projectId.isEmpty, handoff.projectId == nil || handoff.projectId == projectId,
+        let legacySubject = handoff.targetSessionId.flatMap { DiagnosticTargetReference(host: handoff.host.envelopeIdentity, sessionId: $0) }
+            .map(DiagnosticEvidenceSubject.chat)
+        guard let binding = admission.binding, binding.projectId == projectId,
+              binding.host == admission.evidenceSubject?.host, binding.origin == DiagnosticRepairProjectBinding.requiredOrigin,
+              binding.schemaVersion == 1, binding.revision > 0, UUID(uuidString: binding.id) != nil,
+              let title = admission.repairTitle, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              title.utf16.count <= 160, title.utf8.count <= 480,
+              title.rangeOfCharacter(from: .controlCharacters) == nil,
+              !projectId.isEmpty,
               handoff.proposalId == admission.proposalId,
-              handoff.targetSessionId == admission.target.sessionId else {
-            throw ClientError("Choose the diagnosed project as the repair destination.")
+              (handoff.subject ?? legacySubject) == admission.evidenceSubject,
+              handoff.repairTitle == nil || handoff.repairTitle == title else {
+            throw ClientError("Review the configured Pilot repair project, source and issue title before starting.")
         }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         let material = String(decoding: try encoder.encode(handoff), as: UTF8.self)
         return SpawnRequest(
             projectId: projectId,
             message: "Investigate and repair the diagnosed issue. Use only the reviewed specialist proposal and cited bounded evidence below as operational context. Verify the findings and suggested repair, add the requested regression coverage, and do not retry, restart, replay, or mutate the diagnosed chat.\n\n\(material)",
-            title: "Repair diagnosed issue", mode: .build, diagnosticRepair: admission
+            title: title, model: model, thinking: thinking, mode: .build, workspace: .clone, diagnosticRepair: admission
         )
     }
 
@@ -385,15 +421,16 @@ enum DiagnosticRepair {
                               admittedTarget: SessionSummary?, available: Bool) -> String? {
         if specialist.isArchived { return "Restore this diagnostics chat before requesting or starting a repair." }
         if !available { return "Reconnect to this chat's host before requesting or starting a repair." }
-        guard let targetId = specialist.diagnosticTargetId else { return "This diagnostics chat has no admitted target." }
-        guard admittedTarget != nil else { return "The admitted target is no longer available on this host." }
-        guard let reference = specialist.diagnosticTarget else {
+        guard let source = subject(specialist: specialist, host: specialistHost) else {
             return "This diagnostics chat predates verified repair target identity. Start a new diagnosis before repairing."
         }
-        if reference.sessionId != targetId || reference.host != specialistHost {
+        if source.host != specialistHost {
             return "The admitted target belongs to a different host identity."
         }
-        if let proposal = specialist.diagnosticRepairProposal, proposal.targetSessionId != targetId {
+        if source.kind == .chat, specialist.diagnosticRepairProposal?.subject == nil, admittedTarget?.id != source.sessionId {
+            return "The admitted target is no longer available on this host."
+        }
+        if let proposal = specialist.diagnosticRepairProposal, proposal.targetSessionId != source.sessionId {
             return "The repair proposal no longer matches this chat's target."
         }
         return nil
@@ -404,9 +441,7 @@ enum DiagnosticRepair {
         if let problem = targetProblem(specialist: specialist, specialistHost: specialistHost,
                                        admittedTarget: admittedTarget, available: available) { return problem }
         if specialist.diagnosticRepairProposal != nil, !destinationAvailable {
-            return specialist.projectId == nil
-                ? "Choose a project for the separate Build chat."
-                : "The diagnosed project is no longer available on this host."
+            return "Set up a verified Pilot repair project before starting a separate Build."
         }
         return nil
     }
@@ -422,7 +457,8 @@ enum DiagnosticRepair {
             return DiagnosticRepairHeaderPresentation(
                 action: .review, title: "Review repair",
                 help: problem ?? "Review the specialist's proposal before any separate Build chat can start.",
-                detail: problem, enabled: problem == nil, busy: false, detailIsError: problem != nil
+                detail: problem, enabled: targetProblem(specialist: specialist, specialistHost: specialistHost,
+                    admittedTarget: admittedTarget, available: available) == nil, busy: false, detailIsError: problem != nil
             )
         }
         if let problem {
@@ -655,9 +691,12 @@ extension AppModel {
     /// Executes one newly reviewed durable intent. Any uncertain prior intent must be reconciled first.
     func startDiagnosticRepair(_ request: SpawnRequest, target: DiagnosticRepairTarget) async throws -> HostResourceRef {
         guard let admission = request.diagnosticRepair,
+              let current = currentDiagnosticSpecialist(target.reference), current.isDiagnosticsSpecialist, !current.isArchived,
+              current.diagnosticRepairProposal?.id == admission.proposalId,
               admission.specialistSessionId == target.reference.localId,
-              admission.target.host == target.reference.host,
-              admission.target == target.specialist.diagnosticTarget,
+              admission.evidenceSubject?.host == target.reference.host,
+              admission.evidenceSubject == DiagnosticRepair.subject(specialist: current, host: target.reference.host),
+              admission.binding?.host == target.reference.host,
               target.reference.host == localHost || hosts.available.contains(target.reference.host),
               try pendingDiagnosticRepairStart(for: target) == nil,
               let origin = localHost else {
@@ -673,8 +712,7 @@ extension AppModel {
                                 target: DiagnosticRepairTarget) async throws -> HostResourceRef {
         guard pending.operation.destination == target.reference.host,
               pending.admission.specialistSessionId == target.reference.localId,
-              pending.admission.target.host == target.reference.host,
-              pending.admission.target == target.specialist.diagnosticTarget else {
+              pending.admission.evidenceSubject?.host == target.reference.host else {
             throw HostRoutingError.invalidReference
         }
         try await hosts.retryOperation(pending.operation)
@@ -700,8 +738,7 @@ extension AppModel {
               let request = try? JSONDecoder().decode(SpawnRequest.self, from: data),
               let admission = request.diagnosticRepair,
               admission.specialistSessionId == target.reference.localId,
-              admission.target.host == target.reference.host,
-              admission.target == target.specialist.diagnosticTarget else {
+              admission.evidenceSubject?.host == target.reference.host else {
             throw HostRoutingError.invalidReference
         }
         let created = HostResourceRef(host: operation.destination, kind: .session, localId: operation.targetId)
@@ -729,7 +766,8 @@ extension AppModel {
         let key = reference.storageKey
         guard var request = diagnosticRepairRequests[key] else { return }
         guard specialist.id == reference.localId, specialist.isDiagnosticsSpecialist,
-              specialist.diagnosticTarget == request.target, request.target.host == reference.host else {
+              DiagnosticRepair.subject(specialist: specialist, host: reference.host, includeProposal: false) == request.target,
+              request.target.host == reference.host else {
             request.phase = .failed
             request.error = "This diagnostics chat or its admitted target changed. Start a new request from the current chat."
             diagnosticRepairRequests[key] = request
@@ -769,9 +807,9 @@ extension AppModel {
         guard target.reference.kind == .session,
               let current = currentDiagnosticSpecialist(target.reference),
               current.isDiagnosticsSpecialist, current.diagnosticRepairProposal == nil,
-              let admittedTarget = current.diagnosticTarget, admittedTarget.host == target.reference.host,
-              current.diagnosticTarget == target.specialist.diagnosticTarget,
-              current.diagnosticTargetId == target.specialist.diagnosticTargetId else {
+              let admittedTarget = DiagnosticRepair.subject(specialist: current, host: target.reference.host, includeProposal: false),
+              admittedTarget.host == target.reference.host,
+              admittedTarget == DiagnosticRepair.subject(specialist: target.specialist, host: target.reference.host, includeProposal: false) else {
             throw ClientError("This diagnostics chat or its admitted target changed. Review the current chat before retrying.")
         }
         if diagnosticRepairRequests[key] == nil, diagnosticRepairRequests.count >= 64 {
@@ -788,7 +826,7 @@ extension AppModel {
             queuedBehindWork: current.isWorking, phase: .requesting,
             observedWorking: current.isWorking, error: nil, operation: originalOperation
         )
-        let message = "Suggest a repair based on bounded diagnostics and available sanitized chat history. Publish one proposal with repair_proposal. Include plain-language findings, uncertainty, a suggested repair, cited evidence refs, and regression-test guidance. Do not copy raw history into the proposal, and do not start or execute a repair."
+        let message = "Suggest a repair based on bounded diagnostics and available sanitized chat history. Publish one proposal with repair_proposal. Include a concise issue-specific repairTitle, plain-language findings, uncertainty, a suggested repair, cited evidence refs, and regression-test guidance. Do not copy raw history or logs into the proposal, and do not start or execute a repair."
         do {
             if target.reference.host == localHost, client.usesSessionFixtures {
                 try await client.send(target.reference.localId, message: message, mode: .followUp)
@@ -827,7 +865,7 @@ extension AppModel {
             }
             guard var request = diagnosticRepairRequests[key], request.revision == revision else { return }
             guard let latest = currentDiagnosticSpecialist(target.reference), latest.isDiagnosticsSpecialist,
-                  latest.diagnosticTarget == current.diagnosticTarget else {
+                  DiagnosticRepair.subject(specialist: latest, host: target.reference.host, includeProposal: false) == admittedTarget else {
                 throw ClientError("This diagnostics chat or its admitted target changed while requesting a proposal.")
             }
             if latest.diagnosticRepairProposal != nil {
@@ -1072,12 +1110,20 @@ struct DiagnosticRepairSheet: View {
     let target: DiagnosticRepairTarget
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
-    @State private var diagnostics: SessionDiagnostics?
+    @State private var diagnostics: [DiagnosticEvidence]?
+    @State private var evidenceSubject: DiagnosticEvidenceSubject?
+    @State private var repairTitle = ""
     @State private var findings = ""
     @State private var uncertainty = DiagnosticRepairUncertainty.medium
     @State private var suggestedRepair = ""
     @State private var regressionGuidance = ""
-    @State private var selectedProjectId = ""
+    @State private var repairProject: DiagnosticRepairProjectStatus?
+    @State private var showingSetup = false
+    @State private var selectedModel = ""
+    @State private var thinking = ""
+    @State private var models = ModelList(models: [])
+    @State private var loadingModels = false
+    @State private var modelError: String?
     @State private var error: String?
     @State private var busy = false
 
@@ -1102,25 +1148,33 @@ struct DiagnosticRepairSheet: View {
     }
     private var projects: [Project] { endpoint.projects }
     private var admittedTarget: SessionSummary? {
-        specialist.diagnosticTargetId.flatMap { endpoint.session($0) }
+        DiagnosticRepair.subject(specialist: specialist, host: target.reference.host)?.sessionId.flatMap { endpoint.session($0) }
     }
 
     private var available: Bool {
         DiagnosticSetup.available(target.reference, localHost: model.localHost,
                                   localConnected: model.client.connected,
-                                  availableHosts: model.hosts.available) && !specialist.isArchived
+                                  availableHosts: model.hosts.available)
     }
 
     private var destinationProjectId: String? {
-        if let projectId = specialist.projectId { return projects.contains(where: { $0.id == projectId }) ? projectId : nil }
-        return projects.contains(where: { $0.id == selectedProjectId }) ? selectedProjectId : nil
+        binding?.projectId
+    }
+
+    private var binding: DiagnosticRepairProjectBinding? {
+        guard repairProject?.state == .available, let binding = repairProject?.binding,
+              binding.matches(host: target.reference.host, projects: projects) else { return nil }
+        return binding
+    }
+
+    private var chosenOption: ModelOption? {
+        (selectedModel.isEmpty ? models.defaultModel : selectedModel).flatMap { id in models.models.first { $0.id == id } }
     }
 
     private var targetProblem: String? {
         if let pendingStartError { return pendingStartError }
         if pendingStart != nil {
-            return DiagnosticRepair.targetProblem(specialist: specialist, specialistHost: target.reference.host,
-                                                  admittedTarget: admittedTarget, available: available)
+            return available ? nil : "Reconnect to the original host to check the confirmed repair start."
         }
         return DiagnosticRepair.problem(specialist: specialist, specialistHost: target.reference.host,
                                         admittedTarget: admittedTarget, available: available,
@@ -1128,8 +1182,9 @@ struct DiagnosticRepairSheet: View {
     }
 
     private var proposedEvidence: [DiagnosticEvidence]? {
-        guard let proposal, let diagnostics else { return nil }
-        let byRef = Dictionary(uniqueKeysWithValues: diagnostics.evidence.map { ($0.ref, $0) })
+        guard let proposal, let diagnostics,
+              evidenceSubject == DiagnosticRepair.subject(specialist: specialist, host: target.reference.host) else { return nil }
+        let byRef = Dictionary(diagnostics.map { ($0.ref, $0) }, uniquingKeysWith: { first, _ in first })
         let items = proposal.evidenceRefs.compactMap { byRef[$0] }
         return items.count == proposal.evidenceRefs.count ? items : nil
     }
@@ -1137,6 +1192,9 @@ struct DiagnosticRepairSheet: View {
     private var canStart: Bool {
         if pendingStart != nil { return !busy && targetProblem == nil }
         return !busy && proposal != nil && proposedEvidence != nil && targetProblem == nil && destinationProjectId != nil &&
+            !loadingModels && modelError == nil && chosenOption != nil &&
+            (thinking.isEmpty || (chosenOption?.thinkingLevels ?? []).contains(thinking)) &&
+            !repairTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && repairTitle.utf16.count <= 160 &&
             !findings.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
             !suggestedRepair.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
             !regressionGuidance.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1209,11 +1267,23 @@ struct DiagnosticRepairSheet: View {
             }
         }
         .task(id: proposal?.id) { await loadProposal() }
+        .task { await loadBinding() }
+        .onChange(of: selectedModel) { _, _ in thinking = "" }
+        .sheet(isPresented: $showingSetup) {
+            DiagnosticRepairProjectSetupSheet(host: target.reference.host) { _ in Task { await loadBinding() } }
+        }
         .interactiveDismissDisabled(busy)
     }
 
     @ViewBuilder private func proposalReview(_ proposal: DiagnosticRepairProposal) -> some View {
         Group {
+            LabeledContent("Issue title") {
+                TextField("Describe the diagnosed issue", text: $repairTitle).accessibilityLabel("Repair issue title")
+            }
+            if let subject = DiagnosticRepair.subject(specialist: specialist, host: target.reference.host) {
+                LabeledContent("Evidence subject", value: subject.kind == .app ? "Pilot app on \(subject.host.hostId)"
+                    : "\(subject.chatUrl ?? "Unavailable chat") on \(subject.host.hostId)")
+            }
             LabeledContent("Findings") {
                 TextField("Plain-language findings", text: $findings, axis: .vertical).lineLimit(2...5)
             }
@@ -1243,38 +1313,75 @@ struct DiagnosticRepairSheet: View {
                         .font(.pilot(.caption)).foregroundStyle(Theme.destructive)
                 }
             }
-            if specialist.projectId == nil {
-                LabeledContent("Repair project") {
-                    Picker("Repair project", selection: $selectedProjectId) {
-                        Text("Choose a project").tag("")
-                        ForEach(projects) { project in Text(project.name).tag(project.id) }
-                    }.labelsHidden().frame(maxWidth: 260)
-                }
-            } else if let projectId = destinationProjectId, let project = projects.first(where: { $0.id == projectId }) {
-                LabeledContent("Repair project", value: project.name)
+            if let binding {
+                LabeledContent("Repair project", value: projects.first { $0.id == binding.projectId }?.name ?? "Pilot")
+                Text("\(binding.path) · \(binding.host.hostId)")
+                    .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).textSelection(.enabled)
+                Text("Verified Pilot origin · configuration \(binding.revision) · separate private Build")
+                    .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                HStack(spacing: 8) {
+                    ModelMenu(model: $selectedModel, projectDefault: models.defaultModel, list: models)
+                    ThinkingMenu(thinking: $thinking, levels: chosenOption?.thinkingLevels ?? ["off"], help: "Thinking level for the repair")
+                    if loadingModels { ProgressView().controlSize(.small) }
+                }.disabled(loadingModels)
+                if let modelError { InlineProblem(modelError) { Task { await loadBinding() } } }
+            } else {
+                Text(repairProject?.state == .invalid
+                     ? "Repair project configuration cannot be verified. It was preserved, not reset."
+                     : "A verified Pilot repair project must be configured on this host. The diagnosed project is never a fallback.")
+                    .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                Button("Configure repair project…") { showingSetup = true }
+                    .disabled(!available || repairProject?.state == .invalid)
             }
             Text("Proposal \(proposal.id.suffix(8)) · \(proposal.createdAt)")
                 .font(.pilot(.caption)).foregroundStyle(Theme.faintForeground)
         }
-        .disabled(pendingStart != nil)
+        .disabled(pendingStart != nil || busy)
     }
 
     private func loadProposal() async {
+        diagnostics = nil; evidenceSubject = nil
         guard let proposal else { diagnostics = nil; return }
         findings = proposal.findings
+        repairTitle = DiagnosticRepair.title(proposal)
         uncertainty = proposal.uncertainty
         suggestedRepair = proposal.suggestedRepair
         regressionGuidance = proposal.regressionTestGuidance
         error = nil
         do {
-            if target.reference.host == model.localHost {
-                diagnostics = try await model.client.diagnostics(proposal.targetSessionId, limit: 128)
-            } else {
-                diagnostics = try await model.hosts.perform(target.reference, kind: .session) { client, _ in
-                    try await client.diagnostics(proposal.targetSessionId, limit: 128)
+            guard let subject = DiagnosticRepair.subject(specialist: specialist, host: target.reference.host),
+                  subject.host == target.reference.host else { throw HostRoutingError.identityChanged }
+            let items = try await model.hosts.perform(target.reference, kind: .session) { client, _ in
+                if let sessionId = subject.sessionId {
+                    let snapshot = try await client.diagnostics(sessionId, limit: 128)
+                    guard snapshot.host.envelopeIdentity == subject.host else { throw HostRoutingError.identityChanged }
+                    return snapshot.evidence
                 }
+                let snapshot = try await client.appDiagnosticEvidence()
+                guard snapshot.host == subject.host else { throw HostRoutingError.identityChanged }
+                return snapshot.evidence
             }
+            guard !Task.isCancelled, self.proposal?.id == proposal.id else { return }
+            diagnostics = items
+            evidenceSubject = subject
         } catch { self.error = error.localizedDescription }
+    }
+
+    private func loadBinding() async {
+        loadingModels = true; modelError = nil
+        defer { loadingModels = false }
+        do {
+            let status = try await model.diagnosticRepairProject(on: target.reference.host)
+            guard !Task.isCancelled else { return }
+            repairProject = status
+            guard let binding else { models = ModelList(models: []); return }
+            let list = try await model.hosts.perform(target.reference, kind: .session) { client, _ in
+                try await client.models(projectId: binding.projectId, cwd: nil)
+            }
+            guard !Task.isCancelled, self.binding == binding else { return }
+            models = list
+            if !selectedModel.isEmpty, !list.models.contains(where: { $0.id == selectedModel }) { selectedModel = "" }
+        } catch { modelError = error.localizedDescription; self.error = error.localizedDescription }
     }
 
     private func requestProposal() {
@@ -1303,20 +1410,20 @@ struct DiagnosticRepairSheet: View {
             }
             return
         }
-        guard let proposal, let destinationProjectId else { return }
+        guard let proposal, let destinationProjectId, let binding, let modelId = chosenOption?.id else { return }
         busy = true; error = nil
         let request = DiagnosticsHandoffRequest(targetSessionId: proposal.targetSessionId,
                                                 proposalId: proposal.id,
                                                 findings: findings,
                                                 uncertainty: uncertainty,
                                                 suggestedRepair: suggestedRepair,
-                                                regressionTestGuidance: regressionGuidance)
+                                                regressionTestGuidance: regressionGuidance,
+                                                subject: DiagnosticRepair.subject(specialist: specialist, host: target.reference.host),
+                                                repairTitle: repairTitle)
+        let selectedThinking = thinking
         Task {
             defer { busy = false }
             do {
-                let admission = try DiagnosticRepair.admission(specialist: specialist,
-                                                               specialistHost: target.reference.host,
-                                                               proposal: proposal)
                 let handoff: DiagnosticsHandoff
                 if target.reference.host == model.localHost {
                     handoff = try await model.client.diagnosticsHandoff(specialist.id, request: request)
@@ -1326,12 +1433,15 @@ struct DiagnosticRepairSheet: View {
                     }
                 }
                 guard self.proposal == proposal,
-                      specialist.diagnosticTarget == admission.target else {
+                      self.binding == binding else {
                     throw ClientError("The specialist replaced this proposal while it was being reviewed. Review the current proposal before starting.")
                 }
+                let admission = try DiagnosticRepair.admission(specialist: specialist, specialistHost: target.reference.host,
+                    proposal: proposal, binding: binding, repairTitle: handoff.repairTitle ?? repairTitle)
                 let spawn = try DiagnosticRepair.spawnRequest(handoff: handoff,
                                                                destinationProjectId: destinationProjectId,
-                                                               admission: admission)
+                                                               admission: admission, model: modelId,
+                                                               thinking: selectedThinking.isEmpty ? nil : selectedThinking)
                 _ = try await model.startDiagnosticRepair(spawn, target: target)
                 dismiss()
             } catch { self.error = error.localizedDescription }
@@ -1350,6 +1460,10 @@ private struct DiagnosticProposalEvidenceRow: View {
                     .foregroundStyle(suspected ? Theme.warning : Theme.foreground)
                 Text("\(evidence.source.rawValue.replacingOccurrences(of: "_", with: " ").capitalized) · \(evidence.at) · \(detail)")
                     .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).lineLimit(3)
+                if let health = evidence.health {
+                    Text("\(health.totalSessions) chats · \(health.workingSessions) working · \(health.failedSessions) failed. A point-in-time observation, not a cause.")
+                        .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                }
             }
         }
         .help("\(evidence.source.rawValue) · \(evidence.at) · \(evidence.ref)")

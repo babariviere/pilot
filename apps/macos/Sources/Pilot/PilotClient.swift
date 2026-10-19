@@ -51,6 +51,9 @@ final class PilotClient: ObservableObject {
     private(set) var fixtureSpawnRequests: [SpawnRequest] = []
     private(set) var fixtureSendRequests: [(sessionId: String, message: String, mode: DeliveryMode)] = []
     var fixtureDiagnostics: [String: SessionDiagnostics] = [:]
+    var fixtureRepairProject: DiagnosticRepairProjectStatus?
+    var fixtureProjectOrigins: [String: ProjectOrigin] = [:]
+    var fixtureAppDiagnosticEvidence: AppDiagnosticEvidence?
     /// Static previews/test snapshots do not start background network reconciliation.
     var sharedContextTransportEnabled: Bool { !fixtureSessions }
     @Published private(set) var connected = false
@@ -167,11 +170,12 @@ final class PilotClient: ObservableObject {
         return hello
     }
 
-    func operation(_ operation: DurableOperation, lookup: Bool) async throws -> OperationDelivery {
+    func operation(_ operation: DurableOperation, lookup: Bool, nativeCapability: String? = nil) async throws -> OperationDelivery {
         guard let baseURL else { throw HostRoutingError.disconnected }
         var request = URLRequest(url: baseURL.appending(path: lookup ? "api/operations/receipt" : "api/operations"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
+        if let nativeCapability { request.setValue(nativeCapability, forHTTPHeaderField: "X-Pilot-GitHub-Capability") }
         request.httpBody = try JSONEncoder().encode(operation)
         // Receipt reads are small and should leave Check usable even if the endpoint stalls.
         // The mutation keeps its normal command timeout; a timeout is never proof of failure.
@@ -612,6 +616,19 @@ final class PilotClient: ObservableObject {
     func commands(_ sessionId: String) async throws -> [SessionCommand] {
         let response: SessionCommandsResponse = try await call("api/sessions/\(sessionId)/commands", method: "GET")
         return response.commands
+    }
+
+    /// Reads content-free evidence without opening or subscribing to the target chat.
+    func appDiagnosticEvidence() async throws -> AppDiagnosticEvidence {
+        if let fixtureAppDiagnosticEvidence { return fixtureAppDiagnosticEvidence }
+        guard let baseURL, let host = hostIdentity,
+              var components = URLComponents(url: baseURL.appending(path: "api/diagnostics/app"), resolvingAgainstBaseURL: false)
+        else { throw HostRoutingError.disconnected }
+        components.queryItems = [URLQueryItem(name: "hostId", value: host.hostId),
+                                 URLQueryItem(name: "daemonId", value: host.daemonId),
+                                 URLQueryItem(name: "lineageId", value: host.lineageId)]
+        guard let url = components.url else { throw HostRoutingError.invalidReference }
+        return try await call(URLRequest(url: url))
     }
 
     /// Reads content-free evidence without opening or subscribing to the target chat.
@@ -1319,6 +1336,7 @@ final class PilotClient: ObservableObject {
     }
 
     func projectOrigin(_ projectId: String) async throws -> ProjectOrigin {
+        if let fixture = fixtureProjectOrigins[projectId] { return fixture }
         try await call(URLRequest(url: artifactURL(["projects", projectId, "origin"])))
     }
 

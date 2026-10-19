@@ -5,6 +5,9 @@ import Testing
 
 private let localHost = HostRef(hostId: "local", daemonId: "daemon", lineageId: "lineage")
 private let project = Project(id: "project", name: "Project", path: "/projects/source", createdAt: 1)
+private let repairProject = Project(id: "pilot-source", name: "Source checkout", path: "/sources/pilot", createdAt: 1)
+private let repairBinding = DiagnosticRepairProjectBinding(id: "00000000-0000-4000-8000-000000000009", revision: 1,
+    host: localHost, projectId: repairProject.id, path: repairProject.path, configuredAt: "2026-10-19T00:00:00Z")
 
 private func sourceSession(control: Bool? = nil) -> SessionSummary {
     SessionSummary(id: control == true ? "00000000-0000-4000-8000-000000000001" : "01234567-89ab-4cde-8fab-0123456789ab",
@@ -79,19 +82,22 @@ private func sourceSession(control: Bool? = nil) -> SessionSummary {
     """.utf8))
     let admission = DiagnosticRepairAdmission(
         specialistSessionId: "11111111-1111-4111-8111-111111111111", proposalId: handoff.proposalId,
-        target: try #require(DiagnosticTargetReference(host: localHost, sessionId: handoff.targetSessionId)))
-    let request = try DiagnosticRepair.spawnRequest(handoff: handoff, destinationProjectId: project.id,
+        subject: .chat(try #require(DiagnosticTargetReference(host: localHost, sessionId: try #require(handoff.targetSessionId)))),
+        binding: repairBinding, repairTitle: "Worker startup loses failure evidence")
+    let request = try DiagnosticRepair.spawnRequest(handoff: handoff, destinationProjectId: repairProject.id,
                                                     admission: admission)
     #expect(request.mode == .build)
     #expect(request.role == nil)
     #expect(request.diagnosticRepair == admission)
     #expect(request.diagnosticTarget == nil)
-    #expect(request.projectId == project.id)
+    #expect(request.projectId == repairProject.id)
+    #expect(request.title == "Worker startup loses failure evidence")
+    #expect(request.workspace == .clone)
     #expect(request.cwd == nil)
     #expect(request.message.contains(evidenceRef))
     #expect(request.message.contains("do not retry, restart, replay") == true)
     let client = PilotClient()
-    client.loadFixture(projects: [project], sessions: [])
+    client.loadFixture(projects: [project, repairProject], sessions: [])
     _ = try await client.spawn(request)
     #expect(client.fixtureSpawnRequests.count == 1, "one confirmed handoff creates one ordinary Build chat")
     #expect(client.fixtureSpawnRequests.first?.role == nil)
@@ -122,17 +128,21 @@ private func sourceSession(control: Bool? = nil) -> SessionSummary {
     #expect(app.client.fixtureSpawnRequests.isEmpty)
 }
 
-@Test func projectlessRepairRequiresAnExplicitBuildDestination() throws {
+@Test func projectlessRepairRequiresTheConfiguredSourceRatherThanAnArbitraryDestination() throws {
     let handoff = try JSONDecoder().decode(DiagnosticsHandoff.self, from: Data(#"{"schemaVersion":1,"host":{"hostId":"local","daemonId":"daemon","lineageId":"lineage"},"targetSessionId":"01234567-89ab-4cde-8fab-0123456789ab","evidence":[],"proposalId":"proposal","findings":"Finding","uncertainty":"high","suggestedRepair":"Repair","regressionTestGuidance":"Test"}"#.utf8))
     let admission = DiagnosticRepairAdmission(
         specialistSessionId: "11111111-1111-4111-8111-111111111111", proposalId: handoff.proposalId,
-        target: try #require(DiagnosticTargetReference(host: localHost, sessionId: handoff.targetSessionId)))
-    let request = try DiagnosticRepair.spawnRequest(handoff: handoff, destinationProjectId: project.id,
+        subject: .chat(try #require(DiagnosticTargetReference(host: localHost, sessionId: try #require(handoff.targetSessionId)))),
+        binding: repairBinding, repairTitle: "Worker startup retains stale state")
+    let request = try DiagnosticRepair.spawnRequest(handoff: handoff, destinationProjectId: repairProject.id,
                                                     admission: admission)
-    #expect(request.projectId == project.id)
+    #expect(request.projectId == repairProject.id)
     #expect(request.cwd == nil)
     #expect(throws: ClientError.self) {
         try DiagnosticRepair.spawnRequest(handoff: handoff, destinationProjectId: "", admission: admission)
+    }
+    #expect(throws: ClientError.self) {
+        try DiagnosticRepair.spawnRequest(handoff: handoff, destinationProjectId: project.id, admission: admission)
     }
 }
 
@@ -174,7 +184,7 @@ private func sourceSession(control: Bool? = nil) -> SessionSummary {
                                      destinationAvailable: true)?.contains("no longer matches") == true)
     #expect(DiagnosticRepair.problem(specialist: specialist(reference, proposal: proposal), specialistHost: localHost,
                                      admittedTarget: targetSession, available: true,
-                                     destinationAvailable: false)?.contains("Choose a project") == true)
+                                     destinationAvailable: false)?.contains("verified Pilot repair project") == true)
 }
 
 @Test @MainActor func newSessionPrefillIsConsumedOnceWithoutErasingOrdinaryDrafts() {

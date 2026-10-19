@@ -27,6 +27,7 @@ public struct DiagnosticSourceStatus: Codable, Sendable {
 /// Control preparation uses attemptRef, stage, reason and durationMs with prepared/failed/cancelled outcomes.
 /// A prepared projection and a parked_idle lifecycle completion are not task-success signals.
 public struct DiagnosticEvidence: Codable, Sendable {
+    public let health: DiagnosticHostHealth?
     public let ref: String
     public let source: DiagnosticSource
     public let at: String
@@ -245,9 +246,11 @@ public enum DiagnosticRepairUncertainty: String, Codable, CaseIterable, Hashable
 }
 
 public struct DiagnosticRepairProposal: Codable, Equatable, Hashable, Sendable {
+    public let subject: DiagnosticEvidenceSubject?
+    public let repairTitle: String?
     public let schemaVersion: Int
     public let id: String
-    public let targetSessionId: String
+    public let targetSessionId: String?
     public let createdAt: String
     public let evidenceRefs: [String]
     public let findings: String
@@ -255,9 +258,11 @@ public struct DiagnosticRepairProposal: Codable, Equatable, Hashable, Sendable {
     public let suggestedRepair: String
     public let regressionTestGuidance: String
 
-    public init(schemaVersion: Int = 1, id: String, targetSessionId: String, createdAt: String,
+    public init(schemaVersion: Int = 1, id: String, targetSessionId: String? = nil, createdAt: String,
                 evidenceRefs: [String], findings: String, uncertainty: DiagnosticRepairUncertainty,
-                suggestedRepair: String, regressionTestGuidance: String) {
+                suggestedRepair: String, regressionTestGuidance: String,
+                subject: DiagnosticEvidenceSubject? = nil, repairTitle: String? = nil) {
+        self.subject = subject; self.repairTitle = repairTitle
         self.schemaVersion = schemaVersion
         self.id = id
         self.targetSessionId = targetSessionId
@@ -271,16 +276,19 @@ public struct DiagnosticRepairProposal: Codable, Equatable, Hashable, Sendable {
 }
 
 public struct DiagnosticsHandoffRequest: Codable, Sendable {
-    public let targetSessionId: String
+    public let targetSessionId: String?
+    public let subject: DiagnosticEvidenceSubject?
+    public let repairTitle: String?
     public let proposalId: String
     public let findings: String
     public let uncertainty: DiagnosticRepairUncertainty
     public let suggestedRepair: String
     public let regressionTestGuidance: String
 
-    public init(targetSessionId: String, proposalId: String, findings: String,
+    public init(targetSessionId: String? = nil, proposalId: String, findings: String,
                 uncertainty: DiagnosticRepairUncertainty, suggestedRepair: String,
-                regressionTestGuidance: String) {
+                regressionTestGuidance: String, subject: DiagnosticEvidenceSubject? = nil, repairTitle: String? = nil) {
+        self.subject = subject; self.repairTitle = repairTitle
         self.targetSessionId = targetSessionId
         self.proposalId = proposalId
         self.findings = findings
@@ -294,7 +302,10 @@ public struct DiagnosticsHandoffRequest: Codable, Sendable {
 public struct DiagnosticsHandoff: Codable, Sendable {
     public let schemaVersion: Int
     public let host: OperationHost
-    public let targetSessionId: String
+    public let targetSessionId: String?
+    public let subject: DiagnosticEvidenceSubject?
+    public let repairTitle: String?
+    public let sourceProjectId: String?
     public let projectId: String?
     public let evidence: [DiagnosticEvidence]
     public let proposalId: String

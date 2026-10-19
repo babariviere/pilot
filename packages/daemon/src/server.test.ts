@@ -24,9 +24,9 @@ import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
 import { NotFound, SessionManager } from "./sessions.ts";
-import { TerminalManager } from "./terminals.ts";
-import { TelemetrySettingsService } from "./telemetry-settings.ts";
 import { SourceRegistry } from "./sources.ts";
+import { TelemetrySettingsService } from "./telemetry-settings.ts";
+import { TerminalManager } from "./terminals.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
 
 test("refresh-health native reads are qualified, protected and never trigger a refresh", async (t) => {
@@ -555,7 +555,7 @@ test("dedicated diagnostics and repair operations admit only their matching chat
 		},
 	};
 	const terminals = new TerminalManager();
-	const server = createDaemonServer(
+	const serverArgs: Parameters<typeof createDaemonServer> = [
 		{ home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
@@ -569,7 +569,13 @@ test("dedicated diagnostics and repair operations admit only their matching chat
 		undefined,
 		undefined,
 		hello,
-	);
+	];
+	serverArgs[18] = {
+		authenticate: async (value: unknown) => {
+			if (value !== "native-fixture") throw new Conflict("Native only");
+		},
+	} as unknown as NonNullable<(typeof serverArgs)[18]>;
+	const server = createDaemonServer(...serverArgs);
 	t.after(async () => {
 		terminals.shutdown();
 		await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -624,9 +630,22 @@ test("dedicated diagnostics and repair operations admit only their matching chat
 			2,
 		),
 	]) {
+		if (op.kind === "repair-create") {
+			const unconfirmed = await fetch(base, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(op),
+			});
+			assert.notEqual(
+				unconfirmed.status,
+				200,
+				"a matching role/proposal payload cannot substitute for native confirmation",
+			);
+			assert.equal(spawned.mock.callCount(), 1);
+		}
 		const response = await fetch(base, {
 			method: "POST",
-			headers: { "content-type": "application/json" },
+			headers: { "content-type": "application/json", "x-pilot-github-capability": "native-fixture" },
 			body: JSON.stringify(op),
 		});
 		assert.equal(response.status, 200);

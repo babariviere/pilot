@@ -71,6 +71,7 @@ import { ControlHostError } from "./control-host-policy.ts";
 import type { ControlHosts } from "./control-hosts.ts";
 import { DatabaseSettingsError } from "./databases.ts";
 import { EnvironmentApprovalRequired } from "./environment-profile.ts";
+import { awaitDiagnosticRead, diagnosticContextResponse } from "./diagnostic-context.ts";
 import { Conflict, ServiceUnavailable } from "./errors.ts";
 import { daemonPerformance, operations } from "./event-loop-watchdog.ts";
 import type { GitHubImportService } from "./github-import.ts";
@@ -99,7 +100,6 @@ import { SetupError, type SetupService } from "./setup.ts";
 import { parseSlackMessageLink } from "./slack-format.ts";
 import type { SourceRegistry } from "./sources.ts";
 import type { TelemetrySettingsService } from "./telemetry-settings.ts";
-import { awaitDiagnosticRead, diagnosticContextResponse } from "./diagnostic-context.ts";
 import { terminalSender } from "./terminal-output.ts";
 import type { TerminalManager } from "./terminals.ts";
 import { validatePatch } from "./tracked-items.ts";
@@ -743,6 +743,10 @@ export function createDaemonServer(
 			}
 			const bytes = await controlBody(req, MAX_BODY);
 			const operation = controlJSON<DurableOperation>(bytes);
+			if (operation?.kind === "repair-create" && parts[2] !== "receipt") {
+				if (!githubSetup) throw new ServiceUnavailable("Native repair confirmation is unavailable");
+				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			}
 			if (operation?.kind?.startsWith("control.")) {
 				try {
 					if (!control) throw new ControlHostError("capability_denied", "Control executor unavailable", 403);
@@ -1041,6 +1045,29 @@ export function createDaemonServer(
 		}
 		if (parts[1] === "update" && parts[2] === "pause" && parts.length === 3 && req.method === "POST")
 			return json(res, 200, sessions.pauseForUpdate());
+		if (
+			parts[1] === "diagnostics" &&
+			parts[2] === "repair-project" &&
+			parts.length === 3 &&
+			(req.method === "GET" || req.method === "PUT")
+		) {
+			if (!githubSetup) throw new ServiceUnavailable("Native repair project setup is unavailable");
+			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			res.setHeader("cache-control", "no-store");
+			return json(
+				res,
+				200,
+				req.method === "GET"
+					? await sessions.diagnosticRepairProjectStatus()
+					: await sessions.configureDiagnosticRepairProject(
+							await readJson<import("@pilot/protocol").DiagnosticRepairProjectSetup>(req, 8192),
+						),
+			);
+		}
+		if (parts[1] === "diagnostics" && parts[2] === "app" && parts.length === 3 && req.method === "GET") {
+			res.setHeader("cache-control", "no-store");
+			return json(res, 200, sessions.appDiagnosticEvidence(requestedDiagnosticHost(url, hello)));
+		}
 		if (
 			parts[1] === "diagnostics" &&
 			(parts[2] === "read" || parts[2] === "read-response") &&

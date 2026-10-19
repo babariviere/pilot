@@ -13,12 +13,13 @@ export type {
 } from "@earendil-works/pi-durable";
 export type * from "./critical-review.ts";
 export type * from "./databases.ts";
-export type * from "./diagnostics.ts";
 export type * from "./diagnostic-context.ts";
-export type * from "./refresh-health.ts";
+export type * from "./diagnostic-repair.ts";
+export type * from "./diagnostics.ts";
 export type * from "./github-import.ts";
 export type * from "./github-setup.ts";
 export type * from "./model-scope.ts";
+export type * from "./refresh-health.ts";
 
 /** Lifecycle as seen by the daemon. "parked" means no worker is running; the session resumes on demand. */
 export type SessionState = "parked" | "starting" | "idle" | "working" | "failed";
@@ -277,6 +278,8 @@ export interface SessionSummary {
 	role?: SessionRole;
 	/** App/host diagnostics with no implicit chat target or transcript grant. */
 	diagnosticScope?: DiagnosticScope;
+	/** Pinned app diagnostic execution identity; independent of a focus chat. */
+	diagnosticHost?: OperationHost;
 	/** Exact chat this specialist may inspect. Present only for diagnostics specialists. */
 	diagnosticTargetId?: string;
 	/** Canonical host-qualified form of the admitted target, for display and reopen verification. */
@@ -1491,8 +1494,11 @@ export interface ModelList {
 export interface DiagnosticRepairAdmission {
 	specialistSessionId: string;
 	proposalId: string;
-	/** Exact target identity admitted to the specialist when it published the proposal. */
-	target: DiagnosticTargetReference;
+	/** Legacy chat-only receipt. Never fabricates a chat for app-wide diagnoses. */
+	target?: DiagnosticTargetReference;
+	subject?: import("./diagnostic-repair.ts").DiagnosticEvidenceSubject;
+	binding?: import("./diagnostic-repair.ts").DiagnosticRepairProjectBinding;
+	repairTitle?: string;
 }
 
 /** POST /api/sessions. Needs a missionId, projectId or cwd (cwd overrides a non-mission project's path). */
@@ -1506,6 +1512,8 @@ export interface SpawnRequest {
 	diagnosticTarget?: DiagnosticTargetReference;
 	/** Required for app-scoped diagnostics. Mutually exclusive with diagnosticTarget. */
 	diagnosticScope?: DiagnosticScope;
+	/** App diagnosis execution identity, pinned by native setup rather than inferred from a chat. */
+	diagnosticHost?: OperationHost;
 	/** Explicit native grant for bounded target history reads. Omitted for generic no-link diagnostics. */
 	diagnosticHistoryAccess?: boolean;
 	/** Diagnostics-only title hint: ignore the fixed opening instruction and wait for substantive assistant text. */

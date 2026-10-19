@@ -1099,8 +1099,12 @@ proposal form or starts work. Once the specialist publishes a bounded, cited pro
 repair**, and after the turn settles the chat also shows the native review tray without displacing a live question or
 stealing focus. Not now is remembered for that exact proposal, while the header or context menu can reopen it.
 Publishing, viewing, reconnecting, dismissing or cancelling never starts work. Only explicit confirmation in the
-review sheet sends the proposal to a separate ordinary Build chat in a valid chosen project. That start uses one
-durable, host-qualified operation, revalidates the current proposal and target at daemon admission, and reconciles
+review sheet sends the proposal to a separate private Build in the explicitly configured Pilot source project,
+never the diagnosed/current project. Configure its verified host-qualified checkout in Diagnostics settings once;
+missing, changed or unavailable bindings block starts without fallback or automatic cloning. App-wide proposals need
+no fabricated chat target. Review includes an issue-specific title and model, and preserves the title without an
+extra model request. That start uses one durable, host-qualified operation and per-proposal admission claim,
+revalidates the proposal, subject, binding/path/origin at admission, and reconciles
 an unknown response before any retry or replacement intent.
 [Tool-call diagnostics](docs/tool-call-diagnostics.md) add bounded in-flight and completed lifecycle evidence for
 built-ins, MCP and nested `codemode` calls while keeping raw names, arguments, output and commands out of diagnostics
