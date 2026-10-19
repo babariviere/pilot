@@ -356,17 +356,23 @@ function decodeSlackReaction(result: Parameters<typeof decodeMcpResult>[0]): Tra
 			/* This tool can also return a plain confirmation. */
 		}
 	}
+	if (Buffer.byteLength(JSON.stringify(value) ?? "") > 512 * 1024)
+		throw new SourceToolError("Invalid Slack reaction response");
 	const data =
 		value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 	const error = data?.error;
 	const code = error && typeof error === "object" ? (error as Record<string, unknown>).code : (error ?? data?.code);
-	if (code === "already_reacted" || (!data && slackAlreadyReacted(new Error(text)))) return { ok: true };
+	// Newer servers wrap the same confirmation text in result, in JSON text or structuredContent.
+	const confirmation = data ? (typeof data.result === "string" ? data.result : "") : text;
+	if (code === "already_reacted" || (!error && !code && slackAlreadyReacted(new Error(confirmation))))
+		return { ok: true };
 	if (result.isError) throw sourceRateLimit(result) ?? new SourceToolError("Couldn't add Slack reaction");
-	if (data && !error && (data.ok === true || data.success === true)) return { ok: true };
+	if (error || data?.ok === false || data?.success === false)
+		throw sourceRateLimit(result) ?? new SourceToolError("Couldn't add Slack reaction");
+	if (data && (data.ok === true || data.success === true)) return { ok: true };
 	if (
-		!data &&
-		!/\b(?:error|failed|failure)\b/i.test(text) &&
-		/\b(?:added\b[^\n]*\breaction|reaction\b[^\n]*\badded)\b/i.test(text)
+		!/\b(?:error|failed|failure|not|unable|cannot|can't|couldn't)\b/i.test(confirmation) &&
+		/\b(?:added\b[^\n]*\breaction|reaction\b[^\n]*\badded)\b/i.test(confirmation)
 	)
 		return { ok: true };
 	throw sourceRateLimit(result) ?? new SourceToolError("Couldn't add Slack reaction");

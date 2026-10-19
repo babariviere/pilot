@@ -90,6 +90,44 @@ test("Slack start exposes only the fixed eyes reaction and normalizes success wi
 	);
 });
 
+test("Slack reaction confirmations accept result wrappers but preserve failures and response bounds", () => {
+	const wrap = (result: string) => [
+		{ structuredContent: { result } },
+		{ content: [{ type: "text", text: JSON.stringify({ result }) }] },
+	];
+	for (const tool of ["startSlack", "doneSlack"]) {
+		for (const confirmation of [
+			"Reaction :eyes: added to message (private detail).",
+			"Added :white_check_mark: reaction to message (private detail).",
+		]) {
+			for (const response of wrap(confirmation)) assert.deepEqual(decodeMcpResult(response, tool), { ok: true });
+		}
+		for (const response of wrap("Slack API error: already_reacted (private detail)"))
+			assert.deepEqual(decodeMcpResult({ ...response, isError: true }, tool), { ok: true });
+		for (const result of [
+			"Error: reaction could not be added (private detail)",
+			"Reaction was not added (private detail)",
+			"unexpected response (private detail)",
+			"Error: not_already_reacted (private detail)",
+		]) {
+			for (const response of wrap(result))
+				assert.throws(() => decodeMcpResult(response, tool), /^Error: Couldn't add Slack reaction$/);
+		}
+		const result = "Reaction :eyes: added to message (private detail).";
+		for (const response of [
+			{ isError: true, structuredContent: { result } },
+			{ structuredContent: { ok: false, result } },
+			{ structuredContent: { success: false, result } },
+			{ structuredContent: { error: "missing_scope", result } },
+			{ structuredContent: { error: "missing_scope", result: "already_reacted" } },
+			{ structuredContent: { result: { text: result } } },
+		])
+			assert.throws(() => decodeMcpResult(response, tool), /^Error: Couldn't add Slack reaction$/);
+		for (const response of wrap(`${result}${"x".repeat(513 * 1024)}`))
+			assert.throws(() => decodeMcpResult(response, tool), /^Error: Invalid Slack reaction response$/);
+	}
+});
+
 test("check reads expose only reaction metadata and Done writes are fixed to white_check_mark", () => {
 	assert.equal(dedicatedSourceTool("slack", "reactions"), "slack_get_reactions");
 	assert.equal(dedicatedSourceTool("slack", "doneSlack"), "slack_add_reaction");
@@ -427,6 +465,8 @@ test("pinned SDK wrapper calls fixed dedicated tools, reuses OAuth and detects r
 		const reactionArgs = { channel_id: "CEXAMPLE", message_ts: "1780000000.123456", emoji: "eyes" };
 		for (const response of [
 			{ structuredContent: { ok: true } },
+			{ structuredContent: { result: "Reaction :eyes: added to message (private detail)." } },
+			{ content: [{ type: "text", text: '{"result":"Reaction :eyes: added to message (private detail)."}' }] },
 			{ isError: true, structuredContent: { ok: false, error: "already_reacted" } },
 			{ isError: true, content: [{ type: "text", text: "Slack API error: already_reacted (private detail)" }] },
 		]) {
