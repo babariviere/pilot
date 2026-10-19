@@ -386,7 +386,7 @@ test("write failure is quiet, once-only and durable; already_reacted succeeds an
 	}
 });
 
-test("reaction reads are capped, rotate fairly, wait between checks and share the durable daily Slack budget", async () => {
+test("reaction reads are capped, rotate fairly, wait between checks and share the durable hourly Slack budget", async () => {
 	const items = new TrackedItemStore(":memory:");
 	try {
 		await items.commit(
@@ -408,7 +408,9 @@ test("reaction reads are capped, rotate fairly, wait between checks and share th
 		assert.equal(used, 100);
 		assert.deepEqual(await items.reserveSlackReactions("p", t + 600, 0), { reads: [], budget: true });
 		assert.equal((await items.reserveSlack("CEXAMPLE", parent, t + 600, "p")).state, "budget");
-		assert.equal((await items.reserveSlackReactions("p", 86_400_000)).reads.length, 8);
+		assert.equal((await items.reserveSlackReactions("p", t + 600, 0, true)).reads.length, 8);
+		assert.deepEqual(await items.reserveSlackReactions("p", t + 601, 0), { reads: [], budget: true });
+		assert.equal((await items.reserveSlackReactions("p", t + 3_600_000 + 1_000)).reads.length, 8);
 	} finally {
 		await items.close();
 	}

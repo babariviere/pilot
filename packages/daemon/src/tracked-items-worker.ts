@@ -77,13 +77,20 @@ parentPort!.on("message", ({ id, method, args }) => {
 				value = disk.slackGroups(args.handles);
 				break;
 			case "reserveSlackRead":
-				value = disk.reserveSlackRead(args.now);
+				value = disk.reserveSlackRead(args.now, args.force === true);
 				break;
 			case "saveSlackGroup":
 				disk.saveSlackGroup(args.handle, args.id, args.now);
 				break;
 			case "reserveSlack":
-				value = disk.reserveSlack(args.channel, args.ts, args.now, args.projectId, args.retry === true);
+				value = disk.reserveSlack(
+					args.channel,
+					args.ts,
+					args.now,
+					args.projectId,
+					args.retry === true,
+					args.force === true,
+				);
 				break;
 			case "finishSlack":
 				disk.finishSlack(args.channel, args.ts, args.result, args.projectId);
@@ -116,14 +123,14 @@ parentPort!.on("message", ({ id, method, args }) => {
 				projectId = disk.require(args.id).projectId;
 				break;
 			case "reserveSlackReactions":
-				value = disk.reserveSlackReactions(args.projectId, args.now, args.recheckMs);
+				value = disk.reserveSlackReactions(args.projectId, args.now, args.recheckMs, args.force === true);
 				break;
 			case "recordSlackReaction":
 				disk.recordSlackReaction(args.id, args.present, args.version);
 				if (changed) projectId = disk.require(args.id).projectId;
 				break;
 			case "reserveSlackWaiting":
-				value = disk.reserveSlackWaiting(args.projectId, args.now);
+				value = disk.reserveSlackWaiting(args.projectId, args.now, args.force === true);
 				break;
 			case "slackWaitingResult":
 				value = disk.slackWaitingResult(args.id, args.since, args.result);

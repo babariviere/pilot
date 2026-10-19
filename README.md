@@ -809,18 +809,23 @@ Slack items become Done locally when every PR of a linked chat has merged, or a 
 The row explains why, for example “Done · PR #42 merged”. Closed unmerged PRs change nothing. Already Done or
 Dismissed items stay untouched, startup PR baselines do not close old items, and reopening is never undone by
 the same merge or completion.
+Slack shares a local budget of 100 classifications and checks per UTC hour across projects.
+Use **Force sync (ignore hourly budget)** in Slack triage's actions menu, or **Force sync** beside a budget pause,
+to bypass it for one bounded refresh. Forced work still counts toward usage; normal polling stays limited,
+and Slack's own rate limits, cached classifications and per-refresh batch limits still apply.
+
 A Slack message can also be **Waiting**, when someone outside Pilot (a CSM, the reporter) has to answer first.
 A chat attached to the message (started from it, or linked to it) sets it with its `slack_status` tool and a short
 reason, shown as “Waiting · CSM to confirm the org ID”. Only attached chats have that tool, and it appears or goes
 away as you link or unlink them. You can also pick Waiting yourself. Waiting messages stay out of the
 Inbox. On Slack refreshes, Pilot reads each waiting thread for new replies at most every ten minutes, sharing the
-daily Slack budget. A reply from anyone but you resumes the message's latest chat with the new replies, quoted
+hourly Slack budget. A reply from anyone but you resumes the message's latest chat with the new replies, quoted
 as context, and moves the message back to In progress; without a chat to resume, the message reopens. Your own
 replies, including ones an agent posts as you, never end a wait. The same tool marks the message **Done** once
 the request is resolved, with a short outcome shown as “Done · answered in thread”. It only changes a chat's own
 messages while they are In progress or Waiting: Open, Done and Dismissed stay yours, so only you reopen a message.
 During normal Slack refreshes, up to eight Open, In progress or Waiting parents are checked for a ✅ reaction, each
-at most once an hour, sharing the daily Slack budget. A spent budget pauses only these checks.
+at most once an hour, sharing the hourly Slack budget. A spent budget pauses only these checks.
 A ✅ from anyone marks the item Done with “Done · ✅ in Slack”. Reopening keeps it open while
 that reaction remains present, even if its count changes. Removing it and adding it again is a new reaction.
 When an item with a successful eyes reaction becomes Done (manually, from a merge, or from Slack), Pilot adds ✅

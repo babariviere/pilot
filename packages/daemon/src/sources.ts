@@ -8,6 +8,8 @@ import type {
 	LinearWorkflowStateOption,
 	Project,
 	ProjectTrackingConfig,
+	RefreshObservation,
+	RefreshReason,
 	SlackChannelOption,
 	SlackChannelStatus,
 	SlackExcerpt,
@@ -20,9 +22,8 @@ import type {
 	TrackingJson,
 	TrackingLookup,
 	TrackingSource,
-	RefreshObservation,
-	RefreshReason,
 } from "@pilot/protocol";
+import { redactDiagnosticText } from "./diagnostic-redaction.ts";
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { linearParentHeaders, linearPrefill, linearStart } from "./linear-source.ts";
 import { workflowStates } from "./linear-workflow.ts";
@@ -34,20 +35,21 @@ import { type SlackAdder, slackChannelProgress, slackExcerpt } from "./slack-sou
 import { slackStart, slackStartAllowed } from "./slack-start.ts";
 import type { SlackWaitingWatcher } from "./slack-waiting.ts";
 import { type SourceMcpClient, SourceRateLimited, SourceSignInRequired, SourceToolError } from "./source-mcp.ts";
-import { SourceSignIns } from "./source-sign-in.ts";
-import type { SourceCheckpoint, TrackedInput, TrackedItemStore, TrackedQuery } from "./tracked-items.ts";
-import { SLACK_REACTION_RECHECK_MS } from "./tracked-items-disk.ts";
-import { lookupLinearTeams, lookupSlackChannels } from "./tracking-lookup.ts";
-import type { TriageGroomer } from "./triage-grooming.ts";
 import {
+	refreshAssessment,
 	SOURCE_REFRESH_CADENCE_MS,
 	SOURCE_REFRESH_TIMEOUT_MS,
 	SourceRefreshDiagnostics,
-	refreshAssessment,
 } from "./source-refresh-diagnostics.ts";
-import { redactDiagnosticText } from "./diagnostic-redaction.ts";
+import { SourceSignIns } from "./source-sign-in.ts";
+import type { SourceCheckpoint, TrackedInput, TrackedItemStore, TrackedQuery } from "./tracked-items.ts";
+import { SLACK_BUDGET_WINDOW_MS, SLACK_REACTION_RECHECK_MS } from "./tracked-items-disk.ts";
+import { lookupLinearTeams, lookupSlackChannels } from "./tracking-lookup.ts";
+import type { TriageGroomer } from "./triage-grooming.ts";
 
 export interface SourcePollContext {
+	/** Manual override for this pass only. Provider rate limits and batch caps still apply. */
+	force?: boolean;
 	/** Closed process-local observation only. Never carries source content or model/tool arguments. */
 	observe?(event: RefreshObservation): void;
 	project: Project;
@@ -478,18 +480,24 @@ export class SourceRegistry {
 	}
 
 	/** Single flight per source, at most two sources. No unbounded backlog from repeated clicks. */
-	poll(id: string): Promise<TrackingSource> {
+	poll(id: string, force = false): Promise<TrackingSource> {
 		if (this.stopped) throw new ServiceUnavailable("Tracking is stopped");
 		const source = this.require(id);
 		if (!source.configured) throw new Conflict("Attach a Linear team or Slack channels in project settings first");
+		if (force && source.kind !== "slack") throw new Conflict("Only Slack supports forcing the local budget");
 		const key = this.currentKey(id)!;
 		// Background polling waits out error backoff on its own schedule. A manual sync retries right away,
-		// except while the provider is rate limiting or Slack's local daily budget is spent.
+		// except while the provider is rate limiting or Slack's local hourly budget is spent.
 		const health = this.health.get(id);
-		if (health && health.status !== "ok" && health.nextPollAt > Date.now() && (health.limited || health.localBudget))
+		if (
+			health &&
+			health.status !== "ok" &&
+			health.nextPollAt > Date.now() &&
+			(health.limited || (health.localBudget && !force))
+		)
 			throw new Conflict(
 				health.localBudget
-					? (health.error ?? "Slack daily budget reached.")
+					? (health.error ?? "Slack hourly budget reached.")
 					: `${source.kind === "slack" ? "Slack" : "Linear"} is limiting requests. Pilot will retry automatically.`,
 			);
 		const running = this.running.get(id);
@@ -535,6 +543,7 @@ export class SourceRegistry {
 		observe({ stage: "discovery", phase: "started" });
 		const work = Promise.resolve().then(() =>
 			poller({
+				force,
 				observe,
 				project,
 				config: project.tracking!,
@@ -575,6 +584,7 @@ export class SourceRegistry {
 					);
 				if (source.kind === "slack") {
 					const context: SourcePollContext = {
+						force,
 						observe,
 						project,
 						config: project.tracking!,
@@ -591,7 +601,7 @@ export class SourceRegistry {
 				}
 				const nextPollAt =
 					result.issue === "slack_budget"
-						? (Math.floor(Date.now() / 86_400_000) + 1) * 86_400_000
+						? (Math.floor(Date.now() / SLACK_BUDGET_WINDOW_MS) + 1) * SLACK_BUDGET_WINDOW_MS
 						: Date.now() + SOURCE_REFRESH_CADENCE_MS;
 				this.health.set(id, {
 					key,
@@ -603,7 +613,7 @@ export class SourceRegistry {
 						? {
 								error:
 									result.issue === "slack_budget"
-										? "Slack daily budget reached. New threads are classified again tomorrow."
+										? "Slack hourly budget reached. Resumes next hour."
 										: result.issue === "slack_channel"
 											? "A Slack channel could not be read. Check its access in project settings."
 											: "Some Slack threads could not be classified. Failed or interrupted attempts are cached and never retried.",
@@ -1340,6 +1350,7 @@ export class SourceRegistry {
 			...(checkpoint?.configKey === key && checkpoint.linear ? { linear: structuredClone(checkpoint.linear) } : {}),
 			...(health?.key === key ? { nextPollAt: health.nextPollAt } : {}),
 			...(health?.key === key && health.error ? { error: health.error } : {}),
+			...(health?.key === key && health.localBudget ? { budgetLimited: true } : {}),
 			...(status === "sign_in_required" ? { signInCommand: `pi mcp login ${kind}` } : {}),
 			...(kind === "slack" && configured
 				? {

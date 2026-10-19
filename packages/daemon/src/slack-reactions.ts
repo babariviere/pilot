@@ -9,7 +9,7 @@ export async function refreshSlackReactions(
 	context: SourcePollContext,
 	recheckMs?: number,
 ): Promise<boolean> {
-	const batch = await items.reserveSlackReactions(context.project.id, Date.now(), recheckMs);
+	const batch = await items.reserveSlackReactions(context.project.id, Date.now(), recheckMs, context.force);
 	for (const { item, version } of batch.reads) {
 		context.signal.throwIfAborted();
 		if (!slackStartAllowed(context.config.slackChannels, item)) continue;

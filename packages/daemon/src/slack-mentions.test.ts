@@ -13,7 +13,7 @@ import { createSlackPoller } from "./slack-source.ts";
 import { dedicatedSourceTool, SourceToolError, validSourceArguments } from "./source-mcp.ts";
 import { type SourcePollContext, SourceRegistry } from "./sources.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
-import { SLACK_DAILY_BUDGET } from "./tracked-items-disk.ts";
+import { SLACK_HOURLY_BUDGET } from "./tracked-items-disk.ts";
 
 const now = Date.UTC(2026, 9, 13, 12);
 const channel = "C000000001";
@@ -330,9 +330,9 @@ test("an unresolved or refused group search retries after a day without stopping
 	assert.equal((await f.store.slackGroups(["oncall"])).oncall?.id, "S0ONCALL1");
 });
 
-test("discovery reads leave the daily budget to classification, which pins progress and resumes next UTC day", async (t) => {
+test("discovery reads leave the hourly budget to classification, which pins progress and resumes next UTC hour", async (t) => {
 	const f = await fixture(t);
-	for (let i = 0; i < SLACK_DAILY_BUDGET; i++) await f.store.reserveSlack(channel, `${i + 1}.000002`, now, "budget");
+	for (let i = 0; i < SLACK_HOURLY_BUDGET; i++) await f.store.reserveSlack(channel, `${i + 1}.000002`, now, "budget");
 	f.history(history([{ ts: parent, text: "<@U000000099> export crashes" }]));
 	const limited = await f.poll(f.context);
 	assert.equal(limited.issue, "slack_budget");
@@ -341,7 +341,7 @@ test("discovery reads leave the daily budget to classification, which pins progr
 		f.calls.map((call) => call.tool),
 		["profile", "history"],
 	);
-	f.tick(86_400_000);
+	f.tick(3_600_000);
 	const resumed = await f.poll({ ...f.context, cursor: limited.cursor });
 	assert.equal(resumed.items.length, 1);
 	assert.equal(f.texts.length, 1);

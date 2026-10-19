@@ -991,8 +991,8 @@ final class PilotClient: ObservableObject {
         try await missionRequest(["sources"], query: projectId.map { [URLQueryItem(name: "projectId", value: $0)] } ?? [])
     }
 
-    func pollSource(_ id: String) async throws -> TrackingSource {
-        try await call(url: missionURL(["sources", id, "poll"]), body: [String: String]())
+    func pollSource(_ id: String, force: Bool = false) async throws -> TrackingSource {
+        try await call(url: missionURL(["sources", id, "poll"]), body: SourcePollRequest(force: force))
     }
 
     func source(projectId: String, kind: TrackedKind) -> TrackingSource? {

@@ -2,6 +2,17 @@ import Foundation
 import Testing
 @testable import PilotCore
 
+@Test func slackHourlyBudgetAndForceRequestRoundTrip() throws {
+    let legacy = Data(#"{"id":"p:slack","projectId":"p","kind":"slack","label":"Slack","configured":true,"status":"ok"}"#.utf8)
+    #expect(try JSONDecoder().decode(TrackingSource.self, from: legacy).budgetLimited == nil)
+    let source = TrackingSource(id: "p:slack", projectId: "p", kind: .slack, label: "Slack", configured: true,
+                                status: .error, budgetLimited: true)
+    #expect(try JSONDecoder().decode(TrackingSource.self, from: JSONEncoder().encode(source)) == source)
+    let wire = try JSONSerialization.jsonObject(with: JSONEncoder().encode(SourcePollRequest(force: true))) as? [String: Bool]
+    #expect(wire == ["force": true])
+    #expect(SourcePollRequest().force == false)
+}
+
 @Test func slackMentionSettingsDecodeLegacyAndRoundTrip() throws {
     let legacy = try JSONDecoder().decode(ProjectTrackingConfig.self, from: Data(#"{"slackChannels":["C1"]}"#.utf8))
     #expect(legacy.slackMentionOnlyChannels == nil)

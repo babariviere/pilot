@@ -24,12 +24,14 @@ import { TriageGuideDisk } from "./triage-guide-disk.ts";
 
 export type SlackCache = { state: "pending" | "error" } | { state: "done"; result: SlackClassification };
 export type SlackReservation = SlackCache | { state: "reserved" } | { state: "budget" };
-export const SLACK_DAILY_BUDGET = 100;
+export const SLACK_HOURLY_BUDGET = 100;
+/** Fixed UTC hours, shared by every project. Forced reads still count toward this hour. */
+export const SLACK_BUDGET_WINDOW_MS = 3_600_000;
 export const SLACK_REACTION_BATCH = 8;
 /** Waiting messages read per poll, and how often one message's thread is read for new replies. */
 export const SLACK_WAITING_BATCH = 4;
 export const SLACK_WAITING_INTERVAL_MS = 10 * 60_000;
-/** An open item's ✅ is checked at most this often. Each check is one read from the daily budget. */
+/** An open item's ✅ is checked at most this often. Each check is one read from the hourly budget. */
 export const SLACK_REACTION_RECHECK_MS = 3_600_000;
 /** A Slack group handle's ID, learned once by search. id is null while it could not be resolved. */
 export interface SlackGroupId {
@@ -202,6 +204,7 @@ export class TrackedItemDisk {
 			 channel TEXT NOT NULL, thread_ts TEXT NOT NULL, state TEXT NOT NULL, result TEXT,
 			 PRIMARY KEY(channel, thread_ts)
 			);
+			-- Keep the legacy column name; hourly ISO keys do not reuse old daily counters.
 			CREATE TABLE IF NOT EXISTS slack_budget (day TEXT PRIMARY KEY, used INTEGER NOT NULL);
 			CREATE TABLE IF NOT EXISTS slack_groups (handle TEXT PRIMARY KEY, id TEXT, checked_at INTEGER NOT NULL);
 		`);
@@ -360,32 +363,38 @@ export class TrackedItemDisk {
 			? { state: "done", result: parseSlackClassification(String(row.result)) }
 			: { state: row.state === "error" ? "error" : "pending" };
 	}
-	/** Crash-safe admission before any model call. One attempt per project/thread, across restarts. */
-	/** Atomic admission for one read against the shared daily Slack budget. */
-	reserveSlackRead(now: number): boolean {
-		const day = new Date(now).toISOString().slice(0, 10);
+	/** Atomic admission for one read against the shared hourly Slack budget. */
+	reserveSlackRead(now: number, force = false): boolean {
+		const hour = new Date(now).toISOString().slice(0, 13);
 		const result = this.db
 			.prepare(`INSERT INTO slack_budget VALUES (?, 1)
-			ON CONFLICT(day) DO UPDATE SET used=used+1 WHERE used < ?`)
-			.run(day, SLACK_DAILY_BUDGET);
+			ON CONFLICT(day) DO UPDATE SET used=used+1 WHERE used < ? OR ?`)
+			.run(hour, SLACK_HOURLY_BUDGET, force ? 1 : 0);
 		this.db
 			.prepare("DELETE FROM slack_budget WHERE day < ?")
-			.run(new Date(now - 7 * 86_400_000).toISOString().slice(0, 10));
+			.run(new Date(now - 7 * 86_400_000).toISOString().slice(0, 13));
 		return Number(result.changes) === 1;
 	}
-	/** Reserves a classification against the daily budget, unless one is cached. retry reclassifies a cached failure or
+	/** Crash-safe classification admission against the hourly budget, unless cached. retry reclassifies a cached failure or
 	 * an interrupted attempt, for a message the user added by hand. */
-	reserveSlack(channel: string, ts: string, now: number, projectId: string, retry = false): SlackReservation {
+	reserveSlack(
+		channel: string,
+		ts: string,
+		now: number,
+		projectId: string,
+		retry = false,
+		force = false,
+	): SlackReservation {
 		validateSlackKey(channel, ts, projectId);
-		const day = new Date(now).toISOString().slice(0, 10);
+		const hour = new Date(now).toISOString().slice(0, 13);
 		this.db.exec("BEGIN IMMEDIATE");
 		try {
 			const cached = this.slackCached(channel, ts, projectId);
 			let result: SlackReservation;
 			if (cached && (cached.state === "done" || !retry)) result = cached;
 			else {
-				const used = Number(this.db.prepare("SELECT used FROM slack_budget WHERE day=?").get(day)?.used ?? 0);
-				if (used >= SLACK_DAILY_BUDGET) result = { state: "budget" };
+				const used = Number(this.db.prepare("SELECT used FROM slack_budget WHERE day=?").get(hour)?.used ?? 0);
+				if (!force && used >= SLACK_HOURLY_BUDGET) result = { state: "budget" };
 				else {
 					this.db
 						.prepare(`INSERT INTO slack_project_classifications VALUES (?, ?, ?, 'pending', NULL)
@@ -393,10 +402,10 @@ export class TrackedItemDisk {
 						.run(projectId, channel, ts);
 					this.db
 						.prepare("INSERT INTO slack_budget VALUES (?, 1) ON CONFLICT(day) DO UPDATE SET used=used+1")
-						.run(day);
+						.run(hour);
 					this.db
 						.prepare("DELETE FROM slack_budget WHERE day < ?")
-						.run(new Date(now - 7 * 86_400_000).toISOString().slice(0, 10));
+						.run(new Date(now - 7 * 86_400_000).toISOString().slice(0, 13));
 					result = { state: "reserved" };
 				}
 			}
@@ -828,7 +837,12 @@ export class TrackedItemDisk {
 
 	/** Fair, capped reads share the classification budget, reserved durably before any network call. Items checked
 	 * within recheckMs wait their turn. */
-	reserveSlackReactions(projectId: string, now: number, recheckMs = SLACK_REACTION_RECHECK_MS): SlackReactionBatch {
+	reserveSlackReactions(
+		projectId: string,
+		now: number,
+		recheckMs = SLACK_REACTION_RECHECK_MS,
+		force = false,
+	): SlackReactionBatch {
 		this.db.exec("BEGIN IMMEDIATE");
 		try {
 			const rows = this.db
@@ -836,13 +850,13 @@ export class TrackedItemDisk {
 				AND active=1 AND dismissed=0 AND slack_status IN ('open','in_progress','waiting')
 				AND slack_reaction_checked <= ? ORDER BY slack_reaction_checked, id LIMIT ?`)
 				.all(projectId, now - recheckMs, SLACK_REACTION_BATCH) as Row[];
-			const day = new Date(now).toISOString().slice(0, 10);
-			const used = Number(this.db.prepare("SELECT used FROM slack_budget WHERE day=?").get(day)?.used ?? 0);
-			const picked = rows.slice(0, Math.max(0, SLACK_DAILY_BUDGET - used));
+			const hour = new Date(now).toISOString().slice(0, 13);
+			const used = Number(this.db.prepare("SELECT used FROM slack_budget WHERE day=?").get(hour)?.used ?? 0);
+			const picked = rows.slice(0, force ? rows.length : Math.max(0, SLACK_HOURLY_BUDGET - used));
 			if (picked.length) {
 				this.db
 					.prepare(`INSERT INTO slack_budget VALUES (?, ?) ON CONFLICT(day) DO UPDATE SET used=used+excluded.used`)
-					.run(day, picked.length);
+					.run(hour, picked.length);
 				for (const row of picked)
 					this.db.prepare("UPDATE tracked_items SET slack_reaction_checked=? WHERE id=?").run(now, row.id);
 			}
@@ -1009,8 +1023,8 @@ export class TrackedItemDisk {
 		return sources;
 	}
 
-	/** Waiting messages due for a reply check, least recently checked first, reserved against the daily budget. */
-	reserveSlackWaiting(projectId: string, now: number): SlackWaitingBatch {
+	/** Waiting messages due for a reply check, least recently checked first, reserved against the hourly budget. */
+	reserveSlackWaiting(projectId: string, now: number, force = false): SlackWaitingBatch {
 		this.db.exec("BEGIN IMMEDIATE");
 		try {
 			const due = (
@@ -1026,13 +1040,13 @@ export class TrackedItemDisk {
 				.filter(({ waiting }) => now - (waiting.checkedAt ?? 0) >= SLACK_WAITING_INTERVAL_MS)
 				.sort((a, b) => (a.waiting.checkedAt ?? 0) - (b.waiting.checkedAt ?? 0))
 				.slice(0, SLACK_WAITING_BATCH);
-			const day = new Date(now).toISOString().slice(0, 10);
-			const used = Number(this.db.prepare("SELECT used FROM slack_budget WHERE day=?").get(day)?.used ?? 0);
-			const picked = due.slice(0, Math.max(0, SLACK_DAILY_BUDGET - used));
+			const hour = new Date(now).toISOString().slice(0, 13);
+			const used = Number(this.db.prepare("SELECT used FROM slack_budget WHERE day=?").get(hour)?.used ?? 0);
+			const picked = due.slice(0, force ? due.length : Math.max(0, SLACK_HOURLY_BUDGET - used));
 			if (picked.length) {
 				this.db
 					.prepare(`INSERT INTO slack_budget VALUES (?, ?) ON CONFLICT(day) DO UPDATE SET used=used+excluded.used`)
-					.run(day, picked.length);
+					.run(hour, picked.length);
 				for (const { row, waiting } of picked)
 					this.db
 						.prepare("UPDATE tracked_items SET slack_waiting=? WHERE id=?")

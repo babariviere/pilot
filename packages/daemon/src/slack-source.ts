@@ -216,7 +216,14 @@ export function createSlackPoller(
 						? await models.prepareSlackClassifier(context.project.path, context.signal, classifierContext)
 						: (text) => models.classifySlack(context.project.path, text, context.signal, classifierContext);
 					context.signal.throwIfAborted();
-					const reservation = await store.reserveSlack(page.channel, message.threadTs, now(), context.project.id);
+					const reservation = await store.reserveSlack(
+						page.channel,
+						message.threadTs,
+						now(),
+						context.project.id,
+						false,
+						context.force,
+					);
 					if (reservation.state === "budget") {
 						context.observe?.({
 							stage: "classification",
@@ -353,7 +360,7 @@ export type SlackMessageLink = { channel: string; ts: string; threadTs: string }
 export type SlackAdder = (context: SourcePollContext, link: SlackMessageLink) => Promise<TrackedInput>;
 
 /** Adds one message the user pasted, from any channel their Slack account can read. Reads its thread and classifies
- * it like a polled thread: cached per project and sharing the daily budget, but a cached failure is retried because
+ * it like a polled thread: cached per project and sharing the hourly budget, but a cached failure is retried because
  * the user asked. When classification is unavailable the message is still added, untyped, titled by its first line.
  * The row is marked manual, so it stays listed when its channel is not tracked. */
 export function createSlackAdder(

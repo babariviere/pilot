@@ -220,3 +220,24 @@ test("a check in Slack still finishes a waiting message", async (t) => {
 	await f.items.recordSlackReaction(f.item.id, true, reads[0]!.version);
 	assert.equal((await f.items.require(f.item.id)).slack?.status, "done");
 });
+
+test("forced refresh bypasses waiting and identity read budgets without lifting batch or recheck limits", async (t) => {
+	const f = await fixture(t);
+	await f.items.patch(f.item.id, { slack: { status: "waiting" } });
+	const clock = Date.now() + 3_600_000;
+	for (let i = 0; i < 100; i++) assert.equal(await f.items.reserveSlackRead(clock), true);
+	const watch = createSlackWaitingWatcher(
+		f.items,
+		async () => false,
+		() => clock,
+	);
+	assert.equal(await watch(f.context), true);
+	assert.equal(f.calls.length, 0);
+	assert.equal(await watch({ ...f.context, force: true }), false);
+	assert.deepEqual(
+		f.calls.map(({ tool }) => tool),
+		["profile", "thread"],
+	);
+	assert.equal(await f.items.reserveSlackRead(clock), false);
+	assert.equal((await f.items.reserveSlackWaiting(f.project.id, clock, true)).reads.length, 0);
+});

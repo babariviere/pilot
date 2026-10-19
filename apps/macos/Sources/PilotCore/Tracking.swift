@@ -518,6 +518,11 @@ public struct SlackChannelStatus: Codable, Equatable, Sendable {
         self.id = id; self.name = name; self.status = status; self.lastPulledAt = lastPulledAt; self.error = error
     }
 }
+/// A one-pass Slack budget override. Provider rate limits still apply.
+public struct SourcePollRequest: Codable, Equatable, Sendable {
+    public let force: Bool
+    public init(force: Bool = false) { self.force = force }
+}
 public struct TrackingSource: Codable, Identifiable, Equatable, Sendable {
     public let id: String
     public let projectId: String
@@ -529,6 +534,7 @@ public struct TrackingSource: Codable, Identifiable, Equatable, Sendable {
     public let error: String?
     public let signInCommand: String?
     public let nextPollAt: Double?
+    public let budgetLimited: Bool?
     public let linear: LinearSourceSummary?
     /// Slack only, in configuration order.
     public let channels: [SlackChannelStatus]?
@@ -538,11 +544,12 @@ public struct TrackingSource: Codable, Identifiable, Equatable, Sendable {
                 status: DashboardSourceStatus, lastPolledAt: Double? = nil,
                 error: String? = nil, signInCommand: String? = nil,
                 nextPollAt: Double? = nil, linear: LinearSourceSummary? = nil, channels: [SlackChannelStatus]? = nil,
-                signIn: SourceSignIn? = nil) {
+                signIn: SourceSignIn? = nil, budgetLimited: Bool? = nil) {
         self.id = id; self.projectId = projectId; self.kind = kind; self.label = label; self.configured = configured
         self.status = status; self.lastPolledAt = lastPolledAt; self.error = error
         self.signInCommand = signInCommand
         self.nextPollAt = nextPollAt; self.linear = linear; self.channels = channels; self.signIn = signIn
+        self.budgetLimited = budgetLimited
     }
 }
 /// Browser sign-in to a tracking source's MCP server, run by pilotd through pi's OAuth flow.
