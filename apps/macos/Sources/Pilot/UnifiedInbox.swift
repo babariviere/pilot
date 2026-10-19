@@ -88,6 +88,7 @@ import SwiftUI
 /// The Inbox across hosts: pilotd's own order and counts (`UnifiedInboxPresentation`), each row carrying its owning
 /// endpoint through every action.
 struct UnifiedInboxContent: View {
+    @EnvironmentObject private var model: AppModel
     @ObservedObject var hosts: HostClients
     @StateObject private var source = UnifiedInboxSource()
     var body: some View {
@@ -120,7 +121,7 @@ struct UnifiedInboxContent: View {
                     }
                 }
                 tracked(page.linear, title: "Linear")
-                tracked(page.slack, title: "Slack")
+                tracked(page.slack, title: "Slack", triage: SlackTriageInboxHeader.choices(hosts: hosts, model: model))
                 ForEach(unavailable, id: \.self) { host in
                     Text(UnifiedInboxPresentation.unavailableNote(
                         host: HostViewContext(host: host, hosts: hosts).name, hasLastKnownRows: source.values[host] != nil))
@@ -141,10 +142,15 @@ struct UnifiedInboxContent: View {
     private var knownUnavailable: [HostRef] {
         Set(hosts.offlineHosts.keys).subtracting(hosts.available).union(source.errors).sorted(by: UnifiedInboxPresentation.hostOrder)
     }
-    @ViewBuilder private func tracked(_ section: UnifiedInboxSection<TrackedItem>, title: String) -> some View {
-        if !section.isEmpty {
+    @ViewBuilder private func tracked(_ section: UnifiedInboxSection<TrackedItem>, title: String,
+                                      triage: [PageSectionLinkChoice] = []) -> some View {
+        if !section.isEmpty || !triage.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
-                PageSectionHeader(title: title, count: section.total)
+                SlackTriageInboxHeader.header(title: title, total: section.total, choices: triage)
+                if section.isEmpty {
+                    Text("No open Slack messages.").font(.pilot(.body)).foregroundStyle(Theme.mutedForeground)
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                }
                 ForEach(section.rows) { row in
                     TrackedItemRow(item: row.value, actions: source.actions(on: row.ref.host), now: Date(), context: place(row.ref.host, row.value.projectId))
                         .environment(\.hostViewContext, HostViewContext(host: row.ref.host, hosts: hosts))

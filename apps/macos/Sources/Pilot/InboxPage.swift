@@ -88,6 +88,7 @@ private struct InboxProjectFilter: View {
 
 /// The populated page: Needs you and Ready to merge, then Linear and Slack when a project in scope tracks them.
 private struct InboxSections: View {
+    @Environment(\.hostViewContext) private var hostContext
     @EndpointClient private var endpoint
     let inbox: Inbox
     let scope: Project?
@@ -111,10 +112,11 @@ private struct InboxSections: View {
                     trackedSection(title: "Linear", kind: .linear, items: linear.items, total: linear.total,
                                    empty: "No open tickets are assigned to you.")
                 }
-                if let slack = inbox.slack {
-                    trackedSection(title: "Slack", kind: .slack, items: slack.items, total: slack.total,
-                                   empty: "No open Slack messages.", triage: triageProjects)
-                }
+            }
+            // Triage also holds waiting, done and hidden messages. A clear Inbox must not hide its entry point.
+            if inbox.slack != nil || !triageProjects.isEmpty {
+                trackedSection(title: "Slack", kind: .slack, items: inbox.slack?.items ?? [], total: inbox.slack?.total ?? 0,
+                               empty: "No open Slack messages.", triage: triageProjects)
             }
             if let hidden = InboxText.hiddenFooter(inbox.slack?.hidden ?? []) {
                 Text(hidden).font(.pilot(.caption)).foregroundStyle(Theme.faintForeground)
@@ -183,14 +185,10 @@ private struct InboxSections: View {
 
     /// "Open triage" opens the one project's Slack triage, or a menu of projects when several track Slack.
     private func triageHeader(title: String, total: Int, projects: [Project]) -> some View {
-        let open = { (id: String) in model.openSlackTriage(id) }
-        return PageSectionHeader(
-            title: title, count: total, linkTitle: projects.isEmpty ? nil : "Open triage",
-            link: projects.count == 1 ? { open(projects[0].id) } : nil,
-            linkChoices: projects.count < 2 ? [] : projects.map { project in
-                PageSectionLinkChoice(id: project.id, title: project.name) { open(project.id) }
-            }
-        )
+        let open = { (id: String) in model.openSlackTriage(id, context: hostContext) }
+        return SlackTriageInboxHeader.header(title: title, total: total, choices: projects.map { project in
+            PageSectionLinkChoice(id: project.id, title: project.name) { open(project.id) }
+        })
     }
 
     @ViewBuilder private func capNote(shown: Int, total: Int) -> some View {
@@ -214,6 +212,24 @@ private struct InboxSections: View {
         endpoint.trackingSources.first {
             $0.kind == kind && $0.configured && $0.status == .signInRequired && (scope == nil || $0.projectId == scope?.id)
         }
+    }
+}
+
+/// Shared by both Inbox presentations, independent of whether any open Slack rows remain.
+enum SlackTriageInboxHeader {
+    static func header(title: String = "Slack", total: Int, choices: [PageSectionLinkChoice]) -> PageSectionHeader {
+        PageSectionHeader(title: title, count: total, linkTitle: choices.isEmpty ? nil : "Open triage",
+                          link: choices.count == 1 ? choices[0].action : nil,
+                          linkChoices: choices.count > 1 ? choices : [])
+    }
+
+    @MainActor static func choices(hosts: HostClients, model: AppModel) -> [PageSectionLinkChoice] {
+        hosts.projects.filter { !($0.value.tracking?.slackChannels ?? []).isEmpty }.map { project in
+            let context = HostViewContext(host: project.ref.host, hosts: hosts)
+            return PageSectionLinkChoice(id: project.ref.storageKey, title: "\(project.value.name) · \(context.name)") {
+                model.openSlackTriage(project.ref.localId, context: context)
+            }
+        }.sorted { $0.title == $1.title ? $0.id < $1.id : $0.title.localizedStandardCompare($1.title) == .orderedAscending }
     }
 }
 
