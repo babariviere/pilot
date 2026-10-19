@@ -26,6 +26,86 @@ import { createDaemonServer } from "./server.ts";
 import { NotFound, SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
 import { TelemetrySettingsService } from "./telemetry-settings.ts";
+import { SourceRegistry } from "./sources.ts";
+import { TrackedItemStore } from "./tracked-items.ts";
+
+test("refresh-health native reads are qualified, protected and never trigger a refresh", async (t) => {
+	const home = mkdtempSync(join(tmpdir(), "refresh-health-api-"));
+	const host = { hostId: "local", daemonId: "daemon", lineageId: "lineage" };
+	const projects = new ProjectStore(home);
+	await projects.load();
+	const project = await projects.create({ path: home, tracking: { slackChannels: [], linearTeam: "ENG" } });
+	const items = new TrackedItemStore(join(home, "items.sqlite"));
+	await items.load([project.id]);
+	let external = 0;
+	const tracking = new SourceRegistry(projects, items, {
+		async call() {
+			external++;
+			return {};
+		},
+	});
+	tracking.register("linear", async () => {
+		external++;
+		return { items: [] };
+	});
+	const sessions = new SessionManager(home, projects, undefined, {}, {}, { diagnosticHost: host });
+	const terminals = new TerminalManager();
+	const args: Parameters<typeof createDaemonServer> = [
+		{ home, host: "127.0.0.1", port: 0 },
+		sessions,
+		projects,
+		new ModelCatalog("/unused"),
+		terminals,
+	];
+	args[9] = tracking;
+	args[18] = {
+		authenticate: async (value: unknown) => {
+			if (value !== "native-fixture") throw new Conflict("Native only");
+		},
+	} as unknown as NonNullable<(typeof args)[18]>;
+	const server = createDaemonServer(...args);
+	t.after(async () => {
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+		await tracking.stop();
+		terminals.shutdown();
+		await sessions.shutdown();
+		await items.close();
+		rmSync(home, { recursive: true, force: true });
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/diagnostics/read`;
+	const post = (body: unknown, native = true) =>
+		fetch(url, {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				...(native ? { "x-pilot-github-capability": "native-fixture" } : {}),
+			},
+			body: JSON.stringify(body),
+		});
+	const request = { action: "refresh_health", host, projectId: project.id, query: "linear", channelOffset: 0 };
+	const denied = await post(request, false);
+	assert.equal(denied.status, 409);
+	await denied.arrayBuffer();
+	const accepted = await post(request);
+	assert.equal(accepted.status, 200);
+	const response = (await accepted.json()) as {
+		host: unknown;
+		data: { sources: Array<{ assessment: { state: string } }> };
+	};
+	assert.deepEqual(response.host, host);
+	assert.equal(response.data.sources[0]?.assessment.state, "not_scheduled");
+	const wrong = await post({ ...request, host: { ...host, lineageId: "other" } });
+	assert.equal(wrong.status, 409);
+	await wrong.arrayBuffer();
+	const forged = await post({ ...request, role: "diagnostics" });
+	assert.equal(forged.status, 409);
+	await forged.arrayBuffer();
+	assert.equal(external, 0);
+	assert.equal(items.checkpoint(`${project.id}:linear`), undefined);
+	assert.equal(sessions.list().length, 0);
+});
 
 test("native local feature aggregate delivery and diagnostic reads work with export off and survive clear safely", async (t) => {
 	const home = mkdtempSync(join(tmpdir(), "native-feature-api-"));

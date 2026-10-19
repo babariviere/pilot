@@ -2527,7 +2527,12 @@ export class SessionManager {
 					return {
 						...diagnosticContextResponse(host, null),
 						status: "unavailable",
-						reason: remote.reason === "offline" ? "offline" : "read_failed",
+						reason:
+							remote.reason === "offline"
+								? "offline"
+								: remote.reason === "unsupported"
+									? "unsupported"
+									: "read_failed",
 					};
 				if (
 					remote?.schemaVersion !== 1 ||

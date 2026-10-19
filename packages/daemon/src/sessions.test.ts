@@ -24,6 +24,7 @@ import type {
 } from "@pilot/protocol";
 import { WebSocket } from "ws";
 import { DATABASE_CONFIG_FILE, DatabaseService } from "./databases.ts";
+import { diagnosticContextResponse } from "./diagnostic-context.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import { DaemonOperations, operations } from "./event-loop-watchdog.ts";
 import type { ModelCatalog } from "./models.ts";
@@ -1803,6 +1804,20 @@ test("app-wide diagnostic capability reads unselected archived chats and budgets
 	assert.equal(deleted.status, "missing");
 	assert.equal(deleted.reason, "deleted");
 	await assert.rejects(sessions.diagnosticContext(peer.id, { action: "chats" }), /Only diagnostics/);
+	let refreshReads = 0;
+	sessions.diagnosticDomainRead = async (request) => {
+		refreshReads++;
+		return diagnosticContextResponse(request.host!, { refresh: "retained_only_no_network", sources: [] });
+	};
+	await assert.rejects(sessions.diagnosticContext(peer.id, { action: "refresh_health" }), /Only diagnostics/);
+	await assert.rejects(
+		sessions.diagnosticContext(specialist.id, { action: "refresh_health", role: "diagnostics" }),
+		/Invalid diagnostic/,
+	);
+	assert.equal(refreshReads, 0);
+	const refresh = await sessions.diagnosticContext(specialist.id, { action: "refresh_health" });
+	assert.match(JSON.stringify(refresh), /retained_only_no_network/);
+	assert.equal(refreshReads, 1, "only the persisted role reaches the read-only service");
 	await assert.rejects(
 		sessions.diagnosticContext(specialist.id, { action: "chats", role: "diagnostics" }),
 		/Invalid diagnostic/,

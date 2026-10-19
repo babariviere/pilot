@@ -39,7 +39,12 @@ import type { SourceCheckpoint, TrackedInput, TrackedItemStore, TrackedQuery } f
 import { SLACK_REACTION_RECHECK_MS } from "./tracked-items-disk.ts";
 import { lookupLinearTeams, lookupSlackChannels } from "./tracking-lookup.ts";
 import type { TriageGroomer } from "./triage-grooming.ts";
-import { SOURCE_REFRESH_CADENCE_MS, SOURCE_REFRESH_TIMEOUT_MS, SourceRefreshDiagnostics, refreshAssessment } from "./source-refresh-diagnostics.ts";
+import {
+	SOURCE_REFRESH_CADENCE_MS,
+	SOURCE_REFRESH_TIMEOUT_MS,
+	SourceRefreshDiagnostics,
+	refreshAssessment,
+} from "./source-refresh-diagnostics.ts";
 import { redactDiagnosticText } from "./diagnostic-redaction.ts";
 
 export interface SourcePollContext {
@@ -312,12 +317,16 @@ export class SourceRegistry {
 				? (explicitDueAt ?? now)
 				: (health?.nextPollAt ?? (currentCheckpoint?.lastPolledAt ?? 0) + SOURCE_REFRESH_CADENCE_MS);
 			const backoff = health?.localBudget
-				? "local_budget"
+				? live?.stages.some((stage) => stage.reason === "local_classification_budget")
+					? "local_classification_budget"
+					: live?.stages.some((stage) => stage.reason === "local_read_budget")
+						? "local_read_budget"
+						: "local_budget_unknown_stage"
 				: health?.limited
 					? "provider_rate_limit"
 					: health?.status === "sign_in_required"
 						? "sign_in"
-							: health?.status === "error" && health.failures > 0
+						: health?.status === "error" && health.failures > 0
 							? "failure_backoff"
 							: undefined;
 			const channels = kind === "slack" ? (project.tracking?.slackChannels ?? []).slice(0, 100) : [];
@@ -335,7 +344,7 @@ export class SourceRegistry {
 					...(/^[CDG][A-Z0-9]{1,199}$/.test(channel) ? { channelId: channel } : {}),
 					lastPulledAt: value.pulledAt,
 					failedAt: value.failedAt,
-					hasMore: value.hasMore,
+					hasMore: value.hasMore === true ? true : undefined,
 					provenance: "retained_checkpoint_page_only_not_full_channel_freshness",
 					pageAgeMs,
 					clockSkew,
@@ -348,7 +357,8 @@ export class SourceRegistry {
 								: value.hasMore
 									? "partial_backlog"
 									: "one_page_observed",
-					...(pageAgeMs !== undefined && pageAgeMs > channels.length * SOURCE_REFRESH_CADENCE_MS + SOURCE_REFRESH_TIMEOUT_MS
+					...(pageAgeMs !== undefined &&
+					pageAgeMs > channels.length * SOURCE_REFRESH_CADENCE_MS + SOURCE_REFRESH_TIMEOUT_MS
 						? { nominallyOverdue: true }
 						: {}),
 				};
@@ -405,15 +415,24 @@ export class SourceRegistry {
 					"classification",
 					"commit",
 					...(kind === "slack" ? ["waiting_replies", "reaction_reads"] : []),
-				].map((stage) => ({
-					stage,
-					availability:
-						stage === "waiting_replies" && !this.slackWaiting
-							? "not_installed"
-							: stages.some((s) => s.stage === stage)
-								? "observed_this_process"
-								: "unknown",
-				})),
+				].map((stage) => {
+					const observation = stages.find((s) => s.stage === stage);
+					const unavailable = stage === "waiting_replies" && !this.slackWaiting;
+					const incomplete = observation?.lastStartedAt !== undefined && observation.lastCompletedAt === undefined;
+					return {
+						stage,
+						availability: unavailable ? "not_installed" : observation ? "observed_this_process" : "unknown",
+						state: unavailable
+							? "unavailable"
+							: !observation
+								? "unknown"
+								: incomplete
+									? run?.key === key && !run.controller.signal.aborted
+										? "running"
+										: "incomplete"
+									: (observation.outcome ?? "unknown"),
+					};
+				}),
 				...(kind === "slack"
 					? {
 							channelCoverage: {
@@ -433,6 +452,7 @@ export class SourceRegistry {
 			schemaVersion: 1,
 			collectedAt: now,
 			availability: "partial",
+			limits: { sourcesPerPage: 5, channelStatesPerSource: 100, channelsReturnedPerSource: 20 },
 			coverage,
 			sources,
 			total,
@@ -447,7 +467,7 @@ export class SourceRegistry {
 			],
 			stageCountMeaning: {
 				discovery: "returned_items_or_messages",
-				classification: "classifier_attempts_when_reported",
+				classification: "classification_admissions_when_reported_not_provider_calls",
 				commit: "committed_items",
 				waiting_replies: "reserved_batch_size_not_read_count",
 				reaction_reads: "reserved_batch_size_not_read_count",
