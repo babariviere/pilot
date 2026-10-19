@@ -65,9 +65,14 @@ struct MarkdownTableRegressionTests {
         return try #require(NSEvent(cgEvent: event))
     }
 
-    private static let wide = "| " + (1 ... 6).map { "Column \($0)" }.joined(separator: " | ") + " |\n"
-        + "|" + String(repeating: "---|", count: 6) + "\n"
-        + "| " + Array(repeating: String(repeating: "long words ", count: 30), count: 6).joined(separator: " | ") + " |"
+    private static let wide: String = {
+        let columns = (1 ... 6).map { "Column \($0)" }
+        let header = "| \(columns.joined(separator: " | ")) |"
+        let separator = "|" + String(repeating: "---|", count: 6)
+        let cell = String(repeating: "long words ", count: 30)
+        let row = Array(repeating: cell, count: 6).joined(separator: " | ")
+        return [header, separator, "| \(row) |"].joined(separator: "\n")
+    }()
 
     @Test func anOverflowingTableScrollsSidewaysAndPassesVerticalScrollingOn() throws {
         let table = try view(Self.wide)
