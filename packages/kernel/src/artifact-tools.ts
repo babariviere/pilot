@@ -5,8 +5,8 @@ import { type AgentToolResult, defineTool, type ToolDefinition } from "@earendil
 import {
 	ArtifactNotFound,
 	type ArtifactStore,
-	isBrowserPreviewAvailable,
 	isArtifactPreviewAvailable,
+	isBrowserPreviewAvailable,
 	loadArtifactImage,
 	MAX_IMAGE_SOURCE_BYTES,
 	previewArtifact,
@@ -84,7 +84,7 @@ export interface ArtifactToolOptions {
 	/** After publishing HTML/React/shaders, render once to report runtime errors as non-blocking warnings.
 	 * Defaults to the installed browser renderer; tests inject or disable it. */
 	diagnose?: ArtifactDiagnose | false;
-	/** Offer kind "visual" (native visuals). Off until the app renders them; PILOT_VISUAL_ARTIFACTS=1 turns it on. */
+	/** Offer kind "visual" (native visuals), which the app renders. On by default; PILOT_VISUAL_ARTIFACTS=0 hides it. */
 	visuals?: boolean;
 }
 
@@ -127,7 +127,7 @@ function dataResult<T extends JsonValue>(data: T): AgentToolResult<T> {
 /** Register through createAgentSession(customTools), so codemode and extension hooks see these tools. */
 export function createArtifactTools(options: ArtifactToolOptions): ToolDefinition[] {
 	const { store } = options;
-	const visuals = options.visuals ?? process.env.PILOT_VISUAL_ARTIFACTS === "1";
+	const visuals = options.visuals ?? process.env.PILOT_VISUAL_ARTIFACTS !== "0";
 	const preview =
 		options.preview === false
 			? undefined
@@ -187,8 +187,7 @@ export function createArtifactTools(options: ArtifactToolOptions): ToolDefinitio
 			label: "Artifact",
 			namespace: {
 				name: "artifacts",
-				description:
-					"Publish and inspect HTML, React, shaders, images and SwiftUI with tools.artifact. Read the pilot-artifacts skill before authoring.",
+				description: `Publish and inspect ${visuals ? "native visuals, " : ""}HTML, React, shaders, images and SwiftUI with tools.artifact. Read the pilot-artifacts skill before authoring.`,
 				instructions: `Read the bundled pilot-artifacts skill at ${ARTIFACT_SKILL_PATH} before authoring.`,
 			},
 			description: `Publish and inspect session-local offline artifacts. Read the pilot-artifacts skill before authoring.
@@ -200,8 +199,10 @@ ${previewDescription}Source must be self-contained and offline. Text source: 512
 ${options.ask ? "Ask images accept only inline base64 data:image/... URLs, never file paths." : "Images accept local PNG, JPEG, GIF or WebP paths, or inline data URLs; never remote URLs."}
 SwiftUI requires the macOS Swift toolchain and renders a static screenshot, not project views. Publication does not require the Pilot app to be running.
 Shaders are Shadertoy-style GLSL (mainImage); publication fails with line-numbered compile errors.
-${visuals ? "Visuals: kind visual, source String(fn) of a function ({ ui, state, data }) => view, data any JSON (1 MiB). Publication runs it and fails with line-numbered errors.\n" : ""}Get the current source before updating, and pass its revision as expectedRevision.`,
-			promptSnippet: "Publish and inspect offline HTML, React, shader, image or native SwiftUI artifacts",
+${visuals ? "Visuals (kind visual) come first for charts, stats, tables and controls: source String(fn) of ({ ui, state, data }) => view, data any JSON (1 MiB). Publication fails with line-numbered errors; fix and republish in the same script.\n" : ""}Get the current source before updating, and pass its revision as expectedRevision.`,
+			promptSnippet: visuals
+				? "Publish native visuals (charts, stats, tables, controls) or offline HTML, React, shader, image and SwiftUI artifacts"
+				: "Publish and inspect offline HTML, React, shader, image or native SwiftUI artifacts",
 			executionMode: "sequential",
 			annotations: { openWorldHint: false, destructiveHint: false },
 			parameters: Type.Object({

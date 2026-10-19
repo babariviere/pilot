@@ -658,7 +658,7 @@ test("visual publication returns the check, get returns source and data, errors 
 	const store = new ArtifactStore(root, { sessionId: "visual-session" });
 	const f = fixture({ store, visuals: true, preview: async () => assert.fail("visuals are not previewed") });
 	const [tool] = f.tools;
-	assert.match(tool!.description, /kind visual, source String\(fn\)/);
+	assert.match(tool!.description, /Visuals \(kind visual\) come first for charts.*source String\(fn\)/);
 	const source =
 		"function visual({ ui, data }) {\n  return () => ui.column(data.map((row) => ui.stat({ label: row.name, value: row.value })));\n}";
 	const data = [

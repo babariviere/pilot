@@ -1,0 +1,166 @@
+/**
+ * Pilot native visuals, API 1: the `ui` and `state` a visual function receives.
+ *
+ * A visual is a plain JavaScript function written in a codemode script and published with
+ * `tools.artifact({ action: "create", kind: "visual", title, source: String(visual), data })`.
+ * Pilot runs it in a sandbox (QuickJS-NG: no I/O, timers, fetch or modules) and draws the tree natively.
+ * Unknown props, wrong types and bad token names fail publication with "line N: message".
+ */
+
+/** Theme token names. They follow light and dark mode. */
+type Color =
+	| "text"
+	| "muted"
+	| "accent"
+	| "success"
+	| "warning"
+	| "danger"
+	| "border"
+	| "chart1"
+	| "chart2"
+	| "chart3"
+	| "chart4"
+	| "chart5"
+	| "chart6";
+/** Steps on the chat's type scale. Default "md". */
+type TextSize = "xs" | "sm" | "md" | "lg" | "xl";
+/** Default 400. */
+type Weight = 400 | 500 | 600 | 700;
+/** Default "start". */
+type Align = "start" | "center" | "end";
+/** Identity among siblings, unique within one children list (1-200 characters, or a number). */
+type Key = string | number;
+type JSONValue = null | boolean | number | string | JSONValue[] | { [key: string]: JSONValue };
+
+/** A node made by ui.*. Opaque: only ui functions create nodes. */
+interface VisualNode {
+	readonly type: string;
+}
+/** A styled run of text for ui.text. */
+interface VisualSpan {
+	readonly type: "span";
+}
+/**
+ * Children: nodes; strings and numbers (shown as text); arrays (flattened, up to 8 levels); null, undefined and
+ * booleans (skipped, so `cond && ui.text("x")` works).
+ */
+type Child = VisualNode | string | number | null | undefined | boolean | Child[];
+type Content = string | number | VisualSpan | null | undefined | false | Content[];
+
+interface UI {
+	/** Vertical stack. Layout nodes have no fill, border or shadow. */
+	column(children: Child[]): VisualNode;
+	column(props: { key?: Key; gap?: number /* 0-64 pt, default 8 */; align?: Align }, children: Child[]): VisualNode;
+	/** Horizontal stack. ui.space() pushes children apart. */
+	row(children: Child[]): VisualNode;
+	row(
+		props: {
+			key?: Key;
+			gap?: number; // 0-64 pt, default 8
+			align?: "start" | "center" | "end" | "baseline"; // vertical, default "center"
+			justify?: "start" | "center" | "end" | "between"; // default "start"
+		},
+		children: Child[],
+	): VisualNode;
+	/** Equal-width columns, filled row by row. */
+	grid(props: { key?: Key; columns: number /* integer 1-12 */; gap?: number }, children: Child[]): VisualNode;
+
+	/** Selectable text. Node styles apply to every run; span styles override them. */
+	text(
+		content: Content,
+		props?: {
+			key?: Key;
+			size?: TextSize;
+			weight?: Weight;
+			color?: Color;
+			mono?: boolean;
+			italic?: boolean;
+			align?: Align;
+			lines?: number; // line limit, integer 1-50
+		},
+	): VisualNode;
+	span(
+		text: string | number,
+		props?: { weight?: Weight; color?: Color; mono?: boolean; italic?: boolean; strike?: boolean },
+	): VisualSpan;
+
+	/** One headline figure with its label. */
+	stat(props: {
+		key?: Key;
+		label: string;
+		value: string | number;
+		unit?: string;
+		delta?: string; // for example "+12%"
+		tone?: "neutral" | "success" | "warning" | "danger"; // color of delta, default "neutral"
+		caption?: string;
+	}): VisualNode;
+
+	/** Columns default to end alignment when every cell is a number. */
+	table(props: {
+		key?: Key;
+		columns: (string | { label: string; align?: Align })[]; // 1-24
+		rows: (string | number | boolean | null)[][]; // at most 500, exactly one cell per column
+	}): VisualNode;
+
+	/** Swift Charts with axes, legend and a hover readout. Series without color take chart1...chart6 in order. */
+	chart(props: {
+		key?: Key;
+		type: "bar" | "line" | "area" | "scatter";
+		x: (string | number)[]; // labels or numbers, at most 2000; numbers only for scatter
+		series: { name: string; values: (number | null)[]; color?: Color }[]; // 1-12, one value per x, null is a gap
+		height?: number; // 80-480 pt, default 220
+		unit?: string;
+		stacked?: boolean; // bar and area only
+		yMin?: number;
+		yMax?: number;
+		xLabel?: string;
+		yLabel?: string;
+	}): VisualNode;
+
+	/** Divider. */
+	rule(props?: { key?: Key }): VisualNode;
+	/** Fixed space (0-96 pt) along the stack; without a size, flexible space that pushes row children apart. */
+	space(size?: number | { key?: Key; size?: number }): VisualNode;
+	/** Opens in the browser. */
+	link(label: string, props: { key?: Key; href: string /* http or https */ }): VisualNode;
+
+	/** Segmented choice. Handlers only assign to state. */
+	tabs(props: {
+		key?: Key;
+		options: (string | number | { value: string; label?: string })[]; // 1-12
+		value: string;
+		onChange: (value: string) => void;
+	}): VisualNode;
+	toggle(props: { key?: Key; label: string; value: boolean; onChange: (value: boolean) => void }): VisualNode;
+	/** The value passed to onChange is clamped to min...max and snapped to step. */
+	slider(props: {
+		key?: Key;
+		label?: string;
+		min: number;
+		max: number; // greater than min
+		step?: number;
+		value: number;
+		unit?: string;
+		onChange: (value: number) => void;
+	}): VisualNode;
+	button(props: { key?: Key; label: string; onClick: () => void; primary?: boolean; disabled?: boolean }): VisualNode;
+
+	/** Not yet supported: publication fails. */
+	canvas(...args: unknown[]): never;
+	/** Not yet supported: publication fails. */
+	shader(...args: unknown[]): never;
+}
+
+/**
+ * Reader state: call it only while the function sets up, before returning the view. Values must be JSON. Assign to
+ * the returned object in handlers (never in the view); the view runs again after each handler. Pilot saves the state
+ * per artifact revision and restores it by call order when the reader comes back.
+ */
+type State = <T extends { [key: string]: JSONValue }>(initial: T) => T;
+
+/**
+ * The visual: runs once to set up, then returns the view, a function called after every handler. A static visual
+ * may return a node (or an array, shown as a column) instead. Math.random is seeded from the artifact id and Date is
+ * fixed, so a visual draws the same way everywhere. console.log lines come back in the publish result.
+ */
+type Visual = (context: { ui: UI; state: State; data: any /* the published data, frozen */ }) => (() => Child) | Child;
