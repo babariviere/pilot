@@ -1452,7 +1452,7 @@ final class PilotClient: ObservableObject {
                                        resolvingAgainstBaseURL: false)!
         if !latest { components.queryItems = [URLQueryItem(name: "revision", value: String(reference.revision))] }
         // Keeps a visual's data text, whose key order the visual can observe.
-        let result: ArtifactRevision = try await get(components.url!, decode: ArtifactRevision.decoding)
+        let result: ArtifactRevision = try await get(components.url!, decode: { try ArtifactRevision.decoding($0) })
         guard result.id == reference.id, result.sessionId == reference.sessionId,
               latest || result.revision == reference.revision else { throw ClientError("Invalid artifact revision") }
         return result
