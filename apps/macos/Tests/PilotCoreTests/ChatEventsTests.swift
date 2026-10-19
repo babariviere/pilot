@@ -65,6 +65,21 @@ private func eventJSON(_ text: String) -> JSONValue { try! JSONValue.decode(Data
     #expect(events[2].destructive)
 }
 
+@Test func decisionChangeNoticesKeepSpecificSummariesAndBeforeAfterDisclosureOnReplay() {
+    let snapshot = eventJSON(#"{"type":"snapshot","entries":[{"id":1,"kind":"pilot.activity","data":{"text":"Mission decisions changed.\n\n### D7 updated\n\nBefore:\n> Original rule\n\nAfter:\n> Revised rule","event":{"kind":"mission_decisions_changed","text":"Mission decisions changed: D7 updated: Revised rule"}},"model":[]},{"id":2,"kind":"pilot.activity","data":{"text":"### D7 removed\n\n> Revised rule","event":{"kind":"mission_decisions_changed","text":"Mission decisions changed: D7 removed: Revised rule"}},"model":[]}]}"#)
+    var transcript = Transcript()
+    for _ in 0..<2 {
+        transcript.apply(snapshot)
+        let events = transcript.rows.compactMap { row -> ChatEvent? in
+            if case let .event(event) = row { event } else { nil }
+        }
+        #expect(events.map(\.text) == ["Mission decisions changed: D7 updated: Revised rule",
+                                     "Mission decisions changed: D7 removed: Revised rule"])
+        #expect(events.first?.detail?.contains("Before:\n> Original rule\n\nAfter:\n> Revised rule") == true)
+        #expect(events.last?.detail == "### D7 removed\n\n> Revised rule")
+    }
+}
+
 @Test func largeEventProjectionKeepsStreamingWorkIndependentOfHistory() async throws {
     let entries = (1...10000).map { id in JSONValue.object([
         "id": .number(Double(id)), "kind": .string("pi.user"),

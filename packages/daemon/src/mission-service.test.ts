@@ -416,6 +416,11 @@ test("decision audiences and task pins select prompts and avoid duplicate detail
 	const all = f.store.addDecision(mission.id, "Everyone", {}, "all");
 	const coordinator = f.store.addDecision(mission.id, "Coordinate", {}, "coordinator");
 	assert.deepEqual(f.service.context(worker.id)?.decisions, ["D2: Everyone"]);
+	assert.deepEqual(f.service.context(worker.id)?.decisionState, [
+		{ id: reference.id, number: 1, text: "Reference", audience: "reference", selected: false },
+		{ id: all.id, number: 2, text: "Everyone", audience: "all", selected: true },
+		{ id: coordinator.id, number: 3, text: "Coordinate", audience: "coordinator", selected: false },
+	]);
 	assert.deepEqual(f.service.context(lead.id)?.decisions, ["D2: Everyone", "D3: Coordinate"]);
 	await f.service.call(worker.id, "task", { id: "1", decisionIds: [reference.id, coordinator.id] });
 	assert.deepEqual(

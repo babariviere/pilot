@@ -2,7 +2,7 @@
 
 import type { Context } from "@earendil-works/chord";
 import { type Extension, hook, type PromptInput, section, ToolTask } from "@earendil-works/pi-durable";
-import type { DiagnosticTargetReference, OperationHost } from "@pilot/protocol";
+import type { DiagnosticTargetReference, MissionDecision, OperationHost } from "@pilot/protocol";
 
 import {
 	type ControlPermission,
@@ -81,6 +81,8 @@ export interface MissionContext {
 	tickets?: Array<{ resourceId: string; url: string; role: "reference" | "managed" | "contribution"; task?: number }>;
 	/** All decision content/audiences and task pins, for live notices only. */
 	decisionVersion?: string;
+	/** Latest decision state for specific live notices, separate from the frozen prompt selection. */
+	decisionState?: Array<Pick<MissionDecision, "id" | "number" | "text" | "audience"> & { selected: boolean }>;
 }
 
 /** Ask reads either the original checkout or a pinned tree in a daemon-owned bare object store. */

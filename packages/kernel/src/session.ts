@@ -81,6 +81,7 @@ import { JobsMonitor } from "./jobs.ts";
 import { createManualCompaction, queueDuringCompaction } from "./manual-compaction.ts";
 import { mcpActivity } from "./mcp-activity.ts";
 import { createMemoryTools, type MemoryCall } from "./memory-tools.ts";
+import { decisionNotice } from "./mission-decisions.ts";
 import { createMissionTool, MISSION_TOOL, type MissionCall } from "./mission-tools.ts";
 import { continueModelInPlace } from "./model-continuation.ts";
 import { rebuildContext } from "./model-rebuild.ts";
@@ -208,6 +209,7 @@ export class KernelSession {
 	readonly #automaticSince = new Map<number, number>();
 	/** Shared with the prompt section and deliverable guard, which read it per request and per tool call. */
 	readonly #mission: { current?: MissionContext };
+	#latestMission?: MissionContext;
 	/** Last UI-published run state. Current work is read from the adapter's activity source. */
 	#reportedWorking = false;
 	/** Live compaction tasks, which can summarize an idle conversation without a run. */
@@ -1096,10 +1098,15 @@ export class KernelSession {
 		);
 		const coordinatorChanged = (this.#mission.current?.coordinator === "self") !== (context?.coordinator === "self");
 		const previous = this.#mission.current;
+		const latest = this.#latestMission ?? previous;
+		this.#latestMission = context;
 		if (previous && context && previous.id === context.id && !coordinatorChanged) {
-			if (previous.decisionVersion !== context.decisionVersion) {
-				const text =
-					'Mission decisions changed. Read mission({action: "decisions"}); current decisions supersede earlier prompt text.';
+			const notice =
+				latest && previous.decisionVersion !== context.decisionVersion
+					? decisionNotice(latest, context)
+					: undefined;
+			if (notice) {
+				const text = notice.detail;
 				void this.conversation
 					.submit(
 						{
@@ -1107,7 +1114,7 @@ export class KernelSession {
 							requestId: `mission-decisions:${randomUUID()}`,
 							entry: {
 								kind: "pilot.activity",
-								data: { text, event: { kind: "mission_decisions_changed", text: "Mission decisions changed" } },
+								data: { text, event: { kind: "mission_decisions_changed", text: notice.summary } },
 								model: [{ role: "user", content: text, timestamp: Date.now() }],
 							},
 						},
