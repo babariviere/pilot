@@ -97,9 +97,11 @@ test("setup, view and handler time limits interrupt with their phase and line", 
 });
 
 test("memory and tree limits fail with plain messages", async () => {
-	assert.match(
-		failed(await run('() => {\n  const a = [];\n  for (;;) a.push("x".repeat(4096));\n}')),
-		/used more than 32 MiB of memory/,
+	// A few large allocations reach the heap limit long before the setup time limit, on any machine: thousands of
+	// small strings took ~90 ms locally and passed 250 ms on a loaded CI runner, failing as a timeout instead.
+	assert.equal(
+		failed(await run("() => {\n  const chunks = [];\n  for (;;) chunks.push(new ArrayBuffer(8 * 1024 * 1024));\n}")),
+		"line 3: the visual used more than 32 MiB of memory",
 	);
 	assert.equal(
 		failed(await run("({ ui }) => () => ui.column(Array.from({ length: 5001 }, () => ui.rule()))")),
