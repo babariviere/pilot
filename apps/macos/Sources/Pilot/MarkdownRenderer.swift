@@ -131,6 +131,11 @@ actor MarkdownRenderer {
         case let .diagram(.mermaid, text):
             attributed = nil
             diagram = NativeMermaid.layout(text)
+        case let .table(table):
+            // The table's rows as written, without the delimiter row, until tables have native cells.
+            let lines = table.source.components(separatedBy: "\n").enumerated().filter { $0.offset != 1 }
+            attributed = AttributedString(lines.map { $0.element.trimmingCharacters(in: .whitespaces) }
+                .joined(separator: "\n"))
         default: attributed = nil
         }
         nextBlockID += 1
