@@ -49,6 +49,27 @@ enum MissionSheet: Identifiable, Hashable {
 }
 
 extension AppModel {
+    /// Scope presentation by checkout provenance, never by an unqualified project ID or name.
+    /// A logical mission can belong to both its home project and a linked execution checkout.
+    func sidebarMissions(in rows: [ControlLogicalMission]) -> [ControlLogicalMission] {
+        let projects = focusedProjectRef.map { focused in
+            navigationProjectGroups.first { $0.checkouts.contains { $0.ref == focused } }?
+                .checkouts.map(\.ref) ?? [focused]
+        }
+        let query = sidebarQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        return rows.filter { mission in
+            let inScope = projects.map { projects in
+                mission.provenance.contains { evidence in
+                    projects.contains { project in
+                        evidence.projectId == project.localId
+                            && LogicalMissionCatalog.matches(evidence.sourceHost, pin: project.host)
+                    }
+                }
+            } ?? true
+            return inScope && (query.isEmpty || (mission.title ?? "Mission").localizedCaseInsensitiveContains(query))
+        }
+    }
+
     func briefEditor(for missionId: String) -> BriefEditorState {
         if let editor = missionBriefEditors[missionId] { return editor }
         let editor = BriefEditorState()
