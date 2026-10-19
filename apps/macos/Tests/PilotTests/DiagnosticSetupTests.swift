@@ -162,6 +162,44 @@ private func diagnosticSession(_ id: String, _ title: String = "Private chat tit
     }
 }
 
+@Test func diagnosticChatSelectorUsesExactHostsAndNoChatNeverGrantsHistory() throws {
+    let sameID = diagnosticSession(diagnosticRemoteID, "Same title")
+    let localRef = HostResourceRef(host: diagnosticLocalHost, kind: .session, localId: sameID.id)
+    let remoteRef = HostResourceRef(host: diagnosticRemoteHost, kind: .session, localId: sameID.id)
+    let specialist = diagnosticSession(diagnosticControlID, role: .diagnostics)
+    let setup = DiagnosticSetupTarget(host: diagnosticLocalHost, reference: nil,
+                                      askingAboutPilot: true, tracksFeature: false)
+    let hosted = [Hosted(ref: remoteRef, value: sameID), Hosted(ref: localRef, value: sameID)]
+    let choices = DiagnosticSetup.chatChoices(localHost: diagnosticLocalHost,
+                                               local: [sameID, specialist], hosted: hosted)
+    #expect(Set(choices.map(\.ref)) == Set([localRef, remoteRef]))
+    #expect(choices.count == 2, "deduplicate exact references, not bare IDs or titles")
+    for ref in [localRef, remoteRef] {
+        let selected = try DiagnosticSetup.resolve(selected: ref, setup: setup, localHost: diagnosticLocalHost,
+                                                    local: [sameID], hosted: hosted)
+        #expect(selected.reference == ref && selected.historyAccess)
+    }
+    let empty = try DiagnosticSetup.resolve(selected: nil, setup: setup, localHost: diagnosticLocalHost,
+                                             local: [sameID], hosted: hosted)
+    #expect(empty.host == diagnosticLocalHost && empty.reference == nil && !empty.historyAccess)
+    #expect(throws: DiagnosticTargetResolutionError.missing) {
+        try DiagnosticSetup.resolve(selected: remoteRef, setup: setup, localHost: diagnosticLocalHost,
+                                     local: [sameID], hosted: [])
+    }
+    let replaced = HostRef(hostId: diagnosticRemoteHost.hostId, daemonId: diagnosticRemoteHost.daemonId,
+                            lineageId: "replacement")
+    #expect(throws: DiagnosticTargetResolutionError.missing) {
+        try DiagnosticSetup.resolve(selected: remoteRef, setup: setup, localHost: diagnosticLocalHost,
+                                     local: [sameID], hosted: [Hosted(ref: HostResourceRef(
+                                        host: replaced, kind: .session, localId: sameID.id), value: sameID)])
+    }
+    #expect(throws: DiagnosticTargetResolutionError.specialist) {
+        try DiagnosticSetup.resolve(selected: HostResourceRef(host: diagnosticLocalHost, kind: .session,
+                                                               localId: specialist.id), setup: setup,
+                                     localHost: diagnosticLocalHost, local: [specialist], hosted: [])
+    }
+}
+
 @Test @MainActor func cancellingDiagnosticSetupHasNoRequestOrSpawnSideEffect() throws {
     let client = PilotClient()
     client.loadFixture(projects: [], sessions: [])

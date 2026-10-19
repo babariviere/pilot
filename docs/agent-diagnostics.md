@@ -18,8 +18,8 @@ path, command, raw stderr or arbitrary error text and cannot initiate setup or c
 
 Only an on-demand diagnostics specialist gets the `diagnostics` reader and fixed-catalogue `diagnostic_logs` reader.
 A chat-scoped specialist also gets the proposal-only `repair_proposal` publisher. When the user selected
-**Diagnose this chat** or supplied a nonblank chat link, that specialist additionally gets
-`diagnostic_history`. Generic no-link **Ask about Pilot** sessions do not. This is a separately persisted native grant;
+**Diagnose this chat** or explicitly selected a chat, that specialist additionally gets
+`diagnostic_history`. **Ask about Pilot** with **No chat** does not. This is a separately persisted native grant;
 missing legacy metadata denies history access.
 The app admits that persistent session role explicitly; Build, Ask, control and child agents receive neither. The
 kernel loads the specialist with no
@@ -29,11 +29,12 @@ IPC from a session whose persisted role is not `diagnostics`. These are runtime 
 
 Before creation, the app shows an explicit setup sheet with the resolved target host, target link and the selected
 model and thinking level. **Diagnose this chat** pins that chat. **Ask about Pilot** also accepts an optional multiline
-question or bug report of at most 8 KiB UTF-8. Its chat link is optional: blank selects an explicit app scope on
-the currently selected verified host, without resolving, creating or displaying a Control target. A supplied
-`pilot://chat/<UUID>` resolves only when exactly one
-already-known local or hosted chat matches. Malformed, missing, ambiguous, disconnected and unavailable supplied
-targets fail closed; there is no silent Local fallback. Dismissing the sheet creates no session, and duplicate starts
+question or bug report of at most 8 KiB UTF-8. The host-qualified chat selector defaults to **No chat**: an explicit
+app scope on the currently selected verified host, without resolving, creating or displaying a Control target.
+Selecting a known local or devbox chat explicitly grants its bounded history; no copied link is required.
+Selection retains the exact host, daemon, lineage and chat identity even when titles or UUIDs repeat.
+Missing, replaced, disconnected and unavailable targets fail closed; there is no silent Local fallback.
+Dismissing the sheet creates no session, and duplicate starts
 are rejected while one is in flight. The sheet discloses bounded sanitized Pilot-log access on the selected host and
 whether the specialist additionally receives conversation and tool history for the exact linked chat.
 
@@ -54,8 +55,8 @@ The specialist prompt and visible header identify that admitted scope, while the
 first and every later read for the persisted session UUID. The model has no target selector, and the daemon rejects
 every other ID even when another chat shares the project. App scope returns only content-free host health and
 aggregate chat-state counts. It does not enumerate, open, start, subscribe to or mutate chats. **Diagnose this chat**
-and a supplied link explicitly authorize a separate bounded
-cold read of committed conversation and tool entries for that exact target. A blank Ask about Pilot link does not
+and an explicitly selected chat authorize a separate bounded
+cold read of committed conversation and tool entries for that exact target. **No chat** does not
 authorize the Control transcript. An Ask about Pilot question is new user-authored specialist-chat content, separate
 from that immutable target reference. Its text cannot grant or widen transcript, tool or target access and is never
 included in diagnostic evidence or telemetry. Operational tool results
