@@ -55,6 +55,11 @@ test("bundled artifact skill is valid and retains detailed authoring guidance ou
 		"mainImage",
 		"omit `#version`",
 		"iMouse",
+		"Choose a native visual first",
+		"String(visual)",
+		"in the same script",
+		"interface UI",
+		"onChange",
 	])
 		assert.ok(source.includes(guidance), `missing ${guidance}`);
 	for (const name of Object.keys(artifactLibraries)) assert.ok(source.includes(`\`${name}\``), name);

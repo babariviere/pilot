@@ -180,7 +180,8 @@ PILOT_SWIFTUI_TESTS=1 node --import tsx --test packages/artifacts/src/swiftui.te
 +### Visuals
 
 `kind: "visual"` publishes a JavaScript function that the app runs and renders natively (docs/native-visuals.md).
-The tool offers it only with `PILOT_VISUAL_ARTIFACTS=1` until the app renders visuals. Define the function in the
+The tool offers it by default (`PILOT_VISUAL_ARTIFACTS=0` hides it) and agents prefer it for charts, stats, tables and
+controls. Define the function in the
 codemode script and pass its text with `String(visual)`; tool arguments are JSON, so a function passed directly
 arrives empty. `data` is any JSON value up to 1 MiB, never spliced into the code:
 

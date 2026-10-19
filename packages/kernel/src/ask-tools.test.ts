@@ -119,7 +119,10 @@ for (const snapshot of [false, true]) {
 			"---\n[More lines available; use offset=2.]",
 		);
 		for (const reference of ARTIFACT_SKILL_REFERENCES)
-			assert.match(text(await hostRead("read", { path: reference })), /^# .+ artifacts/);
+			assert.match(
+				text(await hostRead("read", { path: reference })),
+				reference.endsWith(".d.ts") ? /^\/\*\*\n \* Pilot native visuals/ : /^# .+ artifacts/,
+			);
 		for (const path of [
 			dirname(ARTIFACT_SKILL_PATH),
 			join(dirname(ARTIFACT_SKILL_PATH), "other.md"),
