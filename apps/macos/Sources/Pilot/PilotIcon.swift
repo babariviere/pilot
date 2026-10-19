@@ -38,7 +38,7 @@ enum PilotIcon: String, CaseIterable {
     // MARK: Status
 
     case done, complete, warning, blocked, info, question, stopped, paused, idle, cancelled, pending, todo, inProgress,
-        inReview, draft, unset, working, scheduled, scheduleFailed
+        inReview, draft, unset, working, scheduled, scheduleFailed, disconnected
 
     // MARK: Conversation and mission
 
@@ -121,6 +121,7 @@ extension PilotIcon {
         case .working, .pullRequest, .branch, .inProgress, .inReview: nil
         case .scheduled: "calendar.badge.clock"
         case .scheduleFailed: "calendar.badge.exclamationmark"
+        case .disconnected: "wifi.slash"
         case .chats: "bubble.left.and.bubble.right"
         case .message: "bubble.left"
         case .update: "text.bubble"
@@ -288,6 +289,7 @@ extension PilotIcon {
         case .working: "Live work uses the shared EllipsisSpinner (three dots), never an SF Symbol or a braille spinner."
         case .scheduled: "A scheduled item."
         case .scheduleFailed: "A scheduled item that could not start."
+        case .disconnected: "An unavailable chat host; reconnect before sending."
         case .chats: "A list of chats or channels."
         case .message: "One chat or one Slack message."
         case .update: "An update, an open comment or a prompt template."

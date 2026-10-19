@@ -248,7 +248,8 @@ final class HostClients: ObservableObject {
         devboxUpdateStore = automaticUpdates?.store ?? operationDirectory.map {
             DevboxUpdateIntentStore(directory: $0.appendingPathComponent("devbox-updates", isDirectory: true))
         } ?? .shared
-        checkoutDirectory = operationDirectory ?? FileManager.default.urls(
+        // The outbox decodes every top-level JSON file as an operation. Keep checkout metadata separate.
+        checkoutDirectory = operationDirectory?.appendingPathComponent("project-checkouts", isDirectory: true) ?? FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Pilot")
         operations = OperationOutbox(directory: operationDirectory ?? FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Pilot/Operations"))
