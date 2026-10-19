@@ -52,7 +52,8 @@ struct DiagnosticRepairFooterTests {
         #expect(fixture.model.dismissedDiagnosticRepairProposal(for: fixture.reference) == proposal.id)
         #expect(fixture.anchor(.primary) != nil, "Not now hides the summary, never the fixed Review action")
         #expect(fixture.client.fixtureSpawnRequests.isEmpty)
-        let reviewButton = try #require(fixture.button(at: try #require(fixture.anchor(.primary))))
+        let reviewButtonAnchor = try #require(fixture.anchor(.primary))
+        let reviewButton = try #require(fixture.button(at: reviewButtonAnchor))
         reviewButton.performClick(nil)
         #expect(fixture.model.diagnosticRepairTarget?.reference == fixture.reference)
         #expect(fixture.client.fixtureSpawnRequests.isEmpty, "Review alone cannot start a Build")
@@ -81,7 +82,8 @@ struct DiagnosticRepairFooterTests {
         fixture.setWorking()
         fixture.updateClient()
         try await fixture.settle()
-        let request = try #require(fixture.button(at: try #require(fixture.anchor(.primary))))
+        let requestAnchor = try #require(fixture.anchor(.primary))
+        let request = try #require(fixture.button(at: requestAnchor))
         request.performClick(nil); request.performClick(nil)
         try await fixture.settle { fixture.client.fixtureSendRequests.count == 1 }
         #expect(fixture.model.diagnosticRepairRequest(for: fixture.reference)?.isPending == true)
@@ -117,7 +119,8 @@ struct DiagnosticRepairFooterTests {
         fixture.state.session.diagnosticRepairProposal = nil
         fixture.updateClient()
         try await fixture.settle()
-        let button = try #require(fixture.button(at: try #require(fixture.anchor(.primary))))
+        let buttonAnchor = try #require(fixture.anchor(.primary))
+        let button = try #require(fixture.button(at: buttonAnchor))
         #expect(button.isEnabled)
         button.performClick(nil)
         #expect(fixture.model.diagnosticRepairTarget?.reference == fixture.reference)
@@ -128,7 +131,8 @@ struct DiagnosticRepairFooterTests {
             guard let anchor = fixture.anchor(.primary), let button = fixture.button(at: anchor) else { return false }
             return !button.isEnabled
         }
-        let offline = try #require(fixture.button(at: try #require(fixture.anchor(.primary))))
+        let offlineAnchor = try #require(fixture.anchor(.primary))
+        let offline = try #require(fixture.button(at: offlineAnchor))
         #expect(!offline.isEnabled)
         offline.performClick(nil)
         #expect(fixture.model.hosts.pendingOperations.count == 1)
