@@ -11,6 +11,14 @@ struct PreparedMarkdownBlock: Sendable {
     let code: AttributedString?
     /// Mermaid blocks the native renderer accepted, laid out here so their height is known before drawing.
     var diagram: NativeMermaidLayout? = nil
+    /// Inline Markdown of every table cell.
+    var table: PreparedMarkdownTable? = nil
+}
+
+/// A table's cells with inline Markdown applied, header first, in the same shape as its `MarkdownTable`.
+struct PreparedMarkdownTable: Sendable {
+    let header: [AttributedString]
+    let rows: [[AttributedString]]
 }
 
 /// Parsing, inline Markdown and lexical highlighting never run from a view body.
@@ -70,7 +78,7 @@ actor MarkdownRenderer {
             if let extended, streams[extended].parser.stableLength > 0 {
                 return try prepareStream(text, at: extended, keep: false)
             }
-            return try Markdown.parse(text).map(prepareBlock)
+            return try Markdown.parse(text).map { try prepareBlock($0) }
         }
         let cost = text.utf8.count * 8 + result.count * 256
         if cost <= byteLimit { markdown[text] = Entry(value: result, cost: cost, order: order) }
@@ -93,8 +101,10 @@ actor MarkdownRenderer {
                 reusable = reusable.dropFirst()
                 return first
             }
+            // A block still being written, such as a growing table, keeps the preparation of its unchanged parts.
+            let previous = reusable.first
             reusable = []
-            return try prepareBlock(block)
+            return try prepareBlock(block, reusing: previous)
         }
         if stream.parser.stableBlocks.count < previousStableCount { stream.stable = [] }
         for block in stream.parser.stableBlocks.dropFirst(stream.stable.count) {
@@ -114,12 +124,13 @@ actor MarkdownRenderer {
         return stream.stable + stream.tail
     }
 
-    private func prepareBlock(_ block: MarkdownBlock) throws -> PreparedMarkdownBlock {
+    private func prepareBlock(_ block: MarkdownBlock, reusing previous: PreparedMarkdownBlock? = nil) throws -> PreparedMarkdownBlock {
         try Task.checkCancellation()
         let attributed: AttributedString?
         var items: [AttributedString] = []
         var highlighted: AttributedString?
         var diagram: NativeMermaidLayout?
+        var table: PreparedMarkdownTable?
         switch block {
         case let .heading(_, text), let .paragraph(text), let .quote(text): attributed = inline(text)
         case let .list(_, _, values):
@@ -131,16 +142,40 @@ actor MarkdownRenderer {
         case let .diagram(.mermaid, text):
             attributed = nil
             diagram = NativeMermaid.layout(text)
-        case let .table(table):
-            // The table's rows as written, without the delimiter row, until tables have native cells.
-            let lines = table.source.components(separatedBy: "\n").enumerated().filter { $0.offset != 1 }
-            attributed = AttributedString(lines.map { $0.element.trimmingCharacters(in: .whitespaces) }
-                .joined(separator: "\n"))
+        case let .table(value):
+            attributed = nil
+            table = try prepareTable(value, reusing: previous)
         default: attributed = nil
         }
         nextBlockID += 1
         return PreparedMarkdownBlock(
-            id: nextBlockID, block: block, inline: attributed, items: items, code: highlighted, diagram: diagram)
+            id: nextBlockID, block: block, inline: attributed, items: items, code: highlighted, diagram: diagram,
+            table: table)
+    }
+
+    /// Applies inline Markdown to every cell. Cells equal to the same cell of `previous`, the earlier preparation of
+    /// a table still streaming, keep their result, so a growing table styles only its new or changed cells.
+    private func prepareTable(_ table: MarkdownTable, reusing previous: PreparedMarkdownBlock?) throws -> PreparedMarkdownTable {
+        var old: (table: MarkdownTable, prepared: PreparedMarkdownTable)?
+        if let previous, case let .table(value) = previous.block, let prepared = previous.table { old = (value, prepared) }
+        func cells(_ values: [String], _ oldValues: [String]?, _ prepared: [AttributedString]?) throws -> [AttributedString] {
+            if let oldValues, let prepared, oldValues == values { return prepared }
+            try Task.checkCancellation()
+            return values.indices.map { column in
+                if let oldValues, let prepared, column < oldValues.count, oldValues[column] == values[column] {
+                    return prepared[column]
+                }
+                return inline(values[column])
+            }
+        }
+        let header = try cells(table.header, old?.table.header, old?.prepared.header)
+        var rows: [[AttributedString]] = []
+        rows.reserveCapacity(table.rows.count)
+        for (index, row) in table.rows.enumerated() {
+            let reusable = old.flatMap { index < $0.table.rows.count ? ($0.table.rows[index], $0.prepared.rows[index]) : nil }
+            rows.append(try cells(row, reusable?.0, reusable?.1))
+        }
+        return PreparedMarkdownTable(header: header, rows: rows)
     }
 
     func prepareCode(_ text: String, language: String?) throws -> AttributedString {

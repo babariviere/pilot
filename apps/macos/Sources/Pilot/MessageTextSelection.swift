@@ -6,11 +6,14 @@ import SwiftUI
 /// Only weak references to mounted regions are retained. No event monitors or polling.
 @MainActor
 final class MessageTextSelection: ObservableObject {
+    /// A text region's place in reading order: its block, then its item (a list item, or a table row with the header
+    /// as row 0), then its column within a table row.
     struct Key: Hashable, Comparable {
         let block: Int
         var item: Int = 0
+        var column: Int = 0
         static func < (lhs: Self, rhs: Self) -> Bool {
-            lhs.block == rhs.block ? lhs.item < rhs.item : lhs.block < rhs.block
+            (lhs.block, lhs.item, lhs.column) < (rhs.block, rhs.item, rhs.column)
         }
     }
     struct Position: Comparable {
@@ -139,15 +142,17 @@ final class MessageTextSelection: ObservableObject {
 
     func extend(toWindowPoint point: NSPoint) {
         guard let anchor else { return }
-        // Use the nearest text region in vertical gaps, such as code headers and rules.
+        // Use the nearest text region in vertical gaps, such as code headers and rules. Regions side by side, such as
+        // the cells of a table row, are told apart by horizontal distance.
         let views = mounted.filter { $0.window != nil }
-        guard let view = views.min(by: { distance(point, to: $0) < distance(point, to: $1) }) else { return }
+        guard let view = views.min(by: { Self.distance(point, to: $0) < Self.distance(point, to: $1) }) else { return }
         select(from: anchor, to: Position(key: view.selectionKey, offset: view.insertionIndex(atWindowPoint: point)))
     }
 
-    private func distance(_ point: NSPoint, to view: NSView) -> CGFloat {
+    /// Vertical distance first, so a short line's region still wins beside it, then horizontal distance.
+    static func distance(_ point: NSPoint, to view: NSView) -> (vertical: CGFloat, horizontal: CGFloat) {
         let rect = view.convert(view.bounds, to: nil)
-        return max(rect.minY - point.y, point.y - rect.maxY, 0)
+        return (max(rect.minY - point.y, point.y - rect.maxY, 0), max(rect.minX - point.x, point.x - rect.maxX, 0))
     }
 
     private func apply(to view: MessageSelectionTextView) {
@@ -168,17 +173,24 @@ final class MessageTextSelection: ObservableObject {
         // Like the existing "Copy full message", Select All preserves the original Markdown,
         // including diagram source and block delimiters not represented by text regions.
         if entireMessage { return source }
+        guard let anchor, let end else { return "" }
+        let lower = min(anchor, end).key, upper = max(anchor, end).key
         var result = ""
         var previous: Key?
         for view in mounted {
             let range = view.selectedRange()
-            guard range.length > 0 else { continue }
-            if let previous { result += previous.block == view.selectionKey.block ? "\n" : "\n\n" }
+            let key = view.selectionKey
+            // An empty table cell inside the selection still takes its place, so copied rows keep their columns.
+            guard range.length > 0 || (view.isTableCell && lower < key && key < upper) else { continue }
+            if let previous {
+                // Table cells copy as tab-separated values: a tab within a row, a newline between rows.
+                result += previous.block != key.block ? "\n\n" : previous.item == key.item ? "\t" : "\n"
+            }
             if range.location == 0 { result += view.copyPrefix }
-            if let storage = view.textStorage {
+            if range.length > 0, let storage = view.textStorage {
                 result += MessageServiceLinks.copiedText(storage, range: range)
             }
-            previous = view.selectionKey
+            previous = key
         }
         return result
     }
@@ -244,18 +256,7 @@ struct SelectableMessageText: NSViewRepresentable {
     @Environment(\.messageTextFadesInitial) private var fadesInitial
 
     func makeNSView(context: Context) -> MessageSelectionTextView {
-        let view = MessageSelectionTextView.make()
-        view.isEditable = false
-        view.isSelectable = true
-        view.drawsBackground = false
-        view.selectedTextAttributes = [.backgroundColor: NSColor.selectedTextBackgroundColor]
-        view.textContainerInset = .zero
-        view.textContainer?.lineFragmentPadding = 0
-        view.textContainer?.widthTracksTextView = false
-        view.textContainer?.heightTracksTextView = false
-        view.isVerticallyResizable = false
-        view.isHorizontallyResizable = false
-        view.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let view = MessageSelectionTextView.makeReadOnly()
         updateNSView(view, context: context)
         return view
     }
@@ -338,6 +339,8 @@ final class MessageSelectionTextView: NSTextView {
     var style: Style?
     var copyPrefix = ""
     var unwrapped = false
+    /// A table cell: copied as a tab-separated value, and kept when empty inside a selection.
+    var isTableCell = false
     private var measuring = false
     /// Sizes for the few widths SwiftUI probes per layout pass, so alternating probes do not relayout.
     private var measurements: [(width: CGFloat, hugsContent: Bool, size: CGSize)] = []
@@ -410,6 +413,23 @@ final class MessageSelectionTextView: NSTextView {
         let view = MessageSelectionTextView(frame: .zero, textContainer: container)
         view.ownedStorage = storage
         view.linkTextAttributes = MessageServiceLinks.linkTextAttributes
+        return view
+    }
+
+    /// Read-only, selectable message text without insets, sized by its owner rather than by TextKit.
+    static func makeReadOnly() -> MessageSelectionTextView {
+        let view = make()
+        view.isEditable = false
+        view.isSelectable = true
+        view.drawsBackground = false
+        view.selectedTextAttributes = [.backgroundColor: NSColor.selectedTextBackgroundColor]
+        view.textContainerInset = .zero
+        view.textContainer?.lineFragmentPadding = 0
+        view.textContainer?.widthTracksTextView = false
+        view.textContainer?.heightTracksTextView = false
+        view.isVerticallyResizable = false
+        view.isHorizontallyResizable = false
+        view.setContentHuggingPriority(.defaultLow, for: .horizontal)
         return view
     }
 

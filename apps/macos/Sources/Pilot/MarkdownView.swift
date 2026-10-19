@@ -134,13 +134,7 @@ private struct BlockView: View, Equatable {
                                       hugsContent: hugsContent)
             }
         case let .table(table):
-            SelectableMessageText(text: block.inline ?? AttributedString(table.source),
-                                  font: fonts.nsMono, monoFont: fonts.nsMono, lineSpacing: 0)
-                // The table's fill is translucent, so no single colour can veil its text.
-                .environment(\.messageTextFade, nil)
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: Theme.Radius.control).fill(Theme.muted))
+            MarkdownTableBlock(table: table, prepared: block.table)
         case .rule:
             Divider().padding(.vertical, 4)
         }
