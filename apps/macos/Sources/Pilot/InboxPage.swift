@@ -224,9 +224,13 @@ enum SlackTriageInboxHeader {
     }
 
     @MainActor static func choices(hosts: HostClients, model: AppModel) -> [PageSectionLinkChoice] {
-        hosts.projects.filter { !($0.value.tracking?.slackChannels ?? []).isEmpty }.map { project in
+        let projects = hosts.projects.filter { !($0.value.tracking?.slackChannels ?? []).isEmpty }
+        let names = Dictionary(grouping: projects, by: { $0.value.name.lowercased() })
+        return projects.map { project in
             let context = HostViewContext(host: project.ref.host, hosts: hosts)
-            return PageSectionLinkChoice(id: project.ref.storageKey, title: "\(project.value.name) · \(context.name)") {
+            let ambiguous = (names[project.value.name.lowercased()]?.count ?? 0) > 1
+            let title = ambiguous ? "\(project.value.name) · \(context.name)" : project.value.name
+            return PageSectionLinkChoice(id: project.ref.storageKey, title: title) {
                 model.openSlackTriage(project.ref.localId, context: context)
             }
         }.sorted { $0.title == $1.title ? $0.id < $1.id : $0.title.localizedStandardCompare($1.title) == .orderedAscending }
