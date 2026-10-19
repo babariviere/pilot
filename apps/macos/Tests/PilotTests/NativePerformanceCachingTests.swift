@@ -202,3 +202,23 @@ import Testing
     let plain = try await renderer.prepareCode("hello", language: nil)
     #expect(String(plain.characters) == "hello")
 }
+
+@Test func preparedMarkdownTablesStyleCellsAndMatchAcrossStreamedUpdates() async throws {
+    let renderer = MarkdownRenderer()
+    let source = "Intro\n\n| Name | Link |\n| :-- | --: |\n| **bold** | [site](https://example.com) |\n| §a|b§ | x \\| y |\n| last | row |"
+        .replacingOccurrences(of: "§", with: "`")
+    var streamed: [PreparedMarkdownBlock] = []
+    for end in Array(stride(from: 1, through: source.count, by: 7)) + [source.count] {
+        streamed = try await renderer.prepare(String(source.prefix(end)), streaming: true)
+    }
+    let full = try await MarkdownRenderer().prepare(source)
+    #expect(streamed.map(\.block) == full.map(\.block))
+    let table = try #require(full.last?.table)
+    let text = { (cells: [AttributedString]) in cells.map { String($0.characters) } }
+    #expect(text(table.header) == ["Name", "Link"])
+    #expect(table.rows.map(text) == [["bold", "site"], ["a|b", "x | y"], ["last", "row"]])
+    #expect(table.rows[0][1].runs.contains { $0.link == URL(string: "https://example.com") })
+    let streamedTable = try #require(streamed.last?.table)
+    #expect(streamedTable.rows.map(text) == table.rows.map(text))
+    #expect(text(streamedTable.header) == text(table.header))
+}
