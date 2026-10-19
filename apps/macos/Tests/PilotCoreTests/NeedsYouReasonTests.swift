@@ -44,6 +44,43 @@ private let reasonNow = Date(timeIntervalSince1970: 1_000)
     }
 }
 
+@Test func codeChangesWithoutAPullRequestCannotBeReviewedAway() throws {
+    let base: [String: Any] = ["id": "s", "title": "Chat", "cwd": "/tmp", "createdAt": 1, "updatedAt": 1,
+                               "state": "idle", "outcome": "done", "outcomeAt": 1, "missionId": "m",
+                               "unpublishedWork": true]
+    func decode(_ overrides: [String: Any] = [:]) throws -> SessionSummary {
+        try JSONDecoder().decode(SessionSummary.self, from: JSONSerialization.data(withJSONObject:
+            base.merging(overrides) { _, new in new }))
+    }
+    let chat = try decode()
+    #expect(chat.signal(unread: false) == .needsYou)
+    #expect(!chat.isQuiet)
+    #expect(chat.needsYouReason(unread: false)?.label(at: 0) == "No PR created")
+    #expect(SidebarUrgency.groups([chat], unread: { _ in false }).needsYou == [chat])
+    let mission = try JSONDecoder().decode(Mission.self, from: Data(#"{"id":"m","projectId":"p","title":"Release","goal":"Ship","status":"active","briefRevision":0,"needsYouCount":0,"createdAt":1,"updatedAt":2}"#.utf8))
+    #expect(MissionNeedsYou.count(mission: mission, members: [chat], isUnread: { _ in false }) == 1)
+    #expect(MissionNeedsYou.items(mission: mission, detail: nil, members: [chat], isUnread: { _ in false }) == [.chat(chat)])
+    let row = DashboardNeedsYouItem(kind: .noPR, id: "session:s", title: "Chat", sessionId: "s", at: 1)
+    #expect(row.signal == .needsYou)
+    #expect(row.needsYouLabel() == "No PR created")
+    #expect(try JSONDecoder().decode(DashboardNeedsYouItem.self, from: JSONEncoder().encode(row)) == row)
+    #expect(InboxText.needsYouSummary([ProjectDashboardCount(needsYou: 1, needsYouReasons: ["no_pr": 1])]) == "1 needs you: 1 no PR created")
+    for outcome in ["failed", "question"] {
+        let other = try decode(["outcome": outcome])
+        #expect(other.needsYouReason(unread: false)?.kind == (outcome == "failed" ? .failed : .asks))
+    }
+    let pr: [String: Any] = ["number": 1, "url": "https://github.com/o/r/pull/1", "title": "PR", "state": "draft", "checkedAt": 1]
+    let overrides: [[String: Any]] = [
+        ["unpublishedWork": false], ["working": true], ["scheduledMessage": true], ["mode": "ask"],
+        ["pullRequest": pr], ["pullRequests": [pr]], ["boundPullRequests": ["https://github.com/o/r/pull/1"]],
+        ["continuedTo": "next"], ["missionCoordinator": true],
+    ]
+    for override in overrides {
+        let other = try decode(override)
+        #expect(other.signal(unread: false) != .needsYou)
+    }
+}
+
 @Test func reasonFlowsThroughDashboardAndFlatInboxPayloads() throws {
     let data = Data(#"{"projectId":"p","kind":"question","id":"session:s","title":"Chat","sessionId":"s","at":1,"attentionReason":{"kind":"asks","detail":"Deploy?"}}"#.utf8)
     let row = try JSONDecoder().decode(InboxNeedsYouItem.self, from: data)

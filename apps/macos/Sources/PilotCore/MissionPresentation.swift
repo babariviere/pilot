@@ -39,6 +39,7 @@ public enum MissionNeedsYou {
             .filter { $0.missionId == mission.id && !$0.isArchived }
             .filter { session in
                 session.attentionReason?.kind.isLive == true || session.attentionReason?.kind == .prStuck
+                    || (!session.isWorking && session.scheduledMessage != true && session.hasMissingPullRequest)
                     || (!session.isWorking && (session.outcome == .done || session.outcome == .failed)
                         && isUnread(session) && session.signal(unread: true)?.needsUser == true)
             }

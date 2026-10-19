@@ -8,6 +8,7 @@ public enum NeedsYouReasonKind: String, LenientStringEnum {
     case longJob = "long_job"
     case toolStall = "tool_stall"
     case prStuck = "pr_stuck"
+    case noPR = "no_pr"
     /// The chat reached for an MCP server that needs the user (sign-in, or it fails to connect). Live-only.
     case mcp
     public static let fallback = NeedsYouReasonKind.notReviewed
@@ -41,6 +42,7 @@ public struct NeedsYouReason: Codable, Hashable, Sendable {
         case .toolStall: return "Tool may be stalled: \(detail ?? "No useful progress has been observed")"
         case .mcp: return "MCP: \(detail ?? "A server this chat uses needs you")"
         case .prStuck: return detail ?? "A pull request needs your help"
+        case .noPR: return "No PR created"
         case .mission: return "Mission: \(detail ?? "A question or blocked task is waiting on you")"
         case .limit:
             guard let resumesAt, resumesAt.isFinite else { return "Limit reached" }
@@ -74,6 +76,7 @@ extension DashboardNeedsYouItem {
         case .toolStall: return NeedsYouReason(kind: .toolStall, detail: reason)
         case .mcp: return NeedsYouReason(kind: .mcp, detail: reason)
         case .prStuck: return NeedsYouReason(kind: .prStuck, detail: reason)
+        case .noPR: return NeedsYouReason(kind: .noPR)
         }
     }
 
@@ -91,6 +94,7 @@ extension SessionSummary {
         }
         if status == .question { return NeedsYouReason(kind: .asks, detail: outcomeReason) }
         if let attentionReason { return attentionReason }
+        if hasMissingPullRequest { return NeedsYouReason(kind: .noPR) }
         return NeedsYouReason(kind: .notReviewed)
     }
 
@@ -146,6 +150,7 @@ extension InboxText {
                           ("long_job", "long job", "long jobs"), ("mcp", "MCP sign-in", "MCP sign-ins"),
                           ("asks", "question", "questions"), ("failed", "failed", "failed"),
                           ("pr_stuck", "stuck PR", "stuck PRs"),
+                          ("no_pr", "no PR created", "no PR created"),
                           ("not_reviewed", "not reviewed", "not reviewed"),
                           ("couldnt_start", "couldn't start", "couldn't start"),
                           ("limit", "limit reached", "limits reached"),

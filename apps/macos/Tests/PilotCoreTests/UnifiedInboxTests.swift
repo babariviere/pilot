@@ -45,7 +45,7 @@ private func inbox(needs: [InboxNeedsYouItem] = [], needsTotal: Int? = nil, read
 }
 
 @Test func needsYouFollowsTheDaemonRankThenNewestThenStableTieBreaks() {
-    let kinds: [DashboardNeedsYouKind] = [.failed, .question, .scheduledFailed, .toolStall, .longJob, .mcp, .prStuck, .unread]
+    let kinds: [DashboardNeedsYouKind] = [.failed, .question, .scheduledFailed, .toolStall, .longJob, .mcp, .prStuck, .noPR, .unread]
     let rows = kinds.reversed().map { needs($0, $0.rawValue, at: 1) }
     let page = UnifiedInboxPresentation([mac: inbox(needs: rows)])
     #expect(page.needsYou.rows.map(\.value.item.kind) == kinds)

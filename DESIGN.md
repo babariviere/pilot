@@ -68,6 +68,8 @@ by urgency: failed, question, scheduled failure, unread, then the rest.
   answered. Scheduling a follow-up message counts as an answer: the chat leaves at once and returns only if the
   schedule is cancelled or fails. Live reasons (a long job, an MCP sign-in) clear when their cause does.
 - **Ready to merge waits, it never badges.** It is the user's next step, not an alarm.
+- **Changes without a PR need you.** Idle Build chats with known workspace changes and no PR say "No PR created"
+  until a PR is created or attached, or the changes are removed. Reading the chat or pushing does not clear it.
 - **Waiting is working.** An idle agent whose background jobs still run is Working: no done outcome, notification or
   Needs you entry, and it never wakes a mission coordinator. Only a job past one hour asks for the user.
 
@@ -100,7 +102,7 @@ The progress pies fill clockwise from 12 o'clock.
 | State | Meaning | Interrupts |
 | --- | --- | --- |
 | Working | An agent is running, or it is idle while its background jobs or subagents run | No |
-| Needs you | Failed, unreviewed result, agent or mission question, scheduled item that could not start, limit reached, stuck pull request, MCP server needing sign-in, job running over an hour. Clears itself (see Attention budget) | Yes |
+| Needs you | Failed, unreviewed result, agent or mission question, scheduled item that could not start, limit reached, stuck pull request, code changes without a PR, MCP server needing sign-in, job running over an hour. Clears itself (see Attention budget) | Yes |
 | Ready to merge | Open PR with no blockers (only the user can confirm a merge) | Optional notification |
 | Blocked or pending | PR waiting on checks, reviews or conflicts | No |
 | Done | Finished and reviewed | No |

@@ -116,6 +116,42 @@ test("stuck PRs survive reading, count once per chat and exclude every head from
 	assert.equal(f.service.inbox(undefined, 50).readyToMerge.total, 1);
 });
 
+test("code changes without a PR survive reading and clear when a PR is created or changes are removed", () => {
+	const chat = session({ id: "no-pr", missionId: "m", outcome: "done", outcomeAt: 1, unpublishedWork: true });
+	const read = { isUnread: () => false, onChange: () => () => {} };
+	const f = service([chat], { reviews: read });
+	assert.deepEqual(f.service.counts().projects.p1, { working: 0, needsYou: 1, needsYouReasons: { no_pr: 1 } });
+	const dashboard = build({ sessions: [chat], missions: [mission({ id: "m" })], isUnread: () => false });
+	assert.equal(dashboard.needsYou.total, 1);
+	assert.equal(dashboard.needsYou.items[0]?.kind, "no_pr");
+	assert.deepEqual(dashboard.needsYou.items[0]?.attentionReason, { kind: "no_pr" });
+	assert.equal(dashboard.missions.items[0]?.needsYou, 1);
+	assert.equal(f.service.inbox(undefined, 50).needsYou.items[0]?.kind, "no_pr");
+	for (const outcome of ["failed", "question"] as const) {
+		chat.outcome = outcome;
+		assert.equal(
+			f.service.inbox(undefined, 50).needsYou.items[0]?.attentionReason.kind,
+			outcome === "failed" ? "failed" : "asks",
+		);
+	}
+	chat.outcome = "done";
+	for (const override of [
+		{ working: true },
+		{ scheduledMessage: true },
+		{ unpublishedWork: undefined },
+		{ pullRequest: pr(1) },
+		{ pullRequests: [pr(2, { state: "draft" })] },
+		{ pullRequests: [pr(3, { state: "merged" })] },
+		{ boundPullRequests: ["https://github.com/o/r/pull/4"] },
+		{ mode: "ask" as const },
+		{ continuedTo: "next" },
+		{ missionCoordinator: true },
+	]) {
+		const next = build({ sessions: [{ ...chat, ...override }], isUnread: () => false });
+		assert.equal(next.needsYou.total, 0, JSON.stringify(override));
+	}
+});
+
 test("chats blocked on an MCP server need the user even while working, with the server to fix", () => {
 	const attentionReason = { kind: "mcp" as const, detail: "datadog needs sign-in", server: "datadog" };
 	const chat = session({ id: "logs", state: "working", working: true, attentionReason, attentionAt: 7 });

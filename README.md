@@ -358,6 +358,8 @@ Below, chats are grouped by urgency in every scope: Missions first, then **Pinne
 merge**, **Working** and **Recent**. Every Needs you row says why ("Failed: …", "Asks: …", "Long job: …",
 "Limit reached · resumes 18:00"). It clears itself: a read result leaves once you leave its chat, failures stay
 until retried and questions until answered. Lists show the PR, branch and reason, not diff counts.
+Idle Build chats with known workspace changes but no pull request stay in **Needs you** with **No PR created**,
+even after reading them. Creating or attaching a PR, or removing the changes, clears that reason. Pushing alone does not.
 
 A chat whose agent is idle while its background jobs run stays **Working**, with a quieter animation. Its working
 line ("Waiting on 2 jobs…") opens a panel of running jobs with Stop on each. A job still running after an hour

@@ -94,6 +94,7 @@ enum SidebarScopeCounts {
             reasons.failed > 0 ? "\(reasons.failed) failed" : nil,
             reasons.limited > 0 ? "\(reasons.limited) \(reasons.limited == 1 ? "limit" : "limits") reached" : nil,
             reasons.stuckPRs > 0 ? "\(reasons.stuckPRs) \(reasons.stuckPRs == 1 ? "stuck PR" : "stuck PRs")" : nil,
+            reasons.noPR > 0 ? "\(reasons.noPR) no PR created" : nil,
             reasons.notReviewed > 0 ? "\(reasons.notReviewed) not reviewed" : nil,
         ].compactMap { $0 }
         guard !parts.isEmpty, reasons.total == total else { return needsYou(total) }
@@ -111,10 +112,11 @@ struct NeedsYouReasons: Equatable {
     var toolStalls = 0
     var longJobs = 0
     var stuckPRs = 0
+    var noPR = 0
     /// Chats blocked on an MCP server that needs the user.
     var mcp = 0
 
-    var total: Int { questions + failed + notReviewed + limited + toolStalls + longJobs + stuckPRs + mcp }
+    var total: Int { questions + failed + notReviewed + limited + toolStalls + longJobs + stuckPRs + noPR + mcp }
 
     init(questions: Int = 0, failed: Int = 0, notReviewed: Int = 0, limited: Int = 0) {
         self.questions = questions
@@ -130,6 +132,7 @@ struct NeedsYouReasons: Equatable {
             if session.attentionReason?.kind == .longJob { longJobs += 1; continue }
             if session.attentionReason?.kind == .mcp { mcp += 1; continue }
             if session.needsYouReason(unread: unread(session))?.kind == .prStuck { stuckPRs += 1; continue }
+            if session.needsYouReason(unread: unread(session))?.kind == .noPR { noPR += 1; continue }
             switch session.signal(unread: unread(session)) {
             case .failed:
                 if session.subscriptionLimit() != nil { limited += 1 } else { failed += 1 }

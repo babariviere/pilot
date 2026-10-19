@@ -191,3 +191,13 @@ private func mission(_ id: String, project: String) throws -> MissionDetail {
     #expect(reasons.notReviewed == 0)
     #expect(SidebarScopeCounts.needsYouReasons(total: 1, reasons: reasons) == "1 needs you: 1 stuck PR")
 }
+
+@Test func codeWithoutAPullRequestKeepsItsOwnSidebarBadgeReason() {
+    let session = SessionSummary(id: "no-pr", title: "Chat", cwd: "/tmp", createdAt: 1, updatedAt: 1,
+                                state: "idle", outcome: .done, unpublishedWork: true)
+    let reasons = NeedsYouReasons([session], unread: { _ in false })
+    #expect(reasons.total == 1)
+    #expect(reasons.noPR == 1)
+    #expect(reasons.notReviewed == 0)
+    #expect(SidebarScopeCounts.needsYouReasons(total: 1, reasons: reasons) == "1 needs you: 1 no PR created")
+}

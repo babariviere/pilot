@@ -208,7 +208,7 @@ extension DashboardNeedsYouItem {
     public var signal: SessionSignal {
         switch kind {
         case .failed, .scheduledFailed: .failed
-        case .unread, .question, .longJob, .toolStall, .prStuck, .mcp: .needsYou
+        case .unread, .question, .longJob, .toolStall, .prStuck, .noPR, .mcp: .needsYou
         }
     }
 }
