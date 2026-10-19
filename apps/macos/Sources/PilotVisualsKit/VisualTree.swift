@@ -122,6 +122,8 @@ public struct VisualNode: Hashable, Sendable, Identifiable {
         case button(Button)
         case canvas(Canvas)
         case shader(Shader)
+        /// Mermaid source, drawn natively or, when the native renderer can't read it faithfully, in a web view.
+        case mermaid(String)
     }
 
     public struct Column: Hashable, Sendable {
@@ -402,6 +404,8 @@ extension VisualNode {
         case "canvas":
             kind = .canvas(Canvas(height: Swift.max(24, Swift.min(600, number("height") ?? 240)),
                                   animated: flag("animated") ?? false, label: string("label")))
+        case "mermaid":
+            kind = .mermaid(string("source") ?? "")
         case "shader":
             guard let glsl = object["glsl"]?.stringValue else { throw VisualTree.DecodingError.invalid("shader at \(path)") }
             let inputs = (object["inputs"]?.objectValue?.entries ?? [])
@@ -430,5 +434,18 @@ extension VisualValue {
     /// A number as a label: integers without a fraction, others in their shortest form.
     public static func label(_ number: Double) -> String {
         formatNumber(number)
+    }
+}
+
+extension VisualNode {
+    /// The Mermaid sources in this subtree, in tree order, so hosts can lay them out before showing the tree.
+    public var mermaidSources: [String] {
+        switch kind {
+        case .mermaid(let source): [source]
+        case .column(let column): column.children.flatMap(\.mermaidSources)
+        case .row(let row): row.children.flatMap(\.mermaidSources)
+        case .grid(let grid): grid.children.flatMap(\.mermaidSources)
+        default: []
+        }
     }
 }

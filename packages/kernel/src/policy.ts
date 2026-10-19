@@ -249,7 +249,7 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false, c
 		);
 	if (artifactsAvailable) {
 		lines.push(
-			"- When a diagram would make an explanation of architecture, workflows or relationships clearer, publish one with the artifact tool without being asked: a simple Mermaid diagram in an HTML artifact, with a short explanation. Skip it for simple answers or when the user wants text only.",
+			"- When a diagram would make an explanation of architecture, workflows or relationships clearer, publish one with the artifact tool without being asked: a simple Mermaid diagram in a visual artifact (ui.mermaid), with a short explanation. Skip it for simple answers or when the user wants text only.",
 			"- Artifact preview is optional. If it is unavailable or fails, publish without it.",
 		);
 	}

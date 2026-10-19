@@ -37,7 +37,7 @@ test("bundled artifact skill is valid and retains detailed authoring guidance ou
 		"expectedRevision",
 		"default-export",
 		"echarts.init",
-		"mermaid.initialize",
+		"ui.mermaid",
 		"motion.animate",
 		"d3.select",
 		"THREE.Scene",
@@ -62,7 +62,10 @@ test("bundled artifact skill is valid and retains detailed authoring guidance ou
 		"onChange",
 	])
 		assert.ok(source.includes(guidance), `missing ${guidance}`);
-	for (const name of Object.keys(artifactLibraries)) assert.ok(source.includes(`\`${name}\``), name);
+	// Mermaid diagrams go to visuals (ui.mermaid); the library keeps working in HTML but is no longer advertised.
+	for (const name of Object.keys(artifactLibraries).filter((name) => name !== "mermaid"))
+		assert.ok(source.includes(`\`${name}\``), name);
+	assert.doesNotMatch(source, /libraries: \["mermaid"\]|mermaid\.initialize/);
 	for (const name of ["background", "foreground", "muted", "muted-foreground", "border", "primary", "radius"])
 		assert.ok(source.includes(`--pilot-${name}`), name);
 	assert.match(source, /Ask image sources must be inline base64/);

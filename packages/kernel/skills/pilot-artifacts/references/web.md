@@ -6,11 +6,11 @@ Pilot supplies a light palette and the system font through CSS variables you may
 
 In chat, previews share the prose column, left-aligned on a transparent, unpadded page, and readers use them in place (click, type, scroll). Design for the **760 pt column** (narrower with the window): content reflows to that width and is never scaled. Aim for about **160–600 pt** of height. Cards hug their content up to 720 pt and scroll inside beyond that, so avoid full-viewport layouts (`100vh`, fixed full-screen panels). Wide or tall work belongs in the expanded viewer. Use inner elements for intentional panels or backgrounds. Expanded previews keep their page layout.
 
-Bundled, pinned offline libraries: `react`, `react-dom`, `mermaid`, `echarts`, `motion`, `d3` and `three`. Nothing needs downloading.
+Bundled, pinned offline libraries: `react`, `react-dom`, `echarts`, `motion`, `d3` and `three`. Nothing needs downloading. Draw Mermaid diagrams in a native visual with `ui.mermaid` ([visuals.md](visuals.md)).
 
 ## HTML
 
-Use ordinary inline `<script>` tags, not package imports. `libraries` exposes the globals `echarts`, `mermaid`, `motion`, `d3` and `THREE` (from `three`): for example `echarts.init(el)`, `motion.animate()`, `d3.select()`, `new THREE.Scene()`.
+Use ordinary inline `<script>` tags, not package imports. `libraries` exposes the globals `echarts`, `motion`, `d3` and `THREE` (from `three`): for example `echarts.init(el)`, `motion.animate()`, `d3.select()`, `new THREE.Scene()`.
 
 ```js
 await tools.artifact({
@@ -28,16 +28,9 @@ echarts.init(document.getElementById("chart")).setOption({
 });
 ```
 
-Diagrams use `kind: "html"` with `libraries: ["mermaid"]`:
-
-```html
-<pre class="mermaid">graph TD; A-->B</pre>
-<script>mermaid.initialize({startOnLoad:true});</script>
-```
-
 ## React
 
-Provide a JSX/TSX module with a default-export component. Pilot mounts it; do not mount it yourself. Allowed imports: `react`, `react-dom` (including `react-dom/client`), `mermaid`, `echarts`, `motion` (including `motion/react`), `d3` and `three`.
+Provide a JSX/TSX module with a default-export component. Pilot mounts it; do not mount it yourself. Allowed imports: `react`, `react-dom` (including `react-dom/client`), `echarts`, `motion` (including `motion/react`), `d3` and `three`.
 
 ```js
 await tools.artifact({

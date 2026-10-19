@@ -72,7 +72,7 @@ await tools.artifact({ action: "create", kind: "visual", title: "Latency", sourc
 - Node set for v1: `column`, `row`, `grid`, `text`/`span`, `stat`, `table`, `chart`
   (bar, line, area, scatter), `rule`, `space`, `link`; controls `tabs`, `toggle`, `slider`, `button`;
   `canvas` (2D draw commands); `shader` (the GLSL surface from the shader artifact kind, plus named
-  inputs bound to state). There is no 3D scene node.
+  inputs bound to state); `mermaid` (a diagram drawn like Mermaid in chat, D15). There is no 3D scene node.
 - Style rules are part of the API, as in Zeron: colors are Theme token names (`text`, `muted`,
   `accent`, `success`, `warning`, `danger`, `border`, `chart1`...`chart6`), text sizes are steps on
   the chat's type scale, and layout nodes have no fills, borders or shadows. Visuals sit on the chat,

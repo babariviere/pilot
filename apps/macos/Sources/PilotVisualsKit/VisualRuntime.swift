@@ -45,6 +45,7 @@ public enum VisualRuntime {
 		drawTextChars: 64 * 1024,
 		shaderChars: 16 * 1024,
 		shaderInputs: 16,
+		mermaidChars: 20 * 1024,
 	});
 	const COLORS = [
 		"text",
@@ -832,6 +833,54 @@ public enum VisualRuntime {
 		},
 	});
 
+	// Diagram types a Mermaid source may start with, after an optional front-matter block, %% comments and directives.
+	const MERMAID_TYPES = [
+		"flowchart",
+		"graph",
+		"sequenceDiagram",
+		"classDiagram",
+		"stateDiagram",
+		"stateDiagram-v2",
+		"erDiagram",
+		"journey",
+		"gantt",
+		"pie",
+		"quadrantChart",
+		"requirementDiagram",
+		"gitGraph",
+		"mindmap",
+		"timeline",
+		"sankey-beta",
+		"xychart-beta",
+		"block-beta",
+		"packet-beta",
+		"kanban",
+		"architecture-beta",
+	];
+
+	function mermaid(source, options) {
+		const p = props("mermaid", options, ["key"]);
+		if (typeof source !== "string") fail(`mermaid: source must be a string of Mermaid, got ${describe(source)}`);
+		const text = source;
+		if (text.length > LIMITS.mermaidChars) fail(`mermaid: source is longer than ${LIMITS.mermaidChars} characters`);
+		const lines = text.split("\n");
+		let index = 0;
+		const blank = (line) => !line.trim() || line.trim().startsWith("%%");
+		while (index < lines.length && blank(lines[index])) index++;
+		if (index < lines.length && lines[index].trim() === "---") {
+			index++;
+			while (index < lines.length && lines[index].trim() !== "---") index++;
+			index++;
+			while (index < lines.length && blank(lines[index])) index++;
+		}
+		const first = (lines[index] ?? "").trim().split(/[\s;]/)[0];
+		if (!MERMAID_TYPES.includes(first))
+			fail(
+				`mermaid: source must start with a diagram type such as flowchart, sequenceDiagram or classDiagram, got ${stringify(first) ?? "nothing"}`,
+			);
+		return node({ type: "mermaid", key: key("mermaid", p.key), source: text }, text.length);
+	}
+
 	// Names the shader prelude declares, and GLSL's own prefixes, which inputs can't take.
 	const SHADER_RESERVED = /^(?:iResolution|iTime|iTimeDelta|iFrame|iMouse|main|mainImage|pilot.*|gl_.*)$/;
 
@@ -922,6 +971,7 @@ public enum VisualRuntime {
 		button,
 		canvas,
 		shader,
+		mermaid,
 	});
 
 	// Reader state: plain JSON slots, one per state() call in setup, restored by call order.

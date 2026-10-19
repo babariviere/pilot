@@ -87,6 +87,14 @@ stop the canvas and show the error. `ops` is a flat list of commands, each start
 follow the color tokens in schema order; sizes are `xs`...`xl`, align `start`, `center`, `end`, baseline `top`,
 `middle`, `bottom`. A filled arc is a wedge, or a ring segment when inner > 0; a stroked arc is the arc at r.
 
+## Mermaid
+
+A `mermaid` node carries its `source`, at most 20 KiB, starting with a diagram type (`flowchart`, `graph`,
+`sequenceDiagram`...) after an optional front-matter block and `%%` lines. The runtime checks only that; hosts draw it
+like Mermaid in chat Markdown (the app: MermaidKit, with Mermaid in a web view when the native parser can't read it
+faithfully), at its natural size shrunk to the column and 480 pt. The publication check reports how many different
+sources the views show as `check.mermaid`.
+
 ## Shader
 
 A `shader` node carries its `glsl` (Shadertoy-style `mainImage`, GLSL ES 3.00), its `height`, whether it is

@@ -27,6 +27,17 @@ struct VisualTreeTests {
         #expect(VisualRuntime.source + "\n" == runtime)
     }
 
+    @Test func decodesMermaidAndListsSourcesInTreeOrder() throws {
+        let json = ##"{"api":1,"root":{"type":"column","children":[{"type":"mermaid","source":"graph TD\n  A --> B"},{"type":"row","children":[{"type":"mermaid","key":"seq","source":"sequenceDiagram\n  A->>B: hi"}]}]}}"##
+        let tree = try VisualTree(VisualValue(json: Data(json.utf8)))
+        #expect(tree.root.mermaidSources == ["graph TD\n  A --> B", "sequenceDiagram\n  A->>B: hi"])
+        guard case .column(let column) = tree.root.kind, case .mermaid(let source) = column.children[0].kind else {
+            Issue.record("expected a mermaid node")
+            return
+        }
+        #expect(source == "graph TD\n  A --> B")
+    }
+
     @Test func decodesShadersWithSortedInputsAndDefaults() throws {
         let json = #"{"api":1,"root":{"type":"shader","glsl":"void mainImage(out vec4 c, in vec2 p) {}","inputs":{"speed":2,"glow":0.5}}}"#
         let tree = try VisualTree(VisualValue(json: Data(json.utf8)))

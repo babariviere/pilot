@@ -46,6 +46,8 @@ export const VISUAL_LIMITS = Object.freeze({
 	shaderInputs: 16,
 	/** Different shaders (GLSL and input names) one visual may show across its views. */
 	shaders: 4,
+	/** UTF-16 code units of one Mermaid source. They also count toward the tree's text. */
+	mermaidChars: 20 * 1024,
 });
 
 export const VISUAL_COLORS = [
@@ -326,6 +328,18 @@ const nodes = {
 		},
 		{ ...strict, description: "A fragment shader as wide as the column, drawn with Metal." },
 	),
+	Mermaid: Type.Object(
+		{
+			type: Type.Literal("mermaid"),
+			key: Type.Optional(Key),
+			source: Type.String({
+				maxLength: 20 * 1024,
+				description:
+					"Mermaid source starting with a diagram type (flowchart, sequenceDiagram...). Drawn natively, or by Mermaid in a web view when the native renderer cannot read it faithfully.",
+			}),
+		},
+		{ ...strict, description: "A Mermaid diagram at its natural size, shrunk to fit the column and 480 pt." },
+	),
 };
 
 const Node = Type.Union(
@@ -346,6 +360,7 @@ const Node = Type.Union(
 		nodes.Button,
 		nodes.Canvas,
 		nodes.Shader,
+		nodes.Mermaid,
 	],
 	{ description: "One node, discriminated by type." },
 );
