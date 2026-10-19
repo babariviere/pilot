@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.53.0](https://github.com/babariviere/pilot/compare/v1.52.0...v1.53.0) (2026-10-19)
+
+
+### Features
+
+* **projects:** map host checkouts by Git origin ([df46ec5](https://github.com/babariviere/pilot/commit/df46ec5f2e2f001e2684bd72c7a5dcbada3c9a0b))
+
+
+### Bug Fixes
+
+* **macos:** disable disconnected chat submission ([8697b22](https://github.com/babariviere/pilot/commit/8697b22f69f06f4b07fbb8285ca78867ccdafba8))
+* **macos:** keep urgency and true totals in the multi-host Inbox ([f10228f](https://github.com/babariviere/pilot/commit/f10228f3326d9b9be8cab1267176b846c0aad7ce))
+* **projects:** scope manual checkout overrides to placement ([aa6f4cb](https://github.com/babariviere/pilot/commit/aa6f4cb8f52c91e90dc410a7a7784eecd228ee4a))
+* **settings:** keep unsaved project edits across refreshes and saves ([bad833f](https://github.com/babariviere/pilot/commit/bad833f0c618b6627642957aad644e1ac90d384a))
+
+
+### Performance Improvements
+
+* **projects:** coalesce unchanged checkout evidence writes ([6ad467c](https://github.com/babariviere/pilot/commit/6ad467c0e95f96bab4c8e50e593398323d79c68e))
+
 ## [1.52.0](https://github.com/babariviere/pilot/compare/v1.51.0...v1.52.0) (2026-10-18)
 
 
