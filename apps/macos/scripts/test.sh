@@ -93,6 +93,8 @@ mcp_tests=(
 	hostMcpUncertainApplyOnlyLooksUpTheSamePinAfterReconnect
 	hostMcpNativeProjectionRejectsSecretsAndLocalPaths
 	hostMcpDelayedResultsAndReplacementPinsCannotPublishOrRetarget
+	hostMcpAdditiveReviewKeepsOtherServersAndLabelsNamespacesWithoutReplacingThem
+	hostMcpNativeCheckboxSelectsOnlyMissingServers
 )
 printf -v host_mcps '%s|' "${mcp_tests[@]}"
 host_mcps="${host_mcps%|}"

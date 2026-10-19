@@ -31,6 +31,19 @@ process.env.PI_CODING_AGENT_DIR = isolated;
 let parent;
 globalThis.fetch = () => { throw new Error('Runtime profile smoke test must stay offline'); };
 try {
+  const sdk = import.meta.resolve('@earendil-works/pi-coding-agent');
+  const writer = await import(new URL('./extensions/mcp/config-writer.js', sdk).href);
+  assert.equal(writer.mcpConfigWriteProtocol, 1, 'Coordinated MCP writer patch is missing');
+  const config = await import(new URL('./bundle/chunks/chunk-GDR5JFDJ.js', sdk).href);
+  const mcpPath = join(isolated, 'mcp.json');
+  config.addMcpServerConfig(mcpPath, 'fixture', { url: 'https://example.test/mcp' });
+  const { McpSetupStore } = await import('./packages/daemon/src/mcp-setup.ts');
+  const setup = new McpSetupStore(isolated), baseline = await setup.read();
+  const saved = await setup.apply({ expectedRevision: baseline.revision,
+    entries: [{ name: 'second', config: { url: 'https://example.test/mcp' } }] });
+  assert.deepEqual(saved.entries.map(entry => entry.name), ['fixture', 'second']);
+  config.removeMcpServerConfig(mcpPath, 'fixture');
+  config.removeMcpServerConfig(mcpPath, 'second');
   const options = { cwd: isolated, agentDir: isolated, settingsManager: SettingsManager.inMemory(), noExtensions: true, noSkills: true, noThemes: true, noPromptTemplates: true, noContextFiles: true };
   const models = await ModelRuntime.create({ credentials: new InMemoryCredentialStore(), modelsPath: null, modelsStore: new InMemoryModelsStore(), refreshOnCreate: false, allowModelNetwork: false });
   const faux = fauxProvider();

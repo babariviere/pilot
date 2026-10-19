@@ -91,7 +91,7 @@ test("MCP setup HTTP requires the selected host's native capability for both rea
 	assert.deepEqual(await (await a.request("PUT", input)).json(), committed);
 });
 
-test("MCP setup HTTP rejects secret-bearing input, existing config, read-only mode and malformed files without leaking them", async (t) => {
+test("MCP setup HTTP adds to existing config, but rejects secret-bearing input, conflicts and malformed files without leaking them", async (t) => {
 	const normal = await fixture(t),
 		readOnly = await fixture(t, true);
 	const initial = (await (await normal.request()).json()) as McpSetupSnapshot;
@@ -104,13 +104,24 @@ test("MCP setup HTTP rejects secret-bearing input, existing config, read-only mo
 	});
 	assert.equal(unsafe.status, 400);
 	assert.equal((await unsafe.text()).includes("private-token"), false);
-	const original = '{"unknown":"private-value","mcpServers":{}}';
+	const original =
+		'{"unknown":"private-value","mcpServers":{"other":{"command":"private-command","env":{"KEY":"private-token"}}}}';
 	await writeFile(join(normal.home, "mcp.json"), original);
 	const snapshot = (await (await normal.request()).json()) as McpSetupSnapshot;
-	const conflict = await normal.request("PUT", { ...input, expectedRevision: snapshot.revision });
+	const applied = await normal.request("PUT", { ...input, expectedRevision: snapshot.revision });
+	assert.equal(applied.status, 200);
+	const result = (await applied.json()) as McpSetupSnapshot;
+	assert.equal(JSON.stringify(result).includes("private-"), false);
+	const saved = JSON.parse(await readFile(join(normal.home, "mcp.json"), "utf8"));
+	assert.equal(saved.unknown, "private-value");
+	assert.deepEqual(saved.mcpServers.other, JSON.parse(original).mcpServers.other);
+	const conflict = await normal.request("PUT", {
+		expectedRevision: result.revision,
+		entries: [{ name: "example", config: { url: "https://different.test/mcp" } }],
+	});
 	assert.equal(conflict.status, 409);
 	assert.equal((await conflict.text()).includes("private-value"), false);
-	assert.equal(await readFile(join(normal.home, "mcp.json"), "utf8"), original);
+	assert.deepEqual(JSON.parse(await readFile(join(normal.home, "mcp.json"), "utf8")), saved);
 	await writeFile(join(normal.home, "mcp.json"), "private-malformed-json");
 	const invalid = await normal.request();
 	assert.equal(invalid.status, 503);

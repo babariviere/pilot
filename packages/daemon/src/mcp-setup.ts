@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { access, link, mkdir, open, rm } from "node:fs/promises";
+import { access, link, mkdir, open, realpath, rename, rm } from "node:fs/promises";
 import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { McpSetupApplyRequest, McpSetupEntry, McpSetupSnapshot, McpShareConfig } from "@pilot/protocol";
@@ -26,10 +26,31 @@ const hash = (bytes: Buffer | undefined): string =>
 	createHash("sha256")
 		.update(bytes ?? "absent")
 		.digest("hex");
-type Raw = { bytes?: Buffer; revision: string; servers: Record<string, unknown> };
+type Raw = {
+	bytes?: Buffer;
+	revision: string;
+	servers: Record<string, unknown>;
+	ino?: bigint;
+	dev?: bigint;
+};
+
+// This protocol is provided by the pinned package patch, including the bundled CLI.
+const writer = (await import(
+	new URL("./extensions/mcp/config-writer.js", import.meta.resolve("@earendil-works/pi-coding-agent")).href
+)) as { mcpConfigWriteProtocol: number };
+if (writer.mcpConfigWriteProtocol !== 1) throw new Error("Unsupported MCP configuration writer");
 
 function configKey(config: McpShareConfig): string {
 	return JSON.stringify(Object.fromEntries(Object.entries(config).sort(([a], [b]) => a.localeCompare(b))));
+}
+
+/** Copy untouched number literals exactly, rather than rounding unknown fields through IEEE-754. */
+function preservedRoot(bytes: Buffer | undefined): Record<string, unknown> {
+	if (!bytes) return {};
+	const rawJSON = (JSON as unknown as { rawJSON(source: string): unknown }).rawJSON;
+	return JSON.parse(bytes.toString("utf8"), (_key, value: unknown, context?: { source: string }) =>
+		typeof value === "number" && context ? rawJSON(context.source) : value,
+	) as Record<string, unknown>;
 }
 
 export function mcpSetupInput(value: unknown): McpSetupApplyRequest {
@@ -61,8 +82,8 @@ export function mcpSetupInput(value: unknown): McpSetupApplyRequest {
 }
 
 /** Explicit native requests only. Never reads auth stores, expands secrets, launches or installs commands.
- * Pi 1.3's config editor is an unlocked in-place writer, so existing files are never modified here.
- * Initial publication uses link(2): a concurrent creator wins without either file being overwritten.
+ * Shares the patched SDK/CLI's canonical lock path. Adds missing names only, preserving other values.
+ * Independently installed unpatched Pi/manual editors must not edit during this transaction.
  */
 export class McpSetupStore {
 	readonly path: string;
@@ -76,7 +97,8 @@ export class McpSetupStore {
 		try {
 			file = await open(this.path, constants.O_RDONLY | constants.O_NOFOLLOW);
 			const before = await file.stat({ bigint: true });
-			if (!before.isFile() || before.size > BigInt(MAX_BYTES)) fail(503, "mcp_setup_unreadable");
+			if (!before.isFile() || before.nlink !== 1n || before.size > BigInt(MAX_BYTES))
+				fail(503, "mcp_setup_unreadable");
 			const buffer = Buffer.alloc(MAX_BYTES + 1);
 			const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
 			const after = await file.stat({ bigint: true });
@@ -93,7 +115,7 @@ export class McpSetupStore {
 				fail(503, "mcp_setup_unreadable");
 			const servers = (value.mcpServers ?? {}) as Record<string, unknown>;
 			if (Object.keys(servers).length > 64) fail(503, "mcp_setup_unreadable");
-			return { bytes, revision: hash(bytes), servers };
+			return { bytes, revision: hash(bytes), servers, ino: before.ino, dev: before.dev };
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code === "ENOENT") return { revision: hash(undefined), servers: {} };
 			if (error instanceof McpSetupError) throw error;
@@ -137,7 +159,7 @@ export class McpSetupStore {
 		}
 		return {
 			schemaVersion: 1,
-			writeMode: "initial_only",
+			writeMode: "additive",
 			revision: raw.revision,
 			exists: raw.bytes !== undefined,
 			entries,
@@ -148,8 +170,9 @@ export class McpSetupStore {
 		const input = mcpSetupInput(value);
 		try {
 			await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
+			const lockPath = join(await realpath(dirname(this.path)), "mcp.json");
 			await withModelSettingsLock(
-				this.path,
+				lockPath,
 				async (assertOwned) => {
 					const raw = await this.raw();
 					if (
@@ -162,13 +185,24 @@ export class McpSetupStore {
 					)
 						return; // Lost acknowledgment: read-only exact desired-value reconciliation.
 					if (raw.revision !== input.expectedRevision) fail(409, "mcp_setup_conflict");
-					if (raw.bytes !== undefined) fail(409, "mcp_setup_existing_config");
+					const namespaces = new Set(Object.keys(raw.servers).map(mcpSetupNamespace));
+					for (const entry of input.entries) {
+						if (namespaces.has(mcpSetupNamespace(entry.name))) fail(409, "mcp_setup_name_conflict");
+					}
+					if (Object.keys(raw.servers).length + input.entries.length > 64) fail(409, "mcp_setup_limit");
 					for (const entry of input.entries) {
 						if (entry.config.command && !(await this.executable(entry.config.command)))
 							fail(422, "mcp_setup_dependency_missing");
 					}
+					const root = preservedRoot(raw.bytes);
 					const next = `${JSON.stringify(
-						{ mcpServers: Object.fromEntries(input.entries.map((entry) => [entry.name, entry.config])) },
+						{
+							...root,
+							mcpServers: {
+								...(root.mcpServers as Record<string, unknown> | undefined),
+								...Object.fromEntries(input.entries.map((entry) => [entry.name, entry.config])),
+							},
+						},
 						null,
 						2,
 					)}\n`;
@@ -183,13 +217,18 @@ export class McpSetupStore {
 							await file.close();
 						}
 						await this.options.beforeCommit?.();
+						const current = await this.raw();
+						if (current.revision !== raw.revision || current.ino !== raw.ino || current.dev !== raw.dev)
+							fail(409, "mcp_setup_conflict");
 						assertOwned();
 						try {
-							await link(temporary, this.path);
+							if (raw.bytes === undefined) await link(temporary, this.path);
+							else await rename(temporary, this.path);
 						} catch (error) {
 							if ((error as NodeJS.ErrnoException).code === "EEXIST") fail(409, "mcp_setup_conflict");
 							throw error;
 						}
+						await rm(temporary, { force: true });
 						const directory = await open(dirname(this.path), constants.O_RDONLY);
 						try {
 							await directory.sync();

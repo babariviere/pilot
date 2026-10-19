@@ -726,8 +726,10 @@ Pi's MCP files change, never on a timer. Local OAuth uses the existing browser f
 shows exact-host interactive Pi CLI/manual-redirect instructions; Mac browser callback forwarding is
 not implemented. The Pi CLI must be available on that devbox and use its pilotd agent directory.
 Chats pick up new credentials on their next turn. Errors stay short; use that host's `pi mcp list` for
-details. The [initial setup sharing implementation](docs/devboxes.md#mcp-connections-and-initial-setup-sharing)
-is deliberately partial: existing configuration files are never merged or replaced.
+details. The [reviewed setup sharing implementation](docs/devboxes.md#mcp-connections-and-setup-sharing)
+adds reviewed, nonsecret server setup to existing devbox configuration without replacing entries.
+Bundled Pi and the app coordinate writes; older Pi installations and text editors must not edit
+the configuration concurrently. Authentication stays independent on each host.
 A chat whose tool call reached for a server that needs sign-in (or fails to connect) moves to **Needs
 you** with that server named, and shows a one-line notice above its composer with the same action. It
 clears once the server works again, you write in the chat, or you archive it.

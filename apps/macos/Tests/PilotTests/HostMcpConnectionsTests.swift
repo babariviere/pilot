@@ -1,6 +1,8 @@
+import AppKit
 import Combine
 import Foundation
 import PilotCore
+import SwiftUI
 import Testing
 @testable import Pilot
 
@@ -12,6 +14,7 @@ private final class HostMcpHTTP: URLProtocol {
         var requests: [String] = []
         var wrongCapability = false
         var committed503 = false
+        var targetWriteMode = "additive"
     }
     private final class Storage: @unchecked Sendable { let lock = NSLock(); var value = State() }
     private static let storage = Storage()
@@ -43,11 +46,15 @@ private final class HostMcpHTTP: URLProtocol {
                 if method == "PUT" {
                     let input = try JSONDecoder().decode(McpSetupApplyRequest.self, from: bytes)
                     #expect(host == "box")
-                    Self.storage.value.targetEntries = input.entries.map { .init(name: $0.name, config: $0.config) }
+                    guard input.expectedRevision == Self.storage.value.targetRevision,
+                          !input.entries.contains(where: { entry in Self.storage.value.targetEntries.contains(where: { $0.name == entry.name }) })
+                    else { throw McpSetupFailure.conflict }
+                    Self.storage.value.targetEntries += input.entries.map { .init(name: $0.name, config: $0.config) }
                     Self.storage.value.targetRevision = "applied"
                     if Self.storage.value.committed503 { status = 503 }
                 }
-                let snapshot = McpSetupSnapshot(revision: host == "local" ? Self.storage.value.sourceRevision : Self.storage.value.targetRevision,
+                let snapshot = McpSetupSnapshot(writeMode: host == "local" ? "additive" : Self.storage.value.targetWriteMode,
+                    revision: host == "local" ? Self.storage.value.sourceRevision : Self.storage.value.targetRevision,
                     exists: host == "local" || !Self.storage.value.targetEntries.isEmpty,
                     entries: host == "local" ? [McpSetupEntry(name: "same", config: .init(url: "https://example.test/mcp")),
                                                McpSetupEntry(name: "private", blocked: "advanced_configuration")]
@@ -256,4 +263,77 @@ private final class HostMcpHTTP: URLProtocol {
         await delayed.perform(.check)
         #expect(delayed.problem == nil && !delayed.busy)
     }
+
+    @Test @MainActor func hostMcpAdditiveReviewKeepsOtherServersAndLabelsNamespacesWithoutReplacingThem() async throws {
+        try await withHostMcp { f in
+            let existing = McpSetupEntry(name: "other", blocked: "advanced_configuration")
+            HostMcpHTTP.change { $0.targetEntries = [existing] }
+            let sharing = f.sharing(); await sharing.prepare()
+            let review = try #require(sharing.review)
+            #expect(review.remote.exists && sharing.selectable(review.local.entries[0]))
+            sharing.selected = ["same"]; await sharing.apply()
+            #expect(sharing.notice != nil && !sharing.uncertain)
+            #expect(HostMcpHTTP.state.targetEntries.first == existing)
+            #expect(HostMcpHTTP.state.targetEntries.map(\.name) == ["other", "same"])
+            await sharing.prepare()
+            #expect(!sharing.selectable(review.local.entries[0]))
+            #expect(sharing.entryNotice(review.local.entries[0], targetName: "Box").hasPrefix("Already present"))
+            let alias = McpSetupEntry(name: "same-name", config: .init(url: "https://example.test/mcp"))
+            HostMcpHTTP.change { $0.targetEntries = [.init(name: "same_name", blocked: "advanced_configuration")] }
+            await sharing.prepare()
+            #expect(!sharing.selectable(alias))
+            #expect(sharing.entryNotice(alias, targetName: "Box").hasPrefix("Conflicts with same_name"))
+            HostMcpHTTP.change { $0.targetWriteMode = "initial_only" }
+            await sharing.prepare()
+            #expect(sharing.review == nil && sharing.problem != nil)
+            #expect(HostMcpHTTP.state.requests.filter { $0.contains("PUT") }.count == 1)
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1))) @MainActor func hostMcpNativeCheckboxSelectsOnlyMissingServers() async throws {
+        _ = NSApplication.shared
+        try await withHostMcp { f in
+            HostMcpHTTP.change { $0.targetEntries = [.init(name: "other", blocked: "advanced_configuration")] }
+            let sharing = f.sharing(); await sharing.prepare()
+            let review = try #require(sharing.review)
+            let hosting = NSHostingView(rootView: McpSetupShareRow(entry: review.local.entries[0], targetName: "Box", model: sharing).padding(12))
+            let window = NSWindow(contentRect: NSRect(x: -10000, y: -10000, width: 500, height: 130),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false; window.contentView = hosting
+            window.orderFrontRegardless(); hosting.layoutSubtreeIfNeeded(); window.update()
+            defer { window.close() }
+            try await mcpNativeWait { mcpNativeButtons(hosting).count == 1 }
+            let checkbox = try #require(mcpNativeButtons(hosting).first)
+            #expect(checkbox.isEnabled && sharing.selected.isEmpty)
+            #expect(HostMcpHTTP.state.requests.allSatisfy { !$0.contains("PUT") })
+            try mcpNativeClick(checkbox)
+            try await mcpNativeWait { sharing.selected == ["same"] }
+            await sharing.apply()
+            #expect(sharing.notice != nil && HostMcpHTTP.state.targetEntries.map(\.name) == ["other", "same"])
+            #expect(HostMcpHTTP.state.requests.filter { $0.contains("PUT") } == ["box PUT /api/mcp/setup"])
+            hosting.layoutSubtreeIfNeeded()
+            try await mcpNativeWait { mcpNativeButtons(hosting).allSatisfy { !$0.isEnabled } }
+        }
+    }
+}
+
+@MainActor private func mcpNativeWait(_ predicate: () -> Bool) async throws {
+    let deadline = Date().addingTimeInterval(10)
+    while !predicate(), Date() < deadline { try await Task.sleep(for: .milliseconds(5)) }
+    try #require(predicate(), "Mounted MCP checkbox did not settle")
+}
+@MainActor private func mcpNativeButtons(_ view: NSView) -> [NSButton] {
+    (view as? NSButton).map { [$0] } ?? view.subviews.flatMap(mcpNativeButtons)
+}
+@MainActor private func mcpNativeClick(_ button: NSButton) throws {
+    let window = try #require(button.window)
+    let point = button.convert(NSPoint(x: button.bounds.midX, y: button.bounds.midY), to: nil)
+    func event(_ type: NSEvent.EventType) throws -> NSEvent {
+        try #require(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+            context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
+    }
+    NSApp.postEvent(try event(.leftMouseUp), atStart: false)
+    window.sendEvent(try event(.leftMouseDown))
+    if let up = NSApp.nextEvent(matching: .leftMouseUp, until: Date(), inMode: .default, dequeue: true) { window.sendEvent(up) }
 }

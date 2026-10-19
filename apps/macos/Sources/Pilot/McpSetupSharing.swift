@@ -45,17 +45,28 @@ enum McpSetupFailure: Error { case unavailable, unsupported, changed, conflict, 
             guard source.current(), target.current(), self.generation == generation else { return }
             let remote = try await target.read()
             guard source.current(), target.current(), self.generation == generation else { return }
-            guard local.schemaVersion == 1, remote.schemaVersion == 1, remote.writeMode == "initial_only" else { throw McpSetupFailure.unsupported }
+            guard local.schemaVersion == 1, remote.schemaVersion == 1, remote.writeMode == "additive" else { throw McpSetupFailure.unsupported }
             review = Review(source: source, target: target, local: local, remote: remote)
             selected.removeAll(); attempted = nil; problem = nil; notice = nil
         } catch { if self.generation == generation { problem = Self.message(error) } }
     }
 
     func selectable(_ entry: McpSetupEntry) -> Bool {
-        guard let review, !review.remote.exists, entry.blocked == nil, entry.config?.shareable == true,
+        guard let review, entry.blocked == nil, entry.config?.shareable == true,
               entry.name.range(of: #"^[A-Za-z0-9_-]{1,64}$"#, options: .regularExpression) != nil else { return false }
         let name = entry.name.replacingOccurrences(of: "-", with: "_")
         return !review.remote.entries.contains { $0.name.replacingOccurrences(of: "-", with: "_") == name }
+    }
+
+    func entryNotice(_ entry: McpSetupEntry, targetName: String) -> String {
+        let name = entry.name.replacingOccurrences(of: "-", with: "_")
+        if let existing = review?.remote.entries.first(where: { $0.name.replacingOccurrences(of: "-", with: "_") == name }) {
+            if existing.name == entry.name, existing.blocked == nil, existing.config == entry.config {
+                return "Already present on \(targetName). Kept unchanged."
+            }
+            return "Conflicts with \(existing.name) on \(targetName). Kept unchanged; resolve it on that host."
+        }
+        return "Advanced, secret-bearing or host-specific setup. Configure this server on \(targetName) directly."
     }
 
     func apply() async {
@@ -82,6 +93,9 @@ enum McpSetupFailure: Error { case unavailable, unsupported, changed, conflict, 
             }
             catch McpSetupFailure.dependencyMissing {
                 uncertain = false; attempted = nil; throw McpSetupFailure.dependencyMissing
+            }
+            catch McpSetupFailure.conflict {
+                uncertain = false; attempted = nil; throw McpSetupFailure.conflict
             }
             catch {
                 // Errors, including 503, may follow a committed write. Never repeat the PUT here.
@@ -127,7 +141,7 @@ enum McpSetupFailure: Error { case unavailable, unsupported, changed, conflict, 
         switch error as? McpSetupFailure {
         case .unsupported: "This runtime does not support reviewed setup sharing. Update it, or configure MCP on that host directly."
         case .changed: "The host connection or reviewed configuration changed. Review it again before applying."
-        case .conflict: "The devbox's configuration changed or already exists. Its configuration and authentication were kept; resolve it on that host."
+        case .conflict: "The devbox's configuration changed or a server name conflicts. Existing setup was kept. Review it again; no entry was replaced."
         case .manualSetup: "This configuration needs manual setup on the devbox. No existing entry was replaced."
         case .dependencyMissing: "The MCP executable is missing or unusable on this devbox's PATH. Install or configure it on that host, then review setup again. No packages were installed."
         default: "Setup could not be confirmed on this host. Reconnect and check the reviewed result. No credentials or raw configuration were shared."
