@@ -101,8 +101,14 @@ func scopedModelsNativeSelectorPreservesAdvancedPatterns() async throws {
             timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
             context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
     }
-    NSApp.postEvent(try event(.leftMouseUp), atStart: false)
-    window.sendEvent(try event(.leftMouseDown))
+    // Queue mouse-up before dispatching down so AppKit's synchronous tracking
+    // loop can finish, but construct them in real input order. SwiftUI gesture
+    // recognition must not receive an up timestamp earlier than its down.
+    let down = try event(.leftMouseDown)
+    let up = try event(.leftMouseUp)
+    try #require(up.timestamp >= down.timestamp, "Checkbox pointer events must be chronological")
+    NSApp.postEvent(up, atStart: false)
+    window.sendEvent(down)
     if let up = NSApp.nextEvent(matching: .leftMouseUp, until: Date(), inMode: .default, dequeue: true) {
         window.sendEvent(up)
     }
