@@ -1,0 +1,680 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"$id": "https://pilot.dev/schemas/visual/api-1.json",
+	"title": "Pilot visual tree, API 1",
+	"$defs": {
+		"Node": {
+			"anyOf": [
+				{
+					"type": "object",
+					"required": ["type", "children"],
+					"properties": {
+						"type": {
+							"type": "string",
+							"const": "column"
+						},
+						"key": {
+							"type": "string",
+							"minLength": 1,
+							"maxLength": 200,
+							"description": "Identity among siblings, unique within one children list. Numbers become strings."
+						},
+						"gap": {
+							"type": "number",
+							"minimum": 0,
+							"maximum": 64,
+							"description": "Spacing between children in points."
+						},
+						"align": {
+							"enum": ["start", "center", "end"],
+							"description": "Horizontal. Default start."
+						},
+						"children": {
+							"type": "array",
+							"items": {
+								"$ref": "Node"
+							}
+						}
+					},
+					"additionalProperties": false,
+					"description": "Vertical stack. Layout nodes have no fill, border or shadow."
+				},
+				{
+					"type": "object",
+					"required": ["type", "children"],
+					"properties": {
+						"type": {
+							"type": "string",
+							"const": "row"
+						},
+						"key": {
+							"type": "string",
+							"minLength": 1,
+							"maxLength": 200,
+							"description": "Identity among siblings, unique within one children list. Numbers become strings."
+						},
+						"gap": {
+							"type": "number",
+							"minimum": 0,
+							"maximum": 64,
+							"description": "Spacing between children in points."
+						},
+						"align": {
+							"enum": ["start", "center", "end", "baseline"],
+							"description": "Vertical. Default center."
+						},
+						"justify": {
+							"enum": ["start", "center", "end", "between"],
+							"description": "Horizontal distribution. Default start; between spreads children to both edges."
+						},
+						"children": {
+							"type": "array",
+							"items": {
+								"$ref": "Node"
+							}
+						}
+					},
+					"additionalProperties": false,
+					"description": "Horizontal stack."
+				},
+				{
+					"type": "object",
+					"required": ["type", "columns", "children"],
+					"properties": {
+						"type": {
+							"type": "string",
+							"const": "grid"
+						},
+						"key": {
+							"type": "string",
+							"minLength": 1,
+							"maxLength": 200,
+							"description": "Identity among siblings, unique within one children list. Numbers become strings."
+						},
+						"columns": {
+							"type": "integer",
+							"minimum": 1,
+							"maximum": 12
+						},
+						"gap": {
+							"type": "number",
+							"minimum": 0,
+							"maximum": 64,
+							"description": "Spacing between children in points."
+						},
+						"children": {
+							"type": "array",
+							"items": {
+								"$ref": "Node"
+							}
+						}
+					},
+					"additionalProperties": false,
+					"description": "Equal-width columns, filled row by row."
+				},
+				{
+					"type": "object",
+					"required": ["type", "runs"],
+					"properties": {
+						"type": {
+							"type": "string",
+							"const": "text"
+						},
+						"key": {
+							"type": "string",
+							"minLength": 1,
+							"maxLength": 200,
+							"description": "Identity among siblings, unique within one children list. Numbers become strings."
+						},
+						"runs": {
+							"type": "array",
+							"items": {
+								"type": "object",
+								"required": ["text"],
+								"properties": {
+									"text": {
+										"type": "string",
+										"maxLength": 10000
+									},
+									"weight": {
+										"enum": [400, 500, 600, 700],
+										"description": "Font weight. Default 400."
+									},
+									"color": {
+										"enum": [
+											"text",
+											"muted",
+											"accent",
+											"success",
+											"warning",
+											"danger",
+											"border",
+											"chart1",
+											"chart2",
+											"chart3",
+											"chart4",
+											"chart5",
+											"chart6"
+										],
+										"description": "Theme token name. Values follow light and dark mode."
+									},
+									"mono": {
+										"type": "boolean"
+									},
+									"italic": {
+										"type": "boolean"
+									},
+									"strike": {
+										"type": "boolean"
+									}
+								},
+								"additionalProperties": false,
+								"description": "A run of text with its own style, from a string or ui.span()."
+							},
+							"maxItems": 500
+						},
+						"size": {
+							"enum": ["xs", "sm", "md", "lg", "xl"],
+							"description": "Step on the chat's type scale. Default md."
+						},
+						"weight": {
+							"enum": [400, 500, 600, 700],
+							"description": "Font weight. Default 400."
+						},
+						"color": {
+							"enum": [
+								"text",
+								"muted",
+								"accent",
+								"success",
+								"warning",
+								"danger",
+								"border",
+								"chart1",
+								"chart2",
+								"chart3",
+								"chart4",
+								"chart5",
+								"chart6"
+							],
+							"description": "Theme token name. Values follow light and dark mode."
+						},
+						"mono": {
+							"type": "boolean"
+						},
+						"italic": {
+							"type": "boolean"
+						},
+						"align": {
+							"enum": ["start", "center", "end"],
+							"description": "Default start."
+						},
+						"lines": {
+							"type": "integer",
+							"minimum": 1,
+							"maximum": 50,
+							"description": "Line limit. Default none."
+						}
+					},
+					"additionalProperties": false,
+					"description": "Selectable text. Node styles apply to every run; run styles override them."
+				},
+				{
+					"type": "object",
+					"required": ["type", "label", "value"],
+					"properties": {
+						"type": {
+							"type": "string",
+							"const": "stat"
+						},
+						"key": {
+							"type": "string",
+							"minLength": 1,
+							"maxLength": 200,
+							"description": "Identity among siblings, unique within one children list. Numbers become strings."
+						},
+						"label": {
+							"type": "string",
+							"maxLength": 500
+						},
+						"value": {
+							"type": "string",
+							"maxLength": 500
+						},
+						"unit": {
+							"type": "string",
+							"maxLength": 500
+						},
+						"delta": {
+							"type": "string",
+							"maxLength": 500
+						},
+						"tone": {
+							"enum": ["neutral", "success", "warning", "danger"],
+							"description": "Color of delta. Default neutral."
+						},
+						"caption": {
+							"type": "string",
+							"maxLength": 500
+						}
+					},
+					"additionalProperties": false,
+					"description": "One headline figure with its label."
+				},
+				{
+					"type": "object",
+					"required": ["type", "columns", "rows"],
+					"properties": {
+						"type": {
+							"type": "string",
+							"const": "table"
+						},
+						"key": {
+							"type": "string",
+							"minLength": 1,
+							"maxLength": 200,
+							"description": "Identity among siblings, unique within one children list. Numbers become strings."
+						},
+						"columns": {
+							"type": "array",
+							"items": {
+								"type": "object",
+								"required": ["label"],
+								"properties": {
+									"label": {
+										"type": "string",
+										"maxLength": 500
+									},
+									"align": {
+										"enum": ["start", "center", "end"],
+										"description": "Default end when every cell in the column is a number, else start."
+									}
+								},
+								"additionalProperties": false
+							},
+							"minItems": 1,
+							"maxItems": 24
+						},
+						"rows": {
+							"type": "array",
+							"items": {
+								"type": "array",
+								"items": {
+									"anyOf": [
+										{
+											"type": "string",
+											"maxLength": 10000
+										},
+										{
+											"type": "number"
+										},
+										{
+											"type": "null"
+										}
+									]
+								}
+							},
+							"maxItems": 500,
+							"description": "Each row has exactly one cell per column. Null shows an empty cell."
+						}
+					},
+					"additionalProperties": false
+				},
+				{
+					"type": "object",
+					"required": ["type", "kind", "x", "series", "height"],
+					"properties": {
+						"type": {
+							"type": "string",
+							"const": "chart"
+						},
+						"key": {
+							"type": "string",
+							"minLength": 1,
+							"maxLength": 200,
+							"description": "Identity among siblings, unique within one children list. Numbers become strings."
+						},
+						"kind": {
+							"enum": ["bar", "line", "area", "scatter"]
+						},
+						"x": {
+							"type": "array",
+							"items": {
+								"anyOf": [
+									{
+										"type": "string",
+										"maxLength": 500
+									},
+									{
+										"type": "number"
+									}
+								]
+							},
+							"maxItems": 2000,
+							"description": "Category labels or numbers. Numbers only for scatter."
+						},
+						"series": {
+							"type": "array",
+							"items": {
+								"type": "object",
+								"required": ["name", "values"],
+								"properties": {
+									"name": {
+										"type": "string",
+										"maxLength": 500
+									},
+									"values": {
+										"type": "array",
+										"items": {
+											"anyOf": [
+												{
+													"type": "number"
+												},
+												{
+													"type": "null"
+												}
+											]
+										},
+										"maxItems": 2000,
+										"description": "One value per x entry. Null is a gap."
+									},
+									"color": {
+										"enum": [
+											"text",
+											"muted",
+											"accent",
+											"success",
+											"warning",
+											"danger",
+											"border",
+											"chart1",
+											"chart2",
+											"chart3",
+											"chart4",
+											"chart5",
+											"chart6"
+										],
+										"description": "Theme token name. Values follow light and dark mode."
+									}
+								},
+								"additionalProperties": false
+							},
+							"minItems": 1,
+							"maxItems": 12
+						},
+						"height": {
+							"type": "number",
+							"minimum": 80,
+							"maximum": 480,
+							"description": "Plot height in points. Default 220."
+						},
+						"unit": {
+							"type": "string",
+							"maxLength": 500
+						},
+						"stacked": {
+							"type": "boolean",
+							"description": "Bar and area only."
+						},
+						"yMin": {
+							"type": "number"
+						},
+						"yMax": {
+							"type": "number"
+						},
+						"xLabel": {
+							"type": "string",
+							"maxLength": 500
+						},
+						"yLabel": {
+							"type": "string",
+							"maxLength": 500
+						}
+					},
+					"additionalProperties": false,
+					"description": "Swift Charts. Series without color take chart1...chart6 in order."
+				},
+				{
+					"type": "object",
+					"required": ["type"],
+					"properties": {
+						"type": {
+							"type": "string",
+							"const": "rule"
+						},
+						"key": {
+							"type": "string",
+							"minLength": 1,
+							"maxLength": 200,
+							"description": "Identity among siblings, unique within one children list. Numbers become strings."
+						}
+					},
+					"additionalProperties": false,
+					"description": "Divider."
+				},
+				{
+					"type": "object",
+					"required": ["type"],
+					"properties": {
+						"type": {
+							"type": "string",
+							"const": "space"
+						},
+						"key": {
+							"type": "string",
+							"minLength": 1,
+							"maxLength": 200,
+							"description": "Identity among siblings, unique within one children list. Numbers become strings."
+						},
+						"size": {
+							"type": "number",
+							"minimum": 0,
+							"maximum": 96,
+							"description": "Fixed size in points. Omitted: flexible."
+						}
+					},
+					"additionalProperties": false
+				},
+				{
+					"type": "object",
+					"required": ["type", "label", "href"],
+					"properties": {
+						"type": {
+							"type": "string",
+							"const": "link"
+						},
+						"key": {
+							"type": "string",
+							"minLength": 1,
+							"maxLength": 200,
+							"description": "Identity among siblings, unique within one children list. Numbers become strings."
+						},
+						"label": {
+							"type": "string",
+							"maxLength": 500
+						},
+						"href": {
+							"type": "string",
+							"maxLength": 2048,
+							"pattern": "^https?://",
+							"description": "http or https only."
+						}
+					},
+					"additionalProperties": false
+				},
+				{
+					"type": "object",
+					"required": ["type", "id", "options", "value"],
+					"properties": {
+						"type": {
+							"type": "string",
+							"const": "tabs"
+						},
+						"key": {
+							"type": "string",
+							"minLength": 1,
+							"maxLength": 200,
+							"description": "Identity among siblings, unique within one children list. Numbers become strings."
+						},
+						"id": {
+							"type": "string",
+							"pattern": "^0(\\.[0-9]+)*$",
+							"description": "Controls only: the node's path of child indices from the root (root is 0). The host sends events to this id."
+						},
+						"options": {
+							"type": "array",
+							"items": {
+								"type": "object",
+								"required": ["value", "label"],
+								"properties": {
+									"value": {
+										"type": "string",
+										"maxLength": 500
+									},
+									"label": {
+										"type": "string",
+										"maxLength": 500
+									}
+								},
+								"additionalProperties": false
+							},
+							"minItems": 1,
+							"maxItems": 12
+						},
+						"value": {
+							"type": "string",
+							"maxLength": 500
+						}
+					},
+					"additionalProperties": false,
+					"description": "Segmented choice. Event value: the chosen option's value (string)."
+				},
+				{
+					"type": "object",
+					"required": ["type", "id", "label", "value"],
+					"properties": {
+						"type": {
+							"type": "string",
+							"const": "toggle"
+						},
+						"key": {
+							"type": "string",
+							"minLength": 1,
+							"maxLength": 200,
+							"description": "Identity among siblings, unique within one children list. Numbers become strings."
+						},
+						"id": {
+							"type": "string",
+							"pattern": "^0(\\.[0-9]+)*$",
+							"description": "Controls only: the node's path of child indices from the root (root is 0). The host sends events to this id."
+						},
+						"label": {
+							"type": "string",
+							"maxLength": 500
+						},
+						"value": {
+							"type": "boolean"
+						}
+					},
+					"additionalProperties": false,
+					"description": "Event value: the new boolean."
+				},
+				{
+					"type": "object",
+					"required": ["type", "id", "min", "max", "value"],
+					"properties": {
+						"type": {
+							"type": "string",
+							"const": "slider"
+						},
+						"key": {
+							"type": "string",
+							"minLength": 1,
+							"maxLength": 200,
+							"description": "Identity among siblings, unique within one children list. Numbers become strings."
+						},
+						"id": {
+							"type": "string",
+							"pattern": "^0(\\.[0-9]+)*$",
+							"description": "Controls only: the node's path of child indices from the root (root is 0). The host sends events to this id."
+						},
+						"label": {
+							"type": "string",
+							"maxLength": 500
+						},
+						"min": {
+							"type": "number"
+						},
+						"max": {
+							"type": "number"
+						},
+						"step": {
+							"type": "number",
+							"exclusiveMinimum": 0
+						},
+						"value": {
+							"type": "number"
+						},
+						"unit": {
+							"type": "string",
+							"maxLength": 500
+						}
+					},
+					"additionalProperties": false,
+					"description": "min < max and min <= value <= max. Event value: a number; the runtime clamps it and snaps it to step."
+				},
+				{
+					"type": "object",
+					"required": ["type", "id", "label"],
+					"properties": {
+						"type": {
+							"type": "string",
+							"const": "button"
+						},
+						"key": {
+							"type": "string",
+							"minLength": 1,
+							"maxLength": 200,
+							"description": "Identity among siblings, unique within one children list. Numbers become strings."
+						},
+						"id": {
+							"type": "string",
+							"pattern": "^0(\\.[0-9]+)*$",
+							"description": "Controls only: the node's path of child indices from the root (root is 0). The host sends events to this id."
+						},
+						"label": {
+							"type": "string",
+							"maxLength": 500
+						},
+						"primary": {
+							"type": "boolean"
+						},
+						"disabled": {
+							"type": "boolean"
+						}
+					},
+					"additionalProperties": false,
+					"description": "Event value: null."
+				}
+			],
+			"description": "One node, discriminated by type.",
+			"$id": "Node"
+		},
+		"Tree": {
+			"type": "object",
+			"required": ["api", "root"],
+			"properties": {
+				"api": {
+					"type": "number",
+					"const": 1
+				},
+				"root": {
+					"$ref": "Node"
+				}
+			},
+			"additionalProperties": false,
+			"$id": "Tree"
+		}
+	},
+	"$ref": "Tree"
+}
