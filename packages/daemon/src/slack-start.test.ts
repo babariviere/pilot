@@ -116,6 +116,32 @@ test("confirmed chat and mission starts react on the parent without awaiting Sla
 	}
 });
 
+test("wrapped confirmations persist success without provider text or replaying the reaction", async (t) => {
+	for (const response of [
+		{ structuredContent: { result: "Reaction :eyes: added to message (private detail)." } },
+		{ content: [{ type: "text", text: '{"result":"Reaction :eyes: added to message (private detail)."}' }] },
+	]) {
+		const f = await fixture(t);
+		f.respond(response);
+		const item = await f.tracking.patch(f.item.id, { sessionId: "chat", start: true });
+		await f.tracking.startSlack(item);
+		const saved = await f.items.require(item.id);
+		assert.equal(outcome(saved)?.outcome, "reacted");
+		assert.equal(outcome(saved)?.error, undefined);
+		assert.ok(!JSON.stringify(saved).includes("private detail"));
+		const reopened = new TrackedItemStore(f.path);
+		try {
+			await reopened.load([f.project.id]);
+			assert.deepEqual(outcome(await reopened.require(item.id)), outcome(saved));
+			assert.equal(await reopened.reserveSlackStart(item.id), false);
+		} finally {
+			await reopened.close();
+		}
+		await f.tracking.startSlack(item);
+		assert.equal(f.calls.length, 1);
+	}
+});
+
 test("already_reacted in JSON, structured errors or MCP error text is successful and sanitized", async (t) => {
 	for (const response of [
 		{ structuredContent: { ok: false, error: "already_reacted" } },
