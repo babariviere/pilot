@@ -283,7 +283,8 @@ struct DiagnosticRepairFooter: View {
             .padding(.horizontal, 14).padding(.vertical, 6)
             .frame(maxWidth: Theme.column).padding(.horizontal, 24)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        // Center the bounded action row like the composer below it, including in wide windows.
+        .frame(maxWidth: .infinity)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Diagnostic repair actions")
         .accessibilityIdentifier("diagnostic-repair-footer")
