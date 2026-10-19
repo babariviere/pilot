@@ -22,8 +22,8 @@ export interface McpSetupEntry {
 export interface McpSetupSnapshot {
 	/** Bump before expanding the shareable field set. Older clients must refuse newer schemas. */
 	schemaVersion: 1;
-	/** Existing files require host-local editing until Pi coordinates config writes. */
-	writeMode: "initial_only";
+	/** Adds missing names using the shared SDK/CLI writer lock; never replaces an existing entry. */
+	writeMode: "additive";
 	/** Opaque whole-file revision, including fields not exported. Absence differs from an empty file. */
 	revision: string;
 	exists: boolean;

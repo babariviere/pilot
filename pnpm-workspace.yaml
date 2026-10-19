@@ -20,3 +20,6 @@ allowBuilds:
   fsevents: true
   protobufjs: true
   "@google/genai": true
+
+patchedDependencies:
+  '@earendil-works/pi-coding-agent@1.3.0': patches/@earendil-works__pi-coding-agent@1.3.0.patch

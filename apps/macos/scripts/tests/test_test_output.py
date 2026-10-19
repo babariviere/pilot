@@ -84,6 +84,8 @@ HOST_MCPS = [
     "hostMcpUncertainApplyOnlyLooksUpTheSamePinAfterReconnect",
     "hostMcpNativeProjectionRejectsSecretsAndLocalPaths",
     "hostMcpDelayedResultsAndReplacementPinsCannotPublishOrRetarget",
+    "hostMcpAdditiveReviewKeepsOtherServersAndLabelsNamespacesWithoutReplacingThem",
+    "hostMcpNativeCheckboxSelectsOnlyMissingServers",
 ]
 HOST_MCP_OUTPUTS = [STARTED + "".join(f"◇ Test {name}() started.\n" for name in HOST_MCPS) + PASSED]
 

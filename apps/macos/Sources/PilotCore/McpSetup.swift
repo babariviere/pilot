@@ -87,7 +87,7 @@ public struct McpSetupSnapshot: Codable, Equatable, Sendable {
     public let exists: Bool
     public let entries: [McpSetupEntry]
     public let invalidNames: Int
-    public init(schemaVersion: Int = 1, writeMode: String = "initial_only", revision: String, exists: Bool, entries: [McpSetupEntry], invalidNames: Int = 0) {
+    public init(schemaVersion: Int = 1, writeMode: String = "additive", revision: String, exists: Bool, entries: [McpSetupEntry], invalidNames: Int = 0) {
         self.schemaVersion = schemaVersion
         self.writeMode = writeMode
         self.revision = revision; self.exists = exists; self.entries = entries; self.invalidNames = invalidNames

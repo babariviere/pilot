@@ -28,6 +28,7 @@ cp "$stage/jj/jj" "$stage/runtime/bin/"
 cp -R "$stage/jj" "$stage/runtime/jj-licenses"
 rm "$stage/runtime/jj-licenses/jj"
 cp "$repo/package.json" "$repo/pnpm-lock.yaml" "$repo/pnpm-workspace.yaml" "$stage/runtime/"
+cp -R "$repo/patches" "$stage/runtime/patches"
 (cd "$repo"; tar --exclude=node_modules --exclude='*.test.ts' -cf - packages) | (cd "$stage/runtime"; tar -xf -)
 # Private build tool, not a global install. Native addons compile against the shipped Node headers.
 manager="$(node -p "require('$repo/package.json').packageManager")"

@@ -177,32 +177,13 @@ private struct McpSetupShareSheet: View {
             SettingsNote("Only the reviewed literal setup is shared. Tokens, auth files, secret values, local paths and installations are never copied. Existing target entries are kept.")
             if model.busy { ProgressView().controlSize(.small) }
             if let review = model.review {
-                if review.remote.exists {
-                    SettingsNote("This devbox already has an MCP configuration. Edit it on that host to preserve its existing setup and authentication. This version only creates an initial configuration; it never merges or replaces an existing file.")
-                }
+                SettingsNote("Only missing server names are added. Existing entries, authentication and other settings stay on this devbox. Don't edit MCP configuration with older Pi versions or a text editor while applying.")
                 if review.local.entries.isEmpty { SettingsNote("Local has no shareable server entries to review.") }
                 if review.local.invalidNames > 0 { SettingsNote("\(review.local.invalidNames) Local entries have unsupported names and need manual setup on the target.") }
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
                         ForEach(review.local.entries) { entry in
-                            Toggle(isOn: Binding(get: { model.selected.contains(entry.name) }, set: { selected in
-                                if selected { model.selected.insert(entry.name) } else { model.selected.remove(entry.name) }
-                            })) {
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(entry.name).font(.pilot(.body))
-                                    if model.selectable(entry), let config = entry.config {
-                                        Text(config.url ?? "PATH executable: \(config.command ?? "")").font(.pilot(.caption))
-                                        Text("Enabled: \(config.enabled == false ? "No" : "Yes") · exposure: \(config.exposure ?? "codemode") · timeout: \(Int(config.timeout ?? 60))s")
-                                            .font(.pilot(.caption))
-                                    } else {
-                                        Text(review.remote.entries.contains(where: { $0.name == entry.name })
-                                            ? "Already present on \(targetName). Kept unchanged; resolve conflicts on that host."
-                                            : "Advanced, secret-bearing or host-specific setup. Configure this server on \(targetName) directly.")
-                                            .font(.pilot(.caption))
-                                    }
-                                }.foregroundStyle(Theme.mutedForeground)
-                            }
-                            .toggleStyle(.checkbox).disabled(!model.selectable(entry) || model.busy || model.uncertain)
+                            McpSetupShareRow(entry: entry, targetName: targetName, model: model)
                         }
                     }
                 }.frame(maxHeight: 320)
@@ -212,5 +193,29 @@ private struct McpSetupShareSheet: View {
         }
         .task { await model.prepare() }
         .onDisappear { operation?.cancel(); operation = nil; model.cancelReview() }
+    }
+}
+
+/// Same reviewed checkbox in the sheet and mounted native interaction fixtures.
+struct McpSetupShareRow: View {
+    let entry: McpSetupEntry
+    let targetName: String
+    @ObservedObject var model: McpSetupSharing
+    var body: some View {
+        Toggle(isOn: Binding(get: { model.selected.contains(entry.name) }, set: { selected in
+            if selected { model.selected.insert(entry.name) } else { model.selected.remove(entry.name) }
+        })) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(entry.name).font(.pilot(.body))
+                if model.selectable(entry), let config = entry.config {
+                    Text(config.url ?? "PATH executable: \(config.command ?? "")").font(.pilot(.caption))
+                    Text("Enabled: \(config.enabled == false ? "No" : "Yes") · exposure: \(config.exposure ?? "codemode") · timeout: \(Int(config.timeout ?? 60))s")
+                        .font(.pilot(.caption))
+                } else {
+                    Text(model.entryNotice(entry, targetName: targetName)).font(.pilot(.caption))
+                }
+            }.foregroundStyle(Theme.mutedForeground)
+        }
+        .toggleStyle(.checkbox).disabled(!model.selectable(entry) || model.busy || model.uncertain)
     }
 }

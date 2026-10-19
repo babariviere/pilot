@@ -22,6 +22,7 @@ mkdir -p "$stage/runtime/node/bin"
 cp "$node_root/bin/node" "$stage/runtime/node/bin/node"
 cp "$node_root/LICENSE" "$stage/runtime/node/LICENSE"
 cp "$repo/package.json" "$repo/pnpm-lock.yaml" "$repo/pnpm-workspace.yaml" "$stage/runtime/"
+cp -R "$repo/patches" "$stage/runtime/patches"
 # tar preserves relative workspace links; exclude any existing workspace node_modules.
 (cd "$repo"; tar --exclude=node_modules --exclude='*.test.ts' -cf - packages) | (cd "$stage/runtime"; tar -xf -)
 # Lifecycle scripts are limited to pnpm-workspace.yaml's allowBuilds. The hoisted linker keeps the

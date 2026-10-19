@@ -45,7 +45,7 @@ identity and original outbox, makes an exact private backup, and detaches only t
 to Local. It retains its text/images and other drafts, never changes or resends the remote request,
 and refuses unknown formats or a running app. Relaunch and choose the Local project afterward.
 
-## MCP connections and initial setup sharing
+## MCP connections and setup sharing
 
 Connections lists Local and each saved devbox separately, even when servers have the same name.
 Each host runs its own Pi MCP connections and owns its credentials. Mac sleep, quit or disconnection
@@ -70,12 +70,24 @@ explicit and is never run by the app; cancelling a later login does not restore 
 Stdio, fixed-header and model-provider authentication require their host-specific setup, not this
 OAuth path. These are source-supported SDK steps, not a claim of live account/host validation.
 
-**Partial implementation:** reviewed sharing currently creates an initial global `mcp.json` only
-when that file is absent. Existing-file additive sharing remains unimplemented, pending the product
-decision and a safe coordinated-write contract. It is not full configuration sharing. The pinned Pi
-SDK's editors rewrite existing files without locks or atomic publication. This implementation never
-pretends that a native lock can protect against those independent writers. A concurrent creator wins
-atomically without overwrite; existing files, unrelated fields and authentication remain untouched.
+**Share setup…** reviews selected Local servers before adding them to the devbox's global `mcp.json`,
+including an existing configuration. Only missing server names can be selected. Identical entries
+are already present; differing entries and names that alias the same namespace are conflicts, kept
+unchanged for resolution on that host. Unrelated servers, unknown fields and existing secret-bearing
+values remain on the devbox. File formatting may change; existing values are preserved.
+
+The pinned Pi package includes a focused writer patch: both its SDK editors and bundled CLI take the
+same canonical `proper-lockfile` lock as the native sharing writer and publish private, fsynced files
+atomically. Contending synchronous Pi edits fail promptly and can be retried after sharing finishes.
+The review revision is rechecked under the lock and immediately before publication. A concurrent
+initial creator wins without overwrite. Malformed, symlinked and multiply-linked files are refused.
+Interrupted writes can require inspecting leftover private temporary files/lock state on that host;
+the app does not overwrite unknown state to recover.
+
+**Do not edit MCP configuration concurrently with a separately installed older/unpatched Pi or a text
+editor.** Those writers cannot honor the shared protocol. The app detects changes before publication,
+but cannot promise conflict protection against an uncoordinated edit in the final publication window.
+This limitation is also shown before applying. No Mac authentication files are transferred.
 
 The review shares only literal HTTPS DNS endpoints on a small set of common MCP paths, or bare PATH
 executables, plus validated type/enabled/exposure/timeout fields and empty args/env/headers. Embedded
@@ -85,13 +97,14 @@ fields block the whole entry for manual setup. Nothing is silently stripped into
 equivalent server. The target must already have any stdio executable on its PATH; no install runs.
 
 `GET /api/mcp/setup` returns the bounded safe projection and opaque file revision.
-`PUT /api/mcp/setup` accepts selected safe entries with the reviewed revision, atomically publishes
-a private initial file, then reads it back. Both methods require the existing native host-action
+`PUT /api/mcp/setup` accepts selected safe entries with the reviewed revision, atomically adds them
+to a private file, then reads it back. Both methods require the existing native host-action
 capability; an ordinary chat or loopback connection is not permission to copy executable setup.
 Schemas match `packages/protocol/src/mcp-setup.ts` and `PilotCore/McpSetup.swift`. Unknown runtime/schema,
 corrupt/symlinked files, stale reviews, namespace aliases and unavailable dependencies fail closed.
 Ambiguous delivery is reconciled by exact readback of the approved values, not an automatic repeated
-write. `PILOT_MCP_SETUP_READ_ONLY=1` denies creation while retaining native diagnostics.
+write. `PILOT_MCP_SETUP_READ_ONLY=1` denies writes while retaining native diagnostics. Older runtimes
+advertising `initial_only` are not offered additive sharing; update the devbox first.
 
 ## Host-local model scope API
 

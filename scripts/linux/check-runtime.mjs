@@ -24,6 +24,25 @@ globalThis.fetch = () => {
 };
 let adapter;
 try {
+	const sdk = import.meta.resolve("@earendil-works/pi-coding-agent");
+	const writer = await import(new URL("./extensions/mcp/config-writer.js", sdk).href);
+	assert.equal(writer.mcpConfigWriteProtocol, 1, "Coordinated MCP writer patch is missing");
+	const config = await import(new URL("./bundle/chunks/chunk-GDR5JFDJ.js", sdk).href);
+	const mcpPath = join(isolated, "mcp.json");
+	config.addMcpServerConfig(mcpPath, "fixture", { url: "https://example.test/mcp" });
+	const { McpSetupStore } = await import("./packages/daemon/src/mcp-setup.ts");
+	const setup = new McpSetupStore(isolated),
+		baseline = await setup.read();
+	const saved = await setup.apply({
+		expectedRevision: baseline.revision,
+		entries: [{ name: "second", config: { url: "https://example.test/mcp" } }],
+	});
+	assert.deepEqual(
+		saved.entries.map((entry) => entry.name),
+		["fixture", "second"],
+	);
+	config.removeMcpServerConfig(mcpPath, "fixture");
+	config.removeMcpServerConfig(mcpPath, "second");
 	const { NativeAdapter } = await import("./packages/kernel/src/native-adapter.ts");
 	const { ModelRuntime, SettingsManager } = await import("@earendil-works/pi-coding-agent");
 	const { InMemoryCredentialStore, InMemoryModelsStore, fauxProvider } = await import("@earendil-works/pi-ai");
