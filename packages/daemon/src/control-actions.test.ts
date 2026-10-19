@@ -28,7 +28,7 @@ test("start/send use existing admissions, route mission members and durably audi
 			published.push(entry);
 		},
 	);
-	const chat = { id: "created", title: "Created", model: "test/cheap" } as SessionSummary;
+	const chat = { id: "created", title: "Created", model: "test/cheap", mode: "ask" } as SessionSummary;
 	const target = { id: "member", projectId: "p", missionId: "m" } as SessionSummary;
 	await memory.authorizationCreate(
 		createAuthorization(
@@ -42,7 +42,7 @@ test("start/send use existing admissions, route mission members and durably audi
 			{ conversationId: "1", submissionId: 1, entryId: 1, requestId: "user" },
 		),
 	);
-	const authorized = { authorizationId: "approval", budgetUsd: 1, model: "test/cheap" };
+	const authorized = { authorizationId: "approval", budgetUsd: 1, model: "test/cheap", mode: "ask" };
 	const service = new ControlPilot({
 		watches,
 		isControl: (id) => id === "control",

@@ -95,7 +95,7 @@ async function fixture(t: TestContext) {
 					assert.equal(watches.dashboard().followUps[0]!.requestId, requestId, "arm before any start effect");
 					effects.push(request);
 					await watches.attributeSessionRun("target", "control", [requestId!]);
-					return { id: "target" } as SessionSummary;
+					return { id: "target", mode: request.mode } as SessionSummary;
 				},
 				startTask: async () => {
 					throw new Error("unused");
@@ -147,7 +147,14 @@ test("authorized start installs a once result watch, auto-reads untrusted bounde
 	await f.pilot.call(
 		"control",
 		"start",
-		{ projectId: "p", message: "Investigate", authorizationId: "approval", budgetUsd: 1, model: "test/model" },
+		{
+			projectId: "p",
+			message: "Investigate",
+			authorizationId: "approval",
+			budgetUsd: 1,
+			model: "test/model",
+			mode: "ask",
+		},
 		"start-1",
 	);
 	const next = f.pilot.dashboard().next;
@@ -373,6 +380,7 @@ test("failed pre-admission starts drop only unbound watches; uncertain created c
 	const args = {
 		projectId: "p",
 		message: "Investigate",
+		mode: "ask",
 		authorizationId: "approval",
 		budgetUsd: 1,
 		model: "test/model",

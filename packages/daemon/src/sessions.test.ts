@@ -1251,20 +1251,26 @@ test("Control start permissions persist before work and survive restart without 
 	const f = await fixture(t);
 	const sessions = await f.manager();
 	const chats = [];
-	for (const level of ["investigate", "implement", "publish"] as const) {
+	for (const [level, mode] of [
+		["investigate", "build"], // Defense in depth still forces Ask for investigate.
+		["investigate", "ask"],
+		["implement", "build"],
+		["implement", "ask"],
+		["publish", "build"],
+	] as const) {
 		const permission = { authorizationId: `grant-${level}`, level };
 		const chat = await sessions.controlStart(
-			() => sessions.spawn({ cwd: f.source, mode: "build", message: "work" }),
+			() => sessions.spawn({ cwd: f.source, mode, message: "work" }),
 			permission,
 		);
 		await sessions["starting"].get(chat.id);
 		chats.push(chat);
-		assert.equal(chat.mode, level === "investigate" ? "ask" : "build");
+		assert.equal(chat.mode, level === "investigate" ? "ask" : mode);
 		assert.deepEqual(sessions["metas"].get(chat.id)?.controlPermission, permission);
 		const stored = JSON.parse(await readFile(join(f.home, "sessions", chat.id, "meta.json"), "utf8"));
 		assert.deepEqual(stored.controlPermission, permission);
 		assert.deepEqual(f.workers.at(-1)?.spec.pilot?.controlPermission, permission);
-		assert.equal(!!f.workers.at(-1)?.spec.pilot?.ask, level === "investigate");
+		assert.equal(!!f.workers.at(-1)?.spec.pilot?.ask, chat.mode === "ask");
 		f.workers.at(-1)!.finish();
 	}
 	const userChat = await sessions.spawn({ cwd: f.source, message: "user work" });

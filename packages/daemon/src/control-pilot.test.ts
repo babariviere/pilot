@@ -130,7 +130,7 @@ test("pilot has a short schema and forwards only supplied arguments", async () =
 		return { untrusted: true };
 	});
 	assert.ok(tool.description.length < 200);
-	assert.match(tool.description, /start: scope\/model\/authorizationId; ask if missing/);
+	assert.match(tool.description, /start: scope\/model\/mode\/authorizationId required/);
 	assert.match(tool.description, /USD optional/);
 	assert.match(tool.description, /not runtime caps/);
 	await tool.execute(
@@ -141,6 +141,30 @@ test("pilot has a short schema and forwards only supplied arguments", async () =
 		{} as never,
 	);
 	assert.deepEqual(calls, [["read", { sessionId: "target", view: "tail", limit: 10 }]]);
+	assert.deepEqual(Reflect.get(tool.parameters, "properties").mode.enum, ["build", "ask", "once", "persistent"]);
+	for (const mode of ["build", "ask"] as const) {
+		const args = {
+			projectId: "p",
+			message: "work",
+			model: "test/exact",
+			thinking: "high",
+			mode,
+			authorizationId: "grant",
+		};
+		await tool.execute("start", { action: "start", ...args }, undefined, undefined, {} as never);
+		assert.deepEqual(calls.at(-1), ["start", args]);
+	}
+	for (const mode of ["once", "persistent"] as const) {
+		const args = {
+			event: "chat.settled" as const,
+			target: { kind: "project" as const, id: "p" },
+			note: "Read",
+			mode,
+			authorizationId: "grant",
+		};
+		await tool.execute("watch", { action: "watch", ...args }, undefined, undefined, {} as never);
+		assert.deepEqual(calls.at(-1), ["watch", args]);
+	}
 	for (const action of ["stop", "pause", "resume", "redirect"] as const) {
 		const args = {
 			sessionId: "target",

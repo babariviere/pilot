@@ -291,7 +291,14 @@ export class ControlPilot {
 			await memory.authorizationRevoke(record.id);
 			throw new Error("Authorization ended because its task is done");
 		}
-		const level = args.level === undefined ? "investigate" : authorizationLevel(args.level);
+		const level =
+			action === "start"
+				? args.mode === "build"
+					? "implement"
+					: "investigate"
+				: args.level === undefined
+					? "investigate"
+					: authorizationLevel(args.level);
 		// A task scope follows its current, daemon-confirmed owner, never an arbitrary supplied chat ID.
 		const scopedTargets = targets.map((alternatives) => [...alternatives]);
 		for (const target of record.targets)
@@ -422,6 +429,12 @@ export class ControlPilot {
 		return { ...created, coordinator };
 	}
 	private validateStart(args: Record<string, unknown>) {
+		const mode = args.mode;
+		if (mode !== "build" && mode !== "ask")
+			throw new Error('start requires explicit mode: "build" or "ask" (Build for implementation)');
+		const level = mode === "build" ? "implement" : "investigate";
+		if (args.level !== undefined && authorizationLevel(args.level) !== level)
+			throw new Error(`start mode ${mode} requires level ${level}; explicit level contradicts mode`);
 		const projectId = string(args, "projectId"),
 			missionId = string(args, "missionId"),
 			taskId = string(args, "taskId");
@@ -448,14 +461,16 @@ export class ControlPilot {
 		} else if (!projectId || !message || taskId) {
 			throw new Error("Project starts require projectId and message, without taskId");
 		}
-		return { projectId, missionId, taskId, message: message as string | undefined, choice };
+		return {
+			projectId,
+			missionId,
+			taskId,
+			message: message as string | undefined,
+			choice: { ...choice, mode } as const,
+		};
 	}
 	private async start(args: Record<string, unknown>, permission: ControlPermission, operationId: string) {
-		const { projectId, missionId, taskId, message, choice: modelChoice } = this.validateStart(args);
-		const choice = {
-			...modelChoice,
-			mode: permission.level === "investigate" ? ("ask" as const) : ("build" as const),
-		};
+		const { projectId, missionId, taskId, message, choice } = this.validateStart(args);
 		const provenance = {
 			authorizationId: args.authorizationId as string,
 			...(typeof args.budgetUsd === "number" ? { budgetUsd: args.budgetUsd } : {}),
@@ -484,9 +499,14 @@ export class ControlPilot {
 				provenance,
 			);
 		}
+		if (chat.mode !== choice.mode)
+			throw new Error(
+				`Chat ${chat.id} was created with mode ${chat.mode ?? "unknown"}, requested ${choice.mode}; start failed`,
+			);
 		return {
 			id: chat.id,
 			chatUrl: `pilot://chat/${chat.id}`,
+			mode: chat.mode,
 			title: chat.title,
 			projectId: chat.projectId,
 			missionId: chat.missionId,
