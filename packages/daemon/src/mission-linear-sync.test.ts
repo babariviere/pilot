@@ -8,7 +8,9 @@ import { MissionLinearSyncService } from "./mission-linear-sync.ts";
 import { MissionStore } from "./missions.ts";
 import { ProjectStore } from "./projects.ts";
 import type { SourceMcpClient } from "./source-mcp.ts";
-import { SourceRateLimited } from "./source-mcp.ts";
+import { SourceConfigurationError, SourceRateLimited, SourceSignInRequired, SourceToolError } from "./source-mcp.ts";
+import { SourceRegistry } from "./sources.ts";
+import { TrackedItemStore } from "./tracked-items.ts";
 
 const states = [
 	{ id: "todo", name: "Todo", type: "unstarted" },
@@ -83,7 +85,7 @@ async function fixture(t: TestContext, disk = false) {
 			issue.statusId = state.id;
 			issue.status = state.name;
 			issue.statusType = state.type;
-			if (failure === "after") throw new Error("ambiguous remote success");
+			if (failure === "after") throw new DOMException("private accepted-write timeout", "TimeoutError");
 			return { id: issue.id };
 		},
 	};
@@ -102,6 +104,7 @@ async function fixture(t: TestContext, disk = false) {
 			return service;
 		},
 		projects,
+		mcp,
 		project,
 		mission,
 		manager,
@@ -284,6 +287,7 @@ test("restart reconciles an ambiguous successful remote write without replay", a
 	await f.poll();
 	assert.equal(f.status().state, "error");
 	assert.doesNotMatch(f.status().error!, /ambiguous|secret/);
+	assert.deepEqual(f.status().failure, { stage: "write", category: "transport" });
 	assert.equal(f.store.linearSyncRecord(f.manager.id)!.intent?.stateId, "merged");
 	await f.restart();
 	now += 600_000;
@@ -291,6 +295,11 @@ test("restart reconciles an ambiguous successful remote write without replay", a
 	await f.poll();
 	assert.equal(f.writes.length, 1);
 	assert.equal(f.status().state, "synced");
+	assert.equal(f.status().failure, undefined);
+	assert.equal(f.status().retryAt, undefined);
+	assert.equal(f.store.linearSyncRecord(f.manager.id)!.attempts, 0);
+	await f.poll();
+	assert.equal(f.writes.length, 1);
 });
 
 test("stale final reads, immutable identity changes and moved teams never write", async (t) => {
@@ -417,6 +426,7 @@ test("rate limits persist backoff across restart; failed write retries after its
 	});
 	await f.poll();
 	assert.equal(f.status().retryAt, now + 900_000);
+	assert.deepEqual(f.status().failure, { stage: "issue", category: "rate_limited" });
 	f.setHook(undefined);
 	await f.restart();
 	await f.poll();
@@ -533,4 +543,239 @@ test("Needs you counts each paused or failed managed ticket and clears on recove
 	await f.poll();
 	assert.equal(f.store.require(f.mission.id).needsYouCount, 0);
 	assert.equal(f.store.require(f.mission.id).needsYouReason, undefined);
+});
+
+test("already In Progress is a verified no-op, but later review and completion still synchronize", async (t) => {
+	const f = await fixture(t);
+	f.state("active");
+	f.set("1", "in_progress");
+	await Promise.all([f.poll(), f.poll(), f.poll()]);
+	await f.poll();
+	assert.equal(f.writes.length, 0);
+	assert.equal(f.status().state, "synced");
+	assert.equal(f.status().observedStateId, "active");
+	assert.equal(f.store.linearSyncRecord(f.manager.id)!.intent, undefined);
+	f.set("1", "done");
+	f.set("2", "in_review");
+	await f.poll();
+	f.set("2", "done");
+	await f.poll();
+	assert.deepEqual(
+		f.writes.map((w) => w.state),
+		["review", "merged"],
+	);
+});
+
+test("Todo transitions once even with concurrent and repeated requests", async (t) => {
+	const f = await fixture(t);
+	f.set("1", "in_progress");
+	await Promise.all([f.poll(), f.poll(), f.poll()]);
+	await f.poll();
+	assert.deepEqual(
+		f.writes.map((w) => w.state),
+		["active"],
+	);
+	assert.equal(f.status().state, "synced");
+});
+
+test("a matching final pre-write observation reconciles without pausing or writing", async (t) => {
+	const f = await fixture(t);
+	f.set("1", "in_progress");
+	let reads = 0;
+	f.setHook((tool) => {
+		if (tool === "issue" && ++reads === 2) f.state("active");
+	});
+	await f.poll();
+	assert.equal(f.status().state, "synced");
+	assert.equal(f.status().observedStateId, "active");
+	assert.equal(f.writes.length, 0);
+});
+
+test("read-only eligibility cannot clear a failed pending write; mission reconciliation clears its own backoff", async (t) => {
+	let now = Date.now();
+	t.mock.method(Date, "now", () => now);
+	const f = await fixture(t);
+	f.set("1", "in_progress");
+	f.setFailure("before");
+	await f.poll();
+	const failed = f.status();
+	assert.equal(failed.state, "error");
+	now += 600_000;
+	f.setFailure(undefined);
+	assert.equal((await f.service.closingEligibility(f.mission.id, f.manager.id)).allowed, false);
+	assert.equal(f.status().error, failed.error);
+	assert.equal(f.status().retryAt, failed.retryAt);
+	assert.equal(f.store.require(f.mission.id).needsYouCount, 1);
+	await f.poll();
+	assert.equal(f.status().state, "synced");
+	assert.equal(f.status().error, undefined);
+	assert.equal(f.status().failure, undefined);
+	assert.equal(f.status().retryAt, undefined);
+	assert.equal(f.store.linearSyncRecord(f.manager.id)!.attempts, 0);
+	assert.equal(f.store.require(f.mission.id).needsYouCount, 0);
+});
+
+test("mission failures retain sanitized stages/categories across restart", async (t) => {
+	for (const [tool, error, category, advice] of [
+		["issue", new SourceToolError("private detail", "access_denied"), "access_denied", /permissions/],
+		["issue", new SourceToolError("private detail", "not_found"), "not_found", /not found/],
+		["issue", new SourceConfigurationError("private detail"), "configuration", /settings/],
+		["issue", new SourceSignInRequired("private detail"), "sign_in", /Sign in/],
+		["issue", new Error("private detail"), "transport", /connection/],
+		["states", new SourceToolError("private detail"), "remote_error", /workflow/],
+		["startIssue", new SourceToolError("private detail"), "write_failed", /status update/],
+	] as const) {
+		await t.test(`${tool}: ${category}`, async (t) => {
+			const f = await fixture(t, true);
+			f.set("1", "in_progress");
+			f.setHook((current) => {
+				if (current === tool) throw error;
+			});
+			await f.poll();
+			assert.equal(f.status().state, "error");
+			assert.deepEqual(f.status().failure, { stage: tool === "startIssue" ? "write" : tool, category });
+			assert.match(f.status().error!, advice);
+			assert.doesNotMatch(JSON.stringify(f.status()), /private/);
+			const failed = f.status();
+			await f.restart();
+			assert.deepEqual(f.status(), failed);
+		});
+	}
+});
+
+test("missing issue responses and missing mappings are not reported as connection failures", async (t) => {
+	const f = await fixture(t);
+	t.mock.method(f.mcp, "call", async () => null);
+	await f.poll();
+	assert.deepEqual(f.status().failure, { stage: "issue", category: "not_found" });
+	const g = await fixture(t);
+	await g.projects.update(g.project.id, { tracking: { linearTeam: "root", slackChannels: [] } });
+	g.set("1", "in_progress");
+	await g.poll();
+	assert.deepEqual(g.status().failure, { stage: "configuration", category: "configuration" });
+	assert.equal(g.writes.length, 0);
+});
+
+test("successful background discovery and commit cannot clear a mission sync failure", async (t) => {
+	const f = await fixture(t);
+	f.set("1", "in_progress");
+	f.setFailure("before");
+	await f.poll();
+	const failed = f.store.linearSyncRecord(f.manager.id);
+	const home = await mkdtemp(join(tmpdir(), "linear-discovery-"));
+	const items = new TrackedItemStore(join(home, "tracked.sqlite"));
+	await items.load([f.project.id]);
+	const registry = new SourceRegistry(f.projects, items, f.mcp);
+	t.after(async () => {
+		await registry.stop();
+		await items.close();
+		await rm(home, { recursive: true, force: true });
+	});
+	registry.register("linear", async () => ({ items: [], activeIds: [] }));
+	assert.equal((await registry.poll(`${f.project.id}:linear`)).status, "ok");
+	assert.deepEqual(f.store.linearSyncRecord(f.manager.id), failed);
+	assert.equal(f.store.require(f.mission.id).needsYouCount, 1);
+});
+
+test("an already-matching ticket still verifies workflow guards and respects explicit pauses", async (t) => {
+	const f = await fixture(t);
+	f.state("active");
+	f.set("1", "in_progress");
+	await f.projects.update(f.project.id, {
+		tracking: {
+			linearTeam: "root",
+			slackChannels: [],
+			linearStateMappings: {
+				child: { ...mappings, deployed: { id: "todo", name: "Todo" } },
+			},
+		},
+	});
+	await f.poll();
+	assert.equal(f.status().state, "error", "a status no-op cannot skip other required validation");
+	assert.equal(f.status().failure?.category, "configuration");
+	assert.equal(f.writes.length, 0);
+	const g = await fixture(t);
+	g.state("active");
+	g.set("1", "in_progress");
+	g.store.controlLinearSync(g.mission.id, g.manager.id, "pause");
+	await g.poll();
+	assert.equal(g.status().state, "paused");
+	assert.equal(g.writes.length, 0);
+});
+
+test("terminal observation retains its warning until required cancellation reconciliation succeeds", async (t) => {
+	let now = Date.now();
+	t.mock.method(Date, "now", () => now);
+	const f = await fixture(t);
+	f.set("1", "in_progress");
+	f.setFailure("before");
+	await f.poll();
+	const failed = f.status();
+	now += 600_000;
+	f.state("canceled");
+	let reads = 0;
+	let observedError: string | undefined;
+	let observedNeedsYou = 0;
+	f.setHook((tool) => {
+		if (tool === "issue" && ++reads === 2) {
+			observedError = f.status().error;
+			observedNeedsYou = f.store.require(f.mission.id).needsYouCount;
+			throw new SourceToolError("private detail");
+		}
+	});
+	await f.poll();
+	assert.equal(observedError, failed.error);
+	assert.equal(observedNeedsYou, 1);
+	assert.deepEqual(f.status().failure, { stage: "cancellation", category: "remote_error" });
+	assert.equal(f.store.require(f.mission.id).needsYouCount, 1);
+	f.setHook(undefined);
+	now += 600_000;
+	await f.poll();
+	assert.equal(f.status().state, "terminal");
+	assert.equal(f.status().error, undefined);
+	assert.equal(f.status().failure, undefined);
+	assert.equal(f.status().retryAt, undefined);
+	assert.equal(f.store.linearSyncRecord(f.manager.id)!.attempts, 0);
+	assert.equal(f.store.require(f.mission.id).needsYouCount, 0);
+	assert.equal(f.store.resolveTask(f.mission.id, "1").status, "dropped");
+});
+
+test("a status no-op does not skip synchronization of other managed tickets", async (t) => {
+	const f = await fixture(t);
+	f.issues.push(remote(2));
+	const peer = f.store.addResource(f.mission.id, { url: url(2), linearRole: "managed" });
+	f.store.addResource(f.mission.id, { url: url(2), taskId: "1", linearRole: "contribution" });
+	f.state("active");
+	f.set("1", "in_progress");
+	await f.poll();
+	assert.equal(f.status().state, "synced");
+	assert.equal(f.store.linearSyncRecord(peer.id)!.status.state, "synced");
+	assert.deepEqual(f.writes, [{ id: f.issues[1]!.id, state: "active" }]);
+});
+
+test("exhausted write retries retain the actual failure and still reconcile without replay", async (t) => {
+	let now = Date.now();
+	t.mock.method(Date, "now", () => now);
+	const f = await fixture(t);
+	f.set("1", "in_progress");
+	let rejected = 0;
+	f.setHook((tool) => {
+		if (tool === "startIssue") {
+			rejected++;
+			throw new SourceToolError("private detail", "access_denied");
+		}
+	});
+	for (let n = 0; n < 6; n++) {
+		await f.poll();
+		now += 600_000;
+	}
+	assert.equal(rejected, 5);
+	assert.deepEqual(f.status().failure, { stage: "write", category: "access_denied" });
+	f.state("active");
+	await f.poll();
+	assert.equal(f.status().state, "synced");
+	assert.equal(f.status().failure, undefined);
+	assert.equal(f.status().retryAt, undefined);
+	assert.equal(f.store.linearSyncRecord(f.manager.id)!.attempts, 0);
+	assert.equal(rejected, 5);
 });

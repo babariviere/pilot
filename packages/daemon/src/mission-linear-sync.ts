@@ -1,11 +1,18 @@
 /** Single-flight, bounded remote synchronization. SQLite intents precede every network write. */
 import { createHash } from "node:crypto";
-import type { LinearStateMapping, ProjectTrackingConfig, TrackingJson } from "@pilot/protocol";
+import type { LinearStateMapping, MissionLinearSync, ProjectTrackingConfig, TrackingJson } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
 import { workflowStates } from "./linear-workflow.ts";
 import type { MissionStore } from "./missions.ts";
 import type { ProjectStore } from "./projects.ts";
-import { type SourceMcpClient, SourceRateLimited, SourceSignInRequired } from "./source-mcp.ts";
+import {
+	SourceConfigurationError,
+	type SourceMcpClient,
+	SourceRateLimited,
+	SourceSignInRequired,
+	SourceToolError,
+} from "./source-mcp.ts";
+import { LookupFormatChanged } from "./tracking-lookup.ts";
 
 type Linked = NonNullable<ReturnType<MissionStore["linearSyncResource"]>>;
 type Call = (tool: string, args: Record<string, unknown>) => Promise<TrackingJson>;
@@ -13,8 +20,39 @@ type Issue = { id: string; identifier: string; teamId: string; stateId: string; 
 const FIELDS = ["id", "uuid", "identifier", "url", "teamId", "statusId", "status", "statusType"];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-class SyncProblem extends Error {}
+type Failure = NonNullable<MissionLinearSync["failure"]>;
+class SyncProblem extends Error {
+	readonly category: Failure["category"];
+	constructor(message: string, category: Failure["category"] = "invalid_response") {
+		super(message);
+		this.category = category;
+	}
+}
 class StaleSync extends Error {}
+function failureCategory(error: unknown, stage: Failure["stage"]): Failure["category"] {
+	if (error instanceof SyncProblem) return error.category;
+	if (error instanceof SourceSignInRequired) return "sign_in";
+	if (error instanceof SourceConfigurationError) return "configuration";
+	if (error instanceof SourceRateLimited) return "rate_limited";
+	if (error instanceof SourceToolError)
+		return error.category === "tool_error" ? (stage === "write" ? "write_failed" : "remote_error") : error.category;
+	if (error instanceof LookupFormatChanged) return "invalid_response";
+	return ["issue", "states", "write", "confirm", "cancellation"].includes(stage) ? "transport" : "unknown";
+}
+
+const FAILURE_ADVICE: Record<Failure["category"], string> = {
+	sign_in: "Sign in to Linear in Settings, then retry synchronization.",
+	access_denied: "Linear denied access. Check ticket and team permissions, then retry synchronization.",
+	not_found: "The linked Linear ticket was not found. Review its link and access, then retry.",
+	configuration: "Review the Linear integration and Project settings, then retry synchronization.",
+	transport:
+		"Linear request failed or timed out. Check the connection, then retry synchronization. Unconfirmed writes are reconciled first.",
+	rate_limited: "Linear is limiting requests. Synchronization will retry after the backoff.",
+	invalid_response: "Linear returned an invalid response. Retry synchronization or review the integration.",
+	write_failed: "Linear couldn't confirm the status update. Review the ticket and status mapping, then retry.",
+	remote_error: "Linear couldn't read the ticket or workflow. Review ticket access and retry synchronization.",
+	unknown: "Couldn't complete Linear synchronization. Review the ticket and retry.",
+};
 function object(value: TrackingJson): Record<string, TrackingJson> {
 	if (!value || typeof value !== "object" || Array.isArray(value))
 		throw new SyncProblem("Linear returned an invalid issue. Check access and retry.");
@@ -131,6 +169,7 @@ export class MissionLinearSyncService {
 				delete link.record.status.issueId;
 				throw new SyncProblem(
 					"This Linear issue already has a verified managing link. Remove the duplicate manager, then retry.",
+					"configuration",
 				);
 			}
 			throw error;
@@ -142,6 +181,7 @@ export class MissionLinearSyncService {
 		link.record.paused = reason;
 		link.record.status = { ...link.record.status, state: "paused", reason, updatedAt: Date.now() };
 		delete link.record.status.error;
+		delete link.record.status.failure;
 		delete link.record.status.retryAt;
 		delete link.record.intent;
 		this.save(link);
@@ -152,9 +192,16 @@ export class MissionLinearSyncService {
 		link: Linked,
 		call: Call,
 	): Promise<{ issue: Issue; mapping: LinearStateMapping | undefined; states: ReturnType<typeof workflowStates> }> {
-		const raw = object(
-			await call("issue", { id: link.record.status.issueId ?? link.resource.externalId, fields: FIELDS }),
-		);
+		const response = await call("issue", {
+			id: link.record.status.issueId ?? link.resource.externalId,
+			fields: FIELDS,
+		});
+		if (response === null)
+			throw new SyncProblem(
+				"The linked Linear ticket was not found. Review its link and access, then retry.",
+				"not_found",
+			);
+		const raw = object(response);
 		const id = string(raw.uuid ?? raw.id).toLowerCase();
 		if (!UUID.test(id))
 			throw new SyncProblem("Linear did not return an immutable issue UUID. Refresh the link and retry.");
@@ -197,6 +244,7 @@ export class MissionLinearSyncService {
 			if (mapping?.[slot] && !states.some((s) => s.id === mapping[slot]!.id && s.type === type))
 				throw new SyncProblem(
 					`Choose a valid ${slot} state for the issue's actual team in Project settings, then retry.`,
+					"configuration",
 				);
 		}
 		return {
@@ -212,12 +260,33 @@ export class MissionLinearSyncService {
 		if (mapping?.deployed?.id === issue.stateId) return "deployed";
 	}
 
+	private synced(link: Linked, issue: Issue): void {
+		const record = link.record;
+		record.status = {
+			...record.status,
+			state: "synced",
+			observedStateId: issue.stateId,
+			observedStateName: issue.stateName,
+			updatedAt: Date.now(),
+		};
+		delete record.status.error;
+		delete record.status.failure;
+		delete record.status.retryAt;
+		delete record.status.reason;
+		record.attempts = 0;
+		delete record.intent;
+		this.save(link);
+	}
+
 	private async synchronize(link: Linked, signal: AbortSignal, readOnly = false): Promise<boolean | undefined> {
 		if (this.busy.size) return false;
 		this.busy.add(link.resource.id);
 		const initialAttempts = link.record.attempts;
 		const config = configKey(this.projects.get(link.projectId)?.tracking);
+		let stage: Failure["stage"] = "prepare";
 		const call: Call = async (tool, args) => {
+			if (stage !== "confirm" && stage !== "cancellation")
+				stage = tool === "startIssue" ? "write" : tool === "states" ? "states" : "issue";
 			this.current(link, config, signal);
 			const value = await this.mcp.call("linear", tool, args, signal);
 			this.current(link, config, signal);
@@ -228,9 +297,11 @@ export class MissionLinearSyncService {
 			if (record.contributors.length > 1000)
 				throw new SyncProblem(
 					"This ticket has more than 1,000 contributing tasks. Reduce its contribution scope before retrying synchronization.",
+					"configuration",
 				);
 			if (record.status.retryAt && record.status.retryAt > Date.now()) return;
 			const { issue, mapping, states } = await this.observe(link, call);
+			stage = "configuration";
 			const terminal = this.terminal(issue, mapping);
 			const previous = { ...record.status };
 			record.status = {
@@ -246,10 +317,16 @@ export class MissionLinearSyncService {
 				record.status.reason = terminal;
 				delete record.intent;
 				delete record.status.target;
-				delete record.status.error;
-				delete record.status.retryAt;
+				if (terminal !== "deployed") {
+					stage = "cancellation";
+					await this.cancelTasks(link, config, signal, call);
+				}
+				// Observing terminal state alone does not complete required peer/task reconciliation.
+				delete link.record.status.error;
+				delete link.record.status.failure;
+				delete link.record.status.retryAt;
+				link.record.attempts = 0;
 				this.save(link);
-				if (terminal !== "deployed") await this.cancelTasks(link, config, signal, call);
 				return;
 			}
 			if (!record.acceptBaseline && previous.teamId && previous.teamId !== issue.teamId) {
@@ -277,6 +354,7 @@ export class MissionLinearSyncService {
 				record.status.reason = record.paused ?? record.status.reason;
 				delete record.intent;
 				delete record.status.error;
+				delete record.status.failure;
 				delete record.status.retryAt;
 				record.attempts = 0;
 				this.save(link);
@@ -297,6 +375,7 @@ export class MissionLinearSyncService {
 			)
 				throw new SyncProblem(
 					"Choose a valid Merged state for the issue's actual team in Project settings before using a closing directive.",
+					"configuration",
 				);
 			if (readOnly && issue.type === "completed") return false;
 			if (
@@ -309,24 +388,26 @@ export class MissionLinearSyncService {
 			)
 				throw new SyncProblem(
 					`Choose a valid ${record.intent.target} state for the issue's actual team in Project settings, then retry.`,
+					"configuration",
 				);
+			if (record.intent && target && issue.stateId === target.id) {
+				this.synced(link, issue);
+				return readOnly ? true : undefined;
+			}
+			if (readOnly && record.intent) {
+				// A fresh read verifies PR policy, not an outstanding write. Retain that write's
+				// warning and retry budget until mission reconciliation actually succeeds.
+				this.save(link);
+				return record.status.state !== "error";
+			}
 			if (!record.intent || !target || readOnly) {
 				if (record.status.state === "error") record.status.state = record.intent ? "pending" : "idle";
 				delete record.status.error;
+				delete record.status.failure;
 				delete record.status.retryAt;
 				record.attempts = 0;
 				this.save(link);
 				return true;
-			}
-			if (issue.stateId === target.id) {
-				record.status.state = "synced";
-				delete record.status.error;
-				delete record.status.retryAt;
-				delete record.status.reason;
-				record.attempts = 0;
-				delete record.intent;
-				this.save(link);
-				return;
 			}
 			if (issue.type === "completed") {
 				this.pause(
@@ -342,10 +423,18 @@ export class MissionLinearSyncService {
 				);
 				return;
 			}
+			if (record.attempts >= 5 && record.status.error) {
+				// Continue observing for reconciliation/cancellation without replacing the actual
+				// failing stage and category with generic retry-budget advice.
+				this.save(link);
+				return;
+			}
 			if (record.attempts >= 5)
 				throw new SyncProblem(
 					"Automatic Linear updates stopped after five attempts. Check the ticket and connection, then retry synchronization.",
+					"write_failed",
 				);
+			stage = "prepare";
 			record.intent.stateId = target.id;
 			record.intent.config = config;
 			record.status.state = "pending";
@@ -356,6 +445,10 @@ export class MissionLinearSyncService {
 			// Linear has no conditional update. Minimize the unavoidable read/write race and do not
 			// replay if another actor changed the remote state or actual team during preparation.
 			const latest = await this.observe(link, call);
+			if (latest.issue.teamId === issue.teamId && latest.issue.stateId === target.id) {
+				this.synced(link, latest.issue);
+				return;
+			}
 			if (latest.issue.teamId !== issue.teamId || latest.issue.stateId !== issue.stateId) {
 				this.pause(
 					link,
@@ -366,36 +459,25 @@ export class MissionLinearSyncService {
 			await call("startIssue", { id: issue.id, state: target.id });
 			// A successful RPC is not proof that the new state was applied. Confirmation also repairs
 			// a crash after the write on the next poll, without issuing a duplicate update.
+			stage = "confirm";
 			const confirmed = await this.observe(link, call);
 			if (confirmed.issue.stateId !== target.id || confirmed.issue.teamId !== issue.teamId)
-				throw new SyncProblem("Linear did not confirm the requested status. Check the ticket and retry.");
-			record.status = {
-				...record.status,
-				state: "synced",
-				observedStateId: confirmed.issue.stateId,
-				observedStateName: confirmed.issue.stateName,
-				updatedAt: Date.now(),
-			};
-			delete record.status.error;
-			delete record.status.retryAt;
-			delete record.status.reason;
-			record.attempts = 0;
-			delete record.intent;
-			this.save(link);
+				throw new SyncProblem(
+					"Linear did not confirm the requested status. Check the ticket and retry.",
+					"write_failed",
+				);
+			this.synced(link, confirmed.issue);
 		} catch (error) {
 			if (error instanceof StaleSync || this.stopped) return;
 			const record = link.record;
+			const category = failureCategory(error, stage);
 			record.attempts = Math.min(5, Math.max(initialAttempts + 1, record.attempts));
 			record.status = {
 				...record.status,
 				state: record.paused ? "paused" : "error",
 				updatedAt: Date.now(),
-				error:
-					error instanceof SyncProblem
-						? error.message
-						: error instanceof SourceSignInRequired
-							? "Sign in to Linear in Settings, then retry synchronization."
-							: "Couldn't synchronize Linear. Check the connection, ticket access and Project settings, then retry.",
+				failure: { stage, category },
+				error: error instanceof SyncProblem ? error.message : FAILURE_ADVICE[category],
 			};
 			if (record.attempts < 5)
 				record.status.retryAt =
@@ -420,6 +502,7 @@ export class MissionLinearSyncService {
 		if (peerIds.length > 25)
 			throw new SyncProblem(
 				"Too many shared ticket links to verify safely. Review the contributing tasks and retry.",
+				"configuration",
 			);
 		const peers = new Map<string, { version: string; inactive: boolean }>();
 		for (const id of peerIds) {
@@ -442,8 +525,17 @@ export class MissionLinearSyncService {
 		if (!["canceled", "duplicated"].includes(this.terminal(latest.issue, latest.mapping) ?? ""))
 			throw new StaleSync();
 		this.current(link, config, signal);
-		this.store.dropCanceledLinearTasks(link.resource.id, link.record.version, peers);
+		// Publish the verified terminal observation only after all remote prerequisites succeeded,
+		// immediately before the synchronous task policy. Failed peer reads retain the warning.
+		this.save(link);
+		if (!this.store.dropCanceledLinearTasks(link.resource.id, link.record.version, peers)) throw new StaleSync();
+		// Dropping contributors may change our own version synchronously. Retain that exact version
+		// across the durability await so unrelated scope edits still fence completion.
+		const current = this.store.linearSyncResource(link.resource.id);
+		if (!current) throw new StaleSync();
+		link.record = current.record;
 		await this.store.durable();
+		this.current(link, config, signal);
 	}
 
 	/** Finality itself is checked by the PR policy; this supplies a fresh fail-closed lifecycle guard. */

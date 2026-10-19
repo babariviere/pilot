@@ -55,8 +55,44 @@ export function validSourceArguments(tool: string, args: Record<string, unknown>
 }
 
 export class SourceSignInRequired extends Error {}
+export class SourceConfigurationError extends Error {}
+export type SourceToolFailure = "access_denied" | "not_found" | "tool_error";
 /** The tool itself reported an error (for example, no access to one channel). The server was reachable. */
-export class SourceToolError extends Error {}
+export class SourceToolError extends Error {
+	readonly category: SourceToolFailure;
+	constructor(message: string, category: SourceToolFailure = "tool_error") {
+		super(message);
+		this.category = category;
+	}
+}
+
+/** Only recognized status/code values cross the worker boundary, never provider prose. */
+export function sourceToolFailure(value: unknown): SourceToolFailure {
+	const object = (v: unknown): Record<string, unknown> =>
+		v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+	const root = object(value);
+	let payload = object(root.structuredContent);
+	// MCP error envelopes can carry structured codes in one JSON text block instead.
+	if (!root.structuredContent && Array.isArray(root.content) && root.content.length === 1) {
+		const block = object(root.content[0]);
+		if (block.type === "text" && typeof block.text === "string" && block.text.length <= 8192) {
+			try {
+				payload = object(JSON.parse(block.text));
+			} catch {
+				/* Unstructured prose is not a reliable category. */
+			}
+		}
+	}
+	const data = object(root.data);
+	const detail = object(payload.error ?? root.error);
+	const codes = [root, payload, data, detail].flatMap((v) => [v.code, v.status, v.statusCode, v.error]);
+	const normalized = codes.map((code) => (typeof code === "string" && code.length <= 100 ? code.toUpperCase() : code));
+	const denied = new Set<unknown>([403, "403", "FORBIDDEN", "PERMISSION_DENIED", "ACCESS_DENIED"]);
+	const missing = new Set<unknown>([404, "404", "NOT_FOUND", "ENTITY_NOT_FOUND"]);
+	if (normalized.some((c) => denied.has(c))) return "access_denied";
+	if (normalized.some((c) => missing.has(c))) return "not_found";
+	return "tool_error";
+}
 export class SourceRateLimited extends Error {
 	readonly retryAfterMs: number;
 	constructor(retryAfterMs = 60_000) {
@@ -211,6 +247,8 @@ export class PiSourceMcpClient implements SourceMcpClient {
 					signIn?: boolean;
 					retryAfterMs?: number;
 					toolError?: boolean;
+					failureCategory?: SourceToolFailure;
+					configuration?: boolean;
 				}) => {
 					replied = true;
 					// Worker posts only after connection.close() and OAuth writes have settled.
@@ -223,8 +261,10 @@ export class PiSourceMcpClient implements SourceMcpClient {
 								: reply.retryAfterMs
 									? new SourceRateLimited(reply.retryAfterMs)
 									: reply.toolError
-										? new SourceToolError(reply.error)
-										: new Error(reply.error),
+										? new SourceToolError(reply.error, reply.failureCategory)
+										: reply.configuration
+											? new SourceConfigurationError(reply.error)
+											: new Error(reply.error),
 						);
 					else resolve(reply.value!);
 				},
@@ -274,7 +314,8 @@ export function decodeMcpResult(
 		}
 		throw new SourceToolError("Couldn't remove Slack eyes reaction");
 	}
-	if (result.isError) throw sourceRateLimit(result) ?? new SourceToolError("MCP tool returned an error");
+	if (result.isError)
+		throw sourceRateLimit(result) ?? new SourceToolError("MCP tool returned an error", sourceToolFailure(result));
 	const value =
 		result.structuredContent ??
 		(() => {
@@ -286,6 +327,18 @@ export function decodeMcpResult(
 		})();
 	const json = JSON.stringify(value);
 	if (!json || Buffer.byteLength(json) > 512 * 1024) throw new Error("MCP response exceeds 512 KiB or is empty");
+	if (
+		["issue", "states", "startIssue"].includes(tool ?? "") &&
+		value &&
+		typeof value === "object" &&
+		(("error" in value && !!value.error) ||
+			("success" in value && value.success === false) ||
+			("ok" in value && value.ok === false))
+	)
+		throw (
+			sourceRateLimit({ structuredContent: value }) ??
+			new SourceToolError("MCP tool returned an error", sourceToolFailure({ structuredContent: value }))
+		);
 	return JSON.parse(json) as TrackingJson;
 }
 

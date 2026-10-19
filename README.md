@@ -608,6 +608,10 @@ Resume accepts the reviewed task scope and fresh remote baseline, and retries fa
 Writes use verified immutable issue IDs and actual-team mappings, durable fenced intents, bounded
 retries and fresh reads before updates. Linear has no conditional status update, so a simultaneous
 external edit between the final read and write remains an unavoidable remote race.
+An already-matching verified status is a successful no-op. Uncertain writes are reconciled before
+retrying. Failures retain a sanitized stage and category in `linearSync.failure`; successful background
+discovery cannot clear a mission ticket's warning or backoff, nor can a read-only PR check clear an
+outstanding failed status update.
 
 For linked task PRs, `prGuidance` gives current ticket-specific wording: earlier contributors use
 `Related to`, while the final contributor uses `Closes` only after every other contributor is Done
