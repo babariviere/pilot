@@ -238,6 +238,25 @@
 			}
 		},
 		{
+			"action": "upgrade_permission",
+			"args": {
+				"sessionId": "chat:1",
+				"authorizationId": "auth:1"
+			}
+		},
+		{
+			"action": "upgrade_permission",
+			"host": {
+				"hostId": "daemon",
+				"daemonId": "executor-daemon",
+				"lineageId": "executor-lineage"
+			},
+			"args": {
+				"sessionId": "chat:1",
+				"authorizationId": "auth:1"
+			}
+		},
+		{
 			"action": "start",
 			"args": {}
 		},
