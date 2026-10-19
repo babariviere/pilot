@@ -348,14 +348,14 @@ enum PerformanceCheck {
 /// Counts display frames the main thread missed, from the window's display link (120 Hz on ProMotion displays).
 /// A gap longer than one and a half frames is a hitch; its length in frames, less one, is the frames dropped.
 @MainActor
-private final class FrameMonitor: NSObject {
+final class FrameMonitor: NSObject {
     private var link: CADisplayLink?
     private var last: CFTimeInterval?
-    private var frameDuration: CFTimeInterval = 0
-    private var frames = 0
-    private var hitches = 0
-    private var dropped = 0
-    private var longest: CFTimeInterval = 0
+    private(set) var frameDuration: CFTimeInterval = 0
+    private(set) var frames = 0
+    private(set) var hitches = 0
+    private(set) var dropped = 0
+    private(set) var longest: CFTimeInterval = 0
 
     func start(on view: NSView) {
         let link = view.displayLink(target: self, selector: #selector(tick(_:)))
