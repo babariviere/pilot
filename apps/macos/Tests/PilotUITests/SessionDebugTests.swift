@@ -80,9 +80,11 @@ private func sourceSession(control: Bool? = nil) -> SessionSummary {
     "uncertainty":"medium","suggestedRepair":"Preserve the failure evidence.",
     "regressionTestGuidance":"Cover supervised exit."}
     """.utf8))
+    let targetSessionId = try #require(handoff.targetSessionId)
+    let target = try #require(DiagnosticTargetReference(host: localHost, sessionId: targetSessionId))
     let admission = DiagnosticRepairAdmission(
         specialistSessionId: "11111111-1111-4111-8111-111111111111", proposalId: handoff.proposalId,
-        subject: .chat(try #require(DiagnosticTargetReference(host: localHost, sessionId: try #require(handoff.targetSessionId)))),
+        subject: .chat(target),
         binding: repairBinding, repairTitle: "Worker startup loses failure evidence")
     let request = try DiagnosticRepair.spawnRequest(handoff: handoff, destinationProjectId: repairProject.id,
                                                     admission: admission)
@@ -130,9 +132,11 @@ private func sourceSession(control: Bool? = nil) -> SessionSummary {
 
 @Test func projectlessRepairRequiresTheConfiguredSourceRatherThanAnArbitraryDestination() throws {
     let handoff = try JSONDecoder().decode(DiagnosticsHandoff.self, from: Data(#"{"schemaVersion":1,"host":{"hostId":"local","daemonId":"daemon","lineageId":"lineage"},"targetSessionId":"01234567-89ab-4cde-8fab-0123456789ab","evidence":[],"proposalId":"proposal","findings":"Finding","uncertainty":"high","suggestedRepair":"Repair","regressionTestGuidance":"Test"}"#.utf8))
+    let targetSessionId = try #require(handoff.targetSessionId)
+    let target = try #require(DiagnosticTargetReference(host: localHost, sessionId: targetSessionId))
     let admission = DiagnosticRepairAdmission(
         specialistSessionId: "11111111-1111-4111-8111-111111111111", proposalId: handoff.proposalId,
-        subject: .chat(try #require(DiagnosticTargetReference(host: localHost, sessionId: try #require(handoff.targetSessionId)))),
+        subject: .chat(target),
         binding: repairBinding, repairTitle: "Worker startup retains stale state")
     let request = try DiagnosticRepair.spawnRequest(handoff: handoff, destinationProjectId: repairProject.id,
                                                     admission: admission)
