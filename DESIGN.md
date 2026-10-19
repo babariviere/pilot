@@ -161,23 +161,24 @@ The palette is for jumping to places first: with an empty field, pages and resou
 chats follow. When a search matches a resource and a chat equally well, the resource leads; an exact chat title
 stays first. The highlighted list row's actions sit in their own labeled group, after the places.
 
-Keyboard navigation (`KeyboardNavigation.swift`) has one owner at a time. The window has four regions, in ⌃⇥
-order: sidebar, page, composer and inspector, skipping those not on screen. A region marks itself with
+Keyboard navigation (`KeyboardNavigation.swift`) has one owner at a time. The window has four regions: sidebar,
+page, composer and inspector, skipping those not on screen; ⌘L and ⌘K's Focus entries move between them. A region
+marks itself with
 `keyboardRegion(_:onFocus:)`, and a page's main list takes the page's focus with `keyboardFocusHandler`.
 There are no plain-letter shortcuts, key sequences or pending-key modes: letters, digits and IME input always reach
 the focused view, and destinations live in the Go menu and ⌘K. `KeyboardInputGuard` reads the AppKit first
-responder to tell text, terminal and web content from browsing. Only ⌃⇥, ⌃⇧⇥ and ⌘L, plus ⌘K and ⌘J from a
-terminal or artifact, are read before the focused view; they are also the way out of embedded content. Every other
+responder to tell text, terminal and web content from browsing. Only ⌘L, plus ⌘K and ⌘J from a terminal or
+artifact, are read before the focused view; they are also the way out of embedded content. Every other
 shortcut is a menu key equivalent, so a focused view keeps its own first. Highlight, focus and editing stay
 distinct: moving through a list never opens, edits or submits, and row actions such as editing a title or message
 are buttons, context menus and ⌘K entries, not letters.
 Long pages use `keyboardList()` on their column and `keyboardListItem(_:target:activate:)` on rows (`KeyboardList.swift`):
 one focus stop, Return for the row's click action, and the highlight kept by row id through refreshes (the nearest
 row takes over when it leaves). Arrowing through sidebar chats keeps focus in the sidebar; the composer of the chat
-it opens waits for ⌘L, ⌃⇥ or a click.
+it opens waits for ⌘L or a click.
 Keyboard targets are shown only while the keyboard navigates (`KeyboardCue.swift`): the highlighted list row or
 transcript message gets `Theme.keyboardHighlight`, a very faint neutral fill with no outline, and list rows reveal
-their hover actions. Navigation keys outside text, ⌃⇥, and Tab or Escape out of a field turn it on; typing never
+their hover actions. Navigation keys outside text, and Tab or Escape out of a field turn it on; typing never
 does. Any click hides it, including when focus arrives later, while the target, selection and ⌘K actions stay.
 Chat rows are the exception: their highlight is a selection and keeps the grey `Theme.selected` fill after clicks.
 

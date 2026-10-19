@@ -1,8 +1,9 @@
 import AppKit
 import SwiftUI
 
-// One keyboard entry for a long page: the page's list takes focus once (⌃⇥, a Go menu destination, or a click), then
-// arrows move a highlight through its rows and Return opens the highlighted row. Tab is not needed per row.
+// One keyboard entry for a long page: the page's list takes focus once (a Go menu destination, Escape from the
+// composer, or a click), then arrows move a highlight through its rows and Return opens the highlighted row. Tab is
+// not needed per row.
 // Rows report themselves through a preference, in view order, so lists keep their existing layout and lazy parts.
 
 /// A row the page's keyboard list can highlight and open.

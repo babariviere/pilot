@@ -39,8 +39,8 @@ private func model() -> AppModel {
     try #require(entries.first { $0.item.id == help.id }).perform()
     #expect(opened == 1)
     #expect(KeyboardShortcuts.filtered("").count == KeyboardShortcuts.groups.count)
-    let filtered = KeyboardShortcuts.filtered("region")
-    #expect(filtered.flatMap(\.entries).map(\.title).contains("Focus next region"))
+    let filtered = KeyboardShortcuts.filtered("composer")
+    #expect(filtered.flatMap(\.entries).map(\.title).contains("Focus composer or question"))
     #expect(KeyboardShortcuts.filtered("⌘L").flatMap(\.entries).contains { $0.keys == "⌘L" })
     #expect(KeyboardShortcuts.filtered("zzzz").isEmpty)
 }

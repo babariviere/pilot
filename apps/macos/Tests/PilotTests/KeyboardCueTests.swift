@@ -24,10 +24,10 @@ private let escape: UInt16 = KeyboardChord.escapeKeyCode
     // Menu shortcuts are not navigation.
     #expect(!KeyboardCue.navigates(chord("n", .command), context: .navigation, fieldEditor: false))
     #expect(!KeyboardCue.navigates(chord("k", .command), context: .navigation, fieldEditor: false))
-    // ⌃⇥ moves between regions from anywhere.
+    // ⌃⇥ is not an app shortcut: it shows nothing over text or embedded content.
     for context in [KeyboardInputContext.navigation, .text, .embedded] {
-        #expect(KeyboardCue.navigates(chord("\t", .control, keyCode: tab), context: context, fieldEditor: false))
-        #expect(KeyboardCue.navigates(chord("\t", [.control, .shift], keyCode: tab), context: context, fieldEditor: false))
+        #expect(!KeyboardCue.navigates(chord("\t", .control, keyCode: tab), context: context, fieldEditor: false))
+        #expect(!KeyboardCue.navigates(chord("\t", [.control, .shift], keyCode: tab), context: context, fieldEditor: false))
     }
     // Typing and editing keys in an editor never show it, including the composer's Tab completion.
     for key in [chord("g", keyCode: 5), chord("j", keyCode: 38), chord("\u{f701}", keyCode: 125), chord("\r", keyCode: 36),
@@ -118,12 +118,12 @@ private func click(in window: NSWindow) -> NSEvent? {
     // A letter in the list is not navigation, so the cue stays hidden.
     _ = router.handle(try #require(key("j", keyCode: 38, in: window)))
     #expect(!cue.visible)
-    // The next navigation key restores it: an arrow in the list, or ⌃⇥ from an editor.
+    // The next navigation key restores it: an arrow in the list, or Escape out of an editor.
     _ = router.handle(try #require(key("\u{f701}", keyCode: 125, modifiers: [.function, .numericPad], in: window)))
     #expect(cue.visible)
     _ = router.handlePointer(down)
     #expect(window.makeFirstResponder(editor))
-    _ = router.handle(try #require(key("\t", keyCode: KeyboardChord.tabKeyCode, modifiers: .control, in: window)))
+    _ = router.handle(try #require(key("\u{1b}", keyCode: KeyboardChord.escapeKeyCode, in: window)))
     #expect(cue.visible)
 }
 

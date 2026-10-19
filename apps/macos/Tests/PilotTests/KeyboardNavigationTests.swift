@@ -9,13 +9,11 @@ private func chord(_ characters: String, _ modifiers: NSEvent.ModifierFlags = []
     KeyboardChord(characters: characters, keyCode: keyCode, modifiers: modifiers)
 }
 
-private let controlTab = chord("\t", .control, keyCode: KeyboardChord.tabKeyCode)
-
-@Test func reservedRegionAndComposerKeysWorkEverywhere() {
+@Test func composerKeyWorksEverywhereAndControlTabIsNotReserved() {
     for context in [KeyboardInputContext.navigation, .text, .embedded] {
-        #expect(KeyboardRoute.decide(controlTab, context: context) == .focusNextRegion)
-        #expect(KeyboardRoute.decide(chord("\t", [.control, .shift], keyCode: 48), context: context)
-            == .focusPreviousRegion)
+        // ⌃⇥ and ⌃⇧⇥ reach the focused view (a terminal, web content, or AppKit's own key view loop).
+        #expect(KeyboardRoute.decide(chord("\t", .control, keyCode: 48), context: context) == .pass)
+        #expect(KeyboardRoute.decide(chord("\t", [.control, .shift], keyCode: 48), context: context) == .pass)
         #expect(KeyboardRoute.decide(chord("l", .command), context: context) == .focusComposer)
     }
     // Plain Tab and Shift-Tab keep moving between controls.
@@ -126,28 +124,24 @@ private final class RegionFixture {
     }
 }
 
-@Test @MainActor func regionsCycleInOrderSkippingAbsentOnes() throws {
+@Test @MainActor func regionsFocusTheirOwnViewsSkippingAbsentOnes() throws {
     let fixture = RegionFixture()
     defer { fixture.window.close() }
     #expect(fixture.focus.visibleRegions == [.sidebar, .content, .composer])
-    #expect(fixture.focus.cycle(forward: true))
+    #expect(fixture.focus.focus(.sidebar))
     #expect(fixture.responderRegion == .sidebar)
     #expect(fixture.focus.currentRegion() == .sidebar)
-    #expect(fixture.focus.cycle(forward: true))
+    #expect(fixture.focus.focus(.content))
     #expect(fixture.responderRegion == .content, "the page's own view, not the composer inside it")
-    #expect(fixture.focus.cycle(forward: true))
+    #expect(fixture.focus.focus(.composer))
     #expect(fixture.responderRegion == .composer)
     #expect(fixture.focus.currentRegion() == .composer)
-    #expect(fixture.focus.cycle(forward: true))
-    #expect(fixture.responderRegion == .sidebar, "wraps around")
-    #expect(fixture.focus.cycle(forward: false))
-    #expect(fixture.responderRegion == .composer)
 
-    // A hidden region is skipped.
+    // A hidden region cannot take focus.
     fixture.anchors[.content]?.isHidden = true
     #expect(fixture.focus.visibleRegions == [.sidebar, .composer])
-    #expect(fixture.focus.cycle(forward: true))
-    #expect(fixture.responderRegion == .sidebar)
+    #expect(!fixture.focus.focus(.content))
+    #expect(fixture.responderRegion == .composer)
 }
 
 @Test @MainActor func regionHandlersRunBeforeTheNativeFallback() throws {
@@ -197,10 +191,13 @@ private func keyEvent(_ characters: String, keyCode: UInt16, modifiers: NSEvent.
     let g = try #require(keyEvent("g", keyCode: 5, window: window))
     #expect(router.handle(g) === g)
     #expect(routes.isEmpty)
-    // Ctrl-Tab is reserved even while editing.
+    // ⌃⇥ is not reserved: the editor (or AppKit's key view loop) gets it.
     let tab = try #require(keyEvent("\t", keyCode: 48, modifiers: .control, window: window))
-    #expect(router.handle(tab) == nil)
-    #expect(routes == [.focusNextRegion])
+    #expect(router.handle(tab) === tab)
+    // ⌘L is reserved even while editing.
+    let commandL = try #require(keyEvent("l", keyCode: 37, modifiers: .command, window: window))
+    #expect(router.handle(commandL) == nil)
+    #expect(routes == [.focusComposer])
 
     // Browsing a list: letters still reach it unchanged (type-select, VoiceOver), and nothing waits for a second key.
     let list = NSTableView(frame: NSRect(x: 0, y: 300, width: 150, height: 200))
@@ -215,12 +212,12 @@ private func keyEvent(_ characters: String, keyCode: UInt16, modifiers: NSEvent.
     // Arrows and Return are the list's own, delivered unchanged.
     let down = try #require(keyEvent("\u{f701}", keyCode: 125, modifiers: [.function, .numericPad], window: window))
     #expect(router.handle(down) === down)
-    #expect(routes == [.focusNextRegion])
+    #expect(routes == [.focusComposer])
 
     // Other windows, such as Settings or the shortcut reference, keep their own keys.
     let other = makeWindow()
     defer { other.close() }
-    let elsewhere = try #require(keyEvent("\t", keyCode: 48, modifiers: .control, window: other))
+    let elsewhere = try #require(keyEvent("l", keyCode: 37, modifiers: .command, window: other))
     #expect(router.handle(elsewhere) === elsewhere)
     #expect(routes.count == 1)
 }
@@ -293,11 +290,12 @@ private func keyEvent(_ characters: String, keyCode: UInt16, modifiers: NSEvent.
     #expect(model.sidebarScope == "p1")
 }
 
-@Test func shortcutReferenceListsRegionKeysAndNoLetterShortcuts() {
+@Test func shortcutReferenceListsFocusKeysAndNoLetterShortcuts() {
     let keys = Dictionary(uniqueKeysWithValues: KeyboardShortcuts.groups.flatMap(\.entries).map { ($0.title, $0.keys) })
-    #expect(keys["Focus next region"] == "⌃⇥")
-    #expect(keys["Focus previous region"] == "⌃⇧⇥")
+    #expect(keys["Focus next region"] == nil && keys["Focus previous region"] == nil)
+    #expect(!KeyboardShortcuts.groups.flatMap(\.entries).contains { $0.keys.contains("⌃⇥") })
     #expect(keys["Focus composer or question"] == "⌘L")
+    #expect(keys["Focus the sidebar, page or inspector"] == "⌘K, then Focus…")
     #expect(keys["Open command palette"] == "⌘K")
     #expect(keys["Back"] == "⌘←" && keys["Forward"] == "⌘→")
     #expect(keys["Open latest pull request"] == "⇧⌘P")
