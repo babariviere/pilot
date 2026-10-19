@@ -69,6 +69,8 @@ export function createLinearSizePoller(
 ): SourcePoller {
 	return async (context) => {
 		const result = await pollLinear(context);
+		context.observe?.({ stage: "discovery", phase: "completed", outcome: "success", count: result.items.length });
+		context.observe?.({ stage: "classification", phase: "started" });
 		const fresh = new Map(result.items.map((item) => [item.externalId, item]));
 		const active = new Set(result.activeIds);
 		for (const dismissed of [false, true])
@@ -97,6 +99,8 @@ export function createLinearSizePoller(
 					item.updatedAt,
 					now(),
 				);
+				if (reservation.state === "budget")
+					context.observe?.({ stage: "classification", phase: "partial", reason: "local_classification_budget" });
 				if (reservation.state === "cached") size = reservation.size;
 				else if (reservation.state === "reserved") {
 					attempts++;
@@ -131,12 +135,17 @@ export function createLinearSizePoller(
 						await store.finishLinearSize(context.project.id, item.externalId, item.updatedAt, size);
 					} catch {
 						context.signal.throwIfAborted();
+						context.observe?.({ stage: "classification", phase: "partial", reason: "classification_failed" });
 					}
 				}
-			} else if (["quick_fix", "needs_planning"].includes(String(item.metadata.size)))
-				size = item.metadata.size as LinearSize;
+			} else {
+				context.observe?.({ stage: "classification", phase: "partial", reason: "batch_limit" });
+				if (["quick_fix", "needs_planning"].includes(String(item.metadata.size)))
+					size = item.metadata.size as LinearSize;
+			}
 			items.push({ ...item, metadata: { ...item.metadata, size } });
 		}
+		context.observe?.({ stage: "classification", phase: "completed", outcome: "success", count: attempts });
 		return { ...result, items };
 	};
 }

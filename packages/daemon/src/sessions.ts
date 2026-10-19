@@ -2593,7 +2593,7 @@ export class SessionManager {
 		const limit = request.limit ?? 8;
 		if (request.action === "hosts")
 			return diagnosticContextResponse(host, { hosts: [{ host, availability: "available" }] });
-		if (["projects", "missions", "mission", "issues", "features"].includes(request.action)) {
+		if (["projects", "missions", "mission", "issues", "features", "refresh_health"].includes(request.action)) {
 			if (!this.diagnosticDomainRead)
 				return { ...diagnosticContextResponse(host, null), status: "unavailable", reason: "unsupported" };
 			return this.diagnosticDomainRead({ ...request, host });

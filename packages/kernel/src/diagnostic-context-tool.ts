@@ -28,6 +28,7 @@ export function createDiagnosticContextTool(call: DiagnosticContextCall): ToolDe
 					"mission",
 					"issues",
 					"features",
+					"refresh_health",
 				].map((v) => Type.Literal(v)),
 			),
 			host: Type.Optional(
@@ -53,6 +54,13 @@ export function createDiagnosticContextTool(call: DiagnosticContextCall): ToolDe
 				Type.String({ maxLength: 10, description: "features only: inclusive UTC day YYYY-MM-DD" }),
 			),
 			before: Type.Optional(Type.Integer({ minimum: 0 })),
+			channelOffset: Type.Optional(
+				Type.Integer({
+					minimum: 0,
+					maximum: 100,
+					description: "refresh_health only: channel page offset; query is slack or linear.",
+				}),
+			),
 			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
 			log: Type.Optional(
 				Type.Union([

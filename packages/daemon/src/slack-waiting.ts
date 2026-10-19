@@ -27,10 +27,28 @@ export function createSlackWaitingWatcher(
 	let identity: { value: SlackIdentity; at: number } | undefined;
 	return async (context) => {
 		const batch = await store.reserveSlackWaiting(context.project.id, now());
-		if (!batch.reads.length) return batch.budget;
+		if (!batch.reads.length) {
+			context.observe?.({
+				stage: "waiting_replies",
+				phase: "completed",
+				outcome: batch.budget ? "budget_limited" : "success",
+				...(batch.budget ? { reason: "local_read_budget" } : {}),
+				count: 0,
+			});
+			return batch.budget;
+		}
 		// The user's own replies (including what an agent posts as them) never end a wait.
 		if (!identity || now() - identity.at >= 3_600_000) {
-			if (!(await store.reserveSlackRead(now()))) return true;
+			if (!(await store.reserveSlackRead(now()))) {
+				context.observe?.({
+					stage: "waiting_replies",
+					phase: "completed",
+					outcome: "budget_limited",
+					reason: "local_read_budget",
+					count: 0,
+				});
+				return true;
+			}
 			identity = {
 				value: parseSlackIdentity(await context.call("profile", { response_format: "detailed" })),
 				at: now(),
@@ -57,7 +75,10 @@ export function createSlackWaitingWatcher(
 				);
 			} catch (error) {
 				// A thread the account can no longer read keeps waiting; other messages still get their turn.
-				if (error instanceof SourceToolError && !context.signal.aborted) continue;
+				if (error instanceof SourceToolError && !context.signal.aborted) {
+					context.observe?.({ stage: "waiting_replies", phase: "partial", reason: "read_failed" });
+					continue;
+				}
 				throw error;
 			}
 			context.signal.throwIfAborted();
@@ -79,10 +100,18 @@ export function createSlackWaitingWatcher(
 				} catch (error) {
 					// Busy for now (an update, shutdown): keep waiting and deliver on a later check.
 					console.warn(`pilotd: could not resume a chat with Slack replies: ${error}`);
+					context.observe?.({ stage: "waiting_replies", phase: "partial", reason: "delivery_deferred" });
 					continue;
 				}
 			await store.slackWaitingResult(item.id, since, { status: delivered ? "in_progress" : "open" });
 		}
+		context.observe?.({
+			stage: "waiting_replies",
+			phase: "completed",
+			outcome: batch.budget ? "budget_limited" : "success",
+			...(batch.budget ? { reason: "local_read_budget" } : {}),
+			count: batch.reads.length,
+		});
 		return batch.budget;
 	};
 }

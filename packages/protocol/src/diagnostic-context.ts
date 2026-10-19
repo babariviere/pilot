@@ -20,7 +20,8 @@ export interface DiagnosticContextRequest {
 		| "missions"
 		| "mission"
 		| "issues"
-		| "features";
+		| "features"
+		| "refresh_health";
 	host?: OperationHost;
 	sessionId?: string;
 	projectId?: string;
@@ -28,6 +29,7 @@ export interface DiagnosticContextRequest {
 	query?: string;
 	since?: string;
 	until?: string;
+	channelOffset?: number;
 	after?: string;
 	before?: number;
 	limit?: number;

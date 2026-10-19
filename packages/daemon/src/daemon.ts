@@ -92,6 +92,7 @@ const sourceMcp = new PiSourceMcpClient(config.agentDir);
 const linearWatches = new LinearWatchSource(watches, sourceMcp);
 if (controlHosts.legacyAllowed()) linearWatches.start();
 const tracking = new SourceRegistry(projects, trackedItems, sourceMcp);
+tracking.refreshDiagnostics.setEnabled(telemetry.settings().localDiagnostics);
 if (controlHosts.legacyAllowed())
 	tracking.linearObserved = (projectId, items, activeIds) => linearWatches.tracked(projectId, items, activeIds);
 tracking.triage = new TriageGroomer(projects, trackedItems, workerTriage(config.agentDir));
@@ -172,6 +173,7 @@ telemetry.onChange((settings) => {
 	appliedTelemetry = settings;
 	if (exportChanged) configureNodeTelemetry(telemetry.nodeOptions("pilot.daemon"));
 	sessions.configureTelemetry(telemetry.kernelSettings(), settings.aiUsageBudget);
+	tracking.refreshDiagnostics.setEnabled(settings.localDiagnostics);
 });
 const maintenance = process.platform === "linux" ? new RuntimeMaintenance(config.home, hello, sessions) : undefined;
 await maintenance?.load();
