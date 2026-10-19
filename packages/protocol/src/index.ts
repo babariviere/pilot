@@ -723,7 +723,7 @@ export interface RemoteBranchList {
 
 /** Offline libraries available inside the artifact sandbox. */
 export type ArtifactLibrary = "react" | "react-dom" | "mermaid" | "echarts" | "motion" | "d3" | "three";
-export type ArtifactKind = "html" | "react" | "image" | "swiftui" | "shader";
+export type ArtifactKind = "html" | "react" | "image" | "swiftui" | "shader" | "visual";
 
 /** GET /api/artifacts/:id resolves an unpinned artifact link to its owning session and latest metadata. */
 export interface ArtifactSummary {
@@ -744,6 +744,28 @@ export interface ArtifactRevision extends ArtifactSummary {
 	libraries: ArtifactLibrary[];
 	/** Library versions the revision was prepared with. Absent on revisions saved before versions were recorded. */
 	libraryVersions?: Partial<Record<ArtifactLibrary, string>>;
+	/** Visuals only: the JSON value the visual function receives as `data`. */
+	data?: ArtifactData;
+	/** Visuals only: the engine and API the revision was checked with, and the pre-check report. */
+	visual?: ArtifactVisual;
+}
+
+/** A visual revision's runtime versions and publish-time check (docs/native-visuals.md). */
+export interface ArtifactVisual {
+	/** Node tree API version the visual was checked against. Apps show an update hint for unknown versions. */
+	api: number;
+	/** For example "quickjs-ng 0.17.0". */
+	engine: string;
+	check: {
+		/** Nodes in the first view. */
+		nodes: number;
+		/** Distinct controls seen across the exercised views. */
+		controls: number;
+		/** Control events the check sent. */
+		interactions: number;
+		/** Bounded console output of the visual during the check. */
+		logs: string[];
+	};
 }
 
 export interface ArtifactWrite {
@@ -751,7 +773,12 @@ export interface ArtifactWrite {
 	kind: ArtifactKind;
 	source: string;
 	libraries?: ArtifactLibrary[];
+	/** Visuals only: any JSON value up to 1 MiB, passed to the function as `data`. */
+	data?: ArtifactData;
 }
+
+/** A JSON value. */
+export type ArtifactData = null | boolean | number | string | ArtifactData[] | { [key: string]: ArtifactData };
 
 /** Saved in a tool result, pinning the chat preview to its original revision. */
 export interface ArtifactReference {

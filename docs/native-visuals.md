@@ -1,6 +1,8 @@
 # Native agent visuals (design proposal)
 
-Status: design decided, not implemented. No product code. The decisions are listed at the end.
+Status: design decided. The kernel side of phase 1 is implemented: the `visual` kind, the pre-check and the node
+tree API 1 (`packages/artifacts/src/visual`, fixtures in `packages/protocol/fixtures/visual`). The decisions are
+listed at the end.
 
 ## Goal
 

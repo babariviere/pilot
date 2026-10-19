@@ -4,11 +4,12 @@ import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ArtifactLibrary, ArtifactWrite } from "@pilot/protocol";
+import type { ArtifactLibrary, ArtifactVisual, ArtifactWrite } from "@pilot/protocol";
 import { type BuildOptions, build, version as esbuildVersion, type Plugin, stop } from "esbuild";
 import { MAX_IMAGE_SOURCE_BYTES, validateImageSource } from "./image.ts";
 import { assertShaderCompiles, shaderDocumentBody, validateShaderSource } from "./shader.ts";
 import { previewSwiftUI } from "./swiftui.ts";
+import { checkVisual, VISUAL_FALLBACK_BODY, validateVisualWrite } from "./visual/index.ts";
 
 const require = createRequire(import.meta.url);
 const resolveDir = dirname(fileURLToPath(import.meta.url));
@@ -60,9 +61,10 @@ export function validateArtifact(write: ArtifactWrite): ArtifactWrite & { librar
 		write.kind !== "react" &&
 		write.kind !== "image" &&
 		write.kind !== "swiftui" &&
-		write.kind !== "shader"
+		write.kind !== "shader" &&
+		write.kind !== "visual"
 	)
-		throw new Error("Artifact kind must be html, react, image, swiftui or shader");
+		throw new Error("Artifact kind must be html, react, image, swiftui, shader or visual");
 	const maxBytes = write.kind === "image" ? MAX_IMAGE_SOURCE_BYTES : MAX_SOURCE_BYTES;
 	if (typeof write.source !== "string" || !write.source.trim() || Buffer.byteLength(write.source) > maxBytes)
 		throw new Error(
@@ -72,12 +74,15 @@ export function validateArtifact(write: ArtifactWrite): ArtifactWrite & { librar
 		);
 	if (write.kind === "image") validateImageSource(write.source);
 	if (write.kind === "shader") validateShaderSource(write.source);
+	if (write.kind === "visual") validateVisualWrite(write.source, write.data);
+	else if (write.data !== undefined) throw new Error("Only visual artifacts take data");
 	if (write.libraries !== undefined && (!Array.isArray(write.libraries) || !write.libraries.every(isArtifactLibrary)))
 		throw new Error("Unknown artifact library. Use the bundled library names only");
 	const libraries = [...new Set(write.libraries ?? [])];
 	if (write.kind === "image" && libraries.length) throw new Error("Image artifacts do not use libraries");
 	if (write.kind === "swiftui" && libraries.length) throw new Error("SwiftUI artifacts do not use libraries");
 	if (write.kind === "shader" && libraries.length) throw new Error("Shader artifacts do not use libraries");
+	if (write.kind === "visual" && libraries.length) throw new Error("Visual artifacts do not use libraries");
 	if (libraries.includes("react-dom")) {
 		const reactIndex = libraries.indexOf("react");
 		if (reactIndex !== -1) libraries.splice(reactIndex, 1);
@@ -272,8 +277,8 @@ export const ARTIFACT_RUNTIME_GUARD = `for (const name of ['RTCPeerConnection','
 
 export async function prepareArtifact(
 	input: ArtifactWrite,
-	options: { signal?: AbortSignal } = {},
-): Promise<{ html: string; libraries: ArtifactLibrary[] }> {
+	options: { signal?: AbortSignal; id?: string } = {},
+): Promise<{ html: string; libraries: ArtifactLibrary[]; visual?: ArtifactVisual }> {
 	const write = validateArtifact(input);
 	options.signal?.throwIfAborted();
 	// React artifacts load the shared React runtime as library scripts, in dependency order.
@@ -296,6 +301,14 @@ export async function prepareArtifact(
 	}
 	// Publication fails with line-numbered compiler errors instead of saving a blank canvas.
 	if (write.kind === "shader") await assertShaderCompiles(write.source, options.signal);
+	// Visuals run in the app. The pre-check runs the same runtime first, so errors reach the agent with lines.
+	const visual =
+		write.kind === "visual"
+			? await checkVisual(
+					{ source: write.source, data: validateVisualWrite(write.source, write.data), id: options.id ?? "" },
+					{ signal: options.signal },
+				)
+			: undefined;
 	// The policy is the first node, before any untrusted source. Nested full HTML documents are parsed
 	// as body content, which is intentional: generated source cannot precede the policy in the head.
 	const libraries = write.libraries
@@ -306,10 +319,12 @@ export async function prepareArtifact(
 			? `<div id="artifact-root"></div>${compiledScript(await compileReact(write.source))}`
 			: write.kind === "shader"
 				? shaderDocumentBody(write.source)
-				: imageSource !== undefined
-					? `<style>body{padding:0;min-height:100vh;display:grid;place-items:center}img{display:block;width:auto;height:auto;max-width:${write.kind === "swiftui" ? "min(100vw,var(--pilot-image-width))" : "100vw"};max-height:${write.kind === "swiftui" ? "min(100vh,var(--pilot-image-height))" : "100vh"};object-fit:contain}</style><img alt="Artifact image"${nativeImageAttributes} src="${imageSource}">`
-					: write.source;
+				: write.kind === "visual"
+					? VISUAL_FALLBACK_BODY
+					: imageSource !== undefined
+						? `<style>body{padding:0;min-height:100vh;display:grid;place-items:center}img{display:block;width:auto;height:auto;max-width:${write.kind === "swiftui" ? "min(100vw,var(--pilot-image-width))" : "100vw"};max-height:${write.kind === "swiftui" ? "min(100vh,var(--pilot-image-height))" : "100vh"};object-fit:contain}</style><img alt="Artifact image"${nativeImageAttributes} src="${imageSource}">`
+						: write.source;
 	const html = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}"><meta http-equiv="x-dns-prefetch-control" content="off"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><script>${ARTIFACT_RUNTIME_GUARD}</script><style>${styles}</style>${libraries}</head><body>${body}</body></html>`;
 	if (Buffer.byteLength(html) > 25 * 1024 * 1024) throw new Error("Prepared artifact exceeds 25 MiB");
-	return { html, libraries: write.libraries };
+	return visual ? { html, libraries: write.libraries, visual } : { html, libraries: write.libraries };
 }

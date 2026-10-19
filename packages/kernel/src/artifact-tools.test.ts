@@ -632,6 +632,61 @@ test("shader publication returns compile errors with source lines and saves noth
 	assert.equal(f.notifications, 1);
 });
 
+test("visual artifacts stay hidden until enabled", async () => {
+	const [tool] = fixture({ visuals: false }).tools;
+	assert.ok(tool);
+	assert.doesNotMatch(tool.description, /kind visual/);
+	assert.throws(
+		() =>
+			validateToolArguments(tool, {
+				type: "toolCall",
+				id: "hidden",
+				name: "artifact",
+				arguments: { action: "create", title: "V", kind: "visual", source: "() => null" },
+			}),
+		/Validation failed/,
+	);
+	await assert.rejects(
+		fixture({ visuals: false }).call("create", { title: "V", kind: "visual", source: "() => null" }),
+		/not available yet/,
+	);
+});
+
+test("visual publication returns the check, get returns source and data, errors carry lines", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-visual-artifact-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const store = new ArtifactStore(root, { sessionId: "visual-session" });
+	const f = fixture({ store, visuals: true, preview: async () => assert.fail("visuals are not previewed") });
+	const [tool] = f.tools;
+	assert.match(tool!.description, /kind visual, source String\(fn\)/);
+	const source =
+		"function visual({ ui, data }) {\n  return () => ui.column(data.map((row) => ui.stat({ label: row.name, value: row.value })));\n}";
+	const data = [
+		{ name: "Builds", value: 42 },
+		{ name: "Failures", value: 3 },
+	];
+	await assert.rejects(f.call("create", { title: "Stats", kind: "visual" }), /source: String\(visual\)/);
+	await assert.rejects(f.call("preview", { title: "Stats", kind: "visual", source, data }), /Publish with create/);
+	await assert.rejects(
+		f.call("create", { title: "Stats", kind: "visual", source: source.replace("row.name", "row.missing") }),
+		/Nothing was published\. line 2: TypeError/,
+	);
+	assert.equal(f.notifications, 0);
+	const created = await f.call("create", { title: "Stats", kind: "visual", source, data });
+	const result = created.structuredContent as { artifact: { id: string }; check: unknown };
+	assert.deepEqual(result.check, { nodes: 3, controls: 0, interactions: 0 });
+	assert.equal(f.notifications, 1);
+	const read = await f.call("get", { id: result.artifact.id });
+	assert.deepEqual((read.structuredContent as { artifact: unknown }).artifact, {
+		...(await store.list())[0],
+		source,
+		libraries: [],
+		libraryVersions: {},
+		data,
+		visual: { api: 1, engine: "quickjs-ng 0.17.0" },
+	});
+});
+
 test("updates without expectedRevision succeed with a warning", async () => {
 	const f = fixture();
 	const result = await f.call("update", { id: "artifact-1", ...write });

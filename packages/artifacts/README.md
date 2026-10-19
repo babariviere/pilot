@@ -1,6 +1,7 @@
 # Artifacts
 
-Session-owned, project-indexed images, HTML/JavaScript, React/JSX, GLSL shaders and standalone SwiftUI documents.
+Session-owned, project-indexed images, HTML/JavaScript, React/JSX, GLSL shaders, native visuals and standalone
+SwiftUI documents.
 This package owns preparation, offline libraries, revision storage and agent-side previews. Generated
 JavaScript never runs in Node; SwiftUI runs only in disposable native sandbox processes.
 
@@ -175,6 +176,38 @@ Native integration checks are opt-in because they require a macOS toolchain and 
 ```sh
 PILOT_SWIFTUI_TESTS=1 node --import tsx --test packages/artifacts/src/swiftui.test.ts
 ```
+
++### Visuals
+
+`kind: "visual"` publishes a JavaScript function that the app runs and renders natively (docs/native-visuals.md).
+The tool offers it only with `PILOT_VISUAL_ARTIFACTS=1` until the app renders visuals. Define the function in the
+codemode script and pass its text with `String(visual)`; tool arguments are JSON, so a function passed directly
+arrives empty. `data` is any JSON value up to 1 MiB, never spliced into the code:
+
+```js
+function visual({ ui, state, data }) {
+  const s = state({ metric: "p95" });
+  return () =>
+    ui.column({ gap: 16 }, [
+      ui.tabs({ options: ["p95", "p99"], value: s.metric, onChange: (v) => (s.metric = v) }),
+      ui.chart({ type: "bar", x: data.map((d) => d.region), series: [{ name: s.metric, values: data.map((d) => d[s.metric]) }] }),
+    ]);
+}
+await tools.artifact({ action: "create", kind: "visual", title: "Latency", source: String(visual), data: rows });
+```
+
+Publication runs a pre-check in [quickjs-wasi](https://github.com/vercel-labs/quickjs-wasi) (QuickJS-NG, the engine
+codemode uses, loaded through `loadQuickJSWasm`) in a worker thread: one function expression, setup and the first
+view, every tree validated, then every control exercised once (each other tab, each toggle both ways, each slider at
+min and max, each button; at most 24 events), re-rendering after each. Limits: source 256 KiB, heap 32 MiB, stack
+512 KiB, setup and view 250 ms each, handlers 100 ms, 5,000 nodes and 64 Ki characters of text per tree. The first
+failure is reported as `line N: message (after tabs "metric" = "p99")`, with console output, and nothing is saved.
+`Math.random` is seeded from the artifact id, `Date` is fixed per call and there is no I/O.
+
+A revision stores `source`, `data`, `visual` (`api`, `engine` and the check report) and, in `html`, a short page
+for apps that cannot render visuals. `get` returns `source`, `data` and the versions. `src/visual/runtime.js` is the
+runtime both the pre-check and the app run; the node tree schema and the conformance fixtures every host must pass
+live in `packages/protocol/fixtures/visual`. Canvas and shader nodes are rejected as not yet supported.
 
 ## Verification
 

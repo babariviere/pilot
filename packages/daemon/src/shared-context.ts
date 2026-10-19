@@ -1190,6 +1190,8 @@ export class SharedContextService {
 					"source",
 					"libraries",
 					"libraryVersions",
+					"data",
+					"visual",
 				],
 				"artifact source",
 			);

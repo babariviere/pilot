@@ -10,7 +10,15 @@ const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 export class ArtifactNotFound extends Error {}
 
 function summary(value: ArtifactRevision): ArtifactSummary {
-	const { source: _source, html: _html, libraries: _libraries, libraryVersions: _versions, ...rest } = value;
+	const {
+		source: _source,
+		html: _html,
+		libraries: _libraries,
+		libraryVersions: _versions,
+		data: _data,
+		visual: _visual,
+		...rest
+	} = value;
 	return rest;
 }
 
@@ -147,7 +155,7 @@ export class ArtifactStore {
 		signal?: AbortSignal,
 	): Promise<ArtifactRevision> {
 		const write = validateArtifact(input);
-		const prepared = await prepareArtifact(write, { signal });
+		const { visual, ...prepared } = await prepareArtifact(write, { signal, id });
 		signal?.throwIfAborted();
 		const now = Date.now();
 		const artifact: ArtifactRevision = {
@@ -161,6 +169,7 @@ export class ArtifactStore {
 			source: write.source,
 			...prepared,
 			libraryVersions: libraryVersions(prepared.libraries),
+			...(visual ? { data: write.data ?? null, visual } : {}),
 		};
 		const directory = join(this.directory, id);
 		await mkdir(directory, { recursive: true, mode: 0o700 });
