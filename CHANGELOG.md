@@ -1,5 +1,32 @@
 # Changelog
 
+## [1.55.0](https://github.com/babariviere/pilot/compare/v1.54.0...v1.55.0) (2026-10-19)
+
+
+### Features
+
+* bind reviewed repair starts to configured source checkouts ([0897a42](https://github.com/babariviere/pilot/commit/0897a425d3cbbae582dd79bb8231294ede1d7beb))
+* **diagnostics:** collect local feature usage aggregates ([ba68bec](https://github.com/babariviere/pilot/commit/ba68bec849e7438fe575c444930190f0bc794902))
+* **diagnostics:** expose private local feature evidence ([c71d462](https://github.com/babariviere/pilot/commit/c71d462252357dab611be09a0e4db6c267a3b13b))
+* **diagnostics:** read app-wide evidence through trusted role ([36b5b79](https://github.com/babariviere/pilot/commit/36b5b79b8ad899a848b4451c264180d3ee908716))
+* **diagnostics:** scaffold bounded local feature aggregates ([2edda4c](https://github.com/babariviere/pilot/commit/2edda4cc76a9d6c504f784a2d55bc94acac91be4))
+* **diagnostics:** start without an attached chat ([b53912d](https://github.com/babariviere/pilot/commit/b53912dfb0f26bb1d366b2e117af6f20ea893979))
+* pin repair actions beside the chat composer ([fa862f9](https://github.com/babariviere/pilot/commit/fa862f9119e56bfbca81f40b00468a71baafd4d4))
+* **slack:** set a Slack message's status from its chat ([82f514e](https://github.com/babariviere/pilot/commit/82f514e8ca060e70f8cde5bb67826e9397b70865))
+* **sources:** expose bounded refresh health to diagnostics ([a1770e0](https://github.com/babariviere/pilot/commit/a1770e07c32af09d6cdff4efc6fbbe9c67af092d))
+* **sources:** scaffold read-only refresh health ([9b9d115](https://github.com/babariviere/pilot/commit/9b9d1158055430ead37a51811cc90e870276559a))
+
+
+### Bug Fixes
+
+* **diagnostics:** attribute synchronous startup and update work ([d840c85](https://github.com/babariviere/pilot/commit/d840c8595bcff26a37fbfe214129144a41fdb0ca))
+* **diagnostics:** describe chat selection as investigation focus ([f37a0ed](https://github.com/babariviere/pilot/commit/f37a0ed1767032a7f663d45e919078cd7ef7701e))
+* **diagnostics:** select chats by qualified host ([41342cf](https://github.com/babariviere/pilot/commit/41342cfad6591020607e534da41596c6a8d7c883))
+* return the verified project origin response ([5188ba3](https://github.com/babariviere/pilot/commit/5188ba33ed836d9392b01c944d58d4e3eef4692f))
+* **sessions:** defer auto-pause status until active tools finish ([1264a9e](https://github.com/babariviere/pilot/commit/1264a9e29168b24b42e3a274a9ac61af69bf5e36))
+* **sidebar:** scope missions to the selected project ([06507a7](https://github.com/babariviere/pilot/commit/06507a71d2cb070edb2935327ff1553cb24c22a6))
+* **ui:** preserve PR capitalization in watch labels ([acaab20](https://github.com/babariviere/pilot/commit/acaab20d4e6b483dd500fed604ff971426910174))
+
 ## [1.54.0](https://github.com/babariviere/pilot/compare/v1.53.1...v1.54.0) (2026-10-19)
 
 
