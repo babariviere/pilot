@@ -81,7 +81,7 @@ jobs:
           # Main pushes always verify the app. PRs skip Swift when nothing it reads changed.
           swift=true
           if [ "$EVENT_NAME" = pull_request ] && files="$(git diff --name-only HEAD^1 HEAD)"; then
-            if ! printf '%s\n' "$files" | grep -Eq '^(apps/macos/|scripts/verification-slot\.py$|\.github/workflows/(pr|tests)\.yaml$|package\.json$)'; then
+            if ! printf '%s\n' "$files" | grep -Eq '^(apps/macos/|packages/artifacts/src/visual/runtime\.js$|packages/protocol/fixtures/visual/|scripts/verification-slot\.py$|\.github/workflows/(pr|tests)\.yaml$|package\.json$)'; then
               swift=false
             fi
           fi
@@ -150,7 +150,8 @@ jobs:
             ~/Library/Caches/org.swift.swiftpm/artifacts
             apps/macos/Vendor/libghostty-spm
             apps/macos/Vendor/MermaidKit
-          key: swift-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.resolved', 'apps/macos/Package.swift', 'apps/macos/scripts/vendor-ghostty.sh', 'apps/macos/scripts/patch-ghostty-resources.py', 'apps/macos/scripts/patch-ghostty-layout.py', 'apps/macos/scripts/vendor-mermaidkit.sh', 'apps/macos/scripts/patches/**') }}
+            apps/macos/Vendor/QuickJSNG
+          key: swift-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.resolved', 'apps/macos/Package.swift', 'apps/macos/scripts/vendor-ghostty.sh', 'apps/macos/scripts/patch-ghostty-resources.py', 'apps/macos/scripts/patch-ghostty-layout.py', 'apps/macos/scripts/vendor-mermaidkit.sh', 'apps/macos/scripts/vendor-quickjs.sh', 'apps/macos/scripts/patches/**') }}
       # PRs start from main's newest debug build and recompile only inputs whose contents changed. Main always
       # builds from scratch, and releases never use cached build products.
       - name: Restore the Swift test build
@@ -166,6 +167,7 @@ jobs:
         run: |
           apps/macos/scripts/vendor-ghostty.sh
           apps/macos/scripts/vendor-mermaidkit.sh
+          apps/macos/scripts/vendor-quickjs.sh
           python3 apps/macos/scripts/stable-mtimes.py apps/macos
       - name: Swift tests
         id: swift-test

@@ -123,7 +123,8 @@ jobs:
             ~/Library/Caches/org.swift.swiftpm/artifacts
             apps/macos/Vendor/libghostty-spm
             apps/macos/Vendor/MermaidKit
-          key: swift-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.resolved', 'apps/macos/Package.swift', 'apps/macos/scripts/vendor-ghostty.sh', 'apps/macos/scripts/patch-ghostty-resources.py', 'apps/macos/scripts/patch-ghostty-layout.py', 'apps/macos/scripts/vendor-mermaidkit.sh', 'apps/macos/scripts/patches/**') }}
+            apps/macos/Vendor/QuickJSNG
+          key: swift-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.resolved', 'apps/macos/Package.swift', 'apps/macos/scripts/vendor-ghostty.sh', 'apps/macos/scripts/patch-ghostty-resources.py', 'apps/macos/scripts/patch-ghostty-layout.py', 'apps/macos/scripts/vendor-mermaidkit.sh', 'apps/macos/scripts/vendor-quickjs.sh', 'apps/macos/scripts/patches/**') }}
       - name: Load current release packaging tools
         uses: actions/checkout@v4
         with:

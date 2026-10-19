@@ -32,9 +32,10 @@ fi
 source "$here/scripts/swift-env.sh"
 "$here/scripts/vendor-ghostty.sh"
 "$here/scripts/vendor-mermaidkit.sh"
+"$here/scripts/vendor-quickjs.sh"
 "$here/scripts/share-artifacts.sh"
 bin="$(swift build --package-path "$here" -c "$configuration" --show-bin-path)"
-for product in Pilot PilotSystemEvents PilotPower; do
+for product in Pilot PilotSystemEvents PilotPower PilotVisuals; do
 	if [ "$prebuilt" = 1 ]; then
 		[ -x "$bin/$product" ] || { echo "Missing prebuilt $product in $bin. Build $configuration first." >&2; exit 1; }
 	else
@@ -55,6 +56,12 @@ mkdir -p "$helper/Contents/MacOS"
 cp "$bin/PilotSystemEvents" "$helper/Contents/MacOS/PilotSystemEvents"
 cp "$here/Resources/SystemEvents-Info.plist" "$helper/Contents/Info.plist"
 codesign --force --sign "${PILOT_CODESIGN_IDENTITY:--}" "$helper"
+# Visual scripts run in this XPC service, sandboxed and signed on its own below.
+visuals="$app/Contents/XPCServices/PilotVisuals.xpc"
+mkdir -p "$visuals/Contents/MacOS" "$visuals/Contents/Resources"
+cp "$bin/PilotVisuals" "$visuals/Contents/MacOS/PilotVisuals"
+cp "$here/Resources/Visuals-Info.plist" "$visuals/Contents/Info.plist"
+cp "$here/Vendor/QuickJSNG/LICENSE" "$visuals/Contents/Resources/QuickJS-NG-LICENSE.txt"
 # SwiftPM resource bundles (libghostty runtime resources: terminfo, shell integration).
 for bundle in "$bin"/*.bundle; do
 	[ -e "$bundle" ] && cp -R "$bundle" "$app/Contents/Resources/"
@@ -77,12 +84,15 @@ cp "$here/Resources/AppIcon.icns" "$app/Contents/Resources/AppIcon.icns"
 if [ "$runtime" = 1 ]; then
 	"$here/scripts/bundle-runtime.sh" "$app/Contents/Resources/runtime"
 	# SwiftPM adds checkout-local runpaths for unbundled launches. They are never needed here.
-	while IFS= read -r path; do
-		case "$path" in
-			/*) install_name_tool -delete_rpath "$path" "$app/Contents/MacOS/Pilot" ;;
-		esac
-	done < <(otool -l "$app/Contents/MacOS/Pilot" | awk '/cmd LC_RPATH/{r=1;next} r && /path /{print $2;r=0}')
+	for binary in "$app/Contents/MacOS/Pilot" "$visuals/Contents/MacOS/PilotVisuals"; do
+		while IFS= read -r path; do
+			case "$path" in
+				/*) install_name_tool -delete_rpath "$path" "$binary" ;;
+			esac
+		done < <(otool -l "$binary" | awk '/cmd LC_RPATH/{r=1;next} r && /path /{print $2;r=0}')
+	done
 	strip -S "$app/Contents/MacOS/Pilot"
+	strip -S "$visuals/Contents/MacOS/PilotVisuals"
 	# Code in Resources is not automatically visited by codesign --deep.
 	while IFS= read -r -d '' binary; do
 		if file "$binary" | grep -q 'Mach-O'; then
@@ -92,6 +102,9 @@ if [ "$runtime" = 1 ]; then
 fi
 
 codesign --force --deep --sign "${PILOT_CODESIGN_IDENTITY:--}" "$app"
+# A deep signature drops nested entitlements. Sign the visual service with its sandbox, then reseal the app around it.
+codesign --force --sign "${PILOT_CODESIGN_IDENTITY:--}" --entitlements "$here/Resources/Visuals.entitlements" "$visuals"
+codesign --force --sign "${PILOT_CODESIGN_IDENTITY:--}" "$app"
 codesign --verify --deep --strict "$app"
 "$here/scripts/check-app.sh" "$app"
 echo "$app"
