@@ -290,6 +290,10 @@ test("actual HTTP download admission remains a blocker after disconnect until as
 	await until(() => entered);
 	download.destroy();
 	await writeUpdate(f.home, { ...f.journal, phase: "draining", revision: 3 });
+	// A refresh still reading waiting can release inspect's new fence. Let the watcher
+	// observe draining and settle before asking for a proof, as in the transfer fixture.
+	await until(() => f.maintenance.frozen);
+	await (f.maintenance as unknown as { refreshing?: Promise<void> }).refreshing;
 	let proof = await f.maintenance.inspect(f.journal.id);
 	assert.ok(proof.blockers.some((blocker) => blocker.kind === "download"));
 	const refused = await fetch(`${base}/api/artifacts/not-admitted`);
