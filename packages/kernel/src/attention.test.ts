@@ -16,7 +16,8 @@ import {
 	type SubmissionRecord,
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { AttentionDoc, classifyCompletion, reconcileCompletion, normalizeCompletion } from "./attention.ts";
+import { AttentionDoc, classifyCompletion, normalizeCompletion, reconcileCompletion } from "./attention.ts";
+import { QUESTION_ENTRY } from "./question-entry.ts";
 
 async function fixture(storage = new MemoryStorage()) {
 	const faux = fauxProvider({ tokensPerSecond: 0 });
@@ -262,5 +263,71 @@ test("an old session with status-tool history reopens without the retired declar
 	} finally {
 		await harness?.close(context);
 		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("a compaction summary after a question is not its answer, but the user's reply is", async () => {
+	const faux = fauxProvider({ tokensPerSecond: 0 });
+	const models = createModels();
+	models.setProvider(faux.provider);
+	const registry = createRegistry();
+	let conversation: Awaited<ReturnType<Harness["root"]>> | undefined;
+	// Publishes the transcript entry the way the kernel's ask_user tool does.
+	const ask = defineTool({
+		name: "ask_user",
+		description: "Ask the user",
+		parameters: Type.Object({ question: Type.String() }),
+		replay: "safe",
+		execute: async (args, api) => {
+			await conversation!.submit(
+				{
+					type: "write",
+					requestId: `question:${api.callId}`,
+					entry: { kind: QUESTION_ENTRY, data: { question: args.question, options: [] }, model: [] },
+				},
+				context,
+			);
+			return { output: [{ type: "text", text: "End your turn now." }] };
+		},
+	});
+	registry.install({ name: "native", tools: [ask] });
+	const storage = new MemoryStorage();
+	// A tiny window makes the reply after the question start with a blocking threshold compaction.
+	const compaction = { enabled: true, reserveTokens: 100, keepRecentTokens: 10, backgroundTokens: 0 };
+	const harness = await Harness.open(
+		storage,
+		{ models, registry, settings: { retry: { maxRetries: 0 }, compaction } },
+		context,
+	);
+	const model = faux.getModel();
+	model.contextWindow = 2_000;
+	conversation = await harness.root(context, {
+		agent: { model: { provider: model.provider, modelId: model.id }, extensions: [{ name: "native" }] },
+	});
+	try {
+		faux.setResponses([fauxAssistantMessage("x".repeat(4_000))]);
+		await (await conversation.submit({ type: "input", content: "warm up" }, context)).wait(context);
+		faux.setResponses([
+			fauxAssistantMessage(fauxToolCall("ask_user", { question: "Which database?" }), { stopReason: "toolUse" }),
+			fauxAssistantMessage("## Goal\nStorage"),
+			fauxAssistantMessage("Waiting for your choice."),
+		]);
+		await (await conversation.submit({ type: "input", content: "implement storage" }, context)).wait(context);
+		const kinds = (await conversation.entries({}, 50, undefined, context)).items.toReversed().map((e) => e.kind);
+		assert.ok(
+			kinds.indexOf(QUESTION_ENTRY) >= 0 && kinds.lastIndexOf("pi.compaction") > kinds.indexOf(QUESTION_ENTRY),
+			`the summary follows the question: ${kinds.join(", ")}`,
+		);
+		const question = await reconcileCompletion(storage, harness, conversation, context);
+		assert.equal(question?.outcome, "question");
+		assert.equal(question?.outcomeReason, "Which database?");
+
+		faux.setResponses([fauxAssistantMessage("Implemented with SQLite.")]);
+		await (await conversation.submit({ type: "input", content: "SQLite" }, context)).wait(context);
+		const answered = await reconcileCompletion(storage, harness, conversation, context);
+		assert.equal(answered?.outcome, "done");
+		assert.ok(answered!.outcomeAt > question!.outcomeAt);
+	} finally {
+		await harness.close(context);
 	}
 });

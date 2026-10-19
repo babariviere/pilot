@@ -35,9 +35,13 @@ export class CoordinatorCompaction {
 	private stopped = true;
 	private scheduled = false;
 	private rerun = false;
-	/** When each coordinator chat last became idle. Any other state ends its idle stretch. */
+	/** When each coordinator chat last became idle: its last settled run, or when it was seen idle without one. */
 	private readonly idleSince = new Map<string, number>();
-	/** The idle stretch already compacted (or attempted), so each stretch compacts at most once. */
+	/**
+	 * The idle stretch already compacted (or attempted), so each stretch compacts at most once. It survives the
+	 * compaction's own "working" state: an idle stretch is identified by its last settled run, which compaction does
+	 * not change, so a failed or ineffective compaction waits for a new run instead of retrying straight away.
+	 */
 	private readonly attempted = new Map<string, number>();
 	private readonly unsubscribe: (() => void)[];
 	private readonly store: Store;
@@ -64,9 +68,11 @@ export class CoordinatorCompaction {
 	}
 
 	private observe(session: SessionSummary): void {
-		if (session.state !== "idle" || !session.activeMissionCoordinator || session.archivedAt !== undefined) {
+		if (!session.activeMissionCoordinator || session.archivedAt !== undefined) {
 			this.idleSince.delete(session.id);
 			this.attempted.delete(session.id);
+		} else if (session.state !== "idle") {
+			this.idleSince.delete(session.id);
 		} else if (!this.idleSince.has(session.id)) {
 			// After a restart, the last settled run is the best estimate of when idling began.
 			this.idleSince.set(session.id, Math.min(Date.now(), session.outcomeAt ?? Date.now()));
