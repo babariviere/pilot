@@ -721,7 +721,10 @@ export class Worker implements SessionWorker {
 		options: WorkerOptions = {},
 	) {
 		this.onPacket = onPacket;
-		this.child = options.child ?? (spec.pilot?.coordinatorView ? forkWorker(spec) : (pool?.take() ?? forkWorker()));
+		this.child = operations.time(
+			"worker.acquire",
+			() => options.child ?? (spec.pilot?.coordinatorView ? forkWorker(spec) : (pool?.take() ?? forkWorker())),
+		);
 		this.commandTimeoutMs = options.commandTimeoutMs ?? 60_000;
 		let markReady!: () => void;
 		let markFailed!: (error: Error) => void;
@@ -850,9 +853,13 @@ export class Worker implements SessionWorker {
 			return;
 		}
 		try {
-			this.child.send(command, (error: Error | null) => {
-				if (error) queueMicrotask(() => this.failTransport(new WorkerUnavailable(error.message, { cause: error })));
-			});
+			// Includes synchronous IPC serialization, not the asynchronous acknowledgement or provider work.
+			operations.time("worker.send", () =>
+				this.child.send(command, (error: Error | null) => {
+					if (error)
+						queueMicrotask(() => this.failTransport(new WorkerUnavailable(error.message, { cause: error })));
+				}),
+			);
 		} catch (error) {
 			queueMicrotask(() => this.failTransport(new WorkerUnavailable("Kernel IPC send failed", { cause: error })));
 		}
@@ -1888,7 +1895,8 @@ export class SessionManager {
 		for (const id of await readdir(this.sessionsDir)) {
 			if (!ID_PATTERN.test(id)) continue;
 			try {
-				const meta = JSON.parse(await readFile(join(this.sessionsDir, id, "meta.json"), "utf8")) as SessionMeta;
+				const contents = await readFile(join(this.sessionsDir, id, "meta.json"), "utf8");
+				const meta = operations.time("sessions.metadata.load", () => JSON.parse(contents) as SessionMeta);
 				if (meta.id !== id) throw new Error("Session metadata ID does not match its directory");
 				if (this.isArchivedControl(meta)) {
 					this.metas.set(meta.id, meta);
@@ -4191,6 +4199,10 @@ export class SessionManager {
 
 	/** Acquire a bounded update lease only after every durable and in-memory admission settles. */
 	prepareUpdate(): UpdatePreparation {
+		return operations.time("sessions.update.prepare", () => this.checkUpdateReadiness());
+	}
+
+	private checkUpdateReadiness(): UpdatePreparation {
 		const busy =
 			this.closing ||
 			this.starting.size !== 0 ||
@@ -4218,6 +4230,10 @@ export class SessionManager {
 
 	/** Lease-backed tool drain. Whole runs and durable inboxes may stay unfinished. */
 	pauseForUpdate(): UpdatePreparation {
+		return operations.time("sessions.update.pause", () => this.pauseWorkersForUpdate());
+	}
+
+	private pauseWorkersForUpdate(): UpdatePreparation {
 		const drained = this.updateGate.pause();
 		clearTimeout(this.updatePauseTimer);
 		this.updatePauseTimer = setTimeout(() => this.resumeAfterUpdate(), 30_000);
@@ -4272,6 +4288,10 @@ export class SessionManager {
 	}
 
 	private resumeAfterUpdate(): void {
+		operations.time("sessions.update.resume", () => this.resumeWorkersAfterUpdate());
+	}
+
+	private resumeWorkersAfterUpdate(): void {
 		clearTimeout(this.updatePauseTimer);
 		// A maintenance owner, unlike the legacy app lease, explicitly owns this freeze.
 		if (this.updateGate.frozen) {
@@ -6741,68 +6761,73 @@ export class SessionManager {
 					throw error;
 				}
 			});
-		const mission = this.missions?.context(id);
+		const mission = operations.time("worker.context", () => this.missions?.context(id));
 		const diagnosticTarget = this.diagnosticReference(meta);
 		let published: SessionWorker | undefined;
 		const earlyPackets: KernelPacket[] = [];
 		let overflow = false;
-		const opening = createWorker(
-			{
-				sessionId: id,
-				...(meta.control ? { control: true } : {}),
-				...(meta.role ? { role: meta.role } : {}),
-				...(diagnosticTarget ? { diagnosticTarget } : {}),
-				...(meta.diagnosticHistoryAccess === true ? { diagnosticHistoryAccess: true } : {}),
-				...(meta.projectId ? { projectId: meta.projectId } : {}),
-				storageDir: join(this.dir(id), "durable"),
-				subscriptionPolicy: join(this.dir(id), "subscription-policy.json"),
-				...(this.internetOnline !== undefined ? { connectivityPolicy: join(this.home, "connectivity.json") } : {}),
-				...(this.telemetry ? { telemetry: this.telemetry } : {}),
-				cwd: meta.coordinatorView?.scratch ?? meta.cwd,
-				model: meta.model,
-				thinking: meta.thinking,
-				...(meta.pending?.[0]?.type === "abort" ? { stopOnOpen: true } : {}),
-				...(meta.inputsPaused ? { pauseInputsOnOpen: meta.inputControlRevision } : {}),
-				...(meta.continuationModel ? { continuationModel: meta.continuationModel } : {}),
-				agentDir: this.agentDir,
-				...(meta.workspace ? { trustDirectory: meta.workspace.source } : {}),
-				pilot: {
-					...(meta.controlPermission ? { controlPermission: meta.controlPermission } : {}),
+		// Only the factory's synchronous prefix. Awaited isolation/readiness is not main-thread CPU work.
+		const opening = operations.time("worker.construct", () =>
+			createWorker(
+				{
+					sessionId: id,
+					...(meta.control ? { control: true } : {}),
 					...(meta.role ? { role: meta.role } : {}),
 					...(diagnosticTarget ? { diagnosticTarget } : {}),
 					...(meta.diagnosticHistoryAccess === true ? { diagnosticHistoryAccess: true } : {}),
-					...(meta.ask ? { ask: meta.ask } : {}),
-					...(meta.workspace ? { workspace: meta.workspace } : {}),
-					...(meta.coordinatorView
-						? {
-								coordinatorView: {
-									path: meta.coordinatorView.path,
-									scratch: meta.coordinatorView.scratch,
-									protectedPaths: [
-										join(this.home, "main-views"),
-										meta.coordinatorView.repository,
-										meta.coordinatorView.originalCwd,
-										this.projects.require(meta.projectId!).path,
-									],
-								},
-							}
+					...(meta.projectId ? { projectId: meta.projectId } : {}),
+					storageDir: join(this.dir(id), "durable"),
+					subscriptionPolicy: join(this.dir(id), "subscription-policy.json"),
+					...(this.internetOnline !== undefined
+						? { connectivityPolicy: join(this.home, "connectivity.json") }
 						: {}),
-					...(meta.projectId
-						? { requirePullRequest: this.projects.get(meta.projectId)?.requirePullRequest !== false }
+					...(this.telemetry ? { telemetry: this.telemetry } : {}),
+					cwd: meta.coordinatorView?.scratch ?? meta.cwd,
+					model: meta.model,
+					thinking: meta.thinking,
+					...(meta.pending?.[0]?.type === "abort" ? { stopOnOpen: true } : {}),
+					...(meta.inputsPaused ? { pauseInputsOnOpen: meta.inputControlRevision } : {}),
+					...(meta.continuationModel ? { continuationModel: meta.continuationModel } : {}),
+					agentDir: this.agentDir,
+					...(meta.workspace ? { trustDirectory: meta.workspace.source } : {}),
+					pilot: {
+						...(meta.controlPermission ? { controlPermission: meta.controlPermission } : {}),
+						...(meta.role ? { role: meta.role } : {}),
+						...(diagnosticTarget ? { diagnosticTarget } : {}),
+						...(meta.diagnosticHistoryAccess === true ? { diagnosticHistoryAccess: true } : {}),
+						...(meta.ask ? { ask: meta.ask } : {}),
+						...(meta.workspace ? { workspace: meta.workspace } : {}),
+						...(meta.coordinatorView
+							? {
+									coordinatorView: {
+										path: meta.coordinatorView.path,
+										scratch: meta.coordinatorView.scratch,
+										protectedPaths: [
+											join(this.home, "main-views"),
+											meta.coordinatorView.repository,
+											meta.coordinatorView.originalCwd,
+											this.projects.require(meta.projectId!).path,
+										],
+									},
+								}
+							: {}),
+						...(meta.projectId
+							? { requirePullRequest: this.projects.get(meta.projectId)?.requirePullRequest !== false }
+							: {}),
+						...(meta.workspaceReset ? { workspaceReset: meta.workspaceReset } : {}),
+					},
+					...(mission ? { mission } : {}),
+					...(!meta.ask && !meta.control && this.databases?.configured(this.projectPath(meta))
+						? { databases: true }
 						: {}),
-					...(meta.workspaceReset ? { workspaceReset: meta.workspaceReset } : {}),
 				},
-				...(mission ? { mission } : {}),
-				...(!meta.ask && !meta.control && this.databases?.configured(this.projectPath(meta))
-					? { databases: true }
-					: {}),
-			},
-			(packet) => {
-				if (published) this.onPacket(meta, published, packet);
-				else if (earlyPackets.length < 64) earlyPackets.push(packet);
-				else overflow = true;
-			},
-			(exited, code, signal) => this.onExit(meta, exited, code, signal),
+				(packet) => {
+					if (published) this.onPacket(meta, published, packet);
+					else if (earlyPackets.length < 64) earlyPackets.push(packet);
+					else overflow = true;
+				},
+				(exited, code, signal) => this.onExit(meta, exited, code, signal),
+			),
 		);
 		// Preserve synchronous fixture factories, and publish before replaying callbacks from an
 		// asynchronously prepared isolated process. No callback may observe an uninitialized owner.
@@ -6811,17 +6836,19 @@ export class SessionManager {
 			await worker.close();
 			throw new Error("Kernel startup packet limit exceeded");
 		}
-		published = worker;
-		this.workers.set(id, worker);
-		this.nextWorkerLaunchReason.delete(id);
-		this.aiUsage.observeWorkerLaunch(id, launchReason);
-		for (const packet of earlyPackets) this.onPacket(meta, worker, packet);
-		this.lastUse.set(id, Date.now());
-		// Reattach existing subscribers, for example after a kernel restart.
-		for (const watchId of this.watchers.get(id)?.keys() ?? []) worker.send({ type: "watch", watchId });
-		// A new kernel starts without slack_status; declare it if the chat is attached to a Slack triage message.
-		if (meta.projectId && !meta.ask) this.refreshSlackLinks(meta.projectId);
-		this.emit(meta);
+		operations.time("worker.publish", () => {
+			published = worker;
+			this.workers.set(id, worker);
+			this.nextWorkerLaunchReason.delete(id);
+			this.aiUsage.observeWorkerLaunch(id, launchReason);
+			for (const packet of earlyPackets) this.onPacket(meta, worker, packet);
+			this.lastUse.set(id, Date.now());
+			// Reattach existing subscribers, for example after a kernel restart.
+			for (const watchId of this.watchers.get(id)?.keys() ?? []) worker.send({ type: "watch", watchId });
+			// A new kernel starts without slack_status; declare it if the chat is attached to a Slack triage message.
+			if (meta.projectId && !meta.ask) this.refreshSlackLinks(meta.projectId);
+			this.emit(meta);
+		});
 		return worker;
 	}
 
@@ -8744,12 +8771,12 @@ export class SessionManager {
 	): Promise<void> {
 		this.metas.set(meta.id, meta);
 		// Capture before joining the queue. The live meta can change while an earlier write awaits I/O.
-		const snapshot = `${JSON.stringify(meta, null, "\t")}\n`;
+		const snapshot = operations.time("sessions.metadata.capture", () => `${JSON.stringify(meta, null, "\t")}\n`);
 		const bindingOperation = meta.prBindingOperation;
 		const write = async () => {
 			const file = join(this.dir(meta.id), "meta.json");
 			const temp = `${file}.${randomUUID()}.tmp`;
-			const persisted = JSON.parse(snapshot) as SessionMeta;
+			const persisted = operations.time("sessions.metadata.parse", () => JSON.parse(snapshot) as SessionMeta);
 			// Continuation fencing must survive lifecycle snapshots queued before the ownership commit.
 			for (const key of ["continuedTo", "continuationOf", "continuationPending", "workspaceOriginId"] as const) {
 				if (meta[key] === undefined) delete persisted[key];
@@ -8808,7 +8835,11 @@ export class SessionManager {
 			else delete persisted.workspaceReclaimedAt;
 			if (meta.workspaceCleanupError) persisted.workspaceCleanupError = meta.workspaceCleanupError;
 			else delete persisted.workspaceCleanupError;
-			await writeFile(temp, `${JSON.stringify(persisted, null, "\t")}\n`, { mode: 0o600, flush: durable });
+			const contents = operations.time(
+				"sessions.metadata.encode",
+				() => `${JSON.stringify(persisted, null, "\t")}\n`,
+			);
+			await writeFile(temp, contents, { mode: 0o600, flush: durable });
 			await rename(temp, file);
 			if (durable) {
 				for (const path of [this.dir(meta.id), this.sessionsDir, this.home]) {

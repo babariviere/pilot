@@ -25,6 +25,7 @@ import type {
 import { WebSocket } from "ws";
 import { DATABASE_CONFIG_FILE, DatabaseService } from "./databases.ts";
 import { Conflict, NotFound } from "./errors.ts";
+import { DaemonOperations, operations } from "./event-loop-watchdog.ts";
 import type { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
@@ -104,6 +105,18 @@ test("todo counts arrive on readiness and committed mutations without starting e
 	assert.equal(worker.openTodoCount, 6);
 	assert.equal(child.sent.length, sent);
 	assert.equal(worker.state, "idle");
+});
+
+test("worker acquisition and IPC serialization timings do not capture command content", (t) => {
+	const tracker = new DaemonOperations();
+	t.mock.method(operations, "time", <T>(label: string | (() => string), run: () => T) => tracker.time(label, run, 0));
+	const { worker, ready } = supervisedWorker(t);
+	ready();
+	worker.send({ type: "input", requestId: "private-request", content: "private-command-content", mode: "followUp" });
+	const labels = tracker.snapshot().slowByKind.map((entry) => entry.label);
+	assert.ok(labels.includes("worker.acquire"));
+	assert.ok(labels.includes("worker.send"));
+	assert.doesNotMatch(JSON.stringify(tracker.snapshot()), /private-request|private-command-content|unused/);
 });
 
 test("unexpected disconnect still fails an idle worker", async (t) => {
@@ -2128,6 +2141,49 @@ test("diagnostics role survives reopen and prepares only a bounded read-only han
 	assert.deepEqual(reopened.get(specialist.id)?.diagnosticTarget, remoteTarget);
 	assert.equal(reopened.get(specialist.id)?.diagnosticHistoryAccess, true);
 	assert.deepEqual(reopened.get(specialist.id)?.diagnosticRepairProposal, replacementProposal);
+});
+
+test("startup/update timing labels are fixed and exclude awaited readiness", async (t) => {
+	const f = await fixture(t);
+	let now = 0;
+	const tracker = new DaemonOperations(
+		() => now,
+		() => now,
+	);
+	t.mock.method(operations, "time", <T>(label: string | (() => string), run: () => T) => tracker.time(label, run, 0));
+	const factory = f.workerFactory(false);
+	const sessions = await f.manager({
+		worker: (...args) => {
+			now += 150;
+			return factory!(...args);
+		},
+	});
+	const chat = await sessions.spawn({ cwd: f.source, message: "private-preparation-content" });
+	await until(() => f.workers.length === 1);
+	assert.equal(sessions.prepareUpdate().ready, false);
+	assert.equal(sessions.pauseForUpdate().ready, false);
+	sessions["resumeAfterUpdate"]();
+	now += 2_041; // An asynchronous wait must not become a synchronous slow section.
+	f.workers[0]!.open();
+	await sessions["starting"].get(chat.id);
+	const snapshot = tracker.snapshot();
+	assert.equal(snapshot.slowByKind.find((entry) => entry.label === "worker.construct")?.ms, 150);
+	const expected = [
+		"worker.context",
+		"worker.construct",
+		"worker.publish",
+		"sessions.metadata.capture",
+		"sessions.metadata.parse",
+		"sessions.metadata.encode",
+		"sessions.update.prepare",
+		"sessions.update.pause",
+		"sessions.update.resume",
+	];
+	assert.deepEqual(snapshot.slowByKind.map((entry) => entry.label).sort(), expected.sort());
+	assert.ok(snapshot.recentSlow.every((entry) => entry.ms <= 150));
+	assert.doesNotMatch(JSON.stringify(snapshot), /private-preparation-content/);
+	assert.ok(!JSON.stringify(snapshot).includes(chat.id));
+	assert.ok(!JSON.stringify(snapshot).includes(f.source));
 });
 
 test("large restart recovery keeps the daemon responsive and bounds cold starts without losing input IDs", async (t) => {
