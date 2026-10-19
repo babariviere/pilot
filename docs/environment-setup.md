@@ -152,7 +152,7 @@ interface EnvironmentTool {
 interface EnvironmentService {
 	id: string; // "postgres"
 	kind: "postgres";
-	version: string; // major, e.g. "16"
+	version: string; // major the project declares, e.g. "16"; checked against the host's server (section 5)
 	provider: "pilot" | "compose"; // pilot: built-in database (section 5); compose: reviewed compose file
 	database?: string; // logical name for provider "pilot", at most 32 characters, defaults to the project name
 	/** Agent db tool access to the built-in database; false hides it from the tool. */
@@ -363,17 +363,32 @@ directories, the profile's `env`, service exports, and no provider keys, broker 
 Pilot has built-in Postgres support that works on any host, Local or devbox, with or without a full profile.
 It has its own **Database** section in the Environment settings; Postgres is not a mise tool. **Database ·
 Postgres 16 · Enable** is enough to get one; discovery fills in the major version when the repository declares
-it. The compose provider remains for projects that need their exact image.
+it. The compose provider remains for projects that need an exact version or image.
 
-**One long-running server per host.** Each host runs at most one Pilot-owned server per Postgres major version,
-either native (data in `<Pilot data>/database/postgres-<major>`) or a Docker container (below). It starts the
-first time a project needs it, stays running, and the daemon starts it again after a reboot or restart when any
-project on that host has the database enabled. There is no stop, cleanup or archive hook. Disabling the database
-for a project never drops its data.
+**One long-running server per host.** Each host, Local or devbox, runs at most one Pilot-owned Postgres server,
+either native (data in `<Pilot data>/database/postgres-<major>`) or the `pilot-postgres` Docker container (below),
+with one port and one socket directory. It starts the first time a project needs it, stays running, and the daemon
+starts it again after a reboot or restart when any project on that host has the database enabled. There is no
+stop, cleanup or archive hook. Disabling the database for a project never drops its data.
 
-**One database per chat workspace.** Each project gets two roles inside that server: an owner role and a
-read-only role (with default privileges so new tables stay readable). Workspace setup creates one database per
-chat workspace, owned by the project's owner role, so parallel chats run their own migrations. The physical name
+**Host version.** The server's major version is a host setting, stored in that daemon's state and never synced.
+It defaults to the newest major the host can run when the server is first created: the newest installed Postgres
+binaries, otherwise the newest major Pilot supports. A project's `version` is a check against it, not a request
+for another server:
+
+- Same or older than the host version: the project runs on the host server.
+- Newer: the Database section and the plan show a warning ("orders asks for Postgres 17; devbox-1 runs 16") that
+  suggests the compose provider. The project still runs on the host server meanwhile.
+- A project that needs an exact version uses the compose provider.
+
+**No upgrades.** Pilot never changes the host version once the server exists: `pg_upgrade` and dump-and-restore
+depend too much on the host's binaries, extensions and data to run reliably on their own. Projects that need a
+newer major use the compose provider.
+
+**One database per chat workspace.** Each project gets two roles inside that server: an owner role with
+`CREATEDB` and a read-only role (with default privileges so new tables stay readable). Workspace setup creates one
+database per chat workspace, owned by the project's owner role, so parallel chats run their own migrations. Pilot
+revokes the default `PUBLIC` connect privilege on the databases it creates. The physical name
 is `<name>_<project id prefix>_<workspace slug>` (the slug is the first 8 hex characters of the chat ID, like
 Berth's worktree slug), so two projects asking for `orders` never collide and the name stays under Postgres's
 63-byte limit; the exported variables carry the real name. A new database starts empty: migrations and seeds are
@@ -383,8 +398,15 @@ steps bring it up to date.
 Direct-mode projects have no per-chat workspace and keep one project database, `<name>_<project id prefix>`,
 created by **Apply** or **Run setup**.
 
-Databases are never dropped (setup has no teardown), so archived and deleted chats leave theirs behind. The
-Database section lists each Pilot database with its size and chat, so the user can see what accumulates.
+**Extra databases on demand.** Because the owner role has `CREATEDB`, an agent can create more empty databases
+(a test database, a scratch database) with ordinary commands such as `createdb` or `CREATE DATABASE` through
+`DATABASE_URL`. There is no dedicated tool and no command filtering. Postgres only lets a role use a database it
+owns as a template, so `CREATEDB` does not expose other projects' data. Such databases follow Postgres defaults:
+the read-only role and the `db` tool's `pilot` environment do not cover them.
+
+Pilot never drops databases (setup has no teardown), so archived and deleted chats leave theirs behind; agents can
+drop the ones their owner role owns. The Database section lists every database owned by the project's roles, with
+its size and, when the name carries a workspace slug, its chat, so the user can see what accumulates.
 
 **Socket and TCP.** The server listens on a Unix socket in a private 0700 directory and on a loopback TCP port
 that Pilot picks once per host and keeps. Socket connections need no password. TCP uses `scram-sha-256` with
@@ -397,15 +419,14 @@ the repository. Exports offer both forms:
 
 **Server source**, in order:
 
-1. Postgres binaries already installed at the right major version (Homebrew, system packages, Postgres.app):
-   a native server.
+1. Postgres binaries already installed at the host version (Homebrew, system packages, Postgres.app): a native
+   server.
 2. Homebrew present: `brew install postgresql@<major>`, then a native server. mise is not used for Postgres
    because its plugin compiles from source.
-3. Docker present: one long-lived container per major, `pilot-postgres-<major>`, from the official
-   `postgres:<major>` image, with a named volume of the same name, the port published on `127.0.0.1` only, a
-   restart policy and a `pilot.daemon` label. The plan shows the image; its digest is recorded at first pull and
-   Pilot pulls again only for a newly confirmed plan. The container offers TCP only, so `socketUrl` exports fall
-   back to `url`.
+3. Docker present: one long-lived `pilot-postgres` container from the official `postgres:<major>` image, with
+   the `pilot-postgres-data-<major>` volume, the port published on `127.0.0.1` only, a restart policy and a
+   `pilot.daemon` label. The plan shows the image; its digest is recorded at first pull and Pilot pulls again only
+   for a newly confirmed plan. The container offers TCP only, so `socketUrl` exports fall back to `url`.
 4. Otherwise **manual**: the plan explains what to install (Docker or Homebrew) and shows the system package
    commands for the user to run.
 
@@ -421,7 +442,8 @@ devboxes.
 
 **Never touched**: other clusters, Homebrew or systemd Postgres services, other Docker containers and volumes,
 existing databases and roles, `~/.pgpass`. If Pilot's data directory exists without Pilot's marker file, or a
-`pilot-postgres-<major>` container or volume exists without Pilot's label, setup stops with an error instead of
+`pilot-postgres` container or `pilot-postgres-data-<major>` volume exists without Pilot's label, setup stops with
+an error instead of
 reusing or replacing it.
 
 **Compose provider.** Uses the project's reviewed compose file with a Pilot project name
@@ -478,7 +500,7 @@ configuration, replacing a workspace's existing local files, or running sudo.
 | --- | --- | --- |
 | Tool | mise install record for the exact version, with its `bin` directory present | host, cached until an install or a failed use |
 | Postgres (built-in, native) | `pg_isready -h <socket dir> -d <workspace database>` | server: host; database: workspace. Checked live (two-second timeout) |
-| Postgres (built-in, Docker) | `docker exec pilot-postgres-<major> pg_isready -d <workspace database>` | same |
+| Postgres (built-in, Docker) | `docker exec pilot-postgres pg_isready -d <workspace database>` | same |
 | Postgres (compose) | `pg_isready` against the mapped port, or the container health status | host, checked live |
 | Step | review pin matches, plus `check` or recorded input hashes | workspace |
 
@@ -542,7 +564,8 @@ Suggested fixes come from a fixed table keyed by item kind and failure class, no
 | Download failed | "Couldn't reach github.com from devbox-1. Check the network, then retry." |
 | Database directory not Pilot's | "<path> exists but wasn't created by Pilot. Move it aside yourself; Pilot won't reuse or delete it." |
 | Docker not running | "Docker isn't running on devbox-1. Start it, then retry." |
-| Container or volume not Pilot's | "pilot-postgres-16 exists on devbox-1 but wasn't created by Pilot. Rename or remove it yourself; Pilot won't reuse or delete it." |
+| Container or volume not Pilot's | "pilot-postgres exists on devbox-1 but wasn't created by Pilot. Rename or remove it yourself; Pilot won't reuse or delete it." |
+| Project needs a newer Postgres (warning) | "orders asks for Postgres 17; devbox-1 runs Postgres 16. Use the compose provider if the project needs Postgres 17." |
 | Built-in database port taken | "Port 54016 on devbox-1 is used by another process. Pilot won't stop it. Choose **Use another port** (this changes DATABASE_URL)." |
 | Port already in use (compose) | "Port 5432 is in use on devbox-1. Pilot won't stop the other server. Use the built-in database or change the port in your compose file." |
 | Script changed since review | "scripts/bootstrap.sh changed since you reviewed it. Review the new version to run setup." |
@@ -702,9 +725,10 @@ project's roles. Step `make setup` reviewed. The user confirms once. Each chat's
 environment pointing at that chat's own database.
 
 **Plan on devbox-1 (Linux x86-64, mise present, no Homebrew, apt)**: the synced profile arrives as **Synced**.
-Go and golangci-lint: install with mise. Postgres 16 binaries missing and no Homebrew, but Docker is present: run
-the `pilot-postgres-16` container from `postgres:16`, with `sudo apt-get install postgresql-16` shown as the
-alternative to run yourself. The effective profile includes the host's `GOFLAGS`. The synced review of
+Go and golangci-lint: install with mise. No Postgres binaries and no Homebrew, but Docker is present: the host has
+no server yet, so its version defaults to the newest major Pilot supports, 17, which satisfies the project's 16.
+The plan runs the `pilot-postgres` container from `postgres:17`, with `sudo apt-get install postgresql-17` shown
+as the alternative to run yourself. The effective profile includes the host's `GOFLAGS`. The synced review of
 `make setup` applies because the files' hashes match, but nothing runs on devbox-1 until the user confirms
 this host's plan once.
 
@@ -713,13 +737,16 @@ tools (cached), starts Postgres if needed, creates `orders_1a2b3c4d_5e6f7a8b` fo
 `migrations` have no recorded hashes, and runs `make setup` (about 40 s), which migrates that database. A second
 chat started meanwhile gets its own database and migrates it independently. The first turn is held meanwhile;
 the chat shows "Setting up environment". The agent then gets
-`Project environment: ready (Go 1.23.4, golangci-lint 1.61.0, Postgres 16 via DATABASE_URL).`
+`Project environment: ready (Go 1.23.4, golangci-lint 1.61.0, Postgres 17 via DATABASE_URL).`
+
+**Test database**: the agent runs `createdb orders_test` against `DATABASE_URL` to keep test data apart. It needs no
+approval or tool; the Database section on devbox-1 now lists `orders_test` under the project, with its size.
 
 **Post-run check**: the agent edited files, so `make lint` (requires golangci-lint) and `make test`
 (requires go, postgres) run. devbox-1 rebooted earlier, and the daemon's start of the database failed with
 `No space left on device`. Before the checks, Pilot tries once more and gets the same error. `make test` is skipped and the chat shows
-`Environment not ready: Postgres 16 on devbox-1`, with the trimmed server log and the fix "Free disk space on
-devbox-1 (Postgres data is in the Docker volume pilot-postgres-16), then retry." No follow-up goes to the agent.
+`Environment not ready: Postgres 17 on devbox-1`, with the trimmed server log and the fix "Free disk space on
+devbox-1 (Postgres data is in the Docker volume pilot-postgres-data-17), then retry." No follow-up goes to the agent.
 
 **Script change**: the agent edits `scripts/bootstrap.sh` in its workspace. On the next restore of that
 chat, the hash differs, `make setup` is not run, and Needs you says `Setup script changed: review
@@ -754,10 +781,11 @@ lands.
    mise through Homebrew), sudo items as shown commands, per-host serialization, update gate and pause handling.
    Needs the shell runner.
 7. **Script review**: review view, hash pins, re-review on change, private script copies.
-8. **Built-in database**: per-host long-running native server or Docker container, per-project roles, the
-   per-workspace database helper (one project database in direct mode), socket (native) and TCP, restart on
-   daemon start, readiness probes, `db` tool environment targeting the chat's database. The compose provider
-   follows behind review.
+8. **Built-in database**: one long-running native server or Docker container per host with its host version
+   setting, project roles (owner with `CREATEDB`), the per-workspace database helper (one project database in
+   direct mode), socket (native) and TCP, restart on daemon start, readiness probes, `db` tool environment
+   targeting the chat's database, and the listing of every project-owned database. The compose provider follows
+   behind review.
 9. **Workspace setup**: on `workspace.created` and `workspace.restored`, copy local files, create the
    workspace's database, then run steps; first-turn hold, PATH and exports for agents, agent prompt line. Needs
    the setup triggers.
@@ -767,8 +795,8 @@ lands.
 
 Agent-led setup and project commands (section 15) are not scheduled.
 
-**Adjustments to steps 1–4** for per-workspace databases, local files and layered sync (the mise and Docker
-changes are tracked separately):
+**Adjustments to steps 1–4** for per-workspace databases, local files, layered sync and the single host server
+(the mise and Docker changes are tracked separately):
 
 - Protocol and store: add `ProjectEnvironment.copyFiles?: string[]` (safe relative paths, no `.git`/`.jj`
   segments, unique, at most 32), included in sync. Add `Project.environmentOverride?: ProjectEnvironmentOverride`
@@ -780,6 +808,14 @@ changes are tracked separately):
 - Discovery: add `EnvironmentDiscovery.localFiles: string[]`, root `.env` and `.env.*` names that Git ignores.
 - App: say "its own database for each chat" in the Database row, and add a local files list. Override editing can
   wait for step 5.
+- Single host server: `EnvironmentService.version` becomes the project's declared major, checked against the
+  host version rather than selecting a server. Report the host server (`version`, `source: "native" | "docker"`,
+  or absent before creation) beside the plan. The plan's Postgres item compares the project major with it: same
+  or older is `none` or `start`, newer adds a warning note suggesting the compose provider. There is no upgrade
+  action. Probes look for the host version's binaries (or, before creation, the newest
+  installed major) instead of each project's major. Docker uses the `pilot-postgres` container and
+  `pilot-postgres-data-<major>` volume. The app's Database row shows the host version next to the project's
+  declared major. `CREATEDB` and the database listing need no schema change in steps 1–4.
 
 ## 13. Decisions from review
 
@@ -795,9 +831,14 @@ changes are tracked separately):
 - Toolchains come from mise with no built-in tool table: tool IDs are mise registry names, the app adds tools
   from the host's mise registry, and detection reads mise's install records. Postgres keeps a dedicated
   Database section.
-- Postgres without existing binaries or Homebrew runs in one long-lived Docker container per host and major
-  version, published on loopback only. No Pilot-built or third-party portable binaries. Without Docker either,
-  the plan explains what to install.
+- Postgres without existing binaries or Homebrew runs in one long-lived Docker container per host, published on
+  loopback only. No Pilot-built or third-party portable binaries. Without Docker either, the plan explains what
+  to install.
+- One Pilot Postgres server per host, with a host version set when the server is created (default: the newest
+  available major). Pilot never upgrades it. A project's declared major is a check: older runs on the host
+  server, newer warns. Projects needing a newer or exact version use the compose provider.
+- The project's owner role has `CREATEDB`, so agents create extra empty databases with ordinary commands, with no
+  dedicated tool or command filtering. The Database section lists every database the project's roles own.
 - Each chat workspace gets its own database, created by workspace setup. Direct-mode projects keep one project
   database. The `db` tool targets the chat's database.
 - Workspace setup copies listed ignored local files from the main checkout into new and restored workspaces,
@@ -811,9 +852,9 @@ changes are tracked separately):
    CI pins turn out to be the most reliable source.
 2. **Version bumps.** Default: a new version always needs a confirmed plan, even for an already approved tool.
    Revisit if confirming routine toolchain bumps becomes tedious.
-3. **Leftover workspace databases.** Databases of archived or deleted chats stay, since setup never drops data.
-   Default: list them with sizes in the Database section and leave dropping to the user. Revisit if they grow
-   enough to need a confirmed cleanup action.
+3. **Leftover databases.** Databases of archived or deleted chats, and extra databases agents created, stay,
+   since Pilot never drops data. Default: list them with sizes in the Database section and leave dropping to the
+   user. Revisit if they grow enough to need a confirmed cleanup action.
 
 Resolved: portable Postgres builds (now Docker, section 5) and sync conflicts (now layered sync, section 2).
 
