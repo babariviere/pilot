@@ -191,6 +191,14 @@ test("Control host identity, default-home requests and explicit authorization ho
 		assert.deepEqual(f.requests[i + 1].host, f.enrollments[0].executor);
 		assert.equal(f.requests[i].action, f.requests[i + 1].action);
 	}
+	const upgrade: ControlHostRequest = {
+		action: "upgrade_permission",
+		args: { sessionId: "chat:1", authorizationId: "auth:1" },
+	};
+	assert.deepEqual(
+		f.requests.filter((request) => request.action === "upgrade_permission"),
+		[upgrade, { ...upgrade, host: f.enrollments[0].executor }],
+	);
 	assert.equal(f.authorizations[0].hosts?.length, 2);
 	assert.equal(f.authorizations[1].hosts, undefined);
 	assert.deepEqual(f.authorizations[2].hosts, []);
