@@ -1,5 +1,33 @@
 # Changelog
 
+## [1.57.0](https://github.com/babariviere/pilot/compare/v1.56.0...v1.57.0) (2026-10-19)
+
+
+### Features
+
+* draw Mermaid diagrams in native visuals ([3b87e1e](https://github.com/babariviere/pilot/commit/3b87e1e41549dc574b1f15f011832708fcce0c45))
+* **macos:** add host-specific MCP connections and safe setup review ([d2d361b](https://github.com/babariviere/pilot/commit/d2d361b090b63b4747017e34a776860523e775ac))
+* **mcp:** add coordinated writes for existing configurations ([d4fa044](https://github.com/babariviere/pilot/commit/d4fa0443e7d2ee4c6a335ac6cc934210017ff0f1))
+* **permissions:** require app approval for publish upgrades ([78b6a62](https://github.com/babariviere/pilot/commit/78b6a62bb9b5e90710e4cc578fdd47227cdded9c))
+* **slack:** use hourly budgets and allow forced sync ([57d88c9](https://github.com/babariviere/pilot/commit/57d88c987be19a6668a0d7d94e210997c0a123fc))
+
+
+### Bug Fixes
+
+* **chat:** show which decisions changed in notices ([e5d7288](https://github.com/babariviere/pilot/commit/e5d728896a84ec8bc815fd22ecaeabaae723cf0e))
+* **config:** move Pilot settings to the config directory ([907294e](https://github.com/babariviere/pilot/commit/907294ea976b856a304543434fb7ee6980c15a6a))
+* **control:** share menu visibility across reactive snapshots ([4aecb02](https://github.com/babariviere/pilot/commit/4aecb020eae73412da5d3ec0ef4aef01810b743c))
+* **control:** show only Mac Control in navigation ([48bd2ed](https://github.com/babariviere/pilot/commit/48bd2edb3dde1daf1b4e609eb182282cbf329591))
+* **linear:** reconcile ticket sync and retain scoped failures ([979cb47](https://github.com/babariviere/pilot/commit/979cb47665734d324937abb23ebe1b8080e2fbaf))
+* **macos:** align repair status with the composer ([38f40c0](https://github.com/babariviere/pilot/commit/38f40c0bc1e21115a014fb019c603aad801f8c8c))
+* **macos:** keep row submenus active when the pointer leaves ([f29d901](https://github.com/babariviere/pilot/commit/f29d901b9bd6139abc0b82c9230d359cc03a3236))
+* **macos:** let native visuals grow to their full height ([d899a8d](https://github.com/babariviere/pilot/commit/d899a8da57bb050e02e8f4a75ec1e46f36137972))
+
+
+### Performance Improvements
+
+* **macos:** benchmark native visuals against HTML artifacts ([e2d770a](https://github.com/babariviere/pilot/commit/e2d770a09e08949537b705495e8cf172a20b6b57))
+
 ## [1.56.0](https://github.com/babariviere/pilot/compare/v1.55.0...v1.56.0) (2026-10-19)
 
 
