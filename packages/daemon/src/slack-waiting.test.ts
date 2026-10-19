@@ -111,6 +111,22 @@ test("a chat's agent moves only its own in-progress messages to waiting, out of 
 	await assert.rejects(f.items.agentSlackStatus("chat-2", "waiting"), /isn't linked/);
 });
 
+test("a chat lists the Slack messages whose latest chat it is, dismissed ones too", async (t) => {
+	const f = await fixture(t);
+	const ids = async (sessionId: string) =>
+		(await f.items.list({ projectId: f.project.id, sessionId })).items.map((item) => item.id);
+	assert.deepEqual(await ids("chat-1"), []);
+	await f.items.patch(f.item.id, { sessionId: "chat-1", start: true });
+	assert.deepEqual(await ids("chat-1"), [f.item.id]);
+	await f.items.patch(f.item.id, { slack: { status: "dismissed" } });
+	assert.deepEqual(await ids("chat-1"), [f.item.id]);
+	// A newer chat takes the message over.
+	await f.items.patch(f.item.id, { sessionId: "chat-2" });
+	assert.deepEqual(await ids("chat-1"), []);
+	assert.deepEqual(await ids("chat-2"), [f.item.id]);
+	await assert.rejects(f.items.list({ projectId: f.project.id, sessionId: "" }), /Invalid chat/);
+});
+
 test("a reply from someone else resumes the waiting chat; the user's own replies do not", async (t) => {
 	const f = await fixture(t);
 	await f.items.patch(f.item.id, { sessionId: "chat-1", start: true });

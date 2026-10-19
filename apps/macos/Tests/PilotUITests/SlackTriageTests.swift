@@ -26,6 +26,20 @@ private let hour = 3_600_000.0
     #expect(SlackTriageText.boardColumns(showDismissed: false) == [.open, .inProgress, .waiting, .done])
 }
 
+@Test @MainActor func aSlackChatOffersInProgressWaitingAndDoneAndKeepsItsCurrentStatus() {
+    #expect(SessionSlackText.choices(current: .inProgress) == [.inProgress, .waiting, .done])
+    #expect(SessionSlackText.choices(current: .open) == [.open, .inProgress, .waiting, .done])
+    #expect(SessionSlackText.choices(current: .dismissed) == [.inProgress, .waiting, .done, .dismissed])
+
+    let working = message("a", status: .inProgress, title: "Login fails")
+    #expect(SessionSlackText.label([working]) == "In progress")
+    #expect(SessionSlackText.help([working]) == "Slack message “Login fails”: In progress")
+    let done = SessionSlackLinks.applying(.done, to: working)
+    #expect(done.slack?.status == .done && done.slack?.overrides.status == .done && !done.dismissed)
+    #expect(SessionSlackText.label([done, message("b", status: .waiting)]) == "Mixed")
+    #expect(SessionSlackLinks.applying(.dismissed, to: working).dismissed)
+}
+
 private func message(_ id: String, _ type: SlackMessageType = .bug, _ severity: SlackSeverity = .medium,
                      label: String? = nil, status: SlackLocalStatus = .open, channel: String = "C1",
                      ago: Double = hour, title: String? = nil, replies: Int? = nil,

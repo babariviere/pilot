@@ -142,6 +142,8 @@ export interface TrackedQuery {
 	dismissed?: boolean;
 	/** Only Slack messages a close label dismissed. Implies dismissed. */
 	closedByLabel?: boolean;
+	/** Only messages whose latest chat is this one, dismissed or not. Overrides dismissed and closedByLabel. */
+	sessionId?: string;
 	limit?: number;
 	offset?: number;
 }
@@ -560,10 +562,16 @@ export class TrackedItemDisk {
 		const kinds = query.kind ? [query.kind] : query.kinds;
 		if (kinds?.some((kind) => kind !== "linear" && kind !== "slack")) throw new Error("Unknown tracking kind");
 		if (kinds && !kinds.length) return { items: [], total: 0 };
-		const filter = `project_id = ? AND active = 1 AND dismissed = ?${kinds ? ` AND kind IN (${kinds.map(() => "?").join(",")})` : ""}${query.closedByLabel ? " AND closed_by_label IS NOT NULL" : ""}${query.caseId ? " AND slack_case_id=?" : ""}`;
+		if (
+			query.sessionId !== undefined &&
+			(typeof query.sessionId !== "string" || !query.sessionId || query.sessionId.length > 200)
+		)
+			throw new Error("Invalid chat");
+		const session = query.sessionId !== undefined;
+		const filter = `project_id = ? AND active = 1${session ? " AND session_id = ?" : " AND dismissed = ?"}${kinds ? ` AND kind IN (${kinds.map(() => "?").join(",")})` : ""}${!session && query.closedByLabel ? " AND closed_by_label IS NOT NULL" : ""}${query.caseId ? " AND slack_case_id=?" : ""}`;
 		const args = [
 			query.projectId,
-			query.dismissed || query.closedByLabel ? 1 : 0,
+			session ? query.sessionId! : query.dismissed || query.closedByLabel ? 1 : 0,
 			...(kinds ?? []),
 			...(query.caseId ? [query.caseId] : []),
 		];

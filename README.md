@@ -138,7 +138,8 @@ it does not change chat-result read tracking or enable review entry points.
   granted up front or when you answer the agent's request. See [Databases](#databases).
 - **Bring work into Pilot.** Track Linear issues and Slack messages from configured sources, triage Slack
   messages by type, label and severity, see what waits on you across projects in one Inbox, then start a chat or
-  mission from an item. Schedule work for later or for wake, online and time triggers.
+  mission from an item. A chat started from a Slack message shows that message's status in its toolbar (and ⌘K),
+  where you mark it In progress, Waiting or Done. Schedule work for later or for wake, online and time triggers.
 - **Light or dark.** Pilot follows the macOS appearance; **Settings → Appearance** can pin light or dark.
   Home pairs dithered daytime clouds with a separate evening seascape in dark mode. Artifacts stay light documents
   in both.

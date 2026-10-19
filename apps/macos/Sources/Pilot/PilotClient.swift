@@ -1169,12 +1169,15 @@ final class PilotClient: ObservableObject {
         for source in fixture.sources { if let state = source.signIn { sourceSignIns.record(state) } }
     }
 
+    /// sessionId: only items whose latest chat is this one, dismissed or not (dismissed and closedByLabel are ignored).
     func trackedItems(projectId: String, kind: TrackedKind? = nil, dismissed: Bool = false,
-                      limit: Int = 100, offset: Int = 0, closedByLabel: Bool = false) async throws -> TrackedItemList {
+                      limit: Int = 100, offset: Int = 0, closedByLabel: Bool = false,
+                      sessionId: String? = nil) async throws -> TrackedItemList {
         if let fixture = fixtureTracking {
-            let items = fixture.items.filter {
-                $0.projectId == projectId && $0.dismissed == (dismissed || closedByLabel)
-                    && (kind == nil || $0.kind == kind) && (!closedByLabel || $0.slack?.closedByLabel != nil)
+            let items = fixture.items.filter { item in
+                guard item.projectId == projectId, kind == nil || item.kind == kind else { return false }
+                if let sessionId { return item.sessionId == sessionId }
+                return item.dismissed == (dismissed || closedByLabel) && (!closedByLabel || item.slack?.closedByLabel != nil)
             }
             return TrackedItemList(items: Array(items.dropFirst(offset).prefix(limit)), total: items.count)
         }
@@ -1183,6 +1186,7 @@ final class PilotClient: ObservableObject {
                      URLQueryItem(name: "limit", value: String(limit)), URLQueryItem(name: "offset", value: String(offset))]
         if let kind { query.append(URLQueryItem(name: "kind", value: kind.rawValue)) }
         if closedByLabel { query.append(URLQueryItem(name: "closedByLabel", value: "true")) }
+        if let sessionId { query.append(URLQueryItem(name: "sessionId", value: sessionId)) }
         return try await missionRequest(["tracked-items"], query: query)
     }
 
