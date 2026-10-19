@@ -117,6 +117,59 @@ private func menuSession(id: String = "menu-test", title: String = "Session", st
                    pullRequest: pullRequest, archivedAt: archivedAt)
 }
 
+@Test @MainActor func reactiveMenuSnapshotsNeverReintroduceExecutorControlOrItsCounts() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let hosts = HostClients(operationDirectory: directory)
+    let app = AppModel(projectFolderDefaults: UserDefaults(suiteName: "menu-control-\(UUID())")!, hosts: hosts)
+    let local = HostRef(hostId: "local", daemonId: "mac", lineageId: "mac-lineage")
+    let box = HostRef(hostId: "box", daemonId: "executor", lineageId: "executor-lineage")
+    var localControl = menuSession(id: "mac-control", state: "working"); localControl.control = true
+    let localChat = menuSession(id: "local-chat", state: "working")
+    var control = menuSession(id: "executor-control", state: "working"); control.control = true
+    let ordinary = menuSession(id: "ordinary", title: "Control", state: "working")
+    app.client.loadFixture(projects: [], sessions: [localControl, localChat])
+    try app.registerLocal(local); try hosts.install(app.client, host: local)
+    let client = PilotClient(); client.loadFixture(projects: [], sessions: [control, ordinary])
+    try hosts.install(client, host: box)
+    app.daemon.markRunningForSnapshot()
+    let menu = MenuBarModel(model: app, updater: AppUpdater())
+    let ordinaryRef = HostResourceRef(host: box, kind: .session, localId: ordinary.id)
+    let controlRef = HostResourceRef(host: box, kind: .session, localId: control.id)
+    let baseline = MenuBarSnapshot(sessions: [localControl, localChat], isUnread: { _ in false }, status: .running,
+        lifecycleBusy: app.daemon.lifecycleBusy, waitingToInstall: false,
+        hosted: [Hosted(ref: ordinaryRef, value: ordinary)], availableHosts: [box])
+    #expect(menu.snapshot == baseline)
+
+    // The barrier requires the fresh inventory's ordinary title. It does not wait for the absence
+    // under test, so the old reactive-path bug produces a failed assertion, not a hanging wait.
+    var observation: AnyCancellable?
+    var received = false
+    let updated = menuSession(id: ordinary.id, title: "Control after update", state: "working")
+    var updatedControl = SessionSummary(id: control.id, title: "Waiting Control", cwd: "/tmp",
+        createdAt: 1, updatedAt: 2, state: "idle", outcome: .question)
+    updatedControl.control = true
+    #expect(updatedControl.status == .question)
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+        observation = menu.$snapshot.sink { value in
+            guard !received, value.rows.contains(where: { $0.id == ordinaryRef.storageKey && $0.session.title == updated.title }) else { return }
+            received = true; continuation.resume()
+        }
+        client.loadFixture(projects: [], sessions: [updatedControl, updated])
+    }
+    observation?.cancel()
+    let expected = MenuBarSnapshot(sessions: [localControl, localChat], isUnread: { _ in false }, status: .running,
+        lifecycleBusy: app.daemon.lifecycleBusy, waitingToInstall: false,
+        hosted: [Hosted(ref: ordinaryRef, value: updated)], availableHosts: [box])
+    #expect(menu.snapshot == expected)
+    #expect(!menu.snapshot.rows.contains { $0.id == controlRef.storageKey })
+    #expect(menu.snapshot.rows.contains { $0.id == localChat.id })
+    #expect(menu.snapshot.statusText == baseline.statusText)
+    #expect(app.client.session(localControl.id)?.control == true)
+    #expect(app.previousControlSessions.map(\.ref) == [controlRef])
+    await hosts.stopAndWait()
+}
+
 @MainActor
 private func drainMenuUpdates() async {
     // Allow the zero-delay debounce's scheduled delivery to run, not only queued

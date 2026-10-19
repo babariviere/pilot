@@ -50,6 +50,9 @@ struct MenuBarSnapshot: Equatable {
          status: DaemonController.Status, lifecycleBusy: Bool, waitingToInstall: Bool,
          hosted: [Hosted<SessionSummary>] = [], availableHosts: Set<HostRef> = [],
          isUnreadHost: ((Hosted<SessionSummary>) -> Bool)? = nil) {
+        // Apply once for every snapshot producer, including reactive updates and heading counts.
+        // These conversations are accessible only through Previous Control, not normal menu entries.
+        let hosted = hosted.filter { !$0.value.isControl }
         // Sessions arrive in list order. Like pilotd's counts, pinned chats count by their state.
         let groups = SidebarUrgency.groups(sessions.unarchivedSessions, unread: isUnread, separatingPinned: false)
         var remaining = Self.limit
@@ -117,7 +120,7 @@ final class MenuBarModel: ObservableObject {
     init(model: AppModel, updater: AppUpdater) {
         snapshot = MenuBarSnapshot(sessions: model.client.sessions, isUnread: model.isUnread,
                                    status: model.daemon.status, lifecycleBusy: model.daemon.lifecycleBusy,
-                                   waitingToInstall: updater.waitingToInstall, hosted: model.hosts.sessions.filter { $0.ref.host != model.localHost && !$0.value.isControl }, availableHosts: model.hosts.available, isUnreadHost: { model.isUnread($0.value, on: $0.ref.host) })
+                                   waitingToInstall: updater.waitingToInstall, hosted: model.hosts.sessions.filter { $0.ref.host != model.localHost }, availableHosts: model.hosts.available, isUnreadHost: { model.isUnread($0.value, on: $0.ref.host) })
         observation = Publishers.CombineLatest4(model.client.$sessions, model.$reviewRevision,
                                                  model.daemon.$status, model.daemon.$lifecycleBusy)
             .combineLatest(updater.$waitingToInstall)
