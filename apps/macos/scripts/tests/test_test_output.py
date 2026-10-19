@@ -131,7 +131,7 @@ class TestOutputTests(unittest.TestCase):
             for name in [wrapper, "check-test-output.py", "check-font-roles.py", "font-literals.txt"]:
                 shutil.copy2(SCRIPTS / name, scripts / name)
             (scripts / "swift-env.sh").write_text("")
-            for name in ["vendor-ghostty.sh", "vendor-mermaidkit.sh", "share-artifacts.sh"]:
+            for name in ["vendor-ghostty.sh", "vendor-mermaidkit.sh", "vendor-quickjs.sh", "share-artifacts.sh"]:
                 (scripts / name).write_text(f"#!/bin/sh\nexit {prepare_status}\n")
                 (scripts / name).chmod(0o755)
             (root / "xcrun").write_text('#!/bin/sh\nprintf "%s\\n" "$FAKE_SWIFT"\n')

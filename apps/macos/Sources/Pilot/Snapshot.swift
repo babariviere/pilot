@@ -30,6 +30,10 @@ enum Snapshot {
             TerminalResourceTest.run()
             return true
         }
+        if arguments.contains("--visuals-check") {
+            Task { await VisualServiceCheck.run() }
+            return true
+        }
         if arguments.contains("--queue-edit-test") {
             Task { await QueueEditingTest.run() }
             return true
@@ -2443,4 +2447,3 @@ final class ControlMemoryFixture: ControlMemoryReading {
                            newestAt: empty ? nil : now - 60_000)
     }
 }
-

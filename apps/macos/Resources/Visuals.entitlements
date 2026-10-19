@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The visual service runs agent-written scripts. The App Sandbox with no other entitlements leaves it no network,
+     no files outside its own container and no access to Pilot. Never add entitlements here. -->
+<plist version="1.0"><dict>
+    <key>com.apple.security.app-sandbox</key><true/>
+</dict></plist>

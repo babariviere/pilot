@@ -163,11 +163,13 @@ test("Swift test and release build jobs cache only pinned dependencies with tool
 		assert.match(job, /hashFiles\('apps\/macos\/Package.resolved', 'apps\/macos\/Package.swift'/);
 		assert.match(job, /scripts\/vendor-ghostty.sh.*scripts\/patch-ghostty-resources.py/);
 		assert.match(job, /scripts\/vendor-mermaidkit.sh.*scripts\/patches\/\*\*/);
+		assert.match(job, /scripts\/vendor-quickjs.sh/);
 		const cached = job.slice(job.indexOf("path: |"), job.indexOf("key: swift-deps"));
 		assert.match(cached, /org.swift.swiftpm\/repositories/);
 		assert.match(cached, /org.swift.swiftpm\/artifacts/);
 		assert.match(cached, /Vendor\/libghostty-spm/);
 		assert.match(cached, /Vendor\/MermaidKit/);
+		assert.match(cached, /Vendor\/QuickJSNG/);
 		assert.ok(!cached.includes(".build") && !cached.includes("build/") && !cached.includes("sign"));
 		const build = job.indexOf(`run: apps/macos/scripts/${script}.sh`);
 		assert.ok(build >= 0 && job.indexOf("uses: actions/cache@v4") < build);
@@ -185,6 +187,10 @@ test("PRs skip Swift only when the app is untouched, and smoke-test the test bui
 		["pull_request", "packages/daemon/src/a.ts\ndocs/testing.md", "1", "false"],
 		["pull_request", "packages/protocol/src/a.ts\napps/macos/Sources/PilotCore/A.swift", "1", "true"],
 		["pull_request", "scripts/verification-slot.py", "1", "true"],
+		// The visual service runs the shared runtime against the kernel's conformance fixtures.
+		["pull_request", "packages/artifacts/src/visual/runtime.js", "1", "true"],
+		["pull_request", "packages/protocol/fixtures/visual/conformance.json", "1", "true"],
+		["pull_request", "packages/artifacts/src/visual/check.ts", "1", "false"],
 		["pull_request", ".github/workflows/tests.yaml", "1", "true"],
 		["pull_request", ".github/workflows/pr.yaml", "1", "true"],
 		["pull_request", ".github/workflows/release.yaml", "1", "false"],
