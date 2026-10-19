@@ -1093,11 +1093,14 @@ tool sources unavailable. Missing app text logs, journal history or crash report
 that no failure occurred. The reader rejects symbolic links and arbitrary files, uses opaque bounded continuations
 and excerpts, never wakes or probes the target, and does not copy logs into telemetry or repair handoffs. Logs and
 history stay local, are treated as untrusted data, and grant no attachment, child-session, shell or mutation access.
-When no proposal exists, the diagnostics header's directly visible **Suggest a repair** action sends one bounded,
+When no proposal exists, the diagnostics chat's fixed composer-adjacent **Suggest a repair** action sends one bounded,
 host-qualified follow-up to the specialist. It reports requesting, queued and retry states, but never opens a manual
 proposal form or starts work. Once the specialist publishes a bounded, cited proposal, the action becomes **Review
 repair**, and after the turn settles the chat also shows the native review tray without displacing a live question or
-stealing focus. Not now is remembered for that exact proposal, while the header or context menu can reopen it.
+stealing focus or replacing the composer. The action is outside transcript scrolling and remains reachable beside
+the composer, including during a live question. Not now hides that exact proposal's summary, while **Review repair**
+stays in the footer. Pending starts use that same action to check the original receipt; unavailable actions stay visible
+but disabled. The context menu can also reopen review.
 Publishing, viewing, reconnecting, dismissing or cancelling never starts work. Only explicit confirmation in the
 review sheet sends the proposal to a separate private Build in the explicitly configured Pilot source project,
 never the diagnosed/current project. Configure its verified host-qualified checkout in Diagnostics settings once;

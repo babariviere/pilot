@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import PilotCore
 import PilotTelemetry
@@ -221,55 +222,73 @@ enum DiagnosticSetup {
 struct DiagnosticSpecialistHeader: View {
     let session: SessionSummary
     let context: HostViewContext?
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            PilotSymbol(PilotIcon.bug).foregroundStyle(Theme.mutedForeground).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Diagnostics").font(.pilot(.body, weight: .semibold))
+                    .foregroundStyle(Theme.foreground).accessibilityAddTraits(.isHeader)
+                Text(summary).font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .help("A read-only app-wide diagnostics specialist; a selected chat is investigation focus only")
+    }
+
+    private var summary: String {
+        if session.diagnosticScope == .app { return "App-wide read-only evidence · no initial chat focus" }
+        if let target = session.diagnosticTarget { return "App-wide read-only · focus: \(target.chatURL) on \(target.host.hostId)" }
+        if let id = session.diagnosticTargetId { return "App-wide read-only · focus: \(DiagnosticSetup.link(id))" }
+        return "App-wide read-only diagnostics"
+    }
+}
+
+/// The sole production repair action. Mounted in the fixed composer inset, never in transcript scrolling.
+struct DiagnosticRepairFooter: View {
+    let session: SessionSummary
+    let context: HostViewContext?
+    var proposalPrompt: DiagnosticRepairPromptPresentation?
+    var onDismissProposal: () -> Void
     @EnvironmentObject private var model: AppModel
     @EndpointClient private var endpoint
 
-    init(session: SessionSummary, context: HostViewContext?, client: PilotClient? = nil) {
+    init(session: SessionSummary, context: HostViewContext?, client: PilotClient? = nil,
+         proposalPrompt: DiagnosticRepairPromptPresentation? = nil, onDismissProposal: @escaping () -> Void = {}) {
         self.session = session
         self.context = context
+        self.proposalPrompt = proposalPrompt
+        self.onDismissProposal = onDismissProposal
         _endpoint = EndpointClient(client)
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .top, spacing: 12) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    PilotSymbol(PilotIcon.bug).foregroundStyle(Theme.mutedForeground).accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Diagnostics")
-                            .font(.pilot(.body, weight: .semibold)).foregroundStyle(Theme.foreground)
-                            .accessibilityAddTraits(.isHeader)
-                        Text(summary).font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
-                    }
+        let presentation = self.presentation
+        VStack(spacing: 0) {
+            if let proposalPrompt {
+                DiagnosticRepairPrompt(presentation: proposalPrompt, onReview: perform, onDismiss: onDismissProposal,
+                                       showsReviewAction: false, compact: true)
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                if let detail = presentation?.detail, detail != proposalPrompt?.problem {
+                    Text(detail).font(.pilot(.caption))
+                        .foregroundStyle(presentation?.detailIsError == true ? Theme.destructive : Theme.mutedForeground)
+                        .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .accessibilityElement(children: .combine)
-                .help("A read-only app-wide diagnostics specialist; a selected chat is investigation focus only")
                 Spacer(minLength: 8)
                 if let presentation {
                     DiagnosticRepairHeaderAction(presentation: presentation, action: perform)
                 }
             }
-            if let detail = presentation?.detail {
-                Text(detail)
-                    .font(.pilot(.caption))
-                    .foregroundStyle(presentation?.detailIsError == true ? Theme.destructive : Theme.mutedForeground)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            .padding(.horizontal, 14).padding(.vertical, 6)
+            .frame(maxWidth: Theme.column).padding(.horizontal, 24)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
+        .accessibilityLabel("Diagnostic repair actions")
+        .accessibilityIdentifier("diagnostic-repair-footer")
         .onAppear(perform: reconcileRequest)
         .onChange(of: requestFingerprint) { _, _ in reconcileRequest() }
-    }
-
-    private var summary: String {
-        if session.diagnosticScope == .app { return "App-wide read-only evidence · no initial chat focus" }
-        let target = session.diagnosticTarget
-        if let target { return "App-wide read-only · focus: \(target.chatURL) on \(target.host.hostId)" }
-        if let fallbackTargetId = session.diagnosticTargetId {
-            return "App-wide read-only · focus: \(DiagnosticSetup.link(fallbackTargetId))"
-        }
-        return "App-wide read-only diagnostics"
     }
 
     private var reference: HostResourceRef? {
@@ -303,6 +322,24 @@ struct DiagnosticSpecialistHeader: View {
                 enabled: false, busy: false, detailIsError: true
             )
         }
+        let target = DiagnosticRepairTarget(specialist: session, reference: reference)
+        do {
+            if try model.pendingDiagnosticRepairStart(for: target) != nil {
+                return DiagnosticRepairHeaderPresentation(action: .review, title: "Check repair start",
+                    help: "Check the original confirmed request. This cannot create a second repair intent.",
+                    detail: available ? "A confirmed repair start still needs checking."
+                        : "Reconnect to the original host to check the confirmed repair start.",
+                    enabled: available, busy: false, detailIsError: !available)
+            }
+        } catch {
+            return DiagnosticRepairHeaderPresentation(action: .review, title: "Check repair start", help: error.localizedDescription,
+                detail: error.localizedDescription, enabled: false, busy: false, detailIsError: true)
+        }
+        if session.continuedTo != nil, session.diagnosticRepairProposal == nil {
+            let detail = "Open the continued chat before requesting another repair suggestion."
+            return DiagnosticRepairHeaderPresentation(action: .request, title: "Suggest a repair", help: detail,
+                detail: detail, enabled: false, busy: false, detailIsError: true)
+        }
         return DiagnosticRepair.headerPresentation(
             specialist: session, specialistHost: reference.host, admittedTarget: admittedTarget,
             available: available, destinationAvailable: destinationAvailable,
@@ -321,7 +358,7 @@ struct DiagnosticSpecialistHeader: View {
     }
 
     private func perform() {
-        guard let presentation, let reference else { return }
+        guard let presentation, presentation.enabled, let reference else { return }
         if presentation.action == .review {
             model.prepareDiagnosticRepair(session, context: context)
             return
@@ -350,7 +387,26 @@ private struct DiagnosticRepairHeaderAction: View {
         .accessibilityLabel(presentation.title)
         .accessibilityHint(presentation.help)
         .accessibilityIdentifier("diagnostic-repair-action")
+        .background(DiagnosticRepairActionAnchor())
     }
+}
+
+/// Passive native geometry anchor for keyboard/accessibility layout verification. Never becomes a hit target.
+private struct DiagnosticRepairActionAnchor: NSViewRepresentable {
+    var role: DiagnosticRepairActionAnchorView.Role = .primary
+    func makeNSView(context: Context) -> DiagnosticRepairActionAnchorView {
+        let view = DiagnosticRepairActionAnchorView()
+        view.role = role
+        view.setAccessibilityElement(false)
+        return view
+    }
+    func updateNSView(_ view: DiagnosticRepairActionAnchorView, context: Context) { view.role = role }
+}
+
+final class DiagnosticRepairActionAnchorView: NSView {
+    enum Role: Equatable { case primary, dismiss }
+    var role: Role = .primary
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 enum DiagnosticRepair {
@@ -530,6 +586,8 @@ struct DiagnosticRepairPrompt: View {
     let presentation: DiagnosticRepairPromptPresentation
     let onReview: () -> Void
     let onDismiss: () -> Void
+    var showsReviewAction = true
+    var compact = false
 
     private var proposal: DiagnosticRepairProposal { presentation.proposal }
 
@@ -546,13 +604,13 @@ struct DiagnosticRepairPrompt: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Findings").font(.pilot(.label, weight: .semibold)).foregroundStyle(Theme.mutedForeground)
                     Text(proposal.findings).font(.pilot(.body)).foregroundStyle(Theme.foreground)
-                        .lineLimit(4).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                        .lineLimit(compact ? 2 : 4).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
                 }
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Suggested repair")
                         .font(.pilot(.label, weight: .semibold)).foregroundStyle(Theme.mutedForeground)
                     Text(proposal.suggestedRepair).font(.pilot(.body)).foregroundStyle(Theme.foreground)
-                        .lineLimit(4).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                        .lineLimit(compact ? 2 : 4).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
                 }
                 Label("\(proposal.evidenceRefs.count) cited evidence \(proposal.evidenceRefs.count == 1 ? "item" : "items")",
                       icon: PilotIcon.link)
@@ -573,13 +631,17 @@ struct DiagnosticRepairPrompt: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 HStack(spacing: 8) {
-                    Button(presentation.primaryTitle, action: onReview)
-                        .buttonStyle(.borderedProminent)
-                        .disabled(presentation.problem != nil && !presentation.pendingStart)
-                        .accessibilityIdentifier("diagnostic-repair-review")
+                    if showsReviewAction {
+                        Button(presentation.primaryTitle, action: onReview)
+                            .buttonStyle(.borderedProminent)
+                            .disabled(presentation.problem != nil && !presentation.pendingStart)
+                            .accessibilityIdentifier("diagnostic-repair-review")
+                            .background(DiagnosticRepairActionAnchor())
+                    }
                     if !presentation.pendingStart {
                         Button("Not now", action: onDismiss)
                             .accessibilityIdentifier("diagnostic-repair-dismiss")
+                            .background(DiagnosticRepairActionAnchor(role: .dismiss))
                     }
                     Spacer()
                     Text("Review destination and model before a separate Build starts.")
