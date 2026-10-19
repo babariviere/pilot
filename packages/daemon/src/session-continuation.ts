@@ -20,6 +20,8 @@ export function continuationQueuedInputs(events: readonly AgentEvent[]) {
 
 const MAX_HANDOFF = 32_000;
 const MAX_MESSAGE = 4_000;
+/** Durable assistant replies are `pi.assistant` entries. `pi.message` is kept for older persisted transcripts. */
+const ASSISTANT_KINDS = new Set(["pi.assistant", "pi.message"]);
 const record = (value: unknown): value is Record<string, unknown> =>
 	value !== null && typeof value === "object" && !Array.isArray(value);
 
@@ -46,7 +48,7 @@ function visibleEntries(events: readonly AgentEvent[]) {
 /** Latest visible assistant text only, never signatures, thinking or tool-result payloads. */
 export function continuationAnswer(events: readonly AgentEvent[]): string | undefined {
 	for (const entry of visibleEntries(events).slice(-64).reverse()) {
-		if (entry.kind !== "pi.message") continue;
+		if (!ASSISTANT_KINDS.has(entry.kind)) continue;
 		for (const message of [...(entry.model ?? [])].reverse())
 			if (message.role === "assistant") {
 				const text = plainText(message.content);
@@ -72,7 +74,7 @@ export function continuationHandoff(
 	let remaining = 13_000;
 	const entries = visibleEntries(events);
 	for (const entry of entries.slice(-64).reverse()) {
-		if (entry.kind !== "pi.user" && entry.kind !== "pi.message") continue;
+		if (entry.kind !== "pi.user" && !ASSISTANT_KINDS.has(entry.kind)) continue;
 		for (const message of [...(entry.model ?? [])].reverse()) {
 			if (message.role !== "user" && message.role !== "assistant") continue;
 			const text = plainText(message.content);

@@ -7,6 +7,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
+import { AssistantEntry, CompactionEntry, ToolResultEntry, UserEntry } from "@earendil-works/pi-durable";
 import type { KernelCommand, KernelPacket } from "@pilot/kernel";
 import type { AgentEvent, SessionJob, SessionState, SessionSummary } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
@@ -14,7 +15,7 @@ import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
-import { continuationHandoff, continuationQueuedInputs } from "./session-continuation.ts";
+import { continuationAnswer, continuationHandoff, continuationQueuedInputs } from "./session-continuation.ts";
 import { SessionManager, type SessionMissionBridge, type SessionWorker } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
 
@@ -67,10 +68,11 @@ const events = [
 	{
 		type: "snapshot",
 		entries: [
-			{ kind: "pi.compaction", model: [{ role: "user", content: "PROVIDER COMPACTION SECRET" }] },
-			{ kind: "pi.user", model: [{ role: "user", content: "Fix the tests" }] },
+			// Entry kinds come from pi-durable, as the kernel's cold snapshots carry them.
+			{ kind: CompactionEntry.kind, model: [{ role: "user", content: "PROVIDER COMPACTION SECRET" }] },
+			{ kind: UserEntry.kind, model: [{ role: "user", content: "Fix the tests" }] },
 			{
-				kind: "pi.message",
+				kind: AssistantEntry.kind,
 				model: [
 					{
 						role: "assistant",
@@ -121,7 +123,7 @@ async function fixture(t: TestContext) {
 							type: "snapshot",
 							entries: [
 								{
-									kind: "pi.message",
+									kind: AssistantEntry.kind,
 									model: [
 										{
 											role: "assistant",
@@ -182,6 +184,36 @@ test("handoff is bounded plain visible text, excludes compacted context, thinkin
 			events,
 		).length <= 32_000,
 	);
+});
+
+test("the latest subagent answer is durable assistant text, not tool output or compaction summaries", () => {
+	const entry = (kind: string, role: string, text: string) => ({
+		kind,
+		model: [{ role, content: [{ type: "text", text }] }],
+	});
+	const snapshot = (...entries: ReturnType<typeof entry>[]) =>
+		[{ type: "snapshot", entries }] as unknown as AgentEvent[];
+	assert.equal(
+		continuationAnswer(
+			snapshot(
+				entry(UserEntry.kind, "user", "Start"),
+				entry(AssistantEntry.kind, "assistant", "Child answer"),
+				entry(ToolResultEntry.kind, "toolResult", "TOOL OUTPUT"),
+				entry(CompactionEntry.kind, "user", "COMPACTION SUMMARY"),
+			),
+		),
+		"Child answer",
+	);
+	// Later incremental reads append entries one at a time.
+	assert.equal(
+		continuationAnswer([
+			...snapshot(entry(AssistantEntry.kind, "assistant", "Older answer")),
+			{ type: "entry_appended", entry: entry(AssistantEntry.kind, "assistant", "Newer answer") },
+		] as unknown as AgentEvent[]),
+		"Newer answer",
+	);
+	assert.equal(continuationAnswer(snapshot(entry("pi.message", "assistant", "Legacy answer"))), "Legacy answer");
+	assert.equal(continuationAnswer(snapshot(entry(UserEntry.kind, "user", "Only a request"))), undefined);
 });
 
 test("queued user text is transferred losslessly, not truncated into the handoff", () => {

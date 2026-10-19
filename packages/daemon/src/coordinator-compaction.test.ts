@@ -85,8 +85,12 @@ test("an idle coordinator above the threshold compacts once, after the cache lif
 		await compaction.compactDue(Date.now() + 2 * COORDINATOR_COMPACT_IDLE_MS);
 		assert.equal(sessions.compactions.length, 1, "one compaction per idle stretch");
 
+		// A new run settles, so its idle stretch starts at its outcome.
+		t.mock.timers.setTime(Date.now() + 2 * COORDINATOR_COMPACT_IDLE_MS);
 		sessions.update("lead", { state: "working" });
-		sessions.update("lead", { state: "idle" });
+		sessions.update("lead", { state: "idle", outcomeAt: Date.now() });
+		await compaction.compactDue(Date.now() + COORDINATOR_COMPACT_IDLE_MS - 1);
+		assert.equal(sessions.compactions.length, 1, "the new run's prompt cache may still be warm");
 		await compaction.compactDue(Date.now() + COORDINATOR_COMPACT_IDLE_MS);
 		assert.equal(sessions.compactions.length, 2, "a new idle stretch may compact again");
 	} finally {
@@ -134,6 +138,33 @@ test("a failed compaction is not retried in the same idle stretch", async (t) =>
 		await compaction.compactDue(Date.now() + COORDINATOR_COMPACT_IDLE_MS);
 		await compaction.compactDue(Date.now() + 2 * COORDINATOR_COMPACT_IDLE_MS);
 		assert.equal(sessions.compactions.length, 1);
+	} finally {
+		await compaction.stop();
+		store.close();
+	}
+});
+
+test("compaction's own working state does not start a new idle stretch, so a failed one is not retried", async (t) => {
+	const { store, sessions, compaction } = setup(t);
+	sessions.update("lead", { outcomeAt: Date.now() });
+	const later = Date.now() + COORDINATOR_COMPACT_IDLE_MS;
+	try {
+		await compaction.compactDue(later);
+		assert.equal(sessions.compactions.length, 1);
+		// pilotd shows a background compaction as work, without an outcome, then idle again with the same outcome.
+		// A failed compaction leaves the context as large as before.
+		for (let attempt = 0; attempt < 3; attempt++) {
+			sessions.update("lead", { state: "working", outcomeAt: undefined });
+			sessions.update("lead", { state: "idle", outcomeAt: Date.now() });
+			await compaction.compactDue(later + attempt);
+		}
+		assert.equal(sessions.compactions.length, 1, "no retry until another run settles");
+
+		// Losing the coordinator role forgets the attempt.
+		sessions.update("lead", { activeMissionCoordinator: undefined });
+		sessions.update("lead", { activeMissionCoordinator: true });
+		await compaction.compactDue(later);
+		assert.equal(sessions.compactions.length, 2);
 	} finally {
 		await compaction.stop();
 		store.close();

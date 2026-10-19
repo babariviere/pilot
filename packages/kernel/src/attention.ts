@@ -1,6 +1,7 @@
 /** Automatic, restart-stable settled-run outcomes. */
 import type { Context } from "@earendil-works/chord";
 import {
+	CompactionEntry,
 	type Conversation,
 	type Cursor,
 	defineDoc,
@@ -58,7 +59,7 @@ export function classifyCompletion(record: SubmissionRecord): Omit<SessionComple
 
 /**
  * The question asked at the end of the run started by input entry `after`, if any. A question followed by a user
- * message was already answered within the run.
+ * message was already answered within the run. Compaction summaries use the user role too, but are not replies.
  */
 export async function askedQuestion(
 	conversation: Conversation,
@@ -73,6 +74,7 @@ export async function askedQuestion(
 				? question.trim().replace(/\s+/g, " ").slice(0, QUESTION_REASON_LENGTH)
 				: "";
 		}
+		if (CompactionEntry.is(entry)) continue;
 		if (entry.model?.some((message) => message.role === "user")) return undefined;
 	}
 	return undefined;
