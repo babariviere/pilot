@@ -65,6 +65,7 @@ struct TelemetrySettingsSection: View {
             } else {
                 SettingsToggle("Local operational diagnostics", detail: "Keep bounded lifecycle, timing and native crash/hang evidence on this host for Diagnose this. On by default.", isOn: $localDiagnostics)
                 SettingsToggle("Local feature usage", detail: "Keep content-free daily UI counts across chats for seven UTC days on this host. Off by default, independent of uploads. Disabling or clearing deletes the aggregates. Missing observations are unknown, not zero.", isOn: $localFeatureUsage)
+                    .disabled(loaded?.localFeatureUsage == nil)
                 SettingsToggle("Remote operational reporting", detail: "Send allowlisted traces to the OTLP collector below. Off by default.", isOn: $remoteOperational)
                 SettingsToggle("Product analytics", detail: "Allow only cataloged feature events. This remains separate and requires remote reporting to have any effect.", isOn: $productAnalytics)
                 SettingsRow("OTLP/HTTP endpoint", detail: "HTTPS, or literal loopback HTTP. Credentials, query parameters and custom headers are not accepted.") {
@@ -166,12 +167,12 @@ struct TelemetrySettingsSection: View {
                 productAnalytics: productAnalytics,
                 endpoint: trimmed.isEmpty ? nil : trimmed,
                 aiUsageBudget: aiUsageBudget,
-                localFeatureUsage: localFeatureUsage
+                localFeatureUsage: loaded?.localFeatureUsage == nil ? nil : localFeatureUsage
             ))
             loaded = settings; problem = nil; saved = true
             if localApp { NativeTelemetrySettings.apply(settings) }
         } catch {
-            problem = "These settings were not saved. Use HTTPS or loopback HTTP without credentials, a query or fragment."
+            problem = "These settings could not be fully applied. Check this host's connection and local storage. Use HTTPS or loopback HTTP without credentials, a query or fragment."
         }
     }
 

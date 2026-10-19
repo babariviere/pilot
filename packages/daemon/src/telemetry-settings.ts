@@ -118,7 +118,14 @@ function patch(value: unknown): TelemetrySettingsPatch {
 	if (
 		Object.keys(input).some(
 			(key) =>
-				!["localDiagnostics", "localFeatureUsage", "remoteOperational", "productAnalytics", "endpoint", "aiUsageBudget"].includes(key),
+				![
+					"localDiagnostics",
+					"localFeatureUsage",
+					"remoteOperational",
+					"productAnalytics",
+					"endpoint",
+					"aiUsageBudget",
+				].includes(key),
 		) ||
 		typeof input.localDiagnostics !== "boolean" ||
 		typeof input.remoteOperational !== "boolean" ||

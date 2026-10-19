@@ -48,6 +48,8 @@ public struct FeatureUsageSnapshot: Codable, Sendable {
     public let retentionDays: Int
     public let retainedFrom: String
     public let producerLimit: Int
+    public let observedProducers: Int
+    public let dropCoverage: String
     public let prunedProducers: Int
     public let dropped: Int
     public let cells: [FeatureUsageCell]

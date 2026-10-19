@@ -374,9 +374,11 @@ public final class PilotTelemetry: @unchecked Sendable {
     private var featureEvents = 0
     private var featureDedupe: Set<String> = []
     private var sleeping = false
+    private let localFeatures: LocalFeatureUsage
     private let propagator = W3CTraceContextPropagator()
 
-    public init(configuration: PilotTelemetryConfiguration = .disabled) {
+    public init(configuration: PilotTelemetryConfiguration = .disabled, localFeatureUsage: LocalFeatureUsage = .shared) {
+        localFeatures = localFeatureUsage
         runtime = try? Self.makeRuntime(configuration, counters: counters)
     }
 
@@ -450,7 +452,7 @@ public final class PilotTelemetry: @unchecked Sendable {
     /// Emits one cataloged, content-free feature event only when the isolated analytics tracer is configured.
     public func recordFeature(_ event: FeatureEvent) {
         guard let values = featureAttributes(event) else { counters.recordInvalid(); return }
-        LocalFeatureUsage.shared.record(event)
+        localFeatures.record(event)
         var capped = false
         let tracer = lock.withLock { () -> (any Tracer)? in
             guard !sleeping, let tracer = runtime?.analyticsTracer else { return nil }

@@ -35,9 +35,19 @@ export function parseDiagnosticContext(value: unknown): DiagnosticContextRequest
 					"log",
 				].includes(k),
 		) ||
-		!["hosts", "chats", "chat", "history", "search", "logs", "projects", "missions", "mission", "issues", "features"].includes(
-			String(v.action),
-		)
+		![
+			"hosts",
+			"chats",
+			"chat",
+			"history",
+			"search",
+			"logs",
+			"projects",
+			"missions",
+			"mission",
+			"issues",
+			"features",
+		].includes(String(v.action))
 	)
 		return invalid();
 	if (v.host !== undefined) {
@@ -62,9 +72,16 @@ export function parseDiagnosticContext(value: unknown): DiagnosticContextRequest
 		return invalid();
 	if (v.query !== undefined && (typeof v.query !== "string" || v.query.length > 200)) return invalid();
 	if (v.action === "features" && v.query !== undefined && !FEATURE_NAMES.includes(v.query as never)) return invalid();
-	for (const key of ["since", "until"]) if (v[key] !== undefined && (v.action !== "features" ||
-		typeof v[key] !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(v[key] as string) ||
-		!Number.isFinite(Date.parse(v[key] as string)) || new Date(v[key] as string).toISOString().slice(0, 10) !== v[key])) return invalid();
+	for (const key of ["since", "until"])
+		if (
+			v[key] !== undefined &&
+			(v.action !== "features" ||
+				typeof v[key] !== "string" ||
+				!/^\d{4}-\d{2}-\d{2}$/.test(v[key] as string) ||
+				!Number.isFinite(Date.parse(v[key] as string)) ||
+				new Date(v[key] as string).toISOString().slice(0, 10) !== v[key])
+		)
+			return invalid();
 	if (typeof v.since === "string" && typeof v.until === "string" && v.since > v.until) return invalid();
 	if (v.after !== undefined && (typeof v.after !== "string" || !/^[0-9a-f-]{36}$/i.test(v.after))) return invalid();
 	if (v.before !== undefined && (!Number.isSafeInteger(v.before) || (v.before as number) < 0)) return invalid();
