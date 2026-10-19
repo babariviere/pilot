@@ -70,6 +70,11 @@ public struct McpSignInRequest: Codable, Equatable, Sendable {
     public init(again: Bool) { self.again = again }
 }
 
+public struct McpSignInCancelRequest: Codable, Equatable, Sendable {
+    public let expectedStartedAt: Double
+    public init(expectedStartedAt: Double) { self.expectedStartedAt = expectedStartedAt }
+}
+
 /// Plain-language state for a server row.
 public enum McpStatusText {
     public static func line(_ server: McpServerStatus) -> String {

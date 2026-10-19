@@ -56,3 +56,7 @@ export interface McpCheckRequest {
 export interface McpSignInRequest {
 	again?: boolean;
 }
+/** Optional native cancellation fence. Legacy DELETE without a body remains supported. */
+export interface McpSignInCancelRequest {
+	expectedStartedAt: number;
+}

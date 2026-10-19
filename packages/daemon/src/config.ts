@@ -9,6 +9,8 @@ export interface DaemonConfig {
 	agentDir?: string;
 	/** Embedded/read-only hosts may expose scope diagnostics without permitting settings writes. */
 	modelScopeReadOnly?: boolean;
+	/** Expose reviewed MCP setup diagnostics but refuse native configuration creation. */
+	mcpSetupReadOnly?: boolean;
 	/** Close idle, unwatched session kernels after this many milliseconds. */
 	idleParkMs?: number;
 	/** Archived shared-workspace retention. Infinity disables automatic reclamation. */
@@ -39,6 +41,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
 		port,
 		agentDir: env.PILOT_AGENT_DIR || undefined,
 		...(env.PILOT_MODEL_SCOPE_READ_ONLY === "1" ? { modelScopeReadOnly: true } : {}),
+		...(env.PILOT_MCP_SETUP_READ_ONLY === "1" ? { mcpSetupReadOnly: true } : {}),
 		...(idleParkMs !== undefined ? { idleParkMs } : {}),
 		workspaceRetentionMs: retentionDays === 0 ? Number.POSITIVE_INFINITY : retentionDays * 86_400_000,
 	};

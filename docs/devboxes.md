@@ -45,6 +45,54 @@ identity and original outbox, makes an exact private backup, and detaches only t
 to Local. It retains its text/images and other drafts, never changes or resends the remote request,
 and refuses unknown formats or a running app. Relaunch and choose the Local project afterward.
 
+## MCP connections and initial setup sharing
+
+Connections lists Local and each saved devbox separately, even when servers have the same name.
+Each host runs its own Pi MCP connections and owns its credentials. Mac sleep, quit or disconnection
+does not turn the Mac into a live MCP proxy. Rechecks and managed sign-in cancellation target only
+the selected pinned host; a late result cannot be applied to another connection generation.
+
+Local browser sign-in retains the existing flow. The current remote daemon flow cannot accept a Mac
+browser redirect, so **Sign in…** on a devbox gives host-labelled instructions instead of launching a
+browser on the wrong machine:
+
+1. Open an interactive terminal on that exact devbox. Pi's CLI must be installed/available there.
+2. Use the same agent directory as pilotd (`PI_CODING_AGENT_DIR` when customized), and a directory
+   without trusted project MCP overrides.
+3. Run `pi mcp login -- SERVER`. Open its printed authorization link on the Mac if needed.
+4. Copy the resulting callback URL from the browser and paste it into the devbox terminal when Pi
+   asks. Pi validates and exchanges it on that host; no existing Mac tokens are copied.
+5. Recheck that devbox in Connections. Noninteractive terminals cannot accept the pasted redirect.
+
+Pi's CLI skips login when stored credentials already work. To intentionally change accounts,
+`pi mcp logout -- SERVER` removes that devbox's current credentials before another login. This is
+explicit and is never run by the app; cancelling a later login does not restore removed credentials.
+Stdio, fixed-header and model-provider authentication require their host-specific setup, not this
+OAuth path. These are source-supported SDK steps, not a claim of live account/host validation.
+
+**Partial implementation:** reviewed sharing currently creates an initial global `mcp.json` only
+when that file is absent. Existing-file additive sharing remains unimplemented, pending the product
+decision and a safe coordinated-write contract. It is not full configuration sharing. The pinned Pi
+SDK's editors rewrite existing files without locks or atomic publication. This implementation never
+pretends that a native lock can protect against those independent writers. A concurrent creator wins
+atomically without overwrite; existing files, unrelated fields and authentication remain untouched.
+
+The review shares only literal HTTPS DNS endpoints on a small set of common MCP paths, or bare PATH
+executables, plus validated type/enabled/exposure/timeout fields and empty args/env/headers. Embedded
+credentials, query/fragment/path tokens, arbitrary arguments, environment/header values, OAuth/provider
+settings, descriptions, per-tool exposure, working directories, local executable paths and unknown
+fields block the whole entry for manual setup. Nothing is silently stripped into a supposedly
+equivalent server. The target must already have any stdio executable on its PATH; no install runs.
+
+`GET /api/mcp/setup` returns the bounded safe projection and opaque file revision.
+`PUT /api/mcp/setup` accepts selected safe entries with the reviewed revision, atomically publishes
+a private initial file, then reads it back. Both methods require the existing native host-action
+capability; an ordinary chat or loopback connection is not permission to copy executable setup.
+Schemas match `packages/protocol/src/mcp-setup.ts` and `PilotCore/McpSetup.swift`. Unknown runtime/schema,
+corrupt/symlinked files, stale reviews, namespace aliases and unavailable dependencies fail closed.
+Ambiguous delivery is reconciled by exact readback of the approved values, not an automatic repeated
+write. `PILOT_MCP_SETUP_READ_ONLY=1` denies creation while retaining native diagnostics.
+
 ## Host-local model scope API
 
 **Settings → Scoped models** selects the global Pi model list. Use All authenticated models or search

@@ -4,11 +4,10 @@ import SwiftUI
 /// Settings › Connections: the user's global pi MCP servers as pilotd last found them, with sign-in where pi
 /// can run it in the browser. Chats keep their own connections and pick up a new sign-in on their next turn.
 struct ConnectionSettings: View {
-    @EndpointClient private var endpoint
-    private var store: McpStatusStore { endpoint.mcp }
+    @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        ConnectionSettingsContent(status: store.status, error: store.actionError)
+        HostMcpConnections(hosts: model.hosts, localHost: model.localHost)
     }
 }
 
@@ -267,7 +266,7 @@ extension PilotClient {
         case .signIn: if let server { await startMcpSignIn(server) }
         case .cancel: if let server { await cancelMcpSignIn(server) }
         case .openSettings:
-            AppModel.shared.settingsTab = hostIdentity?.hostId != nil && hostIdentity?.hostId != "local" ? .devboxes : .connections
+            AppModel.shared.settingsTab = .connections
             openSettings()
         }
     }

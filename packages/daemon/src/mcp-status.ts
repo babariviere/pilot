@@ -165,8 +165,10 @@ export class McpStatusService {
 		return publicSignIn(this.signIns.start(server, again));
 	}
 
-	cancelSignIn(server: string): McpSignInState | undefined {
+	cancelSignIn(server: string, expectedStartedAt?: number): McpSignInState | undefined {
 		if (!this.servers.has(server)) throw new NotFound(`Unknown MCP server: ${server}`);
+		if (expectedStartedAt !== undefined && this.signIns.get(server)?.startedAt !== expectedStartedAt)
+			throw new SignInUnavailable("Sign-in changed. Check this host again before cancelling.");
 		const state = this.signIns.cancel(server);
 		return state && publicSignIn(state);
 	}

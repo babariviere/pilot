@@ -77,6 +77,7 @@ import { daemonPerformance, operations } from "./event-loop-watchdog.ts";
 import type { GitHubImportService } from "./github-import.ts";
 import type { GitHubSetupService } from "./github-setup.ts";
 import { MachineInformationReader } from "./machine.ts";
+import { McpSetupError, McpSetupStore } from "./mcp-setup.ts";
 import { type McpStatusService, SignInUnavailable } from "./mcp-status.ts";
 import type { MissionService } from "./mission-service.ts";
 import type { MissionStore } from "./missions.ts";
@@ -399,6 +400,7 @@ export function createDaemonServer(
 	};
 	const machine = new MachineInformationReader(_config.home, hello?.daemonVersion ?? "unknown");
 	const reviews = new ReviewStore(_config.home);
+	const mcpSetup = new McpSetupStore(_config.agentDir);
 	const dashboards = new ProjectDashboardService({
 		sessions,
 		projects,
@@ -782,6 +784,36 @@ export function createDaemonServer(
 			if (req.method === "PATCH") return json(res, 200, await power.configure(await readJson(req)));
 			throw new HttpError(405, "Method not allowed");
 		}
+		if (parts[1] === "mcp" && parts[2] === "setup" && parts.length === 3) {
+			res.setHeader("cache-control", "no-store");
+			if (!githubSetup) return json(res, 503, { error: "mcp_setup_unavailable" });
+			try {
+				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			} catch {
+				return json(res, 403, { error: "native_action_required" });
+			}
+			if (req.method === "PUT" && _config.mcpSetupReadOnly) return json(res, 403, { error: "mcp_setup_read_only" });
+			let input: unknown;
+			if (req.method === "PUT") {
+				try {
+					input = await readJson(req, 160 * 1024);
+				} catch {
+					return json(res, 400, { error: "invalid_mcp_setup" });
+				}
+			}
+			try {
+				if (req.method === "GET") return json(res, 200, await mcpSetup.read());
+				if (req.method === "PUT") {
+					const result = await mcpSetup.apply(input);
+					mcp?.check();
+					return json(res, 200, result);
+				}
+			} catch (error) {
+				if (error instanceof McpSetupError) return json(res, error.status, { error: error.code });
+				return json(res, 503, { error: "mcp_setup_unavailable" });
+			}
+			return json(res, 405, { error: "mcp_setup_method" });
+		}
 		if (parts[1] === "mcp") {
 			if (!mcp) throw new ServiceUnavailable("MCP status is unavailable");
 			if (parts.length === 2 && req.method === "GET") return json(res, 200, mcp.status());
@@ -805,7 +837,16 @@ export function createDaemonServer(
 							throw new HttpError(400, "again must be a boolean");
 						return json(res, 200, mcp.signIn(name, body?.again === true));
 					}
-					if (req.method === "DELETE") return json(res, 200, mcp.cancelSignIn(name) ?? null);
+					if (req.method === "DELETE") {
+						let expectedStartedAt: number | undefined;
+						if (req.headers["content-type"]?.startsWith("application/json")) {
+							const body = await readJson<{ expectedStartedAt?: unknown }>(req);
+							if (!body || typeof body.expectedStartedAt !== "number" || !Number.isFinite(body.expectedStartedAt))
+								throw new HttpError(400, "Invalid sign-in cancellation");
+							expectedStartedAt = body.expectedStartedAt;
+						}
+						return json(res, 200, mcp.cancelSignIn(name, expectedStartedAt) ?? null);
+					}
 				} catch (error) {
 					if (error instanceof SignInUnavailable) throw new HttpError(409, error.message);
 					throw error;
