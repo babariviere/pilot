@@ -36,7 +36,7 @@ Principles:
 | `ProjectStore` and `projects.json` (validated sub-objects such as `tracking`, atomic writes, change listeners) | Definitions are a validated `automations` object on `Project` |
 | Workspace preparation in `SessionManager.start` (`meta.preparing`, then `meta.workspace` saved) | `workspace.created` fires right after `meta.workspace` is saved |
 | Workspace restore (`restoreWorkspaceHeld`) and legacy clone pruning, both setting `meta.workspaceReset` | `workspace.restored` fires when a chat with a reset workspace is restored |
-| PR follow-ups (`meta.prFollowUp`, `onlyIfIdle` outbox input, busy refunds, reset by user input) | Admission, budget and durability rules for automation follow-ups |
+| PR follow-ups (`meta.prFollowUp`, `onlyIfIdle` outbox input, busy refunds, reset by user input) | Admission, attempt limit and durability rules for automation follow-ups |
 | Held system messages on Stop (Send now, Discard) | Automation follow-ups are system messages and are held the same way |
 | `pilot.activity` entries with a `ChatEventSummary` (passive writes, no model turn) | Result events in the chat timeline |
 | `AutomaticEvents.swift` and `InputOrigin` from request ID prefixes | A new `automation` origin and a parser for the `<automation>` opening line |
@@ -211,7 +211,7 @@ setup automations for that chat. It never holds a turn that has already started.
 | `filesChanged: { paths }` | a changed path matches one of the globs | Paths are relative to the workspace root |
 | `openTodos: true` | `openTodoCount > 0` | Counts the chat's own list, including items its subagents added |
 | run outcome | always `done` | Fixed rule, not configurable |
-| attempt budget | the chat's automation follow-up budget is not spent | Fixed rule, section 4 |
+| attempt limit | the chat's automation follow-up attempt limit is not reached | Fixed rule, section 4 |
 
 ## 4. Actions and limits
 
@@ -253,7 +253,7 @@ runAction({
   (their result would be stale and the agent is about to change files again); the next `run.finished`
   runs them again.
 
-### Follow-up actions and the shared budget
+### Follow-up actions and the attempt limit
 
 At most **one** automation follow-up per `run.finished`. Failed checks (`onFailure: "followUp"`) win: all their
 failures go into one message. Otherwise the first matching follow-up action (for example, open todos) sends
@@ -262,15 +262,16 @@ its message. The limits follow PR follow-ups:
 | Rule | PR follow-ups | Automation follow-ups |
 | --- | --- | --- |
 | Admission | idle only (`onlyIfIdle`), no queued user input, not Ask, not stopped | same |
-| Budget | 3 per chat, shared by all PR problems | 3 per chat, shared by all automations, separate from the PR budget |
+| Attempt limit | 3 per chat, shared by all PR problems | 3 per chat, shared by all automations, separate from the PR limit |
 | Repeat needs progress | an agent push attempt since the last follow-up | checks: the next run changed files; open todos: the next run closed a todo or changed files |
 | Cooldown | 5 minutes, waiting for remote CI | none: local checks give fresh results at once, and the progress rule stops loops |
 | Busy rejection | refunds the attempt | refunds the attempt; the next `run.finished` re-evaluates |
 | Reset | a user message, deduplicated across transport retries | same, with its own reset list |
 | Durability | `meta.prFollowUp`, stable request IDs, outbox before delivery | `meta.automation.followUps`, request ID `automation:<runId>` |
 
-When the budget is spent or a repeat shows no progress, nothing more is sent and the chat gets the
-`automation` Needs you reason (section 6) with the stop reason.
+When the attempt limit is reached or a repeat shows no progress, nothing more is sent and the chat gets the
+`automation` Needs you reason (section 6) with the stop reason. The attempt limit counts messages to the agent; it
+is unrelated to Pilot's cost budgets. In code and settings it is `AUTOMATION_FOLLOW_UP_ATTEMPT_LIMIT` (3).
 
 ### Durable state
 
@@ -385,16 +386,16 @@ A new `NeedsYouReasonKind`, `automation`, with a one-line detail:
 | --- | --- |
 | Setup command failed, timed out or could not start | `Setup failed: Install dependencies (exit 1)` |
 | A report-only `run.finished` command failed | `Notify failed (exit 2)` |
-| Check budget spent | `Checks still failing after 3 follow-ups: Tests` |
+| Check attempt limit reached | `Checks still failing after 3 follow-ups: Tests` |
 | Check failed and the next run changed no matching files | `Checks failing, agent made no changes: Tests` |
-| Open todos, budget spent | `4 open todos after 3 follow-ups` |
+| Open todos, attempt limit reached | `4 open todos after 3 follow-ups` |
 | Open todos, no progress since the last follow-up | `2 open todos, agent made no progress` |
 | Invalid at run time (cwd missing, queue full, interrupted twice) | `Couldn't run Lint: apps/web is missing` |
 
 - Stored as `automation.attention` and projected into `attentionReason` after failure and question outcomes,
   and ahead of `pr_stuck`: a broken workspace blocks everything else.
 - Clears when the same automation next succeeds for the chat, when **Run setup again** succeeds, when the
-  user sends a message (which also resets the follow-up budget), or when the chat is archived.
+  user sends a message (which also resets the attempt limit), or when the chat is archived.
 - User actions never raise it: Stop and archive cancel quietly.
 - Environment setup uses its own `environment` kind with the same event format and plumbing (its A4).
 
@@ -475,7 +476,7 @@ A pnpm monorepo with personal automations:
    still open, so `2 open todos · asked agent to continue (2/3)`.
 4. The agent finishes without closing a todo or changing files. No more follow-ups; Needs you shows
    `2 open todos, agent made no progress`.
-5. The user replies. The budget resets and the reason clears.
+5. The user replies. The attempt limit resets and the reason clears.
 6. Weeks later the archived chat's workspace is reclaimed. Restoring it fires `workspace.restored`; `pnpm
    install` runs again before the next turn, and the agent's reset notice says setup ran again.
 
@@ -491,7 +492,7 @@ feature stays off in the app until the user-facing parts land.
 3. **Setup triggers**: `workspace.created` and `workspace.restored`, durable queue, first-turn hold, setup
    participants, result events, prompt lines, **Run setup again**, `automation` Needs you reason.
 4. **Run finished**: the trigger with outcome, changed files and open todos.
-5. **Checks**: `onFailure: "followUp"`, the `<automation>` format, budget and progress rules.
+5. **Checks**: `onFailure: "followUp"`, the `<automation>` format, attempt limit and progress rules.
 6. **Continue on open todos**: the follow-up action.
 7. **App**: timeline parsing, working line, Needs you reason, and an Automations section in project settings.
 
@@ -501,5 +502,5 @@ feature stays off in the app until the user-facing parts land.
    first version; add a per-chat toggle if real use asks for it.
 2. **Check concurrency with the agent.** Checks never run while the agent works, so long checks delay the
    chat's completion. Running them as background jobs inside the run is possible later if that delay hurts.
-3. **Budget size.** Three follow-ups per chat, shared with nothing else, matches PR follow-ups. Revisit if checks
+3. **Attempt limit size.** Three follow-ups per chat, shared with nothing else, matches PR follow-ups. Revisit if checks
    and open todos together exhaust it too early.
