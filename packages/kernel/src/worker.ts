@@ -191,24 +191,37 @@ export function runKernelWorker(): void {
 	const send = (packet: KernelPacket) => sender.send(packet);
 	// Notification hooks cannot await. Their retention is still bounded by the same FIFO.
 	const notify = (packet: KernelPacket) => void send(packet).catch(() => undefined);
-	const callDaemon = <T>(packet: (callId: string) => KernelPacket): Promise<T> =>
+	const callDaemon = <T>(packet: (callId: string) => KernelPacket, signal?: AbortSignal): Promise<T> =>
 		new Promise<T>((resolve, reject) => {
 			const callId = randomUUID();
+			if (signal?.aborted) {
+				reject(new Error("Diagnostic read cancelled"));
+				return;
+			}
+			const cancel = () => {
+				daemonCalls.get(callId)?.reject(new Error("Diagnostic read cancelled"));
+				daemonCalls.delete(callId);
+				void send({ type: "diagnostics.context.cancel", callId }).catch(() => undefined);
+			};
 			const timer = setTimeout(() => {
+				signal?.removeEventListener("abort", cancel);
 				daemonCalls.delete(callId);
 				reject(new Error("pilotd did not answer the tool call"));
 			}, 60_000);
 			timer.unref();
 			daemonCalls.set(callId, {
 				resolve: (value) => {
+					signal?.removeEventListener("abort", cancel);
 					clearTimeout(timer);
 					resolve(value as T);
 				},
 				reject: (error) => {
+					signal?.removeEventListener("abort", cancel);
 					clearTimeout(timer);
 					reject(error);
 				},
 			});
+			signal?.addEventListener("abort", cancel, { once: true });
 			send(packet(callId)).catch((error: unknown) => {
 				daemonCalls.get(callId)?.reject(error instanceof Error ? error : new Error(String(error)));
 				daemonCalls.delete(callId);
@@ -233,6 +246,8 @@ export function runKernelWorker(): void {
 			...(sessionId === undefined ? {} : { sessionId }),
 			...(limit === undefined ? {} : { limit }),
 		}));
+	const callDiagnosticContext: import("./diagnostic-context-tool.ts").DiagnosticContextCall = (request, signal) =>
+		callDaemon((callId) => ({ type: "diagnostics.context.call", callId, request }), signal);
 	const callDiagnosticHistory: DiagnosticHistoryCall = (sessionId, before, limit) =>
 		callDaemon((callId) => ({
 			type: "diagnostics.history.call",
@@ -411,6 +426,7 @@ export function runKernelWorker(): void {
 			command.type === "database.result" ||
 			command.type === "slack.result" ||
 			command.type === "diagnostics.result" ||
+			command.type === "diagnostics.context.result" ||
 			command.type === "diagnostics.history.result" ||
 			command.type === "diagnostics.logs.result" ||
 			command.type === "diagnostics.proposal.result" ||
@@ -522,6 +538,7 @@ export function runKernelWorker(): void {
 					callSlackStatus,
 					callDiagnostics,
 					callDiagnosticHistory,
+					callDiagnosticContext,
 					callDiagnosticLogs,
 					callRepairProposal,
 					readArtifactReference: (id, revision) =>

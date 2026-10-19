@@ -2,6 +2,7 @@ import Foundation
 
 /// Fully decoded WebSocket updates, prepared before crossing onto the UI actor.
 public enum ServerUpdate: Sendable {
+    case diagnosticRead(DiagnosticReadDispatch)
     case power(PowerStatus)
     case mcp(McpStatus)
     case schedules([ScheduledItem])
@@ -41,6 +42,9 @@ public enum ServerUpdate: Sendable {
     public static func decode(_ data: Data) throws -> ServerUpdate? {
         let json = try JSONValue.decode(data)
         switch json["type"]?.string {
+        case "diagnostics.read":
+            guard let value = json["dispatch"] else { return nil }
+            return .diagnosticRead(try value.decode(DiagnosticReadDispatch.self))
         case "power":
             guard let value = json["power"] else { return nil }
             return .power(try value.decode(PowerStatus.self))

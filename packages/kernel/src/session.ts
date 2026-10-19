@@ -63,6 +63,7 @@ import { createDatabaseTool, type DatabaseCall } from "./database-tool.ts";
 import { createDiagnosticHistoryTool, type DiagnosticHistoryCall } from "./diagnostic-history-tool.ts";
 import { createDiagnosticLogTool, type DiagnosticLogCall } from "./diagnostic-log-tool.ts";
 import { createDiagnosticsTool, type DiagnosticsCall } from "./diagnostics-tool.ts";
+import { createDiagnosticContextTool, type DiagnosticContextCall } from "./diagnostic-context-tool.ts";
 import { detectGhStack } from "./gh-stack.ts";
 import { appendGitHubAction, GitHubActionsDoc, githubActions } from "./github-actions.ts";
 import {
@@ -184,6 +185,7 @@ export interface KernelSessionHooks {
 	callSlackStatus?: SlackStatusCall;
 	/** Reads bounded host-local diagnostics through pilotd without touching target workers or transcripts. */
 	callDiagnostics?: DiagnosticsCall;
+	callDiagnosticContext?: DiagnosticContextCall;
 	/** Reads bounded history only for an explicitly authorized diagnostic target. */
 	callDiagnosticHistory?: DiagnosticHistoryCall;
 	/** Reads fixed-catalogue Pilot logs on the diagnostics specialist's admitted host. */
@@ -464,7 +466,7 @@ export class KernelSession {
 				control: spec.control,
 				ask: spec.pilot?.ask,
 				diagnostics: spec.role === "diagnostics",
-				diagnosticHistory: spec.diagnosticHistoryAccess === true,
+				diagnosticHistory: spec.role === "diagnostics",
 				agentDir: spec.agentDir,
 				trustDirectory: spec.trustDirectory,
 				projectTrusted: spec.projectTrusted,
@@ -489,9 +491,12 @@ export class KernelSession {
 					...(spec.role === "diagnostics" && hooks.callDiagnostics && hooks.callDiagnosticLogs && diagnosticScope
 						? [
 								createDiagnosticsTool(hooks.callDiagnostics, diagnosticScope),
+								...(hooks.callDiagnosticContext
+									? [createDiagnosticContextTool(hooks.callDiagnosticContext)]
+									: []),
 								createDiagnosticLogTool(hooks.callDiagnosticLogs, diagnosticScope),
-								...(spec.diagnosticHistoryAccess && hooks.callDiagnosticHistory
-									? [createDiagnosticHistoryTool(hooks.callDiagnosticHistory, spec.diagnosticTarget!)]
+								...(hooks.callDiagnosticHistory
+									? [createDiagnosticHistoryTool(hooks.callDiagnosticHistory, spec.diagnosticTarget)]
 									: []),
 								...(spec.diagnosticTarget && hooks.callRepairProposal
 									? [createRepairProposalTool(hooks.callRepairProposal)]

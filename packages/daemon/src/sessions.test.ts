@@ -1511,7 +1511,7 @@ test("only a diagnostics specialist can inspect its parked admitted target", asy
 		(command): command is Extract<KernelCommand, { type: "diagnostics.result" }> =>
 			command.type === "diagnostics.result" && command.callId === "cross-target",
 	);
-	assert.match(denied?.error ?? "", /host-admitted target/);
+	assert.ok(denied?.result, denied?.error);
 });
 
 test("diagnostic log IPC stays fixed to the persisted host and parked target", async (t) => {
@@ -1609,7 +1609,7 @@ test("diagnostic log IPC stays fixed to the persisted host and parked target", a
 	assert.match(wrongHost?.error ?? "", /target host|does not match this daemon/);
 });
 
-test("target history requires a durable explicit grant and stays fixed to the parked admitted target", async (t) => {
+test("diagnostics role reads other parked histories without legacy grants and validates provenance", async (t) => {
 	const f = await fixture(t);
 	const reads: Array<{ directory: string; hostId: string; sessionId: string; before?: number; limit: number }> = [];
 	const sessions = await f.manager(
@@ -1686,8 +1686,9 @@ test("target history requires a durable explicit grant and stays fixed to the pa
 		(command): command is Extract<KernelCommand, { type: "diagnostics.history.result" }> =>
 			command.type === "diagnostics.history.result" && command.callId === "no-link",
 	);
-	assert.match(noLinkResult?.error ?? "", /not explicitly authorized/);
-	assert.equal(reads.length, 0);
+	assert.ok(noLinkResult?.result, noLinkResult?.error);
+	assert.equal(reads.length, 1);
+	reads.length = 0;
 
 	sessions["workers"].delete(target.id);
 	const workerCount = f.workers.length;
@@ -1774,8 +1775,54 @@ test("target history requires a durable explicit grant and stays fixed to the pa
 		(command): command is Extract<KernelCommand, { type: "diagnostics.history.result" }> =>
 			command.type === "diagnostics.history.result" && command.callId === "cross-target",
 	);
-	assert.match(denied?.error ?? "", /host-admitted target/);
-	assert.equal(reads.length, 3);
+	assert.ok(denied?.result, denied?.error);
+	assert.equal(reads.length, 4);
+});
+
+test("app-wide diagnostic capability reads unselected archived chats and budgets without waking them", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager({}, { diagnosticHost });
+	const peer = await sessions.spawn({ projectId: f.project.id, message: "Peer" });
+	const specialist = await sessions.spawn({ message: "Diagnose app", role: "diagnostics", diagnosticScope: "app" });
+	await Promise.all([sessions["starting"].get(peer.id), sessions["starting"].get(specialist.id)]);
+	sessions["metas"].get(peer.id)!.archivedAt = Date.now();
+	sessions["workers"].delete(peer.id);
+	sessions["aiUsageBudget"] = { basis: "catalog_estimate", limitUsdMicros: 123, window: "retained_chat" };
+	const workers = f.workers.length;
+	const before = sessions.get(peer.id);
+	const chats = await sessions.diagnosticContext(specialist.id, { action: "chats", limit: 20 });
+	assert.match(JSON.stringify(chats), new RegExp(peer.id));
+	assert.match(JSON.stringify(chats), /archivedAt/);
+	const detail = await sessions.diagnosticContext(specialist.id, { action: "chat", sessionId: peer.id });
+	assert.match(JSON.stringify(detail), /limitUsdMicros/);
+	assert.match(JSON.stringify(detail), /123/);
+	const history = await sessions.diagnosticContext(specialist.id, { action: "history", sessionId: peer.id });
+	assert.equal(history.host.daemonId, diagnosticHost.daemonId);
+	assert.match(JSON.stringify(history), new RegExp(peer.id));
+	const deleted = await sessions.diagnosticContext(specialist.id, { action: "history", sessionId: randomUUID() });
+	assert.equal(deleted.status, "missing");
+	assert.equal(deleted.reason, "deleted");
+	await assert.rejects(sessions.diagnosticContext(peer.id, { action: "chats" }), /Only diagnostics/);
+	await assert.rejects(
+		sessions.diagnosticContext(specialist.id, { action: "chats", role: "diagnostics" }),
+		/Invalid diagnostic/,
+	);
+	assert.equal(f.workers.length, workers);
+	assert.deepEqual(sessions.get(peer.id), before, "reads never mutate the archived subject");
+	const remote = { hostId: "other", daemonId: "other-daemon", lineageId: "other-lineage" };
+	const stop = sessions.diagnosticReadBroker.onRead((d) =>
+		sessions.diagnosticReadBroker.respond(d.id, {
+			schemaVersion: 1,
+			host: { ...remote, lineageId: "forged" },
+			status: "available",
+			data: { secret: "bad" },
+			page: { more: false, scanned: 0, maxScan: 200, maxBytes: 65536, truncated: false },
+		}),
+	);
+	const wrongHost = await sessions.diagnosticContext(specialist.id, { action: "chats", host: remote });
+	assert.equal(wrongHost.status, "unavailable");
+	assert.doesNotMatch(JSON.stringify(wrongHost), /bad/);
+	stop();
 });
 
 test("spawning target-scoped diagnostics does not wake or change a parked target", async (t) => {

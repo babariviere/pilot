@@ -60,6 +60,7 @@ final class PilotClient: ObservableObject {
     var onSessionsChanged: (([SessionSummary], Bool) -> Void)?
     var onSchedulesChanged: (([ScheduledItem]) -> Void)?
     var onConnected: (() -> Void)?
+    var onDiagnosticRead: ((DiagnosticReadDispatch) -> Void)?
     /// Invalidation only. The courier fetches bounded daemon-owned exchange pages.
     var onSharedContextsChanged: (() -> Void)?
 
@@ -2322,6 +2323,8 @@ final class PilotClient: ObservableObject {
             }
         case let .trackedChanged(projectId):
             for observer in trackedObservers.values { observer(projectId) }
+        case let .diagnosticRead(dispatch):
+            onDiagnosticRead?(dispatch)
         case .sharedContextsChanged:
             onSharedContextsChanged?()
         case .watchesChanged:

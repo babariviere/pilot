@@ -242,6 +242,12 @@ export type KernelCommand =
 	| { type: "database.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "slack.result"; callId: string; result?: JsonValue; error?: string }
 	| {
+			type: "diagnostics.context.result";
+			callId: string;
+			result?: import("@pilot/protocol").DiagnosticContextResponse;
+			error?: string;
+	  }
+	| {
 			type: "diagnostics.result";
 			callId: string;
 			result?: import("@pilot/protocol").DiagnosticSnapshot;
@@ -333,6 +339,8 @@ export type KernelPacket =
 	| { type: "slack.call"; callId: string; args: Record<string, JsonValue> }
 	/** Content-free diagnostic read. Caller identity is derived from this supervised worker. */
 	| { type: "diagnostics.call"; callId: string; sessionId?: string; limit?: number }
+	| { type: "diagnostics.context.call"; callId: string; request: import("@pilot/protocol").DiagnosticContextRequest }
+	| { type: "diagnostics.context.cancel"; callId: string }
 	/** Explicitly granted target-history read. Caller identity and target scope come from the supervised worker. */
 	| { type: "diagnostics.history.call"; callId: string; sessionId: string; before?: number; limit?: number }
 	/** Fixed-host Pilot log inventory/search/excerpts. No caller-supplied paths or host/session selectors. */

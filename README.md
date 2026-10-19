@@ -1076,9 +1076,11 @@ bounded title lifecycle: a submitted reason seeds the title, while a reasonless 
 specialist reply rather than naming the fixed diagnostic instruction. The readable fallback remains if title
 generation is unavailable, and a user rename always wins. Titles and title context stay out of telemetry. Cancel
 creates nothing, and unavailable,
-missing or replaced selections fail without falling back to Local. Diagnose this chat and an explicitly selected chat
-also grant a bounded, paginated cold read of that exact chat's committed conversation and tool history. Generic
-No-chat Ask about Pilot has no transcript authority at all. Every specialist can inventory and search a fixed,
+missing or replaced selections fail without falling back to Local. A selected chat is focus, not an access gate.
+Diagnostics always has bounded, sanitized app-wide read access to available chats and archived history, usage/cost/
+informational budgets, failures, retained mission/tasks and local issue records. Ordinary Ask/Build stay isolated.
+Trusted linked-host reads use already-connected verified native routing; offline/unsupported/partial evidence stays
+explicitly unavailable. No chat means app-wide investigation, never a hidden Control target. Every specialist can inventory and search a fixed,
 path-free catalogue of bounded sanitized Pilot daemon, worker, native report and admitted-target operational logs on
 its selected host. App-scoped sessions expose host sources while marking target-only lifecycle, request-timing and
 tool sources unavailable. Missing app text logs, journal history or crash reports remain explicit coverage gaps, not proof

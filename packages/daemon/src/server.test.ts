@@ -100,6 +100,66 @@ test("project database settings require native authority and fence revisions wit
 	assert.equal(readFileSync(join(home, DATABASE_CONFIG_FILE), "utf8"), "{secret malformed");
 });
 
+test("app-wide diagnostic native endpoints require protected capability and reject forged role selectors", async (t) => {
+	const home = mkdtempSync(join(tmpdir(), "diagnostic-native-read-"));
+	const projects = new ProjectStore(home);
+	const sessions = new SessionManager(
+		home,
+		projects,
+		undefined,
+		{},
+		{},
+		{
+			diagnosticHost: { hostId: "local", daemonId: "daemon", lineageId: "lineage" },
+		},
+	);
+	const terminals = new TerminalManager();
+	const args: Parameters<typeof createDaemonServer> = [
+		{ home, host: "127.0.0.1", port: 0 },
+		sessions,
+		projects,
+		new ModelCatalog("/unused"),
+		terminals,
+	];
+	args[18] = {
+		authenticate: async (token: unknown) => {
+			if (token !== "native-fixture") throw new Conflict("Native capability required");
+		},
+	} as unknown as NonNullable<(typeof args)[18]>;
+	const server = createDaemonServer(...args);
+	t.after(async () => {
+		terminals.shutdown();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+		await sessions.shutdown();
+		rmSync(home, { recursive: true, force: true });
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/diagnostics`;
+	const post = (path: string, body: unknown, native = false) =>
+		fetch(`${base}/${path}`, {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				...(native ? { "x-pilot-github-capability": "native-fixture" } : {}),
+			},
+			body: JSON.stringify(body),
+		});
+	const denied = await post("read", { action: "hosts", role: "diagnostics" });
+	assert.notEqual(denied.status, 200);
+	await denied.arrayBuffer();
+	const allowed = await post("read", { action: "hosts" }, true);
+	assert.equal(allowed.status, 200);
+	assert.match(JSON.stringify(await allowed.json()), /lineage/);
+	const forged = await post("read", { action: "hosts", role: "diagnostics" }, true);
+	assert.equal(forged.status, 409);
+	await forged.arrayBuffer();
+	const stale = await post("read-response", { id: randomUUID(), result: {} }, true);
+	assert.equal(stale.status, 409);
+	await stale.arrayBuffer();
+	assert.equal(sessions.list().length, 0, "native evidence reads never create a target or Control chat");
+});
+
 test("jobs GET returns the session's read-only running list and routes missing sessions", async (t) => {
 	const projects = new ProjectStore("/unused");
 	const sessions = new SessionManager("/unused", projects);

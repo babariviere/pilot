@@ -14,6 +14,7 @@ export type {
 export type * from "./critical-review.ts";
 export type * from "./databases.ts";
 export type * from "./diagnostics.ts";
+export type * from "./diagnostic-context.ts";
 export type * from "./github-import.ts";
 export type * from "./github-setup.ts";
 export type * from "./model-scope.ts";
@@ -1716,6 +1717,7 @@ export type ClientMessage =
 
 /** Daemon to client, over /api/ws and the dedicated sockets below (see their message types). */
 export type ServerMessage =
+	| { type: "diagnostics.read"; dispatch: import("./diagnostic-context.ts").DiagnosticReadDispatch }
 	| import("./control.ts").ControlMessage
 	| { type: "shared-contexts.changed" }
 	| { type: "power"; power: import("./power.ts").PowerStatus }

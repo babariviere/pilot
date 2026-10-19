@@ -46,7 +46,7 @@ const target = {
 	chatUrl: "pilot://chat/01234567-89ab-4cde-8fab-0123456789ab",
 } as const;
 
-test("diagnostics is declared read-only and fixed to the admitted target chat", async () => {
+test("diagnostics is declared read-only with an initial chat focus", async () => {
 	const calls: Array<[string, number | undefined]> = [];
 	const tool = createDiagnosticsTool(
 		async (sessionId, limit) => {
@@ -59,7 +59,7 @@ test("diagnostics is declared read-only and fixed to the admitted target chat", 
 	assert.equal(tool.name, DIAGNOSTICS_TOOL);
 	assert.equal(tool.annotations?.readOnlyHint, true);
 	assert.equal(tool.annotations?.destructiveHint, false);
-	assert.match(tool.description, /pilot:\/\/chat\/01234567/);
+	assert.match(tool.description, /No wake or mutation/);
 	const first = await tool.execute("call-1", {} as never, undefined, undefined, {} as never);
 	await tool.execute("call-2", { limit: 12 } as never, undefined, undefined, {} as never);
 	assert.deepEqual(calls, [
@@ -91,5 +91,5 @@ test("app diagnostics has no implicit session target", async () => {
 	);
 	await tool.execute("call", { limit: 4 } as never, undefined, undefined, {} as never);
 	assert.deepEqual(calls, [[undefined, 4]]);
-	assert.match(tool.description, /no attached chat/);
+	assert.match(tool.description, /app health/);
 });
