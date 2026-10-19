@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.54.0](https://github.com/babariviere/pilot/compare/v1.53.1...v1.54.0) (2026-10-19)
+
+
+### Features
+
+* **databases:** add host-local project connection settings ([1b0071f](https://github.com/babariviere/pilot/commit/1b0071fe936e29718e12426dff2c144a72889968))
+* **environment:** add profile, plan and readiness types with validated storage ([12f65e1](https://github.com/babariviere/pilot/commit/12f65e1b3ad16e12f85208274e7929c31e8089b2))
+* **environment:** add the Environment section to project settings ([d5b81aa](https://github.com/babariviere/pilot/commit/d5b81aafa8a735495d413143b4a10f00a922c11d))
+* **environment:** discover declared toolchains, services and setup steps ([e74f6e0](https://github.com/babariviere/pilot/commit/e74f6e01cc2489db3124519eeed244207a3e8047))
+* **environment:** probe hosts and preview install plans ([de841f2](https://github.com/babariviere/pilot/commit/de841f2b957ef67411b0e32ff22f1c7deb3fac61))
+* show Slack or Linear source on chats started from triage ([f9b020d](https://github.com/babariviere/pilot/commit/f9b020d425fc95010d5e6e7425f89ff5923bd378))
+
+
+### Bug Fixes
+
+* **ci:** repair native regressions and Linux workflow expectations ([d525e57](https://github.com/babariviere/pilot/commit/d525e5798e7c787ceb4c7f777d3826d5a67f0917))
+* **control:** archive non-home conversations read-only ([3d4e4c1](https://github.com/babariviere/pilot/commit/3d4e4c19a61d32b5e4e70889122a62576f04aef3))
+* **control:** require explicit mode for chat starts ([b52dfe8](https://github.com/babariviere/pilot/commit/b52dfe82adc5873f0ac751916864da298f0762e0))
+* **slack:** accept wrapped reaction confirmations ([25a08fa](https://github.com/babariviere/pilot/commit/25a08faa19e0905f60f3a21fe0f5f1e371cd65d9))
+* **slack:** expose triage refresh in the toolbar ([35a8611](https://github.com/babariviere/pilot/commit/35a8611104f0b239fcb54ad48be71be04f5e2033))
+* **slack:** restore access to the triage board ([1131a9b](https://github.com/babariviere/pilot/commit/1131a9b44b57e10b3bd5b813acbffd52bc94a6a1))
+
 ## [1.53.1](https://github.com/babariviere/pilot/compare/v1.53.0...v1.53.1) (2026-10-19)
 
 
