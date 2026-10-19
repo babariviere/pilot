@@ -87,6 +87,16 @@ stop the canvas and show the error. `ops` is a flat list of commands, each start
 follow the color tokens in schema order; sizes are `xs`...`xl`, align `start`, `center`, `end`, baseline `top`,
 `middle`, `bottom`. A filled arc is a wedge, or a ring segment when inner > 0; a stroked arc is the arc at r.
 
-## Not yet supported
+## Shader
 
-`ui.shader` throws "shader nodes are not yet supported" until its phase lands.
+A `shader` node carries its `glsl` (Shadertoy-style `mainImage`, GLSL ES 3.00), its `height`, whether it is
+`animated` (default true) and `inputs`, float uniforms by name in name order. The runtime only checks their shape;
+the kernel's publication check compiles each distinct shader with glslang and translates it to Metal with naga
+(`packages/artifacts/src/visual/metal.ts`). The revision stores the translations as `visual.shaders`: `glsl`, `inputs`
+(names), `msl` and `entry`, the fragment function. Hosts find a node's translation by its input names and GLSL, so
+input values change without a new translation.
+
+The MSL reads one uniform buffer at index 0: `iMouse` (float4, pixels, bottom-left origin), `iResolution` (float4:
+width, height in pixels, 1, 0), `iTime`, `iTimeDelta` (float), `iFrame` (int), then each input as a float, from byte
+44 on, padded to 16 bytes. Draw it over a full-screen triangle into a `bgra8Unorm` target; the output is
+premultiplied. `shaders.json` holds a probe shader's translation with the colors a host must draw for its uniforms.

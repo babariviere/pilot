@@ -78,6 +78,8 @@ final class VisualArtifactModel: ObservableObject {
     private lazy var pacer = DisplayFramePacer { [weak self] in self?.flushSlider() }
     /// Each canvas's last drawing, by path: shown at once when a canvas view is recreated, and in screenshots.
     private var drawings: [String: VisualDrawing] = [:]
+    /// The revision's Metal translations, by input names and GLSL.
+    private var shaders: [String: ArtifactVisualShader] = [:]
 
     init(engine: VisualEngineClient = .shared) {
         self.engine = engine
@@ -93,6 +95,9 @@ final class VisualArtifactModel: ObservableObject {
         guard !started else { return }
         started = true
         self.memoryKey = memoryKey
+        for shader in revision.visual?.shaders ?? [] {
+            shaders[VisualNode.Shader.translationKey(glsl: shader.glsl, inputs: shader.inputs)] = shader
+        }
         if let api = revision.visual?.api, api != VisualTree.supportedAPI {
             unsupportedAPI = api
             return
@@ -130,6 +135,11 @@ final class VisualArtifactModel: ObservableObject {
 
     func remember(_ drawing: VisualDrawing, for path: String) {
         drawings[path] = drawing
+    }
+
+    /// The Metal translation of a shader node, published with the revision.
+    func translation(for shader: VisualNode.Shader) -> ArtifactVisualShader? {
+        shaders[shader.translationKey]
     }
 
     private func load() {
@@ -373,6 +383,12 @@ struct VisualNodeView: View, Equatable {
                 VisualCanvasStill(canvas: canvas, drawing: model.drawing(for: node.path))
             } else {
                 VisualCanvasView(canvas: canvas, path: node.path, model: model)
+            }
+        case .shader(let shader):
+            if still {
+                VisualShaderStill(shader: shader, model: model)
+            } else {
+                VisualShaderView(shader: shader, model: model)
             }
         }
     }

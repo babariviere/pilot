@@ -693,6 +693,53 @@
 					},
 					"additionalProperties": false,
 					"description": "2D drawing, as wide as the column. The host calls draw(id, width, height, t, pointer) for its commands; it redraws on resize and pointer moves, and every frame when animated."
+				},
+				{
+					"type": "object",
+					"required": ["type", "height", "glsl"],
+					"properties": {
+						"type": {
+							"type": "string",
+							"const": "shader"
+						},
+						"key": {
+							"type": "string",
+							"minLength": 1,
+							"maxLength": 200,
+							"description": "Identity among siblings, unique within one children list. Numbers become strings."
+						},
+						"height": {
+							"type": "number",
+							"minimum": 24,
+							"maximum": 600,
+							"description": "Height in points. Default 240."
+						},
+						"animated": {
+							"type": "boolean",
+							"description": "Draw every display frame while visible. Default true; false draws once."
+						},
+						"label": {
+							"type": "string",
+							"maxLength": 500,
+							"description": "Accessibility description."
+						},
+						"glsl": {
+							"type": "string",
+							"maxLength": 16384,
+							"description": "Shadertoy-style GLSL ES 3.00 defining mainImage. The revision carries its Metal translation, keyed by this text and the input names."
+						},
+						"inputs": {
+							"type": "object",
+							"patternProperties": {
+								"^[A-Za-z_][A-Za-z0-9_]{0,31}$": {
+									"type": "number"
+								}
+							},
+							"description": "Float uniforms by name, in name order, set from state on every view."
+						}
+					},
+					"additionalProperties": false,
+					"description": "A fragment shader as wide as the column, drawn with Metal."
 				}
 			],
 			"description": "One node, discriminated by type.",

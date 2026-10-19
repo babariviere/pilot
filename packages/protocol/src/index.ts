@@ -765,9 +765,24 @@ export interface ArtifactVisual {
 		interactions: number;
 		/** Canvas draws the check ran. Absent in revisions published before canvases. */
 		draws?: number;
+		/** Distinct shaders the check translated to Metal. */
+		shaders?: number;
 		/** Bounded console output of the visual during the check. */
 		logs: string[];
 	};
+	/** Metal for the visual's shader nodes, found by GLSL text and input names. */
+	shaders?: ArtifactVisualShader[];
+}
+
+/** One shader node's Metal translation, made by the kernel at publish (naga). */
+export interface ArtifactVisualShader {
+	glsl: string;
+	/** Input names in name order. Their float uniforms follow the built-in ones. */
+	inputs: string[];
+	/** Metal Shading Language with the uniforms at buffer index 0. */
+	msl: string;
+	/** The fragment function's name in msl. */
+	entry: string;
 }
 
 export interface ArtifactWrite {

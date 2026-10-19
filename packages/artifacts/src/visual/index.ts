@@ -1,8 +1,10 @@
-/** Publish-time checks for visual artifacts: limits, then the pre-check in a worker thread. */
+/** Publish-time checks for visual artifacts: limits, the pre-check in a worker thread, then shader GLSL and Metal. */
 import { Worker } from "node:worker_threads";
 import { loadQuickJSWasm } from "@earendil-works/pi-codemode";
-import type { ArtifactVisual } from "@pilot/protocol";
+import type { ArtifactVisual, ArtifactVisualShader } from "@pilot/protocol";
+import { checkShader, type ShaderDiagnostic } from "../shader.ts";
 import type { VisualCheckInput, VisualCheckResult } from "./check.ts";
+import type { VisualShaderTranslation } from "./check-worker.ts";
 import { VISUAL_API_VERSION, VISUAL_LIMITS } from "./schema.ts";
 import { visualRuntime } from "./session.ts";
 
@@ -55,7 +57,7 @@ export async function checkVisual(
 	});
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let abort: (() => void) | undefined;
-	let result: VisualCheckResult;
+	let result: VisualCheckResult & { translations?: VisualShaderTranslation[] };
 	try {
 		result = await new Promise<VisualCheckResult>((resolve, reject) => {
 			worker.once("message", resolve);
@@ -77,7 +79,38 @@ export async function checkVisual(
 		const logs = result.logs.length ? `\nconsole output:\n${result.logs.join("\n")}` : "";
 		throw new VisualCheckError(`Visual check failed. Nothing was published. ${result.error}${logs}`);
 	}
-	return { api: VISUAL_API_VERSION, engine: result.engine, check: result.report };
+	const shaders: ArtifactVisualShader[] = [];
+	for (const [index, shader] of result.shaders.entries()) {
+		// glslang first: it checks the same GLSL ES 3.00 as shader artifacts, with the clearest messages.
+		const errors = await checkShader(shader.glsl, { signal: options.signal, inputs: shader.inputs });
+		const name = JSON.stringify(shader.name);
+		if (errors.length)
+			throw new VisualCheckError(
+				`Visual check failed. Nothing was published. shader ${name} does not compile as GLSL ES 3.00:\n` +
+					formatGlslErrors(errors, shader.glsl),
+			);
+		const translation = result.translations?.[index];
+		if (!translation) throw new VisualCheckError("Visual check failed. The shader was not translated to Metal");
+		if ("error" in translation)
+			throw new VisualCheckError(
+				`Visual check failed. Nothing was published. shader ${name} could not be translated to Metal: ` +
+					formatGlslErrors([{ line: translation.line, message: translation.error }], shader.glsl),
+			);
+		shaders.push({ glsl: shader.glsl, inputs: shader.inputs, msl: translation.msl, entry: translation.entry });
+	}
+	const check = { ...result.report, ...(shaders.length ? { shaders: shaders.length } : {}) };
+	return { api: VISUAL_API_VERSION, engine: result.engine, check, ...(shaders.length ? { shaders } : {}) };
+}
+
+function formatGlslErrors(errors: ShaderDiagnostic[], glsl: string): string {
+	const lines = glsl.split(/\r?\n/);
+	const shown = errors.slice(0, 10).map((error) => {
+		if (error.line === undefined) return error.message;
+		const code = lines[error.line - 1]?.trim();
+		return `line ${error.line}: ${error.message}${code ? `\n    ${code.slice(0, 200)}` : ""}`;
+	});
+	if (errors.length > 10) shown.push(`…and ${errors.length - 10} more`);
+	return shown.join("\n");
 }
 
 /** Shown by apps that do not know the visual kind. */

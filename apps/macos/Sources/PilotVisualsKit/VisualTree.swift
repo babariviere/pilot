@@ -121,6 +121,7 @@ public struct VisualNode: Hashable, Sendable, Identifiable {
         case slider(Slider)
         case button(Button)
         case canvas(Canvas)
+        case shader(Shader)
     }
 
     public struct Column: Hashable, Sendable {
@@ -238,6 +239,42 @@ public struct VisualNode: Hashable, Sendable, Identifiable {
             self.height = height
             self.animated = animated
             self.label = label
+        }
+    }
+
+    /// A fragment shader as wide as the column. Its Metal comes from the artifact revision, found by glsl and the
+    /// input names; input values change with state and need no new translation.
+    public struct Shader: Hashable, Sendable {
+        public struct Input: Hashable, Sendable {
+            public var name: String
+            public var value: Double
+
+            public init(name: String, value: Double) {
+                self.name = name
+                self.value = value
+            }
+        }
+
+        public var height: Double
+        public var animated: Bool
+        public var label: String?
+        public var glsl: String
+        /// In name order, as the uniforms are laid out.
+        public var inputs: [Input]
+
+        public init(height: Double, animated: Bool, label: String?, glsl: String, inputs: [Input]) {
+            self.height = height
+            self.animated = animated
+            self.label = label
+            self.glsl = glsl
+            self.inputs = inputs
+        }
+
+        /// The key of its translation: input names, then the GLSL, as the kernel stores it.
+        public var translationKey: String { Self.translationKey(glsl: glsl, inputs: inputs.map(\.name)) }
+
+        public static func translationKey(glsl: String, inputs: [String]) -> String {
+            inputs.joined(separator: ",") + "\n" + glsl
         }
     }
 }
@@ -365,6 +402,14 @@ extension VisualNode {
         case "canvas":
             kind = .canvas(Canvas(height: Swift.max(24, Swift.min(600, number("height") ?? 240)),
                                   animated: flag("animated") ?? false, label: string("label")))
+        case "shader":
+            guard let glsl = object["glsl"]?.stringValue else { throw VisualTree.DecodingError.invalid("shader at \(path)") }
+            let inputs = (object["inputs"]?.objectValue?.entries ?? [])
+                .compactMap { entry in entry.value.numberValue.map { Shader.Input(name: entry.key, value: $0) } }
+                .sorted { $0.name < $1.name }
+            kind = .shader(Shader(height: Swift.max(24, Swift.min(600, number("height") ?? 240)),
+                                  animated: flag("animated") ?? true, label: string("label"), glsl: glsl,
+                                  inputs: inputs))
         default:
             throw VisualTree.DecodingError.invalid("unknown node type \(type) at \(path)")
         }

@@ -5,6 +5,7 @@ import { test } from "node:test";
 import { loadQuickJSWasm } from "@earendil-works/pi-codemode";
 import { Compile } from "typebox/compile";
 import { CASES, type ConformanceFile, ERRORS, runCase, runErrorCase } from "./conformance.ts";
+import { translateVisualShader, VISUAL_SHADER_LAYOUT, VISUAL_SHADER_TRANSLATOR } from "./metal.ts";
 import { VISUAL_LIMITS, VisualTreeSchema, visualTreeJsonSchema } from "./schema.ts";
 import { VisualSession, visualRuntime } from "./session.ts";
 
@@ -83,4 +84,34 @@ test("the runtime enforces the same limits as schema.ts", async () => {
 		const value = declared.match(new RegExp(`\\b${name}: ([^,\\n]+)`))?.[1];
 		assert.equal(value && Function(`return (${value})`)(), VISUAL_LIMITS[name], name);
 	}
+});
+
+/**
+ * A shader the app must render like this: its Metal from the kernel's translator and, for given uniforms, the colors
+ * at a few pixels (x, y from the top left of the image). It checks the uniform layout, the y flip and premultiplied
+ * alpha end to end.
+ */
+const SHADER_PROBE = `void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  float m = length(fragCoord - iMouse.xy) < 1.0 ? 1.0 : 0.0;
+  fragColor = vec4(fragCoord.x / iResolution.x, fragCoord.y / iResolution.y, speed / 4.0 + m * 0.25, glow);
+}`;
+
+test("the shader fixture matches the translator", async () => {
+	await compare("shaders.json", {
+		translator: VISUAL_SHADER_TRANSLATOR,
+		layout: VISUAL_SHADER_LAYOUT,
+		shaders: [
+			{
+				...translateVisualShader(SHADER_PROBE, ["glow", "speed"]),
+				uniforms: { width: 64, height: 32, time: 1.5, frame: 7, mouse: [10, 20, 0, 0], inputs: [0.5, 2] },
+				// Premultiplied: the app's drawable holds color times alpha.
+				pixels: [
+					{ x: 0, y: 0, rgba: [0.5 / 64 / 2, 31.5 / 32 / 2, 0.25, 0.5] },
+					{ x: 0, y: 31, rgba: [0.5 / 64 / 2, 0.5 / 32 / 2, 0.25, 0.5] },
+					{ x: 63, y: 0, rgba: [63.5 / 64 / 2, 31.5 / 32 / 2, 0.25, 0.5] },
+					{ x: 10, y: 11, rgba: [10.5 / 64 / 2, 20.5 / 32 / 2, 0.375, 0.5] },
+				],
+			},
+		],
+	});
 });

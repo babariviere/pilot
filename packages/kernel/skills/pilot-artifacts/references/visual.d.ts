@@ -156,8 +156,19 @@ interface UI {
 		label?: string; // describes the drawing for VoiceOver
 		draw: (g: Pen, frame: Frame) => void;
 	}): VisualNode;
-	/** Not yet supported: publication fails. */
-	shader(...args: unknown[]): never;
+	/**
+	 * A Shadertoy-style fragment shader as wide as the column, drawn with Metal. glsl defines mainImage (GLSL ES 3.00,
+	 * no #version) with iResolution, iTime, iTimeDelta, iFrame and iMouse declared, plus one float uniform per input.
+	 * Inputs are numbers set from state on every view, so sliders can drive the shader without republishing.
+	 */
+	shader(props: {
+		key?: Key;
+		glsl: string; // at most 16 KiB; at most 4 different shaders per visual
+		inputs?: { [name: string]: number }; // up to 16; GLSL names, not i* built-ins or Metal keywords
+		height?: number; // 24-600, default 240
+		animated?: boolean; // default true: every frame while visible; false draws once
+		label?: string; // describes the shader for VoiceOver
+	}): VisualNode;
 }
 
 /** What a canvas's draw function gets with the pen. Coordinates are points from the top left. */

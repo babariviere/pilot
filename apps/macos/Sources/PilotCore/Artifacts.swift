@@ -87,10 +87,31 @@ public struct ArtifactVisual: Codable, Equatable, Hashable, Sendable {
     public let api: Int
     /// For example "quickjs-ng 0.17.0".
     public let engine: String
+    /// Metal for the visual's shader nodes, translated by the kernel at publish.
+    public var shaders: [ArtifactVisualShader]?
 
-    public init(api: Int, engine: String) {
+    public init(api: Int, engine: String, shaders: [ArtifactVisualShader]? = nil) {
         self.api = api
         self.engine = engine
+        self.shaders = shaders
+    }
+}
+
+/// One shader node's Metal: found by the node's GLSL and input names, compiled by the app.
+public struct ArtifactVisualShader: Codable, Equatable, Hashable, Sendable {
+    public let glsl: String
+    /// Input names in name order. Their float uniforms follow the built-in ones.
+    public let inputs: [String]
+    /// Metal Shading Language with the uniforms at buffer index 0.
+    public let msl: String
+    /// The fragment function's name in msl.
+    public let entry: String
+
+    public init(glsl: String, inputs: [String], msl: String, entry: String) {
+        self.glsl = glsl
+        self.inputs = inputs
+        self.msl = msl
+        self.entry = entry
     }
 }
 
