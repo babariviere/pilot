@@ -128,7 +128,9 @@ private func menuSession(id: String = "menu-test", title: String = "Session", st
     let localChat = menuSession(id: "local-chat", state: "working")
     var control = menuSession(id: "executor-control", state: "working"); control.control = true
     let ordinary = menuSession(id: "ordinary", title: "Control", state: "working")
-    app.client.loadFixture(projects: [], sessions: [localControl, localChat])
+    // Match the client's canonical list order, including the ID tie-breaker for equal timestamps.
+    let localSessions = [localControl, localChat].sorted(by: SessionSummary.listPrecedes)
+    app.client.loadFixture(projects: [], sessions: localSessions)
     try app.registerLocal(local); try hosts.install(app.client, host: local)
     let client = PilotClient(); client.loadFixture(projects: [], sessions: [control, ordinary])
     try hosts.install(client, host: box)
@@ -136,7 +138,7 @@ private func menuSession(id: String = "menu-test", title: String = "Session", st
     let menu = MenuBarModel(model: app, updater: AppUpdater())
     let ordinaryRef = HostResourceRef(host: box, kind: .session, localId: ordinary.id)
     let controlRef = HostResourceRef(host: box, kind: .session, localId: control.id)
-    let baseline = MenuBarSnapshot(sessions: [localControl, localChat], isUnread: { _ in false }, status: .running,
+    let baseline = MenuBarSnapshot(sessions: localSessions, isUnread: { _ in false }, status: .running,
         lifecycleBusy: app.daemon.lifecycleBusy, waitingToInstall: false,
         hosted: [Hosted(ref: ordinaryRef, value: ordinary)], availableHosts: [box])
     #expect(menu.snapshot == baseline)
@@ -158,7 +160,7 @@ private func menuSession(id: String = "menu-test", title: String = "Session", st
         client.loadFixture(projects: [], sessions: [updatedControl, updated])
     }
     observation?.cancel()
-    let expected = MenuBarSnapshot(sessions: [localControl, localChat], isUnread: { _ in false }, status: .running,
+    let expected = MenuBarSnapshot(sessions: localSessions, isUnread: { _ in false }, status: .running,
         lifecycleBusy: app.daemon.lifecycleBusy, waitingToInstall: false,
         hosted: [Hosted(ref: ordinaryRef, value: updated)], availableHosts: [box])
     #expect(menu.snapshot == expected)
@@ -167,7 +169,7 @@ private func menuSession(id: String = "menu-test", title: String = "Session", st
     #expect(menu.snapshot.statusText == baseline.statusText)
     #expect(app.client.session(localControl.id)?.control == true)
     #expect(app.previousControlSessions.map(\.ref) == [controlRef])
-    await hosts.stopAndWait()
+    await hosts.disconnectAll()
 }
 
 @MainActor
