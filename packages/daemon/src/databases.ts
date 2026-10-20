@@ -10,6 +10,7 @@ import { join, resolve } from "node:path";
 import type { JsonValue } from "@earendil-works/chord";
 import type { ProjectDatabaseSettings } from "@pilot/protocol";
 import pg from "pg";
+import { parse, toClientConfig } from "pg-connection-string";
 import Cursor from "pg-cursor";
 import { getPilotConfigDir } from "./config.ts";
 
@@ -37,9 +38,13 @@ export interface DatabaseState {
 	request?: DatabaseRequest;
 }
 
+/** PEM contents, not filenames. Explicit TLS always verifies certificates and server identity. */
+export type DatabaseSsl = boolean | { ca?: string; cert?: string; key?: string; rejectUnauthorized?: true };
+
 interface Target {
 	url: string;
 	access: DatabaseAccessPolicy;
+	ssl?: DatabaseSsl;
 }
 /** Environments of one project. */
 export type DatabaseConfig = Map<string, Partial<Record<DatabaseMode, Target>>>;
@@ -59,8 +64,15 @@ export interface StatementResult {
 	truncated: boolean;
 }
 
+export interface DatabaseConnectionTarget {
+	url: string;
+	mode: DatabaseMode;
+	applicationName: string;
+	ssl?: DatabaseSsl;
+}
+
 export type QueryRunner = (
-	target: { url: string; mode: DatabaseMode; applicationName: string },
+	target: DatabaseConnectionTarget,
 	statements: DatabaseStatement[],
 	maxRows: number,
 ) => Promise<StatementResult[]>;
@@ -88,6 +100,20 @@ function record(value: unknown): value is Record<string, unknown> {
 	return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+function parseDatabaseSsl(value: unknown, field: string): DatabaseSsl | undefined {
+	if (value === undefined || typeof value === "boolean") return value;
+	if (
+		!record(value) ||
+		Object.keys(value).some((key) => !["ca", "cert", "key", "rejectUnauthorized"].includes(key)) ||
+		(value.rejectUnauthorized !== undefined && value.rejectUnauthorized !== true) ||
+		["ca", "cert", "key"].some((key) => value[key] !== undefined && (typeof value[key] !== "string" || !value[key]))
+	)
+		throw new Error(
+			`${field}.ssl must be a boolean or PEM ca/cert/key options with certificate verification enabled`,
+		);
+	return value as DatabaseSsl;
+}
+
 /** Project folders as configured, with `~/` expanded and no trailing slash. */
 export function projectKey(path: string, home = homedir()): string {
 	return resolve(path.startsWith("~/") ? join(home, path.slice(2)) : path);
@@ -109,7 +135,8 @@ function parseEnvironments(project: string, value: unknown): DatabaseConfig {
 			const access = target.access ?? "ask";
 			if (access !== "allow" && access !== "ask")
 				throw new Error(`Database environment ${name}.${mode} access must be "allow" or "ask"`);
-			modes[mode] = { url: target.url, access };
+			const ssl = parseDatabaseSsl(target.ssl, `Database environment ${name}.${mode}`);
+			modes[mode] = { url: target.url, access, ...(ssl === undefined ? {} : { ssl }) };
 		}
 		if (!modes.read && !modes.write) throw new Error(`Database environment ${name} has no read or write connection`);
 		config.set(name, modes);
@@ -557,7 +584,16 @@ export class DatabaseService {
 			throw new Error("db maxRows must be a positive integer");
 		const maxRows = Math.min(requested, DATABASE_LIMITS.maxRows);
 		const results = await this.#limited(() =>
-			this.#run({ url: target.url, mode, applicationName: `pilot-${sessionId}` }, statements, maxRows),
+			this.#run(
+				{
+					url: target.url,
+					mode,
+					applicationName: `pilot-${sessionId}`,
+					...(target.ssl === undefined ? {} : { ssl: target.ssl }),
+				},
+				statements,
+				maxRows,
+			),
 		);
 		const bounded = boundResults(results);
 		return (
@@ -624,21 +660,64 @@ function readCursor(
 	});
 }
 
-/**
- * One connection per call, so no session state (SET, roles, temp tables) leaks between calls or chats.
- * Reads run inside BEGIN READ ONLY and are rolled back. Statements use the extended protocol, which rejects
- * several commands in one string, so a read cannot COMMIT its way out of the read-only transaction.
- */
-export const runPostgres: QueryRunner = async (target, statements, maxRows) => {
-	const client = new pg.Client({
-		connectionString: target.url,
+/** Resolve TLS once so the driver cannot replace an explicit CA when it reparses a URL. */
+export function postgresClientConfig(target: DatabaseConnectionTarget): pg.ClientConfig {
+	let config: pg.ClientConfig;
+	try {
+		// Parse once: pg otherwise reparses connectionString and replaces the entire ssl object, losing its CA.
+		const parsed = parse(target.url);
+		// toClientConfig drops string SSL values; retain pg's supported legacy spelling, never plaintext.
+		if (parsed.ssl === "no-verify") parsed.ssl = { rejectUnauthorized: false };
+		if (typeof parsed.ssl === "string") throw new Error("Invalid ssl option");
+		config = toClientConfig(parsed);
+	} catch {
+		throw new Error("Database connection configuration failed. Check the URL, TLS options and certificate files.");
+	}
+	delete config.connectionString;
+	const ssl = parseDatabaseSsl(target.ssl, "Database connection");
+	if (ssl !== undefined) {
+		if ((ssl === false && !!config.ssl) || (ssl !== false && config.ssl === false))
+			throw new Error(
+				"Database connection configuration failed: URL and ssl options disagree about TLS. No connection was attempted.",
+			);
+		if (ssl === false) config.ssl = false;
+		else {
+			const merged = {
+				...(typeof config.ssl === "object" ? config.ssl : {}),
+				...(ssl === true ? {} : ssl),
+				rejectUnauthorized: true,
+			};
+			// Explicit TLS must not inherit libpq-compatible hostname-verification bypasses from the URL.
+			delete merged.checkServerIdentity;
+			config.ssl = merged;
+		}
+	}
+	return {
+		...config,
 		application_name: target.applicationName,
 		statement_timeout: DATABASE_LIMITS.statementTimeoutMs,
 		lock_timeout: DATABASE_LIMITS.lockTimeoutMs,
 		idle_in_transaction_session_timeout: DATABASE_LIMITS.deadlineMs,
 		connectionTimeoutMillis: DATABASE_LIMITS.connectTimeoutMs,
 		types,
-	});
+	};
+}
+
+/**
+ * One connection per call, so no session state (SET, roles, temp tables) leaks between calls or chats.
+ * Reads run inside BEGIN READ ONLY and are rolled back. Statements use the extended protocol, which rejects
+ * several commands in one string, so a read cannot COMMIT its way out of the read-only transaction.
+ */
+export const runPostgres: QueryRunner = async (target, statements, maxRows) => {
+	const config = postgresClientConfig(target);
+	let client: pg.Client;
+	try {
+		client = new pg.Client(config);
+	} catch {
+		throw new Error(
+			"Database connection configuration failed. Check the URL, TLS options and driver environment settings.",
+		);
+	}
 	client.on("error", () => {});
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const deadline = new Promise<never>((_, reject) => {
@@ -654,7 +733,11 @@ export const runPostgres: QueryRunner = async (target, statements, maxRows) => {
 		timer.unref();
 	});
 	const work = async () => {
-		await client.connect();
+		try {
+			await client.connect();
+		} catch (error) {
+			throw databaseConnectionError(error);
+		}
 		await client.query(target.mode === "read" ? "BEGIN READ ONLY" : "BEGIN");
 		const results: StatementResult[] = [];
 		for (const [index, statement] of statements.entries()) {
@@ -688,6 +771,20 @@ export const runPostgres: QueryRunner = async (target, statements, maxRows) => {
 		await client.end().catch(() => {});
 	}
 };
+
+/** Connection errors can contain endpoints, users, certificate paths or credentials. Never echo them. */
+function databaseConnectionError(error: unknown): Error {
+	const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
+	const sqlstate = code && /^[0-9A-Z]{5}$/.test(code) ? ` (SQLSTATE ${code})` : "";
+	let guidance = "Check the endpoint, TLS configuration and server authentication rules.";
+	if (code?.includes("CERT") || code?.includes("SELF_SIGNED") || code === "UNABLE_TO_VERIFY_LEAF_SIGNATURE")
+		guidance = "TLS certificate verification failed. Check the trusted CA, certificate validity and server name.";
+	else if (code?.startsWith("28"))
+		guidance = "PostgreSQL rejected authentication. Check required TLS, credentials and server authentication rules.";
+	return new Error(
+		`Database connection failed${sqlstate}. ${guidance} Pilot access approval does not verify connectivity.`,
+	);
+}
 
 /** Keeps Postgres's message and hints. Connection errors never include the configured URL. */
 function databaseError(error: unknown): Error {

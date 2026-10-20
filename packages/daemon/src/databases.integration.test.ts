@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
@@ -23,6 +23,8 @@ function postgresBin(): string | undefined {
 const bin = postgresBin();
 let dir = "";
 let url = "";
+let tlsUrl = "";
+let ca = "";
 let server: ReturnType<typeof spawn> | undefined;
 
 before(async () => {
@@ -39,13 +41,44 @@ before(async () => {
 			env,
 		},
 	);
+	// Entirely disposable server and credentials. TCP requires TLS; the existing tests use its Unix socket.
+	const key = join(data, "server.key");
+	const cert = join(data, "server.crt");
+	await exec(
+		"openssl",
+		[
+			"req",
+			"-x509",
+			"-newkey",
+			"rsa:2048",
+			"-nodes",
+			"-days",
+			"1",
+			"-subj",
+			"/CN=localhost",
+			"-addext",
+			"subjectAltName=DNS:localhost",
+			"-keyout",
+			key,
+			"-out",
+			cert,
+		],
+		{ timeout: 30_000 },
+	);
+	await chmod(key, 0o600);
+	ca = await readFile(cert, "utf8");
+	await writeFile(
+		join(data, "pg_hba.conf"),
+		"local all all trust\nhostnossl all all 127.0.0.1/32 reject\nhostssl all all 127.0.0.1/32 trust\n",
+	);
 	const port = String(20_000 + Math.floor(Math.random() * 20_000));
 	server = spawn(
 		join(bin, "postgres"),
-		["-D", data, "-k", dir, "-p", port, "-c", "listen_addresses=", "-c", "fsync=off"],
+		["-D", data, "-k", dir, "-p", port, "-c", "listen_addresses=127.0.0.1", "-c", "ssl=on", "-c", "fsync=off"],
 		{ stdio: "ignore", env },
 	);
 	url = `postgres://pilot@/postgres?host=${encodeURIComponent(dir)}&port=${port}`;
+	tlsUrl = `postgres://pilot@localhost:${port}/postgres`;
 	for (let attempt = 0; ; attempt++) {
 		try {
 			await runPostgres({ url, mode: "read", applicationName: "pilot-test" }, [{ sql: "select 1", params: [] }], 1);
@@ -85,6 +118,39 @@ test("writes commit as one transaction and report row counts", { skip: !bin && "
 		/Statement 2: duplicate key value.*SQLSTATE 23505/s,
 	);
 	assert.deepEqual((await read("select count(*)::int as n from items"))[0]?.rows, [{ n: 2 }]);
+	await write([{ sql: "create sequence should_not_run" }]);
+	// Sequence increments are not rolled back, so this detects later execution even if the transaction aborts.
+	await assert.rejects(
+		write([{ sql: "select 1 / 0" }, { sql: "select nextval('should_not_run')" }]),
+		/Statement 1:.*SQLSTATE 22012/,
+	);
+	assert.deepEqual((await read("select is_called from should_not_run"))[0]?.rows, [{ is_called: false }]);
+});
+
+test("TLS-required connections retain object CA, verify certificates, and enforce read-only transactions", {
+	skip: !bin && "no Postgres binaries",
+}, async () => {
+	const run = (
+		connection: string,
+		ssl?: Parameters<typeof runPostgres>[0]["ssl"],
+		sql = "select ssl from pg_stat_ssl where pid = pg_backend_pid()",
+	) =>
+		runPostgres({ url: connection, ssl, mode: "read", applicationName: "pilot-tls-test" }, [{ sql, params: [] }], 1);
+	const secured = `${tlsUrl}?sslmode=verify-full`;
+	assert.deepEqual((await run(secured, { ca }))[0]?.rows, [{ ssl: true }]);
+	assert.deepEqual((await run(secured, { ca }, "show transaction_read_only"))[0]?.rows, [
+		{ transaction_read_only: "on" },
+	]);
+	await assert.rejects(
+		run(secured, { ca }, "create table forbidden_tls_write (n int)"),
+		/read-only transaction.*SQLSTATE 25006/,
+	);
+	await assert.rejects(run(secured), /TLS certificate verification failed/);
+	await assert.rejects(run(secured.replace("localhost", "127.0.0.1"), { ca }), /TLS certificate verification failed/);
+	await assert.rejects(
+		run(`${tlsUrl}?sslmode=disable`),
+		/Database connection failed.*SQLSTATE 28000.*required TLS.*access approval does not verify connectivity/,
+	);
 });
 
 test("reads cannot write, even with a role that could", { skip: !bin && "no Postgres binaries" }, async () => {

@@ -942,6 +942,17 @@ Messages never grant access, even ones with the same words: typing a reply inste
 of the chat, and write access also covers reads. The file is read afresh for each call; new or removed projects apply
 to the next chat start.
 
+Access approval is permission, not a successful connectivity test. Configure TLS in each connection URL, for
+example `?sslmode=verify-full`. For a private CA or client certificate, hand-edit the connection's optional `ssl`
+field: `"ssl": { "ca": "<PEM contents>", "cert": "<PEM contents>", "key": "<PEM contents>" }`.
+Omit unused fields. `ssl: true` also enables verified TLS; `ssl: false` explicitly selects plaintext for endpoints
+that permit it. Without this field, URL and driver environment defaults apply. Object certificate options override
+URL certificate options while retaining other URL TLS settings, and explicit TLS always verifies the certificate
+and server name. Conflicting URL/object TLS enablement fails before connecting, with no plaintext fallback.
+The object does not accept `rejectUnauthorized: false`. Certificate contents stay on the daemon host and are
+preserved, but never returned, by the settings editor. A connection failure leaves access grants unchanged;
+check both TLS configuration and the server's authentication rules rather than weakening certificate validation.
+
 The agent calls `db({ action: "access" })` to list environments and request access, and
 `db({ action: "query", env, sql, params })` to run one statement. Read mode runs inside `BEGIN READ ONLY` with the
 extended protocol (one statement, no `COMMIT` escape) and is rolled back; in write mode, `statements` run in one

@@ -19,6 +19,7 @@
 		"@pilot/telemetry": "workspace:*",
 		"node-pty": "1.1.0",
 		"pg": "^8.23.1",
+		"pg-connection-string": "^2.14.1",
 		"pg-cursor": "^2.22.1",
 		"proper-lockfile": "^4.1.2",
 		"tsx": "^4.23.15",

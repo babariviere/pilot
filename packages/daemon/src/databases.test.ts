@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { type AddressInfo, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import pg from "pg";
+import type Cursor from "pg-cursor";
 import {
 	boundResults,
 	DATABASE_CONFIG_FILE,
@@ -13,8 +16,10 @@ import {
 	declineDatabaseRequest,
 	loadDatabaseConfig,
 	parseDatabaseConfig,
+	postgresClientConfig,
 	projectKey,
 	type QueryRunner,
+	runPostgres,
 } from "./databases.ts";
 
 const environments = {
@@ -292,6 +297,245 @@ test("config validation names fields, never URLs, and defaults access to ask", (
 			(error: Error) => message.test(error.message) && !error.message.includes("secret"),
 		);
 	}
+});
+
+test("per-environment TLS options reach the runner and survive secret-free settings edits", async () => {
+	const raw = structuredClone(config) as Record<string, any>;
+	const ssl = { ca: "private-ca-pem", cert: "client-cert-pem", key: "private-key-pem", rejectUnauthorized: true };
+	raw.projects[project].environments.prod.read.ssl = ssl;
+	await using db = await fixture(raw);
+	const settings = await db.service.settings(project);
+	assert.doesNotMatch(JSON.stringify(settings), /private-ca|client-cert|private-key/);
+	await db.service.updateSettings(project, {
+		revision: settings.revision,
+		environments: settings.environments.map((env) => ({
+			name: env.name,
+			...(env.read ? { read: {} } : {}),
+			...(env.write ? { write: {} } : {}),
+		})),
+	});
+	assert.deepEqual((await loadDatabaseConfig(db.dir))?.get(project)?.get("prod")?.read?.ssl, ssl);
+	await db.store.write({ grants: [{ env: "prod", mode: "read" }] });
+	await db.call("query", { env: "prod", sql: "select 1" });
+	assert.deepEqual((db.calls.at(-1) as unknown as { ssl: unknown }).ssl, ssl);
+	raw.projects[project].environments.prod.read.ssl = true;
+	await writeFile(join(db.dir, DATABASE_CONFIG_FILE), JSON.stringify(raw));
+	await db.call("query", { env: "prod", sql: "select 1" });
+	assert.equal((db.calls.at(-1) as unknown as { ssl: unknown }).ssl, true, "no pool or cache keeps stale TLS options");
+	assert.deepEqual(db.state(), { grants: [{ env: "prod", mode: "read" }] });
+});
+
+test("TLS configuration validates options without echoing certificate or key values", () => {
+	for (const ssl of [
+		null,
+		"secret-pem",
+		{ ca: 123 },
+		{ key: "" },
+		{ rejectUnauthorized: false },
+		{ typo: "secret-pem" },
+	]) {
+		assert.throws(
+			() =>
+				parseDatabaseConfig({
+					projects: { [project]: { environments: { local: { read: { url: "postgres://host/db", ssl } } } } },
+				}),
+			(error: Error) => /local.read.ssl/.test(error.message) && !error.message.includes("secret-pem"),
+		);
+	}
+});
+
+const connectionTarget = { url: "postgres://user@localhost/db", mode: "read", applicationName: "pilot-test" } as const;
+
+test("TLS options are resolved once, with object certificate options overriding URL options", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "pilot-db-tls-"));
+	try {
+		const path = join(dir, "ca.pem");
+		await writeFile(path, "url-ca-pem");
+		const url = `${connectionTarget.url}?sslmode=verify-full&sslrootcert=${encodeURIComponent(path)}`;
+		assert.deepEqual({ ...(postgresClientConfig({ ...connectionTarget, url }).ssl as object) }, { ca: "url-ca-pem" });
+		const resolved = postgresClientConfig({
+			...connectionTarget,
+			url,
+			ssl: { ca: "object-ca-pem", key: "object-key-pem" },
+		});
+		assert.equal(
+			resolved.connectionString,
+			undefined,
+			"pg must not reparse the URL and erase the merged TLS options",
+		);
+		assert.deepEqual(resolved.ssl, { ca: "object-ca-pem", key: "object-key-pem", rejectUnauthorized: true });
+		const client = new pg.Client(resolved);
+		assert.deepEqual(client.ssl, resolved.ssl);
+		const pool = new pg.Pool(resolved);
+		assert.deepEqual(new pg.Client(pool.options).ssl, resolved.ssl, "pool-created clients retain resolved TLS");
+		await pool.end();
+		assert.deepEqual(postgresClientConfig({ ...connectionTarget, url, ssl: true }).ssl, {
+			ca: "url-ca-pem",
+			rejectUnauthorized: true,
+		});
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("TLS requirements cannot silently become plaintext or disable explicit verification", () => {
+	for (const ssl of [true, { ca: "ca-pem" }] as const)
+		assert.throws(
+			() => postgresClientConfig({ ...connectionTarget, url: `${connectionTarget.url}?sslmode=disable`, ssl }),
+			/disagree about TLS/,
+		);
+	assert.throws(
+		() =>
+			postgresClientConfig({ ...connectionTarget, url: `${connectionTarget.url}?sslmode=verify-full`, ssl: false }),
+		/disagree about TLS/,
+	);
+	assert.equal(postgresClientConfig({ ...connectionTarget, ssl: false }).ssl, false);
+	assert.equal(
+		postgresClientConfig({ ...connectionTarget, url: `${connectionTarget.url}?sslmode=disable`, ssl: false }).ssl,
+		false,
+	);
+	const resolved = postgresClientConfig({
+		...connectionTarget,
+		url: `${connectionTarget.url}?sslmode=require&uselibpqcompat=true`,
+		ssl: true,
+	});
+	assert.deepEqual(resolved.ssl, { rejectUnauthorized: true });
+	assert.deepEqual(postgresClientConfig({ ...connectionTarget, ssl: {} }).ssl, { rejectUnauthorized: true });
+	assert.equal(
+		(
+			postgresClientConfig({ ...connectionTarget, url: `${connectionTarget.url}?ssl=no-verify` }).ssl as {
+				rejectUnauthorized: boolean;
+			}
+		).rejectUnauthorized,
+		false,
+	);
+	assert.deepEqual(
+		postgresClientConfig({ ...connectionTarget, url: `${connectionTarget.url}?ssl=no-verify`, ssl: true }).ssl,
+		{ rejectUnauthorized: true },
+	);
+});
+
+test("URL parsing and certificate-file errors are sanitized before creating a client", () => {
+	assert.throws(
+		() =>
+			postgresClientConfig({
+				...connectionTarget,
+				url: `${connectionTarget.url}?sslrootcert=/missing/private-ca-pem`,
+			}),
+		(error: Error) =>
+			/connection configuration failed/.test(error.message) && !/private-ca-pem|postgres:/.test(error.message),
+	);
+});
+
+test("driver TLS environment defaults survive when no per-connection TLS option is present", () => {
+	const previous = process.env.PGSSLMODE;
+	try {
+		process.env.PGSSLMODE = "verify-full";
+		assert.equal(new pg.Client(postgresClientConfig(connectionTarget)).ssl, true);
+		assert.equal(new pg.Client(postgresClientConfig({ ...connectionTarget, ssl: false })).ssl, false);
+		assert.equal(
+			new pg.Client(postgresClientConfig({ ...connectionTarget, url: `${connectionTarget.url}?sslmode=disable` }))
+				.ssl,
+			false,
+		);
+	} finally {
+		if (previous === undefined) delete process.env.PGSSLMODE;
+		else process.env.PGSSLMODE = previous;
+	}
+});
+
+test("a server refusing TLS receives no plaintext startup or retry", async () => {
+	let connections = 0;
+	const received: Buffer[] = [];
+	const server = createServer((socket) => {
+		connections++;
+		socket.on("error", () => {});
+		socket.on("data", (bytes) => {
+			received.push(bytes);
+			socket.end("N");
+		});
+	});
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	try {
+		const port = (server.address() as AddressInfo).port;
+		await assert.rejects(
+			runPostgres(
+				{ ...connectionTarget, url: `postgres://fixture@127.0.0.1:${port}/db?sslmode=verify-full` },
+				[
+					{ sql: "select 1", params: [] },
+					{ sql: "select * from information_schema.tables", params: [] },
+				],
+				1,
+			),
+			/Database connection failed.*access approval does not verify connectivity/,
+		);
+	} finally {
+		await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+	}
+	assert.equal(connections, 1);
+	assert.equal(
+		Buffer.concat(received).toString("hex"),
+		"0000000804d2162f",
+		"only PostgreSQL's SSLRequest, no startup packet or queries",
+	);
+});
+
+test("access approval is not a connectivity test and failed queries leave grants intact", async () => {
+	await using db = await fixture();
+	let attempts = 0;
+	const service = new DatabaseService(db.dir, async () => {
+		attempts++;
+		throw new Error("Database connection failed. Pilot access approval does not verify connectivity.");
+	});
+	const call = (action: string, args: Record<string, never> | Record<string, unknown>) =>
+		service.call("session-1", project, action, args as never, db.store);
+	const pending = await call("access", { env: "prod" });
+	assert.equal((pending as { status: string }).status, "pending");
+	await db.store.write(decideDatabaseRequest(db.state(), db.state()!.request!.id, true));
+	assert.deepEqual(await call("access", { env: "prod" }), { status: "granted", env: "prod", mode: "read" });
+	assert.equal(attempts, 0);
+	await assert.rejects(async () => {
+		await call("query", { env: "prod", sql: "select 1" });
+		await call("query", { env: "prod", sql: "select * from information_schema.tables" });
+	}, /connection failed.*does not verify connectivity/);
+	assert.equal(attempts, 1);
+	assert.deepEqual(db.state(), { grants: [{ env: "prod", mode: "read" }] });
+});
+
+test("a failed cursor stops sequential statements and closes the connection without committing", async (t) => {
+	const controls: string[] = [];
+	const cursors: Cursor[] = [];
+	let closed = 0;
+	t.mock.method(pg.Client.prototype, "connect", async () => {});
+	const end = t.mock.method(pg.Client.prototype, "end", async () => {});
+	t.mock.method(pg.Client.prototype, "query", ((query: string | Cursor) => {
+		if (typeof query === "string") {
+			controls.push(query);
+			return Promise.resolve();
+		}
+		cursors.push(query);
+		return {
+			read: (_rows: number, callback: (error: Error) => void) => callback(new Error("first query failed")),
+			close: async () => {
+				closed++;
+			},
+		};
+	}) as typeof pg.Client.prototype.query);
+	await assert.rejects(
+		runPostgres(
+			{ ...connectionTarget, mode: "write" },
+			[
+				{ sql: "select 1", params: [] },
+				{ sql: "select * from information_schema.tables", params: [] },
+			],
+			1,
+		),
+		/Statement 1: first query failed/,
+	);
+	assert.deepEqual(controls, ["BEGIN"]);
+	assert.equal(cursors.length, 1, "no later statement is submitted");
+	assert.equal(closed, 1);
+	assert.equal(end.mock.callCount(), 1);
 });
 
 test("only configured projects get the tool; the config must be owner-only and is optional", async () => {
