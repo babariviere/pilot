@@ -1118,8 +1118,9 @@ connectivity, recovery and parking transitions without waking parked workers.
 [Agent diagnostics](docs/agent-diagnostics.md) combine those records with request timings and daemon health in an
 on-demand, runtime-restricted specialist and host-qualified read-only API that never wakes a parked worker. Use
 **Diagnose this chat** from a chat's More menu, or **Ask about Pilot** from Help, to open
-an explicit setup sheet and choose the specialist's model and thinking level. Ask about Pilot accepts an optional
-question or bug report and a host-qualified chat selector, defaulting to **No chat**. Without a selected chat it diagnoses Pilot on the
+an explicit setup sheet and choose the specialist's model and thinking level. Both accept an optional
+investigation reason or bug report (up to 8 KiB UTF-8). Ask about Pilot also offers a host-qualified chat selector,
+defaulting to **No chat**. Without a selected chat it diagnoses Pilot on the
 selected verified host through an explicit app scope, with no hidden Control row or chat target. The report becomes
 only the specialist chat's bounded
 opening user message, never telemetry, diagnostic evidence or target authority. The created chat is visibly labeled

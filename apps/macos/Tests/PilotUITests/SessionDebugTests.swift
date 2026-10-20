@@ -29,7 +29,8 @@ private func sourceSession(control: Bool? = nil) -> SessionSummary {
     let resolved = try DiagnosticSetup.resolve(DiagnosticSetup.link(source.id), setup: setup,
                                                localHost: app.localHost, local: app.client.sessions, hosted: [])
     let prepared = try DiagnosticSetup.spawnRequest(target: resolved, model: "test/diagnostic",
-                                                    thinking: "high", askingAboutPilot: false)
+                                                    thinking: "high", askingAboutPilot: false,
+                                                    question: "Why does this chat freeze after reconnect?")
     let created = try await app.spawnDiagnostics(prepared, target: resolved, tracksFeature: false)
     try app.selectSession(created)
 
@@ -40,6 +41,8 @@ private func sourceSession(control: Bool? = nil) -> SessionSummary {
     #expect(request.projectId == nil)
     #expect(request.cwd == nil)
     #expect(request.message.contains(source.title) == false)
+    #expect(request.message == "Why does this chat freeze after reconnect?")
+    #expect(app.client.fixtureSendRequests.isEmpty, "the opening reason is never sent to the original chat")
     #expect(app.client.session(source.id) == source, "diagnosis does not mutate or replace the target")
     #expect(app.selectedSession?.isDiagnosticsSpecialist == true)
 }

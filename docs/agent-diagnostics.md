@@ -64,9 +64,10 @@ subagent tools. A tool-dispatch allowlist is reapplied after reload and the daem
 IPC from a session whose persisted role is not `diagnostics`. These are runtime boundaries, not prompt conventions.
 
 Before creation, the app shows an explicit setup sheet with the resolved target host, target link and the selected
-model and thinking level. **Diagnose this chat** pins that chat. **Ask about Pilot** also accepts an optional multiline
-question or bug report of at most 8 KiB UTF-8. The host-qualified chat selector defaults to **No chat**: an explicit
-app scope on the currently selected verified host, without resolving, creating or displaying a Control target.
+model and thinking level. **Diagnose this chat** pins that chat and accepts an optional **What should we investigate?**
+reason. Both setup flows accept multiline questions or bug reports of at most 8 KiB UTF-8; blank input is valid,
+and start errors keep the draft. **Ask about Pilot** also offers a host-qualified chat selector defaulting to **No chat**:
+an explicit app scope on the currently selected verified host, without resolving, creating or displaying a Control target.
 Selecting a known local or devbox chat sets the initial focus; no copied link is required.
 Selection retains the exact host, daemon, lineage and chat identity even when titles or UUIDs repeat.
 Missing, replaced, disconnected and unavailable targets fail closed; there is no silent Local fallback.
@@ -90,8 +91,8 @@ identity before persisting it, and the kernel receives the same scope.
 The specialist prompt and visible header identify that initial focus. Trusted runtime role, not focus metadata or
 tool arguments, authorizes app-wide reads. The default `diagnostics` read remains content-free app health or focused
 chat evidence. `diagnostic_context` discovers other chats and already-linked verified hosts on demand; no histories
-are preloaded. Reads never open an agent, start, subscribe to or mutate subjects. An Ask about Pilot question is new
-user-authored specialist-chat content, separate from the focus reference. Its text cannot grant privileges and is never
+are preloaded. Reads never open an agent, start, subscribe to or mutate subjects. A submitted investigation reason or
+question is new user-authored specialist-chat content, separate from the focus reference. Its text cannot grant privileges and is never
 included in diagnostic evidence or telemetry. Operational tool results
 contain a qualified host identity, collection time, source
 freshness and availability, queue/resource summaries, stable evidence references and explicit truncation/drop
