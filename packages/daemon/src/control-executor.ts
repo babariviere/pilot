@@ -9,7 +9,7 @@ import type {
 	SessionSummary,
 	WatchTarget,
 } from "@pilot/protocol";
-import { CONTROL_LEVELS } from "./control-authorizations.ts";
+import { CONTROL_LEVELS, controlAuthorizationRank } from "./control-authorizations.ts";
 import {
 	ControlHostError,
 	controlId,
@@ -67,7 +67,7 @@ function message(value: unknown): asserts value is string {
 function level(value: unknown): number {
 	const n = CONTROL_LEVELS.indexOf(value as ControlAuthorization["level"]);
 	if (n < 0) throw new ControlHostError("invalid_request", "Invalid authorization level", 400);
-	return n;
+	return controlAuthorizationRank(value as ControlAuthorization["level"]);
 }
 function validateAuthority(a: ControlOperationAuthority, op: DurableOperation): void {
 	controlId(a.authorizationId);

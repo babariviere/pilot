@@ -16,8 +16,8 @@ import type {
 import { type ControlActions, ControlPreAdmissionError } from "./control-actions.ts";
 import {
 	authorizationLevel,
-	CONTROL_LEVELS,
 	type ControlAuthorizationUse,
+	controlAuthorizationRank,
 	createAuthorization,
 	legacyWatchAuthorization,
 } from "./control-authorizations.ts";
@@ -73,7 +73,6 @@ export interface ControlPilotOptions extends ControlDashboardSources {
 		send: SessionManager["sendReported"];
 		stop?: SessionManager["stop"];
 		controlInputs?: SessionManager["controlInputs"];
-		upgradePermission?: SessionManager["upgradeControlPermission"];
 		organizeAllowed?: () => boolean;
 		createMission?: (request: CreateMissionRequest) => Promise<Mission>;
 		startCoordinator?: (missionId: string, request: StartMissionCoordinatorRequest) => Promise<SessionSummary>;
@@ -132,28 +131,10 @@ export class ControlPilot {
 					memory.authorizationCreate(record),
 				);
 		}
-		if (action === "upgrade_permission") {
-			if (!this.options.mutations?.upgradePermission) throw new Error("Permission upgrades unavailable");
-			// This action is local and exact-target only, with no mission/coordinator routing.
-			if (Object.keys(args).some((key) => !["sessionId", "authorizationId", "level"].includes(key)))
-				throw new Error("Permission upgrades are same-host only and accept no routing or enclosing scope");
-			if (args.level !== "publish")
-				throw new Error("Only implement to publish upgrades are supported (never merge)");
-			const id = string(args, "sessionId", true)!;
-			if (this.options.isControl(id)) throw new Error("Cannot upgrade the Control chat");
-			if (!this.options.sessions.get(id)) throw new Error("Unknown local chat");
-			const use = await this.authorizationOrNeed(caller, args, action, [[{ kind: "chat", id }]], operationId);
-			return this.options.mutations.audit().perform(
-				caller,
-				action,
-				args,
-				operationId,
-				() => this.options.mutations!.upgradePermission!(id, use.authorizationId, operationId),
-				{ ...use, publishUpgradeChatId: id },
-				(error) => this.authorizationNeeded(caller, action, args, operationId, error),
-				() => this.options.mutations!.upgradePermission!(id, use.authorizationId, operationId),
+		if (action === "upgrade_permission")
+			throw new Error(
+				"Build already supports task-branch pushes and PR creation; no publishing approval is required. Read-only roles cannot be upgraded.",
 			);
-		}
 		if (action === "watch" || action === "unwatch" || action === "watches") {
 			const watches = this.options.watches;
 			if (!watches) throw new Error("Watches unavailable");
@@ -582,8 +563,8 @@ export class ControlPilot {
 		const permissionUnchanged =
 			(action === "send" || action === "redirect") &&
 			ceiling &&
-			CONTROL_LEVELS.indexOf(authorizationLevel(args.level ?? "investigate")) >
-				CONTROL_LEVELS.indexOf(ceiling.level);
+			controlAuthorizationRank(authorizationLevel(args.level ?? "investigate")) >
+				controlAuthorizationRank(ceiling.level);
 		let result: unknown;
 		if (action === "stop" || action === "redirect") {
 			if (!mutations.stop) throw new Error("Chat controls unavailable");
@@ -613,7 +594,7 @@ export class ControlPilot {
 						permission: "permission unchanged",
 						controlPermission: ceiling,
 						permissionNote:
-							"Send does not raise the chat ceiling. Use upgrade_permission to request app approval with an exact-chat publish grant; only Allow approves it for the next fresh run.",
+							"Send does not change read-only roles or permit merging. Build already supports task-branch pushes and PR creation without publishing approval.",
 					}
 				: {}),
 			sessionId: target,

@@ -86,7 +86,6 @@ import { prepareAskSnapshot } from "./ask-snapshots.ts";
 import { chatTitleContext, TITLE_OPENING_LIMIT } from "./chat-title.ts";
 import { ColdViewReader } from "./cold-view-reader.ts";
 import { ControlActions, ControlPreAdmissionError } from "./control-actions.ts";
-import { checkPublishUpgradeAuthorization } from "./control-authorizations.ts";
 import { ControlChat } from "./control-chat.ts";
 import type { ControlMemory } from "./control-memory.ts";
 import type { ControlPilot } from "./control-pilot.ts";
@@ -115,11 +114,7 @@ import { McpChatAttention, type McpStatusSource } from "./mcp-attention.ts";
 import { ModelCatalog } from "./models.ts";
 import { NativeDiagnosticsStore } from "./native-diagnostics.ts";
 import { stuckPullRequestReason } from "./needs-you-reason.ts";
-import {
-	decidePermissionRequest,
-	type PermissionRequestState,
-	publicPermissionRequest,
-} from "./permission-requests.ts";
+import type { PermissionRequestState } from "./permission-requests.ts";
 import { PullRequestAutoRebase } from "./pr-auto-rebase.ts";
 import type { ProjectMemoryService } from "./project-memory.ts";
 import { type ProjectStore, requireDirectory } from "./projects.ts";
@@ -1630,244 +1625,13 @@ export class SessionManager {
 		const p = this.metas.get(id)?.controlPermission;
 		return p && { ...p };
 	}
-	private readonly permissionChanges = new Map<string, Promise<unknown>>();
-	private permissionChange<T>(id: string, work: () => Promise<T>): Promise<T> {
-		if (this.closing) return Promise.reject(new ServiceUnavailable("pilotd is shutting down"));
-		const task = (this.permissionChanges.get(id) ?? Promise.resolve()).catch(() => undefined).then(work);
-		this.permissionChanges.set(id, task);
-		void task
-			.finally(() => {
-				if (this.permissionChanges.get(id) === task) this.permissionChanges.delete(id);
-			})
-			.catch(() => {});
-		return task;
+	/** Retired native decision endpoint. Historical requests are retained, never applied or replayed. */
+	async decideControlPermission(_id: string, _requestId: string, _allow: boolean): Promise<void> {
+		throw new Conflict("Publishing approval is no longer required for Build; this request is obsolete.");
 	}
-	/** Control requests approval; neither this action nor a grant alone raises the ceiling. */
-	upgradeControlPermission(id: string, authorizationId: string, operationId: string) {
-		return this.permissionChange(id, async () => {
-			this.assertControlActive();
-			const meta = this.require(id);
-			await this.saving.get(id);
-			this.assertNotContinued(meta);
-			if (meta.control || id === SessionManager.CONTROL_ID) throw new Error("Cannot upgrade the Control chat");
-			if (meta.ask || meta.mode === "ask" || meta.controlPermission?.level === "investigate")
-				throw new Error("Cannot upgrade an investigate/Ask chat to publish");
-			const record = await this.controlAuthorizations().authorizationGet(authorizationId);
-			if (!record) throw new Error("Unknown authorization");
-			checkPublishUpgradeAuthorization(record, id);
-			const requestId = createHash("sha256").update(`permission:${id}:${operationId}`).digest("hex");
-			let request = meta.permissionRequest;
-			if (request?.status === "pending" && request.authorizationId === authorizationId)
-				return {
-					sessionId: id,
-					requestId: request.id,
-					status: "pending_app_approval" as const,
-					permission: "permission unchanged" as const,
-				};
-			if (request?.id !== requestId) {
-				if (this.pendingPermissionRequests.size + this.permissionDecisionNotices.size >= 128)
-					throw new Error("Too many permission requests awaiting approval or reporting");
-				if (meta.pendingControlPermission || (request && request.status !== "pending" && !request.notified))
-					throw new Error("The previous permission decision is still being applied or reported");
-				if (meta.controlPermission?.level !== "implement")
-					throw new Error("Only implement to publish upgrades are supported");
-				if (request?.status === "pending") throw new Error("A permission request is already pending for this chat");
-				request = {
-					id: requestId,
-					chatId: id,
-					chatTitle: meta.title,
-					level: "publish",
-					scope: record.scope,
-					requestedBy: SessionManager.CONTROL_ID,
-					authorizationId,
-					status: "pending",
-					createdAt: Date.now(),
-					expiresAt: Math.min(record.expiresAt ?? Infinity, Date.now() + 24 * 60 * 60_000),
-				};
-				await this.save(meta, undefined, undefined, true, { permission: meta.controlPermission!, request });
-				this.pendingPermissionRequests.add(id);
-				this.schedulePermissionExpiry();
-				this.emit(meta);
-			}
-			return {
-				sessionId: id,
-				requestId: request.id,
-				status: "pending_app_approval" as const,
-				permission: "permission unchanged" as const,
-			};
-		});
-	}
-
-	/** Native endpoint only. Text, sends, tool calls and stale/replayed IDs cannot decide. */
-	async decideControlPermission(id: string, requestId: string, allow: boolean): Promise<void> {
-		const decision = await this.permissionChange(id, async () => {
-			this.assertControlActive();
-			const meta = this.require(id);
-			await this.saving.get(id);
-			let request: PermissionRequestState;
-			try {
-				request = decidePermissionRequest(meta.permissionRequest, id, requestId, allow);
-			} catch (error) {
-				throw new Conflict(error instanceof Error ? error.message : String(error));
-			}
-			if (request.status === "allowed") {
-				this.assertNotContinued(meta);
-				if (
-					meta.control ||
-					meta.ask ||
-					meta.mode === "ask" ||
-					meta.archivedAt !== undefined ||
-					meta.controlPermission?.level !== "implement"
-				)
-					throw new Conflict("Chat is no longer eligible for a publish upgrade");
-				const record = await this.controlAuthorizations().authorizationGet(request.authorizationId);
-				if (!record) throw new Conflict("Unknown authorization");
-				checkPublishUpgradeAuthorization(record, id);
-			}
-			await this.save(meta, undefined, undefined, true, {
-				permission: meta.controlPermission!,
-				request,
-				...(request.status === "allowed"
-					? {
-							pending: {
-								authorizationId: request.authorizationId,
-								level: "publish",
-								approvalRequestId: request.id,
-							} as const,
-						}
-					: {}),
-			});
-			this.pendingPermissionRequests.delete(id);
-			this.permissionDecisionNotices.add(id);
-			await this.auditPermissionDecision(request);
-			this.emit(meta);
-			this.schedulePermissionExpiry();
-			return request.status;
-		});
-		void this.flushPermissionDecisions().catch((error) => console.warn("pilotd: permission notice deferred", error));
-		if (decision === "expired") throw new Conflict("This permission request expired; permission unchanged");
-	}
-	private async auditPermissionDecision(request: PermissionRequestState): Promise<void> {
-		const memory = this.controlAuthorizations();
-		const operationId = `permission-decision:${request.id}`;
-		if (await memory.auditOperation(operationId)) return;
-		await memory.auditAppend({
-			operationId,
-			action: "permission_decision",
-			phase: "succeeded",
-			at: request.decidedAt!,
-			caller: request.status === "expired" ? "daemon" : "app",
-			args: { sessionId: request.chatId, requestId: request.id, decision: request.status },
-			authorizationId: request.authorizationId,
-			result: {
-				level: request.status === "allowed" ? "publish" : "implement",
-				appliesAt: request.status === "allowed" ? "next_run_boundary" : "unchanged",
-			},
-		});
-	}
-	private readonly pendingPermissionRequests = new Set<string>();
-	private readonly permissionDecisionNotices = new Set<string>();
-	private permissionExpiryTimer?: ReturnType<typeof setTimeout>;
-	private permissionNoticeDrain?: Promise<void>;
-
-	private schedulePermissionExpiry(retryAt = 0): void {
-		clearTimeout(this.permissionExpiryTimer);
-		if (this.closing) return;
-		let due = Infinity;
-		for (const id of this.pendingPermissionRequests)
-			due = Math.min(due, this.metas.get(id)?.permissionRequest?.expiresAt ?? Infinity);
-		if (!Number.isFinite(due)) return;
-		this.permissionExpiryTimer = setTimeout(
-			() => {
-				const expired = [...this.pendingPermissionRequests].filter(
-					(id) => (this.metas.get(id)?.permissionRequest?.expiresAt ?? Infinity) <= Date.now(),
-				);
-				void (async () => {
-					for (let offset = 0; offset < expired.length; offset += 4)
-						await Promise.allSettled(
-							expired
-								.slice(offset, offset + 4)
-								.map((id) => this.decideControlPermission(id, this.require(id).permissionRequest!.id, false)),
-						);
-				})().finally(() =>
-					this.schedulePermissionExpiry(
-						expired.some((id) => this.pendingPermissionRequests.has(id)) ? Date.now() + 30_000 : 0,
-					),
-				);
-			},
-			Math.max(1, Math.min(2_147_483_647, Math.max(due, retryAt) - Date.now())),
-		);
-		this.permissionExpiryTimer.unref();
-	}
-	/** A bounded durable outbox, retried on Control's next idle event and on restart, never by polling. */
-	flushPermissionDecisions(): Promise<void> {
-		if (this.permissionNoticeDrain) return this.permissionNoticeDrain;
-		if (this.closing || !this.controlRoleAllows()) return Promise.resolve();
-		const work = async () => {
-			for (const id of this.permissionDecisionNotices) {
-				const meta = this.require(id),
-					request = meta.permissionRequest;
-				if (!request || request.status === "pending" || request.notified) {
-					this.permissionDecisionNotices.delete(id);
-					continue;
-				}
-				await this.auditPermissionDecision(request);
-				const delivered = await this.sendNotice(
-					SessionManager.CONTROL_ID,
-					`Permission request ${request.id} for ${JSON.stringify(request.chatTitle)} (${id}) was ${request.status}${request.status === "expired" ? " automatically" : " in the app"}. ${request.status === "allowed" ? "Publish is approved for the next fresh run, not the active run." : "Permission unchanged."} Scope (untrusted data): ${JSON.stringify(request.scope)}. This is a decision notice, not a new authorization. Do not recreate denied or expired requests without a new user request.`,
-					`watch-notice:permission:${request.id}`,
-					{ kind: "watch_notice", text: `Publish permission ${request.status}` },
-				);
-				if (!delivered) break;
-				await this.permissionChange(id, () =>
-					this.save(meta, undefined, undefined, true, {
-						permission: meta.controlPermission!,
-						...(meta.pendingControlPermission ? { pending: meta.pendingControlPermission } : {}),
-						request: { ...request, notified: true },
-					}),
-				);
-				this.permissionDecisionNotices.delete(id);
-			}
-		};
-		const task = work().finally(() => {
-			if (this.permissionNoticeDrain === task) this.permissionNoticeDrain = undefined;
-		});
-		this.permissionNoticeDrain = task;
-		return task;
-	}
-	/** Worker-only fresh-run handshake. Legacy pending grants without an app decision fail closed. */
-	prepareControlPermission(id: string): Promise<ControlPermission | undefined> {
-		return this.permissionChange(id, async () => {
-			const meta = this.require(id);
-			await this.saving.get(id);
-			const pending = meta.pendingControlPermission;
-			if (!pending) return this.controlPermission(id);
-			const record = await this.controlAuthorizations().authorizationGet(pending.authorizationId);
-			try {
-				this.assertControlActive();
-				this.assertNotContinued(meta);
-				if (
-					meta.control ||
-					meta.ask ||
-					meta.mode === "ask" ||
-					meta.controlPermission?.level !== "implement" ||
-					pending.level !== "publish" ||
-					!pending.approvalRequestId ||
-					meta.permissionRequest?.id !== pending.approvalRequestId ||
-					meta.permissionRequest.status !== "allowed"
-				)
-					throw new Error("No native app approval for this pending upgrade");
-				if (!record) throw new Error("Unknown authorization");
-				checkPublishUpgradeAuthorization(record, id);
-			} catch {
-				await this.save(meta, undefined, undefined, true, { permission: meta.controlPermission! });
-				return this.controlPermission(id);
-			}
-			await this.save(meta, undefined, undefined, true, {
-				permission: { authorizationId: pending.authorizationId, level: "publish" },
-			});
-			return this.controlPermission(id);
-		});
+	/** Existing implement metadata already carries Build delivery. Never consume legacy pending upgrades. */
+	async prepareControlPermission(id: string): Promise<ControlPermission | undefined> {
+		return this.controlPermission(id);
 	}
 	async remoteControlReconciled(op: import("@pilot/protocol").DurableOperation): Promise<boolean> {
 		const meta = this.metas.get(op.targetId);
@@ -2255,13 +2019,6 @@ export class SessionManager {
 		// Read limits before any recovery kernel can dispatch a request.
 		await this.subscriptionUsage?.start();
 		this.scheduleSubscriptionReset();
-		for (const meta of this.metas.values()) {
-			if (meta.permissionRequest?.status === "pending") this.pendingPermissionRequests.add(meta.id);
-			else if (meta.permissionRequest && !meta.permissionRequest.notified)
-				this.permissionDecisionNotices.add(meta.id);
-		}
-		this.schedulePermissionExpiry();
-		void this.flushPermissionDecisions().catch((error) => console.warn("pilotd: permission notice deferred", error));
 		// Seed silent, durable baselines before the first GitHub refresh starts.
 		for (const meta of this.metas.values()) await this.observePullRequests(meta);
 		// Durable work interrupted by a restart continues as soon as its kernel reopens.
@@ -7332,7 +7089,6 @@ export class SessionManager {
 		this.diagnosticContextReads.clear();
 		this.diagnosticReadBroker.close();
 		this.closing = true;
-		clearTimeout(this.permissionExpiryTimer);
 		const drainRepairProjects = this.repairProject.close();
 		this.workerStarts.close();
 		this.recoveryStops.close();
@@ -7356,8 +7112,6 @@ export class SessionManager {
 		await Promise.allSettled(this.roleTransitions.values());
 		await Promise.all([...this.workers.values()].map((worker) => worker.close()));
 		await this.controlActions?.settled();
-		await this.permissionNoticeDrain?.catch(() => {});
-		await Promise.allSettled(this.permissionChanges.values());
 		await this.controlChat?.stop();
 		await Promise.allSettled([...this.parking.values()]);
 		await this.coldReader.close();
@@ -8713,9 +8467,6 @@ export class SessionManager {
 					meta.workspace?.baseBranch ??
 					(meta.workspace?.base.startsWith("origin/") ? meta.workspace.base.slice("origin/".length) : undefined));
 		return {
-			...(meta.permissionRequest?.status === "pending"
-				? { permissionUpgradeRequest: publicPermissionRequest(meta.permissionRequest) }
-				: {}),
 			id: meta.id,
 			...(meta.control ? { control: true } : {}),
 			...(meta.controlStart ? { controlStart: { ...meta.controlStart } } : {}),
@@ -8788,12 +8539,6 @@ export class SessionManager {
 				: {}),
 			...(!working && !heldAtQuota && !offlinePaused && meta.outcomeReason !== undefined
 				? { outcomeReason: safeFailureText(meta.outcomeReason) }
-				: {}),
-			...(meta.permissionRequest?.status === "pending" && !working
-				? {
-						outcome: "question" as const,
-						outcomeReason: "Allow publish permission? App approval required.",
-					}
 				: {}),
 			...(meta.control && !working && this.watches?.dashboard().authorizationNeededTotal
 				? {
@@ -9570,12 +9315,6 @@ export class SessionManager {
 				if (!this.closing && current) this.emit(current);
 			});
 		for (const listener of this.changeListeners) listener(summary);
-		if (meta.id === SessionManager.CONTROL_ID && this.permissionDecisionNotices.size && !this.closing)
-			queueMicrotask(() => {
-				void this.flushPermissionDecisions().catch((error) =>
-					console.warn("pilotd: permission notice deferred", error),
-				);
-			});
 		if (this.coordinatorArchiveMissions.has(meta.id)) void this.archiveMissionCoordinator(meta);
 	}
 

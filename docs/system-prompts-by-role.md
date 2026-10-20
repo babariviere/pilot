@@ -79,6 +79,11 @@ You are running inside Pilot as a background agent. The user reviews your work i
 - Pilot does not post on GitHub and blocks comments, reviews, replies, merges and closes. Put results, questions and anything you decided not to do in your final answer instead.
 ```
 
+Control-started Build also states that implement includes verification, task-branch pushes and
+opening/updating PRs, with no separate publishing approval, including resumed chats. All Build
+variants require real repository credentials/access, accurate remote failure reporting and explicit
+authorization for force-push/destructive actions. Ask and Diagnostics do not inherit Build delivery.
+
 Without a registered project memory capability, omit its two memory lines. Without artifacts,
 omit the diagram/preview lines. Without a workspace or explicit delivery policy, no workspace or
 PR-delivery lines are added. The real source determines all variants, not this example.

@@ -37,22 +37,21 @@ export function controlPermissionBlock(
 			return "Pilot policy: investigate permission is Ask/read-only. Start a separately authorized Build chat for implementation.";
 		return undefined;
 	}
-	if (permission.level !== "implement") return undefined;
+	// Removing the publication tier does not authorize destructive GitHub administration.
 	if (
-		PUSH.test(executable) ||
-		/\bgh\b[^\n;&|]*\b(?:create|edit|ready|reopen|upload|delete|fork|sync)\b/.test(executable) ||
-		(/\bgh\s+api\b/.test(executable) && (API_WRITE.test(` ${executable}`) || /\bmutation\b/.test(executable))) ||
-		/\bmcp__github\w*__\w*(?:push|create|update|delete|fork)\w*/i.test(name)
+		permission.level === "implement" &&
+		(/\bgh\s+(?:repo|release|cache|secret|variable|gist|label|ruleset|ssh-key|gpg-key)\s+delete\b/.test(executable) ||
+			(/\bgh\s+api\b/.test(executable) && /\s(?:-X|--method)[\s=]*DELETE\b/i.test(` ${executable}`)) ||
+			(/\bgh\s+api\b/.test(executable) &&
+				/\bmutation\b/.test(executable) &&
+				/\bdelete[A-Z]\w*\b/.test(executable)) ||
+			/\bmcp__github\w*__\w*delete\w*/i.test(name))
 	)
-		return "Pilot policy: implement permission allows local changes and verification only, not push or pull request publication. Control may request an exact-chat publish upgrade, but only the app's Allow decision approves it, effective at the next fresh run boundary.";
+		return "Pilot policy: destructive GitHub actions are outside Build PR delivery. Do not delete repositories, branches or other remote resources.";
 	return undefined;
 }
 
 const INVESTIGATE_TOOLS = new Set(["codemode", "read", "find", "grep", "ls", "web", "artifact", "ask_user", "mission"]);
-// Global flags with and without values have distinct alternatives to avoid ambiguous repeated matches.
-const PUSH =
-	/\b(?:git(?:\s+(?:(?:-C|-c|--git-dir|--work-tree|--namespace)\s+[^\s;&|]+|--(?:git-dir|work-tree|namespace)=[^\s;&|]+|--(?:no-pager|paginate|bare|no-optional-locks)))*|jj(?:\s+(?:(?:-R|--repository|--config|--config-file|--at-operation)\s+[^\s;&|]+|--(?:repository|config|config-file|at-operation)=[^\s;&|]+|--(?:no-pager|ignore-working-copy|no-snapshot)))*)(?:\s+git)?\s+push\b/;
-
 /** Runs for actual nested tool calls too, including dynamically constructed codemode arguments. */
 export function nativeToolPolicy(permission?: ControlPermission): ExtensionFactory {
 	return (pi) => {

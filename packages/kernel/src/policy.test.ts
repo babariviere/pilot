@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { ToolHooks } from "@earendil-works/pi-durable";
+import { CONTROL_SYSTEM_PROMPT } from "./control-context.ts";
+import { PILOT_ACTIONS } from "./pilot-tool.ts";
 import {
 	coordinatorMutation,
 	githubPosting,
@@ -23,7 +25,19 @@ const mission: MissionContext = {
 	decisions: ["IDs are opaque strings"],
 };
 
-test("authorization ceilings gate shell, jobs and nested publication at every level", async () => {
+test("Control instructions include Build PR delivery and never request another publishing approval", () => {
+	assert.match(CONTROL_SYSTEM_PROMPT, /task-branch push and PR creation need no separate publishing approval/);
+	assert.match(CONTROL_SYSTEM_PROMPT, /Ordinary, delegated and resumed Build chats/);
+	assert.match(CONTROL_SYSTEM_PROMPT, /Ask\/investigate, Diagnostics and Control remain read-only/);
+	assert.match(CONTROL_SYSTEM_PROMPT, /Merges require separate user confirmation/);
+	assert.doesNotMatch(
+		CONTROL_SYSTEM_PROMPT,
+		/Implement is local only|publish is separate|Only the app's Allow|upgrade_permission/,
+	);
+	assert.ok(!(PILOT_ACTIONS as readonly string[]).includes("upgrade_permission"));
+});
+
+test("Build delivery is allowed through shell, jobs and nested tools while read-only and merge gates remain", async () => {
 	for (const level of ["investigate", "implement", "publish", "merge"] as const) {
 		const extension = withPilotPolicy({ name: "test" }, { controlPermission: { authorizationId: "grant", level } });
 		const before = (extension.hooks![0]!.handlers as Pick<ToolHooks, "beforeTool">).beforeTool;
@@ -40,6 +54,8 @@ test("authorization ceilings gate shell, jobs and nested publication at every le
 			"jj git push --bookmark fix/example",
 			"jj --repository /repo git push",
 			"gh pr create --fill",
+			"gh pr create --title 'Delete unused code' --body 'Remove dead branches'",
+			"gh pr edit 12 --body 'delete the unused helper'",
 			"gh pr edit 12 --body update",
 			"gh api repos/o/r/pulls -X POST",
 			"gh api graphql -f query='mutation { createPullRequest }'",
@@ -50,11 +66,7 @@ test("authorization ceilings gate shell, jobs and nested publication at every le
 				["codemode", { code: `await tools.bash({ command: ${JSON.stringify(command)} });` }],
 				["codemode", { code: `await tools.jobs({ action: "start", command: ${JSON.stringify(command)} });` }],
 			] as const) {
-				assert.equal(
-					!!(await check(name, args))?.block,
-					level === "investigate" || level === "implement",
-					`${level}: ${name}: ${command}`,
-				);
+				assert.equal(!!(await check(name, args))?.block, level === "investigate", `${level}: ${name}: ${command}`);
 			}
 		}
 		for (const command of [
@@ -79,7 +91,7 @@ test("authorization ceilings gate shell, jobs and nested publication at every le
 		);
 		assert.equal(
 			!!(await check("mcp__github__create_pull_request", { title: "Change" }))?.block,
-			level === "investigate" || level === "implement",
+			level === "investigate",
 		);
 		assert.equal(await check("read", { path: "gh pr create" }), undefined);
 		assert.equal(await check("artifact", { source: "git push" }), undefined);
@@ -93,13 +105,13 @@ test("authorization ceilings gate shell, jobs and nested publication at every le
 	}
 });
 
-test("local-only prompts override project and task delivery instructions", async () => {
-	for (const level of ["investigate", "implement"] as const) {
+test("read-only prompts suppress delivery while ordinary and inherited Build include it", async () => {
+	for (const level of [undefined, "investigate", "implement", "publish"] as const) {
 		for (const requirePullRequest of [true, false]) {
 			const extension = withPilotPolicy(
 				{ name: "test" },
 				{
-					controlPermission: { authorizationId: "grant", level },
+					...(level ? { controlPermission: { authorizationId: "grant", level } } : {}),
 					requirePullRequest,
 					workspace: { source: "/source", base: "main", jj: true },
 				},
@@ -107,8 +119,19 @@ test("local-only prompts override project and task delivery instructions", async
 				() => mission,
 			);
 			const prompt = await extension.sections![0]!.render(undefined as never, BACKGROUND_CONTEXT);
-			assert.match(prompt!, /permission/);
-			assert.doesNotMatch(prompt!, /gh pr create|jj git push|may commit and push|Open one pull request per task/);
+			if (level === "investigate") {
+				assert.doesNotMatch(prompt!, /gh pr create|jj git push|may commit and push|Open one pull request per task/);
+			} else {
+				assert.match(prompt!, /Open one pull request per task/);
+				assert.match(prompt!, requirePullRequest ? /gh pr create/ : /Do not open a PR unless the user asks/);
+				assert.doesNotMatch(prompt!, /locally only|only the app's Allow|Do not push, open/);
+				assert.match(prompt!, /repository credentials and remote access/);
+				assert.match(
+					prompt!,
+					/Never force-push or perform destructive repository actions without explicit authorization/,
+				);
+				if (level) assert.match(prompt!, /No separate publishing approval is required, including in resumed chats/);
+			}
 		}
 	}
 });

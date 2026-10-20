@@ -333,7 +333,7 @@ Automatic/notice/extension turns (including `native:user:`) and idle chats canno
 The durable user-message reference contains conversation, submission, entry and request IDs.
 
 `start`, `send`, `watch`, `stop`, `pause`, `resume` and `redirect` require `authorizationId`. Levels are `investigate`, `implement`,
-`publish` and `merge`; implement does not imply publish. Merge is recorded intent only: no agent
+`publish` and `merge`; implement includes scoped Build PR delivery. Publish is a legacy delivery level, not an extra approval tier. Merge is recorded intent only: no agent
 action may execute at merge level. Merging remains a separately confirmed app action.
 Targets are explicit chat/project/mission/task/PR/Linear scopes, without wildcards. Both the
 requested chat and the actual coordinator must be covered when a send is redirected. The daemon
@@ -345,35 +345,32 @@ Successful retries return the original result without another charge. Start/send
 runs before admission. Proven failures before any delegation effect append a release in the same
 transaction as the failure audit. Uncertain outcomes retain their reservation and never replay.
 Audit phases link `authorizationId`.
-The idempotent `upgrade_permission` request alone can reconcile a requested-only audit after a
-lost final acknowledgement. It revalidates the grant and returns the same app-approval request;
-this does not make starts, sends or other uncertain effects replay-safe.
 The first start is initial work; later starts and all sends consume follow-ups. Concurrent actions
 share the same durable counters, including after daemon replacement.
 
-`authorize` records intent, and `send` never raises a chat's ceiling. A send whose explicit level
-exceeds the target's effective ceiling reports `permission unchanged`. To raise an existing local
-implement Build chat, Control must call `upgrade_permission` with `sessionId`, `level: "publish"`
-and a live user-request publish `authorizationId` targeting that exact chat ID. Enclosing
-project/mission/task scopes, legacy watches, merge grants, remote hosts, Ask/investigate chats,
-ordinary unrestricted chats and Control itself are rejected. This action consumes no follow-up
-and starts no work. Its requested/outcome audit and durable `permissionRequest` metadata survive
-retries and daemon replacement. The result contains a request ID, not upgraded permission.
-The target chat shows its name, publish level, scope and Allow/Deny controls. Only the native app
-can POST `{id, allow}` to `/api/sessions/:id/permission-upgrade`, authenticated with the shared
-native host-action capability. The exact pending request must belong to that chat and be unexpired;
-stale and reused IDs are refused. Allow durably records `pendingControlPermission` with the approved
-request ID; Deny/expiry leaves the ceiling unchanged. Both are audited and delivered to Control as
-non-user decision notices through a bounded durable outbox. One expiry timer covers pending requests.
-Only the kernel's first prompt preparation for a fresh run can apply the pending permission.
-The daemon verifies the matching app approval, rechecks grant revocation/expiry, fsyncs `controlPermission` before acknowledgement, and
-clears the pending field. Harness policy, native nested-tool policy and newly spawned child
-inheritance then share the new ceiling. Active tool rounds, steers and recovered in-flight runs
-keep the previous ceiling. Existing children are not upgraded, and merges remain blocked.
+`authorize` records intent, and `send` never converts read-only roles or permits merging.
+Implement Build includes task-branch pushes and PR creation/update under normal project delivery
+policy. Ordinary, delegated and resumed Build sessions, including persisted implement sessions,
+need no publishing upgrade or second app approval. Implement and the legacy publish level have the
+same delivery rank for local and remote admission. Existing target, host, expiry, revocation and
+follow-up checks still apply. Ask/investigate, Diagnostics and Control stay read-only.
+
+The `upgrade_permission` action is no longer advertised. Legacy calls return an explanatory error;
+the native `/api/sessions/:id/permission-upgrade` decision endpoint rejects obsolete requests.
+Historical `permissionRequest` and `pendingControlPermission` fields are retained without applying
+or replaying them. Session summaries omit the old approval prompt and attention reason, including
+after reload. No migration rewrites chat history or restarts workers. Already-running old kernels
+use their installed code until the normal lifecycle loads the updated runtime.
+
+Repository authentication and access are not granted by Build permission. Missing credentials,
+access denials and branch protection remain real tool failures and must be reported accurately,
+never as a local-only publishing restriction. Destructive remote deletion remains blocked for
+implement sessions. Force-push and other destructive actions still need explicit authorization.
+Merge execution remains blocked in tools and requires confirmation in the app.
 
 Provisional defaults are named constants: two follow-ups, diagnostic-only USD accounting,
-24-hour expiry or earlier on use of an already-completed task scope, and publish separate from
-implement. Starts/sends need no `budgetUsd`. Control must never invent a USD limit or ask for one
+24-hour expiry or earlier on use of an already-completed task scope, with Build PR delivery included
+in implement. Starts/sends need no `budgetUsd`. Control must never invent a USD limit or ask for one
 as a prerequisite to delegation. Only an explicitly user-chosen `limits.budgetUsd` limits optional
 reservations; absent limits never deny on USD. These are **Control admission reservations**, not
 measured child-runtime spend caps. Opt-in runtime enforcement is separate work. Enforcing

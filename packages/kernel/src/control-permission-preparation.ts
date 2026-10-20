@@ -1,4 +1,4 @@
-/** Install a daemon-committed publish ceiling only at a verified fresh-run prompt boundary. */
+/** Legacy permission-label refresh at a fresh-run boundary; implement already permits PR delivery. */
 import type { Storage } from "@earendil-works/pi-durable";
 import type { ControlPermission } from "./tool-policy.ts";
 import { turnPreparation } from "./turn-preparation.ts";

@@ -297,17 +297,16 @@ summarizes the grant's remaining limits. Out-of-scope or exhausted requests take
 in the dashboard's `authorizationNeeded` list with the exact request, and Control stays in Needs you
 until the user decides and Control dismisses the item with `resolve_authorization`. Pending result
 reads appear in `next.followUps`. A notice or result never grants new authority.
-Control-started chats keep their admitted permission level across restarts and follow-ups:
-**investigate** uses read-only Ask, **implement** allows local Build changes and checks but blocks
-pushes and PR publication, and **publish** allows pushing and opening/updating PRs. Agents never
-raise a chat's ceiling through an authorization record or a send. Control can explicitly call
-`upgrade_permission` for an existing local implement Build chat using a live user-request publish
-grant targeting that exact chat ID. This creates a durable request shown in the target chat with
-its name, publish level and scope. Only an explicit **Allow** in the app approves it for the next
-fresh run, never active work or recovery. **Deny** or expiry leaves permission unchanged. Messages,
-Control text and grant records never approve a request. Project/mission-only grants, remote chats,
-Ask/investigate chats and Control itself cannot be upgraded. A send above the current ceiling
-reports **permission unchanged**. Agents never
+Control-started chats keep their admitted role across restarts and follow-ups:
+**investigate** uses read-only Ask. **Implement** Build includes local changes, verification,
+task-branch pushes and opening/updating PRs under the normal project delivery policy. The legacy
+**publish** level also permits that delivery, but is no longer a separate approval tier.
+Ordinary, delegated and resumed Build chats need no second publishing approval, including when
+the user explicitly requests a PR. Existing implement metadata needs no migration. Old approval
+requests remain historical data, are not replayed, and no longer show an Allow/Deny prompt.
+Ask, Diagnostics and Control remain read-only. Sends never convert a read-only chat to Build.
+Repository credentials, remote access, branch protections and destructive-action safeguards still
+apply. Agents report genuine remote failures rather than claiming a local-only block. Agents never
 merge, even with a recorded merge authorization; merges still require confirmation in the app.
 See [control chat internals](docs/control-chat.md) for storage, compaction and recovery details.
 

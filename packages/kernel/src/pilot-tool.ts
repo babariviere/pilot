@@ -10,7 +10,6 @@ export const PILOT_ACTIONS = [
 	"read",
 	"authorize",
 	"resolve_authorization",
-	"upgrade_permission",
 	"start",
 	"send",
 	"stop",

@@ -146,7 +146,7 @@ async function fixture(t: TestContext, selectModel?: (model?: string) => Promise
 			service.call("control", "authorize", args, operation) as Promise<ControlAuthorization>,
 	};
 }
-test("publish authorize plus send leaves implement policy intact and reports permission unchanged", async (t) => {
+test("Build delivery needs no publish grant or permission upgrade on send", async (t) => {
 	const f = await fixture(t);
 	const build = await f.authorize(approval, "build-grant");
 	await f.service.call(
@@ -185,10 +185,10 @@ test("publish authorize plus send leaves implement policy intact and reports per
 		},
 	} as never);
 	for (const command of ["git push", "gh pr create --fill"]) {
-		assert.match(controlPermissionBlock(permission, "bash", { command })!, /local changes/);
-		assert.equal(before({ toolName: "bash", input: { command } })?.block, true);
+		assert.equal(controlPermissionBlock(permission, "bash", { command }), undefined);
+		assert.equal(before({ toolName: "bash", input: { command } }), undefined);
 	}
-	assert.match(JSON.stringify(sent), /permission unchanged/);
+	assert.doesNotMatch(JSON.stringify(sent), /permission unchanged|app approval/);
 });
 test("starts derive use level from explicit mode and preserve project/task model choices and permission", async (t) => {
 	const f = await fixture(t);
@@ -505,7 +505,11 @@ test("admission checks level, resolved coordinator targets, invalid budget and m
 		f.service.call("control", "send", { ...args, authorizationId: undefined }, "missing"),
 		/authorizationId/,
 	);
-	await assert.rejects(f.service.call("control", "send", { ...args, level: "publish" }, "publish"), /level/);
+	const readOnly = await f.authorize({ ...approval, level: "investigate" }, "read-only");
+	await assert.rejects(
+		f.service.call("control", "send", { ...args, authorizationId: readOnly.id, level: "publish" }, "publish"),
+		/level/,
+	);
 	await assert.rejects(f.service.call("control", "send", { ...args, sessionId: "elsewhere" }, "foreign"), /targets/);
 	await assert.rejects(f.service.call("control", "send", { ...args, budgetUsd: 0 }, "zero"), /positive/);
 	const narrow = await f.authorize({ ...approval, targets: [{ kind: "chat", id: "member" }] }, "narrow");
