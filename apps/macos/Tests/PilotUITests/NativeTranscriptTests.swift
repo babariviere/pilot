@@ -170,7 +170,8 @@ import Testing
     let message = try #require(cell.subviews.compactMap { $0 as? NativeMarkdownMessage }.first)
     _ = message.measure(width: 700)
     let firstText = try #require(message.nativeTextViews.first)
-    let host = try #require(message.subviews.flatMap(\.subviews).compactMap { $0 as? TranscriptRowHost }.first)
+    let initialChildren: [NSView] = message.subviews.flatMap { $0.subviews }
+    let host = try #require(initialChildren.compactMap { $0 as? TranscriptRowHost }.first)
     oldOwner.select(from: .init(key: firstText.selectionKey, offset: 1),
                     to: .init(key: firstText.selectionKey, offset: 4))
     #expect(firstText.selectedRange().length > 0)
@@ -181,7 +182,9 @@ import Testing
     _ = reused.measure(width: 700)
     #expect(reused === message)
     #expect(reused.nativeTextViews.first === firstText)
-    #expect(reused.subviews.flatMap(\.subviews).compactMap { $0 as? TranscriptRowHost }.first === host)
+    let reusedChildren: [NSView] = reused.subviews.flatMap { $0.subviews }
+    let reusedHost = reusedChildren.compactMap { $0 as? TranscriptRowHost }.first
+    #expect(reusedHost === host)
     #expect(reused.preparedSource == nextSource)
     #expect(reused.nativeTextViews.allSatisfy { $0.selectionOwner === nextOwner && $0.selectedRange().length == 0 })
 
