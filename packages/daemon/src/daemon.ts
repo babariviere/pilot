@@ -97,6 +97,11 @@ const linearWatches = new LinearWatchSource(watches, sourceMcp);
 if (controlHosts.legacyAllowed()) linearWatches.start();
 const tracking = new SourceRegistry(projects, trackedItems, sourceMcp);
 tracking.setDiagnosticsEnabled(telemetry.settings().localDiagnostics);
+await tracking.retainDiagnosticEvidence(join(config.home, "diagnostics", "refresh"), {
+	hostId: "daemon",
+	daemonId: hello.daemonId,
+	lineageId: hello.lineageId,
+});
 if (controlHosts.legacyAllowed())
 	tracking.linearObserved = (projectId, items, activeIds) => linearWatches.tracked(projectId, items, activeIds);
 tracking.triage = new TriageGroomer(
@@ -510,6 +515,9 @@ async function stop(): Promise<void> {
 	await linearSync.stop();
 	await tracking.stop();
 	await tracking.triage?.stop();
+	await tracking
+		.closeDiagnosticEvidence()
+		.catch(() => console.warn("pilotd: retained refresh evidence could not be drained"));
 	await memory.stop();
 	stopControlMissions();
 	await missionService.notices.stop();

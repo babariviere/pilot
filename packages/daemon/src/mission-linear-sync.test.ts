@@ -160,7 +160,10 @@ test("linked sync health reuses authoritative failure stages/categories and insp
 	f.setFailure("before");
 	await f.poll();
 	const before = [f.reads.length, f.writes.length];
-	const key = jobConfigurationKey(f.projects.get(f.project.id)?.tracking);
+	const key = jobConfigurationKey(
+		f.projects.get(f.project.id)?.tracking,
+		f.projects.get(f.project.id)?.trackingGeneration,
+	);
 	const health = f.diagnostics.read("linked_linear_sync", "linear", f.project.id, key);
 	assert.equal(health.observation?.failure?.stage, f.status().failure?.stage);
 	assert.equal(health.observation?.failure?.category, f.status().failure?.category);

@@ -643,6 +643,8 @@ export interface Project {
 	/** Require branch/PR delivery. Defaults to true; false permits direct default-branch pushes. */
 	requirePullRequest?: boolean;
 	tracking?: ProjectTrackingConfig;
+	/** Host-owned generation for diagnostic configuration fencing. Never an editable project setting. */
+	trackingGeneration?: string;
 	/** Environment profile. Edited through PUT /api/projects/:id/environment, never through project updates. */
 	environment?: import("./environment.ts").ProjectEnvironment;
 	/** This host's own environment layer, never synced. Edited through PUT /api/projects/:id/environment/override. */

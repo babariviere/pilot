@@ -204,7 +204,7 @@ export class ProjectStore {
 			name: request.name?.trim() || basename(path),
 			path,
 			createdAt: Date.now(),
-			...(tracking ? { tracking } : {}),
+			...(tracking ? { tracking, trackingGeneration: randomUUID() } : {}),
 			...(request.model?.trim() ? { model: request.model.trim() } : {}),
 			...(request.workspace === "direct" ? { workspace: "direct" } : {}),
 			...(request.requirePullRequest !== undefined ? { requirePullRequest: request.requirePullRequest } : {}),
@@ -219,12 +219,16 @@ export class ProjectStore {
 		const tracking = request.tracking === undefined ? undefined : validateTrackingConfig(request.tracking);
 		const project = this.require(id);
 		const next: Project = { ...project };
-		if (tracking) next.tracking = tracking;
+		if (tracking) {
+			next.tracking = tracking;
+			if (JSON.stringify(tracking) !== JSON.stringify(project.tracking)) next.trackingGeneration = randomUUID();
+		}
 		if (request.name !== undefined) {
 			if (!request.name.trim()) throw new Error("name cannot be empty");
 			next.name = request.name.trim();
 		}
 		if (request.path !== undefined) next.path = await requireDirectory(request.path);
+		if (next.path !== project.path) next.trackingGeneration = randomUUID();
 		if (request.model !== undefined) {
 			if (request.model?.trim()) next.model = request.model.trim();
 			else delete next.model;

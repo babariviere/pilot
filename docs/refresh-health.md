@@ -19,6 +19,9 @@ The reader distinguishes:
   scheduled/unsupported cases and the registry's actual shared-slot occupancy.
 - **Observed this process:** admitted poll attempt/start/completion, the last successful product-store commit,
   returned item count and closed per-stage outcomes. These are last observations, not an unbounded event log.
+- **Previous-process observations:** bounded private source/job evidence retained separately from live maps. These
+  never mark a scheduler running/healthy. A prior unfinished/queued observation becomes `interrupted_unknown`;
+  old due times are labelled previous due times, not current scheduling. Evidence can be absent, expired or dropped.
 - **Retained checkpoint:** the last committed poll timestamp and per-channel page progress. These survive restart,
   but are explicitly not proof the scheduler is currently running or that every channel succeeded.
 
@@ -54,10 +57,41 @@ source checkpoint can advance with partial channel/classification errors and mus
 
 ## Bounds, controls and non-goals
 
-New observations are content-free, process-local last-state records, bounded to 256 source observations and 256
+Live observations are content-free, process-local last-state records, bounded to 256 source observations and 256
 explicit due-request observations. Eviction/drop counts are reported. They are cleared when local operational
 diagnostics are disabled or explicitly cleared. Restart begins with no live observations, even when product
-checkpoints say “ok.” Nothing new is uploaded, and clearing diagnostics does not change refresh scheduling.
+checkpoints say “ok.” Nothing is uploaded, and clearing diagnostics does not change refresh scheduling.
+
+### Private restart continuity
+
+`<PILOT_HOME>/diagnostics/refresh/refresh-health.json` retains schema v1, a hashed exact host/daemon/lineage
+identity and up to 128 source/job snapshots total, at most two processes per key, seven days from actual observed
+activity. Old observations are not renewed merely because another job caused a save. The JSON file is capped at
+256 KiB; one fixed staging file is also capped at 256 KiB. Directory/file modes are 0700/0600. Only closed enum,
+numeric/count and bounded stage/recent-outcome fields survive validation before writing and after loading. No
+project/source names or raw identifiers, items, cursors, errors, prompts, credentials or integration payloads are
+persisted. Scoped keys and host identities are hashed; unknown/expired/deleted coverage remains unavailable.
+
+Full config plus a host-owned `trackingGeneration` fence replacement/removal and config ABA across restarts.
+The generation is stored atomically with the project configuration, rotates on actual tracking/path changes,
+is not user-editable through project requests and leaves scheduler/checkpoint policy unchanged. Legacy projects
+do not require a migration write; their first configuration change creates a fresh generation. Host/lineage changes
+cannot reuse the history. A diagnostic read cannot create a generation or trigger collection, persistence or work.
+
+Mutations only schedule one coalesced one-second save. Bounded snapshots/serialization run outside producer hot
+paths; all filesystem IO is asynchronous. One write plus one dirty/latest snapshot prevents an unbounded save queue.
+Atomic private staging, file/directory sync and rename preserve the previous complete file on interrupted writes;
+startup removes only the fixed owned staging file. Reads reject unsafe roots, symlinks, ownership/permission errors,
+oversized/corrupt data and unsupported schema versions (future versions are not overwritten before explicit clear).
+Hourly metadata-only expiry pruning and shutdown draining do not contact providers or change scheduling. Save errors
+are reported in `historyCoverage`, never thrown into producer/scheduler workflows. Drop/byte/count/retention bounds
+are explicit. Storage failure can lose evidence, not work.
+
+Clear/disable synchronously invalidate retained memory and pending-write generations, drain earlier writes and
+delete the private file/staging data. A delayed commit cannot resurrect cleared evidence. Native clear and settings
+responses wait for the relevant persistence drain. Historical observations never populate live health, timer state,
+queues, quotas or retry decisions. Collection and clear remain under Local operational diagnostics, independently
+of remote opt-in. No uploads, new permissions, background retries or retroactive evidence reconstruction are added.
 
 Inspection never invokes external polls, manual-sync, sign-in, retries/restarts, classifiers, waiting-chat delivery,
 reaction reads/writes, budget reservations or schedule/quota/model changes. It reads only current maps and bounded
