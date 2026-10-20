@@ -1,4 +1,10 @@
-export type RefreshStage = "discovery" | "classification" | "commit" | "waiting_replies" | "reaction_reads";
+export type RefreshStage =
+	| "discovery"
+	| "classification"
+	| "commit"
+	| "waiting_replies"
+	| "reaction_reads"
+	| "parent_headers";
 export type RefreshOutcome = "success" | "partial" | "failure" | "budget_limited" | "cancelled";
 export type RefreshReason =
 	| "sign_in"
@@ -23,6 +29,9 @@ export interface RefreshObservation {
 	reason?: RefreshReason;
 	channelIndex?: number;
 	count?: number;
+	requested?: number;
+	readAttempts?: number;
+	cacheHits?: number;
 }
 export interface RefreshStageHealth {
 	stage: RefreshStage;
@@ -34,6 +43,9 @@ export interface RefreshStageHealth {
 	channelIndex?: number;
 	/** Stage-scoped observed work count, not necessarily new items. */
 	count?: number;
+	requested?: number;
+	readAttempts?: number;
+	cacheHits?: number;
 }
 export interface RefreshLiveHealth {
 	lastAttemptAt: number;

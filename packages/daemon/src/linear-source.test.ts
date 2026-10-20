@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
-import { readFile, mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test, type TestContext } from "node:test";
+import { type TestContext, test } from "node:test";
 import type { Project, TrackingJson } from "@pilot/protocol";
 import { linearParentHeaders, linearPrefill, pollLinear } from "./linear-source.ts";
 import { ProjectStore } from "./projects.ts";
-import { logCause, SourceRegistry, type SourcePollContext } from "./sources.ts";
 import { SourceRateLimited } from "./source-mcp.ts";
+import { logCause, type SourcePollContext, SourceRegistry } from "./sources.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
 
 type Fixture = {
@@ -182,7 +182,14 @@ const EPIC = {
 
 test("sub-issues store parentId and resolve bounded parent headers, cached between polls", async () => {
 	const first = withParents(context(subIssues(await fixture("current"))), { "epic-9": EPIC });
+	const observations: import("@pilot/protocol").RefreshObservation[] = [];
+	first.ctx.observe = (event) => observations.push(event);
 	const result = await pollLinear(first.ctx);
+	const parentHealth = observations.findLast((event) => event.stage === "parent_headers");
+	assert.equal(parentHealth?.readAttempts, 1);
+	assert.equal(parentHealth?.cacheHits, 1);
+	assert.equal(parentHealth?.count, 2);
+	assert.doesNotMatch(JSON.stringify(observations), /Onboarding|epic-9/);
 	const byId = new Map(result.items.map((item) => [item.externalId, item]));
 	assert.equal(byId.get("issue-2")?.metadata.parentId, "issue-1");
 	assert.equal(byId.get("issue-4")?.metadata.parentId, "epic-9");

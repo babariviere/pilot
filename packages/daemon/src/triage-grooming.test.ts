@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
-import { TrackedItemDisk } from "./tracked-items-disk.ts";
+import { BackgroundJobDiagnostics, jobConfigurationKey } from "./background-job-diagnostics.ts";
 import type { TrackedItemStore } from "./tracked-items.ts";
-import { TriageGuideDisk } from "./triage-guide-disk.ts";
+import { TrackedItemDisk } from "./tracked-items-disk.ts";
 import { GUIDE_SCHEMA, parseGuide, TriageGroomer } from "./triage-grooming.ts";
+import { TriageGuideDisk } from "./triage-guide-disk.ts";
 
 test("generic correction store migrates legacy history once and keeps 500 per project across sources", () => {
 	const db = new DatabaseSync(":memory:");
@@ -122,15 +123,22 @@ test("debounced grooming uses only corrections, folds guide and leaves new corre
 		onChange: () => () => {},
 	};
 	let calls = 0;
-	const groomer = new TriageGroomer(projects as never, items, async (cwd, prompt, schema) => {
-		calls++;
-		assert.equal(cwd, "/invented");
-		assert.deepEqual(schema, GUIDE_SCHEMA);
-		assert.match(prompt, /Export unavailable/);
-		assert.doesNotMatch(prompt, /untrustedSlackThread/);
-		disk.triage.append("p", "slack", correction);
-		return '{"rules":["Export failures are bugs."]}';
-	});
+	const diagnostics = new BackgroundJobDiagnostics();
+	const groomer = new TriageGroomer(
+		projects as never,
+		items,
+		async (cwd, prompt, schema) => {
+			calls++;
+			assert.equal(cwd, "/invented");
+			assert.deepEqual(schema, GUIDE_SCHEMA);
+			assert.match(prompt, /Export unavailable/);
+			assert.doesNotMatch(prompt, /untrustedSlackThread/);
+			disk.triage.append("p", "slack", correction);
+			return '{"rules":["Export failures are bugs."]}';
+		},
+		Date.now,
+		diagnostics,
+	);
 	groomer.queue("p");
 	groomer.queue("p");
 	t.mock.timers.tick(1999);
@@ -139,6 +147,11 @@ test("debounced grooming uses only corrections, folds guide and leaves new corre
 	// Drain the finite async chain without wall-clock timing.
 	for (let i = 0; i < 12; i++) await Promise.resolve();
 	assert.equal(calls, 1);
+	const health = diagnostics.read("triage_rebuild", "slack", "p", jobConfigurationKey(undefined));
+	assert.equal(health.observation?.outcome, "success");
+	assert.equal(health.observation?.stage, "commit");
+	assert.doesNotMatch(JSON.stringify(health), /Export|rules|untrustedSlackThread/);
+	assert.equal(calls, 1, "diagnostic inspection never invokes completion");
 	assert.equal(disk.triage.guide("p", "slack").text, "Export failures are bugs.");
 	assert.equal(disk.triage.input("p", "slack").corrections.length, 1);
 	await groomer.stop();
