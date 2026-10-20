@@ -213,3 +213,56 @@ test("unsafe roots/files, permissions and storage errors remain evidence failure
 	assert.ok(permissions.coverage().error);
 	await permissions.close();
 });
+
+test("new activity does not renew expired recent completions or old stage success details", async (t) => {
+	const root = await directory(t),
+		now = Date.now(),
+		old = now - REFRESH_EVIDENCE_AGE_MS - 1;
+	const store = new RefreshEvidenceStore({ directory: root, host, enabled: true, now: () => now });
+	await store.load();
+	const ref = store.ref("job", "failed", "key"),
+		sourceRef = store.ref("source", "failed", "key");
+	store.schedule(() => [
+		{
+			ref,
+			type: "job",
+			value: {
+				job: "manual_lookup",
+				kind: "linear",
+				startedAt: now,
+				completedAt: now,
+				outcome: "failure",
+				reason: "sign_in",
+				readCalls: 1,
+				writeCalls: 0,
+				recent: [{ at: old, outcome: "failure", reason: "provider_rate_limit", readCalls: 1, writeCalls: 0 }],
+			},
+		},
+		{
+			ref: sourceRef,
+			type: "source",
+			value: {
+				...source(now),
+				stages: [
+					{
+						stage: "discovery",
+						lastStartedAt: now,
+						lastSucceededAt: old,
+						lastCompletedAt: now,
+						outcome: "failure",
+						reason: "sign_in",
+					},
+				],
+			},
+		},
+	]);
+	await store.close();
+	assert.doesNotMatch(await readFile(join(root, "refresh-health.json"), "utf8"), /provider_rate_limit/);
+	const reopened = new RefreshEvidenceStore({ directory: root, host, enabled: true, now: () => now });
+	await reopened.load();
+	assert.equal(reopened.read(ref)?.observation.outcome, "failure");
+	assert.deepEqual(reopened.read(ref)?.observation.recent, []);
+	const stages = reopened.read(sourceRef)?.observation.stages as Array<{ lastSucceededAt?: number }>;
+	assert.equal(stages[0]?.lastSucceededAt, undefined);
+	await reopened.close();
+});
