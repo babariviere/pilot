@@ -1048,7 +1048,6 @@ struct DiagnosticSetupSheet: View {
     }
 
     private var questionError: String? {
-        guard setup.askingAboutPilot else { return nil }
         do {
             _ = try DiagnosticSetup.submittedQuestion(question)
             return nil
@@ -1069,29 +1068,31 @@ struct DiagnosticSetupSheet: View {
                         : "Start a read-only diagnostics specialist for this chat.",
                       error: startError,
                       primary: SheetPrimaryAction(title: busy ? "Starting…" : "Start diagnostics",
+                                                  key: .commandReturn,
                                                   enabled: canStart, action: start),
                       cancel: { dismiss() }, width: 520) {
             VStack(alignment: .leading, spacing: 14) {
-                if setup.askingAboutPilot {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Question or bug report (optional)").font(.pilot(.headline))
-                        MissionTextArea(prompt: "What would you like the diagnostics specialist to investigate?",
-                                        text: $question, minLines: 3, maxLines: 8,
-                                        label: "Question or bug report") { if canStart { start() } }
-                            .disabled(busy)
-                        HStack(alignment: .firstTextBaseline) {
-                            if let questionError {
-                                Text(questionError).foregroundStyle(Theme.destructive)
-                            } else {
-                                Text("Sent only as the specialist chat's opening message.")
-                                    .foregroundStyle(Theme.mutedForeground)
-                            }
-                            Spacer()
-                            Text("\(question.utf8.count) / \(DiagnosticSetup.maxQuestionBytes) bytes")
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(setup.askingAboutPilot ? "Question or bug report (optional)" : "What should we investigate? (optional)")
+                        .font(.pilot(.headline))
+                    MissionTextArea(prompt: "What would you like the diagnostics specialist to investigate?",
+                                    text: $question, minLines: 3, maxLines: 8,
+                                    label: setup.askingAboutPilot ? "Question or bug report" : "What should we investigate?") {
+                        if canStart { start() }
+                    }
+                    .disabled(busy)
+                    HStack(alignment: .firstTextBaseline) {
+                        if let questionError {
+                            Text(questionError).foregroundStyle(Theme.destructive)
+                        } else {
+                            Text("Sent only as the specialist chat's opening message.")
                                 .foregroundStyle(Theme.mutedForeground)
                         }
-                        .font(.pilot(.caption))
+                        Spacer()
+                        Text("\(question.utf8.count) / \(DiagnosticSetup.maxQuestionBytes) bytes")
+                            .foregroundStyle(Theme.mutedForeground)
                     }
+                    .font(.pilot(.caption))
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
