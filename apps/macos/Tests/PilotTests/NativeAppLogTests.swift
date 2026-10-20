@@ -16,14 +16,11 @@ import Testing
     let bytes = try String(contentsOf: root.appendingPathComponent("app.jsonl"), encoding: .utf8)
     #expect(!bytes.contains("private-payload") && bytes.contains("-1001"))
     let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../../..").standardizedFileURL
-    let process = Process(); let output = Pipe()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-    process.arguments = ["node", repository.appendingPathComponent("packages/daemon/src/native-app-log.fixture.ts").path, root.path]
-    process.currentDirectoryURL = repository
-    process.standardOutput = output; process.standardError = output
-    try process.run(); process.waitUntilExit()
-    let result = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-    #expect(process.terminationStatus == 0, "\(result)")
+    // Use the existing bounded child runner, not an unbounded wait on the test executor or a full pipe.
+    let captured = await UpdateCommand.output(executable: URL(fileURLWithPath: "/usr/bin/env"),
+        arguments: ["node", repository.appendingPathComponent("packages/daemon/src/native-app-log.fixture.ts").path, root.path],
+        path: ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin", timeout: 15, maxBytes: 16 * 1024)
+    let result = try #require(captured, "The production reader probe failed or exceeded its 15-second bound.")
     #expect(result.contains("producer-reader-ok"))
     logger.setEnabled(false)
     try await logger.clear()

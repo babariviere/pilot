@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { DiagnosticLogReader } from "./diagnostic-logs.ts";
 import { nativeAppLogLine } from "./native-app-log.ts";
 
@@ -16,6 +19,24 @@ const row = {
 	errorDomain: "NSURLErrorDomain",
 	errorCode: -1001,
 };
+
+test("native producer-reader probe canonicalizes fixture-owned temporary aliases without weakening reader paths", async (t) => {
+	const root = await realpath(await mkdtemp(join(tmpdir(), "native-log-bridge-")));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const producer = join(root, "Producer");
+	await mkdir(producer, { mode: 0o700 });
+	const alias = join(root, "temporary-alias");
+	await symlink(producer, alias);
+	await writeFile(join(producer, "app.jsonl"), `${JSON.stringify({ ...row, at: new Date().toISOString() })}\n`, {
+		mode: 0o600,
+	});
+	const result = await promisify(execFile)(
+		process.execPath,
+		[fileURLToPath(new URL("./native-app-log.fixture.ts", import.meta.url)), alias],
+		{ timeout: 5000, maxBuffer: 16 * 1024 },
+	);
+	assert.match(result.stdout, /producer-reader-ok/);
+});
 
 test("native app closed schema rejects identity, payload, malformed, expiry and oversized records", () => {
 	assert.match(nativeAppLogLine(JSON.stringify(row), host, now)!, /-1001/);
