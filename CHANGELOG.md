@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.60.1](https://github.com/babariviere/pilot/compare/v1.60.0...v1.60.1) (2026-10-20)
+
+
+### Bug Fixes
+
+* **database:** classify sanitized connection failures ([6056508](https://github.com/babariviere/pilot/commit/60565082339d20ac896e819cc663dcc2814eda33))
+
 ## [1.60.0](https://github.com/babariviere/pilot/compare/v1.59.2...v1.60.0) (2026-10-20)
 
 
