@@ -44,6 +44,8 @@ import Testing
     first.selectAll()
     #expect(first.selectedText == source)
     #expect(view.nativeTextViews.count == 4)
+    let cellText = view.nativeTextViews.map { $0.string }
+    #expect(cellText == ["Name", "Value", "One", "link"])
     #expect(view.nativeTextViews.allSatisfy { $0.selectedRange().length > 0 })
     let second = MessageTextSelection()
     view.update(prepared, index: 3, selection: second, environment: EnvironmentValues(),

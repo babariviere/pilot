@@ -212,8 +212,15 @@ final class NativeMarkdownBlockView: NSView {
     private var height: CGFloat = 0
     private var dirty = true
     var nativeTextViews: [MessageSelectionTextView] {
-        textViews + (code.map { [$0.text] } ?? []) + (table?.cells.flatMap { $0.map(\.text) } ?? [])
-            + (diagram?.nativeTextViews ?? [])
+        var views = textViews
+        if let code { views.append(code.text) }
+        if let table {
+            for row in table.cells {
+                for cell in row { views.append(cell.text) }
+            }
+        }
+        if let diagram { views.append(contentsOf: diagram.nativeTextViews) }
+        return views
     }
     override var isFlipped: Bool { true }
     override func viewDidChangeEffectiveAppearance() {

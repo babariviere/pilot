@@ -19,9 +19,8 @@ import Testing
 }
 
 @MainActor private func awaitNativeSource(_ message: NativeMarkdownMessage, _ source: String) async throws {
-    let deadline = ContinuousClock.now.advanced(by: .seconds(5))
-    while message.preparedSource != source, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
-    #expect(message.preparedSource == source)
+    await message.preparation?.value
+    try #require(message.preparedSource == source)
 }
 
 @Test @MainActor func nativeConversationAndChromeKindsDoNotMountSwiftUIRows() async {
