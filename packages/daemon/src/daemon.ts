@@ -156,6 +156,7 @@ const sessions = new SessionManager(
 			...(process.platform === "darwin"
 				? {
 						daemonLog: join(homedir(), "Library", "Logs", "Pilot", "pilotd.log"),
+						appLog: join(homedir(), "Library", "Logs", "Pilot", "App", "app.jsonl"),
 						diagnosticReports: join(homedir(), "Library", "Logs", "DiagnosticReports"),
 					}
 				: {}),

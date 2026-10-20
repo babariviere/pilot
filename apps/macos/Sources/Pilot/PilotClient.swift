@@ -2226,6 +2226,7 @@ final class PilotClient: ObservableObject {
                 } catch let error as HostRoutingError where error == .identityChanged || error == .incompatible {
                     guard self.connectionGeneration == generation else { return }
                     self.connectionError = error
+                    NativeAppLog.shared.record(.transportFailed, error: error)
                     self.disconnect()
                 } catch {
                     guard self.connectionGeneration == generation, !self.disconnected else { return }

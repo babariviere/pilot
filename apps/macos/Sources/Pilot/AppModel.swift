@@ -320,6 +320,7 @@ final class AppModel: ObservableObject {
         let composers = try HostKeyMigration.local(chatComposers, host: host, kind: .session)
         let drafts = try HostKeyMigration.local(chatDrafts, host: host, kind: .session)
         localHost = host
+        NativeAppLog.shared.setHost(host)
         chatComposers = composers
         chatDrafts = drafts
         if let editingComposerId { self.editingComposerId = composerKey(editingComposerId) }
@@ -685,6 +686,7 @@ final class AppModel: ObservableObject {
         guard client.hostIdentity?.hostId == "local",
               let settings = try? await client.telemetrySettings() else { return }
         NativeTelemetrySettings.apply(settings)
+        NativeAppLog.shared.record(.appStarted)
         scheduleFeatureUsageSync()
         if settings.localDiagnostics { await synchronizeNativeDiagnostics() }
     }
