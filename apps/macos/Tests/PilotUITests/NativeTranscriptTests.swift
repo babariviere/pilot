@@ -85,15 +85,10 @@ import Testing
                 environment: EnvironmentValues(), changed: {})
     // No await: a cache hit must not temporarily expose raw Markdown or an estimated plain-text height.
     #expect(next.preparedSource == source)
-    #expect(next.nativeTextViews.count == 2)
+    #expect(next.nativeTextViews.count == 3)
     #expect(next.nativeTextViews.allSatisfy { $0.selectionOwner === owner })
     #expect(next.measure(width: 700) == height)
     next.stop()
-}
-
-@Test @MainActor func nativeCompatibilityHostsOnlyRequestIntrinsicSizing() {
-    let host = TranscriptRowHost(rootView: AnyView(Text("Content")))
-    #expect(host.sizingOptions == [.intrinsicContentSize])
 }
 
 @Test @MainActor func nativeProgrammaticScrollCannotLeaveTheDocument() {
@@ -107,20 +102,6 @@ import Testing
         clip.scroll(to: NSPoint(x: 0, y: y))
         #expect(clip.bounds.minY >= -0.5)
         #expect(clip.bounds.maxY <= document.frame.maxY + 0.5)
-    }
-}
-
-@Test @MainActor func nativeHostIntrinsicHeightMatchesPlacedContentAcrossWidths() {
-    let text = String(repeating: "Wrapped content. ", count: 40)
-    let host = TranscriptRowHost(rootView: AnyView(EmptyView()))
-    for width: CGFloat in [700, 180, 700] {
-        host.rootView = AnyView(Text(text).frame(width: width, alignment: .leading)
-            .fixedSize(horizontal: false, vertical: true))
-        host.frame.size.width = width
-        let measured = host.measuredContentHeight()
-        host.layoutSubtreeIfNeeded()
-        #expect(measured > 20)
-        #expect(abs(measured - ceil(host.fittingSize.height)) <= 1)
     }
 }
 
@@ -156,14 +137,14 @@ import Testing
         NativeTranscript(presentation: TranscriptPresentation(), historyLimit: 40,
             resource: NativeTranscriptResource(sessionID: session, host: nil), scroll: TranscriptScrollState(),
             toolExpansions: TranscriptExpansions(), messageExpansions: TranscriptExpansions(),
-            environment: EnvironmentValues(), header: AnyView(EmptyView()), footer: AnyView(EmptyView()),
+            environment: EnvironmentValues(), header: NativeTranscriptHeader(), footer: NativeTranscriptFooter(),
             loadEarlier: {})
     }
     let cell = NativeTranscriptCell()
     let config = configuration(session: "one")
     func bind(_ id: String, _ source: String, _ owner: MessageTextSelection, _ config: NativeTranscript) {
         cell.bind(item: .row(id), width: 700, row: .text(id: id, text: source), configuration: config,
-                  selection: { _ in owner }, hosted: AnyView(EmptyView()), changed: {})
+                  selection: { _ in owner }, changed: {})
     }
     let oldOwner = MessageTextSelection()
     bind("first", firstSource, oldOwner, config)
@@ -171,7 +152,7 @@ import Testing
     _ = message.measure(width: 700)
     let firstText = try #require(message.nativeTextViews.first)
     let initialChildren: [NSView] = message.subviews.flatMap { $0.subviews }
-    let host = try #require(initialChildren.compactMap { $0 as? TranscriptRowHost }.first)
+    let code = try #require(initialChildren.compactMap { $0 as? NativeCodeBlock }.first)
     oldOwner.select(from: .init(key: firstText.selectionKey, offset: 1),
                     to: .init(key: firstText.selectionKey, offset: 4))
     #expect(firstText.selectedRange().length > 0)
@@ -183,35 +164,13 @@ import Testing
     #expect(reused === message)
     #expect(reused.nativeTextViews.first === firstText)
     let reusedChildren: [NSView] = reused.subviews.flatMap { $0.subviews }
-    let reusedHost = reusedChildren.compactMap { $0 as? TranscriptRowHost }.first
-    #expect(reusedHost === host)
+    let reusedCode = reusedChildren.compactMap { $0 as? NativeCodeBlock }.first
+    #expect(reusedCode === code)
     #expect(reused.preparedSource == nextSource)
     #expect(reused.nativeTextViews.allSatisfy { $0.selectionOwner === nextOwner && $0.selectedRange().length == 0 })
 
     bind("second", nextSource, MessageTextSelection(), configuration(session: "other"))
     #expect(cell.subviews.compactMap { $0 as? NativeMarkdownMessage }.first !== message)
-    cell.unbind()
-}
-
-@Test @MainActor func nativeCompatibilityCellReusesHostAndFencesPreviousRowCallbacks() {
-    let configuration = NativeTranscript(presentation: TranscriptPresentation(), historyLimit: 40,
-        resource: NativeTranscriptResource(sessionID: "one", host: nil), scroll: TranscriptScrollState(),
-        toolExpansions: TranscriptExpansions(), messageExpansions: TranscriptExpansions(),
-        environment: EnvironmentValues(), header: AnyView(EmptyView()), footer: AnyView(EmptyView()), loadEarlier: {})
-    let cell = NativeTranscriptCell()
-    var oldChanges = 0
-    var newChanges = 0
-    cell.bind(item: .header, width: 700, row: nil, configuration: configuration,
-              selection: { _ in MessageTextSelection() }, hosted: AnyView(Text("First")), changed: { oldChanges += 1 })
-    let host = cell.subviews.compactMap { $0 as? TranscriptRowHost }.first
-    let oldCallback = host?.onSizeChanged
-    cell.bind(item: .footer, width: 700, row: nil, configuration: configuration,
-              selection: { _ in MessageTextSelection() }, hosted: AnyView(Text("Next")), changed: { newChanges += 1 })
-    #expect(host != nil)
-    #expect(cell.subviews.compactMap { $0 as? TranscriptRowHost }.first === host)
-    let previous = (oldChanges, newChanges)
-    oldCallback?()
-    #expect(oldChanges == previous.0 && newChanges == previous.1)
     cell.unbind()
 }
 
@@ -269,7 +228,7 @@ import Testing
     #expect(!expansion.bottom && expansion.offset == -50)
 }
 
-@Test @MainActor func nativeMarkdownHostedTableKeepsLeadingEdgeAcrossWidthChanges() async throws {
+@Test @MainActor func nativeMarkdownTableKeepsLeadingEdgeAcrossWidthChanges() async throws {
     _ = NSApplication.shared
     let source = "| A | B |\n| --- | --- |\n| one | two |"
     let blocks = try await MarkdownRenderer.shared.prepare(source)
@@ -290,16 +249,8 @@ import Testing
     for width: CGFloat in [760, 320, 760] {
         block.frame = NSRect(x: 0, y: 0, width: width, height: block.measure(width: width))
         block.layoutSubtreeIfNeeded()
-        // Hosting can mount its representable on the next rendering turn even without a key window.
-        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
-        while table(in: block) == nil, ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(5))
-            block.layoutSubtreeIfNeeded()
-        }
-        try await Task.sleep(for: .milliseconds(10))
-        block.frame.size.height = block.measure(width: width)
-        block.layoutSubtreeIfNeeded()
         let rendered = try #require(table(in: block))
+        #expect(block.subviews.compactMap { $0 as? NSHostingView<AnyView> }.isEmpty)
         let frame = rendered.convert(rendered.bounds, to: block)
         #expect(frame.width < width - 40, "A compact table must not stretch to fill its host.")
         #expect(abs(frame.minX) < 1, "The table must stay leading-aligned at width \(width).")
@@ -330,7 +281,7 @@ import Testing
         NativeTranscript(presentation: presentation, historyLimit: 40,
             resource: NativeTranscriptResource(sessionID: session, host: nil), scroll: scroll,
             toolExpansions: tools, messageExpansions: messages, environment: EnvironmentValues(),
-            header: AnyView(EmptyView()), footer: AnyView(EmptyView()), loadEarlier: {},
+            header: NativeTranscriptHeader(), footer: NativeTranscriptFooter(), loadEarlier: {},
             chromeRevision: chromeRevision ?? chrome)
     }
     controller.update(configuration(first))

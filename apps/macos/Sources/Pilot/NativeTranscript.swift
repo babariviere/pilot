@@ -22,8 +22,8 @@ struct NativeTranscriptSection: View {
     let scroll: TranscriptScrollState
     let toolExpansions: TranscriptExpansions
     let messageExpansions: TranscriptExpansions
-    let header: AnyView
-    let footer: AnyView
+    let header: NativeTranscriptHeader
+    let footer: NativeTranscriptFooter
     /// Produced by ChatView, not by this chunk-observing subtree.
     let chromeRevision: UUID
     let loadEarlier: () -> Void
@@ -31,15 +31,24 @@ struct NativeTranscriptSection: View {
     var loadingEarlier = false
     var earlierError: String?
     @Environment(\.self) private var environment
+    @StateObject private var presentation = NativeTranscriptPresentation()
+
+    private var nativeEnvironment: EnvironmentValues {
+        var values = environment
+        let presentation = presentation
+        values.nativeTranscriptPresent = { [weak presentation] in presentation?.request = $0 }
+        return values
+    }
 
     var body: some View {
         NativeTranscript(presentation: model.presentation, historyLimit: model.historyLimit,
                          resource: resource, scroll: scroll, toolExpansions: toolExpansions,
-                         messageExpansions: messageExpansions, environment: environment,
+                         messageExpansions: messageExpansions, environment: nativeEnvironment,
                          header: header, footer: footer, loadEarlier: {
                              if !model.revealEarlier() { loadEarlier() }
                          }, hasSnapshot: hasSnapshot, loadingEarlier: loadingEarlier, earlierError: earlierError,
                          chromeRevision: chromeRevision)
+            .sheet(item: $presentation.request) { NativeTranscriptPresentedContent(request: $0) }
     }
 }
 
@@ -51,8 +60,8 @@ struct NativeTranscript: NSViewRepresentable {
     let toolExpansions: TranscriptExpansions
     let messageExpansions: TranscriptExpansions
     let environment: EnvironmentValues
-    let header: AnyView
-    let footer: AnyView
+    let header: NativeTranscriptHeader
+    let footer: NativeTranscriptFooter
     let loadEarlier: () -> Void
     var hasSnapshot = true
     var loadingEarlier = false
@@ -142,7 +151,7 @@ final class NativeTranscriptController: NSObject, NSTableViewDataSource, NSTable
     private var metrics: PilotFonts?
     private var hasEarlier = false
     private var highlighted: String?
-    private var selections: [String: MessageTextSelection] = [:]
+    private var selections: [NativeTranscriptItem: [String: MessageTextSelection]] = [:]
     private(set) var measurements = 0
     private(set) var membershipUpdates = 0
     private(set) var heightTransactions = 0
@@ -271,11 +280,13 @@ final class NativeTranscriptController: NSObject, NSTableViewDataSource, NSTable
             let retained = Set(items)
             revisions = revisions.filter { retained.contains($0.key) }
             installedHeights = installedHeights.filter { retained.contains($0.key) }
-            selections = selections.filter { rows[$0.key] != nil }
+            selections = selections.filter { retained.contains($0.key) }
         }
         // Header/footer closures are owned outside the streaming rows. Only their producer changes rebind them.
         if reset || old?.chromeRevision != next.chromeRevision {
             changed.formUnion([.header, .footer])
+            let pendingIDs = Set(next.footer.pending.map(\.id))
+            selections[.footer] = selections[.footer]?.filter { pendingIDs.contains($0.key) }
         }
         if reset || old?.hasSnapshot != next.hasSnapshot || old?.loadingEarlier != next.loadingEarlier
             || old?.earlierError != next.earlierError {
@@ -304,6 +315,10 @@ final class NativeTranscriptController: NSObject, NSTableViewDataSource, NSTable
         flushHeights(anchor: anchor)
         resizeViewport()
         settle(anchor)
+        if reset || old?.environment.keyboardCue != next.environment.keyboardCue
+            || old?.environment.colorSchemeContrast != next.environment.colorSchemeContrast {
+            refreshHighlights()
+        }
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int { items.count }
@@ -316,9 +331,18 @@ final class NativeTranscriptController: NSObject, NSTableViewDataSource, NSTable
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard items.indices.contains(row) else { return nil }
-        let nativeText: Bool
-        if case let .row(id) = items[row], case .text = rows[id] { nativeText = true } else { nativeText = false }
-        let identifier = NSUserInterfaceItemIdentifier(nativeText ? "native-transcript-text" : "native-transcript-compatibility")
+        let kind: String
+        if case let .row(id) = items[row], let value = rows[id] {
+            switch value {
+            case .text: kind = "text"
+            case let .user(_, text, _) where SubagentNotification(message: text) == nil: kind = "user"
+            case .user, .automatic, .question, .notice, .event: kind = "event"
+            case .work, .thinking, .tools: kind = "work"
+            case .artifact: kind = "artifact"
+            case .error: kind = "error"
+            }
+        } else { kind = "chrome" }
+        let identifier = NSUserInterfaceItemIdentifier("native-transcript-" + kind)
         let reused = tableView.makeView(withIdentifier: identifier, owner: self) as? NativeTranscriptCell
         if reused == nil { createdCells += 1 }
         let cell = reused ?? NativeTranscriptCell()
@@ -331,28 +355,31 @@ final class NativeTranscriptController: NSObject, NSTableViewDataSource, NSTable
         guard let configuration else { return }
         cellBindings += 1
         cell.bind(item: item, width: columnWidth, row: { if case let .row(id) = item { return rows[id] }; return nil }(),
-                  configuration: configuration, selection: { id in
-                      if let state = selections[id] { return state }
+                  configuration: configuration, selection: { [weak self] id in
+                      guard let self else { return MessageTextSelection() }
+                      if let state = self.selections[item]?[id] { return state }
                       let state = MessageTextSelection()
-                      selections[id] = state
+                      self.selections[item, default: [:]][id] = state
                       return state
-                  }, hosted: {
-                      switch item {
-                      case .header: return configuration.header
-                      case .footer: return configuration.footer
-                      case .earlier: return AnyView(EarlierMessagesRow(loading: configuration.loadingEarlier,
-                                                                     error: configuration.earlierError,
-                                                                     load: configuration.loadEarlier))
-                      case let .row(id):
-                          guard let row = rows[id] else { return AnyView(EmptyView()) }
-                          return AnyView(RowView(row: row, toolExpansions: configuration.toolExpansions,
-                                                 messageExpansions: configuration.messageExpansions,
-                                                 active: configuration.presentation.working && id == live.last(where: \.isWork)?.id))
-                      }
-                  }(), changed: { [weak self, weak cell] in
+                  }, changed: { [weak self, weak cell] in
                       guard let self, let cell, cell.item == item else { return }
                       self.invalidateHeight(item)
                   })
+        styleHighlight(cell)
+    }
+
+    private func styleHighlight(_ cell: NativeTranscriptCell) {
+        let target = highlighted.map { NativeTranscriptItem.row($0) }
+        cell.setHighlighted(cell.item == target && configuration?.environment.keyboardCue == true
+            && table.window?.firstResponder === table,
+            increasedContrast: configuration?.environment.colorSchemeContrast == .increased)
+    }
+
+    func refreshHighlights() {
+        table.enumerateAvailableRowViews { [weak self] row, _ in
+            guard let cell = row.view(atColumn: 0) as? NativeTranscriptCell else { return }
+            self?.styleHighlight(cell)
+        }
     }
 
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
@@ -495,14 +522,10 @@ final class NativeTranscriptController: NSObject, NSTableViewDataSource, NSTable
         case 119: next = ids.last
         case 53: return configuration.environment.keyboardFocus.focus(.composer)
         case 36:
-            guard let highlighted, let row = rows[highlighted] else { return true }
-            let state = configuration.messageExpansions.state(for: highlighted)
-            switch row {
-            case .work, .thinking, .tools: state.choice = !(state.choice ?? false)
-            case .user, .automatic, .question, .event: state.expanded.toggle()
-            default: return true
-            }
+            guard let highlighted, let index = indices[.row(highlighted)] else { return true }
             configuration.scroll.follow.pauseFollowing()
+            let cell = table.view(atColumn: 0, row: index, makeIfNecessary: true) as? NativeTranscriptCell
+            _ = cell?.activate()
             return true
         default: return false
         }
@@ -511,6 +534,7 @@ final class NativeTranscriptController: NSObject, NSTableViewDataSource, NSTable
             highlighted = next
             configuration.scroll.follow.pauseFollowing()
             table.scrollRowToVisible(index)
+            refreshHighlights()
         } else if event.keyCode == 126 { configuration.loadEarlier() }
         return true
     }
@@ -546,6 +570,16 @@ final class NativeTranscriptScrollView: NSScrollView {
 
 final class NativeTranscriptTable: NSTableView {
     weak var controller: NativeTranscriptController?
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted { DispatchQueue.main.async { [weak self] in self?.controller?.refreshHighlights() } }
+        return accepted
+    }
+    override func resignFirstResponder() -> Bool {
+        let accepted = super.resignFirstResponder()
+        if accepted { DispatchQueue.main.async { [weak self] in self?.controller?.refreshHighlights() } }
+        return accepted
+    }
     override func keyDown(with event: NSEvent) {
         if controller?.handleKey(event) != true { super.keyDown(with: event) }
     }
@@ -558,15 +592,17 @@ final class NativeTranscriptCell: NSTableCellView {
     private var resource: NativeTranscriptResource?
     private var generation = UUID()
     private var text: NativeMarkdownMessage?
-    private var hosted: TranscriptRowHost?
-    private var hostedContent: AnyView?
-    private var hostedWidth: CGFloat = 0
+    private var content: (any NativeRowContent)?
+    private var chrome: NativeTranscriptChrome?
     private let anchor = TranscriptRowAnchorView()
+    private let highlight = NativeTranscriptHighlight()
     private var changed: (() -> Void)?
     override var isFlipped: Bool { true }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        highlight.isHidden = true
+        addSubview(highlight)
         addSubview(anchor)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -575,27 +611,26 @@ final class NativeTranscriptCell: NSTableCellView {
         generation = UUID()
         text?.stop()
         text?.removeFromSuperview(); text = nil
-        hosted?.onSizeChanged = nil
-        hosted?.removeFromSuperview(); hosted = nil
-        hostedContent = nil
-        hostedWidth = 0
+        content?.stop(); content = nil
+        chrome?.stop(); chrome = nil
         changed = nil
         item = nil
     }
 
     func bind(item: NativeTranscriptItem, width: CGFloat, row: ChatRow?, configuration: NativeTranscript,
-              selection: (String) -> MessageTextSelection, hosted content: AnyView,
+              selection: @escaping (String) -> MessageTextSelection,
               changed: @escaping () -> Void) {
         if self.item != item || resource != configuration.resource {
             if resource == configuration.resource, case .text = row, let text {
-                // Keep TextKit regions and compatibility host objects, never the previous message's work/state.
+                // Keep TextKit regions, never the previous message's work or state.
                 generation = UUID()
                 text.resetMessageBinding()
                 self.changed = nil
-            } else if resource == configuration.resource, hosted != nil {
-                // Reuse the bounded host object, but reset its SwiftUI subtree identity below.
+            } else if resource == configuration.resource, content != nil {
                 generation = UUID()
-                hosted?.onSizeChanged = nil
+                self.changed = nil
+            } else if resource == configuration.resource, chrome != nil {
+                generation = UUID()
                 self.changed = nil
             } else { unbind() }
         }
@@ -609,26 +644,63 @@ final class NativeTranscriptCell: NSTableCellView {
             changed()
         }
         self.changed = fenced
+        let context = NativeRowContext(configuration: configuration, selection: selection,
+            active: row?.id == configuration.presentation.liveRows.last(where: \.isWork)?.id && configuration.presentation.working,
+            changed: fenced)
         if case let .text(id, source, timestamp) = row {
+            content?.stop(); content = nil
+            chrome?.stop(); chrome = nil
             if text == nil {
-                hosted?.removeFromSuperview(); hosted = nil
                 let view = NativeMarkdownMessage()
                 text = view; addSubview(view)
             }
+            var environment = context.environment
+            if let row { environment.nativeTranscriptMenu = nativeMessageMenu(row: row, environment: environment) }
             text?.update(source: source, timestamp: timestamp, streaming: id.hasPrefix("streaming-"),
-                         selection: selection(id), environment: configuration.environment, changed: fenced)
-        } else {
-            text?.stop(); text?.removeFromSuperview(); text = nil
-            let root = AnyView(content.id(item).environment(\.self, configuration.environment)
-                .environment(\.transcriptContentPrepared, fenced))
-            hostedContent = root
-            hostedWidth = width
-            let sized = AnyView(root.frame(width: width).fixedSize(horizontal: false, vertical: true))
-            if let hosted { hosted.rootView = sized } else {
-                let view = TranscriptRowHost(rootView: sized)
-                hosted = view; addSubview(view)
+                         selection: selection(id), environment: environment, changed: fenced)
+            text?.setAccessibilityElement(true)
+            text?.setAccessibilityRole(.group)
+            text?.setAccessibilityLabel("Assistant message")
+            var actions = [NSAccessibilityCustomAction(name: "Copy message", handler: {
+                MessageCopyButton.copy(source); return true
+            })]
+            if let row, let entry = row.entryID, let rewind = environment.transcriptRewind {
+                actions.append(NSAccessibilityCustomAction(name: "Restore to Here", handler: { [weak rewind] in
+                    guard let rewind, !rewind.pending else { return false }
+                    rewind.request(.restore, entryID: entry); return true
+                }))
             }
-            hosted?.onSizeChanged = fenced
+            text?.setAccessibilityCustomActions(actions)
+        } else if let row, let native = nativeContent(for: row) {
+            text?.stop(); text = nil
+            chrome?.stop(); chrome = nil
+            if content?.nativeView !== native.nativeView {
+                content?.stop()
+                content = native
+                addSubview(native.nativeView)
+            }
+            native.bind(row, context: context)
+        } else {
+            content?.stop(); content = nil
+            text?.stop(); text?.removeFromSuperview(); text = nil
+            let next: NativeTranscriptChrome
+            switch item {
+            case .header:
+                let view = (chrome as? NativeHeaderChrome) ?? NativeHeaderChrome()
+                view.update(configuration.header, context: context); next = view
+            case .footer:
+                let view = (chrome as? NativeFooterChrome) ?? NativeFooterChrome()
+                view.update(configuration.footer, context: context); next = view
+            case .earlier:
+                let view = (chrome as? NativeEarlierChrome) ?? NativeEarlierChrome()
+                view.update(loading: configuration.loadingEarlier, error: configuration.earlierError,
+                            context: context, load: configuration.loadEarlier); next = view
+            case .row:
+                return // A removed row cannot mount stale content.
+            }
+            if chrome !== next {
+                chrome?.stop(); chrome = next; addSubview(next)
+            }
         }
         needsLayout = true
         fenced()
@@ -636,14 +708,8 @@ final class NativeTranscriptCell: NSTableCellView {
 
     func measure(width: CGFloat) -> CGFloat {
         if let text { return max(1, text.measure(width: width)) }
-        if let hosted {
-            if hostedWidth != width, let hostedContent {
-                hostedWidth = width
-                hosted.rootView = AnyView(hostedContent.frame(width: width).fixedSize(horizontal: false, vertical: true))
-            }
-            hosted.frame.size.width = width
-            return hosted.measuredContentHeight()
-        }
+        if let content { return max(1, content.measure(width: width)) }
+        if let chrome { return max(1, chrome.measure(width: width)) }
         return 1
     }
 
@@ -653,31 +719,51 @@ final class NativeTranscriptCell: NSTableCellView {
         let x = max(28, (bounds.width - width) / 2)
         let target = NSRect(x: x, y: 0, width: width, height: bounds.height)
         text?.frame = target
-        hosted?.frame = target
+        content?.nativeView.frame = target
+        chrome?.frame = target
         anchor.frame = target
+        highlight.frame = target
+    }
+
+    func setHighlighted(_ shown: Bool, increasedContrast: Bool) {
+        highlight.isHidden = !shown
+        highlight.increasedContrast = increasedContrast
+    }
+
+    func activate() -> Bool { content?.activate() ?? chrome?.activate() ?? false }
+
+    private func nativeContent(for row: ChatRow) -> (any NativeRowContent)? {
+        switch row {
+        case let .user(_, text, _) where SubagentNotification(message: text) == nil:
+            return (content as? NativeUserMessage) ?? NativeUserMessage()
+        case .user, .automatic, .question, .notice, .event:
+            return (content as? NativeEventRow) ?? NativeEventRow()
+        case .error:
+            return (content as? NativeErrorRow) ?? NativeErrorRow()
+        case .work, .tools, .thinking:
+            return (content as? NativeWorkGroup) ?? NativeWorkGroup()
+        case .artifact:
+            return (content as? NativeArtifactRow) ?? NativeArtifactRow()
+        case .text: return nil
+        }
     }
 }
 
-final class TranscriptRowHost: NSHostingView<AnyView> {
-    var onSizeChanged: (() -> Void)?
-    required init(rootView: AnyView) {
-        super.init(rootView: rootView)
-        // The row owner installs an explicit width and measured height. Min/max probes only repeat that work.
-        sizingOptions = [.intrinsicContentSize]
+private final class NativeTranscriptHighlight: NSView {
+    var increasedContrast = false { didSet { if oldValue != increasedContrast { needsDisplay = true } } }
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true; layer?.cornerRadius = Theme.Radius.row
+        setAccessibilityElement(false)
     }
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    func measuredContentHeight() -> CGFloat {
-        // The root already fixes its width. A size query must not force a nested placement/render pass.
-        let height = intrinsicContentSize.height
-        if height.isFinite, height >= 0 { return max(1, ceil(height)) }
-        // Preserve the old path for a host that cannot yet report an intrinsic height.
-        layoutSubtreeIfNeeded()
-        return max(1, ceil(fittingSize.height))
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = NSColor(increasedContrast ? Theme.selected : Theme.keyboardHighlight).cgColor
+        }
     }
-
-    override func invalidateIntrinsicContentSize() {
-        super.invalidateIntrinsicContentSize()
-        onSizeChanged?()
-    }
+    override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); needsDisplay = true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
