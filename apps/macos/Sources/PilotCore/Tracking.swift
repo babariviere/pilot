@@ -419,7 +419,8 @@ public struct TrackedItem: Codable, Identifiable, Equatable, Sendable {
     public let title: String
     public let url: String
     public let status: String
-    /// Local linearStart (moved/skipped/error) and slackStart (reacted/skipped/error) outcomes,
+    /// Local linearStart (moved/skipped/error) and slackStart (reacted/skipped/error, optional owner) outcomes,
+    /// independent slackDone (reacted/skipped/error) and slackEyesRemoval (removed/absent/skipped/error) results,
     /// with attemptedAt and an optional safe error. Source sync preserves them. Linear sub-issues carry parentId.
     public let metadata: [String: JSONValue]
     /// Linear sub-issues: the parent's header, when pilotd resolved it.

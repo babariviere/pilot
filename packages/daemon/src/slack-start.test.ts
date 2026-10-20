@@ -32,7 +32,7 @@ async function fixture(t: TestContext) {
 	let beforeWrite: (signal: AbortSignal) => Promise<void> = async () => {};
 	let response: Response = { structuredContent: { ok: true } };
 	const tracking = new SourceRegistry(projects, items, {
-		async call(kind, tool, args, signal) {
+		async call(kind, tool, args, signal): Promise<TrackingJson> {
 			assert.equal(kind, "slack", "only the dedicated Slack source");
 			if (tool === "reactions") return { present: false };
 			assert.equal(dedicatedSourceTool(kind, tool), "slack_add_reaction");
@@ -41,7 +41,7 @@ async function fixture(t: TestContext) {
 			calls.push({ tool, args });
 			await beforeWrite(signal);
 			signal.throwIfAborted();
-			return decodeMcpResult(response, tool);
+			return { ...(decodeMcpResult(response, tool) as Record<string, TrackingJson>), userId: "UPILOT" };
 		},
 	});
 	tracking.register("slack", async () => ({ items: [structuredClone(input)] }));
@@ -101,6 +101,7 @@ test("confirmed chat and mission starts react on the parent without awaiting Sla
 		assert.equal(outcome(saved)?.outcome, "reacted");
 		assert.equal(typeof outcome(saved)?.attemptedAt, "number");
 		assert.equal(outcome(saved)?.error, undefined);
+		assert.deepEqual(outcome(saved)?.owner, { userId: "UPILOT", channel: "CEXAMPLE", messageTs: parentTs });
 		assert.equal(saved.updatedAt, f.item.updatedAt, "source timestamp stays source-owned");
 		await f.tracking.patch(linked.id, { ...link, start: true });
 		await f.tracking.patch(linked.id, { sessionId: "another-chat", start: true });

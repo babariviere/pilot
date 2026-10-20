@@ -294,6 +294,50 @@ private func outline(_ items: [TrackedItem]) -> String {
     #expect(item.slack?.doneReason == "Done · ✅ in Slack")
 }
 
+@Test func slackEyesRemovalFailureDoesNotMasqueradeAsSuccessfulSynchronization() {
+    for reason in ["identity_unverified", "identity_mismatch", "access_denied", "configuration", "error"] {
+        let item = TrackedItem(id: "s", projectId: "p", kind: .slack, externalId: "CEXAMPLE/1.000001",
+                              title: "Sample question", url: "https://example.com", status: "done",
+                              metadata: ["slackDone": .object(["outcome": .string("reacted")]),
+                                         "slackEyesRemoval": .object(["outcome": .string("error"),
+                                                                     "reason": .string(reason),
+                                                                     "error": .string("private detail")])],
+                              slack: SlackTriage(type: .question, severity: .low, status: .done),
+                              createdAt: ms, updatedAt: ms)
+        #expect(TrackedItemText.startError(item) == "Couldn't remove eyes reaction in Slack")
+        #expect(TrackedItemText.startErrorHelp(item)?.contains("Done is saved locally") == true)
+        #expect(!SlackTriageText.accessibilityLabel(item, now: now).contains("private detail"))
+        #expect(SlackTriageText.accessibilityLabel(item, now: now).contains("Couldn't remove eyes reaction"))
+        #expect(item.slack?.status == .done)
+        if reason == "identity_mismatch" {
+            #expect(TrackedItemText.startErrorHelp(item)?.contains("different Slack identity") == true)
+        }
+        if reason == "access_denied" {
+            #expect(TrackedItemText.startErrorHelp(item)?.contains("lacks permission") == true)
+        }
+    }
+    for outcome in ["removed", "absent", "skipped"] {
+        let item = TrackedItem(id: "s", projectId: "p", kind: .slack, externalId: "CEXAMPLE/1.000001",
+                              title: "Sample question", url: "https://example.com", status: "done",
+                              metadata: ["slackDone": .object(["outcome": .string("reacted")]),
+                                         "slackEyesRemoval": .object(["outcome": .string(outcome)])],
+                              createdAt: ms, updatedAt: ms)
+        #expect(TrackedItemText.startError(item) == nil)
+        #expect(TrackedItemText.startErrorHelp(item) == nil)
+    }
+}
+
+@Test func bothSlackReactionFailuresAreReportedWithoutLosingDone() {
+    let item = TrackedItem(id: "s", projectId: "p", kind: .slack, externalId: "CEXAMPLE/1.000001",
+                          title: "Sample question", url: "https://example.com", status: "done",
+                          metadata: ["slackDone": .object(["outcome": .string("error")]),
+                                     "slackEyesRemoval": .object(["outcome": .string("error")])],
+                          createdAt: ms, updatedAt: ms)
+    #expect(TrackedItemText.startError(item) == "Couldn't sync Slack reactions")
+    #expect(TrackedItemText.startErrorHelp(item)?.contains("Adding the done reaction also failed") == true)
+    #expect(item.status == "done")
+}
+
 @Test func trackedLinkShowsTheLatestChatOrMissionWithACount() {
     func session(_ id: String, state: String = "idle", outcome: SessionOutcome? = nil, created: Double,
                  pr: SessionPullRequest? = nil) -> SessionSummary {

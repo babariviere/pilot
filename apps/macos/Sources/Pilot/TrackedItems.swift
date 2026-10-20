@@ -121,7 +121,11 @@ enum TrackedItemText {
     static func startError(_ item: TrackedItem) -> String? {
         if item.kind == .slack {
             if item.metadata["slackDone"]?["outcome"]?.string == "error" {
-                return "Couldn't add done reaction in Slack"
+                return item.metadata["slackEyesRemoval"]?["outcome"]?.string == "error"
+                    ? "Couldn't sync Slack reactions" : "Couldn't add done reaction in Slack"
+            }
+            if item.metadata["slackEyesRemoval"]?["outcome"]?.string == "error" {
+                return "Couldn't remove eyes reaction in Slack"
             }
             return item.metadata["slackStart"]?["outcome"]?.string == "error"
                 ? "Couldn't add eyes reaction in Slack" : nil
@@ -131,6 +135,18 @@ enum TrackedItemText {
 
     static func startErrorHelp(_ item: TrackedItem) -> String? {
         guard startError(item) != nil else { return nil }
+        if item.kind == .slack, item.metadata["slackEyesRemoval"]?["outcome"]?.string == "error" {
+            let detail: String = switch item.metadata["slackEyesRemoval"]?["reason"]?.string {
+            case "identity_unverified": "Pilot couldn't verify who added the eyes reaction."
+            case "identity_mismatch": "The removal connection uses a different Slack identity."
+            case "access_denied": "The removal connection lacks permission."
+            case "configuration": "The eyes removal connection isn't configured or available."
+            default: "Eyes removal failed or wasn't confirmed."
+            }
+            let addFailure = item.metadata["slackDone"]?["outcome"]?.string == "error"
+                ? " Adding the done reaction also failed." : ""
+            return "Done is saved locally. \(detail)\(addFailure) Open the thread in Slack to check the reactions."
+        }
         if item.kind == .slack, item.metadata["slackDone"]?["outcome"]?.string == "error" {
             return "Adding the reaction failed without changing the item's local status. Open the thread in Slack to add it."
         }

@@ -15,6 +15,8 @@ import { NotFound, ServiceUnavailable } from "./errors.ts";
 import type { SizeReservation } from "./linear-size.ts";
 import type { CaseGroup, CaseInput } from "./slack-cases.ts";
 import type { SlackClassification } from "./slack-classifier.ts";
+import type { SlackReactionOwner } from "./slack-reaction-owner.ts";
+import type { SlackRemovalFailure } from "./source-mcp.ts";
 import type {
 	InboxQuery,
 	InboxTracked,
@@ -237,8 +239,8 @@ export class TrackedItemStore {
 	reserveSlackStart(id: string): Promise<boolean> {
 		return this.rpc("reserveSlackStart", { id });
 	}
-	slackStartResult(id: string, outcome: "reacted" | "skipped" | "error"): Promise<void> {
-		return this.rpc("slackStartResult", { id, outcome });
+	slackStartResult(id: string, outcome: "reacted" | "skipped" | "error", owner?: SlackReactionOwner): Promise<void> {
+		return this.rpc("slackStartResult", { id, outcome, owner });
 	}
 	reserveSlackReactions(
 		projectId: string,
@@ -279,6 +281,13 @@ export class TrackedItemStore {
 	}
 	reserveSlackDone(projectId: string): Promise<TrackedItem | undefined> {
 		return this.rpc("reserveSlackDone", { projectId });
+	}
+	slackEyesRemovalResult(
+		id: string,
+		outcome: "removed" | "absent" | "skipped" | "error",
+		reason?: SlackRemovalFailure,
+	): Promise<void> {
+		return this.rpc("slackEyesRemovalResult", { id, outcome, reason });
 	}
 	slackDoneResult(id: string, outcome: "reacted" | "skipped" | "error"): Promise<void> {
 		return this.rpc("slackDoneResult", { id, outcome });

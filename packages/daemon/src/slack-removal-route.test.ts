@@ -6,15 +6,18 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import type { TrackingJson } from "@pilot/protocol";
+import { slackReactionUser, validSlackReactionOwner } from "./slack-reaction-owner.ts";
 import { loadSlackRemovalRoute, parseSlackRemovalRoute, slackRemovalCall } from "./slack-removal-route.ts";
-import { decodeMcpResult, PiSourceMcpClient, validSourceArguments } from "./source-mcp.ts";
+import { decodeMcpResult, PiSourceMcpClient, SlackRemovalError, validSourceArguments } from "./source-mcp.ts";
 
 const route = {
 	server: { url: "https://mcp.example.com/mcp", headers: { Authorization: "Bearer fixture-scoped-key" } },
 	tool: "remove_reaction",
+	identityTool: "auth_test",
 };
 const parent = "1780000000.123456";
-const args = { channel_id: "CEXAMPLE", message_ts: parent, emoji: "eyes" };
+const args = { channel_id: "CEXAMPLE", message_ts: parent, emoji: "eyes", user_id: "UPILOT" };
 
 test("local route owns a strict HTTP server definition with explicit key auth and optional dispatcher", async () => {
 	assert.deepEqual(parseSlackRemovalRoute(route), route);
@@ -43,6 +46,9 @@ test("local route owns a strict HTTP server definition with explicit key auth an
 		{ ...route, server: "my-slack-proxy" },
 		{ ...route, token: "secret" },
 		{ ...route, enabled: "false" },
+		{ ...route, identityTool: "" },
+		{ ...route, identityTool: "bad\nname" },
+		{ ...route, identityTool: "__proto__" },
 		{ ...route, tool: "bad\nname" },
 		{ ...route, dispatcher: {} },
 		{ ...route, dispatcher: { ...dispatcher, argumentsKey: "operation" } },
@@ -100,6 +106,8 @@ test("removal accepts explicit success only, discards provider text and fixes ey
 		assert.throws(() => decodeMcpResult(response, "removeSlackEyes"), /^Error: Couldn't remove Slack eyes reaction$/);
 	assert.ok(validSourceArguments("removeSlackEyes", args));
 	for (const invalid of [
+		{ ...args, user_id: undefined },
+		{ ...args, user_id: "not-a-user" },
 		{ ...args, emoji: "white_check_mark" },
 		{ ...args, message_ts: "bad" },
 		{ ...args, channel_id: "bad" },
@@ -113,6 +121,8 @@ test("daemon calls only its inline server with a Bearer key, independently of mc
 	const calls: unknown[] = [];
 	const requests: Array<{ path?: string; authorization?: string }> = [];
 	let rejectKey = false;
+	let removalUser: string | null = "UPILOT";
+	const eyes = new Set(["UPILOT", "UOTHER"]);
 	let response: Parameters<typeof decodeMcpResult>[0] = { structuredContent: { ok: true } };
 	const server = createServer(async (req, res) => {
 		requests.push({ path: req.url, authorization: req.headers.authorization });
@@ -144,7 +154,7 @@ test("daemon calls only its inline server with a Bearer key, independently of mc
 			};
 		if (message.method === "tools/list")
 			result = {
-				tools: ["remove_reaction", "dispatch"].map((name) => ({
+				tools: ["remove_reaction", "auth_test", "dispatch"].map((name) => ({
 					name,
 					inputSchema: { type: "object" },
 					annotations: { readOnlyHint: false },
@@ -152,7 +162,12 @@ test("daemon calls only its inline server with a Bearer key, independently of mc
 			};
 		if (message.method === "tools/call") {
 			calls.push(message.params);
-			result = response;
+			const inner =
+				message.params.name === "dispatch"
+					? (message.params.arguments.name ?? message.params.arguments.operation)
+					: message.params.name;
+			result = inner === "auth_test" ? { structuredContent: { ok: true, user_id: removalUser } } : response;
+			if (inner === "remove_reaction" && !response.isError) eyes.delete("UPILOT");
 		}
 		res.writeHead(200, { "content-type": "application/json" });
 		res.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
@@ -201,6 +216,43 @@ test("daemon calls only its inline server with a Bearer key, independently of mc
 			const expected = slackRemovalCall(configured, "CEXAMPLE", parent);
 			assert.deepEqual(calls.at(-1), { name: expected.tool, arguments: expected.args });
 		}
+		assert.deepEqual(
+			[...eyes],
+			["UOTHER"],
+			"the tool accepts no user selector and removes only the authenticated user's reaction",
+		);
+		for (const [user, reason] of [
+			["UOTHER", "identity_mismatch"],
+			[null, "identity_unverified"],
+		] as const) {
+			removalUser = user;
+			const before = calls.length;
+			await assert.rejects(
+				client.call("slack", "removeSlackEyes", args, signal),
+				(error: unknown) => error instanceof SlackRemovalError && error.reason === reason,
+			);
+			assert.equal(calls.length, before + 1, "only the identity read ran, never the removal");
+		}
+		removalUser = "UPILOT";
+		await configure({ ...local, identityTool: undefined });
+		const beforeUnverified = calls.length;
+		await assert.rejects(
+			client.call("slack", "removeSlackEyes", args, signal),
+			(error: unknown) => error instanceof SlackRemovalError && error.reason === "identity_unverified",
+		);
+		assert.equal(
+			calls.length,
+			beforeUnverified,
+			"old configuration cannot silently remove another identity's reaction",
+		);
+		await configure(local);
+		response = { isError: true, structuredContent: { ok: false, error: "no_reaction" } };
+		assert.deepEqual(await client.call("slack", "removeSlackEyes", args, signal), { ok: true, absent: true });
+		response = { isError: true, structuredContent: { ok: false, error: "missing_scope" } };
+		await assert.rejects(
+			client.call("slack", "removeSlackEyes", args, signal),
+			(error: unknown) => error instanceof SlackRemovalError && error.reason === "access_denied",
+		);
 		assert.ok(requests.length > 0);
 		assert.ok(requests.every((request) => request.authorization === "Bearer fixture-scoped-key"));
 		for (const error of ["no_reaction", "not authorized"]) {
@@ -252,4 +304,28 @@ test("daemon calls only its inline server with a Bearer key, independently of mc
 		await new Promise<void>((resolve) => server.close(() => resolve()));
 		await rm(home, { recursive: true, force: true });
 	}
+});
+
+test("ownership parsing keeps only authenticated IDs, not reaction users, message authors or profile details", () => {
+	assert.equal(slackReactionUser({ result: "User ID: UPILOT\nEmail: private@example.test\n" }), "UPILOT");
+	assert.equal(slackReactionUser({ ok: true, user_id: "UPILOT" }), "UPILOT");
+	for (const value of [
+		null,
+		[],
+		"UPILOT",
+		{ user_id: "not-a-user" },
+		{ ok: false, user_id: "UPILOT" },
+		{ error: "missing_scope", user_id: "UPILOT" },
+		{ users: ["UPILOT"] },
+		{ user: "UPILOT" },
+		{ result: "From: someone (UPILOT)" },
+	] as TrackingJson[])
+		assert.equal(slackReactionUser(value), undefined);
+	assert.equal(validSlackReactionOwner({ userId: "UPILOT", channel: "CEXAMPLE", messageTs: parent }), true);
+	for (const value of [null, {}, { userId: "UPILOT" }, { userId: "UPILOT", channel: "CEXAMPLE", messageTs: "reply" }])
+		assert.equal(validSlackReactionOwner(value), false);
+	assert.deepEqual(
+		decodeMcpResult({ content: [{ type: "text", text: '{"ok":false,"error":"no_reaction"}' }] }, "removeSlackEyes"),
+		{ ok: true, absent: true },
+	);
 });
