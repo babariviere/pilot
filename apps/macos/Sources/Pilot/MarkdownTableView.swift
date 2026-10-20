@@ -326,7 +326,7 @@ final class MarkdownTableCellView: NSView {
     func attach(to selection: MessageTextSelection?, key: MessageTextSelection.Key) {
         if text.selectionOwner !== selection || text.selectionKey != key {
             text.selectionOwner?.unregister(text)
-            text.setSelectedRange(NSRange(location: 0, length: 0))
+            text.clearMessageSelection()
             text.selectionOwner = selection
             text.selectionKey = key
         }

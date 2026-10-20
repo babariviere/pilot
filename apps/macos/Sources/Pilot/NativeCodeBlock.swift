@@ -105,7 +105,7 @@ final class NativeCodeBlock: NSView {
             generation = UUID()
             preparation?.cancel(); preparation = nil
             text.selectionOwner?.unregister(text)
-            text.setSelectedRange(NSRange(location: 0, length: 0))
+            text.clearMessageSelection()
             scroll.contentView.scroll(to: .zero)
         }
         text.selectionOwner = selection

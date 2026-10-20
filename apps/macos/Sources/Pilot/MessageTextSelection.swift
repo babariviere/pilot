@@ -352,6 +352,16 @@ final class MessageSelectionTextView: NSTextView, NSTextViewDelegate {
     }
     weak var selectionOwner: MessageTextSelection?
     var selectionKey = MessageTextSelection.Key(block: 0)
+    /// A recycled native region must not carry a caret/range into another message. Fresh regions already
+    /// have this selection; assigning it again still enters AppKit's selection/invalidation machinery.
+    @discardableResult
+    func clearMessageSelection() -> Bool {
+        let empty = NSRange(location: 0, length: 0)
+        guard selectedRanges.count != 1 || selectedRange() != empty || selectionAffinity != .downstream else { return false }
+        setSelectedRange(empty)
+        return true
+    }
+
     var content: AttributedString?
     var style: Style?
     var copyPrefix = ""

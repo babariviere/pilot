@@ -5,6 +5,36 @@ import Testing
 
 @Suite(.serialized) @MainActor
 struct MessageTextSelectionTests {
+    @Test func nativeRebindingSkipsEmptySelectionWritesButClearsRangesAndCarets() {
+        _ = NSApplication.shared
+        let view = MessageSelectionTextView.makeReadOnly()
+        view.string = "A reused message"
+        view.setSelectedRange(NSRange(location: 0, length: 0))
+        #expect(!view.clearMessageSelection())
+        for range in [NSRange(location: 2, length: 4), NSRange(location: 5, length: 0)] {
+            view.setSelectedRange(range)
+            #expect(view.clearMessageSelection())
+            #expect(view.selectedRange() == NSRange(location: 0, length: 0))
+            #expect(!view.clearMessageSelection())
+        }
+    }
+
+    @Test func nativeRebindingStillResetsAffinityAndMultipleRanges() {
+        _ = NSApplication.shared
+        let view = MessageSelectionTextView.makeReadOnly()
+        view.string = "A reused message"
+        view.setSelectedRanges([NSValue(range: NSRange(location: 0, length: 0))],
+                               affinity: .upstream, stillSelecting: false)
+        #expect(view.clearMessageSelection())
+        #expect(view.selectionAffinity == .downstream)
+        view.setSelectedRanges([NSValue(range: NSRange(location: 0, length: 0)),
+                                NSValue(range: NSRange(location: 4, length: 2))],
+                               affinity: .downstream, stillSelecting: false)
+        #expect(view.clearMessageSelection())
+        #expect(view.selectedRanges == [NSValue(range: NSRange(location: 0, length: 0))])
+        #expect(!view.clearMessageSelection())
+    }
+
     private func region(_ source: String, block: Int, owner: MessageTextSelection) -> MessageSelectionTextView {
         _ = NSApplication.shared
         let view = MessageSelectionTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 60))
