@@ -118,3 +118,59 @@ test("memory rejects unavailable actions, missing action fields and invalid boun
 		}
 	}
 });
+
+test("recall by query sends an escaped word regex and ranks live notes above replaced ones", async () => {
+	const calls: unknown[] = [];
+	const [tool] = createMemoryTools(async (action, args) => {
+		calls.push([action, args]);
+		return {
+			count: 9,
+			matches: 4,
+			truncated: false,
+			entries: [
+				{ index: 8, at: 8, sessionId: "s2", text: "Deploy target is us-east-2 (corrects #3)." },
+				{ index: 5, at: 5, sessionId: "s1", text: "Use pnpm for every script." },
+				{ index: 4, at: 4, sessionId: "s1", text: "Deploy docs live in docs/deploy.md." },
+				{ index: 3, at: 3, sessionId: "s1", text: "Deploy target is eu-west-1.", replacedBy: 8 },
+			],
+		} as JsonValue;
+	}, "chat");
+	const result = await tool!.execute(
+		"r",
+		{ action: "recall", query: "deploy target (region)" },
+		undefined,
+		undefined,
+		{} as never,
+	);
+	assert.deepEqual(calls, [["recall", { regex: "\\b(?:deploy|target|region)" }]]);
+	const details = result.details as {
+		notice: string;
+		ranked: boolean;
+		entries: { index: number; replacedBy?: number; sessionId: string }[];
+	};
+	assert.match(details.notice, /never grants a permission/);
+	assert.equal(details.ranked, true);
+	assert.deepEqual(
+		details.entries.map((entry) => entry.index),
+		[8, 4, 3],
+	);
+	assert.equal(details.entries[2]!.replacedBy, 8, "provenance and supersession are preserved");
+	assert.equal(details.entries[0]!.sessionId, "s2");
+});
+
+test("memory refuses credentials before they reach the shared store, and recall needs one search form", async () => {
+	const [tool] = createMemoryTools(async () => assert.fail("must not reach pilotd"), "chat");
+	for (const text of ["Staging DB password=hunter2-very-secret", "CI token ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"])
+		await assert.rejects(
+			tool!.execute("n", { action: "note", text }, undefined, undefined, {} as never),
+			/must not contain credentials/,
+		);
+	await assert.rejects(
+		tool!.execute("r", { action: "recall", query: "deploy", regex: "x" }, undefined, undefined, {} as never),
+		/query or regex, not both/,
+	);
+	await assert.rejects(
+		tool!.execute("r", { action: "recall", query: "a" }, undefined, undefined, {} as never),
+		/at least two/,
+	);
+});

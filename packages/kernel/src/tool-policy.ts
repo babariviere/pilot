@@ -51,7 +51,18 @@ export function controlPermissionBlock(
 	return undefined;
 }
 
-const INVESTIGATE_TOOLS = new Set(["codemode", "read", "find", "grep", "ls", "web", "artifact", "ask_user", "mission"]);
+const INVESTIGATE_TOOLS = new Set([
+	"codemode",
+	"read",
+	"find",
+	"grep",
+	"ls",
+	"web",
+	"artifact",
+	"ask_user",
+	"mission",
+	"history_recall",
+]);
 /** Runs for actual nested tool calls too, including dynamically constructed codemode arguments. */
 export function nativeToolPolicy(permission?: ControlPermission): ExtensionFactory {
 	return (pi) => {

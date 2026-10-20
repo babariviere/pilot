@@ -94,6 +94,7 @@ test("Build delivery is allowed through shell, jobs and nested tools while read-
 			level === "investigate",
 		);
 		assert.equal(await check("read", { path: "gh pr create" }), undefined);
+		assert.equal(await check("history_recall", { action: "search", query: "git push" }), undefined);
 		assert.equal(await check("artifact", { source: "git push" }), undefined);
 		assert.equal(
 			await check("codemode", {

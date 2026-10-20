@@ -1250,6 +1250,8 @@ export class SessionManager {
 						"lifecycle.jsonl.1",
 						"performance.jsonl",
 						"performance.jsonl.1",
+						"compaction.jsonl",
+						"compaction.jsonl.1",
 						"tool-activity.jsonl",
 						"tool-activity.jsonl.1",
 					].flatMap((file) => [
