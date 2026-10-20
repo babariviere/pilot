@@ -1,5 +1,13 @@
 # Agent diagnostics
 
+Starting a reviewed repair discloses that its originating diagnostics chat will be archived once the
+exact durable repair-create receipt and created-chat identity are confirmed. The app selects the repair;
+archival preserves the specialist history and never stops it or changes the diagnosed subject. Unknown,
+pending, rejected or mismatched receipts do not archive. If archival fails, the accepted create intent
+stays in the private native outbox for reconnect or **Check repair start** to retry archival, not creation.
+Recovery uses the original confirmed identity even if the proposal or project binding changes. Older
+intents without the disclosure flag do not archive, and there is no retroactive sweep or agent archive tool.
+
 Pilot exposes a bounded, read-only diagnostic snapshot to agents and native clients. It combines the current daemon
 projection with retained lifecycle transitions, request timings, [tool-call evidence](tool-call-diagnostics.md),
 event-loop stalls, delayed native OS evidence and the target's bounded aggregate AI usage/context-efficiency summary.

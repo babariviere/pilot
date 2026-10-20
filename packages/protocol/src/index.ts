@@ -1566,6 +1566,8 @@ export interface DiagnosticRepairAdmission {
 	subject?: import("./diagnostic-repair.ts").DiagnosticEvidenceSubject;
 	binding?: import("./diagnostic-repair.ts").DiagnosticRepairProjectBinding;
 	repairTitle?: string;
+	/** Native disclosed follow-through only. Does not grant an agent archive authority. */
+	archiveSpecialistOnStart?: boolean;
 }
 
 /** POST /api/sessions. Needs a missionId, projectId or cwd (cwd overrides a non-mission project's path). */
