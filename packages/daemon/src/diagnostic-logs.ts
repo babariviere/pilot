@@ -1,4 +1,4 @@
-/** Bounded, fixed-catalogue Pilot log reads for diagnostics specialists. No arbitrary paths or subprocesses. */
+/** Bounded fixed-catalogue reads. No model-selected paths, commands, units or subprocess arguments. */
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { constants } from "node:fs";
 import { type FileHandle, lstat, open, opendir, realpath } from "node:fs/promises";
@@ -82,6 +82,13 @@ export interface DiagnosticLogReaderOptions {
 	daemonLog?: string;
 	/** Host-owned fixed native producer path, never a diagnostic tool argument. */
 	appLog?: string;
+	/** Fixed host-owned service reader. No selector, command or arguments come from tool input. */
+	serviceJournal?: (signal?: AbortSignal) => Promise<{
+		available: boolean;
+		text: string;
+		truncated: boolean;
+		reason?: "journal_unavailable" | "inaccessible" | "unsafe_source";
+	}>;
 	/** Current-process daemon console ring. It does not contain inherited kernel stdout/stderr. */
 	daemonTail?: () => { text: string; available: boolean; truncated: boolean };
 	diagnosticReports?: string;
@@ -226,7 +233,9 @@ export class DiagnosticLogReader {
 		target: { sessionId: string; directory: string } | undefined,
 		localDiagnostics: boolean,
 		request: DiagnosticLogRequest,
+		signal?: AbortSignal,
 	): Promise<DiagnosticLogResult> {
+		if (signal?.aborted) throw new Error("Diagnostic read cancelled");
 		if (this.pending >= MAX_PENDING)
 			throw new Error("Diagnostic log reads are busy; retry after pending reads finish");
 		this.pending++;
@@ -242,11 +251,11 @@ export class DiagnosticLogReader {
 				action: parsed.action,
 			};
 			if (parsed.action === "inventory") {
-				const sources = await this.sources(host, target, localDiagnostics);
+				const sources = await this.sources(host, target, localDiagnostics, SOURCE_IDS, signal);
 				return { ...base, sources: [...sources.values()].map(inventory) };
 			}
 			if (parsed.action === "search") {
-				const sources = await this.sources(host, target, localDiagnostics, new Set([parsed.source]));
+				const sources = await this.sources(host, target, localDiagnostics, new Set([parsed.source]), signal);
 				const descriptor = sources.get(parsed.source)!;
 				return { ...base, page: await this.search(descriptor, parsed) };
 			}
@@ -256,6 +265,7 @@ export class DiagnosticLogReader {
 				target,
 				localDiagnostics,
 				new Set(ref && SOURCE_IDS.has(ref.s) ? [ref.s] : []),
+				signal,
 			);
 			return { ...base, excerpt: await this.excerpt(sources, parsed) };
 		} finally {
@@ -310,6 +320,7 @@ export class DiagnosticLogReader {
 		target: { sessionId: string; directory: string } | undefined,
 		localDiagnostics: boolean,
 		selected: ReadonlySet<DiagnosticLogSourceId> = SOURCE_IDS,
+		signal?: AbortSignal,
 	): Promise<Map<DiagnosticLogSourceId, SourceDescriptor>> {
 		const result = new Map<DiagnosticLogSourceId, SourceDescriptor>();
 		if (selected.has("app")) {
@@ -353,13 +364,25 @@ export class DiagnosticLogReader {
 		let daemonCandidates = daemonFiles.files;
 		let daemonRetention: DiagnosticLogSourceInventory["retention"] = "current_and_rotated";
 		let daemonCatalogTruncated = false;
+		let journalHistory = false;
+		if (needsDaemon && !daemonCandidates.length && localDiagnostics && this.options.serviceJournal) {
+			const journal = await this.options.serviceJournal(signal);
+			if (signal?.aborted) throw new Error("Diagnostic read cancelled");
+			daemonReason = journal.reason;
+			if (journal.available) {
+				daemonCandidates = [this.virtual("pilot-service-journal", Buffer.from(journal.text), false)];
+				daemonRetention = "os_managed";
+				daemonCatalogTruncated = journal.truncated;
+				journalHistory = true;
+			}
+		}
 		if (needsDaemon && !daemonCandidates.length && this.options.daemonTail) {
 			const tail = this.options.daemonTail();
 			if (tail.available) {
 				const buffer = Buffer.from(tail.text);
 				daemonCandidates = [this.virtual("process-ring", buffer, false)];
 				daemonRetention = "current_process";
-				daemonReason = "journal_unavailable";
+				daemonReason ??= "journal_unavailable";
 				daemonCatalogTruncated = tail.truncated;
 			}
 		}
@@ -368,9 +391,10 @@ export class DiagnosticLogReader {
 				id: "daemon",
 				scope: "host",
 				availability: daemonCandidates.length ? "available" : "unavailable",
-				coverage:
-					daemonRetention === "current_process"
-						? "Current pilotd process console ring only; system journal history is not read without a shell."
+				coverage: journalHistory
+					? "Current user's verified Pilot-only service journal, including inherited worker output and retained restarts. At most 256 records/seven days, snapshot up to 60 seconds old; not proof of current process liveness. Missing older history is unavailable."
+					: daemonRetention === "current_process"
+						? "Current pilotd process console ring only; safely owned service journal history is unavailable on this host."
 						: "pilotd log plus its retained rotation; inherited kernel/worker output may be interleaved.",
 				retention: daemonRetention,
 				availableFiles: daemonCandidates.length,
@@ -379,7 +403,7 @@ export class DiagnosticLogReader {
 				...(daemonReason ? { reason: daemonReason } : {}),
 				files: daemonCandidates,
 			});
-		const persistentWorkerFiles = daemonFiles.files;
+		const persistentWorkerFiles = journalHistory ? daemonCandidates : daemonFiles.files;
 		if (selected.has("kernel_worker"))
 			result.set("kernel_worker", {
 				id: "kernel_worker",
@@ -388,11 +412,11 @@ export class DiagnosticLogReader {
 				coverage: persistentWorkerFiles.length
 					? "Kernel/worker stdout and stderr inherited by pilotd; records are combined with daemon output and are not attributed by process."
 					: "Kernel/worker output is inherited by the host service, but no safe persistent file source is available to this reader.",
-				retention: persistentWorkerFiles.length ? "current_and_rotated" : "none",
+				retention: journalHistory ? "os_managed" : persistentWorkerFiles.length ? "current_and_rotated" : "none",
 				availableFiles: persistentWorkerFiles.length,
 				rotatedFiles: persistentWorkerFiles.filter((file) => file.rotated).length,
-				catalogTruncated: false,
-				...(daemonFiles.reason ? { reason: daemonFiles.reason } : {}),
+				catalogTruncated: journalHistory && daemonCatalogTruncated,
+				...((journalHistory ? undefined : daemonFiles.reason) ? { reason: daemonFiles.reason } : {}),
 				files: persistentWorkerFiles,
 			});
 

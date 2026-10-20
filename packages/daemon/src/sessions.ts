@@ -2952,6 +2952,7 @@ export class SessionManager {
 				target ? { sessionId: target.id, directory: this.dir(target.id) } : undefined,
 				this.telemetry?.localDiagnostics ?? true,
 				request.log!,
+				signal,
 			);
 			if (signal?.aborted) throw new Conflict("Diagnostic read cancelled");
 			return diagnosticContextResponse(host, logs);
@@ -6529,6 +6530,7 @@ export class SessionManager {
 	private async diagnosticLogsCall(
 		specialist: SessionMeta,
 		request: DiagnosticLogRequest,
+		signal?: AbortSignal,
 	): Promise<DiagnosticLogResult> {
 		this.validateMode(specialist);
 		if (specialist.role !== "diagnostics") throw new Conflict("Only a diagnostics specialist may read Pilot logs");
@@ -6539,6 +6541,7 @@ export class SessionManager {
 				undefined,
 				this.telemetry?.localDiagnostics ?? true,
 				request,
+				signal,
 			);
 		}
 		const reference = this.diagnosticReference(specialist);
@@ -6554,6 +6557,7 @@ export class SessionManager {
 			{ sessionId: target.id, directory: this.dir(target.id) },
 			this.telemetry?.localDiagnostics ?? true,
 			request,
+			signal,
 		);
 	}
 
@@ -8158,11 +8162,18 @@ export class SessionManager {
 			return;
 		}
 		if (packet.type === "diagnostics.logs.call") {
+			const key = `${meta.id}:${packet.callId}`;
+			if (this.diagnosticContextReads.size >= 8 || this.diagnosticContextReads.has(key)) {
+				worker.send({ type: "diagnostics.logs.result", callId: packet.callId, error: "Diagnostic reads are busy" });
+				return;
+			}
+			const controller = new AbortController();
+			this.diagnosticContextReads.set(key, controller);
 			void Promise.resolve()
 				.then(() => {
 					if (this.workers.get(meta.id) !== worker)
 						throw new Error("Only the live diagnostics specialist may read Pilot logs");
-					return this.diagnosticLogsCall(meta, packet.request);
+					return this.diagnosticLogsCall(meta, packet.request, controller.signal);
 				})
 				.then(
 					(result) => {
@@ -8177,7 +8188,8 @@ export class SessionManager {
 								error: formatFailure(error, "Tool diagnostic_logs"),
 							});
 					},
-				);
+				)
+				.finally(() => this.diagnosticContextReads.delete(key));
 			return;
 		}
 		if (packet.type === "diagnostics.proposal") {

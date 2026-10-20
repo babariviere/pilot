@@ -256,8 +256,8 @@ export function runKernelWorker(): void {
 			...(before === undefined ? {} : { before }),
 			...(limit === undefined ? {} : { limit }),
 		}));
-	const callDiagnosticLogs: import("./diagnostic-log-tool.ts").DiagnosticLogCall = (request) =>
-		callDaemon((callId) => ({ type: "diagnostics.logs.call", callId, request }));
+	const callDiagnosticLogs: import("./diagnostic-log-tool.ts").DiagnosticLogCall = (request, signal) =>
+		callDaemon((callId) => ({ type: "diagnostics.logs.call", callId, request }), signal);
 	const callRepairProposal: import("./repair-proposal-tool.ts").RepairProposalCall = (proposal) =>
 		callDaemon((callId) => ({ type: "diagnostics.proposal", callId, proposal }));
 
