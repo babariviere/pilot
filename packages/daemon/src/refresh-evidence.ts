@@ -178,6 +178,55 @@ export function validRefreshValue(type: "source" | "job", value: unknown): value
 	);
 }
 
+/** Do not renew old completion details just because a newer attempt is being saved. */
+function freshValue(type: "source" | "job", value: Value, now: number): Value {
+	const safe = structuredClone(value),
+		cutoff = now - REFRESH_EVIDENCE_AGE_MS;
+	if (Array.isArray(safe.recent))
+		safe.recent = safe.recent.filter(
+			(row) => object(row) && typeof row.at === "number" && row.at >= cutoff && row.at <= now,
+		);
+	if (type === "source") {
+		if (typeof safe.lastCompletedAt === "number" && safe.lastCompletedAt < cutoff) {
+			delete safe.lastCompletedAt;
+			delete safe.outcome;
+			delete safe.reason;
+		}
+		if (typeof safe.lastCommittedAt === "number" && safe.lastCommittedAt < cutoff) {
+			delete safe.lastCommittedAt;
+			delete safe.returnedItems;
+		}
+		if (Array.isArray(safe.stages))
+			safe.stages = safe.stages
+				.map((stage) => {
+					if (!object(stage)) return stage;
+					if (typeof stage.lastCompletedAt === "number" && stage.lastCompletedAt < cutoff)
+						for (const key of [
+							"lastCompletedAt",
+							"outcome",
+							"reason",
+							"count",
+							"requested",
+							"readAttempts",
+							"cacheHits",
+							"channelIndex",
+						])
+							delete stage[key];
+					for (const key of ["lastStartedAt", "lastSucceededAt"])
+						if (typeof stage[key] === "number" && (stage[key] as number) < cutoff) delete stage[key];
+					return stage;
+				})
+				.filter(
+					(stage) =>
+						object(stage) &&
+						(stage.lastStartedAt !== undefined ||
+							stage.lastCompletedAt !== undefined ||
+							stage.lastSucceededAt !== undefined),
+				);
+	}
+	return safe;
+}
+
 export class RefreshEvidenceStore {
 	private readonly directory: string;
 	private readonly file: string;
@@ -350,7 +399,7 @@ export class RefreshEvidenceStore {
 			.filter((row) => row.ref === ref && row.processRef !== this.processRef && this.current(row))
 			.sort((a, b) => b.at - a.at)[0];
 		if (!row) return;
-		const observation = structuredClone(row.value);
+		const observation = freshValue(row.type, row.value, this.now());
 		const start = (observation.startedAt ?? observation.lastStartedAt) as number | undefined;
 		const complete = (observation.completedAt ?? observation.lastCompletedAt) as number | undefined;
 		const interrupted =
@@ -414,8 +463,11 @@ export class RefreshEvidenceStore {
 		this.dropped = Math.min(1_000_000, this.dropped + Math.max(0, inputs.length - REFRESH_EVIDENCE_ENTRIES));
 		const rows = inputs
 			.slice(0, REFRESH_EVIDENCE_ENTRIES)
-			.filter((row) => hex(row.ref) && validRefreshValue(row.type, row.value));
-		let next = this.entries.filter((row) => this.current(row));
+			.filter((row) => hex(row.ref) && validRefreshValue(row.type, row.value))
+			.map((row) => ({ ...row, value: freshValue(row.type, row.value, now) }));
+		let next = this.entries
+			.filter((row) => this.current(row))
+			.map((row) => ({ ...row, value: freshValue(row.type, row.value, now) }));
 		for (const row of rows) {
 			next = next.filter((old) => !(old.ref === row.ref && old.processRef === this.processRef));
 			const dates =
