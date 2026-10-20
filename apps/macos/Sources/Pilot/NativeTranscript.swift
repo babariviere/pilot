@@ -154,7 +154,8 @@ final class NativeTranscriptController: NSObject, NSTableViewDataSource, NSTable
         table.enumerateAvailableRowViews { _, _ in mounted += 1 }
         return "native transcript: cells created=\(createdCells) mounted=\(mounted), bindings=\(cellBindings), "
             + "measurements=\(measurements) height transactions=\(heightTransactions) membership updates=\(membershipUpdates), "
-            + "height cache entries=\(heights.entries.count)"
+            + "height cache entries=\(heights.entries.count), viewport top=\(Int(scrollView.contentView.bounds.minY)) "
+            + "bottom=\(Int(scrollView.contentView.bounds.maxY)) document=\(Int(table.bounds.height))"
     }
 
     override init() {
@@ -315,7 +316,9 @@ final class NativeTranscriptController: NSObject, NSTableViewDataSource, NSTable
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard items.indices.contains(row) else { return nil }
-        let identifier = NSUserInterfaceItemIdentifier("native-transcript-cell")
+        let nativeText: Bool
+        if case let .row(id) = items[row], case .text = rows[id] { nativeText = true } else { nativeText = false }
+        let identifier = NSUserInterfaceItemIdentifier(nativeText ? "native-transcript-text" : "native-transcript-compatibility")
         let reused = tableView.makeView(withIdentifier: identifier, owner: self) as? NativeTranscriptCell
         if reused == nil { createdCells += 1 }
         let cell = reused ?? NativeTranscriptCell()
@@ -518,8 +521,23 @@ final class NativeTranscriptController: NSObject, NSTableViewDataSource, NSTable
     }
 }
 
+final class NativeTranscriptClipView: NSClipView {
+    override func scroll(to newOrigin: NSPoint) {
+        var proposed = bounds
+        proposed.origin = newOrigin
+        // scroll(to:) alone does not constrain programmatic moves. Never expose a viewport past the document.
+        super.scroll(to: constrainBoundsRect(proposed).origin)
+    }
+}
+
 final class NativeTranscriptScrollView: NSScrollView {
     weak var controller: NativeTranscriptController?
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        contentView = NativeTranscriptClipView(frame: contentView.frame)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
     override func layout() {
         super.layout()
         controller?.resizeViewport()
@@ -568,7 +586,19 @@ final class NativeTranscriptCell: NSTableCellView {
     func bind(item: NativeTranscriptItem, width: CGFloat, row: ChatRow?, configuration: NativeTranscript,
               selection: (String) -> MessageTextSelection, hosted content: AnyView,
               changed: @escaping () -> Void) {
-        if self.item != item || resource != configuration.resource { unbind() }
+        if self.item != item || resource != configuration.resource {
+            if resource == configuration.resource, case .text = row, let text {
+                // Keep TextKit regions and compatibility host objects, never the previous message's work/state.
+                generation = UUID()
+                text.resetMessageBinding()
+                self.changed = nil
+            } else if resource == configuration.resource, hosted != nil {
+                // Reuse the bounded host object, but reset its SwiftUI subtree identity below.
+                generation = UUID()
+                hosted?.onSizeChanged = nil
+                self.changed = nil
+            } else { unbind() }
+        }
         self.item = item
         if case let .row(id) = item { anchor.rowID = id; anchor.isHidden = false }
         else { anchor.rowID = ""; anchor.isHidden = true }
@@ -589,7 +619,7 @@ final class NativeTranscriptCell: NSTableCellView {
                          selection: selection(id), environment: configuration.environment, changed: fenced)
         } else {
             text?.stop(); text?.removeFromSuperview(); text = nil
-            let root = AnyView(content.environment(\.self, configuration.environment)
+            let root = AnyView(content.id(item).environment(\.self, configuration.environment)
                 .environment(\.transcriptContentPrepared, fenced))
             hostedContent = root
             hostedWidth = width
@@ -612,8 +642,7 @@ final class NativeTranscriptCell: NSTableCellView {
                 hosted.rootView = AnyView(hostedContent.frame(width: width).fixedSize(horizontal: false, vertical: true))
             }
             hosted.frame.size.width = width
-            hosted.layoutSubtreeIfNeeded()
-            return max(1, ceil(hosted.fittingSize.height))
+            return hosted.measuredContentHeight()
         }
         return 1
     }
@@ -631,6 +660,22 @@ final class NativeTranscriptCell: NSTableCellView {
 
 final class TranscriptRowHost: NSHostingView<AnyView> {
     var onSizeChanged: (() -> Void)?
+    required init(rootView: AnyView) {
+        super.init(rootView: rootView)
+        // The row owner installs an explicit width and measured height. Min/max probes only repeat that work.
+        sizingOptions = [.intrinsicContentSize]
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func measuredContentHeight() -> CGFloat {
+        // The root already fixes its width. A size query must not force a nested placement/render pass.
+        let height = intrinsicContentSize.height
+        if height.isFinite, height >= 0 { return max(1, ceil(height)) }
+        // Preserve the old path for a host that cannot yet report an intrinsic height.
+        layoutSubtreeIfNeeded()
+        return max(1, ceil(fittingSize.height))
+    }
+
     override func invalidateIntrinsicContentSize() {
         super.invalidateIntrinsicContentSize()
         onSizeChanged?()
