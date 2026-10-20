@@ -8,7 +8,8 @@ final class NativeMarkdownMessage: NSView {
     private var source: String?
     private var fonts: PilotFonts?
     private var environment: EnvironmentValues?
-    private var preparation: Task<Void, Never>?
+    /// Awaitable current work, including cancellation, without polling the main actor on a deadline.
+    private(set) var preparation: Task<Void, Never>?
     private var generation = UUID()
     private var blocks: [NativeMarkdownBlockView] = []
     private var preparedBlocks: [PreparedMarkdownBlock] = []
