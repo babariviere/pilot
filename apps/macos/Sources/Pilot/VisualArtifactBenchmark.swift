@@ -125,6 +125,7 @@ enum VisualArtifactBenchmark {
                 "hitches": frames.hitches,
                 "droppedFrames": frames.dropped,
                 "longestFrameGapMs": round1(frames.longest * 1000),
+                "hitchTimeRatioMsPerS": round1(frames.hitchTimeRatio),
                 "scrollFrameP50Ms": round1(p(0.5)),
                 "scrollFrameP95Ms": round1(p(0.95)),
                 "scrollFramesOver16ms": frameTimes.filter { $0 > 16 }.count,

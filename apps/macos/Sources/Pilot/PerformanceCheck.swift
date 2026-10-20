@@ -84,8 +84,9 @@ enum PerformanceCheck {
                 return String(reply[start ..< min(reply.count, start + chunk)])
             }
             let frames = FrameMonitor()
-            if streaming, let view = window.contentView {
-                frames.transcript = findTranscript(view)
+            // Display frames while streaming or scrolling; only streaming follows the newest row for jumps.
+            if streaming || scrolling, let view = window.contentView {
+                if streaming { frames.transcript = findTranscript(view) }
                 frames.start(on: view)
             }
             StreamingTrace.reset()
@@ -172,6 +173,8 @@ enum PerformanceCheck {
                 + "transcript rows evaluations=\(TranscriptRowsSection.bodyEvaluations - rowSections)"
             if streaming {
                 summary += ", physical footprint peak=\(mib(footprintPeak)) end=\(mib(physicalFootprint()))"
+                summary += ", \(frames.summary)"
+            } else if scrolling {
                 summary += ", \(frames.summary)"
             }
             if !scrollFrames.isEmpty {
@@ -351,6 +354,7 @@ enum PerformanceCheck {
 final class FrameMonitor: NSObject {
     private var link: CADisplayLink?
     private var last: CFTimeInterval?
+    private var first: CFTimeInterval?
     private(set) var frameDuration: CFTimeInterval = 0
     private(set) var frames = 0
     private(set) var hitches = 0
@@ -373,6 +377,7 @@ final class FrameMonitor: NSObject {
         let duration = link.targetTimestamp - link.timestamp
         if duration > 0 { frameDuration = duration }
         defer { last = link.timestamp }
+        if first == nil { first = link.timestamp }
         guard let last, frameDuration > 0 else { return }
         frames += 1
         let gap = link.timestamp - last
@@ -383,9 +388,16 @@ final class FrameMonitor: NSObject {
         }
     }
 
+    /// Milliseconds of dropped frames per second of display time, Apple's hitch time ratio. Under 5 ms/s is good.
+    var hitchTimeRatio: Double {
+        guard let first, let last, last > first else { return 0 }
+        return Double(dropped) * frameDuration * 1000 / (last - first)
+    }
+
     var summary: String {
         guard frameDuration > 0 else { return "display frames=unavailable (window not on screen)" }
         return "display \(Int((1 / frameDuration).rounded())) Hz frames=\(frames) hitches=\(hitches) dropped frames=\(dropped) "
+            + "hitch time ratio=\(String(format: "%.1f", hitchTimeRatio)) ms/s "
             + "longest frame gap=\(String(format: "%.1fms", longest * 1000))"
             + ", newest row moved down=\(reversals) times (\(String(format: "%.0f", reversed)) pt, largest \(String(format: "%.0f", largestReversal)) pt)"
             + ", bottom gap changes=\(gapChanges)"
