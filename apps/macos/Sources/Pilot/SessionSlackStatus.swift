@@ -171,7 +171,7 @@ struct SessionSlackMenu: View {
             }
         } label: {
             HStack(spacing: 5) {
-                PilotMarkIcon(mark: .slack, context: .toolbar)
+                PilotToolbarMark(mark: .slack)
                 Text(SessionSlackText.label(links.items)).font(.pilot(.label))
             }
         }

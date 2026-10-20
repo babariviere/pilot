@@ -40,6 +40,23 @@ import Testing
     }
 }
 
+@Test @MainActor func toolbarMenuMarkHasItsContextSizeAsIntrinsicSize() throws {
+    let image = PilotMark.slack.image(side: PilotIcon.Context.toolbar.markSize)
+    // If a native toolbar extracts the image, its intrinsic size must already be 12 pt, not the 16 pt source.
+    #expect(image.size == NSSize(width: 12, height: 12))
+    #expect(image.isTemplate)
+    #expect(PilotMark.slack.image.size == NSSize(width: 16, height: 16), "shared mark stays untouched")
+    var rect = NSRect(x: 0, y: 0, width: 48, height: 48)
+    let bitmap = NSBitmapImageRep(cgImage: try #require(image.cgImage(forProposedRect: &rect, context: nil, hints: nil)))
+    var minY = Int.max, maxY = 0
+    for y in 0..<bitmap.pixelsHigh {
+        for x in 0..<bitmap.pixelsWide where (bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.5 {
+            minY = min(minY, y); maxY = max(maxY, y)
+        }
+    }
+    #expect(maxY - minY > bitmap.pixelsHigh * 9 / 10, "the ink still fills the sized image")
+}
+
 @Test func linkAccessibilityNamesStateTheServiceAndReference() throws {
     func resource(_ kind: String, url: String, externalId: String? = nil, title: String? = nil) throws -> MissionResource {
         var fields: [String: Any] = ["id": "r", "url": url, "kind": kind, "createdAt": 1]
