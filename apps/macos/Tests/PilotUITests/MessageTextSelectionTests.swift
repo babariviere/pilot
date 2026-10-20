@@ -23,16 +23,23 @@ struct MessageTextSelectionTests {
         _ = NSApplication.shared
         let view = MessageSelectionTextView.makeReadOnly()
         view.string = "A reused message"
-        view.setSelectedRanges([NSValue(range: NSRange(location: 0, length: 0))],
+        // AppKit can normalize upstream affinity at offset zero back to the canonical empty selection.
+        // A displaced caret requires a real reset even when AppKit normalizes the requested affinity.
+        view.setSelectedRanges([NSValue(range: NSRange(location: 5, length: 0))],
                                affinity: .upstream, stillSelecting: false)
-        #expect(view.clearMessageSelection())
+        #expect(view.selectedRange() == NSRange(location: 5, length: 0))
+        let affinityReset = view.clearMessageSelection()
+        #expect(affinityReset)
+        #expect(view.selectedRange() == NSRange(location: 0, length: 0))
         #expect(view.selectionAffinity == .downstream)
         view.setSelectedRanges([NSValue(range: NSRange(location: 0, length: 0)),
                                 NSValue(range: NSRange(location: 4, length: 2))],
                                affinity: .downstream, stillSelecting: false)
-        #expect(view.clearMessageSelection())
+        let multipleReset = view.clearMessageSelection()
+        #expect(multipleReset)
         #expect(view.selectedRanges == [NSValue(range: NSRange(location: 0, length: 0))])
-        #expect(!view.clearMessageSelection())
+        let repeatedReset = view.clearMessageSelection()
+        #expect(!repeatedReset)
     }
 
     private func region(_ source: String, block: Int, owner: MessageTextSelection) -> MessageSelectionTextView {
