@@ -103,6 +103,9 @@ export class SourceRefreshDiagnostics {
 			stage.channelIndex = event.channelIndex;
 		if (Number.isSafeInteger(event.count) && event.count! >= 0 && event.count! <= 1_000_000)
 			stage.count = event.count;
+		for (const field of ["requested", "readAttempts", "cacheHits"] as const)
+			if (Number.isSafeInteger(event[field]) && event[field]! >= 0 && event[field]! <= 1_000_000)
+				stage[field] = event[field];
 		if (event.stage === "commit" && event.phase === "completed" && event.outcome === "success") {
 			record.value.lastCommittedAt = at;
 			record.value.returnedItems = event.count;

@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test, type TestContext } from "node:test";
+import { type TestContext, test } from "node:test";
 import type { TrackingJson } from "@pilot/protocol";
 import { ProjectStore } from "./projects.ts";
 import { createSlackPoller } from "./slack-source.ts";
 import { SourceRateLimited, SourceSignInRequired, SourceToolError } from "./source-mcp.ts";
-import { SourceRefreshDiagnostics, refreshAssessment } from "./source-refresh-diagnostics.ts";
+import { refreshAssessment, SourceRefreshDiagnostics } from "./source-refresh-diagnostics.ts";
 import { SourceRegistry } from "./sources.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
 
@@ -80,6 +80,7 @@ async function fixture(t: TestContext) {
 			calls++;
 			if (mode === "sign_in") throw new SourceSignInRequired("password=secret-canary");
 			if (mode === "rate") throw new SourceRateLimited(60_000);
+			if (tool === "teams") return { teams: [] };
 			if (tool === "history") {
 				if (args.channel_id === "C2" && mode === "channel_error") throw new SourceToolError("secret-canary");
 				return {
@@ -109,6 +110,28 @@ async function fixture(t: TestContext) {
 		},
 	};
 }
+
+test("manual discovery health is host-scoped and observing never calls or retries integrations", async (t) => {
+	const f = await fixture(t);
+	await f.registry.linearTeams();
+	const calls = f.calls();
+	const read = () => f.registry.refreshHealth({ projectId: f.project.id, kind: "linear" });
+	let job = read().hostJobs![0]!;
+	assert.equal(job.job, "manual_lookup");
+	assert.equal(job.state, "no_work");
+	assert.equal(job.observation?.readCalls, 1);
+	for (let i = 0; i < 5; i++) read();
+	assert.equal(f.calls(), calls);
+	f.mode("sign_in");
+	await f.registry.linearTeams();
+	job = read().hostJobs![0]!;
+	assert.equal(job.state, "failure");
+	assert.equal(job.observation?.reason, "sign_in");
+	assert.doesNotMatch(JSON.stringify(read()), /secret-canary/);
+	f.registry.setDiagnosticsEnabled(false);
+	assert.equal(read().availability, "disabled");
+	assert.equal(f.calls(), calls + 1);
+});
 
 test("empty successful refresh is live evidence, restart checkpoint is not; reads make no external calls", async (t) => {
 	t.mock.timers.enable({ apis: ["Date"], now: time });

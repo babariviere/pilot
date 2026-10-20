@@ -185,6 +185,12 @@ test("all Done routes add one check and remove eyes on the parent only after a s
 		await f.drain();
 		assert.equal(f.calls.filter((call) => call.tool === "doneSlack").length, 1);
 		assert.equal(f.calls.filter((call) => call.tool === "removeSlackEyes").length, 1);
+		const callsBeforeInspection = f.calls.length;
+		const health = f.registry.refreshHealth({ projectId: f.project.id, kind: "slack" });
+		const done = health.sources[0]!.jobs.find((job) => job.job === "slack_done_write");
+		assert.ok(done?.observation?.recent?.some((entry) => entry.writeCalls === 2 && entry.outcome === "success"));
+		assert.match(done!.quota, /not_local_source_read_budget/);
+		assert.equal(f.calls.length, callsBeforeInspection);
 		assert.ok(
 			f.calls.every((call) => ["doneSlack", "removeSlackEyes", "reactions"].includes(call.tool)),
 			"no messages or fallback tool",

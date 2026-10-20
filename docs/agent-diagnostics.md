@@ -1,5 +1,30 @@
 # Agent diagnostics
 
+### Background integration job health
+
+`diagnostic_context` → `refresh_health` includes host-scoped manual discovery lookups and linked-Linear
+sync scheduling, plus per-project linked sync, parent-header prefill, Slack Done writes and triage-guide
+rebuild observations. Linear polls also report the bounded `parent_headers` stage (requested headers,
+cached/detail hits, external read attempts and returned headers). The real owners report queue/start,
+stage progress, completion, no-work/skip/partial/failure/cancellation and retry/cooldown timestamps.
+Linked sync reuses its existing fixed failure stage/category and retry evidence, never issue names,
+status names, remote payloads or error strings. `no_work` there means no remote status write was needed,
+not that no reconciliation/read occurred. A successful no-op is distinct from a write.
+
+This is a bounded last-observation surface: at most 256 job keys and four recent completions per key,
+with drop counts and installed/applicability labels. Event-driven or deliberately deferred jobs do not
+have a fabricated periodic heartbeat. `idle_unobserved` is not failure, and observed success is not proof
+of current liveness. Full tracking configuration hashes fence replacement/removal and late completions.
+Diagnostic reads only inspect observations, never execute, enqueue, retry or write an integration job.
+Local operational collection/clear controls apply independently of remote export. Nothing is uploaded.
+
+Quota evidence comes from current policy constants, not a new budget: Slack currently counts 100 local
+operations per fixed UTC hour. Force remains a single counted bounded pass and preserves provider limits.
+Slack Done writes use existing durable admissions/shared slots and provider limits, not the source-read
+quota. Manual lookups and linked sync retain their own provider/scheduler guards. Triage rebuilds retain
+existing grooming spacing/day limits and failure cooldown, not Slack classification quota. Observation
+does not change status ownership, mappings, eligibility, retry limits, concurrency, model or schedules.
+
 Starting a reviewed repair discloses that its originating diagnostics chat will be archived once the
 exact durable repair-create receipt and created-chat identity are confirmed. The app selects the repair;
 archival preserves the specialist history and never stops it or changes the diagnosed subject. Unknown,

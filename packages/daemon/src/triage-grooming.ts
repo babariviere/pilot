@@ -1,8 +1,9 @@
 import { Worker } from "node:worker_threads";
 import type { TrackedKind, TriageGuide } from "@pilot/protocol";
+import { type BackgroundJobDiagnostics, jobConfigurationKey } from "./background-job-diagnostics.ts";
 import type { ProjectStore } from "./projects.ts";
-import type { TrackedItemStore } from "./tracked-items.ts";
 import { CASE_SCHEMA, parseCases } from "./slack-cases.ts";
+import type { TrackedItemStore } from "./tracked-items.ts";
 
 export const GUIDE_SCHEMA = {
 	type: "object",
@@ -75,16 +76,20 @@ export class TriageGroomer {
 	private items: TrackedItemStore;
 	private complete: TriageComplete;
 	private now: () => number;
+	private diagnostics?: BackgroundJobDiagnostics;
 	constructor(
 		projects: Pick<ProjectStore, "list" | "require" | "onChange">,
 		items: TrackedItemStore,
 		complete: TriageComplete,
 		now = Date.now,
+		diagnostics?: BackgroundJobDiagnostics,
 	) {
 		this.projects = projects;
 		this.items = items;
 		this.complete = complete;
 		this.now = now;
+		this.diagnostics = diagnostics;
+		for (const kind of ["slack", "linear"] as const) diagnostics?.register("triage_rebuild", kind);
 		this.disposers = [
 			items.onChange((id) => this.queue(id)),
 			projects.onChange(() => {
@@ -104,6 +109,17 @@ export class TriageGroomer {
 				at: Math.min(existing?.at ?? Infinity, this.now() + 2000),
 				force: force || !!existing?.force,
 			});
+			try {
+				this.diagnostics?.queue(
+					"triage_rebuild",
+					source,
+					projectId,
+					jobConfigurationKey(this.projects.require(projectId).tracking),
+					this.pending.get(key)?.at,
+				);
+			} catch {
+				/* Deleted projects have no evidence identity. */
+			}
 		}
 		this.schedule();
 	}
@@ -134,8 +150,18 @@ export class TriageGroomer {
 		if (!entry) return;
 		const [key, job] = entry;
 		this.pending.delete(key);
+		let token: import("./background-job-diagnostics.ts").JobToken | undefined;
+		let outcome: import("./background-job-diagnostics.ts").JobOutcome = "no_work";
+		let reason: import("./background-job-diagnostics.ts").JobReason | undefined;
 		try {
 			const project = this.projects.require(job.projectId);
+			token = this.diagnostics?.begin(
+				"triage_rebuild",
+				job.kind,
+				job.projectId,
+				jobConfigurationKey(project.tracking),
+			);
+			if (token) this.diagnostics?.stage(token, "eligibility");
 			const input = await this.items.triageInput(job.projectId, job.kind);
 			const caseInput =
 				job.kind === "slack" && "caseInput" in this.items
@@ -152,12 +178,16 @@ export class TriageGroomer {
 			const due = (input.guide.updatedAt || input.corrections[0]?.correctedAt || this.now()) + 86_400_000;
 			if (!job.force && !newCases && input.corrections.length < 3 && this.now() < due) {
 				this.pending.set(key, { ...job, at: due });
+				outcome = "skipped";
+				reason = "eligibility";
 				return;
 			}
 			const retryAt =
 				"reserveGrooming" in this.items ? await this.items.reserveGrooming(job.projectId, job.kind, this.now()) : 0;
 			if (retryAt) {
 				this.pending.set(key, { ...job, at: retryAt });
+				outcome = "backoff";
+				reason = "cooldown";
 				return;
 			}
 			let prompt =
@@ -178,7 +208,9 @@ export class TriageGroomer {
 					properties: { rules: GUIDE_SCHEMA.properties.rules, cases: CASE_SCHEMA },
 				};
 			}
+			if (token) this.diagnostics?.stage(token, "classification");
 			const raw = await this.complete(project.path, prompt, schema, this.controller.signal);
+			if (token) this.diagnostics?.progress(token);
 			if (Buffer.byteLength(raw) > 100_000) throw new Error("Invalid grooming output");
 			const output = JSON.parse(raw);
 			if (caseInput && (!output || Object.keys(output).sort().join() !== "cases,rules"))
@@ -188,7 +220,11 @@ export class TriageGroomer {
 			const groups = caseInput ? parseCases(output.cases, caseInput) : undefined;
 			if (this.controller.signal.aborted) return;
 			this.projects.require(job.projectId);
-			if (caseInput && groups) await this.items.saveCases(job.projectId, caseInput, groups, this.now());
+			if (token) this.diagnostics?.stage(token, "commit");
+			if (caseInput && groups) {
+				await this.items.saveCases(job.projectId, caseInput, groups, this.now());
+				outcome = "success";
+			}
 			if (!job.force && (!input.corrections.length || (input.corrections.length < 3 && this.now() < due))) return;
 			await this.items.saveGuide(
 				job.projectId,
@@ -198,9 +234,21 @@ export class TriageGroomer {
 				input.guide.throughSeq,
 				this.now(),
 			);
+			outcome = "success";
+			if (token) this.diagnostics?.progress(token);
 		} catch {
+			outcome = this.controller.signal.aborted ? "cancelled" : "failure";
+			reason = this.controller.signal.aborted ? "stopped" : "classification_failed";
 			if (!this.controller.signal.aborted && this.projects.list().some((project) => project.id === job.projectId))
 				this.pending.set(key, { ...job, at: this.now() + 3_600_000 });
+		} finally {
+			if (token) {
+				if (this.controller.signal.aborted) {
+					outcome = "cancelled";
+					reason = "stopped";
+				}
+				this.diagnostics?.end(token, outcome, reason, undefined, this.pending.get(key)?.at);
+			}
 		}
 	}
 	async stop(): Promise<void> {

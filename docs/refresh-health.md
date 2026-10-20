@@ -63,6 +63,15 @@ Inspection never invokes external polls, manual-sync, sign-in, retries/restarts,
 reaction reads/writes, budget reservations or schedule/quota/model changes. It reads only current maps and bounded
 existing checkpoint projections. Normal background refreshes can still run independently.
 
-Coverage is intentionally not universal background-job health. Linked mission Linear synchronization, parent-header
-refresh details, manual discovery lookups, Slack Done writes and triage-guide rebuilds are explicitly uninstrumented
-coverage gaps here. Do not infer they work or fail from this snapshot.
+Coverage is not universal background-job health. The previously missing linked mission Linear synchronization,
+parent-header poll/prefill reads, manual discovery lookups, Slack Done writes and triage-guide rebuilds now report
+bounded observations from their real owners. `hostJobs` holds user-triggered discovery and linked-sync scheduling;
+source rows contain applicable project jobs, with installed and event-driven/eligibility labels. Parent-header
+stages distinguish requested/cached headers, external attempts and returned headers, without identities or titles.
+Linked sync reuses existing fixed failure stage/category/retry metadata, separately from discovery health.
+
+Each job key retains four recent completions, capped at 256 keys with drop counts. No-work checks cannot erase
+the last actual write immediately. Read and write RPC counts are separate from local eligibility/reservation,
+classification and commit stages. A queued/deferred/running observation is not a command, new durable backlog,
+or proof of a scheduler heartbeat. Idle/unobserved is not failure. Full tracking-config hashes fence late results
+after replacement/removal. See [job coverage and current quota semantics](agent-diagnostics.md#background-integration-job-health).

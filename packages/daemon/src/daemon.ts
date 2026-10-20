@@ -96,10 +96,16 @@ const sourceMcp = new PiSourceMcpClient(config.agentDir);
 const linearWatches = new LinearWatchSource(watches, sourceMcp);
 if (controlHosts.legacyAllowed()) linearWatches.start();
 const tracking = new SourceRegistry(projects, trackedItems, sourceMcp);
-tracking.refreshDiagnostics.setEnabled(telemetry.settings().localDiagnostics);
+tracking.setDiagnosticsEnabled(telemetry.settings().localDiagnostics);
 if (controlHosts.legacyAllowed())
 	tracking.linearObserved = (projectId, items, activeIds) => linearWatches.tracked(projectId, items, activeIds);
-tracking.triage = new TriageGroomer(projects, trackedItems, workerTriage(config.agentDir));
+tracking.triage = new TriageGroomer(
+	projects,
+	trackedItems,
+	workerTriage(config.agentDir),
+	Date.now,
+	tracking.jobDiagnostics,
+);
 // Shared MCP status for Settings and Needs you. Checks once now, then only when pi's MCP files change.
 const mcpStatus = new McpStatusService({
 	probe: workerProbe(config.agentDir),
@@ -186,7 +192,7 @@ telemetry.onChange((settings) => {
 	appliedTelemetry = settings;
 	if (exportChanged) configureNodeTelemetry(telemetry.nodeOptions("pilot.daemon"));
 	sessions.configureTelemetry(telemetry.kernelSettings(), settings.aiUsageBudget);
-	tracking.refreshDiagnostics.setEnabled(settings.localDiagnostics);
+	tracking.setDiagnosticsEnabled(settings.localDiagnostics);
 });
 const maintenance = process.platform === "linux" ? new RuntimeMaintenance(config.home, hello, sessions) : undefined;
 await maintenance?.load();
@@ -214,7 +220,7 @@ trackedItems.onChange((projectId) => {
 const missionStore = new MissionStore(join(config.home, "missions.sqlite"));
 const missionLinear = new MissionLinearSource(missionStore, sourceMcp);
 missionLinear.start();
-const linearSync = new MissionLinearSyncService(missionStore, projects, sourceMcp);
+const linearSync = new MissionLinearSyncService(missionStore, projects, sourceMcp, tracking.jobDiagnostics);
 linearSync.start();
 const completionWrites = new Set<Promise<void>>();
 const stopSlackCompletions = missionStore.onCompleted((projectId, missionId, at) => {
