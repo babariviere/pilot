@@ -58,12 +58,20 @@ final class NativeMarkdownMessage: NSView {
             return
         }
         let initial = self.source == nil
+        let previous = preparedSource
         self.source = source
         self.fonts = fonts
         preparation?.cancel()
+        preparation = nil
         generation = UUID()
         let generation = generation
         if initial {
+            if let prepared = PreparedMarkdownCache.shared.blocks(for: source) {
+                // Recycled rows already have rich preparation. Do not publish a plain-text height first.
+                apply(prepared, streaming: false, initial: true)
+                preparedSource = source
+                return
+            }
             // A newly realized row is immediately readable while its rich preparation is pending.
             let plain = PreparedMarkdownBlock(id: -1, block: .paragraph(source), inline: AttributedString(source), items: [], code: nil)
             apply([plain], streaming: false, initial: true)
@@ -71,6 +79,7 @@ final class NativeMarkdownMessage: NSView {
         preparation = Task { [weak self] in
             guard let prepared = try? await MarkdownRenderer.shared.prepare(source, streaming: streaming),
                   !Task.isCancelled, let self, self.generation == generation else { return }
+            PreparedMarkdownCache.shared.store(prepared, for: source, replacing: previous)
             self.apply(prepared, streaming: streaming && !environment.accessibilityReduceMotion, initial: initial)
             self.preparedSource = source
             self.preparation = nil
@@ -135,13 +144,24 @@ final class NativeMarkdownMessage: NSView {
     override func mouseExited(with event: NSEvent) { copyButton.alphaValue = 0; time.alphaValue = 0 }
     @objc private func copyMessage() { if let source { MessageCopyButton.copy(source) } }
 
-    func stop() {
+    /// Reset identity/work while retaining the bounded mounted regions for the next message in this cell.
+    func resetMessageBinding() {
         generation = UUID()
         preparation?.cancel(); preparation = nil
+        source = nil
+        preparedSource = nil
+        preparedBlocks = []
+        selection = nil
         changed = nil
+        dirty = true
+        copyButton.alphaValue = 0
+        time.alphaValue = 0
+    }
+
+    func stop() {
+        resetMessageBinding()
         for block in blocks { block.stop() }
         blocks = []
-        preparedBlocks = []
         removeFromSuperview()
     }
 }
@@ -255,6 +275,8 @@ final class NativeMarkdownBlockView: NSView {
             for label in labels { label.removeFromSuperview() }; labels = []
             quoteRule?.removeFromSuperview(); quoteRule = nil
             let root = AnyView(BlockView(block: block, hugsContent: false)
+                // Reusing a host must not carry interactive SwiftUI state into a different message.
+                .id(ObjectIdentifier(selection))
                 .environment(\.self, environment)
                 .environment(\.messageTextSelection, selection)
                 .environment(\.messageSelectionBlock, index)
@@ -285,8 +307,7 @@ final class NativeMarkdownBlockView: NSView {
                     .fixedSize(horizontal: false, vertical: true))
             }
             host.frame.size.width = width
-            host.layoutSubtreeIfNeeded()
-            y = max(1, ceil(host.fittingSize.height))
+            y = host.measuredContentHeight()
             host.frame = NSRect(x: 0, y: 0, width: width, height: y)
         } else {
             for (index, text) in textViews.enumerated() {

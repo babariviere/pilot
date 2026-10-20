@@ -1,5 +1,9 @@
 # Opt-in native transcript measurement
 
+Latest result: [profiled rich-scroll follow-up](native-transcript-rich-scroll-follow-up.md), including fresh
+alternating pairs, bounded viewport correction and current CI attribution. **Still no-go:** native scrolling
+hitches/p95 remain above the matched frozen-main baseline. The figures below remain the original comparison.
+
 2026-10-20. **No-go for continuing the migration or changing the default:** streaming is cheaper, but rich
 scrolling has a repeatable hitch/p95 regression. Keep the flag off. This is an experimental table/text path,
 not a completed parity or rollout result. [Migration plan](reused-cell-transcript.md).

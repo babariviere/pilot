@@ -69,6 +69,168 @@ import Testing
     #expect(message.nativeTextViews.isEmpty)
 }
 
+@Test @MainActor func nativeMarkdownRecycledRowRestoresPreparedBlocksBeforeFirstMeasurement() async throws {
+    _ = NSApplication.shared
+    let source = "## Cached \(UUID().uuidString)\n\nA **styled** paragraph.\n\n```swift\nlet value = 1\n```"
+    let first = NativeMarkdownMessage()
+    first.update(source: source, timestamp: nil, streaming: false, selection: MessageTextSelection(),
+                 environment: EnvironmentValues(), changed: {})
+    try await prepared(first, source: source)
+    let height = first.measure(width: 700)
+    first.stop()
+
+    let next = NativeMarkdownMessage()
+    let owner = MessageTextSelection()
+    next.update(source: source, timestamp: nil, streaming: false, selection: owner,
+                environment: EnvironmentValues(), changed: {})
+    // No await: a cache hit must not temporarily expose raw Markdown or an estimated plain-text height.
+    #expect(next.preparedSource == source)
+    #expect(next.nativeTextViews.count == 2)
+    #expect(next.nativeTextViews.allSatisfy { $0.selectionOwner === owner })
+    #expect(next.measure(width: 700) == height)
+    next.stop()
+}
+
+@Test @MainActor func nativeCompatibilityHostsOnlyRequestIntrinsicSizing() {
+    let host = TranscriptRowHost(rootView: AnyView(Text("Content")))
+    #expect(host.sizingOptions == [.intrinsicContentSize])
+}
+
+@Test @MainActor func nativeProgrammaticScrollCannotLeaveTheDocument() {
+    let scroll = NativeTranscriptScrollView(frame: NSRect(x: 0, y: 0, width: 700, height: 500))
+    let document = NSView(frame: NSRect(x: 0, y: 0, width: 700, height: 1800))
+    scroll.documentView = document
+    scroll.layoutSubtreeIfNeeded()
+    let clip = scroll.contentView
+    #expect(clip is NativeTranscriptClipView)
+    for y: CGFloat in [-10000, 10000, -10000] {
+        clip.scroll(to: NSPoint(x: 0, y: y))
+        #expect(clip.bounds.minY >= -0.5)
+        #expect(clip.bounds.maxY <= document.frame.maxY + 0.5)
+    }
+}
+
+@Test @MainActor func nativeHostIntrinsicHeightMatchesPlacedContentAcrossWidths() {
+    let text = String(repeating: "Wrapped content. ", count: 40)
+    let host = TranscriptRowHost(rootView: AnyView(EmptyView()))
+    for width: CGFloat in [700, 180, 700] {
+        host.rootView = AnyView(Text(text).frame(width: width, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true))
+        host.frame.size.width = width
+        let measured = host.measuredContentHeight()
+        host.layoutSubtreeIfNeeded()
+        #expect(measured > 20)
+        #expect(abs(measured - ceil(host.fittingSize.height)) <= 1)
+    }
+}
+
+@Test @MainActor func nativeScrollMonitorIgnoresHiddenChromeAnchors() {
+    _ = NSApplication.shared
+    let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
+    let document = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 600))
+    scroll.documentView = document
+    let message = TranscriptRowAnchorView()
+    message.rowID = "message"
+    let footer = TranscriptRowAnchorView()
+    footer.isHidden = true
+    let hidden = TranscriptRowAnchorView()
+    hidden.rowID = "hidden-message"
+    hidden.isHidden = true
+    let placeholder = TranscriptRowAnchorView()
+    for anchor in [message, footer, hidden, placeholder] { document.addSubview(anchor) }
+    let window = NSWindow(contentRect: scroll.frame, styleMask: [], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    window.contentView = scroll
+    defer { window.close() }
+    let tracked = FrameMonitor.messageAnchors(in: scroll)
+    #expect(tracked.count == 1)
+    #expect(tracked.first === message)
+}
+
+@Test @MainActor func nativeTextCellReusesRegionsButNotMessageSelectionOrResourceIdentity() async throws {
+    let firstSource = "## First \(UUID().uuidString)\n\nFirst paragraph.\n\n```swift\nlet first = 1\n```"
+    let nextSource = "## Second \(UUID().uuidString)\n\nSecond paragraph.\n\n```swift\nlet second = 2\n```"
+    await MarkdownView.prewarm(firstSource)
+    await MarkdownView.prewarm(nextSource)
+    func configuration(session: String) -> NativeTranscript {
+        NativeTranscript(presentation: TranscriptPresentation(), historyLimit: 40,
+            resource: NativeTranscriptResource(sessionID: session, host: nil), scroll: TranscriptScrollState(),
+            toolExpansions: TranscriptExpansions(), messageExpansions: TranscriptExpansions(),
+            environment: EnvironmentValues(), header: AnyView(EmptyView()), footer: AnyView(EmptyView()),
+            loadEarlier: {})
+    }
+    let cell = NativeTranscriptCell()
+    let config = configuration(session: "one")
+    func bind(_ id: String, _ source: String, _ owner: MessageTextSelection, _ config: NativeTranscript) {
+        cell.bind(item: .row(id), width: 700, row: .text(id: id, text: source), configuration: config,
+                  selection: { _ in owner }, hosted: AnyView(EmptyView()), changed: {})
+    }
+    let oldOwner = MessageTextSelection()
+    bind("first", firstSource, oldOwner, config)
+    let message = try #require(cell.subviews.compactMap { $0 as? NativeMarkdownMessage }.first)
+    _ = message.measure(width: 700)
+    let firstText = try #require(message.nativeTextViews.first)
+    let host = try #require(message.subviews.flatMap(\.subviews).compactMap { $0 as? TranscriptRowHost }.first)
+    oldOwner.select(from: .init(key: firstText.selectionKey, offset: 1),
+                    to: .init(key: firstText.selectionKey, offset: 4))
+    #expect(firstText.selectedRange().length > 0)
+
+    let nextOwner = MessageTextSelection()
+    bind("second", nextSource, nextOwner, config)
+    let reused = try #require(cell.subviews.compactMap { $0 as? NativeMarkdownMessage }.first)
+    _ = reused.measure(width: 700)
+    #expect(reused === message)
+    #expect(reused.nativeTextViews.first === firstText)
+    #expect(reused.subviews.flatMap(\.subviews).compactMap { $0 as? TranscriptRowHost }.first === host)
+    #expect(reused.preparedSource == nextSource)
+    #expect(reused.nativeTextViews.allSatisfy { $0.selectionOwner === nextOwner && $0.selectedRange().length == 0 })
+
+    bind("second", nextSource, MessageTextSelection(), configuration(session: "other"))
+    #expect(cell.subviews.compactMap { $0 as? NativeMarkdownMessage }.first !== message)
+    cell.unbind()
+}
+
+@Test @MainActor func nativeCompatibilityCellReusesHostAndFencesPreviousRowCallbacks() {
+    let configuration = NativeTranscript(presentation: TranscriptPresentation(), historyLimit: 40,
+        resource: NativeTranscriptResource(sessionID: "one", host: nil), scroll: TranscriptScrollState(),
+        toolExpansions: TranscriptExpansions(), messageExpansions: TranscriptExpansions(),
+        environment: EnvironmentValues(), header: AnyView(EmptyView()), footer: AnyView(EmptyView()), loadEarlier: {})
+    let cell = NativeTranscriptCell()
+    var oldChanges = 0
+    var newChanges = 0
+    cell.bind(item: .header, width: 700, row: nil, configuration: configuration,
+              selection: { _ in MessageTextSelection() }, hosted: AnyView(Text("First")), changed: { oldChanges += 1 })
+    let host = cell.subviews.compactMap { $0 as? TranscriptRowHost }.first
+    let oldCallback = host?.onSizeChanged
+    cell.bind(item: .footer, width: 700, row: nil, configuration: configuration,
+              selection: { _ in MessageTextSelection() }, hosted: AnyView(Text("Next")), changed: { newChanges += 1 })
+    #expect(host != nil)
+    #expect(cell.subviews.compactMap { $0 as? TranscriptRowHost }.first === host)
+    let previous = (oldChanges, newChanges)
+    oldCallback?()
+    #expect(oldChanges == previous.0 && newChanges == previous.1)
+    cell.unbind()
+}
+
+@Test @MainActor func nativeMarkdownCacheReplacesTheLastPreparedPrefixWhenUpdatesCoalesce() async throws {
+    let source = "Prefix \(UUID().uuidString)"
+    let message = NativeMarkdownMessage()
+    let owner = MessageTextSelection()
+    func update(_ value: String) {
+        message.update(source: value, timestamp: nil, streaming: true, selection: owner,
+                       environment: EnvironmentValues(), changed: {})
+    }
+    update(source)
+    try await prepared(message, source: source)
+    update(source + " skipped")
+    update(source + " skipped and latest")
+    try await prepared(message, source: source + " skipped and latest")
+    #expect(PreparedMarkdownCache.shared.blocks(for: source) == nil)
+    #expect(PreparedMarkdownCache.shared.blocks(for: source + " skipped") == nil)
+    #expect(PreparedMarkdownCache.shared.blocks(for: source + " skipped and latest") != nil)
+    message.stop()
+}
+
 @Test @MainActor func nativeMarkdownSameSourceRegistersEveryRegionWithNewSelectionOwner() async throws {
     _ = NSApplication.shared
     let message = NativeMarkdownMessage()
