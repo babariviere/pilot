@@ -70,6 +70,30 @@ The scrolling results are worse in this batch and cannot establish a scrolling i
 and other app activity were present during portions of the after batch. These results must not be read as a
 quiet-machine smoothness claim. No reused-cell transcript was built; further architecture changes need review.
 
+## Alternating recheck without competing Swift builds
+
+Three paired runs repeated the 4/s case and rich scrolling while holding the shared Swift verification slot,
+excluding other Swift builds for the whole recheck. Pair 2 reversed the order. Other apps and background
+agents remained active. These use the same saved before release and final after release, with no code changes.
+
+| Pair | 4/s hitch time before → after (ms/s) | 4/s main CPU before → after | Text measures before → after |
+| --- | ---: | ---: | ---: |
+| 1 | 437.1 → 272.7 | 48.9% → 32.8% | 46,414 → 525 |
+| 2 (after first) | 535.3 → 299.9 | 54.8% → 32.0% | 46,478 → 524 |
+| 3 | 524.3 → 269.3 | 54.9% → 32.5% | 46,181 → 525 |
+
+The median 4/s hitch ratio fell 48%, from 524.3 to 272.7 ms/s, but still misses the under-10 target.
+
+| Pair | Scroll hitch time before → after (ms/s) | Scroll main CPU before → after | Scroll p50 / p95 before → after (ms) |
+| --- | ---: | ---: | ---: |
+| 1 | 193.6 → 158.8 | 48.0% → 45.2% | 3.6 / 8.8 → 3.7 / 7.9 |
+| 2 (after first) | 414.8 → 464.8 | 44.7% → 48.9% | 4.5 / 11.4 → 4.9 / 13.2 |
+| 3 | 258.2 → 252.6 | 59.0% → 60.3% | 4.4 / 8.0 → 4.6 / 8.2 |
+
+Scrolling is mixed, rather than the large consistent regression suggested by the non-alternating batch.
+Its median hitch ratio is 258.2 → 252.6 ms/s, main CPU 48.0% → 48.9%, p50 4.4 → 4.6 ms and p95
+8.8 → 8.2 ms. This does not prove a scrolling improvement or rule out a small cost from the second layout.
+
 ## Remaining profile
 
 Separate Time Profiler + Streaming signpost recordings sampled the same nine-second interior window at 4/s.
