@@ -172,8 +172,9 @@ jobs:
       - name: Swift tests
         id: swift-test
         if: ${{ !cancelled() && steps.swift-toolchain.outcome == 'success' }}
-        # A normal run takes about 5 minutes. Fail a hung test process quickly instead of at the job limit.
-        timeout-minutes: 12
+        # A cached PR build plus tests takes about 5 minutes; a cold build (main, or a changed test.sh) adds
+        # about 8. Fail a hung test process well before the job limit without cutting off a cold run.
+        timeout-minutes: 20
         run: apps/macos/scripts/test.sh
       # Only main saves (each build is ~430 MB against the repo's 10 GB cache limit), also after failing
       # tests: the build itself stays valid for the next incremental build.
