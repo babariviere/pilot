@@ -183,6 +183,9 @@ enum PerformanceCheck {
                 summary += " over 16ms=\(scrollFrames.filter { $0 > 16 }.count)/\(scrollFrames.count)"
             }
             print(summary)
+            if let native = findTranscript(window.contentView) as? NativeTranscriptScrollView {
+                print("  \(native.controller?.diagnosticSummary ?? "native transcript detached")")
+            }
             if streaming {
                 for (phase, total) in phases where total.count > 0 {
                     let totalMs = Double(total.nanoseconds) / 1e6
@@ -290,6 +293,7 @@ enum PerformanceCheck {
 
     private static func findTranscript(_ view: NSView?) -> NSScrollView? {
         guard let view else { return nil }
+        if let native = view as? NativeTranscriptScrollView { return native }
         if let observer = view as? ScrollObserverView { return observer.enclosingScrollView }
         return view.subviews.lazy.compactMap { findTranscript($0) }.first
     }
