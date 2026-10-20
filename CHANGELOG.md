@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.60.0](https://github.com/babariviere/pilot/compare/v1.59.2...v1.60.0) (2026-10-20)
+
+
+### Features
+
+* **kernel:** add history recall and opt-in deterministic compaction ([c8486c2](https://github.com/babariviere/pilot/commit/c8486c29ac99d1b447825741cefbeef185390efa))
+
+
+### Bug Fixes
+
+* **context:** preserve status when digest budgets fill ([13ea3cc](https://github.com/babariviere/pilot/commit/13ea3cce85a722131f69b58fecee9b0232e8b854))
+
 ## [1.59.2](https://github.com/babariviere/pilot/compare/v1.59.1...v1.59.2) (2026-10-20)
 
 
