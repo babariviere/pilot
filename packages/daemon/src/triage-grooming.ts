@@ -114,7 +114,10 @@ export class TriageGroomer {
 					"triage_rebuild",
 					source,
 					projectId,
-					jobConfigurationKey(this.projects.require(projectId).tracking),
+					jobConfigurationKey(
+						this.projects.require(projectId).tracking,
+						this.projects.require(projectId).trackingGeneration,
+					),
 					this.pending.get(key)?.at,
 				);
 			} catch {
@@ -159,7 +162,7 @@ export class TriageGroomer {
 				"triage_rebuild",
 				job.kind,
 				job.projectId,
-				jobConfigurationKey(project.tracking),
+				jobConfigurationKey(project.tracking, project.trackingGeneration),
 			);
 			if (token) this.diagnostics?.stage(token, "eligibility");
 			const input = await this.items.triageInput(job.projectId, job.kind);

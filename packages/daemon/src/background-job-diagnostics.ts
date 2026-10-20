@@ -60,6 +60,17 @@ export interface JobToken {
 	sequence: number;
 }
 export class BackgroundJobDiagnostics {
+	onChange?: () => void;
+	snapshots(limit = 128) {
+		return [...this.records.values()]
+			.sort(
+				(a, b) =>
+					(b.value.completedAt ?? b.value.startedAt ?? b.value.queuedAt ?? 0) -
+					(a.value.completedAt ?? a.value.startedAt ?? a.value.queuedAt ?? 0),
+			)
+			.slice(0, limit)
+			.map((record) => ({ key: record.key, value: structuredClone(record.value) }));
+	}
 	private enabled = true;
 	private sequence = 0;
 	private readonly records = new Map<
@@ -80,6 +91,7 @@ export class BackgroundJobDiagnostics {
 	clear(): void {
 		this.records.clear();
 		this.dropped = 0;
+		this.onChange?.();
 	}
 	coverage() {
 		return { enabled: this.enabled, limit: 256, dropped: this.dropped, retention: "current_process_latest_per_job" };
@@ -110,6 +122,7 @@ export class BackgroundJobDiagnostics {
 		record.value.queuedAt ??= Date.now();
 		record.value.queued = true;
 		record.value.nextDueAt = nextDueAt;
+		this.onChange?.();
 	}
 	begin(job: BackgroundJob, kind: TrackedKind, projectId: string | undefined, key: string): JobToken {
 		if (!this.enabled) return { id: "", key, sequence: -1 };
@@ -126,6 +139,7 @@ export class BackgroundJobDiagnostics {
 			writeCalls: 0,
 			recent: record.value.recent,
 		};
+		this.onChange?.();
 		return { id, key, sequence: record.sequence };
 	}
 	private record(token: JobToken) {
@@ -141,10 +155,14 @@ export class BackgroundJobDiagnostics {
 		delete record.value.completedAt;
 		if (write) record.value.writeCalls = Math.min(1_000_000, record.value.writeCalls + 1);
 		else if (write === false) record.value.readCalls = Math.min(1_000_000, record.value.readCalls + 1);
+		this.onChange?.();
 	}
 	progress(token: JobToken): void {
 		const record = this.record(token);
-		if (record) record.value.stageCompletedAt = Date.now();
+		if (record) {
+			record.value.stageCompletedAt = Date.now();
+			this.onChange?.();
+		}
 	}
 	failure(token: JobToken, failure: NonNullable<MissionLinearSync["failure"]>): void {
 		const record = this.record(token);
@@ -170,6 +188,7 @@ export class BackgroundJobDiagnostics {
 			},
 		].slice(-4);
 		record.completionSequence = token.sequence;
+		this.onChange?.();
 	}
 	prune(current: (projectId: string, kind: TrackedKind, job: BackgroundJob) => string | undefined): void {
 		for (const [id, record] of this.records)
@@ -178,6 +197,7 @@ export class BackgroundJobDiagnostics {
 				current(record.value.projectId, record.value.kind, record.value.job) !== record.key
 			)
 				this.records.delete(id);
+		this.onChange?.();
 	}
 	read(job: BackgroundJob, kind: TrackedKind, projectId: string | undefined, key: string) {
 		const installed = this.installed.has(`${job}:${kind}`);
@@ -238,8 +258,8 @@ export function jobFailureReason(error: unknown, signal?: AbortSignal): JobReaso
 	if (error instanceof SourceSignInRequired) return "sign_in";
 	return "read_failed";
 }
-export function jobConfigurationKey(config: unknown): string {
+export function jobConfigurationKey(config: unknown, generation?: string): string {
 	return createHash("sha256")
-		.update(JSON.stringify(config ?? {}))
+		.update(JSON.stringify([config ?? {}, generation ?? "legacy"]))
 		.digest("hex");
 }
