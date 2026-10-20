@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
@@ -7,7 +8,8 @@ import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import type { ControlPermission, KernelCommand, KernelPacket } from "@pilot/kernel";
 import type { ControlAuthorization } from "@pilot/protocol";
-import { controlPermissionBlock } from "../../kernel/src/tool-policy.ts";
+import { pilotPrompt } from "../../kernel/src/policy.ts";
+import { controlPermissionBlock, inheritedControlPermission, nativeToolPolicy } from "../../kernel/src/tool-policy.ts";
 import { ControlPilot } from "./control-pilot.ts";
 import { ModelCatalog } from "./models.ts";
 import type { PermissionRequestState } from "./permission-requests.ts";
@@ -89,7 +91,6 @@ async function fixture(t: TestContext) {
 					throw new Error("unused");
 				},
 				send: sessions.sendReported.bind(sessions),
-				upgradePermission: sessions.upgradeControlPermission.bind(sessions),
 			},
 		});
 		return { sessions, service };
@@ -114,7 +115,7 @@ async function fixture(t: TestContext) {
 			"start",
 			{
 				projectId: "p",
-				message: "work locally",
+				message: "Implement the fix, push the task branch and open a PR.",
 				model: "test/model",
 				mode: level === "implement" ? "build" : "ask",
 				authorizationId: grant.id,
@@ -145,243 +146,188 @@ async function fixture(t: TestContext) {
 		await watches.close();
 		await rm(root, { recursive: true, force: true });
 	});
-	return { ...first, home, projects, open, workers, authorize, start, upgrade, stored, requests };
+	const waitForAdmission = async (id: string) => {
+		if (!admitted.has(id)) await new Promise<void>((resolve) => awaitingAdmission.set(id, resolve));
+	};
+	return {
+		...first,
+		home,
+		source,
+		projects,
+		open,
+		workers,
+		authorize,
+		start,
+		upgrade,
+		stored,
+		requests,
+		waitForAdmission,
+	};
 }
 
-test("explicit upgrade is audited, durable, idempotent and leaves a busy run implement-only", async (t) => {
-	const f = await fixture(t);
-	const { id, grant: build } = await f.start();
-	const workerPermission = f.workers.at(-1)!.spec.pilot!.controlPermission!;
-	const publish = await f.authorize([{ kind: "chat", id }]);
-	const args = { sessionId: id, message: "publish", level: "publish", authorizationId: publish.id };
-	const sent = await f.service.call(caller, "send", args, "send-before-upgrade");
-	assert.match(JSON.stringify(sent), /permission unchanged/);
-	assert.deepEqual(f.sessions.controlPermission(id), { authorizationId: build.id, level: "implement" });
-	for (const command of ["git push", "gh pr create --fill"])
-		assert.ok(controlPermissionBlock(workerPermission, "bash", { command }));
-	const result = (await f.upgrade(id, publish.id, "upgrade")) as { requestId: string; status: string };
-	assert.deepEqual(await f.upgrade(id, publish.id, "upgrade"), result);
-	assert.deepEqual(await f.upgrade(id, publish.id, "upgrade-retry"), result);
-	assert.equal(f.workers.at(-1)!.worker.state, "working");
-	assert.equal(workerPermission.level, "implement", "active worker's spawn authority is untouched");
-	assert.equal((await f.stored(id)).pendingControlPermission, undefined);
-	assert.equal((await f.stored(id)).permissionRequest?.status, "pending");
+const deliveryCommands = ["jj git push --bookmark fix/example", "git push origin fix/example", "gh pr create --fill"];
+
+test("Build push reaches Git and reports genuine missing repository access", async (t) => {
+	const permission: ControlPermission = { authorizationId: "build", level: "implement" };
+	assertBuildDelivery(permission);
+	// Exercise a real, disposable Git repository with unavailable remote access, never a network remote.
+	const root = await mkdtemp(join(tmpdir(), "build-delivery-remote-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	assert.equal(spawnSync("git", ["-c", "init.templateDir=", "init", root]).status, 0);
 	assert.equal(
-		(await f.sessions.prepareControlPermission(id))?.level,
-		"implement",
-		"a Control grant/request cannot raise permission",
+		spawnSync("git", [
+			"-C",
+			root,
+			"-c",
+			"core.hooksPath=/dev/null",
+			"-c",
+			"user.name=Fixture",
+			"-c",
+			"user.email=fixture@example.invalid",
+			"commit",
+			"--allow-empty",
+			"-m",
+			"fixture",
+		]).status,
+		0,
 	);
-	assert.equal((await f.stored(id)).controlPermission?.level, "implement");
-	const entries = (await f.sessions.controlAudit().page()).filter((entry) => entry.action === "upgrade_permission");
-	assert.deepEqual(
-		entries.map((entry) => entry.phase),
-		["succeeded", "requested", "succeeded", "requested"],
+	const args = ["-C", root, "push", join(root, "missing-remote"), "HEAD:refs/heads/fix/example"];
+	assert.equal(controlPermissionBlock(permission, "bash", { command: `git ${args.join(" ")}` }), undefined);
+	const pushed = spawnSync("git", args, { encoding: "utf8" });
+	assert.notEqual(pushed.status, 0);
+	assert.match(pushed.stderr, /does not appear to be a git repository/);
+	assert.doesNotMatch(pushed.stderr, /local.only|publishing approval/);
+});
+
+function assertBuildDelivery(permission: ControlPermission | undefined) {
+	let before: (event: { toolName: string; input: Record<string, unknown> }) => unknown = () => undefined;
+	nativeToolPolicy(permission)({
+		on: (_event: string, handler: typeof before) => {
+			before = handler;
+		},
+	} as never);
+	for (const command of deliveryCommands) {
+		assert.equal(controlPermissionBlock(permission, "bash", { command }), undefined);
+		assert.equal(before({ toolName: "bash", input: { command } }), undefined);
+		assert.equal(before({ toolName: "jobs", input: { action: "start", command } }), undefined);
+	}
+	const prompt = pilotPrompt({
+		controlPermission: permission,
+		requirePullRequest: true,
+		workspace: { source: "/source", base: "main", jj: true },
+	});
+	assert.match(prompt, /push the task branch and open a pull request/);
+	assert.doesNotMatch(prompt, /locally only|only the app's Allow|Do not push, open/);
+	assert.match(prompt, /Merges still require user confirmation|Never push the default branch or merge/);
+}
+
+test("ordinary and delegated Build can fulfill an explicit PR request without a second approval", async (t) => {
+	const f = await fixture(t);
+	const ordinary = await f.sessions.spawn({
+		cwd: f.source,
+		mode: "build",
+		message: "Fix this, push the task branch and open a PR.",
+	});
+	await f.waitForAdmission(ordinary.id);
+	const delegated = await f.start();
+	for (const id of [ordinary.id, delegated.id]) {
+		const permission = f.workers.find((w) => w.spec.sessionId === id)!.spec.pilot?.controlPermission;
+		assertBuildDelivery(permission);
+		if (permission) assertBuildDelivery(inheritedControlPermission(JSON.stringify(permission)));
+		assert.equal(f.sessions.get(id)?.permissionUpgradeRequest, undefined);
+		assert.equal((await f.stored(id)).permissionRequest, undefined);
+	}
+	const sendGrant = await f.authorize([{ kind: "chat", id: delegated.id }], "implement");
+	const sent = await f.service.call(
+		caller,
+		"send",
+		{
+			sessionId: delegated.id,
+			message: "Push the task branch and open a PR.",
+			level: "publish",
+			authorizationId: sendGrant.id,
+		},
+		"publish-follow-up",
 	);
-	assert.ok(entries.every((entry) => entry.authorizationId === publish.id));
+	assert.doesNotMatch(JSON.stringify(sent), /permission unchanged|app approval/);
+	assertBuildDelivery(f.sessions.controlPermission(delegated.id));
+	await assert.rejects(f.upgrade(delegated.id, delegated.grant.id), /no publishing approval is required/);
+	assert.equal((await f.stored(delegated.id)).permissionRequest, undefined);
+});
+
+test("persisted implement sessions resume delivery without consuming old pending approvals or changing history", async (t) => {
+	const f = await fixture(t);
+	const { id, grant } = await f.start();
 	await f.sessions.shutdown();
-	const recovered = await f.open();
-	assert.equal(recovered.sessions.controlPermission(id)?.level, "implement", "recovery of an old run cannot publish");
-	assert.equal((await f.stored(id)).permissionRequest?.id, result.requestId);
-	await recovered.sessions.decideControlPermission(id, result.requestId, true);
-	assert.equal(
-		recovered.sessions.controlPermission(id)?.level,
-		"implement",
-		"app approval is still deferred to a fresh run",
-	);
-	await assert.rejects(recovered.sessions.decideControlPermission(id, result.requestId, true), /no longer pending/);
-	const applied = await recovered.sessions.prepareControlPermission(id);
-	assert.deepEqual(applied, { authorizationId: publish.id, level: "publish" });
-	assert.equal((await f.stored(id)).pendingControlPermission, undefined);
-	for (const command of ["git push", "gh pr create --fill"])
-		assert.equal(controlPermissionBlock(applied, "bash", { command }), undefined);
-	await recovered.sessions.flushPermissionDecisions();
-	await recovered.sessions.shutdown();
-	const again = await f.open();
-	assert.deepEqual(again.sessions.controlPermission(id), applied, "effective permission survives another restart");
-	assert.deepEqual(
-		await again.service.call(
-			caller,
-			"upgrade_permission",
-			{
-				sessionId: id,
-				authorizationId: publish.id,
-				level: "publish",
-			},
-			"upgrade",
-		),
-		result,
-		"audited retry survives restart",
-	);
+	const path = join(f.home, "sessions", id, "meta.json");
+	const meta = JSON.parse(await readFile(path, "utf8"));
+	meta.permissionRequest = {
+		id: "obsolete",
+		chatId: id,
+		chatTitle: "Old Build",
+		level: "publish",
+		scope: "Open a PR",
+		requestedBy: caller,
+		authorizationId: "old-grant",
+		status: "pending",
+		createdAt: 1,
+		expiresAt: 2,
+	};
+	meta.pendingControlPermission = { authorizationId: "old-grant", level: "publish", approvalRequestId: "obsolete" };
+	await writeFile(path, JSON.stringify(meta));
+	const reopened = await f.open();
+	const storedBefore = await f.stored(id);
+	assert.deepEqual(reopened.sessions.controlPermission(id), { authorizationId: grant.id, level: "implement" });
+	assertBuildDelivery(await reopened.sessions.prepareControlPermission(id));
+	assert.equal(reopened.sessions.get(id)?.permissionUpgradeRequest, undefined);
+	assert.doesNotMatch(reopened.sessions.get(id)?.outcomeReason ?? "", /Allow publish|App approval/);
+	await assert.rejects(reopened.sessions.decideControlPermission(id, "obsolete", true), /obsolete/);
+	assert.deepEqual(await f.stored(id), storedBefore, "no approval consumption or history mutation is needed");
+	assert.equal(f.requests.filter((r) => r.sessionId === caller).length, 0, "no legacy decision notices replayed");
+	await reopened.sessions.send(id, "Please push the task branch and open a PR.", "followUp");
+	assertBuildDelivery(reopened.sessions.controlPermission(id));
 });
 
-test("upgrade denies wrong, enclosing, legacy, revoked, expired and non-publish grants", async (t) => {
-	const f = await fixture(t);
-	const { id } = await f.start();
-	for (const targets of [
-		[{ kind: "chat", id: "wrong" }],
-		[{ kind: "project", id: "p" }],
-		[{ kind: "mission", id: "m" }],
-		[{ kind: "chat_prs", id }],
-	]) {
-		const grant = await f.authorize(targets);
-		await assert.rejects(f.upgrade(id, grant.id), /exact chat/);
-	}
-	for (const level of ["investigate", "implement", "merge"]) {
-		const grant = await f.authorize([{ kind: "chat", id }], level);
-		await assert.rejects(f.upgrade(id, grant.id), /level|publish authorization/);
-	}
-	const revoked = await f.authorize([{ kind: "chat", id }]);
-	await f.sessions.controlAuthorizations().authorizationRevoke(revoked.id);
-	await assert.rejects(f.upgrade(id, revoked.id), /revoked/);
-	const expired = await f.sessions.controlAuthorizations().authorizationCreate({
-		id: "expired",
-		scope: "old approval",
-		userMessage,
-		level: "publish",
-		targets: [{ kind: "chat", id }],
-		createdAt: 0,
-		expiresAt: 1,
-		limits: { followUps: 0 },
-	});
-	await assert.rejects(f.upgrade(id, expired.id), /expired/);
-	await f.sessions.controlAuthorizations().authorizationCreate({
-		id: "no-user",
-		scope: "not a user request",
-		level: "publish",
-		targets: [{ kind: "chat", id }],
-		createdAt: Date.now(),
-		limits: { followUps: 0 },
-	});
-	await assert.rejects(f.upgrade(id, "no-user"), /user-request/);
-	await assert.rejects(f.upgrade(id, "watch:legacy"), /Legacy watch/);
-	assert.equal((await f.stored(id)).pendingControlPermission, undefined);
-	assert.equal(f.sessions.controlPermission(id)?.level, "implement");
-});
-
-test("upgrade denies investigate, Control, ordinary chats, remote/other hosts and merge levels", async (t) => {
+test("Ask permissions and merge/review safeguards remain blocked while Build delivery is allowed", async (t) => {
 	const f = await fixture(t);
 	const ask = await f.start("investigate");
-	const ordinary = await f.sessions.spawn({ cwd: f.home, mode: "build", message: "local" });
-	for (const id of [ask.id, caller, ordinary.id]) {
-		const grant = await f.authorize([{ kind: "chat", id }]);
-		await assert.rejects(f.upgrade(id, grant.id), /investigate|Control chat|implement to publish/);
+	for (const command of [...deliveryCommands, "git commit -m fix", "rm -rf /source"]) {
+		assert.match(
+			controlPermissionBlock(f.sessions.controlPermission(ask.id), "bash", { command })!,
+			/Ask\/read-only/,
+		);
 	}
-	const { id } = await f.start();
-	const grant = await f.authorize([{ kind: "chat", id }]);
-	for (const host of ["remote", { hostId: "daemon", daemonId: "other", lineageId: "other" }])
-		await assert.rejects(f.upgrade(id, grant.id, undefined, { host }), /same-host/);
-	await assert.rejects(f.upgrade(`remote:${id}`, grant.id), /Unknown local/);
-	for (const level of ["merge", "implement", "investigate", undefined])
-		await assert.rejects(f.upgrade(id, grant.id, undefined, { level }), /Only implement to publish/);
-	await assert.rejects(
-		f.service.call(
-			"member",
-			"upgrade_permission",
-			{
-				sessionId: id,
-				authorizationId: grant.id,
-				level: "publish",
+	await assert.rejects(f.upgrade(ask.id, ask.grant.id), /Read-only roles cannot be upgraded/);
+	for (const command of [
+		"gh repo delete owner/repo --yes",
+		"gh release delete v1 --yes",
+		"gh api repos/owner/repo -X DELETE",
+		"gh api graphql -f query='mutation { deleteRepository(input: {repositoryId: \"fixture\"}) { clientMutationId } }'",
+	])
+		assert.match(
+			controlPermissionBlock({ authorizationId: "build", level: "implement" }, "bash", { command })!,
+			/destructive GitHub actions/,
+		);
+	assert.match(
+		controlPermissionBlock({ authorizationId: "build", level: "implement" }, "mcp__github__delete_branch", {})!,
+		/destructive GitHub actions/,
+	);
+	for (const permission of [undefined, { authorizationId: "build", level: "implement" } as const]) {
+		let before: (event: { toolName: string; input: Record<string, unknown> }) => { block: boolean } | undefined =
+			() => undefined;
+		nativeToolPolicy(permission)({
+			on: (_event: string, handler: typeof before) => {
+				before = handler;
 			},
-			"not-control",
-		),
-		/Only the control/,
-	);
-	assert.equal((await f.stored(id)).pendingControlPermission, undefined);
-});
-
-test("a pending upgrade cannot activate after its grant is revoked or expires", async (t) => {
-	for (const reason of ["revoked", "expired"] as const) {
-		const f = await fixture(t);
-		const { id } = await f.start();
-		const grant = await f.authorize([{ kind: "chat", id }]);
-		await f.upgrade(id, grant.id);
-		await f.sessions.decideControlPermission(id, (await f.stored(id)).permissionRequest!.id, true);
-		await f.sessions.flushPermissionDecisions();
-		if (reason === "revoked") await f.sessions.controlAuthorizations().authorizationRevoke(grant.id);
-		else t.mock.method(Date, "now", () => grant.expiresAt! + 1);
-		assert.equal((await f.sessions.prepareControlPermission(id))?.level, "implement");
-		assert.equal((await f.stored(id)).pendingControlPermission, undefined);
-		t.mock.restoreAll();
+		} as never);
+		for (const command of ["gh pr merge 12 --squash", "gh pr merge 12 --auto", "gh pr review 12 --approve"])
+			assert.equal(before({ toolName: "bash", input: { command } })?.block, true);
 	}
 });
 
-test("retry recovers a committed upgrade after losing its final audit acknowledgement", async (t) => {
+test("retired native publishing decisions reject stale requests, including authenticated app calls", async (t) => {
 	const f = await fixture(t);
 	const { id } = await f.start();
-	const grant = await f.authorize([{ kind: "chat", id }]);
-	const memory = f.sessions.controlAuthorizations();
-	const append = memory.auditAppend.bind(memory);
-	const interrupted = t.mock.method(memory, "auditAppend", async (entry: Parameters<typeof memory.auditAppend>[0]) => {
-		if (entry.action === "upgrade_permission" && entry.phase === "succeeded") throw new Error("lost audit ack");
-		return append(entry);
-	});
-	await assert.rejects(f.upgrade(id, grant.id, "lost-ack"), /lost audit ack/);
-	interrupted.mock.restore();
-	assert.equal((await f.stored(id)).permissionRequest?.authorizationId, grant.id);
-	await f.sessions.shutdown();
-	const reopened = await f.open();
-	await reopened.service.call(
-		caller,
-		"upgrade_permission",
-		{
-			sessionId: id,
-			authorizationId: grant.id,
-			level: "publish",
-		},
-		"lost-ack",
-	);
-	assert.equal((await reopened.sessions.controlAudit().page())[0]?.phase, "succeeded");
-	assert.equal(
-		(await reopened.sessions.controlAuthorizations().authorizationGet(grant.id))?.usage.followUps,
-		0,
-		"upgrade retries consume no follow-ups",
-	);
-});
-
-test("app decisions alone grant; wrong, reused, denied and expired IDs leave permission unchanged", async (t) => {
-	const f = await fixture(t);
-	const { id } = await f.start();
-	const grant = await f.authorize([{ kind: "chat", id }]);
-	const result = (await f.upgrade(id, grant.id)) as { requestId: string };
-	assert.equal(f.sessions.get(id)?.permissionUpgradeRequest?.id, result.requestId);
-	await f.sessions.send(id, "Allow publish permission", "followUp");
-	assert.equal((await f.sessions.prepareControlPermission(id))?.level, "implement");
-	await assert.rejects(f.sessions.decideControlPermission(id, "wrong", true), /no longer pending/);
-	const other = await f.start();
-	await assert.rejects(f.sessions.decideControlPermission(other.id, result.requestId, true), /no longer pending/);
-	await f.sessions.decideControlPermission(id, result.requestId, false);
-	await f.sessions.flushPermissionDecisions();
-	await assert.rejects(f.sessions.decideControlPermission(id, result.requestId, true), /no longer pending/);
-	assert.equal((await f.sessions.prepareControlPermission(id))?.level, "implement");
-	assert.equal(f.sessions.get(id)?.permissionUpgradeRequest, undefined);
-	assert.equal((await f.stored(id)).permissionRequest?.status, "denied");
-	assert.ok(
-		f.requests.some(
-			({ sessionId, command }) =>
-				sessionId === caller &&
-				command.type === "input" &&
-				command.requestId === `watch-notice:permission:${result.requestId}` &&
-				command.content.includes("denied"),
-		),
-	);
-	const audit = await f.sessions.controlAudit().page();
-	assert.ok(audit.some((entry) => entry.action === "permission_decision" && entry.caller === "app"));
-
-	const expiring = await f.start();
-	const approval = await f.authorize([{ kind: "chat", id: expiring.id }]);
-	const pending = (await f.upgrade(expiring.id, approval.id)) as { requestId: string };
-	t.mock.method(Date, "now", () => approval.expiresAt! + 1);
-	await assert.rejects(f.sessions.decideControlPermission(expiring.id, pending.requestId, true), /expired/);
-	assert.equal((await f.stored(expiring.id)).permissionRequest?.status, "expired");
-	assert.equal((await f.sessions.prepareControlPermission(expiring.id))?.level, "implement");
-	t.mock.restoreAll();
-});
-
-test("permission decisions require the native app capability and exact request ID over HTTP", async (t) => {
-	const f = await fixture(t);
-	const { id } = await f.start();
-	const grant = await f.authorize([{ kind: "chat", id }]);
-	const pending = (await f.upgrade(id, grant.id)) as { requestId: string };
 	const terminals = new TerminalManager();
 	const args: Parameters<typeof createDaemonServer> = [
 		{ home: f.home, host: "127.0.0.1", port: 0 },
@@ -403,90 +349,18 @@ test("permission decisions require the native app capability and exact request I
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/sessions/${id}/permission-upgrade`;
-	const decide = async (body: unknown, native = true) => {
+	for (const native of [false, true]) {
 		const response = await fetch(url, {
 			method: "POST",
 			headers: {
 				"content-type": "application/json",
 				...(native ? { "x-pilot-github-capability": "native-fixture" } : {}),
 			},
-			body: JSON.stringify(body),
+			body: JSON.stringify({ id: "obsolete", allow: true }),
 		});
 		await response.arrayBuffer();
-		return response.status;
-	};
-	assert.equal(await decide({ id: pending.requestId, allow: true }, false), 403);
-	assert.equal(await decide({ id: "wrong", allow: true }), 409);
-	assert.equal(await decide({ id: pending.requestId, allow: "yes" }), 400);
-	assert.equal((await f.sessions.prepareControlPermission(id))?.level, "implement");
-	assert.equal(await decide({ id: pending.requestId, allow: true }), 202);
-	assert.equal(await decide({ id: pending.requestId, allow: true }), 409);
-	assert.equal((await f.sessions.prepareControlPermission(id))?.level, "publish");
-	await f.sessions.flushPermissionDecisions();
-});
-
-test("pending requests expire after restart and report the expiry to Control", { timeout: 15_000 }, async (t) => {
-	const f = await fixture(t);
-	const { id } = await f.start();
-	const grant = await f.authorize([{ kind: "chat", id }]);
-	const pending = (await f.upgrade(id, grant.id)) as { requestId: string };
-	await f.sessions.shutdown();
-	t.mock.method(Date, "now", () => grant.expiresAt! + 1);
-	const reopened = await f.open();
-	if (reopened.sessions.get(id)?.permissionUpgradeRequest) {
-		await new Promise<void>((resolve) => {
-			const unsubscribe = reopened.sessions.onChange((summary) => {
-				if (summary.id === id && !summary.permissionUpgradeRequest) {
-					unsubscribe();
-					resolve();
-				}
-			});
-		});
+		assert.equal(response.status, native ? 409 : 403);
 	}
-	await reopened.sessions.flushPermissionDecisions();
-	assert.equal((await f.stored(id)).permissionRequest?.status, "expired");
-	assert.equal(reopened.sessions.controlPermission(id)?.level, "implement");
-	assert.ok(
-		f.requests.some(
-			({ sessionId, command }) =>
-				sessionId === caller &&
-				command.type === "input" &&
-				command.requestId === `watch-notice:permission:${pending.requestId}` &&
-				command.content.includes("expired"),
-		),
-	);
-	t.mock.restoreAll();
-});
-
-test("legacy pending grants cannot bypass app approval after recovery", async (t) => {
-	const f = await fixture(t);
-	const { id } = await f.start();
-	const grant = await f.authorize([{ kind: "chat", id }]);
-	await f.sessions.shutdown();
-	const path = join(f.home, "sessions", id, "meta.json");
-	const meta = JSON.parse(await readFile(path, "utf8"));
-	meta.pendingControlPermission = { authorizationId: grant.id, level: "publish" };
-	await writeFile(path, JSON.stringify(meta));
-	const reopened = await f.open();
-	assert.equal((await reopened.sessions.prepareControlPermission(id))?.level, "implement");
-	assert.equal((await f.stored(id)).pendingControlPermission, undefined);
-});
-
-test("concurrent app decisions consume the pending request once", async (t) => {
-	const f = await fixture(t);
-	const { id } = await f.start();
-	const grant = await f.authorize([{ kind: "chat", id }]);
-	const request = (await f.upgrade(id, grant.id)) as { requestId: string };
-	const results = await Promise.allSettled([
-		f.sessions.decideControlPermission(id, request.requestId, true),
-		f.sessions.decideControlPermission(id, request.requestId, false),
-	]);
-	assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
-	assert.equal(results.filter((result) => result.status === "rejected").length, 1);
-	await f.sessions.flushPermissionDecisions();
-	assert.equal((await f.stored(id)).permissionRequest?.status, "allowed");
-	assert.equal(
-		(await f.sessions.controlAudit().page()).filter((entry) => entry.action === "permission_decision").length,
-		1,
-	);
+	assert.equal((await f.stored(id)).permissionRequest, undefined);
+	assertBuildDelivery(f.sessions.controlPermission(id));
 });

@@ -157,13 +157,19 @@ async function fixture(t: TestContext) {
 								const followUpFailed = command.includes("; gh pr view --head");
 								if (followUpFailed) output += "\nunknown flag: --head\nUsage: gh pr view [flags]";
 								else if (command.includes("--fail")) output = "PR creation failed";
+								const accessFailure = command.includes("--auth-failure")
+									? "GitHub authentication required. Run gh auth login."
+									: command.includes("--access-failure")
+										? "remote: Permission to owner/repo denied to this user."
+										: undefined;
+								if (accessFailure) output = accessFailure;
 								return {
 									content: [{ type: "text", text: "Structured output is authoritative" }],
 									details: undefined,
-									isError: followUpFailed,
+									isError: followUpFailed || !!accessFailure,
 									structuredContent: {
 										output,
-										exit_code: followUpFailed || command.includes("--fail") ? 1 : 0,
+										exit_code: followUpFailed || accessFailure || command.includes("--fail") ? 1 : 0,
 									},
 								};
 							},
@@ -215,7 +221,7 @@ async function fixture(t: TestContext) {
 	return { open, run, calls, adapters, faux, root, toolGates };
 }
 
-test("a resident kernel upgrades both policies only on the next queued run, not during tools", {
+test("Build delivery works before and during a run without waiting for a legacy permission label refresh", {
 	timeout: 20_000,
 }, async (t) => {
 	const f = await fixture(t);
@@ -240,7 +246,7 @@ test("a resident kernel upgrades both policies only on the next queued run, not 
 		{ authorizationId: "build-grant", level: "implement" },
 	);
 	await f.run(session, "before-upgrade", "bash", { command: "git push" });
-	assert.deepEqual(f.calls, []);
+	assert.deepEqual(f.calls, ["git push"]);
 	let entered!: () => void;
 	const insideTool = new Promise<void>((resolve) => {
 		entered = resolve;
@@ -276,8 +282,8 @@ test("a resident kernel upgrades both policies only on the next queued run, not 
 	await session.conversation.waitForIdle(context);
 	assert.deepEqual(
 		f.calls,
-		["pnpm test", "gh pr create"],
-		"old run's dynamic native push stayed blocked; queued run published",
+		["git push", "pnpm test", "git push", "gh pr create"],
+		"implement already delivers before any label update; queued runs also deliver",
 	);
 	assert.equal(preparations, 3, "one handshake per fresh run, none during tool rounds");
 	assert.deepEqual(JSON.parse(process.env.PILOT_CONTROL_PERMISSION!), {
@@ -288,10 +294,10 @@ test("a resident kernel upgrades both policies only on the next queued run, not 
 	f.adapters.at(-1)!.refreshTools();
 	await f.run(session, "publish-after-reload", "bash", { command: "git push" });
 	await f.run(session, "merge-still-blocked", "bash", { command: ["gh", "pr", "merge", "1"].join(" ") });
-	assert.deepEqual(f.calls, ["pnpm test", "gh pr create", "git push"]);
+	assert.deepEqual(f.calls, ["git push", "pnpm test", "git push", "gh pr create", "git push"]);
 });
 
-test("native publication gates catch dynamic nested calls after reload and recovery", {
+test("native Build delivery handles dynamic nested calls after reload and recovery without a publish upgrade", {
 	timeout: 20_000,
 }, async (t) => {
 	const f = await fixture(t);
@@ -309,31 +315,59 @@ test("native publication gates catch dynamic nested calls after reload and recov
 			code: `const command = ${JSON.stringify(command.split(" "))}.join(" "); await tools.bash({ command });`,
 		});
 	}
-	assert.deepEqual(f.calls, [], "no forbidden shell tool body executes");
+	const expected = commands.slice(0, -1).flatMap((command) => [command, command]);
+	assert.deepEqual(f.calls, expected, "pushes and PRs execute; merges do not");
 	await f.run(session, "local", "bash", { command: "pnpm test" });
-	assert.deepEqual(f.calls, ["pnpm test"]);
+	expected.push("pnpm test");
+	assert.deepEqual(f.calls, expected);
 	await f.adapters.at(-1)!.session.reload();
 	f.adapters.at(-1)!.refreshTools();
 	await f.run(session, "after-reload", "codemode", {
 		code: 'const command = ["git", "push"].join(" "); await tools.bash({ command });',
 	});
-	assert.deepEqual(f.calls, ["pnpm test"]);
+	expected.push("git push");
+	assert.deepEqual(f.calls, expected);
 	await session.close();
 	session = await f.open({}, true, { authorizationId: "grant", level: "implement" });
 	await f.run(session, "after-reopen", "codemode", {
 		code: 'const command = ["gh", "pr", "create"].join(" "); await tools.bash({ command });',
 	});
-	assert.deepEqual(f.calls, ["pnpm test"]);
+	expected.push("gh pr create");
+	assert.deepEqual(f.calls, expected);
 	await session.close();
 	session = await f.open({}, true, { authorizationId: "publish-grant", level: "publish" });
 	await f.run(session, "published", "codemode", {
 		code: 'const command = ["gh", "pr", "create"].join(" "); await tools.bash({ command });',
 	});
-	assert.deepEqual(f.calls, ["pnpm test", "gh pr create"]);
+	expected.push("gh pr create");
+	assert.deepEqual(f.calls, expected);
 	await f.run(session, "still-no-merge", "codemode", {
 		code: 'const command = ["gh", "pr", "merge"].join(" "); await tools.bash({ command });',
 	});
-	assert.deepEqual(f.calls, ["pnpm test", "gh pr create"]);
+	assert.deepEqual(f.calls, expected, "legacy publish also cannot merge");
+});
+
+test("implement PR delivery reports actual authentication and repository access failures without claiming a policy block", {
+	timeout: 20_000,
+}, async (t) => {
+	const f = await fixture(t);
+	const created: string[] = [];
+	const session = await f.open({ onPullRequestCreated: (value) => created.push(value) }, true, {
+		authorizationId: "build-grant",
+		level: "implement",
+	});
+	for (const failure of ["auth", "access"]) {
+		await f.run(session, failure, "bash", { command: `gh pr create --${failure}-failure` });
+	}
+	assert.deepEqual(f.calls, ["gh pr create --auth-failure", "gh pr create --access-failure"]);
+	const results = (await session.conversation.context(context)).entries.filter(
+		(entry) => entry.kind === "pi.tool-result",
+	);
+	const text = JSON.stringify(results);
+	assert.match(text, /GitHub authentication required/);
+	assert.match(text, /Permission to owner\/repo denied/);
+	assert.doesNotMatch(text, /local changes and verification only|app's Allow decision|Pilot policy/);
+	assert.deepEqual(created, [], "failed external publication never claims a created PR");
 });
 
 test("agent PR provenance uses matching successful results, survives compaction and replays on open", {

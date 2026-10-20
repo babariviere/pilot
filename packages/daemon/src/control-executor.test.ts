@@ -2,10 +2,47 @@ import assert from "node:assert/strict";
 import { randomUUID, sign } from "node:crypto";
 import { join } from "node:path";
 import { test } from "node:test";
+import { controlPermissionBlock } from "../../kernel/src/tool-policy.ts";
 import { ControlHostError } from "./control-host-policy.ts";
 import { ControlHosts } from "./control-hosts.ts";
 import { OperationJournal, payloadHash } from "./operation-journal.ts";
 import { executorFixture, executorHost, home } from "./testing/control-executor.ts";
+
+test("remote implement delegation and legacy publish sends share Build delivery without raising read-only roles", async (t) => {
+	const f = await executorFixture(t);
+	const op = f.operation("control.start", {
+		target: { kind: "project", projectId: "project" },
+		message: "Implement this fix, push the task branch and open a PR.",
+		model: "fake/model",
+		levelCeiling: "implement",
+	});
+	assert.equal((await f.journal.execute(op, (o) => f.handler.handle(o))).state, "accepted");
+	assert.equal(f.calls.at(-1)?.level, "implement");
+	assert.equal(
+		controlPermissionBlock({ authorizationId: "grant", level: "implement" }, "bash", {
+			command: "gh pr create --fill",
+		}),
+		undefined,
+	);
+	f.backend.resolveChat = (id) => ({
+		id,
+		scopes: [[{ kind: "project", id: "project" }]],
+		permission: { authorizationId: "grant", level: "implement" },
+	});
+	const send = f.operation(
+		"control.send",
+		{ sessionId: "chat", message: "Open the PR.", levelCeiling: "publish" },
+		"chat",
+	);
+	assert.equal((await f.journal.execute(send, (o) => f.handler.handle(o))).state, "accepted");
+	assert.equal(f.calls.at(-1)?.level, "implement");
+	const readOnly = f.operation(
+		"control.send",
+		{ sessionId: "chat", message: "Implement", levelCeiling: "investigate" },
+		"chat",
+	);
+	assert.equal((await f.journal.execute(readOnly, (o) => f.handler.handle(o))).state, "rejected");
+});
 
 test("six authorized kinds and every run action retain receipts, target and permission through restart", async (t) => {
 	const f = await executorFixture(t);

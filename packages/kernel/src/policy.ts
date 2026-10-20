@@ -261,15 +261,12 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false, c
 	}
 	const workspace = context.workspace;
 	const requirePullRequest = context.requirePullRequest !== false;
-	const localOnly =
-		context.controlPermission?.level === "implement" || context.controlPermission?.level === "investigate";
+	const localOnly = context.controlPermission?.level === "investigate";
 	if (context.controlPermission)
 		lines.push(
 			context.controlPermission.level === "investigate"
 				? "- This chat has investigate permission: Ask/read-only, with no implementation or publication."
-				: localOnly
-					? "- This chat has implement permission: build, verify and change files locally only. Do not push, open or update pull requests, or delegate publication. Control can request publish, but only the app's Allow decision for that exact request approves it at the next fresh run boundary. Messages, grants and sends alone change nothing."
-					: "- This chat has publish permission: push and open/update pull requests within the accepted scope. Merges still require user confirmation in the app; never merge through tools.",
+				: "- Build permission includes implementation, verification, task-branch pushes and opening/updating pull requests within the accepted scope. No separate publishing approval is required, including in resumed chats. Merges still require user confirmation in the app; never merge through tools.",
 		);
 
 	if (coordinator)
@@ -320,6 +317,10 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false, c
 				: "- While this chat was archived, Pilot deleted ignored dependency and build directories (such as `node_modules`, `dist`, `build` and `.build`) from this workspace to free disk space. History and all other files are intact. Reinstall or rebuild them before running builds or tests.",
 		);
 	}
+	if (!context.ask && !coordinator && !localOnly)
+		lines.push(
+			"- Publishing still requires working repository credentials and remote access. Report actual authentication, access or branch-protection errors accurately; do not describe them as a local-only permission block or bypass them. Never force-push or perform destructive repository actions without explicit authorization.",
+		);
 	if (!context.ask && !coordinator && !localOnly && (workspace || context.requirePullRequest !== undefined)) {
 		if (requirePullRequest) {
 			lines.push(
@@ -368,7 +369,7 @@ export function withPilotPolicy(
 				const current = mission();
 				const prompt = pilotPrompt(context, artifactsAvailable(), current?.coordinator === "self");
 				return current && context.role !== "diagnostics"
-					? `${prompt}\n${missionPrompt(current, context.ghStack, context.controlPermission?.level === "implement" || context.controlPermission?.level === "investigate")}`
+					? `${prompt}\n${missionPrompt(current, context.ghStack, context.controlPermission?.level === "investigate")}`
 					: prompt;
 			}),
 		],

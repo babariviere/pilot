@@ -10,7 +10,7 @@ type NativeCheck = (event: {
 	input: Record<string, unknown>;
 }) => { block: boolean; reason: string } | undefined;
 
-test("recovery never installs a pending grant; only the next fresh run updates both policy closures", async () => {
+test("inherited implement permits delivery before recovery or any legacy label update", async () => {
 	const permission: ControlPermission = { authorizationId: "build", level: "implement" };
 	let first = 1;
 	let recovering = true;
@@ -43,8 +43,8 @@ test("recovery never installs a pending grant; only the next fresh run updates b
 	recovering = false;
 	await prepare(input, BACKGROUND_CONTEXT);
 	assert.equal(calls, 0, "same recovered run remains pinned even after its request ends");
-	assert.ok(controlPermissionBlock(permission, "bash", { command: "git push" }));
-	assert.equal(before({ toolName: "bash", input: { command: "gh pr create" } })?.block, true);
+	assert.equal(controlPermissionBlock(permission, "bash", { command: "git push" }), undefined);
+	assert.equal(before({ toolName: "bash", input: { command: "gh pr create" } }), undefined);
 	first++;
 	await prepare(input, BACKGROUND_CONTEXT);
 	assert.equal(calls, 1);

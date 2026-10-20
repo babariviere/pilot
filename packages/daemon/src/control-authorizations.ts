@@ -8,12 +8,17 @@ import type {
 import type { ControlMemory } from "./control-memory.ts";
 import type { WatchService } from "./watch-service.ts";
 
-// Provisional policy, pending user decisions. Implement never implies permission to publish.
+// Build implementation includes scoped publication. Read-only and merge boundaries remain separate.
 export const CONTROL_DEFAULT_FOLLOW_UPS = 2;
 export const CONTROL_DEFAULT_BUDGET_USD: undefined = undefined;
 export const CONTROL_DEFAULT_AUTHORIZATION_TTL_MS = 24 * 60 * 60_000;
-export const CONTROL_IMPLEMENT_INCLUDES_PUBLISH = false;
+export const CONTROL_IMPLEMENT_INCLUDES_PUBLISH = true;
 export const CONTROL_LEVELS: readonly ControlAuthorizationLevel[] = ["investigate", "implement", "publish", "merge"];
+
+/** Publish is a legacy spelling of Build delivery, not an additional approval tier. */
+export function controlAuthorizationRank(level: ControlAuthorizationLevel): number {
+	return CONTROL_LEVELS.indexOf(level === "publish" ? "implement" : level);
+}
 
 export type ControlAuthorizationCreate = Omit<ControlAuthorization, "revokedAt" | "usage" | "budget" | "spend">;
 export function legacyWatchAuthorization(watch: Watch): ControlAuthorizationCreate {
@@ -52,18 +57,6 @@ export interface ControlAuthorizationUse {
 	budgetUsd: number;
 	/** Grandfathered watches are valid only for their saved note, in their delivery turn. */
 	legacyWatch?: { watchId: string; note: string };
-	/** Permission upgrades require an exact user-approved chat, never an enclosing scope. */
-	publishUpgradeChatId?: string;
-}
-export function checkPublishUpgradeAuthorization(record: ControlAuthorization, chatId: string): void {
-	checkAuthorization(record, {
-		authorizationId: record.id,
-		level: "publish",
-		targets: [[{ kind: "chat", id: chatId }]],
-		followUps: 0,
-		budgetUsd: 0,
-		publishUpgradeChatId: chatId,
-	});
 }
 export function authorizationLevel(value: unknown): ControlAuthorizationLevel {
 	if (!CONTROL_LEVELS.includes(value as ControlAuthorizationLevel)) throw new Error("Invalid authorization level");
@@ -125,22 +118,11 @@ export function createAuthorization(
 	};
 }
 export function checkAuthorization(record: ControlAuthorization, use: ControlAuthorizationUse, now = Date.now()): void {
-	if (use.publishUpgradeChatId !== undefined) {
-		if (
-			!record.userMessage ||
-			record.watchId ||
-			record.level !== "publish" ||
-			!record.targets.some((target) => target.kind === "chat" && target.id === use.publishUpgradeChatId)
-		)
-			throw new Error(
-				"Permission upgrade requires a user-request publish authorization for that exact chat (never merge)",
-			);
-	}
 	if (record.revokedAt !== undefined) throw new Error("Authorization revoked");
 	if (record.expiresAt !== undefined && record.expiresAt <= now) throw new Error("Authorization expired");
 	// Merge is a recorded user intent, never an executable agent capability.
 	if (use.level === "merge") throw new Error("Merges require user confirmation in the app");
-	if (CONTROL_LEVELS.indexOf(authorizationLevel(use.level)) > CONTROL_LEVELS.indexOf(record.level))
+	if (controlAuthorizationRank(authorizationLevel(use.level)) > controlAuthorizationRank(record.level))
 		throw new Error("Action exceeds authorization level");
 	if (
 		!use.targets.length ||
