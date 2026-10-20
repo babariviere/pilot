@@ -3,6 +3,7 @@
 import { mkdir, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { credentialEnvironment } from "@pilot/kernel/credential-client";
 import { installCredentialBrokerHooks } from "@pilot/kernel/credential-hooks";
@@ -32,6 +33,7 @@ import { MissionLinearSyncService } from "./mission-linear-sync.ts";
 import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
+import { PilotServiceJournal } from "./pilot-service-journal.ts";
 import { detectPlatformCapabilities } from "./platform.ts";
 import { PowerService } from "./power.ts";
 import { ProjectMemoryService } from "./project-memory.ts";
@@ -140,6 +142,11 @@ const stopMemoryProjects = projects.onChange(() => {
 		void memory.load(project.id).catch((error) => console.warn(`pilotd: memory ${project.id}: ${error}`));
 	}
 });
+const serviceJournal = new PilotServiceJournal({
+	home: homedir(),
+	dataHome: config.home,
+	root: fileURLToPath(new URL("../../../", import.meta.url)).replace(/\/$/, ""),
+});
 const sessions = new SessionManager(
 	config.home,
 	projects,
@@ -153,6 +160,9 @@ const sessions = new SessionManager(
 		credentials,
 		diagnosticHost: { hostId: "daemon", daemonId: hello.daemonId, lineageId: hello.lineageId },
 		diagnosticLogs: {
+			...(process.platform === "linux"
+				? { serviceJournal: (signal?: AbortSignal) => serviceJournal.read(signal) }
+				: {}),
 			...(process.platform === "darwin"
 				? {
 						daemonLog: join(homedir(), "Library", "Logs", "Pilot", "pilotd.log"),
