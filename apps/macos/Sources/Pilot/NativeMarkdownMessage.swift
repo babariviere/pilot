@@ -27,7 +27,7 @@ final class NativeMarkdownMessage: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         copyButton.isBordered = false
-        copyButton.image = NSImage(systemSymbolName: PilotIcon.copy.rawValue, accessibilityDescription: "Copy message")
+        copyButton.image = PilotIcon.copy.menuImage
         copyButton.toolTip = "Copy message"
         copyButton.setAccessibilityLabel("Copy message")
         copyButton.target = self
@@ -281,7 +281,8 @@ final class NativeMarkdownBlockView: NSView {
         if let host, let hostContent {
             if hostWidth != width {
                 hostWidth = width
-                host.rootView = AnyView(hostContent.frame(width: width).fixedSize(horizontal: false, vertical: true))
+                host.rootView = AnyView(hostContent.frame(width: width, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true))
             }
             host.frame.size.width = width
             host.layoutSubtreeIfNeeded()
