@@ -129,3 +129,6 @@ The frozen comparison script and full local output hashes are recorded in the JS
 
 Visible benchmarks must run deliberately. Hidden or inactive-Space runs are not substitutes for on-screen
 smoothness evidence.
+
+The [headless attribution follow-up](native-transcript-headless-attribution.md) identifies a small redundant
+selection-reset operation. Its component-only raster results do not replace this full-app no-go verdict.
