@@ -4,6 +4,13 @@ export const SOURCE_REFRESH_CADENCE_MS = 300_000;
 export const SOURCE_REFRESH_TIMEOUT_MS = 90_000;
 
 export class SourceRefreshDiagnostics {
+	onChange?: () => void;
+	snapshots(limit = 128) {
+		return [...this.records]
+			.sort((a, b) => b[1].value.lastAttemptAt - a[1].value.lastAttemptAt)
+			.slice(0, limit)
+			.map(([id, record]) => ({ id, key: record.key, value: structuredClone(record.value) }));
+	}
 	private enabled = true;
 	private readonly records = new Map<string, { key: string; value: RefreshLiveHealth }>();
 	private dropped = 0;
@@ -22,6 +29,7 @@ export class SourceRefreshDiagnostics {
 		this.dropped = 0;
 		this.droppedDue = 0;
 		this.observedSince = Date.now();
+		this.onChange?.();
 	}
 	coverage() {
 		return {
@@ -38,6 +46,7 @@ export class SourceRefreshDiagnostics {
 	prune(currentKey: (id: string) => string | undefined): void {
 		for (const [id, value] of this.records) if (currentKey(id) !== value.key) this.records.delete(id);
 		for (const [id, value] of this.due) if (currentKey(id) !== value.key) this.due.delete(id);
+		this.onChange?.();
 	}
 	requestDue(id: string, key: string): void {
 		if (!this.enabled) return;
@@ -46,6 +55,7 @@ export class SourceRefreshDiagnostics {
 			this.droppedDue = Math.min(1_000_000, this.droppedDue + 1);
 		}
 		this.due.set(id, { key, at: Date.now() });
+		this.onChange?.();
 	}
 	dueAt(id: string, key: string): number | undefined {
 		const value = this.due.get(id);
@@ -73,6 +83,7 @@ export class SourceRefreshDiagnostics {
 				stages: previous?.stages.map((s) => ({ stage: s.stage, lastSucceededAt: s.lastSucceededAt })) ?? [],
 			},
 		});
+		this.onChange?.();
 	}
 	observe(id: string, key: string, event: RefreshObservation): void {
 		const record = this.records.get(id);
@@ -110,6 +121,7 @@ export class SourceRefreshDiagnostics {
 			record.value.lastCommittedAt = at;
 			record.value.returnedItems = event.count;
 		}
+		this.onChange?.();
 	}
 	end(id: string, key: string, outcome: RefreshOutcome, reason?: RefreshReason): void {
 		const record = this.records.get(id);
@@ -133,6 +145,7 @@ export class SourceRefreshDiagnostics {
 			);
 			if (active) this.observe(id, key, { stage: active.stage, phase: "completed", outcome, reason });
 		}
+		this.onChange?.();
 	}
 	read(id: string, key: string): RefreshLiveHealth | undefined {
 		const value = this.records.get(id);

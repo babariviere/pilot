@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
@@ -67,7 +67,7 @@ test("refresh observations remain bounded, cloned, content-free and independentl
 });
 
 async function fixture(t: TestContext) {
-	const home = await mkdtemp(join(tmpdir(), "refresh-health-"));
+	const home = await realpath(await mkdtemp(join(tmpdir(), "refresh-health-")));
 	const projects = new ProjectStore(home);
 	await projects.load();
 	const project = await projects.create({ path: home, tracking: { slackChannels: ["C1", "C2"], linearTeam: "ENG" } });
@@ -110,6 +110,54 @@ async function fixture(t: TestContext) {
 		},
 	};
 }
+
+test("production source history survives restart separately from liveness, fences config ABA and clears without execution", async (t) => {
+	const f = await fixture(t);
+	const path = join(f.home, "retained-refresh");
+	const host = { hostId: "daemon", daemonId: "fixture", lineageId: "lineage" };
+	await f.registry.retainDiagnosticEvidence(path, host);
+	f.registry.register("linear", async () => ({ items: [] }));
+	await f.registry.poll(`${f.project.id}:linear`);
+	await f.registry.flushDiagnosticEvidence();
+	await f.registry.stop();
+	await f.registry.closeDiagnosticEvidence();
+	const reopened = new SourceRegistry(f.projects, f.items, f.mcp);
+	try {
+		await reopened.retainDiagnosticEvidence(path, host);
+		const before = f.calls();
+		let row = reopened.refreshHealth({ projectId: f.project.id, kind: "linear" }).sources[0]!;
+		assert.equal(row.live, undefined);
+		assert.equal(row.historical?.state, "historical_observation");
+		assert.notEqual(row.assessment.state, "healthy");
+		assert.equal(f.calls(), before);
+		const originalGeneration = f.projects.require(f.project.id).trackingGeneration;
+		const tracking = f.projects.require(f.project.id).tracking!;
+		await f.projects.update(f.project.id, { tracking: { ...tracking, linearTeam: "other" } });
+		await f.projects.update(f.project.id, { tracking });
+		assert.notEqual(f.projects.require(f.project.id).trackingGeneration, originalGeneration);
+		const disk = new ProjectStore(f.home);
+		await disk.load();
+		assert.equal(disk.require(f.project.id).trackingGeneration, f.projects.require(f.project.id).trackingGeneration);
+		row = reopened.refreshHealth({ projectId: f.project.id, kind: "linear" }).sources[0]!;
+		assert.equal(
+			row.historical,
+			undefined,
+			"restoring the same settings does not restore an earlier generation's evidence",
+		);
+		await reopened.clearDiagnosticEvidence();
+		reopened.setDiagnosticsEnabled(false);
+		await reopened.flushDiagnosticEvidence();
+		reopened.setDiagnosticsEnabled(true);
+		assert.equal(
+			reopened.refreshHealth({ projectId: f.project.id, kind: "linear" }).sources[0]?.historical,
+			undefined,
+		);
+		assert.equal(f.calls(), before);
+	} finally {
+		await reopened.stop();
+		await reopened.closeDiagnosticEvidence();
+	}
+});
 
 test("manual discovery health is host-scoped and observing never calls or retries integrations", async (t) => {
 	const f = await fixture(t);

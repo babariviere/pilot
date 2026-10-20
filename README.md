@@ -1131,6 +1131,8 @@ export. Settings → Diagnostics → Local feature usage explains its seven-day 
 Missing, dropped or disabled observations remain unknown, not zero. See [feature evidence](docs/feature-adoption.md).
 Structured [Slack/Linear refresh health](docs/refresh-health.md) also distinguishes actual progress, queued/backoff
 work and per-channel coverage from old checkpoints, without contacting a provider to answer a diagnostic read.
+It includes bounded background-job observations and private restart history, kept separate from current liveness
+under local operational collection/clear controls. Historical data never restores a scheduler, queue or retry.
 Its descriptive chat title remains independent and is generated through the normal
 bounded title lifecycle: a submitted reason seeds the title, while a reasonless setup waits for the first substantive
 specialist reply rather than naming the fixed diagnostic instruction. The readable fallback remains if title
@@ -1143,7 +1145,8 @@ Trusted linked-host reads use already-connected verified native routing; offline
 explicitly unavailable. No chat means app-wide investigation, never a hidden Control target. Every specialist can inventory and search a fixed,
 path-free catalogue of bounded sanitized Pilot daemon, worker, native report and admitted-target operational logs on
 its selected host. App-scoped sessions expose host sources while marking target-only lifecycle, request-timing and
-tool sources unavailable. Missing app text logs, journal history or crash reports remain explicit coverage gaps, not proof
+tool sources unavailable. Native Mac app event/error-code logs are privately bounded, and verified owned Linux
+services expose bounded retained Pilot-only journal history. Missing or unsupported logs/reports remain explicit gaps, not proof
 that no failure occurred. The reader rejects symbolic links and arbitrary files, uses opaque bounded continuations
 and excerpts, never wakes or probes the target, and does not copy logs into telemetry or repair handoffs. Logs and
 history stay local, are treated as untrusted data, and grant no attachment, child-session, shell or mutation access.

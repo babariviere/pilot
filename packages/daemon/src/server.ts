@@ -1174,11 +1174,14 @@ export function createDaemonServer(
 			if (!telemetry) throw new ServiceUnavailable("Telemetry settings are unavailable");
 			if (req.method === "GET") return json(res, 200, telemetry.settings());
 			if (req.method === "PUT") {
+				let settings: Awaited<ReturnType<TelemetrySettingsService["update"]>>;
 				try {
-					return json(res, 200, await telemetry.update(await readJson(req)));
+					settings = await telemetry.update(await readJson(req));
 				} catch {
 					throw new HttpError(400, "Invalid telemetry settings");
 				}
+				await tracking?.flushDiagnosticEvidence?.();
+				return json(res, 200, settings);
 			}
 		}
 		if (parts[1] === "diagnostics" && parts[2] === "native" && parts.length === 3 && req.method === "PUT") {
@@ -1190,7 +1193,7 @@ export function createDaemonServer(
 		if (parts[1] === "diagnostics" && parts.length === 2 && req.method === "DELETE") {
 			await sessions.clearDiagnostics();
 			await telemetry?.featureUsage.clear();
-			tracking?.clearDiagnosticEvidence?.();
+			await tracking?.clearDiagnosticEvidence?.();
 			return json(res, 200, { cleared: true });
 		}
 		if (parts[1] === "update" && parts[2] === "prepare" && parts.length === 3 && req.method === "POST")

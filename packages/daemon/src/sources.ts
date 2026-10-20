@@ -6,6 +6,7 @@ import type {
 	LinearSourceSummary,
 	LinearTeamOption,
 	LinearWorkflowStateOption,
+	OperationHost,
 	Project,
 	ProjectTrackingConfig,
 	RefreshObservation,
@@ -23,12 +24,13 @@ import type {
 	TrackingLookup,
 	TrackingSource,
 } from "@pilot/protocol";
-import { BackgroundJobDiagnostics, jobFailureReason } from "./background-job-diagnostics.ts";
+import { BackgroundJobDiagnostics, jobConfigurationKey, jobFailureReason } from "./background-job-diagnostics.ts";
 import { redactDiagnosticText } from "./diagnostic-redaction.ts";
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { linearParentHeaders, linearPrefill, linearStart } from "./linear-source.ts";
 import { workflowStates } from "./linear-workflow.ts";
 import type { ProjectStore } from "./projects.ts";
+import { type RefreshEvidenceInput, RefreshEvidenceStore } from "./refresh-evidence.ts";
 import { SlackModelUnavailable } from "./slack-classifier.ts";
 import { parseSlackMessageLink, SlackFormatChanged } from "./slack-format.ts";
 import type { SlackReactionOwner } from "./slack-reaction-owner.ts";
@@ -100,22 +102,98 @@ type Health = {
 export class SourceRegistry {
 	readonly refreshDiagnostics = new SourceRefreshDiagnostics();
 	readonly jobDiagnostics = new BackgroundJobDiagnostics();
+	private evidence?: RefreshEvidenceStore;
+	async retainDiagnosticEvidence(directory: string, host: OperationHost): Promise<void> {
+		this.evidence = new RefreshEvidenceStore({
+			directory,
+			host,
+			enabled: this.refreshDiagnostics.coverage().enabled,
+		});
+		const schedule = () => this.evidence?.schedule(() => this.evidenceSnapshot());
+		this.refreshDiagnostics.onChange = schedule;
+		this.jobDiagnostics.onChange = schedule;
+		await this.evidence.load();
+		schedule();
+	}
+	private evidenceSnapshot(): RefreshEvidenceInput[] {
+		if (!this.evidence) return [];
+		const sources = this.refreshDiagnostics
+			.snapshots()
+			.filter((row) => this.diagnosticKey(row.id) === row.key)
+			.map((row) => ({
+				ref: this.evidence!.ref("source", row.id, row.key),
+				type: "source" as const,
+				value: row.value as unknown as Record<string, unknown>,
+			}));
+		const jobs = this.jobDiagnostics
+			.snapshots()
+			.filter((row) => row.key === (row.value.projectId ? this.jobConfigKey(row.value.projectId) : "host"))
+			.map((row) => {
+				const { projectId, ...value } = row.value;
+				return {
+					ref: this.evidence!.ref("job", JSON.stringify([value.job, value.kind, projectId ?? null]), row.key),
+					type: "job" as const,
+					value: value as unknown as Record<string, unknown>,
+				};
+			});
+		return [...sources, ...jobs].sort(
+			(a, b) =>
+				Number(b.value.completedAt ?? b.value.lastAttemptAt ?? b.value.startedAt ?? b.value.queuedAt ?? 0) -
+				Number(a.value.completedAt ?? a.value.lastAttemptAt ?? a.value.startedAt ?? a.value.queuedAt ?? 0),
+		);
+	}
+	private historicalJob(
+		job: import("./background-job-diagnostics.ts").BackgroundJob,
+		kind: TrackedKind,
+		projectId?: string,
+	) {
+		const key = projectId ? this.jobConfigKey(projectId) : "host";
+		return key
+			? this.evidence?.read(this.evidence.ref("job", JSON.stringify([job, kind, projectId ?? null]), key))
+			: undefined;
+	}
+	private readJobHealth(
+		job: import("./background-job-diagnostics.ts").BackgroundJob,
+		kind: TrackedKind,
+		projectId: string | undefined,
+		key: string,
+	) {
+		return {
+			...this.jobDiagnostics.read(job, kind, projectId, key),
+			historical: this.historicalJob(job, kind, projectId),
+		};
+	}
+	async flushDiagnosticEvidence(): Promise<void> {
+		await this.evidence?.flush();
+		if (this.evidence && !this.evidence.coverage().enabled && this.evidence.coverage().error)
+			throw new ServiceUnavailable(
+				"Local refresh evidence could not be cleared. Check private storage permissions.",
+			);
+	}
+	async closeDiagnosticEvidence(): Promise<void> {
+		await this.evidence?.close();
+	}
 	jobConfigKey(projectId: string): string | undefined {
 		try {
-			return createHash("sha256")
-				.update(JSON.stringify(this.projects.require(projectId).tracking ?? {}))
-				.digest("hex");
+			const project = this.projects.require(projectId);
+			return jobConfigurationKey(project.tracking, project.trackingGeneration);
 		} catch {
 			return undefined;
 		}
 	}
+	private diagnosticKey(id: string): string | undefined {
+		const key = this.currentKey(id);
+		return key ? `${key}:${this.jobConfigKey(id.slice(0, id.lastIndexOf(":")))}` : undefined;
+	}
 	setDiagnosticsEnabled(value: boolean): void {
 		this.refreshDiagnostics.setEnabled(value);
 		this.jobDiagnostics.setEnabled(value);
+		this.evidence?.setEnabled(value);
 	}
-	clearDiagnosticEvidence(): void {
+	async clearDiagnosticEvidence(): Promise<void> {
 		this.refreshDiagnostics.clear();
 		this.jobDiagnostics.clear();
+		await this.evidence?.clear();
 	}
 	/** Optional read-only consumer. Runs only after a validated Linear poll is committed. */
 	linearObserved?: (projectId: string, items: TrackedInput[], activeIds: string[]) => Promise<void>;
@@ -226,7 +304,7 @@ export class SourceRegistry {
 						run.controller.abort(new Conflict("Tracking configuration changed"));
 				for (const id of this.health.keys())
 					if (this.currentKey(id) !== this.health.get(id)?.key) this.health.delete(id);
-				this.refreshDiagnostics.prune((id) => this.currentKey(id));
+				this.refreshDiagnostics.prune((id) => this.diagnosticKey(id));
 				this.jobDiagnostics.prune((projectId) => this.jobConfigKey(projectId));
 				for (const project of projects.list()) this.emit({ type: "sources", projectId: project.id });
 				this.schedule();
@@ -344,8 +422,8 @@ export class SourceRegistry {
 			const health = this.health.get(id)?.key === key ? this.health.get(id) : undefined;
 			const checkpoint = this.items.checkpoint(id);
 			const currentCheckpoint = checkpoint?.configKey === key ? checkpoint : undefined;
-			const live = this.refreshDiagnostics.read(id, key);
-			const explicitDueAt = this.refreshDiagnostics.dueAt(id, key);
+			const live = this.refreshDiagnostics.read(id, this.diagnosticKey(id) ?? "");
+			const explicitDueAt = this.refreshDiagnostics.dueAt(id, this.diagnosticKey(id) ?? "");
 			const nextDueAt = this.due.has(id)
 				? (explicitDueAt ?? now)
 				: (health?.nextPollAt ?? (currentCheckpoint?.lastPolledAt ?? 0) + SOURCE_REFRESH_CADENCE_MS);
@@ -439,31 +517,20 @@ export class SourceRegistry {
 					now,
 				),
 				live,
+				historical: this.evidence?.read(this.evidence.ref("source", id, this.diagnosticKey(id) ?? "")),
 				jobs: [
-					this.jobDiagnostics.read("triage_rebuild", kind, project.id, this.jobConfigKey(project.id) ?? ""),
+					this.readJobHealth("triage_rebuild", kind, project.id, this.jobConfigKey(project.id) ?? ""),
 					...(kind === "linear"
 						? [
-								this.jobDiagnostics.read(
-									"linked_linear_sync",
-									kind,
-									project.id,
-									this.jobConfigKey(project.id) ?? "",
-								),
-								this.jobDiagnostics.read(
+								this.readJobHealth("linked_linear_sync", kind, project.id, this.jobConfigKey(project.id) ?? ""),
+								this.readJobHealth(
 									"linear_parent_header",
 									kind,
 									project.id,
 									this.jobConfigKey(project.id) ?? "",
 								),
 							]
-						: [
-								this.jobDiagnostics.read(
-									"slack_done_write",
-									kind,
-									project.id,
-									this.jobConfigKey(project.id) ?? "",
-								),
-							]),
+						: [this.readJobHealth("slack_done_write", kind, project.id, this.jobConfigKey(project.id) ?? "")]),
 				],
 				checkpointCommittedAt: currentCheckpoint?.lastPolledAt,
 				checkpointProvenance: "retained_only_not_live_scheduler_or_all_channel_success",
@@ -519,10 +586,11 @@ export class SourceRegistry {
 			more: offset + sources.length < total,
 			scanned: sources.length,
 			jobCoverage: this.jobDiagnostics.coverage(),
+			historyCoverage: this.evidence?.coverage() ?? { enabled: false, reason: "not_installed" },
 			hostJobs: [
-				...kinds.map((kind) => this.jobDiagnostics.read("manual_lookup", kind, undefined, "host")),
+				...kinds.map((kind) => this.readJobHealth("manual_lookup", kind, undefined, "host")),
 				...(kinds.includes("linear")
-					? [this.jobDiagnostics.read("linked_linear_sync", "linear", undefined, "host")]
+					? [this.readJobHealth("linked_linear_sync", "linear", undefined, "host")]
 					: []),
 			],
 			quotaPolicy: {
@@ -594,7 +662,8 @@ export class SourceRegistry {
 				: {}),
 		};
 		this.running.set(id, run);
-		this.refreshDiagnostics.begin(id, key);
+		const diagnosticKey = this.diagnosticKey(id) ?? key;
+		this.refreshDiagnostics.begin(id, diagnosticKey);
 		let discoveryObserved = false;
 		const observe = (event: RefreshObservation) => {
 			if (
@@ -605,7 +674,7 @@ export class SourceRegistry {
 			)
 				return;
 			if (event.stage === "discovery" && event.phase === "completed") discoveryObserved = true;
-			this.refreshDiagnostics.observe(id, key, event);
+			this.refreshDiagnostics.observe(id, diagnosticKey, event);
 		};
 		observe({ stage: "discovery", phase: "started" });
 		const work = Promise.resolve().then(() =>
@@ -689,7 +758,7 @@ export class SourceRegistry {
 				});
 				this.refreshDiagnostics.end(
 					id,
-					key,
+					diagnosticKey,
 					controller.signal.aborted ? "cancelled" : result.issue ? "partial" : "success",
 					controller.signal.aborted ? (this.stopped ? "stopped" : "config_changed") : undefined,
 				);
@@ -708,7 +777,7 @@ export class SourceRegistry {
 							: error instanceof SlackModelUnavailable
 								? "classifier_unavailable"
 								: "read_failed";
-				this.refreshDiagnostics.end(id, key, controller.signal.aborted ? "cancelled" : "failure", reason);
+				this.refreshDiagnostics.end(id, diagnosticKey, controller.signal.aborted ? "cancelled" : "failure", reason);
 				this.failed(id, key, error);
 			})
 			.finally(() => {
@@ -1348,7 +1417,7 @@ export class SourceRegistry {
 			if (health?.status === "sign_in_required") this.health.delete(source.id);
 			this.due.add(source.id);
 			const key = this.currentKey(source.id);
-			if (key) this.refreshDiagnostics.requestDue(source.id, key);
+			if (key) this.refreshDiagnostics.requestDue(source.id, this.diagnosticKey(source.id) ?? key);
 		}
 		this.schedule();
 	}

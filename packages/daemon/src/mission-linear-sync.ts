@@ -318,7 +318,10 @@ export class MissionLinearSyncService {
 			"linked_linear_sync",
 			"linear",
 			link.projectId,
-			jobConfigurationKey(this.projects.get(link.projectId)?.tracking),
+			jobConfigurationKey(
+				this.projects.get(link.projectId)?.tracking,
+				this.projects.get(link.projectId)?.trackingGeneration,
+			),
 		);
 		let outcome: JobOutcome = "no_work",
 			reason: JobReason | undefined;
