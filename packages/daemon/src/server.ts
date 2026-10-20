@@ -378,14 +378,17 @@ export function createDaemonServer(
 				return { ...response(null, 0, false), status: "missing", reason: "deleted" };
 			const tasks = missions.store.tasks(request.missionId!);
 			const rows = tasks.slice(offset, offset + limit);
+			const linearSync = missions.store.linearSyncDiagnostics(request.missionId!, offset, limit);
+			const more = offset + rows.length < tasks.length || linearSync.more;
 			return response(
 				{
 					mission: missions.store.get(request.missionId!),
 					brief: missions.store.brief(request.missionId!),
 					tasks: rows,
+					linearSync: { ...linearSync, coverage: "Persisted mission sync only, no network fetch" },
 				},
-				rows.length,
-				offset + rows.length < tasks.length,
+				Math.max(rows.length, linearSync.tickets.length),
+				more,
 			);
 		}
 		if (request.action === "issues" && tracking) {

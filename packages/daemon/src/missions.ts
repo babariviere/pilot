@@ -22,6 +22,7 @@ import type {
 	MissionEventWrite,
 	MissionHealth,
 	MissionLinearRole,
+	MissionLinearSync,
 	MissionPhase,
 	MissionPhaseWrite,
 	MissionResource,
@@ -697,6 +698,7 @@ export class MissionStore {
 		this.db.exec(`CREATE TABLE IF NOT EXISTS linear_sync_dirty (
 			resource_id TEXT PRIMARY KEY, structural INTEGER NOT NULL DEFAULT 0, reopened INTEGER NOT NULL DEFAULT 0);
 			CREATE INDEX IF NOT EXISTS resources_by_managed_linear ON resources(id) WHERE linear_role = 'managed';
+			CREATE INDEX IF NOT EXISTS managed_linear_by_mission ON resources(mission_id,created_at,id) WHERE linear_role='managed';
 			CREATE UNIQUE INDEX IF NOT EXISTS resources_by_linear_uuid ON resources(json_extract(linear_sync,'$.status.issueId')) WHERE linear_role='managed';
 			CREATE INDEX IF NOT EXISTS resources_by_contributing_task ON resources(task_id,linear_key,mission_id) WHERE linear_role='contribution';
 			CREATE INDEX IF NOT EXISTS linear_sync_attention_order ON resources(mission_id,created_at,id)
@@ -2332,6 +2334,36 @@ export class MissionStore {
 	linearSyncRecord(resourceId: string): LinearSyncRecord | undefined {
 		const row = this.one("SELECT linear_sync FROM resources WHERE id=? AND linear_role='managed'", resourceId);
 		return row?.linear_sync ? (JSON.parse(str(row.linear_sync)) as LinearSyncRecord) : undefined;
+	}
+
+	/** Read-only diagnostic projection. Never materialize contributors, task history or unrelated resources. */
+	linearSyncDiagnostics(missionId: string, offset = 0, limit = 8) {
+		if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 20)
+			throw new Error("Invalid Linear diagnostic page");
+		const rows = this.all(
+			`SELECT id, external_id, json_extract(linear_sync, '$.status') AS status,
+			json_extract(linear_sync, '$.intent.target') AS requested_target,
+			json_extract(linear_sync, '$.attempts') AS attempts,
+			json_extract(linear_sync, '$.paused') AS paused,
+			json_extract(linear_sync, '$.lastObservationAt') AS observed_at,
+			json_extract(linear_sync, '$.lastFailureAt') AS failed_at
+			FROM resources WHERE mission_id=? AND linear_role='managed' ORDER BY created_at,id LIMIT ? OFFSET ?`,
+			missionId,
+			limit + 1,
+			offset,
+		);
+		const tickets = rows.slice(0, limit).map((row) => ({
+			resourceId: str(row.id!),
+			externalId: str(row.external_id!),
+			status: JSON.parse(str(row.status!)) as MissionLinearSync,
+			requestedTarget: row.requested_target === null ? null : str(row.requested_target!),
+			attempts: num(row.attempts ?? 0),
+			paused: row.paused === null ? null : str(row.paused!),
+			// Unknown legacy times stay unknown. status.updatedAt is a record update, not proof of a read.
+			lastObservationAt: row.observed_at === null ? null : num(row.observed_at!),
+			lastFailureAt: row.failed_at === null ? null : num(row.failed_at!),
+		}));
+		return { tickets, more: rows.length > limit };
 	}
 
 	/** CAS fences task/status edits, detach/re-attach, user pause and concurrent sync work. */

@@ -13,6 +13,10 @@ export interface LinearSyncRecord {
 	status: MissionLinearSync;
 	intent?: { target: NonNullable<MissionLinearSync["target"]>; stateId?: string; config?: string };
 	attempts: number;
+	/** Verified issue AND workflow observation, not a failed read or a local record edit. Legacy records omit it. */
+	lastObservationAt?: number;
+	/** Most recent failed reconciliation, retained independently of later record/observation updates. */
+	lastFailureAt?: number;
 	/** A resume accepts the next freshly verified remote state as the baseline. */
 	acceptBaseline?: boolean;
 	/** Independent of transient network errors and terminal observations. Only explicit resume clears it. */

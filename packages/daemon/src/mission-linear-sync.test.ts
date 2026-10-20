@@ -74,7 +74,13 @@ async function fixture(t: TestContext, disk = false) {
 			assert.ok(issue, `unexpected issue ${args.id}`);
 			if (tool === "issue") {
 				reads.push(args);
-				return { ...issue };
+				// Match get_issue's selected-field contract. Returning our whole internal fixture hid
+				// unsupported requests and accidentally supplied identifier/statusId to every caller.
+				const allowed = new Set(["id", "uuid", "url", "teamId", "status", "statusType"]);
+				const fields = args.fields as string[];
+				if (fields.some((field) => !allowed.has(field))) throw new SourceToolError("Invalid fields selection");
+				const payload = { ...issue, uuid: issue.id };
+				return Object.fromEntries(fields.map((field) => [field, payload[field as keyof typeof payload]]));
 			}
 			assert.equal(tool, "startIssue");
 			assert.equal(args.id, issue.id, "write only immutable UUID");
@@ -566,6 +572,124 @@ test("already In Progress is a verified no-op, but later review and completion s
 	);
 });
 
+test("get_issue selected fields support both human id + uuid and UUID-only identity", async (t) => {
+	for (const humanId of [true, false]) {
+		const f = await fixture(t);
+		f.set("1", "in_progress");
+		f.state("active");
+		const call = f.mcp.call.bind(f.mcp);
+		await assert.rejects(
+			call(
+				"linear",
+				"issue",
+				{ id: "ENG-1", fields: ["id", "identifier", "statusId"] },
+				new AbortController().signal,
+			),
+			SourceToolError,
+		);
+		t.mock.method(f.mcp, "call", async (...[kind, tool, args, signal]: Parameters<SourceMcpClient["call"]>) => {
+			const response = await call(kind, tool, args, signal);
+			if (tool !== "issue") return response;
+			assert.ok(response && typeof response === "object" && !Array.isArray(response));
+			assert.equal(response.identifier, undefined);
+			assert.equal(response.statusId, undefined);
+			return { ...response, id: humanId ? "ENG-1" : f.issues[0]!.id };
+		});
+		await f.poll();
+		assert.equal(f.status().state, "synced");
+		assert.equal(f.status().issueId, f.issues[0]!.id);
+		assert.equal(f.status().observedStateId, "active");
+		assert.equal(f.writes.length, 0);
+	}
+});
+
+test("selected status names must match one actual-team state before a no-op or write", async (t) => {
+	const f = await fixture(t);
+	f.set("1", "in_progress");
+	f.state("active");
+	const call = f.mcp.call.bind(f.mcp);
+	t.mock.method(f.mcp, "call", async (...[kind, tool, args, signal]: Parameters<SourceMcpClient["call"]>) =>
+		tool === "states"
+			? [...states, { id: "other", name: "Building", type: "started" }]
+			: call(kind, tool, args, signal),
+	);
+	await f.poll();
+	assert.deepEqual(f.status().failure, { stage: "states", category: "invalid_response" });
+	assert.equal(f.status().issueId, undefined);
+	assert.equal(f.writes.length, 0);
+	const g = await fixture(t);
+	g.set("1", "in_progress");
+	g.state("active");
+	g.issues[0]!.statusType = "completed";
+	await g.poll();
+	assert.deepEqual(g.status().failure, { stage: "states", category: "invalid_response" });
+	assert.equal(g.writes.length, 0);
+});
+
+test("upgrade retains a legacy warning/backoff until a matching ticket AND workflow reconcile", async (t) => {
+	let now = Date.now();
+	t.mock.method(Date, "now", () => now);
+	const f = await fixture(t, true);
+	f.set("1", "in_progress");
+	f.state("active");
+	const record = f.store.linearSyncRecord(f.manager.id)!;
+	record.status = {
+		...record.status,
+		state: "error",
+		error: "Couldn't read the ticket or workflow.",
+		updatedAt: now - 60_000,
+		retryAt: now + 10_000,
+	};
+	record.attempts = 4;
+	assert.ok(f.store.saveLinearSync(f.manager.id, record.version, record));
+	await f.restart();
+	await f.poll();
+	assert.deepEqual(f.store.linearSyncRecord(f.manager.id), record);
+	assert.equal(f.reads.length, 0, "restart does not bypass persisted backoff");
+	now += 20_000;
+	f.setHook((tool) => {
+		if (tool === "states") throw new SourceToolError("private workflow detail");
+	});
+	await f.poll();
+	assert.equal(f.reads.length, 1, "ticket read succeeded before the workflow failure");
+	assert.deepEqual(f.status().failure, { stage: "states", category: "remote_error" });
+	assert.equal(f.store.linearSyncRecord(f.manager.id)!.lastObservationAt, undefined);
+	assert.equal(f.store.linearSyncRecord(f.manager.id)!.lastFailureAt, now);
+	const failureTime = now;
+	await f.restart();
+	f.setHook(undefined);
+	now += 600_000;
+	await Promise.all([f.poll(), f.poll(), f.poll()]);
+	assert.equal(f.writes.length, 0, "matching status reconciles even after five failures, without replay");
+	assert.equal(f.status().state, "synced");
+	assert.equal(f.status().error, undefined);
+	assert.equal(f.status().failure, undefined);
+	assert.equal(f.status().retryAt, undefined);
+	assert.equal(f.store.linearSyncRecord(f.manager.id)!.attempts, 0);
+	assert.equal(f.store.linearSyncRecord(f.manager.id)!.lastObservationAt, now);
+	assert.equal(f.store.linearSyncRecord(f.manager.id)!.lastFailureAt, failureTime);
+	assert.equal(f.store.require(f.mission.id).needsYouCount, 0);
+});
+
+for (const tool of ["issue", "states"] as const) {
+	test(`malformed ${tool} responses retain a stage-specific warning without writing`, async (t) => {
+		const f = await fixture(t, true);
+		f.set("1", "in_progress");
+		const call = f.mcp.call.bind(f.mcp);
+		t.mock.method(f.mcp, "call", async (...[kind, current, args, signal]: Parameters<SourceMcpClient["call"]>) =>
+			current === tool ? { unexpected: "private malformed value" } : call(kind, current, args, signal),
+		);
+		await f.poll();
+		assert.deepEqual(f.status().failure, { stage: tool, category: "invalid_response" });
+		assert.doesNotMatch(JSON.stringify(f.status()), /private/);
+		assert.equal(f.store.linearSyncRecord(f.manager.id)!.lastObservationAt, undefined);
+		assert.equal(f.writes.length, 0);
+		const failed = f.store.linearSyncRecord(f.manager.id);
+		await f.restart();
+		assert.deepEqual(f.store.linearSyncRecord(f.manager.id), failed);
+	});
+}
+
 test("Todo transitions once even with concurrent and repeated requests", async (t) => {
 	const f = await fixture(t);
 	f.set("1", "in_progress");
@@ -600,11 +724,14 @@ test("read-only eligibility cannot clear a failed pending write; mission reconci
 	await f.poll();
 	const failed = f.status();
 	assert.equal(failed.state, "error");
+	const failureTime = f.store.linearSyncRecord(f.manager.id)!.lastFailureAt;
 	now += 600_000;
 	f.setFailure(undefined);
 	assert.equal((await f.service.closingEligibility(f.mission.id, f.manager.id)).allowed, false);
 	assert.equal(f.status().error, failed.error);
 	assert.equal(f.status().retryAt, failed.retryAt);
+	assert.equal(f.store.linearSyncRecord(f.manager.id)!.lastFailureAt, failureTime);
+	assert.equal(f.store.linearSyncRecord(f.manager.id)!.lastObservationAt, now);
 	assert.equal(f.store.require(f.mission.id).needsYouCount, 1);
 	await f.poll();
 	assert.equal(f.status().state, "synced");
