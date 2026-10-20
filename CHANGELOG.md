@@ -1,5 +1,32 @@
 # Changelog
 
+## [1.58.0](https://github.com/babariviere/pilot/compare/v1.57.0...v1.58.0) (2026-10-20)
+
+
+### Features
+
+* **diagnostics:** observe integration background job health ([c43a588](https://github.com/babariviere/pilot/commit/c43a588d61608c5acf30f0b76327b35197ab17ca))
+* **diagnostics:** read bounded owned service journal history ([c55fcb0](https://github.com/babariviere/pilot/commit/c55fcb0917abcaf6fd7615e610e35a9e06586a56))
+* **diagnostics:** retain bounded refresh evidence across restarts ([b41e7fe](https://github.com/babariviere/pilot/commit/b41e7fe8efc3377d2713c835b1dcd30c41362d8b))
+* **diagnostics:** retain private native app event logs ([93abb1a](https://github.com/babariviere/pilot/commit/93abb1af44b1291321e2eab13277fa4542d76ea0))
+
+
+### Bug Fixes
+
+* **deps:** update dependency typebox to v1.4.2 ([d94c48e](https://github.com/babariviere/pilot/commit/d94c48e34f2966a148a598c6cc73c93847b65035))
+* **diagnostics:** expire retained completion details independently ([8f1452c](https://github.com/babariviere/pilot/commit/8f1452c4bb6f26ba340c3b278c62a5746aab638a))
+* **linear:** use supported mission sync read fields ([ac5d59d](https://github.com/babariviere/pilot/commit/ac5d59d348ee5ec624a27c9c207a293075340cb8))
+* **macos:** archive diagnostics after confirmed repair start ([e41be90](https://github.com/babariviere/pilot/commit/e41be901834b89aef3dda811c3a0f206ece5eebf))
+* **macos:** size Slack toolbar glyph to match adjacent actions ([b302ee9](https://github.com/babariviere/pilot/commit/b302ee923fd051705d270e0c6e0685435365f875))
+* **slack:** verify and report Done reaction cleanup ([5852e8d](https://github.com/babariviere/pilot/commit/5852e8d8b793779b91cdbe15904d77eb15aefa1a))
+* **ui:** hide retained Control conversations from discovery ([448a937](https://github.com/babariviere/pilot/commit/448a9376fef15bd7c98e43ef4fdf30a29b8a3376))
+
+
+### Performance Improvements
+
+* **macos:** isolate text sizing from drawing ([f21f96d](https://github.com/babariviere/pilot/commit/f21f96d8a448fdc4e0db5835b08d292d7e99560b))
+* **macos:** report hitch time ratio and scrolling hitches in benchmarks ([18bdfd1](https://github.com/babariviere/pilot/commit/18bdfd1a79857fcbef1f7e80c15ed806d2bd83fe))
+
 ## [1.57.0](https://github.com/babariviere/pilot/compare/v1.56.0...v1.57.0) (2026-10-19)
 
 
