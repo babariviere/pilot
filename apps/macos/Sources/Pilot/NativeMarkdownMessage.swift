@@ -270,7 +270,7 @@ final class NativeMarkdownBlockView: NSView {
                     textViews.append(text); addSubview(text)
                 }
                 let text = textViews[item]
-                if text.selectionOwner !== selection { text.setSelectedRange(NSRange(location: 0, length: 0)) }
+                if text.selectionOwner !== selection { text.clearMessageSelection() }
                 text.selectionOwner?.unregister(text)
                 text.selectionOwner = selection
                 text.selectionKey = .init(block: index, item: item)
