@@ -21,11 +21,10 @@ import Testing
 }
 
 @MainActor private func prepared(_ message: NativeMarkdownMessage, source: String) async throws {
-    let deadline = ContinuousClock.now.advanced(by: .seconds(5))
-    while message.preparedSource != source, ContinuousClock.now < deadline {
-        try await Task.sleep(for: .milliseconds(5))
-    }
-    #expect(message.preparedSource == source)
+    // Awaiting the actual work also propagates the test's priority. A wall-clock deadline can expire
+    // while other AppKit fixtures own the main actor, before this message gets its continuation.
+    await message.preparation?.value
+    try #require(message.preparedSource == source)
 }
 
 @Test @MainActor func nativeStreamingMarkdownKeepsTextViewAndMessageSelectionOwner() async throws {
@@ -63,8 +62,9 @@ import Testing
     message.update(source: String(repeating: "old **source**\n\n", count: 500), timestamp: nil,
                    streaming: false, selection: MessageTextSelection(), environment: EnvironmentValues(),
                    changed: { callbacks += 1 })
+    let preparation = message.preparation
     message.stop()
-    await Task.yield()
+    await preparation?.value
     #expect(callbacks == 0)
     #expect(message.nativeTextViews.isEmpty)
 }
