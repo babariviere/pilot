@@ -113,6 +113,7 @@ NATIVE_POINTERS = [
     "pressingNativeHomeCheckActuallyChecksShowsProgressAndOpensTheExistingChat",
     "slackTriageRefreshIsClickableAndDisablesDuringLocalAndAutomaticSync",
     "sidebarSelectionCoversNativeBlueWithoutLosingKeyboardNavigation",
+    "permissionUpgradePromptRequiresNativeAllowOrDeny",
 ]
 NATIVE_POINTER_OUTPUTS = [STARTED + f"◇ Test {name}() started.\n" + PASSED for name in NATIVE_POINTERS]
 VISUAL_LAYOUT = "longNativeVisualTextReflowsAndShrinksWithoutAnInlineScrollView"
