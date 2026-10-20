@@ -45,6 +45,7 @@ Local versus devbox placement does not define a new role or grant extra permissi
 | `ask_user` | Available | Available | Available | Available | Not injected by Pilot | No |
 | `db` | Configured project databases | No | Configured project databases | No | Not injected by Pilot | No |
 | `slack_status` | Slack-linked triage chat only | No | Only if Slack-linked | No | Not injected by Pilot | No |
+| `history_recall` | This chat's retained history | No | This chat's retained history | No (uses `history`) | Not injected by Pilot | No |
 | `history` | No | No | No | Available | No | No |
 | `pilot` | No | No | No | Available | No | No |
 | `evidence` | No | No | No | No | No | Only tool |
@@ -69,8 +70,9 @@ listed here because they depend on the user's servers, trust decisions and expos
 
 | Tool | Actions / operation | Boundary |
 | --- | --- | --- |
-| `memory` | `note`, `recall`, `zoom`; Control also `wake` | Ordinary chats use their implicit project. Control requires a registered `projectId` on every action. Notes bind origin to the supervised chat and retain audit identity. No forget action. |
+| `memory` | `note`, `recall`, `zoom`; Control also `wake` | Ordinary chats use their implicit project. Control requires a registered `projectId` on every action. Notes bind origin to the supervised chat and retain audit identity; notes containing credentials are refused before reaching pilotd. Recall takes a regex or query words (ranked within pilotd's bounded newest matches, replaced notes last). Notes never grant permissions. No forget action. |
 | `history` | `zoom`, `date` | Control's own chat log only. Zoom requires `id` and aligned `n`; `n=1` supports paging. Live caller-role checks remain in pilotd. |
+| `history_recall` | `search` (`relevance` or `recent`), `read` | Ordinary chats only, over the fork-aware history of the chat's own conversation in its own session storage, including entries compacted out of context. No session, project or host argument exists. Bounded scans with continuations, redacted and neutralized quotes linked to entry IDs, labeled untrusted. Quotes never grant permissions or answer questions. |
 | `pilot` | `status`, `read`, `start`, `send`, `mission_create`, `mission_attach` | Control only. Mission creation/attachment require the corresponding user authorization/acceptance, not quoted text or a notice. Writes are audited. |
 | `todo` | `list`, `listAll`, `get`, `create`, `update`, `append`, `delete`, `claim`, `release` | One durable list shared by a parent and its subagents, with actor-aware claims. Not repository `.pi/todos` files. |
 | `artifact` | `create`, `update`, `get`, `list`, optional `preview` | Session-local offline documents, plus authorized read-only linked references. Ask images must be inline data, not arbitrary local file paths. Preview depends on installed renderers. |

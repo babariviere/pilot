@@ -221,22 +221,28 @@ export class PerformanceLog implements PerformanceSink {
 	private readonly maxBytes: number;
 	private readonly maxPending: number;
 	private readonly file: string;
+	private readonly serialize: (record: never) => string | undefined;
 
-	constructor(file: string, options: { maxBytes?: number; maxPending?: number } = {}) {
+	/** `serialize` must whitelist content-free fields; other records use the request-timing format. */
+	constructor(
+		file: string,
+		options: { maxBytes?: number; maxPending?: number; serialize?: (record: never) => string | undefined } = {},
+	) {
 		this.file = file;
+		this.serialize = options.serialize ?? performanceLine;
 		this.maxBytes = Math.max(MAX_LINE_BYTES, Math.min(MAX_FILE_BYTES, options.maxBytes ?? MAX_FILE_BYTES));
 		this.maxPending = Math.max(1, Math.min(MAX_PENDING, options.maxPending ?? MAX_PENDING));
 		activeLogs.add(this);
 	}
 
-	record(record: PerformanceRecord | ControlPreparationRecord): void {
+	record(record: PerformanceRecord | ControlPreparationRecord | object): void {
 		if (!collectionEnabled || this.closed || this.disabled) return;
 		if (this.queue.length >= this.maxPending) {
 			this.dropped++;
 			return;
 		}
 		try {
-			let line = performanceLine(record);
+			let line = this.serialize(record as never);
 			if (!line) return;
 			if (this.dropped) line = `${line.trimEnd().slice(0, -1)},"droppedBefore":${this.dropped}}\n`;
 			if (Buffer.byteLength(line) > MAX_LINE_BYTES) return;

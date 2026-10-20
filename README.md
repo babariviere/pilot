@@ -434,6 +434,24 @@ the provider's prompt cache has expired (5 minutes for Anthropic, 10 for OpenAI,
 request in the turn then reads the short summary instead of rereading the whole history at full price.
 A warm cache is never discarded, and automatic messages don't trigger it.
 
+With `PILOT_DETERMINISTIC_COMPACTION=1` set for pilotd (opt-in until validated with real providers), ordinary
+chats also compact during a turn, at any model request boundary (including between tool calls),
+once total input passes 100k tokens, or earlier when a smaller model window needs the room. Compaction
+is deterministic and makes no model call: Pilot keeps about 20k tokens of recent context verbatim and replaces
+the rest with a digest of about 5k tokens, rebuilt each time from the original transcript. The digest keeps
+the goal, near-verbatim directives and corrections (marking superseded ones), decisions, open questions,
+changed files, commits, test results, unresolved failures and key tool output, each with its source entry.
+If a digest would not shrink the context enough, Pilot keeps the context and waits for more growth. Manual
+compaction with your own instructions still uses the model summary. Without the setting, ordinary chats keep the
+Harness defaults and model summaries. Control keeps its own memory.
+
+Compaction never deletes the transcript. Ordinary chats have a `history_recall` tool that searches (ranked by
+relevance, or newest first) and reads the chat's own earlier messages and tool output, including parts compacted
+out of context. Results and digests are bounded, redacted, linked to their source entries and labeled as
+untrusted quotes. Historical grants are never restated, and permissions and pending questions stay in Pilot's
+own state. See [context compaction](docs/context-compaction.md) for the policy, safeguards, instrumentation and
+the offline benchmark.
+
 Changing an idle chat's model keeps its existing context when the provider stays the same. When a different
 provider cannot use its compacted context, Pilot automatically creates a new conversation attempt from the
 durable transcript, including messages hidden by compaction. It replays plain messages if they fit the new
@@ -921,11 +939,11 @@ You can also create or hand-edit `~/.config/pilot/database.json` (or
           "write": { "url": "postgres://app@localhost/app", "access": "allow" }
         },
         "staging": {
-          "read": { "url": "postgres://app_ro:…@staging.example.com/app", "access": "allow" },
-          "write": { "url": "postgres://app:…@staging.example.com/app", "access": "ask" }
+          "read": { "url": "postgres://app_ro:****@staging.example.com/app", "access": "allow" },
+          "write": { "url": "postgres://app:****@staging.example.com/app", "access": "ask" }
         },
         "prod": {
-          "read": { "url": "postgres://app_ro:…@prod.example.com/app", "access": "ask" }
+          "read": { "url": "postgres://app_ro:****@prod.example.com/app", "access": "ask" }
         }
       }
     }

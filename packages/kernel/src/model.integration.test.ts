@@ -2458,6 +2458,37 @@ for (const scenario of ["cold", "warm", "automatic"] as const) {
 	});
 }
 
+test("with deterministic compaction enabled, a long cold conversation compacts to a digest without a model call", {
+	timeout: 15000,
+}, async (t) => {
+	const previous = process.env.PILOT_DETERMINISTIC_COMPACTION;
+	process.env.PILOT_DETERMINISTIC_COMPACTION = "1";
+	t.after(() => {
+		if (previous === undefined) delete process.env.PILOT_DETERMINISTIC_COMPACTION;
+		else process.env.PILOT_DETERMINISTIC_COMPACTION = previous;
+	});
+	const f = await fixture(t);
+	const session = await f.open();
+	const adapter = f.adapters.at(-1)!;
+	adapter.models.getModel("pilot-model-a", "one")!.contextWindow = 128000;
+	await seedLongConversation(session, Date.now() - 2 * 60 * 60_000);
+	await adapter.refreshUsage(context);
+	f.a.setResponses([
+		(messages) => {
+			assert.ok(messages.messages.some((m) => JSON.stringify(m).includes("[Pilot context digest]")));
+			assert.ok(messages.messages.some((m) => JSON.stringify(m).includes("Next question")));
+			return fauxAssistantMessage("Done");
+		},
+	]);
+	await session.submit("next", "Next question", "followUp");
+	await session.conversation.waitForIdle(context);
+	assert.equal(f.a.state.callCount, 1, "no summarization request reached the model");
+	const entries = (await session.conversation.entries({}, 100, undefined, context)).items.toReversed();
+	assert.ok(
+		entries.findIndex((e) => e.kind === "pi.compaction") < entries.findIndex((e) => userText(e) === "Next question"),
+	);
+});
+
 test("queued compaction input survives close and reopen exactly once", { timeout: 15000 }, async (t) => {
 	const f = await fixture(t);
 	let session = await f.open();
