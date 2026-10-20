@@ -1,4 +1,5 @@
 import AppKit
+import NativeTestSupport
 import PilotCore
 import SwiftUI
 import Testing
@@ -37,12 +38,12 @@ import Testing
         let buttons = refreshButtons(host)
         #expect(buttons.count == 1, "Refresh is a direct button, not a menu action")
         let button = try #require(buttons.first)
-        #expect(button.isEnabled == enabled)
-        button.performClick(nil)
+        #expect(button.controlEnabled == enabled)
+        try await NativeInput.click(button)
         #expect(refreshes == (enabled ? 1 : 0))
     }
 }
 
-@MainActor private func refreshButtons(_ view: NSView) -> [NSButton] {
-    (view as? NSButton).map { [$0] } ?? view.subviews.flatMap(refreshButtons)
+@MainActor private func refreshButtons(_ view: NSView) -> [ControlGeometryView] {
+    NativeInput.views(in: view, of: ControlGeometryView.self).filter { $0.identifier?.rawValue == "slack-refresh" }
 }

@@ -104,6 +104,20 @@ host_mcps="${host_mcps%|}"
 repair_footer='productionFooterStaysFixedWhileReadingLongHistoryAndKeepsTheComposer|questionWorkingPendingAndErrorTransitionsLeaveTheFooterReachable|originalPendingStartRemainsCheckableWithoutAProposalAndOfflineActionsStayDisabled'
 settings_bar=settingsSaveBarMountsForDirtyFormAndLeavesAfterRevert
 scheduler_regressions='visualSliderDragsCoalesceToOneHandlerInFlightEndingAtTheLastPosition|visualDiscreteEventsRunInOrder|missionNavigationAndPaletteKeepCanonicalPinsAcrossExecutionChangesAndReconnect|sidebarPollsOnlyBranchesAndLoadsCountsOnDemand'
+# Synthetic pointer tracking pumps nested AppKit loops. Another fixture can order/close
+# a window during that loop and steal the event. Give each real-input test its own process.
+native_pointer_tests=(
+	nativeControlsActivateOnlyEnabledProductionActions
+	nativeRepairPromptButtonsOnlyReviewOrDismissAndNeverSpawn
+	mountedDiagnosticsFooterSubmitsOnceAndNeverStartsRepair
+	mountedDiagnosticsFooterReviewsAnExistingProposalWithoutStartingWork
+	nativeIndependentLocalButtonWorksWhileOriginalCheckIsInProgress
+	pressingNativeHomeCheckActuallyChecksShowsProgressAndOpensTheExistingChat
+	slackTriageRefreshIsClickableAndDisablesDuringLocalAndAutomaticSync
+	sidebarSelectionCoversNativeBlueWithoutLosingKeyboardNavigation
+)
+printf -v native_pointers '%s|' "${native_pointer_tests[@]}"
+native_pointers="${native_pointers%|}"
 partition=1
 reuse=(--skip-build)
 for argument in "$@"; do
@@ -127,7 +141,7 @@ run_tests() {
 		| python3 "$here/scripts/check-test-output.py" ${guards[@]+"${guards[@]}"}
 }
 if [ "$partition" = 1 ]; then
-	run_tests "" "$@" --skip "$isolated|$devbox|$terminal|$callbacks|$journeys|$github|$scoped_models|$scoped_model_native|$automatic_updates|$host_mcps|$repair_footer|$settings_bar|$scheduler_regressions"
+	run_tests "" "$@" --skip "$isolated|$devbox|$terminal|$callbacks|$journeys|$github|$scoped_models|$scoped_model_native|$automatic_updates|$host_mcps|$repair_footer|$settings_bar|$scheduler_regressions|$native_pointers"
 	run_tests "$isolated" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$isolated"
 	run_tests "$devbox" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$devbox"
 	run_tests "$terminal" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$terminal"
@@ -149,6 +163,9 @@ if [ "$partition" = 1 ]; then
 	run_tests "$repair_footer" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$repair_footer"
 	run_tests "$settings_bar" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$settings_bar"
 	run_tests "$scheduler_regressions" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$scheduler_regressions"
+	for name in "${native_pointer_tests[@]}"; do
+		run_tests "$name" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$name"
+	done
 else
 	# Explicit selection/listing is the caller's scope. Do not append another filter.
 	run_tests "" "$@"

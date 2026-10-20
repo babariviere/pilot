@@ -1,4 +1,5 @@
 import AppKit
+import NativeTestSupport
 import Combine
 import Foundation
 import PilotCore
@@ -363,8 +364,8 @@ private final class RecoveryHTTPStub: URLProtocol {
         window.contentView = hosting
         window.setFrameOrigin(NSPoint(x: -10000, y: -10000))
         window.orderFrontRegardless(); window.update(); hosting.layoutSubtreeIfNeeded()
-        func buttons(_ view: NSView) -> [NSButton] {
-            (view as? NSButton).map { [$0] } ?? view.subviews.flatMap(buttons)
+        func buttons(_ view: NSView) -> [ControlGeometryView] {
+            NativeInput.views(in: view, of: ControlGeometryView.self).filter { $0.identifier?.rawValue == "independent-local-chat" }
         }
         let deadline = ContinuousClock.now.advanced(by: .seconds(5))
         while buttons(hosting).isEmpty, ContinuousClock.now < deadline {
@@ -374,8 +375,8 @@ private final class RecoveryHTTPStub: URLProtocol {
         let controls = buttons(hosting)
         try #require(controls.count == 1)
         let button = try #require(controls.first)
-        try #require(button.isEnabled, "A slow Check must not disable independent Local creation")
-        button.performClick(nil)
+        try #require(button.controlEnabled, "A slow Check must not disable independent Local creation")
+        try await NativeInput.click(button)
         #expect(app.newSessionForm.executionHost == origin && app.newSessionForm.pendingOperationId == nil)
         #expect(!app.newSessionForm.checkingStart)
         #expect(hosts.pendingOperations[original.operationId] == original)
@@ -575,32 +576,31 @@ private final class RecoveryHTTPStub: URLProtocol {
         window.orderFrontRegardless()
         window.update()
         hosting.layoutSubtreeIfNeeded()
-        func controls<V: NSView>(_ view: NSView, of type: V.Type) -> [V] {
-            (view as? V).map { [$0] } ?? view.subviews.flatMap { controls($0, of: type) }
+        func controls() -> [ControlGeometryView] {
+            NativeInput.views(in: hosting, of: ControlGeometryView.self).filter { $0.identifier?.rawValue == "chat-start-check" }
         }
         let mountDeadline = ContinuousClock.now.advanced(by: .seconds(10))
-        while controls(hosting, of: NSButton.self).isEmpty, ContinuousClock.now < mountDeadline {
+        while controls().isEmpty, ContinuousClock.now < mountDeadline {
             hosting.layoutSubtreeIfNeeded()
             try await Task.sleep(for: .milliseconds(20))
         }
-        let buttons = controls(hosting, of: NSButton.self)
+        let buttons = controls()
         try #require(buttons.count == 1, "A pending start has exactly one native recovery action: Check")
         let check = try #require(buttons.first)
-        try #require(check.isEnabled)
+        try #require(check.controlEnabled)
         RecoveryHTTPStub.setMode(.heldLookup)
         defer { RecoveryHTTPStub.releaseLookups() }
-        // Exercise the actual AppKit control's action without relying on headless window focus
-        // or screen coordinates. Its closure is the exact one used by Home.
-        check.performClick(nil)
+        // Route real pointer input through the mounted production row, not a test closure.
+        try await NativeInput.click(check)
         let deadline = ContinuousClock.now.advanced(by: .seconds(5))
         while RecoveryHTTPStub.heldCount == 0, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
         #expect(RecoveryHTTPStub.heldCount == 1)
         #expect(form.checkingStart)
-        while check.isEnabled, form.checkingStart, ContinuousClock.now < deadline {
+        while check.controlEnabled, form.checkingStart, ContinuousClock.now < deadline {
             hosting.layoutSubtreeIfNeeded()
             try await Task.sleep(for: .milliseconds(5))
         }
-        #expect(!check.isEnabled, "The mounted Check control is visibly disabled while checking")
+        #expect(!check.controlEnabled, "The mounted Check control is visibly disabled while checking")
         RecoveryHTTPStub.setMode(.accepted)
         RecoveryHTTPStub.releaseLookups()
         while form.checkingStart, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }

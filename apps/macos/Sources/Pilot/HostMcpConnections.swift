@@ -216,6 +216,8 @@ struct McpSetupShareRow: View {
                 }
             }.foregroundStyle(Theme.mutedForeground)
         }
-        .toggleStyle(.checkbox).disabled(!model.selectable(entry) || model.busy || model.uncertain)
+        .toggleStyle(.checkbox)
+        .background(ControlGeometry(id: "mcp-share"))
+        .disabled(!model.selectable(entry) || model.busy || model.uncertain)
     }
 }

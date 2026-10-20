@@ -67,8 +67,11 @@ private struct SidebarSelectionTestList: View {
                           styleMask: [.titled], backing: .buffered, defer: false)
     window.isReleasedWhenClosed = false
     defer { window.close() }
-    let host = NSHostingView(rootView: SidebarSelectionTestList(fixture: fixture))
+    let host = NSHostingView(rootView: SidebarSelectionTestList(fixture: fixture).environment(\.colorScheme, .light))
+    // The pixel thresholds below describe the light palette, not the user's current appearance.
+    window.appearance = NSAppearance(named: .aqua)
     window.contentView = host
+    window.orderFrontRegardless(); window.update()
     host.layoutSubtreeIfNeeded()
 
     func table(in view: NSView) -> NSTableView? {

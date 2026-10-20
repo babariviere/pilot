@@ -81,11 +81,19 @@ func localStopNormalizesQualifiedRowsAndRestoresWithdrawnMessages(qualified: Boo
 
 @Test(.timeLimit(.minutes(2)), arguments: ["box", "local"]) @MainActor
 func unavailableStopNeverFallsBackToCurrentLocalHost(hostId: String) async throws {
-    let app = AppModel(client: stopClient("local"))
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let app = AppModel(client: stopClient("local"), hosts: HostClients(operationDirectory: directory))
     try app.registerLocal(HostRef(hostId: "local", daemonId: "a", lineageId: "1"))
     // Also cover an old Local installation whose pinned identity no longer matches.
     let unavailable = HostRef(hostId: hostId, daemonId: "other", lineageId: "other")
     let ref = HostResourceRef(host: unavailable, kind: .session, localId: "same")
+    // A disconnected target retains its admitted inventory. A completely unknown
+    // target is rejected by canMutateSession before any asynchronous Stop dispatch.
+    try app.hosts.install(stopClient("remote"), host: unavailable)
+    await app.hosts.disconnect(unavailable)
+    try #require(app.hosts.sessions.contains { $0.ref == ref })
+    #expect(!app.hosts.available.contains(unavailable))
     let composer = try app.composer(for: ref)
     composer.draft = "unavailable draft"
     app.composer(for: "same").draft = "local draft"
@@ -93,6 +101,23 @@ func unavailableStopNeverFallsBackToCurrentLocalHost(hostId: String) async throw
     await stop.value
     #expect(app.sessionActionError?.contains("Disconnected") == true)
     #expect(composer.draft == "unavailable draft")
+    #expect(app.composer(for: "same").draft == "local draft")
+    #expect(app.pendingSessionActions.isEmpty)
+    await app.hosts.disconnectAll()
+}
+
+@Test(.timeLimit(.minutes(2)), arguments: ["box", "local"]) @MainActor
+func unknownStopIsRejectedBeforeDispatchWithoutLocalFallback(hostId: String) throws {
+    let app = AppModel(client: stopClient("local"))
+    try app.registerLocal(HostRef(hostId: "local", daemonId: "a", lineageId: "1"))
+    let ref = HostResourceRef(host: HostRef(hostId: hostId, daemonId: "unknown", lineageId: "unknown"),
+        kind: .session, localId: "same")
+    let composer = try app.composer(for: ref)
+    composer.draft = "unknown draft"
+    app.composer(for: "same").draft = "local draft"
+    #expect(app.stopSession(ref.storageKey) == nil)
+    #expect(app.sessionActionError == nil)
+    #expect(composer.draft == "unknown draft")
     #expect(app.composer(for: "same").draft == "local draft")
     #expect(app.pendingSessionActions.isEmpty)
 }

@@ -533,6 +533,24 @@ Continue using `apps/macos/scripts/test.sh` and `apps/macos/scripts/build.sh`, w
 SDK and test macro plugin. After a successful build, `apps/macos/scripts/test.sh --skip-build --filter
 <name>` is appropriate for repeating an affected test without rebuilding.
 
+Mounted button checks must not require backing `NSButton`s or populated accessibility children: SwiftUI
+can render the same control without either in a headless test process. `ControlGeometry` (and the existing
+repair-action anchors) provides only the control's bounds and inherited enabled state. Put the anchor inside
+the control's `.disabled` modifier. `NativeTestSupport.NativeInput` sends chronological mouse events through
+the real window at those bounds; it never calls a copied action or bypasses disabled handling. Keep action,
+duplicate-request and enabled-state assertions. The support target is not part of the app's dependencies.
+Input awaits a main-run-loop rendering turn before dispatch (hit-region publication) and after it (deferred
+SwiftUI actions), rather than assuming that an anchor's creation means the button is already interactive.
+Both mounted-test binaries link the shared async-main run-loop workaround. AppKit can stop that loop while
+tests are still pending; the workaround restarts it until Swift Testing exits with the actual test result.
+The wrapper runs each pointer fixture alone, with a required-start guard: AppKit mouse tracking pumps nested
+run loops, where another fixture ordering or closing a window can consume or redirect the synthetic input.
+
+Pin the appearance for pixel thresholds that describe one palette. For Core Animation indicators, sample
+the real presentation-layer opacity/transforms rather than `cacheDisplay`, which redraws the unchanged model
+layer. A fixture window can supply explicit visibility so locked/headless desktops still exercise animation
+and occlusion shutdown without changing production visibility policy.
+
 A full native test run executes the WebKit content-measurement matrix in a separate test process after
 the other tests, reusing the same build and verification slot. This prevents unrelated MainActor/AppKit
 fixtures from consuming its one-minute budget. All clipping, resize, visible-overflow and Mermaid assertions

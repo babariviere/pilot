@@ -1087,6 +1087,7 @@ struct SlackTriageRefreshButton: View {
             Label(refreshing ? "Refreshing Slack triage…" : "Refresh Slack triage", icon: PilotIcon.refresh)
         }
         .labelStyle(.iconOnly)
+        .background(ControlGeometry(id: "slack-refresh"))
         .disabled(!connected || source?.configured != true || refreshing)
         .help(refreshing ? "Refreshing Slack triage…" : "Refresh Slack triage")
         .accessibilityLabel(refreshing ? "Refreshing Slack triage" : "Refresh Slack triage")

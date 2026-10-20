@@ -1,4 +1,5 @@
 import AppKit
+import NativeTestSupport
 import Foundation
 import PilotCore
 import SwiftUI
@@ -41,9 +42,9 @@ func scopedModelsNativeSavePersistsAndDispatchesExplicitAllOnlyAfterClick() asyn
     defer { release?.resume(); window.close() }
     try await nativeScopeWait { nativeScopeButtons(hosting).count == 1 }
     let button = try #require(nativeScopeButtons(hosting).first)
-    #expect(button.isEnabled)
+    #expect(button.controlEnabled)
     #expect(writes.isEmpty, "Opening Settings must not send a PUT")
-    button.performClick(nil)
+    try await NativeInput.click(button)
     try await nativeScopeWait { release != nil }
     #expect(writes.count == 1 && writes.first?.patterns == nil)
     let continuation = try #require(release)
@@ -59,8 +60,8 @@ func scopedModelsNativeSavePersistsAndDispatchesExplicitAllOnlyAfterClick() asyn
     try #require(predicate(), Comment(rawValue: checkpoint))
 }
 
-@MainActor private func nativeScopeButtons(_ view: NSView) -> [NSButton] {
-    (view as? NSButton).map { [$0] } ?? view.subviews.flatMap(nativeScopeButtons)
+@MainActor private func nativeScopeButtons(_ view: NSView) -> [ControlGeometryView] {
+    NativeInput.views(in: view, of: ControlGeometryView.self)
 }
 
 @Test(.timeLimit(.minutes(1))) @MainActor
@@ -82,36 +83,19 @@ func scopedModelsNativeSelectorPreservesAdvancedPatterns() async throws {
         throw error
     }
     let checkbox = try #require(nativeScopeButtons(hosting).first)
-    try nativeScopeClickCheckbox(checkbox)
+    try await nativeScopeClickCheckbox(checkbox)
     try await nativeScopeWait("A native checkbox click did not select the model") { editor.patterns.contains(candidate.id) }
     #expect(editor.patterns == ["unavailable/*:high", "unavailable/*:high", "provider/model"])
-    try nativeScopeClickCheckbox(checkbox)
+    try await nativeScopeClickCheckbox(checkbox)
     try await nativeScopeWait("A native checkbox click did not deselect the model") { !editor.patterns.contains(candidate.id) }
     #expect(editor.patterns == ["unavailable/*:high", "unavailable/*:high"])
 }
 
 /// Exercise the checkbox's real pointer path rather than relying on NSButton's
 /// programmatic action forwarding into a hosted SwiftUI toggle.
-@MainActor private func nativeScopeClickCheckbox(_ button: NSButton) throws {
-    let window = try #require(button.window)
-    try #require(button.isEnabled && !button.bounds.isEmpty)
-    let point = button.convert(NSPoint(x: button.bounds.midX, y: button.bounds.midY), to: nil)
-    func event(_ type: NSEvent.EventType) throws -> NSEvent {
-        try #require(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
-            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
-            context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
-    }
-    // Queue mouse-up before dispatching down so AppKit's synchronous tracking
-    // loop can finish, but construct them in real input order. SwiftUI gesture
-    // recognition must not receive an up timestamp earlier than its down.
-    let down = try event(.leftMouseDown)
-    let up = try event(.leftMouseUp)
-    try #require(up.timestamp >= down.timestamp, "Checkbox pointer events must be chronological")
-    NSApp.postEvent(up, atStart: false)
-    window.sendEvent(down)
-    if let up = NSApp.nextEvent(matching: .leftMouseUp, until: Date(), inMode: .default, dequeue: true) {
-        window.sendEvent(up)
-    }
+@MainActor private func nativeScopeClickCheckbox(_ button: ControlGeometryView) async throws {
+    try #require(button.controlEnabled && !button.bounds.isEmpty)
+    try await NativeInput.click(button)
 }
 
 @MainActor private func nativeScopeViewTree(_ view: NSView, depth: Int = 0) -> String {
@@ -202,7 +186,7 @@ func scopedModelsNativeSaveUsesHostOwnerCapabilityHttpAndLiteralReadback() async
     defer { window.close() }
     try await nativeScopeWait { nativeScopeButtons(hosting).count == 1 }
     let save = try #require(nativeScopeButtons(hosting).first)
-    save.performClick(nil)
+    try await NativeInput.click(save)
     try await nativeScopeWait { hosts.scopedModels.state.entry(host)?.status == .synced && hosts.scopedModels.isIdle }
     #expect(NativeScopeHTTP.counts.writes == 1 && NativeScopeHTTP.counts.explicitNull && NativeScopeHTTP.counts.authorized)
     #expect(NativeScopeHTTP.counts.reads >= 3 && acquisitions == 1)

@@ -413,6 +413,7 @@ struct SheetScaffold<Accessory: View, Content: View, FooterLeading: View>: View 
                 footerLeading()
                 Spacer(minLength: 8)
                 Button(cancelTitle ?? (primary == nil ? "Done" : "Cancel")) { (cancel ?? { dismiss() })() }
+                    .background(ControlGeometry(id: "sheet-cancel"))
                     .keyboardShortcut(.cancelAction)
                 if let primary { primaryButton(primary) }
             }
@@ -428,10 +429,12 @@ struct SheetScaffold<Accessory: View, Content: View, FooterLeading: View>: View 
         switch primary.key {
         case .return:
             Button(primary.title, action: primary.action)
+                .background(ControlGeometry(id: "sheet-primary"))
                 .keyboardShortcut(.defaultAction)
                 .disabled(!primary.enabled)
         case .commandReturn:
             Button(action: primary.action) { ShortcutLabel(title: primary.title) }
+                .background(ControlGeometry(id: "sheet-primary"))
                 .keyboardShortcut(.return, modifiers: .command)
                 .buttonStyle(.borderedProminent)
                 .help("\(primary.title) (⌘↩)")

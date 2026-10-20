@@ -390,10 +390,17 @@ struct SSHTunnelTests {
         }
     }
 
-    @Test
-    func sshMissingExecutableFailsWithoutRetry() async throws {
+    @Test(.timeLimit(.minutes(1)), arguments: ["missing-ssh", "non-executable-ssh", "directory"])
+    func sshMissingExecutableFailsWithoutRetry(path: String) async throws {
         try await withSSHFixture { fixture in
-            let tunnel = try fixture.makeTunnel(executable: fixture.directory.appending(path: "missing-ssh"))
+            let executable = fixture.directory.appending(path: path)
+            if path == "non-executable-ssh" {
+                try Data("#!/bin/sh\nexit 0\n".utf8).write(to: executable)
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: executable.path)
+            } else if path == "directory" {
+                try FileManager.default.createDirectory(at: executable, withIntermediateDirectories: false)
+            }
+            let tunnel = try fixture.makeTunnel(executable: executable)
             do { _ = try await tunnel.connect(); throw SSHTunnelError.invalidConfiguration }
             catch SSHTunnelError.launchFailed { }
             try sshRequire(await tunnel.state == .failed(.launchFailed))

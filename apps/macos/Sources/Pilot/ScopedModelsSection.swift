@@ -201,6 +201,7 @@ struct ScopedModelsHostRow: Identifiable {
             Toggle(candidate.name, isOn: Binding(get: { editor.patterns.contains(candidate.id) },
                 set: { editor.select(candidate.id, selected: $0) }))
                 .labelsHidden().toggleStyle(.checkbox).controlSize(.small)
+                .background(ControlGeometry(id: "scoped-model-candidate"))
                 .disabled(!editor.patterns.contains(candidate.id) && editor.patterns.count >= 256)
                 .accessibilityLabel("Include \(candidate.name)")
         }
@@ -231,6 +232,8 @@ struct ScopedModelsHostRow: Identifiable {
                 await sync.save(selection, joining: joining)
                 if sync.problem == nil, editor.selection == selection { editor.load(selection) }
             }
-        }.controlSize(.small).disabled(!enabled).accessibilityIdentifier("scoped-models-save")
+        }.controlSize(.small)
+            .background(ControlGeometry(id: "scoped-model-save"))
+            .disabled(!enabled).accessibilityIdentifier("scoped-models-save")
     }
 }
