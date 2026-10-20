@@ -119,6 +119,7 @@ native_pointer_tests=(
 	slackTriageRefreshIsClickableAndDisablesDuringLocalAndAutomaticSync
 	sidebarSelectionCoversNativeBlueWithoutLosingKeyboardNavigation
 	permissionUpgradePromptRequiresNativeAllowOrDeny
+	rowActionsStayClickableAcrossSubmenusAndHideAfterDismissal
 )
 printf -v native_pointers '%s|' "${native_pointer_tests[@]}"
 native_pointers="${native_pointers%|}"

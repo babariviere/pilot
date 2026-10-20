@@ -1,4 +1,5 @@
 import AppKit
+import NativeTestSupport
 import SwiftUI
 import Testing
 @testable import Pilot
@@ -76,16 +77,8 @@ private struct RowActionFixtureView: View {
     func click() async throws {
         // Do not let native focus mask a missing menu retain.
         window.makeFirstResponder(nil)
-        host.layoutSubtreeIfNeeded()
-        try await Task.sleep(for: .milliseconds(50))
-        let location = host.convert(NSPoint(x: 80, y: 20), to: nil)
-        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-            let event = try #require(NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
-                timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 1,
-                clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
-            window.sendEvent(event)
-        }
-        try await Task.sleep(for: .milliseconds(20))
+        // Waits for SwiftUI to publish the latest hit regions, so a fixed sleep cannot lose to a busy run loop.
+        try await NativeInput.click(host)
     }
 
     begin(parent)
