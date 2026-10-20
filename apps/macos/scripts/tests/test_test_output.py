@@ -102,6 +102,9 @@ REGRESSION_PARTITIONS = [
 REGRESSION_OUTPUTS = [STARTED + "".join(f"◇ Test {name}() started.\n" for name in names) + PASSED
                       for names in REGRESSION_PARTITIONS]
 NATIVE_POINTERS = [
+    "diagnoseSetupSubmitsReasonOrBlankThroughMountedControls",
+    "diagnoseReasonBoundsApplyToButtonAndKeyboardAndCancelStartsNothing",
+    "diagnoseStartErrorKeepsReasonForKeyboardRetryAndAskStillSubmits",
     "nativeControlsActivateOnlyEnabledProductionActions",
     "nativeRepairPromptButtonsOnlyReviewOrDismissAndNeverSpawn",
     "mountedDiagnosticsFooterSubmitsOnceAndNeverStartsRepair",
