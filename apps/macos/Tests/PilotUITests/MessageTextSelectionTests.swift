@@ -325,6 +325,43 @@ struct MessageTextSelectionTests {
         #expect(probed == fresh.measure(width: 500, unwrapped: false))
     }
 
+    @Test func sizeProbesNeverInvalidateTheDrawnTextLayout() throws {
+        _ = NSApplication.shared
+        let storage = NSTextStorage(string: String(repeating: "Text keeps its placed wrapping. ", count: 40),
+                                    attributes: [.font: NSFont.systemFont(ofSize: 14)])
+        let layout = GeometryTrackingLayoutManager()
+        let container = NSTextContainer(size: .zero)
+        container.lineFragmentPadding = 0
+        storage.addLayoutManager(layout)
+        layout.addTextContainer(container)
+        let view = MessageSelectionTextView(frame: .zero, textContainer: container)
+        view.textContainerInset = .zero
+        container.widthTracksTextView = false
+        container.heightTracksTextView = false
+        view.setFrameSize(NSSize(width: 320, height: 200))
+        layout.ensureLayout(for: container)
+        let placedSize = container.size
+        let placedGlyphs = layout.glyphRange(for: container)
+        let changes = layout.geometryChanges
+        // Initial content, not just an edited-in-place tail, must use an isolated sizing layout.
+        for width: CGFloat in [760, 1, 500, 320, 760] {
+            _ = view.measure(width: width, unwrapped: false)
+            #expect(container.size == placedSize)
+            #expect(layout.geometryChanges == changes, "a size probe invalidated the drawn container")
+        }
+        #expect(layout.glyphRange(for: container) == placedGlyphs)
+        // The same boundary holds after an append and when a placed view changes width.
+        let next = NSAttributedString(string: storage.string + "More words.", attributes: [.font: NSFont.systemFont(ofSize: 14)])
+        let start = try #require(view.replaceChangedTail(storage, with: next))
+        #expect(start > 0)
+        view.invalidateMeasurements()
+        view.setFrameSize(NSSize(width: 280, height: 240))
+        let resizedChanges = layout.geometryChanges
+        _ = view.measure(width: 500, unwrapped: false)
+        #expect(container.size.width == 280)
+        #expect(layout.geometryChanges == resizedChanges)
+    }
+
     @Test func streamedTextFadesInUnderAVeilWithoutChangingLayout() {
         let view = MessageSelectionTextView.make()
         view.textContainer?.lineFragmentPadding = 0
@@ -344,6 +381,48 @@ struct MessageTextSelectionTests {
         view.invalidateMeasurements()
         #expect(view.measure(width: 320, unwrapped: false) == before)
         window.close()
+    }
+
+    @Test func isolatedSizingKeepsCodeUnwrappedAndBubblesHugging() {
+        let view = MessageSelectionTextView.makeReadOnly()
+        view.textStorage?.setAttributedString(NSAttributedString(string: "Short text",
+            attributes: [.font: NSFont.systemFont(ofSize: 14)]))
+        let bubble = view.measure(width: 320, unwrapped: false, hugsContent: true)
+        #expect(bubble.width > 0 && bubble.width < 320)
+        view.unwrapped = true
+        let code = view.measure(width: 1_000_000, unwrapped: true)
+        view.setFrameSize(code)
+        #expect(code.width == bubble.width)
+        #expect(view.textContainer?.size.width == 1_000_000, "the drawn code container stays unwrapped too")
+        view.unwrapped = false
+        view.setFrameSize(NSSize(width: 80, height: code.height))
+        #expect(view.textContainer?.size.width == 80)
+        let wrapped = view.measure(width: 80, unwrapped: false)
+        #expect(wrapped.height >= code.height)
+    }
+
+    @Test func unchangedBubblesCacheTheWholeSwiftUIProbeCycle() throws {
+        let view = MessageSelectionTextView.makeReadOnly()
+        view.textStorage?.setAttributedString(NSAttributedString(string: "Historical message 999",
+            attributes: [.font: NSFont.systemFont(ofSize: 14)]))
+        view.setFrameSize(NSSize(width: 153, height: 17))
+        // Widths captured by the release streaming fixture, including probes of the window's size constraints.
+        let widths: [CGFloat] = [159, 660, 153, 264, 760, 593]
+        let sizes = widths.map { view.measure(width: $0, unwrapped: false, hugsContent: true) }
+        let sizingLayout = try #require(view.textStorage?.layoutManagers.first { $0 !== view.layoutManager })
+        let sizingContainer = try #require(sizingLayout.textContainers.first)
+        let settled = sizingContainer.size
+        for _ in 0..<3 {
+            for (width, size) in zip(widths, sizes) {
+                #expect(view.measure(width: width, unwrapped: false, hugsContent: true) == size)
+                #expect(sizingContainer.size == settled, "cached widths must not rerun TextKit layout")
+            }
+        }
+        // A content change invalidates every width, not just the last drawn width.
+        view.textStorage?.append(NSAttributedString(string: " has a longer ending"))
+        view.invalidateMeasurements()
+        let wider = view.measure(width: 760, unwrapped: false, hugsContent: true)
+        #expect(wider.width > sizes[4].width)
     }
 
     @Test func tailEditsStartAtTheFirstChangedTextOrStyle() {
@@ -475,5 +554,14 @@ struct MessageTextSelectionTests {
             }
             window.orderOut(nil)
         }
+    }
+}
+
+private final class GeometryTrackingLayoutManager: NSLayoutManager {
+    var geometryChanges = 0
+
+    override func textContainerChangedGeometry(_ container: NSTextContainer) {
+        geometryChanges += 1
+        super.textContainerChangedGeometry(container)
     }
 }
