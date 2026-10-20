@@ -575,6 +575,35 @@ enum PilotMark: CaseIterable {
     }
 }
 
+extension PilotMark {
+    /// The mark drawn at exactly `side` points, so its intrinsic size is the size it shows.
+    /// Protects the intrinsic size when a native toolbar extracts the label's image: the source mark is 16 pt,
+    /// so a `resizable()` frame alone could leave it larger than neighbouring SF Symbols (unconfirmed in the
+    /// real toolbar). Not cached: one toolbar item uses it.
+    @MainActor func image(side: CGFloat) -> NSImage {
+        let source = image
+        let sized = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
+            source.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
+            return true
+        }
+        sized.isTemplate = true
+        sized.accessibilityDescription = accessibilityName
+        return sized
+    }
+}
+
+/// A `PilotMark` for a native toolbar Menu label: intrinsic size equals the context's mark size.
+struct PilotToolbarMark: View {
+    let mark: PilotMark
+    var context: PilotIcon.Context = .toolbar
+
+    var body: some View {
+        Image(nsImage: mark.image(side: context.markSize))
+            .renderingMode(.template)
+            .accessibilityLabel(mark.accessibilityName)
+    }
+}
+
 /// A `PilotMark` sized for a context, tinted by the foreground style like an SF Symbol.
 struct PilotMarkIcon: View {
     let mark: PilotMark
