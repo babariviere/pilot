@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import PilotCore
 import PilotTelemetry
@@ -71,9 +72,12 @@ final class AppModel: ObservableObject {
     @Published private(set) var navigationHistory = NavigationHistory(NavigationLocation())
     private var navigationDepth = 0
     private var restoringNavigation = false
+    /// Only a saved selection is cleared when late inventory identifies a retained remote Control.
+    private var restoredSessionObservation: AnyCancellable?
 
     @Published var selectedSessionId: String? {
         didSet {
+            restoredSessionObservation = nil
             beginNavigation()
             defer { endNavigation() }
             if let id = selectedSessionId, let ref = resourceRef(id, kind: .session) {
@@ -378,6 +382,23 @@ final class AppModel: ObservableObject {
         }
         restoreTaskDraft(drafts.newTask, attachments: store.restoreAttachments(drafts.newTask.attachments))
         draftImages.restore(currentDraftImages())
+        if let reference = drafts.selection, reference.kind == .session, reference.host != drafts.localHost {
+            observeRestoredSession(reference)
+        }
+    }
+
+    private func observeRestoredSession(_ reference: HostResourceRef) {
+        // Use the emitted inventory: @Published sends before storing. Ordinary remote selections,
+        // including chats titled Control, remain unchanged. Explicit navigation cancels this observer.
+        let observation = hosts.$sessions.sink { [weak self] inventory in
+            guard let self, self.selectedSessionId == reference.storageKey,
+                  let item = inventory.first(where: { $0.ref == reference }),
+                  PreviousControl.isHistory(item.value, reference: reference, localHost: self.localHost) else { return }
+            self.hosts.selection = nil
+            self.selectedSessionId = nil
+            self.saveDrafts()
+        }
+        if selectedSessionId == reference.storageKey { restoredSessionObservation = observation }
     }
 
     private func restoreTaskDraft(_ task: StoredTaskDraft, attachments: ImageAttachments) {
@@ -602,7 +623,7 @@ final class AppModel: ObservableObject {
         hosts.onRemoteSessionsChanged = { [weak self] host, sessions, snapshot in
             guard let self else { return }
             let store = self.attention(on: host)
-            for notice in store.observe(sessions, snapshot: snapshot) {
+            for notice in store.observe(sessions.filter { !$0.isControl }, snapshot: snapshot) {
                 guard sessions.first(where: { $0.id == notice.sessionId })?.isArchived != true else { continue }
                 self.notifier.deliver(notice, reference: HostResourceRef(host: host, kind: .session, localId: notice.sessionId))
             }
@@ -1165,6 +1186,7 @@ final class AppModel: ObservableObject {
             selectedMissionId = nil
             selectedProjectId = nil
         case let .session(id):
+            guard canMutateSession(id) else { apply(.home); return }
             showingArchive = false
             selectedSessionId = id
         case let .mission(id):
@@ -1575,7 +1597,7 @@ extension AppModel {
     private func canRestoreNavigation(_ location: NavigationLocation) -> Bool {
         if let scope = location.scope, !navigationResourceExists(scope, kind: .project) { return false }
         switch location.selection {
-        case let .session(id): return navigationResourceExists(id, kind: .session)
+        case let .session(id): return canMutateSession(id) && navigationResourceExists(id, kind: .session)
         case let .mission(id): return navigationResourceExists(id, kind: .mission)
         case let .project(id): return navigationResourceExists(id, kind: .project)
         case .home, .inbox, .archive, .control: return true

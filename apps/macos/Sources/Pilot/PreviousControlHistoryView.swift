@@ -15,7 +15,7 @@ struct PreviousControlHistoryView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                PageHeader("Previous Control", subtitle: "Read-only conversation on \(name). This changes only the app's presentation, not agents, watches or permissions.")
+                PageHeader("Retained conversation", subtitle: "Read-only Control history on \(name). Reading does not archive the conversation or change agents, watches or permissions.")
                 Text("\(name) · \(reference.localId)").font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).textSelection(.enabled)
                 if let error = state.error {
                     Text(error).font(.pilot(.body)).foregroundStyle(Theme.mutedForeground)
@@ -57,7 +57,7 @@ struct PreviousControlHistoryView: View {
             .padding(24).frame(maxWidth: Theme.column, alignment: .leading).frame(maxWidth: .infinity)
         }
         .background(Theme.background)
-        .navigationTitle("Previous Control").navigationSubtitle("\(name) · Read-only")
+        .navigationTitle("Retained conversation").navigationSubtitle("\(name) · Read-only")
         .task(id: try? hosts.token(for: reference.host)) { await state.load() }
         .onDisappear { state.stop() }
     }

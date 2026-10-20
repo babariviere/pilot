@@ -9,10 +9,6 @@ enum PreviousControl {
 }
 
 extension AppModel {
-    var previousControlSessions: [Hosted<SessionSummary>] {
-        hosts.sessions.filter { PreviousControl.isHistory($0.value, reference: $0.ref, localHost: localHost) }
-    }
-
     var isPreviousControlSelected: Bool {
         guard let session = selectedSession else { return false }
         return PreviousControl.isHistory(session, reference: hosts.selection, localHost: localHost)
