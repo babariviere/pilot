@@ -97,11 +97,12 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         #expect(app.isPreviousControlSelected && !app.canStopSelectedChat && !app.canToggleTerminal)
         #expect(!app.focusComposer() && !app.openInspector(.terminal))
         #expect(app.sidebarControlRows.map(\.key) == ["same"])
-        #expect(app.previousControlSessions.map(\.ref) == [ref])
+        #expect(hosts.sessions.contains { $0.ref == ref && $0.value.isControl })
         let catalog = CommandPaletteCatalog(model: app, openSettings: {}, openKeyboardShortcuts: {})
         #expect(catalog.chatActions(try previousSession(), reference: ref).isEmpty)
         let items = catalog.entries().map(\.item.id)
-        #expect(!items.contains("chat:" + ref.storageKey) && items.contains("history:" + ref.storageKey))
+        #expect(!items.contains("chat:" + ref.storageKey) && !items.contains("history:" + ref.storageKey))
+        #expect(!items.contains { $0.hasPrefix("history:") } && items.contains("page:control"))
         let ordinary = HostResourceRef(host: box, kind: .session, localId: "ordinary")
         #expect(items.contains("chat:" + ordinary.storageKey) && app.canMutateSession(ordinary.storageKey))
         app.setPinned(false, sessionId: ref.storageKey); app.renameSession(ref.storageKey, title: "No")
@@ -136,7 +137,9 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         try app.registerLocal(local)
         try hosts.install(app.client, host: local)
         let ref = HostResourceRef(host: box, kind: .session, localId: "same")
-        #expect(app.previousControlSessions.map(\.ref) == [ref])
+        #expect(hosts.sessions.contains { $0.ref == ref && $0.value.isControl })
+        let offlineEntries = CommandPaletteCatalog(model: app, openSettings: {}, openKeyboardShortcuts: {}).entries()
+        #expect(!offlineEntries.contains { $0.item.id == "chat:" + ref.storageKey || $0.item.id.hasPrefix("history:") })
         #expect(app.sidebarControlRows.map(\.key) == [original.id] && app.client.session(original.id)?.isControl == true)
         let ordinaryRef = HostResourceRef(host: box, kind: .session, localId: ordinary.id)
         #expect(app.canMutateSession(ordinaryRef.storageKey))
@@ -147,7 +150,10 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         #expect(!model.loaded && model.error?.contains("Reconnect") == true)
         try hosts.install(previousClient("box", sessions: [original, ordinary]), host: box)
         await model.load()
-        #expect(model.loaded && model.error == nil && app.previousControlSessions.map(\.ref) == [ref])
+        #expect(model.loaded && model.error == nil && hosts.sessions.contains { $0.ref == ref && $0.value.isControl })
+        let reconnectedEntries = CommandPaletteCatalog(model: app, openSettings: {}, openKeyboardShortcuts: {}).entries()
+        #expect(!reconnectedEntries.contains { $0.item.id == "chat:" + ref.storageKey || $0.item.id.hasPrefix("history:") })
+        #expect(reconnectedEntries.contains { $0.item.id == "chat:" + ordinaryRef.storageKey })
         model.stop(); await hosts.disconnectAll()
     }
 
@@ -236,5 +242,78 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         #expect(PreviousHistoryHTTP.requests.first?.host == "box.previous-control.invalid")
         #expect(PreviousHistoryHTTP.requests.first?.path == "/api/sessions/\(id)/history")
         model.stop(); await hosts.disconnectAll()
+    }
+
+    @Test @MainActor func savedRemoteControlSelectionIsClearedForInitialAndLateInventoryWithoutArchivingOrLosingDrafts() async throws {
+        for initialInventory in [false, true] {
+            for control in [false, true] {
+                let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+                defer { try? FileManager.default.removeItem(at: directory) }
+                let hosts = HostClients(operationDirectory: directory.appendingPathComponent("operations"))
+                let reference = HostResourceRef(host: box, kind: .session, localId: "same")
+                let session = try previousSession(control: control, title: "Control")
+                let client = previousClient("box", sessions: [session])
+                if initialInventory { try hosts.install(client, host: box) }
+                let store = DraftStore(directory: directory.appendingPathComponent("drafts"))
+                _ = try store.load()
+                var drafts = StoredDrafts()
+                drafts.localHost = local; drafts.selection = reference
+                drafts.chats[reference.storageKey] = StoredChatDraft(text: "Retain this unsent draft")
+                try store.save(drafts)
+                let app = AppModel(projectFolderDefaults: UserDefaults(suiteName: "retained-control-\(UUID())")!,
+                                   draftStore: store, hosts: hosts)
+                if !initialInventory { try hosts.install(client, host: box) }
+                #expect(app.selectedSessionId == (control ? nil : reference.storageKey))
+                #expect(hosts.selection == (control ? nil : reference))
+                #expect(hosts.sessions.first { $0.ref == reference }?.value.isArchived == false)
+                #expect(app.composer(for: reference.storageKey).draft == "Retain this unsent draft")
+                // A later refresh must not resurrect the saved selection or drop an ordinary one.
+                client.loadFixture(projects: [], sessions: [session])
+                #expect(app.selectedSessionId == (control ? nil : reference.storageKey))
+                // Explicit source-qualified access still opens only the read-only destination.
+                try app.selectSession(reference)
+                #expect(app.isPreviousControlSelected == control)
+                #expect(app.canMutateSession(reference.storageKey) == !control)
+                app.flushDrafts()
+                await hosts.disconnectAll()
+            }
+        }
+    }
+
+    @Test @MainActor func navigationHistoryDoesNotRediscoverRemoteControl() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let hosts = HostClients(operationDirectory: directory)
+        let app = AppModel(projectFolderDefaults: UserDefaults(suiteName: "retained-control-\(UUID())")!, hosts: hosts)
+        try app.registerLocal(local)
+        let reference = HostResourceRef(host: box, kind: .session, localId: "same")
+        try hosts.install(previousClient("box", sessions: [previousSession()]), host: box)
+        try app.selectSession(reference)
+        #expect(app.isPreviousControlSelected)
+        app.openHome()
+        app.goBack()
+        #expect(!app.isPreviousControlSelected)
+        #expect(hosts.sessions.contains { $0.ref == reference && $0.value.isControl && !$0.value.isArchived })
+        await hosts.disconnectAll()
+    }
+
+    @Test @MainActor func explicitQualifiedAccessCancelsSavedSelectionCleanupBeforeLateInventory() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let hosts = HostClients(operationDirectory: directory.appendingPathComponent("operations"))
+        let reference = HostResourceRef(host: box, kind: .session, localId: "same")
+        let store = DraftStore(directory: directory.appendingPathComponent("drafts"))
+        _ = try store.load()
+        var drafts = StoredDrafts()
+        drafts.localHost = local; drafts.selection = reference
+        try store.save(drafts)
+        let app = AppModel(projectFolderDefaults: UserDefaults(suiteName: "retained-control-\(UUID())")!,
+                           draftStore: store, hosts: hosts)
+        try app.selectSession(reference)
+        try hosts.install(previousClient("box", sessions: [previousSession()]), host: box)
+        #expect(app.isPreviousControlSelected && hosts.selection == reference)
+        #expect(!app.canMutateSession(reference.storageKey) && !app.canStopSelectedChat && !app.canToggleTerminal)
+        app.flushDrafts()
+        await hosts.disconnectAll()
     }
 }

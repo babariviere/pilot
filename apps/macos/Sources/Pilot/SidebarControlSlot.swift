@@ -61,7 +61,6 @@ extension AppModel {
 /// `SessionRow`s (state corner, context menu), with the list's selection fill and insets.
 struct SidebarControlSlot: View {
     let rows: [SidebarControlRow]
-    var history: [Hosted<SessionSummary>] = []
     @ObservedObject var model: AppModel
     @Environment(\.hostViewContext) private var hostContext
 
@@ -79,20 +78,6 @@ struct SidebarControlSlot: View {
                     .onTapGesture { model.navigate(.session, id: row.key) }
                     .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
                     .accessibilityAction { model.navigate(.session, id: row.key) }
-            }
-            if !history.isEmpty {
-                Menu {
-                    ForEach(history) { item in
-                        Button("\(HostViewContext(host: item.ref.host, hosts: model.hosts).name) · \(item.value.title)") {
-                            try? model.selectSession(item.ref)
-                        }
-                    }
-                } label: {
-                    Text("Previous Control").font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
-                }
-                .menuStyle(.borderlessButton).fixedSize().frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 8).padding(.bottom, 3)
-                .help("Read previous Control conversations on their original hosts")
             }
         }
     }

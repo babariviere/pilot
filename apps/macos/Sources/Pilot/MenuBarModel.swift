@@ -51,7 +51,7 @@ struct MenuBarSnapshot: Equatable {
          hosted: [Hosted<SessionSummary>] = [], availableHosts: Set<HostRef> = [],
          isUnreadHost: ((Hosted<SessionSummary>) -> Bool)? = nil) {
         // Apply once for every snapshot producer, including reactive updates and heading counts.
-        // These conversations are accessible only through Previous Control, not normal menu entries.
+        // Retained remote Control conversations never appear in discovery or heading counts.
         let hosted = hosted.filter { !$0.value.isControl }
         // Sessions arrive in list order. Like pilotd's counts, pinned chats count by their state.
         let groups = SidebarUrgency.groups(sessions.unarchivedSessions, unread: isUnread, separatingPinned: false)

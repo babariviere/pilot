@@ -167,15 +167,7 @@ struct CommandPaletteCatalog {
                     try? model.selectSession(item.ref)
                 }
         }
-        let history = model.previousControlSessions.map { item in
-            let name = HostViewContext(host: item.ref.host, hosts: hosts).name
-            return CommandPaletteEntry(item: CommandPaletteItem(id: "history:" + item.ref.storageKey, kind: .page,
-                title: "Previous Control", keywords: [name, "history", item.value.title]),
-                icon: .archive, suffix: name, detail: "Read-only history on its original host") {
-                    try? model.selectSession(item.ref)
-                }
-        }
-        return chats + history
+        return chats
     }
 
     /// Tasks of the active missions, open ones first. A task's pull requests are the ones linked to it.

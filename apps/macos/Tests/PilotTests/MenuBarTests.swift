@@ -168,7 +168,9 @@ private func menuSession(id: String = "menu-test", title: String = "Session", st
     #expect(menu.snapshot.rows.contains { $0.id == localChat.id })
     #expect(menu.snapshot.statusText == baseline.statusText)
     #expect(app.client.session(localControl.id)?.control == true)
-    #expect(app.previousControlSessions.map(\.ref) == [controlRef])
+    #expect(hosts.sessions.contains { $0.ref == controlRef && $0.value.isControl })
+    let entries = CommandPaletteCatalog(model: app, openSettings: {}, openKeyboardShortcuts: {}).entries()
+    #expect(!entries.contains { $0.item.id == "chat:" + controlRef.storageKey || $0.item.id.hasPrefix("history:") })
     await hosts.disconnectAll()
 }
 
