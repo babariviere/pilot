@@ -186,7 +186,7 @@ for (const nested of [false, true])
 		await adapter.close();
 	});
 
-test("real subagent worker inherits the bundled child profile and required auth, without recursive orchestration", {
+test("real Build subagent inherits PR delivery, required auth and safeguards without recursive orchestration", {
 	timeout: 30_000,
 }, async (t) => {
 	const f = await fixture(t);
@@ -225,14 +225,14 @@ test("real subagent worker inherits the bundled child profile and required auth,
 	await writeFile(
 		fixturePath,
 		`
-import { writeFileSync } from 'node:fs';
+import { appendFileSync, writeFileSync } from 'node:fs';
 import { fauxProvider, fauxAssistantMessage } from ${JSON.stringify(import.meta.resolve("@earendil-works/pi-ai/providers/faux"))};
 import { Type } from ${JSON.stringify(import.meta.resolve("@earendil-works/pi-ai"))};
 export default pi => {
-	pi.registerTool({ name: "bash", label: "bash", description: "Offline publication stub", parameters: Type.Object({command: Type.String()}), execute: async () => { writeFileSync(${JSON.stringify(publication)}, "executed"); return {content:[{type:"text",text:"stub"}],details:undefined}; } });
+	pi.registerTool({ name: "bash", label: "bash", description: "Offline publication stub", parameters: Type.Object({command: Type.String()}), execute: async (_id, {command}) => { appendFileSync(${JSON.stringify(publication)}, command + "\\n"); return {content:[{type:"text",text:"stub"}],details:undefined}; } });
  const faux = fauxProvider({provider:'openai-codex',models:[{id:'offline'}]});
  faux.setResponses([
-  fauxAssistantMessage({type:'toolCall',id:'child-todo',name:'codemode',arguments:{code:'try { await tools.bash({command:["gh","pr","create"].join(" ")}); } catch {} const item = await tools.todo({action:"create",title:"From real child"}); await tools.todo({action:"claim",id:item.id}); return item;'}}, {stopReason:'toolUse'}),
+  fauxAssistantMessage({type:'toolCall',id:'child-todo',name:'codemode',arguments:{code:'for (const parts of [["jj","git","push","--bookmark","fix/child"],["gh","pr","create"],["gh","pr","merge","1"],["gh","repo","delete","fixture/repo","--yes"]]) { try { await tools.bash({command:parts.join(" ")}); } catch {} } const item = await tools.todo({action:"create",title:"From real child"}); await tools.todo({action:"claim",id:item.id}); return item;'}}, {stopReason:'toolUse'}),
   fauxAssistantMessage("", {stopReason:'error',errorMessage:'usage_limit_reached'}),
   fauxAssistantMessage("CHILD_PROFILE_OK"), fauxAssistantMessage("CHILD_FOLLOWUP_OK")
  ]);
@@ -304,7 +304,7 @@ export default pi => {
 			directory: join(f.root, "child-storage"),
 			request: {
 				agent: { config: { name: "task" }, systemPrompt: "", sourcePath: "<builtin>", scope: "builtin" },
-				task: "Synthetic request",
+				task: "Push the task branch and open a PR through the offline stubs. Never merge or delete remote resources.",
 				index: 0,
 				overrides: { model: "openai-codex/offline" },
 			},
@@ -337,7 +337,11 @@ export default pi => {
 	child.send({ type: "stop", id: "stop" });
 	assert.equal(todos.length, 1, "child's tool writes to the parent list, not workspace files");
 	assert.equal(todos[0].title, "From real child");
-	await assert.rejects(readFile(publication), { code: "ENOENT" }, "child cannot publish under implement permission");
+	assert.deepEqual(
+		(await readFile(publication, "utf8")).trim().split("\n"),
+		["jj git push --bookmark fix/child", "gh pr create"],
+		"implement children can push task branches and open PRs, but merge and deletion never execute",
+	);
 	assert.ok(todos[0].assigned_to_session);
 	await packet("stopped", "stop");
 	child.send({ type: "pause" });
