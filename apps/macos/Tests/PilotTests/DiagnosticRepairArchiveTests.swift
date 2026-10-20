@@ -50,6 +50,8 @@ private final class RepairArchiveHTTP: URLProtocol {
         func client(_ host: HostRef) -> PilotClient {
             let configuration = URLSessionConfiguration.ephemeral
             configuration.protocolClasses = [RepairArchiveHTTP.self]
+            configuration.timeoutIntervalForRequest = 3
+            configuration.timeoutIntervalForResource = 5
             let client = PilotClient(baseURL: URL(string: "http://\(host.hostId).repair-archive.invalid"),
                                      commandConfiguration: configuration)
             client.loadFixture(projects: [], sessions: [
@@ -86,7 +88,7 @@ private final class RepairArchiveHTTP: URLProtocol {
         ]))
     }
 
-    @Test @MainActor func acceptedRepairArchivesOnlyQualifiedOriginAndKeepsHistory() async throws {
+    @Test(.timeLimit(.minutes(1))) @MainActor func acceptedRepairArchivesOnlyQualifiedOriginAndKeepsHistory() async throws {
         for host in [local, remote] {
             RepairArchiveHTTP.reset()
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -94,9 +96,13 @@ private final class RepairArchiveHTTP: URLProtocol {
             let op = try await operation(directory, host: host)
             let app = try fixture(directory, host: host, operation: op)
             let ref = HostResourceRef(host: host, kind: .session, localId: "origin")
-            async let first = app.finishDiagnosticRepairStart(op, delivery: .receipt(receipt(op)), reference: ref)
-            async let second = app.finishDiagnosticRepairStart(op, delivery: .receipt(receipt(op)), reference: ref)
-            let (one, two) = try await (first, second)
+            let delivery = OperationDelivery.receipt(try receipt(op))
+            // Explicit app-actor callers keep this regression independent of async-let executor inheritance.
+            let first = Task { @MainActor in try await app.finishDiagnosticRepairStart(op, delivery: delivery, reference: ref) }
+            let second = Task { @MainActor in try await app.finishDiagnosticRepairStart(op, delivery: delivery, reference: ref) }
+            defer { first.cancel(); second.cancel() }
+            let one = try await first.value
+            let two = try await second.value
             #expect(one == two && one.localId == op.targetId && one.host == host)
             #expect(app.hosts.selection == one)
             #expect(RepairArchiveHTTP.posts == ["\(host.hostId).repair-archive.invalid/api/sessions/origin/archive"])
@@ -105,7 +111,7 @@ private final class RepairArchiveHTTP: URLProtocol {
         }
     }
 
-    @Test @MainActor func archiveFailureSurvivesReopenAndNeverCreatesAnotherRepair() async throws {
+    @Test(.timeLimit(.minutes(1))) @MainActor func archiveFailureSurvivesReopenAndNeverCreatesAnotherRepair() async throws {
         RepairArchiveHTTP.reset(failures: 1)
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -126,7 +132,7 @@ private final class RepairArchiveHTTP: URLProtocol {
         #expect(RepairArchiveHTTP.posts.count == 2, "only archival, never a second create or Stop")
     }
 
-    @Test @MainActor func unconfirmedWrongIdentityLegacyAndManualArchiveAreSafe() async throws {
+    @Test(.timeLimit(.minutes(1))) @MainActor func unconfirmedWrongIdentityLegacyAndManualArchiveAreSafe() async throws {
         for mode in ["unknown", "pending", "rejected", "wrong_result", "wrong_host", "wrong_role", "legacy", "manual"] {
             RepairArchiveHTTP.reset()
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
