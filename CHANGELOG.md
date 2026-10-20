@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.59.2](https://github.com/babariviere/pilot/compare/v1.59.1...v1.59.2) (2026-10-20)
+
+
+### Bug Fixes
+
+* **build:** include PR delivery without publishing approval ([63c89c5](https://github.com/babariviere/pilot/commit/63c89c50b5ff8452119faad8421a00bd00d111ab))
+
 ## [1.59.1](https://github.com/babariviere/pilot/compare/v1.59.0...v1.59.1) (2026-10-20)
 
 
