@@ -20,6 +20,8 @@ import { RepositoryChanges } from "./changes.ts";
 import { DATABASE_CONFIG_FILE, DatabaseService } from "./databases.ts";
 import { Conflict, ServiceUnavailable } from "./errors.ts";
 import { GitHubSetupService } from "./github-setup.ts";
+import { MissionService } from "./mission-service.ts";
+import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
@@ -28,6 +30,96 @@ import { SourceRegistry } from "./sources.ts";
 import { TelemetrySettingsService } from "./telemetry-settings.ts";
 import { TerminalManager } from "./terminals.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
+
+test("mission diagnostics page persisted Linear failures independently of tasks without remote work", async (t) => {
+	const home = mkdtempSync(join(tmpdir(), "mission-sync-diagnostics-"));
+	const host = { hostId: "local", daemonId: "daemon", lineageId: "lineage" };
+	const projects = new ProjectStore(home);
+	const sessions = new SessionManager(home, projects, undefined, {}, {}, { diagnosticHost: host });
+	const store = new MissionStore(":memory:");
+	const service = new MissionService(store, sessions, projects);
+	const terminals = new TerminalManager();
+	const server = createDaemonServer(
+		{ home, host: "127.0.0.1", port: 0 },
+		sessions,
+		projects,
+		new ModelCatalog("/unused"),
+		terminals,
+		{ store, service },
+	);
+	t.after(async () => {
+		terminals.shutdown();
+		await sessions.shutdown();
+		await store.durable();
+		store.close();
+		rmSync(home, { recursive: true, force: true });
+	});
+	// No server listen, source registry or MCP client is needed to read persisted diagnostics.
+	assert.equal(server.listening, false);
+	const mission = store.create({ projectId: "p", title: "Delivery" });
+	const other = store.create({ projectId: "p", title: "Other" });
+	store.addResource(other.id, { url: "https://linear.app/acme/issue/ENG-999", linearRole: "managed" });
+	store.addResource(mission.id, { url: "https://linear.app/acme/issue/ENG-100" });
+	for (let n = 1; n <= 23; n++) {
+		const link = store.addResource(mission.id, {
+			url: `https://linear.app/acme/issue/ENG-${n}`,
+			linearRole: "managed",
+		});
+		const record = store.linearSyncRecord(link.id)!;
+		record.status = {
+			state: "error",
+			target: "inProgress",
+			updatedAt: 1000,
+			retryAt: 2000,
+			error: "password=canary",
+			failure: { stage: "issue", category: "remote_error" },
+		};
+		record.intent = { target: "inProgress" };
+		record.attempts = 4;
+		if (n === 1) {
+			record.lastObservationAt = 500;
+			record.lastFailureAt = 1000;
+		}
+		store.saveLinearSync(link.id, record.version, record);
+	}
+	const before = store.linearSyncDiagnostics(mission.id, 0, 20);
+	assert.equal(before.tickets.length, 20);
+	assert.equal(before.more, true);
+	assert.throws(() => store.linearSyncDiagnostics(mission.id, 0, 21));
+	assert.throws(() => store.linearSyncDiagnostics(mission.id, -1));
+	const first = await sessions.readDiagnosticContext({ action: "mission", host, missionId: mission.id, limit: 20 });
+	const data = first.data as unknown as {
+		tasks: unknown[];
+		linearSync: { tickets: typeof before.tickets; coverage: string };
+	};
+	assert.equal(first.status, "available");
+	assert.deepEqual(data.tasks, []);
+	assert.equal(data.linearSync.tickets.length, 20);
+	assert.match(data.linearSync.coverage, /Persisted.*no network/);
+	assert.equal(first.page.more, true);
+	assert.equal(first.page.before, 20, "ticket continuation survives an empty task page");
+	assert.equal(data.linearSync.tickets[0]!.attempts, 4);
+	assert.equal(data.linearSync.tickets[0]!.requestedTarget, "inProgress");
+	assert.equal(data.linearSync.tickets[0]!.status.retryAt, 2000);
+	assert.deepEqual(data.linearSync.tickets[0]!.status.failure, { stage: "issue", category: "remote_error" });
+	assert.equal(data.linearSync.tickets.filter((r) => r.lastFailureAt === 1000).length, 1);
+	assert.equal(data.linearSync.tickets.filter((r) => r.lastObservationAt === 500).length, 1);
+	assert.ok(data.linearSync.tickets.some((r) => r.lastObservationAt === null && r.lastFailureAt === null));
+	assert.doesNotMatch(JSON.stringify(first), /canary|contributors|ENG-999|ENG-100/);
+	const next = await sessions.readDiagnosticContext({
+		action: "mission",
+		host,
+		missionId: mission.id,
+		limit: 20,
+		before: first.page.before,
+	});
+	const rest = (next.data as unknown as typeof data).linearSync.tickets;
+	assert.equal(rest.length, 3);
+	assert.equal(next.page.more, false);
+	assert.equal(new Set([...data.linearSync.tickets, ...rest].map((r) => r.resourceId)).size, 23);
+	assert.deepEqual(store.linearSyncDiagnostics(mission.id, 0, 20), before, "diagnosis does not mutate sync state");
+	assert.equal(sessions.list().length, 0);
+});
 
 test("refresh-health native reads are qualified, protected and never trigger a refresh", async (t) => {
 	const home = mkdtempSync(join(tmpdir(), "refresh-health-api-"));

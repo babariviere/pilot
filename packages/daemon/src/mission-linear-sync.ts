@@ -16,8 +16,10 @@ import { LookupFormatChanged } from "./tracking-lookup.ts";
 
 type Linked = NonNullable<ReturnType<MissionStore["linearSyncResource"]>>;
 type Call = (tool: string, args: Record<string, unknown>) => Promise<TrackingJson>;
-type Issue = { id: string; identifier: string; teamId: string; stateId: string; stateName: string; type: string };
-const FIELDS = ["id", "uuid", "identifier", "url", "teamId", "statusId", "status", "statusType"];
+type Issue = { id: string; teamId: string; stateId: string; stateName: string; type: string };
+// get_issue rejects unknown field selections. Identifier is encoded in id or the canonical URL;
+// status is verified against the team's workflow rather than requesting the unsupported statusId.
+const FIELDS = ["id", "uuid", "url", "teamId", "status", "statusType"];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type Failure = NonNullable<MissionLinearSync["failure"]>;
@@ -207,7 +209,7 @@ export class MissionLinearSyncService {
 			throw new SyncProblem("Linear did not return an immutable issue UUID. Refresh the link and retry.");
 		if (link.record.status.issueId && id !== link.record.status.issueId)
 			throw new SyncProblem("The linked Linear issue identity changed. Review the link before resuming.");
-		const identifier = string(raw.identifier ?? raw.id);
+		const identifier = raw.identifier ?? (typeof raw.id === "string" && !UUID.test(raw.id) ? raw.id : undefined);
 		if (!link.record.status.issueId) {
 			let key: string | undefined;
 			try {
@@ -216,7 +218,7 @@ export class MissionLinearSyncService {
 				if (url.protocol === "https:" && url.hostname === "linear.app" && match)
 					key = `${match[1]!.toLowerCase()}/${match[2]!.toUpperCase()}`;
 			} catch {}
-			if (identifier !== link.resource.externalId || key !== link.resource.linearKey)
+			if ((identifier !== undefined && identifier !== link.resource.externalId) || key !== link.resource.linearKey)
 				throw new SyncProblem(
 					"The Linear link no longer matches this issue. Review its workspace and identifier before retrying.",
 				);
@@ -248,7 +250,7 @@ export class MissionLinearSyncService {
 				);
 		}
 		return {
-			issue: { id, identifier, teamId, stateId: state.id, stateName: state.name, type: state.type },
+			issue: { id, teamId, stateId: state.id, stateName: state.name, type: state.type },
 			mapping,
 			states,
 		};
@@ -262,6 +264,7 @@ export class MissionLinearSyncService {
 
 	private synced(link: Linked, issue: Issue): void {
 		const record = link.record;
+		record.lastObservationAt = Date.now();
 		record.status = {
 			...record.status,
 			state: "synced",
@@ -301,6 +304,7 @@ export class MissionLinearSyncService {
 				);
 			if (record.status.retryAt && record.status.retryAt > Date.now()) return;
 			const { issue, mapping, states } = await this.observe(link, call);
+			record.lastObservationAt = Date.now();
 			stage = "configuration";
 			const terminal = this.terminal(issue, mapping);
 			const previous = { ...record.status };
@@ -471,6 +475,7 @@ export class MissionLinearSyncService {
 			if (error instanceof StaleSync || this.stopped) return;
 			const record = link.record;
 			const category = failureCategory(error, stage);
+			record.lastFailureAt = Date.now();
 			record.attempts = Math.min(5, Math.max(initialAttempts + 1, record.attempts));
 			record.status = {
 				...record.status,

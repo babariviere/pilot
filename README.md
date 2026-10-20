@@ -611,9 +611,14 @@ Writes use verified immutable issue IDs and actual-team mappings, durable fenced
 retries and fresh reads before updates. Linear has no conditional status update, so a simultaneous
 external edit between the final read and write remains an unavoidable remote race.
 An already-matching verified status is a successful no-op. Uncertain writes are reconciled before
-retrying. Failures retain a sanitized stage and category in `linearSync.failure`; successful background
-discovery cannot clear a mission ticket's warning or backoff, nor can a read-only PR check clear an
-outstanding failed status update.
+retrying. Ticket reads request only supported Linear fields and verify the selected status against
+the issue's actual team workflow. Failures retain a sanitized stage and category in `linearSync.failure`;
+successful background discovery cannot clear a mission ticket's warning or backoff, nor can a read-only
+PR check clear an outstanding failed status update.
+Read-only mission diagnostics also include a bounded page of managed-ticket sync records, requested
+targets, attempt counts and retry times. Last verified observation and last failure times are retained
+separately from record updates; older records keep unknown times until a new reconciliation records them.
+These diagnostics read persisted state only and never refresh Linear or replay a status update.
 
 For linked task PRs, `prGuidance` gives current ticket-specific wording: earlier contributors use
 `Related to`, while the final contributor uses `Closes` only after every other contributor is Done
