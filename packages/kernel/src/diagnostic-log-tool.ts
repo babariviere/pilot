@@ -5,7 +5,7 @@ import type { DiagnosticTargetReference, OperationHost } from "@pilot/protocol";
 import type { DiagnosticLogRequest, DiagnosticLogResult, DiagnosticLogSourceId } from "./protocol.ts";
 
 export const DIAGNOSTIC_LOG_TOOL = "diagnostic_logs";
-export type DiagnosticLogCall = (request: DiagnosticLogRequest) => Promise<DiagnosticLogResult>;
+export type DiagnosticLogCall = (request: DiagnosticLogRequest, signal?: AbortSignal) => Promise<DiagnosticLogResult>;
 
 const sources = [
 	"app",
@@ -56,8 +56,8 @@ export function createDiagnosticLogTool(
 		]),
 		executionMode: "sequential",
 		annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-		async execute(_callId, request): Promise<AgentToolResult<DiagnosticLogResult>> {
-			const result = await call(request as DiagnosticLogRequest);
+		async execute(_callId, request, signal): Promise<AgentToolResult<DiagnosticLogResult>> {
+			const result = await call(request as DiagnosticLogRequest, signal);
 			return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
 		},
 	});
