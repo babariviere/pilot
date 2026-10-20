@@ -82,7 +82,7 @@ falling back to any chat:
 | Source ID | Scope and coverage |
 | --- | --- |
 | `app` | Private native app lifecycle, host transport and repair event/error codes on this Mac. Only closed categories and allowlisted error domains/numeric codes, never error descriptions, userInfo, console interception or payloads. Retained history is not current app liveness or comprehensive crash capture. |
-| `daemon` | The current and one rotated `pilotd.log` on macOS. Other hosts expose only the redacted current-process ring when no safe persistent file exists; journal history is explicitly unavailable because the reader never runs a shell. |
+| `daemon` | The current and one rotated `pilotd.log` on macOS. Verified owned Linux user services expose bounded retained Pilot-only journal history. Unsupported/unowned/permission-denied hosts fall back to the redacted current-process ring, explicitly not historical worker coverage. |
 | `kernel_worker` | Kernel/worker stdout and stderr inherited by the persistent daemon log. Records can be interleaved and cannot be reliably attributed to one process. The daemon ring alone is not presented as worker coverage. |
 | `native_report` | Existing Pilot-named crash, hang, spin and diagnostic reports in the current macOS user's `DiagnosticReports` directory. System-wide and ambiguous Node reports are excluded. Empty coverage does not prove no crash or hang. |
 | `lifecycle` | The admitted target's current and rotated content-free lifecycle records. |
@@ -104,8 +104,22 @@ Other current producers are `~/Library/Logs/Pilot/pilotd.log` and its `.1` file 
 `<PILOT_HOME>/sessions/<target>/lifecycle.jsonl`, `durable/performance.jsonl` and
 `durable/tool-activity.jsonl`, each with its supported `.1` segment; and Pilot-named files under the current user's
 `~/Library/Logs/DiagnosticReports` on macOS. launchd directs both daemon stdout/stderr and inherited worker
-stdout/stderr to the daemon file. Linux services currently write to the system journal, which this no-subprocess
-reader deliberately does not query, so only pilotd's bounded redacted process ring is available there. These path
+stdout/stderr to the daemon file. Linux services write to the system journal. A host-owned adapter lazily reads
+only the current user's `pilotd.service`, never another unit, system-wide logs, sudo or a shell. It verifies the
+installed owned service text against the shipped renderer, private runtime/data home and the daemon's own
+user-service cgroup before invoking the fixed `/usr/bin/journalctl` with fixed UID/unit filters. The binary must
+be root-owned and non-writable to other users; the child receives only a minimal host-derived environment.
+There are no model-selected paths, commands, flags or journal cursors. No setup/restart/service mutation occurs.
+
+The read is capped at seven days, 256 records, 192 KiB raw output, 128 KiB sanitized snapshot, 8 KiB per
+message and 1.5 seconds. Pipe overflow/deadline/cancellation kills the child; close/error paths dispose timers
+and listeners. Only trusted UID/service-matching journal records are accepted; credential and conversation-bearing
+records are redacted/withheld before caching and again before disclosure. One 60-second in-memory snapshot
+preserves opaque paging/excerpt refs without retaining raw journal cursors. Expired/replaced snapshots invalidate
+refs honestly. Historical entries can cover retained earlier processes, never prove current liveness, and cannot
+recover deleted or never-retained history. Clear does not delete OS-managed journals. Missing journalctl/systemd,
+non-managed/modified services and denied access report unavailable coverage with ring fallback, not guessed data.
+These path
 templates document producers; responses expose only source IDs and signed opaque cursors/refs, never the paths or
 report names.
 
