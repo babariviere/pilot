@@ -188,6 +188,7 @@ final class AppModel: ObservableObject {
     @Published var diagnosticRepairTarget: DiagnosticRepairTarget?
     /// One bounded, host-qualified proposal request state per diagnostics specialist.
     @Published var diagnosticRepairRequests: [String: DiagnosticRepairRequestState] = [:]
+    var diagnosticRepairCompletions: [String: Task<HostResourceRef, Error>] = [:]
     /// One proposal ID per host-qualified specialist. Proposal text and evidence never enter app preferences.
     private var diagnosticRepairDismissals: [String: String] = [:]
     @Published var projectActionError: String?
@@ -616,12 +617,15 @@ final class AppModel: ObservableObject {
         notifier.onOpenSession = { [weak self] id in self?.open(session: id) }
         notifier.requestAuthorization()
         hosts.onOperationDeliveryChanged = { [weak self] operation, delivery in
-            guard let self, self.adoptedOperationIds.contains(operation.operationId),
+            guard let self else { return }
+            if operation.kind == "repair-create" { self.recoverDiagnosticRepairArchives(on: operation.destination); return }
+            guard self.adoptedOperationIds.contains(operation.operationId),
                   case let .receipt(receipt) = delivery, receipt.state != .pending else { return }
             Task { try? await self.acknowledgeAdopted(operation, receipt: receipt) }
         }
         hosts.onRemoteSessionsChanged = { [weak self] host, sessions, snapshot in
             guard let self else { return }
+            self.recoverDiagnosticRepairArchives(on: host)
             let store = self.attention(on: host)
             for notice in store.observe(sessions.filter { !$0.isControl }, snapshot: snapshot) {
                 guard sessions.first(where: { $0.id == notice.sessionId })?.isArchived != true else { continue }
@@ -647,6 +651,7 @@ final class AppModel: ObservableObject {
         restoreSidebarScope()
         client.onSessionsChanged = { [weak self] sessions, snapshot in
             guard let self else { return }
+            if let host = self.localHost { self.recoverDiagnosticRepairArchives(on: host) }
             let ready = Set(sessions.flatMap { session in
                 session.linkedPullRequests.filter { $0.state == .open && $0.readiness?.state == .ready }
                     .map { "\(session.id):\($0.number)" }

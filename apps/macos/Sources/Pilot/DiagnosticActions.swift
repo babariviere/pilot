@@ -437,14 +437,15 @@ enum DiagnosticRepair {
 
     static func admission(specialist: SessionSummary, specialistHost: HostRef,
                           proposal: DiagnosticRepairProposal, binding: DiagnosticRepairProjectBinding? = nil,
-                          repairTitle: String? = nil) throws -> DiagnosticRepairAdmission {
+                          repairTitle: String? = nil, archiveSpecialistOnStart: Bool? = nil) throws -> DiagnosticRepairAdmission {
         guard specialist.isDiagnosticsSpecialist, specialist.diagnosticRepairProposal?.id == proposal.id,
               let subject = subject(specialist: specialist, host: specialistHost), subject.host == specialistHost,
               proposal.targetSessionId == subject.sessionId else {
             throw ClientError("The repair proposal is stale or no longer matches this diagnostics chat.")
         }
         return DiagnosticRepairAdmission(specialistSessionId: specialist.id, proposalId: proposal.id,
-                                         subject: subject, binding: binding, repairTitle: repairTitle ?? title(proposal))
+                                         subject: subject, binding: binding, repairTitle: repairTitle ?? title(proposal),
+                                         archiveSpecialistOnStart: archiveSpecialistOnStart)
     }
 
     static func spawnRequest(handoff: DiagnosticsHandoff, destinationProjectId: String,
@@ -767,7 +768,7 @@ extension AppModel {
         }
         let (operation, delivery) = try await hosts.deliver(host: target.reference.host, kind: "repair-create",
                                                             targetId: nil, payload: request, origin: origin)
-        return try await finishDiagnosticRepairStart(operation, delivery: delivery, target: target)
+        return try await finishDiagnosticRepairStart(operation, delivery: delivery, reference: target.reference)
     }
 
     /// An explicit user retry checks the immutable original operation before re-sending it.
@@ -780,11 +781,28 @@ extension AppModel {
         }
         try await hosts.retryOperation(pending.operation)
         let delivery = hosts.operationDeliveries[pending.operation.operationId] ?? .unknown
-        return try await finishDiagnosticRepairStart(pending.operation, delivery: delivery, target: target)
+        return try await finishDiagnosticRepairStart(pending.operation, delivery: delivery, reference: target.reference)
     }
 
-    private func finishDiagnosticRepairStart(_ operation: DurableOperation, delivery: OperationDelivery,
-                                             target: DiagnosticRepairTarget) async throws -> HostResourceRef {
+    func finishDiagnosticRepairStart(_ operation: DurableOperation, delivery: OperationDelivery,
+                                             reference: HostResourceRef) async throws -> HostResourceRef {
+        if let running = diagnosticRepairCompletions[operation.operationId] { return try await running.value }
+        let task = Task { try await self.completeDiagnosticRepairStart(operation, delivery: delivery, reference: reference) }
+        diagnosticRepairCompletions[operation.operationId] = task
+        defer { diagnosticRepairCompletions[operation.operationId] = nil }
+        return try await task.value
+    }
+
+    private func completeDiagnosticRepairStart(_ operation: DurableOperation, delivery: OperationDelivery,
+                                               reference: HostResourceRef) async throws -> HostResourceRef {
+        guard operation.kind == "repair-create", operation.destination == reference.host, reference.kind == .session,
+              let data = operation.payload.data(using: .utf8),
+              let request = try? JSONDecoder().decode(SpawnRequest.self, from: data),
+              let admission = request.diagnosticRepair,
+              admission.specialistSessionId == reference.localId,
+              admission.evidenceSubject?.host == reference.host else {
+            throw HostRoutingError.invalidReference
+        }
         guard case let .receipt(receipt) = delivery, receipt.state != .pending else {
             throw ClientError("Repair start is not confirmed. Reconnect to this host, then choose Check repair start. The original request was kept and a new one will not be created.")
         }
@@ -793,23 +811,47 @@ extension AppModel {
             try await acknowledgeAdopted(operation, receipt: receipt)
             throw ClientError("The repair chat was not started: \(receipt.reason ?? "request not accepted"). Review the current proposal before trying again.")
         }
-        guard receipt.result?["sessionId"]?.string == nil || receipt.result?["sessionId"]?.string == operation.targetId else {
+        guard receipt.result?["sessionId"]?.string == operation.targetId else {
             throw HostRoutingError.identityChanged
         }
         try await hosts.createdSession(operation)
-        guard let data = operation.payload.data(using: .utf8),
-              let request = try? JSONDecoder().decode(SpawnRequest.self, from: data),
-              let admission = request.diagnosticRepair,
-              admission.specialistSessionId == target.reference.localId,
-              admission.evidenceSubject?.host == target.reference.host else {
-            throw HostRoutingError.invalidReference
-        }
         let created = HostResourceRef(host: operation.destination, kind: .session, localId: operation.targetId)
         // Persist handled state and navigation before retiring the only idempotent operation record.
-        dismissDiagnosticRepairProposal(admission.proposalId, for: target.reference)
+        dismissDiagnosticRepairProposal(admission.proposalId, for: reference)
         try selectSession(created)
+        if admission.archiveSpecialistOnStart == true {
+            do {
+                // Resolve the exact qualified specialist, including manually archived rows. Never Stop.
+                _ = try await hosts.perform(reference, kind: .session) { client, id in
+                    let origin = try await client.createdSession(id)
+                    guard origin.id == id, origin.isDiagnosticsSpecialist else { throw HostRoutingError.identityChanged }
+                    if !origin.isArchived { _ = try await client.archive(id) }
+                }
+            } catch {
+                // Keep the immutable create intent until archival succeeds. Receipt lookup on reconnect
+                // recovers this even if the proposal or project binding has since been replaced.
+                throw ClientError("The repair started and is selected, but its diagnostics chat could not be archived. Reconnect or choose Check repair start to retry archival without creating another repair.")
+            }
+        }
         try await acknowledgeAdopted(operation, receipt: receipt)
         return created
+    }
+
+    /// Reconnect/list events retry only disclosed, authoritatively accepted follow-through. No create POST.
+    func recoverDiagnosticRepairArchives(on host: HostRef) {
+        for operation in hosts.pendingOperations.values where operation.destination == host {
+            guard operation.kind == "repair-create", diagnosticRepairCompletions[operation.operationId] == nil,
+                  case let .receipt(receipt)? = hosts.operationDeliveries[operation.operationId], receipt.state == .accepted,
+                  let data = operation.payload.data(using: .utf8),
+                  let admission = (try? JSONDecoder().decode(SpawnRequest.self, from: data))?.diagnosticRepair,
+                  admission.archiveSpecialistOnStart == true, admission.evidenceSubject?.host == host else { continue }
+            let reference = HostResourceRef(host: host, kind: .session, localId: admission.specialistSessionId)
+            guard currentDiagnosticSpecialist(reference)?.isWorking != true else { continue }
+            Task {
+                do { _ = try await self.finishDiagnosticRepairStart(operation, delivery: .receipt(receipt), reference: reference) }
+                catch { self.sessionActionError = error.localizedDescription }
+            }
+        }
     }
 
     func diagnosticRepairRequest(for reference: HostResourceRef) -> DiagnosticRepairRequestState? {
@@ -1325,7 +1367,7 @@ struct DiagnosticRepairSheet: View {
                      ? "Cancel leaves the original request unchanged for a later check."
                      : proposal == nil
                      ? "Cancel sends nothing and creates no chat."
-                     : "Only Start separate repair creates an ordinary Build chat. Reviewing or cancelling does not retry, restart, replay, wake, or otherwise change the diagnosed chat.")
+                     : "Start separate repair opens a separate Build chat and archives this diagnostics chat once the repair start is confirmed. Its history is preserved. Reviewing or cancelling changes neither chat; the diagnosed subject is never changed.")
                     .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
             }
         }
@@ -1500,7 +1542,8 @@ struct DiagnosticRepairSheet: View {
                     throw ClientError("The specialist replaced this proposal while it was being reviewed. Review the current proposal before starting.")
                 }
                 let admission = try DiagnosticRepair.admission(specialist: specialist, specialistHost: target.reference.host,
-                    proposal: proposal, binding: binding, repairTitle: handoff.repairTitle ?? repairTitle)
+                    proposal: proposal, binding: binding, repairTitle: handoff.repairTitle ?? repairTitle,
+                    archiveSpecialistOnStart: true)
                 let spawn = try DiagnosticRepair.spawnRequest(handoff: handoff,
                                                                destinationProjectId: destinationProjectId,
                                                                admission: admission, model: modelId,
