@@ -561,6 +561,13 @@ The timed Stop-routing tests also run in a separate process. This keeps unrelate
 MainActor run loops from consuming their two-minute deadlines. Every selected Stop function must start;
 their assertions and time limits are unchanged.
 
+SwiftPM drivers can combine test targets in one runner or launch separate target binaries (as observed
+on CI and locally respectively). The wrapper therefore excludes `PilotUITests` from the broad scheduler/core pass and runs its
+remaining tests explicitly in a later UI-only process. The long native visual-text reflow/shrink matrix
+runs alone, retaining its one-minute deadline. Required-start guards cover both the matrix and the UI batch;
+the UI batch excludes all earlier isolated fixtures so each function runs once. Unknown-target Stop rejection
+joins the other Stop fixtures, not the native layout batch.
+
 The repair-footer fixtures and mounted settings save bar each run in a separate process. Visual event
 ordering/coalescing, mission reconnect navigation and repository branch-cache scheduling fixtures run
 together away from those native layout/run loops. Their deadlines, cache TTLs and assertions are unchanged;

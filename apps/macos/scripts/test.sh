@@ -32,7 +32,7 @@ done
 isolated=artifactHeightRespectsNestedClippingWhileKeepingVisibleOverflow
 devbox=addDevboxPresentsSetupSheetAfterCancelAndReopen
 terminal=terminalOpeningAndResizingDoNotFeedNativeFittingSizeBackIntoWindowConstraints
-callbacks='localStopNormalizesQualifiedRowsAndRestoresWithdrawnMessages|remoteStopKeepsCollidingLocalChatAndDraftUntouched|unavailableStopNeverFallsBackToCurrentLocalHost|missionTaskDragLoadsItsPlainTextOnTheMainActor'
+callbacks='localStopNormalizesQualifiedRowsAndRestoresWithdrawnMessages|remoteStopKeepsCollidingLocalChatAndDraftUntouched|unavailableStopNeverFallsBackToCurrentLocalHost|unknownStopIsRejectedBeforeDispatchWithoutLocalFallback|missionTaskDragLoadsItsPlainTextOnTheMainActor'
 # Each journey activates NSApp's process-global key window and pumps nested main run loops. Keep them in separate
 # processes so Swift Testing cannot interleave the journeys at those yields and let one take focus from the other.
 # They run only on CI, so only CI requires them to start.
@@ -118,6 +118,11 @@ native_pointer_tests=(
 )
 printf -v native_pointers '%s|' "${native_pointer_tests[@]}"
 native_pointers="${native_pointers%|}"
+# SwiftPM drivers can combine test targets in one binary or launch separate
+# binaries. Preserve the UI/scheduler boundary regardless of the build driver.
+visual_layout=longNativeVisualTextReflowsAndShrinksWithoutAnInlineScrollView
+ui_probe=inlineArtifactLayoutKeepsTheReadingColumnWhenResized
+broad_exclusions="$isolated|$devbox|$terminal|$callbacks|$journeys|$github|$scoped_models|$scoped_model_native|$automatic_updates|$host_mcps|$repair_footer|$settings_bar|$scheduler_regressions|$native_pointers|$visual_layout"
 partition=1
 reuse=(--skip-build)
 for argument in "$@"; do
@@ -141,7 +146,7 @@ run_tests() {
 		| python3 "$here/scripts/check-test-output.py" ${guards[@]+"${guards[@]}"}
 }
 if [ "$partition" = 1 ]; then
-	run_tests "" "$@" --skip "$isolated|$devbox|$terminal|$callbacks|$journeys|$github|$scoped_models|$scoped_model_native|$automatic_updates|$host_mcps|$repair_footer|$settings_bar|$scheduler_regressions|$native_pointers"
+	run_tests "" "$@" --skip "$broad_exclusions|PilotUITests"
 	run_tests "$isolated" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$isolated"
 	run_tests "$devbox" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$devbox"
 	run_tests "$terminal" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$terminal"
@@ -166,6 +171,9 @@ if [ "$partition" = 1 ]; then
 	for name in "${native_pointer_tests[@]}"; do
 		run_tests "$name" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$name"
 	done
+	# Native visual reflow also pumps nested layout/run loops. Keep its existing deadline.
+	run_tests "$visual_layout" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$visual_layout"
+	run_tests "$ui_probe" ${reuse[@]+"${reuse[@]}"} "$@" --filter PilotUITests --skip "$broad_exclusions"
 else
 	# Explicit selection/listing is the caller's scope. Do not append another filter.
 	run_tests "" "$@"
