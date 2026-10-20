@@ -736,7 +736,7 @@ export const runPostgres: QueryRunner = async (target, statements, maxRows) => {
 		try {
 			await client.connect();
 		} catch (error) {
-			throw databaseConnectionError(error);
+			throw new DatabaseConnectionError(error);
 		}
 		await client.query(target.mode === "read" ? "BEGIN READ ONLY" : "BEGIN");
 		const results: StatementResult[] = [];
@@ -773,21 +773,50 @@ export const runPostgres: QueryRunner = async (target, statements, maxRows) => {
 };
 
 /** Connection errors can contain endpoints, users, certificate paths or credentials. Never echo them. */
-function databaseConnectionError(error: unknown): Error {
-	const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
-	const sqlstate = code && /^[0-9A-Z]{5}$/.test(code) ? ` (SQLSTATE ${code})` : "";
-	let guidance = "Check the endpoint, TLS configuration and server authentication rules.";
-	if (code?.includes("CERT") || code?.includes("SELF_SIGNED") || code === "UNABLE_TO_VERIFY_LEAF_SIGNATURE")
-		guidance = "TLS certificate verification failed. Check the trusted CA, certificate validity and server name.";
-	else if (code?.startsWith("28"))
-		guidance = "PostgreSQL rejected authentication. Check required TLS, credentials and server authentication rules.";
-	return new Error(
-		`Database connection failed${sqlstate}. ${guidance} Pilot access approval does not verify connectivity.`,
-	);
+class DatabaseConnectionError extends Error {
+	readonly code: string | undefined;
+
+	constructor(error: unknown) {
+		const rawCode = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
+		const code = typeof rawCode === "string" ? rawCode : undefined;
+		const message = error instanceof Error ? error.message : "";
+		const sqlstate = code && /^[0-9A-Z]{5}$/.test(code) ? code : undefined;
+		let guidance = "Check the endpoint, TLS configuration and server authentication rules.";
+		if (code?.includes("CERT") || code?.includes("SELF_SIGNED") || code === "UNABLE_TO_VERIFY_LEAF_SIGNATURE")
+			guidance = "TLS certificate verification failed. Check the trusted CA, certificate validity and server name.";
+		else if (
+			code?.startsWith("ERR_TLS_") ||
+			code?.startsWith("ERR_SSL_") ||
+			(code === "EPROTO" && /\b(?:SSL routines|TLS handshake)\b/.test(message)) ||
+			message === "The server does not support SSL connections"
+		)
+			guidance = "TLS negotiation failed. Check server TLS support and protocol configuration.";
+		else if (sqlstate === "28P01")
+			guidance = "PostgreSQL rejected the credentials (invalid password). Check the configured credentials.";
+		else if (sqlstate?.startsWith("28")) {
+			// Recognize only explicit server evidence, never infer a TLS requirement from SQLSTATE alone.
+			if (/^(?:SSL|TLS) connection is required(?:[.!]|$)/i.test(message))
+				guidance = "The server explicitly requires TLS. Check the connection's TLS configuration.";
+			else if (/^(?:no pg_hba\.conf entry for |pg_hba\.conf rejects connection for )/.test(message))
+				guidance =
+					"PostgreSQL server authentication rules rejected the connection. Check the server's connection rules." +
+					(/, (?:no encryption|SSL off)$/.test(message)
+						? " The server reported an unencrypted connection; this alone does not establish a TLS requirement."
+						: "");
+			else
+				guidance =
+					"PostgreSQL rejected authentication; the cause is undetermined. Check TLS requirements, credentials and server authentication rules.";
+		}
+		super(
+			`Database connection failed${sqlstate ? ` (SQLSTATE ${sqlstate})` : ""}. ${guidance} Pilot access approval does not verify connectivity.`,
+		);
+		this.code = sqlstate;
+	}
 }
 
 /** Keeps Postgres's message and hints. Connection errors never include the configured URL. */
 function databaseError(error: unknown): Error {
+	if (error instanceof DatabaseConnectionError) return error;
 	if (!(error instanceof Error)) return new Error(String(error));
 	const pgError = error as Error & { code?: string; detail?: string; hint?: string; position?: string };
 	const parts = [pgError.message];

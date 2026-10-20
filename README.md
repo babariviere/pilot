@@ -969,6 +969,9 @@ and server name. Conflicting URL/object TLS enablement fails before connecting, 
 The object does not accept `rejectUnauthorized: false`. Certificate contents stay on the daemon host and are
 preserved, but never returned, by the settings editor. A connection failure leaves access grants unchanged;
 check both TLS configuration and the server's authentication rules rather than weakening certificate validation.
+Connection errors retain SQLSTATE and distinguish certificate/negotiation failures, invalid passwords and explicit
+server authentication-rule rejection without exposing server details. An otherwise ambiguous `28000` rejection
+does not establish a TLS or credential fault; only an explicit server requirement is reported as requiring TLS.
 
 The agent calls `db({ action: "access" })` to list environments and request access, and
 `db({ action: "query", env, sql, params })` to run one statement. Read mode runs inside `BEGIN READ ONLY` with the
