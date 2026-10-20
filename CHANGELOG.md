@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.59.1](https://github.com/babariviere/pilot/compare/v1.59.0...v1.59.1) (2026-10-20)
+
+
+### Bug Fixes
+
+* **database:** preserve verified Postgres TLS options ([7004f36](https://github.com/babariviere/pilot/commit/7004f3655269b1553abf60a4a500cca357048ee7))
+
 ## [1.59.0](https://github.com/babariviere/pilot/compare/v1.58.0...v1.59.0) (2026-10-20)
 
 
