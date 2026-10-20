@@ -7,6 +7,7 @@ import SwiftUI
 enum NativeTelemetrySettings {
     static func apply(_ settings: TelemetrySettings) {
         NativeDiagnostics.shared.setEnabled(settings.localDiagnostics)
+        NativeAppLog.shared.setEnabled(settings.hostKind == .local && settings.localDiagnostics)
         LocalFeatureUsage.shared.configure(enabled: settings.hostKind == .local && settings.localFeatureUsage == true,
                                            epoch: settings.featureUsageEpoch)
         guard settings.hostKind == .local, settings.remoteOperational,
@@ -181,11 +182,14 @@ struct TelemetrySettingsSection: View {
         clearing = true
         defer { clearing = false }
         let nativeWasEnabled = NativeDiagnostics.shared.isEnabled
+        let appLogWasEnabled = NativeAppLog.shared.isEnabled
+        if localApp { NativeAppLog.shared.setEnabled(false) }
+        defer { if localApp { NativeAppLog.shared.setEnabled(appLogWasEnabled) } }
         if localApp { NativeDiagnostics.shared.setEnabled(false) }
         defer { if localApp { NativeDiagnostics.shared.setEnabled(nativeWasEnabled) } }
         do {
             try await client.clearDiagnostics()
-            if localApp { try await NativeDiagnostics.shared.clear() }
+            if localApp { try await NativeDiagnostics.shared.clear(); try await NativeAppLog.shared.clear() }
             await load()
             problem = nil
         }

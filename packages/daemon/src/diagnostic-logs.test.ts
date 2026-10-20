@@ -81,20 +81,8 @@ test("inventory exposes only the closed path-free Pilot catalogue and explicit g
 		result.sources?.map((source) => source.id),
 		["app", "daemon", "kernel_worker", "native_report", "lifecycle", "request_timing", "tool_activity"],
 	);
-	assert.deepEqual(
-		result.sources?.find((source) => source.id === "app"),
-		{
-			id: "app",
-			scope: "host",
-			availability: "unavailable",
-			coverage: "Pilot does not currently retain a searchable native app text log.",
-			retention: "none",
-			availableFiles: 0,
-			rotatedFiles: 0,
-			catalogTruncated: false,
-			reason: "not_recorded",
-		},
-	);
+	assert.equal(result.sources?.find((source) => source.id === "app")?.availability, "unavailable");
+	assert.equal(result.sources?.find((source) => source.id === "app")?.reason, "not_recorded");
 	assert.equal(result.sources?.find((source) => source.id === "daemon")?.availableFiles, 2);
 	assert.equal(result.sources?.find((source) => source.id === "daemon")?.rotatedFiles, 1);
 	assert.equal(result.sources?.find((source) => source.id === "native_report")?.availableFiles, 1);

@@ -15,6 +15,7 @@ import type {
 import type { OperationHost } from "@pilot/protocol";
 import { redactDiagnosticText } from "./diagnostic-redaction.ts";
 import { operations } from "./event-loop-watchdog.ts";
+import { nativeAppLogLine } from "./native-app-log.ts";
 
 export const DIAGNOSTIC_LOG_SCAN_BYTES = 128 * 1024;
 export const DIAGNOSTIC_LOG_OUTPUT_BYTES = 64 * 1024;
@@ -45,6 +46,7 @@ interface FileCandidate {
 	virtual?: Buffer;
 	rotated: boolean;
 	fallbackAt?: string;
+	privateApp?: boolean;
 }
 
 interface InspectedCandidate extends FileCandidate {
@@ -56,6 +58,7 @@ interface InspectedCandidate extends FileCandidate {
 
 interface SourceDescriptor extends DiagnosticLogSourceInventory {
 	files: InspectedCandidate[];
+	line?: (raw: string) => string | undefined;
 }
 
 interface CursorPayload {
@@ -77,6 +80,8 @@ interface RefPayload {
 export interface DiagnosticLogReaderOptions {
 	home: string;
 	daemonLog?: string;
+	/** Host-owned fixed native producer path, never a diagnostic tool argument. */
+	appLog?: string;
 	/** Current-process daemon console ring. It does not contain inherited kernel stdout/stderr. */
 	daemonTail?: () => { text: string; available: boolean; truncated: boolean };
 	diagnosticReports?: string;
@@ -180,7 +185,7 @@ function timedRedaction(text: string): string {
 }
 
 function inventory(descriptor: SourceDescriptor): DiagnosticLogSourceInventory {
-	const { files: _files, ...result } = descriptor;
+	const { files: _files, line: _line, ...result } = descriptor;
 	return result;
 }
 
@@ -237,16 +242,17 @@ export class DiagnosticLogReader {
 				action: parsed.action,
 			};
 			if (parsed.action === "inventory") {
-				const sources = await this.sources(target, localDiagnostics);
+				const sources = await this.sources(host, target, localDiagnostics);
 				return { ...base, sources: [...sources.values()].map(inventory) };
 			}
 			if (parsed.action === "search") {
-				const sources = await this.sources(target, localDiagnostics, new Set([parsed.source]));
+				const sources = await this.sources(host, target, localDiagnostics, new Set([parsed.source]));
 				const descriptor = sources.get(parsed.source)!;
 				return { ...base, page: await this.search(descriptor, parsed) };
 			}
 			const ref = parseOpaque<RefPayload>(REF_PREFIX, parsed.ref, this.opaqueSecret);
 			const sources = await this.sources(
+				host,
 				target,
 				localDiagnostics,
 				new Set(ref && SOURCE_IDS.has(ref.s) ? [ref.s] : []),
@@ -300,24 +306,37 @@ export class DiagnosticLogReader {
 	}
 
 	private async sources(
+		host: OperationHost,
 		target: { sessionId: string; directory: string } | undefined,
 		localDiagnostics: boolean,
 		selected: ReadonlySet<DiagnosticLogSourceId> = SOURCE_IDS,
 	): Promise<Map<DiagnosticLogSourceId, SourceDescriptor>> {
 		const result = new Map<DiagnosticLogSourceId, SourceDescriptor>();
-		if (selected.has("app"))
+		if (selected.has("app")) {
+			const path = this.options.appLog;
+			const supported = (this.options.platform ?? process.platform) === "darwin" && !!path;
+			const files =
+				supported && localDiagnostics
+					? await this.fixedFiles([
+							{ token: "app-current", path, rotated: false, privateApp: true },
+							{ token: "app-rotated", path: `${path}.1`, rotated: true, privateApp: true },
+						])
+					: { files: [], reason: "not_recorded" as const };
 			result.set("app", {
 				id: "app",
 				scope: "host",
-				availability: "unavailable",
-				coverage: "Pilot does not currently retain a searchable native app text log.",
-				retention: "none",
-				availableFiles: 0,
-				rotatedFiles: 0,
+				availability: !localDiagnostics ? "disabled" : files.files.length ? "available" : "unavailable",
+				coverage:
+					"Private native app lifecycle, transport and repair event/error codes on this Mac only; retained history does not establish app liveness. No payloads or comprehensive crash capture. Expired, invalid and other-identity records are excluded.",
+				retention: "bounded_local",
+				availableFiles: files.files.length,
+				rotatedFiles: files.files.filter((file) => file.rotated).length,
 				catalogTruncated: false,
-				reason: "not_recorded",
-				files: [],
+				reason: !localDiagnostics ? "disabled" : files.reason,
+				files: files.files,
+				line: (raw) => nativeAppLogLine(raw, host, (this.options.now?.() ?? new Date()).getTime()),
 			});
+		}
 
 		const needsDaemon = selected.has("daemon") || selected.has("kernel_worker");
 		const daemonFiles = needsDaemon
@@ -490,6 +509,11 @@ export class DiagnosticLogReader {
 		const parent = dirname(candidates[0]!.path!);
 		const rootProblem = await this.rootProblem(parent);
 		if (rootProblem) return { files: [], reason: rootProblem };
+		if (candidates[0]?.privateApp) {
+			const stat = await lstat(parent);
+			if (stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0 || (await realpath(parent)) !== parent)
+				return { files: [], reason: "unsafe_source" };
+		}
 		const files: InspectedCandidate[] = [];
 		let reason: DiagnosticLogSourceInventory["reason"] = "missing";
 		for (const candidate of candidates) {
@@ -607,6 +631,11 @@ export class DiagnosticLogReader {
 			handle = await open(candidate.path!, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
 			const stat = await handle.stat({ bigint: true });
 			if (!stat.isFile() || stat.size > BigInt(Number.MAX_SAFE_INTEGER)) return { reason: "unsafe_source" };
+			if (
+				candidate.privateApp &&
+				(stat.uid !== BigInt(process.getuid?.() ?? -1) || (stat.mode & 0o077n) !== 0n || stat.size > 256n * 1024n)
+			)
+				return { reason: "unsafe_source" };
 			return {
 				file: {
 					...candidate,
@@ -786,8 +815,9 @@ export class DiagnosticLogReader {
 					oversizedRecords++;
 					continue;
 				}
-				const safe =
-					windowRedaction ?? sanitizeDiagnosticLogLine(buffer.subarray(range.start, range.end).toString("utf8"));
+				const raw = buffer.subarray(range.start, range.end).toString("utf8");
+				const safe = descriptor.line ? descriptor.line(raw) : (windowRedaction ?? sanitizeDiagnosticLogLine(raw));
+				if (safe === undefined) continue;
 				const at = logTimestamp(safe, file.fallbackAt);
 				if (since !== undefined && (at === undefined || Date.parse(at) < since)) continue;
 				if (query && !safe.toLowerCase().includes(query)) continue;
@@ -918,10 +948,20 @@ export class DiagnosticLogReader {
 		const targetRead = await this.bytes(file, ref.o, ref.l);
 		if (targetRead.changed) return this.changedExcerpt(ref.s, ref.l);
 		let scannedBytes = ref.l;
-		const targetSafe = clipped(
-			sanitizeDiagnosticLogLine(targetRead.buffer.toString("utf8")),
-			DIAGNOSTIC_LOG_RECORD_BYTES,
-		);
+		const raw = targetRead.buffer.toString("utf8");
+		const safe = descriptor.line ? descriptor.line(raw) : sanitizeDiagnosticLogLine(raw);
+		if (safe === undefined)
+			return {
+				source: ref.s,
+				status: "stale_ref",
+				before: [],
+				after: [],
+				scannedBytes,
+				maxScanBytes: this.maxScanBytes,
+				truncated: true,
+				reason: "Record expired or no longer matches this host and closed schema",
+			};
+		const targetSafe = clipped(safe, DIAGNOSTIC_LOG_RECORD_BYTES);
 		const record: DiagnosticLogRecord = {
 			ref: request.ref,
 			...(logTimestamp(targetSafe.text, file.fallbackAt)
@@ -959,10 +999,10 @@ export class DiagnosticLogReader {
 				reason: "Context was withheld because the bounded window contained credential material",
 			};
 		}
-		const before = this.contextRecords(ref.s, file, beforeRead.buffer, beforeStart, true)
+		const before = this.contextRecords(ref.s, file, beforeRead.buffer, beforeStart, true, descriptor.line)
 			.slice(-beforeCount)
 			.map((item) => item.record);
-		const after = this.contextRecords(ref.s, file, afterRead.buffer, afterStart, false)
+		const after = this.contextRecords(ref.s, file, afterRead.buffer, afterStart, false, descriptor.line)
 			.slice(0, afterCount)
 			.map((item) => item.record);
 		return {
@@ -988,6 +1028,7 @@ export class DiagnosticLogReader {
 		buffer: Buffer,
 		absoluteStart: number,
 		dropFirstPartial: boolean,
+		line?: (raw: string) => string | undefined,
 	): Array<{ record: DiagnosticLogRecord }> {
 		let left = 0;
 		let right = buffer.length;
@@ -1002,10 +1043,10 @@ export class DiagnosticLogReader {
 		return this.lineRanges(buffer, left, right).flatMap((range) => {
 			const length = range.end - range.start;
 			if (length <= 0 || length > MAX_RAW_RECORD_BYTES) return [];
-			const safe = clipped(
-				sanitizeDiagnosticLogLine(buffer.subarray(range.start, range.end).toString("utf8")),
-				CONTEXT_RECORD_BYTES,
-			);
+			const raw = buffer.subarray(range.start, range.end).toString("utf8");
+			const sanitized = line ? line(raw) : sanitizeDiagnosticLogLine(raw);
+			if (sanitized === undefined) return [];
+			const safe = clipped(sanitized, CONTEXT_RECORD_BYTES);
 			const offset = absoluteStart + range.start;
 			const at = logTimestamp(safe.text, file.fallbackAt);
 			return [
