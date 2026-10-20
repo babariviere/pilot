@@ -69,6 +69,13 @@ Historical approval or permission wording never appears as authority. A grant ab
 ("you may push") is dropped; other approval wording is replaced with "[approval omitted]" so the task it scopes
 survives; mixed sentences are split so their restrictions are kept. The same rules apply to assistant text.
 
+Rendering reserves a bounded slot for the latest long assistant report before admitting file lists, tool facts
+or recent activity. The slot uses at most 20% of the available body (up to 900 quoted characters), with a minimum
+source-linked omission when a useful excerpt cannot fit. User restrictions are admitted before other sections;
+when a section cannot fit in full, whole newest items take precedence, without leaving an empty heading.
+Reports stay explicitly untrusted, never become check evidence or permissions, and newer original messages
+supersede the digest. Budgets retain the compiler's existing 400-token minimum.
+
 ### Estimated and provider tokens
 
 The trigger uses the Harness measure: the last provider-reported usage plus pi-ai estimates of newer
