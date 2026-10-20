@@ -369,124 +369,7 @@ struct ChatView: View {
     var body: some View {
         let _ = Self.bodyEvaluations &+= 1
         let transcript = feed.status
-        ScrollViewReader { proxy in
-            ScrollView {
-                // Measured rows keep native bottom-follow and pagination away from lazy-stack estimates.
-                VStack(alignment: .leading, spacing: 16) {
-                    if session.isControl {
-                        // The Control screen reads the local pilotd's control chat.
-                        ControlChatHeader(title: session.title,
-                                          openScreen: context == nil || context?.host == model.localHost
-                                              ? { model.openControlScreen() } : nil)
-                            .frame(maxWidth: Theme.column, alignment: .leading)
-                            .frame(maxWidth: .infinity)
-                    }
-                    if session.isDiagnosticsSpecialist {
-                        DiagnosticSpecialistHeader(session: session, context: context)
-                            .frame(maxWidth: Theme.column, alignment: .leading)
-                            .frame(maxWidth: .infinity)
-                    }
-                    if let origin = session.continuationOf {
-                        ContinuedFromRow(originId: origin)
-                            .frame(maxWidth: Theme.column, alignment: .leading)
-                            .frame(maxWidth: .infinity)
-                    }
-                    if let context, !context.available {
-                        DisconnectedNotice(context: context, historyCached: transcript.hasRows)
-                            .frame(maxWidth: Theme.column).frame(maxWidth: .infinity)
-                    }
-                    if feed.loading, session.state != "failed", context?.available != false {
-                        ProgressView(session.state == "starting" ? "Starting task…" : "Loading conversation…")
-                            .frame(maxWidth: .infinity)
-                    }
-                    // The only part observing streamed rows; everything else here reads the turn's status.
-                    TranscriptRowsSection(model: feed.rows, toolExpansions: toolExpansions,
-                                          messageExpansions: messageExpansions, hasSnapshot: feed.hasSnapshot,
-                                          loadingEarlier: feed.loadingEarlier, earlierError: feed.earlierError,
-                                          loadEarlier: feed.loadEarlier)
-                    // Sent messages show at once; the committed row replaces each in the same frame.
-                    ForEach(feed.outgoing.messages) { message in
-                        UserMessage(text: message.text)
-                            .frame(maxWidth: Theme.column, alignment: .leading)
-                            .frame(maxWidth: .infinity)
-                            .transition(Theme.Motion.sent(reduceMotion: reduceMotion))
-                    }
-                    if transcript.failureBannerText(for: session) != nil || session.canRetryStartup == true {
-                        VStack(alignment: .leading, spacing: 8) {
-                            if let error = transcript.failureBannerText(for: session) { ErrorRow(text: error) }
-                            if session.canRetryStartup == true, !session.isReadOnlyHistory {
-                                HStack(spacing: 8) {
-                                    Button {
-                                        retryingStartup = true
-                                        composer.error = nil
-                                        Task {
-                                            defer { retryingStartup = false }
-                                            do { try await perform { client, id in try await client.retryStartup(id) } }
-                                            catch { composer.error = error.localizedDescription }
-                                        }
-                                    } label: {
-                                        Label("Retry Startup", icon: PilotIcon.refresh)
-                                    }
-                                    .controlSize(.small)
-                                    .accessibilityIdentifier("retry-startup")
-                                    .disabled(retryingStartup)
-                                    .help("Reload extensions and continue with the original queued messages. History and workspace files stay as they are.")
-                                    Button("Stop Chat", action: stop)
-                                        .controlSize(.small)
-                                        .accessibilityIdentifier("stop-failed-recovery")
-                                        .disabled(retryingStartup || model.pendingSessionActions.contains(session.id))
-                                        .help("Cancel this chat and its saved subagent work without restarting the worker. History and workspace files stay as they are.")
-                                }
-                            }
-                        }
-                        .frame(maxWidth: Theme.column, alignment: .leading)
-                        .frame(maxWidth: .infinity)
-                    }
-                    VStack(spacing: 0) {
-                        if !session.isReadOnlyHistory {
-                            // Pads itself only when it lists something, so an empty list adds no gap.
-                            ScheduledMessages(sessionId: session.id, topPadding: 16)
-                                .frame(maxWidth: Theme.column)
-                                .frame(maxWidth: .infinity)
-                        }
-                        Color.clear.frame(height: 1).id("bottom")
-                            .background(ChatReviewVisibility {
-                                guard !session.isWorking, session.outcome != nil,
-                                      feed.hasSnapshot, !transcript.working, !transcript.streaming,
-                                      model.hosts.selection == context?.ref(.session, session.id) || (context == nil && model.selectedSessionId == session.id) else { return }
-                                if let context { model.review(session, on: context.host, chatVisible: true) } else { model.review(session, chatVisible: true) }
-                            })
-                    }
-                }
-                .padding(.horizontal, 28)
-                .padding(.top, 24)
-                .padding(.bottom, bottomPadding)
-                .frame(maxWidth: .infinity)
-                .background(TranscriptScrollObserver(state: scroll, bottomPadding: bottomPadding))
-                .modifier(transcriptKeys(proxy, canLoadEarlier: feed.hasSnapshot))
-            }
-            .environment(\.transcriptContentPrepared, preparedAction.callback)
-            .environment(\.transcriptComposer, session.isReadOnlyHistory ? nil : composer)
-            .environment(\.transcriptMessageToggled, scroll.messageToggled)
-            .environment(\.transcriptRewind, session.isReadOnlyHistory ? nil : rewind)
-            // New rows need no scroll request: while following, the native observer pins the bottom when the
-            // document grows, within the same layout pass (TranscriptScrollObserver).
-            .onChange(of: feed.outgoing.messages.count) { previous, count in
-                // Sending is a request to see the conversation's end, even after reading back.
-                guard count > previous else { return }
-                scroll.follow.resumeFollowing()
-                proxy.scrollTo("bottom", anchor: .bottom)
-            }
-            .onAppear {
-                let state = scroll
-                preparedAction.action = {
-                    state.contentPrepared {
-                        if let pin = state.pinBottom { pin() } else { proxy.scrollTo("bottom", anchor: .bottom) }
-                    }
-                }
-                proxy.scrollTo("bottom", anchor: .bottom)
-            }
-        }
+        transcriptContent
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
                 // Attached to the composer rather than the transcript's end, so it stays still while replies
@@ -636,6 +519,242 @@ struct ChatView: View {
             feed.onEventsApplied = nil
             feed.stop(); scroll.cancelPreparedScroll(); preparedAction.action = nil
         }
+    }
+
+    @ViewBuilder private var transcriptContent: some View {
+        if NativeTranscriptFlag.enabled {
+            NativeTranscriptSection(model: feed.rows,
+                resource: NativeTranscriptResource(sessionID: session.id, host: context?.host ?? model.localHost),
+                scroll: scroll, toolExpansions: toolExpansions, messageExpansions: messageExpansions,
+                header: AnyView(nativeTranscriptHeader), footer: AnyView(nativeTranscriptFooter),
+                chromeRevision: UUID(),
+                loadEarlier: feed.loadEarlier, hasSnapshot: feed.hasSnapshot,
+                loadingEarlier: feed.loadingEarlier, earlierError: feed.earlierError)
+                .environment(\.transcriptComposer, session.isReadOnlyHistory ? nil : composer)
+                .environment(\.transcriptMessageToggled, scroll.messageToggled)
+                .environment(\.transcriptRewind, session.isReadOnlyHistory ? nil : rewind)
+                .keyboardFocusHandler(.content) { scroll.focusTranscript?() ?? false }
+                .onChange(of: feed.outgoing.messages.count) { previous, count in
+                    guard count > previous else { return }
+                    scroll.follow.resumeFollowing()
+                    scroll.pinBottom?()
+                }
+        } else {
+            swiftUITranscript
+        }
+    }
+
+    private var swiftUITranscript: some View {
+        let transcript = feed.status
+        return ScrollViewReader { proxy in
+            ScrollView {
+                // Measured rows keep native bottom-follow and pagination away from lazy-stack estimates.
+                VStack(alignment: .leading, spacing: 16) {
+                    if session.isControl {
+                        // The Control screen reads the local pilotd's control chat.
+                        ControlChatHeader(title: session.title,
+                                          openScreen: context == nil || context?.host == model.localHost
+                                              ? { model.openControlScreen() } : nil)
+                            .frame(maxWidth: Theme.column, alignment: .leading)
+                            .frame(maxWidth: .infinity)
+                    }
+                    if session.isDiagnosticsSpecialist {
+                        DiagnosticSpecialistHeader(session: session, context: context)
+                            .frame(maxWidth: Theme.column, alignment: .leading)
+                            .frame(maxWidth: .infinity)
+                    }
+                    if let origin = session.continuationOf {
+                        ContinuedFromRow(originId: origin)
+                            .frame(maxWidth: Theme.column, alignment: .leading)
+                            .frame(maxWidth: .infinity)
+                    }
+                    if let context, !context.available {
+                        DisconnectedNotice(context: context, historyCached: transcript.hasRows)
+                            .frame(maxWidth: Theme.column).frame(maxWidth: .infinity)
+                    }
+                    if feed.loading, session.state != "failed", context?.available != false {
+                        ProgressView(session.state == "starting" ? "Starting task…" : "Loading conversation…")
+                            .frame(maxWidth: .infinity)
+                    }
+                    // The only part observing streamed rows; everything else here reads the turn's status.
+                    TranscriptRowsSection(model: feed.rows, toolExpansions: toolExpansions,
+                                          messageExpansions: messageExpansions, hasSnapshot: feed.hasSnapshot,
+                                          loadingEarlier: feed.loadingEarlier, earlierError: feed.earlierError,
+                                          loadEarlier: feed.loadEarlier)
+                    // Sent messages show at once; the committed row replaces each in the same frame.
+                    ForEach(feed.outgoing.messages) { message in
+                        UserMessage(text: message.text)
+                            .frame(maxWidth: Theme.column, alignment: .leading)
+                            .frame(maxWidth: .infinity)
+                            .transition(Theme.Motion.sent(reduceMotion: reduceMotion))
+                    }
+                    if transcript.failureBannerText(for: session) != nil || session.canRetryStartup == true {
+                        VStack(alignment: .leading, spacing: 8) {
+                            if let error = transcript.failureBannerText(for: session) { ErrorRow(text: error) }
+                            if session.canRetryStartup == true, !session.isReadOnlyHistory {
+                                HStack(spacing: 8) {
+                                    Button {
+                                        retryingStartup = true
+                                        composer.error = nil
+                                        Task {
+                                            defer { retryingStartup = false }
+                                            do { try await perform { client, id in try await client.retryStartup(id) } }
+                                            catch { composer.error = error.localizedDescription }
+                                        }
+                                    } label: {
+                                        Label("Retry Startup", icon: PilotIcon.refresh)
+                                    }
+                                    .controlSize(.small)
+                                    .accessibilityIdentifier("retry-startup")
+                                    .disabled(retryingStartup)
+                                    .help("Reload extensions and continue with the original queued messages. History and workspace files stay as they are.")
+                                    Button("Stop Chat", action: stop)
+                                        .controlSize(.small)
+                                        .accessibilityIdentifier("stop-failed-recovery")
+                                        .disabled(retryingStartup || model.pendingSessionActions.contains(session.id))
+                                        .help("Cancel this chat and its saved subagent work without restarting the worker. History and workspace files stay as they are.")
+                                }
+                            }
+                        }
+                        .frame(maxWidth: Theme.column, alignment: .leading)
+                        .frame(maxWidth: .infinity)
+                    }
+                    VStack(spacing: 0) {
+                        if !session.isReadOnlyHistory {
+                            // Pads itself only when it lists something, so an empty list adds no gap.
+                            ScheduledMessages(sessionId: session.id, topPadding: 16)
+                                .frame(maxWidth: Theme.column)
+                                .frame(maxWidth: .infinity)
+                        }
+                        Color.clear.frame(height: 1).id("bottom")
+                            .background(ChatReviewVisibility {
+                                guard !session.isWorking, session.outcome != nil,
+                                      feed.hasSnapshot, !transcript.working, !transcript.streaming,
+                                      model.hosts.selection == context?.ref(.session, session.id) || (context == nil && model.selectedSessionId == session.id) else { return }
+                                if let context { model.review(session, on: context.host, chatVisible: true) } else { model.review(session, chatVisible: true) }
+                            })
+                    }
+                }
+                .padding(.horizontal, 28)
+                .padding(.top, 24)
+                .padding(.bottom, bottomPadding)
+                .frame(maxWidth: .infinity)
+                .background(TranscriptScrollObserver(state: scroll, bottomPadding: bottomPadding))
+                .modifier(transcriptKeys(proxy, canLoadEarlier: feed.hasSnapshot))
+            }
+            .environment(\.transcriptContentPrepared, preparedAction.callback)
+            .environment(\.transcriptComposer, session.isReadOnlyHistory ? nil : composer)
+            .environment(\.transcriptMessageToggled, scroll.messageToggled)
+            .environment(\.transcriptRewind, session.isReadOnlyHistory ? nil : rewind)
+            // New rows need no scroll request: while following, the native observer pins the bottom when the
+            // document grows, within the same layout pass (TranscriptScrollObserver).
+            .onChange(of: feed.outgoing.messages.count) { previous, count in
+                // Sending is a request to see the conversation's end, even after reading back.
+                guard count > previous else { return }
+                scroll.follow.resumeFollowing()
+                proxy.scrollTo("bottom", anchor: .bottom)
+            }
+            .onAppear {
+                let state = scroll
+                preparedAction.action = {
+                    state.contentPrepared {
+                        if let pin = state.pinBottom { pin() } else { proxy.scrollTo("bottom", anchor: .bottom) }
+                    }
+                }
+                proxy.scrollTo("bottom", anchor: .bottom)
+            }
+        }
+    }
+
+    private var nativeTranscriptHeader: some View {
+        let transcript = feed.status
+        return VStack(alignment: .leading, spacing: 16) {
+                    if session.isControl {
+                        // The Control screen reads the local pilotd's control chat.
+                        ControlChatHeader(title: session.title,
+                                          openScreen: context == nil || context?.host == model.localHost
+                                              ? { model.openControlScreen() } : nil)
+                            .frame(maxWidth: Theme.column, alignment: .leading)
+                            .frame(maxWidth: .infinity)
+                    }
+                    if session.isDiagnosticsSpecialist {
+                        DiagnosticSpecialistHeader(session: session, context: context)
+                            .frame(maxWidth: Theme.column, alignment: .leading)
+                            .frame(maxWidth: .infinity)
+                    }
+                    if let origin = session.continuationOf {
+                        ContinuedFromRow(originId: origin)
+                            .frame(maxWidth: Theme.column, alignment: .leading)
+                            .frame(maxWidth: .infinity)
+                    }
+                    if let context, !context.available {
+                        DisconnectedNotice(context: context, historyCached: transcript.hasRows)
+                            .frame(maxWidth: Theme.column).frame(maxWidth: .infinity)
+                    }
+                    if feed.loading, session.state != "failed", context?.available != false {
+                        ProgressView(session.state == "starting" ? "Starting task…" : "Loading conversation…")
+                            .frame(maxWidth: .infinity)
+                    }
+        }.padding(.top, 24)
+    }
+
+    private var nativeTranscriptFooter: some View {
+        let transcript = feed.status
+        return VStack(alignment: .leading, spacing: 16) {
+                    // Sent messages show at once; the committed row replaces each in the same frame.
+                    ForEach(feed.outgoing.messages) { message in
+                        UserMessage(text: message.text)
+                            .frame(maxWidth: Theme.column, alignment: .leading)
+                            .frame(maxWidth: .infinity)
+                            .transition(Theme.Motion.sent(reduceMotion: reduceMotion))
+                    }
+                    if transcript.failureBannerText(for: session) != nil || session.canRetryStartup == true {
+                        VStack(alignment: .leading, spacing: 8) {
+                            if let error = transcript.failureBannerText(for: session) { ErrorRow(text: error) }
+                            if session.canRetryStartup == true, !session.isReadOnlyHistory {
+                                HStack(spacing: 8) {
+                                    Button {
+                                        retryingStartup = true
+                                        composer.error = nil
+                                        Task {
+                                            defer { retryingStartup = false }
+                                            do { try await perform { client, id in try await client.retryStartup(id) } }
+                                            catch { composer.error = error.localizedDescription }
+                                        }
+                                    } label: {
+                                        Label("Retry Startup", icon: PilotIcon.refresh)
+                                    }
+                                    .controlSize(.small)
+                                    .accessibilityIdentifier("retry-startup")
+                                    .disabled(retryingStartup)
+                                    .help("Reload extensions and continue with the original queued messages. History and workspace files stay as they are.")
+                                    Button("Stop Chat", action: stop)
+                                        .controlSize(.small)
+                                        .accessibilityIdentifier("stop-failed-recovery")
+                                        .disabled(retryingStartup || model.pendingSessionActions.contains(session.id))
+                                        .help("Cancel this chat and its saved subagent work without restarting the worker. History and workspace files stay as they are.")
+                                }
+                            }
+                        }
+                        .frame(maxWidth: Theme.column, alignment: .leading)
+                        .frame(maxWidth: .infinity)
+                    }
+                    VStack(spacing: 0) {
+                        if !session.isReadOnlyHistory {
+                            // Pads itself only when it lists something, so an empty list adds no gap.
+                            ScheduledMessages(sessionId: session.id, topPadding: 16)
+                                .frame(maxWidth: Theme.column)
+                                .frame(maxWidth: .infinity)
+                        }
+                        Color.clear.frame(height: 1).id("bottom")
+                            .background(ChatReviewVisibility {
+                                guard !session.isWorking, session.outcome != nil,
+                                      feed.hasSnapshot, !transcript.working, !transcript.streaming,
+                                      model.hosts.selection == context?.ref(.session, session.id) || (context == nil && model.selectedSessionId == session.id) else { return }
+                                if let context { model.review(session, on: context.host, chatVisible: true) } else { model.review(session, chatVisible: true) }
+                            })
+                    }
+        }.padding(.bottom, bottomPadding)
     }
 
     private func perform<Value>(_ action: (PilotClient, String) async throws -> Value) async throws -> Value {
@@ -1086,7 +1205,7 @@ struct UserMessage: View {
 }
 
 /// Reveals prepared history before fetching pages hidden by compaction. Neither action changes agent context.
-private struct EarlierMessagesRow: View {
+struct EarlierMessagesRow: View {
     let loading: Bool
     let error: String?
     let load: () -> Void

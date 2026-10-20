@@ -1,0 +1,508 @@
+{
+  "date": "2026-10-20",
+  "machine": "Apple M3 Pro",
+  "macOS": "27.0.1 (26A434)",
+  "swift": "6.4",
+  "displayHz": 120,
+  "windowPoints": [
+    1280,
+    820
+  ],
+  "power": "AC",
+  "finalRunUnlockedGuardsPassed": true,
+  "baselineCommit": "5852e8d8b793779b91cdbe15904d77eb15aefa1a",
+  "binarySHA256": {
+    "baseline": "960fbfed46997e79a1615a6d361cb8ffb04bdc438a94c9cb6a3eaac770213093",
+    "native": "8cf758fb2d3ef47e507c0e0cc3d2e91fe706b00cad8f81caa0b591cc46a1402e"
+  },
+  "codeSHA256": {
+    "apps/macos/Sources/Pilot/ChatView.swift": "795a37f10c5cdd173c7499a8151ced289e271566b5a6d787772c5858fb3b97dd",
+    "apps/macos/Sources/Pilot/MarkdownView.swift": "a5cd5227c63d7f747e25240a4d08604515e9152195d97ef4a166e803332b3643",
+    "apps/macos/Sources/Pilot/NativeMarkdownMessage.swift": "40cdca5274ef10db504149dcdc2e4f3c626a90a169ed98d4002b531e1be1f0be",
+    "apps/macos/Sources/Pilot/NativeTranscript.swift": "857afee080f3b4049eac982333a658bb66d474f63f36aaf85cd006679bee85a8",
+    "apps/macos/Sources/Pilot/PerformanceCheck.swift": "a53a63a4722d293e1a88ba413bea256fc972380b5341568a23f092a11d508270",
+    "apps/macos/Sources/Pilot/TranscriptScrollObserver.swift": "9a5daa43b40e8b15fcae47ac49f1cf24c29dbbd1208a4802720e889c3015910d"
+  },
+  "notes": [
+    "The baseline unpaired matrix emitted all 15 valid reports; wrapper then exited 127 after a running-script comment edit.",
+    "Final paired and native matrix job exited 0; screenshots excluded from paired medians.",
+    "Earlier candidate runs affected by display locking are excluded.",
+    "Raw summaries round reported timings/CPU; wall elapsed and delivery lateness are not reported."
+  ],
+  "baselineUnpairedMatrix": [
+    {
+      "section": "BASELINE_UNPAIRED_MATRIX",
+      "summary": "performance-check streaming+4/s+markdown 100 chars: CPU=38.3% of one core, main thread=37.2%, peak RSS=263.1 MiB, rows=1001, chat body evaluations=3, transcript rows evaluations=80, physical footprint peak=242.1 MiB end=241.8 MiB, display 120 Hz frames=800 hitches=100 dropped frames=388 hitch time ratio=327.6 ms/s longest frame gap=133.9ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=14",
+      "details": [
+        "transcript apply: 40 calls, total 4.3ms (0.0% of the run), mean 0.107ms, longest 1.1ms",
+        "publish: 40 calls, total 20.6ms (0.2% of the run), mean 0.515ms, longest 15.9ms",
+        "markdown prepare: 80 calls, total 13.3ms (0.1% of the run), mean 0.166ms, longest 3.7ms",
+        "text update: 142 calls, total 41.2ms (0.4% of the run), mean 0.290ms, longest 1.9ms",
+        "text measure: 525 calls, total 61.2ms (0.6% of the run), mean 0.117ms, longest 2.3ms",
+        "after completion: CPU=0.3% of one core over 5 s, physical footprint=159.2 MiB"
+      ]
+    },
+    {
+      "section": "BASELINE_UNPAIRED_MATRIX",
+      "summary": "performance-check streaming+4/s+markdown 100 chars: CPU=32.8% of one core, main thread=31.9%, peak RSS=250.7 MiB, rows=1001, chat body evaluations=3, transcript rows evaluations=80, physical footprint peak=242.7 MiB end=242.5 MiB, display 120 Hz frames=895 hitches=100 dropped frames=300 hitch time ratio=252.1 ms/s longest frame gap=85.4ms, newest row moved down=1 times (6 pt, largest 6 pt), bottom gap changes=30",
+      "details": [
+        "transcript apply: 40 calls, total 9.4ms (0.1% of the run), mean 0.235ms, longest 6.8ms",
+        "publish: 40 calls, total 16.8ms (0.2% of the run), mean 0.419ms, longest 11.8ms",
+        "markdown prepare: 80 calls, total 9.7ms (0.1% of the run), mean 0.121ms, longest 0.7ms",
+        "text update: 142 calls, total 32.6ms (0.3% of the run), mean 0.230ms, longest 0.7ms",
+        "text measure: 525 calls, total 39.6ms (0.4% of the run), mean 0.075ms, longest 0.8ms",
+        "after completion: CPU=0.0% of one core over 5 s, physical footprint=159.8 MiB"
+      ]
+    },
+    {
+      "section": "BASELINE_UNPAIRED_MATRIX",
+      "summary": "performance-check streaming+4/s+markdown 100 chars: CPU=30.8% of one core, main thread=29.9%, peak RSS=251.0 MiB, rows=1001, chat body evaluations=3, transcript rows evaluations=80, physical footprint peak=243.4 MiB end=243.0 MiB, display 120 Hz frames=922 hitches=92 dropped frames=272 hitch time ratio=227.7 ms/s longest frame gap=78.7ms, newest row moved down=1 times (6 pt, largest 6 pt), bottom gap changes=18",
+      "details": [
+        "transcript apply: 40 calls, total 3.4ms (0.0% of the run), mean 0.085ms, longest 0.4ms",
+        "publish: 40 calls, total 15.5ms (0.2% of the run), mean 0.388ms, longest 10.9ms",
+        "markdown prepare: 80 calls, total 9.5ms (0.1% of the run), mean 0.118ms, longest 0.7ms",
+        "text update: 142 calls, total 31.0ms (0.3% of the run), mean 0.218ms, longest 0.7ms",
+        "text measure: 523 calls, total 37.1ms (0.4% of the run), mean 0.071ms, longest 3.6ms",
+        "after completion: CPU=0.0% of one core over 5 s, physical footprint=160.3 MiB"
+      ]
+    },
+    {
+      "section": "BASELINE_UNPAIRED_MATRIX",
+      "summary": "performance-check streaming+10/s+markdown 12 chars: CPU=44.3% of one core, main thread=43.2%, peak RSS=257.1 MiB, rows=1001, chat body evaluations=3, transcript rows evaluations=200, physical footprint peak=245.0 MiB end=144.0 MiB, display 120 Hz frames=853 hitches=176 dropped frames=332 hitch time ratio=278.8 ms/s longest frame gap=55.9ms, newest row moved down=1 times (6 pt, largest 6 pt), bottom gap changes=14",
+      "details": [
+        "transcript apply: 100 calls, total 6.2ms (0.1% of the run), mean 0.062ms, longest 0.7ms",
+        "publish: 100 calls, total 20.0ms (0.2% of the run), mean 0.200ms, longest 10.1ms",
+        "markdown prepare: 200 calls, total 16.2ms (0.2% of the run), mean 0.081ms, longest 0.7ms",
+        "text update: 198 calls, total 57.0ms (0.6% of the run), mean 0.288ms, longest 0.7ms",
+        "text measure: 574 calls, total 43.0ms (0.4% of the run), mean 0.075ms, longest 0.4ms",
+        "after completion: CPU=0.0% of one core over 5 s, physical footprint=145.4 MiB"
+      ]
+    },
+    {
+      "section": "BASELINE_UNPAIRED_MATRIX",
+      "summary": "performance-check streaming+10/s+markdown 12 chars: CPU=50.7% of one core, main thread=49.5%, peak RSS=244.6 MiB, rows=1001, chat body evaluations=3, transcript rows evaluations=200, physical footprint peak=248.5 MiB end=144.2 MiB, display 120 Hz frames=757 hitches=194 dropped frames=438 hitch time ratio=366.6 ms/s longest frame gap=73.7ms, newest row moved down=1 times (6 pt, largest 6 pt), bottom gap changes=14",
+      "details": [
+        "transcript apply: 100 calls, total 27.9ms (0.3% of the run), mean 0.279ms, longest 18.2ms",
+        "publish: 100 calls, total 22.6ms (0.2% of the run), mean 0.226ms, longest 11.9ms",
+        "markdown prepare: 200 calls, total 16.6ms (0.2% of the run), mean 0.083ms, longest 0.6ms",
+        "text update: 198 calls, total 65.0ms (0.6% of the run), mean 0.328ms, longest 1.0ms",
+        "text measure: 574 calls, total 52.4ms (0.5% of the run), mean 0.091ms, longest 0.7ms",
+        "after completion: CPU=0.0% of one core over 5 s, physical footprint=145.5 MiB"
+      ]
+    },
+    {
+      "section": "BASELINE_UNPAIRED_MATRIX",
+      "summary": "performance-check streaming+10/s+markdown 12 chars: CPU=47.7% of one core, main thread=46.6%, peak RSS=244.3 MiB, rows=1001, chat body evaluations=3, transcript rows evaluations=200, physical footprint peak=245.7 MiB end=144.6 MiB, display 120 Hz frames=803 hitches=191 dropped frames=387 hitch time ratio=324.7 ms/s longest frame gap=55.4ms, newest row moved down=1 times (6 pt, largest 6 pt), bottom gap changes=7",
+      "details": [
+        "transcript apply: 100 calls, total 22.3ms (0.2% of the run), mean 0.223ms, longest 9.2ms",
+        "publish: 100 calls, total 25.5ms (0.3% of the run), mean 0.255ms, longest 12.8ms",
+        "markdown prepare: 200 calls, total 16.5ms (0.2% of the run), mean 0.083ms, longest 0.9ms",
+        "text update: 198 calls, total 61.5ms (0.6% of the run), mean 0.311ms, longest 0.7ms",
+        "text measure: 574 calls, total 48.0ms (0.5% of the run), mean 0.084ms, longest 0.4ms",
+        "after completion: CPU=0.0% of one core over 5 s, physical footprint=146.8 MiB"
+      ]
+    },
+    {
+      "section": "BASELINE_UNPAIRED_MATRIX",
+      "summary": "performance-check streaming+50/s+markdown 12 chars: CPU=97.7% of one core, main thread=95.6%, peak RSS=231.1 MiB, rows=1001, chat body evaluations=3, transcript rows evaluations=560, physical footprint peak=255.5 MiB end=255.5 MiB, display 120 Hz frames=238 hitches=229 dropped frames=1092 hitch time ratio=828.0 ms/s longest frame gap=195.5ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=34",
+      "details": [
+        "transcript apply: 280 calls, total 8281.5ms (73.9% of the run), mean 29.577ms, longest 118.3ms",
+        "publish: 280 calls, total 454.2ms (4.1% of the run), mean 1.622ms, longest 31.4ms",
+        "markdown prepare: 558 calls, total 60.6ms (0.5% of the run), mean 0.109ms, longest 2.3ms",
+        "text update: 386 calls, total 117.4ms (1.0% of the run), mean 0.304ms, longest 1.1ms",
+        "text measure: 1281 calls, total 133.2ms (1.2% of the run), mean 0.104ms, longest 1.0ms",
+        "after completion: CPU=0.1% of one core over 5 s, physical footprint=165.3 MiB"
+      ]
+    },
+    {
+      "section": "BASELINE_UNPAIRED_MATRIX",
+      "summary": "performance-check streaming+50/s+markdown 12 chars: CPU=99.5% of one core, main thread=97.2%, peak RSS=257.5 MiB, rows=1001, chat body evaluations=3, transcript rows evaluations=602, physical footprint peak=255.1 MiB end=253.8 MiB, display 120 Hz frames=248 hitches=235 dropped frames=949 hitch time ratio=793.6 ms/s longest frame gap=173.7ms, newest row moved down=1 times (6 pt, largest 6 pt), bottom gap changes=20",
+      "details": [
+        "transcript apply: 302 calls, total 7758.6ms (77.0% of the run), mean 25.691ms, longest 130.4ms",
+        "publish: 302 calls, total 354.2ms (3.5% of the run), mean 1.173ms, longest 17.8ms",
+        "markdown prepare: 602 calls, total 58.1ms (0.6% of the run), mean 0.096ms, longest 1.4ms",
+        "text update: 377 calls, total 101.5ms (1.0% of the run), mean 0.269ms, longest 1.6ms",
+        "text measure: 1259 calls, total 113.3ms (1.1% of the run), mean 0.090ms, longest 1.0ms",
+        "after completion: CPU=0.0% of one core over 5 s, physical footprint=164.6 MiB"
+      ]
+    },
+    {
+      "section": "BASELINE_UNPAIRED_MATRIX",
+      "summary": "performance-check streaming+50/s+markdown 12 chars: CPU=98.1% of one core, main thread=96.0%, peak RSS=247.2 MiB, rows=1001, chat body evaluations=3, transcript rows evaluations=542, physical footprint peak=254.8 MiB end=254.6 MiB, display 120 Hz frames=234 hitches=221 dropped frames=1003 hitch time ratio=815.9 ms/s longest frame gap=215.2ms, newest row moved down=2 times (10 pt, largest 6 pt), bottom gap changes=29",
+      "details": [
+        "transcript apply: 272 calls, total 7411.0ms (72.1% of the run), mean 27.246ms, longest 124.5ms",
+        "publish: 271 calls, total 400.7ms (3.9% of the run), mean 1.479ms, longest 27.6ms",
+        "markdown prepare: 540 calls, total 52.1ms (0.5% of the run), mean 0.096ms, longest 1.0ms",
+        "text update: 376 calls, total 104.0ms (1.0% of the run), mean 0.277ms, longest 1.0ms",
+        "text measure: 1288 calls, total 120.5ms (1.2% of the run), mean 0.094ms, longest 1.0ms",
+        "after completion: CPU=0.0% of one core over 5 s, physical footprint=165.7 MiB"
+      ]
+    },
+    {
+      "section": "BASELINE_UNPAIRED_MATRIX",
+      "summary": "performance-check streaming+100/s+markdown 12 chars: CPU=98.4% of one core, main thread=96.5%, peak RSS=280.7 MiB, rows=1001, chat body evaluations=3, transcript rows evaluations=1048, physical footprint peak=275.7 MiB end=270.0 MiB, display 120 Hz frames=416 hitches=402 dropped frames=2152 hitch time ratio=843.0 ms/s longest frame gap=358.1ms, newest row moved down=3 times (16 pt, largest 6 pt), bottom gap changes=56",
+      "details": [
+        "transcript apply: 532 calls, total 17881.9ms (83.7% of the run), mean 33.613ms, longest 210.3ms",
+        "publish: 525 calls, total 287.2ms (1.3% of the run), mean 0.547ms, longest 23.7ms",
+        "markdown prepare: 1048 calls, total 105.3ms (0.5% of the run), mean 0.100ms, longest 0.7ms",
+        "text update: 603 calls, total 173.3ms (0.8% of the run), mean 0.287ms, longest 2.8ms",
+        "text measure: 2132 calls, total 188.7ms (0.9% of the run), mean 0.089ms, longest 2.9ms",
+        "after completion: CPU=0.6% of one core over 5 s, physical footprint=215.1 MiB"
+      ]
+    },
+    {
+      "section": "BASELINE_UNPAIRED_MATRIX",
+      "summary": "performance-check streaming+100/s+markdown 12 chars: CPU=100.2% of one core, main thread=98.0%, peak RSS=279.9 MiB, rows=1001, chat body evaluations=3, transcript rows evaluations=1030, physical footprint peak=284.0 MiB end=282.5 MiB, display 120 Hz frames=389 hitches=369 dropped frames=1797 hitch time ratio=822.4 ms/s longest frame gap=220.4ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=32",
+      "details": [
+        "transcript apply: 520 calls, total 15256.2ms (83.6% of the run), mean 29.339ms, longest 146.3ms",
+        "publish: 515 calls, total 152.7ms (0.8% of the run), mean 0.296ms, longest 17.5ms",
+        "markdown prepare: 1026 calls, total 98.7ms (0.5% of the run), mean 0.096ms, longest 1.5ms",
+        "text update: 530 calls, total 132.7ms (0.7% of the run), mean 0.250ms, longest 1.6ms",
+        "text measure: 1881 calls, total 129.6ms (0.7% of the run), mean 0.069ms, longest 2.0ms",
+        "after completion: CPU=0.2% of one core over 5 s, physical footprint=192.1 MiB"
+      ]
+    },
+    {
+      "section": "BASELINE_UNPAIRED_MATRIX",
+      "summary": "performance-check streaming+100/s+markdown 12 chars: CPU=98.5% of one core, main thread=96.7%, peak RSS=244.5 MiB, rows=1001, chat body evaluations=3, transcript rows evaluations=1042, physical footprint peak=272.9 MiB end=178.0 MiB, display 120 Hz frames=420 hitches=409 dropped frames=2423 hitch time ratio=854.5 ms/s longest frame gap=246.1ms, newest row moved down=1 times (4 pt, largest 4 pt), bottom gap changes=80",
+      "details": [
+        "transcript apply: 522 calls, total 18384.8ms (77.7% of the run), mean 35.220ms, longest 144.0ms",
+        "publish: 521 calls, total 744.1ms (3.1% of the run), mean 1.428ms, longest 31.0ms",
+        "markdown prepare: 1038 calls, total 108.7ms (0.5% of the run), mean 0.105ms, longest 1.4ms",
+        "text update: 721 calls, total 209.7ms (0.9% of the run), mean 0.291ms, longest 1.8ms",
+        "text measure: 2413 calls, total 231.3ms (1.0% of the run), mean 0.096ms, longest 1.4ms",
+        "after completion: CPU=0.5% of one core over 5 s, physical footprint=189.3 MiB"
+      ]
+    },
+    {
+      "section": "BASELINE_UNPAIRED_MATRIX",
+      "summary": "performance-check idle+scrolling: CPU=45.2% of one core, main thread=43.8%, peak RSS=241.0 MiB, rows=750, chat body evaluations=0, transcript rows evaluations=0, display 120 Hz frames=1023 hitches=47 dropped frames=119 hitch time ratio=104.1 ms/s longest frame gap=100.9ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=0, scroll frame p50=3.2ms p95=8.5ms max=19.9ms over 16ms=5/600",
+      "details": []
+    },
+    {
+      "section": "BASELINE_UNPAIRED_MATRIX",
+      "summary": "performance-check idle+scrolling: CPU=44.7% of one core, main thread=43.5%, peak RSS=239.8 MiB, rows=750, chat body evaluations=0, transcript rows evaluations=0, display 120 Hz frames=641 hitches=153 dropped frames=500 hitch time ratio=436.3 ms/s longest frame gap=216.4ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=0, scroll frame p50=4.0ms p95=17.7ms max=107.6ms over 16ms=33/600",
+      "details": []
+    },
+    {
+      "section": "BASELINE_UNPAIRED_MATRIX",
+      "summary": "performance-check idle+scrolling: CPU=48.8% of one core, main thread=47.3%, peak RSS=252.7 MiB, rows=750, chat body evaluations=0, transcript rows evaluations=0, display 120 Hz frames=1109 hitches=29 dropped frames=33 hitch time ratio=28.9 ms/s longest frame gap=28.2ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=0, scroll frame p50=4.0ms p95=6.5ms max=11.4ms over 16ms=0/600",
+      "details": []
+    }
+  ],
+  "finalRuns": [
+    {
+      "section": "PAIR 1 streaming baseline",
+      "summary": "performance-check streaming+4/s+markdown 100 chars: CPU=34.4% of one core, main thread=33.5%, peak RSS=253.4 MiB, rows=1001, chat body evaluations=3, transcript rows evaluations=80, physical footprint peak=245.7 MiB end=243.7 MiB, display 120 Hz frames=850 hitches=119 dropped frames=343 hitch time ratio=287.0 ms/s longest frame gap=79.9ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=10",
+      "details": [
+        "transcript apply: 40 calls, total 2.7ms (0.0% of the run), mean 0.067ms, longest 0.2ms",
+        "publish: 40 calls, total 17.1ms (0.2% of the run), mean 0.427ms, longest 12.5ms",
+        "markdown prepare: 80 calls, total 12.0ms (0.1% of the run), mean 0.149ms, longest 1.6ms",
+        "text update: 142 calls, total 35.3ms (0.4% of the run), mean 0.248ms, longest 1.1ms",
+        "text measure: 525 calls, total 37.9ms (0.4% of the run), mean 0.072ms, longest 0.3ms",
+        "after completion: CPU=0.0% of one core over 5 s, physical footprint=161.1 MiB"
+      ]
+    },
+    {
+      "section": "PAIR 1 streaming native",
+      "summary": "performance-check streaming+4/s+markdown 100 chars: CPU=18.0% of one core, main thread=16.8%, peak RSS=221.8 MiB, rows=1001, chat body evaluations=3, transcript rows evaluations=0, physical footprint peak=214.4 MiB end=212.7 MiB, display 120 Hz frames=1064 hitches=68 dropped frames=124 hitch time ratio=103.8 ms/s longest frame gap=46.8ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=0",
+      "details": [
+        "native transcript: cells created=11 mounted=2, bindings=54, measurements=103 height transactions=42 membership updates=3, height cache entries=11",
+        "transcript apply: 40 calls, total 3.5ms (0.0% of the run), mean 0.088ms, longest 0.3ms",
+        "publish: 40 calls, total 17.2ms (0.2% of the run), mean 0.431ms, longest 11.6ms",
+        "markdown prepare: 80 calls, total 16.6ms (0.2% of the run), mean 0.207ms, longest 1.0ms",
+        "text update: 114 calls, total 44.5ms (0.4% of the run), mean 0.390ms, longest 2.2ms",
+        "text measure: 225 calls, total 14.5ms (0.1% of the run), mean 0.065ms, longest 0.4ms",
+        "after completion: CPU=0.0% of one core over 5 s, physical footprint=130.1 MiB"
+      ]
+    },
+    {
+      "section": "PAIR 2 streaming native",
+      "summary": "performance-check streaming+4/s+markdown 100 chars: CPU=17.1% of one core, main thread=16.0%, peak RSS=221.5 MiB, rows=1001, chat body evaluations=3, transcript rows evaluations=0, physical footprint peak=210.2 MiB end=211.0 MiB, display 120 Hz frames=1029 hitches=64 dropped frames=162 hitch time ratio=135.7 ms/s longest frame gap=88.9ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=0",
+      "details": [
+        "native transcript: cells created=11 mounted=2, bindings=54, measurements=103 height transactions=42 membership updates=3, height cache entries=11",
+        "transcript apply: 40 calls, total 5.3ms (0.1% of the run), mean 0.133ms, longest 1.1ms",
+        "publish: 40 calls, total 8.7ms (0.1% of the run), mean 0.217ms, longest 4.0ms",
+        "markdown prepare: 80 calls, total 17.1ms (0.2% of the run), mean 0.214ms, longest 1.3ms",
+        "text update: 114 calls, total 42.6ms (0.4% of the run), mean 0.374ms, longest 2.0ms",
+        "text measure: 226 calls, total 19.2ms (0.2% of the run), mean 0.085ms, longest 4.2ms",
+        "after completion: CPU=0.0% of one core over 5 s, physical footprint=130.1 MiB"
+      ]
+    },
+    {
+      "section": "PAIR 2 streaming baseline",
+      "summary": "performance-check streaming+4/s+markdown 100 chars: CPU=34.8% of one core, main thread=33.8%, peak RSS=253.0 MiB, rows=1001, chat body evaluations=3, transcript rows evaluations=80, physical footprint peak=245.0 MiB end=244.8 MiB, display 120 Hz frames=858 hitches=104 dropped frames=325 hitch time ratio=273.9 ms/s longest frame gap=158.3ms, newest row moved down=1 times (6 pt, largest 6 pt), bottom gap changes=28",
+      "details": [
+        "transcript apply: 40 calls, total 24.6ms (0.2% of the run), mean 0.614ms, longest 21.8ms",
+        "publish: 40 calls, total 27.9ms (0.3% of the run), mean 0.697ms, longest 23.3ms",
+        "markdown prepare: 80 calls, total 10.9ms (0.1% of the run), mean 0.136ms, longest 0.9ms",
+        "text update: 142 calls, total 36.6ms (0.4% of the run), mean 0.258ms, longest 1.0ms",
+        "text measure: 525 calls, total 43.7ms (0.4% of the run), mean 0.083ms, longest 0.5ms",
+        "after completion: CPU=0.0% of one core over 5 s, physical footprint=161.7 MiB"
+      ]
+    },
+    {
+      "section": "PAIR 3 streaming baseline",
+      "summary": "performance-check streaming+4/s+markdown 100 chars: CPU=36.7% of one core, main thread=35.8%, peak RSS=251.3 MiB, rows=1001, chat body evaluations=3, transcript rows evaluations=80, physical footprint peak=243.4 MiB end=243.1 MiB, display 120 Hz frames=843 hitches=118 dropped frames=350 hitch time ratio=293.3 ms/s longest frame gap=134.1ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=12",
+      "details": [
+        "transcript apply: 40 calls, total 3.0ms (0.0% of the run), mean 0.075ms, longest 0.2ms",
+        "publish: 40 calls, total 18.3ms (0.2% of the run), mean 0.458ms, longest 13.5ms",
+        "markdown prepare: 80 calls, total 10.1ms (0.1% of the run), mean 0.126ms, longest 0.7ms",
+        "text update: 142 calls, total 33.5ms (0.3% of the run), mean 0.236ms, longest 0.9ms",
+        "text measure: 524 calls, total 40.8ms (0.4% of the run), mean 0.078ms, longest 0.5ms",
+        "after completion: CPU=0.0% of one core over 5 s, physical footprint=160.4 MiB"
+      ]
+    },
+    {
+      "section": "PAIR 3 streaming native",
+      "summary": "performance-check streaming+4/s+markdown 100 chars: CPU=20.7% of one core, main thread=19.3%, peak RSS=219.5 MiB, rows=1001, chat body evaluations=3, transcript rows evaluations=0, physical footprint peak=212.3 MiB end=210.5 MiB, display 120 Hz frames=1045 hitches=61 dropped frames=147 hitch time ratio=123.1 ms/s longest frame gap=54.4ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=0",
+      "details": [
+        "native transcript: cells created=11 mounted=2, bindings=54, measurements=103 height transactions=42 membership updates=3, height cache entries=11",
+        "transcript apply: 40 calls, total 4.0ms (0.0% of the run), mean 0.100ms, longest 0.2ms",
+        "publish: 40 calls, total 13.2ms (0.1% of the run), mean 0.329ms, longest 7.3ms",
+        "markdown prepare: 80 calls, total 23.7ms (0.2% of the run), mean 0.297ms, longest 1.7ms",
+        "text update: 114 calls, total 46.6ms (0.5% of the run), mean 0.409ms, longest 2.2ms",
+        "text measure: 230 calls, total 16.1ms (0.2% of the run), mean 0.070ms, longest 0.7ms",
+        "after completion: CPU=0.0% of one core over 5 s, physical footprint=128.1 MiB"
+      ]
+    },
+    {
+      "section": "PAIR 1 scrolling baseline",
+      "summary": "performance-check idle+scrolling: CPU=49.0% of one core, main thread=47.4%, peak RSS=241.1 MiB, rows=750, chat body evaluations=0, transcript rows evaluations=0, display 120 Hz frames=1063 hitches=37 dropped frames=81 hitch time ratio=70.7 ms/s longest frame gap=113.6ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=0, scroll frame p50=3.6ms p95=6.9ms max=88.8ms over 16ms=4/600",
+      "details": []
+    },
+    {
+      "section": "PAIR 1 scrolling native",
+      "summary": "performance-check idle+scrolling: CPU=35.4% of one core, main thread=33.8%, peak RSS=193.7 MiB, rows=750, chat body evaluations=0, transcript rows evaluations=0, display 120 Hz frames=952 hitches=81 dropped frames=194 hitch time ratio=169.2 ms/s longest frame gap=83.8ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=0, scroll frame p50=1.2ms p95=12.7ms max=44.2ms over 16ms=20/600",
+      "details": [
+        "native transcript: cells created=10 mounted=2, bindings=107, measurements=129 height transactions=73 membership updates=2, height cache entries=43"
+      ]
+    },
+    {
+      "section": "PAIR 2 scrolling native",
+      "summary": "performance-check idle+scrolling: CPU=35.7% of one core, main thread=33.9%, peak RSS=196.1 MiB, rows=750, chat body evaluations=0, transcript rows evaluations=0, display 120 Hz frames=946 hitches=89 dropped frames=201 hitch time ratio=175.2 ms/s longest frame gap=75.5ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=0, scroll frame p50=1.1ms p95=13.6ms max=32.9ms over 16ms=20/600",
+      "details": [
+        "native transcript: cells created=10 mounted=2, bindings=107, measurements=129 height transactions=72 membership updates=2, height cache entries=43"
+      ]
+    },
+    {
+      "section": "PAIR 2 scrolling baseline",
+      "summary": "performance-check idle+scrolling: CPU=53.4% of one core, main thread=51.8%, peak RSS=254.7 MiB, rows=750, chat body evaluations=0, transcript rows evaluations=0, display 120 Hz frames=1010 hitches=89 dropped frames=134 hitch time ratio=117.0 ms/s longest frame gap=52.1ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=0, scroll frame p50=4.4ms p95=8.4ms max=22.6ms over 16ms=2/600",
+      "details": []
+    },
+    {
+      "section": "PAIR 3 scrolling baseline",
+      "summary": "performance-check idle+scrolling: CPU=51.4% of one core, main thread=49.9%, peak RSS=254.6 MiB, rows=750, chat body evaluations=0, transcript rows evaluations=0, display 120 Hz frames=1078 hitches=53 dropped frames=66 hitch time ratio=57.6 ms/s longest frame gap=57.4ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=0, scroll frame p50=4.2ms p95=7.5ms max=37.9ms over 16ms=1/600",
+      "details": []
+    },
+    {
+      "section": "PAIR 3 scrolling native",
+      "summary": "performance-check idle+scrolling: CPU=33.7% of one core, main thread=32.2%, peak RSS=210.1 MiB, rows=750, chat body evaluations=0, transcript rows evaluations=0, display 120 Hz frames=961 hitches=92 dropped frames=189 hitch time ratio=164.4 ms/s longest frame gap=91.5ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=0, scroll frame p50=0.9ms p95=12.4ms max=32.6ms over 16ms=11/600",
+      "details": [
+        "native transcript: cells created=10 mounted=2, bindings=106, measurements=130 height transactions=74 membership updates=2, height cache entries=43"
+      ]
+    },
+    {
+      "section": "SCREENSHOT baseline",
+      "summary": "performance-check streaming+4/s+markdown 100 chars: CPU=37.8% of one core, main thread=36.8%, peak RSS=263.8 MiB, rows=1001, chat body evaluations=3, transcript rows evaluations=80, physical footprint peak=244.8 MiB end=243.9 MiB, display 120 Hz frames=855 hitches=102 dropped frames=331 hitch time ratio=278.2 ms/s longest frame gap=86.8ms, newest row moved down=1 times (6 pt, largest 6 pt), bottom gap changes=25",
+      "details": [
+        "transcript apply: 40 calls, total 3.8ms (0.0% of the run), mean 0.096ms, longest 0.5ms",
+        "publish: 40 calls, total 18.0ms (0.2% of the run), mean 0.449ms, longest 12.4ms",
+        "markdown prepare: 80 calls, total 11.9ms (0.1% of the run), mean 0.149ms, longest 0.7ms",
+        "text update: 142 calls, total 39.1ms (0.4% of the run), mean 0.275ms, longest 1.0ms",
+        "text measure: 525 calls, total 47.4ms (0.5% of the run), mean 0.090ms, longest 1.5ms",
+        "after completion: CPU=0.0% of one core over 5 s, physical footprint=161.2 MiB"
+      ]
+    },
+    {
+      "section": "SCREENSHOT native",
+      "summary": "performance-check streaming+4/s+markdown 100 chars: CPU=20.9% of one core, main thread=19.6%, peak RSS=221.0 MiB, rows=1001, chat body evaluations=3, transcript rows evaluations=0, physical footprint peak=213.8 MiB end=213.4 MiB, display 120 Hz frames=1052 hitches=62 dropped frames=144 hitch time ratio=120.4 ms/s longest frame gap=51.2ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=0",
+      "details": [
+        "native transcript: cells created=11 mounted=2, bindings=54, measurements=103 height transactions=42 membership updates=3, height cache entries=11",
+        "transcript apply: 40 calls, total 4.3ms (0.0% of the run), mean 0.107ms, longest 0.2ms",
+        "publish: 40 calls, total 14.0ms (0.1% of the run), mean 0.350ms, longest 7.3ms",
+        "markdown prepare: 80 calls, total 19.5ms (0.2% of the run), mean 0.244ms, longest 1.3ms",
+        "text update: 114 calls, total 49.6ms (0.5% of the run), mean 0.435ms, longest 2.0ms",
+        "text measure: 230 calls, total 18.9ms (0.2% of the run), mean 0.082ms, longest 0.7ms",
+        "after completion: CPU=0.0% of one core over 5 s, physical footprint=130.1 MiB"
+      ]
+    },
+    {
+      "section": "FULL_NATIVE_MATRIX",
+      "summary": "performance-check streaming+4/s+markdown 100 chars: CPU=18.8% of one core, main thread=17.4%, peak RSS=205.0 MiB, rows=1001, chat body evaluations=3, transcript rows evaluations=0, physical footprint peak=216.2 MiB end=212.6 MiB, display 120 Hz frames=1038 hitches=60 dropped frames=153 hitch time ratio=128.2 ms/s longest frame gap=91.7ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=0",
+      "details": [
+        "native transcript: cells created=11 mounted=2, bindings=54, measurements=103 height transactions=42 membership updates=3, height cache entries=11",
+        "transcript apply: 40 calls, total 5.4ms (0.1% of the run), mean 0.134ms, longest 1.7ms",
+        "publish: 40 calls, total 11.3ms (0.1% of the run), mean 0.283ms, longest 6.4ms",
+        "markdown prepare: 80 calls, total 18.9ms (0.2% of the run), mean 0.236ms, longest 1.5ms",
+        "text update: 114 calls, total 44.0ms (0.4% of the run), mean 0.386ms, longest 1.9ms",
+        "text measure: 225 calls, total 17.3ms (0.2% of the run), mean 0.077ms, longest 1.8ms",
+        "after completion: CPU=0.0% of one core over 5 s, physical footprint=131.4 MiB"
+      ]
+    },
+    {
+      "section": "FULL_NATIVE_MATRIX",
+      "summary": "performance-check streaming+4/s+markdown 100 chars: CPU=19.3% of one core, main thread=18.1%, peak RSS=225.4 MiB, rows=1001, chat body evaluations=3, transcript rows evaluations=0, physical footprint peak=213.9 MiB end=212.4 MiB, display 120 Hz frames=1044 hitches=60 dropped frames=151 hitch time ratio=126.3 ms/s longest frame gap=74.6ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=0",
+      "details": [
+        "native transcript: cells created=11 mounted=2, bindings=54, measurements=103 height transactions=42 membership updates=3, height cache entries=11",
+        "transcript apply: 40 calls, total 4.4ms (0.0% of the run), mean 0.111ms, longest 0.4ms",
+        "publish: 40 calls, total 12.6ms (0.1% of the run), mean 0.316ms, longest 7.0ms",
+        "markdown prepare: 80 calls, total 19.3ms (0.2% of the run), mean 0.241ms, longest 1.3ms",
+        "text update: 114 calls, total 43.5ms (0.4% of the run), mean 0.381ms, longest 1.5ms",
+        "text measure: 230 calls, total 14.1ms (0.1% of the run), mean 0.061ms, longest 0.4ms",
+        "after completion: CPU=0.7% of one core over 5 s, physical footprint=131.8 MiB"
+      ]
+    },
+    {
+      "section": "FULL_NATIVE_MATRIX",
+      "summary": "performance-check streaming+4/s+markdown 100 chars: CPU=20.8% of one core, main thread=19.5%, peak RSS=221.3 MiB, rows=1001, chat body evaluations=3, transcript rows evaluations=0, physical footprint peak=214.0 MiB end=213.6 MiB, display 120 Hz frames=1025 hitches=59 dropped frames=163 hitch time ratio=136.9 ms/s longest frame gap=62.0ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=0",
+      "details": [
+        "native transcript: cells created=11 mounted=2, bindings=54, measurements=103 height transactions=42 membership updates=3, height cache entries=11",
+        "transcript apply: 40 calls, total 4.8ms (0.0% of the run), mean 0.119ms, longest 0.4ms",
+        "publish: 40 calls, total 18.0ms (0.2% of the run), mean 0.451ms, longest 9.2ms",
+        "markdown prepare: 80 calls, total 22.2ms (0.2% of the run), mean 0.277ms, longest 1.6ms",
+        "text update: 114 calls, total 53.8ms (0.5% of the run), mean 0.472ms, longest 3.1ms",
+        "text measure: 225 calls, total 19.3ms (0.2% of the run), mean 0.086ms, longest 1.0ms",
+        "after completion: CPU=0.0% of one core over 5 s, physical footprint=130.1 MiB"
+      ]
+    },
+    {
+      "section": "FULL_NATIVE_MATRIX",
+      "summary": "performance-check streaming+10/s+markdown 12 chars: CPU=25.9% of one core, main thread=24.3%, peak RSS=217.3 MiB, rows=1001, chat body evaluations=3, transcript rows evaluations=0, physical footprint peak=215.0 MiB end=120.1 MiB, display 120 Hz frames=1024 hitches=89 dropped frames=171 hitch time ratio=143.1 ms/s longest frame gap=59.3ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=0",
+      "details": [
+        "native transcript: cells created=11 mounted=4, bindings=114, measurements=223 height transactions=27 membership updates=3, height cache entries=11",
+        "transcript apply: 100 calls, total 9.3ms (0.1% of the run), mean 0.093ms, longest 0.4ms",
+        "publish: 100 calls, total 18.1ms (0.2% of the run), mean 0.181ms, longest 4.9ms",
+        "markdown prepare: 200 calls, total 29.4ms (0.3% of the run), mean 0.147ms, longest 2.3ms",
+        "text update: 144 calls, total 80.9ms (0.8% of the run), mean 0.562ms, longest 9.3ms",
+        "text measure: 279 calls, total 11.0ms (0.1% of the run), mean 0.040ms, longest 0.4ms",
+        "after completion: CPU=0.0% of one core over 5 s, physical footprint=119.3 MiB"
+      ]
+    },
+    {
+      "section": "FULL_NATIVE_MATRIX",
+      "summary": "performance-check streaming+10/s+markdown 12 chars: CPU=26.7% of one core, main thread=25.2%, peak RSS=229.2 MiB, rows=1001, chat body evaluations=3, transcript rows evaluations=0, physical footprint peak=214.3 MiB end=118.0 MiB, display 120 Hz frames=1015 hitches=82 dropped frames=178 hitch time ratio=149.0 ms/s longest frame gap=50.7ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=0",
+      "details": [
+        "native transcript: cells created=11 mounted=4, bindings=114, measurements=223 height transactions=27 membership updates=3, height cache entries=11",
+        "transcript apply: 100 calls, total 7.8ms (0.1% of the run), mean 0.078ms, longest 0.2ms",
+        "publish: 100 calls, total 19.0ms (0.2% of the run), mean 0.190ms, longest 6.7ms",
+        "markdown prepare: 200 calls, total 28.9ms (0.3% of the run), mean 0.145ms, longest 1.2ms",
+        "text update: 144 calls, total 80.5ms (0.8% of the run), mean 0.559ms, longest 1.7ms",
+        "text measure: 249 calls, total 12.1ms (0.1% of the run), mean 0.049ms, longest 0.7ms",
+        "after completion: CPU=0.0% of one core over 5 s, physical footprint=121.1 MiB"
+      ]
+    },
+    {
+      "section": "FULL_NATIVE_MATRIX",
+      "summary": "performance-check streaming+10/s+markdown 12 chars: CPU=29.3% of one core, main thread=27.3%, peak RSS=212.0 MiB, rows=1001, chat body evaluations=3, transcript rows evaluations=0, physical footprint peak=218.9 MiB end=122.2 MiB, display 120 Hz frames=962 hitches=73 dropped frames=230 hitch time ratio=192.6 ms/s longest frame gap=243.3ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=0",
+      "details": [
+        "native transcript: cells created=11 mounted=4, bindings=113, measurements=220 height transactions=27 membership updates=3, height cache entries=11",
+        "transcript apply: 99 calls, total 102.6ms (1.0% of the run), mean 1.036ms, longest 36.1ms",
+        "publish: 99 calls, total 19.6ms (0.2% of the run), mean 0.198ms, longest 6.9ms",
+        "markdown prepare: 198 calls, total 31.2ms (0.3% of the run), mean 0.158ms, longest 2.6ms",
+        "text update: 144 calls, total 89.8ms (0.9% of the run), mean 0.624ms, longest 2.3ms",
+        "text measure: 263 calls, total 15.7ms (0.2% of the run), mean 0.060ms, longest 2.6ms",
+        "after completion: CPU=0.0% of one core over 5 s, physical footprint=123.3 MiB"
+      ]
+    },
+    {
+      "section": "FULL_NATIVE_MATRIX",
+      "summary": "performance-check streaming+50/s+markdown 12 chars: CPU=61.3% of one core, main thread=57.9%, peak RSS=232.2 MiB, rows=1001, chat body evaluations=3, transcript rows evaluations=0, physical footprint peak=225.3 MiB end=224.8 MiB, display 120 Hz frames=932 hitches=175 dropped frames=259 hitch time ratio=217.0 ms/s longest frame gap=46.4ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=0",
+      "details": [
+        "native transcript: cells created=11 mounted=2, bindings=513, measurements=1017 height transactions=127 membership updates=3, height cache entries=11",
+        "transcript apply: 500 calls, total 53.1ms (0.5% of the run), mean 0.106ms, longest 4.8ms",
+        "publish: 499 calls, total 48.6ms (0.5% of the run), mean 0.097ms, longest 8.3ms",
+        "markdown prepare: 998 calls, total 95.5ms (1.0% of the run), mean 0.096ms, longest 1.0ms",
+        "text update: 708 calls, total 168.1ms (1.7% of the run), mean 0.237ms, longest 1.4ms",
+        "text measure: 1261 calls, total 24.9ms (0.2% of the run), mean 0.020ms, longest 0.3ms",
+        "after completion: CPU=0.0% of one core over 5 s, physical footprint=138.5 MiB"
+      ]
+    },
+    {
+      "section": "FULL_NATIVE_MATRIX",
+      "summary": "performance-check streaming+50/s+markdown 12 chars: CPU=64.4% of one core, main thread=60.9%, peak RSS=233.7 MiB, rows=1001, chat body evaluations=3, transcript rows evaluations=0, physical footprint peak=220.3 MiB end=220.0 MiB, display 120 Hz frames=857 hitches=205 dropped frames=339 hitch time ratio=283.8 ms/s longest frame gap=64.8ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=0",
+      "details": [
+        "native transcript: cells created=11 mounted=2, bindings=508, measurements=997 height transactions=125 membership updates=3, height cache entries=11",
+        "transcript apply: 497 calls, total 170.5ms (1.7% of the run), mean 0.343ms, longest 31.8ms",
+        "publish: 494 calls, total 47.3ms (0.5% of the run), mean 0.096ms, longest 4.0ms",
+        "markdown prepare: 988 calls, total 108.3ms (1.1% of the run), mean 0.110ms, longest 1.7ms",
+        "text update: 695 calls, total 232.1ms (2.3% of the run), mean 0.334ms, longest 2.2ms",
+        "text measure: 1112 calls, total 26.3ms (0.3% of the run), mean 0.024ms, longest 0.3ms",
+        "after completion: CPU=0.0% of one core over 5 s, physical footprint=136.0 MiB"
+      ]
+    },
+    {
+      "section": "FULL_NATIVE_MATRIX",
+      "summary": "performance-check streaming+50/s+markdown 12 chars: CPU=72.5% of one core, main thread=68.7%, peak RSS=210.3 MiB, rows=1001, chat body evaluations=3, transcript rows evaluations=0, physical footprint peak=225.8 MiB end=225.8 MiB, display 120 Hz frames=693 hitches=230 dropped frames=500 hitch time ratio=418.7 ms/s longest frame gap=139.9ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=0",
+      "details": [
+        "native transcript: cells created=11 mounted=2, bindings=478, measurements=898 height transactions=123 membership updates=3, height cache entries=11",
+        "transcript apply: 479 calls, total 664.0ms (6.6% of the run), mean 1.386ms, longest 86.1ms",
+        "publish: 464 calls, total 53.4ms (0.5% of the run), mean 0.115ms, longest 10.6ms",
+        "markdown prepare: 926 calls, total 114.7ms (1.1% of the run), mean 0.124ms, longest 1.9ms",
+        "text update: 657 calls, total 230.1ms (2.3% of the run), mean 0.350ms, longest 1.8ms",
+        "text measure: 1148 calls, total 38.3ms (0.4% of the run), mean 0.033ms, longest 1.9ms",
+        "after completion: CPU=2.1% of one core over 5 s, physical footprint=143.1 MiB"
+      ]
+    },
+    {
+      "section": "FULL_NATIVE_MATRIX",
+      "summary": "performance-check streaming+100/s+markdown 12 chars: CPU=88.2% of one core, main thread=83.4%, peak RSS=232.6 MiB, rows=1001, chat body evaluations=3, transcript rows evaluations=0, physical footprint peak=247.3 MiB end=244.0 MiB, display 120 Hz frames=487 hitches=248 dropped frames=696 hitch time ratio=585.0 ms/s longest frame gap=318.8ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=0",
+      "details": [
+        "native transcript: cells created=11 mounted=2, bindings=598, measurements=1053 height transactions=206 membership updates=3, height cache entries=11",
+        "transcript apply: 784 calls, total 2126.0ms (21.3% of the run), mean 2.712ms, longest 145.7ms",
+        "publish: 584 calls, total 47.2ms (0.5% of the run), mean 0.081ms, longest 6.3ms",
+        "markdown prepare: 1165 calls, total 161.6ms (1.6% of the run), mean 0.139ms, longest 12.5ms",
+        "text update: 806 calls, total 227.8ms (2.3% of the run), mean 0.283ms, longest 4.7ms",
+        "text measure: 1386 calls, total 49.8ms (0.5% of the run), mean 0.036ms, longest 1.1ms",
+        "after completion: CPU=0.3% of one core over 5 s, physical footprint=158.8 MiB"
+      ]
+    },
+    {
+      "section": "FULL_NATIVE_MATRIX",
+      "summary": "performance-check streaming+100/s+markdown 12 chars: CPU=86.7% of one core, main thread=82.0%, peak RSS=246.6 MiB, rows=1001, chat body evaluations=3, transcript rows evaluations=0, physical footprint peak=249.0 MiB end=244.8 MiB, display 120 Hz frames=681 hitches=267 dropped frames=507 hitch time ratio=424.6 ms/s longest frame gap=75.0ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=0",
+      "details": [
+        "native transcript: cells created=11 mounted=2, bindings=733, measurements=1376 height transactions=226 membership updates=3, height cache entries=11",
+        "transcript apply: 876 calls, total 975.3ms (9.7% of the run), mean 1.113ms, longest 36.7ms",
+        "publish: 719 calls, total 53.2ms (0.5% of the run), mean 0.074ms, longest 8.8ms",
+        "markdown prepare: 1436 calls, total 149.2ms (1.5% of the run), mean 0.104ms, longest 0.8ms",
+        "text update: 1076 calls, total 241.1ms (2.4% of the run), mean 0.224ms, longest 1.8ms",
+        "text measure: 1734 calls, total 35.2ms (0.4% of the run), mean 0.020ms, longest 0.3ms",
+        "after completion: CPU=0.3% of one core over 5 s, physical footprint=165.2 MiB"
+      ]
+    },
+    {
+      "section": "FULL_NATIVE_MATRIX",
+      "summary": "performance-check streaming+100/s+markdown 12 chars: CPU=89.3% of one core, main thread=84.0%, peak RSS=252.5 MiB, rows=1001, chat body evaluations=3, transcript rows evaluations=0, physical footprint peak=238.3 MiB end=237.3 MiB, display 120 Hz frames=473 hitches=253 dropped frames=725 hitch time ratio=606.2 ms/s longest frame gap=286.1ms, newest row moved down=12 times (467 pt, largest 186 pt), bottom gap changes=23",
+      "details": [
+        "native transcript: cells created=11 mounted=1, bindings=595, measurements=989 height transactions=197 membership updates=3, height cache entries=11",
+        "transcript apply: 769 calls, total 2375.8ms (23.7% of the run), mean 3.089ms, longest 66.4ms",
+        "publish: 579 calls, total 43.5ms (0.4% of the run), mean 0.075ms, longest 6.7ms",
+        "markdown prepare: 1153 calls, total 132.3ms (1.3% of the run), mean 0.115ms, longest 1.1ms",
+        "text update: 833 calls, total 221.9ms (2.2% of the run), mean 0.266ms, longest 1.2ms",
+        "text measure: 1465 calls, total 47.0ms (0.5% of the run), mean 0.032ms, longest 0.7ms",
+        "after completion: CPU=3.4% of one core over 5 s, physical footprint=161.1 MiB"
+      ]
+    },
+    {
+      "section": "FULL_NATIVE_MATRIX",
+      "summary": "performance-check idle+scrolling: CPU=30.8% of one core, main thread=29.4%, peak RSS=196.5 MiB, rows=750, chat body evaluations=0, transcript rows evaluations=0, display 120 Hz frames=982 hitches=93 dropped frames=160 hitch time ratio=139.5 ms/s longest frame gap=58.5ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=0, scroll frame p50=1.1ms p95=10.5ms max=23.0ms over 16ms=5/600",
+      "details": [
+        "native transcript: cells created=10 mounted=2, bindings=108, measurements=132 height transactions=74 membership updates=2, height cache entries=43"
+      ]
+    },
+    {
+      "section": "FULL_NATIVE_MATRIX",
+      "summary": "performance-check idle+scrolling: CPU=30.7% of one core, main thread=29.5%, peak RSS=197.2 MiB, rows=750, chat body evaluations=0, transcript rows evaluations=0, display 120 Hz frames=972 hitches=92 dropped frames=168 hitch time ratio=146.4 ms/s longest frame gap=60.5ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=0, scroll frame p50=0.9ms p95=11.0ms max=24.4ms over 16ms=3/600",
+      "details": [
+        "native transcript: cells created=10 mounted=2, bindings=108, measurements=131 height transactions=74 membership updates=2, height cache entries=43"
+      ]
+    },
+    {
+      "section": "FULL_NATIVE_MATRIX",
+      "summary": "performance-check idle+scrolling: CPU=31.8% of one core, main thread=30.3%, peak RSS=190.9 MiB, rows=750, chat body evaluations=0, transcript rows evaluations=0, display 120 Hz frames=961 hitches=94 dropped frames=183 hitch time ratio=159.2 ms/s longest frame gap=94.8ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=0, scroll frame p50=1.2ms p95=11.5ms max=80.2ms over 16ms=6/600",
+      "details": [
+        "native transcript: cells created=10 mounted=2, bindings=108, measurements=131 height transactions=74 membership updates=2, height cache entries=43"
+      ]
+    }
+  ]
+}
