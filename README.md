@@ -858,6 +858,7 @@ To opt in to removing only the eyes reaction Pilot successfully added, create a 
       "headers": { "Authorization": "Bearer ${SLACK_REACTION_API_KEY}" }
     },
     "tool": "remove_reaction",
+    "identityTool": "auth_test",
     "dispatcher": { "tool": "dispatch", "nameKey": "name", "argumentsKey": "arguments" }
   }
 }
@@ -867,7 +868,8 @@ Names and URL above are placeholders. Use the exact tool names from your server;
 tool. The daemon owns this MCP-over-HTTP connection entirely from `tracking.json`: it never reads or
 registers a removal server in pi's `mcp.json`, and the tools do not appear in agent tool listings. Your existing
 general-purpose MCP connections and their permissions are unchanged.
-Use an API key scoped only to the removal tool. HTTPS is required, except for loopback development servers.
+Use an API key scoped only to the removal tool and its authenticated identity read. HTTPS is required,
+except for loopback development servers.
 Supply the variable to the daemon process, or use a header beginning with `!command` to read the complete
 `Bearer <key>` value from a local secret store (using pi's existing header expansion). Never put keys in project
 settings, committed files or chat messages. Only an explicit Authorization header is accepted; no OAuth store
@@ -876,11 +878,18 @@ Tool-scoped keys enforce access on the server, rather than just hiding tools fro
 Set `slackEyesRemoval.enabled` to `false` to leave a prepared route inactive until its key is available.
 The inner tool must accept `{channel, ts, name}` (`name` is always `eyes`, without colons) and return JSON
 `{ok: true}` on success, via MCP structured content or one JSON text block. The configured server must use the
-same Slack user as the dedicated server: Slack only lets users remove their own reactions.
+same Slack user as the dedicated server: Slack only lets users remove their own reactions. `identityTool`
+(namespaced or dispatched like `tool`) must accept `{}` and return `{ok: true, user_id: "U…"}` for the
+credential making the removal. Pilot records the authenticated user and original parent when adding eyes,
+then verifies that user on the removal connection before writing. It never supplies a user selector to the
+removal tool, so other users' eyes stay untouched. Unknown legacy ownership or a different identity fails
+closed, without attempting removal. A missing `identityTool` also fails closed.
 This local file is read afresh for each new Done attempt, never from a repository or replicated project settings.
-Missing/invalid config, disabled routes, unreachable/missing tools, `no_reaction`, authorization failures and other
-errors leave eyes in place, do not affect ✅ or local Done, and log one bounded line without retrying or falling
-back to another server. Each item is attempted once, including across restarts; configuring a route does not
+An exact structured Slack `no_reaction` response is an idempotent success (eyes already absent).
+Missing/invalid config, disabled routes, unreachable/missing tools, authorization and identity failures do not
+affect ✅ or local Done. Completion-add and eyes-removal outcomes are saved independently; cleanup failures
+show a quiet row error with permission/identity guidance, even when ✅ succeeded. There is no automatic retry or
+fallback to another server. Each item is attempted once, including across restarts; configuring a route does not
 replay old Done items. No Slack messages or replies are sent.
 Slack messages and Linear issue or project links open in their desktop apps when installed, with a
 browser fallback when the app is unavailable. Copied links remain web URLs.

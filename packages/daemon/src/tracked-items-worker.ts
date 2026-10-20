@@ -150,12 +150,16 @@ parentPort!.on("message", ({ id, method, args }) => {
 				value = disk.reserveSlackDone(args.projectId);
 				if (changed) projectId = args.projectId;
 				break;
+			case "slackEyesRemovalResult":
+				disk.slackEyesRemovalResult(args.id, args.outcome, args.reason);
+				if (changed) projectId = disk.require(args.id).projectId;
+				break;
 			case "slackDoneResult":
 				disk.slackDoneResult(args.id, args.outcome);
 				if (changed) projectId = disk.require(args.id).projectId;
 				break;
 			case "slackStartResult":
-				disk.slackStartResult(args.id, args.outcome);
+				disk.slackStartResult(args.id, args.outcome, args.owner);
 				projectId = disk.require(args.id).projectId;
 				break;
 			case "patch":

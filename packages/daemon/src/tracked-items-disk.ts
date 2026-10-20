@@ -20,6 +20,8 @@ import { LinearSizeDisk } from "./linear-size.ts";
 import { SlackCaseDisk } from "./slack-cases.ts";
 import { parseSlackClassification, type SlackClassification } from "./slack-classifier.ts";
 import { SLACK_SEARCH_CHARS } from "./slack-format.ts";
+import { type SlackReactionOwner, validSlackReactionOwner } from "./slack-reaction-owner.ts";
+import type { SlackRemovalFailure } from "./source-mcp.ts";
 import { TriageGuideDisk } from "./triage-guide-disk.ts";
 
 export type SlackCache = { state: "pending" | "error" } | { state: "done"; result: SlackClassification };
@@ -267,6 +269,13 @@ export class TrackedItemDisk {
 			.prepare(`UPDATE tracked_items SET slack_done=json_set(slack_done, '$.outcome', 'error', '$.error', ?)
 			WHERE slack_done IS NOT NULL AND json_extract(slack_done, '$.outcome') IS NULL`)
 			.run("Couldn't add done reaction in Slack.");
+		// An interrupted cleanup is unknown, not synchronized, and never automatically replayed.
+		this.db
+			.prepare(`UPDATE tracked_items SET slack_done=json_set(slack_done,
+            '$.eyesRemoval.outcome', 'error', '$.eyesRemoval.reason', 'error', '$.eyesRemoval.error', ?)
+            WHERE json_type(slack_done, '$.eyesRemoval')='object'
+            AND json_extract(slack_done, '$.eyesRemoval.outcome') IS NULL`)
+			.run("Couldn't remove eyes reaction in Slack.");
 		// Waiting messages joined the reaction reads; the older index no longer covers their query.
 		this.db.exec(`DROP INDEX IF EXISTS slack_reaction_reads;
 			CREATE INDEX IF NOT EXISTS slack_reaction_reads_unfinished ON tracked_items(project_id, slack_reaction_checked, id)
@@ -817,7 +826,7 @@ export class TrackedItemDisk {
 		if (changed) this.emit(item.projectId);
 		return !!changed;
 	}
-	slackStartResult(id: string, outcome: "reacted" | "skipped" | "error"): void {
+	slackStartResult(id: string, outcome: "reacted" | "skipped" | "error", owner?: SlackReactionOwner): void {
 		if (!["reacted", "skipped", "error"].includes(outcome)) throw new Error("Invalid Slack start outcome");
 		const item = this.require(id);
 		const row = this.db.prepare("SELECT slack_start FROM tracked_items WHERE id=?").get(id) as Pick<
@@ -826,9 +835,11 @@ export class TrackedItemDisk {
 		>;
 		if (item.kind !== "slack" || !row.slack_start) return;
 		const prior = JSON.parse(row.slack_start);
+		if (prior.outcome) return;
 		const result = {
 			outcome,
 			attemptedAt: prior.attemptedAt,
+			...(outcome === "reacted" && validSlackReactionOwner(owner) ? { owner } : {}),
 			...(outcome === "error" ? { error: "Couldn't add eyes reaction in Slack." } : {}),
 		};
 		this.db.prepare("UPDATE tracked_items SET slack_start=? WHERE id=?").run(JSON.stringify(result), id);
@@ -1103,7 +1114,7 @@ export class TrackedItemDisk {
 		if (!row) return;
 		const admitted = this.db
 			.prepare("UPDATE tracked_items SET slack_done=? WHERE id=? AND slack_done IS NULL")
-			.run(JSON.stringify({ attemptedAt: Date.now() }), row.id);
+			.run(JSON.stringify({ attemptedAt: Date.now(), eyesRemoval: { attemptedAt: Date.now() } }), row.id);
 		if (!admitted.changes) return;
 		this.emit(projectId);
 		return this.require(row.id);
@@ -1127,6 +1138,31 @@ export class TrackedItemDisk {
 				outcome,
 				id,
 			);
+		this.emit(row.project_id);
+	}
+
+	slackEyesRemovalResult(
+		id: string,
+		outcome: "removed" | "absent" | "skipped" | "error",
+		reason?: SlackRemovalFailure,
+	): void {
+		if (!["removed", "absent", "skipped", "error"].includes(outcome))
+			throw new Error("Invalid Slack removal outcome");
+		const row = this.db.prepare("SELECT * FROM tracked_items WHERE id=?").get(id) as Row | undefined;
+		if (row?.kind !== "slack" || !row.slack_done) return;
+		const prior = JSON.parse(row.slack_done);
+		if (!prior.eyesRemoval || prior.eyesRemoval.outcome) return;
+		const safeReason = ["identity_unverified", "identity_mismatch", "access_denied", "configuration"].includes(
+			reason ?? "",
+		)
+			? reason
+			: "error";
+		prior.eyesRemoval = {
+			...prior.eyesRemoval,
+			outcome,
+			...(outcome === "error" ? { reason: safeReason, error: "Couldn't remove eyes reaction in Slack." } : {}),
+		};
+		this.db.prepare("UPDATE tracked_items SET slack_done=? WHERE id=?").run(JSON.stringify(prior), id);
 		this.emit(row.project_id);
 	}
 
@@ -1433,6 +1469,7 @@ function decode(row: Row): TrackedItem {
 					severity: slack.severity,
 					...(slackStart?.outcome ? { slackStart } : {}),
 					...(slackDone?.outcome ? { slackDone } : {}),
+					...(slackDone?.eyesRemoval?.outcome ? { slackEyesRemoval: slackDone.eyesRemoval } : {}),
 				}
 			: { ...metadata, ...(row.linear_start ? { linearStart: JSON.parse(row.linear_start) } : {}) },
 		...(slack ? { slack } : {}),

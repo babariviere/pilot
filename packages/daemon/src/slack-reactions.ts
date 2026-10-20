@@ -1,6 +1,7 @@
 import type { TrackedItem, TrackingJson } from "@pilot/protocol";
+import { validSlackReactionOwner } from "./slack-reaction-owner.ts";
 import { slackStartAllowed } from "./slack-start.ts";
-import { SourceToolError, validSourceArguments } from "./source-mcp.ts";
+import { SlackRemovalError, SourceToolError, validSourceArguments } from "./source-mcp.ts";
 import type { SourcePollContext } from "./sources.ts";
 import type { TrackedItemStore } from "./tracked-items.ts";
 
@@ -41,15 +42,23 @@ export async function addSlackDone(context: SourcePollContext, item: TrackedItem
 }
 
 /** Shares the durable Done admission, never its outcome. No generic proxy capability is exposed. */
-export async function removeSlackEyes(context: SourcePollContext, item: TrackedItem): Promise<void> {
+export async function removeSlackEyes(
+	context: SourcePollContext,
+	item: TrackedItem,
+): Promise<"removed" | "absent" | "skipped"> {
 	if (
 		item.slack?.status !== "done" ||
 		!slackStartAllowed(context.config.slackChannels, item) ||
 		(item.metadata.slackStart as { outcome?: string } | undefined)?.outcome !== "reacted"
 	)
-		return;
-	const args = { channel_id: item.metadata.channel, message_ts: item.metadata.thread_ts, emoji: "eyes" };
+		return "skipped";
+	const owner = (item.metadata.slackStart as { owner?: unknown } | undefined)?.owner;
+	if (!validSlackReactionOwner(owner)) throw new SlackRemovalError("identity_unverified");
+	if (owner.channel !== item.metadata.channel || owner.messageTs !== item.metadata.thread_ts)
+		throw new SlackRemovalError("identity_mismatch");
+	const args = { channel_id: owner.channel, message_ts: owner.messageTs, emoji: "eyes", user_id: owner.userId };
 	if (!validSourceArguments("removeSlackEyes", args)) throw new SourceToolError("Invalid Slack parent");
 	context.signal.throwIfAborted();
-	await context.call("removeSlackEyes", args);
+	const result = (await context.call("removeSlackEyes", args)) as { absent?: boolean };
+	return result.absent === true ? "absent" : "removed";
 }

@@ -319,6 +319,7 @@ test("pinned SDK wrapper calls fixed dedicated tools, reuses OAuth and detects r
 	let reactionResponse: Parameters<typeof decodeMcpResult>[0] | undefined;
 	let linearResponse: Parameters<typeof decodeMcpResult>[0] | undefined;
 	let reactionThrows = false;
+	let profileResponse: Parameters<typeof decodeMcpResult>[0] | undefined;
 	let called!: () => void;
 	const server = createServer(async (req, res) => {
 		if (needsAuth) {
@@ -386,16 +387,18 @@ test("pinned SDK wrapper calls fixed dedicated tools, reuses OAuth and detects r
 		}
 		if (message.method === "tools/call")
 			result =
-				message.params.name === "get_issue" && linearResponse
-					? linearResponse
-					: message.params.name === "slack_add_reaction" && reactionResponse
-						? reactionResponse
-						: limited
-							? {
-									isError: true,
-									content: [{ type: "text", text: "Rate limit exceeded; retry-after: 120; secret" }],
-								}
-							: { content: [{ type: "text", text: '{"issues":[]}' }] };
+				message.params.name === "slack_read_user_profile" && profileResponse
+					? profileResponse
+					: message.params.name === "get_issue" && linearResponse
+						? linearResponse
+						: message.params.name === "slack_add_reaction" && reactionResponse
+							? reactionResponse
+							: limited
+								? {
+										isError: true,
+										content: [{ type: "text", text: "Rate limit exceeded; retry-after: 120; secret" }],
+									}
+								: { content: [{ type: "text", text: '{"issues":[]}' }] };
 		res.writeHead(200, { "content-type": "application/json" });
 		res.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
 	});
@@ -539,9 +542,26 @@ test("pinned SDK wrapper calls fixed dedicated tools, reuses OAuth and detects r
 			name: "slack_add_reaction",
 			arguments: doneArgs,
 		});
+		// Earlier assertions deliberately marked every read tool writable. Restore the profile read contract.
+		writes = false;
+		profileResponse = {
+			structuredContent: { result: "User ID: UPILOT\nUsername: fixture\nEmail: private@example.test\n" },
+		};
+		reactionResponse = { structuredContent: { ok: true } };
+		assert.deepEqual(await client.call("slack", "startSlack", reactionArgs, signal), { ok: true, userId: "UPILOT" });
+		assert.deepEqual(
+			seen
+				.filter((request) => request.method === "tools/call")
+				.slice(-2)
+				.map((request) => request.params),
+			[
+				{ name: "slack_read_user_profile", arguments: { response_format: "detailed" } },
+				{ name: "slack_add_reaction", arguments: reactionArgs },
+			],
+		);
 		reactionResponse = { isError: true, content: [{ type: "text", text: "missing_scope: private detail" }] };
 		reactionThrows = true;
-		assert.deepEqual(await client.call("slack", "startSlack", reactionArgs, signal), { ok: true });
+		assert.deepEqual(await client.call("slack", "startSlack", reactionArgs, signal), { ok: true, userId: "UPILOT" });
 		reactionThrows = false;
 		await assert.rejects(
 			client.call("slack", "startSlack", reactionArgs, signal),

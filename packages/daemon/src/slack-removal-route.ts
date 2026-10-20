@@ -9,6 +9,7 @@ export interface SlackRemovalRoute {
 	server: { url: string; headers: { Authorization: string } };
 	enabled?: boolean;
 	tool: string;
+	identityTool?: string;
 	dispatcher?: { tool: string; nameKey: string; argumentsKey: string };
 }
 
@@ -21,9 +22,10 @@ export function parseSlackRemovalRoute(value: unknown): SlackRemovalRoute {
 		/^[a-zA-Z0-9_.:/-]{1,200}$/.test(value) &&
 		!["__proto__", "prototype", "constructor"].includes(value);
 	if (
-		Object.keys(route).some((key) => !["server", "enabled", "tool", "dispatcher"].includes(key)) ||
+		Object.keys(route).some((key) => !["server", "enabled", "tool", "identityTool", "dispatcher"].includes(key)) ||
 		(route.enabled !== undefined && typeof route.enabled !== "boolean") ||
-		!name(route.tool)
+		!name(route.tool) ||
+		(route.identityTool !== undefined && !name(route.identityTool))
 	)
 		throw invalid();
 	const server = route.server as Record<string, unknown> | undefined;
@@ -82,6 +84,7 @@ export function parseSlackRemovalRoute(value: unknown): SlackRemovalRoute {
 		server: { url: server.url, headers: { Authorization: headers.Authorization } },
 		...(route.enabled !== undefined ? { enabled: route.enabled } : {}),
 		tool: route.tool,
+		...(typeof route.identityTool === "string" ? { identityTool: route.identityTool } : {}),
 		...(dispatcher ? { dispatcher } : {}),
 	};
 }
@@ -103,13 +106,16 @@ export async function loadSlackRemovalRoute(configDir = getPilotConfigDir()): Pr
 }
 
 export function slackRemovalCall(route: SlackRemovalRoute, channel: string, ts: string) {
-	const args = { channel, ts, name: "eyes" };
+	return slackRouteCall(route, route.tool, { channel, ts, name: "eyes" });
+}
+
+export function slackRouteCall(route: SlackRemovalRoute, tool: string, args: Record<string, unknown>) {
 	return {
 		server: route.server,
-		tool: route.dispatcher?.tool ?? route.tool,
+		tool: route.dispatcher?.tool ?? tool,
 		args: route.dispatcher
 			? {
-					[route.dispatcher.nameKey]: route.tool,
+					[route.dispatcher.nameKey]: tool,
 					[route.dispatcher.argumentsKey]: args,
 				}
 			: args,

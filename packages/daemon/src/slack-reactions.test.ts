@@ -7,7 +7,8 @@ import { type TestContext, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import type { TrackedItem } from "@pilot/protocol";
 import { ProjectStore } from "./projects.ts";
-import { decodeMcpResult, dedicatedSourceTool, validSourceArguments } from "./source-mcp.ts";
+import { removeSlackEyes } from "./slack-reactions.ts";
+import { decodeMcpResult, dedicatedSourceTool, SlackRemovalError, validSourceArguments } from "./source-mcp.ts";
 import { type SourcePoller, SourceRegistry } from "./sources.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
 
@@ -63,7 +64,7 @@ async function fixture(t: TestContext, adapter: SourcePoller = async () => ({ it
 			assert.ok(validSourceArguments(tool, args));
 			if (tool === "removeSlackEyes") {
 				calls.push({ tool, args });
-				assert.deepEqual(args, { channel_id: "CEXAMPLE", message_ts: parent, emoji: "eyes" });
+				assert.deepEqual(args, { channel_id: "CEXAMPLE", message_ts: parent, emoji: "eyes", user_id: "UPILOT" });
 				await beforeRemoval(signal);
 				signal.throwIfAborted();
 				if (removal instanceof Error) throw removal;
@@ -124,9 +125,13 @@ async function fixture(t: TestContext, adapter: SourcePoller = async () => ({ it
 		beforeWrite: (value: typeof beforeWrite) => {
 			beforeWrite = value;
 		},
-		eyes: async () => {
+		eyes: async (recordOwner = true) => {
 			assert.equal(await items.reserveSlackStart(item.id), true);
-			await items.slackStartResult(item.id, "reacted");
+			await items.slackStartResult(
+				item.id,
+				"reacted",
+				recordOwner ? { userId: "UPILOT", channel: "CEXAMPLE", messageTs: parent } : undefined,
+			);
 		},
 		drain: () => until(() => registry["doneRuns"].size === 0 && registry["doneDue"].size === 0),
 	};
@@ -187,9 +192,7 @@ test("all Done routes add one check and remove eyes on the parent only after a s
 	}
 });
 
-test("failed removal keeps Done and the check successful, logs one safe line, and never retries", async (t) => {
-	const warnings: unknown[][] = [];
-	t.mock.method(console, "warn", (...args: unknown[]) => warnings.push(args));
+test("failed removal keeps Done and the check successful, persists its own failure, and never retries", async (t) => {
 	for (const error of ["no_reaction", "not authorized", "unconfigured", "unreachable"]) {
 		const f = await fixture(t);
 		await f.eyes();
@@ -200,8 +203,10 @@ test("failed removal keeps Done and the check successful, logs one safe line, an
 		);
 		await f.registry.patch(f.item.id, { slack: { status: "done" } });
 		await f.drain();
-		assert.equal(outcome(await f.items.require(f.item.id)), "reacted");
-		assert.equal((await f.items.require(f.item.id)).slack?.status, "done");
+		const saved = await f.items.require(f.item.id);
+		assert.equal(outcome(saved), "reacted");
+		assert.equal((saved.metadata.slackEyesRemoval as { outcome: string }).outcome, "error");
+		assert.equal(saved.slack?.status, "done");
 		await f.poll();
 		await f.registry.patch(f.item.id, { slack: { status: "open" } });
 		await f.registry.patch(f.item.id, { slack: { status: "done" } });
@@ -214,7 +219,6 @@ test("failed removal keeps Done and the check successful, logs one safe line, an
 			await reopened.close();
 		}
 	}
-	assert.deepEqual(warnings, Array(4).fill(["pilotd: Slack eyes removal skipped or failed; no retry"]));
 });
 
 test("missing, failed and pending eyes outcomes never remove any reaction", async (t) => {
@@ -240,6 +244,11 @@ test("a cancelled removal never turns an already persisted check into an error",
 	await entered.promise;
 	assert.equal(outcome(await f.items.require(f.item.id)), "reacted");
 	await f.registry.stop();
+	assert.equal(
+		(await f.items.require(f.item.id)).metadata.slackEyesRemoval &&
+			((await f.items.require(f.item.id)).metadata.slackEyesRemoval as { outcome: string }).outcome,
+		"error",
+	);
 	assert.equal(outcome(await f.items.require(f.item.id)), "reacted");
 	assert.equal((await f.items.require(f.item.id)).slack?.status, "done");
 	assert.equal(await f.items.reserveSlackDone(f.project.id), undefined);
@@ -348,8 +357,10 @@ test("interrupted Done admissions recover as quiet errors without retrying", asy
 	assert.equal(await f.items.reserveSlackDone(f.project.id), undefined);
 	const reopened = new TrackedItemStore(f.path);
 	try {
-		assert.equal(outcome(await reopened.require(f.item.id)), "error");
-		assert.equal((await reopened.require(f.item.id)).slack?.status, "done");
+		const saved = await reopened.require(f.item.id);
+		assert.equal(outcome(saved), "error");
+		assert.equal((saved.metadata.slackEyesRemoval as { outcome: string }).outcome, "error");
+		assert.equal(saved.slack?.status, "done");
 		assert.equal(await reopened.reserveSlackDone(f.project.id), undefined);
 	} finally {
 		await reopened.close();
@@ -473,4 +484,134 @@ test("Done writes wait for admission and share the global two-slot bound with no
 	await linear;
 	await f.drain();
 	assert.equal(f.calls.filter((call) => call.tool === "doneSlack").length, 1);
+});
+
+// All writes below are synthetic; no original chat, account or thread is read or replayed.
+test("manual and tool Done from In progress or Waiting remove only the recorded owner's eyes", async (t) => {
+	for (const status of ["in_progress", "waiting"] as const) {
+		for (const route of ["manual", "tool"]) {
+			const f = await fixture(t);
+			await f.eyes();
+			await f.items.patch(f.item.id, { sessionId: "fixture-chat", start: true });
+			if (status === "waiting") await f.items.agentSlackStatus("fixture-chat", "waiting", "fixture reason");
+			assert.equal((await f.items.require(f.item.id)).slack?.status, status);
+			const users = new Set(["UPILOT", "UOTHER"]);
+			f.beforeRemoval(async () => {
+				users.delete("UPILOT");
+			});
+			if (route === "manual") await f.registry.patch(f.item.id, { slack: { status: "done" } });
+			else await f.items.agentSlackStatus("fixture-chat", "done", "fixture resolved");
+			await f.drain();
+			const saved = await f.items.require(f.item.id);
+			assert.equal(saved.slack?.status, "done");
+			assert.equal(outcome(saved), "reacted");
+			assert.equal((saved.metadata.slackEyesRemoval as { outcome: string }).outcome, "removed");
+			assert.deepEqual([...users], ["UOTHER"]);
+			assert.deepEqual(f.calls.find((c) => c.tool === "removeSlackEyes")?.args, {
+				channel_id: "CEXAMPLE",
+				message_ts: parent,
+				emoji: "eyes",
+				user_id: "UPILOT",
+			});
+		}
+	}
+});
+
+test("already absent is successful independently of adding the completion reaction", async (t) => {
+	for (const addFails of [false, true]) {
+		const f = await fixture(t);
+		await f.eyes();
+		f.removal({ isError: true, structuredContent: { ok: false, error: "no_reaction" } });
+		if (addFails) f.write({ isError: true, structuredContent: { error: "missing_scope" } });
+		await f.registry.patch(f.item.id, { slack: { status: "done" } });
+		await f.drain();
+		const saved = await f.items.require(f.item.id);
+		assert.equal(outcome(saved), addFails ? "error" : "reacted");
+		assert.equal((saved.metadata.slackEyesRemoval as { outcome: string }).outcome, "absent");
+		assert.equal(saved.slack?.status, "done");
+		const reopened = new TrackedItemStore(f.path);
+		try {
+			assert.deepEqual(
+				(await reopened.require(f.item.id)).metadata.slackEyesRemoval,
+				saved.metadata.slackEyesRemoval,
+			);
+			assert.equal(await reopened.reserveSlackDone(f.project.id), undefined);
+		} finally {
+			await reopened.close();
+		}
+	}
+});
+
+test("legacy unknown ownership is visible without attempting removal or replaying old Done items", async (t) => {
+	const f = await fixture(t);
+	await f.eyes(false);
+	await f.registry.patch(f.item.id, { slack: { status: "done" } });
+	await f.drain();
+	const saved = await f.items.require(f.item.id);
+	assert.equal(outcome(saved), "reacted");
+	assert.deepEqual(saved.metadata.slackEyesRemoval, {
+		outcome: "error",
+		reason: "identity_unverified",
+		error: "Couldn't remove eyes reaction in Slack.",
+		attemptedAt: (saved.metadata.slackEyesRemoval as { attemptedAt: number }).attemptedAt,
+	});
+	assert.equal(f.calls.filter((c) => c.tool === "removeSlackEyes").length, 0);
+	await f.poll();
+	await f.drain();
+	assert.equal(f.calls.filter((c) => c.tool === "doneSlack").length, 1);
+});
+
+test("a changed parent cannot redirect removal from the original recorded message", async (t) => {
+	const f = await fixture(t);
+	await f.eyes();
+	const saved = await f.items.require(f.item.id);
+	let writes = 0;
+	await assert.rejects(
+		removeSlackEyes(
+			{
+				project: f.project,
+				config: f.project.tracking!,
+				signal: new AbortController().signal,
+				call: async () => {
+					writes++;
+					return { ok: true };
+				},
+			},
+			{
+				...saved,
+				slack: { ...saved.slack!, status: "done" },
+				metadata: { ...saved.metadata, thread_ts: "1780000999.123456" },
+			},
+		),
+		(error: unknown) => error instanceof SlackRemovalError && error.reason === "identity_mismatch",
+	);
+	assert.equal(writes, 0);
+});
+
+test("permission and identity failures are independent durable outcomes in the triage list", async (t) => {
+	for (const reason of ["access_denied", "identity_mismatch"] as const) {
+		const f = await fixture(t);
+		await f.eyes();
+		f.removal(new SlackRemovalError(reason));
+		await f.registry.patch(f.item.id, { slack: { status: "done" } });
+		await f.drain();
+		const saved = await f.items.require(f.item.id);
+		assert.equal(outcome(saved), "reacted");
+		assert.equal((saved.metadata.slackEyesRemoval as { reason: string }).reason, reason);
+		assert.equal(saved.slack?.status, "done");
+		assert.deepEqual(
+			(await f.items.list({ projectId: f.project.id })).items[0]?.metadata.slackEyesRemoval,
+			saved.metadata.slackEyesRemoval,
+		);
+		const reopened = new TrackedItemStore(f.path);
+		try {
+			assert.deepEqual(
+				(await reopened.require(f.item.id)).metadata.slackEyesRemoval,
+				saved.metadata.slackEyesRemoval,
+			);
+			assert.equal(await reopened.reserveSlackDone(f.project.id), undefined);
+		} finally {
+			await reopened.close();
+		}
+	}
 });

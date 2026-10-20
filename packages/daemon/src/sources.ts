@@ -30,11 +30,19 @@ import { workflowStates } from "./linear-workflow.ts";
 import type { ProjectStore } from "./projects.ts";
 import { SlackModelUnavailable } from "./slack-classifier.ts";
 import { parseSlackMessageLink, SlackFormatChanged } from "./slack-format.ts";
+import type { SlackReactionOwner } from "./slack-reaction-owner.ts";
 import { addSlackDone, refreshSlackReactions, removeSlackEyes } from "./slack-reactions.ts";
 import { type SlackAdder, slackChannelProgress, slackExcerpt } from "./slack-source.ts";
 import { slackStart, slackStartAllowed } from "./slack-start.ts";
 import type { SlackWaitingWatcher } from "./slack-waiting.ts";
-import { type SourceMcpClient, SourceRateLimited, SourceSignInRequired, SourceToolError } from "./source-mcp.ts";
+import {
+	SlackRemovalError,
+	type SlackRemovalFailure,
+	type SourceMcpClient,
+	SourceRateLimited,
+	SourceSignInRequired,
+	SourceToolError,
+} from "./source-mcp.ts";
 import {
 	refreshAssessment,
 	SOURCE_REFRESH_CADENCE_MS,
@@ -1018,6 +1026,7 @@ export class SourceRegistry {
 			// Read the durable parent identity, not a stale caller snapshot.
 			const current = await this.items.require(item.id);
 			let outcome: "reacted" | "skipped" | "error" = "error";
+			let owner: SlackReactionOwner | undefined;
 			try {
 				controller.signal.throwIfAborted();
 				if (!key || this.items.checkpoint(sourceId)?.configKey !== key)
@@ -1026,7 +1035,7 @@ export class SourceRegistry {
 				if (health && health.status !== "ok" && health.nextPollAt > Date.now())
 					throw new Conflict("Source is backing off");
 				const project = structuredClone(this.projects.require(item.projectId));
-				outcome = await abortable(
+				const result = await abortable(
 					slackStart(
 						{
 							project,
@@ -1042,10 +1051,12 @@ export class SourceRegistry {
 					),
 					controller.signal,
 				);
+				outcome = result.outcome;
+				owner = result.owner;
 			} catch {
 				/* The chat is already linked. Never expose provider errors or retry this write. */
 			}
-			await this.items.slackStartResult(item.id, outcome);
+			await this.items.slackStartResult(item.id, outcome, owner);
 		});
 		const promise = work.finally(() => {
 			clearTimeout(timer);
@@ -1125,15 +1136,16 @@ export class SourceRegistry {
 						/* Done is local and never rolled back by a reaction failure. */
 					}
 					await this.items.slackDoneResult(admitted.id, outcome);
-					if (context && current) {
-						try {
-							controller.signal.throwIfAborted();
-							await abortable(removeSlackEyes(context, current), controller.signal);
-						} catch {
-							// Fixed bounded line, never proxy names, provider text, channel IDs or credentials.
-							console.warn("pilotd: Slack eyes removal skipped or failed; no retry");
-						}
+					let removal: "removed" | "absent" | "skipped" | "error" = "error";
+					let reason: SlackRemovalFailure | undefined;
+					try {
+						controller.signal.throwIfAborted();
+						if (context && current)
+							removal = await abortable(removeSlackEyes(context, current), controller.signal);
+					} catch (error) {
+						reason = error instanceof SlackRemovalError ? error.reason : "error";
 					}
+					await this.items.slackEyesRemovalResult(admitted.id, removal, reason);
 				})
 				.catch((error: unknown) => console.warn(`pilotd: Slack done reaction failed: ${logCause(error)}`))
 				.finally(() => {
