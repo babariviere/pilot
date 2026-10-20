@@ -8,9 +8,16 @@ import { MissionStore } from "./missions.ts";
 
 test("legacy milestones migrate in first appearance order to stable scoped phases", (t) => {
 	const dir = mkdtempSync(join(tmpdir(), "pilot-phase-migration-"));
-	t.after(() => rmSync(dir, { recursive: true, force: true }));
 	const file = join(dir, "missions.sqlite");
 	let store = new MissionStore(file);
+	// node:test runs after-hooks in registration order, so close the last store here before removing its files.
+	t.after(() => {
+		try {
+			store.close();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 	const { id } = store.create({
 		projectId: "p",
 		title: "M",
@@ -46,7 +53,6 @@ test("legacy milestones migrate in first appearance order to stable scoped phase
 	assert.equal(store.resolveTask(id, "1").milestone, "Ship");
 	store.close();
 	store = new MissionStore(file);
-	t.after(() => store.close());
 	assert.deepEqual(
 		store.phases(id).map((phase) => phase.id),
 		phases.map((phase) => phase.id),
@@ -56,9 +62,16 @@ test("legacy milestones migrate in first appearance order to stable scoped phase
 
 test("equal-key phase ordering, completion and gating survive durable replica restart", async (t) => {
 	const dir = mkdtempSync(join(tmpdir(), "pilot-phase-replica-"));
-	t.after(() => rmSync(dir, { recursive: true, force: true }));
 	const file = join(dir, "missions.sqlite");
 	let store = new MissionStore(file);
+	// node:test runs after-hooks in registration order, so close the last store here before removing its files.
+	t.after(() => {
+		try {
+			store.close();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 	const { id } = store.create({ projectId: "p", title: "M" });
 	for (const name of ["A", "B", "C", "D"]) store.addPhase(id, { name, order: 1 });
 	const phases = store.phases(id);
@@ -73,7 +86,6 @@ test("equal-key phase ordering, completion and gating survive durable replica re
 	await store.durable();
 	store.close();
 	store = new MissionStore(file);
-	t.after(() => store.close());
 	assert.deepEqual(
 		store.phases(id).map((phase) => phase.id),
 		phases.map((phase) => phase.id),
