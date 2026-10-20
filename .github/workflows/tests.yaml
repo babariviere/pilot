@@ -176,6 +176,46 @@ jobs:
         # about 8. Fail a hung test process well before the job limit without cutting off a cold run.
         timeout-minutes: 20
         run: apps/macos/scripts/test.sh
+      # A crashed test runner prints only its signal. Show the crashed thread from the system crash report.
+      - name: Show Swift test crash reports
+        if: ${{ failure() && steps.swift-test.outcome == 'failure' }}
+        timeout-minutes: 2
+        run: |
+          python3 - <<'PY'
+          import glob, json, os, time
+          dirs = [os.path.expanduser("~/Library/Logs/DiagnosticReports"), "/Library/Logs/DiagnosticReports"]
+          since = time.time() - 45 * 60
+          def recent():
+              found = [p for d in dirs for p in glob.glob(d + "/*.ips") if os.path.getmtime(p) > since]
+              return sorted(found, key=os.path.getmtime)
+          for _ in range(20):  # ReportCrash writes shortly after the process dies.
+              if recent():
+                  break
+              time.sleep(1)
+          reports = recent()
+          if not reports:
+              print("No crash reports from this job.")
+          for path in reports[-3:]:
+              print("==", os.path.basename(path))
+              try:
+                  with open(path) as f:
+                      f.readline()
+                      body = json.loads(f.read())
+              except (OSError, ValueError) as error:
+                  print("  unreadable:", error)
+                  continue
+              print("  exception:", json.dumps(body.get("exception")), json.dumps(body.get("asi", {}))[:2000])
+              images = body.get("usedImages", [])
+              for thread in body.get("threads", []):
+                  if not thread.get("triggered"):
+                      continue
+                  print("  crashed thread:", thread.get("queue") or thread.get("name") or "")
+                  for frame in thread.get("frames", [])[:80]:
+                      index = frame.get("imageIndex", -1)
+                      image = images[index].get("name", "?") if 0 <= index < len(images) else "?"
+                      symbol = frame.get("symbol") or hex(frame.get("imageOffset", 0))
+                      print(f"    {image} {symbol}+{frame.get('symbolLocation', 0)}")
+          PY
       # Only main saves (each build is ~430 MB against the repo's 10 GB cache limit), also after failing
       # tests: the build itself stays valid for the next incremental build.
       - name: Save the Swift test build
