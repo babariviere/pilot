@@ -72,12 +72,18 @@ async function fixture(t: TestContext, models: Record<string, string>) {
 		},
 	);
 	await sessions.load();
+	// node:test runs after-hooks in registration order, so managers reopened by a test register here and
+	// are shut down before the home directory is removed. Otherwise their late writes race the removal.
+	const managers = [sessions];
 	t.after(async () => {
-		await sessions.shutdown();
-		await Promise.allSettled(sessions["saving"].values());
+		for (const manager of managers) {
+			await manager.shutdown();
+			await Promise.allSettled(manager["saving"].values());
+		}
 		await rm(home, { recursive: true, force: true });
 	});
-	return { home, agentDir, ids, sessions, cache: () => cache, workerUsage };
+	const adopt = (manager: SessionManager) => managers.push(manager);
+	return { home, agentDir, ids, sessions, cache: () => cache, workerUsage, adopt };
 }
 
 test("parked sessions share their provider's subscription usage without a kernel", async (t) => {
@@ -270,7 +276,7 @@ test("a known pause and its per-chat force survive daemon restart when provider 
 			subscriptionUsage: () => ({ get: () => undefined, start: async () => {}, close() {} }),
 		},
 	);
-	t.after(() => reopened.shutdown());
+	f.adopt(reopened);
 	await reopened.load();
 	assert.equal(reopened.get(id)?.subscriptionPause?.forced, true);
 	await reopened.forceSubscription(id, false);
@@ -318,7 +324,7 @@ test("provider-reported limits acknowledge only a persisted resumable pause, and
 			subscriptionUsage: () => ({ get: () => undefined, start: async () => {}, close() {} }),
 		},
 	);
-	t.after(() => reopened.shutdown());
+	f.adopt(reopened);
 	await reopened.load();
 	assert.equal(reopened.subscriptionPaused(id), true);
 	await Promise.allSettled(reopened["starting"].values());
