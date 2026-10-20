@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import NativeTestSupport
 import PilotCore
 import SwiftUI
 import Testing
@@ -35,13 +36,9 @@ import Testing
         }
         let control = try #require(permissionAnchors(hosting).first { $0.allow == allow })
         #expect(decisions.isEmpty, "showing the prompt does not approve anything")
-        let point = control.convert(NSPoint(x: control.bounds.midX, y: control.bounds.midY), to: nil)
-        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-            let event = try #require(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
-                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
-                context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
-            window.sendEvent(event)
-        }
+        // Sending mouse-down then mouse-up synchronously left NSButtonCell tracking waiting forever for a
+        // mouse-up that was not queued yet. NativeInput queues the release before the press.
+        try await NativeInput.click(control)
         while decisions.isEmpty, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
         #expect(decisions.count == 1)
         #expect(decisions.first?.0 == request.id)
