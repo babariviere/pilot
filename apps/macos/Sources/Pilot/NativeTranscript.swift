@@ -189,6 +189,8 @@ final class NativeTranscriptController: NSObject, NSTableViewDataSource, NSTable
     func stop() {
         heightWork?.cancel()
         heightWork = nil
+        // The representable explicitly detaches before deinit, just like the existing scroll observer.
+        // swiftlint:disable:next notification_center_detachment
         NotificationCenter.default.removeObserver(self)
         configuration?.scroll.pinBottom = nil
         configuration?.scroll.onMessageToggled = nil

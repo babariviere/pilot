@@ -7,7 +7,9 @@ not a completed parity or rollout result. [Migration plan](reused-cell-transcrip
 ## Method
 
 - Baseline: requested starting main `5852e8d8b793779b91cdbe15904d77eb15aefa1a`.
-- Candidate: the opt-in native table/text implementation, including the reviewed binding/height/selection fixes.
+- Candidate: measured revision `ce0b43137ac9`, including the reviewed binding/height/selection fixes. Later
+  leading-alignment/icon/lint corrections and the automatic PR rebase are not a fresh full-matrix comparison;
+  the figures below remain historical evidence, not measurements of the latest head.
 - Release builds through `apps/macos/scripts/build.sh -c release`; all comparisons held the same shared Swift
   verification slot. Frozen script copies were not edited during execution. `caffeinate -di` prevented idle
   sleep; lock checks ran before and after every sample. The final job completed with exit code 0.
@@ -93,12 +95,30 @@ Sanitized per-run summaries, counters and idle samples are in
 ## Visual evidence and verification
 
 These are actual release-app captures of the same offline synthetic fixture, not SwiftUI mockups and not
-live user conversations. Code/table blocks still use compatibility hosts. The candidate table block is centered
-where the baseline is leading-aligned; this is a visible parity gap, not an intentional layout redesign.
+live user conversations. Code/table blocks still use compatibility hosts. The measured candidate screenshot
+records the original centering regression. The follow-up corrects the compatibility host to explicitly use
+leading alignment, without changing the table's natural size or column/selection rules.
 
 | Main | Native candidate |
 | --- | --- |
 | ![Main transcript](screenshots/native-transcript-before.png) | ![Native transcript](screenshots/native-transcript-after.png) |
+
+### Alignment follow-up
+
+The compatibility host now uses `.frame(width: width, alignment: .leading)`, preserving a compact table's natural
+width while aligning it with the surrounding text. A native regression fixture checks its left edge at
+760 → 320 → 760 points. It is CI-only, like the other Swift tests. The release build passed after preserving
+the PR's automatic rebase. This correction does not resolve or invalidate the historical no-go findings above.
+
+![Leading-aligned table in the corrected release fixture](screenshots/native-transcript-leading.png)
+
+This follow-up is an actual offscreen capture of the release app, not a mock. The screen was locked, so it
+is visual evidence only: the table now shares the code/prose leading edge. No timings from that run are used.
+Corrected executable SHA-256: `41e90c9b67d7684a293b140e6b5716c4f73ec017b0c314b80b061080b603cedb`.
+
+The CI follow-up also fixes two attributable failures: the native reply copy button now resolves its image
+through the shared icon vocabulary (instead of using the enum's raw case name as an SF Symbol), and explicit
+observer detachment uses the same documented lifecycle-specific lint suppression as the existing scroll observer.
 
 The local release build passed. Added native tests cover bounded height keys, stable streaming text views,
 same-source selection-owner replacement/range clearing, cancellation, full host/session identity, membership

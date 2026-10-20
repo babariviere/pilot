@@ -104,6 +104,43 @@ import Testing
     #expect(!expansion.bottom && expansion.offset == -50)
 }
 
+@Test @MainActor func nativeMarkdownHostedTableKeepsLeadingEdgeAcrossWidthChanges() async throws {
+    _ = NSApplication.shared
+    let source = "| A | B |\n| --- | --- |\n| one | two |"
+    let blocks = try await MarkdownRenderer.shared.prepare(source)
+    let prepared = try #require(blocks.first)
+    let block = NativeMarkdownBlockView()
+    let selection = MessageTextSelection()
+    block.update(prepared, index: 0, selection: selection, environment: EnvironmentValues(),
+                 streaming: false, fadesInitial: false, changed: {})
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 300),
+                          styleMask: [.titled], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    window.contentView?.addSubview(block)
+    defer { block.stop(); window.close() }
+    func table(in view: NSView) -> MarkdownTableView? {
+        if let table = view as? MarkdownTableView { return table }
+        return view.subviews.lazy.compactMap { table(in: $0) }.first
+    }
+    for width: CGFloat in [760, 320, 760] {
+        block.frame = NSRect(x: 0, y: 0, width: width, height: block.measure(width: width))
+        block.layoutSubtreeIfNeeded()
+        // Hosting can mount its representable on the next rendering turn even without a key window.
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while table(in: block) == nil, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+            block.layoutSubtreeIfNeeded()
+        }
+        try await Task.sleep(for: .milliseconds(10))
+        block.frame.size.height = block.measure(width: width)
+        block.layoutSubtreeIfNeeded()
+        let rendered = try #require(table(in: block))
+        let frame = rendered.convert(rendered.bounds, to: block)
+        #expect(frame.width < width - 40, "A compact table must not stretch to fill its host.")
+        #expect(abs(frame.minX) < 1, "The table must stay leading-aligned at width \(width).")
+    }
+}
+
 @Test @MainActor func nativeTranscriptResourceIncludesFullHostAndSession() {
     let a = HostRef(hostId: "alias", daemonId: "daemon-a", lineageId: "lineage")
     let b = HostRef(hostId: "alias", daemonId: "daemon-b", lineageId: "lineage")
