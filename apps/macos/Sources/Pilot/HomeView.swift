@@ -172,9 +172,11 @@ struct HostedChatStartNotice: View {
             Spacer(minLength: 8)
             if case let .receipt(receipt)? = delivery, receipt.state == .accepted {
                 Button("Open chat") { Task { await app.checkHostedChat(operation, form: form, openConfirmed: true) } }
+                    .background(ControlGeometry(id: "chat-start-check"))
                     .disabled(form.checkingStart)
             } else {
                 Button(form.checkingStart ? "Checking…" : "Check") { Task { await app.checkHostedChat(operation, form: form) } }
+                    .background(ControlGeometry(id: "chat-start-check"))
                     .disabled(form.checkingStart)
                 if case .unknown? = delivery {
                     Button("Retry original start…", action: retryOriginal)
@@ -194,6 +196,7 @@ struct IndependentLocalChatButton: View {
 
     var body: some View {
         Button("New Local chat") { app.newLocalChatWhileRemoteStartPending() }
+            .background(ControlGeometry(id: "independent-local-chat"))
             .disabled(form.busy)
             .help("Keep the devbox request and its draft, and open an independent Local draft.")
     }

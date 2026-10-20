@@ -1,4 +1,5 @@
 import AppKit
+import NativeTestSupport
 import PilotCore
 import SwiftUI
 import Testing
@@ -47,15 +48,13 @@ struct DiagnosticRepairFooterTests {
         #expect(fixture.client.fixtureSpawnRequests.isEmpty)
 
         let dismissAnchor = try #require(fixture.anchor(.dismiss))
-        let dismissButton = try #require(fixture.button(at: dismissAnchor))
-        dismissButton.performClick(nil)
+        try await NativeInput.click(dismissAnchor)
         try await fixture.settle { fixture.anchor(.dismiss) == nil }
         #expect(fixture.model.dismissedDiagnosticRepairProposal(for: fixture.reference) == proposal.id)
         #expect(fixture.anchor(.primary) != nil, "Not now hides the summary, never the fixed Review action")
         #expect(fixture.client.fixtureSpawnRequests.isEmpty)
         let reviewButtonAnchor = try #require(fixture.anchor(.primary))
-        let reviewButton = try #require(fixture.button(at: reviewButtonAnchor))
-        reviewButton.performClick(nil)
+        try await NativeInput.click(reviewButtonAnchor)
         #expect(fixture.model.diagnosticRepairTarget?.reference == fixture.reference)
         #expect(fixture.client.fixtureSpawnRequests.isEmpty, "Review alone cannot start a Build")
     }
@@ -85,8 +84,7 @@ struct DiagnosticRepairFooterTests {
         fixture.updateClient()
         try await fixture.settle()
         let requestAnchor = try #require(fixture.anchor(.primary))
-        let request = try #require(fixture.button(at: requestAnchor))
-        request.performClick(nil); request.performClick(nil)
+        try await NativeInput.click(requestAnchor); try await NativeInput.click(requestAnchor)
         try await fixture.settle { fixture.client.fixtureSendRequests.count == 1 }
         #expect(fixture.model.diagnosticRepairRequest(for: fixture.reference)?.isPending == true)
         let pendingAnchor = try #require(fixture.anchor(.primary))
@@ -127,21 +125,19 @@ struct DiagnosticRepairFooterTests {
         fixture.updateClient()
         try await fixture.settle()
         let buttonAnchor = try #require(fixture.anchor(.primary))
-        let button = try #require(fixture.button(at: buttonAnchor))
-        #expect(button.isEnabled)
-        button.performClick(nil)
+        #expect(buttonAnchor.controlEnabled)
+        try await NativeInput.click(buttonAnchor)
         #expect(fixture.model.diagnosticRepairTarget?.reference == fixture.reference)
         #expect(fixture.model.hosts.pendingOperations[original.operationId] == original)
         #expect(fixture.client.fixtureSpawnRequests.isEmpty && fixture.client.fixtureSendRequests.isEmpty)
         fixture.client.disconnect()
         try await fixture.settle {
-            guard let anchor = fixture.anchor(.primary), let button = fixture.button(at: anchor) else { return false }
-            return !button.isEnabled
+            guard let anchor = fixture.anchor(.primary) else { return false }
+            return !anchor.controlEnabled
         }
         let offlineAnchor = try #require(fixture.anchor(.primary))
-        let offline = try #require(fixture.button(at: offlineAnchor))
-        #expect(!offline.isEnabled)
-        offline.performClick(nil)
+        #expect(!offlineAnchor.controlEnabled)
+        try await NativeInput.click(offlineAnchor)
         #expect(fixture.model.hosts.pendingOperations.count == 1)
         #expect(fixture.client.fixtureSpawnRequests.isEmpty && fixture.client.fixtureSendRequests.isEmpty)
     }
@@ -234,10 +230,6 @@ private struct FooterChat: View {
     }
     func anchor(_ role: DiagnosticRepairActionAnchorView.Role) -> DiagnosticRepairActionAnchorView? {
         views(DiagnosticRepairActionAnchorView.self).first { $0.role == role }
-    }
-    func button(at anchor: NSView) -> NSButton? {
-        let frame = anchor.convert(anchor.bounds, to: hosting)
-        return views(NSButton.self).first { $0.convert($0.bounds, to: hosting).contains(NSPoint(x: frame.midX, y: frame.midY)) }
     }
     func expectActionAlignedWithComposer(_ anchor: NSView, editor: NSView,
                                         sourceLocation: SourceLocation = #_sourceLocation) {

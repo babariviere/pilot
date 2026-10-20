@@ -336,6 +336,14 @@ private final class OwnedSSHProcess: @unchecked Sendable {
     var status: Int32? { lock.withLock { code } }
 
     init(executable: URL, arguments: [String]) throws {
+        // A failed launch has no child for Foundation's termination handler to reap.
+        // Reject invalid executable paths before installing that handler.
+        var directory: ObjCBool = false
+        guard executable.isFileURL,
+              FileManager.default.fileExists(atPath: executable.path, isDirectory: &directory),
+              !directory.boolValue, FileManager.default.isExecutableFile(atPath: executable.path) else {
+            throw SSHTunnelError.launchFailed
+        }
         process.executableURL = executable
         process.arguments = arguments
         process.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser

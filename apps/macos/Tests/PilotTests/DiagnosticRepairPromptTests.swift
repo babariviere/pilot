@@ -1,4 +1,5 @@
 import AppKit
+import NativeTestSupport
 import PilotCore
 import SwiftUI
 import Testing
@@ -9,10 +10,9 @@ private let repairRemoteHost = HostRef(hostId: "devbox", daemonId: "remote-daemo
 private let repairTargetID = "00000000-0000-4000-8000-000000000101"
 private let repairSpecialistID = "00000000-0000-4000-8000-000000000102"
 
-/// SwiftUI owns the labels for these hosted controls, so the backing `NSButton.title` and AppKit accessibility
-/// fields are empty in headless runners. Keep the mounted tests on the real native controls and assert their effects.
-@MainActor private func mountedButtons(_ view: NSView) -> [NSButton] {
-    (view as? NSButton).map { [$0] } ?? view.subviews.flatMap(mountedButtons)
+/// Locate production controls without depending on SwiftUI's backing NSButtons or headless accessibility tree.
+@MainActor private func mountedButtons(_ view: NSView) -> [DiagnosticRepairActionAnchorView] {
+    NativeInput.views(in: view, of: DiagnosticRepairActionAnchorView.self)
 }
 
 private func repairProposal(_ id: String = "diagnostic-proposal:v1:000000000000000000000001")
@@ -210,7 +210,7 @@ private func repairSession(host: HostRef = repairLocalHost, proposal: Diagnostic
     }
     let controls = mountedButtons(hosting)
     try #require(controls.count == 2, "the production proposal tray has only Review and Not now actions")
-    controls.forEach { $0.performClick(nil) }
+    for control in controls { try await NativeInput.click(control) }
     #expect(reviews == 1 && dismissals == 1)
     #expect(client.fixtureSpawnRequests.isEmpty, "viewing, reviewing and dismissing the tray never starts a chat")
 }
@@ -341,8 +341,8 @@ private func repairSession(host: HostRef = repairLocalHost, proposal: Diagnostic
     let controls = mountedButtons(hosting)
     try #require(controls.count == 1, "the production diagnostics footer has one repair action")
     let action = controls[0]
-    action.performClick(nil)
-    action.performClick(nil)
+    try await NativeInput.click(action)
+    try await NativeInput.click(action)
     while client.fixtureSendRequests.isEmpty, ContinuousClock.now < deadline {
         try await Task.sleep(for: .milliseconds(20))
     }
@@ -378,7 +378,7 @@ private func repairSession(host: HostRef = repairLocalHost, proposal: Diagnostic
     }
     let controls = mountedButtons(hosting)
     try #require(controls.count == 1, "the production diagnostics footer has one repair action")
-    controls[0].performClick(nil)
+    try await NativeInput.click(controls[0])
     #expect(app.diagnosticRepairTarget?.reference.localId == fixture.specialist.id)
     #expect(client.fixtureSendRequests.isEmpty && client.fixtureSpawnRequests.isEmpty)
 }

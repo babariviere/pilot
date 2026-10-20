@@ -382,32 +382,36 @@ private struct DiagnosticRepairHeaderAction: View {
             }
         }
         .controlSize(.small)
+        .background(DiagnosticRepairActionAnchor())
         .disabled(!presentation.enabled)
         .fixedSize()
         .help(presentation.help)
         .accessibilityLabel(presentation.title)
         .accessibilityHint(presentation.help)
         .accessibilityIdentifier("diagnostic-repair-action")
-        .background(DiagnosticRepairActionAnchor())
     }
 }
 
 /// Passive native geometry anchor for keyboard/accessibility layout verification. Never becomes a hit target.
 private struct DiagnosticRepairActionAnchor: NSViewRepresentable {
     var role: DiagnosticRepairActionAnchorView.Role = .primary
+    @Environment(\.isEnabled) private var enabled
     func makeNSView(context: Context) -> DiagnosticRepairActionAnchorView {
         let view = DiagnosticRepairActionAnchorView()
         view.role = role
+        view.controlEnabled = enabled
         view.setAccessibilityElement(false)
         return view
     }
-    func updateNSView(_ view: DiagnosticRepairActionAnchorView, context: Context) { view.role = role }
+    func updateNSView(_ view: DiagnosticRepairActionAnchorView, context: Context) {
+        view.role = role
+        view.controlEnabled = enabled
+    }
 }
 
-final class DiagnosticRepairActionAnchorView: NSView {
+final class DiagnosticRepairActionAnchorView: ControlGeometryView {
     enum Role: Equatable { case primary, dismiss }
     var role: Role = .primary
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 enum DiagnosticRepair {
@@ -636,9 +640,9 @@ struct DiagnosticRepairPrompt: View {
                     if showsReviewAction {
                         Button(presentation.primaryTitle, action: onReview)
                             .buttonStyle(.borderedProminent)
+                            .background(DiagnosticRepairActionAnchor())
                             .disabled(presentation.problem != nil && !presentation.pendingStart)
                             .accessibilityIdentifier("diagnostic-repair-review")
-                            .background(DiagnosticRepairActionAnchor())
                     }
                     if !presentation.pendingStart {
                         Button("Not now", action: onDismiss)

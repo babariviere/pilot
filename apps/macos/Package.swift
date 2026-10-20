@@ -111,8 +111,9 @@ let package = Package(
             ],
             path: "Tests/PilotTelemetryTests"
         ),
-        .testTarget(name: "PilotUITests", dependencies: ["Pilot"], path: "Tests/PilotUITests"),
-        .testTarget(name: "PilotTests", dependencies: ["Pilot"], path: "Tests/PilotTests"),
+        .target(name: "NativeTestSupport", path: "Tests/NativeTestSupport"),
+        .testTarget(name: "PilotUITests", dependencies: ["Pilot", "NativeTestSupport"], path: "Tests/PilotUITests"),
+        .testTarget(name: "PilotTests", dependencies: ["Pilot", "NativeTestSupport"], path: "Tests/PilotTests"),
     ],
     swiftLanguageModes: [.v5]
 )

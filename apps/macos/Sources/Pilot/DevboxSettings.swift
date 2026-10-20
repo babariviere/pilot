@@ -48,7 +48,9 @@ struct DevboxSettingsContent: View {
             ForEach(devboxes, id: \.host) { snapshot in hostRow(snapshot) }
             if devboxes.isEmpty { SettingsRow { SettingsNote("No remote devboxes yet. Setup does not require a project, chat or model login.") } }
             SettingsRow {
-                Button("Add devbox…") { adding = true }.controlSize(.small).disabled(hosts.persistenceError != nil)
+                Button("Add devbox…") { adding = true }
+                    .background(ControlGeometry(id: "devbox-add"))
+                    .controlSize(.small).disabled(hosts.persistenceError != nil)
             }
             if let problem { SettingsRow { InlineProblem(problem) } }
             if let problem = hosts.persistenceError { SettingsRow { InlineProblem(problem) } }

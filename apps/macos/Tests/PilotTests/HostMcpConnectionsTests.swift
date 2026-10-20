@@ -1,4 +1,5 @@
 import AppKit
+import NativeTestSupport
 import Combine
 import Foundation
 import PilotCore
@@ -304,15 +305,15 @@ private final class HostMcpHTTP: URLProtocol {
             defer { window.close() }
             try await mcpNativeWait { mcpNativeButtons(hosting).count == 1 }
             let checkbox = try #require(mcpNativeButtons(hosting).first)
-            #expect(checkbox.isEnabled && sharing.selected.isEmpty)
+            #expect(checkbox.controlEnabled && sharing.selected.isEmpty)
             #expect(HostMcpHTTP.state.requests.allSatisfy { !$0.contains("PUT") })
-            try mcpNativeClick(checkbox)
+            try await NativeInput.click(checkbox)
             try await mcpNativeWait { sharing.selected == ["same"] }
             await sharing.apply()
             #expect(sharing.notice != nil && HostMcpHTTP.state.targetEntries.map(\.name) == ["other", "same"])
             #expect(HostMcpHTTP.state.requests.filter { $0.contains("PUT") } == ["box PUT /api/mcp/setup"])
             hosting.layoutSubtreeIfNeeded()
-            try await mcpNativeWait { mcpNativeButtons(hosting).allSatisfy { !$0.isEnabled } }
+            try await mcpNativeWait { mcpNativeButtons(hosting).allSatisfy { !$0.controlEnabled } }
         }
     }
 }
@@ -322,18 +323,6 @@ private final class HostMcpHTTP: URLProtocol {
     while !predicate(), Date() < deadline { try await Task.sleep(for: .milliseconds(5)) }
     try #require(predicate(), "Mounted MCP checkbox did not settle")
 }
-@MainActor private func mcpNativeButtons(_ view: NSView) -> [NSButton] {
-    (view as? NSButton).map { [$0] } ?? view.subviews.flatMap(mcpNativeButtons)
-}
-@MainActor private func mcpNativeClick(_ button: NSButton) throws {
-    let window = try #require(button.window)
-    let point = button.convert(NSPoint(x: button.bounds.midX, y: button.bounds.midY), to: nil)
-    func event(_ type: NSEvent.EventType) throws -> NSEvent {
-        try #require(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
-            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
-            context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
-    }
-    NSApp.postEvent(try event(.leftMouseUp), atStart: false)
-    window.sendEvent(try event(.leftMouseDown))
-    if let up = NSApp.nextEvent(matching: .leftMouseUp, until: Date(), inMode: .default, dequeue: true) { window.sendEvent(up) }
+@MainActor private func mcpNativeButtons(_ view: NSView) -> [ControlGeometryView] {
+    NativeInput.views(in: view, of: ControlGeometryView.self).filter { $0.identifier?.rawValue == "mcp-share" }
 }

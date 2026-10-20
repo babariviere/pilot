@@ -1,4 +1,5 @@
 import AppKit
+import NativeTestSupport
 import PilotCore
 import SwiftUI
 import Testing
@@ -30,17 +31,16 @@ func addDevboxPresentsSetupSheetAfterCancelAndReopen() async throws {
     }
     hosting.layoutSubtreeIfNeeded()
     try await devboxSettingsWait("Add devbox button did not mount", in: hosting) {
-        devboxSettingsControls(in: hosting, of: NSButton.self).count == 1
+        devboxSettingsControls(in: hosting, of: ControlGeometryView.self).count == 1
     }
 
     for _ in 0..<2 {
         #expect(window.attachedSheet == nil)
-        // With no saved hosts, Add devbox is the destination's only button. SwiftUI's
-        // hosted labels are not exposed as NSButton titles in this in-process runner.
-        let addButtons = devboxSettingsControls(in: hosting, of: NSButton.self)
+        // With no saved hosts, Add devbox is the destination's only action.
+        let addButtons = devboxSettingsControls(in: hosting, of: ControlGeometryView.self)
         try #require(addButtons.count == 1)
         let add = try #require(addButtons.first)
-        try devboxSettingsClick(add)
+        try await devboxSettingsClick(add)
         try await devboxSettingsWait("Add devbox did not present its setup sheet", in: hosting) {
             window.attachedSheet != nil
         }
@@ -48,15 +48,15 @@ func addDevboxPresentsSetupSheetAfterCancelAndReopen() async throws {
         let content = try #require(sheet.contentView)
         try await devboxSettingsWait("The live setup form did not mount", in: content) {
             devboxSettingsControls(in: content, of: NSTextField.self).contains { $0.isEditable }
-                && devboxSettingsControls(in: content, of: NSButton.self).count >= 2
+                && devboxSettingsControls(in: content, of: ControlGeometryView.self).count >= 2
         }
         let fields = devboxSettingsControls(in: content, of: NSTextField.self).filter(\.isEditable)
         try #require(fields.count == 1)
         #expect(fields.first?.stringValue == "")
         let (cancel, setup) = try devboxSettingsFooter(in: content)
-        #expect(!setup.isEnabled, "Opening setup must not grant installation permission")
+        #expect(!setup.controlEnabled, "Opening setup must not grant installation permission")
         #expect(packageLoads == 0)
-        try devboxSettingsClick(cancel)
+        try await devboxSettingsClick(cancel)
         try await devboxSettingsWait("Cancel did not dismiss the setup sheet", in: content) {
             window.attachedSheet == nil
         }
@@ -81,13 +81,13 @@ func githubKeySheetRequiresNativeConfirmationAndCancelDoesNotRegister() async th
     window.setFrameOrigin(NSPoint(x: -10000, y: -10000)); window.orderFrontRegardless()
     defer { window.close() }
     try await devboxSettingsWait("GitHub key confirmation did not mount", in: hosting) {
-        devboxSettingsControls(in: hosting, of: NSButton.self).count == 2
+        devboxSettingsControls(in: hosting, of: ControlGeometryView.self).count == 2
     }
     #expect(approvals == 0)
     let (cancel, approve) = try devboxSettingsFooter(in: hosting)
-    try devboxSettingsClick(cancel)
+    try await devboxSettingsClick(cancel)
     #expect(cancellations == 1 && approvals == 0)
-    try devboxSettingsClick(approve)
+    try await devboxSettingsClick(approve)
     #expect(approvals == 1)
 }
 
@@ -105,13 +105,13 @@ func githubExistingCheckoutRequiresExplicitNativeReuseConfirmation() async throw
     window.setFrameOrigin(NSPoint(x: -10000, y: -10000)); window.orderFrontRegardless()
     defer { window.close() }
     try await devboxSettingsWait("Existing checkout confirmation did not mount", in: hosting) {
-        devboxSettingsControls(in: hosting, of: NSButton.self).count == 2
+        devboxSettingsControls(in: hosting, of: ControlGeometryView.self).count == 2
     }
     #expect(confirmations == 0)
     let (cancel, confirm) = try devboxSettingsFooter(in: hosting)
-    try devboxSettingsClick(cancel)
+    try await devboxSettingsClick(cancel)
     #expect(cancellations == 1 && confirmations == 0)
-    try devboxSettingsClick(confirm)
+    try await devboxSettingsClick(confirm)
     #expect(confirmations == 1)
 }
 
@@ -147,13 +147,13 @@ func githubImportNativeCloneActionStaysDisabledUntilHostDestinationPreview() asy
         !model.busy && devboxSettingsControls(in: hosting, of: NSTextField.self).filter(\.isEditable).count >= 3
     }
     let (_, initialClone) = try devboxSettingsFooter(in: hosting)
-    #expect(!initialClone.isEnabled && starts == 0)
+    #expect(!initialClone.controlEnabled && starts == 0)
     await model.checkDestination()
     try await devboxSettingsWait("Clone did not enable after the selected host's preview", in: hosting) {
-        devboxSettingsControls(in: hosting, of: NSButton.self).contains { $0.isEnabled && $0 === initialClone }
+        devboxSettingsControls(in: hosting, of: ControlGeometryView.self).contains { $0.controlEnabled && $0 === initialClone }
     }
     let (_, clone) = try devboxSettingsFooter(in: hosting)
-    try devboxSettingsClick(clone)
+    try await devboxSettingsClick(clone)
     try await devboxSettingsWait("Native clone action did not reach the host-bound model", in: hosting) { starts == 1 }
     #expect(starts == 1)
 }
@@ -172,8 +172,10 @@ func githubImportNativeCloneActionStaysDisabledUntilHostDestinationPreview() asy
 
 /// SheetScaffold's bottom row contains Cancel followed by the primary action.
 /// Locate that mounted row, not a guessed fixed coordinate or a replacement action.
-@MainActor private func devboxSettingsFooter(in content: NSView) throws -> (NSButton, NSButton) {
-    let buttons = devboxSettingsControls(in: content, of: NSButton.self)
+@MainActor private func devboxSettingsFooter(in content: NSView) throws -> (ControlGeometryView, ControlGeometryView) {
+    let buttons = devboxSettingsControls(in: content, of: ControlGeometryView.self).filter {
+        $0.identifier?.rawValue == "sheet-cancel" || $0.identifier?.rawValue == "sheet-primary"
+    }
     let bottom = try #require(buttons.map { $0.convert($0.bounds, to: nil).midY }.min())
     let footer = buttons.filter { abs($0.convert($0.bounds, to: nil).midY - bottom) < 3 }
         .sorted { $0.convert($0.bounds, to: nil).midX < $1.convert($1.bounds, to: nil).midX }
@@ -187,21 +189,8 @@ func githubImportNativeCloneActionStaysDisabledUntilHostDestinationPreview() asy
         + view.subviews.map { devboxSettingsViewTree($0, depth: depth + 1) }.joined()
 }
 
-/// Find the mounted AppKit control, then send native mouse events to its window.
-@MainActor private func devboxSettingsClick(_ button: NSButton) throws {
-    let window = try #require(button.window)
-    try #require(button.isEnabled)
-    try #require(!button.bounds.isEmpty)
-    let location = button.convert(NSPoint(x: button.bounds.midX, y: button.bounds.midY), to: nil)
-    let event = { (type: NSEvent.EventType) in
-        try #require(NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
-            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
-            eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
-    }
-    // Native buttons can track mouseDown until they dequeue the matching mouseUp.
-    NSApp.postEvent(try event(.leftMouseUp), atStart: false)
-    window.sendEvent(try event(.leftMouseDown))
-    if let up = NSApp.nextEvent(matching: .leftMouseUp, until: Date(), inMode: .default, dequeue: true) {
-        window.sendEvent(up)
-    }
+/// Route pointer input through the real mounted control, regardless of SwiftUI's renderer.
+@MainActor private func devboxSettingsClick(_ button: ControlGeometryView) async throws {
+    try #require(button.controlEnabled)
+    try await NativeInput.click(button)
 }

@@ -39,8 +39,8 @@ import Testing
 @Test(arguments: [0, 1, 2, 3], [ColorScheme.light, .dark])
 @MainActor func settingsNavigationKeepsNeutralSelectionWithoutFocusOutlines(selection: Int, scheme: ColorScheme) throws {
     let titles = ["Appearance", "Notifications", "pilot", "dotfiles"]
-    func render(focused: Bool) throws -> NSBitmapImageRep {
-        let renderer = ImageRenderer(content: VStack(spacing: 1) {
+    func content(focused: Bool) -> some View {
+        VStack(spacing: 1) {
             ForEach(titles.indices, id: \.self) { index in
                 SidebarNavRow(title: titles[index], icon: index < 2 ? .appearance : .project,
                               selected: selection == index, parentFocused: focused, action: {}) {
@@ -51,7 +51,13 @@ import Testing
         .padding(10)
         .frame(width: 210)
         .background(Theme.sidebar)
-        .environment(\.colorScheme, scheme))
+        .environment(\.colorScheme, scheme)
+    }
+    // Exercise a focus transition in the same render graph. Recreating the graph
+    // also compares cold/warm symbol rasterization, which is not focus appearance.
+    let renderer = ImageRenderer(content: content(focused: false))
+    func render(focused: Bool) throws -> NSBitmapImageRep {
+        renderer.content = content(focused: focused)
         return NSBitmapImageRep(cgImage: try #require(renderer.cgImage))
     }
 

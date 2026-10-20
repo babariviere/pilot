@@ -100,6 +100,17 @@ REGRESSION_PARTITIONS = [
 ]
 REGRESSION_OUTPUTS = [STARTED + "".join(f"◇ Test {name}() started.\n" for name in names) + PASSED
                       for names in REGRESSION_PARTITIONS]
+NATIVE_POINTERS = [
+    "nativeControlsActivateOnlyEnabledProductionActions",
+    "nativeRepairPromptButtonsOnlyReviewOrDismissAndNeverSpawn",
+    "mountedDiagnosticsFooterSubmitsOnceAndNeverStartsRepair",
+    "mountedDiagnosticsFooterReviewsAnExistingProposalWithoutStartingWork",
+    "nativeIndependentLocalButtonWorksWhileOriginalCheckIsInProgress",
+    "pressingNativeHomeCheckActuallyChecksShowsProgressAndOpensTheExistingChat",
+    "slackTriageRefreshIsClickableAndDisablesDuringLocalAndAutomaticSync",
+    "sidebarSelectionCoversNativeBlueWithoutLosingKeyboardNavigation",
+]
+NATIVE_POINTER_OUTPUTS = [STARTED + f"◇ Test {name}() started.\n" + PASSED for name in NATIVE_POINTERS]
 
 
 class TestOutputTests(unittest.TestCase):
@@ -153,7 +164,7 @@ class TestOutputTests(unittest.TestCase):
                     fifth_output=CALLBACKS_OUTPUT, fifth_status=0,
                     sixth_output=None, sixth_status=0, seventh_output=None, seventh_status=0,
                     extra_env=None, github_outputs=None, scoped_model_outputs=None, automatic_update_outputs=None,
-                    host_mcp_outputs=None, regression_outputs=None):
+                    host_mcp_outputs=None, regression_outputs=None, pointer_outputs=None):
         if sixth_output is None:
             sixth_output = JOURNEY_START_OUTPUT
         if seventh_output is None:
@@ -193,6 +204,7 @@ class TestOutputTests(unittest.TestCase):
             outputs += ([(text, 0) for text in AUTOMATIC_UPDATE_OUTPUTS] if automatic_update_outputs is None else automatic_update_outputs)
             outputs += ([(text, 0) for text in HOST_MCP_OUTPUTS] if host_mcp_outputs is None else host_mcp_outputs)
             outputs += ([(text, 0) for text in REGRESSION_OUTPUTS] if regression_outputs is None else regression_outputs)
+            outputs += ([(text, 0) for text in NATIVE_POINTER_OUTPUTS] if pointer_outputs is None else pointer_outputs)
             env = {**{key: value for key, value in os.environ.items() if key != "CI"},
                    "PATH": f"{root}:{os.environ['PATH']}",
                    "FAKE_SWIFT": str(root / "swift"), "ARGUMENTS": str(arguments), "PILOT_SWIFT_JOBS": "2",
@@ -213,9 +225,9 @@ class TestOutputTests(unittest.TestCase):
         result, continued, calls = self.run_wrapper(PASSED, all_calls=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(continued)
-        self.assertEqual(len(calls), 7 + len(GITHUB) + len(SCOPED_MODEL_OUTPUTS) + len(AUTOMATIC_UPDATE_OUTPUTS) + len(HOST_MCP_OUTPUTS) + len(REGRESSION_OUTPUTS))
+        self.assertEqual(len(calls), 7 + len(GITHUB) + len(SCOPED_MODEL_OUTPUTS) + len(AUTOMATIC_UPDATE_OUTPUTS) + len(HOST_MCP_OUTPUTS) + len(REGRESSION_OUTPUTS) + len(NATIVE_POINTERS))
         self.assertEqual(calls[0][-2:],
-                         ["--skip", f"{ISOLATED}|{DEVBOX}|{TERMINAL}|{'|'.join(CALLBACKS)}|{'|'.join(JOURNEYS)}|{'|'.join(GITHUB)}|{'|'.join(SCOPED_MODELS)}|{'|'.join(SCOPED_MODEL_NATIVE)}|{'|'.join(AUTOMATIC_UPDATES)}|{'|'.join(HOST_MCPS)}|{'|'.join(name for group in REGRESSION_PARTITIONS for name in group)}"])
+                         ["--skip", f"{ISOLATED}|{DEVBOX}|{TERMINAL}|{'|'.join(CALLBACKS)}|{'|'.join(JOURNEYS)}|{'|'.join(GITHUB)}|{'|'.join(SCOPED_MODELS)}|{'|'.join(SCOPED_MODEL_NATIVE)}|{'|'.join(AUTOMATIC_UPDATES)}|{'|'.join(HOST_MCPS)}|{'|'.join(name for group in REGRESSION_PARTITIONS for name in group)}|{'|'.join(NATIVE_POINTERS)}"])
         self.assertNotIn("--skip-build", calls[0])
         self.assertIn("--skip-build", calls[1])
         self.assertEqual(calls[1][-2:], ["--filter", ISOLATED])
@@ -238,13 +250,29 @@ class TestOutputTests(unittest.TestCase):
         for index, name in enumerate(SCOPED_MODEL_NATIVE, start=scoped_start + 1):
             self.assertEqual(calls[index][-2:], ["--filter", name])
             self.assertIn("--skip-build", calls[index])
-        for call, names in zip(calls[-len(REGRESSION_PARTITIONS):], REGRESSION_PARTITIONS):
+        for call, names in zip(calls[-len(REGRESSION_PARTITIONS)-len(NATIVE_POINTERS):-len(NATIVE_POINTERS)], REGRESSION_PARTITIONS):
             self.assertEqual(call[-2:], ["--filter", "|".join(names)])
+            self.assertIn("--skip-build", call)
+        for call, name in zip(calls[-len(NATIVE_POINTERS):], NATIVE_POINTERS):
+            self.assertEqual(call[-2:], ["--filter", name])
             self.assertIn("--skip-build", call)
         self.assertEqual(result.stderr.count("acquired slot 1/1"), 1)
         self.assertEqual(result.stdout, PASSED + ISOLATED_OUTPUT + DEVBOX_OUTPUT + TERMINAL_OUTPUT + CALLBACKS_OUTPUT
                          + JOURNEY_START_OUTPUT + JOURNEY_SIDEBAR_OUTPUT + "".join(GITHUB_OUTPUTS)
-                         + "".join(SCOPED_MODEL_OUTPUTS) + "".join(AUTOMATIC_UPDATE_OUTPUTS) + "".join(HOST_MCP_OUTPUTS) + "".join(REGRESSION_OUTPUTS))
+                         + "".join(SCOPED_MODEL_OUTPUTS) + "".join(AUTOMATIC_UPDATE_OUTPUTS) + "".join(HOST_MCP_OUTPUTS) + "".join(REGRESSION_OUTPUTS) + "".join(NATIVE_POINTER_OUTPUTS))
+
+    def test_pointer_partitions_require_each_start_and_preserve_failures(self):
+        for index, name in enumerate(NATIVE_POINTERS):
+            output = NATIVE_POINTER_OUTPUTS[index]
+            for text, code in [("", 0), (PASSED, 0), (output + FAILED, 0), (output, 42),
+                               (STARTED + f"◇ Test {name}() started.\n", 0)]:
+                with self.subTest(name=name, output=text, status=code):
+                    outputs = [(value, 0) for value in NATIVE_POINTER_OUTPUTS]
+                    outputs[index] = (text, code)
+                    result, continued, calls = self.run_wrapper(PASSED, pointer_outputs=outputs, all_calls=True)
+                    self.assertNotEqual(result.returncode, 0, result.stderr)
+                    self.assertFalse(continued)
+                    self.assertEqual(calls[-1][-2:], ["--filter", name])
 
     def test_repair_settings_and_scheduler_partitions_require_every_test_and_preserve_failures(self):
         for index, names in enumerate(REGRESSION_PARTITIONS):
@@ -268,7 +296,7 @@ class TestOutputTests(unittest.TestCase):
         result, continued, calls = self.run_wrapper(PASSED, sixth_output=PASSED, seventh_output=PASSED, all_calls=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(continued)
-        self.assertEqual(len(calls), 7 + len(GITHUB) + len(SCOPED_MODEL_OUTPUTS) + len(AUTOMATIC_UPDATE_OUTPUTS) + len(HOST_MCP_OUTPUTS) + len(REGRESSION_OUTPUTS))
+        self.assertEqual(len(calls), 7 + len(GITHUB) + len(SCOPED_MODEL_OUTPUTS) + len(AUTOMATIC_UPDATE_OUTPUTS) + len(HOST_MCP_OUTPUTS) + len(REGRESSION_OUTPUTS) + len(NATIVE_POINTERS))
         outputs = [("", 0), (PASSED, 0), (JOURNEY_START_OUTPUT + FAILED, 0),
                    (JOURNEY_START_OUTPUT, 42),
                    (JOURNEY_START_OUTPUT.replace(f"◇ Test {JOURNEYS[0]}() started.\n", ""), 0)]
@@ -403,7 +431,7 @@ class TestOutputTests(unittest.TestCase):
     def test_explicit_build_options_still_partition_full_suite(self):
         result, _, calls = self.run_wrapper(PASSED, args=("--jobs=1", "--skip-build"), all_calls=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(len(calls), 7 + len(GITHUB) + len(SCOPED_MODEL_OUTPUTS) + len(AUTOMATIC_UPDATE_OUTPUTS) + len(HOST_MCP_OUTPUTS) + len(REGRESSION_OUTPUTS))
+        self.assertEqual(len(calls), 7 + len(GITHUB) + len(SCOPED_MODEL_OUTPUTS) + len(AUTOMATIC_UPDATE_OUTPUTS) + len(HOST_MCP_OUTPUTS) + len(REGRESSION_OUTPUTS) + len(NATIVE_POINTERS))
         for call in calls:
             self.assertIn("--jobs=1", call)
             self.assertNotIn("--jobs", call)
@@ -520,7 +548,7 @@ import Testing
                 folder = root / "Tests" / target
                 folder.mkdir(parents=True)
                 (folder / "Tests.swift").write_text(source)
-            shutil.copy2(SCRIPTS.parent / "Tests/PilotUITests/TestMainLoop.swift",
+            shutil.copy2(SCRIPTS.parent / "Tests/NativeTestSupport/TestMainLoop.swift",
                          root / "Tests/PassingTests/TestMainLoop.swift")
             swift = subprocess.check_output(["xcrun", "--find", "swift"], text=True).strip()
             plugins = str(Path(swift).parent / "../lib/swift/host/plugins/testing")
