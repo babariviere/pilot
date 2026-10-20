@@ -338,17 +338,18 @@ final class MessageSelectionTextView: NSTextView {
     var content: AttributedString?
     var style: Style?
     var copyPrefix = ""
-    var unwrapped = false
+    var unwrapped = false {
+        didSet { if unwrapped != oldValue { matchContainerToFrame() } }
+    }
     /// A table cell: copied as a tab-separated value, and kept when empty inside a selection.
     var isTableCell = false
-    private var measuring = false
-    /// Sizes for the few widths SwiftUI probes per layout pass, so alternating probes do not relayout.
+    /// SwiftUI probes at least six widths for a short hugging bubble (minimum, ideal, maximum and placement).
+    /// Keep that whole cycle; a four-entry cache thrashed and remeasured unchanged history on every update.
     private var measurements: [(width: CGFloat, hugsContent: Bool, size: CGSize)] = []
-    /// A second layout of the same storage for size probes at another width than the drawn one. Created only once
-    /// the text has been edited in place: resizing the drawn container would invalidate its whole layout, and the
-    /// next streamed append would lay out every line again.
+    /// Size probes must never resize the drawn container, even before the first append or placement. TextKit
+    /// invalidates its view when that geometry changes; SwiftUI then probes again on the next display frame.
+    /// This layout has no text view, so probing cannot feed back into AppKit/SwiftUI layout.
     private var probe: (layout: NSLayoutManager, container: NSTextContainer)?
-    private(set) var editedInPlace = false
     /// The text view does not own a TextKit 1 stack it was given, so it retains the root here.
     private var ownedStorage: NSTextStorage?
     private var linkTrackingArea: NSTrackingArea?
@@ -446,7 +447,6 @@ final class MessageSelectionTextView: NSTextView {
         storage.replaceCharacters(in: NSRange(location: start, length: storage.length - start),
                                   with: next.attributedSubstring(from: NSRange(location: start, length: next.length - start)))
         storage.endEditing()
-        editedInPlace = true
         return start
     }
 
@@ -564,35 +564,25 @@ final class MessageSelectionTextView: NSTextView {
     }
 
     private func layOut(width: CGFloat, unwrapped: Bool, hugsContent: Bool) -> CGSize {
-        guard var container = textContainer, var layout = layoutManager else { return .zero }
-        if editedInPlace, !unwrapped, frame.width > 0, width != frame.width, let storage = textStorage {
-            // Probe another width without resizing the drawn layout.
-            let stack = probe ?? {
-                let layout = NSLayoutManager()
-                let container = NSTextContainer(size: CGSize(width: width, height: .greatestFiniteMagnitude))
-                container.lineFragmentPadding = textContainer?.lineFragmentPadding ?? 0
-                layout.addTextContainer(container)
-                storage.addLayoutManager(layout)
-                return (layout, container)
-            }()
-            probe = stack
-            layout = stack.layout
-            container = stack.container
-        }
-        // Resizable text views can resize themselves during layout. Keep the probe width meanwhile.
-        measuring = true
+        guard let storage = textStorage else { return .zero }
+        let stack = probe ?? {
+            let layout = NSLayoutManager()
+            let container = NSTextContainer(size: CGSize(width: width, height: .greatestFiniteMagnitude))
+            container.lineFragmentPadding = textContainer?.lineFragmentPadding ?? 0
+            layout.addTextContainer(container)
+            storage.addLayoutManager(layout)
+            return (layout, container)
+        }()
+        probe = stack
+        let (layout, container) = stack
         // Setting an unchanged size would still invalidate the container's layout.
         if container.size.width != width { container.size = CGSize(width: width, height: .greatestFiniteMagnitude) }
         layout.ensureLayout(for: container)
         let used = layout.usedRect(for: container)
-        measuring = false
         let size = CGSize(width: unwrapped || hugsContent ? ceil(Self.linesWidth(layout, in: container)) : width,
                           height: ceil(used.height))
-        if measurements.count >= 4 { measurements.removeFirst() }
+        if measurements.count >= 8 { measurements.removeFirst() }
         measurements.append((width, hugsContent, size))
-        // A sizing probe must not change how the placed text wraps. Otherwise the drawn text
-        // follows whichever width SwiftUI probed last and reflows on every streamed update.
-        if !unwrapped, frame.width > 0, frame.width != width { matchContainerToFrame() }
         return size
     }
 
@@ -608,12 +598,13 @@ final class MessageSelectionTextView: NSTextView {
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
-        if !unwrapped, !measuring { matchContainerToFrame() }
+        matchContainerToFrame()
     }
 
     private func matchContainerToFrame() {
-        guard let container = textContainer, container.size.width != frame.width else { return }
-        container.size = CGSize(width: frame.width, height: .greatestFiniteMagnitude)
+        let width: CGFloat = unwrapped ? 1_000_000 : frame.width
+        guard let container = textContainer, container.size.width != width else { return }
+        container.size = CGSize(width: width, height: .greatestFiniteMagnitude)
     }
 
     override func becomeFirstResponder() -> Bool {
