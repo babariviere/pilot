@@ -87,11 +87,32 @@ focus, selection interaction or large revealed history.
 
 Temporary entrypoint and fixture edits were removed before the production commit.
 Swift syntax, font-role and whitespace checks pass. The normal-entrypoint release build and full
-SwiftLint passed for the selection-reset candidate. Native Swift tests remain CI-only; the added fixtures have not been compiled or
-run locally. No on-screen pairs have been authorized or run for this change.
+SwiftLint passed for the selection-reset candidate. Native Swift tests remain CI-only; the added fixtures
+have not been compiled or run locally. No on-screen pairs have been authorized or run for this change.
 
 Next: obtain permission for three alternating unlocked on-screen main/native pairs and separate
 PID-attached profiling. The existing full-app no-go verdict remains unchanged.
+
+## CI follow-up
+
+The refreshed heads had two attributable failures, not a shared-main or infrastructure failure:
+
+- Exact main `e3bb09bd` [passed macOS including Swift tests](https://github.com/babariviere/pilot/actions/runs/39466259920/job/118778342121).
+- [Table-layer CI](https://github.com/babariviere/pilot/actions/runs/39466975179/job/118780790003)
+  passed the broad 1,338 tests and isolated pointer fixtures. Four new transcript fixtures then failed
+  while polling preparation against a five-second wall-clock deadline in the busy shared AppKit suite.
+  They now await the actual preparation task, propagating priority and waiting for completion rather
+  than expiring while other main-actor fixtures run. The cancellation fixture also awaits the cancelled
+  task. No assertions were removed and no timeout was increased.
+- [Native-row CI](https://github.com/babariviere/pilot/actions/runs/39466976181/job/118780801824)
+  failed Swift 6.2.3 type checking in the `nativeTextViews` concatenation. Explicit ordered append loops
+  replace the overloaded expression. A table-region reading-order assertion guards the result.
+  The child fixture's same polling pattern now awaits the preparation task too.
+
+The base correction is a separate table-layer commit, merged forward into the child without rebasing
+or rewriting the existing heads. The performance rows above still describe `a16dbb1d`, not the CI
+follow-up. Local Swift syntax/font-role/whitespace, normal-entrypoint release build and full SwiftLint
+passed for the CI follow-up. Swift test compilation/execution remains for fresh exact-head CI.
 
 ## Provenance
 
