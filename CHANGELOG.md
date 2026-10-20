@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.59.0](https://github.com/babariviere/pilot/compare/v1.58.0...v1.59.0) (2026-10-20)
+
+
+### Features
+
+* **diagnostics:** accept an optional investigation reason ([26b5f27](https://github.com/babariviere/pilot/commit/26b5f27076168d8e417eb979448e607c688784ff))
+
+
+### Bug Fixes
+
+* **deps:** update dependency motion to v14.3.1 ([5867702](https://github.com/babariviere/pilot/commit/5867702b3d66211016d47b790c96e62a9cbf1cc2))
+
 ## [1.58.0](https://github.com/babariviere/pilot/compare/v1.57.0...v1.58.0) (2026-10-20)
 
 
