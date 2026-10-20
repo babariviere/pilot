@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
+import { X509Certificate } from "node:crypto";
 import { existsSync, readdirSync } from "node:fs";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { type AddressInfo, createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
+import { createSecureContext, TLSSocket } from "node:tls";
 import { promisify } from "node:util";
 import { runPostgres } from "./databases.ts";
 
@@ -25,6 +28,8 @@ let dir = "";
 let url = "";
 let tlsUrl = "";
 let ca = "";
+let expiredCert = "";
+let fixtureKey = "";
 let server: ReturnType<typeof spawn> | undefined;
 
 before(async () => {
@@ -67,9 +72,71 @@ before(async () => {
 	);
 	await chmod(key, 0o600);
 	ca = await readFile(cert, "utf8");
+	const csr = join(dir, "expired.csr");
+	const expired = join(dir, "expired.crt");
+	const expiredKey = join(dir, "expired.key");
+	await exec("openssl", [
+		"req",
+		"-new",
+		"-newkey",
+		"rsa:2048",
+		"-nodes",
+		"-keyout",
+		expiredKey,
+		"-subj",
+		"/CN=localhost",
+		"-out",
+		csr,
+	]);
+	// Explicit past dates work across OpenSSL versions without sleeps or wall-clock changes.
+	const caConfig = join(dir, "ca.cnf");
+	await writeFile(join(dir, "index"), "");
+	await writeFile(join(dir, "serial"), "02\n");
+	await writeFile(
+		caConfig,
+		[
+			"[ca]",
+			"default_ca=fixture",
+			"[fixture]",
+			`database=${join(dir, "index")}`,
+			`serial=${join(dir, "serial")}`,
+			`new_certs_dir=${dir}`,
+			`certificate=${cert}`,
+			`private_key=${key}`,
+			"default_md=sha256",
+			"policy=subject",
+			"[subject]",
+			"commonName=supplied",
+			"",
+		].join("\n"),
+	);
+	await exec("openssl", [
+		"ca",
+		"-batch",
+		"-notext",
+		"-config",
+		caConfig,
+		"-in",
+		csr,
+		"-startdate",
+		"20000101000000Z",
+		"-enddate",
+		"20010101000000Z",
+		"-out",
+		expired,
+	]);
+	fixtureKey = await readFile(expiredKey, "utf8");
+	expiredCert = await readFile(expired, "utf8");
 	await writeFile(
 		join(data, "pg_hba.conf"),
-		"local all all trust\nhostnossl all all 127.0.0.1/32 reject\nhostssl all all 127.0.0.1/32 trust\n",
+		[
+			"local all all trust",
+			"hostnossl all all 127.0.0.1/32 reject",
+			"hostssl all denied_fixture 127.0.0.1/32 reject",
+			"hostssl all password_fixture 127.0.0.1/32 scram-sha-256",
+			"hostssl all all 127.0.0.1/32 trust",
+			"",
+		].join("\n"),
 	);
 	const port = String(20_000 + Math.floor(Math.random() * 20_000));
 	server = spawn(
@@ -147,10 +214,108 @@ test("TLS-required connections retain object CA, verify certificates, and enforc
 	);
 	await assert.rejects(run(secured), /TLS certificate verification failed/);
 	await assert.rejects(run(secured.replace("localhost", "127.0.0.1"), { ca }), /TLS certificate verification failed/);
+	await assert.rejects(run(`${tlsUrl}?sslmode=no-verify`, true), /TLS certificate verification failed/);
+	await assert.rejects(
+		run(`${tlsUrl.replace("localhost", "127.0.0.1")}?sslmode=require&uselibpqcompat=true`, { ca }),
+		/TLS certificate verification failed/,
+	);
 	await assert.rejects(
 		run(`${tlsUrl}?sslmode=disable`),
-		/Database connection failed.*SQLSTATE 28000.*required TLS.*access approval does not verify connectivity/,
+		// A plaintext HBA rejection is not proof that TLS would grant access.
+		/SQLSTATE 28000.*server authentication rules.*unencrypted connection.*does not establish a TLS requirement/,
 	);
+});
+
+test("real password and server-rule failures preserve SQLSTATE without exposing server details", {
+	skip: !bin && "no Postgres binaries",
+}, async () => {
+	await write([
+		{ sql: "create role password_fixture login password 'synthetic-password'" },
+		{ sql: "create role denied_fixture login" },
+	]);
+	const run = (user: string, password: string) =>
+		runPostgres(
+			{
+				url: `${tlsUrl.replace("pilot@", `${user}:${password}@`)}?sslmode=verify-full`,
+				ssl: { ca },
+				mode: "read",
+				applicationName: "pilot-auth-test",
+			},
+			[{ sql: "select ssl from pg_stat_ssl where pid = pg_backend_pid()", params: [] }],
+			1,
+		);
+	assert.deepEqual((await run("password_fixture", "synthetic-password"))[0]?.rows, [{ ssl: true }]);
+	for (const [user, code, expected] of [
+		["password_fixture", "28P01", /rejected the credentials \(invalid password\)/],
+		["denied_fixture", "28000", /server authentication rules rejected/],
+		["missing_fixture", "28000", /cause is undetermined/],
+	] as const) {
+		await assert.rejects(run(user, "incorrect-password"), (error: NodeJS.ErrnoException) => {
+			assert.equal(error.code, code);
+			assert.match(error.message, new RegExp(`SQLSTATE ${code}`));
+			assert.match(error.message, expected);
+			assert.match(error.message, /access approval does not verify connectivity/);
+			assert.doesNotMatch(error.message, /fixture|password@|incorrect-password|localhost|postgres:\/\//);
+			assert.doesNotMatch(error.message, /explicitly requires TLS|TLS certificate verification failed/);
+			return true;
+		});
+	}
+});
+
+test("an expired trusted certificate stops TLS before PostgreSQL startup, without fallback or retry", {
+	skip: !bin && "no Postgres binaries",
+}, async (t) => {
+	const certificate = new X509Certificate(expiredCert);
+	assert.ok(certificate.verify(new X509Certificate(ca).publicKey));
+	assert.ok(Date.parse(certificate.validTo) < Date.now());
+	const context = createSecureContext({ cert: expiredCert, key: fixtureKey });
+	const sockets = new Set<Socket>();
+	let connections = 0;
+	const requests: Buffer[] = [];
+	const startup: Buffer[] = [];
+	const server = createServer((socket) => {
+		connections++;
+		sockets.add(socket);
+		socket.on("close", () => sockets.delete(socket));
+		socket.on("error", () => socket.destroy());
+		let request = Buffer.alloc(0);
+		const negotiate = (bytes: Buffer) => {
+			request = Buffer.concat([request, bytes]);
+			if (request.length < 8) return;
+			requests.push(request);
+			socket.off("data", negotiate);
+			socket.write("S");
+			const tls = new TLSSocket(socket, { isServer: true, secureContext: context });
+			tls.on("error", () => tls.destroy());
+			tls.on("data", (bytes) => startup.push(bytes));
+		};
+		socket.on("data", negotiate);
+	});
+	t.after(async () => {
+		for (const socket of sockets) socket.destroy();
+		await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+	});
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	await assert.rejects(
+		runPostgres(
+			{
+				url: `postgres://fixture:synthetic-password@localhost:${(server.address() as AddressInfo).port}/postgres?sslmode=verify-full`,
+				ssl: { ca },
+				mode: "read",
+				applicationName: "pilot-expiry-test",
+			},
+			[{ sql: "select 1", params: [] }],
+			1,
+		),
+		(error: Error) => {
+			assert.match(error.message, /TLS certificate verification failed/);
+			assert.doesNotMatch(error.message, /fixture|synthetic-password|localhost|BEGIN CERTIFICATE/);
+			return true;
+		},
+	);
+	assert.equal(connections, 1);
+	assert.equal(Buffer.concat(requests).toString("hex"), "0000000804d2162f");
+	assert.equal(Buffer.concat(startup).length, 0, "no PostgreSQL startup, credentials or queries after invalid TLS");
 });
 
 test("reads cannot write, even with a role that could", { skip: !bin && "no Postgres binaries" }, async () => {

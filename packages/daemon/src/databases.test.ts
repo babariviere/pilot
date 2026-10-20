@@ -467,7 +467,7 @@ test("a server refusing TLS receives no plaintext startup or retry", async () =>
 				],
 				1,
 			),
-			/Database connection failed.*access approval does not verify connectivity/,
+			/Database connection failed.*TLS negotiation failed.*access approval does not verify connectivity/,
 		);
 	} finally {
 		await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
@@ -500,6 +500,60 @@ test("access approval is not a connectivity test and failed queries leave grants
 	}, /connection failed.*does not verify connectivity/);
 	assert.equal(attempts, 1);
 	assert.deepEqual(db.state(), { grants: [{ env: "prod", mode: "read" }] });
+});
+
+test("connection failures classify only supported evidence, preserve SQLSTATE and redact server details", async (t) => {
+	const secret = "private-endpoint-user-password-certificate";
+	for (const [code, message, expected] of [
+		["CERT_HAS_EXPIRED", secret, /TLS certificate verification failed/],
+		["DEPTH_ZERO_SELF_SIGNED_CERT", secret, /TLS certificate verification failed/],
+		["ERR_TLS_CERT_ALTNAME_INVALID", secret, /TLS certificate verification failed/],
+		["ERR_SSL_WRONG_VERSION_NUMBER", secret, /TLS negotiation failed/],
+		["EPROTO", `write EPROTO ${secret}:SSL routines:wrong version number`, /TLS negotiation failed/],
+		["EPROTO", secret, /Check the endpoint/],
+		[undefined, "The server does not support SSL connections", /TLS negotiation failed/],
+		["28P01", secret, /rejected the credentials \(invalid password\)/],
+		["28000", "SSL connection is required. Please specify SSL options and retry.", /explicitly requires TLS/],
+		["28000", `pg_hba.conf rejects connection for host "${secret}", SSL encryption`, /server authentication rules/],
+		[
+			"28000",
+			`no pg_hba.conf entry for host "${secret}", no encryption`,
+			/server authentication rules.*unencrypted connection.*does not establish a TLS requirement/,
+		],
+		["28000", secret, /cause is undetermined/],
+		["28000", `password or SSL problem at ${secret}`, /cause is undetermined/],
+		["28000", `rejecting all connections: ${secret}`, /cause is undetermined/],
+		["3D000", secret, /Check the endpoint/],
+		["ECONNREFUSED", secret, /Check the endpoint/],
+		[secret, secret, /Check the endpoint/],
+	] as const) {
+		await t.test(`${code}: ${expected.source}`, async (t) => {
+			const connect = t.mock.method(pg.Client.prototype, "connect", async () => {
+				throw Object.assign(new Error(message), { code, detail: secret, hint: secret, cause: new Error(secret) });
+			});
+			const query = t.mock.method(pg.Client.prototype, "query", () =>
+				assert.fail("no queries after failed connect"),
+			);
+			const end = t.mock.method(pg.Client.prototype, "end", async () => {});
+			await assert.rejects(
+				runPostgres(connectionTarget, [{ sql: "select 1", params: [] }], 1),
+				(error: NodeJS.ErrnoException) => {
+					assert.match(error.message, expected);
+					assert.match(error.message, /access approval does not verify connectivity/);
+					const sqlstate = code && /^[0-9A-Z]{5}$/.test(code) ? code : undefined;
+					assert.equal(error.code, sqlstate);
+					assert.equal((error.message.match(/SQLSTATE/g) ?? []).length, sqlstate ? 1 : 0);
+					if (sqlstate) assert.ok(error.message.includes(`SQLSTATE ${sqlstate}`));
+					assert.doesNotMatch(`${error.stack} ${JSON.stringify(error)}`, new RegExp(secret));
+					assert.equal(error.cause, undefined);
+					return true;
+				},
+			);
+			assert.equal(connect.mock.callCount(), 1, "no retry");
+			assert.equal(query.mock.callCount(), 0);
+			assert.equal(end.mock.callCount(), 1);
+		});
+	}
 });
 
 test("a failed cursor stops sequential statements and closes the connection without committing", async (t) => {
