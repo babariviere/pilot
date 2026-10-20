@@ -243,7 +243,18 @@ async function resolveParents(
 	const wanted = [...new Set(membership.map(parentOf).filter((id): id is string => !!id))]
 		.sort()
 		.slice(0, MAX_PARENTS);
-	if (!wanted.length) return {};
+	context.observe?.({ stage: "parent_headers", phase: "started", requested: wanted.length });
+	if (!wanted.length) {
+		context.observe?.({
+			stage: "parent_headers",
+			phase: "completed",
+			outcome: "success",
+			count: 0,
+			readAttempts: 0,
+			cacheHits: 0,
+		});
+		return {};
+	}
 	const cached = cachedParents(cursor);
 	const next: Record<string, CachedParent> = {};
 	const missing: string[] = [],
@@ -258,15 +269,29 @@ async function resolveParents(
 		} else missing.push(id);
 	}
 	stale.sort((a, b) => next[a]!.fetchedAt - next[b]!.fetchedAt);
+	const cacheHits = Object.keys(next).length;
+	let readAttempts = 0;
 	for (const id of [...missing, ...stale].slice(0, MAX_PARENT_FETCHES)) {
 		context.signal.throwIfAborted();
 		try {
+			readAttempts++;
 			const issue = object(await context.call("issue", { id, fields: PARENT_FIELDS }));
 			const header = (issue.id === id || issue.uuid === id) && parentHeader(id, issue, now);
 			if (header) next[id] = header;
 		} catch (error) {
 			context.signal.throwIfAborted();
 			// Parents are context only: never fail the poll. Stop asking once the source pushes back.
+			context.observe?.({
+				stage: "parent_headers",
+				phase: "partial",
+				reason:
+					error instanceof SourceRateLimited
+						? "provider_rate_limit"
+						: error instanceof SourceSignInRequired
+							? "sign_in"
+							: "read_failed",
+				readAttempts,
+			});
 			if (error instanceof SourceRateLimited || error instanceof SourceSignInRequired) break;
 		}
 	}
@@ -280,6 +305,14 @@ async function resolveParents(
 		bytes += size;
 		result[id] = header;
 	}
+	context.observe?.({
+		stage: "parent_headers",
+		phase: "completed",
+		outcome: Object.keys(result).length < wanted.length ? "partial" : "success",
+		count: Object.keys(result).length,
+		readAttempts,
+		cacheHits,
+	});
 	return result;
 }
 
@@ -463,16 +496,37 @@ async function prefillParent(
 	item: TrackedItem,
 	parentId: string | undefined,
 ): Promise<TrackedItemPrefill["parent"]> {
-	if (!parentId) return;
+	context.observe?.({ stage: "parent_headers", phase: "started", requested: parentId ? 1 : 0 });
+	if (!parentId) {
+		context.observe?.({ stage: "parent_headers", phase: "completed", outcome: "success", count: 0, readAttempts: 0 });
+		return;
+	}
 	let header: LinearParentHeader | undefined = item.linearParent?.id === parentId ? item.linearParent : undefined;
+	const cacheHits = header ? 1 : 0;
+	let reason: import("@pilot/protocol").RefreshReason | undefined;
 	if (!header)
 		try {
 			const issue = object(await context.call("issue", { id: parentId, fields: PARENT_FIELDS }));
 			if (issue.id === parentId || issue.uuid === parentId) header = parentHeader(parentId, issue, Date.now());
-		} catch {
+		} catch (error) {
 			// Context only: the chat can start without it.
 			context.signal.throwIfAborted();
+			reason =
+				error instanceof SourceRateLimited
+					? "provider_rate_limit"
+					: error instanceof SourceSignInRequired
+						? "sign_in"
+						: "read_failed";
 		}
+	context.observe?.({
+		stage: "parent_headers",
+		phase: "completed",
+		outcome: header ? "success" : "partial",
+		reason,
+		count: header ? 1 : 0,
+		cacheHits,
+		readAttempts: cacheHits ? 0 : 1,
+	});
 	return header ? { identifier: header.identifier, title: header.title } : undefined;
 }
 

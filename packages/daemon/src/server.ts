@@ -1187,7 +1187,7 @@ export function createDaemonServer(
 		if (parts[1] === "diagnostics" && parts.length === 2 && req.method === "DELETE") {
 			await sessions.clearDiagnostics();
 			await telemetry?.featureUsage.clear();
-			tracking?.refreshDiagnostics?.clear();
+			tracking?.clearDiagnosticEvidence?.();
 			return json(res, 200, { cleared: true });
 		}
 		if (parts[1] === "update" && parts[2] === "prepare" && parts.length === 3 && req.method === "POST")

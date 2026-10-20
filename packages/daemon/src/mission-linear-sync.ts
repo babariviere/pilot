@@ -1,6 +1,12 @@
 /** Single-flight, bounded remote synchronization. SQLite intents precede every network write. */
 import { createHash } from "node:crypto";
 import type { LinearStateMapping, MissionLinearSync, ProjectTrackingConfig, TrackingJson } from "@pilot/protocol";
+import {
+	type BackgroundJobDiagnostics,
+	type JobOutcome,
+	type JobReason,
+	jobConfigurationKey,
+} from "./background-job-diagnostics.ts";
 import { Conflict } from "./errors.ts";
 import { workflowStates } from "./linear-workflow.ts";
 import type { MissionStore } from "./missions.ts";
@@ -84,10 +90,18 @@ export class MissionLinearSyncService {
 	private readonly store: MissionStore;
 	private readonly projects: ProjectStore;
 	private readonly mcp: SourceMcpClient;
-	constructor(store: MissionStore, projects: ProjectStore, mcp: SourceMcpClient) {
+	private readonly diagnostics?: BackgroundJobDiagnostics;
+	constructor(
+		store: MissionStore,
+		projects: ProjectStore,
+		mcp: SourceMcpClient,
+		diagnostics?: BackgroundJobDiagnostics,
+	) {
 		this.store = store;
 		this.projects = projects;
 		this.mcp = mcp;
+		this.diagnostics = diagnostics;
+		diagnostics?.register("linked_linear_sync", "linear");
 	}
 
 	start(): void {
@@ -106,6 +120,7 @@ export class MissionLinearSyncService {
 	}
 	private schedule(delay: number): void {
 		if (this.stopped) return;
+		this.diagnostics?.queue("linked_linear_sync", "linear", undefined, "host", Date.now() + delay);
 		this.timer = setTimeout(() => {
 			this.timer = undefined;
 			const controller = new AbortController();
@@ -137,16 +152,31 @@ export class MissionLinearSyncService {
 
 	/** Public for offline fixtures. At most 25 tickets, sequential MCP calls, 90s service deadline. */
 	async poll(signal: AbortSignal): Promise<void> {
-		this.retryAt = undefined;
-		let links = this.store.linearSyncBatch(this.cursor);
-		if (!links.length) links = this.store.linearSyncBatch();
-		for (const link of links) {
-			signal.throwIfAborted();
-			const current = this.store.linearSyncResource(link.resource.id);
-			if (current) await this.synchronize(current, signal);
-			const retryAt = this.store.linearSyncRecord(link.resource.id)?.status.retryAt;
-			if (retryAt && retryAt > Date.now()) this.retryAt = Math.min(this.retryAt ?? retryAt, retryAt);
-			this.cursor = link.resource.id;
+		const token = this.diagnostics?.begin("linked_linear_sync", "linear", undefined, "host");
+		let outcome: JobOutcome = "no_work",
+			reason: JobReason | undefined,
+			count = 0;
+		try {
+			this.retryAt = undefined;
+			let links = this.store.linearSyncBatch(this.cursor);
+			if (!links.length) links = this.store.linearSyncBatch();
+			for (const link of links) {
+				signal.throwIfAborted();
+				const current = this.store.linearSyncResource(link.resource.id);
+				if (current) await this.synchronize(current, signal);
+				count++;
+				if (this.store.linearSyncRecord(link.resource.id)?.status.state === "error") outcome = "partial";
+				const retryAt = this.store.linearSyncRecord(link.resource.id)?.status.retryAt;
+				if (retryAt && retryAt > Date.now()) this.retryAt = Math.min(this.retryAt ?? retryAt, retryAt);
+				this.cursor = link.resource.id;
+			}
+			if (count && outcome !== "partial") outcome = "success";
+		} catch (error) {
+			outcome = signal.aborted ? "cancelled" : "failure";
+			reason = signal.aborted ? "stopped" : "unknown";
+			throw error;
+		} finally {
+			if (token) this.diagnostics?.end(token, outcome, reason, count, this.retryAt);
 		}
 	}
 
@@ -281,6 +311,14 @@ export class MissionLinearSyncService {
 	private async synchronize(link: Linked, signal: AbortSignal, readOnly = false): Promise<boolean | undefined> {
 		if (this.busy.size) return false;
 		this.busy.add(link.resource.id);
+		const token = this.diagnostics?.begin(
+			"linked_linear_sync",
+			"linear",
+			link.projectId,
+			jobConfigurationKey(this.projects.get(link.projectId)?.tracking),
+		);
+		let outcome: JobOutcome = "no_work",
+			reason: JobReason | undefined;
 		const initialAttempts = link.record.attempts;
 		const config = configKey(this.projects.get(link.projectId)?.tracking);
 		let stage: Failure["stage"] = "prepare";
@@ -288,7 +326,10 @@ export class MissionLinearSyncService {
 			if (stage !== "confirm" && stage !== "cancellation")
 				stage = tool === "startIssue" ? "write" : tool === "states" ? "states" : "issue";
 			this.current(link, config, signal);
+			if (token) this.diagnostics?.stage(token, stage, tool === "startIssue");
 			const value = await this.mcp.call("linear", tool, args, signal);
+			if (token) this.diagnostics?.progress(token);
+			if (tool === "startIssue") outcome = "success";
 			this.current(link, config, signal);
 			return value;
 		};
@@ -299,7 +340,11 @@ export class MissionLinearSyncService {
 					"This ticket has more than 1,000 contributing tasks. Reduce its contribution scope before retrying synchronization.",
 					"configuration",
 				);
-			if (record.status.retryAt && record.status.retryAt > Date.now()) return;
+			if (record.status.retryAt && record.status.retryAt > Date.now()) {
+				outcome = "backoff";
+				reason = record.status.failure?.category ?? "unknown";
+				return;
+			}
 			const { issue, mapping, states } = await this.observe(link, call);
 			stage = "configuration";
 			const terminal = this.terminal(issue, mapping);
@@ -468,9 +513,15 @@ export class MissionLinearSyncService {
 				);
 			this.synced(link, confirmed.issue);
 		} catch (error) {
-			if (error instanceof StaleSync || this.stopped) return;
+			if (error instanceof StaleSync || this.stopped) {
+				outcome = "cancelled";
+				reason = this.stopped ? "stopped" : "config_changed";
+				return;
+			}
 			const record = link.record;
 			const category = failureCategory(error, stage);
+			outcome = signal.aborted ? "cancelled" : "failure";
+			reason = category;
 			record.attempts = Math.min(5, Math.max(initialAttempts + 1, record.attempts));
 			record.status = {
 				...record.status,
@@ -493,6 +544,16 @@ export class MissionLinearSyncService {
 				/* A newly detached or duplicate manager cannot gain write authority. */
 			}
 		} finally {
+			if (token) {
+				// Reuse authoritative stage/category/retry evidence. Never copy issue names or error strings.
+				const status = link.record.status;
+				if (status.failure) this.diagnostics?.failure(token, status.failure);
+				if (status.state === "paused" && outcome !== "cancelled") {
+					outcome = "skipped";
+					reason = "eligibility";
+				}
+				this.diagnostics?.end(token, outcome, reason, undefined, status.retryAt);
+			}
 			this.busy.delete(link.resource.id);
 		}
 	}

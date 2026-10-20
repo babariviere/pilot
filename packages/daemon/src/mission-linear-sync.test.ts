@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import type { LinearStateMapping, MissionTaskStatus } from "@pilot/protocol";
+import { BackgroundJobDiagnostics, jobConfigurationKey } from "./background-job-diagnostics.ts";
 import { MissionLinearSyncService } from "./mission-linear-sync.ts";
 import { MissionStore } from "./missions.ts";
 import { ProjectStore } from "./projects.ts";
@@ -89,7 +90,8 @@ async function fixture(t: TestContext, disk = false) {
 			return { id: issue.id };
 		},
 	};
-	let service = new MissionLinearSyncService(store, projects, mcp);
+	const diagnostics = new BackgroundJobDiagnostics();
+	let service = new MissionLinearSyncService(store, projects, mcp, diagnostics);
 	t.after(async () => {
 		await service.stop();
 		await store.durable();
@@ -104,6 +106,7 @@ async function fixture(t: TestContext, disk = false) {
 			return service;
 		},
 		projects,
+		diagnostics,
 		mcp,
 		project,
 		mission,
@@ -144,6 +147,22 @@ async function fixture(t: TestContext, disk = false) {
 		},
 	};
 }
+
+test("linked sync health reuses authoritative failure stages/categories and inspection never writes", async (t) => {
+	const f = await fixture(t);
+	f.set("1", "in_progress");
+	f.setFailure("before");
+	await f.poll();
+	const before = [f.reads.length, f.writes.length];
+	const key = jobConfigurationKey(f.projects.get(f.project.id)?.tracking);
+	const health = f.diagnostics.read("linked_linear_sync", "linear", f.project.id, key);
+	assert.equal(health.observation?.failure?.stage, f.status().failure?.stage);
+	assert.equal(health.observation?.failure?.category, f.status().failure?.category);
+	assert.equal(health.observation?.writeCalls, 1);
+	assert.doesNotMatch(JSON.stringify(health), /secret transport|ENG-1|linear.app/);
+	f.diagnostics.read("linked_linear_sync", "linear", f.project.id, key);
+	assert.deepEqual([f.reads.length, f.writes.length], before);
+});
 
 test("aggregate actual task transitions through progress, review and Merged, never references", async (t) => {
 	const f = await fixture(t);

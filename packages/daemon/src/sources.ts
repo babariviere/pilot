@@ -23,6 +23,7 @@ import type {
 	TrackingLookup,
 	TrackingSource,
 } from "@pilot/protocol";
+import { BackgroundJobDiagnostics, jobFailureReason } from "./background-job-diagnostics.ts";
 import { redactDiagnosticText } from "./diagnostic-redaction.ts";
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { linearParentHeaders, linearPrefill, linearStart } from "./linear-source.ts";
@@ -43,7 +44,7 @@ import {
 } from "./source-refresh-diagnostics.ts";
 import { SourceSignIns } from "./source-sign-in.ts";
 import type { SourceCheckpoint, TrackedInput, TrackedItemStore, TrackedQuery } from "./tracked-items.ts";
-import { SLACK_BUDGET_WINDOW_MS, SLACK_REACTION_RECHECK_MS } from "./tracked-items-disk.ts";
+import { SLACK_BUDGET_WINDOW_MS, SLACK_HOURLY_BUDGET, SLACK_REACTION_RECHECK_MS } from "./tracked-items-disk.ts";
 import { lookupLinearTeams, lookupSlackChannels } from "./tracking-lookup.ts";
 import type { TriageGroomer } from "./triage-grooming.ts";
 
@@ -90,6 +91,24 @@ type Health = {
 /** Bounded manual and background polling. Only explicitly registered sources do work. */
 export class SourceRegistry {
 	readonly refreshDiagnostics = new SourceRefreshDiagnostics();
+	readonly jobDiagnostics = new BackgroundJobDiagnostics();
+	jobConfigKey(projectId: string): string | undefined {
+		try {
+			return createHash("sha256")
+				.update(JSON.stringify(this.projects.require(projectId).tracking ?? {}))
+				.digest("hex");
+		} catch {
+			return undefined;
+		}
+	}
+	setDiagnosticsEnabled(value: boolean): void {
+		this.refreshDiagnostics.setEnabled(value);
+		this.jobDiagnostics.setEnabled(value);
+	}
+	clearDiagnosticEvidence(): void {
+		this.refreshDiagnostics.clear();
+		this.jobDiagnostics.clear();
+	}
 	/** Optional read-only consumer. Runs only after a validated Linear poll is committed. */
 	linearObserved?: (projectId: string, items: TrackedInput[], activeIds: string[]) => Promise<void>;
 	triage?: TriageGroomer;
@@ -157,6 +176,9 @@ export class SourceRegistry {
 		this.projects = projects;
 		this.items = items;
 		this.mcp = mcp;
+		for (const kind of ["slack", "linear"] as const) this.jobDiagnostics.register("manual_lookup", kind);
+		this.jobDiagnostics.register("slack_done_write", "slack");
+		this.jobDiagnostics.register("linear_parent_header", "linear");
 		this.signIns = new SourceSignIns(
 			(kind, options) => mcp.signIn!(kind, options),
 			(state) => {
@@ -197,6 +219,7 @@ export class SourceRegistry {
 				for (const id of this.health.keys())
 					if (this.currentKey(id) !== this.health.get(id)?.key) this.health.delete(id);
 				this.refreshDiagnostics.prune((id) => this.currentKey(id));
+				this.jobDiagnostics.prune((projectId) => this.jobConfigKey(projectId));
 				for (const project of projects.list()) this.emit({ type: "sources", projectId: project.id });
 				this.schedule();
 			}),
@@ -408,6 +431,32 @@ export class SourceRegistry {
 					now,
 				),
 				live,
+				jobs: [
+					this.jobDiagnostics.read("triage_rebuild", kind, project.id, this.jobConfigKey(project.id) ?? ""),
+					...(kind === "linear"
+						? [
+								this.jobDiagnostics.read(
+									"linked_linear_sync",
+									kind,
+									project.id,
+									this.jobConfigKey(project.id) ?? "",
+								),
+								this.jobDiagnostics.read(
+									"linear_parent_header",
+									kind,
+									project.id,
+									this.jobConfigKey(project.id) ?? "",
+								),
+							]
+						: [
+								this.jobDiagnostics.read(
+									"slack_done_write",
+									kind,
+									project.id,
+									this.jobConfigKey(project.id) ?? "",
+								),
+							]),
+				],
 				checkpointCommittedAt: currentCheckpoint?.lastPolledAt,
 				checkpointProvenance: "retained_only_not_live_scheduler_or_all_channel_success",
 				...(backoff ? { backoff: { reason: backoff, until: health?.nextPollAt } } : {}),
@@ -416,6 +465,7 @@ export class SourceRegistry {
 					"discovery",
 					"classification",
 					"commit",
+					...(kind === "linear" ? ["parent_headers"] : []),
 					...(kind === "slack" ? ["waiting_replies", "reaction_reads"] : []),
 				].map((stage) => {
 					const observation = stages.find((s) => s.stage === stage);
@@ -460,13 +510,22 @@ export class SourceRegistry {
 			total,
 			more: offset + sources.length < total,
 			scanned: sources.length,
-			coverageGaps: [
-				"linked_linear_mission_sync",
-				"linear_parent_header_refresh",
-				"manual_discovery_lookups",
-				"slack_done_writes",
-				"triage_guide_rebuilds",
+			jobCoverage: this.jobDiagnostics.coverage(),
+			hostJobs: [
+				...kinds.map((kind) => this.jobDiagnostics.read("manual_lookup", kind, undefined, "host")),
+				...(kinds.includes("linear")
+					? [this.jobDiagnostics.read("linked_linear_sync", "linear", undefined, "host")]
+					: []),
 			],
+			quotaPolicy: {
+				slackLocalOperations: {
+					limit: SLACK_HOURLY_BUDGET,
+					windowMs: SLACK_BUDGET_WINDOW_MS,
+					alignment: "fixed_utc_hour",
+					force: "counted_single_bounded_pass_provider_limits_preserved",
+				},
+			},
+			coverageGaps: [],
 			stageCountMeaning: {
 				discovery: "returned_items_or_messages",
 				classification: "classification_admissions_when_reported_not_provider_calls",
@@ -774,6 +833,8 @@ export class SourceRegistry {
 		const controller = new AbortController();
 		const timer = setTimeout(() => controller.abort(new Error("Prefill timed out")), 60_000);
 		const run = { sourceId: "", key: "", controller, promise: Promise.resolve({} as TrackedItemPrefill) };
+		let parentJob: import("./background-job-diagnostics.ts").JobToken | undefined;
+		let parentRead = false;
 		// Reserve the slot before reading disk, so repeated clicks cannot race.
 		const work = Promise.resolve().then(async () => {
 			const item = this.withParents([await this.items.require(itemId)], (item) => item.projectId)[0]!;
@@ -793,6 +854,26 @@ export class SourceRegistry {
 					config: project.tracking!,
 					signal: controller.signal,
 					call: (tool, args) => this.readCall("linear", tool, args, controller.signal),
+					observe: (event) => {
+						if (event.stage !== "parent_headers") return;
+						parentJob ??= this.jobDiagnostics.begin(
+							"linear_parent_header",
+							"linear",
+							project.id,
+							this.jobConfigKey(project.id) ?? "",
+						);
+						if (event.readAttempts && !parentRead) {
+							parentRead = true;
+							this.jobDiagnostics.stage(parentJob, "lookup", false);
+						}
+						if (event.phase === "completed")
+							this.jobDiagnostics.end(
+								parentJob,
+								event.outcome === "partial" ? "partial" : event.count ? "success" : "no_work",
+								event.reason,
+								event.count,
+							);
+					},
 				},
 				item,
 			);
@@ -801,6 +882,12 @@ export class SourceRegistry {
 		});
 		run.promise = abortable(work, controller.signal)
 			.catch((error) => {
+				if (parentJob)
+					this.jobDiagnostics.end(
+						parentJob,
+						controller.signal.aborted ? "cancelled" : "failure",
+						jobFailureReason(error, controller.signal),
+					);
 				if (error instanceof SourceRateLimited || error instanceof SourceSignInRequired) {
 					this.failed(run.sourceId, run.key, error);
 					this.emit({ type: "sources", projectId: run.sourceId.slice(0, -7) });
@@ -1070,6 +1157,7 @@ export class SourceRegistry {
 		)
 			return;
 		this.doneDue.add(projectId);
+		this.jobDiagnostics.queue("slack_done_write", "slack", projectId, this.jobConfigKey(projectId) ?? "");
 		if (this.doneScheduled) return;
 		this.doneScheduled = true;
 		queueMicrotask(() => {
@@ -1090,10 +1178,20 @@ export class SourceRegistry {
 			const controller = new AbortController();
 			const timer = setTimeout(() => controller.abort(new Error("Slack done reaction timed out")), 60_000);
 			let admitted: TrackedItem | undefined;
+			const job = this.jobDiagnostics.begin(
+				"slack_done_write",
+				"slack",
+				projectId,
+				this.jobConfigKey(projectId) ?? "",
+			);
+			this.jobDiagnostics.stage(job, "reserve");
 			const work = Promise.resolve()
 				.then(async () => {
 					admitted = await this.items.reserveSlackDone(projectId);
-					if (!admitted) return;
+					if (!admitted) {
+						this.jobDiagnostics.end(job, "no_work", undefined, 0);
+						return;
+					}
 					let outcome: "reacted" | "skipped" | "error" = "error";
 					let context: SourcePollContext | undefined;
 					let current: TrackedItem | undefined;
@@ -1117,25 +1215,56 @@ export class SourceRegistry {
 									!slackStartAllowed(this.projects.require(projectId).tracking?.slackChannels ?? [], current!)
 								)
 									throw new Conflict("Tracking configuration changed");
-								return this.mcp.call("slack", tool, args, controller.signal);
+								this.jobDiagnostics.stage(job, tool === "removeSlackEyes" ? "remove_eyes" : "write", true);
+								return this.mcp.call("slack", tool, args, controller.signal).then((value) => {
+									this.jobDiagnostics.progress(job);
+									return value;
+								});
 							},
 						};
 						outcome = await abortable(addSlackDone(context, current), controller.signal);
-					} catch {
+					} catch (error) {
+						this.jobDiagnostics.end(
+							job,
+							controller.signal.aborted ? "cancelled" : "failure",
+							jobFailureReason(error, controller.signal),
+						);
 						/* Done is local and never rolled back by a reaction failure. */
 					}
 					await this.items.slackDoneResult(admitted.id, outcome);
+					if (outcome !== "error")
+						this.jobDiagnostics.end(
+							job,
+							outcome === "reacted" ? "success" : "skipped",
+							undefined,
+							outcome === "reacted" ? 1 : 0,
+						);
 					if (context && current) {
 						try {
 							controller.signal.throwIfAborted();
 							await abortable(removeSlackEyes(context, current), controller.signal);
-						} catch {
+							if (outcome !== "error")
+								this.jobDiagnostics.end(
+									job,
+									outcome === "reacted" ? "success" : "skipped",
+									undefined,
+									outcome === "reacted" ? 1 : 0,
+								);
+						} catch (error) {
+							this.jobDiagnostics.end(
+								job,
+								controller.signal.aborted ? "cancelled" : "partial",
+								jobFailureReason(error, controller.signal),
+							);
 							// Fixed bounded line, never proxy names, provider text, channel IDs or credentials.
 							console.warn("pilotd: Slack eyes removal skipped or failed; no retry");
 						}
 					}
 				})
-				.catch((error: unknown) => console.warn(`pilotd: Slack done reaction failed: ${logCause(error)}`))
+				.catch((error: unknown) => {
+					this.jobDiagnostics.end(job, "failure", jobFailureReason(error, controller.signal));
+					console.warn(`pilotd: Slack done reaction failed: ${logCause(error)}`);
+				})
 				.finally(() => {
 					clearTimeout(timer);
 					this.doneRuns.delete(projectId);
@@ -1247,16 +1376,39 @@ export class SourceRegistry {
 			await previous.promise.catch(() => {});
 			if (this.lookups.get(kind)) return { status: "error", items: [], error: "Superseded by a newer search." };
 		}
-		if (this.busy() >= 2) return { status: "error", items: [], error: "Tracking is syncing. Try again in a moment." };
+		if (this.busy() >= 2) {
+			const token = this.jobDiagnostics.begin("manual_lookup", kind, undefined, "host");
+			this.jobDiagnostics.end(token, "skipped", "shared_slot_capacity");
+			return { status: "error", items: [], error: "Tracking is syncing. Try again in a moment." };
+		}
 		const controller = new AbortController();
 		const timer = setTimeout(() => controller.abort(new Error("Lookup timed out")), 45_000);
 		const label = kind === "linear" ? "Linear" : "Slack";
+		const job = this.jobDiagnostics.begin("manual_lookup", kind, undefined, "host");
 		const promise = abortable(
-			work((tool, args) => this.readCall(kind, tool, args, controller.signal)),
+			work(async (tool, args) => {
+				this.jobDiagnostics.stage(job, "lookup", false);
+				const result = await this.readCall(kind, tool, args, controller.signal);
+				this.jobDiagnostics.progress(job);
+				return result;
+			}),
 			controller.signal,
 		)
-			.then(({ items, more }): TrackingLookup<T> => ({ status: "ok", items, ...(more ? { more } : {}) }))
+			.then(({ items, more }): TrackingLookup<T> => {
+				this.jobDiagnostics.end(
+					job,
+					more ? "partial" : items.length ? "success" : "no_work",
+					more ? "batch_limit" : undefined,
+					items.length,
+				);
+				return { status: "ok", items, ...(more ? { more } : {}) };
+			})
 			.catch((error): TrackingLookup<T> => {
+				this.jobDiagnostics.end(
+					job,
+					controller.signal.aborted ? "cancelled" : "failure",
+					jobFailureReason(error, controller.signal),
+				);
 				if (error instanceof SourceSignInRequired)
 					return {
 						status: "sign_in_required",
