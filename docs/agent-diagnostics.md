@@ -81,7 +81,7 @@ falling back to any chat:
 
 | Source ID | Scope and coverage |
 | --- | --- |
-| `app` | Native app text logs. Pilot does not currently retain a searchable app text log, so this is explicitly unavailable. |
+| `app` | Private native app lifecycle, host transport and repair event/error codes on this Mac. Only closed categories and allowlisted error domains/numeric codes, never error descriptions, userInfo, console interception or payloads. Retained history is not current app liveness or comprehensive crash capture. |
 | `daemon` | The current and one rotated `pilotd.log` on macOS. Other hosts expose only the redacted current-process ring when no safe persistent file exists; journal history is explicitly unavailable because the reader never runs a shell. |
 | `kernel_worker` | Kernel/worker stdout and stderr inherited by the persistent daemon log. Records can be interleaved and cannot be reliably attributed to one process. The daemon ring alone is not presented as worker coverage. |
 | `native_report` | Existing Pilot-named crash, hang, spin and diagnostic reports in the current macOS user's `DiagnosticReports` directory. System-wide and ambiguous Node reports are excluded. Empty coverage does not prove no crash or hang. |
@@ -89,7 +89,18 @@ falling back to any chat:
 | `request_timing` | The admitted target's current and rotated content-free request timing records. |
 | `tool_activity` | The admitted target's current and rotated sanitized tool lifecycle records. |
 
-The current producers are `~/Library/Logs/Pilot/pilotd.log` and its `.1` file for the macOS launch agent;
+The native app producer writes `~/Library/Logs/Pilot/App/app.jsonl` and `.1`, each at most 256 KiB,
+with a 2 KiB record limit, seven-day expiry and a 64-entry off-main admission queue. Its directory is
+0700 and files 0600. It starts only after the Local host identity and local operational collection setting
+are known. It records lifecycle and transport/repair events, not every OSLog/print, arbitrary strings,
+stack dumps or native crash payloads. Startup before settings, dropped events and write failures can leave
+gaps. Writes never throw into app workflows. The reader independently validates the closed schema,
+daemon/lineage identity, age, size, ownership, permissions and no-follow files before disclosure.
+Disabled local diagnostics hides this source; **Clear local diagnostics** drains/invalidate pending app
+writes and deletes both app segments. No app event is uploaded or mirrored to a remote host. App-absent
+or pre-upgrade hosts report missing/not-recorded rather than pretending retained logs exist.
+
+Other current producers are `~/Library/Logs/Pilot/pilotd.log` and its `.1` file for the macOS launch agent;
 `<PILOT_HOME>/sessions/<target>/lifecycle.jsonl`, `durable/performance.jsonl` and
 `durable/tool-activity.jsonl`, each with its supported `.1` segment; and Pilot-named files under the current user's
 `~/Library/Logs/DiagnosticReports` on macOS. launchd directs both daemon stdout/stderr and inherited worker

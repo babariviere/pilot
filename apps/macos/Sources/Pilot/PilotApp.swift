@@ -134,6 +134,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if finishedTermination { return .terminateNow }
         if terminationTask == nil {
             terminationTask = Task { @MainActor in
+                NativeAppLog.shared.record(.appTerminating)
+                await NativeAppLog.shared.flush()
                 await AppModel.shared.hosts.disconnectAll()
                 await PilotTelemetry.shared.shutdown()
                 finishedTermination = true

@@ -834,10 +834,12 @@ extension AppModel {
             } catch {
                 // Keep the immutable create intent until archival succeeds. Receipt lookup on reconnect
                 // recovers this even if the proposal or project binding has since been replaced.
+                NativeAppLog.shared.record(.repairArchiveFailed, error: error)
                 throw ClientError("The repair started and is selected, but its diagnostics chat could not be archived. Reconnect or choose Check repair start to retry archival without creating another repair.")
             }
         }
         try await acknowledgeAdopted(operation, receipt: receipt)
+        NativeAppLog.shared.record(.repairStarted)
         return created
     }
 
@@ -1554,7 +1556,7 @@ struct DiagnosticRepairSheet: View {
                                                                thinking: selectedThinking.isEmpty ? nil : selectedThinking)
                 _ = try await model.startDiagnosticRepair(spawn, target: target)
                 dismiss()
-            } catch { self.error = error.localizedDescription }
+            } catch { NativeAppLog.shared.record(.repairStartFailed, error: error); self.error = error.localizedDescription }
         }
     }
 }
