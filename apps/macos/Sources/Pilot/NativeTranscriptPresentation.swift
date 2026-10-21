@@ -41,7 +41,13 @@ struct NativeTranscriptPresentedContent: View {
     let request: NativeTranscriptPresentation.Request
 
     var body: some View {
-        content.environment(\.self, request.environment)
+        // Forward row ownership and actions, not the presenting chat's entire environment.
+        // In particular, dismiss/isPresented must belong to the new SwiftUI sheet.
+        content
+            .environment(\.hostViewContext, request.environment.hostViewContext)
+            .environment(\.transcriptComposer, request.environment.transcriptComposer)
+            .environment(\.pilotFonts, request.environment.pilotFonts)
+            .environment(\.openURL, request.environment.openURL)
     }
 
     @ViewBuilder private var content: some View {
