@@ -26,19 +26,15 @@ def failed_summary(line):
     return bool(SWIFT_FAILURE.match(line) or XCTEST_FAILURE.match(line))
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--require-test", action="append", default=[],
-                        help="Fail if this Swift Testing function did not start (repeatable)")
-    args = parser.parse_args()
-    required = {name: re.compile(r"^◇ Test " + re.escape(name) + r"\(") for name in args.require_test}
+def check_output(source, output, diagnostics, required_tests=()):
+    required = {name: re.compile(r"^◇ Test " + re.escape(name) + r"\(") for name in required_tests}
     seen_required = set()
     failed = False
     started = 0
     terminal = 0
-    for line in sys.stdin.buffer:
-        sys.stdout.buffer.write(line)
-        sys.stdout.buffer.flush()
+    for line in source:
+        output.write(line)
+        output.flush()
         decoded = ANSI.sub("", line.decode("utf-8", errors="replace")).strip()
         for name, pattern in required.items():
             if pattern.match(decoded):
@@ -50,13 +46,21 @@ def main():
             terminal += 1
     incomplete = terminal < started
     if incomplete:
-        print(f"error: {started - terminal} native test runner(s) started without a terminal summary", file=sys.stderr)
+        print(f"error: {started - terminal} native test runner(s) started without a terminal summary", file=diagnostics)
     if failed:
-        print("error: a native test target failed (see runner summary above)", file=sys.stderr)
+        print("error: a native test target failed (see runner summary above)", file=diagnostics)
     missing = required.keys() - seen_required
     for name in sorted(missing):
-        print(f"error: required native test did not start: {name}", file=sys.stderr)
+        print(f"error: required native test did not start: {name}", file=diagnostics)
     return int(failed or incomplete or bool(missing))
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--require-test", action="append", default=[],
+                        help="Fail if this Swift Testing function did not start (repeatable)")
+    args = parser.parse_args()
+    return check_output(sys.stdin.buffer, sys.stdout.buffer, sys.stderr, args.require_test)
 
 
 if __name__ == "__main__":

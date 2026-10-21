@@ -533,6 +533,19 @@ Continue using `apps/macos/scripts/test.sh` and `apps/macos/scripts/build.sh`, w
 SDK and test macro plugin. After a successful build, `apps/macos/scripts/test.sh --skip-build --filter
 <name>` is appropriate for repeating an affected test without rebuilding.
 
+On CI, `run-swift-tests.py` supervises each SwiftPM invocation with a ten-minute build/startup
+budget and a separate three-minute budget starting at each native test runner's start marker.
+Output activity does not extend that deadline. On timeout it prints bounded stack samples of its
+own native runners, terminates the private session's process groups (including helper groups), and
+fails with status 124. Cancellation also cleans up those groups before releasing the verification slot.
+The outer step deadline remains a last resort for the entire chain. This diagnoses/bounds hangs;
+it does not make a hung test pass or replace its existing assertions and deadlines.
+
+The packaging tests verify the full missing-start/failure matrix through the production output
+parser in-process. A complete shell-wrapper run still checks every partition's filter, required-start
+arguments and build reuse, with representative early/middle/late failures checking shell propagation.
+Do not replay all preceding successful shell partitions for every parser permutation.
+
 Mounted button checks must not require backing `NSButton`s or populated accessibility children: SwiftUI
 can render the same control without either in a headless test process. `ControlGeometry` (and the existing
 repair-action anchors) provides only the control's bounds and inherited enabled state. Put the anchor inside
@@ -592,7 +605,10 @@ and verifies binary artifacts. No signing material or user data are cached.
 
 On main, the `macos` job also saves its debug test build (`apps/macos/.build`, about 430 MB) after the Swift
 tests run, even if some fail, because the build stays valid for the next incremental one. PRs don't save
-(the repository's cache limit is 10 GB); they restore main's latest build. A fresh checkout stamps every file with the current
+(the repository's cache limit is 10 GB); they restore main's latest build. The exact cache key includes
+the package manifest/pins, SDK selection and timestamp scheme, not test selection/watchdog scripts.
+A fallback accepts only the same OS, architecture, compiler and SDK; SwiftPM replans manifest and
+compiler-flag changes and rebuilds changed inputs. A fresh checkout stamps every file with the current
 time, which would make Swift recompile everything, so CI first runs `scripts/stable-mtimes.py`: each file
 under `apps/macos` gets an old timestamp derived from its contents, and only files whose contents changed
 recompile. Main always builds from scratch before saving, and releases never use cached

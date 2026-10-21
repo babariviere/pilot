@@ -134,12 +134,14 @@ jobs:
         id: swift-toolchain
         if: ${{ !cancelled() && steps.changes.outputs.swift == 'true' }}
         env:
-          BUILD_INPUTS: ${{ hashFiles('apps/macos/Package.resolved', 'apps/macos/Package.swift', 'apps/macos/scripts/test.sh', 'apps/macos/scripts/swift-env.sh', 'apps/macos/scripts/stable-mtimes.py') }}
+          # Test selection/watchdog edits are not compiler inputs. SwiftPM still tracks source/flag changes.
+          BUILD_INPUTS: ${{ hashFiles('apps/macos/Package.resolved', 'apps/macos/Package.swift', 'apps/macos/scripts/swift-env.sh', 'apps/macos/scripts/stable-mtimes.py') }}
         run: |
           swift --version
           identity="$(printf '%s\n' "$(swift --version)" "$(xcrun --show-sdk-version)" | shasum -a 256 | awk '{print $1}')"
           echo "key=$identity" >> "$GITHUB_OUTPUT"
           echo "build=swift-build-v1-$RUNNER_OS-$RUNNER_ARCH-$identity-$BUILD_INPUTS" >> "$GITHUB_OUTPUT"
+          echo "compatible=swift-build-v1-$RUNNER_OS-$RUNNER_ARCH-$identity-" >> "$GITHUB_OUTPUT"
       - name: Cache pinned Swift dependencies
         if: ${{ !cancelled() && steps.swift-toolchain.outcome == 'success' }}
         uses: actions/cache@v4
@@ -161,7 +163,11 @@ jobs:
         with:
           path: apps/macos/.build
           key: ${{ steps.swift-toolchain.outputs.build }}-${{ github.sha }}
-          restore-keys: ${{ steps.swift-toolchain.outputs.build }}-
+          # A changed manifest/cache key may still reuse compatible objects. SwiftPM replans and
+          # rebuilds changed inputs; main's uncached build remains the independent correctness check.
+          restore-keys: |
+            ${{ steps.swift-toolchain.outputs.build }}-
+            ${{ steps.swift-toolchain.outputs.compatible }}
       - name: Give Swift inputs content-derived timestamps
         if: ${{ !cancelled() && steps.swift-toolchain.outcome == 'success' }}
         run: |
@@ -172,8 +178,8 @@ jobs:
       - name: Swift tests
         id: swift-test
         if: ${{ !cancelled() && steps.swift-toolchain.outcome == 'success' }}
-        # A cached PR build plus tests takes about 5 minutes; a cold build (main, or a changed test.sh) adds
-        # about 8. Fail a hung test process well before the job limit without cutting off a cold run.
+        # Each invocation separately bounds compilation (10 min) and each test runner (3 min),
+        # sampling hung native runners before cleanup. Keep an outer bound for the whole chain.
         timeout-minutes: 20
         run: apps/macos/scripts/test.sh
       # A crashed test runner prints only its signal. Show the crashed thread from the system crash report.

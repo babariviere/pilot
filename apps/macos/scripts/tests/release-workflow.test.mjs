@@ -242,8 +242,10 @@ test("only main saves and only PRs reuse a cached Swift test build, with content
 		"          path: apps/macos/.build",
 		"          key: ${{ steps.swift-toolchain.outputs.build }}-${{ github.sha }}",
 	]);
-	assert.match(restore, /restore-keys: \$\{\{ steps\.swift-toolchain\.outputs\.build \}\}-$/);
-	assert.match(macos, /BUILD_INPUTS: \$\{\{ hashFiles\('apps\/macos\/Package\.resolved', 'apps\/macos\/Package\.swift', 'apps\/macos\/scripts\/test\.sh', 'apps\/macos\/scripts\/swift-env\.sh', 'apps\/macos\/scripts\/stable-mtimes\.py'\) \}\}/);
+	assert.match(restore, /restore-keys: \|\n +\$\{\{ steps\.swift-toolchain\.outputs\.build \}\}-\n +\$\{\{ steps\.swift-toolchain\.outputs\.compatible \}\}/);
+	assert.match(macos, /BUILD_INPUTS: \$\{\{ hashFiles\('apps\/macos\/Package\.resolved', 'apps\/macos\/Package\.swift', 'apps\/macos\/scripts\/swift-env\.sh', 'apps\/macos\/scripts\/stable-mtimes\.py'\) \}\}/);
+	assert.match(macos, /compatible=swift-build-v1-\$RUNNER_OS-\$RUNNER_ARCH-\$identity-/);
+	assert.doesNotMatch(macos.match(/BUILD_INPUTS: .*/)[0], /test\.sh|run-swift-tests/);
 	const stamped = macos.indexOf("python3 apps/macos/scripts/stable-mtimes.py apps/macos");
 	assert.ok(macos.indexOf("Restore the Swift test build") < stamped);
 	assert.ok(macos.indexOf("apps/macos/scripts/vendor-ghostty.sh", macos.indexOf("Give Swift inputs")) < stamped);
