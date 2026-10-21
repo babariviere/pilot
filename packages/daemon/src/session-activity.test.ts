@@ -11,15 +11,18 @@ import { SessionManager } from "./sessions.ts";
 
 async function fixture(t: TestContext, working?: boolean) {
 	const home = await mkdtemp(join(tmpdir(), "pilot-sessions-"));
-	t.after(() => rm(home, { recursive: true, force: true }));
+	const manager = new SessionManager(home, new ProjectStore(home));
+	// node:test runs after hooks FIFO. Drain every writer before removing its home.
+	t.after(async () => {
+		await manager.shutdown();
+		await rm(home, { recursive: true, force: true });
+	});
 	const id = randomUUID();
 	const file = join(home, "sessions", id, "meta.json");
 	const updatedAt = Date.now() - 86_400_000;
 	await mkdir(join(home, "sessions", id), { recursive: true });
 	await writeFile(file, JSON.stringify({ id, title: "Old chat", cwd: home, createdAt: updatedAt, updatedAt }));
-	const manager = new SessionManager(home, new ProjectStore(home));
 	await manager.load();
-	t.after(() => manager.shutdown());
 	// Exercise packet handling without starting a real kernel or loading user credentials.
 	const meta = manager["require"](id);
 	meta.working = working;
