@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.60.2](https://github.com/babariviere/pilot/compare/v1.60.1...v1.60.2) (2026-10-21)
+
+
+### Bug Fixes
+
+* **deps:** update dependency quickjs-wasi to v3.6.3 ([6a70369](https://github.com/babariviere/pilot/commit/6a70369381a7b6b0a0385ffb8ebdc4002849a34d))
+* **macos:** keep event row timestamp on one line ([ce09158](https://github.com/babariviere/pilot/commit/ce091588ce86abe149c015b7f4f279b04dbef445))
+* **macos:** stop the permission prompt test from hanging Swift CI ([ee0f40e](https://github.com/babariviere/pilot/commit/ee0f40e2b56a64e3edeb20f00ea7f7c6189be0f0))
+
 ## [1.60.1](https://github.com/babariviere/pilot/compare/v1.60.0...v1.60.1) (2026-10-20)
 
 
