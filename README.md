@@ -1209,6 +1209,10 @@ headroom, cache denominators, compaction pairs, request retries and worker relau
 without changing model, context, compaction, retry or restart behavior. Diagnostics settings can optionally compare
 retained per-chat catalog estimates or authoritative billed spend with an explicitly entered USD budget. No budget
 exists by default, missing or partial data is not zero-filled, and the result never gates or changes execution.
+The separate [local usage-history store](docs/usage-history-contract.md) provides a bounded foundation for the usage
+dashboard: private host-owned accounting, 30-day retention, replay-safe replacement identities and separate
+non-additive legacy checkpoints. It is not a billing source or diagnostic export. Request/background capture and
+dashboard projections build on this store; the store alone does not establish complete historical coverage.
 [Native and devbox setup diagnostics](docs/native-diagnostics.md) use Apple's delayed MetricKit delivery for crash
 and hang observations and a closed app-owned timeline for setup stages through verified remote handshake. They
 retain only bounded content-free metadata locally. Pilot does not ingest stacks or report bodies into those

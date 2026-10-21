@@ -2021,3 +2021,4 @@ export type * from "./shared-context.ts";
 export type * from "./telemetry.ts";
 export type * from "./tracking.ts";
 export type * from "./transfers.ts";
+export type * from "./usage-history.ts";
