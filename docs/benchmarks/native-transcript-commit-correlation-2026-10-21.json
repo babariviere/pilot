@@ -1,0 +1,1672 @@
+{
+  "method": "Frozen single-scene native diagnostic. NativeTrace raw uint64 sequence IDs aligned to Points of Interest, deduped with timestamp-conflict rejection, then correlated with captured main-thread CA commit intervals inside the exact phase. Only complete captured generations retained.",
+  "eventCount": 2077,
+  "dropped": 0,
+  "matchedMarkers": 1486,
+  "offsetResidualP95Microseconds": 18.75,
+  "offsetResidualMaxMicroseconds": 76.667375,
+  "phaseStartNs": -1567890375.625,
+  "phaseEndNs": 8443365624.375,
+  "recordedCommitCount": 268,
+  "sourceObjects": {
+    "9": 40
+  },
+  "completeGenerations": 29,
+  "generations": [
+    {
+      "generation": 12,
+      "startMs": 2753.168291625,
+      "sourceCommit": null,
+      "applyCommit": null,
+      "nextCommitAfterApply": 27,
+      "applyAfterSourceMs": 3.6495,
+      "noteAfterSourceMs": [
+        4.4245
+      ],
+      "proposalCount": 20,
+      "viewportChanges": 0,
+      "commits": [
+        {
+          "index": 26,
+          "afterSourceMs": 0.6455,
+          "ms": 1.069167
+        },
+        {
+          "index": 27,
+          "afterSourceMs": 7.912834,
+          "ms": 8.472458
+        },
+        {
+          "index": 28,
+          "afterSourceMs": 16.623042,
+          "ms": 0.053917
+        },
+        {
+          "index": 29,
+          "afterSourceMs": 40.382125,
+          "ms": 0.072875
+        },
+        {
+          "index": 30,
+          "afterSourceMs": 66.153917,
+          "ms": 0.093583
+        },
+        {
+          "index": 31,
+          "afterSourceMs": 107.208375,
+          "ms": 0.098834
+        },
+        {
+          "index": 32,
+          "afterSourceMs": 116.158917,
+          "ms": 0.452083
+        },
+        {
+          "index": 33,
+          "afterSourceMs": 198.732209,
+          "ms": 0.145166
+        },
+        {
+          "index": 34,
+          "afterSourceMs": 198.947042,
+          "ms": 0.056708
+        },
+        {
+          "index": 35,
+          "afterSourceMs": 232.066292,
+          "ms": 0.14575
+        }
+      ]
+    },
+    {
+      "generation": 13,
+      "startMs": 3014.988375,
+      "sourceCommit": null,
+      "applyCommit": null,
+      "nextCommitAfterApply": 36,
+      "applyAfterSourceMs": 1.52170825,
+      "noteAfterSourceMs": [
+        2.198375
+      ],
+      "proposalCount": 8,
+      "viewportChanges": 0,
+      "commits": [
+        {
+          "index": 36,
+          "afterSourceMs": 3.557250625,
+          "ms": 2.766291
+        },
+        {
+          "index": 37,
+          "afterSourceMs": 36.927291625,
+          "ms": 0.160334
+        },
+        {
+          "index": 38,
+          "afterSourceMs": 70.239000625,
+          "ms": 0.065208
+        },
+        {
+          "index": 39,
+          "afterSourceMs": 70.350916625,
+          "ms": 0.034209
+        },
+        {
+          "index": 40,
+          "afterSourceMs": 103.713458625,
+          "ms": 0.212458
+        },
+        {
+          "index": 41,
+          "afterSourceMs": 103.989666625,
+          "ms": 0.072125
+        },
+        {
+          "index": 42,
+          "afterSourceMs": 189.926041625,
+          "ms": 0.081584
+        },
+        {
+          "index": 43,
+          "afterSourceMs": 211.925000625,
+          "ms": 0.101791
+        },
+        {
+          "index": 44,
+          "afterSourceMs": 236.914416625,
+          "ms": 0.097084
+        }
+      ]
+    },
+    {
+      "generation": 14,
+      "startMs": 3257.99970825,
+      "sourceCommit": null,
+      "applyCommit": null,
+      "nextCommitAfterApply": 45,
+      "applyAfterSourceMs": 1.75275,
+      "noteAfterSourceMs": [
+        2.07766675
+      ],
+      "proposalCount": 8,
+      "viewportChanges": 0,
+      "commits": [
+        {
+          "index": 45,
+          "afterSourceMs": 2.815500375,
+          "ms": 2.435917
+        },
+        {
+          "index": 46,
+          "afterSourceMs": 27.255667375,
+          "ms": 0.172791
+        },
+        {
+          "index": 47,
+          "afterSourceMs": 52.238792375,
+          "ms": 0.18275
+        },
+        {
+          "index": 48,
+          "afterSourceMs": 77.210125375,
+          "ms": 0.061542
+        },
+        {
+          "index": 49,
+          "afterSourceMs": 102.226208375,
+          "ms": 0.138584
+        },
+        {
+          "index": 50,
+          "afterSourceMs": 127.209208375,
+          "ms": 0.066959
+        },
+        {
+          "index": 51,
+          "afterSourceMs": 127.330875375,
+          "ms": 0.125333
+        },
+        {
+          "index": 52,
+          "afterSourceMs": 188.575417375,
+          "ms": 0.095416
+        },
+        {
+          "index": 53,
+          "afterSourceMs": 210.557667375,
+          "ms": 0.118208
+        },
+        {
+          "index": 54,
+          "afterSourceMs": 235.541833375,
+          "ms": 0.056
+        }
+      ]
+    },
+    {
+      "generation": 15,
+      "startMs": 3501.821666625,
+      "sourceCommit": null,
+      "applyCommit": null,
+      "nextCommitAfterApply": 56,
+      "applyAfterSourceMs": 4.00025,
+      "noteAfterSourceMs": [
+        16.422666625
+      ],
+      "proposalCount": 30,
+      "viewportChanges": 0,
+      "commits": [
+        {
+          "index": 55,
+          "afterSourceMs": 0.602709,
+          "ms": 0.803
+        },
+        {
+          "index": 56,
+          "afterSourceMs": 4.570917,
+          "ms": 11.735125
+        },
+        {
+          "index": 57,
+          "afterSourceMs": 17.379584,
+          "ms": 4.237583
+        },
+        {
+          "index": 58,
+          "afterSourceMs": 41.689959,
+          "ms": 0.114458
+        },
+        {
+          "index": 59,
+          "afterSourceMs": 66.834959,
+          "ms": 0.124708
+        },
+        {
+          "index": 60,
+          "afterSourceMs": 91.740625,
+          "ms": 0.127625
+        },
+        {
+          "index": 61,
+          "afterSourceMs": 116.771167,
+          "ms": 0.194542
+        },
+        {
+          "index": 62,
+          "afterSourceMs": 117.047542,
+          "ms": 0.082917
+        },
+        {
+          "index": 63,
+          "afterSourceMs": 194.741417,
+          "ms": 0.11375
+        },
+        {
+          "index": 64,
+          "afterSourceMs": 200.082959,
+          "ms": 0.140708
+        },
+        {
+          "index": 65,
+          "afterSourceMs": 250.131459,
+          "ms": 0.116875
+        }
+      ]
+    },
+    {
+      "generation": 16,
+      "startMs": 3759.497916625,
+      "sourceCommit": null,
+      "applyCommit": null,
+      "nextCommitAfterApply": 67,
+      "applyAfterSourceMs": 2.776625,
+      "noteAfterSourceMs": [
+        8.198583375
+      ],
+      "proposalCount": 24,
+      "viewportChanges": 0,
+      "commits": [
+        {
+          "index": 66,
+          "afterSourceMs": 0.736334,
+          "ms": 0.863125
+        },
+        {
+          "index": 67,
+          "afterSourceMs": 3.500917,
+          "ms": 4.47775
+        },
+        {
+          "index": 68,
+          "afterSourceMs": 9.865375,
+          "ms": 2.135
+        },
+        {
+          "index": 69,
+          "afterSourceMs": 42.415084,
+          "ms": 0.137958
+        },
+        {
+          "index": 70,
+          "afterSourceMs": 92.410709,
+          "ms": 0.132625
+        },
+        {
+          "index": 71,
+          "afterSourceMs": 92.609209,
+          "ms": 0.031625
+        },
+        {
+          "index": 72,
+          "afterSourceMs": 192.398709,
+          "ms": 0.159
+        },
+        {
+          "index": 73,
+          "afterSourceMs": 226.009792,
+          "ms": 0.100375
+        }
+      ]
+    },
+    {
+      "generation": 17,
+      "startMs": 4007.01920825,
+      "sourceCommit": null,
+      "applyCommit": null,
+      "nextCommitAfterApply": 74,
+      "applyAfterSourceMs": 5.598458375,
+      "noteAfterSourceMs": [
+        22.50875
+      ],
+      "proposalCount": 31,
+      "viewportChanges": 0,
+      "commits": [
+        {
+          "index": 74,
+          "afterSourceMs": 6.928917375,
+          "ms": 15.483333
+        },
+        {
+          "index": 75,
+          "afterSourceMs": 23.861250375,
+          "ms": 3.692542
+        },
+        {
+          "index": 76,
+          "afterSourceMs": 28.209250375,
+          "ms": 0.111375
+        },
+        {
+          "index": 77,
+          "afterSourceMs": 53.174875375,
+          "ms": 0.1075
+        },
+        {
+          "index": 78,
+          "afterSourceMs": 78.225750375,
+          "ms": 0.074833
+        },
+        {
+          "index": 79,
+          "afterSourceMs": 111.807875375,
+          "ms": 0.107875
+        },
+        {
+          "index": 80,
+          "afterSourceMs": 111.978750375,
+          "ms": 0.059375
+        },
+        {
+          "index": 81,
+          "afterSourceMs": 203.245958375,
+          "ms": 0.298125
+        },
+        {
+          "index": 82,
+          "afterSourceMs": 203.695042375,
+          "ms": 0.457041
+        }
+      ]
+    },
+    {
+      "generation": 18,
+      "startMs": 4256.565625,
+      "sourceCommit": null,
+      "applyCommit": null,
+      "nextCommitAfterApply": 83,
+      "applyAfterSourceMs": 0.894541625,
+      "noteAfterSourceMs": [
+        1.571166625
+      ],
+      "proposalCount": 8,
+      "viewportChanges": 0,
+      "commits": [
+        {
+          "index": 83,
+          "afterSourceMs": 4.329416625,
+          "ms": 4.276875
+        },
+        {
+          "index": 84,
+          "afterSourceMs": 54.800041625,
+          "ms": 0.124625
+        },
+        {
+          "index": 85,
+          "afterSourceMs": 105.037708625,
+          "ms": 0.209833
+        },
+        {
+          "index": 86,
+          "afterSourceMs": 105.311833625,
+          "ms": 0.108208
+        }
+      ]
+    },
+    {
+      "generation": 19,
+      "startMs": 4512.068166625,
+      "sourceCommit": null,
+      "applyCommit": null,
+      "nextCommitAfterApply": 88,
+      "applyAfterSourceMs": 4.324,
+      "noteAfterSourceMs": [
+        5.041125
+      ],
+      "proposalCount": 18,
+      "viewportChanges": 0,
+      "commits": [
+        {
+          "index": 87,
+          "afterSourceMs": 0.346375,
+          "ms": 1.358959
+        },
+        {
+          "index": 88,
+          "afterSourceMs": 6.460417,
+          "ms": 9.664792
+        },
+        {
+          "index": 89,
+          "afterSourceMs": 192.842042,
+          "ms": 0.111917
+        },
+        {
+          "index": 90,
+          "afterSourceMs": 214.866584,
+          "ms": 0.191291
+        },
+        {
+          "index": 91,
+          "afterSourceMs": 239.831625,
+          "ms": 0.103292
+        }
+      ]
+    },
+    {
+      "generation": 20,
+      "startMs": 4754.37758325,
+      "sourceCommit": null,
+      "applyCommit": null,
+      "nextCommitAfterApply": 93,
+      "applyAfterSourceMs": 2.45916675,
+      "noteAfterSourceMs": [
+        2.914833375
+      ],
+      "proposalCount": 12,
+      "viewportChanges": 0,
+      "commits": [
+        {
+          "index": 92,
+          "afterSourceMs": 0.333792375,
+          "ms": 1.008083
+        },
+        {
+          "index": 93,
+          "afterSourceMs": 5.850750375,
+          "ms": 3.113958
+        },
+        {
+          "index": 94,
+          "afterSourceMs": 30.861958375,
+          "ms": 0.116417
+        },
+        {
+          "index": 95,
+          "afterSourceMs": 55.838000375,
+          "ms": 0.123125
+        },
+        {
+          "index": 96,
+          "afterSourceMs": 83.849375375,
+          "ms": 0.103792
+        },
+        {
+          "index": 97,
+          "afterSourceMs": 105.855500375,
+          "ms": 0.14175
+        },
+        {
+          "index": 98,
+          "afterSourceMs": 130.829583375,
+          "ms": 0.1465
+        },
+        {
+          "index": 99,
+          "afterSourceMs": 131.022667375,
+          "ms": 0.103541
+        },
+        {
+          "index": 100,
+          "afterSourceMs": 192.156667375,
+          "ms": 0.08575
+        },
+        {
+          "index": 101,
+          "afterSourceMs": 214.163833375,
+          "ms": 0.065709
+        },
+        {
+          "index": 102,
+          "afterSourceMs": 239.175417375,
+          "ms": 0.202333
+        }
+      ]
+    },
+    {
+      "generation": 21,
+      "startMs": 5007.101916625,
+      "sourceCommit": null,
+      "applyCommit": null,
+      "nextCommitAfterApply": 103,
+      "applyAfterSourceMs": 4.648708375,
+      "noteAfterSourceMs": [
+        6.028
+      ],
+      "proposalCount": 10,
+      "viewportChanges": 0,
+      "commits": [
+        {
+          "index": 103,
+          "afterSourceMs": 9.803125,
+          "ms": 7.615834
+        },
+        {
+          "index": 104,
+          "afterSourceMs": 37.375834,
+          "ms": 0.110416
+        },
+        {
+          "index": 105,
+          "afterSourceMs": 61.460792,
+          "ms": 0.170625
+        },
+        {
+          "index": 106,
+          "afterSourceMs": 94.896834,
+          "ms": 0.124083
+        },
+        {
+          "index": 107,
+          "afterSourceMs": 119.779375,
+          "ms": 0.101792
+        },
+        {
+          "index": 108,
+          "afterSourceMs": 119.974334,
+          "ms": 0.060583
+        }
+      ]
+    },
+    {
+      "generation": 22,
+      "startMs": 5254.45320825,
+      "sourceCommit": null,
+      "applyCommit": null,
+      "nextCommitAfterApply": 110,
+      "applyAfterSourceMs": 2.68954175,
+      "noteAfterSourceMs": [
+        3.50825
+      ],
+      "proposalCount": 20,
+      "viewportChanges": 0,
+      "commits": [
+        {
+          "index": 109,
+          "afterSourceMs": 0.331333375,
+          "ms": 0.568375
+        },
+        {
+          "index": 110,
+          "afterSourceMs": 6.144417375,
+          "ms": 6.898833
+        },
+        {
+          "index": 111,
+          "afterSourceMs": 197.433542375,
+          "ms": 0.109791
+        }
+      ]
+    },
+    {
+      "generation": 23,
+      "startMs": 5503.73533325,
+      "sourceCommit": null,
+      "applyCommit": null,
+      "nextCommitAfterApply": 113,
+      "applyAfterSourceMs": 3.2235,
+      "noteAfterSourceMs": [
+        4.840875
+      ],
+      "proposalCount": 20,
+      "viewportChanges": 0,
+      "commits": [
+        {
+          "index": 112,
+          "afterSourceMs": 0.558708375,
+          "ms": 0.821709
+        },
+        {
+          "index": 113,
+          "afterSourceMs": 6.455583375,
+          "ms": 7.911084
+        },
+        {
+          "index": 114,
+          "afterSourceMs": 23.169875375,
+          "ms": 0.118708
+        },
+        {
+          "index": 115,
+          "afterSourceMs": 81.928542375,
+          "ms": 0.049208
+        },
+        {
+          "index": 116,
+          "afterSourceMs": 82.020083375,
+          "ms": 0.022667
+        },
+        {
+          "index": 117,
+          "afterSourceMs": 198.153750375,
+          "ms": 0.117292
+        },
+        {
+          "index": 118,
+          "afterSourceMs": 234.487583375,
+          "ms": 0.120667
+        }
+      ]
+    },
+    {
+      "generation": 24,
+      "startMs": 5754.90975,
+      "sourceCommit": null,
+      "applyCommit": null,
+      "nextCommitAfterApply": 120,
+      "applyAfterSourceMs": 2.353875,
+      "noteAfterSourceMs": [
+        2.84183325
+      ],
+      "proposalCount": 12,
+      "viewportChanges": 0,
+      "commits": [
+        {
+          "index": 119,
+          "afterSourceMs": 0.462375625,
+          "ms": 0.682166
+        },
+        {
+          "index": 120,
+          "afterSourceMs": 5.336583625,
+          "ms": 3.085458
+        },
+        {
+          "index": 121,
+          "afterSourceMs": 30.312958625,
+          "ms": 0.179333
+        },
+        {
+          "index": 122,
+          "afterSourceMs": 55.332958625,
+          "ms": 0.284375
+        },
+        {
+          "index": 123,
+          "afterSourceMs": 55.685500625,
+          "ms": 0.073708
+        },
+        {
+          "index": 124,
+          "afterSourceMs": 80.308166625,
+          "ms": 0.187125
+        },
+        {
+          "index": 125,
+          "afterSourceMs": 80.547041625,
+          "ms": 0.107584
+        },
+        {
+          "index": 126,
+          "afterSourceMs": 105.310416625,
+          "ms": 0.118084
+        },
+        {
+          "index": 127,
+          "afterSourceMs": 105.521000625,
+          "ms": 0.114208
+        },
+        {
+          "index": 128,
+          "afterSourceMs": 189.608041625,
+          "ms": 0.102084
+        },
+        {
+          "index": 129,
+          "afterSourceMs": 213.645500625,
+          "ms": 0.073166
+        },
+        {
+          "index": 130,
+          "afterSourceMs": 238.658875625,
+          "ms": 0.137916
+        }
+      ]
+    },
+    {
+      "generation": 25,
+      "startMs": 6008.3225,
+      "sourceCommit": null,
+      "applyCommit": null,
+      "nextCommitAfterApply": 131,
+      "applyAfterSourceMs": 1.91983325,
+      "noteAfterSourceMs": [
+        4.337125
+      ],
+      "proposalCount": 12,
+      "viewportChanges": 0,
+      "commits": [
+        {
+          "index": 131,
+          "afterSourceMs": 2.181958625,
+          "ms": 2.104375
+        },
+        {
+          "index": 132,
+          "afterSourceMs": 5.474166625,
+          "ms": 2.622417
+        },
+        {
+          "index": 133,
+          "afterSourceMs": 28.477833625,
+          "ms": 0.105875
+        },
+        {
+          "index": 134,
+          "afterSourceMs": 51.909708625,
+          "ms": 0.162375
+        },
+        {
+          "index": 135,
+          "afterSourceMs": 76.894291625,
+          "ms": 0.126917
+        },
+        {
+          "index": 136,
+          "afterSourceMs": 101.894166625,
+          "ms": 0.135542
+        },
+        {
+          "index": 137,
+          "afterSourceMs": 126.889625625,
+          "ms": 0.136666
+        },
+        {
+          "index": 138,
+          "afterSourceMs": 127.100583625,
+          "ms": 0.060333
+        },
+        {
+          "index": 139,
+          "afterSourceMs": 186.252583625,
+          "ms": 0.11475
+        },
+        {
+          "index": 140,
+          "afterSourceMs": 210.236625625,
+          "ms": 0.116333
+        },
+        {
+          "index": 141,
+          "afterSourceMs": 235.225500625,
+          "ms": 0.116166
+        }
+      ]
+    },
+    {
+      "generation": 26,
+      "startMs": 6265.032375,
+      "sourceCommit": null,
+      "applyCommit": null,
+      "nextCommitAfterApply": 142,
+      "applyAfterSourceMs": 1.87208325,
+      "noteAfterSourceMs": [
+        2.26133325
+      ],
+      "proposalCount": 16,
+      "viewportChanges": 0,
+      "commits": [
+        {
+          "index": 142,
+          "afterSourceMs": 3.483666625,
+          "ms": 7.906667
+        },
+        {
+          "index": 143,
+          "afterSourceMs": 31.516583625,
+          "ms": 0.189208
+        },
+        {
+          "index": 144,
+          "afterSourceMs": 53.523875625,
+          "ms": 0.1265
+        },
+        {
+          "index": 145,
+          "afterSourceMs": 78.577125625,
+          "ms": 0.11275
+        },
+        {
+          "index": 146,
+          "afterSourceMs": 103.513000625,
+          "ms": 0.117833
+        },
+        {
+          "index": 147,
+          "afterSourceMs": 128.491666625,
+          "ms": 0.0665
+        },
+        {
+          "index": 148,
+          "afterSourceMs": 128.613666625,
+          "ms": 0.032542
+        },
+        {
+          "index": 149,
+          "afterSourceMs": 195.200958625,
+          "ms": 0.12875
+        },
+        {
+          "index": 150,
+          "afterSourceMs": 229.495958625,
+          "ms": 0.141417
+        }
+      ]
+    },
+    {
+      "generation": 27,
+      "startMs": 6508.24558325,
+      "sourceCommit": null,
+      "applyCommit": null,
+      "nextCommitAfterApply": 151,
+      "applyAfterSourceMs": 3.27929175,
+      "noteAfterSourceMs": [
+        8.14429175
+      ],
+      "proposalCount": 20,
+      "viewportChanges": 0,
+      "commits": [
+        {
+          "index": 151,
+          "afterSourceMs": 3.783958375,
+          "ms": 4.285292
+        },
+        {
+          "index": 152,
+          "afterSourceMs": 10.282833375,
+          "ms": 3.040209
+        },
+        {
+          "index": 153,
+          "afterSourceMs": 35.302958375,
+          "ms": 0.170834
+        },
+        {
+          "index": 154,
+          "afterSourceMs": 60.313458375,
+          "ms": 0.21675
+        },
+        {
+          "index": 155,
+          "afterSourceMs": 60.577833375,
+          "ms": 0.085875
+        },
+        {
+          "index": 156,
+          "afterSourceMs": 110.304667375,
+          "ms": 0.117083
+        },
+        {
+          "index": 157,
+          "afterSourceMs": 110.508792375,
+          "ms": 0.064083
+        },
+        {
+          "index": 158,
+          "afterSourceMs": 193.641167375,
+          "ms": 0.102916
+        },
+        {
+          "index": 159,
+          "afterSourceMs": 193.809125375,
+          "ms": 0.046292
+        }
+      ]
+    },
+    {
+      "generation": 28,
+      "startMs": 6765.161,
+      "sourceCommit": null,
+      "applyCommit": null,
+      "nextCommitAfterApply": 160,
+      "applyAfterSourceMs": 3.0145,
+      "noteAfterSourceMs": [
+        16.54220825
+      ],
+      "proposalCount": 26,
+      "viewportChanges": 0,
+      "commits": [
+        {
+          "index": 160,
+          "afterSourceMs": 3.979708625,
+          "ms": 12.464792
+        },
+        {
+          "index": 161,
+          "afterSourceMs": 17.529541625,
+          "ms": 2.771542
+        },
+        {
+          "index": 162,
+          "afterSourceMs": 196.074208625,
+          "ms": 0.112458
+        },
+        {
+          "index": 163,
+          "afterSourceMs": 203.376708625,
+          "ms": 0.162542
+        },
+        {
+          "index": 164,
+          "afterSourceMs": 246.060500625,
+          "ms": 0.135583
+        }
+      ]
+    },
+    {
+      "generation": 29,
+      "startMs": 7014.833791625,
+      "sourceCommit": null,
+      "applyCommit": null,
+      "nextCommitAfterApply": 165,
+      "applyAfterSourceMs": 2.861291625,
+      "noteAfterSourceMs": [
+        3.47825
+      ],
+      "proposalCount": 16,
+      "viewportChanges": 0,
+      "commits": [
+        {
+          "index": 165,
+          "afterSourceMs": 5.538209,
+          "ms": 8.005166
+        },
+        {
+          "index": 166,
+          "afterSourceMs": 13.647584,
+          "ms": 0.109916
+        },
+        {
+          "index": 167,
+          "afterSourceMs": 46.404125,
+          "ms": 0.103959
+        },
+        {
+          "index": 168,
+          "afterSourceMs": 96.410209,
+          "ms": 0.106541
+        },
+        {
+          "index": 169,
+          "afterSourceMs": 103.698334,
+          "ms": 0.163958
+        },
+        {
+          "index": 170,
+          "afterSourceMs": 195.465709,
+          "ms": 0.059375
+        },
+        {
+          "index": 171,
+          "afterSourceMs": 195.572625,
+          "ms": 0.040709
+        },
+        {
+          "index": 172,
+          "afterSourceMs": 220.383417,
+          "ms": 0.124292
+        }
+      ]
+    },
+    {
+      "generation": 30,
+      "startMs": 7255.462875,
+      "sourceCommit": null,
+      "applyCommit": null,
+      "nextCommitAfterApply": 174,
+      "applyAfterSourceMs": 2.20483325,
+      "noteAfterSourceMs": [
+        2.923125
+      ],
+      "proposalCount": 12,
+      "viewportChanges": 0,
+      "commits": [
+        {
+          "index": 173,
+          "afterSourceMs": 0.298083625,
+          "ms": 0.912625
+        },
+        {
+          "index": 174,
+          "afterSourceMs": 5.509000625,
+          "ms": 4.842541
+        },
+        {
+          "index": 175,
+          "afterSourceMs": 29.802250625,
+          "ms": 0.122666
+        },
+        {
+          "index": 176,
+          "afterSourceMs": 54.752041625,
+          "ms": 0.150167
+        },
+        {
+          "index": 177,
+          "afterSourceMs": 79.737708625,
+          "ms": 0.141292
+        },
+        {
+          "index": 178,
+          "afterSourceMs": 104.737958625,
+          "ms": 0.117125
+        },
+        {
+          "index": 179,
+          "afterSourceMs": 129.709833625,
+          "ms": 0.113375
+        },
+        {
+          "index": 180,
+          "afterSourceMs": 129.890625625,
+          "ms": 0.065791
+        },
+        {
+          "index": 181,
+          "afterSourceMs": 196.385000625,
+          "ms": 0.070333
+        },
+        {
+          "index": 182,
+          "afterSourceMs": 221.409458625,
+          "ms": 0.107625
+        },
+        {
+          "index": 183,
+          "afterSourceMs": 247.467833625,
+          "ms": 0.128
+        }
+      ]
+    },
+    {
+      "generation": 31,
+      "startMs": 7507.76833325,
+      "sourceCommit": null,
+      "applyCommit": null,
+      "nextCommitAfterApply": 184,
+      "applyAfterSourceMs": 1.536125,
+      "noteAfterSourceMs": [
+        2.33875
+      ],
+      "proposalCount": 8,
+      "viewportChanges": 0,
+      "commits": [
+        {
+          "index": 184,
+          "afterSourceMs": 4.243208375,
+          "ms": 4.319875
+        },
+        {
+          "index": 185,
+          "afterSourceMs": 28.560208375,
+          "ms": 0.105584
+        },
+        {
+          "index": 186,
+          "afterSourceMs": 52.426833375,
+          "ms": 0.071417
+        },
+        {
+          "index": 187,
+          "afterSourceMs": 77.490000375,
+          "ms": 0.128208
+        },
+        {
+          "index": 188,
+          "afterSourceMs": 103.499458375,
+          "ms": 0.06375
+        },
+        {
+          "index": 189,
+          "afterSourceMs": 110.771708375,
+          "ms": 0.234167
+        },
+        {
+          "index": 190,
+          "afterSourceMs": 111.045292375,
+          "ms": 0.084708
+        },
+        {
+          "index": 191,
+          "afterSourceMs": 194.109375375,
+          "ms": 0.14825
+        },
+        {
+          "index": 192,
+          "afterSourceMs": 219.089000375,
+          "ms": 0.176917
+        },
+        {
+          "index": 193,
+          "afterSourceMs": 244.104958375,
+          "ms": 0.13775
+        }
+      ]
+    },
+    {
+      "generation": 32,
+      "startMs": 7756.444916625,
+      "sourceCommit": null,
+      "applyCommit": null,
+      "nextCommitAfterApply": 194,
+      "applyAfterSourceMs": 4.23425,
+      "noteAfterSourceMs": [
+        5.043416625
+      ],
+      "proposalCount": 10,
+      "viewportChanges": 0,
+      "commits": [
+        {
+          "index": 194,
+          "afterSourceMs": 6.736584,
+          "ms": 6.232791
+        },
+        {
+          "index": 195,
+          "afterSourceMs": 37.093375,
+          "ms": 0.069667
+        },
+        {
+          "index": 196,
+          "afterSourceMs": 62.082125,
+          "ms": 0.111875
+        },
+        {
+          "index": 197,
+          "afterSourceMs": 87.090084,
+          "ms": 0.126583
+        },
+        {
+          "index": 198,
+          "afterSourceMs": 112.088584,
+          "ms": 0.162583
+        },
+        {
+          "index": 199,
+          "afterSourceMs": 112.30975,
+          "ms": 0.140375
+        },
+        {
+          "index": 200,
+          "afterSourceMs": 195.500792,
+          "ms": 0.143
+        },
+        {
+          "index": 201,
+          "afterSourceMs": 203.782542,
+          "ms": 0.117792
+        }
+      ]
+    },
+    {
+      "generation": 33,
+      "startMs": 8010.25695825,
+      "sourceCommit": null,
+      "applyCommit": null,
+      "nextCommitAfterApply": 203,
+      "applyAfterSourceMs": 5.672625,
+      "noteAfterSourceMs": [
+        7.495333375
+      ],
+      "proposalCount": 20,
+      "viewportChanges": 0,
+      "commits": [
+        {
+          "index": 202,
+          "afterSourceMs": 0.678583375,
+          "ms": 0.8475
+        },
+        {
+          "index": 203,
+          "afterSourceMs": 10.915875375,
+          "ms": 8.144333
+        },
+        {
+          "index": 204,
+          "afterSourceMs": 116.618542375,
+          "ms": 0.116416
+        },
+        {
+          "index": 205,
+          "afterSourceMs": 199.933542375,
+          "ms": 0.071875
+        }
+      ]
+    },
+    {
+      "generation": 34,
+      "startMs": 8263.1275,
+      "sourceCommit": null,
+      "applyCommit": null,
+      "nextCommitAfterApply": 207,
+      "applyAfterSourceMs": 3.179041625,
+      "noteAfterSourceMs": [
+        4.38708325
+      ],
+      "proposalCount": 20,
+      "viewportChanges": 0,
+      "commits": [
+        {
+          "index": 206,
+          "afterSourceMs": 0.336250625,
+          "ms": 0.654583
+        },
+        {
+          "index": 207,
+          "afterSourceMs": 5.912083625,
+          "ms": 7.573417
+        },
+        {
+          "index": 208,
+          "afterSourceMs": 47.087541625,
+          "ms": 0.13525
+        },
+        {
+          "index": 209,
+          "afterSourceMs": 47.274125625,
+          "ms": 0.102291
+        },
+        {
+          "index": 210,
+          "afterSourceMs": 197.079958625,
+          "ms": 0.132583
+        }
+      ]
+    },
+    {
+      "generation": 35,
+      "startMs": 8510.0225,
+      "sourceCommit": null,
+      "applyCommit": null,
+      "nextCommitAfterApply": 212,
+      "applyAfterSourceMs": 2.911,
+      "noteAfterSourceMs": [
+        5.03408325
+      ],
+      "proposalCount": 12,
+      "viewportChanges": 0,
+      "commits": [
+        {
+          "index": 211,
+          "afterSourceMs": 0.764666625,
+          "ms": 1.22875
+        },
+        {
+          "index": 212,
+          "afterSourceMs": 3.078500625,
+          "ms": 1.819833
+        },
+        {
+          "index": 213,
+          "afterSourceMs": 8.509583625,
+          "ms": 4.360917
+        },
+        {
+          "index": 214,
+          "afterSourceMs": 50.183250625,
+          "ms": 0.127125
+        },
+        {
+          "index": 215,
+          "afterSourceMs": 83.505375625,
+          "ms": 0.078666
+        },
+        {
+          "index": 216,
+          "afterSourceMs": 83.649083625,
+          "ms": 0.057875
+        },
+        {
+          "index": 217,
+          "afterSourceMs": 108.499416625,
+          "ms": 0.104875
+        },
+        {
+          "index": 218,
+          "afterSourceMs": 108.645208625,
+          "ms": 0.110625
+        },
+        {
+          "index": 219,
+          "afterSourceMs": 119.848083625,
+          "ms": 0.096167
+        },
+        {
+          "index": 220,
+          "afterSourceMs": 191.817000625,
+          "ms": 0.097541
+        },
+        {
+          "index": 221,
+          "afterSourceMs": 216.824333625,
+          "ms": 0.117167
+        },
+        {
+          "index": 222,
+          "afterSourceMs": 241.806416625,
+          "ms": 0.067625
+        }
+      ]
+    },
+    {
+      "generation": 36,
+      "startMs": 8761.11170825,
+      "sourceCommit": null,
+      "applyCommit": null,
+      "nextCommitAfterApply": 224,
+      "applyAfterSourceMs": 1.9375,
+      "noteAfterSourceMs": [
+        2.23204175
+      ],
+      "proposalCount": 12,
+      "viewportChanges": 0,
+      "commits": [
+        {
+          "index": 223,
+          "afterSourceMs": 0.332708375,
+          "ms": 0.68575
+        },
+        {
+          "index": 224,
+          "afterSourceMs": 7.420708375,
+          "ms": 5.751875
+        },
+        {
+          "index": 225,
+          "afterSourceMs": 32.409750375,
+          "ms": 0.063333
+        },
+        {
+          "index": 226,
+          "afterSourceMs": 57.453458375,
+          "ms": 0.135584
+        },
+        {
+          "index": 227,
+          "afterSourceMs": 82.388292375,
+          "ms": 0.068458
+        },
+        {
+          "index": 228,
+          "afterSourceMs": 107.407958375,
+          "ms": 0.114417
+        },
+        {
+          "index": 229,
+          "afterSourceMs": 107.606125375,
+          "ms": 0.089125
+        },
+        {
+          "index": 230,
+          "afterSourceMs": 199.095542375,
+          "ms": 0.128166
+        },
+        {
+          "index": 231,
+          "afterSourceMs": 224.071000375,
+          "ms": 0.164208
+        }
+      ]
+    },
+    {
+      "generation": 37,
+      "startMs": 9005.34945825,
+      "sourceCommit": null,
+      "applyCommit": null,
+      "nextCommitAfterApply": 233,
+      "applyAfterSourceMs": 3.621833375,
+      "noteAfterSourceMs": [
+        4.211958375
+      ],
+      "proposalCount": 20,
+      "viewportChanges": 0,
+      "commits": [
+        {
+          "index": 232,
+          "afterSourceMs": 0.596667375,
+          "ms": 0.995583
+        },
+        {
+          "index": 233,
+          "afterSourceMs": 5.561917375,
+          "ms": 8.047708
+        },
+        {
+          "index": 234,
+          "afterSourceMs": 38.192542375,
+          "ms": 0.173333
+        },
+        {
+          "index": 235,
+          "afterSourceMs": 63.176417375,
+          "ms": 0.130416
+        },
+        {
+          "index": 236,
+          "afterSourceMs": 88.151167375,
+          "ms": 0.104166
+        },
+        {
+          "index": 237,
+          "afterSourceMs": 113.171167375,
+          "ms": 0.133958
+        },
+        {
+          "index": 238,
+          "afterSourceMs": 138.184000375,
+          "ms": 0.12925
+        },
+        {
+          "index": 239,
+          "afterSourceMs": 138.452708375,
+          "ms": 0.094792
+        },
+        {
+          "index": 240,
+          "afterSourceMs": 196.574042375,
+          "ms": 0.096625
+        },
+        {
+          "index": 241,
+          "afterSourceMs": 246.536083375,
+          "ms": 0.1565
+        }
+      ]
+    },
+    {
+      "generation": 38,
+      "startMs": 9265.47508325,
+      "sourceCommit": null,
+      "applyCommit": null,
+      "nextCommitAfterApply": 242,
+      "applyAfterSourceMs": 2.26504175,
+      "noteAfterSourceMs": [
+        2.91666675
+      ],
+      "proposalCount": 10,
+      "viewportChanges": 0,
+      "commits": [
+        {
+          "index": 242,
+          "afterSourceMs": 4.348833375,
+          "ms": 7.0755
+        },
+        {
+          "index": 243,
+          "afterSourceMs": 36.384167375,
+          "ms": 0.115666
+        },
+        {
+          "index": 244,
+          "afterSourceMs": 61.459125375,
+          "ms": 0.136583
+        },
+        {
+          "index": 245,
+          "afterSourceMs": 69.724750375,
+          "ms": 0.144542
+        },
+        {
+          "index": 246,
+          "afterSourceMs": 94.743542375,
+          "ms": 0.065416
+        },
+        {
+          "index": 247,
+          "afterSourceMs": 94.863250375,
+          "ms": 0.100417
+        },
+        {
+          "index": 248,
+          "afterSourceMs": 194.719500375,
+          "ms": 0.090542
+        },
+        {
+          "index": 249,
+          "afterSourceMs": 194.863208375,
+          "ms": 0.033084
+        }
+      ]
+    },
+    {
+      "generation": 39,
+      "startMs": 9507.859625,
+      "sourceCommit": null,
+      "applyCommit": null,
+      "nextCommitAfterApply": 250,
+      "applyAfterSourceMs": 2.81970825,
+      "noteAfterSourceMs": [
+        10.681
+      ],
+      "proposalCount": 26,
+      "viewportChanges": 0,
+      "commits": [
+        {
+          "index": 250,
+          "afterSourceMs": 3.326958625,
+          "ms": 7.194708
+        },
+        {
+          "index": 251,
+          "afterSourceMs": 12.967375625,
+          "ms": 4.7765
+        },
+        {
+          "index": 252,
+          "afterSourceMs": 191.610625625,
+          "ms": 0.124666
+        },
+        {
+          "index": 253,
+          "afterSourceMs": 239.724208625,
+          "ms": 0.144708
+        }
+      ]
+    },
+    {
+      "generation": 40,
+      "startMs": 9751.1105,
+      "sourceCommit": null,
+      "applyCommit": null,
+      "nextCommitAfterApply": 255,
+      "applyAfterSourceMs": 4.96808325,
+      "noteAfterSourceMs": [
+        14.844041625
+      ],
+      "proposalCount": 35,
+      "viewportChanges": 0,
+      "commits": [
+        {
+          "index": 254,
+          "afterSourceMs": 0.693250625,
+          "ms": 0.93575
+        },
+        {
+          "index": 255,
+          "afterSourceMs": 6.009500625,
+          "ms": 8.641791
+        },
+        {
+          "index": 256,
+          "afterSourceMs": 16.378208625,
+          "ms": 2.436917
+        },
+        {
+          "index": 257,
+          "afterSourceMs": 26.712416625,
+          "ms": 0.156542
+        },
+        {
+          "index": 258,
+          "afterSourceMs": 50.747958625,
+          "ms": 0.173625
+        },
+        {
+          "index": 259,
+          "afterSourceMs": 50.985416625,
+          "ms": 0.104542
+        },
+        {
+          "index": 260,
+          "afterSourceMs": 84.074541625,
+          "ms": 0.178417
+        },
+        {
+          "index": 261,
+          "afterSourceMs": 84.307541625,
+          "ms": 0.156625
+        },
+        {
+          "index": 262,
+          "afterSourceMs": 109.099291625,
+          "ms": 0.205625
+        },
+        {
+          "index": 263,
+          "afterSourceMs": 109.373583625,
+          "ms": 0.14125
+        },
+        {
+          "index": 264,
+          "afterSourceMs": 200.747625625,
+          "ms": 0.137083
+        },
+        {
+          "index": 265,
+          "afterSourceMs": 200.963083625,
+          "ms": 0.070875
+        },
+        {
+          "index": 266,
+          "afterSourceMs": 225.750375625,
+          "ms": 0.110541
+        },
+        {
+          "index": 267,
+          "afterSourceMs": 253.249041625,
+          "ms": 0.053292
+        }
+      ]
+    }
+  ],
+  "commitDurationP95Ms": 7.573417,
+  "diagnosticSHA256": "e5502937d230529603960373f4830547de591237b1b33706c8866fa2e3ca2240",
+  "diagnosticUUID": "E60BCF64-4B29-326D-87A8-F044149AE8AF",
+  "confidence": [
+    "Prepared application before a CA commit followed by table height installation is observed in nine of 29 complete captured generations.",
+    "CA commit intervals do not prove which frame was presented or attribute the entire subsequent commit to height installation.",
+    "Repeated proposals without viewport changes do not establish their initiating invalidation.",
+    "Diagnostic capture is not an unprofiled performance acceptance measurement."
+  ]
+}
+
