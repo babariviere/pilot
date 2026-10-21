@@ -149,7 +149,7 @@ struct MemoryPage: View {
     }
 
     private var header: some View {
-        let count = selectedBinding == nil ? memory?.count ?? state.count : state.count
+        let count = memory?.count ?? state.count
         return PageHeader("Memory", subtitle: "\(count) \(count == 1 ? "note" : "notes") from agents in this project, summarised as they grow.") {
             HStack(spacing: 2) {
                 quietButton("Expand all") { Task { await state.expandAll() } }
@@ -200,7 +200,7 @@ struct MemoryPage: View {
             Text("\(matches) matching \(matches == 1 ? "note" : "notes"), shown in the tree · Esc clears")
                 .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
                 .padding(.horizontal, 8).padding(.vertical, 3)
-        } else if selectedBinding == nil, let compaction = memory?.compaction {
+        } else if let compaction = memory?.compaction {
             MemoryCompactionLine(compaction: compaction)
         }
         if let notice = state.notice {

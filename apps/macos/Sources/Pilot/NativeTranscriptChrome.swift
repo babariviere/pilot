@@ -24,6 +24,13 @@ struct NativeTranscriptHeader {
     var disconnected: HostViewContext? = nil
     var historyCached = true
     var loading: String? = nil
+
+    @MainActor var disconnectionBanner: NativeTranscriptBanner? {
+        guard let disconnected else { return nil }
+        let message = DisconnectedHistoryMessage(context: disconnected, historyCached: historyCached)
+        return NativeTranscriptBanner(title: message.title,
+            detail: [message.detail, message.ownership].compactMap { $0 }.joined(separator: "\n"))
+    }
 }
 
 struct NativeTranscriptFooter {
@@ -121,32 +128,20 @@ private final class NativeBanner: NSView {
 final class NativeHeaderChrome: NativeTranscriptChrome {
     private var banners: [NativeBanner] = []
     private let connection = NativeBanner()
-    private let connectionError = NSTextField(wrappingLabelWithString: "")
     private let loading = NSTextField(labelWithString: "")
     private let spinner = EllipsisSpinnerView()
     private var value = NativeTranscriptHeader()
-    private var changed: (() -> Void)?
-    private var busy = false
-    private var error: String?
-    private var generation = UUID()
-    private var reconnect: Task<Void, Never>?
-
     override init(frame: NSRect) {
         super.init(frame: frame)
         loading.font = .systemFont(ofSize: Theme.TextRole.label.size)
         loading.textColor = NSColor(Theme.mutedForeground)
-        connectionError.font = .systemFont(ofSize: Theme.TextRole.caption.size)
-        connectionError.textColor = NSColor(Theme.error)
-        for view in [connection, connectionError, loading, spinner] { addSubview(view) }
+        for view in [connection, loading, spinner] { addSubview(view) }
         setAccessibilityElement(false)
     }
     @available(*, unavailable)
     required init?(coder: NSCoder) { nil }
     func update(_ value: NativeTranscriptHeader, context: NativeRowContext) {
-        if self.value.disconnected?.host != value.disconnected?.host {
-            generation = UUID(); reconnect?.cancel(); reconnect = nil; busy = false; error = nil
-        }
-        self.value = value; changed = context.changed
+        self.value = value
         while banners.count > value.banners.count { banners.removeLast().removeFromSuperview() }
         for (index, banner) in value.banners.enumerated() {
             if index == banners.count { let view = NativeBanner(); banners.append(view); addSubview(view) }
@@ -159,30 +154,10 @@ final class NativeHeaderChrome: NativeTranscriptChrome {
         needsLayout = true
     }
     private func refreshConnection() {
-        connection.isHidden = value.disconnected == nil
-        if let disconnected = value.disconnected {
-            connection.update(NativeTranscriptBanner(title: "Disconnected · \(disconnected.name)",
-                detail: value.historyCached ? "This chat may still be working. Its current state is unknown."
-                    : "This chat may still be working. Reconnect to load its conversation.",
-                action: NativeChromeAction(title: "Reconnect", enabled: !busy, perform: { [weak self] in self?.connect() })))
-        }
-        connectionError.stringValue = error ?? ""; connectionError.isHidden = error == nil
+        let banner = value.disconnectionBanner
+        connection.isHidden = banner == nil
+        if let banner { connection.update(banner) }
         needsLayout = true
-    }
-    private func connect() {
-        guard let context = value.disconnected, !busy else { return }
-        busy = true
-        refreshConnection()
-        let generation = generation
-        reconnect = Task { [weak self] in
-            var reconnectError: String?
-            do { try await context.hosts.reconnect(context.host) } catch { reconnectError = error.localizedDescription }
-            guard !Task.isCancelled, let self, self.generation == generation else { return }
-            self.busy = false; self.error = reconnectError; self.reconnect = nil
-            self.refreshConnection()
-            self.changed?()
-        }
-        changed?()
     }
     override func measure(width: CGFloat) -> CGFloat {
         var y: CGFloat = 24
@@ -196,10 +171,6 @@ final class NativeHeaderChrome: NativeTranscriptChrome {
             y += 8
             let height = connection.measure(width: width)
             connection.frame = NSRect(x: 0, y: y, width: width, height: height); y += height + 8
-            if error != nil {
-                let size = chromeLabelHeight(connectionError, width: width)
-                connectionError.frame = NSRect(x: 0, y: y, width: width, height: size); y += size + 6
-            }
         }
         if value.loading != nil {
             if y > 24 { y += 16 }
@@ -212,8 +183,7 @@ final class NativeHeaderChrome: NativeTranscriptChrome {
     }
     override func layout() { super.layout(); _ = measure(width: max(1, bounds.width)) }
     override func stop() {
-        generation = UUID(); reconnect?.cancel(); reconnect = nil
-        changed = nil; spinner.animates = false; value = NativeTranscriptHeader()
+        spinner.animates = false; value = NativeTranscriptHeader()
         super.stop()
     }
 }
