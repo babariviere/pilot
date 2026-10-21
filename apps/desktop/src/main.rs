@@ -69,10 +69,12 @@ fn main() {
     #[cfg(target_os = "macos")]
     let application = gpui_kit::application();
     application
-        .with_assets(gpui_kit::assets::Assets)
+        .with_assets(pilot_desktop::ChromeAssets)
         .run(move |cx| {
             gpui_kit::init(cx);
+            pilot_desktop::init_appearance(cx);
             TranscriptView::bind_keys(cx);
+            LocalViewer::bind_keys(cx);
             // Initial window geometry is a physical platform boundary, not a UI token.
             gpui_kit::open_window(
                 WindowOptions {
@@ -85,6 +87,7 @@ fn main() {
                 },
                 cx,
                 |window, cx| {
+                    pilot_desktop::follow_appearance(window, cx);
                     window.set_window_title(if local {
                         "Pilot Next · Local"
                     } else {

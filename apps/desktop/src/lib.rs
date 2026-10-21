@@ -11,6 +11,8 @@ mod transcript_view;
 mod work_view;
 
 pub use local_client::{LocalOptions, check_local_read, read_local_capture};
-pub use local_view::LocalViewer;
+pub use local_view::{LocalViewer, PreviewState};
 pub use model::{fence_fixture, giant_fixture};
 pub use transcript_view::TranscriptView;
+mod appearance;
+pub use appearance::{ChromeAssets, follow_appearance, init_appearance};

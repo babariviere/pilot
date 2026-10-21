@@ -14,6 +14,8 @@ use gpui_kit::{
         radio::RadioGroup,
     },
     div,
+    prelude::FluentBuilder,
+    px,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -462,17 +464,14 @@ impl ChatEditor {
 }
 
 impl Render for ChatEditor {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(key) = self.selected.clone() else {
             return div()
-                .p_4()
+                .px_3()
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
-                .child(
-                    self.state.error.unwrap_or(
-                        "Choose a chat or start a new Local chat. Swift remains available.",
-                    ),
-                )
+                .text_color(cx.theme().danger)
+                .children(self.state.error)
                 .into_any_element();
         };
         let blank = Draft::default();
@@ -502,10 +501,18 @@ impl Render for ChatEditor {
             .and_then(|id| self.state.book.as_ref().and_then(|b| b.pending.get(id)));
         let mut footer = div()
             .v_flex()
-            .p_4()
+            .relative()
+            .overflow_hidden()
+            .bg(cx.theme().muted)
+            .p_3()
             .gap_2()
             .border_t_1()
-            .border_color(cx.theme().border);
+            .border_color(cx.theme().border)
+            .when(self.busy, |this| {
+                this.child(
+                    crate::appearance::corner(crate::appearance::Corner::Working, cx).opacity(0.15),
+                )
+            });
         if is_new {
             footer = footer.child(
                 div()
@@ -536,6 +543,14 @@ impl Render for ChatEditor {
                     ),
             );
         }
+        if self.busy {
+            footer = footer.child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("Working"),
+            );
+        }
         footer = footer.child(
             Textarea::new(&self.text)
                 .readonly(!can_edit)
@@ -544,6 +559,9 @@ impl Render for ChatEditor {
         footer = footer.child(
             div()
                 .h_flex()
+                .when(window.viewport_size().width < px(800.), |this| {
+                    this.flex_col().items_start()
+                })
                 .justify_between()
                 .gap_2()
                 .child(
@@ -553,9 +571,9 @@ impl Render for ChatEditor {
                         .child(if self.closing {
                             "Saving before closing…"
                         } else if !self.writable {
-                            "This conversation is readonly."
+                            "This chat is read-only."
                         } else if saved {
-                            "Draft saved privately. Enter: send. Shift-Enter: newline."
+                            "Saved privately · Enter to send"
                         } else {
                             "Saving draft…"
                         }),
@@ -612,7 +630,7 @@ impl Render for ChatEditor {
                 ),
         );
         if let Some(error) = self.error.or(self.state.error) {
-            footer = footer.child(div().text_xs().child(error));
+            footer = footer.child(div().text_xs().text_color(cx.theme().danger).child(error));
         }
         if let Some(intent) = pending {
             let id = intent.id.clone();

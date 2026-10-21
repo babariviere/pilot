@@ -101,6 +101,17 @@ See [tool presentation evidence](evidence/tool-presentation.md). This is not ful
 
 ## Limits and lifecycle
 
+### Conversation interface
+
+The Local browser uses the app's soft light/dark palette, follows system
+appearance, keeps a compact adaptive sidebar and centers a bounded reading
+column. Neutral selection identifies the opened chat independently of search.
+Cmd/Ctrl-F focuses chat search. Static cached Bayer corners mark projected
+working/failed rows and the working composer without adding an animation clock.
+Details reveals prototype limitations; capacity/error notices remain visible.
+See [interface verification and remaining gaps](evidence/interface.md).
+This is not Home/Inbox/settings, animated-dither or full app parity.
+
 ### Private rendered-UI capture
 
 ```sh

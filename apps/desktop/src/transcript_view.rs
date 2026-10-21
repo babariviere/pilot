@@ -396,9 +396,12 @@ impl TranscriptView {
                 .child(view.clone());
         }
         let source = row.shared_source();
+        let user = row.label().starts_with("You");
         div()
             .id(("message", row.id()))
             .v_flex()
+            .rounded_lg()
+            .when(user, |this| this.bg(cx.theme().muted).p_3())
             .gap_2()
             .w_full()
             .min_w_0()
@@ -411,11 +414,7 @@ impl TranscriptView {
                         div()
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
-                            .child(SharedString::from(format!(
-                                "{} · #{}",
-                                row.label(),
-                                row.id()
-                            ))),
+                            .child(SharedString::from(row.display_label().to_owned())),
                     )
                     .child(
                         Button::new(("copy-source", row.id()))
@@ -1119,3 +1118,4 @@ mod tests {
 #[cfg(test)]
 #[path = "composer_tests.rs"]
 mod composer_tests;
+use gpui_kit::prelude::FluentBuilder;

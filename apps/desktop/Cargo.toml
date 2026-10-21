@@ -39,3 +39,7 @@ harness = false
 name = "capture"
 harness = false
 test = false
+
+[[test]]
+name = "chrome"
+harness = false
