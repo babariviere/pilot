@@ -1,0 +1,1050 @@
+use std::{collections::HashMap, time::Duration};
+
+use gpui_kit::{
+    App, AppContext, ClipboardItem, Context, Entity, EntityInputHandler, InteractiveElement,
+    IntoElement, KeyBinding, ParentElement, Render, SharedString, StyleRefinement, Styled,
+    Subscription, Task, Window,
+    component::{
+        ActiveTheme, Disableable, Sizable, StyledExt,
+        button::{Button, ButtonVariants},
+        input::{InputEvent, Textarea, TextareaState},
+        message_scroller::{MessageScroller, MessageScrollerState},
+        text::{TextView, TextViewState},
+    },
+    div,
+};
+
+use crate::model::{Message, TICK_MS, Transcript};
+
+gpui_kit::actions!(fixture, [Quit, FocusComposer]);
+
+pub struct TranscriptView {
+    transcript: Transcript,
+    // The whole proof is bounded to 128 rows. A2 must evaluate a bounded cache
+    // for real histories rather than retaining one parser per historical row.
+    text_states: Vec<Option<Entity<TextViewState>>>,
+    scroller: Entity<MessageScrollerState>,
+    composer: Entity<TextareaState>,
+    _subscriptions: Vec<Subscription>,
+    stream_task: Option<Task<()>>,
+    readonly: bool,
+    text_subscriptions: HashMap<u64, Subscription>,
+}
+
+impl TranscriptView {
+    /// Readiness probe for the bounded offscreen harness, not a render-time gate.
+    pub fn text_parsers_ready(&self, cx: &App) -> bool {
+        self.transcript
+            .messages()
+            .iter()
+            .zip(&self.text_states)
+            .all(|(row, state)| {
+                state.as_ref().is_none_or(|state| {
+                    state.read(cx).rendered_text().source() == row.display_source()
+                })
+            })
+    }
+
+    pub fn bind_keys(cx: &mut App) {
+        cx.bind_keys([
+            KeyBinding::new("secondary-q", Quit, None),
+            KeyBinding::new("secondary-l", FocusComposer, None),
+        ]);
+        cx.on_action(|_: &Quit, cx| cx.quit());
+    }
+
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::with_fixture(None, window, cx)
+    }
+
+    pub fn with_fixture(
+        extra: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::build(extra, false, window, cx)
+    }
+
+    pub(crate) fn readonly(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::build(None, true, window, cx)
+    }
+
+    fn build(
+        extra: Option<String>,
+        readonly: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut transcript = if readonly {
+            Transcript::readonly()
+        } else {
+            Transcript::new()
+        };
+        if let Some(source) = extra {
+            transcript.extra_fixture(source);
+        }
+        let scroller = cx.new(|cx| MessageScrollerState::new(transcript.messages().len(), cx));
+        let composer = cx.new(|cx| {
+            let mut state = TextareaState::new(window, cx)
+                .placeholder("Type here. Nothing leaves this window.")
+                .auto_grow(2, 6);
+            state.set_submit_on_enter(true, cx);
+            state
+        });
+        let subscription =
+            cx.subscribe_in(
+                &composer,
+                window,
+                |this, _, event, window, cx| match event {
+                    InputEvent::PressEnter { shift: false, .. } => this.submit(window, cx),
+                    InputEvent::Change => cx.notify(),
+                    _ => {}
+                },
+            );
+        let scroll_subscription = cx.observe(&scroller, |_, _, cx| cx.notify());
+        let mut view = Self {
+            transcript,
+            text_states: Vec::new(),
+            scroller,
+            composer,
+            _subscriptions: vec![subscription, scroll_subscription],
+            stream_task: None,
+            readonly,
+            text_subscriptions: HashMap::new(),
+        };
+        view.text_states = (0..view.transcript.messages().len())
+            .map(|ix| view.create_text_state(ix, cx))
+            .collect();
+        if !readonly {
+            view.composer
+                .update(cx, |state, cx| state.focus(window, cx));
+        }
+        view
+    }
+
+    fn create_text_state(
+        &mut self,
+        ix: usize,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<TextViewState>> {
+        let row = &self.transcript.messages()[ix];
+        // User input is not Markdown: a typed image URL cannot trigger a fetch.
+        if row.label().starts_with("You") && !self.readonly {
+            return None;
+        }
+        let id = row.id();
+        let text = cx.new(|cx| {
+            let state = if row.is_plain() {
+                TextViewState::html(row.display_source(), cx)
+            } else {
+                TextViewState::markdown(row.source(), cx)
+            };
+            state
+                .images_enabled(!self.readonly)
+                .retain_selection_on_unmount(true, cx)
+        });
+        self.text_subscriptions.insert(
+            id,
+            cx.observe(&text, move |this, _, cx| {
+                if let Some(ix) = this
+                    .transcript
+                    .messages()
+                    .iter()
+                    .position(|row| row.id() == id)
+                {
+                    this.scroller.update(cx, |state, cx| {
+                        state.remeasure_items(ix..ix + 1, cx);
+                    });
+                }
+            }),
+        );
+        Some(text)
+    }
+
+    pub(crate) fn replace_readonly(
+        &mut self,
+        rows: Vec<Message>,
+        reset: bool,
+        cx: &mut Context<Self>,
+    ) {
+        assert!(self.readonly);
+        let old = self.transcript.messages();
+        let old_ids: Vec<_> = old.iter().map(Message::id).collect();
+        let new_ids: Vec<_> = rows.iter().map(Message::id).collect();
+        let mut retained: HashMap<_, _> = old
+            .iter()
+            .cloned()
+            .zip(self.text_states.drain(..))
+            .map(|(row, state)| (row.id(), (row, state)))
+            .collect();
+        if reset {
+            retained.clear();
+            self.text_subscriptions.clear();
+        }
+        self.transcript.replace_readonly(rows);
+        for ix in 0..self.transcript.messages().len() {
+            let row = &self.transcript.messages()[ix];
+            let state = if let Some((old, state)) = retained.remove(&row.id()) {
+                if old.source() != row.source() {
+                    if let Some(text) = &state {
+                        text.update(cx, |state, cx| state.set_text(row.display_source(), cx));
+                    }
+                    self.scroller.update(cx, |state, cx| {
+                        state.remeasure_items(ix..ix + 1, cx);
+                    });
+                }
+                state
+            } else {
+                self.create_text_state(ix, cx)
+            };
+            self.text_states.push(state);
+        }
+        self.text_subscriptions.retain(|id, _| new_ids.contains(id));
+        self.scroller.update(cx, |state, cx| {
+            if reset {
+                state.reset(new_ids.len(), cx);
+            } else if old_ids != new_ids {
+                let prefix = old_ids
+                    .iter()
+                    .zip(&new_ids)
+                    .take_while(|(a, b)| a == b)
+                    .count();
+                let suffix = old_ids[prefix..]
+                    .iter()
+                    .rev()
+                    .zip(new_ids[prefix..].iter().rev())
+                    .take_while(|(a, b)| a == b)
+                    .count();
+                state.splice(
+                    prefix..old_ids.len() - suffix,
+                    new_ids.len() - prefix - suffix,
+                    cx,
+                );
+            }
+        });
+        cx.notify();
+    }
+
+    pub(crate) fn latest(&mut self, cx: &mut Context<Self>) {
+        self.scroller
+            .update(cx, |state, cx| state.scroll_to_end(cx));
+    }
+
+    fn append_text_states(&mut self, from: usize, cx: &mut Context<Self>) {
+        for ix in from..self.transcript.messages().len() {
+            let state = self.create_text_state(ix, cx);
+            self.text_states.push(state);
+        }
+        let count = self.transcript.messages().len() - from;
+        self.scroller.update(cx, |state, cx| {
+            state.append(count, cx);
+        });
+        cx.notify();
+    }
+
+    fn prepend(&mut self, cx: &mut Context<Self>) {
+        if self.readonly {
+            return;
+        }
+        let count = self.transcript.prepend();
+        let states: Vec<_> = (0..count)
+            .map(|ix| self.create_text_state(ix, cx))
+            .collect();
+        self.text_states.splice(0..0, states);
+        self.scroller.update(cx, |state, cx| {
+            state.prepend(count, cx);
+        });
+        cx.notify();
+    }
+
+    fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.readonly {
+            return;
+        }
+        // The pointer Send path must also refuse submission during marked text.
+        let composing = self.composer.update(cx, |state, cx| {
+            state.marked_text_range(window, cx).is_some()
+        });
+        if composing {
+            return;
+        }
+        let input = self.composer.read(cx).value();
+        if let Some(range) = self.transcript.submit(&input) {
+            self.composer.update(cx, |state, cx| {
+                state.set_value("", window, cx);
+                state.focus(window, cx);
+            });
+            self.append_text_states(range.start, cx);
+            // Sending does not steal the reading position. Latest is explicit.
+            self.start_stream(cx);
+        }
+    }
+
+    fn demo(&mut self, cx: &mut Context<Self>) {
+        if self.readonly {
+            return;
+        }
+        let from = self.transcript.messages().len();
+        if self.transcript.demo() {
+            self.append_text_states(from, cx);
+            self.start_stream(cx);
+        }
+    }
+
+    fn tick(&mut self, cx: &mut Context<Self>) -> bool {
+        if let Some(ix) = self.transcript.tick() {
+            if let Some(text) = &self.text_states[ix] {
+                text.update(cx, |state, cx| {
+                    state.set_text(self.transcript.messages()[ix].source(), cx)
+                });
+            }
+            self.scroller.update(cx, |state, cx| {
+                state.remeasure_items(ix..ix + 1, cx);
+            });
+            cx.notify();
+        }
+        self.transcript.is_streaming()
+    }
+
+    fn start_stream(&mut self, cx: &mut Context<Self>) {
+        self.stream_task = Some(cx.spawn(async |view, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(TICK_MS))
+                    .await;
+                match view.update(cx, |view, cx| view.tick(cx)) {
+                    Ok(true) => {}
+                    _ => break,
+                }
+            }
+        }));
+    }
+
+    fn stop(&mut self, cx: &mut Context<Self>) {
+        self.stream_task = None;
+        self.transcript.stop();
+        cx.notify();
+    }
+
+    fn render_row(&self, ix: usize, cx: &App) -> impl IntoElement + use<> {
+        let row = &self.transcript.messages()[ix];
+        let source = row.shared_source();
+        div()
+            .id(("message", row.id()))
+            .v_flex()
+            .gap_2()
+            .w_full()
+            .min_w_0()
+            .child(
+                div()
+                    .h_flex()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(SharedString::from(format!(
+                                "{} · #{}",
+                                row.label(),
+                                row.id()
+                            ))),
+                    )
+                    .child(
+                        Button::new(("copy-source", row.id()))
+                            .ghost()
+                            .small()
+                            .label("Copy source")
+                            .on_click(move |_, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                    source.as_ref().clone(),
+                                ))
+                            }),
+                    ),
+            )
+            .child(match &self.text_states[ix] {
+                Some(state) => TextView::new(state)
+                    .selectable(true)
+                    .scrollable(false)
+                    .stream_fade(true)
+                    .on_link_click(|_, _, _, _| {})
+                    .into_any_element(),
+                None => div()
+                    .w_full()
+                    .child(SharedString::from(row.source().to_string()))
+                    .into_any_element(),
+            })
+    }
+}
+
+impl Render for TranscriptView {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let busy = self.transcript.is_streaming();
+        let full = self.transcript.is_full();
+        let weak = cx.weak_entity();
+        let viewport = div().id("viewport").flex_1().min_h_0().min_w_0();
+        #[cfg(test)]
+        let viewport = {
+            use gpui_kit::test::TestSupportExt;
+            viewport.test_support()
+        };
+        let following = self.scroller.read(cx).is_following_tail();
+        // With Kit's default vertical list padding, pinned GPUI fails to resume
+        // following after wheel-scrolling back to the bottom. Keep the list
+        // itself unpadded; the existing row spacing remains unchanged.
+        let list_style = StyleRefinement::default().py_0();
+        if self.readonly {
+            return div()
+                .v_flex()
+                .size_full()
+                .min_h_0()
+                .min_w_0()
+                .child(
+                    viewport.child(
+                        MessageScroller::new(
+                            "transcript",
+                            self.scroller.clone(),
+                            move |ix, _, cx| {
+                                weak.upgrade()
+                                    .map(|view| view.read(cx).render_row(ix, cx).into_any_element())
+                                    .unwrap_or_else(|| div().into_any_element())
+                            },
+                        )
+                        .with_list_style(list_style)
+                        .jump_button(false),
+                    ),
+                )
+                .into_any_element();
+        }
+        div().v_flex().size_full().min_w_0().bg(cx.theme().background).text_color(cx.theme().foreground)
+            .on_action(cx.listener(|this, _: &FocusComposer, window, cx| {
+                if this.readonly { return; }
+                this.composer.update(cx, |state, cx| state.focus(window, cx));
+            }))
+            .child(div().v_flex().p_4().gap_2().border_b_1().border_color(cx.theme().border)
+                .child(div().font_semibold().child("Transcript fixture"))
+                .child(div().text_sm().text_color(cx.theme().muted_foreground).child("Memory only. No live connection. Swift and user data are untouched."))
+                .child(div().h_flex().flex_wrap().gap_2()
+                    .child(Button::new("earlier").small().label("Earlier (+12)")
+                        .disabled(self.transcript.earlier() == 0 || full)
+                        .on_click(cx.listener(|this, _, _, cx| this.prepend(cx))))
+                    .child(Button::new("stream").small().label("Stream fixture")
+                        .disabled(busy || full).on_click(cx.listener(|this, _, _, cx| this.demo(cx))))
+                    .child(Button::new("stop").small().label("Stop").disabled(!busy)
+                        .on_click(cx.listener(|this, _, _, cx| this.stop(cx))))
+                    .child(Button::new("latest").small().label("Latest")
+                        .on_click(cx.listener(|this, _, _, cx| this.scroller.update(cx, |state, cx| state.scroll_to_end(cx)))))
+                    .child(div().text_sm().child(if following { "Following tail" } else { "Reading above tail" }))))
+            .child(viewport.child(
+                MessageScroller::new("transcript", self.scroller.clone(), move |ix, _, cx| {
+                    weak.upgrade().map(|view| view.read(cx).render_row(ix, cx).into_any_element())
+                        .unwrap_or_else(|| div().into_any_element())
+                }).with_list_style(list_style).jump_button(false)))
+            .child(div().v_flex().p_4().gap_2().border_t_1().border_color(cx.theme().border)
+                .child(Textarea::new(&self.composer).accessibility_id("composer").aria_label("Local echo composer"))
+                .child(div().h_flex().justify_between().gap_2()
+                    .child(div().text_sm().text_color(cx.theme().muted_foreground).child(if full {
+                        "Fixture capacity reached. Relaunch to reset; no rows are evicted."
+                    } else if busy { "Streaming 100 characters at 4/s. Composer stays editable." }
+                    else { "Enter: local echo. Shift-Enter: newline. Cmd/Ctrl-L: composer." }))
+                    .child(Button::new("send").primary().label("Echo locally")
+                        .disabled(busy || full || self.composer.read(cx).value().trim().is_empty())
+                        .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx)))))).into_any_element()
+    }
+}
+
+#[cfg(test)]
+#[path = "readonly_tests.rs"]
+mod readonly_tests;
+
+#[cfg(test)]
+mod tests {
+    use super::TranscriptView;
+    use gpui_kit::{
+        AppContext, Bounds, ScrollDelta, TestAppContext, WindowBounds, WindowOptions, point, px,
+        size,
+        test::{TestQueryExt, TestWindowExt},
+    };
+
+    pub(super) fn setup(
+        cx: &mut TestAppContext,
+    ) -> (gpui_kit::AnyWindowHandle, gpui_kit::Entity<TranscriptView>) {
+        setup_extra(cx, None)
+    }
+
+    fn setup_extra(
+        cx: &mut TestAppContext,
+        extra: Option<String>,
+    ) -> (gpui_kit::AnyWindowHandle, gpui_kit::Entity<TranscriptView>) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            TranscriptView::bind_keys(cx);
+        });
+        let result = cx.update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        Default::default(),
+                        size(px(960.), px(760.)),
+                    ))),
+                    show: false,
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| cx.new(|cx| TranscriptView::with_fixture(extra, window, cx)),
+            )
+            .unwrap()
+        });
+        cx.run_until_parked();
+        result
+    }
+
+    #[gpui_kit::test]
+    fn composer_echo_buttons_and_keyboard_preserve_busy_draft(cx: &mut TestAppContext) {
+        let (handle, view) = setup(cx);
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            let input = window.find_by_label("Local echo composer");
+            assert!(input.bounds().size.height > px(0.));
+            assert!(window.find("send").disabled().unwrap_or(false));
+            // Focus was assigned on construction; use the real keyboard path.
+            window.input("Hello 日本語", cx);
+            window.press("shift-enter", cx);
+            window.input("second line", cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.update_window(handle, |_, window, cx| {
+            assert_eq!(
+                view.read(cx).composer.read(cx).value().as_ref(),
+                "Hello 日本語\nsecond line"
+            );
+            window.click("send", cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.update_window(handle, |_, window, cx| {
+            assert!(view.read(cx).transcript.is_streaming());
+            assert_eq!(view.read(cx).transcript.messages().len(), 26);
+            assert_eq!(
+                view.read(cx).transcript.messages()[24].source(),
+                "Hello 日本語\nsecond line"
+            );
+            window.input("next draft", cx);
+            window.press("enter", cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.update_window(handle, |_, window, cx| {
+            assert_eq!(view.read(cx).transcript.messages().len(), 26);
+            assert_eq!(
+                view.read(cx).composer.read(cx).value().as_ref(),
+                "next draft"
+            );
+            window.click("stop", cx);
+            window.press("secondary-l", cx);
+            window.press("enter", cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert_eq!(view.read(cx).transcript.messages().len(), 28);
+            assert!(view.read(cx).composer.read(cx).value().is_empty());
+        });
+    }
+
+    #[gpui_kit::test]
+    fn wheel_back_to_bottom_resumes_stream_following(cx: &mut TestAppContext) {
+        let (handle, view) = setup(cx);
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.click("stream", cx);
+            window.scroll("viewport", ScrollDelta::Pixels(point(px(0.), px(450.))), cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.update(|cx| assert!(!view.read(cx).scroller.read(cx).is_following_tail()));
+        for _ in 0..4 {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(250));
+            cx.run_until_parked();
+        }
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.scroll(
+                "viewport",
+                ScrollDelta::Pixels(point(px(0.), px(-10000.))),
+                cx,
+            );
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            assert!(
+                view.read(cx).scroller.read(cx).is_following_tail(),
+                "wheel back to bottom must resume following without Latest"
+            );
+        })
+        .unwrap();
+        for _ in 0..16 {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(250));
+            cx.run_until_parked();
+            cx.update_window(handle, |_, window, cx| {
+                window.render_frame(cx);
+                let state = view.read(cx);
+                let viewport = window.find("viewport").bounds();
+                let reply = state
+                    .text_states
+                    .last()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .read(cx)
+                    .bounds();
+                assert!(state.scroller.read(cx).is_following_tail());
+                assert!(
+                    reply.bottom() <= viewport.bottom() + px(1.),
+                    "reply bottom must remain visible: reply={reply:?}, viewport={viewport:?}"
+                );
+            })
+            .unwrap();
+        }
+    }
+
+    #[gpui_kit::test]
+    fn streaming_stays_physically_at_tail_after_reply_exceeds_viewport(cx: &mut TestAppContext) {
+        let (handle, view) = setup(cx);
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.click("stream", cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        let mut grew_past_viewport = false;
+        for _ in 0..20 {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(250));
+            cx.run_until_parked();
+            cx.update_window(handle, |_, window, cx| {
+                window.render_frame(cx);
+                let state = view.read(cx);
+                let viewport = window.find("viewport").bounds();
+                let reply = state.text_states.last().unwrap().as_ref().unwrap().read(cx).bounds();
+                grew_past_viewport |= reply.size.height > viewport.size.height;
+                assert!(state.scroller.read(cx).is_following_tail());
+                assert!(reply.bottom() <= viewport.bottom() + px(1.),
+                    "reply bottom must stay visible, not merely report follow=true: reply={reply:?}, viewport={viewport:?}");
+            }).unwrap();
+        }
+        assert!(
+            grew_past_viewport,
+            "exercise a reply taller than its viewport"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn wheel_reading_anchor_survives_prepend_and_stream_then_latest(cx: &mut TestAppContext) {
+        let (handle, view) = setup(cx);
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            assert!(view.read(cx).scroller.read(cx).is_following_tail());
+            window.scroll("viewport", ScrollDelta::Pixels(point(px(0.), px(450.))), cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        let before = cx
+            .update_window(handle, |_, window, cx| {
+                window.render_frame(cx);
+                let state = view.read(cx);
+                assert!(!state.scroller.read(cx).is_following_tail());
+                let top = state.scroller.read(cx).logical_scroll_top();
+                let anchor = (
+                    state.transcript.messages()[top.item_ix].id(),
+                    top.offset_in_item,
+                );
+                window.click("earlier", cx);
+                anchor
+            })
+            .unwrap();
+        cx.run_until_parked();
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            let state = view.read(cx);
+            let top = state.scroller.read(cx).logical_scroll_top();
+            assert_eq!(
+                (
+                    state.transcript.messages()[top.item_ix].id(),
+                    top.offset_in_item
+                ),
+                before
+            );
+            assert_eq!(state.transcript.messages().len(), 36);
+            window.click("stream", cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(250));
+        cx.run_until_parked();
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            let state = view.read(cx);
+            assert!(!state.scroller.read(cx).is_following_tail());
+            assert!(
+                !state
+                    .transcript
+                    .messages()
+                    .last()
+                    .unwrap()
+                    .source()
+                    .is_empty()
+            );
+            let top = state.scroller.read(cx).logical_scroll_top();
+            assert_eq!(
+                (
+                    state.transcript.messages()[top.item_ix].id(),
+                    top.offset_in_item
+                ),
+                before
+            );
+            window.click("latest", cx);
+            assert!(view.read(cx).scroller.read(cx).is_following_tail());
+            window.click("stop", cx);
+        })
+        .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn composer_backspace_deletes_whole_combining_grapheme(cx: &mut TestAppContext) {
+        let (handle, view) = setup(cx);
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.input("e\u{301}", cx);
+            window.press("backspace", cx);
+            assert_eq!(
+                view.read(cx).composer.read(cx).value().as_ref(),
+                "",
+                "Backspace must delete the entire grapheme, not leave its base"
+            );
+        })
+        .unwrap();
+    }
+
+    /// Selection belongs to the retained message, not its current row element.
+    #[gpui_kit::test]
+    fn selection_and_copy_survive_unmount_prepend_and_remount(cx: &mut TestAppContext) {
+        use gpui_kit::base::TextSelection;
+        let (handle, view) = setup(cx);
+        let selected = cx
+            .update_window(handle, |_, window, cx| {
+                window.render_frame(cx);
+                let text = view
+                    .read(cx)
+                    .text_states
+                    .last()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .clone();
+                let bounds = text.read(cx).bounds();
+                let start = bounds.origin + point(px(3.), px(10.));
+                window.drag(start, start + point(px(80.), px(0.)), cx);
+                assert!(
+                    !TextSelection::selected_text(window, cx).is_empty(),
+                    "drag must select actual rendered text"
+                );
+                let selection = TextSelection::selected_text(window, cx);
+                let range = text
+                    .read(cx)
+                    .selected_source_range()
+                    .expect("exact source range");
+                window.press("secondary-c", cx);
+                let copied = cx.read_from_clipboard().unwrap().text().unwrap();
+                window.scroll(
+                    "viewport",
+                    ScrollDelta::Pixels(point(px(0.), px(10000.))),
+                    cx,
+                );
+                (selection, range, copied)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            assert_eq!(
+                TextSelection::selected_text(window, cx),
+                selected.0,
+                "copy must survive unmount"
+            );
+            window.press("secondary-c", cx);
+            assert_eq!(
+                cx.read_from_clipboard().unwrap().text().unwrap(),
+                selected.2
+            );
+            view.update(cx, |view, cx| view.prepend(cx));
+            window.scroll(
+                "viewport",
+                ScrollDelta::Pixels(point(px(0.), px(-10000.))),
+                cx,
+            );
+            assert_eq!(
+                TextSelection::selected_text(window, cx),
+                selected.0,
+                "copy must survive remount and prepend"
+            );
+            let text = view.read(cx).text_states.last().unwrap().as_ref().unwrap();
+            assert_eq!(
+                text.read(cx).selected_source_range(),
+                Some(selected.1.clone())
+            );
+            window.press("secondary-c", cx);
+            assert_eq!(
+                cx.read_from_clipboard().unwrap().text().unwrap(),
+                selected.2
+            );
+        })
+        .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn unicode_selection_keeps_message_identity_during_stream_and_dismisses_on_click(
+        cx: &mut TestAppContext,
+    ) {
+        use gpui_kit::{MouseButton, base::TextSelection, test::TestEventExt};
+        let source = "Éé 🇫🇷 👨‍👩‍👧 👍🏽 e\u{301} 안녕 repeat repeat\n\nA second paragraph.\n".to_string();
+        let (handle, view) = setup_extra(cx, Some(source.clone()));
+        let (id, selected, range, copied) = cx
+            .update_window(handle, |_, window, cx| {
+                window.render_frame(cx);
+                let state = view.read(cx);
+                let row = state.text_states.last().unwrap().as_ref().unwrap().clone();
+                let id = state.transcript.messages().last().unwrap().id();
+                let bounds = row.read(cx).bounds();
+                window.drag(
+                    bounds.origin + point(px(2.), px(10.)),
+                    bounds.origin + point(px(480.), px(10.)),
+                    cx,
+                );
+                let selected = TextSelection::selected_text(window, cx);
+                assert!(
+                    selected.contains("🇫🇷") && selected.contains("👨‍👩‍👧"),
+                    "Unicode selection must be exercised: {selected:?}"
+                );
+                let range = row.read(cx).selected_source_range().unwrap();
+                assert!(source.is_char_boundary(range.start) && source.is_char_boundary(range.end));
+                window.press("secondary-c", cx);
+                let copied = cx.read_from_clipboard().unwrap().text().unwrap();
+                window.scroll(
+                    "viewport",
+                    ScrollDelta::Pixels(point(px(0.), px(10000.))),
+                    cx,
+                );
+                (id, selected, range, copied)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            assert!(
+                window.try_find(("copy-source", id)).is_none(),
+                "selected row must actually be unmounted"
+            );
+            assert_eq!(TextSelection::selected_text(window, cx), selected);
+            window.press("secondary-c", cx);
+            assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), copied);
+            view.update(cx, |view, cx| view.demo(cx));
+        })
+        .unwrap();
+        for _ in 0..4 {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(250));
+            cx.run_until_parked();
+        }
+        cx.update_window(handle, |_, window, cx| {
+            assert_eq!(TextSelection::selected_text(window, cx), selected);
+            assert!(
+                view.read(cx)
+                    .text_states
+                    .last()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .read(cx)
+                    .selected_source_range()
+                    .is_none(),
+                "new message cannot adopt another ID's selection"
+            );
+            window.scroll(
+                "viewport",
+                ScrollDelta::Pixels(point(px(0.), px(-10000.))),
+                cx,
+            );
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            let state = view.read(cx);
+            let ix = state
+                .transcript
+                .messages()
+                .iter()
+                .position(|row| row.id() == id)
+                .unwrap();
+            assert_eq!(
+                state.text_states[ix]
+                    .as_ref()
+                    .unwrap()
+                    .read(cx)
+                    .selected_source_range(),
+                Some(range)
+            );
+            let bounds = window.find_by_label("Local echo composer").bounds();
+            window.pointer_down(bounds.center(), MouseButton::Left, cx);
+            window.pointer_up(bounds.center(), MouseButton::Left, cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.update_window(handle, |_, window, cx| {
+            assert!(TextSelection::selected_text(window, cx).is_empty());
+            for text in view.read(cx).text_states.iter().flatten() {
+                assert!(text.read(cx).selected_source_range().is_none());
+            }
+            view.update(cx, |view, cx| view.stop(cx));
+        })
+        .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn selection_in_streaming_message_keeps_source_range_and_copy(cx: &mut TestAppContext) {
+        use gpui_kit::base::TextSelection;
+        let (handle, view) = setup(cx);
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.click("stream", cx);
+        })
+        .unwrap();
+        for _ in 0..3 {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(250));
+            cx.run_until_parked();
+        }
+        let (range, copied) = cx
+            .update_window(handle, |_, window, cx| {
+                window.render_frame(cx);
+                let row = view
+                    .read(cx)
+                    .text_states
+                    .last()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .clone();
+                let start = row.read(cx).bounds().origin + point(px(2.), px(10.));
+                window.drag(start, start + point(px(80.), px(0.)), cx);
+                assert!(!TextSelection::selected_text(window, cx).is_empty());
+                let range = row.read(cx).selected_source_range().unwrap();
+                window.press("secondary-c", cx);
+                (range, cx.read_from_clipboard().unwrap().text().unwrap())
+            })
+            .unwrap();
+        for _ in 0..12 {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(250));
+            cx.run_until_parked();
+        }
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.scroll(
+                "viewport",
+                ScrollDelta::Pixels(point(px(0.), px(10000.))),
+                cx,
+            );
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            let row = view
+                .read(cx)
+                .text_states
+                .last()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .clone();
+            assert_eq!(row.read(cx).selected_source_range(), Some(range));
+            window.press("secondary-c", cx);
+            assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), copied);
+        })
+        .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn dragging_across_messages_does_not_widen_selection_scope(cx: &mut TestAppContext) {
+        use gpui_kit::base::TextSelection;
+        let (handle, view) = setup(cx);
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            let state = view.read(cx);
+            let last = state.text_states.last().unwrap().as_ref().unwrap().clone();
+            let previous = state.text_states[state.text_states.len() - 2]
+                .as_ref()
+                .unwrap()
+                .clone();
+            let start = last.read(cx).bounds().origin + point(px(70.), px(10.));
+            let end = previous.read(cx).bounds().origin + point(px(30.), px(10.));
+            window.drag(start, end, cx);
+            assert!(!TextSelection::selected_text(window, cx).is_empty());
+            assert!(last.read(cx).selected_source_range().is_some());
+            assert!(
+                previous.read(cx).selected_source_range().is_none(),
+                "a drag must remain within the starting message"
+            );
+        })
+        .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn explicit_send_refuses_marked_text_until_commit(cx: &mut TestAppContext) {
+        use gpui_kit::{ElementInputHandler, test::TestInput};
+        let (handle, view) = setup(cx);
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            let composer = view.read(cx).composer.clone();
+            let bounds = window.find_by_label("Local echo composer").bounds();
+            let handler = ElementInputHandler::new(bounds, composer.clone());
+            let mut input = TestInput::new(handler, window);
+            input.compose_text(None, "にほん", Some(3..3), cx);
+            assert!(input.marked_text_range(cx).is_some());
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.update_window(handle, |_, window, cx| {
+            window.click("send", cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.update_window(handle, |_, window, cx| {
+            assert_eq!(view.read(cx).transcript.messages().len(), 24);
+            assert_eq!(view.read(cx).composer.read(cx).value().as_ref(), "にほん");
+            let composer = view.read(cx).composer.clone();
+            let bounds = window.find_by_label("Local echo composer").bounds();
+            let handler = ElementInputHandler::new(bounds, composer);
+            TestInput::new(handler, window).commit_text("日本", cx);
+            window.click("send", cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert_eq!(view.read(cx).transcript.messages().len(), 26);
+            assert_eq!(view.read(cx).transcript.messages()[24].source(), "日本");
+        });
+    }
+}
+
+#[cfg(test)]
+#[path = "composer_tests.rs"]
+mod composer_tests;

@@ -1,0 +1,120 @@
+{
+  "crate": "gpui-base",
+  "version": "0.8.0",
+  "archiveSha256": "d5cd7de73d5b2d3d18b94a928abf343922091fa77bc472f77b7d2e7e8b1823a7",
+  "upstream": "https://crates.io/crates/gpui-base/0.8.0",
+  "purpose": "Message-local selection retention, grapheme editing and opt-out of document image I/O for the isolated viewer; no accessibility patches.",
+  "edits": [
+    {
+      "path": "src/text_selection.rs",
+      "old": "    local_selection: bool,\n    snapshot: Option<TextSelectionSnapshot>,",
+      "new": "    local_selection: bool,\n    retain_on_unmount: bool,\n    snapshot: Option<TextSelectionSnapshot>,"
+    },
+    {
+      "path": "src/text_selection.rs",
+      "old": "            local_selection: false,\n            snapshot: None,",
+      "new": "            local_selection: false,\n            retain_on_unmount: false,\n            snapshot: None,"
+    },
+    {
+      "path": "src/text_selection.rs",
+      "old": "    /// Returns whether participant-local selection is active.\n    pub fn has_local_selection",
+      "new": "    /// Opt in to message-local selection retained across element unmounts.\n    /// The owner must keep this handle/document alive under a stable domain ID.\n    /// Only the selected participant's logical ranges are retained, never a row.\n    pub fn retain_on_unmount(&self, retain: bool, cx: &mut App) {\n        self.0.update(cx, |state, _| state.retain_on_unmount = retain);\n    }\n\n    /// Returns whether participant-local selection is active.\n    pub fn has_local_selection"
+    },
+    {
+      "path": "src/text_selection.rs",
+      "old": "    generation: u64,\n}\n\n#[derive(Clone)]\nstruct SelectionEndpoint",
+      "new": "    generation: u64,\n    // No live geometry: retained only for logical copy/clear until remounted.\n    detached: bool,\n}\n\n#[derive(Clone)]\nstruct SelectionEndpoint"
+    },
+    {
+      "path": "src/text_selection.rs",
+      "old": "                generation: self.frame_generation.get(),\n            },",
+      "new": "                generation: self.frame_generation.get(),\n                detached: false,\n            },",
+      "count": 2
+    },
+    {
+      "path": "src/text_selection.rs",
+      "old": "(registration.generation != generation && !registration.registration.is_rendered())",
+      "new": "(!registration.detached && registration.generation != generation && !registration.registration.is_rendered())"
+    },
+    {
+      "path": "src/text_selection.rs",
+      "old": "        let endpoint_departed = stale.iter().any(|(id, _)| {",
+      "new": "        let retained = stale.iter().filter_map(|(id, participant)| {\n            let participant = participant.upgrade()?;\n            let state = participant.read(cx);\n            (state.retain_on_unmount && state.has_selection_to_clear()).then_some(*id)\n        }).collect::<Vec<_>>();\n        let endpoint_departed = stale.iter().any(|(id, _)| {\n            if retained.contains(id) { return false; }"
+    },
+    {
+      "path": "src/text_selection.rs",
+      "old": "        for (id, participant) in stale {\n            self.participants.get_mut().remove(&id);",
+      "new": "        if !retained.is_empty() {\n            self.stop_anchor_auto_scroll(cx);\n            self.is_selecting = false;\n        }\n        for (id, participant) in stale {\n            if retained.contains(&id) {\n                self.participants.get_mut().get_mut(&id).unwrap().detached = true;\n                continue;\n            }\n            self.participants.get_mut().remove(&id);"
+    },
+    {
+      "path": "src/text_selection.rs",
+      "old": "            registration.generation != generation && !registration.registration.is_rendered()\n        };",
+      "new": "            !registration.detached && registration.generation != generation && !registration.registration.is_rendered()\n        };"
+    },
+    {
+      "path": "src/text_selection.rs",
+      "old": "            !gone(registration) && registration.participant.upgrade().is_some()",
+      "new": "            !gone(registration) && registration.participant.upgrade().is_some_and(|participant| {\n                !registration.detached || participant.read(cx).has_selection_to_clear()\n            })"
+    },
+    {
+      "path": "src/text_selection.rs",
+      "old": "        let anchor = anchor_endpoint.resolve(&self.participants.borrow())?;\n        let cursor = cursor_endpoint.resolve(&self.participants.borrow())?;\n        (anchor != cursor).then(|| {\n            TextSelectionSnapshot::new(anchor_endpoint.snapshot(), cursor_endpoint.snapshot())\n                .with_selecting(self.is_selecting)\n                .with_window_points(Some(TextSelectionWindowPoints { anchor, cursor }))\n        })",
+      "new": "        let participants = self.participants.borrow();\n        let detached = [anchor_endpoint, cursor_endpoint].iter().any(|endpoint| {\n            endpoint.entity_id().and_then(|id| participants.get(&id)).is_some_and(|item| item.detached)\n        });\n        let points = if detached { None } else {\n            anchor_endpoint.resolve(&participants).zip(cursor_endpoint.resolve(&participants))\n                .map(|(anchor, cursor)| TextSelectionWindowPoints { anchor, cursor })\n        };\n        (anchor_endpoint.snapshot() != cursor_endpoint.snapshot()).then(|| {\n            TextSelectionSnapshot::new(anchor_endpoint.snapshot(), cursor_endpoint.snapshot())\n                .with_selecting(self.is_selecting)\n                .with_window_points(points)\n        })"
+    },
+    {
+      "path": "src/text_selection.rs",
+      "old": "        for registration in self.participants.borrow().values() {\n            if registration.registration.scope != self.active_scope\n                || registration.participant.upgrade().is_none()\n            {",
+      "new": "        // A retained message is its own selection boundary. A new ordinary\n        // mouse-down clears anchor first; Shift-extension stays in its message.\n        let message = self.anchor.as_ref().or(self.pending_extension_anchor.as_ref())\n            .and_then(|endpoint| endpoint.participant.as_ref())\n            .and_then(WeakEntity::upgrade)\n            .filter(|participant| participant.read(cx).retain_on_unmount)\n            .map(|participant| participant.entity_id());\n        for registration in self.participants.borrow().values() {\n            if registration.detached\n                || message.is_some_and(|id| registration.participant.entity_id() != id)\n                || registration.registration.scope != self.active_scope\n                || registration.participant.upgrade().is_none()\n            {"
+    },
+    {
+      "path": "src/text_selection.rs",
+      "old": "            if geometry.scope != self.active_scope || registration.participant.upgrade().is_none() {",
+      "new": "            if registration.detached || geometry.scope != self.active_scope || registration.participant.upgrade().is_none() {"
+    },
+    {
+      "path": "src/text/state.rs",
+      "old": "    /// Set whether the text view scrolls internally, default false.\n    pub fn scrollable",
+      "new": "    /// Retain this message's logical selection when its outer row unmounts.\n    /// Keep this state under one stable message identity; never reuse it for another.\n    pub fn retain_selection_on_unmount(self, retain: bool, cx: &mut Context<Self>) -> Self {\n        self.selection_adapter.retain_on_unmount(retain, cx);\n        self\n    }\n\n    /// Set whether the text view scrolls internally, default false.\n    pub fn scrollable"
+    },
+    {
+      "path": "src/text/selection_adapter.rs",
+      "old": "                            if snapshot.is_none() || changed {\n                                state.preserve_inline_selection = false;\n                            }",
+      "new": "                            if snapshot.is_none() || changed {\n                                state.preserve_inline_selection = false;\n                            }\n                            if snapshot.is_some_and(|snapshot| snapshot.window_points().is_none()) {\n                                // Unmounted geometry is not selection authority.\n                                // Keep the document's existing source byte ranges.\n                                state.preserve_inline_selection = true;\n                            }"
+    },
+    {
+      "path": "src/text/selection_adapter.rs",
+      "old": "    pub(super) fn set_local_selection(&self, active: bool, cx: &mut App) {",
+      "new": "    pub(super) fn retain_on_unmount(&self, retain: bool, cx: &mut App) {\n        self.selection.retain_on_unmount(retain, cx);\n    }\n\n    pub(super) fn set_local_selection(&self, active: bool, cx: &mut App) {"
+    },
+    {
+      "path": "src/input/base/state.rs",
+      "old": "    pub(super) fn previous_boundary(&self, offset: usize) -> usize {\n        let offset = self.cursor_boundary(offset.saturating_sub(1), Bias::Left);\n        self.clamp_offset_to_visible_backward(offset)\n    }\n\n    pub(super) fn next_boundary(&self, offset: usize) -> usize {\n        let offset = self.cursor_boundary(offset.saturating_add(1), Bias::Right);\n        self.clamp_offset_to_visible_forward(offset)\n    }",
+      "new": "    // Walk rope chunks without copying/scanning the whole document per key.\n    // Keep exact byte/UTF-16 IME replacement APIs unchanged.\n    fn adjacent_grapheme_boundary(&self, offset: usize, forward: bool) -> usize {\n        let offset = self.text.clip_offset(offset, Bias::Left);\n        let len = self.text.len();\n        if (!forward && offset == 0) || (forward && offset == len) {\n            return offset;\n        }\n        let mut cursor = GraphemeCursor::new(offset, len, true);\n        let (mut chunk, mut start) = self.text.chunk(if forward { offset } else { offset - 1 });\n        loop {\n            let result = if forward {\n                cursor.next_boundary(chunk, start)\n            } else {\n                cursor.prev_boundary(chunk, start)\n            };\n            match result {\n                Ok(Some(boundary)) => return boundary,\n                Ok(None) => return if forward { len } else { 0 },\n                Err(GraphemeIncomplete::PreContext(end)) => {\n                    let (context, context_start) = self.text.chunk(end - 1);\n                    cursor.provide_context(&context[..end - context_start], context_start);\n                }\n                Err(GraphemeIncomplete::PrevChunk) => {\n                    (chunk, start) = self.text.chunk(start - 1);\n                }\n                Err(GraphemeIncomplete::NextChunk) => {\n                    (chunk, start) = self.text.chunk(start + chunk.len());\n                }\n                Err(GraphemeIncomplete::InvalidOffset) => {\n                    unreachable!(\"grapheme cursor and rope chunks must share byte offsets\");\n                }\n            }\n        }\n    }\n\n    pub(super) fn previous_boundary(&self, offset: usize) -> usize {\n        let offset = self.cursor_boundary(self.adjacent_grapheme_boundary(offset, false), Bias::Left);\n        self.clamp_offset_to_visible_backward(offset)\n    }\n\n    pub(super) fn next_boundary(&self, offset: usize) -> usize {\n        let offset = self.cursor_boundary(self.adjacent_grapheme_boundary(offset, true), Bias::Right);\n        self.clamp_offset_to_visible_forward(offset)\n    }"
+    },
+    {
+      "path": "src/input/base/state.rs",
+      "old": "    pub(super) fn enter(&mut self, action: &Enter, window: &mut Window, cx: &mut Context<Self>) {\n        if M::handle_context_menu_action(self, Box::new(action.clone()), window, cx) {",
+      "new": "    pub(super) fn enter(&mut self, action: &Enter, window: &mut Window, cx: &mut Context<Self>) {\n        // Native IMEs normally consume Return before action dispatch. Keep the\n        // fallback path safe too: never emit a deferred submit or insert a\n        // newline into active preedit (including Shift-Return).\n        if self.ime_marked_range.is_some() {\n            return;\n        }\n        if M::handle_context_menu_action(self, Box::new(action.clone()), window, cx) {"
+    },
+    {
+      "path": "src/text/state.rs",
+      "old": "    pub(super) image_source: Option<std::sync::Arc<super::text_view::ImageSourceFn>>,",
+      "new": "    pub(super) image_source: Option<std::sync::Arc<super::text_view::ImageSourceFn>>,\n    images_enabled: bool,"
+    },
+    {
+      "path": "src/text/state.rs",
+      "old": "            image_source: None,",
+      "new": "            image_source: None,\n            images_enabled: true,"
+    },
+    {
+      "path": "src/text/state.rs",
+      "old": "    /// Retain this message's logical selection when its outer row unmounts.\n    /// Keep this state under one stable message identity; never reuse it for another.\n    pub fn retain_selection_on_unmount(self, retain: bool, cx: &mut Context<Self>) -> Self {",
+      "new": "    /// Disable document image loading, including data/file/remote sources.\n    /// The inert embedded placeholder performs no external I/O.\n    pub fn images_enabled(mut self, enabled: bool) -> Self {\n        self.images_enabled = enabled;\n        self\n    }\n\n    /// Retain this message's logical selection when its outer row unmounts.\n    /// Keep this state under one stable message identity; never reuse it for another.\n    pub fn retain_selection_on_unmount(self, retain: bool, cx: &mut Context<Self>) -> Self {"
+    },
+    {
+      "path": "src/text/state.rs",
+      "old": "            image_source: self.image_source.clone(),",
+      "new": "            image_source: if self.images_enabled { self.image_source.clone() } else {\n                Some(std::sync::Arc::new(|_| gpui::ImageSource::from(\"__disabled_document_image__\")))\n            },"
+    }
+  ]
+}

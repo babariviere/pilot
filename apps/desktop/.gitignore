@@ -1,0 +1,9 @@
+/.tools/
+/target/
+/evidence/local/
+__pycache__/
+/.patched/
+/.state/
+/state/
+/drafts/
+/outbox/
