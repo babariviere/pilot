@@ -23,6 +23,39 @@ enum Scenario {
     Resume,
     Refused,
 }
+
+#[tokio::test]
+async fn capture_opens_only_the_exact_requested_chat_and_never_a_fallback() {
+    let mock = Mock::start(Scenario::Normal).await;
+    let options = mock.options.clone();
+    let capture = tokio::task::spawn_blocking(move || read_local_capture(options, "b"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(capture.chat.id, "b");
+    assert!(capture.state.loaded);
+    let requests = mock.requests.lock().unwrap().clone();
+    assert!(requests.iter().any(|r| r.contains("/api/sessions/b/ws")));
+    assert!(!requests.iter().any(|r| r.contains("/api/sessions/a/")));
+    assert!(requests.iter().all(|r| r.starts_with("GET ")));
+    drop(requests);
+    let missing = Mock::start(Scenario::Normal).await;
+    let options = missing.options.clone();
+    assert!(
+        tokio::task::spawn_blocking(move || read_local_capture(options, "not-listed"))
+            .await
+            .unwrap()
+            .is_err()
+    );
+    assert!(
+        !missing
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r.contains("/api/sessions/"))
+    );
+}
 struct Mock {
     options: LocalOptions,
     requests: Arc<Mutex<Vec<String>>>,

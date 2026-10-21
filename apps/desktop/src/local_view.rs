@@ -130,6 +130,7 @@ pub struct LocalViewer {
     writer: Option<Interaction>,
     nav_chats: Arc<Vec<Chat>>,
     nav_drafts: Vec<(String, String)>,
+    refreshing: bool,
 }
 
 impl LocalViewer {
@@ -241,6 +242,29 @@ impl LocalViewer {
     pub fn text_parsers_ready(&self, cx: &App) -> bool {
         self.transcript.read(cx).text_parsers_ready(cx)
     }
+    /// Same production view, frozen read-only input, no writer/draft store or live transport.
+    pub fn captured(
+        capture: crate::local_client::LocalCapture,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut view = Self::build(None, None, window, cx);
+        view.selected = Some(capture.chat.id.clone());
+        view.title = capture.chat.title.clone();
+        view.generation = capture.state.generation;
+        view.accept(capture.state, window, cx);
+        view.editor.update(cx, |editor, cx| {
+            editor.select(
+                format!("chat:{}", capture.chat.id),
+                false,
+                capture.chat.busy,
+                window,
+                cx,
+            )
+        });
+        view.state.status = "Read-only captured snapshot · no live controls".into();
+        view
+    }
     fn build(
         client: Option<LocalClient>,
         writer: Option<Interaction>,
@@ -324,6 +348,7 @@ impl LocalViewer {
             writer,
             nav_chats: Arc::new(Vec::new()),
             nav_drafts: Vec::new(),
+            refreshing: false,
         }
     }
 
@@ -349,6 +374,7 @@ impl LocalViewer {
             return;
         }
         self.generation = generation;
+        self.refreshing = false;
         let key = format!("chat:{}", chat.id);
         self.editor.update(cx, |editor, cx| {
             editor.select(key, chat.writable, chat.busy, window, cx)
@@ -365,10 +391,20 @@ impl LocalViewer {
     }
 
     fn accept(&mut self, mut state: Presentation, window: &mut Window, cx: &mut Context<Self>) {
-        if state.generation == self.generation {
+        if self.refreshing && state.generation == self.generation && !state.loaded {
+            self.state.chats = state.chats;
+            self.state.status = state.status;
+            self.state.chat_status = state.chat_status;
+        } else if state.generation == self.generation {
             let rows = std::mem::take(&mut state.rows);
-            self.transcript
-                .update(cx, |view, cx| view.replace_readonly(rows, false, cx));
+            let reset = self.refreshing;
+            self.refreshing = false;
+            self.transcript.update(cx, |view, cx| {
+                view.replace_readonly(rows, reset, cx);
+                if reset {
+                    view.latest(cx);
+                }
+            });
             self.state = state;
         } else {
             // An old chat never replaces the selected chat, even while switching quickly.
@@ -389,6 +425,7 @@ impl LocalViewer {
     }
 
     fn clear_chat(&mut self, cx: &mut Context<Self>) {
+        self.refreshing = false;
         self.generation += 1;
         self.selected = None;
         self.state.cursor = None;
@@ -401,6 +438,25 @@ impl LocalViewer {
         }
         self.transcript
             .update(cx, |view, cx| view.replace_readonly(Vec::new(), true, cx));
+    }
+    fn latest(&mut self, cx: &mut Context<Self>) {
+        if self.state.limited
+            && let (Some(client), Some(id)) = (&self.client, &self.selected)
+        {
+            let generation = self.generation + 1;
+            if client.command(Command::Open {
+                id: id.clone(),
+                generation,
+            }) {
+                self.generation = generation;
+                self.refreshing = true;
+                self.state.page_busy = true;
+                self.state.chat_status = "Loading newest bounded window…".into();
+                cx.notify();
+                return;
+            }
+        }
+        self.transcript.update(cx, |view, cx| view.latest(cx));
     }
     fn new_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.editor.read(cx).ready() {
@@ -462,7 +518,7 @@ impl Render for LocalViewer {
         let archived = self.chats.read(cx).delegate().archived;
         let count = self.chats.read(cx).delegate().filtered.len();
         let footer = if self.state.limited {
-            "Viewer capacity reached. New entries and further history are omitted. Open Swift for the full chat."
+            "Bounded history window. Refresh latest to load newer committed messages; full history stays available in Swift."
         } else {
             "Images and links are disabled. Some structured content remains a placeholder. Swift stays available."
         };
@@ -628,11 +684,20 @@ impl Render for LocalViewer {
                                                 }
                                             })),
                                     )
-                                    .child(Button::new("latest").small().label("Latest").on_click(
-                                        cx.listener(|view, _, _, cx| {
-                                            view.transcript.update(cx, |view, cx| view.latest(cx))
-                                        }),
-                                    ))
+                                    .child(
+                                        Button::new("latest")
+                                            .small()
+                                            .label(if self.refreshing {
+                                                "Retry latest"
+                                            } else if self.state.limited {
+                                                "Refresh latest"
+                                            } else {
+                                                "Latest"
+                                            })
+                                            .on_click(
+                                                cx.listener(|view, _, _, cx| view.latest(cx)),
+                                            ),
+                                    )
                                     .child(
                                         div()
                                             .text_xs()
@@ -670,5 +735,51 @@ impl Render for LocalViewer {
                             ))),
                     ),
             )
+    }
+}
+
+#[cfg(test)]
+mod refresh_tests {
+    use super::*;
+    use gpui_kit::{TestAppContext, WindowOptions};
+    #[gpui_kit::test]
+    fn refresh_retains_old_window_allows_retry_fences_late_results_and_clears_on_navigation(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(gpui_kit::init);
+        let (client, commands) = LocalClient::synthetic_commands();
+        let (handle, view) = cx.update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    show: false,
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| {
+                    cx.new(|cx| {
+                        let mut view = LocalViewer::synthetic(window, cx);
+                        view.client = Some(client);
+                        view.state.limited = true;
+                        view.state.queued = 7;
+                        view
+                    })
+                },
+            )
+            .unwrap()
+        });
+        cx.update_window(handle,|_,window,cx|view.update(cx,|view,cx|{
+            view.latest(cx);assert!(view.refreshing);let first=view.generation;
+            assert!(matches!(commands.try_recv().unwrap(),Command::Open{generation,..}if generation==first));
+            view.accept(Presentation{generation:first,chat_status:"Unavailable; retry explicitly".into(),..Default::default()},window,cx);
+            assert!(view.state.loaded);assert_eq!(view.state.queued,7);assert!(view.state.chat_status.contains("Unavailable"));
+            view.latest(cx);let second=view.generation;assert!(second>first);
+            assert!(matches!(commands.try_recv().unwrap(),Command::Open{generation,..}if generation==second));
+            view.accept(Presentation{generation:first,loaded:true,queued:99,..Default::default()},window,cx);
+            assert!(view.refreshing);assert_eq!(view.state.queued,7);
+            view.accept(Presentation{generation:second,loaded:true,queued:3,rows:vec![Message::live(999,"assistant".into(),"Fresh bounded window".into())],..Default::default()},window,cx);
+            assert!(!view.refreshing);assert_eq!(view.state.queued,3);
+            view.refreshing=true;view.clear_chat(cx);assert!(!view.refreshing);assert!(view.selected.is_none());assert!(view.writer.is_none());
+        })).unwrap();
+        cx.run_until_parked();
     }
 }

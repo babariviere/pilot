@@ -1,10 +1,13 @@
 # Tool/work presentation
 
-Work-in-progress checkpoint: 67 library tests, strict checks, native synthetic
-rendering and locked build pass. A user-provided real-chat screenshot exposed
-poor centered alignment, overly long script subjects and latest-window capacity
-behavior. A repeatable real-chat capture path and these visual corrections are
-still being implemented. This checkpoint is a backup, not completed parity.
+A user-provided real-chat screenshot exposed poor centered alignment, overly
+long script subjects and latest-window capacity behavior. The follow-up adds
+read-only production-view capture, leading-aligned controls, compact generic
+script summaries, newest-first initial admission and explicit Refresh latest.
+Local verification: 72 library tests pass, one opt-in disk workload remains
+ignored by default; rustfmt, strict all-target Clippy, synthetic native Metal
+rendering and locked normal build pass. Private capture was also exercised.
+This remains an experimental checkpoint, not full app parity.
 
 Scoped Rust-only presentation slice atop the Local interaction checkpoint.
 Frozen reference: `cb64f770`, `ToolViews.swift`, `PilotCore/ChatRows.swift` and
@@ -25,6 +28,11 @@ User choices win and follow member identities through prepend/regroup/remount.
 Tool expansion and retained body states are chat-scoped. Latest is explicit;
 disclosures pause tail following without changing the offset, while parser/
 stream updates do not. Kit may resume immediately if everything still fits.
+At capacity, Refresh latest explicitly replaces the bounded history window;
+it is not silent eviction of a selected reading row. Ordinary reconnect and
+prepend preserve expansion. Refreshing never touches the composer draft.
+While a refresh loads, the previous window remains visible, errors are shown,
+explicit Retry latest remains available and stale generations cannot replace it.
 
 Tool details are inert selectable text. Only opened panes create a parser;
 closed updates do not touch their retained parser. No tool action, approval,
@@ -32,6 +40,8 @@ shell, network/file image load, URL opening or generated-code execution exists
 in these views. Copy shown text is explicit. Selection is tested through actual
 unmount/remount and prepend, using rendered selection/clipboard: HTML/pre does
 not expose reliable raw-HTML source spans, so tests do not invent byte offsets.
+An already selected ordinary assistant note transfers its existing Markdown
+document into the work view, rather than losing selection during grouping.
 
 Known names and simple single-call codemode literals have useful summaries.
 Mixed/dynamic scripts and extension tools use conservative generic descriptions,
@@ -77,6 +87,15 @@ unmount/regroup/remount. The native Metal offscreen scene uses 48 synthetic text
 rows and synthetic read/edit/test work, including expanded diff/arguments.
 Source readiness is asserted before capture. No real content, requests, sends,
 creates, Stop, approval or visible unattended app is involved.
+
+Separately, after the user's explicit screenshot request, `scripts/capture.sh`
+was run against exactly this chat using read-only Local transport and the same
+production view, as recommended by https://gpui-kit.com/docs/test/. Private
+before/after images were inspected, not committed, published as artifacts or
+attached externally. This opens no visible window, write client or draft store,
+never falls back to another chat, and saves 0600 PNGs in a 0700 ignored directory.
+It captures a fresh snapshot, not running-window scroll/expansion/unsaved state.
+The real-data use is opt-in, not part of the ordinary synthetic test suite.
 
 Offscreen rendering is not visible smoothness, OS IME, native Wayland or matched
 Swift performance evidence. Existing giant Markdown/parser scaling and private

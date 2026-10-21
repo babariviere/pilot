@@ -189,6 +189,15 @@ impl TranscriptView {
             self.text_subscriptions.clear();
         }
         self.transcript.replace_readonly(rows);
+        let adopted = retained
+            .iter()
+            .filter_map(|(id, (row, state))| {
+                state
+                    .as_ref()
+                    .filter(|state| state.read(cx).selected_source_range().is_some())
+                    .map(|state| (*id, (state.clone(), row.shared_source())))
+            })
+            .collect();
         self.work_ui.sync(
             self.transcript
                 .messages()
@@ -196,6 +205,7 @@ impl TranscriptView {
                 .filter_map(|row| row.work_data().cloned())
                 .collect(),
             reset,
+            &adopted,
             cx,
         );
         for ix in 0..self.transcript.messages().len() {

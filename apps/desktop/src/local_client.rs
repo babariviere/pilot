@@ -186,6 +186,11 @@ pub(crate) struct LocalClient {
     commands: async_channel::Sender<Command>,
 }
 impl LocalClient {
+    #[cfg(test)]
+    pub(crate) fn synthetic_commands() -> (Self, async_channel::Receiver<Command>) {
+        let (commands, receiver) = async_channel::bounded(4);
+        (Self { commands }, receiver)
+    }
     pub(crate) fn start(options: LocalOptions) -> (Self, async_channel::Receiver<Presentation>) {
         let (commands, receiver) = async_channel::bounded(4);
         let (updates, output) = async_channel::bounded(1);
@@ -333,7 +338,7 @@ fn socket_task(
                 if let Ok(Ok(mut socket)) =
                     tokio::time::timeout(Duration::from_secs(5), connected).await
                 {
-                    let _ = inbox.send(status("Connected · Local readonly")).await;
+                    let _ = inbox.send(status("Connected · Local")).await;
                     let mut welcomed = !is_chat;
                     let mut heartbeat = tokio::time::interval(Duration::from_secs(30));
                     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -630,6 +635,32 @@ pub fn check_local_read(options: LocalOptions) -> Result<(), &'static str> {
         let bytes:usize=view.rows.iter().map(|r|r.source().len()).sum();
         println!("Local identity verified before sockets. {} summaries; one chat opened; {} rows; {bytes} projected source bytes; {} event batches; history request: {paged}. No content/IDs/titles logged.",list.chats.len(),view.rows.len(),view.batches);
         Ok(())
+    })
+}
+
+/// Explicit read-only capture input. Contains private transcript data; never log or publish it.
+pub struct LocalCapture {
+    pub(crate) state: Presentation,
+    pub(crate) chat: Chat,
+}
+/// Blocking diagnostic helper, run before creating an offscreen context, never on the live UI thread.
+pub fn read_local_capture(options: LocalOptions, id: &str) -> Result<LocalCapture, &'static str> {
+    if !local_model::valid_id(id) {
+        return Err("Invalid capture chat ID");
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|_| "Cannot start capture read")?;
+    runtime.block_on(async {
+        let(client,updates)=LocalClient::start(options);
+        async fn wait(rx:&async_channel::Receiver<Presentation>,selected:bool)->Result<Presentation,&'static str> {
+            tokio::time::timeout(Duration::from_secs(15),async{loop{let view=rx.recv().await.map_err(|_|"Capture reader closed")?;if if selected{view.generation==1&&view.loaded}else{view.list_loaded}{return Ok(view);}}}).await.map_err(|_|"Read-only capture timed out; no wire data logged")?
+        }
+        let list=wait(&updates,false).await?;
+        let chat=list.chats.iter().find(|chat|chat.id==id).cloned().ok_or("Requested capture chat is not in the bounded Local list. No other chat was opened.")?;
+        if !client.command(Command::Open{id:chat.id.clone(),generation:1}){return Err("Capture read queue unavailable");}
+        let state=wait(&updates,true).await?;Ok(LocalCapture{state,chat})
     })
 }
 

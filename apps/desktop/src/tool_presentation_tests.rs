@@ -40,7 +40,14 @@ fn known_unknown_and_codemode_summaries_are_semantic_not_execution() {
             "codemode",
             json!({"code":"await tools.read({path: \"a\"}); await tools.bash({command: \"false\"})"}),
             "Ran a script",
-            "await tools.read({path: \"a\"}); await tools.bash({command: \"false\"})",
+            "",
+        ),
+        (
+            "patch-script",
+            "codemode",
+            json!({"code":r#"text(await tools.applyPatch({patch:"*** Begin Patch\n*** Update File: src/view.rs\n@@\n-old\n+new\n*** End Patch"}));"#}),
+            "Edited",
+            "view.rs",
         ),
         (
             "e",

@@ -5,9 +5,10 @@ use crate::{
 };
 use gpui_kit::{
     AppContext, ClipboardItem, Context, Entity, EventEmitter, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
+    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription,
+    TestSupportExt, Window,
     component::{
-        ActiveTheme, IconName, Sizable, StyledExt,
+        ActiveTheme, Icon, IconName, Sizable, StyledExt,
         button::{Button, ButtonVariants},
         text::{TextView, TextViewState},
     },
@@ -79,18 +80,54 @@ fn step_id(step: &Step) -> String {
         Step::Note { id, .. } => format!("note:{id}"),
     }
 }
+fn disclosure(id: SharedString, title: String, open: bool) -> Button {
+    Button::new(id)
+        .ghost()
+        .small()
+        .w_full()
+        .accessibility_label(title.clone())
+        .child(
+            div()
+                .h_flex()
+                .w_full()
+                .min_w_0()
+                .gap_1()
+                .items_center()
+                .child(
+                    Icon::new(if open {
+                        IconName::ChevronDown
+                    } else {
+                        IconName::ChevronRight
+                    })
+                    .small(),
+                )
+                .child(
+                    div()
+                        .id("disclosure-text")
+                        .test_support()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .child(SharedString::from(title)),
+                ),
+        )
+}
 impl WorkUi {
     pub(crate) fn parsers_ready(&self, cx: &gpui_kit::App) -> bool {
         self.steps.values().all(|step| {
             step.read(cx).bodies.values().all(|body| {
                 body.state.read(cx).rendered_text().source()
-                    == format!(
-                        "<pre>{}</pre>",
-                        body.source
-                            .replace('&', "&amp;")
-                            .replace('<', "&lt;")
-                            .replace('>', "&gt;")
-                    )
+                    == if body.plain {
+                        format!(
+                            "<pre>{}</pre>",
+                            body.source
+                                .replace('&', "&amp;")
+                                .replace('<', "&lt;")
+                                .replace('>', "&gt;")
+                        )
+                    } else {
+                        body.source.as_ref().clone()
+                    }
             })
         })
     }
@@ -118,6 +155,7 @@ impl WorkUi {
         &mut self,
         works: Vec<Arc<Work>>,
         reset: bool,
+        adopted: &BTreeMap<u64, (Entity<TextViewState>, Arc<String>)>,
         cx: &mut Context<TranscriptView>,
     ) {
         if reset {
@@ -128,6 +166,7 @@ impl WorkUi {
         for work in works {
             group_ids.insert(work.id);
             let mut children = Vec::new();
+            let mut selected_note = false;
             for step in &work.steps {
                 let id = step_id(step);
                 step_ids.insert(id.clone());
@@ -149,7 +188,18 @@ impl WorkUi {
                     self.steps.insert(id, view.clone());
                     view
                 };
+                if let Step::Note { id, .. } = step
+                    && let Some((state, source)) = adopted.get(id)
+                {
+                    selected_note = true;
+                    view.update(cx, |view, cx| {
+                        view.adopt_note(state.clone(), source.clone(), cx)
+                    });
+                }
                 children.push(view);
+            }
+            if selected_note {
+                self.choices.borrow_mut().choose(&work, true, true);
             }
             if let Some(view) = self.groups.get(&work.id) {
                 view.update(cx, |view, cx| {
@@ -223,10 +273,9 @@ impl Render for WorkView {
         let limited = self.data.active && choice.is_none() && !all && self.children.len() > 4;
         let start = if limited { self.children.len() - 4 } else { 0 };
         let mut root = div().v_flex().gap_2().w_full().min_w_0().child(
-            Button::new(SharedString::from(format!("work-toggle-{}", self.data.id)))
-                .ghost()
-                .small()
-                .label(SharedString::from(format!(
+            disclosure(
+                SharedString::from(format!("work-toggle-{}", self.data.id)),
+                format!(
                     "{}{}{}",
                     self.data.title,
                     if self.data.failures > 0 {
@@ -239,18 +288,15 @@ impl Render for WorkView {
                     } else {
                         String::new()
                     }
-                )))
-                .icon(if open {
-                    IconName::ChevronDown
-                } else {
-                    IconName::ChevronRight
-                })
-                .on_click(cx.listener(|view, _, _, cx| {
-                    let open = !view.open();
-                    view.choices.borrow_mut().choose(&view.data, open, true);
-                    cx.emit(Change::Disclosure(format!("group:{}", view.data.id)));
-                    cx.notify();
-                })),
+                ),
+                open,
+            )
+            .on_click(cx.listener(|view, _, _, cx| {
+                let open = !view.open();
+                view.choices.borrow_mut().choose(&view.data, open, true);
+                cx.emit(Change::Disclosure(format!("group:{}", view.data.id)));
+                cx.notify();
+            })),
         );
         if open {
             let mut steps = div()
@@ -265,6 +311,7 @@ impl Render for WorkView {
                     Button::new(("work-earlier", self.data.id))
                         .ghost()
                         .small()
+                        .self_start()
                         .label(format!("Show {start} earlier steps"))
                         .on_click(cx.listener(|view, _, _, cx| {
                             view.choices.borrow_mut().choose(&view.data, true, true);
@@ -284,6 +331,7 @@ impl Render for WorkView {
 struct Body {
     source: Arc<String>,
     state: Entity<TextViewState>,
+    plain: bool,
 }
 pub(crate) struct StepView {
     step: Step,
@@ -293,6 +341,30 @@ pub(crate) struct StepView {
 }
 impl EventEmitter<Change> for StepView {}
 impl StepView {
+    fn adopt_note(
+        &mut self,
+        state: Entity<TextViewState>,
+        source: Arc<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.bodies.contains_key("Note") {
+            return;
+        }
+        self.subscriptions.push(cx.observe(&state, |view, _, cx| {
+            view.changed(cx);
+            cx.notify();
+        }));
+        self.bodies.insert(
+            "Note",
+            Body {
+                source,
+                state,
+                plain: false,
+            },
+        );
+        self.open = true;
+        cx.notify();
+    }
     fn changed(&self, cx: &mut Context<Self>) {
         cx.emit(Change::Step(step_id(&self.step)));
     }
@@ -310,6 +382,7 @@ impl StepView {
         &mut self,
         label: &'static str,
         source: Arc<String>,
+        plain: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let changed = self
@@ -317,22 +390,30 @@ impl StepView {
             .get(label)
             .is_none_or(|body| body.source != source);
         if changed {
-            let escaped = format!(
-                "<pre>{}</pre>",
-                source
-                    .replace('&', "&amp;")
-                    .replace('<', "&lt;")
-                    .replace('>', "&gt;")
-            );
+            let escaped = if plain {
+                format!(
+                    "<pre>{}</pre>",
+                    source
+                        .replace('&', "&amp;")
+                        .replace('<', "&lt;")
+                        .replace('>', "&gt;")
+                )
+            } else {
+                source.as_ref().clone()
+            };
             if let Some(body) = self.bodies.get_mut(label) {
                 body.source = source.clone();
                 body.state
                     .update(cx, |state, cx| state.set_text(&escaped, cx));
             } else {
                 let state = cx.new(|cx| {
-                    TextViewState::html(&escaped, cx)
-                        .images_enabled(false)
-                        .retain_selection_on_unmount(true, cx)
+                    (if plain {
+                        TextViewState::html(&escaped, cx)
+                    } else {
+                        TextViewState::markdown(&escaped, cx)
+                    })
+                    .images_enabled(false)
+                    .retain_selection_on_unmount(true, cx)
                 });
                 self.subscriptions.push(cx.observe(&state, |view, _, cx| {
                     view.changed(cx);
@@ -343,6 +424,7 @@ impl StepView {
                     Body {
                         source: source.clone(),
                         state,
+                        plain,
                     },
                 );
             }
@@ -434,25 +516,21 @@ impl Render for StepView {
             ),
         };
         let mut root = div().v_flex().gap_2().min_w_0().w_full().child(
-            Button::new(SharedString::from(format!("step-toggle-{id}")))
-                .ghost()
-                .small()
-                .label(SharedString::from(title))
-                .icon(if self.open {
-                    IconName::ChevronDown
-                } else {
-                    IconName::ChevronRight
-                })
-                .text_color(if error {
-                    cx.theme().danger
-                } else {
-                    cx.theme().muted_foreground
-                })
-                .on_click(cx.listener(|view, _, _, cx| {
-                    view.open = !view.open;
-                    cx.emit(Change::Disclosure(step_id(&view.step)));
-                    cx.notify();
-                })),
+            disclosure(
+                SharedString::from(format!("step-toggle-{id}")),
+                title,
+                self.open,
+            )
+            .text_color(if error {
+                cx.theme().danger
+            } else {
+                cx.theme().muted_foreground
+            })
+            .on_click(cx.listener(|view, _, _, cx| {
+                view.open = !view.open;
+                cx.emit(Change::Disclosure(step_id(&view.step)));
+                cx.notify();
+            })),
         );
         if self.open {
             let step = self.step.clone();
@@ -463,18 +541,20 @@ impl Render for StepView {
                         details = details.child(self.body(
                             "Replacement / patch preview",
                             tool.diff.clone(),
+                            true,
                             cx,
                         ));
                     }
                     if !tool.arguments.is_empty() {
-                        details = details.child(self.body("Arguments", tool.arguments.clone(), cx));
+                        details =
+                            details.child(self.body("Arguments", tool.arguments.clone(), true, cx));
                     }
                     if !tool.output.is_empty() {
-                        details = details.child(self.body("Output", tool.output.clone(), cx));
+                        details = details.child(self.body("Output", tool.output.clone(), true, cx));
                     }
                 }
                 Step::Note { text, .. } => {
-                    details = details.child(self.body("Note / thinking", text, cx));
+                    details = details.child(self.body("Note", text, false, cx));
                 }
             }
             if limited {

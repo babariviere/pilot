@@ -18,6 +18,15 @@ fn tool_details_are_lazy_copyable_and_do_not_parse_hidden_updates(cx: &mut TestA
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         assert_eq!(view.read(cx).work_ui.step_info("a", cx), (false, 0));
+        let button = window.find("step-toggle-call:a").bounds();
+        let label = window
+            .within("step-toggle-call:a")
+            .find("disclosure-text")
+            .bounds();
+        assert!(
+            label.left() - button.left() < px(40.),
+            "semantic work text must be leading-aligned, not centered in the row"
+        );
         assert!(view.read(cx).scroller.read(cx).is_following_tail());
         window.click("step-toggle-call:a", cx);
     })
@@ -137,6 +146,42 @@ fn tool_output_selection_and_expansion_survive_real_unmount_and_prepend_regroup(
         window.render_frame(cx);
         window.press("secondary-c", cx);
         assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), copied);
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn a_selected_assistant_note_keeps_its_document_when_it_folds_into_work(cx: &mut TestAppContext) {
+    let mut model = LiveTranscript::default();
+    model.apply(&json!({"type":"entry_appended","entry":{"id":20,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"text","text":"Selected note 日本語 stays owned."}]}]}}));
+    let (handle, view) = super::readonly_tests::setup(cx, model.rows());
+    let (text, copied) = cx
+        .update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            let text = view.read(cx).text_states[0].clone().unwrap();
+            let start = text.read(cx).bounds().origin + point(px(3.), px(10.));
+            window.drag(start, start + point(px(90.), px(0.)), cx);
+            window.press("secondary-c", cx);
+            let copied = cx.read_from_clipboard().unwrap().text().unwrap();
+            assert!(!copied.is_empty());
+            (text, copied)
+        })
+        .unwrap();
+    model.apply(&json!({"type":"entry_appended","entry":{"id":21,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"toolCall","id":"a","name":"read","arguments":{"path":"a.rs"}}]}]}}));
+    model.apply(&json!({"type":"tool_execution_end","toolCallId":"a","result":{"content":[{"type":"text","text":"complete"}]}}));
+    let group = model.rows()[0].id();
+    cx.update_window(handle, |_, window, cx| {
+        view.update(cx, |view, cx| {
+            view.replace_readonly(model.rows(), false, cx)
+        });
+        window.render_frame(cx);
+        window.press("secondary-c", cx);
+        assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), copied);
+        assert!(text.read(cx).selected_source_range().is_some());
+        assert!(
+            view.read(cx).work_ui.group_open(group, cx),
+            "grouping must not auto-hide the selected note even when work is complete"
+        );
     })
     .unwrap();
 }
