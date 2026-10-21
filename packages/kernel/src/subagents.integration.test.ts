@@ -541,6 +541,74 @@ test("busy steering joins the current turn at its next tool boundary, while foll
 	assert.equal(f.faux.state.callCount, 3);
 });
 
+test("busy steering places every queued steer together, while follow-ups still run one at a time", {
+	timeout: 15_000,
+}, async (t) => {
+	const f = await fixture(t, []);
+	const openAdapter = NativeAdapter.open;
+	t.mock.method(NativeAdapter, "open", (options: NativeAdapterOptions) =>
+		openAdapter.call(NativeAdapter, { ...options, ...f.options }),
+	);
+	let release!: () => void;
+	let started!: () => void;
+	const generating = new Promise<void>((resolve) => {
+		started = resolve;
+	});
+	const gate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	t.after(() => release());
+	const users = (transcript: { messages: readonly { role: string; content: unknown }[] }) =>
+		transcript.messages.filter((message) => message.role === "user").map((message) => message.content);
+	f.faux.setResponses([
+		async () => {
+			started();
+			await gate;
+			return fauxAssistantMessage(
+				{ type: "toolCall", id: "missing", name: "missing", arguments: {} },
+				{ stopReason: "toolUse" },
+			);
+		},
+		(transcript) => {
+			assert.deepEqual(users(transcript), ["Start", "First correction", "Second correction"]);
+			return fauxAssistantMessage("Current answer");
+		},
+		(transcript) => {
+			assert.deepEqual(users(transcript), ["Start", "First correction", "Second correction", "First later"]);
+			return fauxAssistantMessage("First follow-up answer");
+		},
+		(transcript) => {
+			assert.deepEqual(users(transcript), [
+				"Start",
+				"First correction",
+				"Second correction",
+				"First later",
+				"Second later",
+			]);
+			return fauxAssistantMessage("Second follow-up answer");
+		},
+	]);
+	const session = await KernelSession.open(
+		{ sessionId: "steering-all", cwd: f.root, storageDir: join(f.root, "storage") },
+		{ onWorking: () => {} },
+	);
+	f.cleanup.push(() => session.close());
+	await session.submit("first", "Start", "steer");
+	await generating;
+	for (const [requestId, text, mode] of [
+		["later-1", "First later", "followUp"],
+		["correction-1", "First correction", "steer"],
+		["later-2", "Second later", "followUp"],
+		["correction-2", "Second correction", "steer"],
+	] as const)
+		assert.deepEqual(await session.submit(`mission:send:${requestId}`, text, mode, false, true), {
+			delivery: "queued",
+		});
+	release();
+	await session.harness.waitForIdle(context);
+	assert.equal(f.faux.state.callCount, 4);
+});
+
 test("discard held actions keep the kernel stopped, emit per-message events, and leave waiting input read-only", {
 	timeout: 15_000,
 }, async (t) => {

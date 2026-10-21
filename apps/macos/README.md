@@ -31,7 +31,8 @@ Native SwiftUI client for pilotd, with a libghostty terminal per session.
   source (expanded messages also have a copy button). Expanding pauses bottom-follow until you scroll back
   to the bottom. Return steers the current run (or sends when idle), Option-Return queues a
   follow-up, Shift-Return adds a line. All queued messages appear above the composer, with their delivery
-  mode and full text; steering appears before follow-ups, with FIFO order within each mode. Long queues
+  mode and full text; steering appears before follow-ups, with FIFO order within each mode. All queued
+  steering joins the current run together at its next step; follow-ups run one at a time. Long queues
   scroll and survive reconnects. Edit queued messages inline with Edit or Option-Up/Option-Down.
   Return saves, Escape cancels, and Shift-Return adds a line. Arrow navigation retains unsaved drafts;
   saving preserves queue position and delivery mode. Use Remove on any queued row to withdraw it
