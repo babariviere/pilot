@@ -143,6 +143,22 @@ private func repairSession(host: HostRef = repairLocalHost, proposal: Diagnostic
     #expect(request.mode == .build && request.role == nil)
     #expect(request.diagnosticRepair == admission)
     #expect(request.diagnosticTarget == nil && request.diagnosticHistoryAccess == nil)
+    #expect(request.diagnosticRepair?.readDiagnostics == nil)
+    #expect(request.message.contains("No fresh diagnostic access was granted"))
+    let granted = try DiagnosticRepair.admission(specialist: fixture.specialist,
+        specialistHost: repairLocalHost, proposal: proposal, binding: admission.binding, readDiagnostics: true)
+    let grantedRequest = try DiagnosticRepair.spawnRequest(handoff: handoff, destinationProjectId: "pilot-source",
+        admission: granted)
+    #expect(grantedRequest.diagnosticRepair?.readDiagnostics == true)
+    #expect(grantedRequest.message.contains("approved subject and host only"))
+    #expect(grantedRequest.message.contains("Do not inspect other chats or switch hosts"))
+    #expect(grantedRequest.role == nil && grantedRequest.diagnosticTarget == nil)
+    let bytes = try JSONEncoder().encode(grantedRequest)
+    let restored = try JSONDecoder().decode(SpawnRequest.self, from: bytes)
+    #expect(restored.diagnosticRepair?.readDiagnostics == true)
+    let declined = try DiagnosticRepair.admission(specialist: fixture.specialist,
+        specialistHost: repairLocalHost, proposal: proposal, binding: admission.binding, readDiagnostics: false)
+    #expect(declined.readDiagnostics == false)
 }
 
 @Test @MainActor func uncertainRepairStartReusesOneDurableIntentAndBlocksAChangedDuplicate() async throws {

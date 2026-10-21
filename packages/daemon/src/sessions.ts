@@ -368,6 +368,8 @@ interface SessionMeta extends OutcomeMeta {
 	diagnosticTarget?: DiagnosticTargetReference;
 	/** Explicit user grant for bounded target conversation/tool history. Missing is deny. */
 	diagnosticHistoryAccess?: true;
+	/** Granted only by the immutable native repair-create intent, never by the opening message. */
+	repairDiagnostics?: DiagnosticEvidenceSubject;
 	/** Latest bounded, non-executing suggestion published by this specialist. */
 	diagnosticRepairProposal?: DiagnosticRepairProposal;
 	diagnosticHost?: OperationHost;
@@ -4333,6 +4335,7 @@ export class SessionManager {
 				meta.preparing ||
 				meta.archivedAt ||
 				!meta.pinned ||
+				meta.repairDiagnostics !== undefined ||
 				meta.role !== undefined
 			)
 				throw new Error("Invalid control chat metadata");
@@ -4340,6 +4343,7 @@ export class SessionManager {
 		}
 		if (meta.mode !== undefined && meta.mode !== "build" && meta.mode !== "ask")
 			throw new Error("Invalid session mode");
+		if (meta.repairDiagnostics !== undefined) this.repairDiagnosticSubject(meta);
 		if (
 			meta.role === "diagnostics" &&
 			(meta.mode !== "ask" ||
@@ -4786,9 +4790,11 @@ export class SessionManager {
 		};
 	}
 
-	private assertDiagnosticRepairAdmission(request: SpawnRequest): void {
+	private assertDiagnosticRepairAdmission(request: SpawnRequest): DiagnosticEvidenceSubject | undefined {
 		const repair = request.diagnosticRepair;
 		if (!repair) return;
+		if (repair.readDiagnostics !== undefined && typeof repair.readDiagnostics !== "boolean")
+			throw new Conflict("Repair diagnostic access must be explicitly confirmed or omitted");
 		if (request.role !== undefined || (request.mode ?? "build") !== "build")
 			throw new Conflict("Diagnostic repair requires an ordinary Build chat");
 		if (
@@ -4835,6 +4841,27 @@ export class SessionManager {
 			request.title !== diagnosticRepairTitle(repair.repairTitle, proposal.findings)
 		)
 			throw new Conflict("Repair must use the reviewed title and configured Pilot source project without overrides");
+		return subject;
+	}
+
+	/** Durable repair grants are local, exact-subject reads, not the app-wide diagnostics role. */
+	private repairDiagnosticSubject(meta: SessionMeta): DiagnosticEvidenceSubject | undefined {
+		const subject = meta.repairDiagnostics;
+		if (subject === undefined) return;
+		if (meta.role !== undefined || meta.mode !== "build" || meta.control || meta.coordinatorView)
+			throw new Conflict("Repair diagnostic access requires an ordinary Build chat");
+		if (!subject || typeof subject !== "object" || Array.isArray(subject))
+			throw new Conflict("Invalid repair diagnostic subject");
+		const host = repairHost(subject.host);
+		if (host.daemonId !== this.diagnosticHost?.daemonId || host.lineageId !== this.diagnosticHost?.lineageId)
+			throw new Conflict("Repair diagnostic host identity changed");
+		if (subject.kind === "app" && Object.keys(subject).sort().join(",") === "host,kind") return { kind: "app", host };
+		if (subject.kind !== "chat" || Object.keys(subject).sort().join(",") !== "chatUrl,host,kind,sessionId")
+			throw new Conflict("Invalid repair diagnostic subject");
+		return {
+			kind: "chat",
+			...this.admittedDiagnosticTarget({ host, sessionId: subject.sessionId, chatUrl: subject.chatUrl }),
+		};
 	}
 
 	private diagnosticExecutionHost(meta: SessionMeta): OperationHost {
@@ -5056,6 +5083,9 @@ export class SessionManager {
 				? { diagnosticTargetId: diagnosticTarget.id, diagnosticTarget: diagnosticReference }
 				: {}),
 			...(request.diagnosticHistoryAccess === true ? { diagnosticHistoryAccess: true as const } : {}),
+			...(request.diagnosticRepair?.readDiagnostics === true
+				? { repairDiagnostics: this.assertDiagnosticRepairAdmission(request) }
+				: {}),
 			...(admission ? { createOperationId: admission.operationId } : {}),
 			...(admission && request.missionId ? { createMissionId: request.missionId } : {}),
 			mode,
@@ -6263,13 +6293,15 @@ export class SessionManager {
 		requestedLimit: number | undefined,
 	): Promise<DiagnosticHistoryPage> {
 		this.validateMode(specialist);
-		if (specialist.role !== "diagnostics") throw new Conflict("Only diagnostics may read chat history");
+		const repair = this.repairDiagnosticSubject(specialist);
+		if (specialist.role !== "diagnostics" && (!repair || repair.kind !== "chat" || repair.sessionId !== sessionId))
+			throw new Conflict("Chat history requires diagnostics authority or the exact approved repair subject");
 		if (!this.diagnosticHost) throw new Conflict("Diagnostic host identity is unavailable");
 		return this.readDiagnosticHistory(
 			sessionId,
 			before,
 			requestedLimit,
-			this.diagnosticReference(specialist)?.host ?? this.diagnosticHost,
+			repair?.host ?? this.diagnosticReference(specialist)?.host ?? this.diagnosticHost,
 		);
 	}
 
@@ -6308,18 +6340,20 @@ export class SessionManager {
 		signal?: AbortSignal,
 	): Promise<DiagnosticLogResult> {
 		this.validateMode(specialist);
-		if (specialist.role !== "diagnostics") throw new Conflict("Only a diagnostics specialist may read Pilot logs");
+		const repair = this.repairDiagnosticSubject(specialist);
+		if (specialist.role !== "diagnostics" && !repair)
+			throw new Conflict("Only a diagnostics specialist or a confirmed repair may read Pilot logs");
 		if (!this.diagnosticHost) throw new Conflict("Diagnostic host identity is unavailable");
-		if (specialist.diagnosticScope === "app") {
+		if (repair?.kind === "app" || specialist.diagnosticScope === "app") {
 			return this.diagnosticLogs.call(
-				this.diagnosticHost,
+				repair?.host ?? this.diagnosticHost,
 				undefined,
 				this.telemetry?.localDiagnostics ?? true,
 				request,
 				signal,
 			);
 		}
-		const reference = this.diagnosticReference(specialist);
+		const reference = repair?.kind === "chat" ? repair : this.diagnosticReference(specialist);
 		if (!reference) throw new Conflict("Diagnostics require an admitted host-qualified target");
 		if (
 			reference.host.daemonId !== this.diagnosticHost.daemonId ||
@@ -7514,6 +7548,7 @@ export class SessionManager {
 				)
 			: undefined;
 		const diagnosticTarget = this.diagnosticReference(meta);
+		const repairDiagnostics = this.repairDiagnosticSubject(meta);
 		const diagnosticScope =
 			meta.diagnosticScope === "app" && this.diagnosticHost
 				? ({ kind: "app", host: this.diagnosticExecutionHost(meta) } as const)
@@ -7526,6 +7561,7 @@ export class SessionManager {
 			createWorker(
 				{
 					sessionId: id,
+					...(repairDiagnostics ? { repairDiagnostics } : {}),
 					...(usageHistory ? { usageHistory } : {}),
 					...(usageMission ? { usageMission } : {}),
 					...(meta.control ? { control: true } : {}),
@@ -7949,9 +7985,22 @@ export class SessionManager {
 		if (packet.type === "diagnostics.call") {
 			void Promise.resolve()
 				.then(async (): Promise<AppDiagnostics | SessionDiagnostics> => {
-					if (meta.role !== "diagnostics")
+					if (this.workers.get(meta.id) !== worker)
+						throw new Conflict("Only the live worker may read diagnostics");
+					const repair = this.repairDiagnosticSubject(meta);
+					if (meta.role !== "diagnostics" && !repair)
 						throw new Error("Only an admitted diagnostics specialist may read agent diagnostics");
 					this.validateMode(meta);
+					if (repair) {
+						if (repair.kind === "app") {
+							if (packet.sessionId !== undefined)
+								throw new Conflict("App repair does not authorize chat diagnostics");
+							return this.appDiagnostics(repair.host);
+						}
+						if (packet.sessionId !== undefined && packet.sessionId !== repair.sessionId)
+							throw new Conflict("Diagnostics are limited to the approved repair subject");
+						return this.diagnostics(repair.sessionId, { host: repair.host, limit: packet.limit });
+					}
 					if (!packet.sessionId) return this.appDiagnostics(this.diagnosticExecutionHost(meta));
 					const target = this.require(packet.sessionId);
 					return await this.diagnostics(target.id, {

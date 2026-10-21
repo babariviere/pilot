@@ -185,6 +185,13 @@ may persist one closed, bounded, non-executing proposal with at most 16 currentl
 uncertainty, suggested repair and test guidance. Only explicit review confirmation may hand that exact proposal and
 evidence to a separate ordinary coding agent in a valid project; publishing, reviewing or cancelling never launches
 work or mutates the target.
+Native repair confirmation may separately authorize fresh bounded read-only diagnostics for its exact evidence
+subject and qualified host. This is an explicit flag in the immutable repair-create operation, not authority from
+proposal text. The ordinary Build receives no specialist role or app-wide discovery: only that subject's operational
+evidence, disclosed shared Pilot host logs, and, for a chat subject only, sanitized bounded history of that chat.
+Every dispatch checks the persisted grant and host identity. The existing readers retain their privacy/bounds and
+do not wake or mutate targets or export content to telemetry. Older/declined intents have no grant; receipts and
+reopening cannot upgrade one. New chats/child agents do not inherit it.
 
 AI accounting is a separate `SessionUsage.ai` summary. `direct` is usage in Durable's model ledger;
 `child` is usage reported by usage-bearing tool operations. Input, output, cache-read and cache-write are separate;

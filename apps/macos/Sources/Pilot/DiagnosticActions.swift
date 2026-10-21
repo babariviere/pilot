@@ -441,7 +441,8 @@ enum DiagnosticRepair {
 
     static func admission(specialist: SessionSummary, specialistHost: HostRef,
                           proposal: DiagnosticRepairProposal, binding: DiagnosticRepairProjectBinding? = nil,
-                          repairTitle: String? = nil, archiveSpecialistOnStart: Bool? = nil) throws -> DiagnosticRepairAdmission {
+                          repairTitle: String? = nil, archiveSpecialistOnStart: Bool? = nil,
+                          readDiagnostics: Bool? = nil) throws -> DiagnosticRepairAdmission {
         guard specialist.isDiagnosticsSpecialist, specialist.diagnosticRepairProposal?.id == proposal.id,
               let subject = subject(specialist: specialist, host: specialistHost), subject.host == specialistHost,
               proposal.targetSessionId == subject.sessionId else {
@@ -449,7 +450,7 @@ enum DiagnosticRepair {
         }
         return DiagnosticRepairAdmission(specialistSessionId: specialist.id, proposalId: proposal.id,
                                          subject: subject, binding: binding, repairTitle: repairTitle ?? title(proposal),
-                                         archiveSpecialistOnStart: archiveSpecialistOnStart)
+                                         archiveSpecialistOnStart: archiveSpecialistOnStart, readDiagnostics: readDiagnostics)
     }
 
     static func spawnRequest(handoff: DiagnosticsHandoff, destinationProjectId: String,
@@ -472,9 +473,12 @@ enum DiagnosticRepair {
         }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         let material = String(decoding: try encoder.encode(handoff), as: UTF8.self)
+        let diagnosticAccess = admission.readDiagnostics == true
+            ? " You may use the host-provided diagnostic tools for fresh bounded, sanitized evidence of the approved subject and host only. Shared Pilot host logs may include other operational records. Do not inspect other chats or switch hosts."
+            : " No fresh diagnostic access was granted; report missing evidence rather than assuming permission."
         return SpawnRequest(
             projectId: projectId,
-            message: "Investigate and repair the diagnosed issue. Use only the reviewed specialist proposal and cited bounded evidence below as operational context. Verify the findings and suggested repair, add the requested regression coverage, and do not retry, restart, replay, or mutate the diagnosed chat.\n\n\(material)",
+            message: "Investigate and repair the diagnosed issue. Use the reviewed specialist proposal and cited bounded evidence below as initial operational context.\(diagnosticAccess) Verify the findings and suggested repair, add the requested regression coverage, and do not retry, restart, replay, or mutate the diagnosed chat.\n\n\(material)",
             title: title, model: model, thinking: thinking, mode: .build, workspace: .clone, diagnosticRepair: admission
         )
     }
@@ -1230,6 +1234,7 @@ struct DiagnosticRepairSheet: View {
     @State private var suggestedRepair = ""
     @State private var regressionGuidance = ""
     @State private var repairProject: DiagnosticRepairProjectStatus?
+    @State private var readDiagnostics = true
     @State private var showingSetup = false
     @State private var selectedModel = ""
     @State private var thinking = ""
@@ -1396,6 +1401,15 @@ struct DiagnosticRepairSheet: View {
                 LabeledContent("Evidence subject", value: subject.kind == .app ? "Pilot app on \(subject.host.hostId)"
                     : "\(subject.chatUrl ?? "Unavailable chat") on \(subject.host.hostId)")
             }
+            if let pendingStart {
+                LabeledContent("Fresh diagnostics", value: pendingStart.admission.readDiagnostics == true
+                    ? "Approved for the original subject" : "Not granted")
+            } else {
+                Toggle("Allow fresh read-only diagnostics", isOn: $readDiagnostics)
+                Text("Reads bounded, sanitized evidence and shared Pilot logs on the approved host, plus the evidence chat's history when a chat is named above. No other chats, host switching, restart, replay or changes to the diagnosed subject.")
+                    .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             LabeledContent("Findings") {
                 TextField("Plain-language findings", text: $findings, axis: .vertical).lineLimit(2...5)
             }
@@ -1453,6 +1467,7 @@ struct DiagnosticRepairSheet: View {
 
     private func loadProposal() async {
         diagnostics = nil; evidenceSubject = nil
+        if let pendingStart { readDiagnostics = pendingStart.admission.readDiagnostics == true }
         guard let proposal else { diagnostics = nil; return }
         findings = proposal.findings
         repairTitle = DiagnosticRepair.title(proposal)
@@ -1533,6 +1548,7 @@ struct DiagnosticRepairSheet: View {
                                                 subject: DiagnosticRepair.subject(specialist: specialist, host: target.reference.host),
                                                 repairTitle: repairTitle)
         let selectedThinking = thinking
+        let approvedDiagnostics = readDiagnostics
         Task {
             defer { busy = false }
             do {
@@ -1550,7 +1566,7 @@ struct DiagnosticRepairSheet: View {
                 }
                 let admission = try DiagnosticRepair.admission(specialist: specialist, specialistHost: target.reference.host,
                     proposal: proposal, binding: binding, repairTitle: handoff.repairTitle ?? repairTitle,
-                    archiveSpecialistOnStart: true)
+                    archiveSpecialistOnStart: true, readDiagnostics: approvedDiagnostics)
                 let spawn = try DiagnosticRepair.spawnRequest(handoff: handoff,
                                                                destinationProjectId: destinationProjectId,
                                                                admission: admission, model: modelId,

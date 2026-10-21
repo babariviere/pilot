@@ -103,6 +103,7 @@ import {
 	watchQueue,
 } from "./queue.ts";
 import { refActivity } from "./ref-activity.ts";
+import { createRepairDiagnosticsTools } from "./repair-diagnostics-tools.ts";
 import { createRepairProposalTool, type RepairProposalCall } from "./repair-proposal-tool.ts";
 import { createSlackStatusTool, SLACK_STATUS_TOOL, type SlackStatusCall } from "./slack-status-tool.ts";
 import { openSessionStorage } from "./storage.ts";
@@ -449,6 +450,7 @@ export class KernelSession {
 			]);
 			const pilot = {
 				...spec.pilot,
+				repairDiagnostics: spec.repairDiagnostics,
 				...(spec.pilot?.controlPermission ? { controlPermission: { ...spec.pilot.controlPermission } } : {}),
 				...(spec.role ? { role: spec.role } : {}),
 				ghStack,
@@ -544,6 +546,13 @@ export class KernelSession {
 				],
 				subagents,
 				hostTools: [
+					...(spec.repairDiagnostics && hooks.callDiagnostics && hooks.callDiagnosticLogs
+						? createRepairDiagnosticsTools(spec.repairDiagnostics, {
+								diagnostics: hooks.callDiagnostics,
+								logs: hooks.callDiagnosticLogs,
+								history: hooks.callDiagnosticHistory,
+							})
+						: []),
 					...(spec.role === "diagnostics" && hooks.callDiagnostics && hooks.callDiagnosticLogs && diagnosticScope
 						? [
 								createDiagnosticsTool(hooks.callDiagnostics, diagnosticScope),

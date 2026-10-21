@@ -141,6 +141,8 @@ export interface KernelSpec {
 	diagnosticScope?: { kind: "app"; host: OperationHost };
 	/** Explicit user grant for bounded target conversation/tool history. Missing means content-free diagnostics only. */
 	diagnosticHistoryAccess?: boolean;
+	/** Native-confirmed repair-only read scope. Never inherited by child agents. */
+	repairDiagnostics?: import("@pilot/protocol").DiagnosticEvidenceSubject;
 	/** Ephemeral capability, never stored in session metadata or transcripts. Inherited by descendants. */
 	credentials?: CredentialEndpoint;
 	/** Host-resolved trust for read-only Linux configuration; never a writable trust-store exception. */
