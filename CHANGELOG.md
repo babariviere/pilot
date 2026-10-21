@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.62.2](https://github.com/babariviere/pilot/compare/v1.62.1...v1.62.2) (2026-10-21)
+
+
+### Bug Fixes
+
+* **artifacts:** preserve SwiftUI sheet dismissal ([778e014](https://github.com/babariviere/pilot/commit/778e01491e805c3641a88affcbf75f254b36d261))
+
+
+### Reverts
+
+* **chat:** restore the SwiftUI transcript ([58c3e25](https://github.com/babariviere/pilot/commit/58c3e255229dfb132a55047851a996d1df7f334e))
+
 ## [1.62.1](https://github.com/babariviere/pilot/compare/v1.62.0...v1.62.1) (2026-10-21)
 
 
