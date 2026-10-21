@@ -8,6 +8,6 @@ import PilotCore
         try directory.install(client, host: host); return
     }
     directory.restoreLegacySnapshot(OfflineHostSnapshot(host: host,
-        configuration: try LegacyDevboxAddress(alias: "legacy-fixture"), sessions: client.sessions,
+        configuration: try LegacyDevboxAddress(alias: host.hostId), sessions: client.sessions,
         projects: client.projects, missions: client.missions))
 }

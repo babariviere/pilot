@@ -234,7 +234,7 @@ private func keyEvent(_ characters: String, keyCode: UInt16, modifiers: NSEvent.
     model.selectedSessionId = "a"
     #expect(!model.canGo(to: .overview))
     #expect(!model.canGo(to: .tasks))
-    #expect(GoDestination.allCases.filter(model.canGo(to:)) == [.home, .inbox, .archive, .slack, .linear])
+    #expect(GoDestination.allCases.filter(model.canGo(to:)) == [.home, .inbox, .usage, .archive, .slack, .linear])
     model.go(to: .overview)
     model.go(to: .brief)
     #expect(model.selectedSessionId == "a")

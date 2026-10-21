@@ -117,7 +117,8 @@ private func menuSession(id: String = "menu-test", title: String = "Session", st
                    pullRequest: pullRequest, archivedAt: archivedAt)
 }
 
-@Test @MainActor func reactiveMenuSnapshotsNeverReintroduceExecutorControlOrItsCounts() async throws {
+@Test(.timeLimit(.minutes(1))) @MainActor
+func reactiveMenuSnapshotsNeverReintroduceExecutorControlOrItsCounts() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
     let hosts = ClientDirectory(operationDirectory: directory)
@@ -140,29 +141,36 @@ private func menuSession(id: String = "menu-test", title: String = "Session", st
     let controlRef = HostResourceRef(host: box, kind: .session, localId: control.id)
     let baseline = MenuBarSnapshot(sessions: localSessions, isUnread: { _ in false }, status: .running,
         lifecycleBusy: app.daemon.lifecycleBusy, waitingToInstall: false,
-        hosted: [Hosted(ref: ordinaryRef, value: ordinary)], availableHosts: [box])
+        hosted: [Hosted(ref: ordinaryRef, value: ordinary)])
     #expect(menu.snapshot == baseline)
+    #expect(!hosts.available.contains(box))
+    #expect(menu.snapshot.statusText == "1 working", "Cached remote work must not count as live work")
+    #expect(menu.snapshot.rows.first { $0.id == ordinaryRef.storageKey }?.available == false)
 
-    // The barrier requires the fresh inventory's ordinary title. It does not wait for the absence
-    // under test, so the old reactive-path bug produces a failed assertion, not a hanging wait.
-    var observation: AnyCancellable?
+    // Remote fixtures are immutable cached snapshots, not live clients. Replacing the snapshot must
+    // refresh the menu without making retired work live or revealing retained Control conversations.
     var received = false
     let updated = menuSession(id: ordinary.id, title: "Control after update", state: "working")
     var updatedControl = SessionSummary(id: control.id, title: "Waiting Control", cwd: "/tmp",
         createdAt: 1, updatedAt: 2, state: "idle", outcome: .question)
     updatedControl.control = true
     #expect(updatedControl.status == .question)
-    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-        observation = menu.$snapshot.sink { value in
-            guard !received, value.rows.contains(where: { $0.id == ordinaryRef.storageKey && $0.session.title == updated.title }) else { return }
-            received = true; continuation.resume()
+    let observation = menu.$snapshot.sink { value in
+        if value.rows.contains(where: { $0.id == ordinaryRef.storageKey && $0.session.title == updated.title }) {
+            received = true
         }
-        client.loadFixture(projects: [], sessions: [updatedControl, updated])
     }
-    observation?.cancel()
+    defer { observation.cancel() }
+    client.loadFixture(projects: [], sessions: [updatedControl, updated])
+    #expect(hosts.sessions.first { $0.ref == ordinaryRef }?.value.title == ordinary.title,
+            "Changing a detached client must not silently replace cached history")
+    try loadClientFixture(client, host: box, into: hosts)
+    let deadline = ContinuousClock.now + .seconds(10)
+    while !received && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+    try #require(received, "The menu must publish the replaced cached snapshot without an unbounded wait")
     let expected = MenuBarSnapshot(sessions: localSessions, isUnread: { _ in false }, status: .running,
         lifecycleBusy: app.daemon.lifecycleBusy, waitingToInstall: false,
-        hosted: [Hosted(ref: ordinaryRef, value: updated)], availableHosts: [box])
+        hosted: [Hosted(ref: ordinaryRef, value: updated)])
     #expect(menu.snapshot == expected)
     #expect(!menu.snapshot.rows.contains { $0.id == controlRef.storageKey })
     #expect(menu.snapshot.rows.contains { $0.id == localChat.id })
