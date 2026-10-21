@@ -107,6 +107,7 @@ struct UsageTrendPoint: Identifiable, Sendable {
         stop()
         self.scope = scope
         summary = nil; trend = []; trendFailed = false; trendLoading = false; groups = nil; page = nil
+        detailFailed = false
         breakdowns = [:]; breakdownNames = [:]; groupNames = [:]
         anchor = nil; localHost = nil; detail = .overview; subscriptions = []
         state = .loading
@@ -131,12 +132,26 @@ struct UsageTrendPoint: Identifiable, Sendable {
                 trendLoading = true
                 state = .ready
                 do {
-                    let buckets = try await read(query(scope, view: "buckets", bucket: 86_400_000, limit: 400))
-                    try Task.checkCancellation()
-                    guard revision == request else { return }
-                    guard let values = accept(buckets) else { return }
+                    // The window permits 400 buckets, but each response permits only 100 groups.
+                    // Keep pages private until complete; never publish a truncated trend as coverage.
+                    var buckets: [UsageAnalyticsGroup] = []
+                    var after: String?
+                    for _ in 0..<4 {
+                        let projection = try await read(query(scope, view: "buckets", bucket: 86_400_000, limit: 100, after: after))
+                        try Task.checkCancellation()
+                        guard revision == request else { return }
+                        guard let values = accept(projection) else { throw ClientError("Usage trend unavailable") }
+                        guard values.groups.count <= 100,
+                              values.truncated == (values.next != nil),
+                              values.next == nil || values.next != after else { throw ClientError("Usage trend unavailable") }
+                        buckets.append(contentsOf: values.groups)
+                        after = values.next
+                        if after == nil { break }
+                    }
+                    guard after == nil, Set(buckets.map(\.key)).count == buckets.count else { throw ClientError("Usage trend unavailable") }
+                    let completedBuckets = buckets
                     let points = await Task.detached(priority: .utility) {
-                        values.groups.compactMap { group -> UsageTrendPoint? in
+                        completedBuckets.compactMap { group -> UsageTrendPoint? in
                             guard let date = Double(group.key) else { return nil }
                             return UsageTrendPoint(milliseconds: date, tokens: UsageDashboardPresentation.inputOutput(group.aggregate))
                         }
@@ -186,7 +201,10 @@ struct UsageTrendPoint: Identifiable, Sendable {
                     let projection = try await read(query(scope, view: "breakdown", dimension: dimension, limit: 10, after: after))
                     try Task.checkCancellation()
                     guard revision == request, detailRevision == subrequest else { return }
-                    guard let result = accept(projection) else { return }
+                    guard let result = accept(projection) else {
+                        if revision == request { detailFailed = true }
+                        return
+                    }
                     let names = await labels(host, dimension, result.groups.map(\.key))
                     guard revision == request, detailRevision == subrequest else { return }
                     guard current else { invalidate(); return }
@@ -242,10 +260,13 @@ struct UsageTrendPoint: Identifiable, Sendable {
 
     private func accept(_ projection: UsageConnectedProjection) -> UsageAnalyticsResult? {
         guard current, projection.omittedHosts == 0, projection.hosts.count == 1,
-              let value = projection.hosts.first, value.host == localHost, value.state == "fresh",
-              let result = value.result, result.status.generation == summary?.status.generation else {
+              let value = projection.hosts.first, value.host == localHost else {
             invalidate(); return nil
         }
+        // A bounded query may fail while the accepted Local overview remains valid. Missing
+        // evidence is unavailable, not proof that the connection or erasure epoch changed.
+        guard value.state == "fresh", let result = value.result else { return nil }
+        guard result.status.generation == summary?.status.generation else { invalidate(); return nil }
         return result
     }
 

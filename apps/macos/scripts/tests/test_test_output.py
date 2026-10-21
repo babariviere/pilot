@@ -69,7 +69,10 @@ REGRESSION_PARTITIONS = [
      "usageDashboardLocalOnlyCacheAndPagesNeverAddCheckpointOrRepeatedTotals",
      "usageDashboardUnsupportedCapacityErrorsAndAmbiguousLocalAreNotZero",
      "usageDashboardStaleScopeAndConnectionResponsesCannotRepaintOrReuseCache",
-     "usageDashboardNavigationIsAvailableWithoutConfiguration"]
+     "usageDashboardNavigationIsAvailableWithoutConfiguration",
+     "usageDashboardRefreshPaginatesTrendsAndDoesNotRejectOrdinaryHistoryUpdates",
+     "usageDashboardUnavailableSecondaryReadsStayUnknownUntilExplicitRefresh",
+     "usageDashboardLateTrendCannotOverwriteRefreshOrMixErasureGenerations"]
 ]
 REGRESSION_OUTPUTS = [STARTED + "".join(f"◇ Test {name}() started.\n" for name in names) + PASSED
                       for names in REGRESSION_PARTITIONS]

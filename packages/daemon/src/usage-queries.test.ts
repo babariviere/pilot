@@ -289,6 +289,44 @@ test("keyset pages bind filters/view/erasure, stay bounded and preserve non-incr
 	}
 });
 
+test("bucket windows do not raise the 100-group response limit; live cursor pages never add totals", async () => {
+	const f = await setup();
+	try {
+		const hour = 3_600_000;
+		const now = FROM + 105 * hour;
+		for (let i = 0; i < 105; i++) {
+			const at = FROM + i * hour;
+			assert.equal(f.disk.put(f.row(`bucket:${i}`, { observedAt: at, completedAt: at }), now), "stored");
+		}
+		const query: UsageAnalyticsQuery = { ...base, to: now, view: "buckets", bucketMs: hour, limit: 100 };
+		assert.throws(() => usageAnalyticsQuery({ ...query, limit: 400 }), /Invalid usage/);
+		const first = f.disk.analytics(query, now);
+		assert.equal(first.groups.length, 100);
+		assert.equal(first.total.records, 105);
+		assert.ok(first.next);
+		// A correction on an earlier page preserves generation/cursor identity, not immutable totals.
+		const corrected = f.row("bucket:0", {
+			revision: 3,
+			observedAt: FROM,
+			completedAt: FROM,
+			tokens: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, reasoningStatus: "unavailable" },
+		});
+		assert.equal(f.disk.put(corrected, now), "stored");
+		const second = f.disk.analytics({ ...query, after: first.next }, now);
+		assert.equal(second.groups.length, 5);
+		assert.equal(second.next, undefined);
+		assert.equal(second.total.records, 105);
+		assert.equal(second.total.metrics.input.value, 10401);
+		assert.equal(second.status.generation, first.status.generation);
+		assert.equal(new Set([...first.groups, ...second.groups].map((g) => g.key)).size, 105);
+		f.disk.erase(undefined, now);
+		assert.throws(() => f.disk.analytics({ ...query, after: first.next }, now), /Invalid usage cursor/);
+		assert.equal(f.disk.analytics(query, now).total.records, 0);
+	} finally {
+		await f.close();
+	}
+});
+
 test("safe sums expose overflow, and strict resource budgets reject invalid queries", async () => {
 	const f = await setup();
 	try {

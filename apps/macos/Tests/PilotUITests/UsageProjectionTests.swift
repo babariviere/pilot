@@ -31,7 +31,13 @@ private final class UsageProjectionHTTP: URLProtocol {
         } else if url.path == "/api/usage-history/query", name == "local" {
             var root = URL(fileURLWithPath: #filePath)
             for _ in 0..<5 { root.deleteLastPathComponent() }
-            body = (try? Data(contentsOf: root.appendingPathComponent("packages/protocol/fixtures/usage-analytics.json"))) ?? Data()
+            let encoded = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "query" }?.value
+            let query = encoded.flatMap { $0.data(using: .utf8) }.flatMap { try? JSONDecoder().decode(UsageAnalyticsQuery.self, from: $0) }
+            if let limit = query?.limit, limit > 100 {
+                status = 400; body = Data("{}".utf8) // Same bound as usageAnalyticsQuery in the daemon.
+            } else {
+                body = (try? Data(contentsOf: root.appendingPathComponent("packages/protocol/fixtures/usage-analytics.json"))) ?? Data()
+            }
         } else {
             status = name == "limited" ? 429 : 503
             body = Data("{}".utf8)
@@ -72,6 +78,24 @@ func usageLocalConsumerNeverFansOutAndDeferredHelperRequiresExplicitHosts() asyn
     #expect(local.hosts.first?.host.hostId == "local")
     #expect(local.hosts.first?.result?.total.metrics["input"]?.unknown == 1)
     #expect(UsageProjectionHTTP.paths.allSatisfy { $0.hasPrefix("local:") })
+    // Exercise the production directory/model/HTTP path. The old 400-group trend request
+    // returned 400 and immediately erased the overview with a misleading identity warning.
+    let dashboard = UsageDashboardModel(hosts: hosts)
+    defer { dashboard.stop() }
+    let scope = UsageDashboardModel.Scope(window: .init(from: 0, to: 86400000))
+    for _ in 0..<2 {
+        dashboard.refresh(scope, force: true)
+        let deadline = Date().addingTimeInterval(5)
+        while (dashboard.state == .loading || dashboard.trendLoading), Date() < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(dashboard.state == .ready && !dashboard.trendFailed && !dashboard.trendLoading)
+        #expect(dashboard.summary?.total.records == 2)
+        dashboard.connectionChanged()
+        #expect(dashboard.state == .ready, "One explicit refresh must stay accepted on a stable connection")
+    }
+    #expect(UsageProjectionHTTP.paths.allSatisfy { $0.hasPrefix("local:") })
+    dashboard.stop()
     UsageProjectionHTTP.reset()
     // Saved identities remain coverage metadata, never executable usage targets.
     let result = try await hosts.usageProjection(query, on: Set(refs.values).union([alias]))
