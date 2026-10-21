@@ -10,8 +10,6 @@ public struct DaemonHello: Codable, Equatable, Sendable {
     public let platform: String
     public let arch: String
     public let capabilities: DaemonCapabilities
-    /// Contract-only. Absent until cross-host Control is implemented and negotiated.
-    public let controlHost: ControlHostConfiguration?
 
     public static let clientProtocolVersion = 1
 
@@ -30,7 +28,6 @@ public struct DaemonCapabilities: Codable, Equatable, Sendable {
     public let independentExecution: Bool
     public let workspaceTerminalProtocol: Int?
     public let runtimeUpdates: Int?
-    public let controlHosts: Int?
     /// Project environment setup. Absent on older runtimes and while the feature is off.
     public let environmentSetup: Int?
 

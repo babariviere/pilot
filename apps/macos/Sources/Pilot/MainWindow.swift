@@ -193,10 +193,10 @@ struct SessionDetail: View {
 
 
     @ViewBuilder var body: some View {
-        if session.isControl {
+        if session.isRetainedHistory {
             if let reference = (context ?? hostContext)?.ref(.session, session.id)
                 ?? model.localHost.map({ HostResourceRef(host: $0, kind: .session, localId: session.id) }) {
-                PreviousControlHistoryView(reference: reference, hosts: model.hosts)
+                RetainedConversationHistoryView(reference: reference, hosts: model.hosts)
             } else {
                 Text("Control has been retired. Reconnect to read its retained history.")
                     .font(.pilot(.body)).foregroundStyle(Theme.mutedForeground)
@@ -247,7 +247,7 @@ struct SessionDetail: View {
     @ToolbarContentBuilder
     private var contextToolbarItem: some ToolbarContent {
         // The control chat is Ask underneath, but it acts through its tools, so the Ask badge would mislead.
-        let showsAsk = session.isAsk && !session.isControl
+        let showsAsk = session.isAsk && !session.isRetainedHistory
         if RemoteChatBadgeText(context: context) != nil
             || (context.map { model.isUnread(session, on: $0.host) } ?? model.isUnread(session)) || showsAsk
             || AttemptsMenu.label(for: session.attempts ?? []) != nil || session.trackedSource != nil {
@@ -281,7 +281,7 @@ enum SessionHeaderContext {
 
     static func subtitle(for session: SessionSummary, place: String) -> String {
         // The control chat has no project, checkout or source: it spans them all.
-        if session.isControl { return ControlChatIdentity.scope }
+        if session.isRetainedHistory { return "Retained history" }
         return [place, source(for: session)].compactMap { $0 }.joined(separator: " · ")
     }
 }
@@ -306,9 +306,6 @@ struct SessionInspectorControls: View {
     var body: some View {
         if session.missionId != nil {
             SessionMissionControl(session: session)
-        }
-        if session.isControl {
-            InspectorToggle(tab: .watching, icon: PilotIcon.watch, help: "Watching and actions")
         }
         if session.supportsChanges {
             InspectorToggle(tab: .changes, icon: PilotIcon.changes, help: "Changes (⇧⌘D)")
@@ -352,11 +349,11 @@ struct SessionMoreActions: View {
                 }
             } else {
                 Button { model.diagnose(session, context: hostContext) } label: {
-                    Label(session.isControl ? "Ask about Pilot" : "Diagnose this chat", icon: PilotIcon.bug)
+                    Label(session.isRetainedHistory ? "Ask about Pilot" : "Diagnose this chat", icon: PilotIcon.bug)
                 }
                 .disabled(model.isDiagnosing(session, context: hostContext))
                 .onAppear {
-                    guard !session.isControl else { return }
+                    guard !session.isRetainedHistory else { return }
                     let availability: FeatureAvailability = (hostContext?.available ?? model.client.connected)
                         ? .available : .disconnected
                     PilotTelemetry.shared.recordFeature(.eligibility(.diagnoseChat, availability))
@@ -444,10 +441,6 @@ struct Inspector: View {
             }
             if model.inspectorTab == .links {
                 SessionLinksPane(feed: feed ?? context.map { model.feeds.feed(ref: $0.ref(.session, session.id), hosts: $0.hosts) } ?? model.feeds.feed(sessionId: session.id, client: model.client))
-                    .id(session.id)
-            }
-            if model.inspectorTab == .watching, session.isControl {
-                ControlDetailsPane(client: endpoint, context: context)
                     .id(session.id)
             }
         }

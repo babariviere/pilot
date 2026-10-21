@@ -33,90 +33,42 @@ test("project memory dispatches only the requested action and binds notes to the
 	]);
 });
 
-test("control memory requires projectId, exposes wake and retains note identity for audit", async () => {
-	const calls: unknown[] = [];
-	const [tool] = createMemoryTools(
-		async (action, args, operationId) => {
-			calls.push([action, args, operationId]);
-			return {};
-		},
-		"control",
-		true,
-	);
+test("memory has no cross-project or wake surface and rejects invalid arguments", async () => {
+	const [tool] = createMemoryTools(async () => assert.fail("invalid calls must not reach the daemon"), "chat");
 	assert.ok(tool);
-	const schema = tool.parameters as { required: string[] };
-	assert.deepEqual(schema.required, ["action", "projectId"]);
-	for (const [id, args] of [
-		["wake", { action: "wake", projectId: "p" }],
-		["note", { action: "note", projectId: "q", text: "Lasting fact" }],
-		["recall", { action: "recall", projectId: "p", regex: "fact" }],
-		["zoom", { action: "zoom", projectId: "q", lo: 0, hi: 1 }],
-	] as const)
-		await tool.execute(id, args, undefined, undefined, {} as never);
-	assert.deepEqual(calls, [
-		["wake", { projectId: "p" }, undefined],
-		["note", { projectId: "q", text: "Lasting fact", sessionId: "control" }, "note"],
-		["recall", { projectId: "p", regex: "fact" }, undefined],
-		["zoom", { projectId: "q", lo: 0, hi: 1 }, undefined],
-	]);
-});
-
-test("memory rejects unavailable actions, missing action fields and invalid bounded arguments", async () => {
-	for (const control of [false, true]) {
-		const [tool] = createMemoryTools(
-			async () => assert.fail("invalid calls must not reach the daemon"),
-			"chat",
-			control,
-		);
-		assert.ok(tool);
-		const project: Record<string, JsonValue> = control ? { projectId: "p" } : {};
-		for (const args of [
-			{ action: "note" },
-			{ action: "recall" },
-			{ action: "zoom", lo: 0 },
-			{ action: "zoom", hi: 1 },
-			{ action: "forget" },
-			...(!control ? [{ action: "wake" }] : []),
-		])
-			await assert.rejects(tool.execute("invalid", { ...project, ...args }, undefined, undefined, {} as never));
-		const invalidArgs: Record<string, JsonValue>[] = [
-			{},
-			{ action: "forget" },
-			{ action: "note", text: "" },
-			{ action: "note", text: "x".repeat(281) },
-			{ action: "note", text: "fact", replaces: [-1] },
-			{ action: "note", text: "fact", replaces: Array(17).fill(0) },
-			{ action: "recall", regex: "x".repeat(513) },
-			{ action: "zoom", lo: -1, hi: 1 },
-			{ action: "zoom", lo: 0, hi: 0 },
-			...(!control ? [{ action: "wake" }] : []),
-		];
-		for (const args of invalidArgs)
-			assert.throws(
-				() =>
-					validateToolArguments(tool, {
-						type: "toolCall",
-						id: "invalid",
-						name: "memory",
-						arguments: { ...project, ...args },
-					}),
-				JSON.stringify(args),
-			);
-		if (control) {
-			await assert.rejects(
-				tool.execute("invalid", { action: "wake" }, undefined, undefined, {} as never),
-				/projectId/,
-			);
-			assert.throws(() =>
+	const properties = (tool.parameters as { properties: Record<string, unknown> }).properties;
+	assert.equal(properties.projectId, undefined);
+	for (const args of [
+		{ action: "note" },
+		{ action: "recall" },
+		{ action: "zoom", lo: 0 },
+		{ action: "zoom", hi: 1 },
+		{ action: "forget" },
+		{ action: "wake" },
+	])
+		await assert.rejects(tool.execute("invalid", args, undefined, undefined, {} as never));
+	for (const args of [
+		{},
+		{ action: "wake" },
+		{ action: "forget" },
+		{ action: "note", text: "" },
+		{ action: "note", text: "x".repeat(281) },
+		{ action: "note", text: "fact", replaces: [-1] },
+		{ action: "note", text: "fact", replaces: Array(17).fill(0) },
+		{ action: "recall", regex: "x".repeat(513) },
+		{ action: "zoom", lo: -1, hi: 1 },
+		{ action: "zoom", lo: 0, hi: 0 },
+	])
+		assert.throws(
+			() =>
 				validateToolArguments(tool, {
 					type: "toolCall",
 					id: "invalid",
 					name: "memory",
-					arguments: { action: "wake" },
+					arguments: args as Record<string, JsonValue>,
 				}),
-			);
-		}
-	}
+			JSON.stringify(args),
+		);
 });
 
 test("recall by query sends an escaped word regex and ranks live notes above replaced ones", async () => {

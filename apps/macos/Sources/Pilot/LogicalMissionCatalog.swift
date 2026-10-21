@@ -7,17 +7,17 @@ enum LogicalMissionCatalog {
     struct Source: Sendable {
         let host: HostRef
         var missions: [Mission]
-        var dashboard: ControlDashboardResponse?
+        var dashboard: MissionCatalogResponse?
     }
     struct Result: Sendable {
-        let rows: [ControlLogicalMission]
+        let rows: [LogicalMission]
         let total: Int?
         let truncated: Bool
         let conflicts: Set<String>
         let provisional: Set<String>
     }
     private struct Observation {
-        let row: ControlLogicalMission
+        let row: LogicalMission
         let rank: Int
         let sequence: Int?
     }
@@ -47,7 +47,7 @@ enum LogicalMissionCatalog {
         var truncated = false
         var countKnown = true
         var provisional: Set<String> = []
-        func append(_ row: ControlLogicalMission) {
+        func append(_ row: LogicalMission) {
             let home = row.mission.home
             guard !home.daemonId.isEmpty, !home.lineageId.isEmpty,
                   !row.mission.missionId.isEmpty else { return }
@@ -112,7 +112,7 @@ enum LogicalMissionCatalog {
             }
         }
         var conflicts: Set<String> = []
-        var rows: [ControlLogicalMission] = []
+        var rows: [LogicalMission] = []
         for id in groups.keys.sorted() {
             let observations = groups[id]!
             let rank = observations.map(\.rank).max() ?? 0
@@ -136,7 +136,7 @@ enum LogicalMissionCatalog {
                     conflicts.insert(id)
                 }
             }
-            var evidence: [ControlMissionProvenance] = []
+            var evidence: [MissionProvenance] = []
             for observation in observations {
                 for item in observation.row.provenance where !evidence.contains(item) { evidence.append(item) }
             }
@@ -149,7 +149,7 @@ enum LogicalMissionCatalog {
             }
             if evidence.count > provenanceLimit { truncated = true }
             fields["provenance"] = .array(try evidence.prefix(provenanceLimit).map { try json($0) })
-            rows.append(try decode(ControlLogicalMission.self, .object(fields)))
+            rows.append(try decode(LogicalMission.self, .object(fields)))
         }
         rows.sort {
             if ($0.status == .active) != ($1.status == .active) { return $0.status == .active }
@@ -160,7 +160,7 @@ enum LogicalMissionCatalog {
             ? sources[0].dashboard?.totals.logicalMissions : nil
         let total = countKnown ? rows.count : publishedTotal
         if rows.count > rowLimit { truncated = true }
-        var displayed: [ControlLogicalMission] = []
+        var displayed: [LogicalMission] = []
         var bytes = 2
         for row in rows.prefix(rowLimit) {
             let size = try JSONEncoder().encode(row).count + 1
@@ -173,27 +173,27 @@ enum LogicalMissionCatalog {
             conflicts: conflicts.intersection(ids), provisional: provisional.intersection(ids))
     }
 
-    private static func evidenceKey(_ item: ControlMissionProvenance) -> String {
+    private static func evidenceKey(_ item: MissionProvenance) -> String {
         [item.sourceHost.daemonId, item.sourceHost.lineageId, item.projectId, item.bindingId ?? "",
          String(item.sequence ?? -1), String(item.complete ?? false)].joined(separator: "\u{0}")
     }
-    private static func evidenceRank(_ item: ControlMissionProvenance) -> Int {
+    private static func evidenceRank(_ item: MissionProvenance) -> Int {
         item.kind == .canonical ? (item.bindingId == nil ? 3 : 2) : item.complete == true ? 1 : 0
     }
     private static func provenance(kind: String, host: OperationHost, projectId: String,
         bindingId: String? = nil, sequence: Int? = nil, complete: Bool? = nil,
-        syncedAt: Double? = nil, age: Double? = nil) throws -> ControlMissionProvenance {
+        syncedAt: Double? = nil, age: Double? = nil) throws -> MissionProvenance {
         var value: [String: JSONValue] = ["kind": .string(kind), "sourceHost": try json(host), "projectId": .string(projectId)]
         value["bindingId"] = bindingId.map(JSONValue.string)
         value["sequence"] = sequence.map { .number(Double($0)) }
         value["complete"] = complete.map(JSONValue.bool)
         value["replicaSyncedAt"] = syncedAt.map(JSONValue.number)
         value["replicaAgeMs"] = age.map(JSONValue.number)
-        return try decode(ControlMissionProvenance.self, .object(value))
+        return try decode(MissionProvenance.self, .object(value))
     }
     private static func row(home: OperationHost, id: String, title: String? = nil, status: MissionStatus? = nil,
         done: Int? = nil, total: Int? = nil, coordinator: String? = nil,
-        provenance: ControlMissionProvenance) throws -> ControlLogicalMission {
+        provenance: MissionProvenance) throws -> LogicalMission {
         var value: [String: JSONValue] = ["id": .string(identity(home: home, missionId: id)),
             "mission": .object(["home": try json(home), "missionId": .string(id)]),
             "provenance": .array([try json(provenance)])]
@@ -202,7 +202,7 @@ enum LogicalMissionCatalog {
         value["tasksDone"] = done.map { .number(Double($0)) }
         value["tasksTotal"] = total.map { .number(Double($0)) }
         value["coordinator"] = try coordinator.map { .object(["host": try json(home), "sessionId": .string($0)]) }
-        return try decode(ControlLogicalMission.self, .object(value))
+        return try decode(LogicalMission.self, .object(value))
     }
     private static func json<T: Encodable>(_ value: T) throws -> JSONValue {
         try JSONValue.decode(JSONEncoder().encode(value))

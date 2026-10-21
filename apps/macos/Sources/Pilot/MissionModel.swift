@@ -51,7 +51,7 @@ enum MissionSheet: Identifiable, Hashable {
 extension AppModel {
     /// Scope presentation by checkout provenance, never by an unqualified project ID or name.
     /// A logical mission can belong to both its home project and a linked execution checkout.
-    func sidebarMissions(in rows: [ControlLogicalMission]) -> [ControlLogicalMission] {
+    func sidebarMissions(in rows: [LogicalMission]) -> [LogicalMission] {
         let projects = focusedProjectRef.map { focused in
             navigationProjectGroups.first { $0.checkouts.contains { $0.ref == focused } }?
                 .checkouts.map(\.ref) ?? [focused]
@@ -93,7 +93,6 @@ extension AppModel {
         hosts.selection = ref?.host == localHost ? nil : ref
         showingArchive = false
         showingInbox = false
-        showingControl = false
         clearProjectSubpage()
         selectedSessionId = nil
         selectedProjectId = nil

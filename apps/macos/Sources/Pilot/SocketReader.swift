@@ -9,7 +9,6 @@ final class SocketReader: @unchecked Sendable {
     private let queue: DispatchQueue
     private let failed: @MainActor (SocketReader) -> Void
     private var batcher: MainBatcher<ServerUpdate?>!
-    private let controlChanged: (@MainActor (SocketReader, ControlHostInvalidation) -> Void)?
     private let lock = NSLock()
     private var cancelled = false
     private var readsPaused = false
@@ -21,7 +20,6 @@ final class SocketReader: @unchecked Sendable {
     init(
         task: URLSessionWebSocketTask, label: String,
         boundedDelivery: Bool = false,
-        controlChanged: (@MainActor (SocketReader, ControlHostInvalidation) -> Void)? = nil,
         deliver: @escaping @MainActor (SocketReader, [ServerUpdate?]) -> Void,
         failed: @escaping @MainActor (SocketReader) -> Void
     ) {
@@ -29,7 +27,6 @@ final class SocketReader: @unchecked Sendable {
         self.boundedDelivery = boundedDelivery
         queue = DispatchQueue(label: label, qos: .userInitiated)
         self.failed = failed
-        self.controlChanged = controlChanged
         batcher = MainBatcher { [weak self] updates in
             guard let self, !self.isCancelled else { return }
             deliver(self, updates)
@@ -81,15 +78,6 @@ final class SocketReader: @unchecked Sendable {
                     }
                     let message = try? ServerUpdate.decode(data)
                     batcher.append(message)
-                    // Opt-in control sockets only. Preserve the unchanged batched chat/stream path.
-                    if let controlChanged, message == nil, data.count <= 16_384,
-                       let change = try? JSONDecoder().decode(ControlHostInvalidation.self, from: data),
-                       change.type == "control-hosts.changed", change.generation > 0 {
-                        batcher.after { [weak self] in
-                            guard let self, !self.isCancelled else { return }
-                            controlChanged(self, change)
-                        }
-                    }
                     if boundedDelivery {
                         batcher.after { [weak self] in
                             guard let self, !self.isCancelled else { return }

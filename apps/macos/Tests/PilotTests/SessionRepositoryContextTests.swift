@@ -17,7 +17,7 @@ import Testing
     var control = SessionSummary(id: "control", title: "Control", cwd: "", createdAt: 1, updatedAt: 1, state: "idle",
                                  mode: .ask, sourceBranch: "main", pinned: true)
     control.control = true
-    #expect(SessionHeaderContext.subtitle(for: control, place: "~") == ControlChatIdentity.scope)
+    #expect(SessionHeaderContext.subtitle(for: control, place: "~") == "Retained history")
 }
 
 @Test @MainActor func changesRepositoryContextListsEveryBranchWithItsPullRequest() throws {

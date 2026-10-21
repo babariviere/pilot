@@ -65,7 +65,7 @@ struct CommandPaletteCatalog {
     /// The on-screen composer's controls (model, thinking, mode, project, branch, workspace, send later), found by
     /// searching. They run the composer's own handlers and never send the draft.
     private func composerEntries() -> [CommandPaletteEntry] {
-        guard !model.isPreviousControlSelected else { return [] }
+        guard !model.isRetainedHistorySelected else { return [] }
         return model.keyboard.composerCommands.map { command in
             CommandPaletteEntry(
                 item: CommandPaletteItem(id: "composer:\(command.id)", kind: .action, title: command.title,
@@ -126,7 +126,7 @@ struct CommandPaletteCatalog {
     /// say so after their title. The open chat is left out of the recent ones: it is already on screen.
     private func chats() -> [CommandPaletteEntry] {
         let client = model.client
-        let sessions = client.activeSessions.filter { !$0.isControl }.sorted { $0.listActivityAt > $1.listActivityAt }
+        let sessions = client.activeSessions.filter { !$0.isRetainedHistory }.sorted { $0.listActivityAt > $1.listActivityAt }
         var recent = 0
         return (sessions + ArchiveFilter.ordered(client.archivedSessions)).map { session in
             let suggested = !session.isArchived && session.id != model.selectedSessionId && recent < Self.recentChats
@@ -146,7 +146,7 @@ struct CommandPaletteCatalog {
 
     private func remoteResources() -> [CommandPaletteEntry] {
         let hosts = model.hosts
-        let chats = hosts.sessions.filter { $0.ref.host != model.localHost && !$0.value.isControl }.map { item in
+        let chats = hosts.sessions.filter { $0.ref.host != model.localHost && !$0.value.isRetainedHistory }.map { item in
             let name = HostViewContext(host: item.ref.host, hosts: hosts).name
             return CommandPaletteEntry(item: CommandPaletteItem(id: "chat:" + item.ref.storageKey, kind: .chat,
                 title: item.value.title, keywords: [name, item.value.branch ?? ""], pullRequestNumbers: item.value.linkedPullRequests.map(\.number)),
@@ -285,7 +285,7 @@ struct CommandPaletteCatalog {
             item: CommandPaletteItem(id: "page:shortcuts", kind: .page, title: "Keyboard shortcuts",
                                      keywords: ["help", "hotkeys", "keys"]),
             icon: .info, shortcut: KeyboardShortcuts.hint, perform: openKeyboardShortcuts))
-        if !model.isPreviousControlSelected, let session = model.selectedSession, InspectorTab.agents.isAvailable(for: session) {
+        if !model.isRetainedHistorySelected, let session = model.selectedSession, InspectorTab.agents.isAvailable(for: session) {
             entries.append(CommandPaletteEntry(
                 item: CommandPaletteItem(id: "page:agents", kind: .page, title: "Agents"),
                 icon: .subagents, suffix: session.title
@@ -336,7 +336,7 @@ struct CommandPaletteCatalog {
     /// What can be done to one chat: retry, stop, open or merge its PRs, pin or unpin, archive. For the open chat
     /// (suggested), the latest PR's row shows ⌘⇧P and the latest open PR's merge row shows ⌘⇧M.
     func chatActions(_ session: SessionSummary, suggested: Bool = false, reference: HostResourceRef? = nil) -> [CommandPaletteEntry] {
-        guard !PreviousControl.isHistory(session, reference: reference, localHost: model.localHost) else { return [] }
+        guard !RetainedConversation.isHistory(session, reference: reference, localHost: model.localHost) else { return [] }
         guard !session.isArchived else { return [] }
         let id = reference?.storageKey ?? session.id
         let model = model

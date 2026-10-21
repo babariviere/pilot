@@ -20,7 +20,7 @@ import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import { PullRequestsDoc } from "./pull-request-provenance.ts";
 import { KernelSession, type KernelSessionHooks } from "./session.ts";
 import { readSessionSnapshot } from "./snapshot.ts";
-import type { ControlPermission } from "./tool-policy.ts";
+import type { ExecutionPermission } from "./tool-policy.ts";
 
 const context = BACKGROUND_CONTEXT;
 const url = (id: number) => `https://github.com/owner/repo/pull/${id}`;
@@ -191,7 +191,7 @@ async function fixture(t: TestContext) {
 	const open = async (
 		hooks: Partial<KernelSessionHooks> = {},
 		workspace = true,
-		controlPermission?: ControlPermission,
+		executionPermission?: ExecutionPermission,
 	) => {
 		const session = await KernelSession.open(
 			{
@@ -202,7 +202,7 @@ async function fixture(t: TestContext) {
 				model: "pilot-pr-test/offline",
 				pilot: {
 					...(workspace ? { workspace: { source: root, base: "origin/main", jj: false } } : {}),
-					...(controlPermission ? { controlPermission } : {}),
+					...(executionPermission ? { executionPermission } : {}),
 				},
 			},
 			{ onWorking: () => {}, ...hooks },
@@ -225,26 +225,12 @@ test("Build delivery works before and during a run without waiting for a legacy 
 	timeout: 20_000,
 }, async (t) => {
 	const f = await fixture(t);
-	const inherited = process.env.PILOT_CONTROL_PERMISSION;
+	const inherited = process.env.PILOT_EXECUTION_PERMISSION;
 	t.after(() => {
-		if (inherited === undefined) delete process.env.PILOT_CONTROL_PERMISSION;
-		else process.env.PILOT_CONTROL_PERMISSION = inherited;
+		if (inherited === undefined) delete process.env.PILOT_EXECUTION_PERMISSION;
+		else process.env.PILOT_EXECUTION_PERMISSION = inherited;
 	});
-	let pending = false;
-	let preparations = 0;
-	const session = await f.open(
-		{
-			prepareControlPermission: async () => {
-				preparations++;
-				return {
-					authorizationId: pending ? "publish-grant" : "build-grant",
-					level: pending ? "publish" : "implement",
-				};
-			},
-		},
-		true,
-		{ authorizationId: "build-grant", level: "implement" },
-	);
+	const session = await f.open({}, true, { authorizationId: "build-grant", level: "implement" });
 	await f.run(session, "before-upgrade", "bash", { command: "git push" });
 	assert.deepEqual(f.calls, ["git push"]);
 	let entered!: () => void;
@@ -276,7 +262,6 @@ test("Build delivery works before and during a run without waiting for a legacy 
 	]);
 	await session.submit("busy", "Verify locally", "followUp");
 	await insideTool;
-	pending = true;
 	await session.submit("queued-publish", "Publish after this run", "followUp");
 	release();
 	await session.conversation.waitForIdle(context);
@@ -285,10 +270,9 @@ test("Build delivery works before and during a run without waiting for a legacy 
 		["git push", "pnpm test", "git push", "gh pr create"],
 		"implement already delivers before any label update; queued runs also deliver",
 	);
-	assert.equal(preparations, 3, "one handshake per fresh run, none during tool rounds");
-	assert.deepEqual(JSON.parse(process.env.PILOT_CONTROL_PERMISSION!), {
-		authorizationId: "publish-grant",
-		level: "publish",
+	assert.deepEqual(JSON.parse(process.env.PILOT_EXECUTION_PERMISSION!), {
+		authorizationId: "build-grant",
+		level: "implement",
 	});
 	await f.adapters.at(-1)!.session.reload();
 	f.adapters.at(-1)!.refreshTools();

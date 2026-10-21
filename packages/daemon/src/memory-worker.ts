@@ -2,7 +2,6 @@ import { closeSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
 import type { MemoryEntry, MemoryRecall } from "@pilot/protocol";
-import { ControlMemoryDisk } from "./control-memory-disk.ts";
 import { DuplicateNote, decode, deviceIdentity, MemoryDisk, RECORD_BYTES } from "./memory-disk.ts";
 import { checkBindingKey } from "./shared-memory-common.ts";
 import { recallReplica, SharedMemoryReplica } from "./shared-memory-replica.ts";
@@ -62,111 +61,10 @@ if (workerData.replicaRecall) {
 	}
 } else {
 	const stores = new Map<string, MemoryDisk>();
-	let control: ControlMemoryDisk | undefined;
 	const replicas = new Map<string, SharedMemoryReplica>();
 	let deviceId: string | undefined;
 	parentPort!.on("message", ({ id, projectId, method, args }) => {
 		try {
-			if (method.startsWith("control.")) {
-				if (method === "control.close") {
-					control?.close();
-					control = undefined;
-					parentPort!.postMessage({ id });
-					return;
-				}
-				control ??= new ControlMemoryDisk(join(workerData.root, "control-chat"));
-				let value: unknown;
-				switch (method) {
-					case "control.authorizationImport":
-						value = control.authorizationImport(args.records);
-						break;
-					case "control.authorizationCreate":
-						value = control.authorizations.create(args.record);
-						break;
-					case "control.authorizationGet":
-						value = control.authorizations.get(args.id);
-						break;
-					case "control.authorizationRevoke":
-						value = control.authorizations.revoke(args.id);
-						break;
-					case "control.revokeWatchAuthorization":
-						value = control.revokeWatchAuthorization(args.watchId, args.reason);
-						break;
-					case "control.auditWatchRemoval":
-						value = control.auditWatchRemoval(args.removal);
-						break;
-					case "control.authorizationPage":
-						value = control.authorizations.page(args.after, args.limit);
-						break;
-					case "control.authorizationAdmit":
-						value = control.authorizationAdmit(args.entry, args.use);
-						break;
-					case "control.authorizationRelease":
-						value = control.authorizationRelease(args.entry);
-						break;
-					case "control.state":
-						value = control.state();
-						break;
-					case "control.append":
-						value = control.append(args.message);
-						break;
-					case "control.view":
-						value = control.view();
-						break;
-					case "control.next":
-						value = control.next();
-						break;
-					case "control.context":
-						value = control.context(args.id, args.n);
-						break;
-					case "control.retry":
-						value = control.retry();
-						break;
-					case "control.auditAppend":
-						value = control.auditAppend(args.entry);
-						break;
-					case "control.auditOperation":
-						value = control.auditOperation(args.operationId);
-						break;
-					case "control.auditPage":
-						value = control.auditPage(args.before, args.limit);
-						break;
-					case "control.turnView":
-						value = control.turnView(args.key);
-						break;
-					case "control.put":
-						value = control.put(args.id, args.n, args.text);
-						break;
-					case "control.fail":
-						value = control.fail(args.id, args.n, args.failure);
-						break;
-					case "control.message":
-						value = control.message(args.id, args.offset);
-						break;
-					case "control.children":
-						value = control.children(args.id, args.n);
-						break;
-					case "control.viewLines":
-						value = control.viewLines();
-						break;
-					case "control.childLines":
-						value = control.childLines(args.id, args.n);
-						break;
-					case "control.messages":
-						value = control.messages(args.before, args.limit, args.q);
-						break;
-					case "control.stats":
-						value = control.stats();
-						break;
-					case "control.date":
-						value = control.date(args.id);
-						break;
-					default:
-						throw new Error("Unknown control memory operation");
-				}
-				parentPort!.postMessage({ id, value });
-				return;
-			}
 			if (method.startsWith("replica.")) {
 				checkBindingKey(projectId);
 				let replica = replicas.get(projectId);

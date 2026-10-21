@@ -9,8 +9,8 @@ private let logicalHome = HostRef(hostId: "local", daemonId: "home", lineageId: 
 private let logicalBox = HostRef(hostId: "box", daemonId: "box", lineageId: "b1")
 
 private func logicalDashboard(replicas: [[String: Any]] = [], tasks: [[String: Any]] = [],
-                              logical: [ControlLogicalMission]? = nil, logicalTotal: Int? = nil,
-                              truncated: Bool = false) throws -> ControlDashboardResponse {
+                              logical: [LogicalMission]? = nil, logicalTotal: Int? = nil,
+                              truncated: Bool = false) throws -> MissionCatalogResponse {
     var object: [String: Any] = ["untrusted": true, "source": "fixture", "projects": [], "chats": [],
         "missions": [], "pullRequests": [], "linear": [], "runningAgents": [], "activeMissions": [],
         "blockers": [], "pendingDecisions": [], "next": ["watches": [], "total": 0],
@@ -21,7 +21,7 @@ private func logicalDashboard(replicas: [[String: Any]] = [], tasks: [[String: A
     if let logicalTotal, var totals = object["totals"] as? [String: Any] {
         totals["logicalMissions"] = logicalTotal; object["totals"] = totals
     }
-    return try JSONDecoder().decode(ControlDashboardResponse.self, from: JSONSerialization.data(withJSONObject: object))
+    return try JSONDecoder().decode(MissionCatalogResponse.self, from: JSONSerialization.data(withJSONObject: object))
 }
 
 private func logicalReplica(_ sequence: Int, title: String = "Synced", complete: Bool = true,
@@ -348,15 +348,15 @@ private struct LogicalProducerFixture: Decodable {
     struct Case: Decodable {
         let name: String
         let definitions: [Mission]
-        let dashboard: ControlDashboardResponse
+        let dashboard: MissionCatalogResponse
         /// Captured compatibility arrays, with only the additive projection fields absent.
-        func legacy() throws -> ControlDashboardResponse {
+        func legacy() throws -> MissionCatalogResponse {
             var value = try JSONDecoder().decode([String: JSONValue].self, from: JSONEncoder().encode(dashboard))
             value["logicalMissions"] = nil
             if case .object(var totals) = value["totals"] {
                 totals["logicalMissions"] = nil; value["totals"] = .object(totals)
             }
-            return try JSONDecoder().decode(ControlDashboardResponse.self, from: JSONEncoder().encode(value))
+            return try JSONDecoder().decode(MissionCatalogResponse.self, from: JSONEncoder().encode(value))
         }
     }
     static func read() throws -> Self {

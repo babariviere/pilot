@@ -23,7 +23,7 @@ import SwiftUI
 enum PilotIcon: String, CaseIterable {
     // MARK: Places and navigation
 
-    case home, inbox, overview, allProjects, project, chatFolder, mission, coordinator, controlChat, artifact, image,
+    case home, inbox, overview, allProjects, project, chatFolder, mission, coordinator, artifact, image,
         settings, archive, restore, search, filter, back, focusProject, inspector
 
     // MARK: Actions
@@ -69,7 +69,6 @@ extension PilotIcon {
         case .chatFolder: "folder"
         case .mission: "map"
         case .coordinator: "safari"
-        case .controlChat: "antenna.radiowaves.left.and.right"
         case .artifact: "rectangle.on.rectangle.angled"
         case .image: "photo"
         case .settings: "gearshape"
@@ -235,7 +234,6 @@ extension PilotIcon {
         case .chatFolder: "A user folder that groups projects in the project picker and on Home, and New Folder. Shares the project folder mark for OS compatibility."
         case .mission: "A mission, everywhere one appears."
         case .coordinator: "A mission's coordinator chat."
-        case .controlChat: "The global control chat: its sidebar row, palette entry, transcript header and window title."
         case .artifact: "An artifact; image artifacts use image."
         case .image: "An image, an image artifact or an attachment."
         case .settings: "Settings for a project or integration."

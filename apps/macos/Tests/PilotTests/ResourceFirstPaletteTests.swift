@@ -59,17 +59,17 @@ private func modelWithControl() -> AppModel {
     let model = modelWithControl()
     let catalog = CommandPaletteCatalog(model: model, openSettings: {}, openKeyboardShortcuts: {})
     let entries = catalog.entries()
-    #expect(!entries.contains { $0.session?.isControl == true })
+    #expect(!entries.contains { $0.session?.isRetainedHistory == true })
     #expect(!entries.contains { $0.item.id == "page:control" || $0.item.id == "page:control-screen" })
     let sections = CommandPalette.results(for: "", items: entries.map(\.item))
     let recent = try #require(sections.first { $0.title == "Recent chats" })
     #expect(recent.items.count == CommandPaletteCatalog.recentChats)
-    #expect(!model.canGo(to: .control))
+    #expect(!GoDestination.allCases.map(\.rawValue).contains("control"))
 }
 
 @Test @MainActor func paletteHasNoControlEntryWithoutTheControlChat() {
     let model = model()
     let catalog = CommandPaletteCatalog(model: model, openSettings: {}, openKeyboardShortcuts: {})
-    #expect(!catalog.entries().contains { $0.icon == .controlChat })
-    #expect(!model.canGo(to: .control))
+    #expect(!catalog.entries().contains { $0.item.id == "page:control" })
+    #expect(!GoDestination.allCases.map(\.rawValue).contains("control"))
 }

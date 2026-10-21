@@ -274,8 +274,7 @@ private func keyEvent(_ characters: String, keyCode: UInt16, modifiers: NSEvent.
     let chat = SessionSummary(id: "a", title: "a", cwd: "/tmp", projectId: "p1", createdAt: 1, updatedAt: 2, state: "idle")
     model.client.loadFixture(projects: [project], sessions: [chat])
     model.selectedSessionId = "a"
-    #expect(!model.canGo(to: .control))
-    model.go(to: .control)
+    #expect(!GoDestination.allCases.map(\.rawValue).contains("control"))
     #expect(model.selectedSessionId == "a")
 
     var control = SessionSummary(id: "ctl", title: "Control", cwd: "", createdAt: 1, updatedAt: 3, state: "idle",
@@ -284,8 +283,7 @@ private func keyEvent(_ characters: String, keyCode: UInt16, modifiers: NSEvent.
     model.client.loadFixture(projects: [project], sessions: [chat, control])
     model.focus(on: "p1")
     #expect(model.sidebarScope == "p1")
-    #expect(!model.canGo(to: .control))
-    model.go(to: .control)
+    #expect(!GoDestination.allCases.map(\.rawValue).contains("control"))
     #expect(model.selectedSessionId != "ctl")
     #expect(model.sidebarScope == "p1")
 }

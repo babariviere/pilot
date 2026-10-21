@@ -1,29 +1,28 @@
 /** Command policy shared by the Harness, nested native calls and child agents. No runtime SDK imports. */
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import type { ControlAuthorizationLevel } from "@pilot/protocol";
 
-export interface ControlPermission {
+export interface ExecutionPermission {
 	authorizationId: string;
-	level: ControlAuthorizationLevel;
+	level: "investigate" | "implement" | "publish" | "merge";
 }
 
 /** Invalid inherited authority must fail closed rather than silently restoring unrestricted Build. */
-export function inheritedControlPermission(value: string | undefined): ControlPermission | undefined {
+export function inheritedExecutionPermission(value: string | undefined): ExecutionPermission | undefined {
 	if (value === undefined) return undefined;
-	const parsed = JSON.parse(value) as ControlPermission;
+	const parsed = JSON.parse(value) as ExecutionPermission;
 	if (
 		!parsed ||
 		typeof parsed.authorizationId !== "string" ||
 		!parsed.authorizationId ||
 		!["investigate", "implement", "publish", "merge"].includes(parsed.level)
 	)
-		throw new Error("Invalid inherited control permission");
+		throw new Error("Invalid inherited execution permission");
 	return { authorizationId: parsed.authorizationId, level: parsed.level };
 }
 
 /** Backup policy gates, not an OS/network sandbox for arbitrary programs run by a trusted Build agent. */
-export function controlPermissionBlock(
-	permission: ControlPermission | undefined,
+export function executionPermissionBlock(
+	permission: ExecutionPermission | undefined,
 	name: string,
 	args: Record<string, unknown>,
 ): string | undefined {
@@ -64,13 +63,13 @@ const INVESTIGATE_TOOLS = new Set([
 	"history_recall",
 ]);
 /** Runs for actual nested tool calls too, including dynamically constructed codemode arguments. */
-export function nativeToolPolicy(permission?: ControlPermission): ExtensionFactory {
+export function nativeToolPolicy(permission?: ExecutionPermission): ExtensionFactory {
 	return (pi) => {
 		pi.on("tool_call", (event) => {
 			const posting = githubPosting([event.toolName, commandArguments(event.toolName, event.input)]);
 			const reason = posting
 				? `Pilot policy: agents do not ${posting} on GitHub. Report it in your final answer instead.`
-				: controlPermissionBlock(permission, event.toolName, event.input);
+				: executionPermissionBlock(permission, event.toolName, event.input);
 			if (reason) return { block: true, reason };
 		});
 	};

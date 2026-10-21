@@ -2,8 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { ToolHooks } from "@earendil-works/pi-durable";
-import { CONTROL_SYSTEM_PROMPT } from "./control-context.ts";
-import { PILOT_ACTIONS } from "./pilot-tool.ts";
 import {
 	coordinatorMutation,
 	githubPosting,
@@ -13,7 +11,7 @@ import {
 	pilotPrompt,
 	withPilotPolicy,
 } from "./policy.ts";
-import { inheritedControlPermission } from "./tool-policy.ts";
+import { inheritedExecutionPermission } from "./tool-policy.ts";
 
 const mission: MissionContext = {
 	id: "m1",
@@ -25,21 +23,9 @@ const mission: MissionContext = {
 	decisions: ["IDs are opaque strings"],
 };
 
-test("Control instructions include Build PR delivery and never request another publishing approval", () => {
-	assert.match(CONTROL_SYSTEM_PROMPT, /task-branch push and PR creation need no separate publishing approval/);
-	assert.match(CONTROL_SYSTEM_PROMPT, /Ordinary, delegated and resumed Build chats/);
-	assert.match(CONTROL_SYSTEM_PROMPT, /Ask\/investigate, Diagnostics and Control remain read-only/);
-	assert.match(CONTROL_SYSTEM_PROMPT, /Merges require separate user confirmation/);
-	assert.doesNotMatch(
-		CONTROL_SYSTEM_PROMPT,
-		/Implement is local only|publish is separate|Only the app's Allow|upgrade_permission/,
-	);
-	assert.ok(!(PILOT_ACTIONS as readonly string[]).includes("upgrade_permission"));
-});
-
 test("Build delivery is allowed through shell, jobs and nested tools while read-only and merge gates remain", async () => {
 	for (const level of ["investigate", "implement", "publish", "merge"] as const) {
-		const extension = withPilotPolicy({ name: "test" }, { controlPermission: { authorizationId: "grant", level } });
+		const extension = withPilotPolicy({ name: "test" }, { executionPermission: { authorizationId: "grant", level } });
 		const before = (extension.hooks![0]!.handlers as Pick<ToolHooks, "beforeTool">).beforeTool;
 		const check = (name: string, args: Record<string, string>) =>
 			before(
@@ -112,7 +98,7 @@ test("read-only prompts suppress delivery while ordinary and inherited Build inc
 			const extension = withPilotPolicy(
 				{ name: "test" },
 				{
-					...(level ? { controlPermission: { authorizationId: "grant", level } } : {}),
+					...(level ? { executionPermission: { authorizationId: "grant", level } } : {}),
 					requirePullRequest,
 					workspace: { source: "/source", base: "main", jj: true },
 				},
@@ -138,14 +124,14 @@ test("read-only prompts suppress delivery while ordinary and inherited Build inc
 });
 
 test("children parse inherited authority fail-closed", () => {
-	assert.equal(inheritedControlPermission(undefined), undefined);
+	assert.equal(inheritedExecutionPermission(undefined), undefined);
 	for (const level of ["investigate", "implement", "publish", "merge"] as const)
-		assert.deepEqual(inheritedControlPermission(JSON.stringify({ authorizationId: "grant", level })), {
+		assert.deepEqual(inheritedExecutionPermission(JSON.stringify({ authorizationId: "grant", level })), {
 			authorizationId: "grant",
 			level,
 		});
 	for (const value of ["{", "null", "{}", '{"authorizationId":"grant","level":"all"}'])
-		assert.throws(() => inheritedControlPermission(value));
+		assert.throws(() => inheritedExecutionPermission(value));
 });
 
 test("ticket prompt scopes bounded links as untrusted context and distinguishes explicit contributions", () => {

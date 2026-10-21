@@ -20,7 +20,6 @@ export type * from "./github-import.ts";
 export type * from "./github-setup.ts";
 export type * from "./mcp-setup.ts";
 export type * from "./model-scope.ts";
-export type * from "./permission-upgrade.ts";
 export type * from "./refresh-health.ts";
 
 /** Lifecycle as seen by the daemon. "parked" means no worker is running; the session resumes on demand. */
@@ -273,8 +272,6 @@ export interface UpdatePreparation {
 }
 
 export interface SessionSummary {
-	permissionUpgradeRequest?: import("./permission-upgrade.ts").PermissionUpgradeRequest;
-	controlStart?: import("./control.ts").ControlStartBudget;
 	/** The one project-less, pinned orchestration chat. */
 	control?: boolean;
 	/** On-demand read-only specialist. Target history still requires a separate explicit grant. */
@@ -1800,7 +1797,7 @@ export type ClientMessage =
 /** Daemon to client, over /api/ws and the dedicated sockets below (see their message types). */
 export type ServerMessage =
 	| { type: "diagnostics.read"; dispatch: import("./diagnostic-context.ts").DiagnosticReadDispatch }
-	| import("./control.ts").ControlMessage
+	| { type: "mission-catalog.changed" }
 	| { type: "shared-contexts.changed" }
 	| { type: "power"; power: import("./power.ts").PowerStatus }
 	| { type: "mcp"; mcp: import("./mcp.ts").McpStatus }
@@ -1873,137 +1870,6 @@ export type TerminalSocketMessage =
 export type SubagentServerMessage = Extract<ServerMessage, { type: "subagent.events" | "error" }>;
 
 export const DEFAULT_PORT = 4319;
-export type {
-	CancelWatchResponse,
-	ChangeModelResponse,
-	ControlAcceptanceProof,
-	ControlArchiveApproval,
-	ControlArchivedWatch,
-	ControlArchivedWatchesResponse,
-	ControlArchiveHistoryPage,
-	ControlArchiveInfo,
-	ControlArchiveLookupResponse,
-	ControlArchiveOperationPayload,
-	ControlArchiveRead,
-	ControlArchiveRequest,
-	ControlArchiveResponse,
-	ControlArchiveResult,
-	ControlAuditEntry,
-	ControlAuditResponse,
-	ControlAuthorization,
-	ControlAuthorizationLevel,
-	ControlAuthorizationLimits,
-	ControlAuthorizationNeeded,
-	ControlAuthorizationsResponse,
-	ControlBudgetReservation,
-	ControlChatResponse,
-	ControlCourierAuthentication,
-	ControlCourierCapability,
-	ControlCourierCapabilityRefreshRequest,
-	ControlCourierRequestProof,
-	ControlDaemonRole,
-	ControlDashboardAgent,
-	ControlDashboardBlocker,
-	ControlDashboardChat,
-	ControlDashboardDecision,
-	ControlDashboardMission,
-	ControlDashboardReplicaMission,
-	ControlDashboardResponse,
-	ControlDashboardSharedTask,
-	ControlDelegationFence,
-	ControlDurableOperation,
-	ControlEnrollmentPreviewRequest,
-	ControlEnrollmentPreviewResponse,
-	ControlEventFloor,
-	ControlEventImportCursor,
-	ControlFollowUp,
-	ControlFreezeIntent,
-	ControlHomeEnrollment,
-	ControlHomeEnrollmentRequest,
-	ControlHostApprovalDecision,
-	ControlHostApprovalInput,
-	ControlHostApprovalRequest,
-	ControlHostAvailability,
-	ControlHostConfiguration,
-	ControlHostCutover,
-	ControlHostErrorResponse,
-	ControlHostInvalidation,
-	ControlHostLifecycleResponse,
-	ControlHostObservation,
-	ControlHostRequest,
-	ControlHostStateResponse,
-	ControlHostSyncState,
-	ControlLogicalMission,
-	ControlMemoryKind,
-	ControlMemoryLine,
-	ControlMemoryLogEntry,
-	ControlMemoryMessagePage,
-	ControlMemoryMessagesResponse,
-	ControlMemoryNodeResponse,
-	ControlMemoryStats,
-	ControlMemoryViewResponse,
-	ControlMessage,
-	ControlMissionProvenance,
-	ControlMutationResult,
-	ControlNativeRequestProof,
-	ControlOperationAcknowledgment,
-	ControlOperationAuthority,
-	ControlOperationExchangeRequest,
-	ControlOperationExchangeResponse,
-	ControlOperationKind,
-	ControlOperationLifecycle,
-	ControlOperationPayloads,
-	ControlOperationResult,
-	ControlPairingAcknowledgment,
-	ControlPairingState,
-	ControlPilotAction,
-	ControlReadAction,
-	ControlReadExchangeRequest,
-	ControlReadExchangeResponse,
-	ControlReadImportRequest,
-	ControlReadImportResponse,
-	ControlReadSelectors,
-	ControlRealCourierProof,
-	ControlReceiptAdoptionResponse,
-	ControlRemoteEvent,
-	ControlRemoteEventAcknowledgment,
-	ControlRemoteEventCheckpoint,
-	ControlRemoteEventPage,
-	ControlRemoteEventQuery,
-	ControlRemoteReadOutcome,
-	ControlRemoteReadRequest,
-	ControlRemoteReadResponse,
-	ControlRemoteStatusImportRequest,
-	ControlRemoteStatusImportResponse,
-	ControlRemoteStatusPage,
-	ControlRemoteStatusQuery,
-	ControlRemoteStatusSnapshot,
-	ControlRevokeOperationPayload,
-	ControlRoleAcknowledgment,
-	ControlRoleBootstrapRequest,
-	ControlRoleBootstrapResult,
-	ControlRoleBootstrapStatus,
-	ControlRoleFence,
-	ControlRunOperationPayload,
-	ControlSendOperationPayload,
-	ControlSpend,
-	ControlStagedRole,
-	ControlStartBudget,
-	ControlStartOperationPayload,
-	ControlStartTarget,
-	ControlUnpairRequest,
-	ControlUnpairResponse,
-	ControlUntrustedResultTail,
-	ControlUnwatchOperationPayload,
-	ControlUserMessageRef,
-	ControlWatchOperationPayload,
-	RevokeControlAuthorizationResponse,
-	Watch,
-	WatchEvent,
-	WatchesResponse,
-	WatchInput,
-	WatchTarget,
-} from "./control.ts";
 export type * from "./environment.ts";
 export * from "./feature-events.ts";
 export * from "./feature-usage.ts";
@@ -2013,6 +1879,7 @@ export type * from "./inbox.ts";
 export type { MachineInformation } from "./machine.ts";
 export type * from "./mcp.ts";
 export type * from "./memory.ts";
+export type * from "./mission-catalog.ts";
 export * from "./operations.ts";
 export type { PowerSettings, PowerStatus } from "./power.ts";
 export type * from "./repositories.ts";

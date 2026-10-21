@@ -6,11 +6,11 @@ extension AppModel {
     }
 
     /// Canonical mission identity is independent of chat/task execution and the selected project.
-    func openLogicalMission(_ mission: ControlLogicalMission, tab: MissionTab? = nil) {
+    func openLogicalMission(_ mission: LogicalMission, tab: MissionTab? = nil) {
         openMission(missionRegistry.destination(mission, model: self).storageKey, tab: tab)
     }
 
-    var selectedLogicalMission: ControlLogicalMission? {
+    var selectedLogicalMission: LogicalMission? {
         guard let id = selectedMissionId, let reference = resourceRef(id, kind: .mission) else { return nil }
         return missionRegistry.row(for: reference)
     }

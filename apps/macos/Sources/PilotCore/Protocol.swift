@@ -61,8 +61,6 @@ public enum WorkspaceStorage: String, Codable, Sendable {
 
 /// Mirrors packages/protocol. Keep both sides in sync.
 public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendable {
-    public var permissionUpgradeRequest: PermissionUpgradeRequest? = nil
-    public var controlStart: ControlStartBudget? = nil
     /// The single project-less control chat. Its tools, not a workspace, perform orchestration.
     public var control: Bool? = nil
     /// On-demand operational specialist with a runtime-enforced read-only tool profile.
@@ -207,10 +205,10 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     }
     public var isArchived: Bool { archivedAt != nil }
     public var isPinned: Bool { pinned ?? false }
-    /// The one global control chat (`ControlChatIdentity`). It lists apart from other chats and stays pinned.
-    public var isControl: Bool { control ?? false }
-    /// pilotd keeps the control chat pinned and rejects unpinning it.
-    public var canChangePin: Bool { !isControl }
+    /// Legacy metadata flag. Retained conversations are read-only and never execute.
+    public var isRetainedHistory: Bool { control ?? false }
+    /// Retained histories cannot be pinned as live work.
+    public var canChangePin: Bool { !isRetainedHistory }
     public var isMissionCoordinator: Bool { missionCoordinator ?? isActiveMissionCoordinator }
     public var supportsChanges: Bool { !isAsk && !isMissionCoordinator }
     public var isActiveMissionCoordinator: Bool { activeMissionCoordinator ?? false }
@@ -224,8 +222,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     }
     public var hasUnpublishedWork: Bool { unpublishedWork ?? false }
     /// Visible state eligibility. The daemon also rejects un-stopped durable work after a failure.
-    /// The control chat is never archived, so it can never be deleted either.
-    public var canArchive: Bool { !isControl && !isArchived && !isWorking }
+    /// Retained histories cannot be restored as executable chats.
+    public var canArchive: Bool { !isRetainedHistory && !isArchived && !isWorking }
 
     public init(
         id: String, title: String, cwd: String, projectId: String? = nil, branch: String? = nil, createdAt: Double,

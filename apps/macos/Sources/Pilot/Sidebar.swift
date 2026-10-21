@@ -159,7 +159,7 @@ struct SessionSidebar: View {
         }.sorted { $0.value.listActivityAt > $1.value.listActivityAt }
         // Retired Control conversations are available through history, never live chat groups.
         ForEach(["Pinned", "Needs you", "Ready to merge", "Working", "Recent", "Archived"], id: \.self) { title in
-            let rows = values.filter { !$0.value.isControl && group($0) == title }
+            let rows = values.filter { !$0.value.isRetainedHistory && group($0) == title }
             if !rows.isEmpty {
                 Section {
                     ForEach(rows) { item in
@@ -222,7 +222,7 @@ struct SessionSidebar: View {
     /// Home is selected when the detail shows it, in any scope.
     private var homeSelected: Bool {
         model.selectedSessionId == nil && model.selectedMissionId == nil && model.selectedProjectId == nil
-            && !model.showingArchive && !model.showingInbox && !model.showingControl
+            && !model.showingArchive && !model.showingInbox
     }
 
     private func overviewSelected(_ focused: Project?) -> Bool {
@@ -239,7 +239,7 @@ struct SessionSidebar: View {
     }
 
     private var inboxSelected: Bool {
-        model.showingInbox && !model.showingControl && model.selectedSessionId == nil && model.selectedMissionId == nil
+        model.showingInbox && model.selectedSessionId == nil && model.selectedMissionId == nil
             && model.selectedProjectId == nil
     }
 
@@ -519,8 +519,8 @@ struct SessionRow: View {
             draft: draft)
         VStack(alignment: .leading, spacing: 3) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                if session.isControl {
-                    PilotSymbol(PilotIcon.controlChat)
+                if session.isRetainedHistory {
+                    PilotSymbol(PilotIcon.archive)
                         .foregroundStyle(Theme.foreground)
                         .accessibilityHidden(true)
                 }
@@ -533,7 +533,7 @@ struct SessionRow: View {
                 RemoteChatBadge(context: owner.map { HostViewContext(host: $0.host, hosts: model.hosts) })
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     // The control chat is always pinned and always first, so the mark would say nothing.
-                    if session.isPinned, !session.isControl {
+                    if session.isPinned, !session.isRetainedHistory {
                         PilotSymbol(PilotIcon.pin, filled: true)
                             .foregroundStyle(Theme.foreground)
                             .help("Pinned chat. Automatic archiving is disabled until unpinned.")

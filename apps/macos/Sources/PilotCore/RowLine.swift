@@ -155,8 +155,8 @@ public enum RowLineSegments {
     ) -> [RowLineSegment] {
         var segments: [RowLineSegment] = []
         // The control chat spans every project and has no workspace: its scope, then its reason, nothing else.
-        if let session, session.isControl {
-            segments.append(RowLineSegment(.text(ControlChatIdentity.scope)))
+        if let session, session.isRetainedHistory {
+            segments.append(RowLineSegment(.text("Retained history")))
             if let reason, !reason.isEmpty { segments.append(RowLineSegment(.reason(reason))) }
             return segments
         }

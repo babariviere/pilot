@@ -7,7 +7,6 @@
  */
 import { stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import type { Tool } from "@earendil-works/pi-ai";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import {
 	CONFIG_DIR_NAME,
@@ -27,9 +26,6 @@ import type {
 } from "@pilot/protocol";
 import type { BackgroundAttribution, BackgroundCapture, CompletionRuntime } from "./background-usage.ts";
 import { TITLE_CONTEXT_LIMIT } from "./chat-title.ts";
-import { compactControlNode } from "./control-compaction.ts";
-import type { ControlJob } from "./control-memory-disk.ts";
-import type { ControlLine } from "./control-view.ts";
 import { ServiceUnavailable } from "./errors.ts";
 import { compactMemory, type MemoryCompactionObserver } from "./memory-compaction.ts";
 import { modelScopeHash, modelScopeUpdate, readModelScopeValue, writeModelScope } from "./model-scope.ts";
@@ -252,21 +248,6 @@ export class ModelCatalog {
 		return compactMemory(this.background(runtime, "memory", attribution), model, prompt, signal, observe);
 	}
 	/** Same authenticated scope and provider as the turn; never fall back across providers. */
-	async compactControl(
-		cwd: string,
-		provider: string,
-		tools: Tool[],
-		job: ControlJob,
-		lines: ControlLine[],
-		signal: AbortSignal,
-	): Promise<string> {
-		const runtime = await this.getRuntime();
-		const { models } = await this.scoped(cwd, signal);
-		const model = cheapestTitleModel(models.map(({ model }) => model).filter((model) => model.provider === provider));
-		signal.throwIfAborted();
-		if (!model) throw new Error(`No authenticated control compaction model in scope for ${provider}`);
-		return compactControlNode(this.background(runtime, "compaction"), model, tools, job, lines, signal);
-	}
 
 	/** Scope and default follow pi's settings for `cwd` (global plus project settings). */
 	list(cwd: string): Promise<ModelList> {

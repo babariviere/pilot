@@ -14,7 +14,6 @@ the daemon, tool handlers, project trust and OS sandbox enforce the actual opera
 - **Mission member**: a Build or Ask chat with a mission overlay, not a separate execution profile.
 - **Mission coordinator**: a top-level chat with a daemon-managed read-only main view and writable scratch.
   It has the Build extension runtime, not Ask's tool allowlist.
-- **Control**: project-less global orchestration chat, with its own restricted runtime.
 - **Subagent**: a named persistent child conversation, not a mission member chat.
 - **Restricted reviewer**: synthetic qualification runtime only. Production entry points remain disabled.
 - **Background compaction/completion**: host-owned model calls, not general-purpose agent sessions.
@@ -27,30 +26,28 @@ Local versus devbox placement does not define a new role or grant extra permissi
 **Conditional** means installed/selected/configured or enabled only for the stated context.
 **No** means absent from the role's shipped profile, not a promise about arbitrary user extensions in Build.
 
-| Tool/capability | Build | Ask | Mission coordinator | Control | Subagent | Restricted reviewer |
-| --- | --- | --- | --- | --- | --- | --- |
-| `read` | Available | Source-bounded replacement | Available, source read-only | No | Available | No |
-| `find`, `grep`, `ls` | Conditional SDK selection | Source-bounded replacements | Conditional SDK selection | No | Conditional SDK selection | No |
-| `bash`, `powershell` | SDK selection; bash default | No | Read-only commands and scratch only | No | SDK selection and inherited sandbox | No |
-| `edit`, `write`, `applyPatch` | Available/selected; model-specific edit policy | No | Scratch only, no source writes | No | Available/selected under sandbox | No |
-| `codemode` | Available/configurable | Only directly exposed execution entry | Available/configurable | Available | Available/configurable | No |
-| `web` | Bundled | Bundled definition, when available | Bundled | No | Bundled | No |
-| `browser` | Bundled | No | Bundled | No | Bundled | No |
-| `jobs` | Bundled | No | Bundled, subject to command restrictions | No | No shipped jobs extension | No |
-| `subagent` | Bundled | No | Bundled; no authority to bypass coordinator restrictions | No | No shipped subagent extension | No |
-| `todo` | Chat-owned durable list | No | Chat-owned durable list | No | Parent's shared durable list | No |
-| `artifact` | Session-local | Session-local, restricted inputs/previews | Session-local | No | Not injected by Pilot's child profile | No |
-| `memory` | Conditional project memory | No | Conditional project memory | Cross-project, explicit project ID | Not injected by Pilot | No |
-| `mission` | When a mission member | When a mission member | Coordinator actions | No (uses `pilot`) | Not injected by Pilot | No |
-| `ask_user` | Available | Available | Available | Available | Not injected by Pilot | No |
-| `db` | Configured project databases | No | Configured project databases | No | Not injected by Pilot | No |
-| `slack_status` | Slack-linked triage chat only | No | Only if Slack-linked | No | Not injected by Pilot | No |
-| `history_recall` | This chat's retained history | No | This chat's retained history | No (uses `history`) | Not injected by Pilot | No |
-| `history` | No | No | No | Available | No | No |
-| `pilot` | No | No | No | Available | No | No |
-| `evidence` | No | No | No | No | No | Only tool |
-| MCP, personal/project extension tools | Conditional on settings/trust/exposure | No | Conditional on settings/trust/exposure | No | Conditional on child settings/trust | No |
-| Tool discovery | SDK tool-search/codemode discovery | Fixed codemode registry only | Same as Build | Fixed codemode registry only | SDK tool-search/codemode discovery | No |
+| Tool/capability | Build | Ask | Mission coordinator | Subagent | Restricted reviewer |
+| --- | --- | --- | --- | --- | --- |
+| `read` | Available | Source-bounded replacement | Available, source read-only | Available | No |
+| `find`, `grep`, `ls` | Conditional SDK selection | Source-bounded replacements | Conditional SDK selection | Conditional SDK selection | No |
+| `bash`, `powershell` | SDK selection; bash default | No | Read-only commands and scratch only | SDK selection and inherited sandbox | No |
+| `edit`, `write`, `applyPatch` | Available/selected; model-specific edit policy | No | Scratch only, no source writes | Available/selected under sandbox | No |
+| `codemode` | Available/configurable | Only directly exposed execution entry | Available/configurable | Available/configurable | No |
+| `web` | Bundled | Bundled definition, when available | Bundled | Bundled | No |
+| `browser` | Bundled | No | Bundled | Bundled | No |
+| `jobs` | Bundled | No | Bundled, subject to command restrictions | No shipped jobs extension | No |
+| `subagent` | Bundled | No | Bundled; no authority to bypass coordinator restrictions | No shipped subagent extension | No |
+| `todo` | Chat-owned durable list | No | Chat-owned durable list | Parent's shared durable list | No |
+| `artifact` | Session-local | Session-local, restricted inputs/previews | Session-local | Not injected by Pilot's child profile | No |
+| `memory` | Conditional project memory | No | Conditional project memory | Not injected by Pilot | No |
+| `mission` | When a mission member | When a mission member | Coordinator actions | Not injected by Pilot | No |
+| `ask_user` | Available | Available | Available | Not injected by Pilot | No |
+| `db` | Configured project databases | No | Configured project databases | Not injected by Pilot | No |
+| `slack_status` | Slack-linked triage chat only | No | Only if Slack-linked | Not injected by Pilot | No |
+| `history_recall` | This chat's retained history | No | This chat's retained history | Not injected by Pilot | No |
+| `evidence` | No | No | No | No | Only tool |
+| MCP, personal/project extension tools | Conditional on settings/trust/exposure | No | Conditional on settings/trust/exposure | Conditional on child settings/trust | No |
+| Tool discovery | SDK tool-search/codemode discovery | Fixed codemode registry only | Same as Build | SDK tool-search/codemode discovery | No |
 
 The SDK's unmodified startup defaults are `read`, `bash`, `edit`, `write`; other SDK
 definitions include `powershell`, `find`, `grep`, `ls`. Settings can change selection.
@@ -60,8 +57,7 @@ The bundled apply-patch extension can suppress `edit`/`write` for OpenAI models 
 Codemode exposure is not a permission boundary. In Build, modes and listing budgets can hide direct
 declarations while preserving nested calls. Project memory remains directly declared even if a
 codemode listing budget omits it. Ask forces codemode-only mode with its model helpers disabled;
-its allowlist also guards nested calls. Control uses that restricted codemode setup; its supplied
-`memory` tool is also kept directly declared. Neither profile loads personal/project executable extensions.
+its allowlist also guards nested calls. Ask loads no personal/project executable extensions.
 Codemode's `searchTools`, `describeTool`, `describeNamespace` and registry helpers are script-runtime
 APIs, not extra permissions or independent role tools. Configured MCP tool names cannot be exhaustively
 listed here because they depend on the user's servers, trust decisions and exposure settings.
@@ -70,10 +66,8 @@ listed here because they depend on the user's servers, trust decisions and expos
 
 | Tool | Actions / operation | Boundary |
 | --- | --- | --- |
-| `memory` | `note`, `recall`, `zoom`; Control also `wake` | Ordinary chats use their implicit project. Control requires a registered `projectId` on every action. Notes bind origin to the supervised chat and retain audit identity; notes containing credentials are refused before reaching pilotd. Recall takes a regex or query words (ranked within pilotd's bounded newest matches, replaced notes last). Notes never grant permissions. No forget action. |
-| `history` | `zoom`, `date` | Control's own chat log only. Zoom requires `id` and aligned `n`; `n=1` supports paging. Live caller-role checks remain in pilotd. |
+| `memory` | `note`, `recall`, `zoom` | Chats use their implicit project. Notes bind origin to the supervised chat and retain audit identity; notes containing credentials are refused before reaching pilotd. Recall takes a regex or query words (ranked within pilotd's bounded newest matches, replaced notes last). Notes never grant permissions. No forget action. |
 | `history_recall` | `search` (`relevance` or `recent`), `read` | Ordinary chats only, over the fork-aware history of the chat's own conversation in its own session storage, including entries compacted out of context. No session, project or host argument exists. Bounded scans with continuations, redacted and neutralized quotes linked to entry IDs, labeled untrusted. Quotes never grant permissions or answer questions. |
-| `pilot` | `status`, `read`, `start`, `send`, `mission_create`, `mission_attach` | Control only. Mission creation/attachment require the corresponding user authorization/acceptance, not quoted text or a notice. Writes are audited. |
 | `todo` | `list`, `listAll`, `get`, `create`, `update`, `append`, `delete`, `claim`, `release` | One durable list shared by a parent and its subagents, with actor-aware claims. Not repository `.pi/todos` files. |
 | `artifact` | `create`, `update`, `get`, `list`, optional `preview` | Session-local offline documents, plus authorized read-only linked references. Ask images must be inline data, not arbitrary local file paths. Preview depends on installed renderers. |
 | `db` | `access`, `query` | Configured project/environment/mode. Access may require a structured app approval; typed messages never grant access. The kernel never receives connection URLs. |
@@ -115,8 +109,7 @@ It does not install Pilot's top-level `memory`, `mission`, `db`, `artifact`, `as
 `slack_status`, `history` or `pilot` tools. Parent tool availability is not an inheritance contract.
 The shipped child profile does not load jobs, further-subagent or usage-poller extensions.
 
-Control compactions share the control prompt and tool declarations but use `toolChoice: "none"`
-and reject tool-call responses. Project-memory compaction has only its internal
+Project-memory compaction has only its internal
 `submit_summary` schema, not agent capabilities. Other host-owned structured completions are not
 Build sessions and do not inherit Build tools. Synthetic review is not enabled by documenting it.
 
@@ -128,7 +121,7 @@ Build sessions and do not inherit Build tools. Synthetic review is not enabled b
 - [Pilot policy](../packages/kernel/src/policy.ts), [mission schemas](../packages/kernel/src/mission-tools.ts),
   [daemon mission checks](../packages/daemon/src/mission-service.ts).
 - [Child profile](../packages/kernel/src/child-profile.ts), [review boundary](../packages/kernel/src/review-boundary.ts).
-- [Control internals](control-chat.md), [disabled review foundation](critical-review-foundation.md).
+- [Disabled review foundation](critical-review-foundation.md).
 
 GitHub posting restrictions in Pilot's top-level Build/Ask policy are separate from tool presence:
 comments, reviews, replies, merges and closes are blocked. Database approvals, role changes and

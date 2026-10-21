@@ -15,7 +15,6 @@ export interface DaemonHello {
 	arch: string;
 	capabilities: DaemonCapabilities;
 	/** Contract-only; populated only by a future verified cross-host Control implementation. */
-	controlHost?: import("./control.ts").ControlHostConfiguration;
 }
 
 /** Availability on this host, not permissions granted by a client or lifecycle control for another host. */
@@ -31,8 +30,6 @@ export interface DaemonCapabilities {
 	workspaceTerminalProtocol?: 2;
 	/** Journal-backed detached Linux updates with startup/admission fencing. */
 	runtimeUpdates?: 1;
-	/** Cross-host Control contract version, independent of the general daemon protocol. */
-	controlHosts?: 1;
 	/** Project environment setup (docs/environment-setup.md). Absent on older runtimes and while the feature is off. */
 	environmentSetup?: 1;
 }

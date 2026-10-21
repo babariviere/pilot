@@ -233,12 +233,8 @@ export function runKernelWorker(): void {
 		});
 	const callMission: MissionCall = (action, args) =>
 		callDaemon<JsonValue>((callId) => ({ type: "mission.call", callId, action, args }));
-	const callPilot: import("./pilot-tool.ts").PilotCall = (action, args, operationId) =>
-		callDaemon<JsonValue>((callId) => ({ type: "pilot.call", callId, operationId, action, args }));
 	const callMemory: import("./memory-tools.ts").MemoryCall = (action, args, operationId) =>
 		callDaemon<JsonValue>((callId) => ({ type: "memory.call", callId, operationId, action, args }));
-	const callControl: import("./control-turn.ts").ControlCall = (action, args) =>
-		callDaemon<JsonValue>((callId) => ({ type: "control.call", callId, action, args }));
 	const callDatabase: DatabaseCall = (action, args) =>
 		callDaemon<JsonValue>((callId) => ({ type: "database.call", callId, action, args }));
 	const callSlackStatus: SlackStatusCall = (args) =>
@@ -424,10 +420,6 @@ export function runKernelWorker(): void {
 		if (
 			command.type === "mission.result" ||
 			command.type === "memory.result" ||
-			command.type === "control.result" ||
-			command.type === "pilot.result" ||
-			command.type === "watch.run.result" ||
-			command.type === "control.permission.result" ||
 			command.type === "database.result" ||
 			command.type === "slack.result" ||
 			command.type === "diagnostics.result" ||
@@ -503,22 +495,13 @@ export function runKernelWorker(): void {
 					process.env.PILOT_CONNECTIVITY_POLICY = command.spec.connectivityPolicy;
 				else delete process.env.PILOT_CONNECTIVITY_POLICY;
 				// Bundled children inherit the same immutable authority ceiling, never a prompt-supplied level.
-				if (command.spec.pilot?.controlPermission)
-					process.env.PILOT_CONTROL_PERMISSION = JSON.stringify(command.spec.pilot.controlPermission);
-				else delete process.env.PILOT_CONTROL_PERMISSION;
+				if (command.spec.pilot?.executionPermission)
+					process.env.PILOT_EXECUTION_PERMISSION = JSON.stringify(command.spec.pilot.executionPermission);
+				else delete process.env.PILOT_EXECUTION_PERMISSION;
 				const opened = await KernelSession.open(command.spec, {
-					prepareControlPermission: () => callDaemon((callId) => ({ type: "control.permission.prepare", callId })),
 					onSystemMessageState: (event) => {
 						void send({ type: "systemMessageState", event });
 					},
-					onRunAdmitted: (controlCaused, requestIds, recoveredOnly) =>
-						callDaemon<void>((callId) => ({
-							type: "watch.run",
-							callId,
-							controlCaused,
-							requestIds,
-							recoveredOnly,
-						})),
 					onWorking: (working, completion, execution) =>
 						notify({
 							type: "working",
@@ -546,8 +529,6 @@ export function runKernelWorker(): void {
 					onSubagentsChanged: (subagents) => notify({ type: "subagents", subagents }),
 					callMission,
 					callMemory,
-					callControl,
-					callPilot,
 					callDatabase,
 					callSlackStatus,
 					callDiagnostics,

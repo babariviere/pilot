@@ -66,10 +66,6 @@ import { boundedSender } from "./backpressure.ts";
 import { RepositoryChanges } from "./changes.ts";
 import { ChatStreams } from "./chat-streams.ts";
 import type { DaemonConfig } from "./config.ts";
-import type { ControlExecutor } from "./control-executor.ts";
-import { controlBody, controlHeaders, controlHostRoute, controlJSON } from "./control-host-http.ts";
-import { ControlHostError } from "./control-host-policy.ts";
-import type { ControlHosts } from "./control-hosts.ts";
 import { DatabaseSettingsError } from "./databases.ts";
 import { awaitDiagnosticRead, diagnosticContextResponse } from "./diagnostic-context.ts";
 import { EnvironmentApprovalRequired } from "./environment-profile.ts";
@@ -80,6 +76,7 @@ import type { GitHubSetupService } from "./github-setup.ts";
 import { MachineInformationReader } from "./machine.ts";
 import { McpSetupError, McpSetupStore } from "./mcp-setup.ts";
 import { type McpStatusService, SignInUnavailable } from "./mcp-status.ts";
+import { buildMissionCatalog, type MissionCatalogSources } from "./mission-catalog.ts";
 import type { MissionService } from "./mission-service.ts";
 import type { MissionStore } from "./missions.ts";
 import { ModelScopeConflictError, ModelScopeSettingsError, modelScopeUpdate } from "./model-scope.ts";
@@ -318,11 +315,11 @@ export function createDaemonServer(
 	setup?: SetupService,
 	sharing?: import("./shared-context.ts").SharedContextService,
 	maintenance?: RuntimeMaintenance,
-	watches?: import("./watch-service.ts").WatchService,
+	_reserved?: undefined,
 	telemetry?: TelemetrySettingsService,
 	githubSetup?: GitHubSetupService,
 	githubImport?: GitHubImportService,
-	control?: { hosts: ControlHosts; executor?: ControlExecutor },
+	catalog?: MissionCatalogSources,
 	environment?: import("./environment.ts").EnvironmentService,
 ): Server & { runtimeResources: RuntimeResources } {
 	sessions.setWorkspaceProcessGuard((id) => terminals.isRunning(id));
@@ -402,6 +399,17 @@ export function createDaemonServer(
 		}
 		return { ...response(null, 0, false), status: "unavailable", reason: "unsupported" };
 	};
+	const catalogMissions = new Map((missions?.store.list() ?? []).map((mission) => [mission.id, mission]));
+	let catalogGroups = sharing && missions ? missions.store.catalogSharedContext(sharing.host) : [];
+	const catalogSources =
+		catalog ??
+		(hello?.lineageId
+			? {
+					host: { hostId: "daemon", daemonId: hello.daemonId, lineageId: hello.lineageId },
+					missions: () => [...catalogMissions.values()],
+					sharedContext: () => catalogGroups,
+				}
+			: undefined);
 	const machine = new MachineInformationReader(_config.home, hello?.daemonVersion ?? "unknown");
 	const reviews = new ReviewStore(_config.home);
 	const mcpSetup = new McpSetupStore(_config.agentDir);
@@ -461,10 +469,6 @@ export function createDaemonServer(
 		}
 	};
 	const admitOperationHeld = async (op: DurableOperation): Promise<unknown> => {
-		if (op.kind.startsWith("control.")) {
-			if (!control?.executor) throw new OperationRejected("Control has been retired");
-			return control.executor.handle(op);
-		}
 		if (op.kind.startsWith("share-")) {
 			if (!sharing) throw new OperationRejected("Shared context unavailable");
 			return sharing.handle(op);
@@ -535,7 +539,6 @@ export function createDaemonServer(
 		const url = new URL(req.url ?? "/", "http://localhost");
 		const parts = url.pathname.split("/").filter(Boolean);
 		if (parts[0] !== "api") throw new HttpError(404, "Not found");
-		if (control && (await controlHostRoute(control.hosts, req, res))) return;
 		if (parts[1] === "github-import") {
 			res.setHeader("cache-control", "no-store");
 			if (!githubSetup || !githubImport) throw new SetupError(503, "GitHub import is unavailable on this host.");
@@ -747,23 +750,10 @@ export function createDaemonServer(
 				await attachments.releaseRejected(body.operation, body.attachments);
 				return json(res, 200, { ok: true });
 			}
-			const bytes = await controlBody(req, MAX_BODY);
-			const operation = controlJSON<DurableOperation>(bytes);
+			const operation = await readJson<DurableOperation>(req, MAX_BODY);
 			if (operation?.kind === "repair-create" && parts[2] !== "receipt") {
 				if (!githubSetup) throw new ServiceUnavailable("Native repair confirmation is unavailable");
 				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
-			}
-			if (operation?.kind?.startsWith("control.")) {
-				try {
-					if (!control) throw new ControlHostError("capability_denied", "Control executor unavailable", 403);
-					await control.hosts.authenticate(controlHeaders(req), req.method!, req.url!, bytes, {
-						bindingId: operation.bindingId!,
-						kind: parts[2] === "receipt" ? "receipts" : "exchange",
-					});
-				} catch (error) {
-					if (error instanceof ControlHostError) return json(res, error.status, error.response());
-					throw error;
-				}
 			}
 			if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 			const receipt =
@@ -1392,97 +1382,13 @@ export function createDaemonServer(
 						(url.searchParams.get("mode") === "build" && url.searchParams.get("workspace") === "clone"),
 				),
 			);
-		if (parts[1] === "control-chat" && parts[2] === "dashboard" && parts.length === 3 && req.method === "GET") {
-			const args: Record<string, string> = {};
-			for (const [key, value] of url.searchParams) {
-				if ((key !== "projectId" && key !== "missionId") || key in args)
-					throw new HttpError(400, "Invalid dashboard parameters");
-				args[key] = value;
-			}
-			return json(res, 200, sessions.controlDashboard(args));
-		}
-		if (parts[1] === "control-chat" && parts.length === 2 && (req.method === "POST" || req.method === "GET")) {
-			const chat = req.method === "GET" ? sessions.getControlChat() : await sessions.ensureControlChat();
-			if (!chat) throw new NotFound("No retained Control history");
-			return json(res, 200, chat);
-		}
-		if (parts[1] === "control-chat" && req.method !== "GET" && req.method !== "HEAD") sessions.assertControlActive();
-		// Local app HTTP surface only. There is deliberately no agent tool to revoke or edit a grant.
-		if (parts[1] === "control-chat" && parts[2] === "authorizations") {
-			if (parts.length === 3 && req.method === "GET")
-				return json(
-					res,
-					200,
-					await sessions.controlAuthorizationPage(
-						url.searchParams.get("after") ?? undefined,
-						url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : undefined,
-					),
-				);
-			if (parts.length === 4 && req.method === "DELETE")
-				return json(res, 200, {
-					revoked: await sessions.controlAuthorizations().authorizationRevoke(parts[3]!),
-				} satisfies import("@pilot/protocol").RevokeControlAuthorizationResponse);
-		}
-		if (parts[1] === "control-chat" && parts[2] === "watches") {
-			if (!watches) throw new HttpError(503, "Watches unavailable");
-			if (parts.length === 3 && req.method === "GET")
-				return json(
-					res,
-					200,
-					await watches.page(
-						url.searchParams.get("after") ?? undefined,
-						url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : undefined,
-					),
-				);
-			if (parts.length === 4 && req.method === "DELETE")
-				return json(res, 200, {
-					removed: await watches.remove(parts[3]!),
-				} satisfies import("@pilot/protocol").CancelWatchResponse);
-		}
-		if (parts[1] === "control-chat" && parts[2] === "audit" && parts.length === 3 && req.method === "GET")
+		if (parts[1] === "mission-catalog" && parts.length === 2 && req.method === "GET") {
+			if (!catalogSources) throw new ServiceUnavailable("Mission catalog unavailable");
 			return json(
 				res,
 				200,
-				await sessions
-					.controlAudit()
-					.page(
-						url.searchParams.has("before") ? Number(url.searchParams.get("before")) : undefined,
-						url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : undefined,
-					),
+				buildMissionCatalog(catalogSources.host, catalogSources.missions(), catalogSources.sharedContext()),
 			);
-		if (parts[1] === "control-chat" && parts[2] === "memory" && req.method === "GET") {
-			// Read-only browsing for the app. Agents read memory only through their own zoom/date tools.
-			const integer = (name: string, value: string | null | undefined): number | undefined => {
-				if (value === null || value === undefined) return undefined;
-				if (!/^\d{1,15}$/.test(value)) throw new HttpError(400, `${name} must be a non-negative integer`);
-				return Number(value);
-			};
-			if (parts.length === 4 && parts[3] === "view") {
-				const lines = await sessions.controlMemory().viewLines();
-				return json(res, 200, { lines } satisfies import("@pilot/protocol").ControlMemoryViewResponse);
-			}
-			if (parts.length === 4 && parts[3] === "stats") return json(res, 200, await sessions.controlMemory().stats());
-			if (parts.length === 4 && parts[3] === "messages") {
-				const q = url.searchParams.get("q") ?? undefined;
-				const limit = integer("limit", url.searchParams.get("limit")) ?? 50;
-				if (limit < 1 || limit > 100) throw new HttpError(400, "limit must be 1..100");
-				if (q !== undefined && (!q || q.length > 200 || q.includes("\0")))
-					throw new HttpError(400, "q must be 1..200 characters");
-				return json(
-					res,
-					200,
-					await sessions.controlMemory().messages(integer("before", url.searchParams.get("before")), limit, q),
-				);
-			}
-			if (parts.length === 6 && parts[3] === "nodes") {
-				const id = integer("id", parts[4])!,
-					n = integer("n", parts[5])!,
-					offset = integer("offset", url.searchParams.get("offset"));
-				if (n < 1 || !Number.isInteger(Math.log2(n)) || id % n)
-					throw new HttpError(400, "Expected id+n with an aligned power-of-two n");
-				if (n > 1 && offset !== undefined) throw new HttpError(400, "offset is only allowed for n=1");
-				return json(res, 200, await sessions.controlMemory().node(id, n, offset));
-			}
 		}
 		if (parts[1] === "sessions" && parts.length === 2) {
 			if (req.method === "GET") {
@@ -1710,19 +1616,6 @@ export function createDaemonServer(
 				if (!body || typeof body.id !== "string" || !body.id || typeof body.allow !== "boolean")
 					throw new HttpError(400, "id and allow are required");
 				await sessions.decideDatabaseAccess(id, body.id, body.allow);
-				return json(res, 202, { ok: true });
-			}
-			if (parts[3] === "permission-upgrade") {
-				if (!githubSetup) return json(res, 503, { error: "native_action_unavailable" });
-				try {
-					await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
-				} catch {
-					return json(res, 403, { error: "native_action_required" });
-				}
-				const body = await readJson<import("@pilot/protocol").PermissionUpgradeDecision | null>(req);
-				if (!body || typeof body.id !== "string" || !body.id || typeof body.allow !== "boolean")
-					throw new HttpError(400, "id and allow are required");
-				await sessions.decideControlPermission(id, body.id, body.allow);
 				return json(res, 202, { ok: true });
 			}
 			if (parts[3] === "stop") {
@@ -1999,45 +1892,26 @@ export function createDaemonServer(
 		broadcast({ type: "diagnostics.read", dispatch });
 	});
 	let sharingInvalidationScheduled = false;
-	let watchInvalidationScheduled = false;
-	let controlDashboardTimer: NodeJS.Timeout | undefined;
-	const invalidateControlDashboard = () => {
-		if (clients.size === 0 || controlDashboardTimer) return;
-		controlDashboardTimer = setTimeout(() => {
-			controlDashboardTimer = undefined;
-			broadcast({ type: "dashboard.changed" });
+	let missionCatalogTimer: NodeJS.Timeout | undefined;
+	const invalidateMissionCatalog = () => {
+		if (clients.size === 0 || missionCatalogTimer) return;
+		missionCatalogTimer = setTimeout(() => {
+			missionCatalogTimer = undefined;
+			broadcast({ type: "mission-catalog.changed" });
 		}, DASHBOARD_DEBOUNCE_MS);
-		controlDashboardTimer.unref();
+		missionCatalogTimer.unref();
 	};
-	const stopControlDashboard = sessions.onControlDashboardChange(invalidateControlDashboard);
-	const stopWatches = watches?.onChange(() => {
-		invalidateControlDashboard();
-		if (watchInvalidationScheduled) return;
-		watchInvalidationScheduled = true;
-		queueMicrotask(() => {
-			watchInvalidationScheduled = false;
-			broadcast({ type: "watches.changed" });
-		});
+	const refreshMissionCatalog = () => {
+		catalogGroups = sharing && missions ? missions.store.catalogSharedContext(sharing.host) : [];
+		invalidateMissionCatalog();
+	};
+	const stopMissionCatalog = missions?.store.onChange((id) => {
+		const mission = missions.store.get(id);
+		if (mission) catalogMissions.set(id, mission);
+		else catalogMissions.delete(id);
+		refreshMissionCatalog();
 	});
-	const stopControlAudit = sessions.onControlAudit(() => broadcast({ type: "control-audit.changed" }));
-	// Appends and summaries can arrive in bursts while a turn streams: leading edge, then at most one per second.
-	let memoryTimer: NodeJS.Timeout | undefined,
-		memoryDirty = false;
-	const memoryChanged = () => {
-		if (memoryTimer) {
-			memoryDirty = true;
-			return;
-		}
-		broadcast({ type: "control-memory.changed" });
-		memoryTimer = setTimeout(() => {
-			memoryTimer = undefined;
-			if (!memoryDirty) return;
-			memoryDirty = false;
-			memoryChanged();
-		}, 1000);
-		memoryTimer.unref();
-	};
-	const stopControlMemory = sessions.onControlMemory(memoryChanged);
+	const stopSharedCatalog = sharing?.onChange(refreshMissionCatalog);
 	const invalidateSharing = () => {
 		if (sharingInvalidationScheduled) return;
 		sharingInvalidationScheduled = true;
@@ -2065,13 +1939,10 @@ export function createDaemonServer(
 	server.on("close", () => {
 		stopSharingWatch?.();
 		stopDiagnosticReads?.();
-		stopWatches?.();
-		stopControlAudit();
-		stopControlMemory();
-		clearTimeout(memoryTimer);
-		stopControlDashboard();
 		stopSharingReceipts?.();
-		clearTimeout(controlDashboardTimer);
+		stopMissionCatalog?.();
+		stopSharedCatalog?.();
+		clearTimeout(missionCatalogTimer);
 	});
 	const stopPowerWatch = power?.onChange(() => broadcast({ type: "power", power: power.status() }));
 	server.on("close", () => stopPowerWatch?.());
@@ -2103,7 +1974,7 @@ export function createDaemonServer(
 	let sourceTimer: NodeJS.Timeout | undefined;
 	const changedTrackingProjects = new Set<string>();
 	const stopTrackingWatch = tracking?.onChange((change) => {
-		invalidateControlDashboard();
+		invalidateMissionCatalog();
 		if (clients.size === 0) return;
 		if (change.type === "items") changedTrackingProjects.add(change.projectId);
 		if (sourceTimer) return;
@@ -2120,7 +1991,7 @@ export function createDaemonServer(
 		clearTimeout(sourceTimer);
 	});
 	projects.onChange((list) => {
-		invalidateControlDashboard();
+		invalidateMissionCatalog();
 		broadcast({ type: "projects", projects: list });
 	});
 	sessions.onArtifactsChanged((sessionId, artifacts) => {
@@ -2186,7 +2057,7 @@ export function createDaemonServer(
 	});
 	// Keep this the last `sessions.onChange` registration: server.test.ts drives the most recent listener.
 	sessions.onChange((session) => {
-		invalidateControlDashboard();
+		invalidateMissionCatalog();
 		const previous = repositoryVersions.get(session.id);
 		const version = repositoryVersion(session);
 		if (previous?.version !== version) {
@@ -2208,7 +2079,7 @@ export function createDaemonServer(
 		let scheduled = false;
 		// Coalesce bursts (a mission and its tasks created together) into one list and one detail per mission.
 		missions.store.onChange((missionId) => {
-			invalidateControlDashboard();
+			invalidateMissionCatalog();
 			pending.add(missionId);
 			if (scheduled) return;
 			scheduled = true;
@@ -2621,7 +2492,7 @@ async function missionRoute(
 	if (section === "resources") {
 		if (parts.length === 6 && parts[5] === "linear-sync" && method === "POST") {
 			const write = await readJson<{ action: "pause" | "resume" }>(req);
-			return json(res, 200, store.controlLinearSync(id, item!, write?.action)), true;
+			return json(res, 200, store.setLinearSyncPaused(id, item!, write?.action)), true;
 		}
 		if (parts.length === 4 && method === "POST")
 			return json(res, 201, store.addResource(id, await readJson<MissionResourceWrite>(req))), true;

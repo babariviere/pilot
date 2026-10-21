@@ -5,9 +5,9 @@ import { type Extension, hook, type PromptInput, section, ToolTask } from "@eare
 import type { DiagnosticTargetReference, MissionDecision, OperationHost } from "@pilot/protocol";
 
 import {
-	type ControlPermission,
 	commandArguments,
-	controlPermissionBlock,
+	type ExecutionPermission,
+	executionPermissionBlock,
 	githubPosting,
 	nestedShellCommands,
 	strings,
@@ -27,8 +27,8 @@ export interface WorkspaceContext {
 }
 
 export interface PilotContext {
-	/** Trusted, durable authority ceiling for a chat started by Control. Never inferred from input text. */
-	controlPermission?: ControlPermission;
+	/** Trusted, durable execution ceiling. Never inferred from input text. */
+	executionPermission?: ExecutionPermission;
 	/** Runtime-enforced specialist profile. */
 	role?: "diagnostics";
 	/** Host-admitted target shown to the specialist; authority remains in pilotd/tool dispatch. */
@@ -269,10 +269,10 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false, c
 	}
 	const workspace = context.workspace;
 	const requirePullRequest = context.requirePullRequest !== false;
-	const localOnly = context.controlPermission?.level === "investigate";
-	if (context.controlPermission)
+	const localOnly = context.executionPermission?.level === "investigate";
+	if (context.executionPermission)
 		lines.push(
-			context.controlPermission.level === "investigate"
+			context.executionPermission.level === "investigate"
 				? "- This chat has investigate permission: Ask/read-only, with no implementation or publication."
 				: "- Build permission includes implementation, verification, task-branch pushes and opening/updating pull requests within the accepted scope. No separate publishing approval is required, including in resumed chats. Merges still require user confirmation in the app; never merge through tools.",
 		);
@@ -377,7 +377,7 @@ export function withPilotPolicy(
 				const current = mission();
 				const prompt = pilotPrompt(context, artifactsAvailable(), current?.coordinator === "self");
 				return current && context.role !== "diagnostics"
-					? `${prompt}\n${missionPrompt(current, context.ghStack, context.controlPermission?.level === "investigate")}`
+					? `${prompt}\n${missionPrompt(current, context.ghStack, context.executionPermission?.level === "investigate")}`
 					: prompt;
 			}),
 		],
@@ -390,7 +390,7 @@ export function withPilotPolicy(
 						return {
 							block: "Pilot policy: this is the user-message HTTP endpoint. Use pilot/mission send so the message keeps its actual origin. If that cannot reach the target, report the limitation; do not send as the user.",
 						};
-					const denied = controlPermissionBlock(context.controlPermission, call.name, call.arguments);
+					const denied = executionPermissionBlock(context.executionPermission, call.name, call.arguments);
 					if (denied) return { block: denied };
 					if (
 						(mission()?.coordinator === "self" || context.coordinatorView) &&

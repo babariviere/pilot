@@ -22,33 +22,6 @@ enum HostedHistoryAvailability: Equatable {
 /// Callers hold qualified refs, never select a process-wide "current server".
 @MainActor
 final class HostClients: ObservableObject {
-    let controlCourier = ControlCourier()
-
-    /// Only explicit live startup admits relaying. Pairing remains a separate native owner.
-    func startControlCourier() {
-        try? controlCourier.start()
-        refreshControlCourierEndpoints()
-    }
-
-    private func refreshControlCourierEndpoints() {
-        guard !shuttingDown else { return }
-        let endpoints = entries.filter { $0.value.client.connected }.mapValues { entry -> ControlCourier.Endpoint in
-            let client = entry.client, host = entry.token.host
-            let token = HostConnectionToken(host: host, generation: client.connectionGeneration)
-            let current: () -> Bool = { [weak self, weak client] in
-                guard let self, let client else { return false }
-                return !self.shuttingDown && self.entries[host]?.client === client
-                    && client.connected && client.hostIdentity == host && client.connectionGeneration == token.generation
-            }
-            return ControlCourier.Endpoint(token: token, isCurrent: current, request: { [weak client] request, signing in
-                guard current(), let client else { throw HostRoutingError.disconnected }
-                let response = try await client.controlCourierRequest(request, signing: signing)
-                guard current() else { throw HostRoutingError.staleGeneration }
-                return response
-            })
-        }
-        try? controlCourier.update(endpoints)
-    }
     private var checkoutObservation: AnyCancellable?
     private let checkoutDirectory: URL
     private(set) lazy var projectCheckouts: ProjectCheckoutModel = {
@@ -708,11 +681,6 @@ final class HostClients: ObservableObject {
                   self.entries[host]?.client === client, !self.shuttingDown else { return }
             self.reconcileSharedContexts()
         }
-        client.onControlHostChanged = { [weak self, weak client] change in
-            guard let self, let client, self.entries[host]?.token == token, client.connected,
-                  self.entries[host]?.client === client, !self.shuttingDown else { return }
-            self.controlCourier.changed(change, on: host)
-        }
         for registration in terminalRegistrations.values where registration.ref.host == host {
             attachTerminalRegistration(registration)
         }
@@ -878,7 +846,6 @@ final class HostClients: ObservableObject {
         for job in connectionJobs.values { job.task.cancel() }
         connectionJobs.removeAll()
         sharedContextCourier.stop()
-        controlCourier.stop()
         sharedContextGenerations.removeAll()
         connectionAttempts.removeAll()
         for host in tunnels.keys {
@@ -888,7 +855,6 @@ final class HostClients: ObservableObject {
         await scopedModels.stopAndWait()
         await devboxUpdates.stopAndWait()
         await projectCheckouts.stop()
-        await controlCourier.stopAndWait()
         do { try await flushOffline() }
         catch { persistenceError = "Could not save offline host metadata before quitting." }
     }
@@ -908,12 +874,10 @@ final class HostClients: ObservableObject {
             diagnosticReads.removeValue(forKey: key)?.cancel()
         }
         removed?.client.onSharedContextsChanged = nil
-        removed?.client.onControlHostChanged = nil
         removed?.client.disconnect()
         if let removed { presentationClients[host] = removed.client }
         sharedContextGenerations[host] = nil
         refreshSharedContextEndpoints()
-        refreshControlCourierEndpoints()
         available.remove(host)
         refreshRuntimeEndpoints()
         refreshScopedModelEndpoints()
@@ -1225,7 +1189,6 @@ final class HostClients: ObservableObject {
         if sharedContextGenerations[host] != sharedGeneration {
             sharedContextGenerations[host] = sharedGeneration
             refreshSharedContextEndpoints()
-            refreshControlCourierEndpoints()
             refreshRuntimeEndpoints()
             refreshScopedModelEndpoints()
         }

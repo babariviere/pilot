@@ -274,10 +274,8 @@ but the conversation cannot be restored or resumed. Legacy watches and follow-th
 without replay or background compaction. Ordinary chats already started by Control keep their admitted
 permissions and continue independently; mission coordinators are unchanged.
 
-The cached `GET /api/control-chat/dashboard` endpoint remains for the app's logical mission registry.
-It does not create a conversation, wake chat workers or fetch external services. The historical
-Control memory/audit/authorization GET routes remain read-only compatibility surfaces.
-See [retained Control storage](docs/control-chat.md) for compatibility details.
+Mission discovery uses the cached, read-only `GET /api/mission-catalog` endpoint.
+Legacy Control databases remain on disk, but their runtime, tools, APIs and compaction are removed.
 
 Build chats support local changes, verification, task-branch pushes and opening/updating PRs under
 the normal project delivery policy, without a second publishing approval. Ask and Diagnostics remain
@@ -405,7 +403,7 @@ the goal, near-verbatim directives and corrections (marking superseded ones), de
 changed files, commits, test results, unresolved failures and key tool output, each with its source entry.
 If a digest would not shrink the context enough, Pilot keeps the context and waits for more growth. Manual
 compaction with your own instructions still uses the model summary. Without the setting, ordinary chats keep the
-Harness defaults and model summaries. Retired Control memory is retained read-only.
+Harness defaults and model summaries. Legacy Control files are left untouched.
 
 Compaction never deletes the transcript. Ordinary chats have a `history_recall` tool that searches (ranked by
 relevance, or newest first) and reads the chat's own earlier messages and tool output, including parts compacted
@@ -1075,7 +1073,7 @@ and other transport settings stay local. See [catalog tests and measurements](do
 See [tool access by role](docs/tool-access-by-role.md) and
 [system prompts by role](docs/system-prompts-by-role.md) for capability boundaries and prompt composition.
 
-Legacy Control event-watch records remain in `watches.sqlite` for read-only compatibility.
+Legacy event-watch records remain on disk but have no active service or API.
 Production no longer starts their chat, PR, Linear or mission sources, reconciles targets, retries
 follow-through or delivers notices. Saved instructions are retained as history, not executed.
 Mission notices and ordinary chat PR tracking continue independently.

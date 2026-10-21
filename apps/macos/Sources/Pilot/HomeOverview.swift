@@ -221,7 +221,7 @@ struct HomeOverview: View {
         }.sorted { HomeStatus.precedes($0.status, $1.status) }
         let rows = app.localHost == nil || app.navigationProjectGroups.isEmpty ? localRows : united.filter { $0.ref.host == app.localHost }.map(\.status)
         let remoteRows = united.filter { $0.ref.host != app.localHost }
-        let remoteWorking = hosts.sessions.filter { $0.ref.host != app.localHost && !$0.value.isControl && hosts.available.contains($0.ref.host) && $0.value.isWorking && !$0.value.isArchived }
+        let remoteWorking = hosts.sessions.filter { $0.ref.host != app.localHost && !$0.value.isRetainedHistory && hosts.available.contains($0.ref.host) && $0.value.isWorking && !$0.value.isArchived }
         let working = HomeStatus.working(client.sessions)
         let missions = HomeStatus.missions(client.missions)
         let sessionIds = Set(client.sessions.map(\.id))
@@ -362,7 +362,7 @@ struct HomeOverview: View {
     private func workingRow(_ session: SessionSummary, now: Date, context: HostViewContext? = nil) -> some View {
         let owner = context ?? hostContext
         let client = context.map { $0.hosts.presentationClient($0.host) } ?? self.client
-        let project = session.isControl ? ControlChatIdentity.scope
+        let project = session.isRetainedHistory ? "Retained history"
             : client.project(session.projectId)?.name ?? session.cwd.abbreviatingHome
         let mission = session.missionId.flatMap { id in client.missions.first { $0.id == id }?.title }
         let elapsed = SessionTimeFormatting.relative(session.listActivityAt, now: now)

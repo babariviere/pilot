@@ -101,20 +101,6 @@ export interface RequestTimingDiagnosticEvidence {
 	droppedBefore?: number;
 }
 
-/** Preparation only. `prepared` does not imply the Control action ran or its task succeeded. */
-export interface ControlPreparationDiagnosticEvidence {
-	ref: string;
-	source: "request_timing";
-	at: string;
-	kind: "control.request.preparation";
-	attemptRef: string;
-	stage: "history_record" | "history_summarization" | "request_projection";
-	outcome: "prepared" | "failed" | "cancelled";
-	reason?: "preparation_failure";
-	durationMs: number;
-	droppedBefore?: number;
-}
-
 export interface StallDiagnosticEvidence {
 	ref: string;
 	source: "daemon";
@@ -232,7 +218,6 @@ export type DiagnosticEvidence =
 	| HostSnapshotDiagnosticEvidence
 	| LifecycleDiagnosticEvidence
 	| RequestTimingDiagnosticEvidence
-	| ControlPreparationDiagnosticEvidence
 	| ToolInFlightDiagnosticEvidence
 	| ToolCallDiagnosticEvidence
 	| StallDiagnosticEvidence

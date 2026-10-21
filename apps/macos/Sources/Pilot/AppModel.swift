@@ -12,10 +12,8 @@ enum InspectorTab: Hashable {
     case mission
     case links
     /// The control chat's watches and audited actions.
-    case watching
 
     func isAvailable(for session: SessionSummary) -> Bool {
-        if self == .watching { return session.isControl }
         if self == .changes || self == .terminal { return session.supportsChanges }
         if self == .mission { return session.missionId != nil && !session.isMissionCoordinator }
         return !session.isAsk || self == .artifacts || self == .links
@@ -171,7 +169,6 @@ final class AppModel: ObservableObject {
     /// The Inbox page: what waits on the user across every project. Below chats, missions and project pages.
     @Published var showingInbox = false
     /// The Control screen: the control chat's memory, log, watches and health. Global, like the Inbox.
-    @Published var showingControl = false
     /// The Inbox's project filter (nil lists every project). Preset to the focused project each time the Inbox
     /// opens, and never saved.
     @Published var inboxProjectId: String?
@@ -395,7 +392,7 @@ final class AppModel: ObservableObject {
         let observation = hosts.$sessions.sink { [weak self] inventory in
             guard let self, self.selectedSessionId == reference.storageKey,
                   let item = inventory.first(where: { $0.ref == reference }),
-                  PreviousControl.isHistory(item.value, reference: reference, localHost: self.localHost) else { return }
+                  RetainedConversation.isHistory(item.value, reference: reference, localHost: self.localHost) else { return }
             self.hosts.selection = nil
             self.selectedSessionId = nil
             self.saveDrafts()
@@ -578,7 +575,7 @@ final class AppModel: ObservableObject {
         beginNavigation()
         defer { endNavigation() }
         hosts.selection = nil
-        showingArchive = false; showingInbox = false; showingControl = false
+        showingArchive = false; showingInbox = false
         selectedSessionId = nil; selectedMissionId = nil; selectedProjectId = nil
         return true
     }
@@ -628,7 +625,7 @@ final class AppModel: ObservableObject {
             guard let self else { return }
             self.recoverDiagnosticRepairArchives(on: host)
             let store = self.attention(on: host)
-            for notice in store.observe(sessions.filter { !$0.isControl }, snapshot: snapshot) {
+            for notice in store.observe(sessions.filter { !$0.isRetainedHistory }, snapshot: snapshot) {
                 guard sessions.first(where: { $0.id == notice.sessionId })?.isArchived != true else { continue }
                 self.notifier.deliver(notice, reference: HostResourceRef(host: host, kind: .session, localId: notice.sessionId))
             }
@@ -771,7 +768,6 @@ final class AppModel: ObservableObject {
         hosts.selection = nil
         showingArchive = false
         showingInbox = false
-        showingControl = false
         if projectId != nil || message != nil { newSessionForm.mission = nil }
         let fresh = message != nil || !newSessionForm.hasUnsubmittedDraft
         if let projectId, draftProjectId != projectId {
@@ -915,7 +911,6 @@ final class AppModel: ObservableObject {
         chooseArchiveMission(missionId)
         showingArchive = true
         showingInbox = false
-        showingControl = false
         selectedSessionId = nil
         selectedMissionId = nil
         selectedProjectId = nil
@@ -933,14 +928,10 @@ final class AppModel: ObservableObject {
         selectedMissionId = nil
         selectedProjectId = nil
         inboxProjectId = projectId ?? focusedProject?.id
-        showingControl = false
         showingInbox = true
     }
 
     /// Old navigation routes resolve to Home. Control is no longer a product destination.
-    func openControlScreen() {
-        openHome()
-    }
 
     func clearProjectSubpage() {
         memoryProjectId = nil
@@ -959,7 +950,6 @@ final class AppModel: ObservableObject {
         hosts.selection = nil
         showingArchive = false
         showingInbox = false
-        showingControl = false
         selectedSessionId = nil
         // Local pages select the plain project id, even when given a qualified key.
         selectedProjectId = ref?.localId ?? id
@@ -1113,7 +1103,6 @@ final class AppModel: ObservableObject {
         if let id = selectedSessionId { return .session(id) }
         if let id = selectedMissionId { return .mission(id) }
         if let id = selectedProjectId { return .project(id) }
-        if showingControl { return .control }
         if showingInbox { return .inbox }
         if showingArchive { return .archive(projectId: archiveProjectId, missionId: archiveMissionId) }
         return .home
@@ -1180,7 +1169,6 @@ final class AppModel: ObservableObject {
         case .home:
             showingArchive = false
             showingInbox = false
-            showingControl = false
             selectedSessionId = nil
             selectedMissionId = nil
             selectedProjectId = nil
@@ -1196,8 +1184,6 @@ final class AppModel: ObservableObject {
             showArchive(in: projectId, missionId: missionId)
         case .inbox:
             showInbox()
-        case .control:
-            openControlScreen()
         }
     }
 
@@ -1319,7 +1305,7 @@ final class AppModel: ObservableObject {
     /// Retries a failed chat: its startup when that failed, otherwise its last failed turn, which the chat's
     /// transcript runs once it is open and shows Retry.
     func retry(_ session: SessionSummary, context: HostViewContext? = nil) {
-        guard !PreviousControl.isHistory(session, reference: context?.ref(.session, session.id), localHost: localHost) else { return }
+        guard !RetainedConversation.isHistory(session, reference: context?.ref(.session, session.id), localHost: localHost) else { return }
         guard session.status == .failed, !session.isArchived else { return }
         if let context, context.host != localHost {
             guard context.available else { sessionActionError = "Disconnected. Reconnect before retrying."; return }
@@ -1347,7 +1333,7 @@ final class AppModel: ObservableObject {
 
     /// The open chat's subagents, in the inspector's Agents tab.
     func showAgents() {
-        guard !isPreviousControlSelected else { return }
+        guard !isRetainedHistorySelected else { return }
         guard let session = selectedSession, InspectorTab.agents.isAvailable(for: session) else { return }
         inspectorTab = .agents
         inspectorVisible = true
@@ -1495,7 +1481,7 @@ final class AppModel: ObservableObject {
         defer { endNavigation() }
         // Notifications stay global: a chat outside the focused project widens the sidebar to all projects. The
         // control chat shows in every scope, so it keeps the scope.
-        if let scope = sidebarScope, let session = client.session(id), session.projectId != scope, !session.isControl {
+        if let scope = sidebarScope, let session = client.session(id), session.projectId != scope, !session.isRetainedHistory {
             focus(on: nil)
         }
         selectedSessionId = id
@@ -1560,7 +1546,6 @@ extension AppModel {
         hosts.selection = nil
         showingArchive = false
         showingInbox = false
-        showingControl = false
         selectedSessionId = nil
         selectedMissionId = nil
         selectedProjectId = nil
@@ -1587,8 +1572,6 @@ extension AppModel {
             showInbox(for: location.inboxProjectId, context: context)
             inboxProjectId = location.inboxProjectId
             inboxHost = location.filterHost
-        case .control:
-            showingControl = false
         }
         saveDrafts()
     }
@@ -1599,7 +1582,6 @@ extension AppModel {
         case let .session(id): return canMutateSession(id) && navigationResourceExists(id, kind: .session)
         case let .mission(id): return navigationResourceExists(id, kind: .mission)
         case let .project(id): return navigationResourceExists(id, kind: .project)
-        case .control: return false
         case .home, .inbox, .archive: return true
         }
     }

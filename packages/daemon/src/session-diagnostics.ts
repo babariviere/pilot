@@ -4,13 +4,11 @@ import { type FileHandle, open } from "node:fs/promises";
 import { join } from "node:path";
 import {
 	MAX_TOOL_ACTIVITY_FILE_BYTES,
-	parseControlPreparationRecord,
 	parseToolActivityRecord,
 	TOOL_ACTIVITY_FILE,
 	type ToolActivityRecord,
 } from "@pilot/kernel";
 import type {
-	ControlPreparationDiagnosticEvidence,
 	DiagnosticEvidence,
 	DiagnosticFreshness,
 	DiagnosticSourceStatus,
@@ -177,25 +175,9 @@ const TIMING_OPTIONALS = [
 	"firstToolCallMs",
 ] as const;
 
-function timing(value: unknown): RequestTimingDiagnosticEvidence | ControlPreparationDiagnosticEvidence | undefined {
+function timing(value: unknown): RequestTimingDiagnosticEvidence | undefined {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return;
 	const record = value as Record<string, unknown>;
-	if (record.source === "control_preparation") {
-		const event = parseControlPreparationRecord(record);
-		if (!event) return;
-		return {
-			ref: event.attemptRef,
-			source: "request_timing",
-			at: new Date(event.at).toISOString(),
-			kind: "control.request.preparation",
-			attemptRef: event.attemptRef,
-			stage: event.stage,
-			outcome: event.outcome,
-			durationMs: event.durationMs,
-			...(event.reason ? { reason: event.reason } : {}),
-			...(event.droppedBefore ? { droppedBefore: event.droppedBefore } : {}),
-		};
-	}
 	if (
 		record.v !== 1 ||
 		(record.source !== "generation" && record.source !== "stream") ||

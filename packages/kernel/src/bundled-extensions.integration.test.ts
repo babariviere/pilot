@@ -283,7 +283,7 @@ export default pi => {
 			PILOT_USAGE_HISTORY: JSON.stringify({ ...accountingEpoch, attribution: { chatId: randomUUID() } }),
 			PILOT_USAGE_STORAGE: join(f.root, "child-storage"),
 			PILOT_USAGE_PARENT: JSON.stringify(parent),
-			PILOT_CONTROL_PERMISSION: JSON.stringify({ authorizationId: "child-grant", level: "implement" }),
+			PILOT_EXECUTION_PERMISSION: JSON.stringify({ authorizationId: "child-grant", level: "implement" }),
 		},
 	});
 	const closed = once(child, "exit");

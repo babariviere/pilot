@@ -686,7 +686,7 @@ extension AppModel {
         guard !session.isDiagnosticsSpecialist,
               let target = resourceRef(session.id, kind: .session, context: context),
               !diagnosingSessions.contains(target.storageKey) else { return }
-        let askingAboutPilot = askingAboutPilot || session.isControl
+        let askingAboutPilot = askingAboutPilot || session.isRetainedHistory
         let tracksFeature = !askingAboutPilot
         if tracksFeature { PilotTelemetry.shared.recordFeature(.attempt(.diagnoseChat)) }
         diagnosticSetupTarget = DiagnosticSetupTarget(host: target.host, reference: target,

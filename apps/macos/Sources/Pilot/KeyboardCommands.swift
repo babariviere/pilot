@@ -30,9 +30,9 @@ extension AppModel {
 
     /// ⌘L: the chat or new-chat composer, or the open question's answers. Nothing happens where there is none.
     @discardableResult
-    func focusComposer() -> Bool { !isPreviousControlSelected && keyboard.focus(.composer) }
+    func focusComposer() -> Bool { !isRetainedHistorySelected && keyboard.focus(.composer) }
 
-    var canToggleTerminal: Bool { !isPreviousControlSelected && selectedSessionId != nil && selectedSession?.isAsk != true }
+    var canToggleTerminal: Bool { !isRetainedHistorySelected && selectedSessionId != nil && selectedSession?.isAsk != true }
 
     /// No sheet, confirmation or palette is over the window.
     var hasNoModal: Bool {
@@ -42,7 +42,7 @@ extension AppModel {
 
     /// ⌘.: only the open chat, only while its agent works, and never under a dialog.
     var canStopSelectedChat: Bool {
-        !isPreviousControlSelected && hasNoModal && selectedSession?.isWorking == true && selectedSession?.isReadOnlyHistory != true
+        !isRetainedHistorySelected && hasNoModal && selectedSession?.isWorking == true && selectedSession?.isReadOnlyHistory != true
     }
 
     func stopSelectedChat() {
@@ -61,7 +61,7 @@ extension AppModel {
     /// Shows an inspector pane (never hides it, unlike the toolbar toggle) and moves focus into it.
     @discardableResult
     func openInspector(_ tab: InspectorTab) -> Bool {
-        guard !isPreviousControlSelected else { return false }
+        guard !isRetainedHistorySelected else { return false }
         guard let session = selectedSession, tab.isAvailable(for: session) else { return false }
         inspectorTab = tab
         inspectorVisible = true
@@ -72,23 +72,12 @@ extension AppModel {
     /// The mission on screen: the open mission page, or the open chat's mission.
     var currentMissionId: String? { selectedMissionId ?? selectedSession?.missionId }
 
-    /// Retired. Retained histories are opened from the archive, never as a live destination.
-    var controlChat: SessionSummary? { nil }
-
-    /// Compatibility entry point for old callers. Never opens or focuses a retired agent.
-    func openControlChat() {
-        guard let control = controlChat else { return }
-        reveal(session: control.id)
-        keyboard.focusAfterNavigation(.composer)
-    }
-
     /// Whether a Go menu destination applies here. Unavailable ones never guess a project or mission.
     func canGo(to destination: GoDestination) -> Bool {
         switch destination {
         case .home, .inbox, .archive, .slack, .linear: true
         case .overview: sidebarScope != nil
         case .mission, .tasks, .brief: currentMissionId != nil
-        case .control: controlChat != nil
         }
     }
 
@@ -101,7 +90,6 @@ extension AppModel {
         case .archive: showArchive(in: focusedProject?.id)
         case .slack: jump(to: .slack)
         case .linear: jump(to: .linear)
-        case .control: openControlChat()
         case .mission, .tasks, .brief:
             guard let missionId = currentMissionId else { return }
             let tab: MissionTab = destination == .tasks ? .tasks : destination == .brief ? .brief : .overview
@@ -138,7 +126,7 @@ struct KeyboardNavigationCommands: Commands {
             Button("Focus Composer") { model.focusComposer() }
                 .keyboardShortcut("l", modifiers: .command)
             Divider()
-            ForEach(GoDestination.allCases.filter { $0 != .control }, id: \.self) { destination in
+            ForEach(GoDestination.allCases, id: \.self) { destination in
                 Button(destination.menuTitle) { model.go(to: destination) }
                     .disabled(!model.canGo(to: destination))
             }
@@ -158,7 +146,6 @@ extension GoDestination {
         case .archive: "Archive"
         case .slack: "Slack Triage"
         case .linear: "Linear Queue"
-        case .control: "Control Chat"
         }
     }
 }

@@ -372,7 +372,7 @@ test("Control replica freshness tracks mission checkpoint/delta imports, not lat
 	t.mock.method(Date, "now", () => now);
 	const { home, target, mission, binding } = await enrolled(t);
 	await reconcile(home, target, binding);
-	const read = () => target.store.controlSharedContext(target.host).find((g) => g.missionId === mission.id)!.replica!;
+	const read = () => target.store.catalogSharedContext(target.host).find((g) => g.missionId === mission.id)!.replica!;
 	assert.equal(read().complete, true);
 	assert.equal(read().replicaSyncedAt, 1000);
 	now = 2000;

@@ -75,28 +75,14 @@ selectors and mutations are not accepted. Incomplete replicas, disabled memory s
 bindings fail closed. Revocation is rechecked after asynchronous reads. Read responses use the same
 secret-like export refusal as synchronization. `conflicts` continues returning `SharedMissionProposal[]`.
 
-## Control status reads
+## Mission discovery
 
-`pilot status` and `GET /api/control-chat/dashboard` share a change-driven, read-only projection:
-`sharedTasks` contains mission-home grants and remote-home committed/provisional task rows;
-`replicaMissions` contains enrolled replica observations as a compatibility/source-input array,
-not a separate mission namespace or host section. Missions have one logical list and navigation;
-the planned unified projection is frozen in [Control hosts](control-hosts.md#planned-logical-mission-projection),
-not implemented here. Execution hosts belong to chats/tasks, while mission home is internal authority.
-Rows carry the pinned mission-home identity and binding. Grants carry the execution host, execution
-epoch, reserved/accepted/cancel-requested/sealed state and any eligible last imported working fact.
-Cancel requested does not mean stopped; sealed means not running. Missing or old facts never imply failure.
-Project filters use the local enrolled execution project for replica evidence, not a mission host partition.
-Mission identity is the canonical (mission home, missionId): repeated observations of that identity
-represent one mission; same title or bare ID under different pinned homes never merges their state.
-
-Replica summaries report completeness, sequence, last mission import time and age. Memory imports do
-not refresh mission age. Legacy/missing timestamps have unknown (`null`) age. Incomplete replicas expose
-no committed task rows. Provisional task proposals retain pending/conflict/rejected labels and never
-overwrite committed status or receive invented task numbers. Revoked replicas are excluded; home grants
-remain visible even after binding revocation or sealing. The cache retains at most 100 thin task rows per enrolled mission
-scope, with pre-clipping totals. Dashboard row and 24,000-byte limits still apply. No worker, remote read,
-new transport, connectivity lease or reassignment is involved.
+`GET /api/mission-catalog` publishes a change-driven, read-only logical mission projection.
+Canonical homes and verified replica sequences determine identity, never execution hosts or titles.
+Incomplete or conflicting replicas do not invent progress. Provisional task proposals stay separate
+from committed task state. Cached inputs, 50 logical rows, 16 provenance entries per row and a shared
+24,000-byte response bound keep reads off storage and worker hot paths. No agent tools or orchestration
+authority are attached to this endpoint.
 
 ## Performance evidence and remaining risk
 

@@ -3,7 +3,6 @@ import { constants } from "node:fs";
 import { open, rename } from "node:fs/promises";
 import { performance } from "node:perf_hooks";
 import { nodeTelemetry, type TraceCarrier } from "@pilot/telemetry";
-import { type ControlPreparationRecord, parseControlPreparationRecord } from "./control-preparation.ts";
 
 export interface PerformanceRecord {
 	v: 1;
@@ -191,11 +190,7 @@ export async function preparePerformanceClear(): Promise<void> {
 }
 
 /** A strict whitelist, even if a caller passes extra fields at runtime. */
-export function performanceLine(record: PerformanceRecord | ControlPreparationRecord): string | undefined {
-	if (record.source === "control_preparation") {
-		const safe = parseControlPreparationRecord(record);
-		return safe ? `${JSON.stringify(safe)}\n` : undefined;
-	}
+export function performanceLine(record: PerformanceRecord): string | undefined {
 	if (
 		record.v !== 1 ||
 		!["generation", "stream"].includes(record.source) ||
@@ -235,7 +230,7 @@ export class PerformanceLog implements PerformanceSink {
 		activeLogs.add(this);
 	}
 
-	record(record: PerformanceRecord | ControlPreparationRecord | object): void {
+	record(record: PerformanceRecord | object): void {
 		if (!collectionEnabled || this.closed || this.disabled) return;
 		if (this.queue.length >= this.maxPending) {
 			this.dropped++;

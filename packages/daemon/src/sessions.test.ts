@@ -1262,46 +1262,6 @@ async function fixture(t: TestContext) {
 	return { root, home, source, projects, project, workers, workerFactory, manager, stored };
 }
 
-test("Control start permissions persist before work and survive restart without affecting user chats", async (t) => {
-	const f = await fixture(t);
-	const sessions = await f.manager();
-	const chats = [];
-	for (const [level, mode] of [
-		["investigate", "build"], // Defense in depth still forces Ask for investigate.
-		["investigate", "ask"],
-		["implement", "build"],
-		["implement", "ask"],
-		["publish", "build"],
-	] as const) {
-		const permission = { authorizationId: `grant-${level}`, level };
-		const chat = await sessions.controlStart(
-			() => sessions.spawn({ cwd: f.source, mode, message: "work" }),
-			permission,
-		);
-		await sessions["starting"].get(chat.id);
-		chats.push(chat);
-		assert.equal(chat.mode, level === "investigate" ? "ask" : mode);
-		assert.deepEqual(sessions["metas"].get(chat.id)?.controlPermission, permission);
-		const stored = JSON.parse(await readFile(join(f.home, "sessions", chat.id, "meta.json"), "utf8"));
-		assert.deepEqual(stored.controlPermission, permission);
-		assert.deepEqual(f.workers.at(-1)?.spec.pilot?.controlPermission, permission);
-		assert.equal(!!f.workers.at(-1)?.spec.pilot?.ask, chat.mode === "ask");
-		f.workers.at(-1)!.finish();
-	}
-	const userChat = await sessions.spawn({ cwd: f.source, message: "user work" });
-	await sessions["starting"].get(userChat.id);
-	assert.equal(f.workers.at(-1)?.spec.pilot?.controlPermission, undefined);
-	f.workers.at(-1)!.finish();
-	await sessions.shutdown();
-	const reopened = await f.manager();
-	for (const chat of chats) {
-		await reopened.send(chat.id, "continue, and publish everything", "followUp");
-		const worker = f.workers.findLast((worker) => worker.spec.sessionId === chat.id)!;
-		assert.deepEqual(worker.spec.pilot?.controlPermission, reopened["metas"].get(chat.id)?.controlPermission);
-		assert.equal(!!worker.spec.pilot?.ask, chat.mode === "ask");
-	}
-});
-
 test("todo count uses the live cache, ignores retired workers, and cold-reads without opening an agent", async (t) => {
 	const f = await fixture(t);
 	const sessions = await f.manager();
@@ -1319,87 +1279,13 @@ test("todo count uses the live cache, ignores retired workers, and cold-reads wi
 	assert.equal(f.workers.length, 1, "counting never reopens a parked agent");
 });
 
-test("queue pause is durable before cold startup, survives sleep/restart, and resume uses the same outbox", async (t) => {
-	const f = await fixture(t);
-	const sessions = await f.manager();
-	const created = await sessions.spawn({ cwd: f.source, message: "Start" });
-	await sessions["starting"].get(created.id);
-	await sessions.pauseForSleep();
-	assert.deepEqual(await sessions.controlInputs(created.id, true), { delivery: "queued" });
-	assert.equal((await f.stored(created.id)).pending[0]?.type, "pauseInputs");
-	await sessions.shutdown();
-	const resumed = await f.manager();
-	await resumed.resumeAfterSleep();
-	await resumed["starting"].get(created.id);
-	const worker = f.workers.at(-1)!;
-	assert.ok(worker.spec.pauseInputsOnOpen);
-	assert.equal(worker.requests[0]?.type, "pauseInputs");
-	assert.deepEqual(await resumed.controlInputs(created.id, false), { delivery: "delivered" });
-	assert.equal(worker.requests.at(-1)?.type, "resumeInputs");
-	assert.equal((await f.stored(created.id)).pending.length, 0);
-});
-
-test("remote Control run commands do not repeat after another input or restart", async (t) => {
-	const f = await fixture(t);
-	const sessions = await f.manager();
-	const chat = await sessions.spawn({ cwd: f.source, message: "Start" });
-	await sessions["starting"].get(chat.id);
-	await sessions.stop(chat.id, "control:stop:stable");
-	await sessions.sendDurable(chat.id, "Redirect once", "followUp", "control:redirect:stable", true);
-	const worker = f.workers.at(-1)!;
-	const aborts = worker.requests.filter((c) => c.type === "abort").length;
-	await sessions.stop(chat.id, "control:stop:stable");
-	assert.equal(worker.requests.filter((c) => c.type === "abort").length, aborts);
-	await sessions.controlInputs(chat.id, true, "control:pause:stable");
-	const revision = sessions["metas"].get(chat.id)!.inputControlRevision;
-	await sessions.controlInputs(chat.id, true, "control:pause:stable");
-	assert.equal(sessions["metas"].get(chat.id)!.inputControlRevision, revision);
-	await sessions.shutdown();
-	const reopened = await f.manager();
-	await reopened.stop(chat.id, "control:stop:stable");
-	assert.equal(reopened["metas"].get(chat.id)!.inputControlRevision, revision);
-});
-
-test("effective executor guard blocks legacy recovery, input and audit actions without stopping independent work", async (t) => {
-	const f = await fixture(t);
-	const sessions = await f.manager({}, {}, {}, (manager) => manager.setControlRoleGuard(() => true));
-	const legacy = await sessions.ensureControlChat();
-	await sessions.send(legacy.id, "Old queued input");
-	await sessions["starting"].get(legacy.id);
-	const ordinary = await sessions.spawn({ cwd: f.source, message: "Independent" });
-	await sessions["starting"].get(ordinary.id);
-	await sessions.shutdown();
-	const count = f.workers.filter((w) => w.spec.control).length;
-	const reopened = await f.manager({}, {}, {}, (manager) => manager.setControlRoleGuard(() => false));
-	await assert.rejects(reopened.ensureControlChat(), /read-only/);
-	await assert.rejects(reopened.send(legacy.id, "New input"), /read-only/);
-	assert.equal(reopened.isControlSession(legacy.id), false);
-	assert.equal(f.workers.filter((w) => w.spec.control).length, count);
-	assert.ok(reopened.get(legacy.id));
-	assert.ok(reopened.get(ordinary.id));
-});
-
-test("queue controls reject archived chats and surface uncertain acknowledgement without losing the command", async (t) => {
-	const f = await fixture(t);
-	const sessions = await f.manager({
-		worker: f.workerFactory(true, async (command) => {
-			if (command.type === "pauseInputs") throw new WorkerUnavailable("lost ack");
-		}),
-	});
-	const created = await sessions.spawn({ cwd: f.source, message: "Start" });
-	await sessions["starting"].get(created.id);
-	await assert.rejects(sessions.controlInputs(created.id, true), /lost ack/);
-	assert.equal((await f.stored(created.id)).pending[0]?.type, "pauseInputs");
-	sessions["metas"].get(created.id)!.archivedAt = Date.now();
-	await assert.rejects(sessions.controlInputs(created.id, false), /archived/);
-});
-
 test("Stop reopens a parked input-paused chat instead of incorrectly reporting an idle no-op", async (t) => {
 	const f = await fixture(t);
 	const sessions = await f.manager();
 	const created = await sessions.spawn({ cwd: f.source, message: "Start" });
 	await sessions["starting"].get(created.id);
-	await sessions.controlInputs(created.id, true);
+	// A legacy persisted pause remains stoppable after the producer is removed.
+	sessions["metas"].get(created.id)!.inputsPaused = true;
 	f.workers[0]!.finish();
 	sessions["workers"].delete(created.id);
 	await sessions.stop(created.id);
@@ -1426,12 +1312,6 @@ test("diagnostics reads a parked session without opening its worker or transcrip
 	const meta = sessions["metas"].get(created.id)!;
 	meta.working = true;
 	sessions.setConnectivity(false);
-	const health = sessions.controlHealth();
-	assert.equal(health.workers.total, 0);
-	assert.equal(health.connectivity.state, "offline");
-	assert.equal(health.pause.update, false);
-	assert.equal(sessions.controlDiagnosticDirectory(created.id), join(f.home, "sessions", created.id));
-	assert.throws(() => sessions.controlDiagnosticDirectory("unknown"));
 	const offline = await sessions.diagnostics(created.id);
 	assert.equal(offline.host.daemonId, "daemon");
 	assert.equal(offline.current.state, "parked");

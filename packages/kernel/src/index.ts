@@ -1,8 +1,6 @@
 export { installBundledAnthropicAuth } from "./bundled-extensions.ts";
 export type { ConnectivityState } from "./connectivity.ts";
 export { probeReachability, providerOrigin } from "./connectivity.ts";
-export { parseControlPreparationRecord } from "./control-preparation.ts";
-export type { ControlTurnOrigin } from "./control-turn-origin.ts";
 export { formatFailure, safeFailureText } from "./failure.ts";
 export { inputOrigin } from "./input-origin.ts";
 export type { MissionAction } from "./mission-tools.ts";
@@ -31,7 +29,7 @@ export {
 	parseToolActivityRecord,
 	TOOL_ACTIVITY_FILE,
 } from "./tool-activity.ts";
-export type { ControlPermission } from "./tool-policy.ts";
+export { type ExecutionPermission, inheritedExecutionPermission } from "./tool-policy.ts";
 
 /** Absolute path of the worker entry, for `child_process.fork`. Plain Node runs it: no loader is needed. */
 export const workerEntry = new URL("./worker-entry.ts", import.meta.url);

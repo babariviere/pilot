@@ -3,7 +3,7 @@ import PilotCore
 import SwiftUI
 
 enum LogicalMissionPresentation {
-    @MainActor static func line(_ mission: ControlLogicalMission, registry: MissionRegistry, available: Bool) -> String? {
+    @MainActor static func line(_ mission: LogicalMission, registry: MissionRegistry, available: Bool) -> String? {
         var parts: [String] = []
         if let done = mission.tasksDone, let total = mission.tasksTotal { parts.append("\(done) of \(total) tasks done") }
         if mission.status == .done { parts.append("Done") }
@@ -19,7 +19,7 @@ enum LogicalMissionPresentation {
 }
 
 struct LogicalMissionSidebarRow: View {
-    let mission: ControlLogicalMission
+    let mission: LogicalMission
     @ObservedObject var model: AppModel
     @ObservedObject var registry: MissionRegistry
 

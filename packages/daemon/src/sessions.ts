@@ -1,6 +1,5 @@
 /** Session registry and kernel worker supervision. */
 
-import { AsyncLocalStorage } from "node:async_hooks";
 import { type ChildProcess, fork } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -11,11 +10,12 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { ArtifactNotFound, ArtifactStore } from "@pilot/artifacts";
 import {
 	type AskContext,
-	type ControlPermission,
 	type DiagnosticLogRequest,
 	type DiagnosticLogResult,
 	type EarlierEntriesRead,
+	type ExecutionPermission,
 	formatFailure,
+	inheritedExecutionPermission,
 	inputOrigin,
 	type KernelCommand,
 	type KernelPacket,
@@ -85,13 +85,6 @@ import { compareAIUsageBudget } from "./ai-usage-budget.ts";
 import { prepareAskSnapshot } from "./ask-snapshots.ts";
 import { chatTitleContext, TITLE_OPENING_LIMIT } from "./chat-title.ts";
 import { ColdViewReader } from "./cold-view-reader.ts";
-import { ControlActions, ControlPreAdmissionError } from "./control-actions.ts";
-import { ControlChat } from "./control-chat.ts";
-import type { ControlMemory } from "./control-memory.ts";
-import type { ControlPilot } from "./control-pilot.ts";
-import { ControlProjectMemory } from "./control-project-memory.ts";
-import { ControlSpendAccumulator } from "./control-spend.ts";
-import { ControlWatchSink, controlResultTail } from "./control-watches.ts";
 import { coordinatorTrust } from "./coordinator-trust.ts";
 import type { CredentialBroker } from "./credential-broker.ts";
 import { DatabaseService, type DatabaseState, decideDatabaseRequest, declineDatabaseRequest } from "./databases.ts";
@@ -114,7 +107,6 @@ import { McpChatAttention, type McpStatusSource } from "./mcp-attention.ts";
 import { ModelCatalog } from "./models.ts";
 import { NativeDiagnosticsStore } from "./native-diagnostics.ts";
 import { stuckPullRequestReason } from "./needs-you-reason.ts";
-import type { PermissionRequestState } from "./permission-requests.ts";
 import { PullRequestAutoRebase } from "./pr-auto-rebase.ts";
 import type { ProjectMemoryService } from "./project-memory.ts";
 import { type ProjectStore, requireDirectory } from "./projects.ts";
@@ -161,8 +153,6 @@ import { nextToolStallAt, ToolStallWatchdog, toolStallAttention } from "./tool-s
 import { hasUnpublishedWork } from "./unpublished-work.ts";
 import { UpdateGate } from "./update-gate.ts";
 import { UsageHistoryStore } from "./usage-history.ts";
-import type { WatchService } from "./watch-service.ts";
-import { settledSessionEvents } from "./watch-sessions.ts";
 import { WorkerActivity } from "./worker-activity.ts";
 import { WorkerStarts } from "./worker-starts.ts";
 import {
@@ -349,14 +339,9 @@ export interface SessionFactories {
 }
 
 interface SessionMeta extends OutcomeMeta {
-	/** Durable command admission markers, saved with the corresponding outbox mutation. */
-	remoteControlCommands?: Record<string, "stop" | "pause" | "resume" | "send" | "redirect">;
-	controlStart?: SessionSummary["controlStart"];
 	/** Persisted authority ceiling, independent of prompts, model and worker lifetime. */
-	controlPermission?: ControlPermission;
-	/** A committed grant awaiting a verified fresh run, never installed in an active run's spawn spec. */
-	pendingControlPermission?: ControlPermission & { approvalRequestId?: string };
-	permissionRequest?: PermissionRequestState;
+	executionPermission?: ExecutionPermission;
+	/** Legacy history discriminator only. Never enables an execution profile. */
 	control?: boolean;
 	/** Runtime-enforced specialist profile. Omitted for ordinary chats. */
 	role?: "diagnostics";
@@ -1465,288 +1450,14 @@ export class SessionManager {
 	private readonly rebasingWorkspaces = new Set<string>();
 	private readonly projects: ProjectStore;
 	private memory?: ProjectMemoryService;
-	private controlChat?: ControlChat;
-	private pilot?: ControlPilot;
-	private controlActions?: ControlActions;
-	private controlProjectMemory?: ControlProjectMemory;
-	private watches?: WatchService;
-	private readonly controlStartOrigin = new AsyncLocalStorage<{
-		permission: ControlPermission;
-		requestId: string;
-		provenance?: SessionSummary["controlStart"];
-		sideEffectAttempted: boolean;
-		fence?: () => Promise<void>;
-	}>();
-	/** Propagates only across the explicit start path, never unrelated concurrent user work. */
-	controlStart<T>(
-		work: () => Promise<T>,
-		permission: ControlPermission,
-		requestId = `control:start:${randomUUID()}`,
-		provenance?: SessionSummary["controlStart"],
-		fence?: () => Promise<void>,
-	): Promise<T> {
-		const origin = {
-			permission: { ...permission },
-			requestId,
-			...(provenance ? { provenance: { ...provenance } } : {}),
-			sideEffectAttempted: false,
-			...(fence ? { fence } : {}),
-		};
-		return this.controlStartOrigin.run(origin, async () => {
-			try {
-				return await work();
-			} catch (error) {
-				if (origin.sideEffectAttempted) throw error;
-				throw new ControlPreAdmissionError(error instanceof Error ? error.message : "Start preparation failed", {
-					cause: error,
-				});
-			}
-		});
+	/** Legacy metadata only. There is no Control runtime or role override. */
+	private isRetainedHistory(meta: SessionMeta): boolean {
+		return meta.control === true;
 	}
-	/** Fence before a persistent mission write or spawn attempt. Later failures may be uncertain. */
-	controlStartSideEffect(): void {
-		const origin = this.controlStartOrigin.getStore();
-		if (origin) origin.sideEffectAttempted = true;
-	}
-	/** Run binding must be available during kernel recovery, before the notice sink is enabled. */
-	setWatchService(watches: WatchService): void {
-		if (!this.controlRoleAllows()) return;
-		this.watches = watches;
-	}
-	setWatches(watches: WatchService): () => void {
-		this.assertControlActive();
-		this.setWatchService(watches);
-		watches.bindSink(
-			new ControlWatchSink(SessionManager.CONTROL_ID, this, {
-				result: (id) => controlResultTail(this, id),
-				authorization: (id) => this.controlAuthorizations().authorizationGet(id),
-				active: (id) => watches.followThroughActive(id),
-			}),
-		);
-		const stop = this.onChange((chat) => {
-			if (chat.control) watches.sinkChanged();
-		});
-		let authorizationNeeds = watches.dashboard().authorizationNeededTotal;
-		const stopAttention = watches.onChange(() => {
-			const next = watches.dashboard().authorizationNeededTotal;
-			if (next === authorizationNeeds) return;
-			authorizationNeeds = next;
-			const meta = this.metas.get(SessionManager.CONTROL_ID);
-			if (meta) this.emit(meta);
-		});
-		return () => {
-			stop();
-			stopAttention();
-			watches.bindSink(undefined);
-			this.watches = undefined;
-		};
-	}
-	/** Idempotent copy from the watch worker's durable removal outbox. */
-	async auditWatchRemoval(removal: import("./watch-delivery.ts").WatchRemoval): Promise<void> {
-		if (await this.controlMemory().auditWatchRemoval(removal)) {
-			for (const listener of this.controlAuditListeners) listener();
-		}
-	}
-	private readonly controlAuditListeners = new Set<() => void>();
-	onControlAudit(listener: () => void): () => void {
-		this.controlAuditListeners.add(listener);
-		return () => this.controlAuditListeners.delete(listener);
-	}
-	private readonly controlMemoryListeners = new Set<() => void>();
-	/** Control memory appends, summaries and merges. Callers coalesce. */
-	onControlMemory(listener: () => void): () => void {
-		this.controlMemoryListeners.add(listener);
-		return () => this.controlMemoryListeners.delete(listener);
-	}
-	/** Read-only memory browsing for the app; NotFound until the control chat exists. */
-	controlMemory(): ControlChat["memory"] {
-		if (!this.metas.get(SessionManager.CONTROL_ID)?.control) throw new NotFound("No control chat");
-		return this.controlService().memory;
-	}
-	controlAudit(): ControlActions {
-		this.controlActions ??= new ControlActions(
-			this.controlService().memory,
-			(id) => this.isControlSession(id),
-			async (entry) => {
-				const meta = this.require(SessionManager.CONTROL_ID);
-				meta.prActivities ??= [];
-				meta.prActivities.push({
-					type: "activity",
-					requestId: `control-audit:${entry.seq}`,
-					text: `Control ${entry.action} ${entry.phase}. ${JSON.stringify(entry.result ?? {}).slice(0, 1000)}`,
-				});
-				await this.save(meta);
-				if (this.workers.has(meta.id)) void this.start(meta.id, true);
-			},
-			() => {
-				for (const listener of this.controlAuditListeners) listener();
-			},
-		);
-		return this.controlActions;
-	}
-	setPilot(pilot: ControlPilot): void {
-		this.pilot = pilot;
-	}
-	controlDashboard(args: Record<string, unknown> = {}): import("@pilot/protocol").ControlDashboardResponse {
-		if (!this.pilot) throw new ServiceUnavailable("Control dashboard unavailable");
-		return this.pilot.dashboard(args);
-	}
-	onControlDashboardChange(listener: () => void): () => void {
-		return this.pilot?.onDashboardChange(listener) ?? (() => {});
-	}
-	/** Bounded authorization page, enriched from the already-loaded AI usage ledger. No worker/history reads. */
-	async controlAuthorizationPage(
-		after?: string,
-		limit?: number,
-	): Promise<import("@pilot/protocol").ControlAuthorizationsResponse> {
-		const page = await this.controlAuthorizations().authorizationPage(after, limit);
-		const ids = new Set(page.authorizations.map((record) => record.id));
-		const usages = new Map<string, ControlSpendAccumulator>();
-		for (const meta of this.metas.values()) {
-			const id = meta.controlStart?.authorizationId;
-			if (!id || !ids.has(id)) continue;
-			const accumulator = usages.get(id) ?? new ControlSpendAccumulator();
-			accumulator.add(this.aiUsage.summary(meta.id));
-			usages.set(id, accumulator);
-		}
-		return {
-			...page,
-			authorizations: page.authorizations.map((record) => ({
-				...record,
-				spend: (usages.get(record.id) ?? new ControlSpendAccumulator()).value(),
-			})),
-		};
-	}
-	private creatingControl?: Promise<SessionSummary>;
-	static readonly CONTROL_ID = "00000000-0000-4000-8000-000000000001";
-	/** The control chat's name, shown as-is by every client. The only place it is spelled. */
-	static readonly CONTROL_TITLE = "Control";
-	private controlRoleAllows = () => false;
-	/** Compatibility fixtures may exercise the legacy runtime. Production never enables it. */
-	setControlRoleGuard(allows: () => boolean): void {
-		this.controlRoleAllows = allows;
-	}
-	assertControlActive(): void {
-		if (!this.controlRoleAllows()) throw new Conflict("Control is read-only on this host");
-	}
-	private isArchivedControl(meta: SessionMeta): boolean {
-		return meta.control === true && !this.controlRoleAllows();
-	}
-	private assertControlWritable(meta: SessionMeta): void {
-		if (meta.control) this.assertControlActive();
-	}
-	/** Reading the singleton never allocates it or starts an archived conversation. */
-	getControlChat(): SessionSummary | undefined {
-		const meta = this.metas.get(SessionManager.CONTROL_ID);
-		return meta?.control ? this.summary(meta) : undefined;
-	}
-	controlPermission(id: string): ControlPermission | undefined {
-		const p = this.metas.get(id)?.controlPermission;
-		return p && { ...p };
-	}
-	/** Retired native decision endpoint. Historical requests are retained, never applied or replayed. */
-	async decideControlPermission(_id: string, _requestId: string, _allow: boolean): Promise<void> {
-		throw new Conflict("Publishing approval is no longer required for Build; this request is obsolete.");
-	}
-	/** Existing implement metadata already carries Build delivery. Never consume legacy pending upgrades. */
-	async prepareControlPermission(id: string): Promise<ControlPermission | undefined> {
-		return this.controlPermission(id);
-	}
-	async remoteControlReconciled(op: import("@pilot/protocol").DurableOperation): Promise<boolean> {
-		const meta = this.metas.get(op.targetId);
-		if (!meta) return false;
-		await this.saving.get(meta.id);
-		const disk = JSON.parse(await readFile(join(this.dir(meta.id), "meta.json"), "utf8")) as SessionMeta;
-		if (op.kind === "control.start") return disk.createOperationId === op.operationId && !!disk.controlPermission;
-		const p = JSON.parse(op.payload) as { action?: string };
-		const action = op.kind === "control.send" ? "send" : p.action;
-		return !!action && disk.remoteControlCommands?.[`control:${action}:${op.operationId}`] === action;
-	}
-	isControlSession(id: string): boolean {
-		return this.controlRoleAllows() && id === SessionManager.CONTROL_ID && this.metas.get(id)?.control === true;
-	}
-	ensureControlChat(): Promise<SessionSummary> {
-		if (!this.controlRoleAllows()) return Promise.reject(new Conflict("Control is read-only on this host"));
-		if (this.creatingControl) return this.creatingControl;
-		this.creatingControl = (async () => {
-			if (this.closing) throw new Error("pilotd is shutting down");
-			const existing = this.metas.get(SessionManager.CONTROL_ID);
-			if (existing) {
-				if (!existing.control) throw new Conflict("Reserved control identity is occupied");
-				return this.summary(existing);
-			}
-			const now = Date.now();
-			const meta: SessionMeta = {
-				id: SessionManager.CONTROL_ID,
-				control: true,
-				title: SessionManager.CONTROL_TITLE,
-				mode: "ask",
-				cwd: this.home,
-				pinned: true,
-				createdAt: now,
-				updatedAt: now,
-			};
-			await mkdir(this.dir(meta.id), { recursive: true, mode: 0o700 });
-			await this.save(meta);
-			this.emit(meta);
-			return this.summary(meta);
-		})().finally(() => {
-			this.creatingControl = undefined;
-		});
-		return this.creatingControl;
-	}
-	private controlService(): ControlChat {
-		if (!this.controlChat) {
-			this.controlChat = new ControlChat(
-				this.home,
-				this.home,
-				this.modelCatalog,
-				(id) => this.isControlSession(id),
-				() => this.metas.get(SessionManager.CONTROL_ID)?.model,
-				(path) => [
-					join(this.home, "main-views"),
-					...this.projects.list().map((project) => project.path),
-					...Array.from(this.metas.keys(), (id) => join(this.dir(id), "scratch")).filter((root) =>
-						path.startsWith(`${root}/`),
-					),
-				],
-			);
-			this.controlChat.memory.onChange(() => {
-				for (const listener of this.controlMemoryListeners) listener();
-			});
-		}
-		return this.controlChat;
-	}
-	controlOrganizeAllowed(): boolean {
-		return !this.controlService().handlingNotice;
-	}
-	controlAuthorizations(): ControlMemory {
-		return this.controlService().memory;
-	}
-	/** Never trust control.prepare's requestId, which is supplied across the tool boundary. */
-	async controlTurnOrigin(): Promise<import("@pilot/kernel").ControlTurnOrigin | undefined> {
-		const worker = this.workers.get(SessionManager.CONTROL_ID);
-		if (!worker || !this.isControlSession(SessionManager.CONTROL_ID)) return undefined;
-		const turn = await this.coldReader.readControlTurn(join(this.dir(SessionManager.CONTROL_ID), "durable"));
-		if (this.workers.get(SessionManager.CONTROL_ID) !== worker) throw new Error("Control worker changed");
-		return turn;
+	private assertHistoryWritable(meta: SessionMeta): void {
+		if (meta.control) throw new Conflict("Retained conversation is read-only");
 	}
 	/** The role service joins synchronously after this guard, so input cannot interleave. */
-	attachIdleToMission(id: string, join: () => SessionSummary): SessionSummary {
-		const meta = this.require(id);
-		this.assertNotContinued(meta);
-		if (
-			this.closing ||
-			meta.archivedAt !== undefined ||
-			meta.failure ||
-			this.changingModels.has(id) ||
-			this.archiveTransitions.has(id) ||
-			this.backgroundWorking(meta)
-		)
-			throw new Conflict("Only an idle, active chat can join a mission");
-		this.assertModelIdle(meta);
-		return join();
-	}
 	private readonly agentDir?: string;
 	private readonly factories: SessionFactories;
 
@@ -1809,10 +1520,9 @@ export class SessionManager {
 					for (const id of ids) this.requestMainRefresh(id);
 				},
 				linked: {
-					targets: () => [...(this.missions?.linkedPullRequests?.() ?? []), ...(this.watchPrs?.targets() ?? [])],
+					targets: () => [...(this.missions?.linkedPullRequests?.() ?? [])],
 					apply: (pr) => {
 						this.missions?.pullRequestUpdated?.(pr);
-						this.watchPrs?.apply(pr);
 					},
 				},
 			},
@@ -1822,22 +1532,6 @@ export class SessionManager {
 
 	setProjectMemory(memory: ProjectMemoryService): void {
 		this.memory = memory;
-	}
-	private watchPrs?: import("./watch-pull-requests.ts").PullRequestWatchSource;
-	setWatchPullRequests(source: import("./watch-pull-requests.ts").PullRequestWatchSource): void {
-		this.watchPrs = source;
-		for (const meta of this.metas.values()) {
-			source.openedBy(meta.id, this.openedPullRequests(meta.id));
-			for (const pr of sessionPullRequests(meta)) source.apply(pr);
-		}
-	}
-	refreshWatchedPullRequest(target: LinkedPullRequest): void {
-		void this.pullRequests.refreshLinked(target);
-	}
-	private openedPullRequests(id: string): SessionPullRequest[] {
-		const meta = this.metas.get(id);
-		const opened = new Set(meta?.agentPullRequests?.map((url) => url.toLowerCase()) ?? []);
-		return meta ? sessionPullRequests(meta).filter((pr) => opened.has(pr.url.toLowerCase())) : [];
 	}
 	private sharing?: import("./shared-context.ts").SharedContextService;
 	setSharedContext(sharing: import("./shared-context.ts").SharedContextService): void {
@@ -1978,13 +1672,30 @@ export class SessionManager {
 				const contents = await readFile(join(this.sessionsDir, id, "meta.json"), "utf8");
 				const meta = operations.time("sessions.metadata.load", () => JSON.parse(contents) as SessionMeta);
 				if (meta.id !== id) throw new Error("Session metadata ID does not match its directory");
-				if (this.isArchivedControl(meta)) {
+				if (this.isRetainedHistory(meta)) {
 					this.metas.set(meta.id, meta);
 					// Archive once, without consuming queued inputs or changing retained history/grants.
 					if (meta.archivedAt === undefined || meta.pinned) {
 						await this.save(meta, { timestamp: meta.archivedAt ?? Date.now() }, { value: false }, true);
 					}
 					continue;
+				}
+				// Compatibility only: preserve existing chat ceilings without retaining Control authority.
+				const legacy = meta as SessionMeta & { controlPermission?: unknown };
+				const legacyPermission =
+					legacy.controlPermission === undefined
+						? undefined
+						: inheritedExecutionPermission(JSON.stringify(legacy.controlPermission));
+				const permission =
+					meta.executionPermission === undefined
+						? undefined
+						: inheritedExecutionPermission(JSON.stringify(meta.executionPermission));
+				if (legacyPermission && permission && JSON.stringify(legacyPermission) !== JSON.stringify(permission))
+					throw new Error("Conflicting execution permissions");
+				const migratedPermission = legacyPermission !== undefined;
+				if (legacyPermission) {
+					meta.executionPermission = legacyPermission;
+					delete legacy.controlPermission;
 				}
 				normalizeLegacyOutcome(meta);
 				const legacyRefresh =
@@ -2007,12 +1718,8 @@ export class SessionManager {
 				const childWork = !meta.failure && !meta.recoveryStopped && this.backgroundWorking(meta);
 				if (childWork) applyActivity(meta, Boolean(meta.working), undefined, true);
 				this.metas.set(meta.id, meta);
-				if (meta.archivedAt === undefined)
-					for (const command of meta.pending ?? []) {
-						if (command.type === "input" && command.requestId.startsWith("control:start:"))
-							await this.watches?.followThroughCreated(meta.id, command.requestId);
-					}
-				if (legacyRefresh || childWork) await this.save(meta);
+				if (legacyRefresh || childWork || migratedPermission)
+					await this.save(meta, undefined, undefined, migratedPermission);
 			} catch (error) {
 				console.warn(`pilotd: skipping unreadable session ${id}: ${error}`);
 			}
@@ -3656,8 +3363,8 @@ export class SessionManager {
 
 	/** Serialize pin changes with archiving so automatic transitions recheck the committed pin. */
 	async setPinned(id: string, pinned: boolean): Promise<SessionSummary> {
-		this.assertControlWritable(this.require(id));
-		if (this.isControlSession(id) && !pinned) throw new Conflict("The control chat stays pinned");
+		this.assertHistoryWritable(this.require(id));
+
 		const end = this.updateGate.begin();
 		try {
 			if (this.closing) throw new Error("pilotd is shutting down");
@@ -3694,7 +3401,7 @@ export class SessionManager {
 			if (!next) throw new Error("title is required");
 			const meta = this.require(id);
 			const unchanged = meta.title === next && !meta.titlePending;
-			this.assertControlWritable(meta);
+			this.assertHistoryWritable(meta);
 			this.missions?.renameCoordinator?.(id, next);
 			if (unchanged) return this.summary(meta);
 			meta.title = next;
@@ -3774,8 +3481,8 @@ export class SessionManager {
 		staleBefore?: number,
 		coordinatorMissionId?: string,
 	): Promise<SessionSummary> {
-		this.assertControlWritable(this.require(id));
-		if (this.isControlSession(id)) return Promise.reject(new Conflict("The control chat cannot be archived"));
+		this.assertHistoryWritable(this.require(id));
+
 		if (this.closing) throw new Error("pilotd is shutting down");
 		this.require(id);
 		const previous = this.archiveTransitions.get(id);
@@ -3836,7 +3543,6 @@ export class SessionManager {
 					}
 				}
 				// Finish interrupted cleanup even on an idempotent archive or an immediate restore.
-				if (meta.archivedAt !== undefined) await this.watches?.removeTarget("chat", id, "chat archived");
 				if ((meta.archivedAt !== undefined) === archived) return this.summary(meta);
 				const worker = this.workers.get(id);
 				if (
@@ -3864,7 +3570,6 @@ export class SessionManager {
 					...(!archived ? { restoredAt: Date.now() } : {}),
 					autoArchivedPullRequest,
 				});
-				if (archived) await this.watches?.removeTarget("chat", id, "chat archived");
 				this.workspaceCleanupBackoff.delete(id);
 				if (archived) await rm(join(this.dir(id), "scratch"), { recursive: true, force: true });
 				this.emit(meta);
@@ -4075,11 +3780,10 @@ export class SessionManager {
 						view.events.filter((event) => event.type !== "queue_update"),
 					);
 					const target: SessionMeta = {
-						...(meta.controlStart ? { controlStart: { ...meta.controlStart } } : {}),
 						title: meta.title,
 						cwd: meta.cwd,
 						mode: meta.mode,
-						controlPermission: structuredClone(meta.controlPermission),
+						executionPermission: structuredClone(meta.executionPermission),
 						projectId: meta.projectId,
 						ask: structuredClone(meta.ask),
 						workspace: structuredClone(meta.workspace),
@@ -4208,7 +3912,7 @@ export class SessionManager {
 	}
 
 	private assertNotContinued(meta: SessionMeta, allowFenced = false): void {
-		this.assertControlWritable(meta);
+		this.assertHistoryWritable(meta);
 		if (!allowFenced) this.sharing?.assertAdmission(meta.id);
 		if (meta.delegationFenced && !allowFenced)
 			throw new Conflict("Delegated execution is fenced; reassignment requires a target seal receipt");
@@ -4336,13 +4040,11 @@ export class SessionManager {
 		if (meta.role !== undefined && meta.role !== "diagnostics") throw new Error("Invalid session role");
 		if (meta.control) {
 			if (
-				meta.id !== SessionManager.CONTROL_ID ||
 				meta.mode !== "ask" ||
 				meta.ask ||
 				meta.projectId ||
 				meta.workspace ||
 				meta.preparing ||
-				(!this.isArchivedControl(meta) && (meta.archivedAt !== undefined || !meta.pinned)) ||
 				meta.repairDiagnostics !== undefined ||
 				meta.role !== undefined
 			)
@@ -4965,11 +4667,7 @@ export class SessionManager {
 			throw new Error("Diagnostic repair requires durable native confirmation");
 		this.assertDiagnosticRepairAdmission(request);
 		if (request.diagnosticRepair) await this.repairProject.validateCurrent(request.diagnosticRepair.binding);
-		const controlPermission = this.controlStartOrigin.getStore()?.permission;
-		const mode =
-			request.role === "diagnostics" || controlPermission?.level === "investigate"
-				? "ask"
-				: (request.mode ?? "build");
+		const mode = request.role === "diagnostics" ? "ask" : (request.mode ?? "build");
 		let projectId = request.projectId;
 		let diagnosticTarget: SessionMeta | undefined;
 		let diagnosticReference: DiagnosticTargetReference | undefined;
@@ -5042,7 +4740,6 @@ export class SessionManager {
 				};
 		this.newSessionAdmissions.add(folded);
 		try {
-			await this.controlStartOrigin.getStore()?.fence?.();
 			// Binding/origin work is asynchronous; keep failure cleanup inside the reservation fence.
 			if (request.diagnosticRepair) await this.repairProject.validateCurrent(request.diagnosticRepair.binding);
 			this.assertDiagnosticRepairAdmission(request);
@@ -5053,7 +4750,6 @@ export class SessionManager {
 		// Revalidate after every asynchronous preparation step and immediately before the first create side effect.
 		// A replaced proposal cannot borrow an earlier native confirmation.
 		this.assertDiagnosticRepairAdmission(request);
-		this.controlStartSideEffect();
 		try {
 			await mkdir(this.dir(id), { recursive: true, mode: 0o700 });
 		} catch (error) {
@@ -5077,11 +4773,7 @@ export class SessionManager {
 			cwd = join(this.dir(id), "workspace");
 		}
 		const meta: SessionMeta = {
-			...(this.controlStartOrigin.getStore()?.provenance
-				? { controlStart: { ...this.controlStartOrigin.getStore()!.provenance! } }
-				: {}),
 			id,
-			...(controlPermission ? { controlPermission: { ...controlPermission } } : {}),
 			...(request.role ? { role: request.role } : {}),
 			...(request.diagnosticScope === "app" ? { diagnosticScope: "app" as const } : {}),
 			...(request.diagnosticScope === "app" && this.diagnosticHost
@@ -5107,7 +4799,7 @@ export class SessionManager {
 			pending: [
 				{
 					type: "input",
-					requestId: this.controlStartOrigin.getStore()?.requestId ?? admission?.operationId ?? randomUUID(),
+					requestId: admission?.operationId ?? randomUUID(),
 					content: request.message,
 					mode: "followUp",
 				},
@@ -5119,7 +4811,6 @@ export class SessionManager {
 			...(request.thinking ? { thinking: request.thinking } : {}),
 		};
 		try {
-			await this.controlStartOrigin.getStore()?.fence?.();
 			if (request.diagnosticRepair) await this.repairProject.validateCurrent(request.diagnosticRepair.binding);
 			this.assertDiagnosticRepairAdmission(request);
 			await this.save(meta, undefined, undefined, Boolean(admission));
@@ -5130,8 +4821,6 @@ export class SessionManager {
 				// The new chat may act on its membership as soon as it starts.
 				await this.missions!.whenDurable?.();
 			}
-			const controlRequestId = this.controlStartOrigin.getStore()?.requestId;
-			if (controlRequestId) await this.watches?.followThroughCreated(id, controlRequestId);
 		} catch (error) {
 			// Admission may lose a coordinator/task claim or race a closed mission.
 			this.missions?.leaveSpawn?.(id);
@@ -5239,7 +4928,7 @@ export class SessionManager {
 		const worker = this.workers.get(id);
 		return (
 			!!meta &&
-			!this.isArchivedControl(meta) &&
+			!this.isRetainedHistory(meta) &&
 			!meta.continuedTo &&
 			!meta.continuationPending &&
 			!this.closing &&
@@ -5270,13 +4959,7 @@ export class SessionManager {
 		requestId: string,
 		event?: import("@pilot/protocol").ChatEventSummary,
 	): Promise<boolean> {
-		if (
-			!this.canSendNotice(id, requestId) ||
-			(requestId.startsWith("watch-notice:")
-				? !this.isControlSession(id)
-				: !this.missions?.noticeAllowed?.(id, requestId))
-		)
-			return false;
+		if (!this.canSendNotice(id, requestId) || !this.missions?.noticeAllowed?.(id, requestId)) return false;
 		const end = this.updateGate.begin();
 		const meta = this.require(id);
 		this.sending.set(id, 1);
@@ -5437,7 +5120,7 @@ export class SessionManager {
 		resumeHeld = false,
 	): Promise<void> {
 		const meta = this.require(id);
-		if (meta.control && !this.controlRoleAllows()) throw new Conflict("Control is read-only on this host");
+		this.assertHistoryWritable(meta);
 		const resumesStoppedRecovery = meta.recoveryStopped === true;
 		this.assertNotContinued(meta);
 		if (typeof message !== "string" || !message.trim()) throw new Error("message is required");
@@ -5478,16 +5161,6 @@ export class SessionManager {
 					...(report ? { reportDelivery: true } : {}),
 					...(resumeHeld ? { resumeHeld: true } : {}),
 				});
-			}
-			if (durable && /^control:(send|redirect):/.test(requestId)) {
-				if (
-					Object.keys(meta.remoteControlCommands ?? {}).length >= 4096 &&
-					!meta.remoteControlCommands?.[requestId]
-				)
-					throw new Conflict("Remote command receipt retention full");
-				(meta.remoteControlCommands ??= {})[requestId] = requestId.startsWith("control:redirect:")
-					? "redirect"
-					: "send";
 			}
 			meta.updatedAt = Date.now();
 			meta.lastUserMessageAt = meta.updatedAt;
@@ -5541,7 +5214,7 @@ export class SessionManager {
 
 	/** Retry worker initialization, without forking history or replacing queued input IDs. */
 	async retryStartup(id: string): Promise<SessionSummary> {
-		this.assertControlWritable(this.require(id));
+		this.assertHistoryWritable(this.require(id));
 		const end = this.updateGate.begin();
 		let locked = false;
 		let release!: () => void;
@@ -5612,14 +5285,13 @@ export class SessionManager {
 		);
 	}
 
-	async stop(id: string, durableRequestId?: string): Promise<StopResponse> {
+	async stop(id: string): Promise<StopResponse> {
 		const meta = this.require(id);
-		if (durableRequestId && (await this.remoteControlCommand(meta, durableRequestId, "stop"))) return { ok: true };
 		this.assertNotContinued(meta, true);
 		if (this.changingModels.has(id)) throw new Conflict("Session is changing its model or conversation");
 		if (this.closing) throw new Error("pilotd is shutting down");
 		if (this.canRetryStartup(meta)) return this.stopFailedRecovery(meta);
-		if (meta.failure || meta.recoveryStopped) return this.remoteStopped(meta, durableRequestId);
+		if (meta.failure || meta.recoveryStopped) return this.stoppedWithoutWorker(meta);
 		if (
 			!meta.initializing &&
 			!this.workers.has(id) &&
@@ -5629,7 +5301,7 @@ export class SessionManager {
 			!meta.inputsPaused &&
 			!meta.working
 		)
-			return this.remoteStopped(meta, durableRequestId);
+			return this.stoppedWithoutWorker(meta);
 		// Stop is allowed for an existing worker, but must not reopen a parked worker during a lease.
 		// A sleep pause needs no admission: persist cancellation now, drain it before recovery on wake.
 		if (!this.workers.has(id) && !this.sleepPause) this.updateGate.assertOpen();
@@ -5655,7 +5327,7 @@ export class SessionManager {
 				? [{ requestId: command.requestId, content: command.content }]
 				: [],
 		);
-		const requestId = durableRequestId ?? randomUUID();
+		const requestId = randomUUID();
 		const automatic = (meta.delegationFenced ? [] : (meta.pending ?? []))
 			.filter(
 				(command) =>
@@ -5665,7 +5337,6 @@ export class SessionManager {
 			)
 			.map((command) => ({ ...command, onlyIfIdle: false }));
 		meta.pending = [{ type: "abort", requestId }, ...automatic];
-		if (durableRequestId) (meta.remoteControlCommands ??= {})[durableRequestId] = "stop";
 		delete meta.inputsPaused;
 		if (meta.preparing) meta.cancelled = true;
 		await this.save(meta);
@@ -5703,73 +5374,7 @@ export class SessionManager {
 	}
 
 	/** Durable queue controls share the app's input outbox and the kernel's inbox mutation line. */
-	async controlInputs(
-		id: string,
-		paused: boolean,
-		durableRequestId?: string,
-	): Promise<{ delivery: "delivered" | "queued" }> {
-		const meta = this.require(id);
-		if (durableRequestId && (await this.remoteControlCommand(meta, durableRequestId, paused ? "pause" : "resume")))
-			return { delivery: "queued" };
-		const end = this.updateGate.begin();
-		this.sending.set(id, (this.sending.get(id) ?? 0) + 1);
-		try {
-			this.assertNotContinued(meta);
-			const transition = this.archiveTransitions.get(id);
-			if (transition) await transition.promise;
-			if (meta.archivedAt !== undefined) throw new Conflict("Restore the archived session first");
-			if (this.changingModels.has(id)) throw new Conflict("Session is changing its model or conversation");
-			if (this.closing) throw new Error("pilotd is shutting down");
-			if (meta.failure || meta.recoveryStopped) throw new Conflict("Chat recovery must be restored first");
-			const revision = (meta.inputControlRevision ?? 0) + 1;
-			const command: PendingCommand = {
-				type: paused ? "pauseInputs" : "resumeInputs",
-				requestId: durableRequestId ?? randomUUID(),
-				revision,
-			};
-			meta.inputControlRevision = revision;
-			meta.inputsPaused = paused;
-			if (durableRequestId) (meta.remoteControlCommands ??= {})[durableRequestId] = paused ? "pause" : "resume";
-			meta.pending ??= [];
-			// Pause precedes waiting inputs. An already-delivering input is resolved on the same kernel line.
-			if (paused) meta.pending.unshift(command);
-			else meta.pending.push(command);
-			await this.save(meta, undefined, undefined, true);
-			const rejected = await this.start(id, true);
-			if (rejected.has(command.requestId)) throw rejected.get(command.requestId);
-			if (meta.failure) throw new Error(meta.failure);
-			if (this.sleepPause) return { delivery: "queued" };
-			if (meta.pending?.includes(command)) throw new WorkerUnavailable("Queue control acknowledgement is uncertain");
-			return { delivery: "delivered" };
-		} finally {
-			const count = (this.sending.get(id) ?? 1) - 1;
-			if (count) this.sending.set(id, count);
-			else this.sending.delete(id);
-			end();
-		}
-	}
-	private async remoteControlCommand(
-		meta: SessionMeta,
-		requestId: string,
-		kind: "stop" | "pause" | "resume",
-	): Promise<boolean> {
-		const prior = meta.remoteControlCommands?.[requestId];
-		if (prior) {
-			if (prior !== kind) throw new Conflict("Remote command identity reused");
-			await this.saving.get(meta.id);
-			const disk = JSON.parse(await readFile(join(this.dir(meta.id), "meta.json"), "utf8")) as SessionMeta;
-			if (disk.remoteControlCommands?.[requestId] === kind) return true;
-			delete meta.remoteControlCommands![requestId];
-		}
-		if (Object.keys(meta.remoteControlCommands ?? {}).length >= 4096)
-			throw new Conflict("Remote command receipt retention full");
-		return false;
-	}
-	private async remoteStopped(meta: SessionMeta, requestId?: string): Promise<StopResponse> {
-		if (requestId) {
-			(meta.remoteControlCommands ??= {})[requestId] = "stop";
-			await this.save(meta);
-		}
+	private async stoppedWithoutWorker(meta: SessionMeta): Promise<StopResponse> {
 		return { ok: true };
 	}
 
@@ -5902,7 +5507,7 @@ export class SessionManager {
 	 * listing reopens a parked session only the first time. Archived, preparing or failed sessions list none.
 	 */
 	async commands(id: string): Promise<SessionCommand[]> {
-		if (this.isArchivedControl(this.require(id))) return [];
+		if (this.isRetainedHistory(this.require(id))) return [];
 		const cached = this.commandLists.get(id);
 		if (cached) return cached;
 		const meta = this.require(id);
@@ -5936,32 +5541,6 @@ export class SessionManager {
 	}
 
 	/** Content-free in-memory worker/admission state, without transcript or storage reads. */
-	controlHealth() {
-		const workers: Record<string, number> = {};
-		for (const worker of this.workers.values()) workers[worker.state] = (workers[worker.state] ?? 0) + 1;
-		let quotaPaused = 0,
-			userStopped = 0;
-		for (const meta of this.metas.values()) {
-			if (meta.archivedAt !== undefined) continue;
-			const quota = this.subscriptionPause(meta);
-			if (quota && !quota.forced) quotaPaused++;
-			if (meta.recoveryStopped) userStopped++;
-		}
-		return {
-			workers: { total: this.workers.size, byState: workers, starting: this.starting.size },
-			connectivity: {
-				state: this.internetOnline === undefined ? "unknown" : this.internetOnline ? "online" : "offline",
-				observedAt: this.internetObservedAt,
-			},
-			pause: {
-				sleep: !!this.sleepPause,
-				update: this.updateGate.paused,
-				maintenance: this.updateGate.frozen,
-				quotaPaused,
-				userStopped,
-			},
-		};
-	}
 
 	/** Content-free host/app projection. It does not enumerate, open, subscribe to or wake chats. */
 	appDiagnostics(host = this.diagnosticHost): AppDiagnostics {
@@ -6087,10 +5666,6 @@ export class SessionManager {
 	}
 
 	/** Registered identity only. Never accepts a path and never starts a worker. */
-	controlDiagnosticDirectory(id: string): string {
-		this.require(id);
-		return this.dir(id);
-	}
 
 	/** Content-free local evidence. Reading a parked or archived chat never starts, subscribes to or mutates it. */
 	async diagnostics(id: string, options: { host?: OperationHost; limit?: number } = {}): Promise<SessionDiagnostics> {
@@ -6404,7 +5979,7 @@ export class SessionManager {
 	 * until its summary is placed; active runs retain turn-boundary placement. Stop cancels it.
 	 */
 	async compact(id: string, instructions?: string): Promise<void> {
-		this.assertControlWritable(this.require(id));
+		this.assertHistoryWritable(this.require(id));
 		const end = this.updateGate.begin();
 		let admitted = false;
 		try {
@@ -6545,7 +6120,7 @@ export class SessionManager {
 		id: string,
 		command: Extract<KernelCommand, { type: "rewind" | "activateAttempt" }>,
 	): Promise<{ switched: boolean; content?: string }> {
-		this.assertControlWritable(this.require(id));
+		this.assertHistoryWritable(this.require(id));
 		const end = this.updateGate.begin();
 		let locked = false;
 		let release!: () => void;
@@ -6827,7 +6402,7 @@ export class SessionManager {
 			: listener;
 		// Preserve the update lease guard before registering a new cold subscription. Existing
 		// live subscriptions and terminal failed-session snapshots do not start new work.
-		if (!worker && !meta.failure && !meta.recoveryStopped && !this.isArchivedControl(meta))
+		if (!worker && !meta.failure && !meta.recoveryStopped && !this.isRetainedHistory(meta))
 			this.updateGate.assertOpen();
 		const watchId = randomUUID();
 		let watchers = this.watchers.get(id);
@@ -6841,7 +6416,7 @@ export class SessionManager {
 		if (worker && !meta.failure) worker.send({ type: "watch", watchId });
 		else if (
 			!this.sleepPause &&
-			!this.isArchivedControl(meta) &&
+			!this.isRetainedHistory(meta) &&
 			!meta.failure &&
 			!meta.recoveryStopped &&
 			meta.archivedAt === undefined &&
@@ -6935,7 +6510,7 @@ export class SessionManager {
 				// writing durable state, or fabricating a new completion timestamp.
 				if (
 					!this.sleepPause &&
-					!this.isArchivedControl(meta) &&
+					!this.isRetainedHistory(meta) &&
 					!meta.failure &&
 					!meta.recoveryStopped &&
 					view.completion &&
@@ -7173,8 +6748,6 @@ export class SessionManager {
 		await Promise.allSettled(this.coordinatorUnbindings.values());
 		await Promise.allSettled(this.roleTransitions.values());
 		await Promise.all([...this.workers.values()].map((worker) => worker.close()));
-		await this.controlActions?.settled();
-		await this.controlChat?.stop();
 		await Promise.allSettled([...this.parking.values()]);
 		await this.coldReader.close();
 		this.subagentWatchStore?.close();
@@ -7228,7 +6801,7 @@ export class SessionManager {
 		const existing = this.starting.get(id);
 		if (existing) return existing;
 		const meta = this.require(id);
-		if (meta.control && !this.controlRoleAllows()) return Promise.resolve(new Map());
+		if (meta.control) return Promise.resolve(new Map());
 		if (meta.delegationFenced && !meta.pending?.some((command) => command.type === "abort"))
 			return Promise.resolve(new Map());
 		if (meta.continuedTo || meta.continuationPending || (!admitted && this.changingModels.has(id)))
@@ -7342,11 +6915,9 @@ export class SessionManager {
 						if (
 							command.type === "input" &&
 							command.onlyIfIdle &&
-							((command.requestId.startsWith("watch-notice:")
-								? !this.isControlSession(id) || meta.archivedAt !== undefined
-								: command.requestId.startsWith("mission-notice:")
-									? !this.missions?.noticeAllowed?.(id, command.requestId) || meta.archivedAt !== undefined
-									: meta.prFollowUp?.requestId !== command.requestId) ||
+							((command.requestId.startsWith("mission-notice:")
+								? !this.missions?.noticeAllowed?.(id, command.requestId) || meta.archivedAt !== undefined
+								: meta.prFollowUp?.requestId !== command.requestId) ||
 								meta.pending.some((pending) => pending !== command))
 						) {
 							rejected.set(
@@ -7574,7 +7145,6 @@ export class SessionManager {
 					...(repairDiagnostics ? { repairDiagnostics } : {}),
 					...(usageHistory ? { usageHistory } : {}),
 					...(usageMission ? { usageMission } : {}),
-					...(meta.control ? { control: true } : {}),
 					...(meta.role ? { role: meta.role } : {}),
 					...(diagnosticTarget ? { diagnosticTarget } : {}),
 					...(diagnosticScope ? { diagnosticScope } : {}),
@@ -7595,7 +7165,7 @@ export class SessionManager {
 					agentDir: this.agentDir,
 					...(meta.workspace ? { trustDirectory: meta.workspace.source } : {}),
 					pilot: {
-						...(meta.controlPermission ? { controlPermission: meta.controlPermission } : {}),
+						...(meta.executionPermission ? { executionPermission: meta.executionPermission } : {}),
 						...(meta.role ? { role: meta.role } : {}),
 						...(diagnosticTarget ? { diagnosticTarget } : {}),
 						...(meta.diagnosticHistoryAccess === true ? { diagnosticHistoryAccess: true } : {}),
@@ -7738,15 +7308,6 @@ export class SessionManager {
 			);
 			return;
 		}
-		if (
-			packet.type === "accepted" &&
-			packet.delivery === "not_started" &&
-			packet.requestId.startsWith("control:send:") &&
-			this.workers.get(meta.id) === worker
-		)
-			void this.watches
-				?.cancelFollowThrough(packet.requestId)
-				.catch((error) => console.warn(`pilotd: result watch cancellation failed: ${error}`));
 		if (packet.type === "update.paused") {
 			const pause = this.updatePausing.get(worker);
 			if (pause?.id === packet.id) {
@@ -7785,43 +7346,6 @@ export class SessionManager {
 			(packet.type === "ready" || packet.type === "usage" || packet.type === "modelChanged")
 		)
 			this.aiUsage.observeUsage(meta.id, packet.usage);
-		if (packet.type === "watch.run") {
-			if (this.workers.get(meta.id) !== worker) return;
-			void (
-				this.watches?.attributeSessionRun(
-					meta.id,
-					packet.controlCaused ? SessionManager.CONTROL_ID : meta.id,
-					packet.requestIds,
-					packet.recoveredOnly,
-				) ?? Promise.resolve()
-			)
-				.then(async () => {
-					if (packet.recoveredOnly) await this.watches?.observe(settledSessionEvents(this.summary(meta)));
-				})
-				.then(
-					() => worker.send({ type: "watch.run.result", callId: packet.callId }),
-					(error: unknown) =>
-						worker.send({
-							type: "watch.run.result",
-							callId: packet.callId,
-							error: formatFailure(error, "Watch run attribution"),
-						}),
-				);
-			return;
-		}
-		if (packet.type === "control.permission.prepare") {
-			if (this.workers.get(meta.id) !== worker) return;
-			void this.prepareControlPermission(meta.id).then(
-				(result) => worker.send({ type: "control.permission.result", callId: packet.callId, result }),
-				(error: unknown) =>
-					worker.send({
-						type: "control.permission.result",
-						callId: packet.callId,
-						error: formatFailure(error, "Control permission preparation"),
-					}),
-			);
-			return;
-		}
 		if (packet.type === "systemMessageState") {
 			try {
 				if (!this.missions?.systemMessageState) return;
@@ -7924,33 +7448,6 @@ export class SessionManager {
 						});
 				},
 			);
-			return;
-		}
-		if (packet.type === "pilot.call") {
-			void Promise.resolve()
-				.then(() => {
-					if (this.workers.get(meta.id) !== worker || !this.isControlSession(meta.id) || !this.pilot)
-						throw new Error("Only the control chat may call pilot");
-					return this.pilot.call(meta.id, packet.action, packet.args, packet.operationId);
-				})
-				.then(
-					(result) => {
-						if (this.workers.get(meta.id) === worker)
-							worker.send({
-								type: "pilot.result",
-								callId: packet.callId,
-								result: JSON.parse(JSON.stringify(result ?? null)),
-							});
-					},
-					(error) => {
-						if (this.workers.get(meta.id) === worker)
-							worker.send({
-								type: "pilot.result",
-								callId: packet.callId,
-								error: formatFailure(error, "Tool pilot"),
-							});
-					},
-				);
 			return;
 		}
 		if (packet.type === "diagnostics.context.cancel") {
@@ -8130,32 +7627,6 @@ export class SessionManager {
 				);
 			return;
 		}
-		if (packet.type === "control.call") {
-			void Promise.resolve()
-				.then(() => {
-					if (!this.isControlSession(meta.id)) throw new Error("Only the control chat may use this service");
-					return this.controlService().call(meta.id, packet.action, packet.args);
-				})
-				.then(
-					(result) => {
-						if (this.workers.get(meta.id) === worker)
-							worker.send({
-								type: "control.result",
-								callId: packet.callId,
-								result: JSON.parse(JSON.stringify(result ?? null)),
-							});
-					},
-					(error) => {
-						if (this.workers.get(meta.id) === worker)
-							worker.send({
-								type: "control.result",
-								callId: packet.callId,
-								error: formatFailure(error, "Control chat"),
-							});
-					},
-				);
-			return;
-		}
 		if (packet.type === "mission.call") {
 			const reply = (result: { result?: unknown; error?: string }) => {
 				if (this.workers.get(meta.id) === worker)
@@ -8176,16 +7647,6 @@ export class SessionManager {
 					worker.send({ type: "memory.result", callId: packet.callId, ...(result as { result?: never }) });
 			};
 			const call = Promise.resolve().then(async () => {
-				if (this.isControlSession(meta.id)) {
-					if (!this.memory) throw new Error("Project memory is unavailable");
-					this.controlProjectMemory ??= new ControlProjectMemory(
-						this.memory,
-						(id) => this.projects.require(id),
-						(id) => this.isControlSession(id),
-						() => this.controlAudit(),
-					);
-					return this.controlProjectMemory.call(meta.id, packet.action, packet.args, packet.operationId);
-				}
 				if (packet.args.projectId !== undefined)
 					throw new Error("Ordinary chats use their implicit project memory");
 				if (this.sharing?.membership(meta.id)) return this.sharing.memoryCall(meta.id, packet.action, packet.args);
@@ -8502,7 +7963,7 @@ export class SessionManager {
 	}
 
 	private summary(meta: SessionMeta, worker = this.workers.get(meta.id)): SessionSummary {
-		const retiredControl = this.isArchivedControl(meta);
+		const retainedHistory = this.isRetainedHistory(meta);
 		const membership = this.missionSummary(meta.id);
 		const coordinator = membership.missionCoordinator === true;
 		const paused =
@@ -8531,7 +7992,7 @@ export class SessionManager {
 		// Compaction runs without a turn: show it as work, but keep the last result.
 		const workerState = worker?.state === "idle" && worker.compacting ? "working" : worker?.state;
 		const kernelState =
-			retiredControl || (meta.recoveryStopped && !meta.failure)
+			retainedHistory || (meta.recoveryStopped && !meta.failure)
 				? "parked"
 				: paused
 					? "parked"
@@ -8556,7 +8017,7 @@ export class SessionManager {
 			) ??
 				false);
 		const mainActive =
-			!retiredControl &&
+			!retainedHistory &&
 			kernelState !== "failed" &&
 			(kernelState === "working" || kernelState === "starting" || !!meta.working || !!meta.pending?.length);
 		// An unanswered ask_user question needs the user, so background jobs and subagents do not count as work.
@@ -8612,7 +8073,6 @@ export class SessionManager {
 		return {
 			id: meta.id,
 			...(meta.control ? { control: true } : {}),
-			...(meta.controlStart ? { controlStart: { ...meta.controlStart } } : {}),
 			...(meta.role ? { role: meta.role } : {}),
 			...(meta.diagnosticScope === "app" ? { diagnosticScope: "app" as const } : {}),
 			...(meta.diagnosticTargetId ? { diagnosticTargetId: meta.diagnosticTargetId } : {}),
@@ -8682,12 +8142,6 @@ export class SessionManager {
 				: {}),
 			...(!working && !heldAtQuota && !offlinePaused && meta.outcomeReason !== undefined
 				? { outcomeReason: safeFailureText(meta.outcomeReason) }
-				: {}),
-			...(meta.control && !working && this.watches?.dashboard().authorizationNeededTotal
-				? {
-						outcome: "question" as const,
-						outcomeReason: "Authorization needed. No action taken; see the Control dashboard.",
-					}
 				: {}),
 			...(!coordinator && meta.pullRequest ? { pullRequest: meta.pullRequest } : {}),
 			...(!coordinator && sessionPullRequests(meta).length ? { pullRequests: sessionPullRequests(meta) } : {}),
@@ -8921,10 +8375,6 @@ export class SessionManager {
 			);
 		else for (const pr of discovered) this.missions?.pullRequestCreated?.(meta.id, pr.url);
 		for (const pr of [next, ...(result.others ?? [])]) if (pr) this.missions?.pullRequestUpdated?.(pr);
-		if (this.watchPrs) {
-			this.watchPrs.openedBy(meta.id, this.openedPullRequests(meta.id));
-			for (const pr of [next, ...(result.others ?? [])]) if (pr) this.watchPrs.apply(pr);
-		}
 		if (!result.error && fresh) await this.observePullRequests(meta);
 		// Observers announce terminal PRs only after every discovered head is linked and reconciled.
 		if (fresh || changed) this.emit(meta);
@@ -9685,11 +9135,6 @@ export class SessionManager {
 		archive?: { timestamp?: number; restoredAt?: number; autoArchivedPullRequest?: string },
 		pin?: { value: boolean },
 		durable = false,
-		control?: {
-			permission: ControlPermission;
-			pending?: ControlPermission & { approvalRequestId?: string };
-			request?: PermissionRequestState;
-		},
 	): Promise<void> {
 		this.metas.set(meta.id, meta);
 		// Capture before joining the queue. The live meta can change while an earlier write awaits I/O.
@@ -9699,10 +9144,8 @@ export class SessionManager {
 			const file = join(this.dir(meta.id), "meta.json");
 			const temp = `${file}.${randomUUID()}.tmp`;
 			const persisted = operations.time("sessions.metadata.parse", () => JSON.parse(snapshot) as SessionMeta);
-			// Commit authority only after fsync/rename. Queued lifecycle snapshots cannot undo an upgrade.
-			persisted.controlPermission = control?.permission ?? meta.controlPermission;
-			persisted.pendingControlPermission = control ? control.pending : meta.pendingControlPermission;
-			persisted.permissionRequest = control?.request ?? meta.permissionRequest;
+			// Preserve the immutable execution ceiling across queued lifecycle snapshots.
+			persisted.executionPermission = meta.executionPermission;
 			// Continuation fencing must survive lifecycle snapshots queued before the ownership commit.
 			for (const key of ["continuedTo", "continuationOf", "continuationPending", "workspaceOriginId"] as const) {
 				if (meta[key] === undefined) delete persisted[key];
@@ -9780,12 +9223,6 @@ export class SessionManager {
 			if (pin) {
 				if (pin.value) meta.pinned = true;
 				else delete meta.pinned;
-			}
-			if (control) {
-				meta.controlPermission = { ...control.permission };
-				if (control.request) meta.permissionRequest = { ...control.request };
-				if (control.pending) meta.pendingControlPermission = { ...control.pending };
-				else delete meta.pendingControlPermission;
 			}
 			// Commit in memory before the next queued save can read the metadata.
 			if (archive) {

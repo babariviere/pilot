@@ -41,9 +41,6 @@ async function fixture(t: TestContext) {
 	const listeners = new Set<(session: SessionSummary) => void>();
 	const sessions = {
 		setWorkspaceProcessGuard() {},
-		onControlAudit: () => () => {},
-		onControlMemory: () => () => {},
-		onControlDashboardChange: () => () => {},
 		list: (query: { projectId?: string; archived?: string } = {}) =>
 			[...chats.values()].filter((chat) => !query.projectId || chat.projectId === query.projectId),
 		get: (id: string) => chats.get(id),

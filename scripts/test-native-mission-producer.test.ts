@@ -6,17 +6,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
-	buildControlDashboard,
-	type ControlDashboardSources,
-	type ControlSharedMissionGroup,
-} from "../packages/daemon/src/control-dashboard.ts";
-import { ControlPilot } from "../packages/daemon/src/control-pilot.ts";
+	buildMissionCatalog,
+	type MissionCatalogSources,
+	type SharedMissionGroup,
+} from "../packages/daemon/src/mission-catalog.ts";
 import { ModelCatalog } from "../packages/daemon/src/models.ts";
 import { ProjectStore } from "../packages/daemon/src/projects.ts";
 import { createDaemonServer } from "../packages/daemon/src/server.ts";
 import { SessionManager } from "../packages/daemon/src/sessions.ts";
 import { TerminalManager } from "../packages/daemon/src/terminals.ts";
-import type { Mission, OperationHost, Project } from "../packages/protocol/src/index.ts";
+import type { Mission, OperationHost } from "../packages/protocol/src/index.ts";
 
 const fixtureURL = new URL("../apps/macos/Tests/Fixtures/logical-mission-producer.json", import.meta.url);
 const home: OperationHost = { hostId: "daemon", daemonId: "producer", lineageId: "producer-lineage" };
@@ -37,7 +36,7 @@ function mission(id = "same", patch: Partial<Mission> = {}): Mission {
 		...patch,
 	};
 }
-function replica(bindingId: string, sequence: number, title = "Replica", complete = true): ControlSharedMissionGroup {
+function replica(bindingId: string, sequence: number, title = "Replica", complete = true): SharedMissionGroup {
 	return {
 		projectId: "p",
 		missionId: "same",
@@ -65,30 +64,25 @@ test("native mission fixtures are real production HTTP/service payloads, not a s
 	const sessions = new SessionManager(directory, projects);
 	const terminals = new TerminalManager();
 	let definitions: Mission[] = [];
-	let shared: ControlSharedMissionGroup[] = [];
-	const sources: ControlDashboardSources = {
+	let shared: SharedMissionGroup[] = [];
+	const sources: MissionCatalogSources = {
 		host: home,
-		sessions,
-		projects: () => [{ id: "p", name: "Project", path: "/unused", createdAt: 1 }] as Project[],
 		missions: () => definitions,
-		linear: () => [],
 		sharedContext: () => shared,
 	};
 	t.mock.method(sessions, "list", () => []);
 	const history = t.mock.method(sessions, "history", async () => {
 		throw new Error("History must not be read");
 	});
-	const ensure = t.mock.method(sessions, "ensureControlChat", async () => {
-		throw new Error("Worker must not start");
-	});
-	sessions.setPilot(new ControlPilot({ ...sources, sessions, isControl: () => true }));
-	const server = createDaemonServer(
+	const args: Parameters<typeof createDaemonServer> = [
 		{ home: directory, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
 		new ModelCatalog(directory),
 		terminals,
-	);
+	];
+	args[20] = sources;
+	const server = createDaemonServer(...args);
 	t.after(async () => {
 		await new Promise<void>((resolve) => server.close(() => resolve()));
 		await terminals.shutdown();
@@ -98,8 +92,8 @@ test("native mission fixtures are real production HTTP/service payloads, not a s
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	t.mock.method(Date, "now", () => 5000);
-	const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/control-chat/dashboard`;
-	const scenarios: Array<{ name: string; definitions: Mission[]; shared: ControlSharedMissionGroup[] }> = [
+	const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/mission-catalog`;
+	const scenarios: Array<{ name: string; definitions: Mission[]; shared: SharedMissionGroup[] }> = [
 		{
 			name: "canonical-and-alias",
 			definitions: [mission("same", { status: "archived", tasksDone: 2, tasksTotal: 3 })],
@@ -201,7 +195,7 @@ test("native mission fixtures are real production HTTP/service payloads, not a s
 		const response = await fetch(url);
 		assert.equal(response.status, 200);
 		const dashboard = await response.json();
-		assert.deepEqual(dashboard, JSON.parse(JSON.stringify(buildControlDashboard(sources, {}, 5000))));
+		assert.deepEqual(dashboard, JSON.parse(JSON.stringify(buildMissionCatalog(home, definitions, shared, 5000))));
 		assert.ok(Array.isArray(dashboard.logicalMissions));
 		assert.ok(Buffer.byteLength(JSON.stringify(dashboard)) <= 24_000);
 		const scoped = await fetch(`${url}?projectId=p`);
@@ -209,7 +203,6 @@ test("native mission fixtures are real production HTTP/service payloads, not a s
 		cases.push({ name: scenario.name, definitions, dashboard });
 	}
 	assert.equal(history.mock.callCount(), 0);
-	assert.equal(ensure.mock.callCount(), 0);
 	const captured = { sourcePin: { hostId: "local", daemonId: home.daemonId, lineageId: home.lineageId }, cases };
 	if (process.env.PILOT_REFRESH_MISSION_FIXTURE === "1") {
 		await writeFile(fixtureURL, `${JSON.stringify(captured, null, 2)}\n`);

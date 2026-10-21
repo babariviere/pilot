@@ -251,7 +251,7 @@ test("missing mappings fail actionably and durably; retry budget is bounded and 
 	await f.projects.update(f.project.id, {
 		tracking: { linearTeam: "root", slackChannels: [], linearStateMappings: { child: mappings } },
 	});
-	f.store.controlLinearSync(f.mission.id, f.manager.id, "resume");
+	f.store.setLinearSyncPaused(f.mission.id, f.manager.id, "resume");
 	await f.poll();
 	assert.equal(f.writes.at(-1)?.state, "merged");
 });
@@ -269,7 +269,7 @@ test("manual changes pause across task edits and restart; resume accepts reviewe
 	await f.poll();
 	assert.equal(f.writes.length, 1);
 	assert.equal(f.status().state, "paused");
-	f.store.controlLinearSync(f.mission.id, f.manager.id, "resume");
+	f.store.setLinearSyncPaused(f.mission.id, f.manager.id, "resume");
 	await f.poll();
 	assert.equal(f.writes.at(-1)?.state, "merged");
 	f.set("1", "todo");
@@ -340,7 +340,7 @@ test("stale final reads, immutable identity changes and moved teams never write"
 	assert.equal(f.status().state, "paused");
 	assert.equal(f.writes.length, 0);
 	f.issues[0]!.teamId = "child";
-	f.store.controlLinearSync(f.mission.id, f.manager.id, "resume");
+	f.store.setLinearSyncPaused(f.mission.id, f.manager.id, "resume");
 	let reads = 0;
 	f.setHook((tool) => {
 		if (tool === "issue" && ++reads === 2) f.set("2", "todo");
@@ -360,7 +360,7 @@ test("user pause cannot be lost on a failed observation and unsafe closing guard
 	let now = Date.now();
 	t.mock.method(Date, "now", () => now);
 	const f = await fixture(t);
-	f.store.controlLinearSync(f.mission.id, f.manager.id, "pause");
+	f.store.setLinearSyncPaused(f.mission.id, f.manager.id, "pause");
 	f.setHook(() => {
 		throw new Error("offline");
 	});
@@ -478,7 +478,7 @@ test("closing eligibility freshly verifies mappings and scope without remote wri
 	f.store.removeResource(f.mission.id, f.b.id);
 	assert.equal((await f.service.closingEligibility(f.mission.id, f.manager.id)).allowed, false);
 	assert.equal(f.writes.length, 0);
-	f.store.controlLinearSync(f.mission.id, f.manager.id, "resume");
+	f.store.setLinearSyncPaused(f.mission.id, f.manager.id, "resume");
 	assert.equal((await f.service.closingEligibility(f.mission.id, f.manager.id)).allowed, true);
 	f.state("deployed");
 	assert.equal((await f.service.closingEligibility(f.mission.id, f.manager.id)).allowed, false);
@@ -528,7 +528,7 @@ test("renamed identifiers keep their pinned UUID, workspace mismatches never bin
 
 test("manual pauses do not hide inbound cancellation or change its task policy", async (t) => {
 	const f = await fixture(t);
-	f.store.controlLinearSync(f.mission.id, f.manager.id, "pause");
+	f.store.setLinearSyncPaused(f.mission.id, f.manager.id, "pause");
 	f.state("canceled");
 	await f.poll();
 	assert.equal(f.status().state, "terminal");
@@ -553,10 +553,10 @@ test("another URL cannot acquire a second writer for the same immutable UUID", a
 test("Needs you counts each paused or failed managed ticket and clears on recovery", async (t) => {
 	const f = await fixture(t, true);
 	assert.equal(f.store.require(f.mission.id).needsYouCount, 0);
-	f.store.controlLinearSync(f.mission.id, f.manager.id, "pause");
+	f.store.setLinearSyncPaused(f.mission.id, f.manager.id, "pause");
 	assert.equal(f.store.require(f.mission.id).needsYouCount, 1);
 	assert.match(f.store.require(f.mission.id).needsYouReason!, /Linear ENG-1:.*paused/);
-	f.store.controlLinearSync(f.mission.id, f.manager.id, "resume");
+	f.store.setLinearSyncPaused(f.mission.id, f.manager.id, "resume");
 	assert.equal(f.store.require(f.mission.id).needsYouCount, 0);
 	f.setHook(() => {
 		throw new Error("offline");
@@ -567,7 +567,7 @@ test("Needs you counts each paused or failed managed ticket and clears on recove
 	await f.restart();
 	assert.equal(f.store.detail(f.mission.id).mission.needsYouCount, 1);
 	f.setHook(undefined);
-	f.store.controlLinearSync(f.mission.id, f.manager.id, "resume");
+	f.store.setLinearSyncPaused(f.mission.id, f.manager.id, "resume");
 	await f.poll();
 	assert.equal(f.store.require(f.mission.id).needsYouCount, 0);
 	assert.equal(f.store.require(f.mission.id).needsYouReason, undefined);
@@ -846,7 +846,7 @@ test("an already-matching ticket still verifies workflow guards and respects exp
 	const g = await fixture(t);
 	g.state("active");
 	g.set("1", "in_progress");
-	g.store.controlLinearSync(g.mission.id, g.manager.id, "pause");
+	g.store.setLinearSyncPaused(g.mission.id, g.manager.id, "pause");
 	await g.poll();
 	assert.equal(g.status().state, "paused");
 	assert.equal(g.writes.length, 0);

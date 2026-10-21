@@ -665,7 +665,6 @@ export class MissionService {
 				!detail.artifacts.some((ref) => ref.artifactId === item.artifactId && ref.sessionId === item.sessionId)
 			)
 				throw new Conflict("That artifact's chat is no longer in this mission");
-		if (artifacts.length || links.length) this.sessions.controlStartSideEffect();
 		this.store.attachTaskReferences(missionId, taskIds, artifacts, links);
 		const session = await this.sessions.spawn(
 			{

@@ -551,7 +551,6 @@ enum GoDestination: String, CaseIterable {
     case archive
     case slack
     case linear
-    case control
 }
 
 /// The keyboard state views register their regions, handlers and commands with: the app's, or a fixture window's.

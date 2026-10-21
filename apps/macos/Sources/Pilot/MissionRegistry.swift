@@ -6,7 +6,7 @@ import PilotCore
 /// verified sources with two reads at a time. No writes, authority moves, timers or polling.
 @MainActor
 final class MissionRegistry: ObservableObject {
-    @Published private(set) var rows: [ControlLogicalMission] = []
+    @Published private(set) var rows: [LogicalMission] = []
     @Published private(set) var total: Int?
     @Published private(set) var truncated = false
     @Published private(set) var conflicts: Set<String> = []
@@ -40,7 +40,7 @@ final class MissionRegistry: ObservableObject {
 
     func stop() {
         observations.removeAll()
-        for (client, id) in listeners.values { client.stopObservingControlDetails(id) }
+        for (client, id) in listeners.values { client.stopObservingMissionCatalog(id) }
         listeners.removeAll(); tokens.removeAll(); pending.removeAll()
         for (_, task) in running.values { task.cancel() }
         reconcileTask?.cancel(); reconcileTask = nil
@@ -72,12 +72,12 @@ final class MissionRegistry: ObservableObject {
             let client = host == model.localHost ? model.client : model.hosts.presentationClient(host)
             let token = client.connected ? HostConnectionToken(host: host, generation: client.connectionGeneration) : nil
             if tokens[host] != token || listeners[host]?.0 !== client {
-                if let (previous, id) = listeners.removeValue(forKey: host) { previous.stopObservingControlDetails(id) }
+                if let (previous, id) = listeners.removeValue(forKey: host) { previous.stopObservingMissionCatalog(id) }
                 running[host]?.1.cancel()
                 tokens[host] = token
                 if let token {
-                    let id = client.observeControlDetails { [weak self] change in
-                        if change == .dashboard { self?.enqueue(token.host) }
+                    let id = client.observeMissionCatalog { [weak self] in
+                        self?.enqueue(token.host)
                     }
                     listeners[host] = (client, id)
                     enqueue(host)
@@ -86,7 +86,7 @@ final class MissionRegistry: ObservableObject {
             if changedMissions { enqueue(host) }
         }
         for host in Array(listeners.keys) where !hosts.contains(host) {
-            if let (client, id) = listeners.removeValue(forKey: host) { client.stopObservingControlDetails(id) }
+            if let (client, id) = listeners.removeValue(forKey: host) { client.stopObservingMissionCatalog(id) }
             tokens[host] = nil; running[host]?.1.cancel()
         }
         pending.removeAll { tokens[$0] == nil }
@@ -110,7 +110,7 @@ final class MissionRegistry: ObservableObject {
             let task = Task { [weak self] in
                 guard let self else { return }
                 do {
-                    let dashboard = try await client.controlDashboard()
+                    let dashboard = try await client.missionCatalog()
                     try Task.checkCancellation()
                     guard self.tokens[host] == token, client.connected,
                           client.connectionGeneration == token.generation else { throw HostRoutingError.staleGeneration }
@@ -153,11 +153,11 @@ final class MissionRegistry: ObservableObject {
         }
     }
 
-    func row(for reference: HostResourceRef) -> ControlLogicalMission? {
+    func row(for reference: HostResourceRef) -> LogicalMission? {
         rows.first { LogicalMissionCatalog.matches($0.mission.home, pin: reference.host) && $0.mission.missionId == reference.localId }
     }
 
-    func destination(_ row: ControlLogicalMission, model: AppModel) -> HostResourceRef {
+    func destination(_ row: LogicalMission, model: AppModel) -> HostResourceRef {
         let matches = Set(model.hosts.offlineHosts.keys).union(model.hosts.missions.map { $0.ref.host })
             .union(model.localHost.map { [$0] } ?? []).filter { LogicalMissionCatalog.matches(row.mission.home, pin: $0) }
         // Unknown or ambiguous enrollment never selects an execution host as a substitute home.

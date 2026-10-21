@@ -241,7 +241,6 @@ extension AppModel {
         guard let ref = resourceRef(id, kind: kind, context: context) else { return }
         showingArchive = false
         showingInbox = false
-        showingControl = false
         clearProjectSubpage()
         let key = ref.host == localHost ? ref.localId : ref.storageKey
         switch kind {

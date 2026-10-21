@@ -12,8 +12,6 @@ import { BackgroundUsage } from "./background-usage.ts";
 import { loadConfig } from "./config.ts";
 import { migratePilotConfig } from "./config-migration.ts";
 import { ConnectivityService } from "./connectivity.ts";
-import { ControlHostStore } from "./control-host-store.ts";
-import { ControlHosts } from "./control-hosts.ts";
 import { CredentialBroker } from "./credential-broker.ts";
 import { EnvironmentService } from "./environment.ts";
 import { EnvironmentStateStore } from "./environment-state.ts";
@@ -55,7 +53,6 @@ import { TrackedItemStore } from "./tracked-items.ts";
 import { TriageGroomer, workerTriage } from "./triage-grooming.ts";
 import { untrackedStats } from "./untracked-stats.ts";
 import { UsageHistoryStore } from "./usage-history.ts";
-import { WatchService } from "./watch-service.ts";
 
 const config = loadConfig();
 await migratePilotConfig(config.agentDir ?? getAgentDir());
@@ -67,13 +64,6 @@ await installCredentialBrokerHooks();
 const capabilities = await detectPlatformCapabilities();
 const hello = await daemonHello(config.home, capabilities);
 if (!hello.lineageId) throw new Error("Storage lineage is required for sharing");
-// Recover local conversation role and effective policy before any session/watch recovery.
-const controlHostStore = new ControlHostStore(join(config.home, "control-hosts", "state.sqlite"));
-const controlHosts = new ControlHosts(
-	{ hostId: "daemon", daemonId: hello.daemonId, lineageId: hello.lineageId },
-	controlHostStore,
-);
-await controlHosts.recoverConversationRole();
 const telemetry = await TelemetrySettingsService.open(config.home, hello);
 configureNodeTelemetry(telemetry.nodeOptions("pilot.daemon"));
 // Log long timer delays with context, without assuming sleep or descheduling is synchronous CPU work.
@@ -82,10 +72,6 @@ watchdog.start();
 const projects = new ProjectStore(config.home);
 await projects.load();
 const trackedItems = new TrackedItemStore(join(config.home, "tracked-items.sqlite"));
-// Retained watch records remain readable, but no observations, delivery, retries or follow-through run.
-const watches = new WatchService(join(config.home, "watches.sqlite"), true);
-await watches.ready();
-await watches.list();
 await trackedItems.load(projects.list().map((project) => project.id));
 const sourceMcp = new PiSourceMcpClient(config.agentDir);
 const tracking = new SourceRegistry(projects, trackedItems, sourceMcp);
@@ -235,20 +221,6 @@ for (const mission of missionStore.list())
 	if (mission.status === "done" && mission.completedAt !== undefined)
 		await trackedItems.completeSlackMission(mission.projectId, mission.id, mission.completedAt);
 const missionService = new MissionService(missionStore, sessions, projects);
-// Mission reads use a change-driven snapshot, never SQL from a control tool call.
-const controlMissions = new Map(missionStore.list().map((mission) => [mission.id, mission]));
-const controlAttention = new Map(
-	[...controlMissions.values()]
-		.filter((m) => m.status === "active")
-		.map((m) => [m.id, missionStore.controlAttention(m)]),
-);
-const stopControlMissions = missionStore.onChange((id) => {
-	const mission = missionStore.get(id);
-	if (mission) controlMissions.set(id, mission);
-	else controlMissions.delete(id);
-	if (mission?.status === "active") controlAttention.set(id, missionStore.controlAttention(mission));
-	else controlAttention.delete(id);
-});
 const sharing = new SharedContextService(
 	{ hostId: "daemon", daemonId: hello.daemonId, lineageId: hello.lineageId },
 	missionStore,
@@ -259,26 +231,6 @@ const sharing = new SharedContextService(
 );
 sessions.setSharedContext(sharing);
 missionService.setSharedContext(sharing);
-let controlSharedContext = missionStore.controlSharedContext(sharing.host);
-const stopControlSharedContext = sharing.onChange(() => {
-	controlSharedContext = missionStore.controlSharedContext(sharing.host);
-});
-const { ControlPilot } = await import("./control-pilot.ts");
-sessions.setPilot(
-	new ControlPilot({
-		host: sharing.host,
-		// The cached dashboard still backs the app's logical mission registry. It is not an agent.
-		isControl: () => false,
-		sessions,
-		projects: () => projects.list(),
-		missions: () => [...controlMissions.values()],
-		missionAttention: (id) => controlAttention.get(id),
-		sharedContext: () => controlSharedContext,
-		onDashboardChange: (listener) => sharing.onChange(listener),
-		nextWatches: () => watches.dashboard(),
-		linear: (id) => trackedItems.preview(id, "linear").items,
-	}),
-);
 missionService.setLinearClosingGuard((missionId, resourceId) => linearSync.closingEligibility(missionId, resourceId));
 missionService.setLinearReader(sourceMcp);
 const linearPrChecks = new MissionLinearPrChecks(
@@ -381,13 +333,11 @@ const server = createDaemonServer(
 	setup,
 	sharing,
 	maintenance,
-	watches,
+	undefined,
 	telemetry,
 	githubSetup,
 	githubImport,
-	{
-		hosts: controlHosts,
-	},
+	undefined,
 	environment,
 );
 server.listen(config.port, config.host, () => {
@@ -402,7 +352,6 @@ async function stop(): Promise<void> {
 	watchdog.stop();
 	maintenance?.close();
 	server.close();
-	stopControlSharedContext();
 	await sharing.stop();
 	await schedules.stop();
 	await connectivity.stop();
@@ -419,7 +368,6 @@ async function stop(): Promise<void> {
 		.closeDiagnosticEvidence()
 		.catch(() => console.warn("pilotd: retained refresh evidence could not be drained"));
 	await memory.stop();
-	stopControlMissions();
 	await missionService.notices.stop();
 	await missionService.compaction.stop();
 	await githubImport.close();
@@ -429,8 +377,6 @@ async function stop(): Promise<void> {
 	stopSlackCompletions();
 	await Promise.all(completionWrites);
 	await trackedItems.close();
-	await watches.close();
-	await controlHostStore.close();
 	await power?.stop();
 	await untrackedStats.close();
 	await environment?.close();

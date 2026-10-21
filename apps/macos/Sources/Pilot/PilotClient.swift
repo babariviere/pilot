@@ -20,7 +20,7 @@ final class PilotClient: ObservableObject {
     /// dashboard updates. Observers register with observeTrackedItems.
     private var trackedObservers: [UUID: (String) -> Void] = [:]
     /// Control-chat details invalidations (watches or audit). Installed only while those details are shown.
-    private var controlObservers: [UUID: (ControlDetailsChange) -> Void] = [:]
+    private var missionCatalogObservers: [UUID: () -> Void] = [:]
     /// Snapshot fixtures for tracked items and the settings pickers. Never set in the live app.
     var fixtureTracking: TrackingFixture?
     @Published private(set) var hasProjectSnapshot = false
@@ -66,7 +66,6 @@ final class PilotClient: ObservableObject {
     var onDiagnosticRead: ((DiagnosticReadDispatch) -> Void)?
     /// Invalidation only. The courier fetches bounded daemon-owned exchange pages.
     var onSharedContextsChanged: (() -> Void)?
-    var onControlHostChanged: ((ControlHostInvalidation) -> Void)?
 
     // The WebSocket includes ALL sessions, including archives, for readable subscriptions.
     var activeSessions: [SessionSummary] { sessions.unarchivedSessions }
@@ -365,77 +364,6 @@ final class PilotClient: ObservableObject {
     }
 
     private var activeSharedRequests = 0
-
-    private var activeControlRequests = 0
-
-    /// Same verified endpoint and bounded redirect-free transport. Never uses native management
-    /// authority, changes operation kinds, or accepts a caller-supplied server URL.
-    func controlCourierRequest(_ descriptor: ControlCourierRequest, signing: ControlCourierSigning) async throws -> Data {
-        guard connected, !disconnected, let hostIdentity, signing.permits(descriptor, on: hostIdentity),
-              descriptor.maximumBytes > 0, descriptor.maximumBytes <= 2 * 1024 * 1024 else { throw HostRoutingError.invalidReference }
-        let generation = connectionGeneration
-        let url = try missionURL(descriptor.path, query: descriptor.query)
-        let components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
-        let path = components.percentEncodedPath + (components.percentEncodedQuery.map { "?" + $0 } ?? "")
-        let authentication = try await signing.authentication(method: descriptor.method, path: path, body: descriptor.body)
-        guard connected, !disconnected, connectionGeneration == generation, self.hostIdentity == hostIdentity else { throw HostRoutingError.staleGeneration }
-        return try await controlRequestData(path: path, method: descriptor.method, body: descriptor.body,
-                                            authentication: authentication, maximumBytes: descriptor.maximumBytes)
-    }
-
-    /// Header carrier shared with native management. Callers own the distinct M/C signer and policy;
-    /// transport neither creates credentials nor edits the signed body or follows a redirect.
-    func controlRequest<Response: Decodable & Sendable>(path: String, method: String, body: Data? = nil,
-                                                       authentication: ControlCourierAuthentication) async throws -> Response {
-        let generation = connectionGeneration, identity = hostIdentity
-        let data = try await controlRequestData(path: path, method: method, body: body, authentication: authentication)
-        let value = try await Task.detached(priority: .utility) { try JSONDecoder().decode(Response.self, from: data) }.value
-        guard connected, !disconnected, connectionGeneration == generation, hostIdentity == identity else { throw HostRoutingError.staleGeneration }
-        try Task.checkCancellation()
-        return value
-    }
-
-    private func controlRequestData(path: String, method: String, body: Data?, authentication: ControlCourierAuthentication,
-                                    maximumBytes: Int = 2 * 1024 * 1024) async throws -> Data {
-        guard connected, !disconnected, let hostIdentity, let baseURL, activeControlRequests < 4,
-              path.hasPrefix("/"), !path.hasPrefix("//"), path.utf8.count <= 4096,
-              let url = URL(string: path, relativeTo: baseURL)?.absoluteURL,
-              url.scheme == baseURL.scheme, url.host == baseURL.host, url.port == baseURL.port,
-              url.fragment == nil, (body?.count ?? 0) <= 2 * 1024 * 1024,
-              authentication.signedPayload.utf8.count <= 16_384,
-              Data(authentication.signedPayload.utf8).base64EncodedString().utf8.count <= 8192,
-              Data(base64Encoded: authentication.signature)?.count == 64,
-              let configuration = commandConfiguration.copy() as? URLSessionConfiguration else { throw HostRoutingError.invalidReference }
-        configuration.httpAdditionalHeaders = nil
-        configuration.httpCookieStorage = nil; configuration.httpShouldSetCookies = false
-        configuration.urlCredentialStorage = nil; configuration.urlCache = nil
-        activeControlRequests += 1
-        defer { activeControlRequests -= 1 }
-        let generation = connectionGeneration
-        try Task.checkCancellation()
-        var request = URLRequest(url: url)
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        request.httpMethod = method; request.httpBody = body
-        request.setValue(Data(authentication.signedPayload.utf8).base64EncodedString(), forHTTPHeaderField: "x-pilot-control-proof")
-        request.setValue(authentication.signature, forHTTPHeaderField: "x-pilot-control-signature")
-        if body != nil { request.setValue("application/json", forHTTPHeaderField: "content-type") }
-        let (data, response) = try await BoundedHTTPData.read(request, maximumBytes: maximumBytes, configuration: configuration)
-        guard connected, !disconnected, connectionGeneration == generation, self.hostIdentity == hostIdentity else { throw HostRoutingError.staleGeneration }
-        try Task.checkCancellation()
-        guard (200..<300).contains(response.statusCode) else {
-            let error = try? await Task.detached(priority: .utility) { try JSONDecoder().decode(ControlHostErrorResponse.self, from: data) }.value
-            guard connected, !disconnected, connectionGeneration == generation, self.hostIdentity == hostIdentity else { throw HostRoutingError.staleGeneration }
-            try Task.checkCancellation()
-            let code = error?.code
-            let kind: ControlCourierFailure.Kind
-            if [401, 403].contains(response.statusCode) || code == .capabilityExpired { kind = .authenticationRequired }
-            else if [404, 405, 501].contains(response.statusCode) { kind = .incompatible }
-            else if response.statusCode == 409 { kind = .reconciliationRequired }
-            else { kind = .unavailable }
-            throw ControlCourierFailure(kind, status: response.statusCode, code: code)
-        }
-        return data
-    }
 
     private func sharedContextRequest<Response: Decodable & Sendable>(
         _ path: [String], method: String = "GET", body: Data? = nil,
@@ -1149,90 +1077,15 @@ final class PilotClient: ObservableObject {
         trackedObservers[id] = nil
     }
 
-    // MARK: Control chat details
-
-    /// The same bounded daemon-memory snapshot as pilot status. Never starts a worker.
-    func controlDashboard(projectId: String? = nil, missionId: String? = nil) async throws -> ControlDashboardResponse {
+    /// Cached mission discovery, independent of any conversational agent.
+    func missionCatalog() async throws -> MissionCatalogResponse {
         guard let baseURL else { throw HostRoutingError.disconnected }
-        var url = URLComponents(url: baseURL.appending(path: "api/control-chat/dashboard"), resolvingAgainstBaseURL: false)!
-        url.queryItems = (projectId.map { [URLQueryItem(name: "projectId", value: $0)] } ?? [])
-            + (missionId.map { [URLQueryItem(name: "missionId", value: $0)] } ?? [])
-        return try await get(url.url!)
+        return try await get(baseURL.appending(path: "api/mission-catalog"))
     }
-
-    /// One bounded page of active watches, in ID order. `after` is the previous page's `next`.
-    func controlWatches(after: String? = nil, limit: Int = 40) async throws -> WatchesResponse {
-        guard let baseURL else { throw HostRoutingError.disconnected }
-        var url = URLComponents(url: baseURL.appending(path: "api/control-chat/watches"), resolvingAgainstBaseURL: false)!
-        url.queryItems = [URLQueryItem(name: "limit", value: String(limit))]
-            + (after.map { [URLQueryItem(name: "after", value: $0)] } ?? [])
-        return try await get(url.url!)
+    func observeMissionCatalog(_ handler: @escaping () -> Void) -> UUID {
+        let id = UUID(); missionCatalogObservers[id] = handler; return id
     }
-
-    /// Idempotent: false when the watch already fired, expired or was cancelled.
-    func cancelWatch(_ id: String) async throws -> Bool {
-        // One path segment; pilotd's IDs never need escaping.
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_.:"))
-        guard !id.isEmpty, id.unicodeScalars.allSatisfy(allowed.contains) else { throw HostRoutingError.invalidReference }
-        let response: CancelWatchResponse = try await call("api/control-chat/watches/\(id)", method: "DELETE")
-        return response.removed
-    }
-
-    /// One bounded page of the control audit, newest first. `before` is the oldest loaded sequence.
-    func controlAudit(before: Int? = nil, limit: Int = 50) async throws -> ControlAuditResponse {
-        guard let baseURL else { throw HostRoutingError.disconnected }
-        var url = URLComponents(url: baseURL.appending(path: "api/control-chat/audit"), resolvingAgainstBaseURL: false)!
-        url.queryItems = [URLQueryItem(name: "limit", value: String(limit))]
-            + (before.map { [URLQueryItem(name: "before", value: String($0))] } ?? [])
-        return try await get(url.url!)
-    }
-
-    /// The control chat's current memory view, oldest first. Read-only.
-    func controlMemoryView() async throws -> ControlMemoryViewResponse {
-        guard let baseURL else { throw HostRoutingError.disconnected }
-        return try await get(baseURL.appending(path: "api/control-chat/memory/view"))
-    }
-
-    /// A summary's two halves (n > 1), or one page of a whole message (n == 1, paged by `offset`).
-    func controlMemoryNode(start: Int, n: Int, offset: Int? = nil) async throws -> ControlMemoryNodeResponse {
-        guard let baseURL else { throw HostRoutingError.disconnected }
-        var url = URLComponents(
-            url: baseURL.appending(path: "api/control-chat/memory/nodes/\(start)/\(n)"), resolvingAgainstBaseURL: false
-        )!
-        if let offset { url.queryItems = [URLQueryItem(name: "offset", value: String(offset))] }
-        return try await get(url.url!)
-    }
-
-    /// One page of the logged messages, newest first. `before` is the previous page's `next`.
-    func controlMemoryMessages(before: Int? = nil, limit: Int = 50, query: String? = nil) async throws
-        -> ControlMemoryMessagesResponse
-    {
-        guard let baseURL else { throw HostRoutingError.disconnected }
-        var url = URLComponents(
-            url: baseURL.appending(path: "api/control-chat/memory/messages"), resolvingAgainstBaseURL: false
-        )!
-        url.queryItems = [URLQueryItem(name: "limit", value: String(limit))]
-            + (before.map { [URLQueryItem(name: "before", value: String($0))] } ?? [])
-            + (query.map { [URLQueryItem(name: "q", value: $0)] } ?? [])
-        // URLComponents leaves "+" alone, which pilotd's form decoding would read as a space.
-        url.percentEncodedQuery = url.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
-        return try await get(url.url!)
-    }
-
-    func controlMemoryStats() async throws -> ControlMemoryStats {
-        guard let baseURL else { throw HostRoutingError.disconnected }
-        return try await get(baseURL.appending(path: "api/control-chat/memory/stats"))
-    }
-
-    func observeControlDetails(_ handler: @escaping (ControlDetailsChange) -> Void) -> UUID {
-        let id = UUID()
-        controlObservers[id] = handler
-        return id
-    }
-
-    func stopObservingControlDetails(_ id: UUID) {
-        controlObservers[id] = nil
-    }
+    func stopObservingMissionCatalog(_ id: UUID) { missionCatalogObservers[id] = nil }
 
     func loadTrackingFixture(_ fixture: TrackingFixture) {
         fixtureTracking = fixture
@@ -2337,10 +2190,6 @@ final class PilotClient: ObservableObject {
         guard !disconnected, let url = socketURL("/api/ws", controlSocket: true) else { return }
         let reader = SocketReader(
             task: StreamSocket.task(url), label: "pilot.control-socket",
-            controlChanged: { [weak self] reader, change in
-                guard let self, self.control === reader, self.connected, !self.disconnected else { return }
-                self.onControlHostChanged?(change)
-            },
             deliver: { [weak self] reader, updates in
                 guard let self, self.control === reader else { return }
                 if !self.connected { self.didConnect() }
@@ -2430,14 +2279,8 @@ final class PilotClient: ObservableObject {
             onDiagnosticRead?(dispatch)
         case .sharedContextsChanged:
             onSharedContextsChanged?()
-        case .watchesChanged:
-            for observer in controlObservers.values { observer(.watches) }
-        case .controlAuditChanged:
-            for observer in controlObservers.values { observer(.audit) }
-        case .controlMemoryChanged:
-            for observer in controlObservers.values { observer(.memory) }
-        case .dashboardChanged:
-            for observer in controlObservers.values { observer(.dashboard) }
+        case .missionCatalogChanged:
+            for observer in missionCatalogObservers.values { observer() }
         case let .projects(list):
             projects = list
             hasProjectSnapshot = true

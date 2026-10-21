@@ -26,7 +26,6 @@ type Job = {
 	/** Read a bounded page from one explicitly authorized diagnostics target. */
 	diagnosticHistory?: { target: DiagnosticTargetReference; before?: number; limit: number };
 	todoCount?: boolean;
-	controlTurn?: boolean;
 	resolve(view: SizedSessionView): void;
 	reject(error: Error): void;
 };
@@ -144,15 +143,6 @@ export class ColdViewReader {
 	}
 
 	/** Fresh, bounded provenance read. Never uses the transcript snapshot cache. */
-	readControlTurn(directory: string): Promise<import("@pilot/kernel").ControlTurnOrigin | undefined> {
-		if (this.closed) return Promise.reject(new Error("Session reader is closed"));
-		if (this.waiting.length >= MAX_QUEUED_READS)
-			return Promise.reject(new ServiceUnavailable("Session history is busy. Retry shortly."));
-		return new Promise<SizedSessionView>((resolve, reject) => {
-			this.waiting.push({ directory, cwd: directory, includeTodos: false, controlTurn: true, resolve, reject });
-			this.drain();
-		}).then((view) => (view as unknown as { turn?: import("@pilot/kernel").ControlTurnOrigin }).turn);
-	}
 	private drain(): void {
 		while (!this.closed && this.active.size < 2 && this.waiting.length) {
 			const job = this.waiting.shift()!;
@@ -169,7 +159,6 @@ export class ColdViewReader {
 						...(job.earlier === undefined ? {} : { earlier: job.earlier }),
 						...(job.diagnosticHistory === undefined ? {} : { diagnosticHistory: job.diagnosticHistory }),
 						...(job.todoCount ? { todoCount: true } : {}),
-						...(job.controlTurn ? { controlTurn: true } : {}),
 					},
 					execArgv: [],
 				});

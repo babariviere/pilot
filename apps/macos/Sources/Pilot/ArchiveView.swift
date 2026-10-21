@@ -14,7 +14,7 @@ struct ArchiveView: View {
     private var sessions: [SessionSummary] {
         let query = browser.query.trimmingCharacters(in: .whitespacesAndNewlines)
         let inventory = browser.sessions.filter {
-            !PreviousControl.isHistory($0, reference: hostContext?.ref(.session, $0.id), localHost: model.localHost)
+            !RetainedConversation.isHistory($0, reference: hostContext?.ref(.session, $0.id), localHost: model.localHost)
         }
         if query.isEmpty { return inventory }
         return inventory.filter { session in
@@ -237,7 +237,7 @@ struct SessionArchiveAction: View {
 
     var body: some View {
         // Retired Control history cannot be restored as an agent.
-        if !session.isControl { button }
+        if !session.isRetainedHistory { button }
     }
 
     private var button: some View {

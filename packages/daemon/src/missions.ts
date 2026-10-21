@@ -5,7 +5,7 @@ import { dirname } from "node:path";
 import { DatabaseSync, type Session, type SQLInputValue } from "node:sqlite";
 import type {
 	ArtifactKind,
-	ControlDashboardSharedTask,
+	CatalogSharedTask,
 	DelegationGrant,
 	GitHubAction,
 	Mission,
@@ -42,9 +42,9 @@ import type {
 	SharedMissionSnapshot,
 	UpdateMissionRequest,
 } from "@pilot/protocol";
-import type { ControlSharedMissionGroup } from "./control-dashboard.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
+import type { SharedMissionGroup } from "./mission-catalog.ts";
 import {
 	type LinearContributor,
 	type LinearSyncRecord,
@@ -485,7 +485,7 @@ export function parseResourceUrl(raw: string): { url: string; kind: MissionResou
 
 export class MissionStore {
 	/** Replica projections are reused across unrelated mission/memory invalidations. At most one per binding. */
-	private readonly controlReplicaCache = new Map<string, ControlSharedMissionGroup[]>();
+	private readonly catalogReplicaCache = new Map<string, SharedMissionGroup[]>();
 	private db: DatabaseSync;
 	private readonly listeners = new Set<(missionId: string) => void>();
 	private readonly linearSyncListeners = new Set<() => void>();
@@ -1002,8 +1002,8 @@ export class MissionStore {
 			id,
 			serialized,
 		);
-		if (namespace === "binding" || namespace === "replica") this.controlReplicaCache.delete(id);
-		else if (namespace.startsWith("proposal:")) this.controlReplicaCache.delete(namespace.slice("proposal:".length));
+		if (namespace === "binding" || namespace === "replica") this.catalogReplicaCache.delete(id);
+		else if (namespace.startsWith("proposal:")) this.catalogReplicaCache.delete(namespace.slice("proposal:".length));
 	}
 	sharingTransaction<T>(work: () => T): T {
 		return this.batchChanges(work);
@@ -1898,59 +1898,13 @@ export class MissionStore {
 		return row ? missionFrom(row) : undefined;
 	}
 
-	/** Bounded attention rows for the control cache, refreshed only on mission changes. */
-	controlAttention(
-		mission: Pick<Mission, "id" | "projectId">,
-	): import("./control-dashboard.ts").ControlMissionAttention {
-		const { id, projectId } = mission;
-		// Thin, bounded projections for the change-driven control cache. Never load task bodies, history or resources.
-		const blockedTotal = num(
-			this.one("SELECT COUNT(*) AS n FROM tasks WHERE mission_id = ? AND status = 'blocked'", id)!.n!,
-		);
-		const decisionsTotal = num(
-			this.one("SELECT COUNT(*) AS n FROM decision_proposals WHERE mission_id = ? AND status = 'pending'", id)!.n!,
-		);
-		return {
-			blockedTotal,
-			decisionsTotal,
-			blockedTasks: this.all(
-				"SELECT id, number, substr(title, 1, 160) AS title, substr(body, 1, 512) AS detail, updated_at FROM tasks WHERE mission_id = ? AND status = 'blocked' ORDER BY sort, number LIMIT 100",
-				id,
-			).map((row) => ({
-				id: `task:${str(row.id!)}`,
-				kind: "blocked_task",
-				missionId: id,
-				projectId,
-				taskId: str(row.id!),
-				taskNumber: num(row.number!),
-				title: str(row.title!),
-				...(row.detail ? { detail: str(row.detail) } : {}),
-				at: num(row.updated_at!),
-			})),
-			pendingDecisions: this.all(
-				"SELECT id, decision_id, kind, substr(text, 1, 512) AS text, substr(reason, 1, 512) AS reason, author_session_id, created_at FROM decision_proposals WHERE mission_id = ? AND status = 'pending' ORDER BY created_at, id LIMIT 100",
-				id,
-			).map((row) => ({
-				id: str(row.id!),
-				missionId: id,
-				projectId,
-				decisionId: str(row.decision_id!),
-				kind: str(row.kind!) as "edit" | "remove",
-				...(row.text ? { text: str(row.text) } : {}),
-				reason: str(row.reason!),
-				authorSessionId: str(row.author_session_id!),
-				createdAt: num(row.created_at!),
-			})),
-		};
-	}
-
-	/** Thin, bounded per-scope projection for the change-driven Control cache, never a tool-time read.
+	/** Thin, bounded per-scope projection for the change-driven mission catalog, never a tool-time read.
 	 * SQL extracts only display fields, not grant requests, replica bodies, events or proposal arguments.
 	 * Connectivity is deliberately absent: missing facts cannot fail a task or release a grant.
 	 */
-	controlSharedContext(host: OperationHost): ControlSharedMissionGroup[] {
-		const groups: ControlSharedMissionGroup[] = [];
-		const parseTask = (row: Row): ControlDashboardSharedTask => {
+	catalogSharedContext(host: OperationHost): SharedMissionGroup[] {
+		const groups: SharedMissionGroup[] = [];
+		const parseTask = (row: Row): CatalogSharedTask => {
 			const value = JSON.parse(str(row.value!));
 			for (const key of Object.keys(value)) if (value[key] === null) delete value[key];
 			return value;
@@ -1997,12 +1951,12 @@ export class MissionStore {
 				binding.executionProject.host.lineageId !== host.lineageId
 			)
 				continue;
-			const cached = this.controlReplicaCache.get(binding.bindingId);
+			const cached = this.catalogReplicaCache.get(binding.bindingId);
 			if (cached) {
 				groups.push(...cached);
 				continue;
 			}
-			const bindingGroups: ControlSharedMissionGroup[] = [];
+			const bindingGroups: SharedMissionGroup[] = [];
 			for (const missionId of binding.missionIds) {
 				// json_each avoids loading the full replica object in JavaScript, even for a large brief/history.
 				const snapshot = this.one(
@@ -2068,7 +2022,7 @@ export class MissionStore {
 					tasksTotal: Number(rows[0]?.total ?? 0),
 				});
 			}
-			this.controlReplicaCache.set(binding.bindingId, bindingGroups);
+			this.catalogReplicaCache.set(binding.bindingId, bindingGroups);
 			groups.push(...bindingGroups);
 		}
 		return groups;
@@ -2392,7 +2346,7 @@ export class MissionStore {
 		return true;
 	}
 
-	controlLinearSync(id: string, resourceId: string, action: "pause" | "resume"): MissionResource {
+	setLinearSyncPaused(id: string, resourceId: string, action: "pause" | "resume"): MissionResource {
 		this.require(id);
 		if (action !== "pause" && action !== "resume") throw new Error("action must be pause or resume");
 		const row = this.one(

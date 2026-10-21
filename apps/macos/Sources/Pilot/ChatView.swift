@@ -373,14 +373,6 @@ struct ChatView: View {
             ScrollView {
                 // Measured rows keep native bottom-follow and pagination away from lazy-stack estimates.
                 VStack(alignment: .leading, spacing: 16) {
-                    if session.isControl {
-                        // The Control screen reads the local pilotd's control chat.
-                        ControlChatHeader(title: session.title,
-                                          openScreen: context == nil || context?.host == model.localHost
-                                              ? { model.openControlScreen() } : nil)
-                            .frame(maxWidth: Theme.column, alignment: .leading)
-                            .frame(maxWidth: .infinity)
-                    }
                     if session.isDiagnosticsSpecialist {
                         DiagnosticSpecialistHeader(session: session, context: context)
                             .frame(maxWidth: Theme.column, alignment: .leading)
@@ -516,7 +508,7 @@ struct ChatView: View {
                         .padding(.horizontal, 24)
                 }
                 // Control and diagnostics chats cannot transfer their privileged context to Build.
-                if session.isAsk, !session.isControl, !session.isDiagnosticsSpecialist {
+                if session.isAsk, !session.isRetainedHistory, !session.isDiagnosticsSpecialist {
                     // Matches the other rows above the composer, such as the queued-messages header.
                     HStack {
                         Button {
@@ -569,22 +561,6 @@ struct ChatView: View {
                         .id(question.entryID)
                         .transition(Theme.Motion.replacement(reduceMotion: reduceMotion))
                 } else {
-                    if let request = session.permissionUpgradeRequest, !session.isReadOnlyHistory {
-                        PermissionUpgradePrompt(request: request) { requestId, allow in
-                            guard request.chatId == session.id, let host = context?.host ?? model.localHost else {
-                                throw ClientError("The permission request no longer matches this chat.")
-                            }
-                            struct Accepted: Decodable { let ok: Bool }
-                            let _: Accepted = try await model.hosts.githubRequest(on: host,
-                                path: "api/sessions/\(session.id)/permission-upgrade",
-                                body: PermissionUpgradeDecision(id: requestId, allow: allow))
-                        }
-                        .id(request.id)
-                        .disabled(context?.available == false)
-                        .frame(maxWidth: Theme.column)
-                        .padding(.horizontal, 24)
-                        .padding(.bottom, 8)
-                    }
                     Composer(
                         state: composer,
                         working: transcript.working || session.state == "starting",

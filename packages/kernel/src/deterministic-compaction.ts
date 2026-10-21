@@ -1,8 +1,7 @@
 /**
  * The normal compaction path for ordinary chats: a deterministic digest from the retained original transcript,
  * validated before the Harness switches context. The Harness still selects the range (tool-safe) and places the
- * summary entry atomically; original entries stay in storage. Control keeps its own OptChat memory and never installs
- * this. When the digest cannot be used, a target compaction is declined with backoff (the request still fits), and a
+ * summary entry atomically; original entries stay in storage. When the digest cannot be used, a target compaction is declined with backoff (the request still fits), and a
  * required one (window safety, overflow, manual) falls back to the Harness model summary.
  */
 import { performance } from "node:perf_hooks";

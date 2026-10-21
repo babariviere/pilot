@@ -15,7 +15,6 @@ import {
 	backgroundEvidence,
 	type CompletionRuntime,
 } from "./background-usage.ts";
-import { compactControlNode } from "./control-compaction.ts";
 import { compactMemory } from "./memory-compaction.ts";
 import { MemoryDisk } from "./memory-disk.ts";
 import { generateChatTitle, ModelCatalog } from "./models.ts";
@@ -234,31 +233,6 @@ test("observed usage survives actual memory summary application rejecting a stal
 	);
 	assert.equal(disk.put(job.lo, job.hi, job.epoch, text), false);
 	assert.equal((await f.page())[0]?.tokens?.input, 10);
-});
-
-test("Control correction loops preserve retry settings and record all rejected responses", async (t) => {
-	const f = await fixture(t);
-	let calls = 0;
-	const runtime: CompletionRuntime = {
-		completeSimple: async (_model, _context, options) => {
-			assert.equal(options?.maxRetries, 2);
-			return response(++calls < 3 ? "x".repeat(600) : "short");
-		},
-	};
-	const job = { id: 1, n: 1, source: "source", epoch: 1 };
-	assert.equal(
-		await compactControlNode(
-			f.usage.runtime(runtime, "compaction"),
-			model,
-			[],
-			job,
-			[],
-			new AbortController().signal,
-		),
-		"short",
-	);
-	assert.equal(calls, 3);
-	assert.equal((await f.page()).length, 3);
 });
 
 test("observed HTTP retries are bounded numeric evidence, not extra additive responses", async (t) => {

@@ -118,7 +118,6 @@ native_pointer_tests=(
 	pressingNativeHomeCheckActuallyChecksShowsProgressAndOpensTheExistingChat
 	slackTriageRefreshIsClickableAndDisablesDuringLocalAndAutomaticSync
 	sidebarSelectionCoversNativeBlueWithoutLosingKeyboardNavigation
-	permissionUpgradePromptRequiresNativeAllowOrDeny
 	rowActionsStayClickableAcrossSubmenusAndHideAfterDismissal
 )
 printf -v native_pointers '%s|' "${native_pointer_tests[@]}"

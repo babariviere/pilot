@@ -10,12 +10,7 @@ public enum ServerUpdate: Sendable {
     case sources([TrackingSource])
     case trackedChanged(projectId: String)
     case sharedContextsChanged
-    /// Invalidation only. Refetch the bounded control-chat HTTP pages.
-    case watchesChanged
-    case controlAuditChanged
-    /// The control chat's memory changed (coalesced by pilotd to at most one per second).
-    case controlMemoryChanged
-    case dashboardChanged
+    case missionCatalogChanged
     case sessions([SessionSummary])
     case session(SessionSummary)
     /// `seq` numbers a chat socket's batches, for resuming; absent on the shared socket.
@@ -62,14 +57,8 @@ public enum ServerUpdate: Sendable {
             return .trackedChanged(projectId: id)
         case "shared-contexts.changed":
             return .sharedContextsChanged
-        case "watches.changed":
-            return .watchesChanged
-        case "control-audit.changed":
-            return .controlAuditChanged
-        case "control-memory.changed":
-            return .controlMemoryChanged
-        case "dashboard.changed":
-            return .dashboardChanged
+        case "mission-catalog.changed":
+            return .missionCatalogChanged
         case "projects":
             guard let list = json["projects"] else { return nil }
             return .projects(try list.decode([Project].self).sorted {

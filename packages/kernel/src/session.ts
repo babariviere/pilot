@@ -57,9 +57,6 @@ import {
 import { reconcileCompletion } from "./attention.ts";
 import { autoCompactionThreshold, shouldAutoCompact } from "./auto-compaction.ts";
 import { chatEvents, compactionEvents } from "./chat-events.ts";
-import { createControlMemoryTools } from "./control-memory-tools.ts";
-import { controlPermissionPreparation } from "./control-permission-preparation.ts";
-import { type ControlCall, ControlTurn } from "./control-turn.ts";
 import { createDatabaseTool, type DatabaseCall } from "./database-tool.ts";
 import { compactionLine, DeterministicCompaction, deterministicCompactionEnabled } from "./deterministic-compaction.ts";
 import { createDiagnosticContextTool, type DiagnosticContextCall } from "./diagnostic-context-tool.ts";
@@ -89,7 +86,6 @@ import { continueModelInPlace } from "./model-continuation.ts";
 import { rebuildContext } from "./model-rebuild.ts";
 import { NativeAdapter } from "./native-adapter.ts";
 import { PerformanceLog } from "./performance.ts";
-import { createPilotTool, type PilotCall } from "./pilot-tool.ts";
 import type { WorkspaceContext } from "./policy.ts";
 import { type MissionContext, withPilotPolicy } from "./policy.ts";
 import type { KernelSpec, KernelSubagent } from "./protocol.ts";
@@ -154,8 +150,6 @@ async function pinnedAgent(
 export interface KernelSessionHooks {
 	reportUsageHistory?: import("./usage-capture.ts").PublishUsage;
 	acquireUsageEpoch?: import("./usage-capture.ts").AcquireUsageEpoch;
-	prepareControlPermission?(): Promise<import("./tool-policy.ts").ControlPermission | undefined>;
-	onRunAdmitted?(controlCaused: boolean, requestIds: string[], recoveredOnly?: boolean): Promise<void>;
 	reportSubscriptionLimit?: import("./subscription-limit.ts").ReportSubscriptionLimit;
 	onSystemMessageState?(event: SystemMessageStateEvent): void;
 	onWorking(
@@ -186,8 +180,6 @@ export interface KernelSessionHooks {
 	/** Executes a `mission` tool call in pilotd. Without it, the tool is not registered. */
 	callMission?: MissionCall;
 	callMemory?: MemoryCall;
-	callControl?: ControlCall;
-	callPilot?: PilotCall;
 	/** Executes a `db` tool call in pilotd. Registered only when the spec reports a database config. */
 	callDatabase?: DatabaseCall;
 	/** Executes a `slack_status` tool call in pilotd. The tool is declared only while the chat has a Slack message. */
@@ -246,7 +238,6 @@ export class KernelSession {
 	private jobsMonitor?: JobsMonitor;
 	private todoBridge?: { close(): Promise<void> };
 	#openTodoCount = 0;
-	#control = false;
 
 	get openTodoCount(): number {
 		return this.#openTodoCount;
@@ -292,8 +283,11 @@ export class KernelSession {
 	}
 
 	static async open(spec: KernelSpec, hooks: KernelSessionHooks): Promise<KernelSession> {
-		if (spec.control && (!hooks.callControl || spec.projectId || spec.pilot?.workspace || spec.pilot?.ask))
-			throw new Error("Invalid project-less control session");
+		// Reject obsolete persisted start envelopes before opening storage or loading extensions.
+		if ((spec as { control?: unknown }).control) throw new Error("Retained conversation cannot execute");
+		if (spec.pilot?.executionPermission)
+			process.env.PILOT_EXECUTION_PERMISSION = JSON.stringify(spec.pilot.executionPermission);
+		else delete process.env.PILOT_EXECUTION_PERMISSION;
 		// Recovery may launch descendants while native extensions initialize, before this
 		// worker's Harness exists. They must already inherit the host-issued capture epoch.
 		if (spec.usageHistory && hooks.reportUsageHistory)
@@ -304,7 +298,7 @@ export class KernelSession {
 					...(spec.projectId ? { projectId: spec.projectId } : {}),
 					...(spec.usageMission ? { mission: spec.usageMission } : {}),
 				},
-				purpose: spec.control ? "control" : "agent",
+				purpose: "agent",
 			});
 		else delete process.env.PILOT_USAGE_HISTORY;
 		const owned = await openSessionStorage(spec.storageDir);
@@ -314,7 +308,7 @@ export class KernelSession {
 				: new PerformanceLog(join(spec.storageDir, "performance.jsonl"));
 		// Content-free compaction sizes and outcomes, under the same local-timing switch and caps.
 		const compactionLog =
-			spec.control || !deterministicCompactionEnabled() || process.env.PILOT_PERF_TIMINGS === "0"
+			!deterministicCompactionEnabled() || process.env.PILOT_PERF_TIMINGS === "0"
 				? undefined
 				: new PerformanceLog(join(spec.storageDir, "compaction.jsonl"), { serialize: compactionLine });
 		let adapter: NativeAdapter | undefined;
@@ -327,16 +321,6 @@ export class KernelSession {
 			(value) => hooks.onJobsChanged?.(value),
 		);
 		let artifactConversation: Conversation | undefined;
-		const control =
-			spec.control && hooks.callControl
-				? new ControlTurn(
-						hooks.callControl,
-						() => harness!,
-						owned.storage,
-						() => artifactConversation!.id,
-						(record) => performanceLog?.record(record),
-					)
-				: undefined;
 		const subagents = new SubagentBridge(hooks.onSubagentsChanged);
 		const toolDrain = new ToolDrain();
 		const mission: { current?: MissionContext } = { current: spec.mission };
@@ -347,8 +331,7 @@ export class KernelSession {
 						action === "decisions" ? { ...args, _promptDecisions: mission.current?.decisionEntries ?? [] } : args,
 					)
 			: undefined;
-		const missionTools =
-			!spec.control && callMission ? [createMissionTool(callMission, mission.current?.coordinator === "self")] : [];
+		const missionTools = callMission ? [createMissionTool(callMission, mission.current?.coordinator === "self")] : [];
 		// Pending questions are transcript entries, so a restart or a codemode call shows them too.
 		const publishQuestion: PublishQuestion = async (callId, question) => {
 			if (!artifactConversation) throw new Error("Questions require a bound conversation");
@@ -425,33 +408,32 @@ export class KernelSession {
 				spec.pilot?.workspace && !spec.pilot.ask && hooks.onRefsChanged
 					? refActivity(hooks.onRefsChanged)
 					: undefined;
-			const audit =
-				!spec.pilot?.ask && !spec.control
-					? githubActions(async (action) => {
-							if (mission.current) action = { ...action, missionId: mission.current.id };
-							if (!artifactConversation) throw new Error("GitHub audit requires a bound conversation");
-							const added = await artifactConversation.commit(async (tx) => {
-								const state = await tx.doc(GitHubActionsDoc);
-								const latest = (await tx.scanEntries({ conversationId: artifactConversation!.id }, 1)).items[0];
-								action = {
-									...action,
-									conversationId: String(artifactConversation!.id),
-									...(latest ? { afterEntryId: Number(latest.id) } : {}),
-								};
-								return appendGitHubAction(state, action);
-							}, context);
-							if (added) hooks.onGitHubAction?.(action);
-						})
-					: undefined;
+			const audit = !spec.pilot?.ask
+				? githubActions(async (action) => {
+						if (mission.current) action = { ...action, missionId: mission.current.id };
+						if (!artifactConversation) throw new Error("GitHub audit requires a bound conversation");
+						const added = await artifactConversation.commit(async (tx) => {
+							const state = await tx.doc(GitHubActionsDoc);
+							const latest = (await tx.scanEntries({ conversationId: artifactConversation!.id }, 1)).items[0];
+							action = {
+								...action,
+								conversationId: String(artifactConversation!.id),
+								...(latest ? { afterEntryId: Number(latest.id) } : {}),
+							};
+							return appendGitHubAction(state, action);
+						}, context);
+						if (added) hooks.onGitHubAction?.(action);
+					})
+				: undefined;
 			const active = await activeConversation(owned.storage, context);
 			const [pinned, ghStack] = await Promise.all([
 				pinnedAgent(owned.storage, active),
-				spec.control || spec.role === "diagnostics" ? Promise.resolve(false) : detectGhStack(spec.cwd),
+				spec.role === "diagnostics" ? Promise.resolve(false) : detectGhStack(spec.cwd),
 			]);
 			const pilot = {
 				...spec.pilot,
 				repairDiagnostics: spec.repairDiagnostics,
-				...(spec.pilot?.controlPermission ? { controlPermission: { ...spec.pilot.controlPermission } } : {}),
+				...(spec.pilot?.executionPermission ? { executionPermission: { ...spec.pilot.executionPermission } } : {}),
 				...(spec.role ? { role: spec.role } : {}),
 				ghStack,
 				projectMemory: spec.role !== "diagnostics" && !!spec.projectId && !!hooks.callMemory,
@@ -463,15 +445,6 @@ export class KernelSession {
 						if (workspace) pilot.workspace = workspace;
 					}
 				: undefined;
-			const preparePermission = controlPermissionPreparation(
-				owned.storage,
-				pilot.controlPermission,
-				hooks.prepareControlPermission,
-				(permission) => {
-					// Newly spawned children inherit the run's ceiling; already-running children keep theirs.
-					process.env.PILOT_CONTROL_PERMISSION = JSON.stringify(permission);
-				},
-			);
 			const artifacts = new ArtifactStore(dirname(spec.storageDir), {
 				sessionId: spec.sessionId,
 				projectId: spec.projectId,
@@ -493,7 +466,7 @@ export class KernelSession {
 					);
 				},
 			};
-			if (!spec.pilot?.ask && !spec.control)
+			if (!spec.pilot?.ask)
 				todoBridge = await startTodoBridge(
 					callTodo,
 					hooks.reportSubscriptionLimit,
@@ -503,25 +476,21 @@ export class KernelSession {
 			const diagnosticScope = spec.diagnosticTarget
 				? ({ kind: "chat", target: spec.diagnosticTarget } as const)
 				: spec.diagnosticScope;
-			// Ordinary chats search their own retained history. Control keeps its OptChat memory instead.
-			const historyRecall = !spec.control && !spec.pilot?.ask && spec.role !== "diagnostics";
+			const historyRecall = !spec.pilot?.ask && spec.role !== "diagnostics";
 			// Ordinary chats may compact to a deterministic digest (opt-in until validated with real providers).
-			// Control keeps OptChat and never compacts here.
-			const digestCompaction =
-				spec.control || !deterministicCompactionEnabled()
-					? undefined
-					: new DeterministicCompaction({
-							harness: () => harness,
-							recall: historyRecall,
-							...(compactionLog ? { log: compactionLog } : {}),
-						});
+			const digestCompaction = !deterministicCompactionEnabled()
+				? undefined
+				: new DeterministicCompaction({
+						harness: () => harness,
+						recall: historyRecall,
+						...(compactionLog ? { log: compactionLog } : {}),
+					});
 			adapter = await NativeAdapter.open({
 				onToolsRunningChanged: hooks.onToolsRunningChanged,
 				subscriptionPolicy: spec.subscriptionPolicy,
 				reportSubscriptionLimit: hooks.reportSubscriptionLimit,
 				connectivityPolicy: spec.connectivityPolicy,
 				cwd: spec.cwd,
-				control: spec.control,
 				ask: spec.pilot?.ask,
 				diagnostics: spec.role === "diagnostics",
 				diagnosticHistory: spec.role === "diagnostics",
@@ -537,7 +506,7 @@ export class KernelSession {
 					publish: (activity) => hooks.onToolActivity?.(activity),
 				},
 				hostExtensions: [
-					nativeToolPolicy(pilot.controlPermission),
+					nativeToolPolicy(pilot.executionPermission),
 					jobs.native,
 					...(provenance ? [provenance.native] : []),
 					...(refs ? [refs.native] : []),
@@ -566,17 +535,12 @@ export class KernelSession {
 								...(hooks.callRepairProposal ? [createRepairProposalTool(hooks.callRepairProposal)] : []),
 							]
 						: []),
-					...(spec.control && hooks.callMemory ? createMemoryTools(hooks.callMemory, spec.sessionId, true) : []),
-					...(spec.control && hooks.callPilot ? [createPilotTool(hooks.callPilot)] : []),
-					...createControlMemoryTools(!!spec.control, (action, args) => hooks.callControl!(action, args)),
 					...missionTools,
 					questionTool,
-					...(!spec.pilot?.ask && !spec.control ? [createTodoTool(callTodo, () => spec.sessionId)] : []),
-					...(!spec.pilot?.ask && !spec.control && hooks.callSlackStatus
-						? [createSlackStatusTool(hooks.callSlackStatus)]
-						: []),
+					...(!spec.pilot?.ask ? [createTodoTool(callTodo, () => spec.sessionId)] : []),
+					...(!spec.pilot?.ask && hooks.callSlackStatus ? [createSlackStatusTool(hooks.callSlackStatus)] : []),
 				],
-				...(spec.control || spec.role === "diagnostics"
+				...(spec.role === "diagnostics"
 					? {}
 					: spec.pilot?.ask
 						? { askArtifacts: artifactOptions }
@@ -607,13 +571,6 @@ export class KernelSession {
 			// Likewise slack_status, declared once pilotd reports the chat attached to a Slack triage message.
 			if (!spec.pilot?.ask && hooks.callSlackStatus) adapter.setToolActive(SLACK_STATUS_TOOL, false);
 			const prepare = (extension: Extension) => {
-				if (control)
-					return toolDrain.prepare(
-						control.prepare(replayUnsafe(extension), (messages, block) =>
-							adapter!.prepareControlRequest(messages, block),
-						),
-						(context) => adapter!.waitForSubscription(context.abortSignal),
-					);
 				const prepared = replayUnsafe(
 					withPilotPolicy(
 						extension,
@@ -623,7 +580,6 @@ export class KernelSession {
 							adapter!.session.getActiveToolNames().includes("artifact"),
 						() => mission.current,
 						async (input, context) => {
-							await preparePermission(input, context);
 							await prepareWorkspace?.();
 						},
 					),
@@ -636,7 +592,6 @@ export class KernelSession {
 				);
 			};
 			const registry = createRegistry();
-			if (control) adapter.controlContext = (context) => control.context(context);
 			let serializeCompaction = (work: () => Promise<boolean>) => work();
 			const compaction = createManualCompaction(async (id, requestId, context) => {
 				return serializeCompaction(async () => {
@@ -674,7 +629,7 @@ export class KernelSession {
 									...(spec.projectId ? { projectId: spec.projectId } : {}),
 									...(spec.usageMission ? { mission: spec.usageMission } : {}),
 								},
-								purpose: spec.control ? "control" : "agent",
+								purpose: "agent",
 							},
 							hooks.reportUsageHistory,
 							hooks.acquireUsageEpoch,
@@ -686,20 +641,14 @@ export class KernelSession {
 				owned.storage,
 				{
 					models: usageCapture ? usageCapture.deferredModels(adapter.models) : adapter.models,
-					registry: usageCapture
-						? usageCapture.registry(control ? control.registry(registry) : registry)
-						: control
-							? control.registry(registry)
-							: registry,
+					registry: usageCapture ? usageCapture.registry(registry) : registry,
 					// The Harness reads settings on every resolution, so the getter follows model and window changes.
 					settings: digestCompaction
 						? Object.defineProperty({ ...settings }, "compaction", {
 								enumerable: true,
 								get: () => digestCompaction.policy(window(), artifactConversation?.id).harness,
 							})
-						: spec.control
-							? { ...settings, compaction: { enabled: false } }
-							: settings,
+						: settings,
 				},
 				context,
 			);
@@ -744,7 +693,7 @@ export class KernelSession {
 			}
 			adapter.onToolsChanged = (extension) => registry.install(prepare(extension));
 			artifactConversation = conversation;
-			if (!spec.pilot?.ask && !spec.control) {
+			if (!spec.pilot?.ask) {
 				await conversation.commit(async (tx) => {
 					await tx.doc(TodosDoc);
 					await tx.doc(TodoProgressDoc);
@@ -773,13 +722,12 @@ export class KernelSession {
 				owned.release,
 				status,
 				subagents,
-				!!spec.pilot?.ask || !!spec.control,
+				!!spec.pilot?.ask,
 				mission,
 				callMission,
 				hooks.callMemory,
 			);
 			openedSession = session;
-			session.#control = !!spec.control;
 			session.todoBridge = todoBridge;
 			session.#openTodoCount = openTodoCount;
 			session.#compactSession = compaction.compactSession;
@@ -799,48 +747,14 @@ export class KernelSession {
 			session.#usageCapture = usageCapture;
 			session.#compactionLog = compactionLog;
 			session.#attempts = publicAttempts(await harness.snapshot(AttemptsDoc, context));
-			const recoverFollowThrough = async (
-				records: readonly import("@earendil-works/pi-durable").SubmissionRecord[],
-			) => {
-				const requestIds = records
-					.filter(
-						(record) =>
-							record.type === "input" &&
-							record.entry !== undefined &&
-							(record.status === "done" || record.status === "unanswered") &&
-							record.requestId?.startsWith("control:"),
-					)
-					.map((record) => record.requestId!);
-				if (requestIds.length) await hooks.onRunAdmitted?.(false, requestIds, true);
-			};
 			if (!session.#reportedWorking) {
-				session.#completion = await reconcileCompletion(
-					owned.storage,
-					harness,
-					conversation,
-					context,
-					undefined,
-					recoverFollowThrough,
-				);
-				if (control && adapter.session.model) await control.reportFailure(context, adapter.session.model);
+				session.#completion = await reconcileCompletion(owned.storage, harness, conversation, context, undefined);
 			}
 			status.start(async (events, deliveryContext) => {
 				let working = session.#reportedWorking;
 				let completion = session.#completion;
 				const wasCompacting = session.#compactions.size !== 0;
 				for (const event of events) {
-					const inputs =
-						event.type === "run_start" ? event.inputs : event.type === "snapshot" ? event.run?.inputs : undefined;
-					if (inputs?.length && hooks.onRunAdmitted) {
-						const first = await owned.storage.submission(inputs[0]!, deliveryContext);
-						const requestIds: string[] = [];
-						for (const input of inputs) {
-							const submission =
-								input === inputs[0] ? first : await owned.storage.submission(input, deliveryContext);
-							if (submission?.requestId?.startsWith("control:")) requestIds.push(submission.requestId);
-						}
-						await hooks.onRunAdmitted(first?.requestId?.startsWith("control:") ?? false, requestIds);
-					}
 					if (event.type === "snapshot") {
 						session.#compactions.clear();
 						for (const { taskId } of event.compactions) session.#compactions.add(String(taskId));
@@ -861,23 +775,10 @@ export class KernelSession {
 							conversation,
 							context,
 							event.type === "run_end" ? event.inputs : undefined,
-							recoverFollowThrough,
 						);
-						if (control && adapter!.session.model)
-							await control.reportFailure(deliveryContext, adapter!.session.model);
 					}
 				}
 				if (!working) {
-					if (control) {
-						const ids = events.flatMap((event) =>
-							event.type === "snapshot"
-								? event.entries.map((entry) => Number(entry.id))
-								: "entry" in event && event.entry && typeof event.entry === "object" && "id" in event.entry
-									? [Number(event.entry.id)]
-									: [],
-						);
-						if (ids.length) await control.record(deliveryContext, Math.max(...ids));
-					}
 					await jobs.refresh();
 				}
 				// A queued follow-up may start in the same commit as the preceding run ends.
@@ -1340,7 +1241,6 @@ export class KernelSession {
 	 * then waits behind the summary, as it does for a manual compaction. A failure only skips the saving.
 	 */
 	private async compactBeforeUserInput(): Promise<void> {
-		if (this.#control) return;
 		try {
 			// Context usage is refreshed after every run, so most messages stop here without a storage read.
 			const usage = this.adapter.usage.current.context;
@@ -1397,7 +1297,6 @@ export class KernelSession {
 	 * retain SDK turn-boundary placement. Returns once admitted; `abort()` cancels it.
 	 */
 	async compact(instructions?: string): Promise<void> {
-		if (this.#control) throw new Error("The control chat compacts its memory in the background");
 		if (this.#closing || this.#changingModel || this.#moving) throw new ConversationBusy(this.conversation.id);
 		this.#admissions++;
 		await this.serializeInput(async () => {

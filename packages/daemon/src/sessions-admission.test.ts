@@ -10,7 +10,6 @@ import { mock, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import type { KernelCommand, KernelPacket } from "@pilot/kernel";
 import type { AgentEvent } from "@pilot/protocol";
-import { ControlPreAdmissionError } from "./control-actions.ts";
 import { ServiceUnavailable } from "./errors.ts";
 import { ProjectStore } from "./projects.ts";
 import { SessionManager } from "./sessions.ts";
@@ -30,44 +29,6 @@ test("spawn is counted synchronously before metadata exists, and failures releas
 	} finally {
 		await rm(home, { recursive: true, force: true });
 	}
-});
-
-test("Control start budgets persist before startup, survive reload and never leak into concurrent user starts", async (t) => {
-	const home = await mkdtemp(join(tmpdir(), "control-start-budget-"));
-	const projects = new ProjectStore(home);
-	const sessions = new SessionManager(home, projects, undefined, {
-		title: async () => undefined,
-		worker: () => {
-			throw new Error("Offline fixture startup failure");
-		},
-	});
-	const reloaded = new SessionManager(home, projects);
-	t.after(async () => {
-		await sessions.shutdown();
-		await reloaded.shutdown();
-		await rm(home, { recursive: true, force: true });
-	});
-	const budget = { authorizationId: "explicit-user-approval", budgetUsd: 2.5 };
-	const [started, user] = await Promise.all([
-		sessions.controlStart(
-			() => sessions.spawn({ cwd: home, message: "Authorized work", model: "test/model" }),
-			{ authorizationId: budget.authorizationId, level: "implement" },
-			"control:start:approved",
-			budget,
-		),
-		sessions.spawn({ cwd: home, message: "User work", ...{ controlStart: budget } }),
-	]);
-	assert.deepEqual(started.controlStart, budget);
-	assert.equal(user.controlStart, undefined, "public arguments cannot mint Control provenance");
-	const saved = JSON.parse(await readFile(join(home, "sessions", started.id, "meta.json"), "utf8"));
-	assert.deepEqual(saved.controlStart, budget);
-	started.controlStart!.budgetUsd = 999;
-	assert.deepEqual(sessions.get(started.id)?.controlStart, budget, "summary consumers cannot mutate metadata");
-	await until(() => sessions.get(started.id)?.state === "failed" && sessions.get(user.id)?.state === "failed");
-	await sessions.shutdown();
-	await reloaded.load();
-	assert.deepEqual(reloaded.get(started.id)?.controlStart, budget);
-	assert.equal(reloaded.get(user.id)?.controlStart, undefined);
 });
 
 test("a lease rejects spawn, send, queued mutations and subscription reopening before side effects", async () => {
@@ -110,62 +71,6 @@ async function until(check: () => boolean | Promise<boolean>): Promise<void> {
 		await delay(1);
 	}
 }
-test("Control start attribution is trusted, budgetless, and durable; only preparation failures are releasable", async (t) => {
-	const home = await mkdtemp(join(tmpdir(), "control-start-provenance-"));
-	const projects = new ProjectStore(home);
-	const sessions = new SessionManager(home, projects, undefined, {
-		worker: () => {
-			throw new Error("Offline test worker");
-		},
-		title: async () => undefined,
-	});
-	const reopened = new SessionManager(home, projects);
-	t.after(async () => {
-		await sessions.shutdown();
-		await reopened.shutdown();
-		await rm(home, { recursive: true, force: true });
-	});
-	const provenance = { authorizationId: "approved" };
-	const permission = { authorizationId: "approved", level: "implement" as const };
-	const started = await sessions.controlStart(
-		() => sessions.spawn({ cwd: home, message: "work", model: "test/model" }),
-		permission,
-		"control:start:1",
-		provenance,
-	);
-	const ordinary = await sessions.spawn({ cwd: home, message: "user", ...{ controlStart: provenance } });
-	assert.deepEqual(started.controlStart, provenance);
-	// biome-ignore lint/complexity/useLiteralKeys: inspect trusted private metadata, not the public request.
-	assert.deepEqual(sessions["metas"].get(started.id)?.controlPermission, permission);
-	assert.equal(ordinary.controlStart, undefined);
-	started.controlStart!.authorizationId = "forged";
-	assert.deepEqual(sessions.get(started.id)?.controlStart, provenance);
-	await until(() => sessions.get(started.id)?.state === "failed" && sessions.get(ordinary.id)?.state === "failed");
-	await sessions.shutdown();
-	await reopened.load();
-	assert.deepEqual(reopened.get(started.id)?.controlStart, provenance);
-	// biome-ignore lint/complexity/useLiteralKeys: verify the persisted authority ceiling after reload.
-	assert.deepEqual(reopened["metas"].get(started.id)?.controlPermission, permission);
-	assert.equal(reopened.get(ordinary.id)?.controlStart, undefined);
-	await assert.rejects(
-		reopened.controlStart(() => reopened.spawn({ cwd: join(home, "missing"), message: "work" }), permission),
-		ControlPreAdmissionError,
-	);
-	await assert.rejects(
-		reopened.controlStart(async () => {
-			throw new Error("Invalid model");
-		}, permission),
-		ControlPreAdmissionError,
-	);
-	await assert.rejects(
-		reopened.controlStart(async () => {
-			reopened.controlStartSideEffect();
-			throw new Error("Uncertain");
-		}, permission),
-		(error) => error instanceof Error && !(error instanceof ControlPreAdmissionError),
-	);
-});
-
 test("real Worker blocks accepted-before-working and queued inbox gaps until a fresh idle snapshot", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-worker-activity-"));
 	const commands: KernelCommand[] = [];
