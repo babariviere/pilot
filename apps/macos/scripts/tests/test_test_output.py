@@ -280,7 +280,9 @@ class TestOutputTests(unittest.TestCase):
         self.assertTrue(continued)
         self.assertEqual(len(calls), 7 + len(GITHUB) + len(SCOPED_MODEL_OUTPUTS) + len(AUTOMATIC_UPDATE_OUTPUTS) + len(HOST_MCP_OUTPUTS) + len(REGRESSION_OUTPUTS) + len(NATIVE_POINTERS) + len(TAIL_OUTPUTS))
         expected_guards = [[], *PARTITIONS]
-        sampling = ["--sample-stalled-after", "60"]
+        sampling = self.guard_calls[0][:4]
+        self.assertEqual(sampling[:3], ["--sample-stalled-after", "60", "--runner-parent-pid"])
+        self.assertGreater(int(sampling[3]), 0)
         self.assertEqual(self.guard_calls,
                          [sampling + [arg for name in names for arg in ("--require-test", name)]
                           for names in expected_guards])

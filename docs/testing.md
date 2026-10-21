@@ -76,6 +76,9 @@ deadline, suppress an assertion or change the output guard's result. Sampling fa
 The log contains a bounded excerpt; full traces are uploaded as `swift-test-stalls` for three days.
 Local wrappers do not enable sampling. Native Swift tests remain CI-only when working under that
 verification constraint; the sampler's clock/process/output tests use Python mocks.
+The shell passes its owner PID explicitly, and `ps -ww` preserves long Xcode executable paths. If
+no supported runner is found, the log includes at most 32 owned descendant command basenames, never
+arguments or unrelated processes, so a missing runner match is diagnosable instead of silently empty.
 
 Iterate with affected test files. Run the relevant full suites once before publishing, not after each
 edit. Use background jobs for long checks, and never bypass the queue or launch duplicate suites while

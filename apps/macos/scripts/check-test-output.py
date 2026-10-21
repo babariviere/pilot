@@ -33,8 +33,8 @@ def failed_summary(line):
     return bool(SWIFT_FAILURE.match(line) or XCTEST_FAILURE.match(line))
 
 
-def descendant_runners(table, parent):
-    """Only this pipeline's runners, never another checkout's Swift processes."""
+def descendant_processes(table, parent):
+    """Only this pipeline's processes, never another checkout's Swift processes."""
     processes = []
     for line in table.splitlines():
         fields = line.strip().split(None, 2)
@@ -46,17 +46,26 @@ def descendant_runners(table, parent):
         if found == descendants:
             break
         descendants = found
-    return sorted(pid for pid, _, name in processes if pid in descendants and pid != parent
-                  and (name == "swiftpm-testing" or name == "xctest" or name.endswith("PackageTests")))[:2]
+    return sorted((pid, name) for pid, _, name in processes if pid in descendants and pid != parent)
+
+
+def descendant_runners(table, parent):
+    names = {"swiftpm-testing", "swift-testing-helper", "xctest"}
+    return [pid for pid, name in descendant_processes(table, parent)
+            if name in names or name.endswith("PackageTests") or name.endswith("Tests.xctest")][:2]
 
 
 def sample_stalled_runners(parent):
     """Best-effort, bounded diagnostics. Never terminate or change a test's result."""
     try:
-        table = subprocess.run(["/bin/ps", "-axo", "pid=,ppid=,comm="], check=True,
+        # CI may set a narrow COLUMNS value. Without -ww, the executable's basename can be truncated.
+        table = subprocess.run(["/bin/ps", "-wwaxo", "pid=,ppid=,comm="], check=True,
                                capture_output=True, text=True, timeout=5).stdout
         runners = descendant_runners(table, parent)
         print(f"Swift test output stalled; sampling runner PIDs: {runners}", file=sys.stderr, flush=True)
+        if not runners:
+            own = descendant_processes(table, parent)[:32]
+            print(f"Swift stall owner PID: {parent}; descendant names: {own}", file=sys.stderr, flush=True)
         directory = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "swift-test-stalls"
         directory.mkdir(parents=True, exist_ok=True)
         for pid in runners:
@@ -154,13 +163,17 @@ def main():
                         help="Fail if this Swift Testing function did not start (repeatable)")
     parser.add_argument("--sample-stalled-after", type=float,
                         help="Capture one bounded live stack after this many seconds without test output")
+    parser.add_argument("--runner-parent-pid", type=int, default=os.getppid(),
+                        help="Owning wrapper PID, explicit to survive shell pipeline reparenting")
     args = parser.parse_args()
     if args.sample_stalled_after is not None and (not math.isfinite(args.sample_stalled_after)
                                                  or args.sample_stalled_after <= 0):
         parser.error("--sample-stalled-after must be finite and positive")
+    if args.runner_parent_pid <= 0:
+        parser.error("--runner-parent-pid must be positive")
     sampler = None
     if args.sample_stalled_after is not None:
-        parent = os.getppid()
+        parent = args.runner_parent_pid
         sampler = StallSampler(args.sample_stalled_after, lambda: sample_stalled_runners(parent))
         sampler.thread.start()
     try:

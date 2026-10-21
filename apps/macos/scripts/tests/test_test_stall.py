@@ -120,6 +120,7 @@ malformed table
                     contextlib.redirect_stderr(output):
                 guard.sample_stalled_runners(44)
             self.assertEqual(commands[0][1]["timeout"], 5)
+            self.assertEqual(commands[0][0][1], "-wwaxo")
             self.assertEqual(commands[1][0][:4], ["/usr/bin/sample", "45", "2", "-file"])
             self.assertEqual(commands[1][1]["timeout"], 10)
             self.assertEqual(len(list(Path(directory).glob("swift-test-stalls/*.sample.txt"))), 1)
@@ -143,6 +144,26 @@ malformed table
             guard.sample_stalled_runners(44)
         self.assertIn("sample unavailable: CalledProcessError", output.getvalue())
 
+    def test_long_xcode_paths_and_swift_testing_helper_keep_owner_scope(self):
+        path = "/Applications/" + "Xcode_26.2/" * 20
+        table = f"45 44 {path}swift-testing-helper\n46 44 {path}PilotMacPackageTests.xctest\n47 99 {path}swift-testing-helper"
+        self.assertEqual(guard.descendant_runners(table, 44), [45, 46])
+        self.assertEqual(guard.descendant_runners(table, 99), [47])
+
+    def test_empty_discovery_prints_only_bounded_owned_command_names(self):
+        table = "\n".join(f"{i} 44 /private/runner/helper-{i}" for i in range(100, 140))
+        table += "\n999 1 /private/other-checkout/private-peer-command"
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"RUNNER_TEMP": directory}), \
+                patch.object(guard.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, table)), \
+                contextlib.redirect_stderr(output):
+            guard.sample_stalled_runners(44)
+        self.assertIn("Swift stall owner PID: 44", output.getvalue())
+        self.assertIn("helper-131", output.getvalue())
+        self.assertNotIn("helper-132", output.getvalue())
+        self.assertNotIn("private-peer-command", output.getvalue())
+        self.assertNotIn("/private/runner", output.getvalue())
+
     def test_enabled_guard_keeps_original_output_and_failure_semantics(self):
         for text, code in [("◇ Test run started.\n✔ Test run with 1 test passed after 0.1 seconds.\n", 0),
                            ("◇ Test run started.\n", 1),
@@ -159,6 +180,13 @@ malformed table
                                     input="", text=True, capture_output=True, timeout=5)
             self.assertEqual(result.returncode, 2)
             self.assertIn("finite and positive", result.stderr)
+
+    def test_invalid_parent_pids_are_rejected(self):
+        for pid in ["0", "-1"]:
+            result = subprocess.run([os.sys.executable, str(SCRIPT), "--runner-parent-pid", pid],
+                                    input="", text=True, capture_output=True, timeout=5)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("must be positive", result.stderr)
 
 
 if __name__ == "__main__":
