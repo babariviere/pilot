@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.61.0](https://github.com/babariviere/pilot/compare/v1.60.2...v1.61.0) (2026-10-21)
+
+
+### Features
+
+* **kernel:** deliver all queued steering messages at once ([0b8f51d](https://github.com/babariviere/pilot/commit/0b8f51d1a4d62cb20090b44ad7d11e828b66b97f))
+* **usage:** capture separate background inference ([b6132d2](https://github.com/babariviere/pilot/commit/b6132d27fc38cae6d191dc366c6c8041d26cc85f))
+* **usage:** represent unknown response evidence and provenance ([d94c347](https://github.com/babariviere/pilot/commit/d94c34749b1412248e4d88b3266daac3f8e82040))
+* **usage:** store bounded replay-safe accounting history ([d247728](https://github.com/babariviere/pilot/commit/d2477288d214fd8b4f41d107ea9b9c36eb3327b6))
+
+
+### Bug Fixes
+
+* **pr:** avoid rebasing clean PRs when main advances ([91ecdde](https://github.com/babariviere/pilot/commit/91ecddef75fb0b16e6241b2599cdbca23ba8393b))
+
+
+### Performance Improvements
+
+* **usage:** reuse accounting allocations and isolate RSS probes ([f9b1a0f](https://github.com/babariviere/pilot/commit/f9b1a0f19dcc0aa8ff754251c73c6894e4395521))
+
 ## [1.60.2](https://github.com/babariviere/pilot/compare/v1.60.1...v1.60.2) (2026-10-21)
 
 
