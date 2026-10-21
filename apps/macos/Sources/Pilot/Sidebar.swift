@@ -4,8 +4,7 @@ import SwiftUI
 
 /// Missions, then chats by urgency (Pinned, Needs you, Ready to merge, Working, Recent), each in PR status and stable
 /// activity order. The scope switcher at the top lists every project (the default) or focuses on one, which then shows
-/// only that project's missions and chats, without project names. The control chat sits in a fixed slot under the
-/// switcher in every scope (`SidebarControlSlot`), never in the scrolling list. Project folders are headings in the
+/// only that project's missions and chats, without project names. Project folders are headings in the
 /// scope switcher and on Home, never a sidebar grouping. Search appears on ⌘F, and the footer only when the
 /// connection to pilotd needs attention. Each chat's state is its dithered corner (`DitherCorner`).
 struct SessionSidebar: View {
@@ -87,7 +86,6 @@ struct SessionSidebar: View {
             let archivedCount = focused.map { project in
                 client.archivedSessions.filter { $0.projectId == project.id }.count
             } ?? client.archivedSessions.count
-            let controls = model.sidebarControlRows
             VStack(spacing: 6) {
                 SidebarHeader(model: model, client: client, counts: counts, homeSelected: homeSelected,
                               inboxSelected: inboxSelected, overviewSelected: overviewSelected(focused),
@@ -95,9 +93,6 @@ struct SessionSidebar: View {
                               needsYouHelp: SidebarScopeCounts.needsYouReasons(total: needsYou,
                                                                                reasons: needsYouReasons, counts: counts),
                               archivedCount: archivedCount, folderEditor: folderEditor)
-                if !controls.isEmpty {
-                    SidebarControlSlot(rows: controls, model: model)
-                }
                 if showsSearch {
                     SearchField(text: $model.sidebarQuery, focused: $searchFocused) { model.hideSidebarSearch() }
                         .transition(.opacity.combined(with: .move(edge: .top)))
@@ -136,14 +131,7 @@ struct SessionSidebar: View {
                 model.hideSidebarSearch()
             }
         }
-        .onAppear {
-            model.validateSidebarScope()
-            model.keyboard.sidebarStickyRows = KeyboardFocus.StickyRows(
-                keys: { [model] in model.sidebarControlRows.map(\.key) },
-                current: { [model] in model.selectedSessionId },
-                select: { [model] key in model.navigate(.session, id: key) })
-        }
-        .onDisappear { model.keyboard.sidebarStickyRows = nil }
+        .onAppear { model.validateSidebarScope() }
         .onChange(of: known) { model.validateSidebarScope() }
         .sheet(isPresented: $folderEditor.presented) {
             ProjectFolderEditor(editor: folderEditor) {
@@ -169,7 +157,7 @@ struct SessionSidebar: View {
                     scopedProjects?.contains(HostResourceRef(host: hosted.ref.host, kind: .project, localId: $0)) == true
                 } == true)
         }.sorted { $0.value.listActivityAt > $1.value.listActivityAt }
-        // Each host's control chat lives in the fixed slot above the list (`SidebarControlSlot`).
+        // Retired Control conversations are available through history, never live chat groups.
         ForEach(["Pinned", "Needs you", "Ready to merge", "Working", "Recent", "Archived"], id: \.self) { title in
             let rows = values.filter { !$0.value.isControl && group($0) == title }
             if !rows.isEmpty {

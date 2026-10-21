@@ -325,6 +325,8 @@ test("authorization-needed cache keeps Control in Needs you, survives ordinary r
 	const projects = new ProjectStore(home);
 	await projects.load();
 	const sessions = new SessionManager(home, projects);
+	// Explicit legacy fixture, never the production default.
+	sessions.setControlRoleGuard(() => true);
 	await sessions.load();
 	const watches = new WatchService(":memory:");
 	await watches.ready();

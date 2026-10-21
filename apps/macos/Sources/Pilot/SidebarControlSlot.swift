@@ -1,30 +1,4 @@
-import PilotCore
-import SwiftUI
-
-/// One Control chat in the sidebar's fixed slot, with the key its selection uses (the sidebar list's tag).
-struct SidebarControlRow: Identifiable, Equatable {
-    let session: SessionSummary
-    /// Set while devboxes are listed, so the row reads its own host.
-    let reference: HostResourceRef?
-    let key: String
-    var id: String { key }
-
-    /// Only the verified Mac Control belongs in normal navigation. Other histories keep their source.
-    static func rows(sessions: [SessionSummary], hosted: [Hosted<SessionSummary>]?, localHost: HostRef?)
-        -> [SidebarControlRow] {
-        guard let hosted else {
-            return sessions.first { $0.isControl && !$0.isArchived }
-                .map { [SidebarControlRow(session: $0, reference: nil, key: $0.id)] } ?? []
-        }
-        let controls = hosted.filter { $0.value.isControl && !$0.value.isArchived && $0.ref.host == localHost }
-        return controls.prefix(1).map { item in
-            SidebarControlRow(session: item.value, reference: item.ref,
-                              key: item.ref.host == localHost ? item.ref.localId : item.ref.storageKey)
-        }
-    }
-}
-
-/// Arrow keys in the sidebar list treat the fixed Control rows as the list's first items.
+/// Generic keyboard handling for rows fixed above a native sidebar list.
 enum SidebarStickyNavigation {
     enum Step: Equatable {
         /// Let the list move as usual.
@@ -45,40 +19,5 @@ enum SidebarStickyNavigation {
         }
         if !listHasSelection { return down ? .select(sticky[0]) : .native }
         return down ? .native : .nativeOr(last)
-    }
-}
-
-extension AppModel {
-    /// The sidebar's fixed Control rows, as `SessionSidebar` shows them.
-    var sidebarControlRows: [SidebarControlRow] {
-        SidebarControlRow.rows(sessions: client.activeSessions,
-                               hosted: hosts.offlineHosts.isEmpty ? nil : hosts.sessions, localHost: localHost)
-    }
-}
-
-/// The Control chat's fixed slot under the scope header. It never scrolls and shows in every scope: like Home, it is
-/// a place rather than one chat among others, and opening it keeps the scope. Rows look and act like the list's
-/// `SessionRow`s (state corner, context menu), with the list's selection fill and insets.
-struct SidebarControlSlot: View {
-    let rows: [SidebarControlRow]
-    @ObservedObject var model: AppModel
-    @Environment(\.hostViewContext) private var hostContext
-
-    var body: some View {
-        VStack(spacing: 0) {
-            ForEach(rows) { row in
-                let selected = model.selectedSessionId == row.key
-                SessionRow(session: row.session, reference: row.reference)
-                    .environment(\.hostViewContext,
-                                 row.reference.map { HostViewContext(host: $0.host, hosts: model.hosts) } ?? hostContext)
-                    // The list's row insets: the dithered corner reaches the selection fill's edges.
-                    .padding(EdgeInsets(top: 3, leading: 8, bottom: 3, trailing: 6))
-                    .background(RoundedRectangle(cornerRadius: Theme.Radius.row).fill(selected ? Theme.selected : .clear))
-                    .contentShape(Rectangle())
-                    .onTapGesture { model.navigate(.session, id: row.key) }
-                    .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
-                    .accessibilityAction { model.navigate(.session, id: row.key) }
-            }
-        }
     }
 }

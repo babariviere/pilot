@@ -73,6 +73,8 @@ test("archiving a real parked chat removes both watch kinds and modes, audits ea
 		await watches.close();
 		await rm(home, { recursive: true, force: true });
 	});
+	// Explicit legacy fixture, never the production default.
+	sessions.setControlRoleGuard(() => true);
 	await sessions.load();
 	await sessions.ensureControlChat();
 	watches.bindRemovalAudit((removal) => sessions.auditWatchRemoval(removal));

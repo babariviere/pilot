@@ -3,8 +3,7 @@ import PilotCore
 import SwiftUI
 
 extension Snapshot {
-    /// The Control chat's fixed row under the scope header, in All projects and in a focused project, selected and
-    /// working. A short sidebar shows it staying put above a list that overflows.
+    /// Regression fixture: legacy Control inventory never creates a sidebar row, in either scope or a short list.
     static func renderControlSidebar(model: AppModel, to directory: URL) async {
         let now = Fixtures.now
         var control = SessionSummary(id: "control", title: "Control", cwd: "", createdAt: now, updatedAt: now,

@@ -69,7 +69,7 @@ it does not change chat-result read tracking or enable review entry points.
   never taken as
   shortcuts, so typing, IME input and list type-select behave as in any Mac app. The **Go** menu and ⌘K reach
   Home, Inbox, the focused project's Overview, the current mission's Overview, Tasks or Brief, Archive, Slack
-  triage, the Linear queue and the Control chat (with its composer focused). Slack triage and the Linear queue open
+  triage and the Linear queue. Slack triage and the Linear queue open
   the board or queue of the project in view (or the only project tracking it); otherwise ⌘K lists one "Slack
   triage" or "Linear queue" per project ("Linear triage" finds it too). The Linear queue is the project's Linear
   list in Pilot, not the Linear app. Home, Overview, Inbox and Archive each have one keyboard list: a Go
@@ -265,62 +265,24 @@ work. Devbox setup/selection and disconnected-state presentation remain separate
 
 ### Start your first chat
 
-The daemon keeps one project-less Control chat, pinned and never archived. The app shows it in a fixed row at
-the top of the sidebar in every scope, apart from Ask chats. Its fresh turns use a persisted summary view, with `zoom` and
-`date` for the original messages. It has no workspace or filesystem tools.
-It can read global status, start or message requested work, create or attach missions with your approval,
-and append memory across registered projects. Changes have a durable audit and timeline record.
-The Control screen (from its header or ⌘K) shows its memory summaries, a searchable message log, its watches and
-actions, and memory health, read-only.
-The app shows only the Mac Control in navigation and search. Old remote Control conversations are hidden,
-not deleted. Existing host-qualified links retain read-only access; reconnect to read uncached history.
-Hiding these conversations does not commit a daemon archive or change agents, watches or permissions.
-`GET /api/control-chat/dashboard` and its `pilot status` tool share one bounded, cached snapshot of
-running chats, mission progress, blockers, proposed decisions and active watch instructions. Reading it
-does not wake chat workers or fetch external services.
-Its shared-context sections include mission-home delegation grants (execution host, epoch, acknowledged
-state and last-known running fact) and enrolled remote-home mission replicas. Committed tasks and
-provisional task proposals stay separate. Replica age is the last mission import, not a connectivity
-check; unknown or disconnected hosts are never inferred to have failed.
-Status lists each logical mission once, with bounded source provenance, even when it is observed through
-multiple replicas. Canonical homes keep same-name missions distinct; replica task rows never invent progress.
-Control records user-turn authorizations for starts, follow-ups and watches, with explicit targets,
-permission levels and follow-up limits. USD accounting is diagnostic by default, without a required cap.
-The local API reports optional user-set limits, reservations/releases and separate ledger costs, and can
-revoke authorizations. Proven pre-admission failures release reservations; uncertain outcomes do not.
-Existing watch instructions keep their original, narrowly scoped authority.
-Control starts require an explicit project or mission task and an allowed model. Missing scope,
-model or authorization makes Control ask you. Chat rows expose the selected model and start attribution.
-Each authorized start or message also installs an implicit once result watch, bound to that admitted
-input, including queued messages. Its notice automatically reads a bounded, untrusted result tail and
-summarizes the grant's remaining limits. Out-of-scope or exhausted requests take no action: they appear
-in the dashboard's `authorizationNeeded` list with the exact request, and Control stays in Needs you
-until the user decides and Control dismisses the item with `resolve_authorization`. Pending result
-reads appear in `next.followUps`. A notice or result never grants new authority.
-Control-started chats keep their admitted role across restarts and follow-ups:
-**investigate** uses read-only Ask. **Implement** Build includes local changes, verification,
-task-branch pushes and opening/updating PRs under the normal project delivery policy. The legacy
-**publish** level also permits that delivery, but is no longer a separate approval tier.
-Ordinary, delegated and resumed Build chats need no second publishing approval, including when
-the user explicitly requests a PR. Existing implement metadata needs no migration. Old approval
-requests remain historical data, are not replayed, and no longer show an Allow/Deny prompt.
-Ask, Diagnostics and Control remain read-only. Sends never convert a read-only chat to Build.
-Repository credentials, remote access, branch protections and destructive-action safeguards still
-apply. Agents report genuine remote failures rather than claiming a local-only block. Agents never
-merge, even with a recorded merge authorization; merges still require confirmation in the app.
-See [control chat internals](docs/control-chat.md) for storage, compaction and recovery details.
+Control has been retired. Pilot no longer creates or runs a global coordinator chat, and there is no
+replacement Project coordinator. Start work directly in a chat or use a mission for a scoped objective.
 
-Control can stop, pause, resume or redirect authorized chats. Pause holds queued and new input
-while the current run finishes; resume releases it. Redirect stops first, then sends a new
-instruction. Mission members route to their coordinator unless explicitly targeted directly.
-These actions are audited and require a recorded user authorization covering the target.
+Existing Control conversations are archived once on their original host and remain readable from the
+archive or a host-qualified link. Their transcript, queued input, memory, grants and audit are retained,
+but the conversation cannot be restored or resumed. Legacy watches and follow-through are frozen,
+without replay or background compaction. Ordinary chats already started by Control keep their admitted
+permissions and continue independently; mission coordinators are unchanged.
 
-Control can read allowlisted local text files (up to 64 KiB) and PNG/JPEG/GIF/WebP images (up to
-8 MiB) through a read-only tool. File contents are untrusted; remote paths and shell access remain unavailable.
+The cached `GET /api/control-chat/dashboard` endpoint remains for the app's logical mission registry.
+It does not create a conversation, wake chat workers or fetch external services. The historical
+Control memory/audit/authorization GET routes remain read-only compatibility surfaces.
+See [retained Control storage](docs/control-chat.md) for compatibility details.
 
-Control can read health, bounded redacted log tails and local diagnostic evidence through `pilot`
-(`health`, `logs`, `telemetry`) before delegating an investigation. Disabled or unavailable sources
-are reported explicitly. These actions never run a shell, start a chat worker or change settings.
+Build chats support local changes, verification, task-branch pushes and opening/updating PRs under
+the normal project delivery policy, without a second publishing approval. Ask and Diagnostics remain
+read-only. Credentials, remote access, branch protections and destructive-action safeguards still apply.
+Agents never merge; merges require confirmation in the app.
 
 Chat messages render Linear, Slack and GitHub URLs as compact links with the service mark and a short name.
 Names come from Markdown labels or the URL, without fetching private pages. Bare `#123` references stay literal
@@ -378,7 +340,7 @@ moves the chat to Needs you.
 In a chat, each turn's thinking and tool calls fold into one line ("Worked for 3 min · read 3 files, ran 2
 commands"). Automatic items (pushes and pull requests, job results, subagent answers, mission updates, compaction
 and stops) appear as one-line events where they happened, expanding on **Show**.
-Control and coordinator deliveries are system events, not user turns. New coordinator deliveries include the
+Legacy Control deliveries and current coordinator deliveries are system events, not user turns. New coordinator deliveries include the
 sending chat's identity. Authorship comes from saved delivery provenance, never from words such as "From the
 Global coordinator". Old entries without that provenance are left unchanged. Agents use the supported send
 tools, not the user-message HTTP endpoint; unsupported cross-mission sends must be reported rather than sent as you.
@@ -443,7 +405,7 @@ the goal, near-verbatim directives and corrections (marking superseded ones), de
 changed files, commits, test results, unresolved failures and key tool output, each with its source entry.
 If a digest would not shrink the context enough, Pilot keeps the context and waits for more growth. Manual
 compaction with your own instructions still uses the model summary. Without the setting, ordinary chats keep the
-Harness defaults and model summaries. Control keeps its own memory.
+Harness defaults and model summaries. Retired Control memory is retained read-only.
 
 Compaction never deletes the transcript. Ordinary chats have a `history_recall` tool that searches (ranked by
 relevance, or newest first) and reads the chat's own earlier messages and tool output, including parts compacted
@@ -1113,19 +1075,10 @@ and other transport settings stay local. See [catalog tests and measurements](do
 See [tool access by role](docs/tool-access-by-role.md) and
 [system prompts by role](docs/system-prompts-by-role.md) for capability boundaries and prompt composition.
 
-The daemon also has an internal event-watch service backed by `watches.sqlite`. SQLite matching and
-pending-notice writes run on a worker. Chat, PR, Linear Done and mission completion sources feed durable,
-idempotent batches through the same settle/rate policy as mission notices. Standalone PR watches reuse
-the PR tracker; out-of-scope Linear watches use at most 25 rotating `list_issues` reads per five minutes.
-The control chat manages these subscriptions with `pilot` actions `watch`, `unwatch` and `watches`.
-Archiving a chat removes its chat and chat-PR watches in both modes. Archiving a mission removes
-watches targeting that mission, but marking it Done does not. Restoring never restores watches.
-The daemon reconciles archived or deleted targets on startup, audits each removal and queues a short
-informational cleanup notice for Control, even when its agent is asleep.
-Saved watch instructions run automatically as event turns. Event summaries remain quoted, untrusted
-data, and notice turns cannot create or attach missions. The control chat's own activity and work
-it starts or sends do not wake it again. In the app, the control chat's Watching pane (binoculars in its
-toolbar) lists active watches with Cancel, then its audited actions, newest first.
+Legacy Control event-watch records remain in `watches.sqlite` for read-only compatibility.
+Production no longer starts their chat, PR, Linear or mission sources, reconciles targets, retries
+follow-through or delivers notices. Saved instructions are retained as history, not executed.
+Mission notices and ordinary chat PR tracking continue independently.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -1221,7 +1174,7 @@ non-additive legacy checkpoints. Kernel and delegated requests retain physical-m
 selection provenance locally, including failed responses with reported usage. Unknown crash responses are not zero,
 and deterministic compaction records activity without invented inference cost. It is not a billing source or
 diagnostic export. Separate [background completions](docs/background-inference-accounting.md), including titles,
-memory/Control compaction, Slack classification and triage workers, record observed usage before output validation
+memory compaction (including historical Control usage), Slack classification and triage workers record observed usage before output validation
 or application. Capture and dashboard projections remain partial; neither establishes complete historical coverage
 or waives the dashboard performance/release gates.
 [Native and devbox setup diagnostics](docs/native-diagnostics.md) use Apple's delayed MetricKit delivery for crash

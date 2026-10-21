@@ -131,19 +131,11 @@ attention badge), then the project selector ("All projects" or one project) head
 project's Overview as its first row. Archived chats, search (⌘F) and project folders (New Folder…, Move to folder)
 live in the selector's menu; folders are headings there and on Home, never a sidebar scope.
 
-The Control chat has its own fixed row under the project selector, without a header: its antenna symbol before the
-title and "All projects" as its line, never Ask, a branch or a pin mark. It never scrolls with the list and shows in
-every scope; opening it from a focused project keeps the scope. Arrow keys reach it as the list's first row.
-It offers no pin, archive or mission actions. Its window subtitle is "All projects" and its transcript opens
-with a one-sentence header on what it can see and do; the Ask badge and the Build-handoff row stay hidden.
-Its inspector adds a Watching pane: active watches (target, "When … · Once/Every time", the saved note) with Cancel
-under the pointer, then Actions, its audited starts, messages, missions and memory notes, one row per operation.
-Its transcript header and ⌘K ("Control screen") open the Control screen, a read-only page with four sections:
-Summaries (the current view, oldest first; a disclosure opens a line into its halves down to the original message),
-Log (newest first, searchable, "Show more"), Watches & actions (the Watching pane's rows) and Health (hairline rows).
-Agent and event text sits in a quote block as plain text, and memory is never edited from it.
+Control is retired. There is no fixed Control row, Go menu destination, palette page or live composer.
+Existing conversations are archived on their source host and open as bounded read-only history, never as
+a new agent. No Project coordinator replaces Control. Home and the Inbox retain their existing roles.
 
-Below that, both scopes use the same order: Missions, then chats grouped only by urgency (Pinned, Needs you, Ready to
+Both scopes use the same order: Missions, then chats grouped only by urgency (Pinned, Needs you, Ready to
 merge, Working, Recent). All projects names each row's project; a focused project leaves it out. Missions never sit in
 the chat groups and their rows do not expand: clicking opens the mission, hover reveals its coordinator and new chat.
 Mission chats sit in the chat groups like any chat, their mission on the second line; a coordinator's line starts

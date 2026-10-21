@@ -178,40 +178,22 @@ private func appWithControl() -> AppModel {
     return app
 }
 
-@Test @MainActor func theControlScreenIsAPageWithHistory() {
+@Test @MainActor func retiredControlScreenRoutesToHome() {
     let app = appWithControl()
     app.selectedSessionId = "a"
     app.openControlScreen()
-    #expect(app.currentRoute == .control)
-    #expect(app.currentSelection == .control)
-    #expect(app.selectedSessionId == nil && app.showingControl)
-    app.showInbox()
-    #expect(!app.showingControl && app.currentSelection == .inbox)
-    app.goBack()
-    #expect(app.currentRoute == .control)
-    app.goBack()
-    #expect(app.currentRoute == .session("a"))
-    app.goForward()
-    #expect(app.currentRoute == .control)
+    #expect(app.currentRoute == .home)
+    #expect(app.currentSelection == .home)
+    #expect(app.selectedSessionId == nil && !app.showingControl)
     app.openControlChat()
-    #expect(app.currentRoute == .session("c"))
-    app.openControlScreen()
-    app.openProject("p1")
-    #expect(!app.showingControl && app.currentRoute == .project("p1"))
-    #expect(SidebarSelection.restoring(.control, in: "p1", sessions: [], missions: [], projectIds: ["p1"]) == .control)
+    #expect(app.currentRoute == .home)
+    #expect(SidebarSelection.restoring(.control, in: "p1", sessions: [], missions: [], projectIds: ["p1"]) == .project("p1"))
 }
 
-@Test @MainActor func thePaletteOffersTheControlScreenOnlyWithAControlChat() {
+@Test @MainActor func paletteOmitsRetiredControlPagesEvenWithLegacyInventory() {
     let app = appWithControl()
     let catalog = CommandPaletteCatalog(model: app, openSettings: {}, openKeyboardShortcuts: {})
-    let entry = catalog.entries().first { $0.item.id == "page:control-screen" }
-    #expect(entry?.item.title == "Control screen")
-    #expect(entry?.item.kind == .page)
-    entry?.perform()
-    #expect(app.currentRoute == .control)
-
-    let plain = AppModel(projectFolderDefaults: UserDefaults(suiteName: "control-screen-\(UUID())")!)
-    plain.client.loadFixture(projects: [], sessions: [])
-    let none = CommandPaletteCatalog(model: plain, openSettings: {}, openKeyboardShortcuts: {})
-    #expect(!none.entries().contains { $0.item.id == "page:control-screen" })
+    #expect(!catalog.entries().contains { $0.item.id == "page:control-screen" || $0.item.id == "page:control" })
+    #expect(app.controlChat == nil)
+    #expect(!app.canGo(to: .control))
 }

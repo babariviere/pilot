@@ -8,12 +8,14 @@ import { type TestContext, test } from "node:test";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
-import type { AgentEvent } from "@pilot/protocol";
+import type { AgentEvent, DurableOperation } from "@pilot/protocol";
 import { openSessionStorage } from "../../kernel/src/storage.ts";
 import { createAuthorization } from "./control-authorizations.ts";
 import { ControlHostStore } from "./control-host-store.ts";
 import { ControlHosts } from "./control-hosts.ts";
+import { daemonHello } from "./hello.ts";
 import { ModelCatalog } from "./models.ts";
+import { OperationJournal, payloadHash } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
@@ -54,7 +56,7 @@ async function fixture(t: TestContext) {
 		await hosts.recoverConversationRole(platform);
 		return hosts;
 	};
-	const manager = async (roles?: ControlHosts, realHistory = false) => {
+	const manager = async (roles?: ControlHosts, realHistory = false, legacyFixture = false) => {
 		const sessions = new SessionManager(root, projects, join(root, "agent"), {
 			title: async () => undefined,
 			...(!realHistory
@@ -86,7 +88,8 @@ async function fixture(t: TestContext) {
 			},
 		});
 		managers.push(sessions);
-		if (roles) sessions.setControlRoleGuard(() => roles.legacyAllowed());
+		if (legacyFixture) sessions.setControlRoleGuard(() => true);
+		else if (roles) sessions.setControlRoleGuard(() => roles.legacyAllowed());
 		await sessions.load();
 		return sessions;
 	};
@@ -111,11 +114,11 @@ test("conversation role is persisted, lineage pinned, and independent of endpoin
 		/another installation/,
 	);
 	const mac = await f.roles("darwin", "mac");
-	assert.equal(mac.legacyAllowed(), true);
+	assert.equal(mac.legacyAllowed(), false);
 	await mac.store.close();
 	await assert.rejects(mac.recoverConversationRole("darwin"));
 	assert.equal(mac.legacyAllowed(), false, "failed recovery cannot retain a previously open guard");
-	assert.equal((await f.roles("linux", "mac")).legacyAllowed(), true, "persisted role is authoritative");
+	assert.equal((await f.roles("linux", "mac")).legacyAllowed(), false, "persisted home cannot reactivate Control");
 });
 
 test("effective non-home, freeze and archive policy override the Mac compatibility role", async (t) => {
@@ -128,31 +131,114 @@ test("effective non-home, freeze and archive policy override the Mac compatibili
 	} as const)) {
 		const roles = await f.roles("darwin", name);
 		await roles.initialize({ schemaVersion: 1, roleEpoch: 1, host, home: host, ...extra });
-		assert.equal(roles.legacyAllowed(), name === "home");
+		assert.equal(roles.legacyAllowed(), false);
 	}
 	const linux = await f.roles("linux", "legacy-home");
 	await linux.initialize({ schemaVersion: 1, roleEpoch: 1, host, home: host, role: "home" });
 	assert.equal(linux.legacyAllowed(), false, "old home policy cannot enable a devbox conversation");
 });
 
-test("fresh Linux creates no Control; Mac singleton and turns remain unchanged", async (t) => {
+test("fresh installations never create or run Control, with or without recovered host policy", async (t) => {
 	const f = await fixture(t);
-	const linux = await f.manager(await f.roles("linux"));
-	await assert.rejects(linux.ensureControlChat(), /read-only/);
-	assert.equal(linux.getControlChat(), undefined);
-	assert.deepEqual(linux.list(), []);
-	assert.deepEqual(f.starts, []);
-	await linux.shutdown();
-	const mac = await f.manager(await f.roles("darwin", "mac"));
-	const control = await mac.ensureControlChat();
-	assert.equal((await mac.ensureControlChat()).id, control.id);
-	await mac.send(control.id, "A local user request");
-	assert.deepEqual(f.starts, [control.id]);
+	for (const roles of [undefined, await f.roles("linux"), await f.roles("darwin", "mac")]) {
+		const sessions = await f.manager(roles);
+		await assert.rejects(sessions.ensureControlChat(), /read-only/);
+		assert.equal(sessions.getControlChat(), undefined);
+		assert.deepEqual(sessions.list(), []);
+		assert.deepEqual(f.starts, []);
+		await sessions.shutdown();
+	}
 });
 
-test("legacy Linux Control is a readable archive, with frozen watches and independent accepted work", async (t) => {
+test("fresh Control HTTP reads never allocate history and creation is retired", async (t) => {
 	const f = await fixture(t);
-	const seed = await f.manager();
+	const sessions = await f.manager();
+	const terminals = new TerminalManager();
+	const server = createDaemonServer(
+		{ home: f.root, host: "127.0.0.1", port: 0 },
+		sessions,
+		f.projects,
+		new ModelCatalog(f.root),
+		terminals,
+	);
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	t.after(async () => {
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+		await terminals.shutdown();
+	});
+	const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/control-chat`;
+	assert.equal((await fetch(url)).status, 404);
+	assert.equal((await fetch(url, { method: "POST" })).status, 409);
+	assert.equal((await fetch(url)).status, 404);
+	assert.deepEqual(sessions.list(), []);
+	assert.deepEqual(f.starts, []);
+});
+
+test("retired executor rejects a previously queued Control operation and retains its receipt", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager();
+	const roles = await f.roles("darwin");
+	// Isolate retirement after native authentication. Signature/scope admission has its own coverage.
+	t.mock.method(roles, "authenticate", async () => "native-fixture");
+	const hello = await daemonHello(f.root, {
+		powerManagement: false,
+		systemSleepEvents: false,
+		swiftUIArtifacts: false,
+		coordinatorIsolation: false,
+		independentExecution: true,
+	});
+	const destination = { hostId: "daemon", daemonId: hello.daemonId, lineageId: hello.lineageId! };
+	const payload = JSON.stringify({ target: { projectId: "p" }, message: "Old Control instruction" });
+	const operation: DurableOperation = {
+		schemaVersion: 1,
+		operationId: "retired-control-operation",
+		producerId: "old-control",
+		sequence: 1,
+		origin: host,
+		destination,
+		bindingId: "old-binding",
+		bindingGeneration: 1,
+		kind: "control.start",
+		targetId: "old-chat",
+		payload,
+		payloadHash: payloadHash(payload),
+	};
+	const journal = new OperationJournal(join(f.root, "operations"), destination);
+	assert.equal((await journal.reserve(operation)).state, "pending");
+	const terminals = new TerminalManager();
+	const args: Parameters<typeof createDaemonServer> = [
+		{ home: f.root, host: "127.0.0.1", port: 0 },
+		sessions,
+		f.projects,
+		new ModelCatalog(f.root),
+		terminals,
+	];
+	args[12] = hello;
+	args[20] = { hosts: roles }; // Production retains host/history compatibility, not an executor.
+	const server = createDaemonServer(...args);
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	t.after(async () => {
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+		await terminals.shutdown();
+	});
+	const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/operations`;
+	const request = { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(operation) };
+	for (const path of ["", "/receipt", ""]) {
+		const response = await fetch(url + path, request);
+		assert.equal(response.status, 200);
+		const receipt = (await response.json()) as { state: string; reason: string };
+		assert.equal(receipt.state, "rejected");
+		assert.match(JSON.stringify(receipt.reason), /retired/);
+	}
+	assert.deepEqual(sessions.list(), []);
+	assert.deepEqual(f.starts, []);
+});
+
+test("retired Mac Control is durably archived with frozen watches and independent accepted work", async (t) => {
+	const f = await fixture(t);
+	const seed = await f.manager(undefined, false, true);
 	const control = await seed.ensureControlChat();
 	const memory = seed.controlMemory();
 	await memory.append({ kind: "note", text: "Retained memory" });
@@ -196,7 +282,7 @@ test("legacy Linux Control is a readable archive, with frozen watches and indepe
 	meta.initializing = true;
 	meta.pending = [{ type: "input", requestId: "watch-notice:old", content: "Old notice", mode: "followUp" }];
 	await writeFile(file, JSON.stringify(meta));
-	const preserved = await readFile(file, "utf8");
+
 	const ordinaryId = "11111111-1111-4111-8111-111111111111";
 	await mkdir(join(f.root, "sessions", ordinaryId));
 	await writeFile(
@@ -231,8 +317,17 @@ test("legacy Linux Control is a readable archive, with frozen watches and indepe
 	await live.observe([event]);
 	await live.close();
 	const frozen = await f.watchService(true);
-	const roles = await f.roles("linux");
+	const roles = await f.roles("darwin");
 	const sessions = await f.manager(roles, true);
+	const archived = JSON.parse(await readFile(file, "utf8"));
+	assert.ok(archived.archivedAt > 0);
+	assert.equal(archived.pinned, undefined);
+	assert.deepEqual(archived.pending, meta.pending, "queued work is retained, never replayed");
+	assert.equal(archived.working, meta.working);
+	assert.equal(archived.initializing, meta.initializing);
+	const preserved = await readFile(file, "utf8");
+	assert.equal(sessions.getControlChat()?.archivedAt, archived.archivedAt);
+	assert.equal(sessions.getControlChat()?.working, false);
 	// Even accidental run-binding setup cannot attach frozen legacy follow-through to accepted work.
 	sessions.setWatchService(frozen);
 	await sessions.send(ordinaryId, "Ordinary work remains usable");
@@ -249,6 +344,7 @@ test("legacy Linux Control is a readable archive, with frozen watches and indepe
 		() => sessions.setPinned(control.id, false),
 		() => sessions.rename(control.id, "No"),
 		() => sessions.archive(control.id),
+		() => sessions.restore(control.id),
 		() => sessions.compact(control.id),
 		() => sessions.rewind(control.id, "restore", 1),
 	])
@@ -315,5 +411,12 @@ test("legacy Linux Control is a readable archive, with frozen watches and indepe
 	assert.equal((await fetch(`${base}/authorizations/old-grant`, { method: "DELETE" })).status, 409);
 	assert.equal((await sessions.controlAuthorizationPage()).authorizations[0]?.revokedAt, undefined);
 	assert.equal(await readFile(file, "utf8"), preserved, "reads/refusals never rewrite archived metadata");
+	assert.equal(f.starts.includes(control.id), false);
+	await sessions.shutdown();
+	const restarted = await f.manager();
+	assert.equal(restarted.getControlChat()?.archivedAt, archived.archivedAt);
+	assert.equal(restarted.getControlChat()?.pinned, undefined);
+	assert.equal(restarted.isControlSession(control.id), false);
+	assert.equal(await readFile(file, "utf8"), preserved, "default recovery preserves the original archive timestamp");
 	assert.equal(f.starts.includes(control.id), false);
 });

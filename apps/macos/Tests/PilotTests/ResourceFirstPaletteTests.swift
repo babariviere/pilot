@@ -55,29 +55,16 @@ private func modelWithControl() -> AppModel {
     return model
 }
 
-@Test @MainActor func controlChatIsAlwaysSuggestedWithThePagesNotTheRecentChats() throws {
+@Test @MainActor func retiredControlNeverAppearsAsALivePaletteDestination() throws {
     let model = modelWithControl()
     let catalog = CommandPaletteCatalog(model: model, openSettings: {}, openKeyboardShortcuts: {})
     let entries = catalog.entries()
-    let control = try #require(entries.first { $0.session?.isControl == true })
-    #expect(control.item.kind == .page)
-    #expect(control.item.suggested)
-    #expect(control.icon == .controlChat)
-    #expect(control.shortcut == nil, "the Control chat has no letter sequence; the Go menu and palette reach it")
-    #expect(entries.filter { $0.session?.isControl == true }.count == 1)
-
+    #expect(!entries.contains { $0.session?.isControl == true })
+    #expect(!entries.contains { $0.item.id == "page:control" || $0.item.id == "page:control-screen" })
     let sections = CommandPalette.results(for: "", items: entries.map(\.item))
-    let pages = try #require(sections.first { $0.title == "Pages" })
-    #expect(pages.items.prefix(3).map(\.id).contains(control.item.id))
-    // It is the oldest chat, yet it shows, and the recent chats keep all their places.
     let recent = try #require(sections.first { $0.title == "Recent chats" })
     #expect(recent.items.count == CommandPaletteCatalog.recentChats)
-    #expect(!recent.items.contains { $0.id == control.item.id })
-
-    for query in ["control", "pilot"] {
-        let found = CommandPalette.results(for: query, items: entries.map(\.item)).flatMap(\.items)
-        #expect(found.contains { $0.id == control.item.id }, "\(query)")
-    }
+    #expect(!model.canGo(to: .control))
 }
 
 @Test @MainActor func paletteHasNoControlEntryWithoutTheControlChat() {

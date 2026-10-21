@@ -181,7 +181,7 @@ test("native enrollment requires pinned signatures and exact consent, replay pre
 	assert.equal(state.mutation?.disposition, "replayed");
 	assert.equal(state.configuration.roleEpoch, 1);
 	assert.equal(state.configuration.role, "home");
-	assert.equal(f.hosts.legacyAllowed(), true);
+	assert.equal(f.hosts.legacyAllowed(), false);
 	assert.deepEqual(state.configuration.stagedRole?.home, home);
 	await assert.rejects(
 		f.hosts.enroll(f.enrollment.bindingId, { ...f.request, approvalRequestId: randomUUID() }, "native"),

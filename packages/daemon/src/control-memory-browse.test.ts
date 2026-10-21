@@ -125,6 +125,8 @@ test("HTTP memory routes validate params, 404 without a control chat and broadca
 	const projects = new ProjectStore(home);
 	await projects.load();
 	const sessions = new SessionManager(home, projects);
+	// Explicit legacy fixture for retained memory routes, never the production default.
+	sessions.setControlRoleGuard(() => true);
 	await sessions.load();
 	const terminals = new TerminalManager();
 	const server = createDaemonServer(

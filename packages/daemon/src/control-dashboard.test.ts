@@ -840,7 +840,7 @@ test("HTTP and pilot status agree on the identical fixture; bad params are 400 a
 		assert.equal((await fetch(`${base}?${query}`)).status, 400, query);
 	}
 	assert.equal((await fetch(base, { headers: { origin: "https://example.com" } })).status, 403);
-	assert.equal((await fetch(base, { method: "POST" })).status, 404);
+	assert.equal((await fetch(base, { method: "POST" })).status, 409);
 	assert.equal((await fetch(`${base}/extra`)).status, 404);
 	await assert.rejects(service.call("other", "status", {}), /Only the control/);
 	await assert.rejects(service.call("control", "status", { limit: 0 }), /Unknown parameter/);

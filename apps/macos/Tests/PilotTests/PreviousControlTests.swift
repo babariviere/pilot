@@ -61,7 +61,7 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         #expect(PreviousControl.isHistory(control, reference: ref, localHost: local))
         #expect(PreviousControl.isHistory(control, reference: ref, localHost: nil))
         #expect(!PreviousControl.isHistory(ordinary, reference: ref, localHost: local))
-        #expect(!PreviousControl.isHistory(control, reference: .init(host: local, kind: .session, localId: control.id), localHost: local))
+        #expect(PreviousControl.isHistory(control, reference: .init(host: local, kind: .session, localId: control.id), localHost: local))
     }
 
     @Test @MainActor func sourceQualifiedReadsPageWithoutAnyWriteOrLocalFallback() async throws {
@@ -96,13 +96,13 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         try app.selectSession(ref)
         #expect(app.isPreviousControlSelected && !app.canStopSelectedChat && !app.canToggleTerminal)
         #expect(!app.focusComposer() && !app.openInspector(.terminal))
-        #expect(app.sidebarControlRows.map(\.key) == ["same"])
+        #expect(!app.canGo(to: .control))
         #expect(hosts.sessions.contains { $0.ref == ref && $0.value.isControl })
         let catalog = CommandPaletteCatalog(model: app, openSettings: {}, openKeyboardShortcuts: {})
         #expect(catalog.chatActions(try previousSession(), reference: ref).isEmpty)
         let items = catalog.entries().map(\.item.id)
         #expect(!items.contains("chat:" + ref.storageKey) && !items.contains("history:" + ref.storageKey))
-        #expect(!items.contains { $0.hasPrefix("history:") } && items.contains("page:control"))
+        #expect(!items.contains { $0.hasPrefix("history:") } && !items.contains("page:control"))
         let ordinary = HostResourceRef(host: box, kind: .session, localId: "ordinary")
         #expect(items.contains("chat:" + ordinary.storageKey) && app.canMutateSession(ordinary.storageKey))
         app.setPinned(false, sessionId: ref.storageKey); app.renameSession(ref.storageKey, title: "No")
@@ -112,7 +112,16 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         for _ in 0..<10 { await Task.yield() }
         #expect(PreviousHistoryHTTP.requests.isEmpty)
         app.openControlChat()
-        #expect(app.hosts.selection?.host == local && app.selectedSessionId == "same")
+        #expect(app.hosts.selection == ref && app.selectedSessionId == ref.storageKey)
+        let localRef = HostResourceRef(host: local, kind: .session, localId: "same")
+        try app.selectSession(localRef)
+        #expect(app.isPreviousControlSelected && !app.focusComposer() && !app.canStopSelectedChat)
+        #expect(!app.canMutateSession("same") && !app.canMutateSession(localRef.storageKey))
+        app.renameSession("same", title: "No")
+        app.setArchived(false, sessionId: localRef.storageKey)
+        #expect(app.stopSession("same") == nil)
+        for _ in 0..<10 { await Task.yield() }
+        #expect(PreviousHistoryHTTP.requests.isEmpty)
         await hosts.disconnectAll()
     }
 
@@ -140,7 +149,7 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         #expect(hosts.sessions.contains { $0.ref == ref && $0.value.isControl })
         let offlineEntries = CommandPaletteCatalog(model: app, openSettings: {}, openKeyboardShortcuts: {}).entries()
         #expect(!offlineEntries.contains { $0.item.id == "chat:" + ref.storageKey || $0.item.id.hasPrefix("history:") })
-        #expect(app.sidebarControlRows.map(\.key) == [original.id] && app.client.session(original.id)?.isControl == true)
+        #expect(!app.canGo(to: .control) && app.client.session(original.id)?.isControl == true)
         let ordinaryRef = HostResourceRef(host: box, kind: .session, localId: ordinary.id)
         #expect(app.canMutateSession(ordinaryRef.storageKey))
         #expect(hosts.sessions.first { $0.ref == ordinaryRef }?.value.isControl == false)

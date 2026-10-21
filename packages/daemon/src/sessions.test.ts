@@ -1362,7 +1362,7 @@ test("remote Control run commands do not repeat after another input or restart",
 
 test("effective executor guard blocks legacy recovery, input and audit actions without stopping independent work", async (t) => {
 	const f = await fixture(t);
-	const sessions = await f.manager();
+	const sessions = await f.manager({}, {}, {}, (manager) => manager.setControlRoleGuard(() => true));
 	const legacy = await sessions.ensureControlChat();
 	await sessions.send(legacy.id, "Old queued input");
 	await sessions["starting"].get(legacy.id);

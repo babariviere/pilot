@@ -72,11 +72,10 @@ extension AppModel {
     /// The mission on screen: the open mission page, or the open chat's mission.
     var currentMissionId: String? { selectedMissionId ?? selectedSession?.missionId }
 
-    /// The local daemon's global Control chat, once pilotd has created it.
-    var controlChat: SessionSummary? { client.sessions.first(where: \.isControl) }
+    /// Retired. Retained histories are opened from the archive, never as a live destination.
+    var controlChat: SessionSummary? { nil }
 
-    /// The Go menu or the palette: the local Control chat, with its composer focused. Its sidebar row shows in every
-    /// scope, so the scope stays.
+    /// Compatibility entry point for old callers. Never opens or focuses a retired agent.
     func openControlChat() {
         guard let control = controlChat else { return }
         reveal(session: control.id)
@@ -139,7 +138,7 @@ struct KeyboardNavigationCommands: Commands {
             Button("Focus Composer") { model.focusComposer() }
                 .keyboardShortcut("l", modifiers: .command)
             Divider()
-            ForEach(GoDestination.allCases, id: \.self) { destination in
+            ForEach(GoDestination.allCases.filter { $0 != .control }, id: \.self) { destination in
                 Button(destination.menuTitle) { model.go(to: destination) }
                     .disabled(!model.canGo(to: destination))
             }

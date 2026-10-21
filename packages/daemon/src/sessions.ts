@@ -1621,8 +1621,8 @@ export class SessionManager {
 	static readonly CONTROL_ID = "00000000-0000-4000-8000-000000000001";
 	/** The control chat's name, shown as-is by every client. The only place it is spelled. */
 	static readonly CONTROL_TITLE = "Control";
-	private controlRoleAllows = () => true;
-	/** Installed from durable local conversation/effective host policy before load. */
+	private controlRoleAllows = () => false;
+	/** Compatibility fixtures may exercise the legacy runtime. Production never enables it. */
 	setControlRoleGuard(allows: () => boolean): void {
 		this.controlRoleAllows = allows;
 	}
@@ -1980,6 +1980,10 @@ export class SessionManager {
 				if (meta.id !== id) throw new Error("Session metadata ID does not match its directory");
 				if (this.isArchivedControl(meta)) {
 					this.metas.set(meta.id, meta);
+					// Archive once, without consuming queued inputs or changing retained history/grants.
+					if (meta.archivedAt === undefined || meta.pinned) {
+						await this.save(meta, { timestamp: meta.archivedAt ?? Date.now() }, { value: false }, true);
+					}
 					continue;
 				}
 				normalizeLegacyOutcome(meta);
@@ -4338,8 +4342,7 @@ export class SessionManager {
 				meta.projectId ||
 				meta.workspace ||
 				meta.preparing ||
-				meta.archivedAt ||
-				!meta.pinned ||
+				(!this.isArchivedControl(meta) && (meta.archivedAt !== undefined || !meta.pinned)) ||
 				meta.repairDiagnostics !== undefined ||
 				meta.role !== undefined
 			)
@@ -6401,6 +6404,7 @@ export class SessionManager {
 	 * until its summary is placed; active runs retain turn-boundary placement. Stop cancels it.
 	 */
 	async compact(id: string, instructions?: string): Promise<void> {
+		this.assertControlWritable(this.require(id));
 		const end = this.updateGate.begin();
 		let admitted = false;
 		try {
@@ -6931,6 +6935,7 @@ export class SessionManager {
 				// writing durable state, or fabricating a new completion timestamp.
 				if (
 					!this.sleepPause &&
+					!this.isArchivedControl(meta) &&
 					!meta.failure &&
 					!meta.recoveryStopped &&
 					view.completion &&
@@ -8497,6 +8502,7 @@ export class SessionManager {
 	}
 
 	private summary(meta: SessionMeta, worker = this.workers.get(meta.id)): SessionSummary {
+		const retiredControl = this.isArchivedControl(meta);
 		const membership = this.missionSummary(meta.id);
 		const coordinator = membership.missionCoordinator === true;
 		const paused =
@@ -8525,7 +8531,7 @@ export class SessionManager {
 		// Compaction runs without a turn: show it as work, but keep the last result.
 		const workerState = worker?.state === "idle" && worker.compacting ? "working" : worker?.state;
 		const kernelState =
-			meta.recoveryStopped && !meta.failure
+			retiredControl || (meta.recoveryStopped && !meta.failure)
 				? "parked"
 				: paused
 					? "parked"
@@ -8550,6 +8556,7 @@ export class SessionManager {
 			) ??
 				false);
 		const mainActive =
+			!retiredControl &&
 			kernelState !== "failed" &&
 			(kernelState === "working" || kernelState === "starting" || !!meta.working || !!meta.pending?.length);
 		// An unanswered ask_user question needs the user, so background jobs and subagents do not count as work.

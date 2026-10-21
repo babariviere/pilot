@@ -35,7 +35,6 @@ export class ControlHosts {
 	readonly store: ControlHostStore;
 	private readonly keys?: ProtectedControlKeys;
 	private policy?: ControlHostConfiguration;
-	private conversationRole?: "app-home" | "executor";
 	constructor(host: OperationHost, store: ControlHostStore, keys?: ProtectedControlKeys) {
 		requireHost(host);
 		this.host = host;
@@ -187,23 +186,14 @@ export class ControlHosts {
 		this.policy = await this.store.call("configuration");
 		return this.policy;
 	}
-	/** Local product policy, recovered before sessions/watches. This does not enroll a remote home. */
+	/** Retain installation policy for transport/history compatibility, not a conversational agent. */
 	async recoverConversationRole(platform: NodeJS.Platform = process.platform): Promise<void> {
-		this.conversationRole = undefined;
-		const role = await this.store.call<"app-home" | "executor">("conversationRole", { host: this.host, platform });
+		await this.store.call("conversationRole", { host: this.host, platform });
 		await this.configuration();
-		this.conversationRole = role;
 	}
+	/** Control is retired on every host. Old home roles cannot reactivate it. */
 	legacyAllowed(): boolean {
-		return (
-			this.conversationRole === "app-home" &&
-			(!this.policy ||
-				(this.policy.role === "home" &&
-					sameControlHost(this.policy.host, this.host) &&
-					sameControlHost(this.policy.home, this.host) &&
-					!this.policy.freeze &&
-					!this.policy.archive))
-		);
+		return false;
 	}
 	/** Called by the protected role-bootstrap owner, not exposed as an agent or pairing API. */
 	async initialize(configuration: ControlHostConfiguration): Promise<ControlHostConfiguration> {

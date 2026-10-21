@@ -236,7 +236,7 @@ struct SessionArchiveAction: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        // pilotd never archives the control chat, so it can never be deleted either.
+        // Retired Control history cannot be restored as an agent.
         if !session.isControl { button }
     }
 

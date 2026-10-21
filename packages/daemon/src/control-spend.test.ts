@@ -80,6 +80,8 @@ test("authorization reporting separates limits/reservations/releases from ledger
 		await sessions.shutdown();
 		await rm(home, { recursive: true, force: true });
 	});
+	// Explicit legacy fixture, never the production default.
+	sessions.setControlRoleGuard(() => true);
 	await sessions.load();
 	await sessions.ensureControlChat();
 	const memory = sessions.controlAuthorizations();

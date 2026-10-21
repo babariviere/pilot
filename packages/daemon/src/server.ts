@@ -322,7 +322,7 @@ export function createDaemonServer(
 	telemetry?: TelemetrySettingsService,
 	githubSetup?: GitHubSetupService,
 	githubImport?: GitHubImportService,
-	control?: { hosts: ControlHosts; executor: ControlExecutor },
+	control?: { hosts: ControlHosts; executor?: ControlExecutor },
 	environment?: import("./environment.ts").EnvironmentService,
 ): Server & { runtimeResources: RuntimeResources } {
 	sessions.setWorkspaceProcessGuard((id) => terminals.isRunning(id));
@@ -462,7 +462,7 @@ export function createDaemonServer(
 	};
 	const admitOperationHeld = async (op: DurableOperation): Promise<unknown> => {
 		if (op.kind.startsWith("control.")) {
-			if (!control) throw new OperationRejected("Control executor unavailable");
+			if (!control?.executor) throw new OperationRejected("Control has been retired");
 			return control.executor.handle(op);
 		}
 		if (op.kind.startsWith("share-")) {
@@ -1401,14 +1401,11 @@ export function createDaemonServer(
 			}
 			return json(res, 200, sessions.controlDashboard(args));
 		}
-		if (parts[1] === "control-chat" && parts.length === 2 && (req.method === "POST" || req.method === "GET"))
-			return json(
-				res,
-				200,
-				req.method === "GET"
-					? (sessions.getControlChat() ?? (await sessions.ensureControlChat()))
-					: await sessions.ensureControlChat(),
-			);
+		if (parts[1] === "control-chat" && parts.length === 2 && (req.method === "POST" || req.method === "GET")) {
+			const chat = req.method === "GET" ? sessions.getControlChat() : await sessions.ensureControlChat();
+			if (!chat) throw new NotFound("No retained Control history");
+			return json(res, 200, chat);
+		}
 		if (parts[1] === "control-chat" && req.method !== "GET" && req.method !== "HEAD") sessions.assertControlActive();
 		// Local app HTTP surface only. There is deliberately no agent tool to revoke or edit a grant.
 		if (parts[1] === "control-chat" && parts[2] === "authorizations") {

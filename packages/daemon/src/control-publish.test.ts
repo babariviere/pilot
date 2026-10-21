@@ -68,6 +68,8 @@ async function fixture(t: TestContext) {
 			},
 		});
 		managers.push(sessions);
+		// Explicit legacy fixture, never the production default.
+		sessions.setControlRoleGuard(() => true);
 		await sessions.load();
 		await sessions.ensureControlChat();
 		const service = new ControlPilot({

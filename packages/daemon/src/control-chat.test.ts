@@ -25,6 +25,8 @@ test("singleton is project-less, pinned, never archived, and creation starts no 
 		await sessions.shutdown();
 		await rm(home, { recursive: true, force: true });
 	});
+	// Explicit legacy fixture, never the production default.
+	sessions.setControlRoleGuard(() => true);
 	await sessions.load();
 	const chats = await Promise.all(Array.from({ length: 10 }, () => sessions.ensureControlChat()));
 	assert.equal(new Set(chats.map((chat) => chat.id)).size, 1);

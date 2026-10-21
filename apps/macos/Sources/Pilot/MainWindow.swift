@@ -34,8 +34,6 @@ struct MainWindow: View {
                     ProjectPage(projectId: projectId)
                         .id(projectId)
                 }
-            } else if model.showingControl {
-                ControlScreen()
             } else if model.showingInbox {
                 InboxPage().environment(\.hostViewContext, model.inboxHost.map { HostViewContext(host: $0, hosts: hosts) } ?? model.localHost.map { HostViewContext(host: $0, hosts: hosts) })
             } else if model.showingArchive {
@@ -195,9 +193,14 @@ struct SessionDetail: View {
 
 
     @ViewBuilder var body: some View {
-        if let reference = (context ?? hostContext)?.ref(.session, session.id),
-           PreviousControl.isHistory(session, reference: reference, localHost: model.localHost) {
-            PreviousControlHistoryView(reference: reference, hosts: model.hosts)
+        if session.isControl {
+            if let reference = (context ?? hostContext)?.ref(.session, session.id)
+                ?? model.localHost.map({ HostResourceRef(host: $0, kind: .session, localId: session.id) }) {
+                PreviousControlHistoryView(reference: reference, hosts: model.hosts)
+            } else {
+                Text("Control has been retired. Reconnect to read its retained history.")
+                    .font(.pilot(.body)).foregroundStyle(Theme.mutedForeground)
+            }
         } else { liveDetail }
     }
 

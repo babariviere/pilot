@@ -226,6 +226,8 @@ test("control notice admission bypasses mission-only eligibility, preserves even
 		},
 	});
 	const watches = new WatchService(":memory:");
+	// Explicit legacy fixture, never the production default.
+	sessions.setControlRoleGuard(() => true);
 	const stopBinding = sessions.setWatches(watches);
 	t.after(async () => {
 		stopBinding();
@@ -270,6 +272,8 @@ test("HTTP control, watch cancellation, audit and WS invalidations share durable
 	const projects = new ProjectStore(home);
 	await projects.load();
 	const sessions = new SessionManager(home, projects);
+	// Explicit legacy fixture, never the production default.
+	sessions.setControlRoleGuard(() => true);
 	await sessions.load();
 	const watches = new WatchService(":memory:");
 	const terminals = new TerminalManager();

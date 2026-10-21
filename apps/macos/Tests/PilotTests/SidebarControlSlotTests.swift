@@ -22,12 +22,12 @@ private func chat(_ id: String, project: String?, control: Bool = false) throws 
     return app
 }
 
-@Test @MainActor func controlRowShowsInEveryScopeAndNeverInTheList() throws {
+@Test @MainActor func retiredControlHasNoSidebarSlotInAnyScope() throws {
     let app = try fixture()
-    #expect(app.sidebarControlRows.map(\.key) == ["control"])
+    #expect(!app.canGo(to: .control))
     app.focus(on: "p1")
-    // The fixed slot ignores the scope; the list's groups never hold the control chat.
-    #expect(app.sidebarControlRows.map(\.key) == ["control"])
+    // Retired Control has no fixed slot or live chat group.
+    #expect(!app.canGo(to: .control))
     let all = SidebarUrgency.groups(app.client.activeSessions, unread: { _ in false })
     #expect(all.control?.id == "control")
     let listed = all.pinned + all.needsYou + all.readyToMerge + all.working + all.recent
@@ -36,21 +36,17 @@ private func chat(_ id: String, project: String?, control: Bool = false) throws 
     #expect(!scoped.contains { $0.isControl })
 }
 
-@Test func controlRowsShowOnlyMacAndKeepSourceQualifiedHistoryOutsideTheNormalSlot() throws {
+@Test func allControlHistoriesStayOutsideTheNormalSidebarSlot() throws {
     let control = try chat("control", project: nil, control: true)
     let remote = Hosted(ref: HostResourceRef(host: box, kind: .session, localId: "control"), value: control)
     let mine = Hosted(ref: HostResourceRef(host: local, kind: .session, localId: "control"), value: control)
-    let other = Hosted(ref: HostResourceRef(host: local, kind: .session, localId: "a"), value: try chat("a", project: "p1"))
-    let rows = SidebarControlRow.rows(sessions: [], hosted: [remote, other, mine], localHost: local)
-    #expect(rows.map(\.key) == ["control"])
-    #expect(rows.map(\.reference) == [mine.ref])
     #expect(PreviousControl.isHistory(remote.value, reference: remote.ref, localHost: local))
-    #expect(!PreviousControl.isHistory(mine.value, reference: mine.ref, localHost: local))
-    #expect(SidebarControlRow.rows(sessions: [], hosted: [remote], localHost: nil).isEmpty)
-    #expect(SidebarControlRow.rows(sessions: [try chat("a", project: "p1")], hosted: nil, localHost: local).isEmpty)
+    #expect(PreviousControl.isHistory(mine.value, reference: mine.ref, localHost: local))
+    #expect(PreviousControl.isHistory(mine.value, reference: nil, localHost: nil))
+    #expect(!PreviousControl.isHistory(try chat("ordinary", project: "p1"), reference: mine.ref, localHost: local))
 }
 
-@Test @MainActor func openingControlKeepsTheFocusedScope() throws {
+@Test @MainActor func explicitControlHistoryDoesNotBecomeASavedLiveDestination() throws {
     let app = try fixture()
     try app.registerLocal(local)
     app.focus(on: "p1")
@@ -59,10 +55,11 @@ private func chat(_ id: String, project: String?, control: Bool = false) throws 
     app.selectedSessionId = nil
     app.reveal(session: "control")
     #expect(app.sidebarScope == "p1" && app.selectedSessionId == "control")
-    // Leaving and returning to the scope restores the control chat, which belongs to every scope.
+    // A retained conversation is available explicitly, but is not restored as a live destination.
     app.focus(on: "p2")
     app.focus(on: "p1")
-    #expect(app.sidebarScope == "p1" && app.selectedSessionId == "control")
+    #expect(app.sidebarScope == "p1" && app.selectedSessionId == nil)
+    #expect(app.isPreviousControlSelected == false)
 }
 
 @Test func arrowKeysReachTheFixedRowsAsTheListsFirstItems() {

@@ -12,16 +12,13 @@ import { BackgroundUsage } from "./background-usage.ts";
 import { loadConfig } from "./config.ts";
 import { migratePilotConfig } from "./config-migration.ts";
 import { ConnectivityService } from "./connectivity.ts";
-import { ControlDiagnostics } from "./control-diagnostics.ts";
-import { ControlExecutor } from "./control-executor.ts";
-import { controlSessionBackend } from "./control-executor-sessions.ts";
 import { ControlHostStore } from "./control-host-store.ts";
 import { ControlHosts } from "./control-hosts.ts";
 import { CredentialBroker } from "./credential-broker.ts";
 import { EnvironmentService } from "./environment.ts";
 import { EnvironmentStateStore } from "./environment-state.ts";
 import { Conflict, NotFound } from "./errors.ts";
-import { daemonPerformance, EventLoopWatchdog } from "./event-loop-watchdog.ts";
+import { EventLoopWatchdog } from "./event-loop-watchdog.ts";
 import { GitHubImportService } from "./github-import.ts";
 import { GitHubSetupService } from "./github-setup.ts";
 import { daemonHello } from "./hello.ts";
@@ -58,12 +55,7 @@ import { TrackedItemStore } from "./tracked-items.ts";
 import { TriageGroomer, workerTriage } from "./triage-grooming.ts";
 import { untrackedStats } from "./untracked-stats.ts";
 import { UsageHistoryStore } from "./usage-history.ts";
-import { WatchLifecycle } from "./watch-lifecycle.ts";
-import { LinearWatchSource } from "./watch-linear.ts";
-import { MissionWatchSource } from "./watch-missions.ts";
-import { PullRequestWatchSource } from "./watch-pull-requests.ts";
 import { WatchService } from "./watch-service.ts";
-import { SessionWatchSource } from "./watch-sessions.ts";
 
 const config = loadConfig();
 await migratePilotConfig(config.agentDir ?? getAgentDir());
@@ -90,13 +82,12 @@ watchdog.start();
 const projects = new ProjectStore(config.home);
 await projects.load();
 const trackedItems = new TrackedItemStore(join(config.home, "tracked-items.sqlite"));
-const watches = new WatchService(join(config.home, "watches.sqlite"), !controlHosts.legacyAllowed());
+// Retained watch records remain readable, but no observations, delivery, retries or follow-through run.
+const watches = new WatchService(join(config.home, "watches.sqlite"), true);
 await watches.ready();
 await watches.list();
 await trackedItems.load(projects.list().map((project) => project.id));
 const sourceMcp = new PiSourceMcpClient(config.agentDir);
-const linearWatches = new LinearWatchSource(watches, sourceMcp);
-if (controlHosts.legacyAllowed()) linearWatches.start();
 const tracking = new SourceRegistry(projects, trackedItems, sourceMcp);
 tracking.setDiagnosticsEnabled(telemetry.settings().localDiagnostics);
 await tracking.retainDiagnosticEvidence(join(config.home, "diagnostics", "refresh"), {
@@ -104,8 +95,6 @@ await tracking.retainDiagnosticEvidence(join(config.home, "diagnostics", "refres
 	daemonId: hello.daemonId,
 	lineageId: hello.lineageId,
 });
-if (controlHosts.legacyAllowed())
-	tracking.linearObserved = (projectId, items, activeIds) => linearWatches.tracked(projectId, items, activeIds);
 const usageHistory = new UsageHistoryStore(config.home);
 const backgroundUsage = new BackgroundUsage(config.home, usageHistory);
 void backgroundUsage.ready();
@@ -194,7 +183,6 @@ const sessions = new SessionManager(
 		telemetry: telemetry.kernelSettings(),
 	},
 );
-sessions.setControlRoleGuard(() => controlHosts.legacyAllowed());
 let appliedTelemetry = telemetry.settings();
 sessions.configureTelemetry(telemetry.kernelSettings(), appliedTelemetry.aiUsageBudget);
 telemetry.onChange((settings) => {
@@ -276,43 +264,12 @@ const stopControlSharedContext = sharing.onChange(() => {
 	controlSharedContext = missionStore.controlSharedContext(sharing.host);
 });
 const { ControlPilot } = await import("./control-pilot.ts");
-const { controlPreAdmission } = await import("./control-actions.ts");
 sessions.setPilot(
 	new ControlPilot({
 		host: sharing.host,
-		diagnostics: new ControlDiagnostics({
-			home: config.home,
-			daemonId: hello.daemonId,
-			lineageId: hello.lineageId,
-			...(process.platform === "darwin" ? { daemonLog: join(homedir(), "Library/Logs/Pilot/pilotd.log") } : {}),
-			daemonTail: daemonLogTail,
-			localDiagnostics: () => telemetry.settings().localDiagnostics,
-			health: () => sessions.controlHealth(),
-			sessionDirectory: (id) => sessions.controlDiagnosticDirectory(id),
-			evidence: (id, limit) => sessions.diagnostics(id, { limit }),
-			evidenceSummary: () => {
-				const performance = daemonPerformance();
-				return performance
-					? {
-							uptimeMs: performance.uptimeMs,
-							eventLoop: performance.eventLoop,
-							process: performance.process,
-							stalls: performance.stalls.recent.slice(-20).map(({ at, ms, cpuMs }) => ({ at, ms, cpuMs })),
-						}
-					: { available: false, reason: "Local performance diagnostics are not running" };
-			},
-		}),
-		isControl: (id) => sessions.isControlSession(id),
-		authorizations: () => sessions.controlAuthorizations(),
-		turnOrigin: () => sessions.controlTurnOrigin(),
-		taskDone: (missionId, taskId) => {
-			const task = missionStore.resolveTask(missionId, taskId);
-			return task.status === "done" || task.status === "dropped";
-		},
-		taskSession: (missionId, taskId) => missionStore.resolveTask(missionId, taskId).sessionId,
-		watches,
+		// The cached dashboard still backs the app's logical mission registry. It is not an agent.
+		isControl: () => false,
 		sessions,
-		controlPermission: sessions.controlPermission.bind(sessions),
 		projects: () => projects.list(),
 		missions: () => [...controlMissions.values()],
 		missionAttention: (id) => controlAttention.get(id),
@@ -320,45 +277,6 @@ sessions.setPilot(
 		onDashboardChange: (listener) => sharing.onChange(listener),
 		nextWatches: () => watches.dashboard(),
 		linear: (id) => trackedItems.preview(id, "linear").items,
-		mutations: {
-			organizeAllowed: () => sessions.controlOrganizeAllowed(),
-			createMission: async (request) => {
-				const detail = await missionService.create(request);
-				await missionStore.durable();
-				return detail.mission;
-			},
-			startCoordinator: (id, request) => missionService.startCoordinator(id, request),
-			attachMission: async (sessionId, missionId, taskId) => {
-				const chat = sessions.attachIdleToMission(sessionId, () =>
-					missionService.join(sessionId, { missionId, ...(taskId ? { taskId } : {}) }),
-				);
-				await missionStore.durable();
-				return chat;
-			},
-			audit: () => sessions.controlAudit(),
-			startProject: async (request, permission, requestId, provenance) => {
-				const selection = await controlPreAdmission(async () => {
-					const project = projects.require(request.projectId!);
-					return sessions.selectTaskModel(project.path, request.model ?? project.model, request.thinking);
-				});
-				return sessions.controlStart(
-					() => sessions.spawn({ ...request, ...selection }),
-					permission,
-					requestId,
-					provenance,
-				);
-			},
-			startTask: (missionId, taskId, request, permission, requestId, provenance) =>
-				sessions.controlStart(
-					() => missionService.startTask(missionId, taskId, request, "coordinator"),
-					permission,
-					requestId,
-					provenance,
-				),
-			send: sessions.sendReported.bind(sessions),
-			stop: sessions.stop.bind(sessions),
-			controlInputs: sessions.controlInputs.bind(sessions),
-		},
 	}),
 );
 missionService.setLinearClosingGuard((missionId, resourceId) => linearSync.closingEligibility(missionId, resourceId));
@@ -381,26 +299,8 @@ await connectivity.start();
 power?.onNetworkPath((path) => connectivity.setPath(path));
 // Recover global sleep overrides before any interrupted agent can reopen.
 await power?.start();
-// Frozen legacy follow-through must not participate in independent accepted work's recovery.
-if (controlHosts.legacyAllowed()) sessions.setWatchService(watches);
 await sessions.load(maintenance?.frozen);
 for (const project of projects.list()) sessions.refreshTrackedSources(project.id);
-if (controlHosts.legacyAllowed()) await sessions.ensureControlChat();
-if (controlHosts.legacyAllowed()) watches.bindRemovalAudit((removal) => sessions.auditWatchRemoval(removal));
-const watchLifecycle = controlHosts.legacyAllowed()
-	? new WatchLifecycle(watches, sessions, missionStore, () => sessions.controlAuthorizations())
-	: undefined;
-await watchLifecycle?.reconcile();
-const { importLegacyWatchAuthorizations } = await import("./control-authorizations.ts");
-if (controlHosts.legacyAllowed())
-	await importLegacyWatchAuthorizations(() => sessions.controlAuthorizations(), watches);
-const stopControlWatches = controlHosts.legacyAllowed() ? sessions.setWatches(watches) : () => {};
-const missionWatches = controlHosts.legacyAllowed() ? new MissionWatchSource(missionStore, watches) : undefined;
-const sessionWatches = controlHosts.legacyAllowed() ? new SessionWatchSource(watches, sessions) : undefined;
-const prWatches = controlHosts.legacyAllowed()
-	? new PullRequestWatchSource(watches, config.home, (target) => sessions.refreshWatchedPullRequest(target))
-	: undefined;
-if (prWatches) sessions.setWatchPullRequests(prWatches);
 // A reply in a waiting Slack thread resumes the message's latest chat with it, once chats are loaded.
 tracking.slackWaiting = createSlackWaitingWatcher(trackedItems, async (sessionId, message, requestId) => {
 	const chat = sessions.get(sessionId);
@@ -487,10 +387,6 @@ const server = createDaemonServer(
 	githubImport,
 	{
 		hosts: controlHosts,
-		executor: new ControlExecutor(
-			controlHostStore,
-			controlSessionBackend(sessions, projects, (id) => missionStore.get(id)?.coordinatorSessionId),
-		),
 	},
 	environment,
 );
@@ -506,7 +402,6 @@ async function stop(): Promise<void> {
 	watchdog.stop();
 	maintenance?.close();
 	server.close();
-	stopControlWatches();
 	stopControlSharedContext();
 	await sharing.stop();
 	await schedules.stop();
@@ -516,7 +411,6 @@ async function stop(): Promise<void> {
 	stopMemoryProjects();
 	await mcpStatus.close();
 	await missionLinear.stop();
-	await linearWatches.stop();
 	await linearPrChecks.stop();
 	await linearSync.stop();
 	await tracking.stop();
@@ -528,8 +422,6 @@ async function stop(): Promise<void> {
 	stopControlMissions();
 	await missionService.notices.stop();
 	await missionService.compaction.stop();
-	await watchLifecycle?.stop();
-	watches.bindRemovalAudit(undefined);
 	await githubImport.close();
 	await Promise.all([setup.close(), githubSetup.close(), terminals.shutdown(), sessions.shutdown()]);
 	await telemetry.featureUsage.close();
@@ -537,9 +429,6 @@ async function stop(): Promise<void> {
 	stopSlackCompletions();
 	await Promise.all(completionWrites);
 	await trackedItems.close();
-	await sessionWatches?.stop();
-	await missionWatches?.stop();
-	await prWatches?.stop();
 	await watches.close();
 	await controlHostStore.close();
 	await power?.stop();

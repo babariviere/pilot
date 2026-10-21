@@ -15,7 +15,7 @@ struct PreviousControlHistoryView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                PageHeader("Retained conversation", subtitle: "Read-only Control history on \(name). Reading does not archive the conversation or change agents, watches or permissions.")
+                PageHeader("Retained conversation", subtitle: "Read-only Control history on \(name). Control has been retired. This conversation cannot be resumed.")
                 Text("\(name) · \(reference.localId)").font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).textSelection(.enabled)
                 if let error = state.error {
                     Text(error).font(.pilot(.body)).foregroundStyle(Theme.mutedForeground)

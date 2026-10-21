@@ -937,17 +937,9 @@ final class AppModel: ObservableObject {
         showingInbox = true
     }
 
-    /// The Control screen, in place of the detail. Read-only; the sidebar keeps its scope.
+    /// Old navigation routes resolve to Home. Control is no longer a product destination.
     func openControlScreen() {
-        beginNavigation()
-        defer { endNavigation() }
-        hosts.selection = nil
-        showingArchive = false
-        showingInbox = false
-        selectedSessionId = nil
-        selectedMissionId = nil
-        selectedProjectId = nil
-        showingControl = true
+        openHome()
     }
 
     func clearProjectSubpage() {
@@ -1596,7 +1588,7 @@ extension AppModel {
             inboxProjectId = location.inboxProjectId
             inboxHost = location.filterHost
         case .control:
-            showingControl = true
+            showingControl = false
         }
         saveDrafts()
     }
@@ -1607,7 +1599,8 @@ extension AppModel {
         case let .session(id): return canMutateSession(id) && navigationResourceExists(id, kind: .session)
         case let .mission(id): return navigationResourceExists(id, kind: .mission)
         case let .project(id): return navigationResourceExists(id, kind: .project)
-        case .home, .inbox, .archive, .control: return true
+        case .control: return false
+        case .home, .inbox, .archive: return true
         }
     }
 

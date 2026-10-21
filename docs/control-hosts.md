@@ -2,39 +2,30 @@
 
 ## Current conversation policy
 
-Control runs only on the Mac that owns the app. Linux/devbox daemons never create or run a
-conversational Control. This restriction applies now, independently of cross-host enrollment,
-transport readiness or either end-to-end proof suite. It supersedes the older staged-rollout
-language below that kept remote Controls usable until remote orchestration was ready.
+Control is retired everywhere, including the Mac app host. Persisted `app-home`, `home`,
+executor, enrollment or freeze state cannot enable a conversation. Production has no singleton
+creation, Control worker recovery, live watch sources, delivery or follow-through. No Project
+coordinator replaces it. The native app no longer starts the Control courier; production retains
+host inspection and receipts but installs no Control operation executor. Old queued Control operations
+are rejected without allocating work.
 
-Before session or watch recovery, `ControlHosts.recoverConversationRole` loads the local
-`control_conversation_role` record in `$PILOT_HOME/control-hosts/state.sqlite`. On first use,
-the daemon persists `app-home` for the macOS app host and `executor` for other platforms,
-including Linux. The record pins daemon installation and storage lineage. Subsequent starts use
-that persisted role, not hostname, SSH alias, connection state, selected devbox or a new platform
-hint. An identity mismatch or unreadable policy fails closed. This is local product configuration,
-not enrollment, consent to a remote home, or an automatic failover election.
+`ControlHosts.recoverConversationRole` still validates the installation/lineage-pinned legacy
+record for transport compatibility; `legacyAllowed()` always returns false. SessionManager is
+read-only for Control by default, including when constructed without the host-policy service.
 
-An `executor` conversation role always denies Control, even if older cross-host configuration
-calls that daemon `home`. On an `app-home` installation the existing Mac Control behavior is
-unchanged, except that explicit effective executor/archived-control, freeze or archive policy
-still denies execution. Missing cross-host enrollment does not disable the Mac singleton.
+On load, existing Control sessions are durably archived once and unpinned. Their queued input,
+transcript, memory, grants and audit stay on the original host. All session mutations and restore
+attempts refuse; history subscriptions and GET routes remain cold and read-only. Fresh installations
+have no singleton (`GET /api/control-chat` returns 404; POST refuses). Existing ordinary work
+continues with its original permissions/provenance and is never attached to frozen follow-through.
+Mission coordinators and the shared-context transport are unchanged.
 
-Existing non-home Control metadata, queued input, transcript, memory, grants and audit remain
-on their original host, unchanged and readable. This is a policy-level read-only archive, not
-ordinary session archival: no `archivedAt` rewrite, history merge, deletion or workspace cleanup.
-`ensureControlChat` and input/configuration/worker mutations refuse; recovery, scheduled/user
-wakes, notice delivery, memory compaction and global Control actions cannot start a turn.
-GET `/api/control-chat` reads an existing singleton without ensuring it. Session history and
-subscriptions use cold storage, and existing Control memory/audit/authorization GET routes stay
-readable. Mutating Control HTTP routes refuse. A fresh executor has no singleton to read.
+The app removes Control from the sidebar, Go menu and palette pages. Existing archived conversations
+and host-qualified links open only bounded read-only history, including Local Control. Legacy watch
+records remain readable, but sources, reconciliation, pruning, retries and delivery do not run.
 
-The legacy watch service is frozen before sources start: no matching, expiry pruning, live source
-targets, delivery or follow-through; its existing records remain browseable. Executors skip
-legacy-grant import, watch reconciliation and the conversational sink. Independent accepted
-chats are not attached to that frozen service, so their recovery and continued work do not fail
-on old follow-through bookkeeping. Their permissions and provenance are not widened or changed.
-No accepted ordinary work is stopped. App-side hiding/archive presentation is a separate change.
+The cross-host material below is retained historical protocol/design documentation. It does not
+authorize or enable a conversational Control or a replacement coordinator.
 
 ## Cross-host contract
 

@@ -1,4 +1,19 @@
-# Control chat internals
+# Retained Control chat storage
+
+Control is retired on every host. This document records the legacy storage/runtime for compatibility
+and tests, not an enabled agent. Production creates no singleton or worker and wires no Control
+mutations, cross-host executor, watch sources, delivery, reconciliation or compaction. The cached dashboard remains only
+because the app's logical mission registry consumes it. No Project coordinator is introduced.
+
+At session load, existing Control metadata receives an `archivedAt` timestamp once and loses its pin.
+The change is durable and idempotent. All other retained metadata, queued input, transcript, memory,
+grants and audit remain on their source host. Reads never replay queued work. Session mutations,
+restoration, wakes and agent tool calls fail closed. The app opens every Control conversation through
+the read-only history reader, including the former Mac singleton. Fresh GET returns 404; POST refuses
+creation. Historical memory, audit and authorization GET routes stay readable.
+
+The sections below describe the legacy implementation, exercised only by explicit compatibility
+fixtures. They do not describe current product capabilities.
 
 ## Memory storage
 
