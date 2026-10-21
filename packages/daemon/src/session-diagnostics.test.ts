@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import type { OperationHost, SessionDiagnosticCurrent } from "@pilot/protocol";
+import type { OperationHost, SessionDiagnosticCurrent, ToolCallDiagnosticEvidence } from "@pilot/protocol";
 import { performanceLine } from "../../kernel/src/performance.ts";
 import type { DaemonPerformance } from "./event-loop-watchdog.ts";
 import { type LifecycleEvent, lifecycleLine } from "./lifecycle-diagnostics.ts";
@@ -395,6 +395,63 @@ test("diagnostics combine live tool progress with completed and interrupted evid
 	assert.equal(active?.livenessAgeMs, 1_000);
 	assert.equal(result.sources.find((source) => source.source === "tool")?.available, 3);
 	assert.equal(JSON.stringify(result).includes("mcp__slack"), false, "raw tool names are never exposed");
+});
+
+test("diagnostics retain nested DB failure beside outer script success without exposing connection context", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-diagnostics-db-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	await mkdir(join(root, "durable"));
+	const secret = "private-connection-context";
+	await writeFile(
+		join(root, "durable", "tool-activity.jsonl"),
+		[
+			{
+				v: 1,
+				kind: "finished",
+				ref: "abcdef012345-1",
+				at: 19_000,
+				startedAt: 18_000,
+				category: "orchestration",
+				nested: true,
+				outcome: "failure",
+				durationMs: 1_000,
+				// Defensive projection coverage: even unexpected retained fields cannot disclose connection context.
+				error: { code: "28000", message: secret, detail: secret, hint: secret },
+				args: { url: `postgres://fixture:${secret}@private.example/db`, sql: secret },
+			},
+			{
+				v: 1,
+				kind: "finished",
+				ref: "abcdef012345-2",
+				at: 19_001,
+				startedAt: 17_000,
+				category: "codemode",
+				nested: false,
+				outcome: "success",
+				durationMs: 2_001,
+			},
+		]
+			.map((record) => JSON.stringify(record))
+			.join("\n"),
+	);
+	const result = await readSessionDiagnostics({
+		host,
+		sessionId: "offline-db",
+		storageDir: root,
+		current,
+		connectivity: { state: "online" },
+		now: 20_000,
+	});
+	const evidence = result.evidence.filter((item): item is ToolCallDiagnosticEvidence => item.kind === "tool.call");
+	assert.deepEqual(
+		evidence.map(({ category, nested, outcome }) => ({ category, nested, outcome })),
+		[
+			{ category: "codemode", nested: false, outcome: "success" },
+			{ category: "orchestration", nested: true, outcome: "failure" },
+		],
+	);
+	assert.notEqual(evidence[0]!.ref, evidence[1]!.ref);
+	assert.doesNotMatch(JSON.stringify(result), /private-connection-context|postgres:\/\/|private\.example|28000/);
 });
 
 test("diagnostics distinguish an idle live observer from disabled collection", async (t) => {

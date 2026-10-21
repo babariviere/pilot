@@ -9,7 +9,15 @@ import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { createSecureContext, TLSSocket } from "node:tls";
 import { promisify } from "node:util";
-import { runPostgres } from "./databases.ts";
+import pg from "pg";
+import {
+	DATABASE_CONFIG_FILE,
+	DatabaseService,
+	type DatabaseState,
+	type DatabaseStateStore,
+	decideDatabaseRequest,
+	runPostgres,
+} from "./databases.ts";
 
 const exec = promisify(execFile);
 
@@ -224,6 +232,97 @@ test("TLS-required connections retain object CA, verify certificates, and enforc
 		// A plaintext HBA rejection is not proof that TLS would grant access.
 		/SQLSTATE 28000.*server authentication rules.*unencrypted connection.*does not establish a TLS requirement/,
 	);
+});
+
+test("saved project TLS reaches the real driver, while discovery and approval never open a connection", {
+	skip: !bin && "no Postgres binaries",
+}, async (t) => {
+	const configDir = await mkdtemp(join(tmpdir(), "pilot-pg-config-"));
+	t.after(() => rm(configDir, { recursive: true, force: true }));
+	const project = join(configDir, "project");
+	const service = new DatabaseService(configDir);
+	const connect = t.mock.method(pg.Client.prototype, "connect");
+	let state: DatabaseState | undefined;
+	const store: DatabaseStateStore = {
+		read: () => state,
+		write: async (value) => {
+			state = value;
+		},
+	};
+	const update = async (connection: string) => {
+		const settings = await service.settings(project);
+		await service.updateSettings(project, {
+			revision: settings.revision,
+			environments: [{ name: "prod", read: { url: connection } }],
+		});
+	};
+	// An operator-provided CA in database.json must survive editing and URL parsing all the way to pg.
+	await writeFile(
+		join(configDir, DATABASE_CONFIG_FILE),
+		JSON.stringify({
+			projects: {
+				[project]: {
+					environments: {
+						prod: {
+							read: {
+								url: `${tlsUrl}?sslmode=verify-full`,
+								ssl: { ca },
+								access: "ask",
+							},
+						},
+					},
+				},
+			},
+		}),
+		{ mode: 0o600 },
+	);
+	await update(`${tlsUrl}?sslmode=verify-full`);
+	await service.refresh();
+	assert.equal(service.configured(project), true);
+	const settings = await service.settings(project);
+	assert.doesNotMatch(JSON.stringify(settings), /BEGIN CERTIFICATE|postgres:\/\/|sslmode/);
+	const call = (action: string, args: Parameters<DatabaseService["call"]>[3]) =>
+		service.call("offline-tls-fixture", project, action, args, store);
+	// Target a closed port: these operations must still work without testing connectivity.
+	await update("postgres://pilot@127.0.0.1:1/postgres?sslmode=verify-full");
+	assert.deepEqual(await call("access", {}), {
+		environments: [{ name: "prod", modes: { read: "ask" }, granted: [] }],
+	});
+	const pending = await call("access", { env: "prod" });
+	assert.equal((pending as { status: string }).status, "pending");
+	await store.write(decideDatabaseRequest(state, state!.request!.id, true));
+	const approved = structuredClone(state);
+	assert.deepEqual(await call("access", { env: "prod" }), { status: "granted", env: "prod", mode: "read" });
+	assert.equal(connect.mock.callCount(), 0, "saving, discovery and approval do not test connectivity");
+	await assert.rejects(call("query", { env: "prod", sql: "select 1" }), /Database connection failed/);
+	assert.equal(connect.mock.callCount(), 1, "no retry on connection rejection");
+	assert.deepEqual(state, approved);
+	await update(`${tlsUrl.replace("localhost", "127.0.0.1")}?sslmode=verify-full`);
+	await assert.rejects(call("query", { env: "prod", sql: "select 1" }), /TLS certificate verification failed/);
+	assert.equal(connect.mock.callCount(), 2, "hostname verification fails without a fallback connection");
+	assert.deepEqual(state, approved);
+	// Only an explicit query against the disposable server demonstrates verified TLS and read-only mode.
+	await update(`${tlsUrl}?sslmode=verify-full`);
+	assert.deepEqual(
+		await call("query", {
+			env: "prod",
+			sql: "select ssl, current_setting('transaction_read_only') as read_only from pg_stat_ssl where pid = pg_backend_pid()",
+		}),
+		{
+			env: "prod",
+			mode: "read",
+			columns: ["ssl", "read_only"],
+			rows: [{ ssl: true, read_only: "on" }],
+			rowCount: 1,
+			truncated: false,
+		},
+	);
+	await assert.rejects(
+		call("query", { env: "prod", sql: "create table forbidden_config_write (n int)" }),
+		/SQLSTATE 25006/,
+	);
+	assert.equal(connect.mock.callCount(), 4, "one connection per explicit fixture query");
+	assert.deepEqual(state, approved);
 });
 
 test("real password and server-rule failures preserve SQLSTATE without exposing server details", {
