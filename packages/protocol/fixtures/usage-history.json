@@ -15,6 +15,7 @@
 			"attribution": {
 				"projectId": "33333333-3333-4333-8333-333333333333",
 				"chatId": "44444444-4444-4444-8444-444444444444",
+				"attemptId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
 				"runId": "55555555-5555-4555-8555-555555555555",
 				"mission": {
 					"homeId": "66666666-6666-4666-8666-666666666666",
@@ -24,6 +25,8 @@
 			},
 			"physicalModel": { "provider": "example", "model": "example-model-1" },
 			"virtualModel": { "provider": "pi-virtual", "model": "observed-selection" },
+			"virtualRevision": "observed-v1",
+			"parent": { "sourceId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "operationId": "tool:17" },
 			"tokens": {
 				"input": 100,
 				"output": 20,

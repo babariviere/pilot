@@ -47,6 +47,23 @@ test("shared local accounting fixture has exact canonical TS shape and unknown l
 	assert.equal(fixture.rows[1]!.physicalModel, undefined);
 });
 
+test("unknown dispatched responses omit usage rather than inventing zero tokens/cost", async () => {
+	const unknown = JSON.parse(
+		await readFile(new URL("../../protocol/fixtures/usage-history-unknown.json", import.meta.url), "utf8"),
+	);
+	assert.deepEqual(parseUsageObservation(unknown), unknown);
+	assert.equal(parseUsageObservation(unknown).tokens, undefined);
+	assert.equal(parseUsageObservation(unknown).cost, undefined);
+	assert.throws(() =>
+		parseUsageObservation({ ...unknown, parent: { sourceId: CHAT, operationId: "https://private" } }),
+	);
+	assert.throws(() => parseUsageObservation({ ...unknown, activity: "compaction" }));
+	assert.equal(
+		parseUsageObservation({ ...unknown, kind: "checkpoint", activity: "compaction", requests: 0 }).activity,
+		"compaction",
+	);
+});
+
 test("bounded stored-row reader preserves strict validation without reserializing JSON", () => {
 	const json = JSON.stringify(fixture.rows[0]);
 	assert.deepEqual(readUsageObservation(json), fixture.rows[0]);
@@ -401,8 +418,8 @@ test("compatibility migration is undated, idempotent and cannot resurrect cleare
 	const home = await mkdtemp(join(tmpdir(), "usage-legacy-"));
 	const store = new UsageHistoryStore(home, () => NOW);
 	const scope = {
-		tokens: fixture.rows[0]!.tokens,
-		cost: fixture.rows[0]!.cost,
+		tokens: fixture.rows[0]!.tokens!,
+		cost: fixture.rows[0]!.cost!,
 		activity: {
 			kind: "model_requests" as const,
 			count: 1,

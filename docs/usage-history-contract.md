@@ -26,10 +26,13 @@ An observation contains only:
 | `completedAt` | Optional committed physical-request completion time; omitted when unknown |
 | `coverage` | `committed`, `legacy` or `partial`; no claim of complete host/account usage |
 | `purpose` | `agent`, `control`, `follow_up`, `title`, `triage`, `classification`, `memory`, `compaction`, `other`, `unknown` |
-| `attribution` | Optional project/chat/run UUIDs; optional mission tuple `(homeId, lineageId, missionId)`, all UUIDs |
+| `attribution` | Optional project/chat/attempt/run UUIDs; optional mission tuple `(homeId, lineageId, missionId)`, all UUIDs |
 | `physicalModel` | Optional observed `{provider, model}` identifiers, each <=128 restricted identifier characters |
 | `virtualModel` | Optional **observed** `{provider, model}` identifiers; never a newly inferred routing policy |
-| `tokens`, `cost` | Existing `AIUsageTokens` and `AIUsageCost`; retain pricing revision with the estimate |
+| `virtualRevision` | Optional already-observed immutable policy revision, <=128 restricted identifier characters; absent if unavailable |
+| `parent` | Optional original `{sourceId, operationId}` provenance; same validation as record identity |
+| `tokens`, `cost` | Optional existing `AIUsageTokens` and `AIUsageCost`; unknown response evidence omits them, never substitutes zeros. Retain pricing revision with the estimate |
+| `activity` | Optional `compaction`, on non-additive checkpoints only; non-model activity has no inferred tokens/cost |
 | `requests`, `providerAttempts`, `retries`, `durationMs` | Optional committed/observed nonnegative integer counters |
 | `outcome` | Optional `success`, `failure`, `cancelled` or `unknown` from committed outcome evidence |
 
