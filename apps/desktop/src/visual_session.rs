@@ -49,12 +49,25 @@ impl Session {
             version: 0,
         })
     }
-    pub(crate) async fn retry(&mut self) -> Result<(), Fault> {
+    pub(crate) async fn prepare(&mut self) -> Result<(), Fault> {
         self.stop().await;
         let process = Process::start().await?;
         self.process = Some(process);
+        Ok(())
+    }
+    pub(crate) async fn load(&mut self) -> Result<(), Fault> {
         let request = json!({"kind":"load","source":self.program.source,"data":self.program.data,"state":self.state,"seed":self.program.seed,"now":self.program.now});
         self.apply(request).await
+    }
+    #[cfg(all(test, target_os = "macos"))]
+    pub(crate) async fn retry(&mut self) -> Result<(), Fault> {
+        self.prepare().await?;
+        self.load().await
+    }
+    pub(crate) fn clock(&mut self, now: f64) {
+        if now.is_finite() {
+            self.program.now = now;
+        }
     }
     pub(crate) async fn event(
         &mut self,
@@ -134,6 +147,7 @@ fn validate_state(state: &str) -> Result<(), Fault> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn failed_handler_state_is_not_committed_and_retry_has_a_fresh_vm() {
         for failure in [

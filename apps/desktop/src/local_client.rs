@@ -136,12 +136,25 @@ fn identity_file(path: PathBuf) -> Result<String, Failure> {
 
 enum ReadRoute {
     Hello,
-    History { id: String, before: u64 },
+    History {
+        id: String,
+        before: u64,
+    },
+    Artifact {
+        owner: String,
+        id: String,
+        revision: u32,
+    },
 }
 impl ReadRoute {
     fn path(&self) -> String {
         match self {
             Self::Hello => "/api/hello".into(),
+            Self::Artifact {
+                owner,
+                id,
+                revision,
+            } => format!("/api/sessions/{owner}/artifacts/{id}?revision={revision}"),
             Self::History { id, before } => {
                 format!("/api/sessions/{id}/history?before={before}&limit=24")
             }
@@ -164,6 +177,7 @@ pub(crate) enum Command {
 
 #[derive(Clone, Default)]
 pub(crate) struct Presentation {
+    pub(crate) artifacts: Arc<Vec<crate::artifact_model::Reference>>,
     pub(crate) chats: Arc<Vec<Chat>>,
     pub(crate) rows: Vec<Message>,
     pub(crate) generation: u64,
@@ -278,6 +292,37 @@ async fn get(
 
 pub(crate) async fn gate(client: &reqwest::Client, options: &LocalOptions) -> Result<(), Failure> {
     options.verify(&get(client, options, ReadRoute::Hello).await?)
+}
+pub(crate) async fn artifact(
+    options: &LocalOptions,
+    reference: &crate::artifact_model::Reference,
+) -> Result<crate::artifact_model::Revision, Failure> {
+    if !local_model::valid_id(&reference.session)
+        || !local_model::valid_id(&reference.id)
+        || reference.revision == 0
+    {
+        return Err("Invalid artifact read scope");
+    }
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(2))
+        .timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|_| "Cannot start artifact reader")?;
+    gate(&client, options).await?;
+    let value = get(
+        &client,
+        options,
+        ReadRoute::Artifact {
+            owner: reference.session.clone(),
+            id: reference.id.clone(),
+            revision: reference.revision,
+        },
+    )
+    .await?;
+    gate(&client, options).await?;
+    crate::artifact_model::Revision::parse(value, reference)
 }
 
 fn socket_task(
@@ -508,13 +553,14 @@ async fn run(
                 Ok(Command::Clear {generation})=>{
                     if let Some(task)=chat_socket.take(){task.abort();}
                     if let Some(task)=page_task.take(){task.abort();}
-                    selected=None;model=LiveTranscript::default();view.generation=generation;view.page_busy=false;view.chat_status.clear();view.batches=0;view.queued=0;
+                    selected=None;model=LiveTranscript::default();view.generation=generation;view.page_busy=false;view.chat_status.clear();view.batches=0;view.queued=0;view.artifacts=Arc::new(Vec::new());
                 }
                 Ok(Command::Open { id, generation }) => {
                     if fenced || !local_model::valid_id(&id) { continue; }
                     if let Some(task) = chat_socket.take() { task.abort(); }
                     if let Some(task) = page_task.take() { task.abort(); }
                     selected = Some(id.clone());
+                    view.artifacts=Arc::new(Vec::new());
                     model = LiveTranscript::default();
                     view.generation = generation; view.page_busy = false; view.chat_status = "Loading chat…".into(); view.batches=0;view.queued=0;
                     chat_socket = Some(socket_task(options.clone(),client.clone(),Some(id),generation,inbox.clone()));
@@ -565,7 +611,8 @@ async fn run(
                 Ok((_, Incoming::Wire {generation,chat: is_chat,value})) => {
                     if is_chat {
                         if generation != view.generation { continue; }
-                        if value["type"] == "events" && let Some(events) = value["events"].as_array() {
+                        if value["type"] == "artifacts" && value["sessionId"].as_str()==selected.as_deref(){view.artifacts=crate::artifact_model::summaries(&value["artifacts"],selected.as_deref().unwrap_or(""));}
+                        else if value["type"] == "events" && let Some(events) = value["events"].as_array() {
                             view.batches+=1;
                             for event in events { model.apply(event); }
                         } else if value["type"] == "error" { view.chat_status = "Local chat unavailable; details omitted for privacy.".into(); }

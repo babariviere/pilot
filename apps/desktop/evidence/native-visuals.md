@@ -1,70 +1,115 @@
-# Native visual runtime, foundation checkpoint
+# Bounded native visual reader, incremental checkpoint
 
-WIP, not viewer delivery. No artifact cards/detail UI is wired yet. Parent
-transport/schema/session modules are test-only until their UI integration lands.
-No generated source runs in the desktop process. No Swift/backend changes.
+WIP partial viewer, not full artifact parity/security certification. Native
+gallery/detail/read/runtime wiring is implemented. Source/handlers only execute
+in the separate OS-confined helper, never the desktop process/thread. No Swift
+or backend changes, real automated mutations or real capture-scope expansion.
 
-## Isolation implemented
+## Read boundary and supported display
+
+Metadata comes only from the selected chat subscription, max64 items. Explicit
+Open fetches exactly that session/artifact/revision using an allowlisted GET,
+4 MiB response cap and full hello before/after. No proxy/redirect/cookie,
+unpinned resolution or cross-chat fallback. Check id/session/revision before
+accepting source. Prepared HTML is ignored for every kind. Unknown runtime/kind
+keeps read-only source/provenance instead of executing it. Metadata never
+automatically changes an open pinned revision. Previous revision/All artifacts
+give explicit historical/latest navigation.
+
+Native rows/columns/grids, plain selectable text, stats, tables (numeric/null
+cells), rules/spaces, inert links, buttons/toggles/tabs and slider steppers.
+Non-stacked line/area/bar/scatter charts use trusted native primitives over
+finite normalized geometry prepared off UI; missing values stay gaps. No
+dynamic SVG/image cache. Aggregate4096 weighted display units include nodes,
+text, table cells and geometry. Max8192 bytes per text node,1024 table cells and
+2048 chart points plus shared budgets. Overflow is explicit. Per-run typography,
+some alignment/axis/hover details, slider dragging, stacked plotting and
+out-of-domain clipping remain incomplete. Large numeric table labels are
+compact. Source/data is unchanged.
+
+Canvas and Mermaid have node-local unsupported cards; shaders are explicit
+deferrals, retaining mixed visual siblings. Image/SwiftUI previews are not yet
+wired. HTML/React/browser libraries/standalone shaders stay deferred. Source
+preview is bounded plain selectable text, not an editor/interpreter. Copy source
+retains the full fetched source. Eight revision-keyed states are in memory only,
+not Swift import or durable restart support. Clipboard controls are user-driven.
+
+## Isolation
 
 `pilot-visual-worker` is a separate Cargo package. It compiles the existing C
-visual engine and shared runtime against QuickJS-NG 0.17.0, with no libc/std/os
-modules or host bridge. A checksum-pinned preparation script materializes only
-the engine into private `.tools`, verifies the archive on every preparation and
-refuses changed materialized files. Existing Swift/vendor/registry sources are
-not edited. Source/archive/version pin matches the current Swift preparation.
+engine/shared runtime with QuickJS-NG0.17.0, no std/os/libc JS modules or host
+bridge. Checksum-pinned preparation materializes only in private `.tools`,
+verifies archive/materialized bytes and refuses changes. No registry/vendor or
+Swift source edits. Source/version/archive pin matches existing Swift preparation.
 
-Trusted native bootstrap runs before source is read. It closes inherited fds,
-sets resource limits, creates intrinsics and a parked watchdog, then installs:
-- macOS: deny-default Seatbelt after loader bootstrap, self process-info only.
-  File, network and actual exec denial are actively probed before hello. Parent
-  independently queries the actual child's file sandbox. `sandbox_check` is SPI;
-  absence/failure refuses execution. Its process-exec query was not reliable;
-  actual exec denial is required instead. No broad sysctl or file grants.
-- Linux: no-new-privs, non-dumpable, parent-death kill, close-range, 320 MiB
-  address-space cap and architecture-checked seccomp allowlist with TSYNC to the
-  watchdog. No open/socket/connect/exec/clone/ptrace/io_uring or executable
-  mappings. Parent checks `/proc` before sending source. Linux code is not yet
-  built/run on a native Wayland host. Capability failure has no fallback.
+Trusted native bootstrap closes inherited fds, sets limits, creates intrinsics
+and a parked watchdog, then confines before reading any source:
+- macOS deny-default Seatbelt after loader bootstrap, self process-info only.
+  Active file/network/actual exec denial before hello, independent parent file
+  sandbox attestation of the actual child. `sandbox_check` is SPI; absence or
+  failure refuses execution. Its exec query was unreliable; actual exec denial
+  is required. No broad file/sysctl grants. Validated on the current macOS27
+  host, not security certification or macOS15 verification.
+- Linux draft: no-new-privs, non-dumpable, parent-death kill, close-range,
+  320 MiB AS cap and architecture-checked seccomp allowlist with TSYNC to the
+  watchdog. No open/socket/connect/exec/clone/ptrace/io_uring/executable mappings.
+  Draft parent checks `/proc`. Not compiled/run on native Wayland. App source
+  execution is explicitly disabled off macOS pending validation; source view
+  remains available. No unconstrained fallback.
 
-Child environment is cleared and cwd is `/`. A parent-owned synthetic listener
-ensures denial testing cannot contact the daemon or another real service.
+Child env cleared, cwd `/`, stderr null, private pipes only. A parent-owned
+synthetic listener ensures denial probes cannot contact the daemon/real service.
 Hello pins protocol, engine, runtime hash and actual child pid before source.
-At most two workers exist globally. A failed reap latches execution unavailable.
+Max2 workers globally. Failed reap latches execution unavailable.
 
-## Transactions and limits
+## Transactions and lifetime
 
-32 MiB JS heap, 512 KiB JS stack, setup/view 250 ms, handler 100 ms and draw
-8 ms. Helper watchdog exits after 1.5 s of active work, parent hard deadline is
-2 s, and kill/reap is bounded. Idle watchdog is parked, not polling.
-Every error/interrupt/OOM/invalid reply discards the whole helper. No interrupted
-VM resumes. Retry recreates it from last committed reader state. Normal success
-keeps setup/closures as the existing contract requires.
+32 MiB JS heap,512 KiB JS stack; setup/view250 ms, handler100 ms, draw8 ms.
+Parked watchdog exits after1.5 s active work; parent hard deadline2 s and bounded
+kill/reap. Idle has no polling. Every error/interrupt/OOM/invalid reply discards
+the whole helper, never continues a poisoned VM. Explicit retry creates fresh
+VM/closures from last committed reader state. Normal success keeps setup state.
+Closing cancels pending load/event IPC then kills/reaps. Trusted startup is
+always joined before source, never cancelled into an orphan.
 
-Frames: 4 MiB request, 2 MiB reply; strict PV decoding with valid UTF-8, finite
-numbers, duplicate-key/overflow/trailing-data rejection, depth/value/expanded-byte
-caps. Host independently validates closed API 1, aggregate text and node limits,
-sibling keys, dimensions, chart series lengths and current-path control ids.
-State must be a bounded JSON array. Tree and state commit atomically only after
-all validation; stale/disabled/mistyped events never reach the helper.
-Shader metadata/source is retained, never compiled/executed; mixed valid trees
-keep their other nodes. Renderer support remains unfinished.
+4 MiB request/2 MiB reply. Strict PV UTF-8, finite values, duplicates, varint
+overflow, trailing-data, depth/value/expanded-byte caps. Independent closed API1
+tree/text/node/sibling-key/dimension/chart-length/current-path validation. State
+is a bounded JSON array. Tree/state commit atomically after validation. UI exact
+resource/generation/scene-version/type checks fence late snapshots/controls.
+No host file/network/tool/daemon bridge for generated code. Shaders stay data.
 
-## Evidence and remaining work
+## Evidence and gaps
 
-Full checkpoint verification: 83 library tests pass, one opt-in disk workload
-ignored; fmt-all, strict parent/helper Clippy, native fixture/browser plus16
-synthetic chrome scenes, locked app/helper builds and engine-symbol separation
-pass. `JS_NewRuntime` is present in the helper, absent from the UI binary.
-Native tests passed for sandbox/parent attestation, load/events, real
-handler interrupt and heap exhaustion, null-OOM metadata, fresh-VM recovery,
-no partial state commit, stale events, kill/reap of an unresponsive helper,
-hostile wire/schema rejection, nine shared view/event/state fixtures and the
-30 shared non-draw error cases. Draw/error-budget fixtures, canvas codec/renderer,
-charts/layout/controls UI, artifact read/provenance/revision/generation fencing
-and lifetime/state-cache integration are still pending. Native Wayland/macOS15,
-broader escape probes and matched performance remain unverified. No real data,
-real mutation, visible app, service install, release/default switch or Swift
-removal. No full parity/security certification or speedup claim.
+Foundation:83 library tests pass/one ignored workload, fmt-all, strict helper/
+parent Clippy, native fixture/browser plus16 chrome scenes, locked builds and
+symbol separation. `JS_NewRuntime` present in helper, absent from UI.
+Native tests: actual sandbox/parent attestation, load/events, real heap exhaustion
+and handler interrupt, null-OOM metadata, fresh-VM retry, no partial state commit,
+stale events, malformed wire/schema. SIGSTOP the exact owned/attested child before
+exchange: parent2s deadline kills/reaps it; fresh helper then succeeds. Nine shared
+view/event/state and30 non-draw error fixtures match.
+
+Follow-on focused tests: GET-only faux server load/event, identity change after
+fetch admits no revision/source, generation/revision/typed-event rejection and
+8-slot state-cache eviction.36 expected-tree narrow/wide/light/dark native GPU
+offscreen scenes, no VM/network/account. Native drag selection and exact keyboard
+Copy (fake clipboard), full Copy source, Source disclosure and huge wheel-to-bottom/
+back assert bounded scrolling. Selecting plain text explicitly focuses the pane
+so search/composer Copy cannot swallow it; app Copy preserves boundary whitespace.
+Full UI checkpoint:88 library tests pass/one ignored workload, fmt-all, strict
+helper/parent Clippy, native fixture/browser,16 chrome and36 visual scenes,
+locked app/helper builds and engine-symbol separation pass.
+Synthetic GPUI images and separately
+labelled static SwiftUI mock attached internally; no real content is published.
+
+Draw/error-budget corpus, canvas codec/renderer, image/SwiftUI previews, Mermaid
+candidate/license/corpus, durable reader state and complete chart/style parity
+remain unfinished. Native Wayland/macOS15, broader escape probes, OS IME and
+matched performance unverified. Count helper RSS in future measurements. No
+visible unattended app, real writes, service/global install, release/default
+switch, Swift removal or merge. No full parity/security-certification/speedup
+claim; locked-screen timings are not used.
 
 ```sh
 cd apps/desktop

@@ -167,6 +167,8 @@ pub struct LocalViewer {
     nav_drafts: Vec<(String, String)>,
     refreshing: bool,
     details_open: bool,
+    artifacts: Entity<crate::artifact_view::ArtifactPane>,
+    artifacts_open: bool,
 }
 
 impl LocalViewer {
@@ -175,8 +177,9 @@ impl LocalViewer {
     }
     pub fn new(options: LocalOptions, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (writer, write_updates) = Interaction::start(options.clone(), Store::default_path());
-        let (client, updates) = LocalClient::start(options);
+        let (client, updates) = LocalClient::start(options.clone());
         let mut view = Self::build(Some(client), Some(writer), window, cx);
+        view.artifacts.update(cx, |pane, _| pane.options(options));
         view.updates = Some(cx.spawn_in(window, async move |view, cx| {
             while let Ok(update) = updates.recv().await {
                 if view
@@ -282,6 +285,35 @@ impl LocalViewer {
     /// Offscreen harness readiness, not a render-time gate.
     pub fn text_parsers_ready(&self, cx: &App) -> bool {
         self.transcript.read(cx).text_parsers_ready(cx)
+    }
+    /// Network/state-free native renderer corpus. Uses stored expected trees, never evaluates JS.
+    pub fn visual_preview(index: usize, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mut view = Self::preview(PreviewState::Conversation, window, cx);
+        let corpus: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../packages/protocol/fixtures/visual/conformance.json"
+        ))
+        .expect("checked-in synthetic corpus");
+        let cases = corpus["cases"].as_array().unwrap();
+        let case = &cases[index % cases.len()];
+        let reference = crate::artifact_model::Reference {
+            id: "synthetic-visual".into(),
+            session: "synthetic".into(),
+            revision: 1,
+            title: case["name"].as_str().unwrap().into(),
+            kind: "visual".into(),
+        };
+        view.state.artifacts = Arc::new(vec![reference.clone()]);
+        view.artifacts_open = true;
+        let scene = crate::visual_scene::Scene::parse(case["steps"][0]["tree"].clone()).unwrap();
+        view.artifacts.update(cx, |p, cx| {
+            p.preview(
+                reference,
+                case["source"].as_str().unwrap().into(),
+                scene,
+                cx,
+            )
+        });
+        view
     }
     /// Fixed synthetic states, no daemon/private draft store or mutation capability.
     pub fn preview(state: PreviewState, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -445,6 +477,8 @@ impl LocalViewer {
             nav_drafts: Vec::new(),
             refreshing: false,
             details_open: false,
+            artifacts: cx.new(|_| crate::artifact_view::ArtifactPane::new()),
+            artifacts_open: false,
         }
     }
 
@@ -476,6 +510,11 @@ impl LocalViewer {
             editor.select(key, chat.writable, chat.busy, window, cx)
         });
         self.selected = Some(chat.id);
+        self.artifacts_open = false;
+        self.state.artifacts = Arc::new(Vec::new());
+        self.artifacts.update(cx, |pane, cx| {
+            pane.context(self.selected.clone(), self.state.artifacts.clone(), cx)
+        });
         self.title = chat.title;
         self.state.cursor = None;
         self.state.page_busy = false;
@@ -518,10 +557,18 @@ impl LocalViewer {
                 .update(cx, |editor, cx| editor.permission(writable, busy, cx));
         }
         self.rebuild_nav(window, cx);
+        self.artifacts.update(cx, |pane, cx| {
+            pane.context(self.selected.clone(), self.state.artifacts.clone(), cx)
+        });
         cx.notify();
     }
 
     fn clear_chat(&mut self, cx: &mut Context<Self>) {
+        self.artifacts_open = false;
+        self.state.artifacts = Arc::new(Vec::new());
+        self.artifacts.update(cx, |pane, cx| {
+            pane.context(None, self.state.artifacts.clone(), cx)
+        });
         self.refreshing = false;
         self.generation += 1;
         self.selected = None;
@@ -685,6 +732,8 @@ impl Render for LocalViewer {
                                 })))
                             .child(Button::new("latest").ghost().small().label(if self.refreshing{"Retry latest"}else if self.state.limited{"Refresh latest"}else{"Latest"})
                                 .on_click(cx.listener(|view,_,_,cx|view.latest(cx))))
+                            .when(!self.state.artifacts.is_empty()||self.artifacts_open,|this|this.child(Button::new("artifact-gallery").ghost().small().label(if self.artifacts_open{"Back to chat"}else{"Artifacts"})
+                                .on_click(cx.listener(|view,_,_,cx|{view.artifacts_open = !view.artifacts_open;if !view.artifacts_open{view.artifacts.update(cx,|p,_|p.close());}cx.notify();}))))
                             .child(div().flex_1().min_w_0().text_xs().truncate().text_color(cx.theme().muted_foreground)
                                 .child(SharedString::from(format!("{}{}",self.state.chat_status,if self.state.queued>0{format!(" · {} queued",self.state.queued)}else{String::new()}))))))
                     .child(div().v_flex().flex_1().min_h_0().min_w_0().w_full().max_w(px(760.)).mx_auto()
@@ -692,7 +741,8 @@ impl Render for LocalViewer {
                         .when(self.selected.is_none(),|this|this.child(div().v_flex().flex_1().justify_center().p_6().gap_2()
                             .child(div().font_semibold().child("Choose a chat"))
                             .child(div().text_sm().text_color(cx.theme().muted_foreground).child("Open a Local conversation from the sidebar, or start a new chat."))))
-                        .when(self.selected.is_some(),|this|this.child(self.transcript.clone())))
+                        .when(self.selected.is_some()&&!self.artifacts_open,|this|this.child(self.transcript.clone()))
+                        .when(self.artifacts_open,|this|this.child(self.artifacts.clone())))
                     .child(div().w_full().max_w(px(760.)).mx_auto().child(self.editor.clone()))
                     .child(div().v_flex().px_3().py_1().gap_1().border_t_1().border_color(cx.theme().border).text_xs().text_color(cx.theme().muted_foreground)
                         .child(Button::new("view-details").ghost().small().self_start().label(if self.details_open{"Hide details"}else{"Details"})

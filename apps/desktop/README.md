@@ -5,8 +5,8 @@
 This is an experimental draft source checkpoint, not a merge-ready replacement.
 The synthetic fixture, input/selection fixes, bounded Local viewer and explicit
 Local create/send/Stop with private durable drafts are implemented.
-Compact tool/work presentation is implemented; interface parity and native visual artifacts are subsequent
-work. Swift remains unchanged and operational. See `evidence/` for the exact
+Compact tool/work presentation, adaptive light/dark chrome and a partial native visual reader are implemented.
+The artifact reader remains incomplete, not a replacement/parity claim. Swift remains unchanged and operational. See `evidence/` for the exact
 focused checks and explicit platform/performance gaps.
 
 Experimental Rust desktop, kept separate from the production Swift app.
@@ -39,7 +39,7 @@ history read, including reconnects. An identity/protocol mismatch fences all
 subscriptions. Existing daemon chat-open semantics can refresh PR status and
 perform ordinary internal subscription housekeeping. No backend change is made.
 
-The read transport issues only allowlisted hello/history/WS requests and sends
+The read transport issues only allowlisted hello/history/WS/scoped artifact requests and sends
 no application WS messages. A separate worker supports GET of the selected
 chat, POST /api/operations/receipt, POST /api/operations and the selected chat's
 Stop route. There are no legacy send/create fallbacks, focus, approvals, edits,
@@ -101,13 +101,28 @@ See [tool presentation evidence](evidence/tool-presentation.md). This is not ful
 
 ## Limits and lifecycle
 
-### Native visuals, work in progress
+### Native visual reader, work in progress
 
-The separate sandboxed native visual worker is a test-first foundation, not yet
-wired to artifact cards or the live viewer. No generated source executes in the
-desktop process. `scripts/check.sh` prepares/builds its pinned local dependency
-and runs native synthetic boundary tests; it never uses real artifacts/accounts.
-See [runtime boundaries and unfinished work](evidence/native-visuals.md).
+Use Artifacts in a Local chat's header to browse its bounded metadata gallery,
+then explicitly open a pinned revision. No preview auto-runs from a message or
+metadata update. Previous revisions, source/provenance and Copy source remain
+available even for unsupported kinds. Reader state is in memory for eight
+revisions, separate from Swift and canonical data; it resets on restart.
+
+Native text/layout/stats/tables, buttons/toggles/tabs, slider steppers and
+bounded non-stacked line/area/bar/scatter charts are implemented with explicit
+display limits and simplified typography/axes. Canvas, Mermaid, image/SwiftUI
+previews and stacked/out-of-domain charts currently show honest placeholders.
+HTML/React/browser libraries and shaders remain deferred and stored data is not
+deleted. Links are inert. No prepared HTML or external assets are consumed.
+
+Only validated macOS confinement enables source/handlers, in a separate helper,
+never the desktop process/thread. Linux source execution is explicitly disabled
+pending native validation; source still works. Failure discards/reaps the entire
+helper and keeps the last validated scene/state; Retry is fresh and explicit.
+`scripts/run.sh --local` prepares/builds the pinned helper but starts no VM until
+user Open. `scripts/check.sh` uses only native synthetic/faux-server tests.
+See [exact boundaries, checks and remaining work](evidence/native-visuals.md).
 
 ### Conversation interface
 
