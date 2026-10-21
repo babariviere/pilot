@@ -31,6 +31,9 @@ const ROW_FIELDS = [
 	"attribution",
 	"physicalModel",
 	"virtualModel",
+	"virtualRevision",
+	"parent",
+	"activity",
 	"tokens",
 	"cost",
 	"requests",
@@ -66,8 +69,8 @@ const COST_FIELDS = [
 ];
 const ESTIMATES = ["catalog_estimate", "partial_catalog_estimate", "unavailable"];
 const SUBSCRIPTIONS = ["covered", "not_covered", "unknown"];
-const ATTRIBUTION_FIELDS = ["projectId", "chatId", "runId", "mission"];
-const ATTRIBUTION_IDS = ["projectId", "chatId", "runId"] as const;
+const ATTRIBUTION_FIELDS = ["projectId", "chatId", "attemptId", "runId", "mission"];
+const ATTRIBUTION_IDS = ["projectId", "chatId", "attemptId", "runId"] as const;
 const MISSION_FIELDS = ["homeId", "lineageId", "missionId"];
 const COUNTERS = ["requests", "providerAttempts", "retries", "durationMs"] as const;
 
@@ -102,26 +105,39 @@ function canonical(value: unknown): UsageObservation {
 	requireValue(COVERAGE.includes(r.coverage as string));
 	requireValue(r.outcome === undefined || OUTCOMES.includes(r.outcome as string));
 	requireValue(PURPOSES.includes(r.purpose as string));
-	const t = object(r.tokens, TOKEN_FIELDS);
-	for (const key of TOKEN_AMOUNTS) requireValue(safeUsageInteger(t[key]));
-	requireValue(REASONING_STATUS.includes(t.reasoningStatus as string));
-	requireValue(
-		t.reasoning === undefined || (safeUsageInteger(t.reasoning) && (t.reasoning as number) <= (t.output as number)),
-	);
-	requireValue((t.reasoningStatus === "unavailable") === (t.reasoning === undefined));
-	const c = object(r.cost, COST_FIELDS);
-	requireValue(ESTIMATES.includes(c.estimateStatus as string));
-	requireValue(c.billedStatus === "unavailable" && c.billedUsdMicros === undefined);
-	requireValue(SUBSCRIPTIONS.includes(c.subscriptionCoverage as string));
-	if (c.estimateStatus === "unavailable")
-		requireValue(c.estimatedUsdMicros === undefined && c.pricingRevision === undefined);
-	else
+	const t = r.tokens === undefined ? undefined : object(r.tokens, TOKEN_FIELDS);
+	if (t) {
+		for (const key of TOKEN_AMOUNTS) requireValue(safeUsageInteger(t[key]));
+		requireValue(REASONING_STATUS.includes(t.reasoningStatus as string));
 		requireValue(
-			safeUsageInteger(c.estimatedUsdMicros) &&
-				typeof c.pricingRevision === "string" &&
-				!c.pricingRevision.includes("://") &&
-				PRICE.test(c.pricingRevision),
+			t.reasoning === undefined ||
+				(safeUsageInteger(t.reasoning) && (t.reasoning as number) <= (t.output as number)),
 		);
+		requireValue((t.reasoningStatus === "unavailable") === (t.reasoning === undefined));
+	}
+	const c = r.cost === undefined ? undefined : object(r.cost, COST_FIELDS);
+	if (c) {
+		requireValue(ESTIMATES.includes(c.estimateStatus as string));
+		requireValue(c.billedStatus === "unavailable" && c.billedUsdMicros === undefined);
+		requireValue(SUBSCRIPTIONS.includes(c.subscriptionCoverage as string));
+		if (c.estimateStatus === "unavailable")
+			requireValue(c.estimatedUsdMicros === undefined && c.pricingRevision === undefined);
+		else
+			requireValue(
+				safeUsageInteger(c.estimatedUsdMicros) &&
+					typeof c.pricingRevision === "string" &&
+					!c.pricingRevision.includes("://") &&
+					PRICE.test(c.pricingRevision),
+			);
+	}
+	requireValue(r.virtualRevision === undefined || usageIdentifier(r.virtualRevision));
+	requireValue(r.activity === undefined || (r.activity === "compaction" && r.kind === "checkpoint"));
+	let parent: UsageObservation["parent"];
+	if (r.parent !== undefined) {
+		const p = object(r.parent, ["sourceId", "operationId"]);
+		requireValue(usageUUID(p.sourceId) && usageIdentifier(p.operationId));
+		parent = { sourceId: p.sourceId, operationId: p.operationId };
+	}
 	let attribution: UsageObservation["attribution"];
 	if (r.attribution !== undefined) {
 		const a = object(r.attribution, ATTRIBUTION_FIELDS);
@@ -154,22 +170,38 @@ function canonical(value: unknown): UsageObservation {
 		...(attribution ? { attribution } : {}),
 		...(r.physicalModel === undefined ? {} : { physicalModel: model(r.physicalModel) }),
 		...(r.virtualModel === undefined ? {} : { virtualModel: model(r.virtualModel) }),
-		tokens: {
-			input: t.input as number,
-			output: t.output as number,
-			cacheRead: t.cacheRead as number,
-			cacheWrite: t.cacheWrite as number,
-			...(t.reasoning === undefined ? {} : { reasoning: t.reasoning as number }),
-			reasoningStatus: t.reasoningStatus as UsageObservation["tokens"]["reasoningStatus"],
-		},
-		cost: {
-			estimateStatus: c.estimateStatus as UsageObservation["cost"]["estimateStatus"],
-			...(c.estimatedUsdMicros === undefined
-				? {}
-				: { estimatedUsdMicros: c.estimatedUsdMicros as number, pricingRevision: c.pricingRevision as string }),
-			billedStatus: "unavailable",
-			subscriptionCoverage: c.subscriptionCoverage as UsageObservation["cost"]["subscriptionCoverage"],
-		},
+		...(r.virtualRevision === undefined ? {} : { virtualRevision: r.virtualRevision as string }),
+		...(r.activity === undefined ? {} : { activity: "compaction" as const }),
+		...(parent ? { parent } : {}),
+		...(t
+			? {
+					tokens: {
+						input: t.input as number,
+						output: t.output as number,
+						cacheRead: t.cacheRead as number,
+						cacheWrite: t.cacheWrite as number,
+						...(t.reasoning === undefined ? {} : { reasoning: t.reasoning as number }),
+						reasoningStatus: t.reasoningStatus as NonNullable<UsageObservation["tokens"]>["reasoningStatus"],
+					},
+				}
+			: {}),
+		...(c
+			? {
+					cost: {
+						estimateStatus: c.estimateStatus as NonNullable<UsageObservation["cost"]>["estimateStatus"],
+						...(c.estimatedUsdMicros === undefined
+							? {}
+							: {
+									estimatedUsdMicros: c.estimatedUsdMicros as number,
+									pricingRevision: c.pricingRevision as string,
+								}),
+						billedStatus: "unavailable",
+						subscriptionCoverage: c.subscriptionCoverage as NonNullable<
+							UsageObservation["cost"]
+						>["subscriptionCoverage"],
+					},
+				}
+			: {}),
 	};
 	for (const key of COUNTERS) {
 		if (r[key] !== undefined) {

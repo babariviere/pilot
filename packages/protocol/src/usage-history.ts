@@ -26,13 +26,20 @@ export interface UsageObservation {
 	attribution?: {
 		projectId?: string;
 		chatId?: string;
+		/** Opaque durable conversation identity, not the current chat's model selection. */
+		attemptId?: string;
 		runId?: string;
 		mission?: { homeId: string; lineageId: string; missionId: string };
 	};
 	physicalModel?: { provider: string; model: string };
 	virtualModel?: { provider: string; model: string };
-	tokens: AIUsageTokens;
-	cost: AIUsageCost;
+	/** Present only when the already-selected router exposes an immutable revision. */
+	virtualRevision?: string;
+	parent?: { sourceId: string; operationId: string };
+	/** Unknown response usage is absent, never a synthetic zero. */
+	tokens?: AIUsageTokens;
+	cost?: AIUsageCost;
+	activity?: "compaction";
 	requests?: number;
 	providerAttempts?: number;
 	retries?: number;
