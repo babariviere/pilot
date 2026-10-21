@@ -544,6 +544,7 @@ struct KeyboardRegionAnchor: NSViewRepresentable {
 enum GoDestination: String, CaseIterable {
     case home
     case inbox
+    case usage
     case overview
     case mission
     case tasks

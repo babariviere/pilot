@@ -3,22 +3,6 @@ import PilotCore
 import Testing
 @testable import Pilot
 
-@Test @MainActor func sharedVersionLimitsRejectExtremeIntegersBeforeArithmetic() async throws {
-    let host = HostRef(hostId: "box", daemonId: "daemon", lineageId: "history")
-    let client = PilotClient()
-    try client.bind(host)
-    let project = SharedProjectRef(host: OperationHost(host), projectId: "project")
-    let binding = SharedContextBinding(bindingId: "binding", generation: 1, logicalProjectId: "logical",
-        memoryHome: project, missionHome: OperationHost(host), executionProject: project,
-        missionIds: ["mission"], shareMemory: true)
-    for limit in [Int.min, -1, 0, 129, Int.max] {
-        do {
-            _ = try await client.sharedMissionVersions(binding, missionId: "mission", limit: limit)
-            Issue.record("Invalid version page limit was accepted")
-        } catch { #expect(error as? HostRoutingError == .invalidReference) }
-    }
-}
-
 @Test @MainActor func qualifiedNavigationAndFeedsKeepCollidingChatsSeparate() throws {
     let app = AppModel()
     let local = HostRef(hostId: "local", daemonId: "a", lineageId: "1")

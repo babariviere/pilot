@@ -723,6 +723,13 @@ final class ClientDirectory: ObservableObject {
                                         queriedAt: Date().timeIntervalSince1970 * 1000)
     }
 
+    /// Fence the dashboard's ephemeral cache against removal or replacement of the sole Local pin.
+    func localUsageToken(for expected: HostRef? = nil) throws -> HostConnectionToken {
+        guard let host = localHost else { throw HostRoutingError.disconnected }
+        guard host.hostId == "local", expected == nil || expected == host else { throw HostRoutingError.identityChanged }
+        return try token(for: host)
+    }
+
     /// Explicit coverage for Local and saved identities. Only Local can issue a read.
     func usageProjection(_ query: UsageAnalyticsQuery, on selectedHosts: Set<HostRef>) async throws -> UsageConnectedProjection {
         var known = Set(offlineHosts.keys).union(presentationClients.keys)

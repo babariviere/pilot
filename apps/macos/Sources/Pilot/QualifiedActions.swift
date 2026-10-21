@@ -190,7 +190,7 @@ extension AppModel {
         defer { endNavigation() }
         guard let ref = resourceRef(id, kind: kind, context: context) else { return }
         showingArchive = false
-        showingInbox = false
+        showingUsage = false; showingInbox = false
         clearProjectSubpage()
         let key = ref.host == localHost ? ref.localId : ref.storageKey
         switch kind {
