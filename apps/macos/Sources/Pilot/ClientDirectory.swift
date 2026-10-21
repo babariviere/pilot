@@ -60,6 +60,7 @@ final class ClientDirectory: ObservableObject {
         var observations: [AnyCancellable]
     }
     private var local: Entry?
+    var localHost: HostRef? { local?.token.host }
     private func entry(_ host: HostRef) -> Entry? { local?.token.host == host ? local : nil }
     private var diagnosticReads: [String: Task<Void, Never>] = [:]
     private let readNativeCapability: @MainActor (HostRef) async throws -> String
