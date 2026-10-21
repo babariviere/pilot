@@ -17,9 +17,9 @@ struct RetainedConversationPage: Sendable {
 
 @MainActor final class RetainedConversationReader: RetainedConversationReading {
     let reference: HostResourceRef
-    let hosts: HostClients
+    let hosts: ClientDirectory
     var available: Bool { hosts.available.contains(reference.host) }
-    init(reference: HostResourceRef, hosts: HostClients) { self.reference = reference; self.hosts = hosts }
+    init(reference: HostResourceRef, hosts: ClientDirectory) { self.reference = reference; self.hosts = hosts }
 
     func read(before: Int) async throws -> RetainedConversationPage {
         guard reference.kind == .session, hosts.sessions.contains(where: { $0.ref == reference && $0.value.isRetainedHistory }) else {

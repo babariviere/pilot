@@ -4,48 +4,6 @@ import Testing
 @testable import Pilot
 
 @Suite(.serialized) struct WorkspaceTerminalTests {
-    @Test @MainActor func hostRegistrationsKeepCollidingIDsAndReconnectIntentWithoutLocalFallback() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let hosts = HostClients(operationDirectory: directory)
-        let local = HostRef(hostId: "local", daemonId: "local", lineageId: "one")
-        let remote = HostRef(hostId: "box", daemonId: "remote", lineageId: "two")
-        let localClient = PilotClient(), remoteClient = PilotClient()
-        localClient.loadFixture(projects: [], sessions: [])
-        remoteClient.loadFixture(projects: [], sessions: [])
-        try hosts.install(localClient, host: local); try hosts.install(remoteClient, host: remote)
-        let a = HostResourceRef(host: local, kind: .session, localId: "same")
-        let b = HostResourceRef(host: remote, kind: .session, localId: "same")
-        var localData: [String] = [], remoteData: [String] = [], remoteStatus: [TerminalConnectionState] = []
-        try hosts.attachTerminal(a, attachment: .init(cols: 80, rows: 24,
-            onData: { localData.append($0) }, onExit: { _ in }, onReplay: {}))
-        try hosts.attachTerminal(b, restart: true, attachment: .init(cols: 80, rows: 24,
-            onData: { remoteData.append($0) }, onExit: { _ in }, onReplay: {}, onStatus: { remoteStatus.append($0) }))
-        let intent = try #require(remoteClient.terminalIntents["same"])
-        intent.bootId = "remembered-boot"; intent.terminalId = "remembered-shell"
-        localClient.handle(.terminalData(sessionId: "same", data: "Local"))
-        remoteClient.handle(.terminalData(sessionId: "same", data: "Remote"))
-        #expect(localData == ["Local"]); #expect(remoteData == ["Remote"])
-        await hosts.disconnect(remote)
-        #expect(remoteStatus.last == .disconnected)
-        #expect(!hosts.terminalInput(b, data: Data("never queued".utf8)))
-        #expect(!hosts.closeTerminal(b))
-        remoteClient.handle(.terminalExit(sessionId: "same", code: 0))
-        #expect(localClient.terminalIntents["same"] != nil)
-        let replacement = PilotClient(); replacement.loadFixture(projects: [], sessions: [])
-        try hosts.install(replacement, host: remote)
-        #expect(replacement.terminalIntents["same"] === intent)
-        #expect(intent.restart)
-        #expect(intent.bootId == "remembered-boot")
-        #expect(intent.terminalId == "remembered-shell")
-        remoteClient.handle(.terminalData(sessionId: "same", data: "stale"))
-        replacement.handle(.terminalData(sessionId: "same", data: "new endpoint"))
-        #expect(remoteData == ["Remote", "new endpoint"])
-        hosts.detachTerminal(b)
-        #expect(replacement.terminalIntents["same"] == nil)
-        #expect(localClient.terminalIntents["same"] != nil)
-        hosts.detachTerminal(a)
-    }
 
     @Test @MainActor func callbackQueuesBoundInputCoalesceResizesAndCancelLateDelivery() async throws {
         var received: [Data] = [], resize: (Int, Int)?, overflow = false, paused: Bool?

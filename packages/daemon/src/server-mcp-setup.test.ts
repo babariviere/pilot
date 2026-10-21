@@ -43,7 +43,6 @@ async function fixture(t: TestContext, readOnly = false) {
 		undefined,
 		undefined,
 		undefined,
-		undefined,
 		native,
 	);
 	server.listen(0, "127.0.0.1");

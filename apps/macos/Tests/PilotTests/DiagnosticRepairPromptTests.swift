@@ -164,7 +164,7 @@ private func repairSession(host: HostRef = repairLocalHost, proposal: Diagnostic
 @Test @MainActor func uncertainRepairStartReusesOneDurableIntentAndBlocksAChangedDuplicate() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
-    let hosts = HostClients(operationDirectory: directory)
+    let hosts = ClientDirectory(operationDirectory: directory)
     let client = PilotClient()
     let fixture = repairSession()
     client.loadFixture(projects: [], sessions: [fixture.specialist, fixture.target])

@@ -11,7 +11,7 @@ struct GitHubImportActions {
     var start: (HostRef, GitHubImportRequest) async throws -> GitHubImportOperation
     var act: (HostRef, String, String) async throws -> GitHubImportOperation
     var project: (HostRef, String) async throws -> Hosted<Project>
-    static func live(_ hosts: HostClients) -> Self {
+    static func live(_ hosts: ClientDirectory) -> Self {
         Self(available: { hosts.available.contains($0) }, repositories: {
             try await hosts.githubRequest(on: $0, path: "api/github-import/repositories", body: Optional<GitHubImportRequest>.none, method: "GET")
         }, operations: {

@@ -16,7 +16,7 @@ import SwiftUI
     private var queued: Set<HostRef> = []
     private var running: [HostRef: Task<Void, Never>] = [:]
     private var hostObservation: AnyCancellable?
-    private var hosts: HostClients?
+    private var hosts: ClientDirectory?
     private var actions: [HostRef: TrackedItemActions] = [:]
 
     func actions(on host: HostRef) -> TrackedItemActions {
@@ -24,7 +24,7 @@ import SwiftUI
         let value = TrackedItemActions(); actions[host] = value; return value
     }
 
-    func start(_ hosts: HostClients) {
+    func start(_ hosts: ClientDirectory) {
         self.hosts = hosts
         hostObservation = hosts.objectWillChange.debounce(for: .milliseconds(30), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in self?.configure() }
@@ -89,7 +89,7 @@ import SwiftUI
 /// endpoint through every action.
 struct UnifiedInboxContent: View {
     @EnvironmentObject private var model: AppModel
-    @ObservedObject var hosts: HostClients
+    @ObservedObject var hosts: ClientDirectory
     @StateObject private var source = UnifiedInboxSource()
     var body: some View {
         let page = UnifiedInboxPresentation(source.values)

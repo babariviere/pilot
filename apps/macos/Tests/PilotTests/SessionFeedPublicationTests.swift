@@ -16,10 +16,10 @@ private func waitUntil(_ check: @MainActor () -> Bool) async {
     var value = 0
 }
 
-@Test(arguments: ["direct", "local", "box"])
+@Test(arguments: ["direct", "local"])
 @MainActor func reopenedFeedAppliesItsFirstSnapshotAfterStopping(route: String) async throws {
     let client = PilotClient()
-    let hosts = HostClients()
+    let hosts = ClientDirectory()
     let feed: SessionFeed
     if route == "direct" {
         feed = SessionFeed(sessionId: "s", client: client)

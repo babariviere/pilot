@@ -4,7 +4,7 @@ import Testing
 @testable import Pilot
 
 @Test @MainActor func qualifiedSubscriptionsReattachOnlyToTheirPinnedReplacementEndpoint() async throws {
-    let host = HostRef(hostId: "box", daemonId: "daemon", lineageId: "history")
+    let host = HostRef(hostId: "local", daemonId: "daemon", lineageId: "history")
     let ref = HostResourceRef(host: host, kind: .session, localId: "same")
     func fixture() -> PilotClient {
         let client = PilotClient()
@@ -13,7 +13,7 @@ import Testing
         ])
         return client
     }
-    let hosts = HostClients()
+    let hosts = ClientDirectory()
     let old = fixture()
     try hosts.install(old, host: host)
     let fence = try hosts.token(for: host)

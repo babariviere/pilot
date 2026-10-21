@@ -92,9 +92,9 @@ import type { ProjectMemoryService } from "./project-memory.ts";
 import { EnvironmentRevisionConflict, expandHome, type ProjectStore } from "./projects.ts";
 import { PTY_INPUT_CHUNK } from "./pty-input.ts";
 import { RepositoryBrowser } from "./repository-browser.ts";
+import { isRetiredDevboxOperation } from "./retired-devboxes.ts";
 import { ReviewStore } from "./reviews.ts";
 import { RuntimeAdmission, RuntimeResources } from "./runtime-admission.ts";
-import type { RuntimeMaintenance } from "./runtime-maintenance.ts";
 import type { ScheduleService } from "./schedules.ts";
 import { NotFound, type SessionManager } from "./sessions.ts";
 import { SetupError, type SetupService } from "./setup.ts";
@@ -317,8 +317,7 @@ export function createDaemonServer(
 	mcp?: McpStatusService,
 	hello?: DaemonHello,
 	setup?: SetupService,
-	sharing?: import("./shared-context.ts").SharedContextService,
-	maintenance?: RuntimeMaintenance,
+	legacyAdmissionFrozen = false,
 	_reserved?: undefined,
 	telemetry?: TelemetrySettingsService,
 	githubSetup?: GitHubSetupService,
@@ -404,7 +403,8 @@ export function createDaemonServer(
 		return { ...response(null, 0, false), status: "unavailable", reason: "unsupported" };
 	};
 	const catalogMissions = new Map((missions?.store.list() ?? []).map((mission) => [mission.id, mission]));
-	let catalogGroups = sharing && missions ? missions.store.catalogSharedContext(sharing.host) : [];
+	const catalogHost = hello?.lineageId ? { hostId: "daemon", daemonId: hello.daemonId, lineageId: hello.lineageId } : undefined;
+	let catalogGroups = catalogHost && missions ? missions.store.catalogSharedContext(catalogHost) : [];
 	const catalogSources =
 		catalog ??
 		(hello?.lineageId
@@ -456,7 +456,7 @@ export function createDaemonServer(
 		...(githubImport ? [githubImport] : []),
 		...(setup ? [setup] : []),
 	]);
-	maintenance?.bind(runtimeResources);
+	if (legacyAdmissionFrozen) runtimeResources.freezeAdmissions();
 	const journal = hello?.lineageId
 		? new OperationJournal(join(_config.home, "operations"), {
 				hostId: "daemon",
@@ -473,10 +473,6 @@ export function createDaemonServer(
 		}
 	};
 	const admitOperationHeld = async (op: DurableOperation): Promise<unknown> => {
-		if (op.kind.startsWith("share-")) {
-			if (!sharing) throw new OperationRejected("Shared context unavailable");
-			return sharing.handle(op);
-		}
 		let payload: unknown;
 		try {
 			payload = JSON.parse(op.payload);
@@ -533,11 +529,12 @@ export function createDaemonServer(
 	};
 	// Only registered idempotent handlers resume. An interrupted handler always retains the same target.
 	const recoverOperations = () => {
-		if (journal && !maintenance?.frozen)
-			void journal.recover(admitOperation).catch((error) => console.warn("pilotd: operation recovery", error));
+		if (journal && !legacyAdmissionFrozen)
+			void journal
+				.recover(admitOperation, (op) => !isRetiredDevboxOperation(op.kind))
+				.catch((error) => console.warn("pilotd: operation recovery", error));
 	};
 	recoverOperations();
-	const stopRecoveryWatch = maintenance?.onOpen(recoverOperations);
 	const route = async (req: IncomingMessage, res: ServerResponse) => {
 		if (!isAllowedOrigin(req.headers.origin)) throw new HttpError(403, "Browser requests are not allowed");
 		const url = new URL(req.url ?? "/", "http://localhost");
@@ -584,113 +581,6 @@ export function createDaemonServer(
 			if (parts.length === 4 && req.method === "POST")
 				return json(res, 200, await githubImport.action(parts[2]!, parts[3]!));
 			throw new SetupError(404, "Unknown GitHub import operation.");
-		}
-		if (parts[1] === "runtime-update" && maintenance) {
-			res.setHeader("cache-control", "no-store");
-			if (parts.length === 2 && req.method === "GET")
-				return json(res, 200, await maintenance.status(url.searchParams.get("id") ?? undefined));
-			if (parts.length === 3 && parts[2] === "cancel" && req.method === "POST") {
-				const body = await readJson<{ id: string }>(req);
-				return json(res, 202, await maintenance.cancel(body.id));
-			}
-			if (parts.length === 3 && req.method === "POST" && ["drain", "commit"].includes(parts[2]!)) {
-				const body = await readJson<{ id: string }>(req);
-				return json(res, 200, await maintenance.inspect(body.id, parts[2] === "commit"));
-			}
-			throw new HttpError(404, "Unknown update action");
-		}
-		if (parts[1] === "shared-contexts") {
-			if (!sharing) throw new ServiceUnavailable("Shared context unavailable");
-			if (parts.length === 2 && req.method === "GET") return json(res, 200, await sharing.summaries());
-			if (
-				req.method === "GET" &&
-				((parts.length === 5 && parts[3] === "memory") ||
-					((parts.length === 5 || parts.length === 6) && parts[3] === "missions"))
-			) {
-				const allowed =
-					parts[3] === "memory"
-						? parts[4] === "tree"
-							? ["lo", "hi", "depth", "reveal"]
-							: parts[4] === "recall"
-								? ["regex", "lines"]
-								: parts[4] === "wake"
-									? ["lines"]
-									: parts[4] === "zoom"
-										? ["lo", "hi"]
-										: []
-						: parts.length === 6 && parts[5] === "versions"
-							? ["after", "limit", "sequence"]
-							: [];
-				for (const name of url.searchParams.keys())
-					if (!allowed.includes(name) || url.searchParams.getAll(name).length !== 1)
-						throw new HttpError(400, "Unknown or duplicate shared read parameter");
-				const args: Record<string, unknown> = {};
-				for (const [name, value] of url.searchParams) {
-					if (name === "regex") args[name] = value;
-					else if (name === "reveal") {
-						if (value !== "" && !/^\d+(,\d+)*$/.test(value)) throw new HttpError(400, "Invalid reveal indices");
-						args[name] = value === "" ? [] : value.split(",").map(Number);
-					} else {
-						if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)))
-							throw new HttpError(400, "Invalid shared read number");
-						args[name] = Number(value);
-					}
-				}
-				if (parts[3] === "memory") {
-					if (parts[4] === "tree") return json(res, 200, await sharing.readMemoryTree(parts[2]!, args));
-					if (parts[4] === "wake" || parts[4] === "recall" || parts[4] === "zoom")
-						return json(res, 200, await sharing.readMemory(parts[2]!, parts[4], args));
-				} else {
-					if (parts.length === 5) return json(res, 200, await sharing.readMission(parts[2]!, parts[4]!));
-					if (parts[5] === "versions")
-						return json(res, 200, await sharing.readMissionVersions(parts[2]!, parts[4]!, args));
-				}
-				throw new HttpError(404, "Unknown shared read operation");
-			}
-			if (parts.length === 4 && parts[3] === "conflicts" && req.method === "GET")
-				return json(res, 200, sharing.conflicts(parts[2]!));
-			if (parts.length === 5 && parts[3] === "events" && req.method === "GET")
-				return json(res, 200, sharing.audit(parts[2]!, parts[4]!, Number(url.searchParams.get("after") ?? 0)));
-			if (parts.length === 6 && parts[3] === "proposals" && parts[5] === "resolve" && req.method === "POST")
-				return json(res, 200, await sharing.resolveProposal(parts[2]!, parts[4]!, await readJson(req)));
-			if (parts.length === 2 && req.method === "POST") {
-				await sharing.enroll(await readJson(req));
-				return json(res, 201, { ok: true });
-			}
-			if (parts.length === 4 && parts[3] === "exchange" && req.method === "POST") {
-				const body = await readJson<{ peer: import("@pilot/protocol").OperationHost }>(req);
-				return json(res, 200, await sharing.exchange(parts[2]!, body.peer));
-			}
-			if (parts.length === 4 && parts[3] === "ack" && req.method === "POST") {
-				await sharing.acknowledge(parts[2]!, await readJson(req));
-				return json(res, 200, { ok: true });
-			}
-			throw new HttpError(404, "Unknown shared context operation");
-		}
-		if (
-			parts[1] === "missions" &&
-			parts[3] === "tasks" &&
-			parts[5] === "delegations" &&
-			parts.length === 6 &&
-			req.method === "POST"
-		) {
-			if (!sharing) throw new ServiceUnavailable("Delegation unavailable");
-			return json(res, 201, await sharing.reserve(parts[2]!, parts[4]!, await readJson(req)));
-		}
-		if (parts[1] === "delegations" && parts.length === 4 && req.method === "POST") {
-			if (!sharing) throw new ServiceUnavailable("Delegation unavailable");
-			if (parts[3] === "cancel") {
-				const grant = sharing.cancel(parts[2]!);
-				await missions?.store.durable();
-				return json(res, 200, grant);
-			}
-			if (parts[3] === "seal") {
-				const body =
-					req.headers["content-length"] === undefined || req.headers["content-length"] === "0"
-						? {}
-						: await readJson<{ bindingId?: string }>(req);
-				return json(res, 200, await sharing.seal(parts[2]!, body.bindingId));
-			}
 		}
 		if (parts[0] !== "api") throw new HttpError(404, "Not found");
 		if (parts[1] === "setup") {
@@ -779,7 +669,9 @@ export function createDaemonServer(
 				await attachments.releaseRejected(body.operation, body.attachments);
 				return json(res, 200, { ok: true });
 			}
-			const operation = await readJson<DurableOperation>(req, MAX_BODY);
+			const operation = await readJson<DurableOperation>(req);
+			if (parts[2] !== "receipt" && typeof operation?.kind === "string" && isRetiredDevboxOperation(operation.kind))
+				throw new HttpError(410, "Remote devbox operations are retired; stored receipts are retained");
 			if (operation?.kind === "repair-create" && parts[2] !== "receipt") {
 				if (!githubSetup) throw new ServiceUnavailable("Native repair confirmation is unavailable");
 				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
@@ -1827,7 +1719,6 @@ export function createDaemonServer(
 	const streamWss = new WebSocketServer({ noServer: true, maxPayload: 4 * 1024 * 1024 });
 	const terminalWss = new WebSocketServer({ noServer: true, maxPayload: 128 * 1024 });
 	server.on("close", () => {
-		stopRecoveryWatch?.();
 		for (const ws of terminalWss.clients) ws.terminate();
 		terminalWss.close();
 	});
@@ -1922,7 +1813,6 @@ export function createDaemonServer(
 	const stopDiagnosticReads = sessions.diagnosticReadBroker?.onRead((dispatch) => {
 		broadcast({ type: "diagnostics.read", dispatch });
 	});
-	let sharingInvalidationScheduled = false;
 	let missionCatalogTimer: NodeJS.Timeout | undefined;
 	const invalidateMissionCatalog = () => {
 		if (clients.size === 0 || missionCatalogTimer) return;
@@ -1933,7 +1823,7 @@ export function createDaemonServer(
 		missionCatalogTimer.unref();
 	};
 	const refreshMissionCatalog = () => {
-		catalogGroups = sharing && missions ? missions.store.catalogSharedContext(sharing.host) : [];
+		catalogGroups = catalogHost && missions ? missions.store.catalogSharedContext(catalogHost) : [];
 		invalidateMissionCatalog();
 	};
 	const stopMissionCatalog = missions?.store.onChange((id) => {
@@ -1942,37 +1832,9 @@ export function createDaemonServer(
 		else catalogMissions.delete(id);
 		refreshMissionCatalog();
 	});
-	const stopSharedCatalog = sharing?.onChange(refreshMissionCatalog);
-	const invalidateSharing = () => {
-		if (sharingInvalidationScheduled) return;
-		sharingInvalidationScheduled = true;
-		queueMicrotask(() => {
-			sharingInvalidationScheduled = false;
-			broadcast({ type: "shared-contexts.changed" });
-		});
-	};
-	let recoveringSharing: Promise<void> | undefined;
-	const stopSharingWatch = sharing?.onChange(() => {
-		invalidateSharing();
-		// A prerequisite/context change can unblock a reserved handler. Pending receipts are
-		// not resubmitted by couriers; recovery belongs to this intact destination journal.
-		if (journal && !recoveringSharing)
-			recoveringSharing = journal
-				.recover(admitOperation)
-				.catch(() => {})
-				.finally(() => {
-					recoveringSharing = undefined;
-				});
-	});
-	const stopSharingReceipts = journal?.onSettled((operation) => {
-		if (operation.kind.startsWith("share-")) invalidateSharing();
-	});
 	server.on("close", () => {
-		stopSharingWatch?.();
 		stopDiagnosticReads?.();
-		stopSharingReceipts?.();
 		stopMissionCatalog?.();
-		stopSharedCatalog?.();
 		clearTimeout(missionCatalogTimer);
 	});
 	const stopPowerWatch = power?.onChange(() => broadcast({ type: "power", power: power.status() }));

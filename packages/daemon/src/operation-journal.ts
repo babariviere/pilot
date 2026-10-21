@@ -277,9 +277,14 @@ export class OperationJournal {
 		this.running.set(op.operationId, work);
 		return work;
 	}
-	async recover(handler: (op: DurableOperation) => Promise<unknown>): Promise<void> {
+	async recover(
+		handler: (op: DurableOperation) => Promise<unknown>,
+		eligible: (op: Readonly<DurableOperation>) => boolean = () => true,
+	): Promise<void> {
 		await this.init();
-		const pending = [...this.records.values()].filter(({ receipt }) => receipt.state === "pending");
+		const pending = [...this.records.values()].filter(
+			({ receipt, operation }) => receipt.state === "pending" && eligible(operation),
+		);
 		let cursor = 0;
 		await Promise.all(
 			Array.from({ length: Math.min(4, pending.length) }, async () => {

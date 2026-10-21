@@ -23,14 +23,12 @@ class ProductionArtifactTests(unittest.TestCase):
         self.env = {
             "PILOT_UPDATE_REPOSITORY": "owner/repo",
             "SPARKLE_PUBLIC_KEY": base64.b64encode(bytes(range(32))).decode(),
-            "LINUX_RUNTIME_PUBLIC_KEY": base64.b64encode(bytes(reversed(range(32)))).decode(),
             "BUNDLE_VERSION": "10010.2",
         }
         self.info = {
             "CFBundleShortVersionString": "1.2.3", "CFBundleVersion": "10010.2",
             "PilotUpdateRepository": self.env["PILOT_UPDATE_REPOSITORY"],
             "SUPublicEDKey": self.env["SPARKLE_PUBLIC_KEY"],
-            "PilotLinuxRuntimePublicKey": self.env["LINUX_RUNTIME_PUBLIC_KEY"],
         }
         self.archive = self.root / "Pilot-arm64.zip"
         self.manifest = self.root / "production-artifact.json"
@@ -95,7 +93,7 @@ class ProductionArtifactTests(unittest.TestCase):
 
     def test_changed_or_missing_public_configuration_is_rejected(self):
         self.run_action("create")
-        for key in ["PILOT_UPDATE_REPOSITORY", "SPARKLE_PUBLIC_KEY", "LINUX_RUNTIME_PUBLIC_KEY"]:
+        for key in ["PILOT_UPDATE_REPOSITORY", "SPARKLE_PUBLIC_KEY"]:
             for value in ["different", ""]:
                 with self.subTest(key=key, value=value), self.assertRaisesRegex(ValueError, key):
                     self.run_action("verify", env={**self.env, key: value})

@@ -49,7 +49,7 @@ func usageLocalConsumerNeverFansOutAndDeferredHelperRequiresExplicitHosts() asyn
     UsageProjectionHTTP.reset()
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
-    let hosts = HostClients(operationDirectory: directory.appendingPathComponent("operations"))
+    let hosts = ClientDirectory(operationDirectory: directory.appendingPathComponent("operations"))
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [UsageProjectionHTTP.self]
     var refs: [String: HostRef] = [:]

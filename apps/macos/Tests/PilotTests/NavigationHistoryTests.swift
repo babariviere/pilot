@@ -117,7 +117,7 @@ import Testing
     let remote = HostRef(hostId: "remote", daemonId: "other", lineageId: "remote-lineage")
     let remoteClient = PilotClient()
     remoteClient.loadFixture(projects: app.client.projects, sessions: app.client.sessions)
-    try app.hosts.install(remoteClient, host: remote)
+    try loadClientFixture(remoteClient, host: remote, into: app.hosts)
     let context = HostViewContext(host: remote, hosts: app.hosts)
     let remoteChat = context.ref(.session, "a")
     app.focus(on: context.ref(.project, "p1").storageKey)

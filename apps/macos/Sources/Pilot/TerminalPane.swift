@@ -20,8 +20,8 @@ final class TerminalStore: ObservableObject {
     @Published private(set) var connections: [String: TerminalConnectionState] = [:]
     private var refs: [String: HostResourceRef] = [:]
     private var callbacks: [String: TerminalCallbacks] = [:]
-    private let routing: HostClients?
-    init(hosts: HostClients? = nil) { routing = hosts }
+    private let routing: ClientDirectory?
+    init(hosts: ClientDirectory? = nil) { routing = hosts }
     private var settings: AppSettings?
     private var subscriptions: Set<AnyCancellable> = []
     private var retention = TerminalSurfaceRetention()
@@ -39,7 +39,7 @@ final class TerminalStore: ObservableObject {
         return useGhostty && FileManager.default.fileExists(atPath: Self.ghosttyConfig) ? .file(Self.ghosttyConfig) : .none
     }
 
-    private var hosts: HostClients { routing ?? AppModel.shared.hosts }
+    private var hosts: ClientDirectory { routing ?? AppModel.shared.hosts }
 
     /// Applies font and config changes from Settings to every open terminal, live.
     func bind(to settings: AppSettings) {
@@ -272,7 +272,7 @@ struct TerminalPane: View {
     @ObservedObject var store: TerminalStore
     let session: SessionSummary
     let ref: HostResourceRef
-    @ObservedObject var hosts: HostClients
+    @ObservedObject var hosts: ClientDirectory
     var isVisible = true
     @State private var reconnecting = false
     @State private var reconnectError: String?

@@ -68,56 +68,6 @@ extension AppModel {
         return session
     }
 
-    func createHostedChat(form: NewSessionForm, host: HostRef, project: Project, revision: UUID) async throws {
-        guard let origin = localHost else { throw HostRoutingError.invalidReference }
-        func ownsDraft() -> Bool { form.revision == revision && (form.executionHost ?? localHost) == host }
-        guard ownsDraft(), form.checkoutValidation == nil else { throw HostRoutingError.invalidReference }
-        _ = try hosts.endpoint(host)
-        let fence = try hosts.token(for: host)
-        let images = form.attachments.items
-        // Freeze the submitted draft before any suspension. A later edit is not part of this intent.
-        let request = form.spawnRequest(in: project, rawAttachments: true)
-        try await finishAdopted(on: host)
-        guard ownsDraft() else { return }
-        try hosts.validate(fence)
-        let operation: DurableOperation
-        let receipt: OperationReceipt
-        if form.pendingOperationId == nil {
-            form.pendingOperationId = pendingChatCreate(on: host)?.operationId
-        }
-        if let id = form.pendingOperationId, let pending = hosts.pendingOperations[id] {
-            guard pending.destination == host,
-                  case let .receipt(known)? = hosts.operationDeliveries[id], known.state != .pending else {
-                throw ClientError("Delivery unknown. Your draft has been kept. Reconnect to check before starting another chat.")
-            }
-            operation = pending; receipt = known
-        } else {
-            try persistDrafts()
-            var staged: [HostedAttachment] = []
-            for image in images {
-                staged.append(try await hosts.upload(image, host: host, origin: origin))
-                guard ownsDraft() else { return }
-                try hosts.validate(fence)
-            }
-            let result: (DurableOperation, OperationDelivery)
-            if staged.isEmpty {
-                result = try await hosts.deliver(host: host, kind: "chat-create", targetId: nil, payload: request, origin: origin)
-            } else {
-                result = try await hosts.deliverAttached(host: host, kind: "chat-create-attached", targetId: nil,
-                    request: request, attachments: staged, origin: origin)
-            }
-            // A host switch while delivery was in flight must not bind the new draft to this intent.
-            guard ownsDraft() else { return }
-            form.pendingOperationId = result.0.operationId
-            try persistDrafts()
-            guard case let .receipt(known) = result.1, known.state != .pending else {
-                throw ClientError("Delivery unknown. Your draft has been kept. Reconnect to check before starting another chat.")
-            }
-            operation = result.0; receipt = known
-        }
-        try await adoptCreatedChat(operation, receipt: receipt, form: form, revision: revision)
-    }
-
     /// The Home Check action owns visible progress and recovery. It never creates a fresh intent.
     /// Explicit retry is separately confirmed by the UI and still looks up the original receipt first.
     func checkHostedChat(_ operation: DurableOperation, form: NewSessionForm, retryOriginal: Bool = false,

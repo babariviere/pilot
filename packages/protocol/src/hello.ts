@@ -14,7 +14,6 @@ export interface DaemonHello {
 	platform: string;
 	arch: string;
 	capabilities: DaemonCapabilities;
-	/** Contract-only; populated only by a future verified cross-host Control implementation. */
 }
 
 /** Availability on this host, not permissions granted by a client or lifecycle control for another host. */
@@ -28,8 +27,6 @@ export interface DaemonCapabilities {
 	independentExecution: boolean;
 	/** Instance/boot-fenced workspace terminal handshake. Absent on older runtimes. */
 	workspaceTerminalProtocol?: 2;
-	/** Journal-backed detached Linux updates with startup/admission fencing. */
-	runtimeUpdates?: 1;
 	/** Project environment setup (docs/environment-setup.md). Absent on older runtimes and while the feature is off. */
 	environmentSetup?: 1;
 	/** Bounded local accounting query API. Absent on older hosts, unrelated to subscription windows. */

@@ -24,13 +24,6 @@ enum TerminalResourceTest {
                 fail("\(name) must load from this app, not a build checkout")
             }
         }
-        do {
-            guard try LinuxSSHBootstrap.scriptSource().contains("fcntl.LOCK_EX") else {
-                fail("invalid SSH setup helper")
-            }
-        } catch {
-            fail("SSH setup helper could not load: \(error.localizedDescription)")
-        }
         // This is the initialization path that previously trapped on Bundle.module.
         let controller = TerminalController(configSource: .none)
         controller.tick()

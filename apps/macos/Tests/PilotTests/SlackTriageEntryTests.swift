@@ -17,7 +17,7 @@ private let project = Project(id: "same", name: "Repository", path: "/repo",
     ]))
     app.client.fixtureInbox = Inbox(slack: InboxSlackSection(total: 0, items: []))
     try app.registerLocal(local)
-    try app.hosts.install(app.client, host: local)
+    try loadClientFixture(app.client, host: local, into: app.hosts)
     return app
 }
 
@@ -42,7 +42,7 @@ private let project = Project(id: "same", name: "Repository", path: "/repo",
     let app = try fixture()
     let client = PilotClient()
     client.loadFixture(projects: [project, Project(id: "no-slack", name: "Other", path: "/other", createdAt: 1)], sessions: [])
-    try app.hosts.install(client, host: remote)
+    try loadClientFixture(client, host: remote, into: app.hosts)
     let choices = SlackTriageInboxHeader.choices(hosts: app.hosts, model: app)
     #expect(choices.count == 2)
     #expect(Set(choices.map(\.id)).count == 2)
@@ -90,7 +90,7 @@ private let project = Project(id: "same", name: "Repository", path: "/repo",
                         tracking: .init(slackChannels: ["C2"]), createdAt: 1)
     let untracked = Project(id: "untracked", name: project.name, path: "/untracked", createdAt: 1)
     client.loadFixture(projects: [tools, untracked], sessions: [])
-    try app.hosts.install(client, host: remote)
+    try loadClientFixture(client, host: remote, into: app.hosts)
     var choices = SlackTriageInboxHeader.choices(hosts: app.hosts, model: app)
     #expect(choices.map(\.title) == ["Dev tools", "Repository"], "untracked projects do not cause ambiguity")
     for choice in choices {
@@ -105,7 +105,7 @@ private let project = Project(id: "same", name: "Repository", path: "/repo",
                             tracking: .init(slackChannels: ["C3"]), createdAt: 1)
     let replacement = PilotClient()
     replacement.loadFixture(projects: [tools, duplicate], sessions: [])
-    try app.hosts.install(replacement, host: remote)
+    try loadClientFixture(replacement, host: remote, into: app.hosts)
     choices = SlackTriageInboxHeader.choices(hosts: app.hosts, model: app)
     #expect(Set(choices.map(\.title)) == ["Dev tools", "Repository · Local", "repository · devbox"],
             "only duplicate names need hosts, including names differing only by case")

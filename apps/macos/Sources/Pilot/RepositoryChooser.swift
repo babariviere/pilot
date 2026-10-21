@@ -4,7 +4,7 @@ import SwiftUI
 /// Browses only the selected daemon's allowed roots. Paths are never Mac file URLs.
 struct RepositoryChooser: View {
     let host: HostRef
-    @ObservedObject var hosts: HostClients
+    @ObservedObject var hosts: ClientDirectory
     let selected: (Hosted<Project>) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var selection = RepositorySelection()

@@ -34,13 +34,13 @@ enum ScopedModelsHostStatus: String, Codable, Sendable {
 
     var title: String {
         switch self {
-        case .needsConsent: "Review before joining"
+        case .needsConsent: "Review saved settings"
         case .pending: "Pending"
         case .applying: "Checking application…"
-        case .synced: "Synced"
-        case .conflict: "Changed on this host"
+        case .synced: "Saved"
+        case .conflict: "Changed in pi"
         case .divergent: "Left as is"
-        case .failed: "Could not sync"
+        case .failed: "Could not save"
         case .unsupported: "Update required"
         case .readOnly: "Read-only host"
         case .authorizationRequired: "Native authorization unavailable"
@@ -93,14 +93,13 @@ struct ScopedModelsState: Codable, Equatable, Sendable {
         }
     }
 
-    mutating func save(_ selection: ScopedModelsSelection, joining: [HostRef: ScopedModelsBaseline]) throws {
+    /// The legacy file can contain retired host records. Only the exact Local installation changes.
+    mutating func save(_ selection: ScopedModelsSelection, on host: HostRef, baseline: ScopedModelsBaseline? = nil) throws {
+        guard host.hostId == "local" else { throw ScopedModelsFailure.stale }
         try selection.validate()
         guard revision < UInt64.max else { throw ScopedModelsFailure.storage }
-        revision += 1
-        desired = selection
-        for (host, baseline) in joining {
+        if let baseline {
             if let existing = entry(host), existing.baseline != nil || existing.status == .divergent {
-                // Save may consent to first contact, not overwrite an established conflict.
                 throw ScopedModelsFailure.stale
             }
             edit(host) { entry in
@@ -108,9 +107,10 @@ struct ScopedModelsState: Codable, Equatable, Sendable {
                 entry.status = .pending; entry.attempt = nil; entry.decision = UUID()
             }
         }
-        for index in hosts.indices where hosts[index].participates && hosts[index].status != .divergent {
-            // Preserve established conflict baselines. Save is not force-overwrite consent.
-            if hosts[index].status != .conflict { hosts[index].status = .pending }
+        revision += 1
+        desired = selection
+        if let entry = entry(host), entry.participates && entry.status != .divergent && entry.status != .conflict {
+            edit(host) { $0.status = .pending }
         }
     }
 

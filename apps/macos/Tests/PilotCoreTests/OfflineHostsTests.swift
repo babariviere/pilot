@@ -6,7 +6,7 @@ import Testing
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
     let host = HostRef(hostId: "box", daemonId: "daemon", lineageId: "lineage")
-    let configuration = try SSHConnectionConfiguration(alias: "fixture-box")
+    let configuration = try LegacyDevboxAddress(alias: "fixture-box")
     var session = SessionSummary(id: "same", title: "Known remote chat", cwd: "/remote/repo",
         projectId: "project", branch: "work", createdAt: 1, updatedAt: 2, state: "working",
         error: "PRIVATE_DIAGNOSTIC", outcome: .failed, outcomeAt: 1, outcomeReason: "PRIVATE_REASON",
@@ -46,7 +46,7 @@ import Testing
 @Test func offlineHostIndexDoesNotMergeCollidingIDsOrReplaceCorruptFiles() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
-    let configuration = try SSHConnectionConfiguration(alias: "fixture")
+    let configuration = try LegacyDevboxAddress(alias: "fixture")
     let first = HostRef(hostId: "one", daemonId: "daemon1", lineageId: "1")
     let second = HostRef(hostId: "two", daemonId: "daemon2", lineageId: "2")
     let session = SessionSummary(id: "same", title: "Chat", cwd: "/repo", createdAt: 0, updatedAt: 0, state: "working")
@@ -93,7 +93,7 @@ import Testing
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
     let host = HostRef(hostId: "box", daemonId: "remote", lineageId: "1")
-    let configuration = try SSHConnectionConfiguration(alias: "fixture")
+    let configuration = try LegacyDevboxAddress(alias: "fixture")
     let current = OfflineHostSnapshot(host: host, configuration: configuration, receivedAt: Date(timeIntervalSince1970: 2))
     let old = OfflineHostSnapshot(host: host, configuration: configuration, receivedAt: Date(timeIntervalSince1970: 1))
     let store = OfflineHostStore(directory: directory)

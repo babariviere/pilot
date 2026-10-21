@@ -76,7 +76,7 @@ final class ProjectDatabaseEditor: ObservableObject {
 struct ProjectDatabaseSettingsSection: View {
     let projectId: String
     let host: HostRef
-    let hosts: HostClients
+    let hosts: ClientDirectory
     @StateObject private var editor = ProjectDatabaseEditor()
 
     var body: some View {

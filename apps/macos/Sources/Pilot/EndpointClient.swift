@@ -25,9 +25,9 @@ struct EndpointClient: @MainActor DynamicProperty {
 @MainActor private final class EndpointClientSource: ObservableObject {
     private weak var client: PilotClient?
     private var observation: AnyCancellable?
-    private weak var hosts: HostClients?
+    private weak var hosts: ClientDirectory?
     private var hostsObservation: AnyCancellable?
-    func bind(_ next: PilotClient, hosts nextHosts: HostClients?) {
+    func bind(_ next: PilotClient, hosts nextHosts: ClientDirectory?) {
         if hosts !== nextHosts {
             hosts = nextHosts
             hostsObservation = nextHosts?.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }

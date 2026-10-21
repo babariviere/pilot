@@ -27,10 +27,7 @@ DEVBOX = "retiredDevboxesKeepSettingsLocalAndCachedHistoryReadOnly"
 DEVBOX_OUTPUT = STARTED + f"◇ Test {DEVBOX}() started.\n" + PASSED
 TERMINAL = "terminalOpeningAndResizingDoNotFeedNativeFittingSizeBackIntoWindowConstraints"
 TERMINAL_OUTPUT = STARTED + f"◇ Test {TERMINAL}() started.\n" + PASSED
-CALLBACKS = ["localStopNormalizesQualifiedRowsAndRestoresWithdrawnMessages",
-         "remoteStopKeepsCollidingLocalChatAndDraftUntouched",
-         "unavailableStopNeverFallsBackToCurrentLocalHost",
-         "unknownStopIsRejectedBeforeDispatchWithoutLocalFallback",
+CALLBACKS = [
              "missionTaskDragLoadsItsPlainTextOnTheMainActor"]
 CALLBACKS_OUTPUT = STARTED + "".join(f"◇ Test {name}() started.\n" for name in CALLBACKS) + PASSED
 JOURNEYS = ["keyboardOnlyStartSwitchTypeAndReturn", "keyboardOnlySidebarBrowsingKeepsFocusInTheSidebar"]
@@ -40,19 +37,7 @@ GITHUB = ["githubKeySheetRequiresNativeConfirmationAndCancelDoesNotRegister",
           "githubExistingCheckoutRequiresExplicitNativeReuseConfirmation",
           "githubImportNativeCloneActionStaysDisabledUntilHostDestinationPreview"]
 GITHUB_OUTPUTS = [STARTED + f"◇ Test {name}() started.\n" + PASSED for name in GITHUB]
-SCOPED_MODELS = [
-    "scopedModelsNoStartupWritesAndLocalFirstIndependentHosts",
-    "scopedModelsOfflineColdLaunchAndNewIdentityNeedExplicitConsent",
-    "scopedModelsLostAckExactReadbackAndOnlyOneBoundedRetryAcrossRelaunch",
-    "scopedModelsConflictChoicesNeverBlindlyRebaseOtherHosts",
-    "scopedModelsSupersededRevisionAndGenerationCannotPublishOldSuccess",
-    "scopedModelsCoalescesSavesWithoutCallingOlderReadbackNewSuccess",
-    "scopedModelsLeaveDuringAcceptedWritePersistsWithoutLateSuccessRevivingSync",
-    "scopedModelsReadOnlyAndUnavailablePatternsAreTruthfulAndDurable",
-    "scopedModelsBoundsIndependentHostConcurrency",
-    "scopedModelsConflictConsentCannotFollowNewIntentOrConnection",
-    "scopedModelsReadFailureCannotErasePersistedLeaveAsIs"
-]
+SCOPED_MODELS = ['localModelScopePersistsIntentBeforeItsOnlyWriteAndRejectsRemoteEndpoints', 'localModelScopeLostAckUsesExactReadbackAndKeepsRetryBudgetAcrossRelaunch', 'localModelScopeConflictAndLeaveCannotBeOverwrittenByAnotherSave', 'localModelScopeReplacementWaitsForOldWriteWithoutPublishingStaleSuccess', 'localModelScopeSupersededSavesApplyOnlyTheLatestPendingSelection']
 SCOPED_MODEL_TRANSPORT = ["modelScopeLiveOwnerNeverSyncsRetiredDevboxes", "modelScopeLiveConflictAndLeaveRemainDivergentAfterColdLaunch", "modelScopeWirePreservesAllAndDecodesBothPutArmsWithoutCapabilityReadsOnGet", "modelScopeWireRejectsStaleCapabilityAcquisitionBeforeSending", "modelScopeWireExposesTypedReadFailuresWithoutTreatingThemAsAbsent", "modelScopeWireReconcilesCommitted503WithLiteralReadbackWithoutRepeatingPut"]
 SCOPED_MODELS += SCOPED_MODEL_TRANSPORT
 SCOPED_MODEL_NATIVE = ["scopedModelsNativeSavePersistsAndDispatchesExplicitAllOnlyAfterClick",
@@ -69,18 +54,7 @@ AUTOMATIC_UPDATES = [
     "retiredCorruptOfflineMetadataCannotBlockLocalOrReplaceSavedFiles",
 ]
 AUTOMATIC_UPDATE_OUTPUTS = [STARTED + "".join(f"◇ Test {name}() started.\n" for name in AUTOMATIC_UPDATES) + PASSED]
-HOST_MCPS = [
-    "hostMcpRosterCoalescesUnchangedPresentationWithoutStartingChecks",
-    "hostMcpActionsRouteDuplicateNamesAndCancelToTheExactHost",
-    "hostMcpReviewedSetupUsesHostCapabilitiesAndReconcilesCommitted503WithoutReplay",
-    "hostMcpSourceAndTargetEditsOrExistingNamespacesRequireNewReview",
-    "hostMcpDisconnectDuringCapabilityReadCannotDispatchToReplacement",
-    "hostMcpUncertainApplyOnlyLooksUpTheSamePinAfterReconnect",
-    "hostMcpNativeProjectionRejectsSecretsAndLocalPaths",
-    "hostMcpDelayedResultsAndReplacementPinsCannotPublishOrRetarget",
-    "hostMcpAdditiveReviewKeepsOtherServersAndLabelsNamespacesWithoutReplacingThem",
-    "hostMcpNativeCheckboxSelectsOnlyMissingServers",
-]
+HOST_MCPS = ["localDirectoryRejectsRemoteEndpointsWithoutCallingThem"]
 HOST_MCP_OUTPUTS = [STARTED + "".join(f"◇ Test {name}() started.\n" for name in HOST_MCPS) + PASSED]
 USAGE_PROJECTION = "usageLocalConsumerNeverFansOutAndDeferredHelperRequiresExplicitHosts"
 
@@ -139,18 +113,18 @@ class TestOutputTests(unittest.TestCase):
                          r"@Test\(\.timeLimit\(\.minutes\(1\)\)\) @MainActor\s+func " + USAGE_PROJECTION)
 
     def test_host_mcp_partition_covers_fixtures(self):
-        source = SCRIPTS.parent / "Tests/PilotTests/HostMcpConnectionsTests.swift"
-        self.assertEqual(re.findall(r"func (hostMcp\w+)\(", source.read_text()), HOST_MCPS)
+        source = SCRIPTS.parent / "Tests/PilotTests/RetiredDevboxTests.swift"
+        self.assertEqual(re.findall(r"func (localDirectory\w+)\(", source.read_text()), HOST_MCPS)
 
     def test_automatic_update_partition_covers_production_fixtures(self):
         source = SCRIPTS.parent / "Tests/PilotTests/RetiredDevboxTests.swift"
         self.assertEqual(re.findall(r"@Test @MainActor func (retired(?!Devboxes)\w+)\(", source.read_text()), AUTOMATIC_UPDATES)
 
     def test_scoped_model_partitions_cover_the_production_fixtures(self):
-        scheduler = SCRIPTS.parent / "Tests/PilotTests/ScopedModelsSyncTests.swift"
+        scheduler = SCRIPTS.parent / "Tests/PilotTests/LocalModelScopeTests.swift"
         native = SCRIPTS.parent / "Tests/PilotUITests/ScopedModelsInteractionTests.swift"
         transport = SCRIPTS.parent / "Tests/PilotTests/ScopedModelsTransportTests.swift"
-        self.assertEqual(re.findall(r"func (scopedModels\w+)\(", scheduler.read_text()) +
+        self.assertEqual(re.findall(r"func (localModelScope\w+)\(", scheduler.read_text()) +
                          re.findall(r"func (modelScope\w+)\(", transport.read_text()), SCOPED_MODELS)
         self.assertEqual(re.findall(r"func (scopedModels\w+)\(", native.read_text()), SCOPED_MODEL_NATIVE)
 

@@ -6,7 +6,7 @@ import SwiftUI
 @MainActor
 struct HostViewContext {
     let host: HostRef
-    let hosts: HostClients
+    let hosts: ClientDirectory
 
     func ref(_ kind: HostResourceKind, _ id: String) -> HostResourceRef {
         HostResourceRef(host: host, kind: kind, localId: id)

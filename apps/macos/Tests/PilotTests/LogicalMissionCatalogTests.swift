@@ -184,7 +184,7 @@ private func logicalMission(_ id: String = "same", title: String = "Canonical", 
     }, sessions: [])
     let remote = PilotClient()
     remote.loadFixture(projects: [Project(id: "project", name: "project", path: "/remote", createdAt: 1)], sessions: [])
-    try model.hosts.install(remote, host: logicalBox)
+    try loadClientFixture(remote, host: logicalBox, into: model.hosts)
     let rows = try LogicalMissionCatalog.normalize([
         .init(host: logicalHome, missions: [logicalMission("active"), logicalMission("done", status: .done),
             logicalMission("archived", status: .archived), logicalMission("other", projectId: "other")], dashboard: nil),
@@ -212,7 +212,7 @@ private func logicalMission(_ id: String = "same", title: String = "Canonical", 
 @Test @MainActor func sidebarMissionsIncludeLinkedCheckoutsButNotSameNamedUnlinkedProjects() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
-    let hosts = HostClients(operationDirectory: directory)
+    let hosts = ClientDirectory(operationDirectory: directory)
     let suite = "mission-scope-\(UUID().uuidString)"
     let defaults = try #require(UserDefaults(suiteName: suite))
     defer { defaults.removePersistentDomain(forName: suite) }
@@ -222,10 +222,10 @@ private func logicalMission(_ id: String = "same", title: String = "Canonical", 
     let remote = Project(id: "execution-project", name: "Same name", path: "/remote", createdAt: 1)
     let unrelated = Project(id: "project", name: "Same name", path: "/unrelated", createdAt: 1)
     model.client.loadFixture(projects: [local], sessions: [])
-    try hosts.install(model.client, host: logicalHome)
+    try loadClientFixture(model.client, host: logicalHome, into: hosts)
     let remoteClient = PilotClient()
     remoteClient.loadFixture(projects: [remote, unrelated], sessions: [])
-    try hosts.install(remoteClient, host: logicalBox)
+    try loadClientFixture(remoteClient, host: logicalBox, into: hosts)
     let source = HostResourceRef(host: logicalHome, kind: .project, localId: local.id)
     let target = HostResourceRef(host: logicalBox, kind: .project, localId: remote.id)
     let rows = try LogicalMissionCatalog.normalize([
@@ -234,7 +234,12 @@ private func logicalMission(_ id: String = "same", title: String = "Canonical", 
     ]).rows
     model.focus(on: local.id)
     #expect(model.sidebarMissions(in: rows).map { $0.mission.missionId } == ["home"])
-    try await hosts.projectCheckouts.confirm(source: source, target: target)
+    var legacy = RepositoryAssociations()
+    _ = try legacy.bindings.confirm(logicalProjectId: source.storageKey, project: target, remotePath: remote.path, expectedGeneration: nil,
+        sourcePath: local.path)
+    let legacyStore = RepositoryAssociationStore(file: directory.appendingPathComponent("project-checkouts/project-checkouts.json"))
+    try await legacyStore.save(legacy, revision: 1)
+    await hosts.projectCheckouts.start()
     #expect(Set(model.sidebarMissions(in: rows).map { $0.mission.missionId }) == ["home", "remote"])
     model.focus(on: target.storageKey)
     #expect(Set(model.sidebarMissions(in: rows).map { $0.mission.missionId }) == ["home", "remote"])
@@ -257,7 +262,7 @@ private func logicalMission(_ id: String = "same", title: String = "Canonical", 
     let alias = HostRef(hostId: "renamed-box", daemonId: logicalBox.daemonId, lineageId: logicalBox.lineageId)
     let remote = PilotClient()
     remote.loadFixture(projects: [Project(id: "execution-project", name: "Project", path: "/remote", createdAt: 1)], sessions: [])
-    try model.hosts.install(remote, host: alias)
+    try loadClientFixture(remote, host: alias, into: model.hosts)
     model.focus(on: HostResourceRef(host: alias, kind: .project, localId: "execution-project").storageKey)
     #expect(model.sidebarMissions(in: rows) == rows, "Replica provenance associates the canonical row with its execution project")
     model.focus(on: "execution-project")
@@ -265,7 +270,7 @@ private func logicalMission(_ id: String = "same", title: String = "Canonical", 
     let replaced = HostRef(hostId: alias.hostId, daemonId: alias.daemonId, lineageId: "replacement")
     let replacement = PilotClient()
     replacement.loadFixture(projects: remote.projects, sessions: [])
-    try model.hosts.install(replacement, host: replaced)
+    try loadClientFixture(replacement, host: replaced, into: model.hosts)
     model.focus(on: HostResourceRef(host: replaced, kind: .project, localId: "execution-project").storageKey)
     #expect(model.sidebarMissions(in: rows).isEmpty)
 }
@@ -288,7 +293,7 @@ private func logicalMission(_ id: String = "same", title: String = "Canonical", 
         let client = PilotClient()
         client.loadFixture(projects: [], sessions: [])
         client.handle(.missions([logicalMission()]))
-        try model.hosts.install(client, host: host)
+        try loadClientFixture(client, host: host, into: model.hosts)
     }
     model.missionRegistry.start(model)
     defer { model.missionRegistry.stop() }
@@ -316,7 +321,7 @@ private func logicalMission(_ id: String = "same", title: String = "Canonical", 
     let replacement = PilotClient()
     replacement.loadFixture(projects: [], sessions: [])
     replacement.handle(.missions([logicalMission()]))
-    try model.hosts.install(replacement, host: logicalBox)
+    try loadClientFixture(replacement, host: logicalBox, into: model.hosts)
     try await logicalEventually { model.missionAvailable(model.missionRegistry.destination(remote, model: model)) }
     #expect(model.selectedLogicalMission?.id == remote.id)
     model.openMission(HostResourceRef(host: second, kind: .mission, localId: "same").storageKey)
@@ -444,7 +449,7 @@ private struct LogicalProducerFixture: Decodable {
     let client = PilotClient()
     client.loadFixture(projects: [], sessions: [])
     client.handle(.missions([logicalMission()]))
-    try model.hosts.install(client, host: pin)
+    try loadClientFixture(client, host: pin, into: model.hosts)
     model.openLogicalMission(row)
     #expect(model.hosts.selection?.host == pin)
     #expect(model.hosts.selection?.localId == row.mission.missionId)

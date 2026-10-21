@@ -150,11 +150,11 @@ test("refresh-health native reads are qualified, protected and never trigger a r
 		terminals,
 	];
 	args[9] = tracking;
-	args[18] = {
+	args[17] = {
 		authenticate: async (value: unknown) => {
 			if (value !== "native-fixture") throw new Conflict("Native only");
 		},
-	} as unknown as NonNullable<(typeof args)[18]>;
+	} as unknown as NonNullable<(typeof args)[17]>;
 	const server = createDaemonServer(...args);
 	t.after(async () => {
 		await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -217,12 +217,12 @@ test("native local feature aggregate delivery and diagnostic reads work with exp
 		new ModelCatalog("/unused"),
 		terminals,
 	];
-	args[17] = telemetry;
-	args[18] = {
+	args[16] = telemetry;
+	args[17] = {
 		authenticate: async (value: unknown) => {
 			if (value !== "native-fixture") throw new Conflict("Native only");
 		},
-	} as unknown as NonNullable<(typeof args)[18]>;
+	} as unknown as NonNullable<(typeof args)[17]>;
 	const server = createDaemonServer(...args);
 	t.after(async () => {
 		await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -315,7 +315,7 @@ test("project database settings require native authority and fence revisions wit
 		new ModelCatalog(home),
 		terminals,
 	];
-	args[18] = native;
+	args[17] = native;
 	const server = createDaemonServer(...args);
 	t.after(async () => {
 		await sessions.shutdown();
@@ -386,11 +386,11 @@ test("app-wide diagnostic native endpoints require protected capability and reje
 		new ModelCatalog("/unused"),
 		terminals,
 	];
-	args[18] = {
+	args[17] = {
 		authenticate: async (token: unknown) => {
 			if (token !== "native-fixture") throw new Conflict("Native capability required");
 		},
-	} as unknown as NonNullable<(typeof args)[18]>;
+	} as unknown as NonNullable<(typeof args)[17]>;
 	const server = createDaemonServer(...args);
 	t.after(async () => {
 		terminals.shutdown();
@@ -662,11 +662,11 @@ test("dedicated diagnostics and repair operations admit only their matching chat
 		undefined,
 		hello,
 	];
-	serverArgs[18] = {
+	serverArgs[17] = {
 		authenticate: async (value: unknown) => {
 			if (value !== "native-fixture") throw new Conflict("Native only");
 		},
-	} as unknown as NonNullable<(typeof serverArgs)[18]>;
+	} as unknown as NonNullable<(typeof serverArgs)[17]>;
 	const server = createDaemonServer(...serverArgs);
 	t.after(async () => {
 		terminals.shutdown();

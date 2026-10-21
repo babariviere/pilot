@@ -111,10 +111,10 @@ private final class ScopeHTTPFixture: URLProtocol {
         defer { try? FileManager.default.removeItem(at: directory) }
         let models = directory.appendingPathComponent("models")
         var acquisitions: [HostRef] = []
-        func facade() -> HostClients {
-            HostClients(operationDirectory: directory.appendingPathComponent("operations"),
-                scopedModelsStore: ScopedModelsStore(directory: models), readScopedModelCapability: { host, configuration in
-                    #expect(host.hostId == "local" && configuration == nil)
+        func facade() -> ClientDirectory {
+            ClientDirectory(operationDirectory: directory.appendingPathComponent("operations"),
+                scopedModelsStore: ScopedModelsStore(directory: models), readScopedModelCapability: { host in
+                    #expect(host.hostId == "local")
                     acquisitions.append(host)
                     return "fixture-local"
                 })
@@ -124,15 +124,17 @@ private final class ScopeHTTPFixture: URLProtocol {
         let (aClient, a) = try scopeTransportClient("a")
         let (bClient, b) = try scopeTransportClient("b")
         let inventory = OfflineHostStore(directory: directory.appendingPathComponent("hosts"))
-        try await inventory.save([a, b].map { OfflineHostSnapshot(host: $0, configuration: try SSHConnectionConfiguration(alias: "fixture-\($0.hostId)")) })
+        try await inventory.save([a, b].map { OfflineHostSnapshot(host: $0, configuration: try LegacyDevboxAddress(alias: "fixture-\($0.hostId)")) })
         try await hosts.restoreOffline(from: inventory)
         // Synthetic installed clients exercise the boundary even if an old caller retains an endpoint.
-        try hosts.install(localClient, host: local); try hosts.install(aClient, host: a); try hosts.install(bClient, host: b)
+        try hosts.install(localClient, host: local)
+        #expect(throws: HostRoutingError.identityChanged) { try hosts.install(aClient, host: a) }
+        #expect(throws: HostRoutingError.identityChanged) { try hosts.install(bClient, host: b) }
         #expect(ScopeHTTPFixture.requests.isEmpty && acquisitions.isEmpty)
         hosts.startScopedModels(); hosts.startScopedModels()
         try await wireScopeWait { hosts.scopedModels.observations[local] != nil && hosts.scopedModels.isIdle }
         let baseline = try #require(hosts.scopedModels.observations[local]?.baseline)
-        await hosts.scopedModels.save(.all, joining: [local: baseline])
+        await hosts.scopedModels.save(.all, on: local, baseline: baseline)
         try await wireScopeWait { hosts.scopedModels.state.entry(local)?.status == .synced && hosts.scopedModels.isIdle }
         #expect(hosts.scopedModels.observations[a] == nil && hosts.scopedModels.observations[b] == nil)
         #expect(ScopeHTTPFixture.requests.allSatisfy { $0.host == "local" })
@@ -151,24 +153,24 @@ private final class ScopeHTTPFixture: URLProtocol {
     }
 
     @Test @MainActor func modelScopeLiveConflictAndLeaveRemainDivergentAfterColdLaunch() async throws {
-        ScopeHTTPFixture.reset(["box": .init(mode: "conflict")])
+        ScopeHTTPFixture.reset(["local": .init(mode: "conflict")])
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let (client, host) = try scopeTransportClient("box")
+        let (client, host) = try scopeTransportClient("local")
         let store = ScopedModelsStore(directory: directory)
-        let sync = ScopedModelsSync(store: store)
-        sync.update([host: scopeTransport(client, host: host, capability: { "fixture-box" }).endpoint()])
+        let sync = LocalModelScope(store: store)
+        sync.update(scopeTransport(client, host: host, capability: { "fixture-local" }).endpoint())
         await sync.start()
         try await wireScopeWait { sync.observations[host] != nil && sync.isIdle }
         let baseline = try #require(sync.observations[host]?.baseline)
-        await sync.save(.all, joining: [host: baseline])
+        await sync.save(.all, on: host, baseline: baseline)
         try await wireScopeWait { sync.state.entry(host)?.status == .conflict && sync.isIdle }
         #expect(ScopeHTTPFixture.requests.filter { $0.method == "PUT" }.count == 1)
         await sync.leave(host)
         await sync.stopAndWait(); client.disconnect()
-        let (nextClient, _) = try scopeTransportClient("box")
-        let next = ScopedModelsSync(store: ScopedModelsStore(directory: directory))
-        next.update([host: scopeTransport(nextClient, host: host, capability: { Issue.record("Left-as-is host must not acquire capability"); return "fixture-box" }).endpoint()])
+        let (nextClient, _) = try scopeTransportClient("local")
+        let next = LocalModelScope(store: ScopedModelsStore(directory: directory))
+        next.update(scopeTransport(nextClient, host: host, capability: { Issue.record("Left-as-is host must not acquire capability"); return "fixture-local" }).endpoint())
         await next.start()
         try await wireScopeWait { next.observations[host] != nil && next.isIdle }
         #expect(next.state.entry(host)?.status == .divergent)
@@ -196,11 +198,11 @@ private final class ScopeHTTPFixture: URLProtocol {
     }
 
     @Test @MainActor func modelScopeWireRejectsStaleCapabilityAcquisitionBeforeSending() async throws {
-        ScopeHTTPFixture.reset(["box": .init()])
-        let (client, host) = try scopeTransportClient("box")
+        ScopeHTTPFixture.reset(["local": .init()])
+        let (client, host) = try scopeTransportClient("local")
         let adapter = scopeTransport(client, host: host) {
             client.disconnect()
-            return "fixture-box"
+            return "fixture-local"
         }
         do { try await adapter.write(.all, expectedHash: "old-hash"); Issue.record("Stale capability cannot be sent") }
         catch { #expect(error as? HostRoutingError == .staleGeneration) }
@@ -211,14 +213,14 @@ private final class ScopeHTTPFixture: URLProtocol {
         for (status, code, expected) in [(404, "missing", ScopedModelsHostStatus.unsupported),
                                         (403, "read_only", .readOnly), (403, "native_action_required", .authorizationRequired),
                                         (422, "settings_unreadable", .settingsUnreadable), (503, "settings_unreadable", .settingsUnreadable)] {
-            ScopeHTTPFixture.reset(["box": .init(status: status, error: code)])
-            let (client, host) = try scopeTransportClient("box")
+            ScopeHTTPFixture.reset(["local": .init(status: status, error: code)])
+            let (client, host) = try scopeTransportClient("local")
             defer { client.disconnect() }
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             defer { try? FileManager.default.removeItem(at: directory) }
-            let sync = ScopedModelsSync(store: ScopedModelsStore(directory: directory))
+            let sync = LocalModelScope(store: ScopedModelsStore(directory: directory))
             defer { sync.stop() }
-            sync.update([host: scopeTransport(client, host: host, capability: { Issue.record("GET must not read native capability"); return "fixture-box" }).endpoint()])
+            sync.update(scopeTransport(client, host: host, capability: { Issue.record("GET must not read native capability"); return "fixture-local" }).endpoint())
             await sync.start()
             let deadline = Date().addingTimeInterval(10)
             while sync.state.entry(host)?.status != expected, Date() < deadline { try await Task.sleep(for: .milliseconds(5)) }
@@ -229,19 +231,19 @@ private final class ScopeHTTPFixture: URLProtocol {
     }
 
     @Test @MainActor func modelScopeWireReconcilesCommitted503WithLiteralReadbackWithoutRepeatingPut() async throws {
-        ScopeHTTPFixture.reset(["box": .init(mode: "commit-503")])
-        let (client, host) = try scopeTransportClient("box")
+        ScopeHTTPFixture.reset(["local": .init(mode: "commit-503")])
+        let (client, host) = try scopeTransportClient("local")
         defer { client.disconnect() }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let sync = ScopedModelsSync(store: ScopedModelsStore(directory: directory))
+        let sync = LocalModelScope(store: ScopedModelsStore(directory: directory))
         defer { sync.stop() }
-        sync.update([host: scopeTransport(client, host: host, capability: { "fixture-box" }).endpoint()])
+        sync.update(scopeTransport(client, host: host, capability: { "fixture-local" }).endpoint())
         await sync.start()
         var deadline = Date().addingTimeInterval(10)
         while sync.observations[host] == nil || !sync.checking.isEmpty, Date() < deadline { try await Task.sleep(for: .milliseconds(5)) }
         let initial = try #require(sync.observations[host])
-        await sync.save(.all, joining: [host: initial.baseline])
+        await sync.save(.all, on: host, baseline: initial.baseline)
         deadline = Date().addingTimeInterval(10)
         while sync.state.entry(host)?.status != .synced, Date() < deadline { try await Task.sleep(for: .milliseconds(5)) }
         #expect(sync.state.entry(host)?.status == .synced)

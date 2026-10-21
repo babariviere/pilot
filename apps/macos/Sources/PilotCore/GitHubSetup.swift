@@ -34,17 +34,12 @@ public struct GitHubSetupAction: Codable, Sendable {
 /// Not cached, logged, persisted in the app, queued, or exposed to tools/messages.
 public enum GitHubNativeAccess {
     private struct Capability: Decodable { let daemonId: String; let lineageId: String; let token: String }
-    public static func read(host: HostRef, configuration: SSHConnectionConfiguration?) async throws -> String {
-        let data: Data
-        if let configuration {
-            data = try await LinuxBootstrapSSH.run(arguments: arguments(configuration: configuration),
-                input: URL(fileURLWithPath: "/dev/null"), timeout: 20)
-        } else {
-            let environment = ProcessInfo.processInfo.environment
-            let home = environment["PILOT_HOME"].map { URL(fileURLWithPath: $0) }
-                ?? URL(fileURLWithPath: environment["XDG_DATA_HOME"] ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/share").path).appendingPathComponent("pilot")
-            data = try await Task.detached { try Data(contentsOf: home.appendingPathComponent("github-app-capability")) }.value
-        }
+    public static func read(host: HostRef) async throws -> String {
+        guard host.hostId == "local" else { throw HostRoutingError.invalidReference }
+        let environment = ProcessInfo.processInfo.environment
+        let home = environment["PILOT_HOME"].map { URL(fileURLWithPath: $0) }
+            ?? URL(fileURLWithPath: environment["XDG_DATA_HOME"] ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/share").path).appendingPathComponent("pilot")
+        let data = try await Task.detached { try Data(contentsOf: home.appendingPathComponent("github-app-capability")) }.value
         return try validate(data, host: host)
     }
     static func validate(_ data: Data, host: HostRef) throws -> String {
@@ -53,10 +48,5 @@ public enum GitHubNativeAccess {
         guard value.daemonId == host.daemonId, value.lineageId == host.lineageId,
               value.token.utf8.count == 64, value.token.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else { throw HostRoutingError.identityChanged }
         return value.token
-    }
-    static func arguments(configuration: SSHConnectionConfiguration) -> [String] {
-        // Runtime bootstrap pins this path. No caller-supplied command, path or shell interpolation.
-        let command = "exec python3 -c 'from pathlib import Path; import sys; p=Path.home()/\".local/share/pilot/github-app-capability\"; sys.stdout.buffer.write(p.read_bytes()[:4097])'"
-        return SSHArguments.safety.filter { $0 != "-N" } + ["-o", "ControlMaster=no", "-S", "none", "-o", "ClearAllForwardings=yes", "--", configuration.alias, command]
     }
 }

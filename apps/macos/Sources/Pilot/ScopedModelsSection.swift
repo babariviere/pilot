@@ -43,9 +43,9 @@ struct ScopedModelsHostRow: Identifiable {
     var id: HostRef { host }
 }
 
-/// Editor and host outcomes, independent of endpoint lifetime. HostClients owns sync outside Settings.
+/// Editor and host outcomes, independent of endpoint lifetime. ClientDirectory owns sync outside Settings.
 @MainActor struct ScopedModelsSection: View {
-    @ObservedObject var sync: ScopedModelsSync
+    @ObservedObject var sync: LocalModelScope
     let hosts: [ScopedModelsHostRow]
     let localHost: HostRef?
     @StateObject private var editor = ScopedModelsEditor()
@@ -57,7 +57,7 @@ struct ScopedModelsHostRow: Identifiable {
     private struct HostReview: Identifiable {
         let id = UUID()
         let row: ScopedModelsHostRow
-        let consent: ScopedModelsSync.Consent
+        let consent: LocalModelScope.Consent
         let useEverywhere: Bool
     }
 
@@ -140,13 +140,13 @@ struct ScopedModelsHostRow: Identifiable {
         .onChange(of: localObservation?.baseline) { _, _ in initialize() }
         .onChange(of: query) { _, _ in candidateLimit = 30 }
         .sheet(item: $review) { value in
-            SheetScaffold(value.useEverywhere ? "Use current pi settings" : "Sync this host",
+            SheetScaffold(value.useEverywhere ? "Use current pi settings" : "Apply saved model list",
                 subtitle: value.row.title,
                 primary: SheetPrimaryAction(title: value.useEverywhere ? "Save new list" : "Apply saved list",
                     enabled: sync.isCurrent(value.consent),
                     action: {
                         Task {
-                            if value.useEverywhere { await sync.useEverywhere(value.consent) }
+                            if value.useEverywhere { await sync.useCurrent(value.consent) }
                             else { await sync.join(value.consent) }
                             review = nil
                         }
@@ -173,7 +173,7 @@ struct ScopedModelsHostRow: Identifiable {
                 if sync.checking.contains(row.host) { ProgressView().controlSize(.small) }
                 if let observation, sync.state.desired != nil {
                     Menu(status == .conflict ? "Resolve…" : "Options") {
-                        Button(status == .conflict ? "Overwrite this host…" : "Join saved list…") {
+                        Button(status == .conflict ? "Apply saved list…" : "Apply saved list…") {
                             if let consent = sync.review(row.host) { review = HostReview(row: row, consent: consent, useEverywhere: false) }
                         }.disabled(!observation.writable)
                         Button("Use current pi settings…") {
@@ -182,7 +182,7 @@ struct ScopedModelsHostRow: Identifiable {
                         Button("Leave as is") { Task { await sync.leave(row.host) } }
                     }.disabled(!row.connected || sync.checking.contains(row.host))
                 }
-                Button("Check") { sync.refresh(row.host) }.disabled(!row.connected || sync.checking.contains(row.host))
+                Button("Check") { sync.refresh() }.disabled(!row.connected || sync.checking.contains(row.host))
             }.controlSize(.small)
         }
     }
@@ -210,7 +210,7 @@ struct ScopedModelsHostRow: Identifiable {
 
 /// Exact production Save control, independently mountable by the native dispatch fixture.
 @MainActor struct ScopedModelsSaveButton: View {
-    @ObservedObject var sync: ScopedModelsSync
+    @ObservedObject var sync: LocalModelScope
     @ObservedObject var editor: ScopedModelsEditor
     let localHost: HostRef?
     @State private var saving = false
@@ -225,11 +225,12 @@ struct ScopedModelsHostRow: Identifiable {
             let selection = editor.selection
             Task {
                 defer { saving = false }
-                var joining: [HostRef: ScopedModelsBaseline] = [:]
+                var baseline: ScopedModelsBaseline?
                 if let localHost, sync.state.entry(localHost)?.baseline == nil, let observation = sync.observations[localHost] {
-                    joining[localHost] = observation.baseline
+                    baseline = observation.baseline
                 }
-                await sync.save(selection, joining: joining)
+                guard let localHost else { return }
+                await sync.save(selection, on: localHost, baseline: baseline)
                 if sync.problem == nil, editor.selection == selection { editor.load(selection) }
             }
         }.controlSize(.small)

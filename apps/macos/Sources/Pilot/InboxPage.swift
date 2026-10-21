@@ -223,7 +223,7 @@ enum SlackTriageInboxHeader {
                           linkChoices: choices.count > 1 ? choices : [])
     }
 
-    @MainActor static func choices(hosts: HostClients, model: AppModel) -> [PageSectionLinkChoice] {
+    @MainActor static func choices(hosts: ClientDirectory, model: AppModel) -> [PageSectionLinkChoice] {
         let projects = hosts.projects.filter { !($0.value.tracking?.slackChannels ?? []).isEmpty }
         let names = Dictionary(grouping: projects, by: { $0.value.name.lowercased() })
         return projects.map { project in

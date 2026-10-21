@@ -69,7 +69,6 @@ export async function daemonHello(
 			...capabilities,
 			workspaceTerminalProtocol: 2,
 			usageQueries: 1,
-			...(process.platform === "linux" ? { runtimeUpdates: 1 as const } : {}),
 			...(environmentSetupEnabled(env) ? { environmentSetup: 1 as const } : {}),
 		},
 	};

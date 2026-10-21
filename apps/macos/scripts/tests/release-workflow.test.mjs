@@ -343,7 +343,7 @@ test("production packages are built once without private keys and publishing pro
 	assert.doesNotMatch(publish, /swift build|pnpm install|bundle\.sh|bundle-runtime\.sh/);
 	assert.doesNotMatch(publish, /run-id:|github-token:/);
 	assert.match(publish, /contents: write/);
-	assert.match(publish, /LINUX_RUNTIME_PUBLIC_KEY repository variable/);
+	assert.doesNotMatch(publish, /LINUX_RUNTIME_PUBLIC_KEY/);
 	assert.doesNotMatch(publish, /--draft=false|finalize-release|concurrency:/);
 });
 
@@ -360,7 +360,8 @@ test("Linux release signing follows successful package verification", () => {
 	const verification = read("linux-package.yml");
 	assert.match(verification, /permissions:\n  contents: read/);
 	assert.doesNotMatch(verification, /contents: write|secrets\.|gh release upload|PRIVATE_KEY/);
-	assert.match(verification, /verify-service\.sh/);
+	assert.match(verification, /check-runtime\.mjs/);
+	assert.doesNotMatch(verification, /verify-service\.sh|openssh-server/);
 });
 
 test("one serialized job publishes the complete draft after both platforms upload", () => {

@@ -32,7 +32,7 @@ done
 isolated=artifactHeightRespectsNestedClippingWhileKeepingVisibleOverflow
 devbox=retiredDevboxesKeepSettingsLocalAndCachedHistoryReadOnly
 terminal=terminalOpeningAndResizingDoNotFeedNativeFittingSizeBackIntoWindowConstraints
-callbacks='localStopNormalizesQualifiedRowsAndRestoresWithdrawnMessages|remoteStopKeepsCollidingLocalChatAndDraftUntouched|unavailableStopNeverFallsBackToCurrentLocalHost|unknownStopIsRejectedBeforeDispatchWithoutLocalFallback|missionTaskDragLoadsItsPlainTextOnTheMainActor'
+callbacks='missionTaskDragLoadsItsPlainTextOnTheMainActor'
 # Each journey activates NSApp's process-global key window and pumps nested main run loops. Keep them in separate
 # processes so Swift Testing cannot interleave the journeys at those yields and let one take focus from the other.
 # They run only on CI, so only CI requires them to start.
@@ -44,17 +44,11 @@ github='githubKeySheetRequiresNativeConfirmationAndCancelDoesNotRegister|githubE
 # Scoped-model scheduler waits need the MainActor, but no AppKit run loops. Keep
 # their bounded fault fixtures together, separate from both the full suite and native clicks.
 scoped_model_tests=(
-	scopedModelsNoStartupWritesAndLocalFirstIndependentHosts
-	scopedModelsOfflineColdLaunchAndNewIdentityNeedExplicitConsent
-	scopedModelsLostAckExactReadbackAndOnlyOneBoundedRetryAcrossRelaunch
-	scopedModelsConflictChoicesNeverBlindlyRebaseOtherHosts
-	scopedModelsSupersededRevisionAndGenerationCannotPublishOldSuccess
-	scopedModelsCoalescesSavesWithoutCallingOlderReadbackNewSuccess
-	scopedModelsLeaveDuringAcceptedWritePersistsWithoutLateSuccessRevivingSync
-	scopedModelsReadOnlyAndUnavailablePatternsAreTruthfulAndDurable
-	scopedModelsBoundsIndependentHostConcurrency
-	scopedModelsConflictConsentCannotFollowNewIntentOrConnection
-	scopedModelsReadFailureCannotErasePersistedLeaveAsIs
+	localModelScopePersistsIntentBeforeItsOnlyWriteAndRejectsRemoteEndpoints
+	localModelScopeLostAckUsesExactReadbackAndKeepsRetryBudgetAcrossRelaunch
+	localModelScopeConflictAndLeaveCannotBeOverwrittenByAnotherSave
+	localModelScopeReplacementWaitsForOldWriteWithoutPublishingStaleSuccess
+	localModelScopeSupersededSavesApplyOnlyTheLatestPendingSelection
 	modelScopeLiveOwnerNeverSyncsRetiredDevboxes
 	modelScopeLiveConflictAndLeaveRemainDivergentAfterColdLaunch
 	modelScopeWirePreservesAllAndDecodesBothPutArmsWithoutCapabilityReadsOnGet
@@ -75,18 +69,7 @@ automatic_update_tests=(
 printf -v automatic_updates '%s|' "${automatic_update_tests[@]}"
 automatic_updates="${automatic_updates%|}"
 # Host-specific HTTP fault fixtures need MainActor scheduling, not AppKit event loops.
-mcp_tests=(
-	hostMcpRosterCoalescesUnchangedPresentationWithoutStartingChecks
-	hostMcpActionsRouteDuplicateNamesAndCancelToTheExactHost
-	hostMcpReviewedSetupUsesHostCapabilitiesAndReconcilesCommitted503WithoutReplay
-	hostMcpSourceAndTargetEditsOrExistingNamespacesRequireNewReview
-	hostMcpDisconnectDuringCapabilityReadCannotDispatchToReplacement
-	hostMcpUncertainApplyOnlyLooksUpTheSamePinAfterReconnect
-	hostMcpNativeProjectionRejectsSecretsAndLocalPaths
-	hostMcpDelayedResultsAndReplacementPinsCannotPublishOrRetarget
-	hostMcpAdditiveReviewKeepsOtherServersAndLabelsNamespacesWithoutReplacingThem
-	hostMcpNativeCheckboxSelectsOnlyMissingServers
-)
+mcp_tests=(localDirectoryRejectsRemoteEndpointsWithoutCallingThem)
 printf -v host_mcps '%s|' "${mcp_tests[@]}"
 host_mcps="${host_mcps%|}"
 # Mounted repair history and settings exercise native layout/run loops. Keep them

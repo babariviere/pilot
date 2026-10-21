@@ -7,14 +7,14 @@ public enum HostStopRequest: String, Codable, Sendable { case requested, acknowl
 /// Private navigation metadata only. Not a transcript, context replica, or execution authority.
 public struct OfflineHostSnapshot: Codable, Sendable {
     public let host: HostRef
-    public let configuration: SSHConnectionConfiguration
+    public let configuration: LegacyDevboxAddress
     public var receivedAt: Date?
     public var sessions: [SessionSummary]
     public var projects: [Project]
     public var missions: [Mission]
     public var stopRequests: [String: HostStopRequest]
 
-    public init(host: HostRef, configuration: SSHConnectionConfiguration, receivedAt: Date? = nil,
+    public init(host: HostRef, configuration: LegacyDevboxAddress, receivedAt: Date? = nil,
                 sessions: [SessionSummary] = [], projects: [Project] = [], missions: [Mission] = [],
                 stopRequests: [String: HostStopRequest] = [:]) {
         self.host = host; self.configuration = configuration; self.receivedAt = receivedAt

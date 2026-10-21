@@ -12,7 +12,7 @@ private let scopeBaseline = ScopedModelsBaseline(patterns: ["provider/original"]
     let selection = ScopedModelsSelection(patterns: patterns)
     try selection.validate()
     var state = ScopedModelsState()
-    try state.save(selection, joining: [scopeLocal: scopeBaseline])
+    try state.save(selection, on: scopeLocal, baseline: scopeBaseline)
     let decoded = try JSONDecoder().decode(ScopedModelsState.self, from: JSONEncoder().encode(state))
     #expect(decoded == state)
     #expect(decoded.desired?.patterns == patterns)
@@ -28,20 +28,19 @@ private let scopeBaseline = ScopedModelsBaseline(patterns: ["provider/original"]
 
 @Test func scopedModelsNewIntentDoesNotRebaseConflictsOrUndoPersistentLeave() throws {
     var state = ScopedModelsState()
-    try state.save(.init(patterns: ["first"]), joining: [scopeLocal: scopeBaseline, scopeRemote: scopeBaseline])
+    try state.save(.init(patterns: ["first"]), on: scopeLocal, baseline: scopeBaseline)
+    state.edit(scopeRemote) { $0.baseline = scopeBaseline; $0.participates = true }
     state.edit(scopeRemote) { $0.status = .conflict; $0.observed = .init(patterns: ["elsewhere"], hash: "new") }
-    try state.save(.init(patterns: ["second"]), joining: [:])
+    try state.save(.init(patterns: ["second"]), on: scopeLocal)
     #expect(state.entry(scopeRemote)?.baseline == scopeBaseline)
     #expect(state.entry(scopeRemote)?.status == .conflict)
-    state.leave(scopeRemote)
-    try state.save(.all, joining: [:])
-    #expect(state.entry(scopeRemote)?.status == .divergent)
-    #expect(state.entry(scopeRemote)?.participates == false)
-    let replacement = HostRef(hostId: scopeRemote.hostId, daemonId: "reinstalled", lineageId: "new-history")
-    #expect(state.entry(replacement) == nil)
-    try state.join(scopeRemote, baseline: .init(patterns: ["elsewhere"], hash: "new"))
-    #expect(state.entry(scopeRemote)?.status == .pending)
-    #expect(state.entry(scopeRemote)?.baseline?.hash == "new")
+    let archived = state.entry(scopeRemote)
+    state.leave(scopeLocal)
+    try state.save(.all, on: scopeLocal)
+    #expect(state.entry(scopeLocal)?.status == .divergent)
+    #expect(state.entry(scopeRemote) == archived)
+    #expect(throws: ScopedModelsFailure.self) { try state.save(.all, on: scopeRemote) }
+
 }
 
 @Test func scopedModelsStorePersistsIntentAndOutcomesBeforeDispatchAndFencesCorruption() async throws {
@@ -51,7 +50,7 @@ private let scopeBaseline = ScopedModelsBaseline(patterns: ["provider/original"]
     let empty = try await store.load()
     #expect(empty.desired == nil && empty.revision == 0)
     #expect(!FileManager.default.fileExists(atPath: directory.path))
-    let saved = try await store.update { try $0.save(.all, joining: [scopeLocal: scopeBaseline]) }
+    let saved = try await store.update { try $0.save(.all, on: scopeLocal, baseline: scopeBaseline) }
     #expect(saved.revision == 1)
     let second = ScopedModelsStore(directory: directory)
     let restored = try await second.load()
@@ -63,7 +62,7 @@ private let scopeBaseline = ScopedModelsBaseline(patterns: ["provider/original"]
     try corrupt.write(to: url)
     let broken = ScopedModelsStore(directory: directory)
     do { _ = try await broken.load(); Issue.record("Corruption must fence reads") } catch {}
-    do { _ = try await broken.update { try $0.save(.all, joining: [:]) }; Issue.record("Corruption must fence writes") } catch {}
+    do { _ = try await broken.update { try $0.save(.all, on: scopeLocal) }; Issue.record("Corruption must fence writes") } catch {}
     #expect(try Data(contentsOf: url) == corrupt)
 }
 
