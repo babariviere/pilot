@@ -630,6 +630,8 @@ The repair-footer fixtures and mounted settings save bar each run in a separate 
 ordering/coalescing, mission reconnect navigation and repository branch-cache scheduling fixtures run
 together away from those native layout/run loops. Their deadlines, cache TTLs and assertions are unchanged;
 the output guard requires every selected function to start, and explicit filters still use one invocation.
+The Local usage HTTP consumer fixture joins this scheduler partition. Its one-minute deadline, pinned-host
+checks and no-devbox-fanout assertions remain unchanged; it is excluded from the broad native UI batch.
 
 The CI-only keyboard journeys run last, one journey per process. Each activates `NSApp`'s process-global key
 window and pumps nested main run loops; separate processes prevent the tests from interleaving at those yields
