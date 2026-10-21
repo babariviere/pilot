@@ -15,7 +15,10 @@ export async function generatedModules(directory) {
 	for (const name of modules) {
 		let code = stripTypeScriptTypes(await readFile(join(directory, `${name}.ts`), "utf8"));
 		// Fail packaging if this deliberately closed leaf graph gains another runtime dependency.
-		for (const [, dependency] of code.matchAll(/(?:from\s*|import\s*(?:\(\s*)?)["']([^"']+)["']/g)) {
+		// Match import/export clauses, not ordinary query field strings such as ["from", "to"].
+		for (const [, dependency] of code.matchAll(
+			/\b(?:import|export)\s*(?:\(\s*|[^;"']*?\bfrom\s*)?["']([^"']+)["']/g,
+		)) {
 			assert.ok(dependency.startsWith("node:") || modules.some((module) => dependency === `./${module}.ts`));
 		}
 		for (const module of modules) code = code.replaceAll(`./${module}.ts`, `./${module}.mjs`);
@@ -67,6 +70,12 @@ export async function checkUsageWorker(directory) {
 		const page = await store.page({ kind: "request", from: now - 1, to: now + 1 });
 		assert.equal(page.rows.length, 1);
 		assert.equal(page.rows[0].operationId, "runtime-smoke");
+		const summary = await store.analytics({ version: 1, view: "summary", from: now - 1, to: now + 1 });
+		assert.equal(summary.total.records, 1);
+		assert.equal(summary.total.metrics.input.value, 1);
+		assert.equal(summary.total.metrics.reasoning.value, undefined);
+		assert.equal(summary.total.metrics.reasoning.unknown, 1);
+		assert.equal(summary.reconciliation.records, 0);
 		assert.equal((await store.clear()).retainedRows, 0);
 	} finally {
 		await store.close();

@@ -35,4 +35,6 @@ export interface DaemonCapabilities {
 	controlHosts?: 1;
 	/** Project environment setup (docs/environment-setup.md). Absent on older runtimes and while the feature is off. */
 	environmentSetup?: 1;
+	/** Bounded local accounting query API. Absent on older hosts, unrelated to subscription windows. */
+	usageQueries?: 1;
 }
