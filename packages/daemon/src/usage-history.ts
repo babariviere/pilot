@@ -23,6 +23,12 @@ export class UsageHistoryStore {
 	private drained?: () => void;
 	private maintenance?: Promise<UsageHistoryStatus>;
 	private readonly home: string;
+	private readonly erasureListeners = new Set<(status: UsageHistoryStatus) => Promise<void>>();
+	/** Source adapters must drain/purge stale durable evidence before erasure acknowledges. */
+	onErasure(listener: (status: UsageHistoryStatus) => Promise<void>): () => void {
+		this.erasureListeners.add(listener);
+		return () => this.erasureListeners.delete(listener);
+	}
 	private readonly clock: () => number;
 	private readonly pending = new Map<
 		number,
@@ -111,6 +117,10 @@ export class UsageHistoryStore {
 			return this.rpc("put", {});
 		}
 	}
+	/** Content-free adapter admission failure. Uses the same durable rejection counter and bounded ingress. */
+	rejectCapture(): void {
+		void this.rpc("put", {}).catch(() => undefined);
+	}
 	async page(query: UsageHistoryQuery): Promise<UsageHistoryPage> {
 		if (query.after !== undefined && (typeof query.after !== "string" || query.after.length > 1024))
 			throw new Error("Invalid usage cursor");
@@ -130,11 +140,15 @@ export class UsageHistoryStore {
 			.catch(() => undefined);
 		return pending;
 	}
-	eraseChat(chatId: string): Promise<UsageHistoryStatus> {
-		return this.rpc("erase", { chatId });
+	async eraseChat(chatId: string): Promise<UsageHistoryStatus> {
+		const status = await this.rpc<UsageHistoryStatus>("erase", { chatId });
+		await Promise.all([...this.erasureListeners].map((listener) => listener(status)));
+		return status;
 	}
-	clear(): Promise<UsageHistoryStatus> {
-		return this.rpc("erase");
+	async clear(): Promise<UsageHistoryStatus> {
+		const status = await this.rpc<UsageHistoryStatus>("erase");
+		await Promise.all([...this.erasureListeners].map((listener) => listener(status)));
+		return status;
 	}
 
 	/** Bounded compatibility migration only. No transcript scans, guessed dates or model attribution. */

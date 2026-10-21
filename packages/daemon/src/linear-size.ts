@@ -2,7 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { LinearSize } from "@pilot/protocol";
 import { pollLinear } from "./linear-source.ts";
 import type { SourcePoller } from "./sources.ts";
-import type { TrackedItemStore, TrackedInput } from "./tracked-items.ts";
+import type { TrackedInput, TrackedItemStore } from "./tracked-items.ts";
 import type { TriageComplete } from "./triage-grooming.ts";
 
 export const SIZE_SCHEMA = {
@@ -130,7 +130,11 @@ export function createLinearSizePoller(
 								guide: input.guide.text,
 								corrections: input.corrections,
 							});
-						size = parseSize(await complete(context.project.path, prompt, SIZE_SCHEMA, context.signal));
+						size = parseSize(
+							await complete(context.project.path, prompt, SIZE_SCHEMA, context.signal, {
+								projectId: context.project.id,
+							}),
+						);
 						context.signal.throwIfAborted();
 						await store.finishLinearSize(context.project.id, item.externalId, item.updatedAt, size);
 					} catch {
