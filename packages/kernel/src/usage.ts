@@ -3,11 +3,10 @@ import { randomUUID } from "node:crypto";
 import type { Message } from "@earendil-works/pi-ai";
 import { calculateContextTokens, estimateMessageTokens } from "@earendil-works/pi-ai/utils/estimate";
 import type { ContextView, ConversationId, UsageState } from "@earendil-works/pi-durable";
-import type { AIUsageActivity, AIUsageCost, AIUsageScope, AIUsageTokens, ContextUsage } from "@pilot/protocol";
-import manifest from "../package.json" with { type: "json" };
+import type { AIUsageActivity, AIUsageScope, ContextUsage } from "@pilot/protocol";
 import type { PerformanceRecord } from "./performance.ts";
 
-const PRICING_REVISION = `pi-ai@${manifest.dependencies["@earendil-works/pi-ai"]}`;
+import { usageCost, usageTokens } from "./usage-values.ts";
 
 export interface KernelAIUsageConversation {
 	/** Local durable conversation identity. pilotd never exposes or exports it. */
@@ -74,74 +73,6 @@ function usageValues(state: UsageState | undefined, bucket: keyof UsageState): u
 	return value && typeof value === "object" && !Array.isArray(value) ? Object.values(value) : [];
 }
 
-function tokens(values: unknown[]): AIUsageTokens {
-	let input = 0;
-	let output = 0;
-	let cacheRead = 0;
-	let cacheWrite = 0;
-	let reasoning = 0;
-	let reasoningReports = 0;
-	let outputReports = 0;
-	for (const value of values) {
-		if (!value || typeof value !== "object" || Array.isArray(value)) continue;
-		const usage = value as Record<string, unknown>;
-		input = add(input, amount(usage.input));
-		output = add(output, amount(usage.output));
-		cacheRead = add(cacheRead, amount(usage.cacheRead));
-		cacheWrite = add(cacheWrite, amount(usage.cacheWrite));
-		if (amount(usage.output) > 0) outputReports++;
-		if (usage.reasoning !== undefined) {
-			reasoning = add(reasoning, amount(usage.reasoning));
-			reasoningReports++;
-		}
-	}
-	const reasoningStatus =
-		reasoningReports === 0 ? "unavailable" : reasoningReports < outputReports ? "partial" : "reported";
-	return {
-		input,
-		output,
-		cacheRead,
-		cacheWrite,
-		...(reasoningReports ? { reasoning } : {}),
-		reasoningStatus,
-	};
-}
-
-function cost(values: unknown[]): AIUsageCost {
-	let estimatedUsdMicros = 0;
-	let usageReports = 0;
-	let pricedReports = 0;
-	for (const value of values) {
-		if (!value || typeof value !== "object" || Array.isArray(value)) continue;
-		const usage = value as Record<string, unknown>;
-		const tokenCount =
-			amount(usage.input) + amount(usage.output) + amount(usage.cacheRead) + amount(usage.cacheWrite);
-		const rawCost = usage.cost;
-		const estimate =
-			rawCost && typeof rawCost === "object" && !Array.isArray(rawCost)
-				? micros((rawCost as Record<string, unknown>).total)
-				: undefined;
-		if (!tokenCount && estimate === undefined) continue;
-		usageReports++;
-		if (estimate !== undefined) {
-			pricedReports++;
-			estimatedUsdMicros = Math.min(Number.MAX_SAFE_INTEGER, estimatedUsdMicros + estimate);
-		}
-	}
-	const estimateStatus =
-		pricedReports === 0
-			? "unavailable"
-			: pricedReports < usageReports
-				? "partial_catalog_estimate"
-				: "catalog_estimate";
-	return {
-		estimateStatus,
-		...(pricedReports ? { estimatedUsdMicros, pricingRevision: PRICING_REVISION } : {}),
-		billedStatus: "unavailable",
-		subscriptionCoverage: "unknown",
-	};
-}
-
 function committedActivity(
 	view: ContextView,
 	conversationId: ConversationId,
@@ -188,8 +119,8 @@ function scope(
 	kind: AIUsageActivity["kind"],
 ): AIUsageScope {
 	return {
-		tokens: tokens(values),
-		cost: cost(values),
+		tokens: usageTokens(values),
+		cost: usageCost(values),
 		activity: { ...activity, ...timing, kind, outcomeCoverage: "partial", timingCoverage: "partial" },
 	};
 }

@@ -211,7 +211,7 @@ export interface SessionMissionBridge {
 	/** The chat's mission, its status and this member's coordinator role. */
 	membership(sessionId: string): { missionId: string; active: boolean; coordinator?: boolean } | undefined;
 	context(sessionId: string): MissionContext | undefined;
-	/** Canonical home identity only; execution-host aliases are not mission attribution. */
+	/** Canonical mission home/lineage, not the execution host or its display alias. */
 	usageAttribution?(
 		sessionId: string,
 	): NonNullable<import("@pilot/protocol").UsageObservation["attribution"]>["mission"];
@@ -289,6 +289,8 @@ export interface SessionWorker {
 }
 
 export interface SessionManagerOptions {
+	/** One host-owned accounting store, shared with separate background completions. */
+	usageHistory?: UsageHistoryStore;
 	/** Agent database access. Defaults to the agent directory's config, except with injected test workers. */
 	databases?: DatabaseService;
 	credentials?: CredentialBroker;
@@ -310,7 +312,6 @@ export interface SessionManagerOptions {
 	kernelRestartBackoffMs?: number;
 	/** Shared with the HTTP API so model lists, model changes and titles reuse one runtime and cache. */
 	models?: ModelCatalog;
-	usageHistory?: UsageHistoryStore;
 	/** Immutable identity returned by agent-local diagnostic reads. */
 	diagnosticHost?: OperationHost;
 	/** Fixed roots and in-memory tail used by the diagnostics specialist log catalogue. */
@@ -7505,6 +7506,13 @@ export class SessionManager {
 				}
 			});
 		const mission = operations.time("worker.context", () => this.missions?.context(id));
+		const usageMission = this.missions?.usageAttribution?.(id);
+		const usageHistory = !this.factories.worker
+			? await this.usageHistory.status().then(
+					({ generation, captureFloor, retentionFloor }) => ({ generation, captureFloor, retentionFloor }),
+					() => undefined,
+				)
+			: undefined;
 		const diagnosticTarget = this.diagnosticReference(meta);
 		const diagnosticScope =
 			meta.diagnosticScope === "app" && this.diagnosticHost
@@ -7518,6 +7526,8 @@ export class SessionManager {
 			createWorker(
 				{
 					sessionId: id,
+					...(usageHistory ? { usageHistory } : {}),
+					...(usageMission ? { usageMission } : {}),
 					...(meta.control ? { control: true } : {}),
 					...(meta.role ? { role: meta.role } : {}),
 					...(diagnosticTarget ? { diagnosticTarget } : {}),
@@ -7659,6 +7669,29 @@ export class SessionManager {
 
 	private onPacket(meta: SessionMeta, worker: SessionWorker, packet: KernelPacket): void {
 		if (this.parked.has(worker)) return;
+		if (packet.type === "usage-history.epoch") {
+			if (this.workers.get(meta.id) !== worker) return;
+			void this.usageHistory.status().then(
+				({ generation, captureFloor, retentionFloor }) =>
+					worker.send({
+						type: "usage-history.epoch.result",
+						callId: packet.callId,
+						result: {
+							generation,
+							captureFloor,
+							retentionFloor,
+							mission: this.missions?.usageAttribution?.(meta.id),
+						},
+					}),
+				() =>
+					worker.send({
+						type: "usage-history.epoch.result",
+						callId: packet.callId,
+						error: "Usage history unavailable",
+					}),
+			);
+			return;
+		}
 		if (
 			packet.type === "accepted" &&
 			packet.delivery === "not_started" &&
@@ -7692,6 +7725,15 @@ export class SessionManager {
 		// Parking already detached this worker. Cleanup errors and late packets belong
 		// to its shutdown, not the session's completed work or a replacement worker.
 		if (this.parked.has(worker)) return;
+		if (packet.type === "usage-history") {
+			if (this.workers.get(meta.id) !== worker) return;
+			void this.usageHistory.put(packet.row).then(
+				(result) => worker.send({ type: "usage-history.result", callId: packet.callId, result }),
+				() =>
+					worker.send({ type: "usage-history.result", callId: packet.callId, error: "Usage history unavailable" }),
+			);
+			return;
+		}
 		if (
 			this.workers.get(meta.id) === worker &&
 			(packet.type === "ready" || packet.type === "usage" || packet.type === "modelChanged")

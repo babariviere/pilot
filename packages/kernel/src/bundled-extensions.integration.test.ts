@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -15,7 +16,9 @@ import {
 } from "@earendil-works/pi-ai";
 import { getPackageDir, ModelRuntime, SettingsManager, wrapRegisteredTool } from "@earendil-works/pi-coding-agent";
 import type { JsonObject } from "@earendil-works/pi-durable";
+import type { UsageObservation } from "@pilot/protocol";
 import { ANTHROPIC_AUTH_PATH, CHILD_PROFILE_PATH, installBundledAnthropicAuth } from "./bundled-extensions.ts";
+import { credentialEnvironment } from "./credential-client.ts";
 import { NativeAdapter } from "./native-adapter.ts";
 import { startTodoBridge } from "./todo-bridge.ts";
 import { createTodoTool } from "./todo-tool.ts";
@@ -208,6 +211,13 @@ test("real Build subagent inherits PR delivery, required auth and safeguards wit
 	const limitReported = new Promise<void>((resolve) => {
 		reported = resolve;
 	});
+	const accountingEpoch = { generation: randomUUID(), captureFloor: 0, retentionFloor: 0 };
+	const parent = { sourceId: randomUUID(), operationId: "tool:7" };
+	const usage = new Map<string, UsageObservation>();
+	let usageComplete!: () => void;
+	const usageCaptured = new Promise<void>((resolve) => {
+		usageComplete = resolve;
+	});
 	const bridge = await startTodoBridge(
 		async (args, actor) => applyTodo(todos, args, actor),
 		async (limit) => {
@@ -216,6 +226,12 @@ test("real Build subagent inherits PR delivery, required auth and safeguards wit
 			await savePolicy(true);
 			reported();
 		},
+		async (row) => {
+			usage.set(row.operationId, row);
+			if ([...usage.values()].filter((row) => row.kind === "request").length === 4) usageComplete();
+			return "stored";
+		},
+		async () => accountingEpoch,
 	);
 	t.after(() => bridge.close());
 	const installed = fileURLToPath(
@@ -255,12 +271,18 @@ export default pi => {
 		stdio: ["ignore", "ignore", "pipe", "ipc"],
 		env: {
 			...process.env,
+			...credentialEnvironment(undefined),
+			NODE_OPTIONS: undefined,
+			PILOT_CONNECTIVITY_POLICY: undefined,
 			PI_OFFLINE: "1",
 			PI_CODE_MODE_SUBAGENT: "1",
 			PI_SUBAGENT_HOST_PACKAGE_DIR: getPackageDir(),
 			PILOT_PI_EXTENSIONS_PROFILE: CHILD_PROFILE_PATH,
 			PILOT_ANTHROPIC_AUTH_EXTENSION: ANTHROPIC_AUTH_PATH,
 			PILOT_SUBSCRIPTION_POLICY: policy,
+			PILOT_USAGE_HISTORY: JSON.stringify({ ...accountingEpoch, attribution: { chatId: randomUUID() } }),
+			PILOT_USAGE_STORAGE: join(f.root, "child-storage"),
+			PILOT_USAGE_PARENT: JSON.stringify(parent),
 			PILOT_CONTROL_PERMISSION: JSON.stringify({ authorizationId: "child-grant", level: "implement" }),
 		},
 	});
@@ -344,6 +366,20 @@ export default pi => {
 	);
 	assert.ok(todos[0].assigned_to_session);
 	await packet("stopped", "stop");
+	await usageCaptured;
+	const requests = [...usage.values()].filter((row) => row.kind === "request");
+	assert.equal(requests.length, 4, "the rejected response and its retried invocation have separate identities");
+	assert.equal(
+		new Set(requests.map((row) => row.sourceId)).size,
+		1,
+		"the original child source survives tool rounds and follow-ups",
+	);
+	assert.notEqual(requests[0]!.sourceId, parent.sourceId);
+	for (const row of requests) {
+		assert.deepEqual(row.parent, parent);
+		assert.deepEqual(row.physicalModel, { provider: "openai-codex", model: "offline" });
+		assert.ok(row.tokens);
+	}
 	child.send({ type: "pause" });
 	await packet("paused");
 	await closed;

@@ -6,11 +6,13 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { OfflineGate, offlineRequestStream } from "./connectivity.ts";
 import { installCredentialBrokerHooks } from "./credential-hooks.ts";
 import { subscriptionRecovery } from "./subscription-limit.ts";
-import { callParentSubscriptionLimit, callParentTodo } from "./todo-bridge.ts";
+import { callParentSubscriptionLimit, callParentTodo, callParentUsage, callParentUsageEpoch } from "./todo-bridge.ts";
 import { createTodoTool } from "./todo-tool.ts";
 import { inheritedControlPermission, nativeToolPolicy } from "./tool-policy.ts";
+import { installChildUsageCapture, observeChildUsageStreams } from "./usage-capture.ts";
 
 export default async function childProfile(pi: ExtensionAPI): Promise<void> {
+	installChildUsageCapture(callParentUsage, callParentUsageEpoch);
 	nativeToolPolicy(inheritedControlPermission(process.env.PILOT_CONTROL_PERMISSION))(pi);
 	await installCredentialBrokerHooks();
 	for (const name of ["sandbox", "apply-patch", "web", "browser"]) {
@@ -24,6 +26,7 @@ export default async function childProfile(pi: ExtensionAPI): Promise<void> {
 		// Child adapters dispatch through this public registry. Keep the immutable shared
 		// extension dependency unchanged, and gate only requests, not native tool execution.
 		const registry = ctx.modelRegistry;
+		observeChildUsageStreams(registry);
 		const gate = new OfflineGate();
 		const subscription = new SubscriptionGate();
 		const reportLimit = process.env.PILOT_TODO_BRIDGE ? callParentSubscriptionLimit : undefined;

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +16,7 @@ import {
 import { calculateContextTokens, estimateMessageTokens } from "@earendil-works/pi-ai/utils/estimate";
 import { createEventBus, type ExtensionFactory, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { AssistantEntry, createRegistry, Harness, MemoryStorage, UserEntry } from "@earendil-works/pi-durable";
+import type { UsageObservation } from "@pilot/protocol";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import { KernelSession } from "./session.ts";
 import type { KernelUsage } from "./usage.ts";
@@ -285,6 +287,16 @@ test("KernelSession exposes startup usage for ready and publishes committed fina
 		}),
 	);
 	const changes: KernelUsage[] = [];
+	const captured = new Map<string, UsageObservation>();
+	let capturedRequest!: () => void;
+	const requestCaptured = new Promise<void>((resolve) => {
+		capturedRequest = resolve;
+	});
+	const reportUsageHistory = async (row: UsageObservation) => {
+		captured.set(row.operationId, structuredClone(row));
+		if (row.kind === "request") capturedRequest();
+		return "stored" as const;
+	};
 	const working: boolean[] = [];
 	let usageChanged: ((usage: KernelUsage) => void) | undefined;
 	let settle!: () => void;
@@ -292,12 +304,14 @@ test("KernelSession exposes startup usage for ready and publishes committed fina
 		settle = resolve;
 	});
 	const spec = {
-		sessionId: "offline-usage",
+		sessionId: randomUUID(),
+		usageHistory: { generation: randomUUID(), captureFloor: 0, retentionFloor: 0 },
 		cwd: f.root,
 		agentDir: f.options.agentDir,
 		storageDir: join(f.root, "storage"),
 	};
 	const session = await KernelSession.open(spec, {
+		reportUsageHistory,
 		onUsageChanged: (usage) => {
 			changes.push(usage);
 			usageChanged?.(usage);
@@ -340,6 +354,12 @@ test("KernelSession exposes startup usage for ready and publishes committed fina
 	assert.ok(tokens > 0);
 	// Lifecycle notification precedes the same batch's asynchronous usage refresh.
 	await waitForTokens(tokens);
+	await requestCaptured;
+	const capturedRow = [...captured.values()].find((row) => row.kind === "request")!;
+	assert.equal(capturedRow.coverage, "committed");
+	assert.equal(capturedRow.physicalModel?.provider, provider);
+	assert.equal(capturedRow.tokens?.output, final.usage.output);
+	assert.equal(capturedRow.attribution?.chatId, spec.sessionId);
 	assertBaseUsage(session.usage, {
 		provider,
 		context: { tokens, contextWindow, percent: (tokens / contextWindow) * 100 },
@@ -358,6 +378,7 @@ test("KernelSession exposes startup usage for ready and publishes committed fina
 	// Ready usage is reconstructed from committed history, without another model call.
 	await session.close();
 	const restored = await KernelSession.open(spec, {
+		reportUsageHistory,
 		onWorking: () => {},
 		onUsageChanged: (usage) => changes.push(usage),
 	});
@@ -369,4 +390,5 @@ test("KernelSession exposes startup usage for ready and publishes committed fina
 	});
 	assert.equal(restored.usage.accounting?.direct.activity.count, 1);
 	assert.equal(f.faux.state.callCount, 1, "restoring ready usage never invokes a model");
+	assert.equal([...captured.values()].filter((row) => row.kind === "request").length, 1);
 });

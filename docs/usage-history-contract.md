@@ -146,6 +146,41 @@ delete/clear fencing and checkpoint/detail/child overlap. TS/PilotCore JSON pari
 Capture adapters must separately prove lifecycle recovery through replay, fork, reset, compaction, park and restart.
 Store tests alone do not prove those capture seams or complete historical coverage.
 
+### Kernel source adapter
+
+The kernel observes the existing physical registry stream, inside native offline/subscription retries, without
+changing model/auth/options resolution. Task wrappers carry structured purpose and conversation/run identity, and
+observe successful UsageDoc commits. Numeric direct/child UsageDoc checkpoints remain a separate reconciliation
+view. Detailed raw responses remain `partial` until matching ledger contributions are observed; they never replace
+UsageDoc or get added to a parent tool's overlapping checkpoint. New physical invocations have distinct operations.
+Already-scheduled deferred fetch/cancel operations reuse the original identity and never introduce new polling.
+Request estimates retain their capture-time catalog revision; historical UsageDoc checkpoint estimates use the
+explicit `UsageDoc:unversioned` marker because the source has no original pricing revision, rather than claiming the
+current catalog produced old totals.
+
+Each runtime owns one `usage-capture.json` source outbox beside its durable storage, private mode 0600, at most 32
+records / 132 KiB and one bounded `.pending` crash remnant. Asynchronous fsync/rename persists source and operation
+identity before dispatch. This source file is independent of Harness storage: capture I/O failures cannot fail
+the agent's storage, retry work or change dispatch. Full outboxes omit new detail instead of blocking work, so
+coverage stays partial. Publication is asynchronous and acknowledged; a lost acknowledgement replays the same
+source/operation/revision, with no transcript scan. Retention/capture floors apply on new capture; recovered source
+evidence keeps its original epoch, date and attribution and cannot be transplanted into an erased epoch.
+Runtime source evidence, like UsageDoc, is not part of the dashboard's erasable materialization.
+
+Child profiles observe their existing request path and publish through the private parent bridge. Their own source
+UUID and original parent reference survive worker replacement. Forks reuse existing source evidence rather than
+charging inherited requests again. Attempt/run UUIDs encode source-owned durable conversation/input identities,
+not titles or current model settings. Mission `homeId` is the canonical home's daemon UUID, paired with its lineage,
+never an execution-host alias. Unavailable policy revisions, prices, dates, retry detail and timing remain absent.
+Deterministic compactions are non-additive activity checkpoints with no inferred token/cost contribution.
+
+Offscreen faux source-overhead probe (not a release pass): three serial fresh pairs, 36 zero-latency responses per
+variant, 400 seeded entries (about 700 KiB), real runtime SQLite plus the candidate source file. Including source
+publication/acknowledgement drain, baseline median/p95 was 5.0/10.6 ms and capture was 46.6/133.1 ms. Durable source
+writes dominate an instantaneous faux response, and the tail is a verification risk, not a provider-latency or UI
+claim. This did not measure daemon RSS/event-loop p99, live providers, installed packaging or on-screen smoothness;
+the unchanged 16 MiB gate and dashboard release verification remain separate and unresolved.
+
 Before dashboard release measure faux large retained histories and streaming versus baseline: p95 bounded page
 query <=50ms and <=512KiB; no new uninterrupted main-thread accounting task >10ms; event-loop p99 regression
 <=5ms and peak RSS regression <=16MiB. These are acceptance budgets, not measured results. On-screen UI performance

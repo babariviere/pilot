@@ -191,7 +191,11 @@ export function runKernelWorker(): void {
 	const send = (packet: KernelPacket) => sender.send(packet);
 	// Notification hooks cannot await. Their retention is still bounded by the same FIFO.
 	const notify = (packet: KernelPacket) => void send(packet).catch(() => undefined);
-	const callDaemon = <T>(packet: (callId: string) => KernelPacket, signal?: AbortSignal): Promise<T> =>
+	const callDaemon = <T>(
+		packet: (callId: string) => KernelPacket,
+		signal?: AbortSignal,
+		notifyCancellation = true,
+	): Promise<T> =>
 		new Promise<T>((resolve, reject) => {
 			const callId = randomUUID();
 			if (signal?.aborted) {
@@ -201,7 +205,7 @@ export function runKernelWorker(): void {
 			const cancel = () => {
 				daemonCalls.get(callId)?.reject(new Error("Diagnostic read cancelled"));
 				daemonCalls.delete(callId);
-				void send({ type: "diagnostics.context.cancel", callId }).catch(() => undefined);
+				if (notifyCancellation) void send({ type: "diagnostics.context.cancel", callId }).catch(() => undefined);
 			};
 			const timer = setTimeout(() => {
 				signal?.removeEventListener("abort", cancel);
@@ -432,6 +436,8 @@ export function runKernelWorker(): void {
 			command.type === "diagnostics.logs.result" ||
 			command.type === "diagnostics.proposal.result" ||
 			command.type === "subscription.limit.result" ||
+			command.type === "usage-history.result" ||
+			command.type === "usage-history.epoch.result" ||
 			command.type === "artifact.reference.result"
 		) {
 			const call = daemonCalls.get(command.callId);
@@ -479,6 +485,9 @@ export function runKernelWorker(): void {
 		if (command.type === "start") {
 			if (initialization) return;
 			initialization = (async () => {
+				// Do not inherit another worker's accounting epoch in tests or delegated launches.
+				delete process.env.PILOT_USAGE_HISTORY;
+				delete process.env.PILOT_USAGE_PARENT;
 				if (command.spec.telemetry) configureTelemetry(command.spec.telemetry);
 				const { credentialEnvironment } = await import("./credential-client.ts");
 				for (const [key, value] of Object.entries(credentialEnvironment(command.spec.credentials))) {
@@ -523,6 +532,9 @@ export function runKernelWorker(): void {
 					onToolsRunningChanged: (running) => notify({ type: "tools.running", running }),
 					onTodosChanged: (openCount) => notify({ type: "todos.changed", openCount }),
 					onUsageChanged: (usage) => notify({ type: "usage", usage }),
+					reportUsageHistory: (row) => callDaemon((callId) => ({ type: "usage-history", callId, row })),
+					acquireUsageEpoch: () =>
+						callDaemon((callId) => ({ type: "usage-history.epoch", callId }), AbortSignal.timeout(100), false),
 					reportSubscriptionLimit: (limit) =>
 						callDaemon<void>((callId) => ({ type: "subscription.limit", callId, limit })),
 					onArtifactsChanged: () => notify({ type: "artifacts.changed" }),

@@ -129,6 +129,9 @@ export interface KernelSubagent extends SessionSubagent {
 }
 
 export interface KernelSpec {
+	/** Local accounting epoch, never telemetry or provider options. */
+	usageHistory?: import("./usage-capture.ts").UsageCaptureEpoch;
+	usageMission?: NonNullable<import("@pilot/protocol").UsageObservation["attribution"]>["mission"];
 	control?: boolean;
 	/** Runtime-enforced specialist profile. Omitted for ordinary Build and Ask sessions. */
 	role?: "diagnostics";
@@ -271,6 +274,18 @@ export type KernelCommand =
 	/** Whether the chat is attached to a Slack triage message, which declares or withdraws `slack_status`. */
 	| { type: "slack.linked"; linked: boolean }
 	| { type: "subscription.limit.result"; callId: string; error?: string }
+	| {
+			type: "usage-history.result";
+			callId: string;
+			result?: import("@pilot/protocol").UsageHistoryWriteResult;
+			error?: string;
+	  }
+	| {
+			type: "usage-history.epoch.result";
+			callId: string;
+			result?: import("./usage-capture.ts").UsageCaptureEpoch;
+			error?: string;
+	  }
 	| { type: "artifact.reference.result"; callId: string; result?: Omit<ArtifactRevision, "html">; error?: string }
 	| { type: "workspace.prepared"; callId: string; workspace?: WorkspaceContext }
 	| { type: "update.pause"; id: string }
@@ -310,6 +325,8 @@ export type KernelPacket =
 	| { type: "tools.running"; running: boolean }
 	| { type: "todos.changed"; openCount: number }
 	| { type: "usage"; usage: KernelUsage }
+	| { type: "usage-history"; callId: string; row: import("@pilot/protocol").UsageObservation }
+	| { type: "usage-history.epoch"; callId: string }
 	/** Confirm a provider-reported usage hold before retrying only its pending request. */
 	| { type: "subscription.limit"; callId: string; limit: import("./subscription-limit.ts").SubscriptionLimitReport }
 	| { type: "children"; requestId: string; hasChildren: boolean }
