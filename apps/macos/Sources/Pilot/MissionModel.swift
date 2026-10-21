@@ -92,7 +92,7 @@ extension AppModel {
         let key = ref.map { qualified || $0.host != localHost ? $0.storageKey : $0.localId } ?? id
         hosts.selection = ref?.host == localHost ? nil : ref
         showingArchive = false
-        showingInbox = false
+        showingUsage = false; showingInbox = false
         clearProjectSubpage()
         selectedSessionId = nil
         selectedProjectId = nil

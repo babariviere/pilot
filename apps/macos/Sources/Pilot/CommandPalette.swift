@@ -242,6 +242,9 @@ struct CommandPaletteCatalog {
             CommandPaletteEntry(item: CommandPaletteItem(id: "page:inbox", kind: .page, title: "Inbox", suggested: true),
                                 icon: .inbox) { [model] in model.showInbox() },
         ]
+        entries.append(CommandPaletteEntry(
+            item: CommandPaletteItem(id: "page:usage", kind: .page, title: "Usage", suggested: true),
+            icon: .activity, detail: "Observed Local usage") { [model] in model.showUsage() })
         let projects = model.orderedProjects
         for project in projects.filter({ $0.id == focused }) + projects.filter({ $0.id != focused }) {
             entries.append(CommandPaletteEntry(

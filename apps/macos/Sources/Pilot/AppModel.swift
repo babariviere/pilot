@@ -90,6 +90,7 @@ final class AppModel: ObservableObject {
                 }
             }
             guard selectedSessionId != nil else { return }
+            showingUsage = false
             if selectedMissionId != nil { selectedMissionId = nil }
             if selectedProjectId != nil { selectedProjectId = nil }
         }
@@ -99,6 +100,7 @@ final class AppModel: ObservableObject {
         didSet {
             beginNavigation()
             defer { endNavigation() }
+            if selectedMissionId != nil { showingUsage = false }
             if selectedMissionId != nil, selectedProjectId != nil { selectedProjectId = nil }
         }
     }
@@ -107,6 +109,7 @@ final class AppModel: ObservableObject {
         didSet {
             beginNavigation()
             defer { endNavigation() }
+            if selectedProjectId != nil { showingUsage = false }
             if selectedProjectId != nil, selectedMissionId != nil { selectedMissionId = nil }
             if selectedProjectId != slackTriageProjectId, slackTriageProjectId != nil { slackTriageProjectId = nil }
             if selectedProjectId != memoryProjectId, memoryProjectId != nil { memoryProjectId = nil }
@@ -168,7 +171,8 @@ final class AppModel: ObservableObject {
     @Published var showingArchive = false
     /// The Inbox page: what waits on the user across every project. Below chats, missions and project pages.
     @Published var showingInbox = false
-    /// The Control screen: the control chat's memory, log, watches and health. Global, like the Inbox.
+    /// Local-only usage, independent of the focused project.
+    @Published var showingUsage = false
     /// The Inbox's project filter (nil lists every project). Preset to the focused project each time the Inbox
     /// opens, and never saved.
     @Published var inboxProjectId: String?
@@ -543,7 +547,7 @@ final class AppModel: ObservableObject {
         beginNavigation()
         defer { endNavigation() }
         hosts.selection = nil
-        showingArchive = false; showingInbox = false
+        showingArchive = false; showingUsage = false; showingInbox = false
         selectedSessionId = nil; selectedMissionId = nil; selectedProjectId = nil
         return true
     }
@@ -731,7 +735,7 @@ final class AppModel: ObservableObject {
         else if projectId != nil { newSessionForm.executionHost = localHost }
         hosts.selection = nil
         showingArchive = false
-        showingInbox = false
+        showingUsage = false; showingInbox = false
         if projectId != nil || message != nil { newSessionForm.mission = nil }
         let fresh = message != nil || !newSessionForm.hasUnsubmittedDraft
         if let projectId, draftProjectId != projectId {
@@ -874,7 +878,7 @@ final class AppModel: ObservableObject {
         archiveProjectId = projectId
         chooseArchiveMission(missionId)
         showingArchive = true
-        showingInbox = false
+        showingUsage = false; showingInbox = false
         selectedSessionId = nil
         selectedMissionId = nil
         selectedProjectId = nil
@@ -892,6 +896,7 @@ final class AppModel: ObservableObject {
         selectedMissionId = nil
         selectedProjectId = nil
         inboxProjectId = projectId ?? focusedProject?.id
+        showingUsage = false
         showingInbox = true
     }
 
@@ -913,7 +918,7 @@ final class AppModel: ObservableObject {
         }
         hosts.selection = nil
         showingArchive = false
-        showingInbox = false
+        showingUsage = false; showingInbox = false
         selectedSessionId = nil
         // Local pages select the plain project id, even when given a qualified key.
         selectedProjectId = ref?.localId ?? id
@@ -1067,6 +1072,7 @@ final class AppModel: ObservableObject {
         if let id = selectedSessionId { return .session(id) }
         if let id = selectedMissionId { return .mission(id) }
         if let id = selectedProjectId { return .project(id) }
+        if showingUsage { return .usage }
         if showingInbox { return .inbox }
         if showingArchive { return .archive(projectId: archiveProjectId, missionId: archiveMissionId) }
         return .home
@@ -1137,7 +1143,7 @@ final class AppModel: ObservableObject {
         switch selection {
         case .home:
             showingArchive = false
-            showingInbox = false
+            showingUsage = false; showingInbox = false
             selectedSessionId = nil
             selectedMissionId = nil
             selectedProjectId = nil
@@ -1151,6 +1157,8 @@ final class AppModel: ObservableObject {
             openProject(id)
         case let .archive(projectId, missionId):
             showArchive(in: projectId, missionId: missionId)
+        case .usage:
+            showUsage()
         case .inbox:
             showInbox()
         }
@@ -1498,7 +1506,7 @@ extension AppModel {
         saveSidebarScope()
         hosts.selection = nil
         showingArchive = false
-        showingInbox = false
+        showingUsage = false; showingInbox = false
         selectedSessionId = nil
         selectedMissionId = nil
         selectedProjectId = nil
@@ -1521,6 +1529,8 @@ extension AppModel {
             archiveProjectId = projectId
             archiveMissionId = missionId
             showingArchive = true
+        case .usage:
+            showUsage()
         case .inbox:
             showInbox(for: location.inboxProjectId, context: context)
             inboxProjectId = location.inboxProjectId
@@ -1535,7 +1545,7 @@ extension AppModel {
         case let .session(id): return canRestoreSessionSelection(id) && navigationResourceExists(id, kind: .session)
         case let .mission(id): return navigationResourceExists(id, kind: .mission)
         case let .project(id): return navigationResourceExists(id, kind: .project)
-        case .home, .inbox, .archive: return true
+        case .home, .inbox, .usage, .archive: return true
         }
     }
 

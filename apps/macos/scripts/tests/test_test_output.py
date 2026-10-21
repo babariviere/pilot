@@ -65,11 +65,16 @@ REGRESSION_PARTITIONS = [
     ["settingsSaveBarMountsForDirtyFormAndLeavesAfterRevert"],
     ["visualSliderDragsCoalesceToOneHandlerInFlightEndingAtTheLastPosition", "visualDiscreteEventsRunInOrder",
      "missionNavigationAndPaletteKeepCanonicalPinsAcrossExecutionChangesAndReconnect",
-     "sidebarPollsOnlyBranchesAndLoadsCountsOnDemand", USAGE_PROJECTION]
+     "sidebarPollsOnlyBranchesAndLoadsCountsOnDemand", USAGE_PROJECTION,
+     "usageDashboardLocalOnlyCacheAndPagesNeverAddCheckpointOrRepeatedTotals",
+     "usageDashboardUnsupportedCapacityErrorsAndAmbiguousLocalAreNotZero",
+     "usageDashboardStaleScopeAndConnectionResponsesCannotRepaintOrReuseCache",
+     "usageDashboardNavigationIsAvailableWithoutConfiguration"]
 ]
 REGRESSION_OUTPUTS = [STARTED + "".join(f"◇ Test {name}() started.\n" for name in names) + PASSED
                       for names in REGRESSION_PARTITIONS]
 NATIVE_POINTERS = [
+    "usageDashboardMountedControlsReadLocalRangesFoldAndPageInBothAppearances",
     "diagnoseSetupSubmitsReasonOrBlankThroughMountedControls",
     "diagnoseReasonBoundsApplyToButtonAndKeyboardAndCancelStartsNothing",
     "diagnoseStartErrorKeepsReasonForKeyboardRetryAndAskStillSubmits",

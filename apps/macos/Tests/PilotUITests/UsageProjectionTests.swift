@@ -87,6 +87,16 @@ func usageLocalConsumerNeverFansOutAndDeferredHelperRequiresExplicitHosts() asyn
     #expect(!paths.contains { $0 == "old:GET:/api/usage-history/query" || $0 == "changed:GET:/api/usage-history/query" })
     #expect(paths.allSatisfy { $0.contains(":GET:") && ($0.hasSuffix("/api/hello") || $0.hasSuffix("/api/usage-history/query")) })
     let localRef = try #require(refs["local"])
+    #expect(try hosts.localUsageToken(for: localRef).host == localRef)
+    #expect(throws: HostRoutingError.identityChanged) { try hosts.localUsageToken(for: alias) }
+    let secondLocal = HostRef(hostId: "local", daemonId: "replacement", lineageId: "lineage")
+    let replacement = PilotClient(baseURL: URL(string: "http://replacement.usage.invalid"), commandConfiguration: configuration)
+    replacement.loadFixture(projects: [], sessions: [])
+    UsageProjectionHTTP.reset()
+    #expect(throws: HostRoutingError.identityChanged) { try hosts.install(replacement, host: secondLocal) }
+    #expect(throws: HostRoutingError.identityChanged) { try hosts.localUsageToken(for: secondLocal) }
+    #expect(try hosts.localUsageToken(for: localRef).host == localRef)
+    #expect(UsageProjectionHTTP.paths.isEmpty)
     await hosts.disconnect(localRef)
     UsageProjectionHTTP.reset()
     do {

@@ -1,0 +1,268 @@
+import Foundation
+import Combine
+import PilotCore
+import SwiftUI
+
+extension AppModel {
+    func showUsage() {
+        beginNavigation()
+        defer { endNavigation() }
+        hosts.selection = nil
+        showingArchive = false; showingInbox = false
+        selectedSessionId = nil; selectedMissionId = nil; selectedProjectId = nil
+        clearProjectSubpage()
+        showingUsage = true
+    }
+}
+
+struct UsageTrendPoint: Identifiable, Sendable {
+    let milliseconds: Double
+    let tokens: Double?
+    var id: Double { milliseconds }
+    var date: Date { Date(timeIntervalSince1970: milliseconds / 1000) }
+}
+
+@MainActor final class UsageDashboardModel: ObservableObject {
+    enum State: Equatable { case idle, loading, ready, unavailable(String), failed }
+    enum Detail: Equatable {
+        case overview
+        case breakdown(String, after: String? = nil)
+        case records(String, after: String? = nil)
+    }
+    struct Scope: Equatable {
+        let window: UsageDashboardWindow
+        var filters: UsageQueryFilters?
+    }
+    typealias LocalRead = @MainActor (UsageAnalyticsQuery) async throws -> UsageConnectedProjection
+    typealias PageRead = @MainActor (UsageHistoryQuery, HostRef) async throws -> UsageHistoryPage
+    typealias TokenRead = @MainActor (HostRef) -> HostConnectionToken?
+    typealias LabelsRead = @MainActor (HostRef, String, [String]) async -> [String: String]
+
+    @Published private(set) var state: State = .idle
+    @Published private(set) var summary: UsageAnalyticsResult?
+    @Published private(set) var trend: [UsageTrendPoint] = []
+    @Published private(set) var trendFailed = false
+    @Published private(set) var trendLoading = false
+    @Published private(set) var detail: Detail = .overview
+    @Published private(set) var groups: UsageAnalyticsResult?
+    @Published private(set) var groupNames: [String: String] = [:]
+    @Published private(set) var page: UsageHistoryPage?
+    @Published private(set) var detailLoading = false
+    @Published private(set) var detailFailed = false
+    @Published private(set) var scope: Scope?
+    @Published private(set) var subscriptions: [SubscriptionUsage] = []
+    private(set) var localHost: HostRef?
+    private let read: LocalRead
+    private let readPage: PageRead
+    private let token: TokenRead
+    private let snapshots: @MainActor (HostRef) async -> [SubscriptionUsage]
+    private let labels: LabelsRead
+    private var anchor: HostConnectionToken?
+    private var revision = UUID()
+    private var detailRevision = UUID()
+    private var overviewTask: Task<Void, Never>?
+    private var detailTask: Task<Void, Never>?
+    private var hostObservation: AnyCancellable?
+    private var connectionCheckScheduled = false
+    // Only the active scope, at most five first pages of ten groups. No disk/stale fallback cache.
+    private var breakdowns: [String: UsageAnalyticsResult] = [:]
+    private var breakdownNames: [String: [String: String]] = [:]
+
+    init(read: @escaping LocalRead, page: @escaping PageRead, token: @escaping TokenRead,
+         snapshots: @escaping @MainActor (HostRef) async -> [SubscriptionUsage] = { _ in [] },
+         labels: @escaping LabelsRead = { _, _, _ in [:] }) {
+        self.read = read; readPage = page; self.token = token
+        self.snapshots = snapshots; self.labels = labels
+    }
+
+    convenience init(hosts: ClientDirectory) {
+        self.init(read: { try await hosts.localUsage($0) },
+                  page: { try await hosts.usagePage($0, on: $1) },
+                  token: { try? hosts.localUsageToken(for: $0) }, snapshots: { host in
+                      let sessions = (try? hosts.endpoint(host).sessions) ?? []
+                      return await Task.detached(priority: .utility) { HomeStatus.subscriptions(sessions) }.value
+                  }, labels: { host, dimension, keys in
+                      guard dimension == "project" || dimension == "chat", let client = try? hosts.endpoint(host) else { return [:] }
+                      let projects = client.projects, chats = client.sessions
+                      return await Task.detached(priority: .utility) {
+                          var names: [String: String] = [:]
+                          for key in keys {
+                              guard let data = key.data(using: .utf8), let id = try? JSONDecoder().decode(String.self, from: data) else { continue }
+                              if dimension == "project" { names[key] = projects.first { $0.id.lowercased() == id }?.name }
+                              else { names[key] = chats.first { $0.id.lowercased() == id }?.title }
+                          }
+                          return names
+                      }.value
+                  })
+        // Invalidate on endpoint events, without rereading history or polling. objectWillChange precedes
+        // mutation, so defer the small identity check to the next main-actor turn.
+        hostObservation = hosts.objectWillChange.sink { [weak self] _ in
+            MainActor.assumeIsolated { self?.scheduleConnectionCheck() }
+        }
+    }
+
+    func refresh(_ scope: Scope, force: Bool = false) {
+        if !force, self.scope == scope, state == .loading { return } // Coalesce identical in-flight controls.
+        if !force, self.scope == scope, state == .ready, current { return }
+        stop()
+        self.scope = scope
+        summary = nil; trend = []; trendFailed = false; trendLoading = false; groups = nil; page = nil
+        breakdowns = [:]; breakdownNames = [:]; groupNames = [:]
+        anchor = nil; localHost = nil; detail = .overview; subscriptions = []
+        state = .loading
+        let request = revision
+        overviewTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                // Scope changes coalesce before any expensive storage query, never on repaint/timer.
+                try await Task.sleep(for: .milliseconds(180))
+                let projection = try await read(query(scope))
+                try Task.checkCancellation()
+                guard revision == request else { return }
+                guard projection.omittedHosts == 0, projection.hosts.count == 1,
+                      let host = projection.hosts.first, host.host.hostId == "local" else {
+                    state = .unavailable("Pinned Local identity unavailable or ambiguous."); return
+                }
+                guard host.state == "fresh", let result = host.result else {
+                    state = .unavailable(Self.unavailable(host.state)); return
+                }
+                guard let connection = token(host.host) else { state = .unavailable(Self.unavailable("disconnected")); return }
+                localHost = host.host; anchor = connection; summary = result
+                trendLoading = true
+                state = .ready
+                do {
+                    let buckets = try await read(query(scope, view: "buckets", bucket: 86_400_000, limit: 400))
+                    try Task.checkCancellation()
+                    guard revision == request else { return }
+                    guard let values = accept(buckets) else { return }
+                    let points = await Task.detached(priority: .utility) {
+                        values.groups.compactMap { group -> UsageTrendPoint? in
+                            guard let date = Double(group.key) else { return nil }
+                            return UsageTrendPoint(milliseconds: date, tokens: UsageDashboardPresentation.inputOutput(group.aggregate))
+                        }
+                    }.value
+                    guard revision == request else { return }
+                    guard current else { invalidate(); return }
+                    trend = points
+                } catch {
+                    guard revision == request, !Task.isCancelled else { return }
+                    trendFailed = true
+                }
+                trendLoading = false
+                let cached = await snapshots(host.host)
+                guard revision == request else { return }
+                guard current else { invalidate(); return }
+                subscriptions = cached
+            } catch {
+                guard revision == request, !Task.isCancelled else { return }
+                if error is HostRoutingError { state = .unavailable("Pinned Local is unavailable. No other host was queried.") }
+                else { state = .failed }
+            }
+        }
+    }
+
+    func show(_ selection: Detail, force: Bool = false) {
+        detailTask?.cancel(); detailRevision = UUID()
+        detail = selection; groups = nil; groupNames = [:]; page = nil; detailFailed = false; detailLoading = false
+        guard selection != .overview, let scope, let host = localHost, current else {
+            if selection != .overview { invalidate() }
+            return
+        }
+        if case let .breakdown(dimension, after) = selection, after == nil, !force, let cached = breakdowns[dimension] {
+            groups = cached; groupNames = breakdownNames[dimension] ?? [:]; return
+        }
+        let request = revision, subrequest = detailRevision
+        detailLoading = true
+        detailTask = Task { [weak self] in
+            guard let self else { return }
+            defer { if detailRevision == subrequest { detailLoading = false } }
+            do {
+                try await Task.sleep(for: .milliseconds(180))
+                guard current else { invalidate(); return }
+                switch selection {
+                case .overview: break
+                case let .breakdown(dimension, after):
+                    guard Self.dimensions.contains(dimension) else { detailFailed = true; return }
+                    let projection = try await read(query(scope, view: "breakdown", dimension: dimension, limit: 10, after: after))
+                    try Task.checkCancellation()
+                    guard revision == request, detailRevision == subrequest else { return }
+                    guard let result = accept(projection) else { return }
+                    let names = await labels(host, dimension, result.groups.map(\.key))
+                    guard revision == request, detailRevision == subrequest else { return }
+                    guard current else { invalidate(); return }
+                    groups = result; groupNames = names
+                    if after == nil { breakdowns[dimension] = result; breakdownNames[dimension] = names }
+                case let .records(kind, after):
+                    guard kind == "request" || kind == "checkpoint" else { detailFailed = true; return }
+                    let result = try await readPage(.init(kind: kind, from: scope.window.from, to: scope.window.to,
+                                                         limit: 25, after: after, filters: scope.filters), host)
+                    try Task.checkCancellation()
+                    guard revision == request, detailRevision == subrequest else { return }
+                    guard current, result.status.generation == summary?.status.generation else { invalidate(); return }
+                    page = result // Replace, never sum repeated totals or retain an unbounded list of pages.
+                }
+            } catch {
+                guard revision == request, detailRevision == subrequest, !Task.isCancelled else { return }
+                if !current { invalidate() } else { detailFailed = true }
+            }
+        }
+    }
+
+    static let dimensions = ["project", "mission", "chat", "physicalModel", "purpose"]
+
+    func connectionChanged() {
+        if summary != nil, !current { invalidate() }
+    }
+
+    private func scheduleConnectionCheck() {
+        guard !connectionCheckScheduled else { return }
+        connectionCheckScheduled = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            connectionCheckScheduled = false
+            connectionChanged()
+        }
+    }
+
+    func stop() {
+        overviewTask?.cancel(); detailTask?.cancel()
+        revision = UUID(); detailRevision = UUID(); detailLoading = false
+    }
+
+    private var current: Bool {
+        guard let host = localHost, let anchor else { return false }
+        return host.hostId == "local" && token(host) == anchor
+    }
+
+    private func invalidate() {
+        stop(); summary = nil; groups = nil; groupNames = [:]; page = nil; trend = []; breakdowns = [:]; breakdownNames = [:]
+        trendLoading = false; subscriptions = []
+        state = .unavailable("Local connection or history changed. Refresh to read the current retained view.")
+    }
+
+    private func accept(_ projection: UsageConnectedProjection) -> UsageAnalyticsResult? {
+        guard current, projection.omittedHosts == 0, projection.hosts.count == 1,
+              let value = projection.hosts.first, value.host == localHost, value.state == "fresh",
+              let result = value.result, result.status.generation == summary?.status.generation else {
+            invalidate(); return nil
+        }
+        return result
+    }
+
+    private func query(_ scope: Scope, view: String = "summary", dimension: String? = nil,
+                       bucket: Int? = nil, limit: Int? = nil, after: String? = nil) -> UsageAnalyticsQuery {
+        .init(from: scope.window.from, to: scope.window.to, filters: scope.filters,
+              view: view, dimension: dimension, bucketMs: bucket, limit: limit, after: after)
+    }
+
+    private static func unavailable(_ state: String) -> String {
+        switch state {
+        case "unsupported": "Local does not support usage queries version 1. Usage is unknown, not zero."
+        case "limited": "Local query capacity reached. Try Refresh later."
+        case "disconnected": "Local is disconnected. No other host was queried."
+        default: "Local accounting is unavailable. Missing evidence is not zero."
+        }
+    }
+
+    deinit { overviewTask?.cancel(); detailTask?.cancel() }
+}

@@ -4,6 +4,7 @@ import PilotCore
 /// Forward use NavigationHistory, which also restores the sidebar scope.
 enum AppRoute: Hashable {
     case home
+    case usage
     case inbox(projectId: String?)
     case archive(projectId: String?, missionId: String?)
     case project(String)
@@ -16,6 +17,7 @@ enum AppRoute: Hashable {
     var key: String {
         switch self {
         case .home: "home"
+        case .usage: "usage"
         case let .inbox(projectId): "inbox:\(projectId ?? "")"
         case let .archive(projectId, missionId): "archive:\(projectId ?? ""):\(missionId ?? "")"
         case let .project(id): "project:\(id)"
@@ -38,6 +40,7 @@ extension AppModel {
             if memoryProjectId == id { return .memory(id) }
             return .project(id)
         }
+        if showingUsage { return .usage }
         if showingInbox { return .inbox(projectId: inboxProjectId) }
         if showingArchive { return .archive(projectId: archiveProjectId, missionId: archiveMissionId) }
         return .home

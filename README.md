@@ -26,6 +26,10 @@ Critical code review is not available yet. The disabled [review foundation](docs
 has separate storage, transport contracts and a synthetic-only committed-history capture seam;
 it does not change chat-result read tracking or enable review entry points.
 
+The native [Local usage dashboard](docs/usage-dashboard.md) is available in the sidebar, Go menu and command
+palette. It shows observed Local token/cache usage and catalog estimates, not billing. Composer usage is
+unchanged; outstanding accounting memory and release verification is documented separately.
+
 - **Run several agents at once.** Follow progress across projects, send follow-ups, queue messages or stop
   a run. Every session has its own worker process.
 - **Choose pi’s scoped models.** Settings → Scoped models has a searchable multi-select and an All option.

@@ -24,10 +24,10 @@ source/mission provenance remain unchanged. Nothing changes unrelated devbox beh
 - `UsageConnectedProjection`: a bounded response envelope; the active Local consumer returns one Local
   host, never an aggregate over connected hosts.
 
-Call **`HostClients.localUsage(query)`** on explicit refresh or scope changes, not from a view body or
+Call **`ClientDirectory.localUsage(query)`** on explicit refresh or scope changes, not from a view body or
 on every repaint. It resolves only the installed, pinned Local endpoint; missing/ambiguous Local identity
 fails closed rather than selecting a devbox. Cancel obsolete Tasks and retain only the active bounded
-result. `HostClients.usagePage(query,on:localHost)` reads a drill-down on that same qualified Local host.
+result. `ClientDirectory.usagePage(query,on:localHost)` reads a drill-down on that same qualified Local host.
 Project/chat filters refer to Local IDs. Canonical-mission filters still use the full home/lineage/mission
 tuple, but only Local execution evidence contributes in this pass.
 
@@ -44,13 +44,13 @@ completion clock. Do not compare host wall clocks as an ordering or identity mec
 cache is silently substituted after a failure. Status gives coverage start, effective retention floor,
 generation, retained rows, rejections/conflicts/expiration and process-local queue overflows.
 
-### Retained helper, deferred integration
+### Retained identity coverage
 
-The already-written `HostClients.usageProjection(query,on: explicitHosts)` and pure projection-plan DTOs
-are retained but **not wired to the dashboard's active path**. There is no all-connected-host default.
-Any future caller must supply explicit already-known endpoints. The helper is bounded at four concurrent
-reads / 32 endpoints, reports `omittedHosts`, and never connects or fails over. Existing source-only faux
-helper tests are not evidence of remote integration, nor a new first-pass release prerequisite.
+`ClientDirectory.usageProjection(query,on: explicitHosts)` and pure projection-plan DTOs retain coverage
+metadata for known Local and saved identities, but are **not wired to the dashboard's active path**.
+Only the sole installed Local client can issue a read. Saved identities remain disconnected coverage
+or aliases, never executable endpoints. The plan is bounded at 32 identities and reports `omittedHosts`;
+there is no remote endpoint registry, fanout, connection or failover.
 
 Host aliases are deduplicated by case-folded `(daemonId,lineageId)` before reads, preferring an already
 connected endpoint. No failed read tries a second alias. The storage primary key `(sourceId,operationId)`

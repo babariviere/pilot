@@ -58,7 +58,9 @@ struct MainWindow: View {
                 .navigationSplitViewColumnWidth(min: 230, ideal: 280, max: 400)
         } detail: {
             Group {
-                if let id = model.selectedMissionId, let ref = model.resourceRef(id, kind: .mission) {
+                if model.showingUsage {
+                    UsageDashboardPage(hosts: hosts)
+                } else if let id = model.selectedMissionId, let ref = model.resourceRef(id, kind: .mission) {
                     LogicalMissionDestination(reference: ref, model: model, registry: model.missionRegistry)
                         .id(ref.storageKey)
                 } else if let ref = hosts.selection, ref.host != model.localHost, ref.kind == .session,

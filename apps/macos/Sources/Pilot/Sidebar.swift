@@ -222,7 +222,7 @@ struct SessionSidebar: View {
     /// Home is selected when the detail shows it, in any scope.
     private var homeSelected: Bool {
         model.selectedSessionId == nil && model.selectedMissionId == nil && model.selectedProjectId == nil
-            && !model.showingArchive && !model.showingInbox
+            && !model.showingArchive && !model.showingInbox && !model.showingUsage
     }
 
     private func overviewSelected(_ focused: Project?) -> Bool {
