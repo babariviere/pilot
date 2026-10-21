@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.62.1](https://github.com/babariviere/pilot/compare/v1.62.0...v1.62.1) (2026-10-21)
+
+
+### Bug Fixes
+
+* **macos:** include text cell padding in work row widths ([49fb82f](https://github.com/babariviere/pilot/commit/49fb82fcf10a152e1a892b595d3e6d93e11ebf71))
+* **usage:** accept refreshed history within query bounds ([10e75a6](https://github.com/babariviere/pilot/commit/10e75a620a9c6bc13e4a84b9480053b79edf825c))
+
 ## [1.62.0](https://github.com/babariviere/pilot/compare/v1.61.0...v1.62.0) (2026-10-21)
 
 
