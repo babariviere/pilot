@@ -526,7 +526,14 @@ test("owned open and draft PRs reopen parked workers with one durable idle-only 
 			assert.match(input.content, /merge conflicts/);
 			assert.match(input.content, /each PR's own branch, preserving stack boundaries and other sessions' work/);
 			assert.match(input.content, /flaky or infrastructure failures/);
-			assert.match(input.content, /Consider rebasing if ancestry shows a PR is behind its actual target branch/);
+			assert.match(
+				input.content,
+				/Do not rebase just because main or the stack's root base advanced, or because CI failed/,
+			);
+			assert.match(
+				input.content,
+				/Rebase only to resolve actual conflicts or restack onto a changed lower PR branch/,
+			);
 			assert.match(input.content, /GitHub's BEHIND status alone is not enough/);
 			assert.doesNotMatch(input.content, /Wait for fresh CI after rebasing/);
 			assert.match(input.content, /After pushing or rebasing, report and finish/);

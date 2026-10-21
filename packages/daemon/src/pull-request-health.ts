@@ -174,7 +174,7 @@ export async function discoverPullRequestHealth(
 			]),
 		);
 		if (response.errors !== undefined && (!Array.isArray(response.errors) || response.errors.length)) invalid();
-		divergedFrom = stackDivergence(object(object(object(response.data).repository).pullRequest));
+		divergedFrom = stackDivergence(object(object(object(response.data).repository).pullRequest), pr.stack.baseBranch);
 	}
 	const problems = (reviewComments: number): PullRequestProblems => ({
 		failedChecks: checks,

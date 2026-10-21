@@ -51,6 +51,39 @@ test("unbound or busy PRs do not even create a trial repository", async () => {
 	}
 });
 
+for (const root of ["main", "release", "trunk"]) {
+	test(`an advanced root base (${root}) does not consume admission or fetch a rebase trial`, async () => {
+		const commands: string[][] = [];
+		const service = new PullRequestAutoRebase(async (file, args) => {
+			commands.push([file, ...args]);
+			if (file !== "gh") return "";
+			return JSON.stringify({
+				data: {
+					repository: {
+						defaultBranchRef: { name: root === "trunk" ? "trunk" : "main" },
+						pullRequest: {
+							state: "OPEN",
+							isCrossRepository: false,
+							headRefName: "feature",
+							headRefOid: "a".repeat(40),
+							baseRefName: root,
+							baseRefOid: "b".repeat(40),
+						},
+					},
+				},
+			});
+		});
+		const target = root === "trunk" ? pr : { ...pr, stack: { number: 1, size: 1, position: 1, baseBranch: root } };
+		const result = await service.restack([target], "/unused", "/upstream", {
+			...host,
+			reserve: async () => assert.fail("root bases do not consume the rebase budget"),
+			ownedChanges: async () => assert.fail("root bases do not need provenance lookup"),
+		});
+		assert.deepEqual(result.get(pr.url), { unchanged: true });
+		assert.ok(!commands.some((args) => args.includes("fetch") || args.includes("rebase") || args.includes("push")));
+	});
+}
+
 for (const scenario of ["default-head", "fork", "deleted-base"] as const) {
 	test(`unsafe GitHub state: ${scenario} never pushes or retargets`, async () => {
 		const commands: string[][] = [];

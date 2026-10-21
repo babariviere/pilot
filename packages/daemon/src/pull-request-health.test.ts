@@ -255,21 +255,25 @@ test("stacked PRs report divergence from their base branch", async () => {
 		...target,
 		pullRequest: { ...target.pullRequest, stack: { number: 1, position: 2, size: 2, baseBranch: "main" } },
 	};
-	for (const [position, behindBy, expected] of [
-		[2, 1, { ...healthy, divergedFrom: "feat/bottom" }],
-		[2, 0, healthy],
-		[1, 1, { ...healthy, divergedFrom: "feat/bottom" }],
+	for (const [position, baseBranch, baseRefName, behindBy, mergeable, expected] of [
+		[2, "main", "feat/bottom", 1, "MERGEABLE", { ...healthy, divergedFrom: "feat/bottom" }],
+		[2, "main", "feat/bottom", 0, "MERGEABLE", healthy],
+		[1, "main", "main", 1, "MERGEABLE", healthy],
+		[2, "main", "main", 1, "MERGEABLE", healthy],
+		[1, "release", "release", 10, "MERGEABLE", healthy],
+		[1, "main", "main", 1, "CONFLICTING", { ...healthy, mergeConflicts: true }],
 	] as const) {
 		stacked.pullRequest.stack.position = position;
+		stacked.pullRequest.stack.baseBranch = baseBranch;
 		const calls: string[][] = [];
 		const result = await discoverPullRequestProblems(stacked, async (_file, args) => {
 			calls.push(args);
-			if (args[0] === "pr") return JSON.stringify(view());
+			if (args[0] === "pr") return JSON.stringify(view([], mergeable));
 			const query = args.find((arg) => arg.startsWith("query="))!;
 			if (query.includes("compare"))
 				return JSON.stringify({
 					data: {
-						repository: { pullRequest: { baseRefName: "feat/bottom", baseRef: { compare: { behindBy } } } },
+						repository: { pullRequest: { baseRefName, baseRef: { compare: { behindBy } } } },
 					},
 				});
 			return JSON.stringify(page());
@@ -278,7 +282,7 @@ test("stacked PRs report divergence from their base branch", async () => {
 		assert.equal(calls.length, 3);
 		assert.ok(calls[1]!.includes("head=refs/heads/fix-bug"));
 	}
-	// Unstacked PRs skip the comparison: a PR behind its base is only a problem inside a stack.
+	// Unstacked PRs skip the comparison too.
 	assert.deepEqual(await discoverPullRequestProblems(session(), responses()), healthy);
 });
 
