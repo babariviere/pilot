@@ -1,6 +1,6 @@
 {
 	"name": "pilot",
-	"version": "1.60.2",
+	"version": "1.61.0",
 	"private": true,
 	"description": "A native macOS app for background pi coding agents, with durable chats, isolated workspaces, and reviewable pull requests.",
 	"type": "module",
