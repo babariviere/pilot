@@ -403,7 +403,9 @@ export function createDaemonServer(
 		return { ...response(null, 0, false), status: "unavailable", reason: "unsupported" };
 	};
 	const catalogMissions = new Map((missions?.store.list() ?? []).map((mission) => [mission.id, mission]));
-	const catalogHost = hello?.lineageId ? { hostId: "daemon", daemonId: hello.daemonId, lineageId: hello.lineageId } : undefined;
+	const catalogHost = hello?.lineageId
+		? { hostId: "daemon", daemonId: hello.daemonId, lineageId: hello.lineageId }
+		: undefined;
 	let catalogGroups = catalogHost && missions ? missions.store.catalogSharedContext(catalogHost) : [];
 	const catalogSources =
 		catalog ??

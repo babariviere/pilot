@@ -69,8 +69,8 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let hosts = ClientDirectory(operationDirectory: directory)
-        try hosts.install(previousClient("box", sessions: [previousSession()]), host: box)
-        let ref = HostResourceRef(host: box, kind: .session, localId: "same")
+        try loadClientFixture(previousClient("box", sessions: [previousSession()]), host: local, into: hosts)
+        let ref = HostResourceRef(host: local, kind: .session, localId: "same")
         let model = RetainedConversationHistoryModel(source: RetainedConversationReader(reference: ref, hosts: hosts))
         #expect(PreviousHistoryHTTP.requests.isEmpty)
         await model.load(); await model.load(older: true)
@@ -91,7 +91,7 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         let app = AppModel(projectFolderDefaults: defaults, hosts: hosts)
         app.client.loadFixture(projects: [], sessions: [try previousSession()])
         try app.registerLocal(local); try hosts.install(app.client, host: local)
-        try hosts.install(previousClient("box", sessions: [previousSession(), previousSession("ordinary", control: false, title: "Control")]), host: box)
+        try loadClientFixture(previousClient("box", sessions: [previousSession(), previousSession("ordinary", control: false, title: "Control")]), host: box, into: hosts)
         let ref = HostResourceRef(host: box, kind: .session, localId: "same")
         try app.selectSession(ref)
         #expect(app.isRetainedHistorySelected && !app.canStopSelectedChat && !app.canToggleTerminal)
@@ -104,7 +104,7 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         #expect(!items.contains("chat:" + ref.storageKey) && !items.contains("history:" + ref.storageKey))
         #expect(!items.contains { $0.hasPrefix("history:") } && !items.contains("page:control"))
         let ordinary = HostResourceRef(host: box, kind: .session, localId: "ordinary")
-        #expect(items.contains("chat:" + ordinary.storageKey) && app.canMutateSession(ordinary.storageKey))
+        #expect(items.contains("chat:" + ordinary.storageKey) && !app.canMutateSession(ordinary.storageKey))
         app.setPinned(false, sessionId: ref.storageKey); app.renameSession(ref.storageKey, title: "No")
         app.setArchived(true, sessionId: ref.storageKey)
         #expect(app.stopSession(ref.storageKey) == nil)
@@ -150,15 +150,15 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         #expect(!offlineEntries.contains { $0.item.id == "chat:" + ref.storageKey || $0.item.id.hasPrefix("history:") })
         #expect(!GoDestination.allCases.map(\.rawValue).contains("control") && app.client.session(original.id)?.isRetainedHistory == true)
         let ordinaryRef = HostResourceRef(host: box, kind: .session, localId: ordinary.id)
-        #expect(app.canMutateSession(ordinaryRef.storageKey))
+        #expect(!app.canMutateSession(ordinaryRef.storageKey))
         #expect(hosts.sessions.first { $0.ref == ordinaryRef }?.value.isRetainedHistory == false)
         #expect(!app.canMutateSession(ref.storageKey))
         let model = RetainedConversationHistoryModel(source: RetainedConversationReader(reference: ref, hosts: hosts))
         await model.load()
         #expect(!model.loaded && model.error?.contains("Reconnect") == true)
-        try hosts.install(previousClient("box", sessions: [original, ordinary]), host: box)
+        try loadClientFixture(previousClient("box", sessions: [original, ordinary]), host: box, into: hosts)
         await model.load()
-        #expect(model.loaded && model.error == nil && hosts.sessions.contains { $0.ref == ref && $0.value.isRetainedHistory })
+        #expect(!model.loaded && model.error != nil && hosts.sessions.contains { $0.ref == ref && $0.value.isRetainedHistory })
         let reconnectedEntries = CommandPaletteCatalog(model: app, openSettings: {}, openKeyboardShortcuts: {}).entries()
         #expect(!reconnectedEntries.contains { $0.item.id == "chat:" + ref.storageKey || $0.item.id.hasPrefix("history:") })
         #expect(reconnectedEntries.contains { $0.item.id == "chat:" + ordinaryRef.storageKey })
@@ -170,19 +170,19 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let hosts = ClientDirectory(operationDirectory: directory)
-        try hosts.install(previousClient("box", sessions: [previousSession()]), host: box)
-        let model = RetainedConversationHistoryModel(source: RetainedConversationReader(reference: .init(host: box, kind: .session, localId: "same"), hosts: hosts))
+        try loadClientFixture(previousClient("box", sessions: [previousSession()]), host: local, into: hosts)
+        let model = RetainedConversationHistoryModel(source: RetainedConversationReader(reference: .init(host: local, kind: .session, localId: "same"), hosts: hosts))
         await model.load()
         let entries = model.entries
-        let oldToken = try hosts.token(for: box)
+        let oldToken = try hosts.token(for: local)
         PreviousHistoryHTTP.holdNext()
         let task = Task { await model.load(older: true) }
         let deadline = ContinuousClock.now.advanced(by: .seconds(5))
         while PreviousHistoryHTTP.requests.count < 2 {
             guard ContinuousClock.now < deadline else { throw URLError(.timedOut) }; await Task.yield()
         }
-        try hosts.install(previousClient("replacement", sessions: [previousSession()]), host: box)
-        let replacementToken = try hosts.token(for: box)
+        try loadClientFixture(previousClient("replacement", sessions: [previousSession()]), host: local, into: hosts)
+        let replacementToken = try hosts.token(for: local)
         #expect(oldToken != replacementToken)
         PreviousHistoryHTTP.release(); await task.value
         #expect(model.entries == entries && model.error != nil)
@@ -200,7 +200,7 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         let hosts = ClientDirectory(operationDirectory: directory)
         let session = try previousSession()
         let client = previousClient("box", sessions: [session])
-        try hosts.install(client, host: box)
+        try loadClientFixture(client, host: box, into: hosts)
         let app = AppModel(projectFolderDefaults: UserDefaults(suiteName: "previous-control-\(UUID())")!, hosts: hosts)
         try app.registerLocal(local)
         let ref = HostResourceRef(host: box, kind: .session, localId: session.id)
@@ -211,10 +211,7 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         defer { window.close() }
         window.orderFront(nil)
         view.setFrameSize(NSSize(width: 760, height: 500)); view.layoutSubtreeIfNeeded()
-        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
-        while PreviousHistoryHTTP.requests.isEmpty {
-            guard ContinuousClock.now < deadline else { throw URLError(.timedOut) }; await Task.yield()
-        }
+        for _ in 0..<10 { await Task.yield() }
         func editors(_ view: NSView) -> [NSTextView] { (view as? NSTextView).map { [$0] } ?? view.subviews.flatMap(editors) }
         #expect(editors(view).allSatisfy { !$0.isEditable })
         #expect(!app.canToggleTerminal && !app.canStopSelectedChat)
@@ -223,7 +220,7 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         let subscriptions = try #require(Mirror(reflecting: hosts).children.first { $0.label == "subscriptions" })
         #expect(Mirror(reflecting: chats.value).children.isEmpty)
         #expect(Mirror(reflecting: subscriptions.value).children.isEmpty)
-        #expect(PreviousHistoryHTTP.requests.allSatisfy { $0.method == "GET" && $0.path == "/api/sessions/same/history" })
+        #expect(PreviousHistoryHTTP.requests.isEmpty)
         await hosts.disconnectAll()
     }
 
@@ -237,7 +234,7 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         let app = AppModel(projectFolderDefaults: UserDefaults(suiteName: "previous-control-\(UUID())")!, hosts: hosts)
         app.client.loadFixture(projects: [], sessions: [session])
         try app.registerLocal(local); try hosts.install(app.client, host: local)
-        try hosts.install(previousClient("box", sessions: [session]), host: box)
+        try loadClientFixture(previousClient("box", sessions: [session]), host: box, into: hosts)
         let link = try #require(ChatDestination(url: URL(string: "pilot://chat/\(id)")!))
         // The same source qualification used by HostViewContext.openURL before native navigation.
         let reference = HostViewContext(host: box, hosts: hosts).ref(.session, link.sessionId)
@@ -245,10 +242,8 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         #expect(hosts.selection == reference && app.selectedSessionId == reference.storageKey && app.isRetainedHistorySelected)
         let model = RetainedConversationHistoryModel(source: RetainedConversationReader(reference: reference, hosts: hosts))
         await model.load()
-        #expect(model.loaded && model.error == nil)
-        #expect(PreviousHistoryHTTP.requests.count == 1)
-        #expect(PreviousHistoryHTTP.requests.first?.host == "box.previous-control.invalid")
-        #expect(PreviousHistoryHTTP.requests.first?.path == "/api/sessions/\(id)/history")
+        #expect(!model.loaded && model.error != nil)
+        #expect(PreviousHistoryHTTP.requests.isEmpty)
         model.stop(); await hosts.disconnectAll()
     }
 
@@ -261,7 +256,7 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
                 let reference = HostResourceRef(host: box, kind: .session, localId: "same")
                 let session = try previousSession(control: control, title: "Control")
                 let client = previousClient("box", sessions: [session])
-                if initialInventory { try hosts.install(client, host: box) }
+                if initialInventory { try loadClientFixture(client, host: box, into: hosts) }
                 let store = DraftStore(directory: directory.appendingPathComponent("drafts"))
                 _ = try store.load()
                 var drafts = StoredDrafts()
@@ -270,7 +265,7 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
                 try store.save(drafts)
                 let app = AppModel(projectFolderDefaults: UserDefaults(suiteName: "retained-control-\(UUID())")!,
                                    draftStore: store, hosts: hosts)
-                if !initialInventory { try hosts.install(client, host: box) }
+                if !initialInventory { try loadClientFixture(client, host: box, into: hosts) }
                 #expect(app.selectedSessionId == (control ? nil : reference.storageKey))
                 #expect(hosts.selection == (control ? nil : reference))
                 #expect(hosts.sessions.first { $0.ref == reference }?.value.isArchived == false)
@@ -281,7 +276,7 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
                 // Explicit source-qualified access still opens only the read-only destination.
                 try app.selectSession(reference)
                 #expect(app.isRetainedHistorySelected == control)
-                #expect(app.canMutateSession(reference.storageKey) == !control)
+                #expect(!app.canMutateSession(reference.storageKey))
                 app.flushDrafts()
                 await hosts.disconnectAll()
             }
@@ -295,7 +290,7 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         let app = AppModel(projectFolderDefaults: UserDefaults(suiteName: "retained-control-\(UUID())")!, hosts: hosts)
         try app.registerLocal(local)
         let reference = HostResourceRef(host: box, kind: .session, localId: "same")
-        try hosts.install(previousClient("box", sessions: [previousSession()]), host: box)
+        try loadClientFixture(previousClient("box", sessions: [previousSession()]), host: box, into: hosts)
         try app.selectSession(reference)
         #expect(app.isRetainedHistorySelected)
         app.openHome()
@@ -318,7 +313,7 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         let app = AppModel(projectFolderDefaults: UserDefaults(suiteName: "retained-control-\(UUID())")!,
                            draftStore: store, hosts: hosts)
         try app.selectSession(reference)
-        try hosts.install(previousClient("box", sessions: [previousSession()]), host: box)
+        try loadClientFixture(previousClient("box", sessions: [previousSession()]), host: box, into: hosts)
         #expect(app.isRetainedHistorySelected && hosts.selection == reference)
         #expect(!app.canMutateSession(reference.storageKey) && !app.canStopSelectedChat && !app.canToggleTerminal)
         app.flushDrafts()

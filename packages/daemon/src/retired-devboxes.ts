@@ -89,4 +89,3 @@ export class RetiredDevboxes implements LegacySessionOwnership, LegacyMissionOwn
 		);
 	}
 }
-
