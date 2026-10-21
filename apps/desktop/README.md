@@ -101,6 +101,14 @@ See [tool presentation evidence](evidence/tool-presentation.md). This is not ful
 
 ## Limits and lifecycle
 
+### Native visuals, work in progress
+
+The separate sandboxed native visual worker is a test-first foundation, not yet
+wired to artifact cards or the live viewer. No generated source executes in the
+desktop process. `scripts/check.sh` prepares/builds its pinned local dependency
+and runs native synthetic boundary tests; it never uses real artifacts/accounts.
+See [runtime boundaries and unfinished work](evidence/native-visuals.md).
+
 ### Conversation interface
 
 The Local browser uses the app's soft light/dark palette, follows system
