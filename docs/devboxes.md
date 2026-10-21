@@ -31,8 +31,9 @@ legacy ownership records and rejects delegated admission, preventing old work fr
 or reinterpreted as ordinary Local work. Canonical Local missions and memory continue normally.
 
 Old pending sharing/Control operations are excluded from startup recovery. An explicit attempt to
-resubmit one is rejected before changing its receipt. Retired updater records and Control role policy
-are read only to preserve safety fences; unresolved ownership is never automatically cleared.
+resubmit one is rejected before changing its receipt. Retired updater records are read only to
+preserve safety fences; unresolved ownership is never automatically cleared. Control is retired
+independently on main; no Control runtime or policy service is recreated here.
 
 Host-qualified cache formats, provenance, offline readers and preservation tests are retained.
 The Linux headless daemon and packaging remain development capabilities, not a supported macOS remote
