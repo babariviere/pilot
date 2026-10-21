@@ -1,5 +1,8 @@
 # AI usage and cost accounting
 
+The separate [local usage-history contract](usage-history-contract.md) specifies the dashboard's content-free,
+bounded accounting plane. Its local provenance is not part of the aggregate IPC/telemetry plane described below.
+
 Pilot reports content-free chat accounting from two existing authoritative sources:
 
 - Pi Durable's per-conversation `UsageDoc` provides committed input, output, cache-read, cache-write, reasoning and
