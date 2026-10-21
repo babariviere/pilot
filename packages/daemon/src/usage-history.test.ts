@@ -9,7 +9,12 @@ import { test } from "node:test";
 import type { AIUsageAccounting, UsageHistoryPage, UsageHistoryQuery, UsageObservation } from "@pilot/protocol";
 import { UsageHistoryStore } from "./usage-history.ts";
 import { UsageHistoryDisk } from "./usage-history-disk.ts";
-import { parseUsageObservation, USAGE_DAY_MS, USAGE_RETENTION_MS } from "./usage-history-validation.ts";
+import {
+	parseUsageObservation,
+	readUsageObservation,
+	USAGE_DAY_MS,
+	USAGE_RETENTION_MS,
+} from "./usage-history-validation.ts";
 
 const fixture: UsageHistoryPage = JSON.parse(
 	await readFile(new URL("../../protocol/fixtures/usage-history.json", import.meta.url), "utf8"),
@@ -40,6 +45,32 @@ test("shared local accounting fixture has exact canonical TS shape and unknown l
 	assert.deepEqual(fixture.rows.map(parseUsageObservation), fixture.rows);
 	assert.equal(fixture.rows[1]!.completedAt, undefined);
 	assert.equal(fixture.rows[1]!.physicalModel, undefined);
+});
+
+test("bounded stored-row reader preserves strict validation without reserializing JSON", () => {
+	const json = JSON.stringify(fixture.rows[0]);
+	assert.deepEqual(readUsageObservation(json), fixture.rows[0]);
+	assert.throws(() => readUsageObservation(" ".repeat(4097)), /Invalid usage value/);
+	assert.throws(
+		() => readUsageObservation(JSON.stringify({ ...fixture.rows[0], prompt: "private" })),
+		/Invalid usage fields/,
+	);
+	assert.throws(
+		() =>
+			readUsageObservation(
+				JSON.stringify({ ...fixture.rows[0], tokens: { ...fixture.rows[0]!.tokens, input: -1 } }),
+			),
+		/Invalid usage value/,
+	);
+	const stringify = JSON.stringify;
+	try {
+		JSON.stringify = () => {
+			throw new Error("Unexpected stored-row serialization");
+		};
+		assert.deepEqual(readUsageObservation(json), fixture.rows[0]);
+	} finally {
+		JSON.stringify = stringify;
+	}
 });
 
 test("transactional schema v0 migration, private files and restart persistence", async () => {
@@ -78,6 +109,31 @@ test("duplicate/out-of-order revisions replace instead of incrementing and confl
 		assert.equal(f.disk.status().retainedRows, 1);
 		assert.equal(f.disk.status().conflicts, 2);
 		assert.deepEqual(f.disk.page(QUERY, NOW).rows, [corrected]);
+	} finally {
+		await f.close();
+	}
+});
+
+test("hot-path SQL statements are reused across parameters and released at close", async () => {
+	const f = await diskFixture();
+	try {
+		const original = f.disk.db.prepare.bind(f.disk.db);
+		let prepares = 0;
+		f.disk.db.prepare = (...args) => {
+			prepares++;
+			return original(...args);
+		};
+		f.disk.put(row(f.disk), NOW);
+		f.disk.page(QUERY, NOW);
+		const warm = prepares;
+		for (let i = 0; i < 100; i++) {
+			f.disk.status();
+			f.disk.put(row(f.disk, { operationId: `reuse:${i}` }), NOW);
+			f.disk.page({ ...QUERY, limit: (i % 100) + 1 }, NOW);
+		}
+		assert.equal(prepares, warm, "parameter values must not allocate new native statements");
+		const cache = (f.disk as unknown as { statements: Map<string, unknown> }).statements;
+		assert.ok(cache.size > 0 && cache.size <= 16);
 	} finally {
 		await f.close();
 	}
@@ -312,6 +368,29 @@ test("worker queue is bounded, maintenance coalesces and close drains while refu
 		} finally {
 			await reopened.close();
 		}
+	} finally {
+		await store.close();
+		await rm(home, { recursive: true, force: true });
+	}
+});
+
+test("worker fault and rejected message cloning release the shutdown drain", async () => {
+	const home = await mkdtemp(join(tmpdir(), "usage-drain-"));
+	const store = new UsageHistoryStore(home, () => NOW);
+	try {
+		const status = await store.status();
+		await assert.rejects(store.page({ ...QUERY, from: (() => 0) as unknown as number }), /Invalid usage message/);
+		const calls = Array.from({ length: 10 }, (_, i) =>
+			store.put({ ...fixture.rows[0]!, generation: status.generation, operationId: `drain:${i}` }),
+		);
+		const settled = Promise.allSettled(calls);
+		const worker = (store as unknown as { worker: import("node:worker_threads").Worker }).worker;
+		const closing = store.close();
+		await worker.terminate();
+		await settled;
+		await closing;
+		assert.equal((store as unknown as { pending: Map<number, unknown> }).pending.size, 0);
+		await assert.rejects(store.status(), /unavailable/);
 	} finally {
 		await store.close();
 		await rm(home, { recursive: true, force: true });

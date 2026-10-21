@@ -2,10 +2,11 @@
 import { randomUUID } from "node:crypto";
 import { chmodSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync } from "node:fs";
 import { dirname } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
 import type { UsageHistoryPage, UsageHistoryQuery, UsageHistoryStatus, UsageHistoryWriteResult } from "@pilot/protocol";
 import {
 	parseUsageObservation,
+	readUsageObservation,
 	safeUsageInteger,
 	USAGE_DAY_MS,
 	USAGE_MAX_BYTES,
@@ -30,6 +31,7 @@ interface Meta {
 export class UsageHistoryDisk {
 	readonly db: DatabaseSync;
 	readonly maxRows: number;
+	private readonly statements = new Map<string, StatementSync>();
 	constructor(file: string, now: number, limits: { maxRows?: number; maxBytes?: number } = {}) {
 		this.maxRows = Math.min(USAGE_MAX_ROWS, Math.max(1, limits.maxRows ?? USAGE_MAX_ROWS));
 		const maxBytes = Math.min(USAGE_MAX_BYTES, Math.max(65536, limits.maxBytes ?? USAGE_MAX_BYTES));
@@ -96,8 +98,18 @@ export class UsageHistoryDisk {
 			throw error;
 		}
 	}
+	/** Fixed SQL only. Repeated prepare() retains native SQLite allocations until a later V8 GC. */
+	private prepare(sql: string): StatementSync {
+		let statement = this.statements.get(sql);
+		if (!statement) {
+			if (this.statements.size >= 16) throw new Error("Usage statement capacity exceeded");
+			statement = this.db.prepare(sql);
+			this.statements.set(sql, statement);
+		}
+		return statement;
+	}
 	private meta(): Meta {
-		const value = this.db.prepare("SELECT * FROM usage_meta WHERE id=1").get() as unknown as Meta;
+		const value = this.prepare("SELECT * FROM usage_meta WHERE id=1").get() as unknown as Meta;
 		if (
 			!value ||
 			!usageUUID(value.generation) ||
@@ -137,12 +149,12 @@ export class UsageHistoryDisk {
 	}
 	private expireInside(now: number): void {
 		const floor = Math.max(this.meta().floor, now - USAGE_RETENTION_MS, 0);
-		const result = this.db
-			.prepare("DELETE FROM usage_rows WHERE rowid IN (SELECT rowid FROM usage_rows WHERE age < ? LIMIT 500)")
-			.run(floor);
-		this.db
-			.prepare("UPDATE usage_meta SET floor=?, rows=rows-?, expired=MIN(9007199254740991,expired+?) WHERE id=1")
-			.run(floor, result.changes, result.changes);
+		const result = this.prepare(
+			"DELETE FROM usage_rows WHERE rowid IN (SELECT rowid FROM usage_rows WHERE age < ? LIMIT 500)",
+		).run(floor);
+		this.prepare(
+			"UPDATE usage_meta SET floor=?, rows=rows-?, expired=MIN(9007199254740991,expired+?) WHERE id=1",
+		).run(floor, result.changes, result.changes);
 	}
 	put(value: unknown, now: number): UsageHistoryWriteResult {
 		if (!safeUsageInteger(now)) throw new Error("Invalid usage clock");
@@ -164,9 +176,9 @@ export class UsageHistoryDisk {
 					(row.kind === "request" && row.completedAt === undefined)
 				)
 					return this.reject();
-				const previous = this.db
-					.prepare("SELECT revision, kind, scope, data FROM usage_rows WHERE source=? AND operation=?")
-					.get(row.sourceId, row.operationId);
+				const previous = this.prepare(
+					"SELECT revision, kind, scope, data FROM usage_rows WHERE source=? AND operation=?",
+				).get(row.sourceId, row.operationId);
 				const data = JSON.stringify(row);
 				if (previous) {
 					if (row.revision < Number(previous.revision)) return "stale";
@@ -180,20 +192,18 @@ export class UsageHistoryDisk {
 					}
 					if (row.revision === previous.revision) return "duplicate";
 				} else if (m.rows >= this.maxRows) return this.reject();
-				this.db
-					.prepare(`INSERT INTO usage_rows VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(source,operation)
-				 DO UPDATE SET revision=excluded.revision, completed=excluded.completed, age=excluded.age, chat=excluded.chat, data=excluded.data`)
-					.run(
-						row.sourceId,
-						row.operationId,
-						row.revision,
-						row.kind,
-						row.scope,
-						row.completedAt ?? 0,
-						age,
-						row.attribution?.chatId ?? null,
-						data,
-					);
+				this.prepare(`INSERT INTO usage_rows VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(source,operation)
+				 DO UPDATE SET revision=excluded.revision, completed=excluded.completed, age=excluded.age, chat=excluded.chat, data=excluded.data`).run(
+					row.sourceId,
+					row.operationId,
+					row.revision,
+					row.kind,
+					row.scope,
+					row.completedAt ?? 0,
+					age,
+					row.attribution?.chatId ?? null,
+					data,
+				);
 				if (!previous) this.db.exec("UPDATE usage_meta SET rows=rows+1 WHERE id=1");
 				return "stored";
 			});
@@ -244,19 +254,26 @@ export class UsageHistoryDisk {
 		// Checkpoints are undated reconciliation, deliberately independent of the chart's date window.
 		const from = query.kind === "checkpoint" ? 0 : query.from;
 		const to = query.kind === "checkpoint" ? Number.MAX_SAFE_INTEGER : query.to;
-		const rows = this.db
-			.prepare(`SELECT completed, source, operation,
+		const rows = this.prepare(`SELECT completed, source, operation,
 		 CASE WHEN length(CAST(data AS BLOB))<=${USAGE_ROW_BYTES} THEN data ELSE NULL END AS data
 		 FROM usage_rows INDEXED BY usage_time
 		 WHERE kind=? AND completed>=? AND completed<? AND (completed,source,operation)>(?,?,?) AND age>=?
-		 ORDER BY completed,source,operation LIMIT ?`)
-			.all(query.kind, from, to, time, source, operation, Math.max(m.floor, now - USAGE_RETENTION_MS), limit + 1);
+		 ORDER BY completed,source,operation LIMIT ?`).all(
+			query.kind,
+			from,
+			to,
+			time,
+			source,
+			operation,
+			Math.max(m.floor, now - USAGE_RETENTION_MS),
+			limit + 1,
+		);
 		const hasMore = rows.length > limit;
 		if (hasMore) rows.pop();
 		const last = rows.at(-1);
 		const result = rows.map((r) => {
 			if (typeof r.data !== "string") throw new Error("Usage row unavailable");
-			return parseUsageObservation(JSON.parse(r.data));
+			return readUsageObservation(r.data);
 		});
 		return {
 			rows: result,
@@ -286,17 +303,16 @@ export class UsageHistoryDisk {
 		return this.transaction(() => {
 			const changes =
 				chatId === undefined
-					? this.db.prepare("DELETE FROM usage_rows").run().changes
-					: this.db.prepare("DELETE FROM usage_rows WHERE chat=?").run(chatId).changes;
-			this.db
-				.prepare(
-					"UPDATE usage_meta SET generation=?, started=MAX(started,?), capture=MAX(capture,?), rows=rows-? WHERE id=1",
-				)
-				.run(randomUUID(), now, now + 1, changes);
+					? this.prepare("DELETE FROM usage_rows").run().changes
+					: this.prepare("DELETE FROM usage_rows WHERE chat=?").run(chatId).changes;
+			this.prepare(
+				"UPDATE usage_meta SET generation=?, started=MAX(started,?), capture=MAX(capture,?), rows=rows-? WHERE id=1",
+			).run(randomUUID(), now, now + 1, changes);
 			return this.status();
 		});
 	}
 	close(): void {
 		this.db.close();
+		this.statements.clear();
 	}
 }
