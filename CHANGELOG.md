@@ -1,5 +1,39 @@
 # Changelog
 
+## [1.62.0](https://github.com/babariviere/pilot/compare/v1.61.0...v1.62.0) (2026-10-21)
+
+
+### Features
+
+* **chat:** render remaining transcript rows in AppKit ([bfe9da4](https://github.com/babariviere/pilot/commit/bfe9da4ec48fec6d081f18d07106d430ba282ec7))
+* **chat:** use native transcript by default ([837c1ef](https://github.com/babariviere/pilot/commit/837c1efb3961e4d0cb1f954ac7f6a60cad00b7f6))
+* **control:** add a verified native courier adapter ([0583d6b](https://github.com/babariviere/pilot/commit/0583d6b3970a98655ca98c9bac59193b271034df))
+* **diagnostics:** grant scoped repair evidence access ([36bc78a](https://github.com/babariviere/pilot/commit/36bc78a728a02dc82fc9b2b79422395940b757ae))
+* **kernel:** capture local request and child usage ([8d529c2](https://github.com/babariviere/pilot/commit/8d529c226b0a113aa1851320bbd68f07dd8cf6ba))
+* **usage:** add bounded Local usage queries ([d298c97](https://github.com/babariviere/pilot/commit/d298c97de050c8404b15d25f3115698ab2428077))
+* **usage:** add native Local usage dashboard ([31d1f6b](https://github.com/babariviere/pilot/commit/31d1f6ba98d17dcbdadf39f0e45ed7f796052e63))
+
+
+### Bug Fixes
+
+* **chat:** align hosted tables and use shared native icons ([96101b3](https://github.com/babariviere/pilot/commit/96101b32fd00ccd27e14d4ff04babdc21e059ea6))
+* **chat:** carry preparation completion and simplify native regions ([d0c8772](https://github.com/babariviere/pilot/commit/d0c877211e048157ba346f29b5e44b68e23aaabb))
+* **devboxes:** reconcile rebase with Control retirement ([c9badda](https://github.com/babariviere/pilot/commit/c9badda3f6874118378699f7beb4a56aaf656616))
+* **devboxes:** reconcile retirement with current main ([42ac2f0](https://github.com/babariviere/pilot/commit/42ac2f0e503734fe552ca092c875c461c076bf24))
+* **devboxes:** repair native retirement compile regressions ([099fb75](https://github.com/babariviere/pilot/commit/099fb756774b8eeb495ec80864cb146c7c92c651))
+* **diagnostics:** clarify repair proposal evidence refs ([382c3fb](https://github.com/babariviere/pilot/commit/382c3fbd8366e9125951d1a20c939f42b2fa7bbe))
+* **macos:** align retained history test with Local default ([19804bf](https://github.com/babariviere/pilot/commit/19804bf189fcd98eef3e60eafb23c0dce8f0884c))
+* **macos:** benchmark the existing transcript scene ([8b87ae0](https://github.com/babariviere/pilot/commit/8b87ae05225ae23475f786daebd9c90874f036e3))
+* preserve native diagnostic fields and reconcile usage routes ([3a28d99](https://github.com/babariviere/pilot/commit/3a28d99b58dba454501b62bd344f37fdfa623f5e))
+
+
+### Performance Improvements
+
+* **chat:** add opt-in native table transcript ([ec7e1c2](https://github.com/babariviere/pilot/commit/ec7e1c2f99a87d5bd9dc298f12f4c158e125e71b))
+* **chat:** reuse content and constrain transcript layout ([fdda554](https://github.com/babariviere/pilot/commit/fdda5547956691c9ddab65515f2f2f4e7f993cf3))
+* **chat:** skip empty selection resets when rebinding ([0e66b9e](https://github.com/babariviere/pilot/commit/0e66b9e22301dfa7713e27e25afbfde7a39b426d))
+* **usage:** precompile the accounting storage worker ([f64310c](https://github.com/babariviere/pilot/commit/f64310c5df19a7a4c87d5193242b50f9a2ff2219))
+
 ## [1.61.0](https://github.com/babariviere/pilot/compare/v1.60.2...v1.61.0) (2026-10-21)
 
 
