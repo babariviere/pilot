@@ -14,8 +14,7 @@ struct DiagnosticRepairFooterTests {
         fixture.seedHistory()
         try await fixture.settle { fixture.feed.presentation.historyRowCount == 500 }
         let anchor = try #require(fixture.anchor(.primary))
-        let observer = try #require(fixture.views(ScrollObserverView.self).first)
-        let scroll = try #require(observer.enclosingScrollView)
+        let scroll = try fixture.transcriptScrollView()
         let document = try #require(scroll.documentView)
         #expect(!anchor.isDescendant(of: document), "the production repair control is outside transcript scrolling")
         #expect(fixture.views(DiagnosticRepairActionAnchorView.self).filter { $0.role == .primary }.count == 1)
@@ -230,6 +229,15 @@ private struct FooterChat: View {
     }
     func anchor(_ role: DiagnosticRepairActionAnchorView.Role) -> DiagnosticRepairActionAnchorView? {
         views(DiagnosticRepairActionAnchorView.self).first { $0.role == role }
+    }
+    func transcriptScrollView() throws -> NSScrollView {
+        // Follow the same renderer policy as the production ChatView. Do not mistake an editor's
+        // scroll view for the transcript or force the legacy path merely to satisfy this fixture.
+        if NativeTranscriptFlag.enabled {
+            return try #require(views(NativeTranscriptScrollView.self).first)
+        }
+        let observer = try #require(views(ScrollObserverView.self).first)
+        return try #require(observer.enclosingScrollView)
     }
     func expectActionAlignedWithComposer(_ anchor: NSView, editor: NSView,
                                         sourceLocation: SourceLocation = #_sourceLocation) {

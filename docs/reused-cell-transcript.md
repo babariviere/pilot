@@ -5,7 +5,8 @@ native AppKit rows, not hosted SwiftUI rows. Keep the surrounding app/composer i
 250 ms checkpoint cadence. The old transcript remains default until measurement and parity gates pass.
 
 **Measured stop:** the [2026-10-20 release comparison](native-transcript-measurement.md) reduces streaming CPU
-and hitches but regresses rich-scroll hitches/p95. Keep the flag off; the next migration stage has not started.
+and hitches but regresses rich-scroll hitches/p95. The user subsequently approved completing the native row
+port despite that hybrid result. Keep the flag off: implementation approval is not performance acceptance.
 
 ## Recommendation and decision gate
 
@@ -176,17 +177,38 @@ test the same supported remount behavior as today, with no accidental new reload
 
 ## Approved ordered migration PRs
 
-The initial table/text path is opt-in with `PILOT_APPKIT_TRANSCRIPT=1` (or the `appKitTranscript` app default).
-Without the flag, `ChatView` keeps the existing SwiftUI transcript. The native controller consumes the existing
+The AppKit transcript is now the default. `PILOT_APPKIT_TRANSCRIPT=0` selects the retained SwiftUI fallback;
+`1` forces native. Either explicit environment value overrides the saved `appKitTranscript` app preference;
+without it, a stored false selects legacy, true selects native, and an absent preference selects native.
+Other environment values are ignored. The user-approved default change does not close the outstanding
+smoothness, interaction or scaling gates; source-pinned measurements remain historical evidence.
+The native controller consumes the existing
 history/live split, rebinds only changed live rows, and bounds the measured-height cache to 4,096 entries.
 NSTableView's installed geometry is tracked separately so measurement eviction or font invalidation cannot
 silently leave an old table height installed. Header/footer publication has its own parent-produced revision;
 it must not infer chrome changes from the streaming revision.
 
-Native Markdown text reuses the existing incremental preparation, native selection regions and Core Animation
-veils. Code, tables, diagrams and non-text rows temporarily use compatibility hosts in this first PR only.
-Image sizing, visual sizing and selection scope are unchanged. The final path must remove those hosts before
-the default switches. Initial measurements are evidence for that next step, not a rollout/parity claim.
+The first prototype used compatibility hosts for complex Markdown and non-text rows. The remaining-row port
+removes those generic hosts. Native AppKit views now supply bubbles, work/tool steps, diffs, timeline/error rows,
+code, tables, diagrams, artifact chrome, header/footer, pagination and scheduled messages. The shipping-default
+SwiftUI path is still present for comparison and fallback, but is no longer the default.
+
+Native Markdown shares incremental preparation, selection and Core Animation veils. Native Mermaid uses its
+existing off-main bitmap engine; unsupported diagrams embed the same sandboxed WebKit fallback directly.
+Image artifacts decode off-main into native image views, including native animated-image representations.
+HTML/React/shader and SwiftUI-snapshot artifacts keep their existing content engines. Native visuals retain their
+existing interactive visual component in a dedicated adapter, including its SwiftUI chart/control internals.
+This is not a promise that every artifact engine is AppKit or that the transcript contains no WebKit.
+There is no general-purpose hosted conversation row or hosted Markdown block in the new path.
+
+Image cap 720, uncapped native visuals, the 760 pt column and per-message selection scope are unchanged.
+Expanded viewers remain app-shell sheets outside cell reuse. Lightweight row contexts hold only resource,
+environment, expansion owners and callbacks, not whole presentation/history snapshots.
+
+The native port's full release measurements and interaction acceptance are separate from the historical hybrid
+numbers above. The [remaining-row release comparison](native-transcript-native-rows.md) reduces CPU/memory,
+but still fails 4/s and paired rich-scroll hitch gates. Focused-editor recycling, accessibility journeys, large single-row renderer lifetimes and
+large revealed histories remain explicit default-switch gates; a source port or compile is not proof they pass.
 
 1. **Opt-in table and native streaming text.** One native scroller, reused cells, native Markdown text regions,
    bounded explicit height cache, changed-live-row updates, one height transaction per prepared chunk, existing

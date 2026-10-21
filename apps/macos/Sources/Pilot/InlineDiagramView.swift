@@ -141,7 +141,7 @@ private struct NativeDiagramPreview: View {
 
 /// The expanded viewer opens the vector drawing at its natural size, shrunk to fit and centered;
 /// pinch or scroll-zoom to enlarge it.
-private struct NativeDiagramViewer: View {
+struct NativeDiagramViewer: View {
     let kind: MarkdownDiagramKind
     let text: String
     let layout: NativeMermaidLayout
@@ -294,7 +294,7 @@ final class InlineDiagramLayout: ObservableObject {
     }
 }
 
-private struct InlineDiagramViewer: View {
+struct InlineDiagramViewer: View {
     let kind: MarkdownDiagramKind
     let text: String
     @Environment(\.dismiss) private var dismiss

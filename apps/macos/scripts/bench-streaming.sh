@@ -5,7 +5,8 @@
 #
 #   apps/macos/scripts/bench-streaming.sh            # build, then three runs of every case
 #   PILOT_BENCH_RUNS=5 apps/macos/scripts/bench-streaming.sh --no-build
-#   PILOT_APPKIT_TRANSCRIPT=1 apps/macos/scripts/bench-streaming.sh --no-build # opt-in native rows
+#   PILOT_APPKIT_TRANSCRIPT=0 apps/macos/scripts/bench-streaming.sh --no-build # legacy control
+#   PILOT_APPKIT_TRANSCRIPT=1 apps/macos/scripts/bench-streaming.sh --no-build # force native (default)
 #
 # It opens a window for about 20 s per run and never connects to the daemon. Compare branches on the same Mac,
 # plugged in, with the window on the built-in display (120 Hz on ProMotion) and other apps idle.

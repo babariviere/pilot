@@ -1,0 +1,345 @@
+{
+  "method": "Native/native, same real SwiftUI main scene, requested 1280x820 content size. Three alternating unlocked 120Hz AC release pairs per workload, no profiler or trace hooks; one rich warmup per binary.",
+  "date": "2026-10-21",
+  "beforeSource": "f6c09610a36331594bf18dec72fee5b03fae94f4 + single-scene fixture correction",
+  "afterSource": "Same + guarded async-only prepared-height callback",
+  "beforeSHA256": "70b5036dfc51cca4203932652e16e525495e572bd33af11441a105bff3d93d30",
+  "afterSHA256": "c5bd9962eda087bb297de9f13403d926b2f01838ee6a553c4cc50ea972dd70fd",
+  "beforeUUID": "DF810183-46A0-300B-BDA1-D46CFE1ED15B",
+  "afterUUID": "9EEA7EBB-AFE8-3740-9208-594CD8205189",
+  "candidateProductionDiffSHA256": "13f869523f3a1b0e0dd6666b25a1d1ab4d9fbc3e40de830f12aa2384672af4df",
+  "runnerSHA256": "27cd50ef0bb746e002c9cbb80ccf212e99a2a837aec471eff4fcf1ff1510e9f3",
+  "limits": [
+    "Earlier attempt rejected at initial lock guard; no samples from that attempt.",
+    "Other machine activity uncontrolled; every pair retained.",
+    "Synthetic scroll steps, not manual wheel-input journey.",
+    "Timing and hitch metrics do not independently prove CA-commit causality.",
+    "New native Swift regression fixtures CI-only, not locally compiled or run."
+  ],
+  "rows": [
+    {
+      "mode": "streaming",
+      "pair": 1,
+      "variant": "before",
+      "summary": "performance-check streaming+4/s+markdown 100 chars: CPU=12.4% of one core, main thread=11.0%, peak RSS=187.6 MiB, rows=1001, chat body evaluations=2, transcript rows evaluations=0, physical footprint peak=181.0 MiB end=178.1 MiB, display 120 Hz frames=1136 hitches=40 dropped frames=61 hitch time ratio=50.9 ms/s longest frame gap=35.8ms, newest row moved down=1 times (6 pt, largest 6 pt), bottom gap changes=0",
+      "mainCPU": 11.0,
+      "processCPU": 12.4,
+      "rssMiB": 187.6,
+      "footprintPeakMiB": 181.0,
+      "hitchesMsPerSecond": 50.9,
+      "displayHz": 120.0,
+      "scrollP50Ms": null,
+      "scrollP95Ms": null,
+      "stepsOver16Ms": null,
+      "reversals": 1.0,
+      "bottomGapChanges": 0.0,
+      "stdoutSHA256": "02abedd0d69d0d57596be783ef93bd83144e3356f06f326da990f51916dd5ec3",
+      "details": [
+        "native transcript: cells created=9 mounted=2, bindings=53, measurements=98 height transactions=42 membership updates=3, height cache entries=9, viewport top=4705 bottom=5311 document=5311",
+        "transcript apply: 40 calls, total 5.0ms (0.0% of the run), mean 0.124ms, longest 0.3ms",
+        "publish: 40 calls, total 11.1ms (0.1% of the run), mean 0.279ms, longest 6.0ms",
+        "markdown prepare: 40 calls, total 23.3ms (0.2% of the run), mean 0.582ms, longest 1.7ms",
+        "text update: 57 calls, total 35.4ms (0.4% of the run), mean 0.622ms, longest 2.8ms",
+        "text measure: 118 calls, total 7.2ms (0.1% of the run), mean 0.061ms, longest 0.3ms",
+        "after completion: CPU=1.0% of one core over 5 s, physical footprint=87.7 MiB"
+      ]
+    },
+    {
+      "mode": "streaming",
+      "pair": 1,
+      "variant": "after",
+      "summary": "performance-check streaming+4/s+markdown 100 chars: CPU=10.8% of one core, main thread=9.6%, peak RSS=171.0 MiB, rows=1001, chat body evaluations=2, transcript rows evaluations=0, physical footprint peak=176.2 MiB end=173.4 MiB, display 120 Hz frames=1134 hitches=40 dropped frames=63 hitch time ratio=52.6 ms/s longest frame gap=44.5ms, newest row moved down=1 times (6 pt, largest 6 pt), bottom gap changes=0",
+      "mainCPU": 9.6,
+      "processCPU": 10.8,
+      "rssMiB": 171.0,
+      "footprintPeakMiB": 176.2,
+      "hitchesMsPerSecond": 52.6,
+      "displayHz": 120.0,
+      "scrollP50Ms": null,
+      "scrollP95Ms": null,
+      "stepsOver16Ms": null,
+      "reversals": 1.0,
+      "bottomGapChanges": 0.0,
+      "stdoutSHA256": "9d0dba06f4065899dcc32eda5e1a9c6685408d3c0a89062c24b8d285bee759c7",
+      "details": [
+        "native transcript: cells created=9 mounted=2, bindings=53, measurements=99 height transactions=42 membership updates=3, height cache entries=9, viewport top=4705 bottom=5311 document=5311",
+        "transcript apply: 40 calls, total 3.9ms (0.0% of the run), mean 0.098ms, longest 0.4ms",
+        "publish: 40 calls, total 8.8ms (0.1% of the run), mean 0.220ms, longest 4.6ms",
+        "markdown prepare: 40 calls, total 22.8ms (0.2% of the run), mean 0.569ms, longest 1.6ms",
+        "text update: 57 calls, total 33.3ms (0.3% of the run), mean 0.584ms, longest 3.1ms",
+        "text measure: 118 calls, total 17.6ms (0.2% of the run), mean 0.149ms, longest 0.8ms",
+        "after completion: CPU=0.0% of one core over 5 s, physical footprint=82.1 MiB"
+      ]
+    },
+    {
+      "mode": "streaming",
+      "pair": 2,
+      "variant": "before",
+      "summary": "performance-check streaming+4/s+markdown 100 chars: CPU=12.7% of one core, main thread=11.4%, peak RSS=190.8 MiB, rows=1001, chat body evaluations=2, transcript rows evaluations=0, physical footprint peak=180.7 MiB end=179.1 MiB, display 120 Hz frames=1136 hitches=40 dropped frames=60 hitch time ratio=50.1 ms/s longest frame gap=31.9ms, newest row moved down=1 times (6 pt, largest 6 pt), bottom gap changes=0",
+      "mainCPU": 11.4,
+      "processCPU": 12.7,
+      "rssMiB": 190.8,
+      "footprintPeakMiB": 180.7,
+      "hitchesMsPerSecond": 50.1,
+      "displayHz": 120.0,
+      "scrollP50Ms": null,
+      "scrollP95Ms": null,
+      "stepsOver16Ms": null,
+      "reversals": 1.0,
+      "bottomGapChanges": 0.0,
+      "stdoutSHA256": "534cb0f97e44718ad9619c4a02a5df85716925121c525b9ef6ce6545958bc541",
+      "details": [
+        "native transcript: cells created=9 mounted=2, bindings=53, measurements=99 height transactions=42 membership updates=3, height cache entries=9, viewport top=4705 bottom=5311 document=5311",
+        "transcript apply: 40 calls, total 5.3ms (0.1% of the run), mean 0.132ms, longest 0.4ms",
+        "publish: 40 calls, total 10.6ms (0.1% of the run), mean 0.266ms, longest 5.2ms",
+        "markdown prepare: 40 calls, total 28.2ms (0.3% of the run), mean 0.704ms, longest 1.9ms",
+        "text update: 57 calls, total 38.7ms (0.4% of the run), mean 0.679ms, longest 2.4ms",
+        "text measure: 118 calls, total 8.3ms (0.1% of the run), mean 0.070ms, longest 0.3ms",
+        "after completion: CPU=0.0% of one core over 5 s, physical footprint=88.1 MiB"
+      ]
+    },
+    {
+      "mode": "streaming",
+      "pair": 2,
+      "variant": "after",
+      "summary": "performance-check streaming+4/s+markdown 100 chars: CPU=10.5% of one core, main thread=9.4%, peak RSS=200.1 MiB, rows=1001, chat body evaluations=2, transcript rows evaluations=0, physical footprint peak=181.1 MiB end=178.4 MiB, display 120 Hz frames=1148 hitches=30 dropped frames=49 hitch time ratio=40.9 ms/s longest frame gap=39.9ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=0",
+      "mainCPU": 9.4,
+      "processCPU": 10.5,
+      "rssMiB": 200.1,
+      "footprintPeakMiB": 181.1,
+      "hitchesMsPerSecond": 40.9,
+      "displayHz": 120.0,
+      "scrollP50Ms": null,
+      "scrollP95Ms": null,
+      "stepsOver16Ms": null,
+      "reversals": 0.0,
+      "bottomGapChanges": 0.0,
+      "stdoutSHA256": "653306dd4affef564a421baabc5667bdca77322280df84995e679d2691b0bb29",
+      "details": [
+        "native transcript: cells created=9 mounted=2, bindings=53, measurements=99 height transactions=42 membership updates=3, height cache entries=9, viewport top=4705 bottom=5311 document=5311",
+        "transcript apply: 40 calls, total 4.7ms (0.0% of the run), mean 0.117ms, longest 0.4ms",
+        "publish: 40 calls, total 11.3ms (0.1% of the run), mean 0.282ms, longest 6.5ms",
+        "markdown prepare: 40 calls, total 25.5ms (0.3% of the run), mean 0.638ms, longest 4.0ms",
+        "text update: 57 calls, total 27.4ms (0.3% of the run), mean 0.481ms, longest 2.3ms",
+        "text measure: 118 calls, total 15.0ms (0.1% of the run), mean 0.127ms, longest 0.7ms",
+        "after completion: CPU=0.0% of one core over 5 s, physical footprint=88.7 MiB"
+      ]
+    },
+    {
+      "mode": "streaming",
+      "pair": 3,
+      "variant": "before",
+      "summary": "performance-check streaming+4/s+markdown 100 chars: CPU=11.5% of one core, main thread=10.3%, peak RSS=185.7 MiB, rows=1001, chat body evaluations=2, transcript rows evaluations=0, physical footprint peak=181.8 MiB end=178.0 MiB, display 120 Hz frames=1138 hitches=33 dropped frames=58 hitch time ratio=48.5 ms/s longest frame gap=40.2ms, newest row moved down=1 times (6 pt, largest 6 pt), bottom gap changes=0",
+      "mainCPU": 10.3,
+      "processCPU": 11.5,
+      "rssMiB": 185.7,
+      "footprintPeakMiB": 181.8,
+      "hitchesMsPerSecond": 48.5,
+      "displayHz": 120.0,
+      "scrollP50Ms": null,
+      "scrollP95Ms": null,
+      "stepsOver16Ms": null,
+      "reversals": 1.0,
+      "bottomGapChanges": 0.0,
+      "stdoutSHA256": "d261a1fce995d4cc48bd020afff6f1488f3f927ccfb58218482b6846912e0569",
+      "details": [
+        "native transcript: cells created=9 mounted=2, bindings=53, measurements=99 height transactions=42 membership updates=3, height cache entries=9, viewport top=4705 bottom=5311 document=5311",
+        "transcript apply: 40 calls, total 5.2ms (0.1% of the run), mean 0.129ms, longest 0.3ms",
+        "publish: 40 calls, total 11.1ms (0.1% of the run), mean 0.279ms, longest 6.1ms",
+        "markdown prepare: 40 calls, total 23.8ms (0.2% of the run), mean 0.596ms, longest 2.2ms",
+        "text update: 57 calls, total 40.0ms (0.4% of the run), mean 0.702ms, longest 2.6ms",
+        "text measure: 118 calls, total 6.8ms (0.1% of the run), mean 0.057ms, longest 0.3ms",
+        "after completion: CPU=0.0% of one core over 5 s, physical footprint=88.1 MiB"
+      ]
+    },
+    {
+      "mode": "streaming",
+      "pair": 3,
+      "variant": "after",
+      "summary": "performance-check streaming+4/s+markdown 100 chars: CPU=12.7% of one core, main thread=11.4%, peak RSS=199.8 MiB, rows=1001, chat body evaluations=2, transcript rows evaluations=0, physical footprint peak=180.5 MiB end=178.0 MiB, display 120 Hz frames=1103 hitches=48 dropped frames=93 hitch time ratio=77.8 ms/s longest frame gap=36.9ms, newest row moved down=1 times (6 pt, largest 6 pt), bottom gap changes=0",
+      "mainCPU": 11.4,
+      "processCPU": 12.7,
+      "rssMiB": 199.8,
+      "footprintPeakMiB": 180.5,
+      "hitchesMsPerSecond": 77.8,
+      "displayHz": 120.0,
+      "scrollP50Ms": null,
+      "scrollP95Ms": null,
+      "stepsOver16Ms": null,
+      "reversals": 1.0,
+      "bottomGapChanges": 0.0,
+      "stdoutSHA256": "76749c693b5520f61c7b403ce76a35adceca52110e05a8fc396b0fbfa9d0ad8b",
+      "details": [
+        "native transcript: cells created=9 mounted=2, bindings=53, measurements=99 height transactions=42 membership updates=3, height cache entries=9, viewport top=4705 bottom=5311 document=5311",
+        "transcript apply: 40 calls, total 4.9ms (0.0% of the run), mean 0.124ms, longest 0.2ms",
+        "publish: 40 calls, total 12.4ms (0.1% of the run), mean 0.309ms, longest 7.0ms",
+        "markdown prepare: 40 calls, total 28.4ms (0.3% of the run), mean 0.711ms, longest 1.9ms",
+        "text update: 57 calls, total 40.7ms (0.4% of the run), mean 0.714ms, longest 3.0ms",
+        "text measure: 118 calls, total 22.6ms (0.2% of the run), mean 0.191ms, longest 0.9ms",
+        "after completion: CPU=0.0% of one core over 5 s, physical footprint=88.1 MiB"
+      ]
+    },
+    {
+      "mode": "scrolling",
+      "pair": 1,
+      "variant": "before",
+      "summary": "performance-check idle+scrolling: CPU=20.2% of one core, main thread=18.7%, peak RSS=186.4 MiB, rows=750, chat body evaluations=0, transcript rows evaluations=0, display 120 Hz frames=1105 hitches=31 dropped frames=45 hitch time ratio=39.1 ms/s longest frame gap=29.8ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=0, scroll frame p50=0.2ms p95=7.3ms max=18.2ms over 16ms=4/600",
+      "mainCPU": 18.7,
+      "processCPU": 20.2,
+      "rssMiB": 186.4,
+      "footprintPeakMiB": null,
+      "hitchesMsPerSecond": 39.1,
+      "displayHz": 120.0,
+      "scrollP50Ms": 0.2,
+      "scrollP95Ms": 7.3,
+      "stepsOver16Ms": 4.0,
+      "reversals": 0.0,
+      "bottomGapChanges": 0.0,
+      "stdoutSHA256": "919b7f81d11d67ffa80405aaccc27a65f32f16fd991dff25896c1ad95b66057f",
+      "details": [
+        "native transcript: cells created=9 mounted=5, bindings=85, measurements=110 height transactions=49 membership updates=2, height cache entries=43, viewport top=5569 bottom=6202 document=6202"
+      ]
+    },
+    {
+      "mode": "scrolling",
+      "pair": 1,
+      "variant": "after",
+      "summary": "performance-check idle+scrolling: CPU=22.8% of one core, main thread=21.1%, peak RSS=186.9 MiB, rows=750, chat body evaluations=0, transcript rows evaluations=0, display 120 Hz frames=1089 hitches=47 dropped frames=61 hitch time ratio=53.1 ms/s longest frame gap=33.3ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=0, scroll frame p50=0.2ms p95=8.3ms max=18.6ms over 16ms=4/600",
+      "mainCPU": 21.1,
+      "processCPU": 22.8,
+      "rssMiB": 186.9,
+      "footprintPeakMiB": null,
+      "hitchesMsPerSecond": 53.1,
+      "displayHz": 120.0,
+      "scrollP50Ms": 0.2,
+      "scrollP95Ms": 8.3,
+      "stepsOver16Ms": 4.0,
+      "reversals": 0.0,
+      "bottomGapChanges": 0.0,
+      "stdoutSHA256": "11794828b5f22ba4efb4a554299665e19b9cf53cc2724eec75be47343c963295",
+      "details": [
+        "native transcript: cells created=9 mounted=5, bindings=85, measurements=110 height transactions=49 membership updates=2, height cache entries=43, viewport top=5569 bottom=6202 document=6202"
+      ]
+    },
+    {
+      "mode": "scrolling",
+      "pair": 2,
+      "variant": "before",
+      "summary": "performance-check idle+scrolling: CPU=22.2% of one core, main thread=20.6%, peak RSS=174.6 MiB, rows=750, chat body evaluations=0, transcript rows evaluations=0, display 120 Hz frames=1095 hitches=41 dropped frames=55 hitch time ratio=47.8 ms/s longest frame gap=27.6ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=0, scroll frame p50=0.2ms p95=8.0ms max=18.3ms over 16ms=2/600",
+      "mainCPU": 20.6,
+      "processCPU": 22.2,
+      "rssMiB": 174.6,
+      "footprintPeakMiB": null,
+      "hitchesMsPerSecond": 47.8,
+      "displayHz": 120.0,
+      "scrollP50Ms": 0.2,
+      "scrollP95Ms": 8.0,
+      "stepsOver16Ms": 2.0,
+      "reversals": 0.0,
+      "bottomGapChanges": 0.0,
+      "stdoutSHA256": "7dfdf0185a914c4b71136816e9ec61dd8963ff704f52d6d73f8d4f81e6e2560d",
+      "details": [
+        "native transcript: cells created=9 mounted=5, bindings=85, measurements=110 height transactions=49 membership updates=2, height cache entries=43, viewport top=5569 bottom=6202 document=6202"
+      ]
+    },
+    {
+      "mode": "scrolling",
+      "pair": 2,
+      "variant": "after",
+      "summary": "performance-check idle+scrolling: CPU=17.2% of one core, main thread=15.9%, peak RSS=174.9 MiB, rows=750, chat body evaluations=0, transcript rows evaluations=0, display 120 Hz frames=1112 hitches=26 dropped frames=38 hitch time ratio=33.0 ms/s longest frame gap=32.7ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=0, scroll frame p50=0.2ms p95=6.0ms max=15.9ms over 16ms=0/600",
+      "mainCPU": 15.9,
+      "processCPU": 17.2,
+      "rssMiB": 174.9,
+      "footprintPeakMiB": null,
+      "hitchesMsPerSecond": 33.0,
+      "displayHz": 120.0,
+      "scrollP50Ms": 0.2,
+      "scrollP95Ms": 6.0,
+      "stepsOver16Ms": 0.0,
+      "reversals": 0.0,
+      "bottomGapChanges": 0.0,
+      "stdoutSHA256": "80cd9ecc0362bb8d168b5813cb1f67e392a824fcbe95e878d875357b02c2df1a",
+      "details": [
+        "native transcript: cells created=9 mounted=5, bindings=85, measurements=110 height transactions=49 membership updates=2, height cache entries=43, viewport top=5569 bottom=6202 document=6202"
+      ]
+    },
+    {
+      "mode": "scrolling",
+      "pair": 3,
+      "variant": "before",
+      "summary": "performance-check idle+scrolling: CPU=21.3% of one core, main thread=19.7%, peak RSS=186.7 MiB, rows=750, chat body evaluations=0, transcript rows evaluations=0, display 120 Hz frames=1097 hitches=39 dropped frames=54 hitch time ratio=46.9 ms/s longest frame gap=28.1ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=0, scroll frame p50=0.2ms p95=7.8ms max=16.8ms over 16ms=4/600",
+      "mainCPU": 19.7,
+      "processCPU": 21.3,
+      "rssMiB": 186.7,
+      "footprintPeakMiB": null,
+      "hitchesMsPerSecond": 46.9,
+      "displayHz": 120.0,
+      "scrollP50Ms": 0.2,
+      "scrollP95Ms": 7.8,
+      "stepsOver16Ms": 4.0,
+      "reversals": 0.0,
+      "bottomGapChanges": 0.0,
+      "stdoutSHA256": "47941b0c84074051ae9f19cf5511709453215210a4ad5b490bb85cf409ddb745",
+      "details": [
+        "native transcript: cells created=9 mounted=5, bindings=85, measurements=110 height transactions=49 membership updates=2, height cache entries=43, viewport top=5569 bottom=6202 document=6202"
+      ]
+    },
+    {
+      "mode": "scrolling",
+      "pair": 3,
+      "variant": "after",
+      "summary": "performance-check idle+scrolling: CPU=23.3% of one core, main thread=21.5%, peak RSS=175.1 MiB, rows=750, chat body evaluations=0, transcript rows evaluations=0, display 120 Hz frames=1086 hitches=48 dropped frames=65 hitch time ratio=56.5 ms/s longest frame gap=32.0ms, newest row moved down=0 times (0 pt, largest 0 pt), bottom gap changes=0, scroll frame p50=0.2ms p95=8.5ms max=19.5ms over 16ms=2/600",
+      "mainCPU": 21.5,
+      "processCPU": 23.3,
+      "rssMiB": 175.1,
+      "footprintPeakMiB": null,
+      "hitchesMsPerSecond": 56.5,
+      "displayHz": 120.0,
+      "scrollP50Ms": 0.2,
+      "scrollP95Ms": 8.5,
+      "stepsOver16Ms": 2.0,
+      "reversals": 0.0,
+      "bottomGapChanges": 0.0,
+      "stdoutSHA256": "126c24e275b65052edcfed065b4fa98caebe43416ec8fd3a4ff675970fdcbe51",
+      "details": [
+        "native transcript: cells created=9 mounted=5, bindings=85, measurements=110 height transactions=49 membership updates=2, height cache entries=43, viewport top=5569 bottom=6202 document=6202"
+      ]
+    }
+  ],
+  "medians": {
+    "streaming": {
+      "before": {
+        "mainCPU": 11.0,
+        "processCPU": 12.4,
+        "rssMiB": 187.6,
+        "footprintPeakMiB": 181.0,
+        "hitchesMsPerSecond": 50.1
+      },
+      "after": {
+        "mainCPU": 9.6,
+        "processCPU": 10.8,
+        "rssMiB": 199.8,
+        "footprintPeakMiB": 180.5,
+        "hitchesMsPerSecond": 52.6
+      }
+    },
+    "scrolling": {
+      "before": {
+        "mainCPU": 19.7,
+        "processCPU": 21.3,
+        "rssMiB": 186.4,
+        "hitchesMsPerSecond": 46.9,
+        "scrollP50Ms": 0.2,
+        "scrollP95Ms": 7.8
+      },
+      "after": {
+        "mainCPU": 21.1,
+        "processCPU": 22.8,
+        "rssMiB": 175.1,
+        "hitchesMsPerSecond": 53.1,
+        "scrollP50Ms": 0.2,
+        "scrollP95Ms": 8.3
+      }
+    }
+  }
+}

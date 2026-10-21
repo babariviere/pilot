@@ -1,0 +1,187 @@
+{
+  "schema": 1,
+  "status": "headless attribution only, no smoothness acceptance",
+  "source": {
+    "main": "e3bb09bd2eff35a0fc41f7d1fdaffb0e8571a954",
+    "tableLayer": "bd185d45566d8e3e262111afe67de3949e449ad0",
+    "nativeRows": "c8cbd4de14b933b600d7ddc0be9e20439c2b5446",
+    "candidate": "a16dbb1dca7c3753e840b1619065fd8150e3404b"
+  },
+  "method": {
+    "configuration": "release",
+    "scope": "production NativeTranscriptSection in temporary prohibited-activation NSApplication, no shell/composer",
+    "viewportsPt": {
+      "scrolling": [
+        1024,
+        713
+      ],
+      "streaming": [
+        1024,
+        686
+      ]
+    },
+    "draw": "full bitmap cacheDisplay, not production dirty-window drawing or display callbacks",
+    "samples": "10-second sample capture including startup/warmup, counts not CPU milliseconds, groups overlap",
+    "repetitions": 1,
+    "onScreenPairs": 0,
+    "localSwiftTesting": "not compiled or run",
+    "limitations": [
+      "Synthetic raster dominates scrolling.",
+      "Single before/after with different cold-runtime/page-cache effects; not a reliable speedup estimate.",
+      "Before streaming has one 533.7ms async transcript-apply wall interval, which includes queueing.",
+      "No display frames, hitches, selection/focus interaction or large revealed history acceptance."
+    ]
+  },
+  "binaries": {
+    "before": {
+      "SHA256": "ca926c4bf4e4b254f8f3ade333740663be0b0986f5d6aaf6ccb047916b89fef7",
+      "UUID": "36B595B8-EE08-3805-B82C-D44AB07F7B60"
+    },
+    "after": {
+      "SHA256": "b3376410ee18305942310b3579e9e4248820e7633eb3311cefb94bb0e691a72a",
+      "UUID": "8D52AAED-C48C-3CDF-A38F-07925BD8FFBF"
+    }
+  },
+  "harness": {
+    "beforePatchSHA256": "8af6f7ed32cb60467ea7ee134fd6229409789cab417c319be48c47b905b3d9f4",
+    "candidatePatchSHA256": "54278b319f1e4ad61e0a7a88b436b9a12dfa476b51e5efd1ea4996d53b0cd61c",
+    "runnerSHA256": "c386986905d8ff7429a09a435eb65c1c541564f0988d683f2ea484d3da2c7323",
+    "pushed": false
+  },
+  "rejected": {
+    "scope": "initial full-shell attempt",
+    "exit": 3,
+    "reason": "zero-window guard, sample attributes allocation to editable composer TextKit2/TextInputUI cursor window",
+    "includedInResults": false
+  },
+  "runs": [
+    {
+      "variant": "before",
+      "workload": "scrolling",
+      "output": [
+        "headless-transcript-profile idle+scrolling: CPU=38.1% of one core, main thread=37.3%, peak RSS=97.8 MiB, rows=750, chat body evaluations=0, transcript rows evaluations=0, HEADLESS_LAYOUT_ONLY (no display metrics), scroll frame p50=6.7ms p95=12.2ms max=36.4ms over 16ms=7/600",
+        "  native transcript: cells created=10 mounted=5, bindings=106, measurements=131 height transactions=49 membership updates=2, height cache entries=43, viewport top=5489 bottom=6202 document=6202",
+        "HEADLESS SAFETY windows=0 active=false"
+      ],
+      "mainThreadSamples": {
+        "all": 8212,
+        "waiting": 5110,
+        "non_waiting": 3102
+      },
+      "overlappingNonwaitingInclusiveGroups": {
+        "height transactions": 36,
+        "view layout": 349,
+        "TextKit": 546,
+        "text measurement": 22,
+        "font setup": 374,
+        "native clip scrolling": 46,
+        "SwiftUI graph/layout": 49,
+        "table realization": 164,
+        "headless raster": 2458,
+        "cell binding": 85,
+        "tracking": 4
+      },
+      "stdoutSHA256": "b17d746d9a2a507b53e24b147c40de82d686d5451fd75994772b1a9d2629919f",
+      "sampleSHA256": "933f4cf28f86cd8f4ebc43f4d7f31209055fe11f1ea488c54e71f2f0bd700068"
+    },
+    {
+      "variant": "before",
+      "workload": "streaming",
+      "output": [
+        "headless-transcript-profile streaming+4/s+markdown 100 chars: CPU=5.6% of one core, main thread=5.2%, peak RSS=98.5 MiB, rows=1001, chat body evaluations=0, transcript rows evaluations=0, physical footprint peak=37.4 MiB end=37.5 MiB, HEADLESS_LAYOUT_ONLY (no display metrics)",
+        "  native transcript: cells created=10 mounted=1, bindings=74, measurements=119 height transactions=41 membership updates=3, height cache entries=10, viewport top=4628 bottom=5314 document=5314",
+        "  transcript apply: 40 calls, total 598.8ms (6.0% of the run), mean 14.970ms, longest 533.7ms",
+        "  publish: 40 calls, total 24.0ms (0.2% of the run), mean 0.600ms, longest 16.7ms",
+        "  markdown prepare: 40 calls, total 31.8ms (0.3% of the run), mean 0.794ms, longest 3.1ms",
+        "  text update: 57 calls, total 55.9ms (0.6% of the run), mean 0.981ms, longest 5.1ms",
+        "  text measure: 118 calls, total 15.7ms (0.2% of the run), mean 0.133ms, longest 3.0ms",
+        "  after completion: CPU=0.0% of one core over 5 s, physical footprint=37.9 MiB",
+        "HEADLESS SAFETY windows=0 active=false"
+      ],
+      "mainThreadSamples": {
+        "all": 8205,
+        "waiting": 7331,
+        "non_waiting": 874
+      },
+      "overlappingNonwaitingInclusiveGroups": {
+        "TextKit": 211,
+        "height transactions": 95,
+        "view layout": 99,
+        "native clip scrolling": 6,
+        "font setup": 89,
+        "table realization": 22,
+        "text measurement": 9,
+        "tracking": 3,
+        "SwiftUI graph/layout": 113,
+        "cell binding": 5,
+        "headless raster": 496
+      },
+      "stdoutSHA256": "ab131d29f491664851ab991a8b06e24be5cdbc6020aba104c0cb5ed483e5289d",
+      "sampleSHA256": "b702fcb601f896d9ea27166dbd4a5de3ef1223d43d5b3742607f13986c322dde"
+    },
+    {
+      "variant": "after",
+      "workload": "scrolling",
+      "output": [
+        "headless-transcript-profile idle+scrolling: CPU=36.3% of one core, main thread=35.5%, peak RSS=97.8 MiB, rows=750, chat body evaluations=0, transcript rows evaluations=0, HEADLESS_LAYOUT_ONLY (no display metrics), scroll frame p50=6.1ms p95=12.2ms max=36.2ms over 16ms=8/600",
+        "  native transcript: cells created=10 mounted=5, bindings=102, measurements=129 height transactions=49 membership updates=2, height cache entries=43, viewport top=5489 bottom=6202 document=6202",
+        "HEADLESS SAFETY windows=0 active=false"
+      ],
+      "mainThreadSamples": {
+        "all": 7752,
+        "waiting": 4977,
+        "non_waiting": 2775
+      },
+      "overlappingNonwaitingInclusiveGroups": {
+        "height transactions": 36,
+        "tracking": 2,
+        "view layout": 314,
+        "TextKit": 403,
+        "native clip scrolling": 55,
+        "font setup": 277,
+        "SwiftUI graph/layout": 22,
+        "table realization": 164,
+        "headless raster": 2077,
+        "cell binding": 81,
+        "text measurement": 16
+      },
+      "stdoutSHA256": "a59e17612d68f2e3e418a3243ffbc5c692fcc33629502a042a1359a0a64c1363",
+      "sampleSHA256": "4f56350d85f38886d14e2f5f788411ca59bd07f5ca02be959f3a3bf5339e4659"
+    },
+    {
+      "variant": "after",
+      "workload": "streaming",
+      "output": [
+        "headless-transcript-profile streaming+4/s+markdown 100 chars: CPU=4.7% of one core, main thread=4.3%, peak RSS=98.4 MiB, rows=1001, chat body evaluations=0, transcript rows evaluations=0, physical footprint peak=37.2 MiB end=37.3 MiB, HEADLESS_LAYOUT_ONLY (no display metrics)",
+        "  native transcript: cells created=10 mounted=1, bindings=75, measurements=122 height transactions=42 membership updates=3, height cache entries=10, viewport top=4628 bottom=5314 document=5314",
+        "  transcript apply: 40 calls, total 13.2ms (0.1% of the run), mean 0.329ms, longest 2.0ms",
+        "  publish: 40 calls, total 9.7ms (0.1% of the run), mean 0.243ms, longest 4.4ms",
+        "  markdown prepare: 40 calls, total 19.7ms (0.2% of the run), mean 0.492ms, longest 2.3ms",
+        "  text update: 57 calls, total 30.3ms (0.3% of the run), mean 0.531ms, longest 2.1ms",
+        "  text measure: 118 calls, total 4.7ms (0.0% of the run), mean 0.040ms, longest 0.9ms",
+        "  after completion: CPU=0.0% of one core over 5 s, physical footprint=37.8 MiB",
+        "HEADLESS SAFETY windows=0 active=false"
+      ],
+      "mainThreadSamples": {
+        "all": 7970,
+        "waiting": 7657,
+        "non_waiting": 313
+      },
+      "overlappingNonwaitingInclusiveGroups": {
+        "TextKit": 82,
+        "height transactions": 34,
+        "view layout": 34,
+        "native clip scrolling": 1,
+        "text measurement": 2,
+        "font setup": 30,
+        "SwiftUI graph/layout": 20,
+        "cell binding": 2,
+        "headless raster": 178,
+        "table realization": 7,
+        "tracking": 1
+      },
+      "stdoutSHA256": "08c5ade2aa4199def27af73de5184932cb7af4dbc9e66735b5a0e652e928afad",
+      "sampleSHA256": "a555d683869df61bb9cfa4cc88d519b368d7e5e4b417e0736f48aa6910fb99bd"
+    }
+  ]
+}

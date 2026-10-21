@@ -14,15 +14,24 @@ final class NativeMarkdownMessage: NSView {
     private var blocks: [NativeMarkdownBlockView] = []
     private var preparedBlocks: [PreparedMarkdownBlock] = []
     private var selection: MessageTextSelection?
+    private var color: NSColor?
     private var changed: (() -> Void)?
     private var measuredWidth: CGFloat = 0
     private var measuredHeight: CGFloat = 0
     private(set) var preparedSource: String?
     var nativeTextViews: [MessageSelectionTextView] { blocks.flatMap(\.nativeTextViews) }
     private var dirty = true
-    private let copyButton = NSButton()
+    private let copyButton = NativeTranscriptButton()
     private let time = NSTextField(labelWithString: "")
     private var tracking: NSTrackingArea?
+    private var hovered = false
+    var showsActions = true {
+        didSet {
+            if oldValue != showsActions { dirty = true; needsLayout = true }
+            copyButton.isHidden = !showsActions
+            time.isHidden = !showsActions
+        }
+    }
     override var isFlipped: Bool { true }
 
     override init(frame: NSRect) {
@@ -35,6 +44,7 @@ final class NativeMarkdownMessage: NSView {
         copyButton.action = #selector(copyMessage)
         copyButton.alphaValue = 0
         copyButton.contentTintColor = NSColor(Theme.mutedForeground)
+        copyButton.onFocusChanged = { [weak self] in self?.refreshActions() }
         addSubview(copyButton)
         time.font = .systemFont(ofSize: Theme.TextRole.caption.size)
         time.textColor = NSColor(Theme.mutedForeground)
@@ -45,17 +55,22 @@ final class NativeMarkdownMessage: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     func update(source: String, timestamp: Double?, streaming: Bool, selection: MessageTextSelection,
-                environment: EnvironmentValues, changed: @escaping () -> Void) {
+                environment: EnvironmentValues, color: NSColor = NSColor(Theme.foreground),
+                changed: @escaping () -> Void) {
         self.changed = changed
+        var environment = environment
+        environment.messageSelectionColor = color
         self.environment = environment
         let selectionChanged = self.selection !== selection
+        let colorChanged = self.color != color
+        self.color = color
         self.selection = selection
         selection.source = source
         time.stringValue = timestamp.flatMap { MessageTimeFormatting.label($0) } ?? ""
         time.toolTip = timestamp.flatMap { MessageTimeFormatting.detail($0) }
         let fonts = environment.pilotFonts
         guard self.source != source || self.fonts != fonts else {
-            if selectionChanged { apply(preparedBlocks, streaming: false, initial: true) }
+            if selectionChanged || colorChanged { apply(preparedBlocks, streaming: false, initial: true) }
             return
         }
         let initial = self.source == nil
@@ -120,9 +135,13 @@ final class NativeMarkdownMessage: NSView {
             y += height
         }
         measuredWidth = width
-        measuredHeight = ceil(y + 24) // The existing fixed action slot: 4 pt gap, 20 pt footer.
+        measuredHeight = ceil(y + (showsActions ? 24 : 0))
         dirty = false
         return measuredHeight
+    }
+
+    func preferredWidth(upTo width: CGFloat) -> CGFloat {
+        min(width, max(1, blocks.map { $0.preferredWidth(upTo: width) }.max() ?? width))
     }
 
     override func layout() {
@@ -141,8 +160,12 @@ final class NativeMarkdownMessage: NSView {
         addTrackingArea(area)
     }
 
-    override func mouseEntered(with event: NSEvent) { copyButton.alphaValue = 1; time.alphaValue = 1 }
-    override func mouseExited(with event: NSEvent) { copyButton.alphaValue = 0; time.alphaValue = 0 }
+    override func mouseEntered(with event: NSEvent) { hovered = true; refreshActions() }
+    override func mouseExited(with event: NSEvent) { hovered = false; refreshActions() }
+    private func refreshActions() {
+        let shown = hovered || window?.firstResponder === copyButton
+        copyButton.alphaValue = shown ? 1 : 0; time.alphaValue = shown ? 1 : 0
+    }
     @objc private func copyMessage() { if let source { MessageCopyButton.copy(source) } }
 
     /// Reset identity/work while retaining the bounded mounted regions for the next message in this cell.
@@ -155,6 +178,7 @@ final class NativeMarkdownMessage: NSView {
         selection = nil
         changed = nil
         dirty = true
+        hovered = false
         copyButton.alphaValue = 0
         time.alphaValue = 0
     }
@@ -167,17 +191,17 @@ final class NativeMarkdownMessage: NSView {
     }
 }
 
-/// Native text, list markers, quote rules and dividers. Complex block views are temporary compatibility hosts
-/// behind the flag, removed with the remaining native row migration. They share the message's selection owner.
+/// Native Markdown regions sharing the message's selection owner. No SwiftUI block hosts.
 final class NativeMarkdownBlockView: NSView {
     private var blockID: Int?
     private weak var selection: MessageTextSelection?
     private var fonts: PilotFonts?
+    private var color: NSColor?
     private var textViews: [MessageSelectionTextView] = []
     private var labels: [NSTextField] = []
-    private var host: TranscriptRowHost?
-    private var hostContent: AnyView?
-    private var hostWidth: CGFloat = 0
+    private var code: NativeCodeBlock?
+    private var table: MarkdownTableView?
+    private var diagram: NativeDiagramBlock?
     private var quoteRule: NSView?
     private var kind: MarkdownBlock?
     private var changed: (() -> Void)?
@@ -187,24 +211,42 @@ final class NativeMarkdownBlockView: NSView {
     private var lastWidth: CGFloat = 0
     private var height: CGFloat = 0
     private var dirty = true
-    var nativeTextViews: [MessageSelectionTextView] { textViews }
+    var nativeTextViews: [MessageSelectionTextView] {
+        var views = textViews
+        if let code { views.append(code.text) }
+        if let table {
+            for row in table.cells {
+                for cell in row { views.append(cell.text) }
+            }
+        }
+        if let diagram { views.append(contentsOf: diagram.nativeTextViews) }
+        return views
+    }
     override var isFlipped: Bool { true }
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            quoteRule?.layer?.backgroundColor = NSColor(Theme.faintForeground).cgColor
+        }
+    }
 
     func update(_ block: PreparedMarkdownBlock, index: Int, selection: MessageTextSelection,
                 environment: EnvironmentValues, streaming: Bool, fadesInitial: Bool, changed: @escaping () -> Void) {
         self.changed = changed
         let fonts = environment.pilotFonts
-        guard blockID != block.id || self.fonts != fonts || self.selection !== selection else { return }
+        guard blockID != block.id || self.fonts != fonts || self.selection !== selection
+            || color != environment.messageSelectionColor else { return }
         self.selection = selection
         blockID = block.id
         self.fonts = fonts
+        self.color = environment.messageSelectionColor
         kind = block.block
         top = 0; indent = 0; itemSpacing = 0
         var values: [AttributedString] = []
         var markers: [String] = []
         var font = fonts.nsBody
         var spacing: CGFloat = 3
-        var color = NSColor(Theme.foreground)
+        var color = environment.messageSelectionColor
         var prefixes: [String] = []
         var native = true
         switch block.block {
@@ -225,7 +267,9 @@ final class NativeMarkdownBlockView: NSView {
         default: native = false
         }
         if native {
-            host?.onSizeChanged = nil; host?.removeFromSuperview(); host = nil; hostContent = nil
+            code?.stop(); code = nil
+            table?.unregister(); table?.removeFromSuperview(); table = nil
+            diagram?.stop(); diagram = nil
             while textViews.count > values.count { removeText(textViews.removeLast()) }
             for (item, value) in values.enumerated() {
                 if item >= textViews.count {
@@ -233,11 +277,13 @@ final class NativeMarkdownBlockView: NSView {
                     textViews.append(text); addSubview(text)
                 }
                 let text = textViews[item]
-                if text.selectionOwner !== selection { text.setSelectedRange(NSRange(location: 0, length: 0)) }
+                if text.selectionOwner !== selection { text.clearMessageSelection() }
                 text.selectionOwner?.unregister(text)
                 text.selectionOwner = selection
                 text.selectionKey = .init(block: index, item: item)
                 text.copyPrefix = item < prefixes.count ? prefixes[item] : ""
+                text.supplementalMenu = environment.nativeTranscriptMenu
+                text.nativeOpenURL = environment.openURL
                 let style = MessageSelectionTextView.Style(font: font, mono: fonts.nsMono, color: color, spacing: spacing)
                 if text.content != value || text.style != style {
                     StreamingTrace.measure(.textUpdate) {
@@ -275,41 +321,73 @@ final class NativeMarkdownBlockView: NSView {
             for text in textViews { removeText(text) }; textViews = []
             for label in labels { label.removeFromSuperview() }; labels = []
             quoteRule?.removeFromSuperview(); quoteRule = nil
-            let root = AnyView(BlockView(block: block, hugsContent: false)
-                // Reusing a host must not carry interactive SwiftUI state into a different message.
-                .id(ObjectIdentifier(selection))
-                .environment(\.self, environment)
-                .environment(\.messageTextSelection, selection)
-                .environment(\.messageSelectionBlock, index)
-                .environment(\.messageSelectionColor, NSColor(Theme.foreground))
-                .environment(\.messageTextFade, streaming ? NSColor(Theme.background) : nil)
-                .environment(\.messageTextFadesInitial, fadesInitial)
-                .environment(\.transcriptContentPrepared, changed))
-            hostContent = root
-            hostWidth = 0
-            if let host { host.rootView = root } else {
-                let view = TranscriptRowHost(rootView: root)
-                host = view; addSubview(view)
+            switch block.block {
+            case let .code(language, source):
+                diagram?.stop(); diagram = nil
+                table?.unregister(); table?.removeFromSuperview(); table = nil
+                let view = code ?? NativeCodeBlock()
+                if code == nil { code = view; addSubview(view) }
+                view.update(source: source, language: language, prepared: block.code, fonts: fonts,
+                            selection: selection, block: index, streaming: streaming, fadesInitial: fadesInitial,
+                            menu: environment.nativeTranscriptMenu,
+                            openURL: environment.openURL,
+                            changed: { [weak self] in self?.dirty = true; self?.changed?() })
+            case let .table(value):
+                diagram?.stop(); diagram = nil
+                code?.stop(); code = nil
+                let view = table ?? MarkdownTableView()
+                if table == nil { table = view; addSubview(view) }
+                let header = block.table?.header ?? value.header.map { AttributedString($0) }
+                let rows = block.table?.rows ?? value.rows.map { $0.map { AttributedString($0) } }
+                let body = MessageSelectionTextView.Style(font: fonts.nsBody, mono: fonts.nsMono,
+                                                         color: color, spacing: MarkdownTableView.lineSpacing)
+                let heading = MessageSelectionTextView.Style(font: fonts.nsChat(fonts.chatSize, weight: .semibold),
+                    mono: fonts.nsMono, color: color, spacing: MarkdownTableView.lineSpacing)
+                view.update(rows: [header] + rows, alignments: value.alignments, header: heading, body: body,
+                            selection: selection, block: index)
+                for row in view.cells { for cell in row {
+                    cell.text.supplementalMenu = environment.nativeTranscriptMenu
+                    cell.text.nativeOpenURL = environment.openURL
+                } }
+            case let .diagram(kind, source):
+                code?.stop(); code = nil
+                table?.unregister(); table?.removeFromSuperview(); table = nil
+                let view = diagram ?? NativeDiagramBlock()
+                if diagram == nil { diagram = view; addSubview(view) }
+                view.update(kind: kind, source: source, native: block.diagram, selection: selection,
+                            block: index, environment: environment,
+                            changed: { [weak self] in self?.dirty = true; self?.changed?() })
+            default: break // Text/list/rule cases are handled above.
             }
-            host?.onSizeChanged = { [weak self] in self?.dirty = true; self?.changed?() }
         }
         dirty = true
         needsLayout = true
+    }
+
+    func preferredWidth(upTo width: CGFloat) -> CGFloat {
+        if code != nil || table != nil || diagram != nil { return width }
+        if case .rule = kind { return width }
+        return min(width, max(1, (textViews.map {
+            $0.measure(width: max(1, width - indent), unwrapped: false, hugsContent: true).width
+        }.max() ?? 0) + indent))
     }
 
     func measure(width: CGFloat) -> CGFloat {
         guard dirty || width != lastWidth else { return height }
         lastWidth = width
         var y = top
-        if let host, let hostContent {
-            if hostWidth != width {
-                hostWidth = width
-                host.rootView = AnyView(hostContent.frame(width: width, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true))
-            }
-            host.frame.size.width = width
-            y = host.measuredContentHeight()
-            host.frame = NSRect(x: 0, y: 0, width: width, height: y)
+        if let code {
+            let size = code.measure(width: width)
+            code.frame = NSRect(origin: .zero, size: size)
+            y = size.height
+        } else if let table {
+            let size = table.size(forWidth: width)
+            table.frame = NSRect(origin: .zero, size: size)
+            y = size.height
+        } else if let diagram {
+            let size = diagram.measure(width: width)
+            diagram.frame = NSRect(origin: .zero, size: size)
+            y = size.height
         } else {
             for (index, text) in textViews.enumerated() {
                 if index > 0 { y += itemSpacing }
@@ -333,14 +411,17 @@ final class NativeMarkdownBlockView: NSView {
     private func removeText(_ text: MessageSelectionTextView) {
         text.selectionOwner?.unregister(text)
         text.selectionOwner = nil
+        text.supplementalMenu = nil
+        text.nativeOpenURL = nil
         text.removeFromSuperview()
     }
 
     func stop() {
         for text in textViews { removeText(text) }
         textViews = []
-        host?.onSizeChanged = nil
-        host?.removeFromSuperview(); host = nil
+        code?.stop(); code = nil
+        table?.unregister(); table?.removeFromSuperview(); table = nil
+        diagram?.stop(); diagram = nil
         changed = nil
         removeFromSuperview()
     }

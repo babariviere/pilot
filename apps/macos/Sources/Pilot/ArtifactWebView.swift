@@ -67,23 +67,30 @@ struct ArtifactWebView: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(state: state) }
 
     func makeNSView(context: Context) -> WKWebView {
+        Self.makeView(revision: revision, client: client, coordinator: context.coordinator,
+                      inline: inline, onEscape: onEscape)
+    }
+
+    /// The same sandbox/lifecycle for SwiftUI surfaces and native transcript cards.
+    static func makeView(revision: ArtifactRevision, client: PilotClient, coordinator: Coordinator,
+                         inline: Bool = false, onEscape: (() -> Void)? = nil) -> WKWebView {
         let libraries = ArtifactLibraryHandler(libraries: Set(revision.libraries), client: client)
         let interactive = inline && (revision.kind == .html || revision.kind == .react || revision.kind == .shader)
-        let view = Self.makeSandboxView(coordinator: context.coordinator, libraries: libraries, inline: inline,
+        let view = Self.makeSandboxView(coordinator: coordinator, libraries: libraries, inline: inline,
                                         interactive: interactive)
         if let page = view as? InlineArtifactWebView {
             page.onEscape = onEscape
             page.reportsHostVisibility = revision.kind == .shader
             // Clicks and typing can expand or collapse content: measure again promptly.
-            page.onInteraction = { [weak coordinator = context.coordinator, weak page] in
+            page.onInteraction = { [weak coordinator, weak page] in
                 guard let coordinator, let page else { return }
                 coordinator.startMeasuring(page)
             }
         }
-        context.coordinator.measurementKind = revision.kind
-        context.coordinator.artifactID = revision.id
-        context.coordinator.awaitingMermaid = revision.libraries.contains(.mermaid)
-        context.coordinator.install(in: view, document: ArtifactPreviewDocument.document(revision, inline: inline))
+        coordinator.measurementKind = revision.kind
+        coordinator.artifactID = revision.id
+        coordinator.awaitingMermaid = revision.libraries.contains(.mermaid)
+        coordinator.install(in: view, document: ArtifactPreviewDocument.document(revision, inline: inline))
         return view
     }
 

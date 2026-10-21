@@ -33,7 +33,12 @@ enum PerformanceCheck {
         let diagrams = arguments.contains("--diagrams")
         NativeMermaid.webOnly = arguments.contains("--web-diagrams")
         NSApp.appearance = NSAppearance(named: .aqua)
-        for window in NSApp.windows { window.close() }
+        // Closing a SwiftUI scene window retains its graph. A second manual host then renders the
+        // same shared feed twice, including into the closed window. Measure the real scene instead.
+        guard let window = mainSceneWindow(in: NSApp.windows) else {
+            print("performance-check error: main scene window is unavailable")
+            exit(1)
+        }
         let model = AppModel.shared
         let now = Date().timeIntervalSince1970 * 1000
         let project = Project(id: "performance", name: "Offline performance fixture", path: "/tmp/pilot-performance-fixture", createdAt: now)
@@ -67,11 +72,10 @@ enum PerformanceCheck {
         let feed = SessionFeed(sessionId: sessions[0].id, transcript: transcript)
         model.feeds.retain(feed, sessionId: sessions[0].id)
         feed.applyFixtureEvents([snapshot])
-        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 1280, height: 820),
-                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: MainWindow().environmentObject(model).environment(\.pilotFonts, model.settings.fonts))
-        window.orderFrontRegardless()
+        window.setContentSize(NSSize(width: 1280, height: 820))
+        window.setFrameOrigin(NSPoint(x: 100, y: 100))
+        window.makeKeyAndOrderFront(nil)
         do {
             try await Task.sleep(for: .seconds(2))
             let ticks = scrolling ? 600 : rate * measuredSeconds
@@ -227,6 +231,12 @@ enum PerformanceCheck {
             print("performance-check failed: \(error)")
             exit(1)
         }
+    }
+
+    /// A fixture must not silently add another graph or choose between duplicate scene windows.
+    static func mainSceneWindow(in windows: [NSWindow]) -> NSWindow? {
+        let matches = windows.filter { $0.identifier?.rawValue == MainWindow.id }
+        return matches.count == 1 ? matches[0] : nil
     }
 
     /// Turns of a user request, a tool call with its result, and a Markdown answer with code.

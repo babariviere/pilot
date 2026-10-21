@@ -326,7 +326,24 @@ struct SelectableMessageText: NSViewRepresentable {
 }
 
 @MainActor
-final class MessageSelectionTextView: NSTextView {
+final class MessageSelectionTextView: NSTextView, NSTextViewDelegate {
+    var supplementalMenu: ((NSMenu) -> Void)?
+    var nativeOpenURL: OpenURLAction? {
+        didSet { delegate = nativeOpenURL == nil ? nil : self }
+    }
+
+    func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+        guard let nativeOpenURL, let url = (link as? URL) ?? (link as? String).flatMap(URL.init(string:)) else { return false }
+        nativeOpenURL(url)
+        return true
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event) ?? NSMenu()
+        supplementalMenu?(menu)
+        return menu
+    }
+
     struct Style: Equatable {
         let font: NSFont
         let mono: NSFont
@@ -335,6 +352,16 @@ final class MessageSelectionTextView: NSTextView {
     }
     weak var selectionOwner: MessageTextSelection?
     var selectionKey = MessageTextSelection.Key(block: 0)
+    /// A recycled native region must not carry a caret/range into another message. Fresh regions already
+    /// have this selection; assigning it again still enters AppKit's selection/invalidation machinery.
+    @discardableResult
+    func clearMessageSelection() -> Bool {
+        let empty = NSRange(location: 0, length: 0)
+        guard selectedRanges.count != 1 || selectedRange() != empty || selectionAffinity != .downstream else { return false }
+        setSelectedRange(empty)
+        return true
+    }
+
     var content: AttributedString?
     var style: Style?
     var copyPrefix = ""
@@ -602,7 +629,7 @@ final class MessageSelectionTextView: NSTextView {
     }
 
     private func matchContainerToFrame() {
-        let width: CGFloat = unwrapped ? 1_000_000 : frame.width
+        let width: CGFloat = unwrapped ? 1_000_000 : max(1, frame.width - textContainerInset.width * 2)
         guard let container = textContainer, container.size.width != width else { return }
         container.size = CGSize(width: width, height: .greatestFiniteMagnitude)
     }

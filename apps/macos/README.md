@@ -38,6 +38,13 @@ Native SwiftUI client for pilotd, with a libghostty terminal per session.
   saving preserves queue position and delivery mode. Use Remove on any queued row to withdraw it
   without stopping the active run, or press Command-Delete (⌘⌫) while its inline editor is focused.
   Consumed messages cannot be edited or removed.
+- **Transcript renderer.** Reused AppKit rows are the default inside the SwiftUI shell. The legacy SwiftUI
+  transcript remains available: launch with `PILOT_APPKIT_TRANSCRIPT=0`, or retain an explicit false
+  `appKitTranscript` app preference. `PILOT_APPKIT_TRANSCRIPT=1` forces native; either explicit environment
+  value wins over the saved preference. With no environment override, a saved true/false preference wins;
+  absent preferences select native. Other environment values are ignored. Restart after changing an override.
+  This default selection does not imply that the outstanding smoothness and interaction gates have passed;
+  see the [source-pinned release measurements](../../docs/native-transcript-single-scene-measurement.md).
 - **Inline diagrams.** Completed `svg` and `mermaid` Markdown fences render directly in chat, with
   source/copy controls and source fallback for errors. Unclosed streaming fences stay as code.
   Diagrams keep their natural size, centered, and only shrink to fit the chat width and 480 pt; the
