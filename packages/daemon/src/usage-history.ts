@@ -3,15 +3,29 @@ import { join } from "node:path";
 import { Worker } from "node:worker_threads";
 import type {
 	AIUsageAccounting,
+	UsageAnalyticsQuery,
+	UsageAnalyticsResult,
 	UsageHistoryPage,
 	UsageHistoryQuery,
 	UsageHistoryStatus,
 	UsageHistoryWriteResult,
 	UsageObservation,
 } from "@pilot/protocol";
-import { parseUsageObservation, USAGE_MAX_ROWS, USAGE_ROW_BYTES } from "./usage-history-validation.ts";
+import {
+	parseUsageObservation,
+	USAGE_MAX_ROWS,
+	USAGE_ROW_BYTES,
+	usageAnalyticsQuery,
+	usageHistoryQuery,
+} from "./usage-history-validation.ts";
 
-/** Trusted, local host API. No agent tool, telemetry serializer or network endpoint. */
+export class UsageQueryCapacityError extends Error {
+	constructor() {
+		super("Usage query capacity exceeded");
+	}
+}
+
+/** Trusted host storage API. Only bounded native projections are exposed, never an agent/SQL/telemetry API. */
 export class UsageHistoryStore {
 	private worker?: Worker;
 	private serial = 0;
@@ -22,6 +36,7 @@ export class UsageHistoryStore {
 	private closing?: Promise<void>;
 	private drained?: () => void;
 	private maintenance?: Promise<UsageHistoryStatus>;
+	private queries = 0;
 	private readonly home: string;
 	private readonly erasureListeners = new Set<(status: UsageHistoryStatus) => Promise<void>>();
 	/** Source adapters must drain/purge stale durable evidence before erasure acknowledges. */
@@ -122,12 +137,29 @@ export class UsageHistoryStore {
 		void this.rpc("put", {}).catch(() => undefined);
 	}
 	async page(query: UsageHistoryQuery): Promise<UsageHistoryPage> {
-		if (query.after !== undefined && (typeof query.after !== "string" || query.after.length > 1024))
-			throw new Error("Invalid usage cursor");
-		const { kind, from, to, limit, after } = query;
-		const page = await this.rpc<UsageHistoryPage>("page", { query: { kind, from, to, limit, after } });
-		page.status.queueOverflows = this.overflows;
-		return page;
+		const canonical = usageHistoryQuery(query);
+		return this.readQuery(async () => {
+			const page = await this.rpc<UsageHistoryPage>("page", { query: canonical });
+			page.status.queueOverflows = this.overflows;
+			return page;
+		});
+	}
+	private async readQuery<T>(read: () => Promise<T>): Promise<T> {
+		if (this.queries >= 2) throw new UsageQueryCapacityError();
+		this.queries++;
+		try {
+			return await read();
+		} finally {
+			this.queries--;
+		}
+	}
+	async analytics(query: UsageAnalyticsQuery): Promise<UsageAnalyticsResult> {
+		const canonical = usageAnalyticsQuery(query);
+		return this.readQuery(async () => {
+			const result = await this.rpc<UsageAnalyticsResult>("analytics", { query: canonical });
+			result.status.queueOverflows = this.overflows;
+			return result;
+		});
 	}
 	expire(): Promise<UsageHistoryStatus> {
 		if (this.maintenance) return this.maintenance;

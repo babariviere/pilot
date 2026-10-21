@@ -898,6 +898,66 @@ final class HostClients: ObservableObject {
         return HostConnectionToken(host: host, generation: client.connectionGeneration)
     }
 
+    /// First dashboard pass is Local only. No implicit all-host selection or devbox reads.
+    func localUsage(_ query: UsageAnalyticsQuery) async throws -> UsageConnectedProjection {
+        let local = entries.keys.filter { $0.hostId == "local" }
+        guard !local.isEmpty else { throw HostRoutingError.disconnected }
+        guard local.count == 1 else { throw HostRoutingError.identityChanged }
+        return try await usageProjection(query, on: Set(local))
+    }
+
+    /// Deferred read-only helper, NOT the dashboard's active path. Targets must be explicit;
+    /// no all-connected-host default, connects, worker starts, persistence or failover.
+    func usageProjection(_ query: UsageAnalyticsQuery, on selectedHosts: Set<HostRef>) async throws -> UsageConnectedProjection {
+        let online = Set(entries.filter { $0.value.client.connected }.keys)
+        let known = Set(entries.keys).union(offlineHosts.keys).union(presentationClients.keys)
+        guard selectedHosts.isSubset(of: known) else { throw HostRoutingError.invalidReference }
+        let plan = UsageProjectionPlan(hosts: Array(selectedHosts), connected: online)
+        var values = plan.hosts
+        for start in stride(from: 0, to: values.count, by: 4) {
+            try Task.checkCancellation()
+            let batch = Array(values[start..<min(start + 4, values.count)].enumerated())
+            await withTaskGroup(of: (Int, UsageHostProjection).self) { group in
+                for (offset, value) in batch where value.state == "fresh" {
+                    group.addTask { (start + offset, await self.readUsageProjection(query, host: value.host)) }
+                }
+                for await (index, value) in group { values[index] = value }
+            }
+        }
+        try Task.checkCancellation()
+        return UsageConnectedProjection(hosts: values, omittedHosts: plan.omittedHosts,
+                                        queriedAt: Date().timeIntervalSince1970 * 1000)
+    }
+
+    private func readUsageProjection(_ query: UsageAnalyticsQuery, host: HostRef) async -> UsageHostProjection {
+        do {
+            try Task.checkCancellation()
+            let client = try endpoint(host), fence = try token(for: host)
+            let hello = try await client.hello()
+            try validate(fence)
+            try host.validate(hello)
+            guard hello.capabilities.usageQueries == 1 else { return UsageHostProjection(host: host, state: "unsupported") }
+            let result = try await client.usageAnalytics(query, host: host)
+            try validate(fence)
+            return UsageHostProjection(host: host, state: "fresh", result: result)
+        } catch let error as ClientError where error.status == 429 {
+            return UsageHostProjection(host: host, state: "limited")
+        } catch {
+            return UsageHostProjection(host: host, state: (try? endpoint(host)) == nil ? "disconnected" : "unavailable")
+        }
+    }
+
+    func usagePage(_ query: UsageHistoryQuery, on host: HostRef) async throws -> UsageHistoryPage {
+        let client = try endpoint(host), fence = try token(for: host)
+        let hello = try await client.hello()
+        try validate(fence)
+        try host.validate(hello)
+        guard hello.capabilities.usageQueries == 1 else { throw HostRoutingError.incompatible }
+        let page = try await client.usagePage(query, host: host)
+        try validate(fence)
+        return page
+    }
+
     // Shared pages always retain the chosen host and enrollment. They never read an
     // execution project's unrelated local memory or switch to another reachable daemon.
     func sharedContexts(on host: HostRef) async throws -> [SharedContextSummary] {

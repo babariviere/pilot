@@ -96,7 +96,9 @@ public struct NativeDiagnosticEvidence: Codable, Equatable, Sendable {
     public let windowMs: Double?
     public let releaseRelation: String?
     public let durationMs: Double?
+    public let attemptRef: String?
     public let sequence: Int?
+    public let stage: String?
     public let outcome: String?
 
     public init(ref: String, at: String, kind: String, reason: String, windowMs: Double, releaseRelation: String,

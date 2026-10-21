@@ -60,8 +60,19 @@ test("release generator is deterministic, relocatable and fails closed on missin
 		assert.notEqual(run("check").status, 0, "missing dependency must fail the package gate");
 		assert.equal(run("build").status, 0);
 		const worker = join(directory, "usage-history-worker.ts");
-		writeFileSync(worker, `${readFileSync(worker, "utf8")}\nimport "unexpected-sdk";`);
-		assert.notEqual(run("build").status, 0, "new runtime dependencies require explicit review");
+		const workerSource = readFileSync(worker, "utf8");
+		writeFileSync(worker, `${workerSource}\nconst queryFields = ["from", "to"];`);
+		assert.equal(run("build").status, 0, "query field strings are not module imports");
+		for (const declaration of [
+			'import "unexpected-sdk";',
+			'import"unexpected-sdk";',
+			'import{x}from"unexpected-sdk";',
+			'export{x}from"unexpected-sdk";',
+			'import("unexpected-sdk");',
+		]) {
+			writeFileSync(worker, `${workerSource}\n${declaration}`);
+			assert.notEqual(run("build").status, 0, "new runtime dependencies require explicit review");
+		}
 	} finally {
 		rmSync(directory, { recursive: true, force: true });
 	}

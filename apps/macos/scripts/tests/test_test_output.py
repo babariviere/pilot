@@ -91,6 +91,7 @@ HOST_MCPS = [
     "hostMcpNativeCheckboxSelectsOnlyMissingServers",
 ]
 HOST_MCP_OUTPUTS = [STARTED + "".join(f"◇ Test {name}() started.\n" for name in HOST_MCPS) + PASSED]
+USAGE_PROJECTION = "usageLocalConsumerNeverFansOutAndDeferredHelperRequiresExplicitHosts"
 
 REGRESSION_PARTITIONS = [
     ["productionFooterStaysFixedWhileReadingLongHistoryAndKeepsTheComposer",
@@ -99,7 +100,7 @@ REGRESSION_PARTITIONS = [
     ["settingsSaveBarMountsForDirtyFormAndLeavesAfterRevert"],
     ["visualSliderDragsCoalesceToOneHandlerInFlightEndingAtTheLastPosition", "visualDiscreteEventsRunInOrder",
      "missionNavigationAndPaletteKeepCanonicalPinsAcrossExecutionChangesAndReconnect",
-     "sidebarPollsOnlyBranchesAndLoadsCountsOnDemand"]
+     "sidebarPollsOnlyBranchesAndLoadsCountsOnDemand", USAGE_PROJECTION]
 ]
 REGRESSION_OUTPUTS = [STARTED + "".join(f"◇ Test {name}() started.\n" for name in names) + PASSED
                       for names in REGRESSION_PARTITIONS]
@@ -138,6 +139,13 @@ class TestOutputTests(unittest.TestCase):
         self.assertIsNotNone(registry)
         names = re.findall(r"^\s*(\w+)\s*$", registry.group(1), re.M)
         self.assertEqual(names, NATIVE_POINTERS)
+
+    def test_usage_http_fixture_keeps_its_deadline_in_the_scheduler_partition(self):
+        source = SCRIPTS.parent / "Tests/PilotUITests/UsageProjectionTests.swift"
+        self.assertIn(USAGE_PROJECTION, REGRESSION_PARTITIONS[-1])
+        self.assertEqual(sum(names.count(USAGE_PROJECTION) for names in PARTITIONS), 1)
+        self.assertRegex(source.read_text(),
+                         r"@Test\(\.timeLimit\(\.minutes\(1\)\)\) @MainActor\s+func " + USAGE_PROJECTION)
 
     def test_host_mcp_partition_covers_fixtures(self):
         source = SCRIPTS.parent / "Tests/PilotTests/HostMcpConnectionsTests.swift"

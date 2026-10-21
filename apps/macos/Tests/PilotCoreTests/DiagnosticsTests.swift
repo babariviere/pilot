@@ -2,6 +2,33 @@ import Foundation
 import Testing
 import PilotCore
 
+@Test func nativeDiagnosticEvidenceKeepsDevboxSetupCorrelation() throws {
+    let item = NativeDiagnosticEvidence(ref: "diagnostic:v1:setup:fixture",
+        attemptRef: "diagnostic:v1:setup-attempt:fixture", sequence: 3,
+        at: "2026-01-01T00:00:00.000Z", stage: .remoteHandshake, outcome: .failed,
+        reason: .handshakeRejected)
+    let data = try JSONEncoder().encode(item)
+    let restored = try JSONDecoder().decode(NativeDiagnosticEvidence.self, from: data)
+    #expect(restored == item)
+    #expect(restored.attemptRef == "diagnostic:v1:setup-attempt:fixture")
+    #expect(restored.stage == "remote_handshake")
+    #expect(restored.sequence == 3)
+    let projection = try JSONDecoder().decode(DiagnosticEvidence.self, from: data)
+    #expect(projection.attemptRef == restored.attemptRef)
+    #expect(projection.stage == restored.stage)
+}
+
+@Test func nativeOSDiagnosticEvidenceDoesNotInventSetupCorrelation() throws {
+    let item = NativeDiagnosticEvidence(ref: "diagnostic:v1:native:fixture",
+        at: "2026-01-01T00:00:00.000Z", kind: "native.hang", reason: "main_thread",
+        windowMs: 1000, releaseRelation: "current", durationMs: 20)
+    let restored = try JSONDecoder().decode(NativeDiagnosticEvidence.self, from: JSONEncoder().encode(item))
+    #expect(restored == item)
+    #expect(restored.attemptRef == nil)
+    #expect(restored.stage == nil)
+    #expect(restored.sequence == nil)
+}
+
 @Test func diagnosticProtocolDecodesBoundedEvidenceAndHostIdentity() throws {
     let data = Data(#"""
     {

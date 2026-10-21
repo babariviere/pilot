@@ -1,4 +1,4 @@
-import type { UsageObservation } from "@pilot/protocol";
+import type { UsageAnalyticsQuery, UsageHistoryQuery, UsageObservation, UsageQueryFilters } from "@pilot/protocol";
 
 export const USAGE_ROW_BYTES = 4096;
 export const USAGE_DAY_MS = 86_400_000;
@@ -73,6 +73,96 @@ const ATTRIBUTION_FIELDS = ["projectId", "chatId", "attemptId", "runId", "missio
 const ATTRIBUTION_IDS = ["projectId", "chatId", "attemptId", "runId"] as const;
 const MISSION_FIELDS = ["homeId", "lineageId", "missionId"];
 const COUNTERS = ["requests", "providerAttempts", "retries", "durationMs"] as const;
+
+export function usageFilters(value: unknown): UsageQueryFilters {
+	const f = object(value ?? {}, [
+		"projectId",
+		"chatId",
+		"mission",
+		"purpose",
+		"physicalModel",
+		"virtualModel",
+		"virtualRevision",
+		"missing",
+	]);
+	const result: UsageQueryFilters = {};
+	for (const key of ["projectId", "chatId"] as const) {
+		if (f[key] !== undefined) {
+			requireValue(usageUUID(f[key]));
+			result[key] = f[key].toLowerCase();
+		}
+	}
+	if (f.mission !== undefined) {
+		const m = object(f.mission, MISSION_FIELDS);
+		requireValue(MISSION_FIELDS.every((key) => usageUUID(m[key])));
+		result.mission = {
+			homeId: (m.homeId as string).toLowerCase(),
+			lineageId: (m.lineageId as string).toLowerCase(),
+			missionId: (m.missionId as string).toLowerCase(),
+		};
+	}
+	if (f.purpose !== undefined) {
+		requireValue(PURPOSES.includes(f.purpose as string));
+		result.purpose = f.purpose as UsageObservation["purpose"];
+	}
+	if (f.physicalModel !== undefined) result.physicalModel = model(f.physicalModel);
+	if (f.virtualModel !== undefined) result.virtualModel = model(f.virtualModel);
+	if (f.virtualRevision !== undefined) {
+		requireValue(usageIdentifier(f.virtualRevision));
+		result.virtualRevision = f.virtualRevision;
+	}
+	if (f.missing !== undefined) {
+		requireValue(
+			Array.isArray(f.missing) &&
+				f.missing.length <= 6 &&
+				f.missing.every((k) =>
+					["project", "mission", "chat", "physicalModel", "virtualPolicy", "virtualRevision"].includes(k),
+				),
+		);
+		result.missing = [...new Set(f.missing)].sort() as NonNullable<UsageQueryFilters["missing"]>;
+	}
+	return result;
+}
+
+export function usageAnalyticsQuery(value: unknown): UsageAnalyticsQuery {
+	const q = object(value, ["version", "from", "to", "filters", "view", "dimension", "bucketMs", "limit", "after"]);
+	requireValue(
+		q.version === 1 &&
+			safeUsageInteger(q.from) &&
+			safeUsageInteger(q.to) &&
+			q.to > q.from &&
+			q.to - q.from <= 366 * USAGE_DAY_MS,
+	);
+	requireValue(["summary", "breakdown", "buckets"].includes(q.view as string));
+	requireValue(q.limit === undefined || (safeUsageInteger(q.limit) && q.limit >= 1 && q.limit <= 100));
+	requireValue(q.after === undefined || (typeof q.after === "string" && q.after.length <= 2048));
+	requireValue(
+		q.view === "breakdown"
+			? ["project", "mission", "chat", "purpose", "physicalModel", "virtualPolicy", "scope"].includes(
+					q.dimension as string,
+				)
+			: q.dimension === undefined,
+	);
+	requireValue(
+		q.view === "buckets"
+			? (q.bucketMs === 3600000 || q.bucketMs === USAGE_DAY_MS) &&
+					Math.ceil(q.to / q.bucketMs) - Math.floor(q.from / q.bucketMs) <= 400
+			: q.bucketMs === undefined,
+	);
+	requireValue(q.view !== "summary" || q.after === undefined);
+	return { ...q, filters: usageFilters(q.filters) } as unknown as UsageAnalyticsQuery;
+}
+
+export function usageHistoryQuery(value: unknown): UsageHistoryQuery {
+	const q = object(value, ["kind", "from", "to", "limit", "after", "filters"]);
+	requireValue(q.kind === "request" || q.kind === "checkpoint");
+	requireValue(
+		safeUsageInteger(q.from) && safeUsageInteger(q.to) && q.to > q.from && q.to - q.from <= 366 * USAGE_DAY_MS,
+	);
+	requireValue(q.limit === undefined || (safeUsageInteger(q.limit) && q.limit >= 1 && q.limit <= 100));
+	requireValue(q.after === undefined || (typeof q.after === "string" && q.after.length <= 1024));
+	return { ...q, filters: usageFilters(q.filters) } as unknown as UsageHistoryQuery;
+}
 
 function object(value: unknown, fields: readonly string[]): Record<string, unknown> {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid usage record");

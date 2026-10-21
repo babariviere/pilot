@@ -30,6 +30,7 @@ public struct DaemonCapabilities: Codable, Equatable, Sendable {
     public let runtimeUpdates: Int?
     /// Project environment setup. Absent on older runtimes and while the feature is off.
     public let environmentSetup: Int?
+    public let usageQueries: Int?
 
     public var supportsEnvironmentSetup: Bool { environmentSetup == 1 }
 }

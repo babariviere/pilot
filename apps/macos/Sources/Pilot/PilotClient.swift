@@ -1433,6 +1433,45 @@ final class PilotClient: ObservableObject {
     }
 
     private struct Ack: Decodable, Sendable {}
+
+    /// Numeric/content-free accounting only, through the already-connected, identity-pinned endpoint.
+    func usageAnalytics(_ query: UsageAnalyticsQuery, host: HostRef) async throws -> UsageAnalyticsResult {
+        let result: UsageAnalyticsResult = try await usageRead("query", query: query, host: host)
+        guard result.version == 1 else { throw HostRoutingError.incompatible }
+        return result
+    }
+
+    func usagePage(_ query: UsageHistoryQuery, host: HostRef) async throws -> UsageHistoryPage {
+        try await usageRead("page", query: query, host: host)
+    }
+
+    private func usageRead<Query: Encodable, Response: Decodable & Sendable>(
+        _ endpoint: String, query: Query, host: HostRef
+    ) async throws -> Response {
+        guard connected, let baseURL else { throw HostRoutingError.disconnected }
+        let generation = connectionGeneration
+        let data = try JSONEncoder().encode(query)
+        guard data.count <= 4096 else { throw ClientError("Usage query limit exceeded") }
+        var components = URLComponents(url: baseURL.appending(path: "api/usage-history/\(endpoint)"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "query", value: String(decoding: data, as: UTF8.self)),
+                                 URLQueryItem(name: "daemonId", value: host.daemonId),
+                                 URLQueryItem(name: "lineageId", value: host.lineageId)]
+        do {
+            let (body, response) = try await BoundedHTTPData.read(URLRequest(url: components.url!), maximumBytes: 512 * 1024,
+                                                                configuration: commandConfiguration)
+            try Task.checkCancellation()
+            guard generation == connectionGeneration, connected else { throw HostRoutingError.staleGeneration }
+            guard response.statusCode == 200 else { throw ClientError("Usage query unavailable", status: response.statusCode) }
+            let value = try await Task.detached { try JSONDecoder().decode(Response.self, from: body) }.value
+            try Task.checkCancellation()
+            guard generation == connectionGeneration, connected else { throw HostRoutingError.staleGeneration }
+            return value
+        } catch is CancellationError { throw CancellationError() }
+        catch let error as HostRoutingError { throw error }
+        catch let error as ClientError { throw error }
+        catch { throw ClientError("Usage query unavailable") } // Never expose query URLs or row decoding details.
+    }
+
     private struct APIError: Decodable { let error: String }
 
     private func call<Response: Decodable>(_ path: String, method: String = "POST") async throws -> Response {
