@@ -57,7 +57,7 @@ func usageLocalConsumerNeverFansOutAndDeferredHelperRequiresExplicitHosts() asyn
         let ref = HostRef(hostId: name, daemonId: name, lineageId: "lineage")
         let client = PilotClient(baseURL: URL(string: "http://\(name).usage.invalid"), commandConfiguration: configuration)
         client.loadFixture(projects: [], sessions: [])
-        try hosts.install(client, host: ref)
+        try loadClientFixture(client, host: ref, into: hosts)
         refs[name] = ref
     }
     let offline = try #require(refs["offline"])
@@ -65,7 +65,7 @@ func usageLocalConsumerNeverFansOutAndDeferredHelperRequiresExplicitHosts() asyn
     let alias = HostRef(hostId: "zz-alias", daemonId: "local", lineageId: "lineage")
     let aliasClient = PilotClient(baseURL: URL(string: "http://alias.usage.invalid"), commandConfiguration: configuration)
     aliasClient.loadFixture(projects: [], sessions: [])
-    try hosts.install(aliasClient, host: alias)
+    try loadClientFixture(aliasClient, host: alias, into: hosts)
     let query = UsageAnalyticsQuery(from: 0, to: 86400000)
     let local = try await hosts.localUsage(query)
     #expect(local.hosts.count == 1)
@@ -73,17 +73,17 @@ func usageLocalConsumerNeverFansOutAndDeferredHelperRequiresExplicitHosts() asyn
     #expect(local.hosts.first?.result?.total.metrics["input"]?.unknown == 1)
     #expect(UsageProjectionHTTP.paths.allSatisfy { $0.hasPrefix("local:") })
     UsageProjectionHTTP.reset()
-    // Explicit deferred-helper coverage only, not a dashboard integration/release prerequisite.
+    // Saved identities remain coverage metadata, never executable usage targets.
     let result = try await hosts.usageProjection(query, on: Set(refs.values).union([alias]))
     #expect(result.hosts.first { $0.host == refs["local"] }?.result?.total.metrics["input"]?.unknown == 1)
-    #expect(result.hosts.first { $0.host == refs["old"] }?.state == "unsupported")
-    #expect(result.hosts.first { $0.host == refs["failed"] }?.state == "unavailable")
-    #expect(result.hosts.first { $0.host == refs["limited"] }?.state == "limited")
-    #expect(result.hosts.first { $0.host == refs["changed"] }?.state == "unavailable")
+    #expect(result.hosts.first { $0.host == refs["old"] }?.state == "disconnected")
+    #expect(result.hosts.first { $0.host == refs["failed"] }?.state == "disconnected")
+    #expect(result.hosts.first { $0.host == refs["limited"] }?.state == "disconnected")
+    #expect(result.hosts.first { $0.host == refs["changed"] }?.state == "disconnected")
     #expect(result.hosts.first { $0.host == refs["offline"] }?.state == "disconnected")
     #expect(result.hosts.first { $0.host == alias }?.state == "alias")
     let paths = UsageProjectionHTTP.paths
-    #expect(!paths.contains { $0.hasPrefix("offline:") || $0.hasPrefix("alias:") })
+    #expect(paths.allSatisfy { $0.hasPrefix("local:") })
     #expect(!paths.contains { $0 == "old:GET:/api/usage-history/query" || $0 == "changed:GET:/api/usage-history/query" })
     #expect(paths.allSatisfy { $0.contains(":GET:") && ($0.hasSuffix("/api/hello") || $0.hasSuffix("/api/usage-history/query")) })
     let localRef = try #require(refs["local"])
@@ -94,6 +94,22 @@ func usageLocalConsumerNeverFansOutAndDeferredHelperRequiresExplicitHosts() asyn
         Issue.record("Missing Local must not fall back to a connected devbox or alias")
     } catch { #expect(error as? HostRoutingError == .disconnected) }
     #expect(UsageProjectionHTTP.paths.isEmpty)
+    // Capability, capacity and identity failures still apply to the one Local endpoint.
+    for (name, expected) in [("old", "unsupported"), ("failed", "unavailable"), ("limited", "limited"), ("changed", "unavailable")] {
+        UsageProjectionHTTP.reset()
+        let ref = HostRef(hostId: "local", daemonId: name, lineageId: "lineage")
+        let client = PilotClient(baseURL: URL(string: "http://\(name).usage.invalid"), commandConfiguration: configuration)
+        client.loadFixture(projects: [], sessions: [])
+        try hosts.install(client, host: ref)
+        let result = try await hosts.localUsage(query)
+        #expect(result.hosts.count == 1)
+        #expect(result.hosts.first?.state == expected)
+        #expect(UsageProjectionHTTP.paths.allSatisfy { $0.hasPrefix("\(name):GET:") })
+        if ["old", "changed"].contains(name) {
+            #expect(!UsageProjectionHTTP.paths.contains { $0.hasSuffix("/api/usage-history/query") })
+        }
+        await hosts.disconnect(ref)
+    }
     await hosts.disconnectAll()
     try? FileManager.default.removeItem(at: directory)
 }
