@@ -1,5 +1,8 @@
 # Host routing
 
+> Historical transport/design reference. Remote devboxes are retired in the app and production daemon.
+> See [retained data and boundaries](devboxes.md). The workflows below are not enabled product features.
+
 `HostRef` identifies a configured endpoint, pinned daemon installation and storage lineage.
 `HostResourceRef` qualifies navigation, draft and cache keys. Never derive host identity from
 a repository path, display name or matching daemon-local ID.

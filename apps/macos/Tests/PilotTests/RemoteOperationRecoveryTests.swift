@@ -205,63 +205,11 @@ private final class RecoveryHTTPStub: URLProtocol {
         #expect(RecoveryHTTPStub.requests.filter { $0.path == "/api/operations/receipt" }.count == 1)
         #expect(RecoveryHTTPStub.requests.filter { $0.path == "/api/operations" }.isEmpty,
                 "The fixture reports a pending durable owner on lookup, so neither path may POST it again")
-        #expect(app.chooseNewChatHost(target))
-        #expect(form.pendingOperationId == original.operationId && form.message == "newer remote draft")
+        #expect(!app.chooseNewChatHost(target))
+        try app.persistDrafts()
+        let parked = try #require(DraftStore(directory: directory.appendingPathComponent("drafts")).load().parkedNewTasks?.first)
+        #expect(parked.pendingOperationId == original.operationId && parked.message == "newer remote draft")
         await hosts.disconnect(target)
-    }
-
-    @Test @MainActor func switchingHostsAndRelaunchKeepNewerRemoteImagesAndIndependentDrafts() async throws {
-        RecoveryHTTPStub.reset(.pending)
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let operations = directory.appendingPathComponent("operations"), drafts = directory.appendingPathComponent("drafts")
-        let hosts = HostClients(operationDirectory: operations)
-        try hosts.install(recoveryClient(), host: target)
-        let other = HostRef(hostId: "other-box", daemonId: "other", lineageId: "other-history")
-        try hosts.install(recoveryClient(), host: other)
-        let first = try app(drafts, hosts: hosts)
-        let original = try await pendingStart(first)
-        let imageURL = directory.appendingPathComponent("newer.png")
-        let bitmap = try #require(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1, pixelsHigh: 1,
-            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
-        bitmap.setColor(.black, atX: 0, y: 0)
-        let png = try #require(bitmap.representation(using: .png, properties: [:]))
-        try png.write(to: imageURL)
-        let image = PastedImage(id: UUID(), url: imageURL, preview: NSImage(size: NSSize(width: 1, height: 1)))
-        first.newSessionForm.message = "newer remote draft"
-        first.newSessionForm.attachments.items = [image]
-        first.newSessionForm.model = "remote/model"
-        first.newSessionForm.folder = "/remote-only"
-        first.newSessionForm.mode = .ask
-        #expect(first.chooseNewChatHost(origin))
-        #expect(first.newSessionForm.attachments.items.isEmpty && first.newSessionForm.model.isEmpty)
-        first.newSessionForm.message = "Local unsent draft"
-        first.newSessionForm.model = "local/model"
-        #expect(first.chooseNewChatHost(other))
-        let otherOperation = try await pendingStart(first, on: other)
-        first.newSessionForm.message = "other devbox draft"
-        #expect(first.chooseNewChatHost(origin))
-        #expect(first.newSessionForm.message == "Local unsent draft" && first.newSessionForm.model == "local/model")
-        try first.persistDrafts()
-        let restored = AppModel(projectFolderDefaults: UserDefaults(suiteName: UUID().uuidString)!,
-            draftStore: DraftStore(directory: drafts, attachmentDirectory: directory), hosts: hosts)
-        #expect(restored.newSessionForm.executionHost == origin)
-        #expect(restored.newSessionForm.message == "Local unsent draft")
-        #expect(try DraftStore(directory: drafts).load().parkedNewTasks?.count == 2)
-        #expect(restored.chooseNewChatHost(target))
-        #expect(restored.newSessionForm.message == "newer remote draft")
-        #expect(restored.newSessionForm.mode == .ask && restored.newSessionForm.model == "remote/model")
-        #expect(restored.newSessionForm.folder == "/remote-only" && restored.draftProjectId == "p")
-        #expect(restored.newSessionForm.pendingOperationId == original.operationId)
-        #expect(restored.newSessionForm.attachments.items.map(\.id) == [image.id])
-        #expect(FileManager.default.fileExists(atPath: imageURL.path))
-        #expect(restored.chooseNewChatHost(other))
-        #expect(restored.newSessionForm.message == "other devbox draft")
-        #expect(restored.newSessionForm.pendingOperationId == otherOperation.operationId)
-        #expect(try await OperationOutbox(directory: operations).pending() == [original, otherOperation])
-        await hosts.disconnect(target)
-        await hosts.disconnect(other)
     }
 
     @Test(arguments: [false, true]) @MainActor func lateCheckCannotRelockEraseOrNavigateAwayFromIndependentLocalChat(holdChat: Bool) async throws {
@@ -319,10 +267,9 @@ private final class RecoveryHTTPStub: URLProtocol {
         #expect(app.newSessionForm.message == "keep Local" && app.newSessionForm.pendingOperationId == nil)
         #expect(app.newSessionForm.error == nil && app.selectedSessionId == nil)
         #expect(try await OperationOutbox(directory: operations).pending() == [original])
-        #expect(app.chooseNewChatHost(target))
-        await app.checkHostedChat(original, form: app.newSessionForm, delay: .zero)
-        #expect(app.newSessionForm.pendingOperationId == nil && app.newSessionForm.message == "original remote request")
-        #expect(try await OperationOutbox(directory: operations).pending().isEmpty)
+        #expect(!app.chooseNewChatHost(target))
+        #expect(app.newSessionForm.message == "keep Local")
+        #expect(try await OperationOutbox(directory: operations).pending() == [original])
         await hosts.disconnect(target)
     }
 
@@ -399,8 +346,10 @@ private final class RecoveryHTTPStub: URLProtocol {
         app.newSessionForm.consumeDraft(from: app)
         #expect(app.newSessionForm.executionHost == origin && app.newSessionForm.message == "Local prefill")
         #expect(app.draftProjectId == "local-project" && app.newSessionForm.pendingOperationId == nil)
-        #expect(app.chooseNewChatHost(target))
-        #expect(app.newSessionForm.message == "newer remote text" && app.newSessionForm.pendingOperationId == original.operationId)
+        #expect(!app.chooseNewChatHost(target))
+        try app.persistDrafts()
+        let parked = try #require(DraftStore(directory: directory.appendingPathComponent("drafts")).load().parkedNewTasks?.first)
+        #expect(parked.message == "newer remote text" && parked.pendingOperationId == original.operationId)
         #expect(hosts.pendingOperations[original.operationId] == original)
         await hosts.disconnect(target)
     }
@@ -472,43 +421,6 @@ private final class RecoveryHTTPStub: URLProtocol {
         #expect(try DraftStore(directory: directory.appendingPathComponent("drafts")).load().selection?.localId == mutation.targetId)
         #expect(RecoveryHTTPStub.requests.filter { $0.path == "/api/operations" }.count == 1)
         await hosts.disconnect(target)
-    }
-
-    @Test @MainActor func mappedCheckoutUsesRemoteProjectInActualDurableCreateAction() async throws {
-        RecoveryHTTPStub.reset(.normal)
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let hosts = HostClients(operationDirectory: directory.appendingPathComponent("operations"))
-        let remote = recoveryClient()
-        let project = Project(id: "remote-project", name: "Code", path: "/home/test/code", workspace: "direct", createdAt: 0)
-        remote.loadFixture(projects: [project], sessions: [])
-        try hosts.install(remote, host: target)
-        let app = try app(directory.appendingPathComponent("drafts"), hosts: hosts)
-        let source = HostResourceRef(host: origin, kind: .project, localId: "p")
-        let destination = HostResourceRef(host: target, kind: .project, localId: project.id)
-        try await hosts.projectCheckouts.confirm(source: source, target: destination)
-        #expect(try await OperationOutbox(directory: directory.appendingPathComponent("operations")).pending().isEmpty,
-                "Saved checkout metadata must not be decoded as a pending operation")
-        #expect(app.chooseNewChatHost(origin))
-        app.draftProjectId = "p"
-        app.newSessionForm.message = "Use the mapped checkout"
-        #expect(app.chooseNewChatHost(target, sourceProject: app.client.project("p")))
-        #expect(app.draftProjectId == project.id)
-        await app.newSessionForm.checkoutValidationTask?.value
-        try await app.createHostedChat(form: app.newSessionForm, host: target, project: project, revision: app.newSessionForm.revision)
-        let mutation = try #require(RecoveryHTTPStub.requests.first { $0.path == "/api/operations" }?.operation)
-        let payload = try JSONValue.decode(Data(mutation.payload.utf8))
-        #expect(mutation.destination == target)
-        #expect(payload["projectId"]?.string == project.id)
-        #expect(payload["cwd"] == nil, "Use the daemon's registered checkout, not a Mac path")
-        #expect(hosts.projectCheckouts.groups(local: origin).count == 1)
-        #expect(try await OperationOutbox(directory: directory.appendingPathComponent("operations")).pending().isEmpty,
-                "saved checkout matches must not be decoded as pending operations")
-        let saved = try await RepositoryAssociationStore(file: directory
-            .appendingPathComponent("operations/project-checkouts/project-checkouts.json")).load()
-        #expect(saved.bindings.mapping(logicalProjectId: source.storageKey, host: target)?.project == destination,
-                "isolating the stores must still persist the explicit checkout match")
-        await hosts.disconnectAll()
     }
 
     @Test @MainActor func homeCheckPublishesProgressThenAdoptsPendingToAcceptedWithoutAnotherCreate() async throws {
@@ -886,8 +798,9 @@ private final class RecoveryHTTPStub: URLProtocol {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let hosts = HostClients(operationDirectory: directory.appendingPathComponent("operations"))
-        try await hosts.restoreOffline(from: OfflineHostStore(directory: directory.appendingPathComponent("hosts")))
-        try await hosts.enroll(target, configuration: SSHConnectionConfiguration(alias: "fixture-box"))
+        let legacyInventory = OfflineHostStore(directory: directory.appendingPathComponent("hosts"))
+        try await legacyInventory.save([OfflineHostSnapshot(host: target, configuration: SSHConnectionConfiguration(alias: "fixture-box"))])
+        try await hosts.restoreOffline(from: legacyInventory)
         try hosts.install(recoveryClient(), host: target)
         let ref = HostResourceRef(host: target, kind: .session, localId: "same")
         do { _ = try await hosts.requestStop(ref); Issue.record("Lost response was acknowledged") } catch {}

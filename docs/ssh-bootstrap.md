@@ -1,5 +1,8 @@
 # Initial Linux runtime setup over SSH
 
+> Historical transport/design reference. Remote devboxes are retired in the app and production daemon.
+> See [retained data and boundaries](devboxes.md). The workflows below are not enabled product features.
+
 `PilotCore.LinuxSSHBootstrap` is an app-callable setup API, not onboarding UI or a runtime updater.
 It uses the system OpenSSH alias, existing authentication and host-key policy from
 [the managed transport](ssh-transport.md). No cloud access flow, model chat, global tool upgrade or

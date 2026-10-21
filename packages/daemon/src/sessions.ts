@@ -1533,8 +1533,8 @@ export class SessionManager {
 	setProjectMemory(memory: ProjectMemoryService): void {
 		this.memory = memory;
 	}
-	private sharing?: import("./shared-context.ts").SharedContextService;
-	setSharedContext(sharing: import("./shared-context.ts").SharedContextService): void {
+	private sharing?: import("./retired-devboxes.ts").SessionSharedContext;
+	setSharedContext(sharing: import("./retired-devboxes.ts").SessionSharedContext): void {
 		this.sharing = sharing;
 	}
 	async fenceDelegatedSession(id: string): Promise<void> {

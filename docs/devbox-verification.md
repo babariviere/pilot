@@ -1,5 +1,8 @@
 # Devbox verification and remaining manual checks
 
+> Historical transport/design reference. Remote devboxes are retired in the app and production daemon.
+> See [retained data and boundaries](devboxes.md). The workflows below are not enabled product features.
+
 Keep four kinds of evidence separate: exact-head CI, post-merge integration, signed release
 publication, and an actual devbox deployment. A green source test or static SwiftUI mock does not
 establish the latter three. Heavy Swift/full Node/package checks belong in GitHub CI, not a local

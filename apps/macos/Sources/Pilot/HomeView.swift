@@ -273,15 +273,6 @@ struct TaskComposer: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 14) {
-                Menu {
-                    if let local = app.localHost { Button("Local") { chooseHost(local) } }
-                    ForEach(hosts.offlineHosts.keys.sorted { $0.hostId < $1.hostId }, id: \.self) { host in
-                        Button(HostViewContext(host: host, hosts: hosts).name) { chooseHost(host) }
-                            .onAppear { PilotTelemetry.shared.recordFeature(.exposure(.devboxChat)) }
-                    }
-                } label: {
-                    ChipLabel(title: destinationHost.map { HostViewContext(host: $0, hosts: hosts).name } ?? "Local", icon: PilotIcon.terminal)
-                }.chipMenuStyle().disabled(!form.canChooseExecutionHost)
                 TabButton(title: "New chat", selected: form.tab == .newTask) { form.tab = .newTask }
                 TabButton(title: "Running", count: client.workingCount, selected: form.tab == .running) { form.tab = .running }
                 Spacer()
@@ -309,7 +300,6 @@ struct TaskComposer: View {
         .overlay(RoundedRectangle(cornerRadius: Theme.Radius.tray).strokeBorder(Theme.border))
         .task(id: modelScopeKey) { await loadModels() }
         .task(id: branchLoadKey) { await loadBranches() }
-        .task(id: devboxFeatureEligibilityKey) { recordDevboxFeatureEligibility() }
         .onAppear { consumeDraft() }
         .keyboardRegion(.composer) {
             // A new editor focuses itself on appear; an existing one takes the token.
@@ -336,11 +326,6 @@ struct TaskComposer: View {
                 }
             }
         }
-        .sheet(item: $form.checkoutChoice) { choice in
-            ProjectCheckoutChooser(source: choice.source, initialHost: choice.host, hosts: hosts) { target in
-                app.applyCheckoutChoice(choice, target: target)
-            }
-        }
         .onChange(of: app.draftRevision) { _, _ in consumeDraft() }
         .onChange(of: app.draftMessage) { _, message in if message != nil { consumeDraft() } }
         .task(id: pendingCreateDelivery) {
@@ -358,6 +343,16 @@ struct TaskComposer: View {
 
     private var newTask: some View {
         VStack(alignment: .leading, spacing: 0) {
+            if remote {
+                HStack {
+                    Text("Saved remote draft. Remote devboxes are retired.")
+                        .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                    Spacer()
+                    Button("New Local chat") {
+                        if let local = app.localHost { _ = app.chooseNewChatHost(local, independent: true) }
+                    }.controlSize(.small).disabled(app.localHost == nil || form.busy)
+                }.padding(12)
+            }
             if let operation = pendingCreate {
                 HostedChatStartNotice(operation: operation, hosts: hosts, form: form) { retryingCreate = operation }
                 if operation.destination != app.localHost, app.localHost != nil {
@@ -472,24 +467,9 @@ struct TaskComposer: View {
         }
     }
 
-    private var devboxFeatureEligibilityKey: String {
-        let configured = hosts.offlineHosts.keys.map(\.hostId).sorted().joined(separator: ",")
-        let available = hosts.available.map(\.hostId).sorted().joined(separator: ",")
-        return "\(configured):\(available)"
-    }
-
-    private func recordDevboxFeatureEligibility() {
-        let devboxes = hosts.offlineHosts.keys
-        let availability: FeatureAvailability
-        if devboxes.isEmpty { availability = .notConfigured }
-        else if devboxes.contains(where: { hosts.available.contains($0) }) { availability = .available }
-        else { availability = .disconnected }
-        PilotTelemetry.shared.recordFeature(.eligibility(.devboxChat, availability))
-    }
-
     private var canStart: Bool {
         form.checkoutChoice == nil && !choosingRepository && pendingCreate == nil && form.pendingOperationId == nil && !form.checkingStart && form.canStart(in: project, branches: branches)
-            && (!remote || (project != nil && destinationHost.map { hosts.available.contains($0) } == true))
+            && !remote
     }
 
     /// `/model`, `/mode` and `/help` before a chat exists: they open the palette's choices or the shortcut
@@ -602,11 +582,6 @@ struct TaskComposer: View {
         BranchSelectorState.scope(project: project, mode: form.mode, workspace: form.workspace)
     }
 
-    private func chooseHost(_ host: HostRef) {
-        let intentionalFolder = !form.folder.isEmpty
-        if app.chooseNewChatHost(host, sourceProject: project), intentionalFolder { choosingRepository = true }
-    }
-
     private func consumeDraft() {
         form.consumeDraft(from: app, branches: branches)
         Task { await loadBranches() }
@@ -662,25 +637,6 @@ struct TaskComposer: View {
         catch {
             form.error = "Could not retain attached images: \(error.localizedDescription)"
             form.busy = false
-            return
-        }
-        if remote, let host = destinationHost, let project {
-            PilotTelemetry.shared.recordFeature(.attempt(.devboxChat))
-            Task {
-                defer { form.busy = false }
-                do {
-                    try await app.createHostedChat(form: form, host: host, project: project, revision: revision)
-                    if let event = FeatureEvent.outcome(.devboxChat, .success, reason: .none) {
-                        PilotTelemetry.shared.recordFeature(event)
-                    }
-                } catch {
-                    let event = hosts.available.contains(host)
-                        ? FeatureEvent.outcome(.devboxChat, .failure, reason: .unknown)
-                        : FeatureEvent.outcome(.devboxChat, .unavailable, reason: .disconnected)
-                    if let event { PilotTelemetry.shared.recordFeature(event) }
-                    if form.revision == revision { form.error = error.localizedDescription }
-                }
-            }
             return
         }
         let request = form.spawnRequest(in: project, branches: branches)

@@ -979,8 +979,7 @@ struct SourceSignInButton: View {
     var body: some View {
         let waiting = signIns[kind]?.state == .waiting
         if let context = hostContext, context.host.hostId != "local" {
-            Button("Devbox setup…") { AppModel.shared.settingsTab = .devboxes; openSettings() }
-                .controlSize(.small).help("Configure this devbox independently. Local sign-ins are not copied.")
+            Text("Remote devboxes are retired").font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
         } else {
         Button(waiting ? "Cancel" : again ? "Sign in again" : "Sign in") {
             busy = true

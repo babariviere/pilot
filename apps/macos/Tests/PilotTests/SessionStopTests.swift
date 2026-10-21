@@ -58,12 +58,13 @@ func localStopNormalizesQualifiedRowsAndRestoresWithdrawnMessages(qualified: Boo
 @Test(.timeLimit(.minutes(2))) @MainActor func remoteStopKeepsCollidingLocalChatAndDraftUntouched() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
-    let app = AppModel(client: stopClient("local"))
+    let app = AppModel(client: stopClient("local"), hosts: HostClients(operationDirectory: directory.appendingPathComponent("operations")))
     let local = HostRef(hostId: "local", daemonId: "a", lineageId: "1")
     let remote = HostRef(hostId: "box", daemonId: "b", lineageId: "2")
     try app.registerLocal(local)
-    try await app.hosts.restoreOffline(from: OfflineHostStore(directory: directory))
-    try await app.hosts.enroll(remote, configuration: SSHConnectionConfiguration(alias: "fixture-box"))
+    let legacyInventory = OfflineHostStore(directory: directory)
+    try await legacyInventory.save([OfflineHostSnapshot(host: remote, configuration: SSHConnectionConfiguration(alias: "fixture-box"))])
+    try await app.hosts.restoreOffline(from: legacyInventory)
     try app.hosts.install(stopClient("remote"), host: remote)
     let ref = HostResourceRef(host: remote, kind: .session, localId: "same")
     let remoteComposer = try app.composer(for: ref)

@@ -69,7 +69,7 @@ import Testing
     #expect(app.hosts.selection == nil)
 }
 
-@Test @MainActor func remoteProjectScopeNavigationAndUnsentDraftNeverChangeHost() async throws {
+@Test @MainActor func retiredProjectScopeStartsLocalWithoutRetargetingSavedRemoteDraft() async throws {
     let app = AppModel()
     let local = HostRef(hostId: "local", daemonId: "a", lineageId: "1")
     let remote = HostRef(hostId: "box", daemonId: "b", lineageId: "2")
@@ -85,7 +85,9 @@ import Testing
     #expect(app.focusedProjectRef == ref)
     #expect(app.hosts.selection == ref)
     app.newChatInScope()
-    #expect(app.newSessionForm.executionHost == remote)
+    #expect(app.newSessionForm.executionHost == local)
+    // A draft restored from an older release still retains its original remote identity.
+    app.newSessionForm.executionHost = remote
     app.newSessionForm.message = "Keep this remote draft"
     app.openHome()
     #expect(app.newSessionForm.executionHost == remote)

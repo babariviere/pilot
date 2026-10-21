@@ -59,38 +59,3 @@ private func mappedProject(_ id: String, host: HostRef) -> Hosted<Project> {
     #expect(model.mapped(local.ref, on: mappedRemote)?.ref == remote.ref)
     await model.stop()
 }
-
-@Test @MainActor func mappedHostChoiceRoutesCheckoutWithoutChangingExistingChatOrPendingDraft() async throws {
-    let local = mappedProject("local-project", host: mappedLocal), remote = mappedProject("remote-project", host: mappedRemote)
-    let localClient = PilotClient(); localClient.loadFixture(projects: [local.value], sessions: [])
-    localClient.handle(.missions([]))
-    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let hosts = HostClients(operationDirectory: directory)
-    let app = AppModel(client: localClient, hosts: hosts)
-    try app.registerLocal(mappedLocal)
-    try hosts.install(localClient, host: mappedLocal)
-    let remoteClient = PilotClient(); remoteClient.loadFixture(projects: [remote.value], sessions: []); remoteClient.handle(.missions([]))
-    try hosts.install(remoteClient, host: mappedRemote)
-    // Explicit association works without origin/network access. It is not a shared-context binding.
-    try await hosts.projectCheckouts.confirm(source: local.ref, target: remote.ref)
-    app.draftProjectId = local.value.id
-    app.newSessionForm.executionHost = mappedLocal
-    app.newSessionForm.message = "Keep this draft"
-    #expect(app.chooseNewChatHost(mappedRemote, sourceProject: local.value))
-    #expect(app.draftProjectId == remote.value.id)
-    #expect(app.newSessionForm.spawnRequest(in: remote.value).projectId == remote.value.id)
-    #expect(app.newSessionForm.message == "Keep this draft")
-    #expect(app.orderedProjects.count == 1)
-    let choice = CheckoutChoice(source: local.ref, host: mappedRemote, revision: app.newSessionForm.revision)
-    app.newSessionForm.checkoutChoice = choice
-    #expect(app.chooseNewChatHost(mappedLocal, sourceProject: remote.value))
-    app.applyCheckoutChoice(choice, target: remote)
-    #expect(app.newSessionForm.executionHost == mappedLocal)
-    #expect(app.draftProjectId == local.value.id)
-    app.newSessionForm.pendingOperationId = "immutable-original"
-    #expect(app.chooseNewChatHost(mappedRemote, independent: true))
-    #expect(app.newSessionForm.pendingOperationId == nil)
-    #expect(app.chooseNewChatHost(mappedLocal, independent: true))
-    #expect(app.newSessionForm.pendingOperationId == "immutable-original")
-}

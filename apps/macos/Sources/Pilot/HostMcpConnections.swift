@@ -5,8 +5,6 @@ struct HostMcpConnections: View {
     let hosts: HostClients
     let localHost: HostRef?
     @StateObject private var roster: HostMcpRoster
-    @State private var sharing: Target?
-    private struct Target: Identifiable { let host: HostRef; var id: HostRef { host } }
     init(hosts: HostClients, localHost: HostRef?) {
         self.hosts = hosts; self.localHost = localHost
         _roster = StateObject(wrappedValue: HostMcpRoster(hosts: hosts, local: localHost))
@@ -14,34 +12,13 @@ struct HostMcpConnections: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            SettingsSection(explanation: "Each host connects and signs in independently. Setup sharing never copies tokens or authenticated sessions, and does not proxy calls through this Mac.") {
-                SettingsRow("Share Local setup", detail: "Review initial nonsecret setup for a trusted devbox. Existing MCP configuration stays manual.") {
-                    Menu("Share setup…") {
-                        ForEach(roster.rows.filter { $0.host.hostId != "local" }) { row in
-                            Button(row.name) { sharing = Target(host: row.host) }
-                                .disabled(!row.available)
-                        }
-                    }
-                    .disabled(localHost == nil || !roster.rows.contains(where: { $0.host.hostId != "local" }))
-                    .controlSize(.small)
-                }
-            }
             if localHost == nil { SettingsSection("Local") { SettingsRow { SettingsNote("Waiting for the Local connection.") } } }
             ForEach(roster.rows) { row in
                 HostMcpConnectionSection(host: row.host, name: row.name, available: row.available, hosts: hosts, client: row.client)
                     .id(row.host)
             }
         }
-        .sheet(item: $sharing) { target in
-            if let localHost {
-                McpSetupShareSheet(source: localHost, target: target.host, targetName: name(target.host), hosts: hosts)
-            }
-        }
         .onChange(of: localHost, initial: true) { _, value in roster.update(local: value) }
-    }
-
-    private func name(_ host: HostRef) -> String {
-        roster.rows.first(where: { $0.host == host })?.name ?? host.hostId
     }
 }
 
@@ -154,70 +131,5 @@ struct HostMcpServerControl: View {
             Button("Check on \(hostName)") { Task { await actions.perform(.check, server: server.name) } }
                 .disabled(!available || actions.busy)
         }
-    }
-}
-
-private struct McpSetupShareSheet: View {
-    let targetName: String
-    @StateObject private var model: McpSetupSharing
-    @State private var operation: Task<Void, Never>?
-    init(source: HostRef, target: HostRef, targetName: String, hosts: HostClients) {
-        self.targetName = targetName
-        _model = StateObject(wrappedValue: McpSetupSharing(source: source, target: target, hosts: hosts))
-    }
-    var body: some View {
-        SheetScaffold("Share MCP setup", subtitle: "Local → \(targetName)",
-            primary: SheetPrimaryAction(title: model.uncertain ? "Check result" : "Apply reviewed setup",
-                enabled: !model.busy && (model.uncertain || !model.selected.isEmpty), action: {
-                    operation = Task {
-                        defer { operation = nil }
-                        if model.uncertain { await model.checkResult() } else { await model.apply() }
-                    }
-                })) {
-            SettingsNote("Only the reviewed literal setup is shared. Tokens, auth files, secret values, local paths and installations are never copied. Existing target entries are kept.")
-            if model.busy { ProgressView().controlSize(.small) }
-            if let review = model.review {
-                SettingsNote("Only missing server names are added. Existing entries, authentication and other settings stay on this devbox. Don't edit MCP configuration with older Pi versions or a text editor while applying.")
-                if review.local.entries.isEmpty { SettingsNote("Local has no shareable server entries to review.") }
-                if review.local.invalidNames > 0 { SettingsNote("\(review.local.invalidNames) Local entries have unsupported names and need manual setup on the target.") }
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
-                        ForEach(review.local.entries) { entry in
-                            McpSetupShareRow(entry: entry, targetName: targetName, model: model)
-                        }
-                    }
-                }.frame(maxHeight: 320)
-            }
-            if let problem = model.problem { InlineProblem(problem) }
-            if let notice = model.notice { SettingsNote(notice) }
-        }
-        .task { await model.prepare() }
-        .onDisappear { operation?.cancel(); operation = nil; model.cancelReview() }
-    }
-}
-
-/// Same reviewed checkbox in the sheet and mounted native interaction fixtures.
-struct McpSetupShareRow: View {
-    let entry: McpSetupEntry
-    let targetName: String
-    @ObservedObject var model: McpSetupSharing
-    var body: some View {
-        Toggle(isOn: Binding(get: { model.selected.contains(entry.name) }, set: { selected in
-            if selected { model.selected.insert(entry.name) } else { model.selected.remove(entry.name) }
-        })) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(entry.name).font(.pilot(.body))
-                if model.selectable(entry), let config = entry.config {
-                    Text(config.url ?? "PATH executable: \(config.command ?? "")").font(.pilot(.caption))
-                    Text("Enabled: \(config.enabled == false ? "No" : "Yes") · exposure: \(config.exposure ?? "codemode") · timeout: \(Int(config.timeout ?? 60))s")
-                        .font(.pilot(.caption))
-                } else {
-                    Text(model.entryNotice(entry, targetName: targetName)).font(.pilot(.caption))
-                }
-            }.foregroundStyle(Theme.mutedForeground)
-        }
-        .toggleStyle(.checkbox)
-        .background(ControlGeometry(id: "mcp-share"))
-        .disabled(!model.selectable(entry) || model.busy || model.uncertain)
     }
 }

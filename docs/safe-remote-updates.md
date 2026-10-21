@@ -1,5 +1,8 @@
 # Updating a remote Pilot runtime
 
+> Historical transport/design reference. Remote devboxes are retired in the app and production daemon.
+> See [retained data and boundaries](devboxes.md). The workflows below are not enabled product features.
+
 `LinuxSSHUpdate.start` is the app-callable update action. It is not initial setup and does not
 change the selected host. Devbox UI consumes this API separately. No personal devbox, live provider,
 release publication or production signing key is used by its fixtures.

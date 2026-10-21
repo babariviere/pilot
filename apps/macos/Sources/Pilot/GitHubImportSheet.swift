@@ -8,21 +8,14 @@ struct GitHubImportSheet: View {
     var initialURL = ""
     var initialHost: HostRef?
     let selected: (Hosted<Project>) -> Void
-    @State private var host: HostRef?
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Picker("Import onto", selection: $host) {
-                Text("Choose host").tag(Optional<HostRef>.none)
-                if let localHost { Text("Local").tag(Optional(localHost)) }
-                ForEach(hosts.offlineHosts.values.sorted { $0.configuration.alias < $1.configuration.alias }, id: \.host) { snapshot in
-                    Text(snapshot.configuration.alias + (hosts.available.contains(snapshot.host) ? "" : " · Disconnected")).tag(Optional(snapshot.host))
-                }
-            }.pickerStyle(.menu).padding(.horizontal, 20).padding(.top, 16)
-            if let host {
-                GitHubImportContent(host: host, hosts: hosts, initialURL: initialURL, selected: selected).id(host)
-            } else { SheetScaffold("Import GitHub project", subtitle: "Choose Local or a saved devbox", width: 600) { SettingsNote("The selected host owns the checkout, GitHub credentials and project. No files or project context will be copied between hosts.") } }
+        if let localHost {
+            GitHubImportContent(host: localHost, hosts: hosts, initialURL: initialURL, selected: selected)
+        } else {
+            SheetScaffold("Import GitHub project", width: 600) {
+                SettingsNote("Waiting for the local daemon.")
+            }
         }
-        .onAppear { if host == nil { host = initialHost ?? localHost } }
     }
 }
 
@@ -115,7 +108,7 @@ struct GitHubImportContent: View {
         .onChange(of: model.url) { _, _ in model.suggestDestination() }
         .sheet(isPresented: $setup) {
             SheetScaffold("GitHub on this host", width: 620) {
-                ScrollView { SettingsColumn { DevboxGitHubSetup(host: host, hosts: hosts) } }.frame(height: 440)
+                ScrollView { SettingsColumn { GitHubSetupSection(host: host, hosts: hosts) } }.frame(height: 440)
             }
         }
         .sheet(isPresented: $choosingFolder) {

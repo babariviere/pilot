@@ -1,32 +1,26 @@
 import PilotCore
 import SwiftUI
 
+/// Former remote chats remain identifiable, never redirected to Local.
 struct DisconnectedNotice: View {
     let context: HostViewContext
     var historyCached = true
-    @State private var busy = false
-    @State private var error: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Disconnected · \(context.name)").font(.pilot(.label, weight: .medium))
-                    Text(historyCached ? "This chat may still be working. Its current state is unknown."
-                         : "This chat may still be working. Reconnect to load its conversation.")
-                        .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
-                }
-                Spacer(minLength: 8)
-                Button("Reconnect") {
-                    busy = true
-                    Task {
-                        defer { busy = false }
-                        do { try await context.hosts.reconnect(context.host); error = nil }
-                        catch { self.error = error.localizedDescription }
-                    }
-                }.disabled(busy).controlSize(.small)
+        VStack(alignment: .leading, spacing: 3) {
+            if context.host.hostId == "local" {
+                Text("Local daemon unavailable").font(.pilot(.label, weight: .medium))
+                Text("Reconnect to pilotd to continue. The saved conversation stays on this Mac.")
+                    .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+            } else {
+                Text("Remote history · \(context.name)").font(.pilot(.label, weight: .medium))
+                Text(historyCached
+                    ? "Remote devboxes are retired. Cached history is read-only; the original data remains on its host."
+                    : "Remote devboxes are retired. This conversation is not cached on this Mac; the original data remains on its host.")
+                    .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                Text("Retiring support does not stop work already running on that host.")
+                    .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
             }
-            if let error { InlineProblem(error) }
         }
         .padding(.vertical, 8)
         .accessibilityElement(children: .combine)

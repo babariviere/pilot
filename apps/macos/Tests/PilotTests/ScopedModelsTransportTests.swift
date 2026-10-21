@@ -105,7 +105,7 @@ private final class ScopeHTTPFixture: URLProtocol {
 }
 
 @Suite(.serialized) struct ScopedModelsTransportTests {
-    @Test @MainActor func modelScopeLiveOwnerSyncsLocalAndTwoDevboxesAcrossOfflineReconnectAndRelaunch() async throws {
+    @Test @MainActor func modelScopeLiveOwnerNeverSyncsRetiredDevboxes() async throws {
         ScopeHTTPFixture.reset(["local": .init(), "a": .init(), "b": .init()])
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -114,9 +114,9 @@ private final class ScopeHTTPFixture: URLProtocol {
         func facade() -> HostClients {
             HostClients(operationDirectory: directory.appendingPathComponent("operations"),
                 scopedModelsStore: ScopedModelsStore(directory: models), readScopedModelCapability: { host, configuration in
-                    #expect((configuration == nil) == (host.hostId == "local"))
+                    #expect(host.hostId == "local" && configuration == nil)
                     acquisitions.append(host)
-                    return "fixture-\(host.hostId)"
+                    return "fixture-local"
                 })
         }
         let hosts = facade()
@@ -126,30 +126,16 @@ private final class ScopeHTTPFixture: URLProtocol {
         let inventory = OfflineHostStore(directory: directory.appendingPathComponent("hosts"))
         try await inventory.save([a, b].map { OfflineHostSnapshot(host: $0, configuration: try SSHConnectionConfiguration(alias: "fixture-\($0.hostId)")) })
         try await hosts.restoreOffline(from: inventory)
+        // Synthetic installed clients exercise the boundary even if an old caller retains an endpoint.
         try hosts.install(localClient, host: local); try hosts.install(aClient, host: a); try hosts.install(bClient, host: b)
-        #expect(ScopeHTTPFixture.requests.isEmpty && acquisitions.isEmpty, "Restore and construction never start model I/O")
+        #expect(ScopeHTTPFixture.requests.isEmpty && acquisitions.isEmpty)
         hosts.startScopedModels(); hosts.startScopedModels()
-        try await wireScopeWait { hosts.scopedModels.observations.count == 3 && hosts.scopedModels.isIdle }
-        #expect(acquisitions.isEmpty)
+        try await wireScopeWait { hosts.scopedModels.observations[local] != nil && hosts.scopedModels.isIdle }
         let baseline = try #require(hosts.scopedModels.observations[local]?.baseline)
         await hosts.scopedModels.save(.all, joining: [local: baseline])
         try await wireScopeWait { hosts.scopedModels.state.entry(local)?.status == .synced && hosts.scopedModels.isIdle }
-        #expect(hosts.scopedModels.state.entry(a)?.status == .needsConsent)
-        for host in [a, b] {
-            let review = try #require(hosts.scopedModels.review(host))
-            await hosts.scopedModels.join(review)
-            try await wireScopeWait { hosts.scopedModels.state.entry(host)?.status == .synced && hosts.scopedModels.isIdle }
-        }
-        await hosts.disconnect(b)
-        let before = ScopeHTTPFixture.requests.filter { $0.host == "b" && $0.method == "PUT" }.count
-        await hosts.scopedModels.save(.init(patterns: ["provider/outside-current-scope"]), joining: [:])
-        try await wireScopeWait { hosts.scopedModels.state.entry(a)?.appliedRevision == 2 && hosts.scopedModels.isIdle }
-        #expect(hosts.scopedModels.state.entry(b)?.status == .pending)
-        #expect(ScopeHTTPFixture.requests.filter { $0.host == "b" && $0.method == "PUT" }.count == before)
-        let (replacementClient, _) = try scopeTransportClient("b")
-        try hosts.install(replacementClient, host: b)
-        try await wireScopeWait { hosts.scopedModels.state.entry(b)?.appliedRevision == 2 && hosts.scopedModels.isIdle }
-        #expect(ScopeHTTPFixture.requests.filter { $0.host == "b" && $0.method == "PUT" }.count == before + 1)
+        #expect(hosts.scopedModels.observations[a] == nil && hosts.scopedModels.observations[b] == nil)
+        #expect(ScopeHTTPFixture.requests.allSatisfy { $0.host == "local" })
         await hosts.disconnectAll()
         let writes = ScopeHTTPFixture.requests.filter { $0.method == "PUT" }.count
         let restarted = facade()
@@ -157,10 +143,10 @@ private final class ScopeHTTPFixture: URLProtocol {
         let (freshLocal, _) = try scopeTransportClient("local")
         try restarted.install(freshLocal, host: local)
         restarted.startScopedModels()
-        try await wireScopeWait { restarted.scopedModels.state.entry(local)?.appliedRevision == 2 && restarted.scopedModels.isIdle }
-        #expect(ScopeHTTPFixture.requests.filter { $0.method == "PUT" }.count == writes, "Exact cold-launch readback never rewrites settings")
-        #expect(restarted.scopedModels.state.desired?.patterns == ["provider/outside-current-scope"])
-        #expect(acquisitions.count == writes)
+        try await wireScopeWait { restarted.scopedModels.state.entry(local)?.status == .synced && restarted.scopedModels.isIdle }
+        #expect(ScopeHTTPFixture.requests.filter { $0.method == "PUT" }.count == writes)
+        #expect(ScopeHTTPFixture.requests.allSatisfy { $0.host == "local" })
+        #expect(acquisitions == [local])
         await restarted.disconnectAll()
     }
 

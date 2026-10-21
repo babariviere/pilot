@@ -49,8 +49,8 @@ import Testing
     let host = HostRef(hostId: "box", daemonId: "remote", lineageId: "history")
     let hosts = HostClients(operationDirectory: directory.appendingPathComponent("operations"))
     let store = OfflineHostStore(directory: directory.appendingPathComponent("hosts"))
+    try await store.save([OfflineHostSnapshot(host: host, configuration: SSHConnectionConfiguration(alias: "fixture"))])
     try await hosts.restoreOffline(from: store)
-    try await hosts.enroll(host, configuration: SSHConnectionConfiguration(alias: "fixture"))
     let rows = (0..<10_000).map {
         SessionSummary(id: String($0), title: "Chat \($0)", cwd: "/remote/repo", createdAt: 0, updatedAt: 0, state: "idle")
     }

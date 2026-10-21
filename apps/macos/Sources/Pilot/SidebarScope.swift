@@ -268,7 +268,6 @@ struct SidebarProjectSelector: View {
     let archivedCount: Int
     let folderEditor: ProjectFolderEditorState
     @State private var showingList = false
-    @State private var showingCheckouts = false
     @State private var hovered = false
 
     var body: some View {
@@ -327,16 +326,6 @@ struct SidebarProjectSelector: View {
                              },
                              deleteFolder: { model.projectFolders.remove($0) },
                              move: { model.projectFolders.move(projectId: $0, to: $1) })
-            if model.focusedProjectRef != nil {
-                HairlineDivider()
-                Button("Checkout locations…") { showingList = false; showingCheckouts = true }
-                    .padding(10).rowButtonStyle()
-            }
-            }
-        }
-        .sheet(isPresented: $showingCheckouts) {
-            if let source = model.focusedProjectRef {
-                ProjectCheckoutChooser(source: source, initialHost: nil, hosts: model.hosts) { _ in }
             }
         }
     }

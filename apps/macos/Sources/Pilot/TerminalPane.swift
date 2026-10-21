@@ -361,7 +361,7 @@ struct TerminalPane: View {
             defer { reconnecting = false }
             do {
                 if hosts.available.contains(ref.host) { try hosts.reconnectTerminal(ref) }
-                else { try await hosts.reconnect(ref.host) }
+                else { throw ClientError("Remote devboxes are retired. The original terminal remains on its host.") }
             } catch { reconnectError = "Couldn't reconnect to this host. Check its connection settings." }
         }
     }

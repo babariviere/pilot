@@ -34,6 +34,7 @@ import { detectPlatformCapabilities } from "./platform.ts";
 import { PowerService } from "./power.ts";
 import { ProjectMemoryService } from "./project-memory.ts";
 import { ProjectStore } from "./projects.ts";
+import { RetiredDevboxes } from "./retired-devboxes.ts";
 import { RuntimeMaintenance } from "./runtime-maintenance.ts";
 import { ScheduleDetection } from "./schedule-detection.ts";
 import { ScheduleStore } from "./schedule-store.ts";
@@ -41,7 +42,6 @@ import { ScheduleService } from "./schedules.ts";
 import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { SetupService } from "./setup.ts";
-import { SharedContextService } from "./shared-context.ts";
 import { createSlackAdder, createSlackPoller } from "./slack-source.ts";
 import { createSlackWaitingWatcher } from "./slack-waiting.ts";
 import { PiSourceMcpClient } from "./source-mcp.ts";
@@ -221,13 +221,11 @@ for (const mission of missionStore.list())
 	if (mission.status === "done" && mission.completedAt !== undefined)
 		await trackedItems.completeSlackMission(mission.projectId, mission.id, mission.completedAt);
 const missionService = new MissionService(missionStore, sessions, projects);
-const sharing = new SharedContextService(
+// Keep legacy grants occupied and delegated sessions fenced, without loading any live
+// sharing service, observers, replica recovery or courier endpoints.
+const sharing = new RetiredDevboxes(
 	{ hostId: "daemon", daemonId: hello.daemonId, lineageId: hello.lineageId },
 	missionStore,
-	memory,
-	projects,
-	sessions,
-	missionService,
 );
 sessions.setSharedContext(sharing);
 missionService.setSharedContext(sharing);
@@ -265,7 +263,6 @@ tracking.slackWaiting = createSlackWaitingWatcher(trackedItems, async (sessionId
 		throw error;
 	}
 });
-if (!maintenance?.frozen) await sharing.recover();
 power?.refresh();
 if (!maintenance?.frozen) {
 	missionService.notices.start();
@@ -294,7 +291,6 @@ await schedules.load();
 sessions.setScheduledMessages(schedules);
 if (!maintenance?.frozen) schedules.start();
 maintenance?.onOpen(() => {
-	void sharing.recover().catch((error) => console.warn("pilotd: sharing recovery", error));
 	missionService.notices.start();
 	missionService.compaction.start();
 	schedules.start();
@@ -331,7 +327,7 @@ const server = createDaemonServer(
 	mcpStatus,
 	hello,
 	setup,
-	sharing,
+	undefined, // Remote sharing routes are retired; retained records are not an active transport.
 	maintenance,
 	undefined,
 	telemetry,
@@ -352,7 +348,6 @@ async function stop(): Promise<void> {
 	watchdog.stop();
 	maintenance?.close();
 	server.close();
-	await sharing.stop();
 	await schedules.stop();
 	await connectivity.stop();
 	systemEventsDetection?.stop();
