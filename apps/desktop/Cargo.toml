@@ -23,6 +23,7 @@ tokio-tungstenite = { version = "=0.28.0", default-features = false, features = 
 
 [dev-dependencies]
 gpui-kit = { version = "=0.8.0", features = ["test-support"] }
+image = { version = "=0.25.10", default-features = false, features = ["png"] }
 
 [profile.dev]
 debug = 0
@@ -33,3 +34,8 @@ debug = 0
 [[test]]
 name = "rendering"
 harness = false
+
+[[test]]
+name = "capture"
+harness = false
+test = false

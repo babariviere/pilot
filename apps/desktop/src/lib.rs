@@ -10,7 +10,7 @@ mod tool_presentation;
 mod transcript_view;
 mod work_view;
 
-pub use local_client::{LocalOptions, check_local_read};
+pub use local_client::{LocalOptions, check_local_read, read_local_capture};
 pub use local_view::LocalViewer;
 pub use model::{fence_fixture, giant_fixture};
 pub use transcript_view::TranscriptView;

@@ -101,6 +101,28 @@ See [tool presentation evidence](evidence/tool-presentation.md). This is not ful
 
 ## Limits and lifecycle
 
+### Private rendered-UI capture
+
+```sh
+cd apps/desktop
+bash scripts/capture.sh <exact-Local-chat-ID>
+```
+
+This opt-in development harness uses Kit's documented native
+`HeadlessAppContext::capture_screenshot` on the production `LocalViewer` with a
+read-only snapshot of exactly the requested chat. No fallback chat, live write
+client, private draft store or visible window is created. It needs no macOS
+Screen Recording grant. Source readiness is checked before saving actual pixels.
+Test support stays development-only, not enabled in normal app builds.
+
+Files go into ignored `evidence/local/captures/`, with a private directory and
+0600 PNGs; existing files/permissions are never overwritten. Captures contain
+real private content. Do not commit them, publish them as artifacts, or attach
+them to a PR. The harness does not reproduce the running window's current
+scroll, expansion, preedit or unsaved drafts. It is a fresh rendering of the
+same views and selected chat data, not an OS window screenshot or a smoothness
+benchmark. See the [Kit testing guide](https://gpui-kit.com/docs/test/).
+
 A private single-thread async runtime owns read decoding/reduction and network I/O.
 At most one control socket, one selected chat socket and one history request;
 4 queued UI commands, 2 queued wire frames, 1 coalesced full UI projection.
@@ -133,15 +155,17 @@ later deltas as if complete; full updates/results can replace them. Wire output
 trim uses UTF-16, not scalar/grapheme counts. Expanded panes are bounded, not a
 claim of arbitrary-output virtualization or syntax-highlighting parity.
 
-Never record real chat content, IDs, titles or credentials in logs, screenshots,
-tests or published artifacts. `--local-check` prints only counts/byte totals and
+Never record real chat content, IDs, titles or credentials in shared logs,
+tests or published artifacts. Explicit private capture above is the sole screenshot
+exception; never publish those pixels. `--local-check` prints only counts/byte totals and
 uses bounded reads, not GUI/smoothness instrumentation. See
 [evidence/local-viewer.md](evidence/local-viewer.md) for verification and gaps.
 
 ## Build and launch
 
 Requires existing `rustup`, `curl`, `python3` and platform native build tools.
-Bootstrap downloads dependencies. Only explicit --local / --local-check connects to Pilot.
+Bootstrap downloads dependencies. Only explicit --local / --local-check or the
+opt-in private capture helper connects to the existing Local daemon.
 No sudo, global mise config, shell integration or `mbx setup` is required.
 
 ```sh

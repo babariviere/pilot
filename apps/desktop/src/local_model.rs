@@ -232,6 +232,9 @@ impl LiveTranscript {
                     Some("toolResult") => "toolResult",
                     _ => "unknown",
                 };
+                if value["role"].is_null() {
+                    continue;
+                }
                 // Authorship is structured provenance, never inferred from body text.
                 let label = if role == "user" {
                     if entry["origin"].is_string() {
@@ -269,7 +272,10 @@ impl LiveTranscript {
                         rows.push(message(key, value, &format!("toolResult · entry {id}")));
                     }
                 } else {
-                    rows.push(message(key, value, &format!("{label} · entry {id}")));
+                    let row = message(key, value, &format!("{label} · entry {id}"));
+                    if role != "unknown" || row.source() != "[No text content]" {
+                        rows.push(row);
+                    }
                 }
             }
             if models.len() > 32 {
@@ -314,7 +320,7 @@ impl LiveTranscript {
                 self.limited = false;
                 self.unsupported = 0;
                 let start = active.len().saturating_sub(ENTRY_CAP);
-                for entry in &active[start..] {
+                for entry in active[start..].iter().rev() {
                     self.entry(entry, None);
                 }
                 self.prefix_pending = event["prefixPending"] == true;
@@ -773,5 +779,24 @@ mod tests {
             "Synthetic 6,000-entry projection bounded to {ENTRY_CAP} entries: {:?}; not a render benchmark",
             started.elapsed()
         );
+    }
+
+    #[test]
+    fn initial_capacity_admission_keeps_the_newest_rows_not_the_oldest_suffix() {
+        let mut model = LiveTranscript::default();
+        let entries: Vec<_> = (1..=100)
+            .map(|id| entry(id, &"x".repeat(100_000)))
+            .collect();
+        model.apply(&json!({"type":"snapshot","entries":entries}));
+        assert!(model.limited);
+        assert!(model.entries.contains_key(&100));
+        assert!(!model.entries.contains_key(&1));
+    }
+
+    #[test]
+    fn empty_unknown_metadata_does_not_become_a_fake_chat_message() {
+        let mut model = LiveTranscript::default();
+        model.apply(&json!({"type":"entry_appended","entry":{"id":1,"kind":"pi.metadata","model":[{"role":"context","content":[]}]}}));
+        assert!(model.rows().is_empty());
     }
 }

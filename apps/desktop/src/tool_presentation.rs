@@ -169,7 +169,7 @@ impl Tool {
             }
             "codemode" => {
                 let code = string("code");
-                subject = first_line(code);
+                subject.clear();
                 if code.matches("tools.").count() == 1 && code.contains("tools.read(") {
                     if let Some(path) = js_string(code, "path:") {
                         subject = path;
@@ -181,6 +181,21 @@ impl Tool {
                     if let Some(command) = js_string(code, "command:") {
                         subject = first_line(&command);
                         ("Ran", Kind::Command)
+                    } else {
+                        ("Ran a script", Kind::Script)
+                    }
+                } else if code.matches("tools.").count() == 1 && code.contains("tools.applyPatch(")
+                {
+                    if let Some(patch) = js_string(code, "patch:") {
+                        self.paths = patch_paths(&patch);
+                        subject = self
+                            .paths
+                            .iter()
+                            .map(|path| path.rsplit('/').next().unwrap_or(path))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        self.diff = Arc::new(patch_diff(&patch));
+                        ("Edited", Kind::Edit)
                     } else {
                         ("Ran a script", Kind::Script)
                     }
