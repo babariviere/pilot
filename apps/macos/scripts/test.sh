@@ -39,8 +39,6 @@ callbacks='missionTaskDragLoadsItsPlainTextOnTheMainActor'
 journeyStart=keyboardOnlyStartSwitchTypeAndReturn
 journeySidebar=keyboardOnlySidebarBrowsingKeepsFocusInTheSidebar
 journeys="$journeyStart|$journeySidebar"
-# These native approval controls also own AppKit mouse tracking. Run each alone, keeping its deadline.
-github='githubKeySheetRequiresNativeConfirmationAndCancelDoesNotRegister|githubExistingCheckoutRequiresExplicitNativeReuseConfirmation|githubImportNativeCloneActionStaysDisabledUntilHostDestinationPreview'
 # Scoped-model scheduler waits need the MainActor, but no AppKit run loops. Keep
 # their bounded fault fixtures together, separate from both the full suite and native clicks.
 scoped_model_tests=(
@@ -92,8 +90,6 @@ native_pointer_tests=(
 	nativeRepairPromptButtonsOnlyReviewOrDismissAndNeverSpawn
 	mountedDiagnosticsFooterSubmitsOnceAndNeverStartsRepair
 	mountedDiagnosticsFooterReviewsAnExistingProposalWithoutStartingWork
-	nativeIndependentLocalButtonWorksWhileOriginalCheckIsInProgress
-	pressingNativeHomeCheckActuallyChecksShowsProgressAndOpensTheExistingChat
 	slackTriageRefreshIsClickableAndDisablesDuringLocalAndAutomaticSync
 	sidebarSelectionCoversNativeBlueWithoutLosingKeyboardNavigation
 	rowActionsStayClickableAcrossSubmenusAndHideAfterDismissal
@@ -104,7 +100,7 @@ native_pointers="${native_pointers%|}"
 # binaries. Preserve the UI/scheduler boundary regardless of the build driver.
 visual_layout=longNativeVisualTextReflowsAndShrinksWithoutAnInlineScrollView
 ui_probe=inlineArtifactLayoutKeepsTheReadingColumnWhenResized
-broad_exclusions="$isolated|$devbox|$terminal|$callbacks|$journeys|$github|$scoped_models|$scoped_model_native|$automatic_updates|$host_mcps|$repair_footer|$settings_bar|$scheduler_regressions|$native_pointers|$visual_layout"
+broad_exclusions="$isolated|$devbox|$terminal|$callbacks|$journeys|$scoped_models|$scoped_model_native|$automatic_updates|$host_mcps|$repair_footer|$settings_bar|$scheduler_regressions|$native_pointers|$visual_layout"
 partition=1
 reuse=(--skip-build)
 for argument in "$@"; do
@@ -143,10 +139,6 @@ if [ "$partition" = 1 ]; then
 	run_tests "$callbacks" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$callbacks"
 	run_tests "${CI:+$journeyStart}" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$journeyStart"
 	run_tests "${CI:+$journeySidebar}" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$journeySidebar"
-	IFS='|' read -r -a github_tests <<< "$github"
-	for name in "${github_tests[@]}"; do
-		run_tests "$name" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$name"
-	done
 	run_tests "$scoped_models" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$scoped_models"
 	IFS='|' read -r -a scoped_model_native_tests <<< "$scoped_model_native"
 	for name in "${scoped_model_native_tests[@]}"; do

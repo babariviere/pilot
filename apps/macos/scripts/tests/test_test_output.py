@@ -33,10 +33,6 @@ CALLBACKS_OUTPUT = STARTED + "".join(f"◇ Test {name}() started.\n" for name in
 JOURNEYS = ["keyboardOnlyStartSwitchTypeAndReturn", "keyboardOnlySidebarBrowsingKeepsFocusInTheSidebar"]
 JOURNEY_START_OUTPUT = STARTED + f"◇ Test {JOURNEYS[0]}() started.\n" + PASSED
 JOURNEY_SIDEBAR_OUTPUT = STARTED + f"◇ Test {JOURNEYS[1]}() started.\n" + PASSED
-GITHUB = ["githubKeySheetRequiresNativeConfirmationAndCancelDoesNotRegister",
-          "githubExistingCheckoutRequiresExplicitNativeReuseConfirmation",
-          "githubImportNativeCloneActionStaysDisabledUntilHostDestinationPreview"]
-GITHUB_OUTPUTS = [STARTED + f"◇ Test {name}() started.\n" + PASSED for name in GITHUB]
 SCOPED_MODELS = ['localModelScopePersistsIntentBeforeItsOnlyWriteAndRejectsRemoteEndpoints', 'localModelScopeLostAckUsesExactReadbackAndKeepsRetryBudgetAcrossRelaunch', 'localModelScopeConflictAndLeaveCannotBeOverwrittenByAnotherSave', 'localModelScopeReplacementWaitsForOldWriteWithoutPublishingStaleSuccess', 'localModelScopeSupersededSavesApplyOnlyTheLatestPendingSelection']
 SCOPED_MODEL_TRANSPORT = ["modelScopeLiveOwnerNeverSyncsRetiredDevboxes", "modelScopeLiveConflictAndLeaveRemainDivergentAfterColdLaunch", "modelScopeWirePreservesAllAndDecodesBothPutArmsWithoutCapabilityReadsOnGet", "modelScopeWireRejectsStaleCapabilityAcquisitionBeforeSending", "modelScopeWireExposesTypedReadFailuresWithoutTreatingThemAsAbsent", "modelScopeWireReconcilesCommitted503WithLiteralReadbackWithoutRepeatingPut"]
 SCOPED_MODELS += SCOPED_MODEL_TRANSPORT
@@ -86,8 +82,6 @@ NATIVE_POINTERS = [
     "nativeRepairPromptButtonsOnlyReviewOrDismissAndNeverSpawn",
     "mountedDiagnosticsFooterSubmitsOnceAndNeverStartsRepair",
     "mountedDiagnosticsFooterReviewsAnExistingProposalWithoutStartingWork",
-    "nativeIndependentLocalButtonWorksWhileOriginalCheckIsInProgress",
-    "pressingNativeHomeCheckActuallyChecksShowsProgressAndOpensTheExistingChat",
     "slackTriageRefreshIsClickableAndDisablesDuringLocalAndAutomaticSync",
     "sidebarSelectionCoversNativeBlueWithoutLosingKeyboardNavigation",
     "rowActionsStayClickableAcrossSubmenusAndHideAfterDismissal",
@@ -96,17 +90,25 @@ NATIVE_POINTER_OUTPUTS = [STARTED + f"◇ Test {name}() started.\n" + PASSED for
 VISUAL_LAYOUT = "longNativeVisualTextReflowsAndShrinksWithoutAnInlineScrollView"
 UI_PROBE = "inlineArtifactLayoutKeepsTheReadingColumnWhenResized"
 TAIL_OUTPUTS = [STARTED + f"◇ Test {name}() started.\n" + PASSED for name in [VISUAL_LAYOUT, UI_PROBE]]
-BROAD_EXCLUSIONS = f"{ISOLATED}|{DEVBOX}|{TERMINAL}|{'|'.join(CALLBACKS)}|{'|'.join(JOURNEYS)}|{'|'.join(GITHUB)}|{'|'.join(SCOPED_MODELS)}|{'|'.join(SCOPED_MODEL_NATIVE)}|{'|'.join(AUTOMATIC_UPDATES)}|{'|'.join(HOST_MCPS)}|{'|'.join(name for group in REGRESSION_PARTITIONS for name in group)}|{'|'.join(NATIVE_POINTERS)}|{VISUAL_LAYOUT}"
+BROAD_EXCLUSIONS = f"{ISOLATED}|{DEVBOX}|{TERMINAL}|{'|'.join(CALLBACKS)}|{'|'.join(JOURNEYS)}|{'|'.join(SCOPED_MODELS)}|{'|'.join(SCOPED_MODEL_NATIVE)}|{'|'.join(AUTOMATIC_UPDATES)}|{'|'.join(HOST_MCPS)}|{'|'.join(name for group in REGRESSION_PARTITIONS for name in group)}|{'|'.join(NATIVE_POINTERS)}|{VISUAL_LAYOUT}"
 
 # Same partition order as test.sh. One shell run verifies every filter and guard;
 # the full fault/missing-start matrix exercises the production parser in-process.
 PARTITIONS = [[ISOLATED], [DEVBOX], [TERMINAL], CALLBACKS,
-              *[[name] for name in JOURNEYS], *[[name] for name in GITHUB], SCOPED_MODELS,
+              *[[name] for name in JOURNEYS], SCOPED_MODELS,
               *[[name] for name in SCOPED_MODEL_NATIVE], AUTOMATIC_UPDATES, HOST_MCPS,
               *REGRESSION_PARTITIONS, *[[name] for name in NATIVE_POINTERS], [VISUAL_LAYOUT], [UI_PROBE]]
 
 
 class TestOutputTests(unittest.TestCase):
+    def test_required_partition_names_have_swift_test_declarations(self):
+        declared = set()
+        for path in (SCRIPTS.parent / "Tests").rglob("*.swift"):
+            declared.update(re.findall(r"@Test\b(?:(?!\bfunc\b|@Test\b).)*\bfunc\s+(\w+)\s*\(",
+                                       path.read_text(), re.S))
+        required = {name for names in PARTITIONS for name in names}
+        self.assertEqual(required - declared, set(), "Remove stale registrations when deleting or renaming tests")
+
     def test_native_pointer_registry_matches_wrapper(self):
         source = (SCRIPTS / "test.sh").read_text()
         registry = re.search(r"native_pointer_tests=\(\n(.*?)\n\)", source, re.S)
@@ -193,7 +195,7 @@ class TestOutputTests(unittest.TestCase):
                     fourth_output=TERMINAL_OUTPUT, fourth_status=0,
                     fifth_output=CALLBACKS_OUTPUT, fifth_status=0,
                     sixth_output=None, sixth_status=0, seventh_output=None, seventh_status=0,
-                    extra_env=None, github_outputs=None, scoped_model_outputs=None, automatic_update_outputs=None,
+                    extra_env=None, scoped_model_outputs=None, automatic_update_outputs=None,
                     host_mcp_outputs=None, regression_outputs=None, pointer_outputs=None, tail_outputs=None):
         if sixth_output is None:
             sixth_output = JOURNEY_START_OUTPUT
@@ -237,7 +239,6 @@ class TestOutputTests(unittest.TestCase):
             outputs = [(output, status), (ISOLATED_OUTPUT if second_output is None else second_output, second_status),
                        (third_output, third_status), (fourth_output, fourth_status), (fifth_output, fifth_status),
                        (sixth_output, sixth_status), (seventh_output, seventh_status)]
-            outputs += ([(text, 0) for text in GITHUB_OUTPUTS] if github_outputs is None else github_outputs)
             outputs += ([(text, 0) for text in SCOPED_MODEL_OUTPUTS] if scoped_model_outputs is None else scoped_model_outputs)
             outputs += ([(text, 0) for text in AUTOMATIC_UPDATE_OUTPUTS] if automatic_update_outputs is None else automatic_update_outputs)
             outputs += ([(text, 0) for text in HOST_MCP_OUTPUTS] if host_mcp_outputs is None else host_mcp_outputs)
@@ -266,7 +267,7 @@ class TestOutputTests(unittest.TestCase):
         result, continued, calls = self.run_wrapper(PASSED, all_calls=True, extra_env={"CI": "true"})
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(continued)
-        self.assertEqual(len(calls), 7 + len(GITHUB) + len(SCOPED_MODEL_OUTPUTS) + len(AUTOMATIC_UPDATE_OUTPUTS) + len(HOST_MCP_OUTPUTS) + len(REGRESSION_OUTPUTS) + len(NATIVE_POINTERS) + len(TAIL_OUTPUTS))
+        self.assertEqual(len(calls), 7 + len(SCOPED_MODEL_OUTPUTS) + len(AUTOMATIC_UPDATE_OUTPUTS) + len(HOST_MCP_OUTPUTS) + len(REGRESSION_OUTPUTS) + len(NATIVE_POINTERS) + len(TAIL_OUTPUTS))
         expected_guards = [[], *PARTITIONS]
         sampling = self.guard_calls[0][:4]
         self.assertEqual(sampling[:3], ["--sample-stalled-after", "60", "--runner-parent-pid"])
@@ -289,10 +290,7 @@ class TestOutputTests(unittest.TestCase):
         self.assertEqual(calls[5][-2:], ["--filter", JOURNEYS[0]])
         self.assertIn("--skip-build", calls[6])
         self.assertEqual(calls[6][-2:], ["--filter", JOURNEYS[1]])
-        for index, name in enumerate(GITHUB, start=7):
-            self.assertIn("--skip-build", calls[index])
-            self.assertEqual(calls[index][-2:], ["--filter", name])
-        scoped_start = 7 + len(GITHUB)
+        scoped_start = 7
         self.assertEqual(calls[scoped_start][-2:], ["--filter", "|".join(SCOPED_MODELS)])
         self.assertIn("--skip-build", calls[scoped_start])
         for index, name in enumerate(SCOPED_MODEL_NATIVE, start=scoped_start + 1):
@@ -313,7 +311,7 @@ class TestOutputTests(unittest.TestCase):
         self.assertEqual(len(timing_lines), len(calls))
         output = re.sub(r"^\[swift-watchdog\] invocation finished in [0-9.]+s\n", "", result.stdout, flags=re.MULTILINE)
         self.assertEqual(output, PASSED + ISOLATED_OUTPUT + DEVBOX_OUTPUT + TERMINAL_OUTPUT + CALLBACKS_OUTPUT
-                         + JOURNEY_START_OUTPUT + JOURNEY_SIDEBAR_OUTPUT + "".join(GITHUB_OUTPUTS)
+                         + JOURNEY_START_OUTPUT + JOURNEY_SIDEBAR_OUTPUT
                          + "".join(SCOPED_MODEL_OUTPUTS) + "".join(AUTOMATIC_UPDATE_OUTPUTS) + "".join(HOST_MCP_OUTPUTS) + "".join(REGRESSION_OUTPUTS) + "".join(NATIVE_POINTER_OUTPUTS) + "".join(TAIL_OUTPUTS))
 
     def test_isolated_journeys_are_required_only_on_ci(self):
@@ -369,7 +367,7 @@ class TestOutputTests(unittest.TestCase):
     def test_explicit_build_options_still_partition_full_suite(self):
         result, _, calls = self.run_wrapper(PASSED, args=("--jobs=1", "--skip-build"), all_calls=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(len(calls), 7 + len(GITHUB) + len(SCOPED_MODEL_OUTPUTS) + len(AUTOMATIC_UPDATE_OUTPUTS) + len(HOST_MCP_OUTPUTS) + len(REGRESSION_OUTPUTS) + len(NATIVE_POINTERS) + len(TAIL_OUTPUTS))
+        self.assertEqual(len(calls), 7 + len(SCOPED_MODEL_OUTPUTS) + len(AUTOMATIC_UPDATE_OUTPUTS) + len(HOST_MCP_OUTPUTS) + len(REGRESSION_OUTPUTS) + len(NATIVE_POINTERS) + len(TAIL_OUTPUTS))
         for call in calls:
             self.assertIn("--jobs=1", call)
             self.assertNotIn("--jobs", call)
