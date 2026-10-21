@@ -6,7 +6,9 @@ mod local_client;
 mod local_model;
 mod local_view;
 mod model;
+mod tool_presentation;
 mod transcript_view;
+mod work_view;
 
 pub use local_client::{LocalOptions, check_local_read};
 pub use local_view::LocalViewer;

@@ -16,6 +16,9 @@ pub(crate) struct Message {
     label: String,
     source: Arc<String>,
     display: Option<Arc<String>>,
+    work: Option<Arc<crate::tool_presentation::Work>>,
+    tool_ids: Option<Arc<Vec<String>>>,
+    work_note: bool,
 }
 
 impl Message {
@@ -36,6 +39,9 @@ impl Message {
             label,
             source: Arc::new(source),
             display,
+            work: None,
+            tool_ids: None,
+            work_note: false,
         }
     }
     pub(crate) fn id(&self) -> u64 {
@@ -55,6 +61,36 @@ impl Message {
     }
     pub(crate) fn is_plain(&self) -> bool {
         self.display.is_some()
+    }
+    pub(crate) fn work_data(&self) -> Option<&Arc<crate::tool_presentation::Work>> {
+        self.work.as_ref()
+    }
+    pub(crate) fn tool_ids(&self) -> Option<&[String]> {
+        self.tool_ids.as_ref().map(|ids| ids.as_slice())
+    }
+    pub(crate) fn is_assistant(&self) -> bool {
+        self.label.starts_with("assistant") || self.label.starts_with("Assistant")
+    }
+    pub(crate) fn work_note(&self) -> bool {
+        self.work_note
+    }
+    pub(crate) fn mark_note(&mut self) {
+        self.work_note = true;
+    }
+    pub(crate) fn attach_tools(&mut self, ids: Vec<String>) {
+        if !ids.is_empty() {
+            self.tool_ids = Some(Arc::new(ids));
+        }
+    }
+    pub(crate) fn tool_ref(id: u64, call_id: &str) -> Self {
+        let mut row = Self::live(id, "assistant".into(), String::new());
+        row.attach_tools(vec![call_id.into()]);
+        row
+    }
+    pub(crate) fn work(work: Arc<crate::tool_presentation::Work>) -> Self {
+        let mut row = Self::live(work.id, "Work".into(), work.title.clone());
+        row.work = Some(work);
+        row
     }
 }
 
@@ -164,6 +200,9 @@ impl Transcript {
             label: label.to_string(),
             source: Arc::new(source),
             display: None,
+            work: None,
+            tool_ids: None,
+            work_note: false,
         });
     }
 
@@ -244,6 +283,9 @@ fn history_message(ix: usize) -> Message {
         label: "Assistant · history fixture".into(),
         source: Arc::new(source),
         display: None,
+        work: None,
+        tool_ids: None,
+        work_note: false,
     }
 }
 

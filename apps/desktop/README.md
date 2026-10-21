@@ -5,7 +5,7 @@
 This is an experimental draft source checkpoint, not a merge-ready replacement.
 The synthetic fixture, input/selection fixes, bounded Local viewer and explicit
 Local create/send/Stop with private durable drafts are implemented.
-Tool presentation, interface parity and native visual artifacts are subsequent
+Compact tool/work presentation is implemented; interface parity and native visual artifacts are subsequent
 work. Swift remains unchanged and operational. See `evidence/` for the exact
 focused checks and explicit platform/performance gaps.
 
@@ -90,8 +90,14 @@ through prepend, updates and streaming-to-commit; switching chats clears it.
 Assistant Markdown uses Kit's built-in word fade. User/tool text is escaped
 into inert preformatted content, not interpreted markup. Copy source is explicit.
 Document images (remote/file/data) are disabled for both measurement and paint;
-links have no open handler. Structured entries, image/tool-call blocks and
-unsupported content have honest placeholders. This is not full Swift parity.
+links have no open handler. Structured/unsupported content has honest placeholders.
+Tool calls use semantic summaries and grouped work. Expand a step to inspect
+bounded inert arguments, output and structured replacement/patch previews, never
+to execute or approve anything. Work follows the turn by default, folds when
+finished and stays open on failure/unknown status; explicit choices persist
+through streaming, commit, history prepend and row remount. Hidden bodies have
+no parsers. Opened panes keep selection/copy state and a 256 px scrolling region.
+See [tool presentation evidence](evidence/tool-presentation.md). This is not full Swift parity.
 
 ## Limits and lifecycle
 
@@ -109,8 +115,8 @@ not a quiet chat alone. Bounded exponential reconnects, up to
 errors stop rather than spin. Resume uses the last accepted stream sequence;
 replacement split snapshots retain the last visible projection until complete.
 
-List: at most 1,000 summaries. Transcript: 256 entries, at most 512 rows including
-up to 32 live tools, 8 MiB projected source budget (including live/tool reserve),
+List: at most 1,000 summaries. Transcript: 256 entries, at most 512 rows before
+work folding, up to 32 running progress slots, 8 MiB projected source budget (including live/tool reserve),
 1 MiB per message and 64 KiB per running tool output. Oversize messages get an
 explicit placeholder; capacity stops further entry/history admission without
 silently evicting selected rows. Initial oversized histories show a bounded
@@ -119,6 +125,13 @@ Escaped display strings, parser graphs, raw in-flight JSON, saved split-snapshot
 history, queued projections and GPU allocations are additional memory; the
 source budget is not an RSS guarantee. One retained parser per admitted row is
 bounded, but not an LRU solution for arbitrary history.
+
+Tool detail reserve: at most 256 retained call identities and 2 MiB aggregate,
+including 12 KiB arguments, 40 KiB output and 12 KiB diff per call plus metadata.
+Oversize/capacity cases are explicit. Incomplete output prefixes do not receive
+later deltas as if complete; full updates/results can replace them. Wire output
+trim uses UTF-16, not scalar/grapheme counts. Expanded panes are bounded, not a
+claim of arbitrary-output virtualization or syntax-highlighting parity.
 
 Never record real chat content, IDs, titles or credentials in logs, screenshots,
 tests or published artifacts. `--local-check` prints only counts/byte totals and
@@ -257,8 +270,9 @@ directories. Neither is a repeated cold-build/second-worktree benchmark.
 ## Known gaps and next review
 
 This is not full Swift parity. Only the explicit Local interaction slice above
-is connected. Tool presentation, interface/dither parity and native non-shader
-visual artifacts remain subsequent work.
+is connected. Interface/dither parity and native non-shader visual artifacts
+remain subsequent work. Tool summaries have conservative generic fallbacks;
+unsupported image/rich result content is not silently treated as text.
 
 - The fixture now opts into message-local selection retention through its
   pinned source patch. Actual selection/copy survives unmount/remount, prepend

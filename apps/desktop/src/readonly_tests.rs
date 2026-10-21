@@ -4,7 +4,7 @@ use gpui_kit::{
     px, size, test::TestWindowExt,
 };
 
-fn setup(
+pub(super) fn setup(
     cx: &mut TestAppContext,
     rows: Vec<Message>,
 ) -> (gpui_kit::AnyWindowHandle, Entity<TranscriptView>) {
