@@ -150,13 +150,13 @@ requires separate permission and evidence; routine checks stay offscreen. Full s
 Rollout preserves direct selection, composer summaries, quota gates and informational budgets. Larger retention,
 content/credential storage or remote export needs separate user review, not a routine schema revision.
 
-### Initial offscreen store probe (not a release pass)
+### Offscreen allocation verification (not a release pass)
 
-`node packages/daemon/src/usage-history.bench.ts` seeds 50,000 synthetic rows outside measurement in a disposable
-home. On macOS arm64 / Node 24.21.0, one run of 200 indexed 100-row pages and 500 revision replacements measured
-p95 page latency 1.18ms, largest response 50,777 bytes, event-loop p99 10.74ms versus an idle baseline 11.08ms.
-Peak process RSS grew **51.34 MiB**, exceeding the proposed 16 MiB gate. Do not waive that gate or call the dashboard
-performance-verified from this probe. Worker/isolate/query allocation needs profiling and repeatable before/after
-measurement before default dashboard rollout. It ran no providers, native UI, live chats or on-screen benchmark.
-Capture latency, full provider lifecycle recovery, native DTO execution, exact-head CI and packaging remain
-separate verification obligations; a store test does not prove them.
+The initial +51.34 MiB result was confounded by seed-worker allocator state and an inherited agent preload.
+[Corrected fresh-process, serial paired measurements](usage-history-performance.md) separate bare worker, empty
+store, retained history and sustained query/write allocations. Practical statement/validation/RPC fixes reduce
+write peaks from median 45.44 to 38.03 MiB; idle store peaks remain about 30–32 MiB. Query peaks grow from about
+51–61 MiB at 1,500 pages to about 80 MiB at 6,000 serialized pages; these are measurements, not memory bounds.
+The **16 MiB gate remains unchanged and failing**. No inference, native window, deployment or merge was used.
+Capture/provider/native/installed-daemon/CI/packaging verification remains separate; these store measurements
+do not authorize default dashboard rollout or completion of dependent tasks.

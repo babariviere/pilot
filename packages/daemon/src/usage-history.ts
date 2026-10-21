@@ -20,12 +20,13 @@ export class UsageHistoryStore {
 	private bytes = 0;
 	private overflows = 0;
 	private closing?: Promise<void>;
+	private drained?: () => void;
 	private maintenance?: Promise<UsageHistoryStatus>;
 	private readonly home: string;
 	private readonly clock: () => number;
 	private readonly pending = new Map<
 		number,
-		{ bytes: number; settled: Promise<void>; resolve(value: unknown): void; reject(error: Error): void }
+		{ bytes: number; resolve(value: unknown): void; reject(error: Error): void }
 	>();
 	constructor(home: string, clock: () => number = Date.now) {
 		this.home = home;
@@ -45,18 +46,26 @@ export class UsageHistoryStore {
 			this.bytes -= waiting.bytes;
 			if (error) waiting.reject(new Error("Usage history unavailable"));
 			else waiting.resolve(value);
-			if (!this.pending.size) worker.unref();
+			this.idle();
 		});
 		const fail = () => {
 			this.fault = true;
 			for (const waiting of this.pending.values()) waiting.reject(new Error("Usage history unavailable"));
 			this.pending.clear();
 			this.bytes = 0;
+			this.idle();
 		};
 		worker.on("error", fail);
 		worker.on("exit", fail);
 		worker.unref();
 		return worker;
+	}
+	private idle(): void {
+		if (this.pending.size) return;
+		this.worker?.unref();
+		const done = this.drained;
+		this.drained = undefined;
+		done?.();
 	}
 	private rpc<T>(method: string, args: Record<string, unknown> = {}, draining = false): Promise<T> {
 		if ((!draining && this.state !== "open") || this.fault)
@@ -74,21 +83,10 @@ export class UsageHistoryStore {
 		return new Promise((resolve, reject) => {
 			const worker = this.start();
 			const id = ++this.serial;
-			let finish!: () => void;
-			const settled = new Promise<void>((done) => {
-				finish = done;
-			});
 			this.pending.set(id, {
 				bytes: size,
-				settled,
-				resolve: (value) => {
-					resolve(value as T);
-					finish();
-				},
-				reject: (error) => {
-					reject(error);
-					finish();
-				},
+				resolve: (value) => resolve(value as T),
+				reject,
 			});
 			this.bytes += size;
 			worker.ref();
@@ -98,7 +96,7 @@ export class UsageHistoryStore {
 				this.pending.get(id)!.reject(new Error("Invalid usage message"));
 				this.pending.delete(id);
 				this.bytes -= size;
-				if (!this.pending.size) worker.unref();
+				this.idle();
 			}
 		});
 	}
@@ -183,7 +181,10 @@ export class UsageHistoryStore {
 		this.closing = (async () => {
 			try {
 				// Wait for pending calls to settle before placing the close barrier (queue may be full).
-				await Promise.allSettled([...this.pending.values()].map((p) => p.settled));
+				if (this.pending.size)
+					await new Promise<void>((done) => {
+						this.drained = done;
+					});
 				if (this.worker && !this.fault) await this.rpc("close", {}, true);
 			} finally {
 				this.state = "closed";
