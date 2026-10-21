@@ -3,7 +3,7 @@ import PilotCore
 import SwiftUI
 
 /// Native disclosure chrome shared by work, thinking, read groups and individual tools.
-private final class NativeWorkLine: NSView {
+final class NativeWorkLine: NSView {
     private let mark = NSImageView()
     private let spinner = EllipsisSpinnerView()
     private let verb = NSTextField(labelWithString: "")
@@ -60,11 +60,16 @@ private final class NativeWorkLine: NSView {
         let height = max(18, ceil(verb.intrinsicContentSize.height))
         mark.frame = NSRect(x: 0, y: (height - 12) / 2, width: 14, height: 12)
         spinner.frame = NSRect(x: 0, y: (height - 14) / 2, width: 14, height: 14)
-        let badgeWidth = badge.stringValue.isEmpty ? 0 : min(max(0, width - 21), ceil(badge.intrinsicContentSize.width) + 6)
+        // Intrinsic width excludes the text cell's horizontal padding. Using it as the frame
+        // width makes AppKit truncate even when the row has plenty of room.
+        func naturalWidth(_ field: NSTextField) -> CGFloat {
+            ceil(field.cell?.cellSize.width ?? field.intrinsicContentSize.width)
+        }
+        let badgeWidth = badge.stringValue.isEmpty ? 0 : min(max(0, width - 21), naturalWidth(badge) + 6)
         let available = max(1, width - 21 - badgeWidth)
-        let verbWidth = min(available, ceil(verb.intrinsicContentSize.width))
+        let verbWidth = min(available, naturalWidth(verb))
         verb.frame = NSRect(x: 21, y: 0, width: verbWidth, height: height)
-        let subjectWidth = subject.stringValue.isEmpty ? 0 : min(max(0, available - verbWidth - 4), ceil(subject.intrinsicContentSize.width))
+        let subjectWidth = subject.stringValue.isEmpty ? 0 : min(max(0, available - verbWidth - 4), naturalWidth(subject))
         subject.frame = NSRect(x: 25 + verbWidth, y: 0, width: subjectWidth, height: height)
         badge.frame = NSRect(x: min(width - badgeWidth, 25 + verbWidth + subjectWidth + 6),
                              y: 0, width: badgeWidth, height: height)
