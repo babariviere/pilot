@@ -2,11 +2,23 @@ import AppKit
 import PilotCore
 import SwiftUI
 
-/// Opt-in until the release benchmark and native interaction gates pass. No daemon setting or wire change.
+/// Native by default, with explicit local overrides retaining the legacy transcript. No wire setting.
 enum NativeTranscriptFlag {
     static var enabled: Bool {
-        ProcessInfo.processInfo.environment["PILOT_APPKIT_TRANSCRIPT"] == "1"
-            || UserDefaults.standard.bool(forKey: "appKitTranscript")
+        let defaults = UserDefaults.standard
+        let preference: Bool? = defaults.object(forKey: "appKitTranscript").map { _ in
+            defaults.bool(forKey: "appKitTranscript")
+        }
+        return resolve(environmentOverride: ProcessInfo.processInfo.environment["PILOT_APPKIT_TRANSCRIPT"],
+                       preference: preference)
+    }
+
+    static func resolve(environmentOverride: String?, preference: Bool?) -> Bool {
+        switch environmentOverride {
+        case "0": false
+        case "1": true
+        default: preference ?? true
+        }
     }
 }
 
