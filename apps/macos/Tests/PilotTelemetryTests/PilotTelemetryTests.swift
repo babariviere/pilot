@@ -284,10 +284,14 @@ private func configuration(exporter: any SpanExporter) -> PilotTelemetryConfigur
 @Test func swiftTelemetryDropsFailedExportsWithoutRetainingAQueue() async {
     let telemetry = PilotTelemetry(configuration: configuration(exporter: FailingSpanExporter()))
     for _ in 0 ..< pilotSwiftSpanBatchLimit + 1 { telemetry.startSpan(.daemonRequest).finish() }
-    await telemetry.flush()
-    #expect(telemetry.stats.queued == 0)
-    #expect(telemetry.stats.dropped == pilotSwiftSpanBatchLimit + 1)
-    #expect(telemetry.stats.exportFailures >= 2)
+    // Flush is bounded and may return while the exporter is still draining the second batch.
+    // As in the queue-bound test, wait for completion without assuming one flush drains every batch.
+    let deadline = ContinuousClock.now + .seconds(15)
+    repeat { await telemetry.flush() } while telemetry.stats.queued > 0 && ContinuousClock.now < deadline
+    let stats = telemetry.stats
+    #expect(stats.queued == 0)
+    #expect(stats.dropped == pilotSwiftSpanBatchLimit + 1)
+    #expect(stats.exportFailures >= 2)
     await telemetry.shutdown()
 }
 
