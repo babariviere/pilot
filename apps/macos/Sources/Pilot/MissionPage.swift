@@ -301,9 +301,6 @@ struct MissionOverviewTab: View {
         let taskLinks = MissionTaskLinkIndex(detail)
         VStack(alignment: .leading, spacing: 28) {
             summary(counts, working: working.count)
-            if let context = hostContext {
-                SharedMissionPageSection(mission: context.ref(.mission, mission.id), hosts: context.hosts)
-            }
             if drafting {
                 MissionDraftingEvent(mission: mission)
             } else if detail.tasks.isEmpty {

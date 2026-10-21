@@ -3,18 +3,10 @@ import Foundation
 import PilotCore
 import PilotTelemetry
 
-/// The only lifecycle operations exposed to the app are on owned local forwards.
-protocol HostTunnel: AnyObject, Sendable {
-    func states() async -> AsyncStream<SSHTunnelState>
-    func connect() async throws -> URL
-    func disconnect() async
-}
-extension ManagedSSHTunnel: HostTunnel {}
-
 enum HostedHistoryAvailability: Equatable {
     case online, cached, requiresReconnect
     var explanation: String? {
-        self == .requiresReconnect ? "This history is not cached. Reconnect to load it." : nil
+        self == .requiresReconnect ? "This history is not cached on this Mac. Remote devboxes are retired; the original data remains on its host." : nil
     }
 }
 
@@ -38,7 +30,6 @@ final class HostClients: ObservableObject {
         projectCheckouts.update(projects, available: available,
             generations: entries.mapValues { $0.client.connectionGeneration })
     }
-    let machineInformationStore = DevboxMachineStore()
     var onOperationDeliveryChanged: ((DurableOperation, OperationDelivery) -> Void)?
     var onRemoteSessionsChanged: ((HostRef, [SessionSummary], Bool) -> Void)?
     @Published private(set) var sessions: [Hosted<SessionSummary>] = []
@@ -77,21 +68,6 @@ final class HostClients: ObservableObject {
     private var entries: [HostRef: Entry] = [:]
     private var diagnosticReads: [String: Task<Void, Never>] = [:]
     private let readNativeCapability: @MainActor (HostRef, SSHConnectionConfiguration?) async throws -> String
-    @Published private(set) var sharedRevision = 0
-    let sharedContextCourier = SharedContextCourier()
-    private var sharedContextGenerations: [HostRef: UUID] = [:]
-
-    /// Explicit UI enrollment/edit reconciliation. Never queues an arbitrary chat mutation.
-    func reconcileSharedContexts() { sharedRevision &+= 1; sharedContextCourier.trigger() }
-
-    private func refreshSharedContextEndpoints() {
-        guard !shuttingDown else { return }
-        sharedContextCourier.update(entries.filter {
-            $0.value.client.connected && $0.value.client.sharedContextTransportEnabled
-        }.mapValues {
-            SharedContextCourier.Endpoint(client: $0.client, host: $0.token.host)
-        })
-    }
     @MainActor private final class TerminalRegistration {
         let ref: HostResourceRef
         let intent: WorkspaceTerminalIntent
@@ -170,46 +146,11 @@ final class HostClients: ObservableObject {
     func terminalReadPaused(_ ref: HostResourceRef, _ paused: Bool) {
         terminalRegistrations[ref]?.client?.terminalReadPaused(ref.localId, paused)
     }
-    private var tunnels: [HostRef: any HostTunnel] = [:]
-    private var tunnelWatches: [HostRef: Task<Void, Never>] = [:]
-    private var tunnelURLs: [HostRef: URL] = [:]
-    private var connectionAttempts: [HostRef: UUID] = [:]
-    private struct ConnectionJob {
-        let id: UUID
-        let configuration: SSHConnectionConfiguration
-        let task: Task<Void, Error>
-    }
-    private var connectionJobs: [HostRef: ConnectionJob] = [:]
-    private var tunnelConfigurations: [HostRef: SSHConnectionConfiguration] = [:]
-    private var connectionCleanup: [HostRef: (UUID, Task<Void, Never>)] = [:]
-    private let savedStartup = SavedDevboxStartup()
-    private let connectionAdmission = HostConnectionAdmission()
-    /// Read-only, generation-fenced hello/version evidence for lifecycle consumers outside Settings.
-    let remoteRuntimes = VerifiedRemoteRuntimes()
     /// One owner for live lifecycle fan-out and Settings. Construction performs no I/O.
     let scopedModels: ScopedModelsSync
+    private var endpointGenerations: [HostRef: UUID] = [:]
     private let readScopedModelCapability: @MainActor (HostRef, SSHConnectionConfiguration?) async throws -> String
     private var scopedModelsStarted = false
-    private let automaticUpdateConfiguration: DevboxAutomaticUpdateConfiguration
-    private let devboxUpdateStore: DevboxUpdateIntentStore
-    /// One model per pinned host, reused by Settings and the automatic lifecycle consumer.
-    private(set) lazy var devboxUpdates = AutomaticDevboxUpdates(runtimes: remoteRuntimes,
-        targetVersion: automaticUpdateConfiguration.targetVersion,
-        loadPackage: automaticUpdateConfiguration.loadPackage,
-        actions: automaticUpdateConfiguration.actions ?? .live(self), store: devboxUpdateStore,
-        validate: { [weak self] token in
-            guard let self, !self.shuttingDown else { return false }
-            return (try? self.validate(token)) != nil
-        })
-    private var liveConnectionsStarted = false
-    private var enrollingHosts: Set<HostRef> = []
-    var startupConnectionsIdle: Bool {
-        savedStartup.isIdle && connectionJobs.isEmpty && connectionCleanup.isEmpty && remoteRuntimes.isIdle && scopedModels.isIdle && devboxUpdates.isIdle
-    }
-    private let makeTunnel: (SSHConnectionConfiguration, HostRef) -> any HostTunnel
-    private let makeClient: @MainActor () -> PilotClient
-    private let connectClient: @MainActor (PilotClient, URL) -> Void
-    private let readRuntimeHello: @MainActor (PilotClient, HostRef) async throws -> DaemonHello
     private var offlineStore: OfflineHostStore?
     private var offlineReady = false
     private var saveTask: Task<Void, Never>?
@@ -219,41 +160,19 @@ final class HostClients: ObservableObject {
     private var shuttingDown = false
 
     init(operationDirectory: URL? = nil,
-         makeTunnel: @escaping (SSHConnectionConfiguration, HostRef) -> any HostTunnel = { configuration, host in
-             ManagedSSHTunnel(configuration: configuration) { data in
-                 try host.validate(JSONDecoder().decode(DaemonHello.self, from: data))
-             }
-         }, makeClient: @escaping @MainActor () -> PilotClient = {
-             let configuration = URLSessionConfiguration.ephemeral
-             configuration.timeoutIntervalForRequest = 15
-             configuration.timeoutIntervalForResource = 30
-             return PilotClient(commandConfiguration: configuration)
-         },
-         connectClient: @escaping @MainActor (PilotClient, URL) -> Void = { $0.connect(to: $1) },
          scopedModelsStore: ScopedModelsStore? = nil,
          readScopedModelCapability: @escaping @MainActor (HostRef, SSHConnectionConfiguration?) async throws -> String = {
              try await GitHubNativeAccess.read(host: $0, configuration: $1)
          },
          readNativeCapability: @escaping @MainActor (HostRef, SSHConnectionConfiguration?) async throws -> String = {
              try await GitHubNativeAccess.read(host: $0, configuration: $1)
-         },
-         automaticUpdates: DevboxAutomaticUpdateConfiguration? = nil,
-         readRuntimeHello: @escaping @MainActor (PilotClient, HostRef) async throws -> DaemonHello = { client, _ in
-             try await client.hello()
          }) {
-        self.makeTunnel = makeTunnel; self.makeClient = makeClient
-        self.connectClient = connectClient
-        self.readRuntimeHello = readRuntimeHello
         self.readScopedModelCapability = readScopedModelCapability
         self.readNativeCapability = readNativeCapability
         scopedModels = ScopedModelsSync(store: scopedModelsStore ?? ScopedModelsStore(directory:
             operationDirectory?.appendingPathComponent("scoped-models", isDirectory: true) ??
                 FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                     .appendingPathComponent("Pilot/ScopedModels", isDirectory: true)))
-        automaticUpdateConfiguration = automaticUpdates ?? DevboxAutomaticUpdateConfiguration()
-        devboxUpdateStore = automaticUpdates?.store ?? operationDirectory.map {
-            DevboxUpdateIntentStore(directory: $0.appendingPathComponent("devbox-updates", isDirectory: true))
-        } ?? .shared
         // The outbox decodes every top-level JSON file as an operation. Keep checkout metadata separate.
         checkoutDirectory = operationDirectory?.appendingPathComponent("project-checkouts", isDirectory: true) ?? FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Pilot")
@@ -281,48 +200,6 @@ final class HostClients: ObservableObject {
         } catch { persistenceError = "Could not read saved host metadata. The original data was kept."; throw error }
     }
 
-    /// Explicit user-confirmed enrollment. A changed daemon/lineage requires a separate repair flow.
-    func enroll(_ host: HostRef, configuration: SSHConnectionConfiguration) async throws {
-        guard !shuttingDown, offlineReady, !enrollingHosts.contains(host), host.hostId != "local", !host.hostId.isEmpty,
-              !host.daemonId.isEmpty, !host.lineageId.isEmpty,
-              !offlineHosts.keys.contains(where: { $0.hostId == host.hostId && $0 != host }),
-              offlineHosts[host] != nil || offlineHosts.count < 32 else { throw HostRoutingError.identityChanged }
-        if offlineHosts[host]?.configuration == configuration { return }
-        enrollingHosts.insert(host)
-        defer { enrollingHosts.remove(host) }
-        if let previous = offlineHosts[host], previous.configuration != configuration {
-            // A queued/held launch attempt may not use superseded connection coordinates.
-            await disconnect(host)
-        }
-        let previous = offlineHosts[host]
-        if let existing = previous {
-            offlineHosts[host] = OfflineHostSnapshot(host: host, configuration: configuration,
-                receivedAt: existing.receivedAt, sessions: existing.sessions, projects: existing.projects,
-                missions: existing.missions, stopRequests: existing.stopRequests)
-        } else { offlineHosts[host] = OfflineHostSnapshot(host: host, configuration: configuration) }
-        do { try await flushOffline() }
-        catch { offlineHosts[host] = previous; throw error }
-    }
-
-    func reconnect(_ host: HostRef) async throws {
-        guard let configuration = offlineHosts[host]?.configuration else { throw HostRoutingError.invalidReference }
-        try await connect(host: host, configuration: configuration)
-    }
-
-    /// Explicit live-app admission, separate from pure offline restoration and preview construction.
-    func startSavedConnections() {
-        guard offlineReady, !shuttingDown else { return }
-        liveConnectionsStarted = true
-        refreshRuntimeEndpoints()
-        savedStartup.start(offlineHosts.values.map {
-            SavedDevboxStartup.Request(host: $0.host, configuration: $0.configuration)
-        }) { [weak self] request in
-            guard let self else { throw HostRoutingError.disconnected }
-            try Task.checkCancellation()
-            try await self.connect(host: request.host, configuration: request.configuration)
-        }
-    }
-
     /// Explicit live admission only. restoreOffline, init and Settings rendering remain inert.
     func startScopedModels() {
         guard !shuttingDown else { return }
@@ -332,7 +209,7 @@ final class HostClients: ObservableObject {
 
     private func refreshScopedModelEndpoints() {
         guard scopedModelsStarted, !shuttingDown else { return }
-        scopedModels.update(entries.filter { $0.value.client.connected }.mapValues { entry in
+        scopedModels.update(entries.filter { $0.key.hostId == "local" && $0.value.client.connected }.mapValues { entry in
             let client = entry.client, host = entry.token.host
             let token = HostConnectionToken(host: host, generation: client.connectionGeneration)
             return ScopedModelsTransport(client: client, token: token, validate: { [weak self, weak client] in
@@ -351,35 +228,12 @@ final class HostClients: ObservableObject {
         })
     }
 
-    private func refreshRuntimeEndpoints() {
-        guard liveConnectionsStarted, !shuttingDown else { return }
-        remoteRuntimes.update(entries.filter { $0.key.hostId != "local" && $0.value.client.connected }.mapValues { entry in
-            let client = entry.client, host = entry.token.host, generation = client.connectionGeneration
-            return VerifiedRemoteRuntimes.Endpoint(token: HostConnectionToken(host: host, generation: generation),
-                isCurrent: { [weak self, weak client] in
-                    guard let self, let client else { return false }
-                    return !self.shuttingDown && self.entries[host]?.client === client && client.connected
-                        && client.connectionGeneration == generation && client.hostIdentity == host
-                }, hello: { [weak self, weak client] in
-                    guard let self, let client else { throw HostRoutingError.disconnected }
-                    return try await self.readRuntimeHello(client, host)
-                })
-        })
-        devboxUpdates.retainSavedHosts(Set(offlineHosts.keys))
-        devboxUpdates.targetChanged()
-    }
-
-    func startAutomaticDevboxUpdates() {
-        guard !shuttingDown else { return }
-        devboxUpdates.start()
-    }
-
     func historyAvailability(_ ref: HostResourceRef, cached: Bool) -> HostedHistoryAvailability {
         available.contains(ref.host) ? .online : cached ? .cached : .requiresReconnect
     }
 
     private func scheduleSave() {
-        guard offlineStore != nil else { return }
+        guard !shuttingDown, offlineStore != nil else { return }
         saveTask?.cancel()
         saveTask = Task { [weak self] in
             do { try await Task.sleep(for: .milliseconds(500)); try await self?.flushOffline() }
@@ -431,7 +285,7 @@ final class HostClients: ObservableObject {
         Task { @MainActor [weak self] in
             guard let self else { return }
             if details { self.pendingDetails.remove(host) } else { self.pendingRefresh.remove(host) }
-            guard let entry = self.entries[host] else { return }
+            guard !self.shuttingDown, let entry = self.entries[host] else { return }
             if details { self.refreshDetails(host, token: entry.token) }
             else { self.refresh(host, token: entry.token) }
         }
@@ -676,11 +530,6 @@ final class HostClients: ObservableObject {
                   self.entries[host]?.client === client, client.connected, !self.shuttingDown else { return }
             self.routeDiagnosticRead(dispatch, source: host, token: token)
         }
-        client.onSharedContextsChanged = { [weak self, weak client] in
-            guard let self, let client, self.entries[host]?.token == token, client.connected,
-                  self.entries[host]?.client === client, !self.shuttingDown else { return }
-            self.reconcileSharedContexts()
-        }
         for registration in terminalRegistrations.values where registration.ref.host == host {
             attachTerminalRegistration(registration)
         }
@@ -692,171 +541,21 @@ final class HostClients: ObservableObject {
         refreshDetails(host, token: token)
     }
 
-    /// Enrollment pins an explicitly confirmed identity. No first-response TOFU during reconnect.
-    func connect(host: HostRef, configuration: SSHConnectionConfiguration) async throws {
-        try Task.checkCancellation()
-        guard !shuttingDown, offlineReady, !enrollingHosts.contains(host), host.hostId != "local",
-              offlineHosts[host]?.configuration == configuration,
-              !offlineHosts.keys.contains(where: { $0.hostId == host.hostId && $0 != host }) else {
-            throw HostRoutingError.invalidReference
-        }
-        if let job = connectionJobs[host], job.configuration == configuration {
-            try await job.task.value
-            return
-        }
-        if tunnelConfigurations[host] == configuration, tunnels[host] != nil {
-            switch connectionStates[host] {
-            case .connected, .connecting: return // Includes a verified forward whose client is still opening.
-            default: break
-            }
-        }
-        let attempt = UUID()
-        connectionAttempts[host] = attempt
-        connectionJobs[host]?.task.cancel()
-        let task = Task { [weak self] in
-            guard let self else { throw HostRoutingError.disconnected }
-            try Task.checkCancellation()
-            try self.validateConnection(host, configuration: configuration, attempt: attempt)
-            try await self.connectionAdmission.acquire()
-            defer { self.connectionAdmission.release() }
-            try Task.checkCancellation()
-            try self.validateConnection(host, configuration: configuration, attempt: attempt)
-            await self.closeConnection(host)
-            try Task.checkCancellation()
-            try self.validateConnection(host, configuration: configuration, attempt: attempt)
-            let tunnel = self.makeTunnel(configuration, host)
-            try await self.attachTunnel(tunnel, host: host, configuration: configuration, attempt: attempt)
-        }
-        connectionJobs[host] = ConnectionJob(id: attempt, configuration: configuration, task: task)
-        defer { if connectionJobs[host]?.id == attempt { connectionJobs[host] = nil } }
-        try await task.value
-    }
+    /// Close local subscriptions without contacting or modifying any former devbox.
+    func disconnect(_ host: HostRef) async { removeConnection(host) }
 
-    private func validateConnection(_ host: HostRef, configuration: SSHConnectionConfiguration, attempt: UUID) throws {
-        guard !shuttingDown, !enrollingHosts.contains(host), connectionAttempts[host] == attempt,
-              offlineHosts[host]?.configuration == configuration else { throw HostRoutingError.staleGeneration }
-    }
-
-    /// Adopt only after enrollment was explicitly confirmed and durably persisted. Bootstrap has
-    /// already validated this owned forward. Keep its state stream, never just its first URL.
-    func adopt(_ connection: LinuxBootstrapConnection, configuration: SSHConnectionConfiguration) async throws {
-        guard offlineReady, offlineHosts[connection.host]?.configuration == configuration, !shuttingDown else {
-            throw HostRoutingError.invalidReference
-        }
-        let attempt = UUID()
-        savedStartup.suppress(connection.host)
-        connectionJobs.removeValue(forKey: connection.host)?.task.cancel()
-        connectionAttempts[connection.host] = attempt
-        await closeConnection(connection.host)
-        try Task.checkCancellation()
-        try validateConnection(connection.host, configuration: configuration, attempt: attempt)
-        try await attachTunnel(connection.tunnel, host: connection.host, configuration: configuration, attempt: attempt)
-    }
-
-    private func attachTunnel(_ tunnel: any HostTunnel, host: HostRef,
-                              configuration: SSHConnectionConfiguration, attempt: UUID) async throws {
-        try validateConnection(host, configuration: configuration, attempt: attempt)
-        tunnels[host] = tunnel
-        tunnelConfigurations[host] = configuration
-        let states = await tunnel.states()
-        guard !Task.isCancelled, !shuttingDown, connectionAttempts[host] == attempt,
-              offlineHosts[host]?.configuration == configuration, tunnels[host] === tunnel else {
-            await tunnel.disconnect()
-            throw HostRoutingError.staleGeneration
-        }
-        tunnelWatches[host] = Task { [weak self] in
-            for await state in states {
-                guard !Task.isCancelled, let self, self.tunnels[host] === tunnel,
-                      (try? self.validateConnection(host, configuration: configuration, attempt: attempt)) != nil else { break }
-                self.connectionStates[host] = state
-                switch state {
-                case let .connected(url):
-                    do { try self.installTunnelEndpoint(host, url: url, configuration: configuration, attempt: attempt) }
-                    catch { self.removeConnection(host) }
-                default:
-                    self.tunnelURLs[host] = nil
-                    self.removeConnection(host)
-                }
-            }
-        }
-        do {
-            let url = try await tunnel.connect()
-            try Task.checkCancellation()
-            try validateConnection(host, configuration: configuration, attempt: attempt)
-            guard tunnels[host] === tunnel else { throw HostRoutingError.staleGeneration }
-            try installTunnelEndpoint(host, url: url, configuration: configuration, attempt: attempt)
-        } catch {
-            if tunnels[host] === tunnel, connectionAttempts[host] == attempt {
-                connectionAttempts[host] = nil
-                await closeConnection(host)
-                if let failure = error as? SSHTunnelError { connectionStates[host] = .failed(failure) }
-            }
-            throw error
-        }
-    }
-
-    private func installTunnelEndpoint(_ host: HostRef, url: URL,
-                                       configuration: SSHConnectionConfiguration, attempt: UUID) throws {
-        try validateConnection(host, configuration: configuration, attempt: attempt)
-        if tunnelURLs[host] == url, entries[host] != nil { return }
-        let client = makeClient()
-        try install(client, host: host)
-        tunnelURLs[host] = url
-        connectClient(client, url)
-    }
-
-    func disconnect(_ host: HostRef) async {
-        savedStartup.suppress(host)
-        connectionAttempts[host] = nil
-        connectionJobs.removeValue(forKey: host)?.task.cancel()
-        await closeConnection(host)
-    }
-
-    private func closeConnection(_ host: HostRef) async {
-        tunnelWatches.removeValue(forKey: host)?.cancel()
-        tunnelURLs[host] = nil
-        tunnelConfigurations[host] = nil
-        let tunnel = tunnels.removeValue(forKey: host)
-        removeConnection(host)
-        connectionStates[host] = .disconnected
-        let previous = connectionCleanup[host]?.1
-        guard let tunnel else {
-            await previous?.value
-            return
-        }
-        let id = UUID()
-        let cleanup = Task {
-            await previous?.value
-            await tunnel.disconnect()
-        }
-        connectionCleanup[host] = (id, cleanup)
-        await cleanup.value
-        if connectionCleanup[host]?.0 == id { connectionCleanup[host] = nil }
-    }
-
-    /// Quit closes only owned local forwards, never remote agents or daemon services.
     func disconnectAll() async {
-        // Fence startup/reconnect completions before the first suspension. Keep Local installed;
-        // no daemon stop, power command, remote service management or agent mutation is reachable.
         shuttingDown = true
-        savedStartup.stop()
-        remoteRuntimes.stop()
         scopedModels.stop()
-        devboxUpdates.stop()
-        for job in connectionJobs.values { job.task.cancel() }
-        connectionJobs.removeAll()
-        sharedContextCourier.stop()
-        sharedContextGenerations.removeAll()
-        connectionAttempts.removeAll()
-        for host in tunnels.keys {
-            if let entry = entries[host] { refresh(host, token: entry.token) }
-        }
-        for host in Set(tunnels.keys).union(connectionCleanup.keys) { await disconnect(host) }
+        saveTask?.cancel()
+        await saveTask?.value
+        saveTask = nil
+        for task in reconciliationTasks.values { task.cancel() }
+        for task in diagnosticReads.values { task.cancel() }
+        for task in reconciliationTasks.values { await task.value }
+        for task in diagnosticReads.values { await task.value }
         await scopedModels.stopAndWait()
-        await devboxUpdates.stopAndWait()
         await projectCheckouts.stop()
-        do { try await flushOffline() }
-        catch { persistenceError = "Could not save offline host metadata before quitting." }
     }
 
     /// Removal keeps last-known summaries. It does not invent an execution outcome.
@@ -876,10 +575,8 @@ final class HostClients: ObservableObject {
         removed?.client.onSharedContextsChanged = nil
         removed?.client.disconnect()
         if let removed { presentationClients[host] = removed.client }
-        sharedContextGenerations[host] = nil
-        refreshSharedContextEndpoints()
+        endpointGenerations[host] = nil
         available.remove(host)
-        refreshRuntimeEndpoints()
         refreshScopedModelEndpoints()
     }
 
@@ -1246,10 +943,8 @@ final class HostClients: ObservableObject {
         defer { refreshProjectCheckouts() }
         guard let entry = entries[host], entry.token == token else { return }
         let sharedGeneration = entry.client.connected ? entry.client.connectionGeneration : nil
-        if sharedContextGenerations[host] != sharedGeneration {
-            sharedContextGenerations[host] = sharedGeneration
-            refreshSharedContextEndpoints()
-            refreshRuntimeEndpoints()
+        if endpointGenerations[host] != sharedGeneration {
+            endpointGenerations[host] = sharedGeneration
             refreshScopedModelEndpoints()
         }
         if entry.client.connected {

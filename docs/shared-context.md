@@ -1,5 +1,8 @@
 # Shared context and independent task execution
 
+> Historical transport/design reference. Remote devboxes are retired in the app and production daemon.
+> See [retained data and boundaries](devboxes.md). The workflows below are not enabled product features.
+
 This is the daemon/client integration protocol, not the devbox enrollment or delegation UI.
 It uses the existing loopback-only daemons and pinned SSH transports. No reverse connection,
 public unauthenticated API, workspace synchronization or credential/configuration transfer is added.

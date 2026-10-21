@@ -65,8 +65,8 @@ struct ScopedModelsHostRow: Identifiable {
     private var initialSelection: ScopedModelsSelection? { sync.state.desired ?? localObservation?.baseline.selection }
 
     var body: some View {
-        SettingsSection("Scoped models", explanation: "Choose pi’s global model list on this Mac and participating devboxes. Save is explicit; new devboxes need their own review before joining.") {
-            SettingsToggle("All authenticated models", detail: "All is not an empty picker. Authentication stays independent on every host.",
+        SettingsSection("Scoped models", explanation: "Choose pi’s global model list on this Mac. Changes apply only when you save.") {
+            SettingsToggle("All authenticated models", detail: "Use every authenticated model, including models added later.",
                 isOn: Binding(get: { editor.allModels }, set: { editor.setAll($0) }))
                 .disabled(!editor.initialized)
             if !editor.allModels {
@@ -74,7 +74,7 @@ struct ScopedModelsHostRow: Identifiable {
                     TextField("Search available models", text: $query).textFieldStyle(.roundedBorder)
                         .accessibilityLabel("Search available models")
                 }
-                SettingsRow { SettingsNote("Authenticated models on Local, including those outside the current scope. Devboxes keep their own availability; patterns they cannot resolve are still preserved.") }
+                SettingsRow { SettingsNote("Authenticated models on this Mac, including those outside the current scope. Unavailable patterns are preserved.") }
                 let candidates = (localObservation?.candidates ?? []).filter {
                     query.isEmpty || "\($0.provider) \($0.id) \($0.name)".localizedCaseInsensitiveContains(query)
                 }
@@ -121,7 +121,7 @@ struct ScopedModelsHostRow: Identifiable {
             } else if sync.state.desired == nil {
                 SettingsRow { SettingsNote("Connect Local to read its baseline before the first Save. Opening Settings never writes pi settings.") }
             }
-            SettingsRow { SettingsNote("Only global enabledModels is synchronized. Project .pi/settings.json overrides remain in effect and are not changed. Default models, sign-ins and running chats are untouched.") }
+            SettingsRow { SettingsNote("Only global enabledModels is changed. Project .pi/settings.json overrides remain in effect and are not changed. Default models, sign-ins and running chats are untouched.") }
             SettingsRow {
                 HStack(spacing: 8) {
                     ScopedModelsSaveButton(sync: sync, editor: editor, localHost: localHost)
@@ -132,7 +132,7 @@ struct ScopedModelsHostRow: Identifiable {
             if !editor.valid { SettingsRow { InlineProblem("Select at least one model or choose All. Advanced patterns must be nonempty and fit within 256 UTF-8 bytes.") } }
             if let problem = sync.problem { SettingsRow { InlineProblem(problem) } }
         }
-        SettingsSection("Sync by host", explanation: "Synced requires exact readback. Disconnected hosts remain pending; one host’s failure does not mean others failed or succeeded.") {
+        SettingsSection("Local status", explanation: "Saved changes are verified by reading pi’s settings back. Conflicting edits need your review.") {
             ForEach(hosts) { row in hostRow(row) }
         }
         .onAppear { initialize() }
@@ -140,7 +140,7 @@ struct ScopedModelsHostRow: Identifiable {
         .onChange(of: localObservation?.baseline) { _, _ in initialize() }
         .onChange(of: query) { _, _ in candidateLimit = 30 }
         .sheet(item: $review) { value in
-            SheetScaffold(value.useEverywhere ? "Use this host’s list everywhere" : "Sync this host",
+            SheetScaffold(value.useEverywhere ? "Use current pi settings" : "Sync this host",
                 subtitle: value.row.title,
                 primary: SheetPrimaryAction(title: value.useEverywhere ? "Save new list" : "Apply saved list",
                     enabled: sync.isCurrent(value.consent),
@@ -154,7 +154,7 @@ struct ScopedModelsHostRow: Identifiable {
                 SettingsNote("Current host value: \(Self.describe(value.consent.baseline))")
                 SettingsNote("Saved Mac list (revision \(value.consent.revision)): \(value.consent.desired.patterns?.joined(separator: ", ") ?? "All authenticated models")")
                 SettingsNote(value.useEverywhere
-                    ? "This creates a new saved Mac revision. Other hosts still use normal conflict checks; their conflicts are not overwritten."
+                    ? "This creates a new saved Mac revision. The current pi settings become your saved list."
                     : "Replace only this host’s global model scope with the saved Mac list, using the shown baseline. A change elsewhere will require another review.")
                 SettingsNote("No credentials, project overrides or other settings are copied.")
             }
@@ -176,7 +176,7 @@ struct ScopedModelsHostRow: Identifiable {
                         Button(status == .conflict ? "Overwrite this host…" : "Join saved list…") {
                             if let consent = sync.review(row.host) { review = HostReview(row: row, consent: consent, useEverywhere: false) }
                         }.disabled(!observation.writable)
-                        Button("Use this host’s list everywhere…") {
+                        Button("Use current pi settings…") {
                             if let consent = sync.review(row.host) { review = HostReview(row: row, consent: consent, useEverywhere: true) }
                         }
                         Button("Leave as is") { Task { await sync.leave(row.host) } }

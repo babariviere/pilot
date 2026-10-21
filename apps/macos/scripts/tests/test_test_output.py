@@ -23,7 +23,7 @@ PASSED = ('✔ Test run with 122 tests in 9 suites passed after 0.100 seconds.\n
 STARTED = '◇ Test run started.\n'
 ISOLATED = "artifactHeightRespectsNestedClippingWhileKeepingVisibleOverflow"
 ISOLATED_OUTPUT = STARTED + f"◇ Test {ISOLATED}() started.\n" + PASSED
-DEVBOX = "addDevboxPresentsSetupSheetAfterCancelAndReopen"
+DEVBOX = "retiredDevboxesKeepSettingsLocalAndCachedHistoryReadOnly"
 DEVBOX_OUTPUT = STARTED + f"◇ Test {DEVBOX}() started.\n" + PASSED
 TERMINAL = "terminalOpeningAndResizingDoNotFeedNativeFittingSizeBackIntoWindowConstraints"
 TERMINAL_OUTPUT = STARTED + f"◇ Test {TERMINAL}() started.\n" + PASSED
@@ -53,7 +53,7 @@ SCOPED_MODELS = [
     "scopedModelsConflictConsentCannotFollowNewIntentOrConnection",
     "scopedModelsReadFailureCannotErasePersistedLeaveAsIs"
 ]
-SCOPED_MODEL_TRANSPORT = ["modelScopeLiveOwnerSyncsLocalAndTwoDevboxesAcrossOfflineReconnectAndRelaunch", "modelScopeLiveConflictAndLeaveRemainDivergentAfterColdLaunch", "modelScopeWirePreservesAllAndDecodesBothPutArmsWithoutCapabilityReadsOnGet", "modelScopeWireRejectsStaleCapabilityAcquisitionBeforeSending", "modelScopeWireExposesTypedReadFailuresWithoutTreatingThemAsAbsent", "modelScopeWireReconcilesCommitted503WithLiteralReadbackWithoutRepeatingPut"]
+SCOPED_MODEL_TRANSPORT = ["modelScopeLiveOwnerNeverSyncsRetiredDevboxes", "modelScopeLiveConflictAndLeaveRemainDivergentAfterColdLaunch", "modelScopeWirePreservesAllAndDecodesBothPutArmsWithoutCapabilityReadsOnGet", "modelScopeWireRejectsStaleCapabilityAcquisitionBeforeSending", "modelScopeWireExposesTypedReadFailuresWithoutTreatingThemAsAbsent", "modelScopeWireReconcilesCommitted503WithLiteralReadbackWithoutRepeatingPut"]
 SCOPED_MODELS += SCOPED_MODEL_TRANSPORT
 SCOPED_MODEL_NATIVE = ["scopedModelsNativeSavePersistsAndDispatchesExplicitAllOnlyAfterClick",
                        "scopedModelsNativeSelectorPreservesAdvancedPatterns",
@@ -63,19 +63,10 @@ SCOPED_MODEL_OUTPUTS += [STARTED + f"◇ Test {name}() started.\n" + PASSED for 
 
 
 AUTOMATIC_UPDATES = [
-    "automaticPackageWaitersCancelIndependentlyAndReconnectDoesNotWaitForAbandonedIO",
-    "automaticStoreKeepsEveryCancelledTargetAndRefusesUnresolvedReplay",
-    "automaticLiveStartupKeepsLocalUnblockedAndUsesTheVerifiedRuntimeOwner",
-    "automaticOlderRuntimeStagesOnceAndSharesWaitingBlockersWithoutSettings",
-    "automaticSameNewerUnknownAndUnsupportedVersionsNeverDownloadOrDowngrade",
-    "automaticLostAckAndRelaunchLookUpOriginalManualOrAutomaticIntentOnly",
-    "automaticPendingDifferentPackageAndUnknownAckCannotAllocateReplacement",
-    "automaticUnreadableStoreAndNeedsRepairFailClosedWithoutReplacingState",
-    "automaticIdentityReplacementCannotPublishOldSuccessOrSendAnotherRequest",
-    "automaticCancellationSurvivesLostAckReconnectAndColdLaunchUntilExplicitRetry",
-    "automaticTrustFailureIsBoundedAndCannotCreateAnIntent",
-    "automaticDisconnectOrTargetChangeDuringDownloadCannotDispatchStalePackage",
-    "automaticWorkIsBoundedAndOneHostDoesNotBlockOthersOrInventTermination"
+    "retiredOfflineRestoreKeepsLegacyBytesAndUnknownOutboxWithoutNetwork",
+    "retiredLocalDraftParksUnsubmittedRemoteTextWithoutRetargeting",
+    "retiredRemoteProjectsCannotStartOrImportChats",
+    "retiredCorruptOfflineMetadataCannotBlockLocalOrReplaceSavedFiles",
 ]
 AUTOMATIC_UPDATE_OUTPUTS = [STARTED + "".join(f"◇ Test {name}() started.\n" for name in AUTOMATIC_UPDATES) + PASSED]
 HOST_MCPS = [
@@ -152,8 +143,8 @@ class TestOutputTests(unittest.TestCase):
         self.assertEqual(re.findall(r"func (hostMcp\w+)\(", source.read_text()), HOST_MCPS)
 
     def test_automatic_update_partition_covers_production_fixtures(self):
-        source = SCRIPTS.parent / "Tests/PilotTests/AutomaticDevboxUpdateTests.swift"
-        self.assertEqual(re.findall(r"@Test @MainActor func (automatic\w+)\(", source.read_text()), AUTOMATIC_UPDATES)
+        source = SCRIPTS.parent / "Tests/PilotTests/RetiredDevboxTests.swift"
+        self.assertEqual(re.findall(r"@Test @MainActor func (retired(?!Devboxes)\w+)\(", source.read_text()), AUTOMATIC_UPDATES)
 
     def test_scoped_model_partitions_cover_the_production_fixtures(self):
         scheduler = SCRIPTS.parent / "Tests/PilotTests/ScopedModelsSyncTests.swift"

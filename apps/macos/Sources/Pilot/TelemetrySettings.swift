@@ -214,7 +214,7 @@ struct TelemetrySettingsPage: View {
             TelemetrySettingsSection(localApp: true)
             DiagnosticRepairProjectSettings()
             SettingsSection("Boundaries", explanation: "Pilot does not export prompts, responses, reasoning, code, paths, tool traffic, integration content, raw errors or credentials. Queues stay in memory and are discarded when reporting is disabled.") {
-                SettingsRow { SettingsNote("A collector on 127.0.0.1 is recommended. Configure every devbox independently from its Devboxes page.") }
+                SettingsRow { SettingsNote("A collector on 127.0.0.1 is recommended.") }
             }
         }
     }

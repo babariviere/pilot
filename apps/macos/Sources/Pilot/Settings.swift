@@ -160,10 +160,10 @@ extension EnvironmentValues {
 
 /// A page of the settings window. General pages come first in the sidebar, then one page per project.
 enum SettingsTab: Hashable {
-    case appearance, notifications, connections, models, diagnostics, energy, terminal, updates, devboxes
+    case appearance, notifications, connections, models, diagnostics, energy, terminal, updates
     case project(String)
 
-    static let general: [SettingsTab] = [.appearance, .notifications, .connections, .models, .diagnostics, .energy, .terminal, .updates, .devboxes]
+    static let general: [SettingsTab] = [.appearance, .notifications, .connections, .models, .diagnostics, .energy, .terminal, .updates]
 
     /// The sidebar's order: general pages, then projects.
     static func ordered(projects: [Project]) -> [SettingsTab] { general + projects.map { .project($0.id) } }
@@ -183,7 +183,6 @@ enum SettingsTab: Hashable {
         case .diagnostics: "Diagnostics"
         case .energy: "Energy"
         case .terminal: "Terminal"
-        case .devboxes: "Devboxes"
         case .updates: "Updates"
         case .project: "Project"
         }
@@ -198,7 +197,6 @@ enum SettingsTab: Hashable {
         case .diagnostics: PilotIcon.activity
         case .energy: PilotIcon.energy
         case .terminal: PilotIcon.terminal
-        case .devboxes: PilotIcon.terminal
         case .updates: PilotIcon.updates
         case .project: PilotIcon.project
         }
@@ -247,7 +245,7 @@ struct SettingsView: View {
         case .notifications:
             SettingsPage("Notifications", subtitle: "Pilot only interrupts you for things that need you.") { NotificationSettings() }
         case .connections:
-            SettingsPage("Connections", subtitle: "MCP servers and sign-in on Local and your devboxes.") {
+            SettingsPage("Connections", subtitle: "MCP servers and sign-in on this Mac.") {
                 ConnectionSettings()
             }
         case .models:
@@ -258,8 +256,6 @@ struct SettingsView: View {
             SettingsPage("Energy", subtitle: "Keep work moving. Let the display rest.") { EnergySettings() }
         case .terminal:
             SettingsPage("Terminal", subtitle: "The chat terminal runs on Ghostty.") { TerminalSettings() }
-        case .devboxes:
-            DevboxSettings(hosts: model.hosts, navigate: { ref in model.navigate(ref.kind, id: ref.storageKey); model.showMainWindow() })
         case .updates:
             SettingsPage("Updates", subtitle: "Pilot updates itself from private GitHub releases.") { UpdateSettings() }
         case let .project(id):
@@ -952,9 +948,6 @@ private struct ProjectSettings: View {
                 ProjectDatabaseSettingsSection(projectId: project.id, host: host,
                                                hosts: hostContext?.hosts ?? AppModel.shared.hosts)
                     .id(HostResourceRef(host: host, kind: .project, localId: project.id).storageKey)
-            }
-            if let host = hostContext?.host ?? AppModel.shared.localHost {
-                ProjectSharingSection(project: HostResourceRef(host: host, kind: .project, localId: project.id), hosts: AppModel.shared.hosts)
             }
             ProjectRemoval(error: removeError) { confirmingRemoval = true }
         }

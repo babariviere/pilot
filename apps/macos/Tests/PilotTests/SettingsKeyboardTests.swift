@@ -12,7 +12,7 @@ import Testing
     #expect(order.suffix(2) == [.project("p1"), .project("p2")])
     #expect(SettingsTab.moving(from: .appearance, by: -1, in: order) == .appearance)
     #expect(SettingsTab.moving(from: .appearance, by: 1, in: order) == .notifications)
-    #expect(SettingsTab.moving(from: .devboxes, by: 1, in: order) == .project("p1"), "general pages lead into projects")
+    #expect(SettingsTab.moving(from: .updates, by: 1, in: order) == .project("p1"), "general pages lead into projects")
     #expect(SettingsTab.moving(from: .project("p2"), by: 1, in: order) == .project("p2"))
     #expect(SettingsTab.moving(from: .project("gone"), by: 1, in: order) == .appearance, "a removed project falls back")
 }

@@ -136,8 +136,8 @@ export class MissionService {
 	setLinearReader(mcp: SourceMcpClient): void {
 		this.ticketReader = new MissionTicketReader(mcp);
 	}
-	private sharing?: import("./shared-context.ts").SharedContextService;
-	setSharedContext(sharing: import("./shared-context.ts").SharedContextService): void {
+	private sharing?: import("./retired-devboxes.ts").MissionSharedContext;
+	setSharedContext(sharing: import("./retired-devboxes.ts").MissionSharedContext): void {
 		this.sharing = sharing;
 		this.notices.setRemoteOccupied((missionId) => sharing.remoteOccupied(missionId));
 	}

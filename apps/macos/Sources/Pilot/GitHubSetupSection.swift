@@ -56,7 +56,7 @@ final class GitHubSetupModel: ObservableObject {
 }
 
 @MainActor
-struct DevboxGitHubSetup: View {
+struct GitHubSetupSection: View {
     let host: HostRef
     @ObservedObject var hosts: HostClients
     @StateObject private var model: GitHubSetupModel
@@ -68,17 +68,17 @@ struct DevboxGitHubSetup: View {
         _model = StateObject(wrappedValue: GitHubSetupModel(host: host, actions: .live(hosts)))
     }
     var body: some View {
-        SettingsSection("GitHub", explanation: "Authorize this devbox independently. Its token and private key stay here. Existing SSH configuration and credentials are not replaced.") {
+        SettingsSection("GitHub", explanation: "Authorize GitHub on this Mac. Existing SSH configuration and credentials are not replaced.") {
             if !hosts.available.contains(host) {
-                SettingsRow { SettingsNote("Disconnected. Reconnect this devbox to check GitHub.") }
+                SettingsRow { SettingsNote("Reconnect to the local daemon to check GitHub.") }
             } else {
                 SettingsRow(model.status?.account.map { "GitHub · \($0)" } ?? "Connect GitHub",
-                            detail: model.status.map { $0.apiReady ? "GitHub CLI/API verified. Repository and SSO permissions still apply." : "GitHub CLI/API access has not been verified." } ?? "Check this devbox before connecting.") {
+                            detail: model.status.map { $0.apiReady ? "GitHub CLI/API verified. Repository and SSO permissions still apply." : "GitHub CLI/API access has not been verified." } ?? "Check access before connecting.") {
                     Button("Check access") { Task { await model.perform("verify") } }.controlSize(.small)
                         .disabled(model.busy || model.uncertain || model.status?.working == true)
                 }
                 if model.status?.apiReady != true {
-                    SettingsRow("Browser authorization", detail: "Requires gh, git and OpenSSH on the devbox. No packages are installed.") {
+                    SettingsRow("Browser authorization", detail: "Requires gh, git and OpenSSH on this Mac. No packages are installed.") {
                         Button("Connect GitHub…") { Task { await model.perform("authorize") } }.controlSize(.small)
                             .disabled(model.busy || model.uncertain || model.status?.working == true)
                     }
@@ -89,7 +89,7 @@ struct DevboxGitHubSetup: View {
                     }
                 }
                 if let status = model.status, status.apiReady {
-                    SettingsRow("Dedicated SSH key", detail: status.sshReady ? "Identity verified for this GitHub account. Access to each repository is checked separately." : status.fingerprint ?? "Generated only on this devbox. No Mac key or agent forwarding.") {
+                    SettingsRow("Dedicated SSH key", detail: status.sshReady ? "Identity verified for this GitHub account. Access to each repository is checked separately." : status.fingerprint ?? "Generate a dedicated key without replacing existing keys.") {
                         if status.fingerprint == nil {
                             Button("Generate key") { Task { await model.perform("prepare_key") } }.controlSize(.small).disabled(model.busy || model.uncertain)
                         } else if !status.sshReady {
@@ -101,7 +101,7 @@ struct DevboxGitHubSetup: View {
                     }
                 }
                 if model.status?.working == true {
-                    SettingsRow("Waiting for GitHub", detail: model.status?.phase == "authorizing" ? "Closing this view does not cancel remote authorization." : "Registration may already have reached GitHub. Refresh to reconcile its result; cancelling cannot undo a sent account change.") {
+                    SettingsRow("Waiting for GitHub", detail: model.status?.phase == "authorizing" ? "Closing this view does not cancel authorization." : "Registration may already have reached GitHub. Refresh to reconcile its result; cancelling cannot undo a sent account change.") {
                         if model.status?.phase == "authorizing" {
                             Button("Cancel authorization") { Task { await model.perform("cancel") } }.controlSize(.small).disabled(model.busy)
                         }

@@ -3,12 +3,6 @@ import PilotCore
 import Testing
 @testable import Pilot
 
-private final class NoDiagnosticTunnel: HostTunnel {
-    func states() async -> AsyncStream<SSHTunnelState> { AsyncStream { $0.finish() } }
-    func connect() async throws -> URL { throw HostRoutingError.disconnected }
-    func disconnect() async {}
-}
-
 private final class DiagnosticReadHTTP: URLProtocol {
     struct Seen: Sendable { let host: String; let path: String; let capability: String?; let body: JSONValue }
     private final class State: @unchecked Sendable {
@@ -65,10 +59,7 @@ private final class DiagnosticReadHTTP: URLProtocol {
             let stream = DiagnosticReadHTTP.stream(wrongIdentity: wrong)
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             defer { try? FileManager.default.removeItem(at: directory) }
-            let hosts = HostClients(operationDirectory: directory, makeTunnel: { _, _ in
-                Issue.record("Diagnostics must never bootstrap a connection")
-                return NoDiagnosticTunnel()
-            }, readNativeCapability: { host, _ in "fixture-\(host.hostId)" })
+            let hosts = HostClients(operationDirectory: directory, readNativeCapability: { host, _ in "fixture-\(host.hostId)" })
             func endpoint(_ name: String) throws -> (PilotClient, HostRef) {
                 let configuration = URLSessionConfiguration.ephemeral
                 configuration.protocolClasses = [DiagnosticReadHTTP.self]

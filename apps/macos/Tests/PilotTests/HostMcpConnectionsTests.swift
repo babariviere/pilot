@@ -116,13 +116,13 @@ private final class HostMcpHTTP: URLProtocol {
     @Test @MainActor func hostMcpRosterCoalescesUnchangedPresentationWithoutStartingChecks() async throws {
         try await withHostMcp { f in
             let roster = HostMcpRoster(hosts: f.hosts, local: f.local)
-            #expect(roster.rows.map(\.host) == [f.local, f.box])
+            #expect(roster.rows.map(\.host) == [f.local])
             var publications = 0
             let observation = roster.$rows.dropFirst().sink { _ in publications += 1 }
             for _ in 0..<100 { roster.update(local: f.local) }
             #expect(publications == 0 && HostMcpHTTP.state.requests.isEmpty)
             await f.hosts.disconnect(f.box)
-            #expect(roster.rows.first(where: { $0.host == f.box })?.available == false)
+            #expect(!roster.rows.contains(where: { $0.host == f.box }))
             withExtendedLifetime(observation) {}
         }
     }

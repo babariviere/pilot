@@ -201,21 +201,6 @@ private struct ProjectToolbar: ToolbarContent {
                     Label("Open on GitHub", icon: PilotIcon.openExternal)
                 }
                 .disabled(model.openingGitHubProjectId != nil)
-                if hostContext == nil || hostContext?.host.hostId == "local" {
-                    Button("Set up on devbox…") {
-                        Task {
-                            do {
-                                let url = try await endpoint.projectGitHubURL(project.id)
-                                guard let host = model.hosts.offlineHosts.keys.sorted(by: { $0.hostId < $1.hostId }).first else {
-                                    model.projectActionError = "Add a devbox before setting up this project remotely."; return
-                                }
-                                model.importGitHubProject(url: url.absoluteString, host: host)
-                            }
-                            catch { model.projectActionError = "Could not resolve this project's GitHub remote. No files were copied." }
-                        }
-                    }
-                    .disabled(model.hosts.offlineHosts.isEmpty)
-                }
                 Divider()
                 Button { model.showArchive(in: project.id, context: hostContext) } label: {
                     Label("Browse Archived Chats", icon: PilotIcon.archive)

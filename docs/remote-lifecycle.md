@@ -1,5 +1,8 @@
 # Remote lifecycle and offline metadata
 
+> Historical transport/design reference. Remote devboxes are retired in the app and production daemon.
+> See [retained data and boundaries](devboxes.md). The workflows below are not enabled product features.
+
 `HostClients` keeps connection availability separate from the last authoritative session summary.
 An unreachable host is **Disconnected**, not stopped, failed, idle, or eligible for reassignment.
 `historyAvailability(_:cached:)` explicitly identifies uncached history that requires reconnection.

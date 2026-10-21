@@ -29,24 +29,12 @@ it does not change chat-result read tracking or enable review entry points.
 - **Run several agents at once.** Follow progress across projects, send follow-ups, queue messages or stop
   a run. Every session has its own worker process.
 - **Choose pi’s scoped models.** Settings → Scoped models has a searchable multi-select and an All option.
-  Save keeps one global model list on this Mac and participating devboxes, with per-host sync/conflict
-  status and explicit review before a new devbox joins. Offline hosts catch up after verified reconnect;
-  project overrides, sign-ins, default models and running chats are unchanged. Advanced literal patterns
+  Save changes pi’s global model list on this Mac, with conflict detection and exact readback.
+  Project overrides, sign-ins, default models and running chats are unchanged. Advanced literal patterns
   and unavailable models are preserved.
-- **Work on a devbox, too.** Add a working SSH alias in Settings → Devboxes, confirm its identity, and
-  sign in to providers independently there. Choose Local or that devbox in the new-chat composer.
-  Known checkouts with an unambiguous matching Git origin appear as one navigation project;
-  choosing a host selects its registered checkout. Use the project selector’s **Checkout locations…**
-  to match missing/ambiguous origins or correct a choice. Matching never copies files or sign-ins,
-  moves existing chats, or enables project sharing. Offline matches retain their original host and path.
-  At launch, saved trusted devboxes reconnect in the background and their verified runtime versions are read
-  without opening Settings. Unreachable hosts never block Local startup.
-  Known remote chats stay visible as Disconnected through network loss, Mac sleep and app quit;
-  remote work continues independently. Project sharing explicitly selects notes and missions,
-  keeps pending contributions and conflicting edits separate, and never copies files or sign-ins.
-  Devbox settings also show read-only machine specifications, runtime observations and last-check times,
-  with stale values clearly marked when disconnected.
-  See [devbox setup and troubleshooting](docs/devboxes.md).
+- **Work locally.** Chats, projects and setup run on this Mac. Remote devboxes are retired.
+  Existing cached remote history and unsent drafts are retained without reconnecting or moving work.
+  See [retained remote data](docs/devboxes.md).
 - **See what needs you first.** Home shows how every project is doing. The Inbox is the one place to act: chats
   that need you (each with a short reason), pull requests ready to merge, and Linear and Slack items, across
   projects or filtered to one. Each project has an Overview that starts with what is next for it.
@@ -126,7 +114,7 @@ it does not change chat-result read tracking or enable review entry points.
   Chats open with recent messages; **Show earlier messages** reveals older pages without changing agent context.
 - **Coordinate bigger goals.** Missions group chats around a shared brief, decisions, tasks, dependencies,
   artifacts and activity, with an optional coordinator agent. One logical mission list stays visible regardless
-  of a chat's execution devbox. Synced mission evidence retains its canonical identity; disconnected or
+  of a chat's stored execution identity. Synced mission evidence retains its canonical identity; disconnected or
   replica-only summaries remain read-only until current details can be loaded from the mission's home.
 - **Keep useful context.** Build agents can save lasting decisions, preferences and lessons in project
   memory for later chats, rather than task status or secrets. A note can replace an outdated one, and
@@ -158,12 +146,9 @@ unzip it and move `Pilot.app` to Applications.
 - Releases bundle Node and the daemon, so you don't need a source checkout or a separate Node installation.
 - Set up a model provider in [pi](https://github.com/earendil-works/pi) first. Pilot uses your pi agent directory
   (normally `~/.pi/agent`), including provider authentication.
-- For a devbox, **Settings → Devboxes → GitHub** provides independent browser authorization and explicitly
-  approved dedicated-key setup. Tokens and private keys stay remote. See [devbox setup](docs/devboxes.md).
-- **File → Import GitHub Project** clones directly onto Local or a chosen devbox, previews an editable
-  `~/src/github.com/owner/repo` destination and adds the host-qualified project. Local projects can use
-  **Set up on devbox** with their GitHub remote URL, without copying local changes or sharing context.
-- Install and authenticate [GitHub CLI](https://cli.github.com) (`gh auth login`) if you want agents to create
+- **File → Import GitHub Project** clones onto this Mac and previews an editable destination under
+  your Home directory before cloning. GitHub authorization and existing-checkout reuse require explicit approval.
+- Install and authenticate [GitHub CLI](https://cli.github.com/) (`gh auth login`) if you want agents to create
   pull requests or Pilot to monitor them.
 - Install [Jujutsu](https://jj-vcs.github.io/jj/) **0.46+** and **Git 2.42+** for shared, isolated jj workspaces.
   Git-only projects use private clones instead.
@@ -190,16 +175,9 @@ Compatibility depends on the available runtime, shell and native module ABIs, no
 or OS release. Linux CI executes the selected PTY, SQLite and artifact compiler dependencies and a real
 headless daemon/kernel smoke test. [Production Linux packaging](scripts/linux/README.md) provides a
 signed manifest, private Node/jj runtime and an explicitly provisioned persistent systemd user service.
-CI verifies extracted production assets and real SSH logout survival. `PilotCore.LinuxSSHBootstrap`
-provides repeatable initial SSH setup without a model chat, with signed-asset, prerequisite, persistent
-service, identity and separate coordinator-isolation gates. Settings → Devboxes exposes setup,
-provider helpers, reconnect and safe automatic runtime updates. Live startup and verified reconnect
-check saved trusted devboxes outside Settings; older compatible runtimes receive the exact installed
-app version's signed package. Current runtimes are left alone, newer/unknown versions are never
-downgraded, and existing or cancelled requests retain their ownership. Settings shares the automatic
-status and offers explicit recovery controls. Setup
-requires a configured signing key and published trusted assets; it never installs packages, grants
-linger, weakens security policy or copies credentials automatically. See [SSH setup](docs/ssh-bootstrap.md).
+Linux packaging and headless runtime checks remain available for development. The macOS app no longer
+provisions, connects to or updates remote daemons. Previously accepted remote work is not stopped or
+migrated by retiring app support. See [retained remote data](docs/devboxes.md).
 
 `GET /api/hello` returns a stable data-home `daemonId`, application `daemonVersion`, an independently
 versioned protocol range (`minimumClientProtocolVersion` through `protocolVersion`, currently 1),
@@ -210,12 +188,6 @@ re-pairing. The unauthenticated API remains bound to `127.0.0.1` only.
 
 Linux omits Mac energy/system-events helpers. Its agents and daemon-owned processes do not depend on a
 client connection, and disconnecting a client does not stop them.
-[Host-qualified workspace terminals](docs/workspace-terminals.md) use the same SSH
-forward, retain remote shells through disconnect and expose terminal/job/transfer admission blockers
-for safe maintenance. A lost terminal-open reply reattaches by instance instead of restarting a shell.
-`LinuxSSHUpdate` provides [safe remote updates](docs/safe-remote-updates.md): a verified package and
-independent remote journal wait for live jobs, shells and transfers before restarting. App connection
-loss does not cancel an accepted update. Older runtimes without the maintenance capability are blocked.
 HTML, React and image artifact authoring remain available; SwiftUI rendering requires macOS.
 Linux coordinators require a root-owned, non-setuid
 `bubblewrap` installation (`dnf install bubblewrap`, or the equivalent package-manager command) and working
@@ -246,25 +218,19 @@ The [pre-chat setup API and host-qualified client helpers](docs/credential-setup
 host readiness and run a trusted, bounded setup PTY without an existing chat or working model. Audited
 Codex device and Anthropic manual-code login use that host's canonical broker. Other provider flows and
 cross-host MCP browser callbacks are explicitly unsupported, not silently relayed or copied. These are
-onboarding integration APIs, not a complete devbox setup screen.
+same-host integration APIs, not a remote setup workflow.
 
 Read-only workers use the SDK settings-storage seam to read existing canonical configuration without
 creating adjacent lock directories. Live writer locks, malformed, oversized or changing files fail closed;
 configuration writes remain denied. Fixed trusted preloads install the same adapters before immutable
 child SDK runtimes are constructed, after the Linux boundary has been validated.
 
-The source includes [host-qualified client routing](docs/host-routing.md),
-[durable operation receipts](docs/durable-operations.md), [server-side repository/file reads](docs/host-repositories.md)
-and [staged image/artifact transfers](docs/host-transfers.md). These are integration adapters, not a complete
-remote setup or chat-selection workflow in the app. They do not copy credentials.
-[Shared context and delegation](docs/shared-context.md) adds explicitly enrolled canonical homes,
-durable replicas/provisional proposals and receipt-backed sole execution grants. Accepted bounded work
-can continue without the Mac; cancellation/reassignment requires target acknowledgment, not a timeout.
-Enrollment/delegation/conflict presentation remains part of the pending devbox UI, not an enabled
-end-to-end setup experience. The [remote lifecycle layer](docs/remote-lifecycle.md) preserves private
-offline chat summaries and pinned identities across relaunch, reconciles ambiguous delivery receipts
-without replaying mutations, and awaits local forward cleanup on normal quit without stopping remote
-work. Devbox setup/selection and disconnected-state presentation remain separate UI work.
+Host-qualified references, durable operation receipts and legacy sharing records remain readable for
+compatibility and data preservation. The live app has no remote setup, host picker, SSH reconnect,
+automatic remote update or cross-host courier. The daemon does not enable sharing or remote Control
+transport routes, recover delegated work, or import replicas into ordinary Local missions/memory.
+Legacy execution ownership stays fenced, not released or reassigned. Technical documents describing
+these retired transports are historical, not enabled product capabilities.
 
 ### Start your first chat
 
@@ -716,17 +682,11 @@ available. Ask loads only its restricted tools and bundled web, never personal/p
 factories. [pi-anthropic-auth](https://github.com/gotgenes/pi-anthropic-auth) is required in Build, Ask,
 child workers and daemon model calls, without modifying personal settings.
 
-**Settings → Connections** groups global Pi MCP servers by Local and saved devbox, with each host's
-connection/sign-in/error state and recheck/cancellation controls. Disconnected hosts retain last-known
-state while it is available, never a claim that their agents stopped. pilotd checks at startup and when
-Pi's MCP files change, never on a timer. Local OAuth uses the existing browser flow. Remote **Sign in…**
-shows exact-host interactive Pi CLI/manual-redirect instructions; Mac browser callback forwarding is
-not implemented. The Pi CLI must be available on that devbox and use its pilotd agent directory.
-Chats pick up new credentials on their next turn. Errors stay short; use that host's `pi mcp list` for
-details. The [reviewed setup sharing implementation](docs/devboxes.md#mcp-connections-and-setup-sharing)
-adds reviewed, nonsecret server setup to existing devbox configuration without replacing entries.
-Bundled Pi and the app coordinate writes; older Pi installations and text editors must not edit
-the configuration concurrently. Authentication stays independent on each host.
+**Settings → Connections** shows this Mac’s global Pi MCP servers, with connection/sign-in/error
+state and recheck/cancellation controls. pilotd checks at startup and when Pi’s MCP files change,
+never on a timer. OAuth uses the existing browser flow. Chats pick up new credentials on their next
+turn. Errors stay short; use `pi mcp list` for details. Bundled Pi and the app coordinate writes;
+older Pi installations and text editors must not edit the configuration concurrently.
 A chat whose tool call reached for a server that needs sign-in (or fails to connect) moves to **Needs
 you** with that server named, and shows a one-line notice above its composer with the same action. It
 clears once the server works again, you write in the chat, or you archive it.
@@ -885,8 +845,8 @@ then choose **Save Databases**. New connections default to **Ask each chat**; en
 requires an explicit choice. Existing URLs and credential query parameters are never returned to the app. Leave
 the replacement URL empty to keep them. Existing environment names are fixed; remove and add to rename one.
 
-These settings belong to the selected host, not replicated project settings. Remote project settings use that
-devbox's daemon and file. Reload after a hand edit or a revision conflict. Invalid, unreadable, oversized,
+These settings belong to this Mac and are not replicated to other machines. Reload after a hand edit or a
+revision conflict. Invalid, unreadable, oversized,
 duplicate-project or insecure files disable editing instead of being replaced; Pilot does not repair permissions
 automatically. Saving preserves other projects and existing chat grants and does not connect to Postgres.
 

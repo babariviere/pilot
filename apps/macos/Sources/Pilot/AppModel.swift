@@ -502,6 +502,7 @@ final class AppModel: ObservableObject {
     @discardableResult
     func chooseNewChatHost(_ host: HostRef, independent: Bool = false, sourceProject: Project? = nil) -> Bool {
         let form = newSessionForm
+        guard host == localHost else { return false }
         guard independent ? !form.busy : form.canChooseExecutionHost,
               let previous = form.executionHost ?? localHost, previous != host else { return false }
         let pending = form.pendingOperationId != nil || pendingChatCreate(on: previous) != nil
@@ -512,7 +513,7 @@ final class AppModel: ObservableObject {
         form.checkoutValidationTask?.cancel()
         form.checkoutValidation = nil
         form.checkoutChoice = nil
-        if pending || !parkedTaskDrafts.isEmpty || pendingChatCreate(on: host) != nil {
+        if independent || pending || !parkedTaskDrafts.isEmpty || pendingChatCreate(on: host) != nil {
             let original = ParkedTaskDraft(value: taskDraftSnapshot(), attachments: form.attachments)
             let oldParked = parkedTaskDrafts
             var next = parkedTaskDrafts
@@ -751,6 +752,10 @@ final class AppModel: ObservableObject {
 
     @discardableResult
     func newSession(in projectId: String?, message: String? = nil, context: HostViewContext? = nil) -> Bool {
+        guard context == nil || context?.host == localHost else {
+            sessionActionError = "Remote devboxes are retired. Saved remote history is read-only."
+            return false
+        }
         let host = newSessionForm.executionHost ?? localHost
         if newSessionForm.pendingOperationId != nil || pendingChatCreate(on: host) != nil {
             let destination = context?.host ?? (projectId == nil ? nil : localHost)
@@ -1149,9 +1154,14 @@ final class AppModel: ObservableObject {
     /// A new chat in the focused project, or in the last chosen project otherwise.
     func newChatInScope() {
         if newLocalChatWhileRemoteStartPending() { return }
+        if let previous = newSessionForm.executionHost, previous != localHost {
+            guard let localHost, chooseNewChatHost(localHost, independent: true) else { return }
+            newSession(in: nil)
+            return
+        }
         if newSessionForm.hasUnsubmittedDraft { newSession(in: nil); return }
-        let context = (focusedProjectRef?.host ?? newSessionForm.executionHost).map { HostViewContext(host: $0, hosts: hosts) }
-        newSession(in: focusedProject?.id ?? draftProjectId, context: context)
+        let localProject = focusedProjectRef?.host == localHost ? focusedProject?.id : nil
+        newSession(in: localProject ?? (focusedProjectRef == nil ? draftProjectId : nil))
     }
 
     /// Falls back to every project once the project list shows the focused one is gone.
@@ -1443,7 +1453,10 @@ final class AppModel: ObservableObject {
     var githubImportURL = ""
     var githubImportHost: HostRef?
     func importGitHubProject(url: String = "", host: HostRef? = nil) {
-        githubImportURL = url; githubImportHost = host; githubImportPresented = true
+        guard host == nil || host == localHost else {
+            projectActionError = "Remote devboxes are retired. Import projects on this Mac."; return
+        }
+        githubImportURL = url; githubImportHost = localHost; githubImportPresented = true
     }
 
     func open(session id: String) {
