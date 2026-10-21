@@ -47,6 +47,14 @@ sequential, with a 180 ms cancellable debounce. Reads never run from view bodies
 accounting events or a refresh timer. Token aggregation stays inside the existing storage worker;
 bounded trend preparation and cached subscription-snapshot selection run off the main actor.
 
+Trend reads use at most four sequential pages of 100 groups. The API's 400-bucket **window** bound
+does not raise its 100-group **response** bound. Trend pages remain private until the complete bounded
+trend is accepted; repeated totals on those pages never replace or add to the overview. Ordinary live
+history corrections may change page totals without changing the erasure epoch. A failed trend or
+breakdown is shown as unavailable while preserving the accepted overview, not as a changed connection.
+Connection, host/lineage and erasure mismatches still discard the entire view. Refresh clears all
+cursors, failures and detail caches, and there is no automatic retry.
+
 The only cache is the mounted page's active scope: one summary, at most 400 trend buckets, five first
 breakdown pages of ten groups and one detail page of 25 records. Next replaces, never appends. Scope
 changes and Refresh cancel obsolete tasks and clear data. Revision fences discard late deliveries;
@@ -68,11 +76,15 @@ quota behavior, canonical provenance and unrelated host navigation are preserved
 - `UsageDashboardPresentationTests`: UTC/DST/custom bounds, unknown/zero/partial/overflow, cache
   denominator, reasoning subset and exact canonical/missing group filters.
 - `UsageDashboardModelTests`: fake Local queries, coalescing/cache bounds, no checkpoint/page sums,
-  unavailable/unsupported/capacity/error states, stale scope and connection/erasure fences.
+  unavailable/unsupported/capacity/error states, stale scope and connection/erasure fences, paginated
+  trends with changing live totals, explicit-refresh recovery and late trend deliveries.
 - `usageDashboardMountedControlsReadLocalRangesFoldAndPageInBothAppearances`: real mounted production
   range, refresh, custom Cancel, disclosure and request/reconciliation controls with faux data,
   narrow/wide in light/dark. The wrapper runs pointer interaction alone; model fixtures run in the scheduler partition.
 - Existing `UsageProjectionTests` verifies pinned Local-only reads and rejection of ambiguous identities.
+  Its HTTP fixture enforces the daemon's per-response bound and exercises two explicit refreshes through
+  the production directory and dashboard model. The daemon query suite separately checks that 400 is
+  rejected, 100-group cursor pages have unique buckets, corrections preserve cursors and erasure fences them.
 
 Full suites and packaging remain CI checks. After the user authorized local native verification,
 the real `apps/macos/scripts/test.sh` wrapper built the application and test targets, then passed

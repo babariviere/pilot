@@ -12,6 +12,12 @@ private func usageDashboardFixture<T: Decodable>(_ name: String, as: T.Type = T.
     return try JSONDecoder().decode(T.self, from: Data(contentsOf: root.appendingPathComponent("packages/protocol/fixtures/\(name).json")))
 }
 
+private func usageDashboardReplacing<T: Codable>(_ value: T, _ change: (inout [String: Any]) -> Void) throws -> T {
+    var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(value)) as? [String: Any])
+    change(&object)
+    return try JSONDecoder().decode(T.self, from: JSONSerialization.data(withJSONObject: object))
+}
+
 @MainActor private func usageDashboardWait(_ predicate: () -> Bool) async throws {
     let deadline = Date().addingTimeInterval(8)
     while !predicate(), Date() < deadline { try await Task.sleep(for: .milliseconds(5)) }
@@ -19,7 +25,7 @@ private func usageDashboardFixture<T: Decodable>(_ name: String, as: T.Type = T.
 }
 
 @MainActor private final class UsageDashboardFixture {
-    let host = HostRef(hostId: "local", daemonId: "local-fixture", lineageId: "local-lineage")
+    var host = HostRef(hostId: "local", daemonId: "local-fixture", lineageId: "local-lineage")
     var connection: HostConnectionToken
     var analytics: UsageAnalyticsResult
     var records: UsageHistoryPage
@@ -28,6 +34,8 @@ private func usageDashboardFixture<T: Decodable>(_ name: String, as: T.Type = T.
     var projectionState = "fresh"
     var readFailure = false
     var replaceGeneration = false
+    var bucketCount = 0
+    var secondaryState: String?
 
     init() throws {
         connection = HostConnectionToken(host: host)
@@ -44,6 +52,29 @@ private func usageDashboardFixture<T: Decodable>(_ name: String, as: T.Type = T.
         .init(read: { [self] query in
             queries.append(query)
             if readFailure { throw URLError(.cannotConnectToHost) }
+            // Match the real daemon's per-response bound, not the 400-bucket window bound.
+            if let limit = query.limit, limit > 100 {
+                return .init(hosts: [.init(host: host, state: "unavailable")], omittedHosts: 0, queriedAt: 0)
+            }
+            if query.view != "summary", let secondaryState {
+                return .init(hosts: [.init(host: host, state: secondaryState)], omittedHosts: 0, queriedAt: 0)
+            }
+            if query.view == "buckets", bucketCount > 0 {
+                let start = Int(query.after ?? "0") ?? 0
+                let end = min(start + (query.limit ?? 100), bucketCount)
+                let aggregate = try JSONSerialization.jsonObject(with: JSONEncoder().encode(analytics.total))
+                let result = try usageDashboardReplacing(analytics) {
+                    $0["groups"] = (start..<end).map { ["key": String(format: "%016lld", Int64($0) * 86_400_000), "aggregate": aggregate] }
+                    $0["truncated"] = end < bucketCount
+                    $0["next"] = end < bucketCount ? String(end) : nil
+                    // Ordinary corrections between live pages need not match overview totals.
+                    var total = $0["total"] as? [String: Any] ?? [:]
+                    total["records"] = end; $0["total"] = total
+                    var status = $0["status"] as? [String: Any] ?? [:]
+                    status["retainedRows"] = end; $0["status"] = status
+                }
+                return .init(hosts: [.init(host: host, state: "fresh", result: result)], omittedHosts: 0, queriedAt: 0)
+            }
             return projection()
         }, page: { [self] query, host in
             pages.append((query, host))
@@ -61,6 +92,104 @@ private func usageDashboardFixture<T: Decodable>(_ name: String, as: T.Type = T.
 }
 
 @Suite(.serialized) @MainActor struct UsageDashboardModelTests {
+    @Test(.timeLimit(.minutes(1))) func usageDashboardRefreshPaginatesTrendsAndDoesNotRejectOrdinaryHistoryUpdates() async throws {
+        let fixture = try UsageDashboardFixture(), model = fixture.makeModel()
+        defer { model.stop() }
+        fixture.bucketCount = 366
+        let scope = UsageDashboardModel.Scope(window: .init(from: 0, to: 366 * 86_400_000))
+        model.refresh(scope)
+        try await usageDashboardWait { model.state != .loading && !model.trendLoading }
+        #expect(model.state == .ready && !model.trendFailed)
+        #expect(model.trend.count == 366 && Set(model.trend.map(\.id)).count == 366)
+        #expect(fixture.queries.filter { $0.view == "buckets" }.map(\.limit) == [100, 100, 100, 100])
+        #expect(fixture.queries.filter { $0.view == "buckets" }.map(\.after) == [nil, "100", "200", "300"])
+        #expect(model.summary?.total.records == 2, "Repeated or corrected per-page totals never add to the overview")
+        model.show(.records("request", after: "old-cursor"))
+        try await usageDashboardWait { !model.detailLoading }
+        fixture.connection = HostConnectionToken(host: fixture.host)
+        model.connectionChanged()
+        #expect(model.summary == nil && model.page == nil)
+        if case .unavailable = model.state {} else { Issue.record("Reconnect must reject the old snapshot") }
+        let before = fixture.queries.count
+        model.refresh(scope, force: true)
+        try await usageDashboardWait { model.state != .loading && !model.trendLoading }
+        #expect(model.state == .ready && !model.trendFailed && model.trend.count == 366)
+        #expect(model.detail == .overview && model.page == nil)
+        #expect(fixture.queries[before].view == "summary" && fixture.queries[before].after == nil)
+        #expect(fixture.queries[before + 1].after == nil, "Refresh must discard the old trend cursor")
+        model.connectionChanged(); await Task.yield()
+        #expect(model.state == .ready, "Stable connection events must not bring back the warning")
+        model.show(.records("request"))
+        try await usageDashboardWait { !model.detailLoading }
+        #expect(fixture.pages.last?.0.after == nil && model.summary?.total.records == 2)
+    }
+
+    @Test(.timeLimit(.minutes(1))) func usageDashboardUnavailableSecondaryReadsStayUnknownUntilExplicitRefresh() async throws {
+        for state in ["limited", "unsupported", "unavailable", "disconnected"] {
+            let fixture = try UsageDashboardFixture(), model = fixture.makeModel()
+            defer { model.stop() }
+            fixture.secondaryState = state
+            model.refresh(fixture.scope)
+            try await usageDashboardWait { model.state != .loading && !model.trendLoading }
+            #expect(model.state == .ready && model.summary != nil)
+            #expect(model.trendFailed && model.trend.isEmpty, "Missing trend is unavailable, not zero or a changed identity")
+            model.show(.breakdown("project"))
+            try await usageDashboardWait { !model.detailLoading }
+            #expect(model.detailFailed && model.groups == nil && model.summary != nil)
+            #expect(fixture.queries.count == 3, "No automatic retry loop")
+            fixture.secondaryState = nil
+            model.refresh(fixture.scope, force: true)
+            try await usageDashboardWait { model.state == .ready && !model.trendLoading }
+            #expect(!model.trendFailed && !model.detailFailed)
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1))) func usageDashboardLateTrendCannotOverwriteRefreshOrMixErasureGenerations() async throws {
+        let fixture = try UsageDashboardFixture()
+        var delayed: CheckedContinuation<UsageConnectedProjection, Never>?
+        var bucketReads = 0
+        var wrongHost: HostRef?
+        let model = UsageDashboardModel(read: { query in
+            if query.view == "buckets" {
+                bucketReads += 1
+                if bucketReads == 1 { return await withCheckedContinuation { delayed = $0 } }
+            }
+            if let wrongHost {
+                return .init(hosts: [.init(host: wrongHost, state: "fresh", result: fixture.analytics)], omittedHosts: 0, queriedAt: 0)
+            }
+            return fixture.projection()
+        }, page: { _, _ in fixture.records }, token: { _ in fixture.connection })
+        defer { delayed?.resume(returning: fixture.projection()); model.stop() }
+        model.refresh(fixture.scope)
+        try await usageDashboardWait { delayed != nil }
+        let stale = fixture.projection()
+        fixture.analytics = try usageDashboardReplacing(fixture.analytics) {
+            var status = $0["status"] as? [String: Any] ?? [:]
+            status["generation"] = "22222222-2222-4222-8222-222222222222"; $0["status"] = status
+        }
+        model.refresh(fixture.scope, force: true)
+        try await usageDashboardWait { model.state == .ready && !model.trendLoading }
+        let release = try #require(delayed); delayed = nil; release.resume(returning: stale)
+        await Task.yield()
+        #expect(model.state == .ready && model.summary?.status.generation == fixture.analytics.status.generation)
+        // A current request from the wrong erasure epoch must still invalidate, unlike an unavailable read.
+        fixture.analytics = try usageDashboardFixture("usage-analytics")
+        model.show(.breakdown("project"))
+        try await usageDashboardWait { !model.detailLoading }
+        #expect(model.summary == nil && model.groups == nil)
+        if case .unavailable = model.state {} else { Issue.record("Never mix erasure epochs") }
+        let previousHost = fixture.host
+        fixture.host = HostRef(hostId: "local", daemonId: "replacement", lineageId: "replacement-lineage")
+        fixture.connection = HostConnectionToken(host: fixture.host)
+        model.refresh(fixture.scope, force: true)
+        try await usageDashboardWait { model.state == .ready && !model.trendLoading }
+        #expect(model.localHost == fixture.host)
+        wrongHost = previousHost
+        model.show(.breakdown("project"))
+        try await usageDashboardWait { !model.detailLoading }
+        #expect(model.summary == nil && model.groups == nil, "A response from the previous daemon/lineage cannot enter the new view")
+    }
+
     @Test(.timeLimit(.minutes(1))) func usageDashboardLocalOnlyCacheAndPagesNeverAddCheckpointOrRepeatedTotals() async throws {
         let fixture = try UsageDashboardFixture(), model = fixture.makeModel()
         defer { model.stop() }
