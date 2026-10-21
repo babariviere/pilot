@@ -608,7 +608,7 @@ export class PullRequestSync<Session extends PullRequestSession, Context = unkno
 				request.prs.push({
 					number: pr.number,
 					branch: pr.branch ?? plan?.branch,
-					...(pr.stack ? { stacked: true } : {}),
+					...(pr.stack ? { stackBaseBranch: pr.stack.baseBranch } : {}),
 				});
 			}
 		}
@@ -622,7 +622,7 @@ export class PullRequestSync<Session extends PullRequestSession, Context = unkno
 			request.prs.push({
 				number: item.pr.number,
 				branch: item.pr.branch,
-				...(item.pr.stack ? { stacked: true } : {}),
+				...(item.pr.stack ? { stackBaseBranch: item.pr.stack.baseBranch } : {}),
 			});
 		}
 		const health = new Map<string, Map<number, HealthResult>>();

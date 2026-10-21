@@ -821,9 +821,10 @@ test("health for every eligible PR of a repository is one request, and problems 
 	}
 });
 
-test("a bottom-of-stack PR whose head no longer contains the stack base reaches the host as diverged", async () => {
+test("a clean bottom-of-stack PR behind main reaches the host without divergence", async () => {
 	const sessions = [session("a", "repo")];
 	const queries: string[] = [];
+	let applied = 0;
 	const runner: Runner = async (file, args) => {
 		if (file === "git") return "";
 		const value = (name: string) => args.find((arg) => arg.startsWith(`${name}=`))?.slice(name.length + 1);
@@ -862,6 +863,7 @@ test("a bottom-of-stack PR whose head no longer contains the stack base reaches 
 		host(sessions, {
 			health: (_target, result) => (result.pullRequest ? { prs: [result.pullRequest], context: "ctx" } : undefined),
 			apply: async (_target, _result, checks) => {
+				applied++;
 				reported.push(...(checks?.checks.map((check) => check.problems) ?? []));
 			},
 		}),
@@ -871,9 +873,8 @@ test("a bottom-of-stack PR whose head no longer contains the stack base reaches 
 		sync.start();
 		await sync.settled();
 		assert.match(queries.at(-1)!, /compare\(headRef: \$h0\)/);
-		assert.deepEqual(reported, [
-			{ failedChecks: [], reviewComments: 0, mergeConflicts: false, divergedFrom: "main" },
-		]);
+		assert.equal(applied, 1);
+		assert.deepEqual(reported, [], "healthy root-base ancestry does not become follow-up work");
 	} finally {
 		await sync.stop();
 	}

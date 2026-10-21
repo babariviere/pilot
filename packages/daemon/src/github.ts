@@ -481,9 +481,8 @@ export interface PullRequestProblems {
 	reviewThreads?: { id: string; commentId: string; updatedAt: number }[];
 	mergeConflicts: boolean;
 	/**
-	 * Set for a stacked PR whose head no longer contains its base branch (the PR below it in the stack, or the
-	 * stack's base for the bottom PR), which GitHub reports as "Some branches in this stack have diverged and must
-	 * be rebased". Names that base branch.
+	 * Set for a stacked PR whose head no longer contains the PR below it. Names that base branch.
+	 * Falling behind the stack's root base (for example main) is not divergence requiring a restack.
 	 */
 	divergedFrom?: string;
 }
@@ -553,8 +552,8 @@ export interface HealthRequest {
 	number: number;
 	/** Expected head branch. A different head means the PR is not the one this session tracks. */
 	branch?: string;
-	/** Part of a stack. Its head must contain its base branch, which needs the head branch. */
-	stacked?: boolean;
+	/** Root base of the stack. Only divergence from a lower PR branch requires restacking. */
+	stackBaseBranch?: string;
 }
 
 export type HealthResult =
@@ -579,17 +578,22 @@ export const stackBaseFields = (variable: string) =>
 
 /**
  * The base branch a stacked PR must be rebased onto, from {@link stackBaseFields}, or undefined when its head
- * contains the base. A deleted base branch is not evidence of divergence.
+ * contains the base or targets the stack's root base. A deleted base branch is not evidence of divergence.
  */
-export function stackDivergence(pr: Record<string, unknown>, what = healthWhat): string | undefined {
+export function stackDivergence(
+	pr: Record<string, unknown>,
+	stackBaseBranch: string,
+	what = healthWhat,
+): string | undefined {
 	if (pr.baseRef === null) return undefined;
 	const compare = object(object(pr.baseRef, what).compare, what);
 	if (!Number.isSafeInteger(compare.behindBy) || (compare.behindBy as number) < 0) invalid(what);
-	return (compare.behindBy as number) > 0 ? text(pr.baseRefName, what) : undefined;
+	const base = text(pr.baseRefName, what);
+	return (compare.behindBy as number) > 0 && base !== stackBaseBranch ? base : undefined;
 }
 
 function stackedHead(request: HealthRequest): string | undefined {
-	return request.stacked && request.branch ? `refs/heads/${request.branch}` : undefined;
+	return request.stackBaseBranch && request.branch ? `refs/heads/${request.branch}` : undefined;
 }
 
 function parseHealth(value: unknown, request: HealthRequest): HealthResult {
@@ -637,7 +641,7 @@ function parseHealth(value: unknown, request: HealthRequest): HealthResult {
 			reviewThreads.push({ id, ...reviewCommentVersion(comments) });
 		}
 	}
-	const divergedFrom = stackedHead(request) ? stackDivergence(pr) : undefined;
+	const divergedFrom = stackedHead(request) ? stackDivergence(pr, request.stackBaseBranch!) : undefined;
 	// UNKNOWN (and future mergeability values) are not evidence of a conflict.
 	const problems = {
 		failedChecks: checks,

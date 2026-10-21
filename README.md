@@ -515,13 +515,14 @@ schedule brings it back. A long job or an MCP sign-in still needs you.
 
 Pilot monitors agent-owned PRs from isolated Build sessions for failed CI, unresolved review threads and
 merge conflicts, including earlier PRs in a stack. It sends follow-up work only when the agent is idle
-and no user messages are queued. Before a failed-CI follow-up, eligible jj workspaces try a safe,
-conflict-free rebase onto the PR's current base, once per PR/base commit. A successful rebase waits for
+and no user messages are queued. When a stacked PR no longer contains its lower PR branch, eligible jj
+workspaces try a safe, conflict-free restack, once per PR/base commit. A successful restack waits for
 fresh CI without spending a follow-up attempt; new review feedback still goes to the agent.
-Follow-ups also ask the agent to check the PR's actual target branch and consider rebasing if behind,
-preserving stack boundaries and other sessions' work. After pushing or rebasing, agents report and
-finish without waiting for remote CI. Pilot monitors fresh results; agents must not start background
-jobs or polling loops to wait for CI. Long local verification checks still run as background jobs.
+Advancing main (or another stack root base) does not trigger a rebase. Failed CI alone does not either.
+Actual conflicts go to the agent, preserving stack boundaries and other sessions' work. After pushing
+or rebasing, agents report and finish without waiting for remote CI. Pilot monitors fresh results;
+agents must not start background jobs or polling loops to wait for CI. Long local verification checks
+still run as background jobs.
 An unresolved thread is reported only once per latest-comment version, even across restarts and user
 messages. Declined or already-addressed feedback need not be resolved on GitHub to stop repeat prompts.
 New threads, replies or edits to the latest comment can trigger another follow-up; CI and conflict

@@ -155,6 +155,12 @@ export class PullRequestAutoRebase {
 							pr,
 						);
 					const head = await read();
+					// Coalescing a stack must not rewrite its bottom just because main advanced.
+					// Conflicts on the root base go to the agent, not a mechanical restack.
+					if (head.baseBranch === head.defaultBranch || head.baseBranch === pr.stack?.baseBranch) {
+						results.set(pr.url, { unchanged: true });
+						continue;
+					}
 					// Only GitHub's current base is used. A merged/deleted base is never retargeted here.
 					await command("git", ["check-ref-format", `refs/heads/${head.branch}`], store);
 					await command("git", ["check-ref-format", `refs/heads/${head.baseBranch}`], store);

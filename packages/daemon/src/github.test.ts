@@ -335,23 +335,32 @@ test("stacked PR health reports a head that no longer contains its base branch",
 	const seen: Map<string, string>[] = [];
 	const runner: Runner = async (_file, args) => {
 		seen.push(variables(args));
-		const compare = (behindBy: unknown) => ({ baseRefName: "feat/bottom", baseRef: { compare: { behindBy } } });
+		const compare = (behindBy: unknown, baseRefName = "feat/bottom") => ({
+			baseRefName,
+			baseRef: { compare: { behindBy } },
+		});
 		return respond({
 			p0: health(1, compare(1)),
 			p1: health(2, compare(0)),
 			p2: health(3, { baseRefName: "feat/gone", baseRef: null }),
 			p3: health(4),
 			p4: health(5, compare(-1)),
+			p5: health(6, compare(10, "main")),
+			p6: health(7, compare(10, "release")),
+			p7: health(8, { ...compare(1, "main"), mergeable: "CONFLICTING" }),
 		});
 	};
 	const results = await lookupHealth(
 		repo,
 		[
-			{ number: 1, branch: "feat/1", stacked: true },
-			{ number: 2, branch: "feat/2", stacked: true },
-			{ number: 3, branch: "feat/3", stacked: true },
+			{ number: 1, branch: "feat/1", stackBaseBranch: "main" },
+			{ number: 2, branch: "feat/2", stackBaseBranch: "main" },
+			{ number: 3, branch: "feat/3", stackBaseBranch: "main" },
 			{ number: 4, branch: "feat/4" },
-			{ number: 5, branch: "feat/5", stacked: true },
+			{ number: 5, branch: "feat/5", stackBaseBranch: "main" },
+			{ number: 6, branch: "feat/6", stackBaseBranch: "main" },
+			{ number: 7, branch: "feat/7", stackBaseBranch: "release" },
+			{ number: 8, branch: "feat/8", stackBaseBranch: "main" },
 		],
 		"/clone",
 		runner,
@@ -366,6 +375,13 @@ test("stacked PR health reports a head that no longer contains its base branch",
 	);
 	assert.deepEqual((results.get(4) as { problems: unknown }).problems, healthy);
 	assert.ok("error" in results.get(5)!, "an invalid comparison is never read as healthy");
+	assert.deepEqual((results.get(6) as { problems: unknown }).problems, healthy, "main advancing is not divergence");
+	assert.deepEqual(
+		(results.get(7) as { problems: unknown }).problems,
+		healthy,
+		"nondefault root bases behave like main",
+	);
+	assert.deepEqual((results.get(8) as { problems: unknown }).problems, { ...healthy, mergeConflicts: true });
 	const query = seen[0]!.get("query")!;
 	assert.match(query, /\$h0: String!/);
 	assert.match(query, /p0: pullRequest\(number: \$p0\) \{[^\n]*baseRef \{ compare\(headRef: \$h0\) \{ behindBy \} \}/);
