@@ -69,7 +69,9 @@ import Testing
     #expect(app.focusedProjectRef == ref)
     #expect(app.hosts.selection == ref)
     app.newChatInScope()
-    #expect(app.newSessionForm.executionHost == local)
+    // Match the composer's destination resolution: nil means the installed Local host.
+    #expect((app.newSessionForm.executionHost ?? app.localHost) == local)
+    #expect(app.newSessionForm.executionHost != remote)
     // A draft restored from an older release still retains its original remote identity.
     app.newSessionForm.executionHost = remote
     app.newSessionForm.message = "Keep this remote draft"

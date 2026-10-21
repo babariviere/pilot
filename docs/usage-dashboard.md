@@ -74,20 +74,23 @@ quota behavior, canonical provenance and unrelated host navigation are preserved
   narrow/wide in light/dark. The wrapper runs pointer interaction alone; model fixtures run in the scheduler partition.
 - Existing `UsageProjectionTests` verifies pinned Local-only reads and rejection of ambiguous identities.
 
-Full Swift builds/tests run through the CI wrappers, not locally for this task. Static mocks are not
-proof of the mounted production page, keyboard/VoiceOver quality, installed-daemon responsiveness,
-large-history streaming smoothness, packaged behavior or the accounting memory gate. No live/paid
-experiment, visible benchmark, deployment or merge is required or authorized by this dashboard change.
+Full suites and packaging remain CI checks. After the user authorized local native verification,
+the real `apps/macos/scripts/test.sh` wrapper built the application and test targets, then passed
+16 focused tests: nine usage/presentation/model/Local-transport tests, six retained-history and
+qualified-navigation tests, and the mounted pointer fixture in its own `--skip-build` invocation.
+The mounted production page passed actual document/viewport bounds at 420/900 widths in both
+appearances. The native build also exposed a stale test of the retired `sharedMissionVersions` API;
+that obsolete API-only test was removed, without restoring remote execution or weakening retained
+history assertions. Local destination checks use the composer's `executionHost ?? localHost` rule.
 
-Local focused evidence: the new page/controller and presentation sources compile with Swift 6 and
-warnings-as-errors in an isolated source harness, using real usage DTO/shared-control source plus
-dependency shims instead of building the application. Its eight presentation/model tests and one
-offscreen mounted-control fixture pass, including actual document/viewport bounds at 420/900 widths
-in both appearances. This does not prove full application linkage, the installed Local transport or
-native CI integration. Static light/dark mock artifacts reuse the reviewed revision-2 sources with
-Local-only wording; they are not screenshots of the production page.
-The Python wrapper suite passes 107 mocked tests with its real Swift-building fixture excluded;
-Swift lint, font-role checks and shell/Swift syntax checks pass. Full app and transport evidence must
-come from the exact PR-head CI run, not these isolated checks or prior-main results.
+The earlier isolated source harness passed nine tests but is not used as a substitute for these real
+native results. The Python wrapper suite passes 107 mocked tests with its real Swift-building fixture
+excluded; Swift lint, font-role checks and shell/Swift syntax checks pass. Exact-head CI remains
+separate evidence, not inferred from local results or prior-main checks.
+
+Static light/dark mock artifacts reuse the reviewed revision-2 sources with Local-only wording;
+they are not production screenshots. None of these checks proves keyboard/VoiceOver quality,
+installed-daemon responsiveness, large-history streaming smoothness, packaged behavior or the
+accounting memory target. No live/paid experiment, visible benchmark, deployment or merge was run.
 
 Contracts: [accounting](usage-history-contract.md), [queries](usage-queries.md).
