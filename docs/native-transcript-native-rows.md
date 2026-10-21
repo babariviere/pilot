@@ -1,5 +1,9 @@
 # Native transcript rows: implementation and release comparison
 
+The [single-scene measurement](native-transcript-single-scene-measurement.md) corrects a duplicate retained
+graph in this report's older fixture. Use that matched main/native comparison for current one-window
+evidence. This historical batch is retained, not presented as a clean one-window acceptance control.
+
 **Status: opt-in, not ready to become the default.** Conversation rows and Markdown blocks no longer use
 generic SwiftUI hosts. Release measurements improve CPU and memory, and reduce the hybrid prototype's
 scrolling cost, but still fail the shipping smoothness gates.

@@ -1,5 +1,10 @@
 # CPU and memory audit
 
+For the corrected one-window transcript fixture and current release comparison, see
+[single-scene transcript measurement](native-transcript-single-scene-measurement.md). The older fixture
+closed SwiftUI's scene but retained its graph, then created another host. Its historical numbers below
+must not be compared directly with the corrected method as a production speedup.
+
 For the later repository polling and streaming WAL audit, see [I/O amplification audit](io-performance-check.md).
 For daemon event-loop stalls, their log lines and live diagnostics, see [pilotd event-loop stalls](daemon-stalls.md).
 
