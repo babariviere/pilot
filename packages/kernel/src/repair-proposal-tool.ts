@@ -11,7 +11,7 @@ export function createRepairProposalTool(call: RepairProposalCall): ToolDefiniti
 		name: REPAIR_PROPOSAL_TOOL,
 		label: "Repair proposal",
 		description:
-			"Publish a bounded repair draft with an issue title and 1–16 exact diagnostic evidence refs. User review and native confirmation are required; this cannot start a repair or change any chat.",
+			"Publish a repair draft for user review using 1–16 diagnostic:v1: refs from diagnostics, never history/log refs. Native confirmation is required; this cannot start a repair or change a chat.",
 		promptSnippet: "Publish a bounded repair suggestion for user review",
 		parameters: Type.Object({
 			repairTitle: Type.Optional(
@@ -35,7 +35,12 @@ export function createRepairProposalTool(call: RepairProposalCall): ToolDefiniti
 					}),
 				]),
 			),
-			evidenceRefs: Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { minItems: 1, maxItems: 16 }),
+			evidenceRefs: Type.Array(Type.String({ minLength: 1, maxLength: 256 }), {
+				minItems: 1,
+				maxItems: 16,
+				description:
+					"Unique exact diagnostic:v1: refs returned by diagnostics for the proposal subject. diagnostic-history:v1: and diagnostic-log:v1: refs are not accepted. Summarize history/log findings without copying raw text. If no eligible evidence is available, report that limitation rather than inventing refs.",
+			}),
 			findings: Type.String({ minLength: 1, maxLength: 1200 }),
 			uncertainty: Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")]),
 			suggestedRepair: Type.String({ minLength: 1, maxLength: 1200 }),

@@ -619,12 +619,17 @@ function validatedDiagnosticProposal(value: unknown): DiagnosticRepairProposalDr
 		!Array.isArray(proposal.evidenceRefs) ||
 		proposal.evidenceRefs.length < 1 ||
 		proposal.evidenceRefs.length > 16 ||
-		proposal.evidenceRefs.some(
-			(ref) => typeof ref !== "string" || !ref.startsWith("diagnostic:v1:") || ref.length > 256,
-		) ||
 		new Set(proposal.evidenceRefs).size !== proposal.evidenceRefs.length
 	)
 		throw new Conflict("A repair proposal requires 1 to 16 unique diagnostic evidence refs");
+	if (
+		proposal.evidenceRefs.some(
+			(ref) => typeof ref !== "string" || !ref.startsWith("diagnostic:v1:") || ref.length > 256,
+		)
+	)
+		throw new Conflict(
+			"Repair proposal evidence refs must be diagnostic:v1: strings of at most 256 characters returned by diagnostics for the proposal subject. History (diagnostic-history:v1:) and log (diagnostic-log:v1:) refs are not accepted.",
+		);
 	if (proposal.uncertainty !== "low" && proposal.uncertainty !== "medium" && proposal.uncertainty !== "high")
 		throw new Conflict("Repair proposal uncertainty must be low, medium or high");
 	return {
