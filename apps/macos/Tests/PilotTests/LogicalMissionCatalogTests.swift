@@ -349,15 +349,15 @@ private struct LogicalProducerFixture: Decodable {
         let name: String
         let definitions: [Mission]
         let dashboard: MissionCatalogResponse
-        /// Captured compatibility arrays, with only the additive projection fields absent.
-        func legacy() throws -> MissionCatalogResponse {
-            var value = try JSONDecoder().decode([String: JSONValue].self, from: JSONEncoder().encode(dashboard))
-            value["logicalMissions"] = nil
-            if case .object(var totals) = value["totals"] {
-                totals["logicalMissions"] = nil; value["totals"] = .object(totals)
-            }
-            return try JSONDecoder().decode(MissionCatalogResponse.self, from: JSONEncoder().encode(value))
-        }
+    }
+    /// Mission-only observations captured before endpoint retirement at cbcaae0351205db246ff256804f18f1ecfab30d7.
+    /// The compact endpoint deliberately omits legacy definitions. Do not synthesize them from its projection
+    /// or refresh this historical capture alongside the current HTTP producer fixture.
+    static func legacyDashboards() throws -> [String: MissionCatalogResponse] {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/legacy-mission-observations.json")
+        return try JSONDecoder().decode([String: MissionCatalogResponse].self, from: Data(contentsOf: url))
     }
     static func read() throws -> Self {
         let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
@@ -367,10 +367,14 @@ private struct LogicalProducerFixture: Decodable {
     }
 }
 
-@Test func actualHttpProducerPayloadAndLegacyCompatibilityHaveTheSameCanonicalDefinitions() throws {
+@Test func actualHttpProducerAndFrozenLegacyObservationsHaveTheSameCanonicalDefinitions() throws {
     let fixture = try LogicalProducerFixture.read()
+    let legacyDashboards = try LogicalProducerFixture.legacyDashboards()
     #expect(fixture.cases.count == 10)
+    #expect(Set(legacyDashboards.keys) == Set(fixture.cases.map(\.name)))
     for sample in fixture.cases {
+        let legacyDashboard = try #require(legacyDashboards[sample.name])
+        #expect(legacyDashboard.logicalMissions == nil, "Legacy normalization must use the captured observations")
         let published = try LogicalMissionCatalog.normalize([.init(host: fixture.sourcePin,
             missions: sample.definitions + (sample.name == "clipped" ? [] : [logicalMission("must-not-augment-published")]),
             dashboard: sample.dashboard)])
@@ -380,7 +384,7 @@ private struct LogicalProducerFixture: Decodable {
             #expect(published.rows.contains { row in !wire.contains { $0.id == row.id } },
                 "Clipped producer rows must be supplemented from the full home feed")
             let legacy = try LogicalMissionCatalog.normalize([.init(host: fixture.sourcePin,
-                missions: sample.definitions, dashboard: sample.legacy())])
+                missions: sample.definitions, dashboard: legacyDashboard)])
             #expect(legacy.total == nil && legacy.truncated, "Do not sum clipped compatibility arrays")
             continue
         }
@@ -393,7 +397,7 @@ private struct LogicalProducerFixture: Decodable {
             #expect(row.id == LogicalMissionCatalog.identity(home: source.mission.home, missionId: source.mission.missionId))
         }
         let legacy = try LogicalMissionCatalog.normalize([.init(host: fixture.sourcePin,
-            missions: sample.definitions, dashboard: sample.legacy())])
+            missions: sample.definitions, dashboard: legacyDashboard)])
         #expect(Set(legacy.rows.map(\.id)) == Set(wire.map(\.id)), "\(sample.name)")
         for row in legacy.rows {
             let source = try #require(wire.first { $0.id == row.id })

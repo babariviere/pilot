@@ -197,6 +197,9 @@ test("native mission fixtures are real production HTTP/service payloads, not a s
 		const dashboard = await response.json();
 		assert.deepEqual(dashboard, JSON.parse(JSON.stringify(buildMissionCatalog(home, definitions, shared, 5000))));
 		assert.ok(Array.isArray(dashboard.logicalMissions));
+		// Legacy definitions live in a separate historical capture, not this compact endpoint.
+		assert.deepEqual(dashboard.missions, []);
+		assert.deepEqual(dashboard.replicaMissions, []);
 		assert.ok(Buffer.byteLength(JSON.stringify(dashboard)) <= 24_000);
 		const scoped = await fetch(`${url}?projectId=p`);
 		assert.deepEqual((await scoped.json()).logicalMissions, dashboard.logicalMissions);

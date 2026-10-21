@@ -1,0 +1,961 @@
+{
+  "canonical-and-alias": {
+    "missions": [
+      {
+        "id": "same",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "archived",
+        "tasksDone": 2,
+        "tasksTotal": 3
+      }
+    ],
+    "sharedTasks": [],
+    "replicaMissions": [
+      {
+        "id": "remote-copy",
+        "bindingId": "remote-copy",
+        "projectId": "p",
+        "missionId": "same",
+        "missionHome": {
+          "hostId": "alias",
+          "daemonId": "remote",
+          "lineageId": "remote-lineage"
+        },
+        "title": "Replica",
+        "status": "active",
+        "complete": true,
+        "sequence": 3,
+        "consistency": "committed",
+        "replicaAgeMs": null
+      },
+      {
+        "id": "local-copy",
+        "bindingId": "local-copy",
+        "projectId": "p",
+        "missionId": "same",
+        "missionHome": {
+          "hostId": "label",
+          "daemonId": "producer",
+          "lineageId": "producer-lineage"
+        },
+        "title": "Stale",
+        "status": "active",
+        "complete": true,
+        "sequence": 100,
+        "consistency": "committed",
+        "replicaAgeMs": null
+      }
+    ],
+    "truncated": false,
+    "totals": {}
+  },
+  "greatest-complete": {
+    "missions": [],
+    "sharedTasks": [],
+    "replicaMissions": [
+      {
+        "id": "old",
+        "bindingId": "old",
+        "projectId": "p",
+        "missionId": "same",
+        "missionHome": {
+          "hostId": "alias",
+          "daemonId": "remote",
+          "lineageId": "remote-lineage"
+        },
+        "title": "Old",
+        "status": "active",
+        "complete": true,
+        "sequence": 2,
+        "consistency": "committed",
+        "replicaAgeMs": null
+      },
+      {
+        "id": "new",
+        "bindingId": "new",
+        "projectId": "p",
+        "missionId": "same",
+        "missionHome": {
+          "hostId": "alias",
+          "daemonId": "remote",
+          "lineageId": "remote-lineage"
+        },
+        "title": "New",
+        "status": "active",
+        "complete": true,
+        "sequence": 3,
+        "consistency": "committed",
+        "replicaAgeMs": null
+      },
+      {
+        "id": "partial",
+        "bindingId": "partial",
+        "projectId": "p",
+        "missionId": "same",
+        "missionHome": {
+          "hostId": "alias",
+          "daemonId": "remote",
+          "lineageId": "remote-lineage"
+        },
+        "title": "Partial",
+        "status": "active",
+        "complete": false,
+        "sequence": 99,
+        "consistency": "committed",
+        "replicaAgeMs": null
+      }
+    ],
+    "truncated": false,
+    "totals": {}
+  },
+  "equal-sequence-conflict": {
+    "missions": [],
+    "sharedTasks": [],
+    "replicaMissions": [
+      {
+        "id": "left",
+        "bindingId": "left",
+        "projectId": "p",
+        "missionId": "same",
+        "missionHome": {
+          "hostId": "alias",
+          "daemonId": "remote",
+          "lineageId": "remote-lineage"
+        },
+        "title": "Left",
+        "status": "active",
+        "complete": true,
+        "sequence": 3,
+        "consistency": "committed",
+        "replicaAgeMs": null
+      },
+      {
+        "id": "right",
+        "bindingId": "right",
+        "projectId": "p",
+        "missionId": "same",
+        "missionHome": {
+          "hostId": "alias",
+          "daemonId": "remote",
+          "lineageId": "remote-lineage"
+        },
+        "title": "Right",
+        "status": "active",
+        "complete": true,
+        "sequence": 3,
+        "consistency": "committed",
+        "replicaAgeMs": null
+      }
+    ],
+    "truncated": false,
+    "totals": {}
+  },
+  "provenance-cap": {
+    "missions": [],
+    "sharedTasks": [],
+    "replicaMissions": [
+      {
+        "id": "binding-0",
+        "bindingId": "binding-0",
+        "projectId": "p",
+        "missionId": "same",
+        "missionHome": {
+          "hostId": "alias",
+          "daemonId": "remote",
+          "lineageId": "remote-lineage"
+        },
+        "title": "Sequence 0",
+        "status": "active",
+        "complete": true,
+        "sequence": 0,
+        "consistency": "committed",
+        "replicaAgeMs": null
+      },
+      {
+        "id": "binding-1",
+        "bindingId": "binding-1",
+        "projectId": "p",
+        "missionId": "same",
+        "missionHome": {
+          "hostId": "alias",
+          "daemonId": "remote",
+          "lineageId": "remote-lineage"
+        },
+        "title": "Sequence 1",
+        "status": "active",
+        "complete": true,
+        "sequence": 1,
+        "consistency": "committed",
+        "replicaAgeMs": null
+      },
+      {
+        "id": "binding-2",
+        "bindingId": "binding-2",
+        "projectId": "p",
+        "missionId": "same",
+        "missionHome": {
+          "hostId": "alias",
+          "daemonId": "remote",
+          "lineageId": "remote-lineage"
+        },
+        "title": "Sequence 2",
+        "status": "active",
+        "complete": true,
+        "sequence": 2,
+        "consistency": "committed",
+        "replicaAgeMs": null
+      },
+      {
+        "id": "binding-3",
+        "bindingId": "binding-3",
+        "projectId": "p",
+        "missionId": "same",
+        "missionHome": {
+          "hostId": "alias",
+          "daemonId": "remote",
+          "lineageId": "remote-lineage"
+        },
+        "title": "Sequence 3",
+        "status": "active",
+        "complete": true,
+        "sequence": 3,
+        "consistency": "committed",
+        "replicaAgeMs": null
+      },
+      {
+        "id": "binding-4",
+        "bindingId": "binding-4",
+        "projectId": "p",
+        "missionId": "same",
+        "missionHome": {
+          "hostId": "alias",
+          "daemonId": "remote",
+          "lineageId": "remote-lineage"
+        },
+        "title": "Sequence 4",
+        "status": "active",
+        "complete": true,
+        "sequence": 4,
+        "consistency": "committed",
+        "replicaAgeMs": null
+      },
+      {
+        "id": "binding-5",
+        "bindingId": "binding-5",
+        "projectId": "p",
+        "missionId": "same",
+        "missionHome": {
+          "hostId": "alias",
+          "daemonId": "remote",
+          "lineageId": "remote-lineage"
+        },
+        "title": "Sequence 5",
+        "status": "active",
+        "complete": true,
+        "sequence": 5,
+        "consistency": "committed",
+        "replicaAgeMs": null
+      },
+      {
+        "id": "binding-6",
+        "bindingId": "binding-6",
+        "projectId": "p",
+        "missionId": "same",
+        "missionHome": {
+          "hostId": "alias",
+          "daemonId": "remote",
+          "lineageId": "remote-lineage"
+        },
+        "title": "Sequence 6",
+        "status": "active",
+        "complete": true,
+        "sequence": 6,
+        "consistency": "committed",
+        "replicaAgeMs": null
+      },
+      {
+        "id": "binding-7",
+        "bindingId": "binding-7",
+        "projectId": "p",
+        "missionId": "same",
+        "missionHome": {
+          "hostId": "alias",
+          "daemonId": "remote",
+          "lineageId": "remote-lineage"
+        },
+        "title": "Sequence 7",
+        "status": "active",
+        "complete": true,
+        "sequence": 7,
+        "consistency": "committed",
+        "replicaAgeMs": null
+      },
+      {
+        "id": "binding-8",
+        "bindingId": "binding-8",
+        "projectId": "p",
+        "missionId": "same",
+        "missionHome": {
+          "hostId": "alias",
+          "daemonId": "remote",
+          "lineageId": "remote-lineage"
+        },
+        "title": "Sequence 8",
+        "status": "active",
+        "complete": true,
+        "sequence": 8,
+        "consistency": "committed",
+        "replicaAgeMs": null
+      },
+      {
+        "id": "binding-9",
+        "bindingId": "binding-9",
+        "projectId": "p",
+        "missionId": "same",
+        "missionHome": {
+          "hostId": "alias",
+          "daemonId": "remote",
+          "lineageId": "remote-lineage"
+        },
+        "title": "Sequence 9",
+        "status": "active",
+        "complete": true,
+        "sequence": 9,
+        "consistency": "committed",
+        "replicaAgeMs": null
+      },
+      {
+        "id": "binding-10",
+        "bindingId": "binding-10",
+        "projectId": "p",
+        "missionId": "same",
+        "missionHome": {
+          "hostId": "alias",
+          "daemonId": "remote",
+          "lineageId": "remote-lineage"
+        },
+        "title": "Sequence 10",
+        "status": "active",
+        "complete": true,
+        "sequence": 10,
+        "consistency": "committed",
+        "replicaAgeMs": null
+      },
+      {
+        "id": "binding-11",
+        "bindingId": "binding-11",
+        "projectId": "p",
+        "missionId": "same",
+        "missionHome": {
+          "hostId": "alias",
+          "daemonId": "remote",
+          "lineageId": "remote-lineage"
+        },
+        "title": "Sequence 11",
+        "status": "active",
+        "complete": true,
+        "sequence": 11,
+        "consistency": "committed",
+        "replicaAgeMs": null
+      },
+      {
+        "id": "binding-12",
+        "bindingId": "binding-12",
+        "projectId": "p",
+        "missionId": "same",
+        "missionHome": {
+          "hostId": "alias",
+          "daemonId": "remote",
+          "lineageId": "remote-lineage"
+        },
+        "title": "Sequence 12",
+        "status": "active",
+        "complete": true,
+        "sequence": 12,
+        "consistency": "committed",
+        "replicaAgeMs": null
+      },
+      {
+        "id": "binding-13",
+        "bindingId": "binding-13",
+        "projectId": "p",
+        "missionId": "same",
+        "missionHome": {
+          "hostId": "alias",
+          "daemonId": "remote",
+          "lineageId": "remote-lineage"
+        },
+        "title": "Sequence 13",
+        "status": "active",
+        "complete": true,
+        "sequence": 13,
+        "consistency": "committed",
+        "replicaAgeMs": null
+      },
+      {
+        "id": "binding-14",
+        "bindingId": "binding-14",
+        "projectId": "p",
+        "missionId": "same",
+        "missionHome": {
+          "hostId": "alias",
+          "daemonId": "remote",
+          "lineageId": "remote-lineage"
+        },
+        "title": "Sequence 14",
+        "status": "active",
+        "complete": true,
+        "sequence": 14,
+        "consistency": "committed",
+        "replicaAgeMs": null
+      },
+      {
+        "id": "binding-15",
+        "bindingId": "binding-15",
+        "projectId": "p",
+        "missionId": "same",
+        "missionHome": {
+          "hostId": "alias",
+          "daemonId": "remote",
+          "lineageId": "remote-lineage"
+        },
+        "title": "Sequence 15",
+        "status": "active",
+        "complete": true,
+        "sequence": 15,
+        "consistency": "committed",
+        "replicaAgeMs": null
+      },
+      {
+        "id": "binding-16",
+        "bindingId": "binding-16",
+        "projectId": "p",
+        "missionId": "same",
+        "missionHome": {
+          "hostId": "alias",
+          "daemonId": "remote",
+          "lineageId": "remote-lineage"
+        },
+        "title": "Sequence 16",
+        "status": "active",
+        "complete": true,
+        "sequence": 16,
+        "consistency": "committed",
+        "replicaAgeMs": null
+      },
+      {
+        "id": "binding-17",
+        "bindingId": "binding-17",
+        "projectId": "p",
+        "missionId": "same",
+        "missionHome": {
+          "hostId": "alias",
+          "daemonId": "remote",
+          "lineageId": "remote-lineage"
+        },
+        "title": "Sequence 17",
+        "status": "active",
+        "complete": true,
+        "sequence": 17,
+        "consistency": "committed",
+        "replicaAgeMs": null
+      },
+      {
+        "id": "binding-18",
+        "bindingId": "binding-18",
+        "projectId": "p",
+        "missionId": "same",
+        "missionHome": {
+          "hostId": "alias",
+          "daemonId": "remote",
+          "lineageId": "remote-lineage"
+        },
+        "title": "Sequence 18",
+        "status": "active",
+        "complete": true,
+        "sequence": 18,
+        "consistency": "committed",
+        "replicaAgeMs": null
+      },
+      {
+        "id": "binding-19",
+        "bindingId": "binding-19",
+        "projectId": "p",
+        "missionId": "same",
+        "missionHome": {
+          "hostId": "alias",
+          "daemonId": "remote",
+          "lineageId": "remote-lineage"
+        },
+        "title": "Sequence 19",
+        "status": "active",
+        "complete": true,
+        "sequence": 19,
+        "consistency": "committed",
+        "replicaAgeMs": null
+      }
+    ],
+    "truncated": true,
+    "totals": {}
+  },
+  "incomplete-only": {
+    "missions": [],
+    "sharedTasks": [],
+    "replicaMissions": [
+      {
+        "id": "partial",
+        "bindingId": "partial",
+        "projectId": "p",
+        "missionId": "same",
+        "missionHome": {
+          "hostId": "alias",
+          "daemonId": "remote",
+          "lineageId": "remote-lineage"
+        },
+        "title": "Not authoritative",
+        "status": "active",
+        "complete": false,
+        "sequence": 9,
+        "consistency": "committed",
+        "replicaAgeMs": null
+      }
+    ],
+    "truncated": false,
+    "totals": {}
+  },
+  "task-only-provisional": {
+    "missions": [],
+    "sharedTasks": [
+      {
+        "id": "proposal",
+        "bindingId": "copy",
+        "projectId": "p",
+        "missionId": "same",
+        "missionHome": {
+          "hostId": "alias",
+          "daemonId": "remote",
+          "lineageId": "remote-lineage"
+        },
+        "source": "replica",
+        "consistency": "provisional",
+        "title": "Not a mission definition",
+        "status": "done",
+        "replicaAgeMs": null
+      }
+    ],
+    "replicaMissions": [],
+    "truncated": true,
+    "totals": {}
+  },
+  "home-grant-only": {
+    "missions": [],
+    "sharedTasks": [
+      {
+        "id": "grant",
+        "bindingId": "copy",
+        "projectId": "p",
+        "missionId": "same",
+        "missionHome": {
+          "hostId": "home-alias",
+          "daemonId": "producer",
+          "lineageId": "producer-lineage"
+        },
+        "source": "mission-home",
+        "consistency": "committed",
+        "title": "Not a mission definition",
+        "status": "done"
+      }
+    ],
+    "replicaMissions": [],
+    "truncated": false,
+    "totals": {}
+  },
+  "self-replica-without-definition": {
+    "missions": [],
+    "sharedTasks": [],
+    "replicaMissions": [
+      {
+        "id": "self",
+        "bindingId": "self",
+        "projectId": "p",
+        "missionId": "same",
+        "missionHome": {
+          "hostId": "home-alias",
+          "daemonId": "producer",
+          "lineageId": "producer-lineage"
+        },
+        "title": "Stale self-copy",
+        "status": "active",
+        "complete": true,
+        "sequence": 11,
+        "consistency": "committed",
+        "replicaAgeMs": null
+      }
+    ],
+    "truncated": false,
+    "totals": {}
+  },
+  "same-id-different-home": {
+    "missions": [
+      {
+        "id": "same",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      }
+    ],
+    "sharedTasks": [],
+    "replicaMissions": [
+      {
+        "id": "remote",
+        "bindingId": "remote",
+        "projectId": "p",
+        "missionId": "same",
+        "missionHome": {
+          "hostId": "alias",
+          "daemonId": "remote",
+          "lineageId": "remote-lineage"
+        },
+        "title": "Replica",
+        "status": "active",
+        "complete": true,
+        "sequence": 1,
+        "consistency": "committed",
+        "replicaAgeMs": null
+      }
+    ],
+    "truncated": false,
+    "totals": {}
+  },
+  "clipped": {
+    "missions": [
+      {
+        "id": "mission-0",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-1",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-2",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-3",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-4",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-5",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-6",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-7",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-8",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-9",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-10",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-11",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-12",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-13",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-14",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-15",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-16",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-17",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-18",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-19",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-20",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-21",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-22",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-23",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-24",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-25",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-26",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-27",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-28",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-29",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-30",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-31",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-32",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-33",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-34",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-35",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-36",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-37",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-38",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      },
+      {
+        "id": "mission-39",
+        "projectId": "p",
+        "title": "Mission",
+        "status": "active",
+        "tasksDone": 0,
+        "tasksTotal": 0
+      }
+    ],
+    "sharedTasks": [],
+    "replicaMissions": [],
+    "truncated": true,
+    "totals": {}
+  }
+}
