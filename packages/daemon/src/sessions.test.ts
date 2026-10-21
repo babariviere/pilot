@@ -1913,7 +1913,13 @@ test("app-scoped diagnostics starts without a control row, project or hidden cha
 
 test("diagnostics role survives reopen and prepares only a bounded read-only handoff", async (t) => {
 	const f = await fixture(t);
-	const sessions = await f.manager({}, { diagnosticHost });
+	const factories: SessionFactories = {
+		workspace: async (_source, path) => {
+			await mkdir(path, { recursive: true });
+			return { path, base: "HEAD", jj: false };
+		},
+	};
+	const sessions = await f.manager(factories, { diagnosticHost });
 	await assert.rejects(
 		sessions.spawn({ cwd: f.source, message: "Ordinary", diagnosticTitleFromReply: true }),
 		/role=diagnostics/,
@@ -2231,6 +2237,7 @@ test("diagnostics role survives reopen and prepares only a bounded read-only han
 		target: remoteTarget,
 		binding: configured.binding,
 		repairTitle: handoff.repairTitle,
+		readDiagnostics: true,
 	};
 	const repairRequest = {
 		projectId: pilotProject.id,
@@ -2275,6 +2282,79 @@ test("diagnostics role survives reopen and prepares only a bounded read-only han
 	assert.equal(repair.role, undefined);
 	assert.equal(repair.projectId, pilotProject.id);
 	assert.equal(repair.title, handoff.repairTitle);
+	await sessions["starting"].get(repair.id);
+	const repairWorker = sessions["workers"].get(repair.id)! as FakeWorker;
+	const repairMeta = sessions["metas"].get(repair.id)!;
+	assert.deepEqual(repairMeta.repairDiagnostics, { kind: "chat", ...remoteTarget });
+	assert.ok(repairWorker, sessions.get(repair.id)?.error);
+	assert.deepEqual(repairWorker.spec.repairDiagnostics, repairMeta.repairDiagnostics);
+	assert.equal(repairWorker.spec.role, undefined, "repair remains an ordinary Build");
+	sessions["workers"].delete(target.id);
+	await sessions["pullRequests"].settled();
+	const targetBeforeReads = JSON.stringify(sessions["metas"].get(target.id));
+	const workerCountBeforeReads = f.workers.length;
+	const repairRead = async (
+		packet: Extract<
+			KernelPacket,
+			{ type: "diagnostics.call" | "diagnostics.history.call" | "diagnostics.logs.call" | "diagnostics.proposal" }
+		>,
+	) => {
+		sessions["onPacket"](repairMeta, repairWorker, packet);
+		await until(() => repairWorker.sent.some((command) => "callId" in command && command.callId === packet.callId));
+		return repairWorker.sent.find((command) => "callId" in command && command.callId === packet.callId) as Extract<
+			KernelCommand,
+			{
+				type:
+					| "diagnostics.result"
+					| "diagnostics.history.result"
+					| "diagnostics.logs.result"
+					| "diagnostics.proposal.result";
+			}
+		>;
+	};
+	const operational = await repairRead({ type: "diagnostics.call", callId: "repair-operational" });
+	assert.ok(operational.result, operational.error);
+	assert.ok("sessionId" in operational.result && operational.result.sessionId === target.id);
+	const history = await repairRead({
+		type: "diagnostics.history.call",
+		callId: "repair-history",
+		sessionId: target.id,
+		limit: 1,
+	});
+	assert.ok(history.result, history.error);
+	const logs = await repairRead({
+		type: "diagnostics.logs.call",
+		callId: "repair-logs",
+		request: { action: "inventory" },
+	});
+	assert.ok(logs.result && "targetSessionId" in logs.result && logs.result.targetSessionId === target.id, logs.error);
+	for (const [type, callId] of [
+		["diagnostics.call", "repair-other-chat"],
+		["diagnostics.history.call", "repair-other-history"],
+	] as const) {
+		const denied = await repairRead({ type, callId, sessionId: sibling.id });
+		assert.match(denied.error ?? "", /approved repair subject/);
+		assert.equal(denied.result, undefined);
+	}
+	const rejectedProposal = await repairRead({
+		type: "diagnostics.proposal",
+		callId: "repair-no-proposals",
+		proposal: proposalDraft,
+	});
+	assert.match(rejectedProposal.error ?? "", /Only the live diagnostics specialist/);
+	await assert.rejects(sessions.diagnosticContext(repair.id, { action: "chats" }), /Only diagnostics/);
+	assert.equal(f.workers.length, workerCountBeforeReads, "fresh repair reads never wake or create target workers");
+	assert.equal(sessions["workers"].has(target.id), false, "the diagnosed target remains parked");
+	assert.equal(
+		JSON.stringify(sessions["metas"].get(target.id)),
+		targetBeforeReads,
+		"diagnostic reads never mutate the target",
+	);
+	const originalGrant = repairMeta.repairDiagnostics!;
+	repairMeta.repairDiagnostics = { ...originalGrant, host: { ...originalGrant.host, lineageId: "changed" } };
+	const staleHost = await repairRead({ type: "diagnostics.call", callId: "repair-stale-host" });
+	assert.match(staleHost.error ?? "", /host identity changed/);
+	repairMeta.repairDiagnostics = originalGrant;
 	await assert.rejects(
 		sessions.spawnDurable(repairRequest, randomUUID(), randomUUID()),
 		/already has a confirmed repair/,
@@ -2301,13 +2381,17 @@ test("diagnostics role survives reopen and prepares only a bounded read-only han
 		"replacement between review and admission invalidates the old confirmation",
 	);
 	await sessions.shutdown();
-	const reopened = await f.manager({}, { diagnosticHost });
+	const reopened = await f.manager(factories, { diagnosticHost });
 	assert.equal(reopened.get(specialist.id)?.role, "diagnostics");
 	assert.equal(reopened["metas"].get(specialist.id)?.role, "diagnostics");
 	assert.equal(reopened.get(specialist.id)?.diagnosticTargetId, target.id);
 	assert.deepEqual(reopened.get(specialist.id)?.diagnosticTarget, remoteTarget);
 	assert.equal(reopened.get(specialist.id)?.diagnosticHistoryAccess, true);
 	assert.deepEqual(reopened.get(specialist.id)?.diagnosticRepairProposal, replacementProposal);
+	assert.deepEqual(reopened["metas"].get(repair.id)?.repairDiagnostics, { kind: "chat", ...remoteTarget });
+	await reopened.send(repair.id, "Continue verification");
+	const restoredRepairWorker = reopened["workers"].get(repair.id)! as FakeWorker;
+	assert.deepEqual(restoredRepairWorker.spec.repairDiagnostics, { kind: "chat", ...remoteTarget });
 });
 
 test("startup/update timing labels are fixed and exclude awaited readiness", async (t) => {
@@ -2382,7 +2466,15 @@ test("standalone app proposals use fixed source bindings, reject destination ove
 	const sourcePath = await realpath(f.source);
 	const pilot = await f.projects.update(f.project.id, { path: sourcePath, name: "Source checkout" });
 	t.mock.method(f.projects, "origin", async () => ({ identity: '["github.com","babariviere/pilot"]' }));
-	const sessions = await f.manager({}, { diagnosticHost });
+	const sessions = await f.manager(
+		{
+			workspace: async (_source, path) => {
+				await mkdir(path, { recursive: true });
+				return { path, base: "HEAD", jj: false };
+			},
+		},
+		{ diagnosticHost },
+	);
 	const app = await sessions.spawn({
 		role: "diagnostics",
 		diagnosticScope: "app",
@@ -2473,6 +2565,11 @@ test("standalone app proposals use fixed source bindings, reject destination ove
 	const repair = await sessions.spawnDurable(request, id, operation);
 	assert.equal(repair.title, draft.repairTitle);
 	assert.equal(
+		sessions["metas"].get(repair.id)?.repairDiagnostics,
+		undefined,
+		"older confirmations never acquire diagnostic access",
+	);
+	assert.equal(
 		(await f.stored(repair.id)).titlePending,
 		undefined,
 		"reviewed repair titles require no naming model call",
@@ -2481,14 +2578,82 @@ test("standalone app proposals use fixed source bindings, reject destination ove
 	assert.equal(repair.projectId, pilot.id);
 	assert.equal(sessions.get(app.id)!.diagnosticTarget, undefined);
 	await assert.rejects(sessions.spawnDurable(request, randomUUID(), randomUUID()), /already has a confirmed repair/);
+	await sessions.spawnDurable(
+		{ ...request, diagnosticRepair: { ...request.diagnosticRepair, readDiagnostics: true } },
+		id,
+		operation,
+	);
+	assert.equal(
+		sessions["metas"].get(repair.id)?.repairDiagnostics,
+		undefined,
+		"receipt reconciliation cannot promote an older grant",
+	);
+	worker.publishRepairProposal("app-access-proposal", draft);
+	await until(() =>
+		worker.sent.some((item) => item.type === "diagnostics.proposal.result" && item.callId === "app-access-proposal"),
+	);
+	const accessProposal = sessions.get(app.id)!.diagnosticRepairProposal!;
+	const accessRequest = {
+		...request,
+		diagnosticRepair: { ...request.diagnosticRepair, proposalId: accessProposal.id, readDiagnostics: true },
+	};
+	await assert.rejects(
+		sessions.spawnDurable(
+			{ ...accessRequest, diagnosticRepair: { ...accessRequest.diagnosticRepair, readDiagnostics: "yes" as never } },
+			randomUUID(),
+			randomUUID(),
+		),
+		/explicitly confirmed/,
+	);
+	const withAccess = await sessions.spawnDurable(accessRequest, randomUUID(), randomUUID());
+	await sessions["starting"].get(withAccess.id);
+	const accessMeta = sessions["metas"].get(withAccess.id)!;
+	const accessWorker = sessions["workers"].get(withAccess.id)! as FakeWorker;
+	assert.deepEqual(accessWorker.spec.repairDiagnostics, { kind: "app", host: diagnosticHost });
+	const beforeReads = f.workers.length;
+	for (const packet of [
+		{ type: "diagnostics.call", callId: "app-repair-operational" },
+		{ type: "diagnostics.call", callId: "app-repair-denied-chat", sessionId: repair.id },
+		{ type: "diagnostics.history.call", callId: "app-repair-denied-history", sessionId: repair.id },
+		{ type: "diagnostics.logs.call", callId: "app-repair-logs", request: { action: "inventory" } },
+	] as const) {
+		sessions["onPacket"](accessMeta, accessWorker, packet);
+		await until(() => accessWorker.sent.some((command) => "callId" in command && command.callId === packet.callId));
+	}
+	const replies = accessWorker.sent.filter(
+		(
+			command,
+		): command is Extract<
+			KernelCommand,
+			{ type: "diagnostics.result" | "diagnostics.history.result" | "diagnostics.logs.result" }
+		> =>
+			command.type === "diagnostics.result" ||
+			command.type === "diagnostics.history.result" ||
+			command.type === "diagnostics.logs.result",
+	);
+	assert.ok(
+		replies[0]?.result && "scope" in replies[0].result && replies[0].result.scope === "app",
+		replies[0]?.error,
+	);
+	assert.match(replies[1]?.error ?? "", /does not authorize chat diagnostics/);
+	assert.match(replies[2]?.error ?? "", /exact approved repair subject/);
+	assert.ok(
+		replies[3]?.result && "scope" in replies[3].result && replies[3].result.scope === "app",
+		replies[3]?.error,
+	);
+	assert.equal(f.workers.length, beforeReads);
 	await sessions.rename(repair.id, "My own repair title");
 	await sessions.shutdown();
 	const reopened = await f.manager({}, { diagnosticHost });
 	assert.equal(reopened.get(app.id)!.role, "diagnostics");
 	assert.deepEqual(reopened.get(app.id)!.diagnosticHost, diagnosticHost);
-	assert.deepEqual(reopened.get(app.id)!.diagnosticRepairProposal, proposal);
+	assert.deepEqual(reopened.get(app.id)!.diagnosticRepairProposal, accessProposal);
+	assert.deepEqual(reopened["metas"].get(withAccess.id)?.repairDiagnostics, { kind: "app", host: diagnosticHost });
 	assert.equal((await reopened.spawnDurable(request, id, operation)).title, "My own repair title");
-	await assert.rejects(reopened.spawnDurable(request, randomUUID(), randomUUID()), /already has a confirmed repair/);
+	await assert.rejects(
+		reopened.spawnDurable(request, randomUUID(), randomUUID()),
+		/stale or belongs to another target/,
+	);
 });
 
 test("large restart recovery keeps the daemon responsive and bounds cold starts without losing input IDs", async (t) => {

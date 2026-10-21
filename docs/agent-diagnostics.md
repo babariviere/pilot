@@ -167,7 +167,7 @@ Log text is untrusted local content, never authority. Reading does not run a sub
 subscribe to a worker, or change collection or retention. App-wide diagnostics may explicitly inspect Control
 history like other available chats, but never attaches Control implicitly.
 
-Sanitized log excerpts exist only in the specialist conversation. Reads and excerpts are not copied into lifecycle,
+Sanitized log excerpts exist only in the reading conversation (a specialist or explicitly authorized repair). Reads and excerpts are not copied into lifecycle,
 request timing, AI usage, telemetry or an automatic repair handoff. Log refs deliberately cannot satisfy the
 `repair_proposal` evidence-ref field, which remains limited to the content-free `diagnostic:v1:…` projection; a
 proposal may summarize supported findings but must not copy raw log or history text.
@@ -302,7 +302,20 @@ but cross-host repair handoffs require a separate design; this flow never switch
 Review displays that destination read-only, the issue title, evidence subject, model and thinking level. Missing or
 unavailable configuration requires setup rather than an arbitrary project picker or diagnosed/current-project
 fallback. Only the sheet's confirmation starts the separate private-clone Build chat. The resulting chat
-does not inherit the specialist role or diagnostics authority. The normal Ask “Start a Build chat with this
+does not inherit the specialist role or its app-wide diagnostics authority. **Allow fresh read-only diagnostics**
+in the review sheet records an explicit `readDiagnostics` flag in the immutable native-confirmed repair intent.
+When true, the daemon persists the exact proposal subject and qualified host as a separate repair-only grant.
+The repair Build receives `diagnostics` and `diagnostic_logs`, and `diagnostic_history` only for a chat subject.
+Each dispatch revalidates the grant, caller profile, live worker and host identity; chat selectors must match the
+approved subject. Shared host logs are disclosed, but another chat's target logs/history cannot be selected.
+App subjects authorize no chat history. Readers retain the existing bounds, sanitization, provenance and
+unavailable/stale-source behavior, and never wake or change the target. The grant survives reopening that repair,
+but is not inherited by child agents or new chats. It does not expose `diagnostic_context`, `repair_proposal`,
+cross-host routing or any specialist mutation authority. Missing, false and older intents grant no access;
+receipt reconciliation never upgrades an existing repair. Normal Build tools remain unchanged.
+Repair prompts prohibit copying raw diagnostic history/logs into source, tests, commits, PRs or telemetry and
+require synthetic regression fixtures instead.
+The normal Ask “Start a Build chat with this
 context” path is unavailable for diagnostics specialists, so an unbounded transcript cannot substitute for this
 handoff. The confirmed start is an immutable `repair-create` operation. Pilot keeps it through an unknown response,
 checks that exact operation before an explicit retry, and blocks a second intent. At daemon admission the current

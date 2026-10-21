@@ -633,20 +633,24 @@ public struct DiagnosticRepairAdmission: Codable, Equatable, Sendable {
     public let repairTitle: String?
     /// Native Start repair disclosure was accepted. Absent on older intents, which must not archive.
     public let archiveSpecialistOnStart: Bool?
+    /// Explicit native confirmation for bounded read-only evidence of the exact subject and host.
+    public let readDiagnostics: Bool?
     public var evidenceSubject: DiagnosticEvidenceSubject? { subject ?? target.map(DiagnosticEvidenceSubject.chat) }
 
     public init(specialistSessionId: String, proposalId: String, target: DiagnosticTargetReference) {
         self.specialistSessionId = specialistSessionId
         self.proposalId = proposalId
         self.target = target
-        subject = nil; binding = nil; repairTitle = nil; archiveSpecialistOnStart = nil
+        subject = nil; binding = nil; repairTitle = nil; archiveSpecialistOnStart = nil; readDiagnostics = nil
     }
 
     public init(specialistSessionId: String, proposalId: String, subject: DiagnosticEvidenceSubject,
-                binding: DiagnosticRepairProjectBinding?, repairTitle: String, archiveSpecialistOnStart: Bool? = nil) {
+                binding: DiagnosticRepairProjectBinding?, repairTitle: String, archiveSpecialistOnStart: Bool? = nil,
+                readDiagnostics: Bool? = nil) {
         self.specialistSessionId = specialistSessionId; self.proposalId = proposalId
         self.subject = subject; target = subject.target; self.binding = binding; self.repairTitle = repairTitle
         self.archiveSpecialistOnStart = archiveSpecialistOnStart
+        self.readDiagnostics = readDiagnostics
     }
 }
 
