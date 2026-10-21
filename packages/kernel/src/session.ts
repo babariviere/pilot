@@ -623,6 +623,8 @@ export class KernelSession {
 			registry.install(prepare(adapter.extension));
 			const settings = {
 				toolExecution: "sequential" as const,
+				// Every queued steer joins the next boundary together; follow-ups still start one run each.
+				steeringMode: "all" as const,
 				// Progress is durable and drives display. Four checkpoints/sec bound page-write
 				// amplification while keeping streaming responsive; admissions/final results bypass it.
 				progress: { partialIntervalMs: 250, outputIntervalMs: 250 },

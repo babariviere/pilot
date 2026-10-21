@@ -866,8 +866,8 @@ test("kernel coalesces durable progress without losing short final responses", {
 	await session.close();
 	const restored = await f.open();
 	assert.deepEqual(settings, [
-		{ toolExecution: "sequential", progress: { partialIntervalMs: 250, outputIntervalMs: 250 } },
-		{ toolExecution: "sequential", progress: { partialIntervalMs: 250, outputIntervalMs: 250 } },
+		{ toolExecution: "sequential", steeringMode: "all", progress: { partialIntervalMs: 250, outputIntervalMs: 250 } },
+		{ toolExecution: "sequential", steeringMode: "all", progress: { partialIntervalMs: 250, outputIntervalMs: 250 } },
 	]);
 	await restored.close();
 });
