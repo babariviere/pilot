@@ -143,11 +143,15 @@ run_tests() {
 	local guards=()
 	local required_tests=()
 	local name
+	local runner=(swift)
+	# Compilation gets its own budget. A wedged test runner must not consume the
+	# entire CI step; capture its stacks before terminating only its private session.
+	if [ -n "${CI:-}" ]; then runner=(python3 "$here/scripts/run-swift-tests.py" -- swift); fi
 	if [ -n "$required" ]; then
 		IFS='|' read -r -a required_tests <<< "$required"
 		for name in "${required_tests[@]}"; do guards+=(--require-test "$name"); done
 	fi
-	swift test --package-path "$here" ${jobs[@]+"${jobs[@]}"} -Xswiftc -plugin-path -Xswiftc "$plugins" "$@" 2>&1 \
+	"${runner[@]}" test --package-path "$here" ${jobs[@]+"${jobs[@]}"} -Xswiftc -plugin-path -Xswiftc "$plugins" "$@" 2>&1 \
 		| python3 "$here/scripts/check-test-output.py" ${guards[@]+"${guards[@]}"}
 }
 if [ "$partition" = 1 ]; then

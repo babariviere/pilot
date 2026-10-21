@@ -1,4 +1,6 @@
 import importlib.util
+import io
+import json
 import os
 import re
 from pathlib import Path
@@ -122,32 +124,22 @@ UI_PROBE = "inlineArtifactLayoutKeepsTheReadingColumnWhenResized"
 TAIL_OUTPUTS = [STARTED + f"◇ Test {name}() started.\n" + PASSED for name in [VISUAL_LAYOUT, UI_PROBE]]
 BROAD_EXCLUSIONS = f"{ISOLATED}|{DEVBOX}|{TERMINAL}|{'|'.join(CALLBACKS)}|{'|'.join(JOURNEYS)}|{'|'.join(GITHUB)}|{'|'.join(SCOPED_MODELS)}|{'|'.join(SCOPED_MODEL_NATIVE)}|{'|'.join(AUTOMATIC_UPDATES)}|{'|'.join(HOST_MCPS)}|{'|'.join(name for group in REGRESSION_PARTITIONS for name in group)}|{'|'.join(NATIVE_POINTERS)}|{VISUAL_LAYOUT}"
 
+# Same partition order as test.sh. One shell run verifies every filter and guard;
+# the full fault/missing-start matrix exercises the production parser in-process.
+PARTITIONS = [[ISOLATED], [DEVBOX], [TERMINAL], CALLBACKS,
+              *[[name] for name in JOURNEYS], *[[name] for name in GITHUB], SCOPED_MODELS,
+              *[[name] for name in SCOPED_MODEL_NATIVE], AUTOMATIC_UPDATES, HOST_MCPS,
+              *REGRESSION_PARTITIONS, *[[name] for name in NATIVE_POINTERS], [VISUAL_LAYOUT], [UI_PROBE]]
+
 
 class TestOutputTests(unittest.TestCase):
-    def test_host_mcp_partition_covers_fixtures_and_requires_every_start(self):
+    def test_host_mcp_partition_covers_fixtures(self):
         source = SCRIPTS.parent / "Tests/PilotTests/HostMcpConnectionsTests.swift"
         self.assertEqual(re.findall(r"func (hostMcp\w+)\(", source.read_text()), HOST_MCPS)
-        output = HOST_MCP_OUTPUTS[0]
-        cases = [("", 0), (PASSED, 0), (output + FAILED, 0), (output, 42),
-                 (STARTED + f"◇ Test {HOST_MCPS[0]}() started.\n", 0)]
-        cases += [(output.replace(f"◇ Test {name}() started.\n", ""), 0) for name in HOST_MCPS]
-        for text, code in cases:
-            result, continued, calls = self.run_wrapper(PASSED, all_calls=True, host_mcp_outputs=[(text, code)])
-            self.assertNotEqual(result.returncode, 0, result.stderr)
-            self.assertFalse(continued)
-            self.assertEqual(calls[-1][-2:], ["--filter", "|".join(HOST_MCPS)])
 
-    def test_automatic_update_partition_covers_production_fixtures_and_requires_each_start(self):
+    def test_automatic_update_partition_covers_production_fixtures(self):
         source = SCRIPTS.parent / "Tests/PilotTests/AutomaticDevboxUpdateTests.swift"
         self.assertEqual(re.findall(r"@Test @MainActor func (automatic\w+)\(", source.read_text()), AUTOMATIC_UPDATES)
-        output = AUTOMATIC_UPDATE_OUTPUTS[0]
-        cases = [("", 0), (PASSED, 0), (output + FAILED, 0), (output, 42)]
-        cases += [(output.replace(f"◇ Test {name}() started.\n", ""), 0) for name in AUTOMATIC_UPDATES]
-        for text, code in cases:
-            result, continued, calls = self.run_wrapper(PASSED, all_calls=True, automatic_update_outputs=[(text, code)])
-            self.assertNotEqual(result.returncode, 0, result.stderr)
-            self.assertFalse(continued)
-            self.assertEqual(calls[-1][-2:], ["--filter", "|".join(AUTOMATIC_UPDATES)])
 
     def test_scoped_model_partitions_cover_the_production_fixtures(self):
         scheduler = SCRIPTS.parent / "Tests/PilotTests/ScopedModelsSyncTests.swift"
@@ -156,6 +148,46 @@ class TestOutputTests(unittest.TestCase):
         self.assertEqual(re.findall(r"func (scopedModels\w+)\(", scheduler.read_text()) +
                          re.findall(r"func (modelScope\w+)\(", transport.read_text()), SCOPED_MODELS)
         self.assertEqual(re.findall(r"func (scopedModels\w+)\(", native.read_text()), SCOPED_MODEL_NATIVE)
+
+    def check_guard(self, text, names=()):
+        output, diagnostics = io.BytesIO(), io.StringIO()
+        status = guard.check_output(io.BytesIO(text.encode()), output, diagnostics, names)
+        self.assertEqual(output.getvalue(), text.encode())
+        return status, diagnostics.getvalue()
+
+    def test_every_partition_rejects_missing_starts_failures_and_incomplete_output(self):
+        for names in PARTITIONS:
+            output = STARTED + "".join(f"◇ Test {name}() started.\n" for name in names) + PASSED
+            self.assertEqual(self.check_guard(output, names), (0, ""))
+            cases = ["", PASSED, output + FAILED, output.removesuffix(PASSED),
+                     output + "✘ Test fixture() recorded an issue: Expectation failed\n"]
+            cases += [output.replace(f"◇ Test {name}() started.\n", "") for name in names]
+            for text in cases:
+                with self.subTest(names=names, text=text):
+                    status, diagnostics = self.check_guard(text, names)
+                    self.assertEqual(status, 1)
+                    self.assertTrue(diagnostics)
+
+    def test_parser_preserves_non_utf8_output_bytes(self):
+        raw = b"warning: \xff\xfe\n" + PASSED.encode()
+        output, diagnostics = io.BytesIO(), io.StringIO()
+        self.assertEqual(guard.check_output(io.BytesIO(raw), output, diagnostics), 0)
+        self.assertEqual(output.getvalue(), raw)
+        self.assertEqual(diagnostics.getvalue(), "")
+
+    def test_late_partition_guard_failure_and_driver_failure_stop_the_shell_chain(self):
+        # Early failures are covered below; these cover middle and final pipelines.
+        for options, expected in [
+            ({"host_mcp_outputs": [(HOST_MCP_OUTPUTS[0] + FAILED, 0)]}, ["--filter", "|".join(HOST_MCPS)]),
+            ({"tail_outputs": [(text, 0) for text in TAIL_OUTPUTS[:-1]] + [(TAIL_OUTPUTS[-1], 42)]},
+             ["--filter", "PilotUITests", "--skip", BROAD_EXCLUSIONS]),
+            ({"pointer_outputs": [(NATIVE_POINTER_OUTPUTS[0].removesuffix(PASSED), 0)]},
+             ["--filter", NATIVE_POINTERS[0]]),
+        ]:
+            result, continued, calls = self.run_wrapper(PASSED, all_calls=True, **options)
+            self.assertNotEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(continued)
+            self.assertEqual(calls[-1][-len(expected):], expected)
 
     def test_summaries_not_warning_prose(self):
         for line in [FAILED, '\x1b[31m' + FAILED + '\x1b[0m',
@@ -188,8 +220,16 @@ class TestOutputTests(unittest.TestCase):
             (root / "scripts").mkdir()
             shutil.copy2(SCRIPTS.parents[2] / "scripts/verification-slot.py",
                          root / "scripts/verification-slot.py")
-            for name in [wrapper, "check-test-output.py", "check-font-roles.py", "font-literals.txt"]:
+            for name in [wrapper, "check-test-output.py", "check-font-roles.py", "font-literals.txt", "run-swift-tests.py"]:
                 shutil.copy2(SCRIPTS / name, scripts / name)
+            # Record the real guard's argv, not a replacement guard or fake assertion.
+            guard_path = scripts / "check-test-output.py"
+            guard_path.write_text(guard_path.read_text().replace(
+                "    sys.exit(main())",
+                '    import json, os\n'
+                '    with open(os.environ["GUARD_ARGUMENTS"], "a") as log:\n'
+                '        log.write(json.dumps(sys.argv[1:]) + "\\n")\n'
+                '    sys.exit(main())'))
             (scripts / "swift-env.sh").write_text("")
             for name in ["vendor-ghostty.sh", "vendor-mermaidkit.sh", "vendor-quickjs.sh", "share-artifacts.sh"]:
                 (scripts / name).write_text(f"#!/bin/sh\nexit {prepare_status}\n")
@@ -219,7 +259,7 @@ class TestOutputTests(unittest.TestCase):
             env = {**{key: value for key, value in os.environ.items() if key != "CI"},
                    "PATH": f"{root}:{os.environ['PATH']}",
                    "FAKE_SWIFT": str(root / "swift"), "ARGUMENTS": str(arguments), "PILOT_SWIFT_JOBS": "2",
-                   "COUNTER": str(root / "swift-calls"),
+                   "COUNTER": str(root / "swift-calls"), "GUARD_ARGUMENTS": str(root / "guard-arguments"),
                    "PILOT_HOME": str(root / "home"), "BUNDLE_RUNTIME": "0", **extra_env}
             for index, (text, code) in enumerate(outputs, start=1):
                 env[f"OUTPUT_{index}"] = text
@@ -230,13 +270,18 @@ class TestOutputTests(unittest.TestCase):
                 env={**env, "CONTINUED": str(marker)}, capture_output=True, text=True)
             calls = ([part.splitlines() for part in arguments.read_text().split("__SWIFT_CALL__\n")[1:]]
                      if arguments.exists() else [])
+            guard_log = root / "guard-arguments"
+            self.guard_calls = [json.loads(line) for line in guard_log.read_text().splitlines()] if guard_log.exists() else []
             return result, marker.exists(), calls if all_calls else calls[-1] if calls else []
 
     def test_full_suite_runs_window_interactions_separately_without_rebuilding(self):
-        result, continued, calls = self.run_wrapper(PASSED, all_calls=True)
+        result, continued, calls = self.run_wrapper(PASSED, all_calls=True, extra_env={"CI": "true"})
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(continued)
         self.assertEqual(len(calls), 7 + len(GITHUB) + len(SCOPED_MODEL_OUTPUTS) + len(AUTOMATIC_UPDATE_OUTPUTS) + len(HOST_MCP_OUTPUTS) + len(REGRESSION_OUTPUTS) + len(NATIVE_POINTERS) + len(TAIL_OUTPUTS))
+        expected_guards = [[], *PARTITIONS]
+        self.assertEqual(self.guard_calls,
+                         [[arg for name in names for arg in ("--require-test", name)] for names in expected_guards])
         self.assertEqual(calls[0][-2:],
                          ["--skip", f"{BROAD_EXCLUSIONS}|PilotUITests"])
         self.assertNotIn("--skip-build", calls[0])
@@ -272,150 +317,22 @@ class TestOutputTests(unittest.TestCase):
         for call in calls[-2:]:
             self.assertIn("--skip-build", call)
         self.assertEqual(result.stderr.count("acquired slot 1/1"), 1)
-        self.assertEqual(result.stdout, PASSED + ISOLATED_OUTPUT + DEVBOX_OUTPUT + TERMINAL_OUTPUT + CALLBACKS_OUTPUT
+        timing_lines = re.findall(r"^\[swift-watchdog\] invocation finished in [0-9.]+s\n", result.stdout, re.MULTILINE)
+        self.assertEqual(len(timing_lines), len(calls))
+        output = re.sub(r"^\[swift-watchdog\] invocation finished in [0-9.]+s\n", "", result.stdout, flags=re.MULTILINE)
+        self.assertEqual(output, PASSED + ISOLATED_OUTPUT + DEVBOX_OUTPUT + TERMINAL_OUTPUT + CALLBACKS_OUTPUT
                          + JOURNEY_START_OUTPUT + JOURNEY_SIDEBAR_OUTPUT + "".join(GITHUB_OUTPUTS)
                          + "".join(SCOPED_MODEL_OUTPUTS) + "".join(AUTOMATIC_UPDATE_OUTPUTS) + "".join(HOST_MCP_OUTPUTS) + "".join(REGRESSION_OUTPUTS) + "".join(NATIVE_POINTER_OUTPUTS) + "".join(TAIL_OUTPUTS))
 
-    def test_visual_layout_and_ui_batch_require_real_start_and_preserve_failures(self):
-        for index, name in enumerate([VISUAL_LAYOUT, UI_PROBE]):
-            output = TAIL_OUTPUTS[index]
-            for text, code in [("", 0), (PASSED, 0), (output + FAILED, 0), (output, 42),
-                               (STARTED + f"◇ Test {name}() started.\n", 0)]:
-                with self.subTest(name=name, output=text, status=code):
-                    outputs = [(value, 0) for value in TAIL_OUTPUTS]
-                    outputs[index] = (text, code)
-                    result, continued, calls = self.run_wrapper(PASSED, tail_outputs=outputs, all_calls=True)
-                    self.assertNotEqual(result.returncode, 0, result.stderr)
-                    self.assertFalse(continued)
-                    expected = ["--filter", VISUAL_LAYOUT] if index == 0 else ["--filter", "PilotUITests", "--skip", BROAD_EXCLUSIONS]
-                    self.assertEqual(calls[-1][-len(expected):], expected)
-
-    def test_pointer_partitions_require_each_start_and_preserve_failures(self):
-        for index, name in enumerate(NATIVE_POINTERS):
-            output = NATIVE_POINTER_OUTPUTS[index]
-            for text, code in [("", 0), (PASSED, 0), (output + FAILED, 0), (output, 42),
-                               (STARTED + f"◇ Test {name}() started.\n", 0)]:
-                with self.subTest(name=name, output=text, status=code):
-                    outputs = [(value, 0) for value in NATIVE_POINTER_OUTPUTS]
-                    outputs[index] = (text, code)
-                    result, continued, calls = self.run_wrapper(PASSED, pointer_outputs=outputs, all_calls=True)
-                    self.assertNotEqual(result.returncode, 0, result.stderr)
-                    self.assertFalse(continued)
-                    self.assertEqual(calls[-1][-2:], ["--filter", name])
-
-    def test_repair_settings_and_scheduler_partitions_require_every_test_and_preserve_failures(self):
-        for index, names in enumerate(REGRESSION_PARTITIONS):
-            output = REGRESSION_OUTPUTS[index]
-            cases = [("", 0), (PASSED, 0), (output + FAILED, 0), (output, 42),
-                     (output.removesuffix(PASSED), 0)]
-            cases += [(output.replace(f"◇ Test {name}() started.\n", ""), 0) for name in names]
-            for text, code in cases:
-                with self.subTest(partition=index, output=text, status=code):
-                    outputs = [(value, 0) for value in REGRESSION_OUTPUTS]
-                    outputs[index] = (text, code)
-                    result, continued, calls = self.run_wrapper(PASSED, regression_outputs=outputs, all_calls=True)
-                    self.assertNotEqual(result.returncode, 0, result.stderr)
-                    self.assertFalse(continued)
-                    self.assertEqual(calls[-1][-2:], ["--filter", "|".join(names)])
-                    self.assertEqual(len(calls), 8 + len(GITHUB) + len(SCOPED_MODEL_OUTPUTS)
-                                     + len(AUTOMATIC_UPDATE_OUTPUTS) + len(HOST_MCP_OUTPUTS) + index)
-
     def test_isolated_journeys_are_required_only_on_ci(self):
-        # Outside CI the journeys are disabled, so an empty run passes.
-        result, continued, calls = self.run_wrapper(PASSED, sixth_output=PASSED, seventh_output=PASSED, all_calls=True)
+        # Outside CI an empty journey is valid. On CI its required-start guard rejects it.
+        result, continued, _ = self.run_wrapper(PASSED, sixth_output=PASSED, seventh_output=PASSED)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(continued)
-        self.assertEqual(len(calls), 7 + len(GITHUB) + len(SCOPED_MODEL_OUTPUTS) + len(AUTOMATIC_UPDATE_OUTPUTS) + len(HOST_MCP_OUTPUTS) + len(REGRESSION_OUTPUTS) + len(NATIVE_POINTERS) + len(TAIL_OUTPUTS))
-        outputs = [("", 0), (PASSED, 0), (JOURNEY_START_OUTPUT + FAILED, 0),
-                   (JOURNEY_START_OUTPUT, 42),
-                   (JOURNEY_START_OUTPUT.replace(f"◇ Test {JOURNEYS[0]}() started.\n", ""), 0)]
-        for output, status in outputs:
-            result, continued, _ = self.run_wrapper(PASSED, sixth_output=output, sixth_status=status,
-                                                    seventh_output=JOURNEY_SIDEBAR_OUTPUT,
-                                                    extra_env={"CI": "true"})
+        for options in [{"sixth_output": PASSED}, {"seventh_output": PASSED}]:
+            result, continued, _ = self.run_wrapper(PASSED, extra_env={"CI": "true"}, **options)
             self.assertNotEqual(result.returncode, 0, result.stderr)
             self.assertFalse(continued)
-        outputs = [("", 0), (PASSED, 0), (JOURNEY_SIDEBAR_OUTPUT + FAILED, 0),
-                   (JOURNEY_SIDEBAR_OUTPUT, 42),
-                   (JOURNEY_SIDEBAR_OUTPUT.replace(f"◇ Test {JOURNEYS[1]}() started.\n", ""), 0)]
-        for output, status in outputs:
-            result, continued, _ = self.run_wrapper(PASSED, sixth_output=JOURNEY_START_OUTPUT,
-                                                    seventh_output=output, seventh_status=status,
-                                                    extra_env={"CI": "true"})
-            self.assertNotEqual(result.returncode, 0, result.stderr)
-            self.assertFalse(continued)
-        result, continued, _ = self.run_wrapper(PASSED, extra_env={"CI": "true"})
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue(continued)
-
-    def test_isolated_callbacks_require_every_test_and_preserve_failures(self):
-        outputs = [("", 0), (PASSED, 0), (CALLBACKS_OUTPUT + FAILED, 0), (CALLBACKS_OUTPUT, 42)]
-        for name in CALLBACKS:
-            outputs.append((CALLBACKS_OUTPUT.replace(f"◇ Test {name}() started.\n", ""), 0))
-        for output, status in outputs:
-            result, continued, calls = self.run_wrapper(PASSED, fifth_output=output,
-                                                       fifth_status=status, all_calls=True)
-            self.assertNotEqual(result.returncode, 0, result.stderr)
-            self.assertFalse(continued)
-            self.assertEqual(len(calls), 5)
-
-    def test_isolated_github_controls_require_each_test_and_preserve_failures(self):
-        for index, name in enumerate(GITHUB):
-            for output, status in [("", 0), (PASSED, 0),
-                                   (STARTED + f"◇ Test {name}() started.\n", 0),
-                                   (GITHUB_OUTPUTS[index] + FAILED, 0), (GITHUB_OUTPUTS[index], 42)]:
-                outputs = [(text, 0) for text in GITHUB_OUTPUTS]
-                outputs[index] = (output, status)
-                result, continued, calls = self.run_wrapper(PASSED, github_outputs=outputs, all_calls=True)
-                self.assertNotEqual(result.returncode, 0, result.stderr)
-                self.assertFalse(continued)
-                self.assertEqual(len(calls), 8 + index)
-
-    def test_isolated_terminal_must_start_finish_and_pass(self):
-        for output, status in [("", 0), (PASSED, 0),
-                               (STARTED + f"◇ Test {TERMINAL}() started.\n", 0),
-                               (TERMINAL_OUTPUT + FAILED, 0), (TERMINAL_OUTPUT, 42)]:
-            result, continued, calls = self.run_wrapper(PASSED, fourth_output=output,
-                                                       fourth_status=status, all_calls=True)
-            self.assertNotEqual(result.returncode, 0, result.stderr)
-            self.assertFalse(continued)
-            self.assertEqual(len(calls), 4)
-
-    def test_scoped_model_scheduler_requires_every_fixture_and_preserves_failures(self):
-        output = SCOPED_MODEL_OUTPUTS[0]
-        cases = [("", 0), (PASSED, 0), (output + FAILED, 0), (output, 42)]
-        for name in SCOPED_MODELS:
-            cases.append((output.replace(f"◇ Test {name}() started.\n", ""), 0))
-        for text, code in cases:
-            outputs = [(value, 0) for value in SCOPED_MODEL_OUTPUTS]
-            outputs[0] = (text, code)
-            result, continued, calls = self.run_wrapper(PASSED, scoped_model_outputs=outputs, all_calls=True)
-            self.assertNotEqual(result.returncode, 0, result.stderr)
-            self.assertFalse(continued)
-            self.assertEqual(len(calls), 8 + len(GITHUB))
-
-    def test_scoped_model_native_controls_run_alone_and_require_real_start(self):
-        for index, name in enumerate(SCOPED_MODEL_NATIVE, start=1):
-            output = SCOPED_MODEL_OUTPUTS[index]
-            for text, code in [("", 0), (PASSED, 0),
-                               (STARTED + f"◇ Test {name}() started.\n", 0),
-                               (output + FAILED, 0), (output, 42)]:
-                outputs = [(value, 0) for value in SCOPED_MODEL_OUTPUTS]
-                outputs[index] = (text, code)
-                result, continued, calls = self.run_wrapper(PASSED, scoped_model_outputs=outputs, all_calls=True)
-                self.assertNotEqual(result.returncode, 0, result.stderr)
-                self.assertFalse(continued)
-                self.assertEqual(len(calls), 8 + len(GITHUB) + index)
-
-    def test_isolated_devbox_must_start_finish_and_pass(self):
-        for output, status in [("", 0), (PASSED, 0),
-                               (STARTED + f"◇ Test {DEVBOX}() started.\n", 0),
-                               (DEVBOX_OUTPUT + FAILED, 0), (DEVBOX_OUTPUT, 42)]:
-            result, continued, calls = self.run_wrapper(PASSED, third_output=output,
-                                                       third_status=status, all_calls=True)
-            self.assertNotEqual(result.returncode, 0, result.stderr)
-            self.assertFalse(continued)
-            self.assertEqual(len(calls), 3)
 
     def test_isolated_geometry_failures_and_driver_status_stop_chain(self):
         for output, status in [(STARTED + f"◇ Test {ISOLATED}() started.\n" + FAILED, 0),
