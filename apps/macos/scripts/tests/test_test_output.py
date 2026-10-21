@@ -132,6 +132,13 @@ PARTITIONS = [[ISOLATED], [DEVBOX], [TERMINAL], CALLBACKS,
 
 
 class TestOutputTests(unittest.TestCase):
+    def test_native_pointer_registry_matches_wrapper(self):
+        source = (SCRIPTS / "test.sh").read_text()
+        registry = re.search(r"native_pointer_tests=\(\n(.*?)\n\)", source, re.S)
+        self.assertIsNotNone(registry)
+        names = re.findall(r"^\s*(\w+)\s*$", registry.group(1), re.M)
+        self.assertEqual(names, NATIVE_POINTERS)
+
     def test_host_mcp_partition_covers_fixtures(self):
         source = SCRIPTS.parent / "Tests/PilotTests/HostMcpConnectionsTests.swift"
         self.assertEqual(re.findall(r"func (hostMcp\w+)\(", source.read_text()), HOST_MCPS)

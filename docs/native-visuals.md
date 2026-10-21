@@ -173,6 +173,12 @@ Visuals share codemode's engine, not its script protocol.
 | Draw commands | 20,000 per frame | Error |
 | Live VMs in the app | 8, least recently visible released first | The visual keeps its last tree and JSON state |
 
+Native heap-exhaustion diagnostics retain the memory error and limit even when a source location is
+unavailable. QuickJS can throw `null` when it cannot allocate its out-of-memory Error; that existing
+fallback has neither stack nor line metadata. When a stack survives, its source line must still be
+correct. Do not invent a line or raise the heap limit to obtain diagnostics. Ordinary script errors
+and stack exhaustion retain their source-line checks.
+
 No I/O of any kind: no `fetch`, no timers, no module loading, no access to the app or to other
 visuals. The function sees only `ui`, `state` and `data`. `console.log` output is bounded and
 returned to the agent by the pre-check.

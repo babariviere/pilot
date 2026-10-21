@@ -1,24 +1,27 @@
 # Reused-cell transcript plan
 
-**Status: proposal, planning only.** No production renderer, behavior or default changes are authorized here.
-Revisiting the earlier decision to defer reuse is justified by on-screen hitches, not by a framework preference.
-Keep SwiftUI/AppKit, the existing rendering components and the daemon's 250 ms checkpoint cadence.
+**Status: native AppKit migration, opt-in first.** The approved direction is a single `NSTableView` with reused
+native AppKit rows, not hosted SwiftUI rows. Keep the surrounding app/composer in SwiftUI and the daemon's
+250 ms checkpoint cadence. The old transcript remains default until measurement and parity gates pass.
+
+**Measured stop:** the [2026-10-20 release comparison](native-transcript-measurement.md) reduces streaming CPU
+and hitches but regresses rich-scroll hitches/p95. Keep the flag off; the next migration stage has not started.
 
 ## Recommendation and decision gate
 
-Evaluate a single-column, view-based `NSTableView` inside one native `NSScrollView`, with reused cells hosting
-the existing `RowView`. Keep the composer and working line outside the cell lifecycle. Use explicit, cached
+Build a single-column, view-based `NSTableView` inside one native `NSScrollView`, with native AppKit row views.
+Keep the composer and working line outside the cell lifecycle. Use explicit, cached
 row heights and a changed-row update path, not automatic self-sizing or a whole-table snapshot per chunk.
 
-This is the lowest-risk first candidate, **not a demonstrated fix**. A SwiftUI host per visible row can still
-be expensive. Before production integration, compare it with the current renderer using the same real row
+This is an approved direction, **not a demonstrated performance result**. Before changing the default,
+compare it with the current renderer using the same content, features,
 views, release fixture, host window and measurement. Also distinguish fixture hosting overhead from normal
 app hosting: the current benchmark constructs a standalone `NSHostingView`, whereas the app uses a SwiftUI
 `Window`. Removing benchmark-only constraint work must not be mistaken for a transcript improvement.
 
-Prefer `NSCollectionView` only if the table cannot satisfy measured height, responder or accessibility
-requirements. Consider native AppKit implementations of individual hot row types only if the reused-host
-prototype still spends its frame budget inside those rows. Do not start a wholesale native-row rewrite.
+Use native `NSTextView` Markdown regions, native controls, menus and accessibility. SwiftUI compatibility
+hosts are permitted only in the initial opt-in table/text PR, so the flag can display all current content.
+Remove them as the remaining row types migrate. Do not rasterize interactive artifacts or native visuals.
 
 ## Current structure and evidence
 
@@ -62,9 +65,9 @@ sizing fix. Do not claim a scrolling improvement or ignore the possible small co
 
 | Option | Advantage | Main cost/risk | Position |
 | --- | --- | --- | --- |
-| `NSTableView`, reused cells with existing SwiftUI rows | Native one-column reuse, mature scroll/AX behavior; smallest rendering migration | Row hosts can still remeasure; dynamic heights, responder retention and SwiftUI environments need explicit ownership | First prototype |
+| `NSTableView`, reused cells with existing SwiftUI rows | Smaller first migration | Row hosts still remeasure | Temporary compatibility for the first opt-in PR only |
 | `NSCollectionView`, reused items with existing rows | More control over layout attributes, invalidation and unusual cell retention | A one-column variable-height layout needs its own height/index bookkeeping; no intrinsic speed win over a table | Contingency, not parallel implementation |
-| Reused native AppKit rows | Direct `NSTextView` updates and predictable sizing; avoids SwiftUI layout for migrated types | Rebuilds work rows, actions, menus, selection, diagrams/visual composition and AX; greatest parity risk | Selective second step if measured necessary |
+| Reused native AppKit rows | Direct `NSTextView` updates and predictable sizing; avoids SwiftUI row layout | Must preserve work rows, actions, menus, selection, diagrams/visual composition and AX | Approved final architecture |
 | Keep SwiftUI stack, isolate/cache more subtrees | Smallest behavior change; useful control experiment | Does not bound retained row hosts as revealed history grows; layout cache hits still have traversal cost | Baseline/control, not dismissed without comparison |
 
 A fully native transcript would still host existing interactive artifacts and native visual components where
@@ -79,8 +82,8 @@ flowchart TD
     C --> H[Bounded height cache]
     C --> T[One native scroll view / table]
     T --> V[Visible cells plus bounded spare pool]
-    V --> R[Existing RowView hosts]
-    R --> A[Existing text / diagrams / artifact renderers]
+    V --> R[Native AppKit row views]
+    R --> A[NSTextView / diagrams / interactive artifact renderers]
     A -->|content height changed| H
     H -->|affected row heights only| T
     F[Composer and working line] --> O[Outside cell reuse]
@@ -100,7 +103,7 @@ flowchart TD
 - Streaming rows currently use `streaming…` identities and committed rows use entry identities. Transfer the
   render-state binding only with a proven message/entry transition. Otherwise replace just that tail row,
   preserve scroll geometry and do not replay its initial fade. Do not invent a content-equality identity.
-- A reused cell binds a small row-scoped model, not the whole feed. Supply the same fonts, appearance,
+- A reused cell binds row-scoped native content, not the whole feed. Supply the same fonts, appearance,
   endpoint/host context, action handlers and expansion owners as today. Do not create a new app model per cell.
 - On rebinding, clear old tracking/hover state, selection visuals, fade layers and closures. Cancel obsolete
   tasks and fence every result by binding generation, including artifact size/failure callbacks. An old remote
@@ -149,10 +152,9 @@ in height keys or retain an old cache generation for every window width/font siz
 | Accessibility | Preserve reading order, text/link semantics, work disclosures and named actions. Expose appropriate native list/row groups without duplicate hosting wrappers. VoiceOver must reach and realize offscreen logical rows without realizing all history. Do not announce the whole transcript on every chunk. Test actual AX navigation and focus, not only a label snapshot. |
 | Appearance | Use Theme and the existing font environment in every host. Native visuals follow light/dark; web artifacts retain their existing light document surface. Rebinding must not carry another row's appearance or metrics. No layout redesign. |
 
-**Sizing discrepancy to resolve before rollout.** `ArtifactViewerLayout.inlineImageMaxHeight` currently equals
-720, while D3 specifies 480. Native visuals explicitly grow uncapped in `docs/native-visuals.md` and
-`VisualArtifactContent`, unlike D8's general 720 pt artifact ceiling. The container migration must call these
-out for an explicit policy decision and delegate sizing to the existing shared layout helpers meanwhile.
+**Sizing preservation is explicit.** Keep `ArtifactViewerLayout.inlineImageMaxHeight` at 720 and native visuals
+uncapped, matching current behavior. The older 480 pt/general 720 pt language does not authorize a sizing
+change in this migration. Delegate sizing to the existing shared layout helpers.
 It must not silently crop tall visuals, introduce a nested visual scroller, or retune image heights as an
 incidental consequence of reuse. Contract reconciliation is separate from proving the container's performance.
 
@@ -172,33 +174,46 @@ strategy before rollout, rather than silently blurring the editor or keeping eve
 Persisted visual JSON does not by itself preserve arbitrary web DOM/input state across teardown; define and
 test the same supported remount behavior as today, with no accidental new reloads during a focused edit.
 
-## Small migration PRs, each requiring separate implementation approval
+## Approved ordered migration PRs
 
-1. **Measurement and standalone prototype.** Compare current stack, table with existing row hosts, and only
-   if necessary a collection layout. Same data, release configuration, window, widths and renderer features;
-   no production default change. Add counts for mounted hosts, cell creation/rebinds, height cache misses,
-   row measurements, whole-window layout and stale callbacks. Prove the outer sizing boundary, variable-height
-   convergence and focused-artifact behavior. A plain native-text variant is an upper-bound experiment, not
-   an apples-to-apples win over rich rows. This planning PR contains no prototype or new performance result.
-2. **Identity/state adapter.** Add deterministic client-side tests for changed live rows, commits/grouping,
-   prepend, snapshot/recovery, remote resource identity and stale asynchronous callbacks. Carry external
-   expansion/selection/height state. No protocol or history-storage change is initially needed; do not add
-   history-sized main-thread copying just to drive a native data source.
-3. **Opt-in table with plain/work rows.** Keep the existing renderer as default. Integrate the one native
-   scroller, bounded cell pool, explicit width/height updates and follow/reading-anchor controller. Preserve
-   the initial 40-row history window and explicit paging. Benchmark after this PR; stop if host reuse does
-   not substantially reduce main-thread work or if unchanged history is still measured per chunk.
-4. **Interaction parity.** Complete selection across reuse boundaries, keyboard-to-ID routing, existing
-   message actions, first responder/IME and VoiceOver. Add native interaction tests and at least one real
-   window journey. Do not enable a faster read-only transcript in production as a shortcut around parity.
-5. **Rich rows and lifecycle parity.** Exercise dynamic tools, diagrams, images, web artifacts and native
-   visuals, including tall content, loading/failure/retry, late resize, host switches, expanded viewer and
-   focused editing. Port anchor/lifecycle fixtures to the native container. Audit renderer leases, listeners,
-   timers, tasks and process counts after repeated scroll-away/return and closing a chat.
-6. **Measured choice and rollout.** Run the full release A/B matrix and interaction/AX gates. If row-local
-   SwiftUI still dominates, propose a small native text/work-row follow-up with its own parity budget; do not
-   rewrite all row types. Enable only after the acceptance targets and sizing decisions are resolved, with
-   an explicit rollback path. Remove the old stack only in a later, separately reviewed cleanup.
+The initial table/text path is opt-in with `PILOT_APPKIT_TRANSCRIPT=1` (or the `appKitTranscript` app default).
+Without the flag, `ChatView` keeps the existing SwiftUI transcript. The native controller consumes the existing
+history/live split, rebinds only changed live rows, and bounds the measured-height cache to 4,096 entries.
+NSTableView's installed geometry is tracked separately so measurement eviction or font invalidation cannot
+silently leave an old table height installed. Header/footer publication has its own parent-produced revision;
+it must not infer chrome changes from the streaming revision.
+
+Native Markdown text reuses the existing incremental preparation, native selection regions and Core Animation
+veils. Code, tables, diagrams and non-text rows temporarily use compatibility hosts in this first PR only.
+Image sizing, visual sizing and selection scope are unchanged. The final path must remove those hosts before
+the default switches. Initial measurements are evidence for that next step, not a rollout/parity claim.
+
+1. **Opt-in table and native streaming text.** One native scroller, reused cells, native Markdown text regions,
+   bounded explicit height cache, changed-live-row updates, one height transaction per prepared chunk, existing
+   Core Animation word veils, follow/reading anchors. Temporary compatibility hosts keep the flag usable for
+   other types. Update this document. Run the matched release benchmark and publish before/after tables before
+   proceeding. Stop if it does not clearly beat main.
+2. **Remaining native rows.** Migrate user bubbles, work/tools, code, tables, images, inline artifacts, native
+   visuals, Mermaid, actions/menus, keyboard and accessibility. Preserve light/dark, image cap 720, uncapped
+   visuals and per-message selection. Measure each coherent PR; no SwiftUI row hosting in the completed path.
+3. **Parity, default and deletion.** Check screenshots/fixtures, copy/selection, native keyboard/AX, scrolling,
+   anchors and artifact interaction. Run the final release matrix against main. Only after every gate passes,
+   enable the native transcript and delete the SwiftUI transcript path.
+
+### Native migration checklist
+
+- Identity/state tests cover changed live rows, commits/grouping, prepend, snapshot/recovery, full remote
+  resource identity, stale asynchronous callbacks and row reuse. Keep the history window and external
+  expansion/selection state, without adding history-sized copies to the chunk path.
+- Instrument cell creation/bindings, mounted cells, height measurements/transactions and cache entries.
+  Prove the viewport sizing boundary and variable-height convergence using the actual release fixture.
+- Complete keyboard-to-ID routing, native message actions/menus, first responder/IME and VoiceOver.
+  A faster read-only transcript is not production parity.
+- Exercise diagrams, images, web artifacts and native visuals: tall content, loading/failure/retry, late
+  resize, host switches, expanded viewer and focused editing. Audit renderers, listeners, tasks and processes
+  after repeated scroll-away/return and closing a chat.
+- Keep per-message selection. Any extension across unrelated messages needs a separate user decision.
+  Recycling must preserve supported copy semantics without retaining every selected view.
 
 One giant text reply or uncapped visual can occupy a single very tall cell. Cell reuse alone does not bound
 that row's internal layout. Splitting such content into reusable blocks is a separate measured option, with
@@ -206,9 +221,9 @@ selection/source mapping and artifact interaction costs, not part of the first c
 
 ## Numbers, verification and stop conditions
 
-The numbers below are **provisional budgets/hypotheses, not measured predictions**. No prototype was run for
-this planning document: a toy list would not answer whether the real row hosts, responder behavior and rich
-content meet the constraints. Approve the measurement step before committing to a production container.
+The numbers below are **acceptance budgets, not measured predictions**. A toy list does not answer whether
+the real native rows, responder behavior and rich content meet the constraints. Measurements below must
+use the real offline fixture with unchanged content and cadence.
 
 | Stage / workload | Expected budget or go/no-go test |
 | --- | --- |

@@ -183,6 +183,9 @@ enum PerformanceCheck {
                 summary += " over 16ms=\(scrollFrames.filter { $0 > 16 }.count)/\(scrollFrames.count)"
             }
             print(summary)
+            if let native = findTranscript(window.contentView) as? NativeTranscriptScrollView {
+                print("  \(native.controller?.diagnosticSummary ?? "native transcript detached")")
+            }
             if streaming {
                 for (phase, total) in phases where total.count > 0 {
                     let totalMs = Double(total.nanoseconds) / 1e6
@@ -290,6 +293,7 @@ enum PerformanceCheck {
 
     private static func findTranscript(_ view: NSView?) -> NSScrollView? {
         guard let view else { return nil }
+        if let native = view as? NativeTranscriptScrollView { return native }
         if let observer = view as? ScrollObserverView { return observer.enclosingScrollView }
         return view.subviews.lazy.compactMap { findTranscript($0) }.first
     }
@@ -415,9 +419,15 @@ final class FrameMonitor: NSObject {
     private var bottomGap: CGFloat?
     private var gapChanges = 0
 
+    static func messageAnchors(in scroll: NSScrollView) -> [TranscriptRowAnchorView] {
+        TranscriptRowAnchorView.rows.allObjects.filter {
+            $0.window != nil && !$0.rowID.isEmpty && !$0.isHidden && $0.enclosingScrollView === scroll
+        }
+    }
+
     private func sampleNewestRow() {
         guard let scroll = transcript, let document = scroll.documentView else { return }
-        let rows = TranscriptRowAnchorView.rows.allObjects.filter { $0.window != nil && $0.enclosingScrollView === scroll }
+        let rows = Self.messageAnchors(in: scroll)
         // Window coordinates grow upward, so the newest row is the lowest, and moving down lowers its top.
         guard let newest = rows.min(by: { $0.convert($0.bounds, to: nil).maxY < $1.convert($1.bounds, to: nil).maxY }) else { return }
         let top = newest.convert(newest.bounds, to: nil).maxY
