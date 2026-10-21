@@ -85,6 +85,8 @@ struct ChatEventRow: View {
                 if let timestamp = event.timestamp {
                     Text(timeLabel(timestamp))
                         .font(.pilot(.caption)).foregroundStyle(Theme.faintForeground)
+                        // Keep the time on one line at its natural width; the sentence truncates instead.
+                        .lineLimit(1).fixedSize()
                         .opacity(hovering ? 1 : 0).accessibilityHidden(true)
                 }
             }
