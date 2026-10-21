@@ -68,6 +68,15 @@ Formatting (`swift format`) and unused-code analysis (Periphery) remain separate
 
 ### Shared heavy-verification slots
 
+On CI, the Swift output guard captures one live stack if an already-started test runner emits no
+output for 60 seconds. Compilation silence does not arm it. Discovery is scoped to that wrapper's
+descendants, with a five-second process-list deadline and at most two two-second samples (each with
+a ten-second command deadline). This is diagnostic only: it does not cancel a test, extend CI's
+deadline, suppress an assertion or change the output guard's result. Sampling failures are nonfatal.
+The log contains a bounded excerpt; full traces are uploaded as `swift-test-stalls` for three days.
+Local wrappers do not enable sampling. Native Swift tests remain CI-only when working under that
+verification constraint; the sampler's clock/process/output tests use Python mocks.
+
 Iterate with affected test files. Run the relevant full suites once before publishing, not after each
 edit. Use background jobs for long checks, and never bypass the queue or launch duplicate suites while
 waiting. `pnpm test` (also `npm test`) and all `test:*` suite commands use the Node pool;
@@ -566,6 +575,13 @@ own native runners, terminates the private session's process groups (including h
 fails with status 124. Cancellation also cleans up those groups before releasing the verification slot.
 The outer step deadline remains a last resort for the entire chain. This diagnoses/bounds hangs;
 it does not make a hung test pass or replace its existing assertions and deadlines.
+
+The output guard's earlier, diagnostic-only silence sample remains separate from that hard deadline:
+60 seconds without output after a native runner starts can capture a bounded stack without terminating
+anything. Output resets this silence timer, not the watchdog's three-minute deadline. The shared
+`check_output` parser supports in-process verification with sampling disabled by default; CLI sampling
+always closes its helper thread, including if the output stream fails. Both guards retain failure and
+required-start checks. The watchdog's timeout sampling and cleanup remain unchanged.
 
 The packaging tests verify the full missing-start/failure matrix through the production output
 parser in-process. A complete shell-wrapper run still checks every partition's filter, required-start
