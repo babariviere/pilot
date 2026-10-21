@@ -33,6 +33,7 @@ rm -rf "$stage/runtime/node_modules/.pnpm" "$stage/runtime/node_modules/.modules
 	"$stage/runtime/node_modules/.pnpm-workspace-state-v1.json"
 # Ship minified artifact libraries, so first previews never wait for esbuild inside pilotd.
 (cd "$stage/runtime"; node packages/artifacts/scripts/build-libraries.ts)
+(cd "$stage/runtime"; node packages/daemon/scripts/build-usage-worker.mjs build packages/daemon/src)
 python3 "$here/scripts/release_metadata.py" prepare-runtime "$stage/runtime"
 python3 "$here/scripts/release_metadata.py" symlinks "$stage/runtime"
 # Copy links, not their targets. The @pilot/* workspace links must stay relative to runtime/packages.

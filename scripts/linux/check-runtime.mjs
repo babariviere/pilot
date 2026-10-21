@@ -9,6 +9,11 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 
 const root = dirname(fileURLToPath(import.meta.url));
+execFileSync(
+	process.execPath,
+	[join(root, "packages/daemon/scripts/build-usage-worker.mjs"), "check", join(root, "packages/daemon/src")],
+	{ stdio: "inherit" },
+);
 assert.equal(process.platform, "linux");
 assert.equal(process.arch, "x64");
 assert.equal(process.versions.node, "24.21.0");
