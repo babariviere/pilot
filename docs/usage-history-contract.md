@@ -160,3 +160,10 @@ write peaks from median 45.44 to 38.03 MiB; idle store peaks remain about 30–3
 The **16 MiB gate remains unchanged and failing**. No inference, native window, deployment or merge was used.
 Capture/provider/native/installed-daemon/CI/packaging verification remains separate; these store measurements
 do not authorize default dashboard rollout or completion of dependent tasks.
+
+A [release-generator follow-up](usage-history-performance.md#focused-release-time-reduction) removes the leaf
+worker's per-isolate TypeScript parser without changing the dedicated worker or storage semantics. Three paired
+synthetic runs using the shipped Node executable and actual generator reduce idle median peak from 25.14 to
+14.58 MiB, but 6,000 serialized pages still peak at median 46.66 MiB (baseline 72.91). Raw/final pairs are retained.
+These are isolated worker-leaf results, not installed full-daemon or rebuilt-package evidence. The **16 MiB gate
+still fails and is not waived**; architecture or budget alternatives require explicit review before default rollout.

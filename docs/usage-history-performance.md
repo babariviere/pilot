@@ -102,3 +102,131 @@ or an explicitly reviewed, evidence-backed budget change. Neither is silently in
 The proposed gate must remain open. Full installed-daemon/capture overhead, repeated live-host baselines,
 native DTO execution, full CI/packaging, longer retention workloads and default dashboard rollout remain separate
 release evidence. Dependency tasks are not marked done and no release gate is waived by this document.
+
+## Shipped-execution follow-up, 2026-10-21
+
+Continued from merged `f9b1a0f1`, not the initial confounded measurement. Both release packagers copy `.ts`
+sources unchanged; the launch agent invokes bundled Node directly. The accounting worker has only built-in/local
+runtime imports. There is no production JS bundle that removes its TypeScript parser cost.
+
+The [paired probe and raw evidence](benchmarks/usage-worker-2026-10-21/README.md) copy the installed shipped Node
+24.21.0 executable and freeze the exact source graph into release-shaped disposable directories. They preserve
+binary/source hashes and use separate-process seeding and the credential-free allowlisted fixture environment.
+This establishes **isolated shipped-worker execution equivalence**, not a rebuilt package or full installed-daemon
+measurement. No installs, deployments, production data, providers or windows were used.
+
+Unlike the prior harness invocation, final measured children do **not** receive `--expose-gc`; no forced GC runs.
+The old `main_gc_only` stage label is a no-op in these samples. Different idle/peak values from the previous
+source-mode run are not a newly implemented production improvement. Ambient host load is uncontrolled; raw
+per-trial results and outliers are retained rather than pooled into the earlier data.
+
+Three alternating serial sets, medians of fresh-process sampled peak RSS above the pre-worker baseline (MiB):
+
+| Case | Shipped TS | TS, 1 MiB nursery | JS worker only | JS + 1 MiB nursery |
+| --- | ---: | ---: | ---: | ---: |
+| No worker | 0.09 | 0.09 | 0.11 | 0.09 |
+| Bare Node worker | 11.23 | 11.25 | 11.12 | 11.27 |
+| Empty store, idle | 24.20 | 24.59 | 14.84 | 14.30 |
+| 50k rows, idle | 25.09 | 25.56 | 14.81 | 13.94 |
+| 1,500 indexed pages | 40.42 | 43.64 | 31.22 | 29.53 |
+| 1,500 pages + response JSON | 52.89 | 46.38 | 33.89 | 35.02 |
+| 1,500 revision writes | 31.64 | 30.06 | 21.09 | 14.66 |
+
+Only the first column is baseline shipped behavior. JS columns strip only worker/disk/validation modules in a separate
+setup process, retaining the original TypeScript parent and validation code. These first runs are **diagnostics**,
+preceding the release-generator implementation below.
+The previous ~17 MiB derived-JS idle diagnostic remains a separate measurement, not replaced retroactively.
+
+Shipped empty-store peaks span 20.98–27.28 MiB; JS-only empty-store peaks span 14.44–15.27 MiB. Packaging the
+worker as generated JS is therefore a credible way to remove avoidable bootstrap cost, but is **not a gate fix**:
+JS-only serialized-query peaks span 29.38–37.05 MiB. The small-nursery option does not consistently improve all
+workloads. Even the combined diagnostic's write median below 16 MiB hides a 19.84 MiB sample, and its query
+medians remain far above the gate. No V8/resource-limit setting was added to production.
+
+At empty-store readiness, shipped worker median heap-used/physical/external memory was 10.4/15.0/9.9 MiB;
+JS-only was 7.3/11.1/3.5 MiB. These categories are not additive RSS attribution, but their reduction independently
+supports avoidable TypeScript bootstrap cost rather than a credential SDK import. There is no preload in either
+final environment, and the worker graph contains no SDK dependency.
+
+All short-run page responses remain 50,777 bytes. Per-sample query p95 values are preserved, including a
+21.65ms shipped serialized-query outlier; all remain below 50ms, but ambient-load timings are not a speedup claim.
+The nursery is an isolate GC heuristic, not an RSS cap; it cannot bound parent or external/SQLite allocations.
+
+The three **6,000 serialized-page** samples per variant reinforce that idle-only success is insufficient:
+
+| Worker variant | Individual peak increases, MiB | Median peak, MiB | Per-sample query p95, ms |
+| --- | --- | ---: | --- |
+| Shipped TS | 67.16, 64.23, 62.17 | 64.23 | 2.05, 1.63, 2.30 |
+| TS + small nursery | 67.42, 58.23, 63.77 | 63.77 | 1.47, 2.70, 2.17 |
+| JS worker only | 38.61, 27.73, 39.91 | 38.61 | 3.43, 5.43, 1.94 |
+| JS + small nursery | 38.80, 36.09, 35.89 | 36.09 | 2.15, 2.64, 1.93 |
+
+Shipped worker heap medians at ready/each 1,000-page boundary were 10.4, 18.4, 25.5, 32.1, 39.6, 17.7 and
+15.6 MiB. Natural worker GC is again visible, while sampled process RSS retains a higher allocation footprint.
+The JS-only heap medians were 7.2, 9.2, 8.2, 15.1, 15.5, 13.3 and 12.8 MiB; it still leaves substantial
+query/parent/native high-water overhead. Final evidence retains all raw stages and final summaries. Neither
+series proves a universal steady-state memory bound, and neither supersedes the prior ~80 MiB observation.
+
+### Focused release-time reduction
+
+The follow-up change adds `packages/daemon/scripts/build-usage-worker.mjs` to **both** release packagers. It strips
+the three worker-only modules using bundled Node's own TypeScript stripper, rewrites their known local imports to
+`.mjs`, and switches the worker URL in the staged parent copy only after generation succeeds. TypeScript remains
+the single maintained source; there is no checked-in generated copy, runtime compilation, dynamic fallback,
+additional dependency, V8 flag, worker lifecycle change or kernel/background API change.
+
+Both relocated-runtime checks now verify that the generated files exactly match current source, verify the parent
+selects the generated entry, and exercise real worker write/read/clear/close with a temporary synthetic database.
+Focused tests cover deterministic regeneration, relocation, missing/stale outputs and an unexpected dependency.
+The regular source-store durability/privacy/bounds tests remain unchanged. Full package creation/relocation on
+both operating systems remains remote CI evidence, not a local installation or deployment claim.
+
+Final `release-paired.jsonl` and `release-sustained.jsonl` freeze and invoke this **actual release generator**,
+including its verification before measurements, and preserve its hash alongside source/binary hashes. The
+historical `shipped` label denotes the unmodified `f9b1a0f1` TS baseline; `js_worker` is the proposed release path.
+No small-nursery variant is adopted.
+
+Final three serial alternating before/after pairs using that generator:
+
+| Case | TS baseline median peak, MiB | Generated release worker median peak, MiB |
+| --- | ---: | ---: |
+| Empty store, idle | 25.14 | 14.58 |
+| 50k rows, idle | 25.30 | 14.92 |
+| 1,500 indexed pages | 44.98 | 32.14 |
+| 1,500 pages + response JSON | 51.72 | 38.17 |
+| 1,500 revision writes | 31.52 | 21.22 |
+| 6,000 pages + response JSON | 72.91 | 46.66 |
+
+The final sustained candidate peaks were **45.38, 46.89, 46.66 MiB**, versus baseline **72.91, 73.17, 55.14 MiB**.
+The candidate's sustained per-sample page p95 was 0.58–0.90ms; responses remained 50,777 bytes. Idle candidate
+peaks were 14.55–14.70 MiB (empty) and 14.91–15.11 MiB (populated). The no-worker control medians were 0.27/0.09
+MiB before/after, bare-worker medians 11.75/11.70 MiB. This is a useful bounded-workload reduction, **not gate
+closure**: writes and both query workloads still exceed 16 MiB. Candidate results are neither a total host-memory
+cap nor proof of future workload bounds. The earlier diagnostic variation and prior corrected results remain
+preserved alongside these final pairs.
+
+### Review needed, not an implicit budget change
+
+No measured variant closes the **unchanged 16 MiB peak gate**. The narrow V8 change is not a convincing safe
+win. Generated-JS packaging removes avoidable parser cost but still leaves the peak gate failing. The storage
+implementation, durability, privacy, queue/page/storage limits, the dedicated off-event-loop worker and
+kernel/background APIs are unchanged.
+
+Evidence-backed choices to review before default rollout:
+
+1. **Keep 16 MiB and review a different execution/ownership design.** A shared existing storage-worker owner or
+   lower-overhead native helper is a possible research direction, not a measured solution. Either needs explicit
+   architecture review, lifecycle/failure isolation and privacy proofs, with durable acknowledgements and bounded
+   queues preserved. Moving SQLite onto the daemon event loop, counting a child process as zero memory, or recycling
+   workers across in-flight commits is not an acceptable shortcut.
+2. **Continue query-allocation work after the independent packaging reduction.** The paired evidence supports
+   lower bootstrap cost without changing the storage semantics. The proposed generator and relocated checks still
+   need exact-head remote CI. More aggressive object/transport or GC work needs separate measurements and must
+   preserve response validation, durability, privacy and bounded ingress. Idle-only success cannot close the gate.
+3. **Explicitly review a measured workload budget instead.** The present implementation does not fit 16 MiB.
+   Any replacement budget must state idle versus sustained-query/capture workloads, total host/process accounting
+   and duration, and be verified in the full daemon. These isolated results do not establish a universal RSS bound
+   or justify simply rounding a gate above the largest observed sample.
+
+Until that choice and subsequent verification, default dashboard rollout remains blocked; independent capture,
+bounded-query and UI implementation can continue. This document does not authorize an architecture or budget change.

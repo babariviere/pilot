@@ -44,6 +44,7 @@ export LDFLAGS="-static-libstdc++ -static-libgcc"
 (cd "$stage/runtime"; "$stage/tools/node_modules/.bin/pnpm" install --prod --frozen-lockfile --config.node-linker=hoisted)
 rm -rf "$stage/runtime/node_modules/.pnpm" "$stage/runtime/node_modules/.modules.yaml" "$stage/runtime/node_modules/.pnpm-workspace-state-v1.json"
 (cd "$stage/runtime"; node packages/artifacts/scripts/build-libraries.ts)
+(cd "$stage/runtime"; node packages/daemon/scripts/build-usage-worker.mjs build packages/daemon/src)
 cp "$repo/scripts/linux/"{service.mjs,check-runtime.mjs} "$stage/runtime/"
 mkdir -p "$stage/runtime/scripts/linux"
 cp "$repo/scripts/linux/"{update.mjs,service.mjs,release-manifest.mjs} "$stage/runtime/scripts/linux/"
