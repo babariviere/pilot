@@ -1,5 +1,8 @@
 # Pilot Next, read-only Local viewer
 
+Historical read-only checkpoint evidence. The current Local client adds explicit
+create/send/Stop and private drafts; see `local-interaction.md` for that boundary.
+
 2026-10-21. Evidence captured before the first source checkpoint, renamed from
 `apps/gpui-fixture` to `apps/desktop` at the user's request. Product: Pilot Next;
 Rust package/binary: `pilot-desktop`. Production Swift, daemon, packaging,

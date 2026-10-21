@@ -1,13 +1,16 @@
 //! Readonly Local browser. The transport is never given UI events capable of writing.
 use crate::{
     LocalOptions, TranscriptView,
+    chat_editor::{ChatEditor, EditorEvent},
+    delivery_store::Store,
+    interaction::{Interaction, WriteCommand},
     local_client::{Command, LocalClient, Presentation},
     local_model::Chat,
     model::Message,
 };
 use gpui_kit::{
-    App, AppContext, Context, Entity, IntoElement, ParentElement, Render, SharedString, Styled,
-    Subscription, Task, Window,
+    App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, Render,
+    SharedString, Styled, Subscription, Task, Window,
     component::{
         ActiveTheme, Disableable, IndexPath, Sizable, StyledExt,
         button::Button,
@@ -122,12 +125,18 @@ pub struct LocalViewer {
     state: Presentation,
     _subscriptions: Vec<Subscription>,
     updates: Option<Task<()>>,
+    writes: Option<Task<()>>,
+    editor: Entity<ChatEditor>,
+    writer: Option<Interaction>,
+    nav_chats: Arc<Vec<Chat>>,
+    nav_drafts: Vec<(String, String)>,
 }
 
 impl LocalViewer {
     pub fn new(options: LocalOptions, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let (writer, write_updates) = Interaction::start(options.clone(), Store::default_path());
         let (client, updates) = LocalClient::start(options);
-        let mut view = Self::build(Some(client), window, cx);
+        let mut view = Self::build(Some(client), Some(writer), window, cx);
         view.updates = Some(cx.spawn_in(window, async move |view, cx| {
             while let Ok(update) = updates.recv().await {
                 if view
@@ -142,12 +151,33 @@ impl LocalViewer {
                     .await;
             }
         }));
+        view.writes = Some(cx.spawn_in(window, async move |view, cx| {
+            while let Ok(state) = write_updates.recv().await {
+                if view
+                    .update_in(cx, |view, window, cx| {
+                        view.editor
+                            .update(cx, |editor, cx| editor.accept(state, window, cx))
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }));
+        let weak = cx.weak_entity();
+        window.on_window_should_close(cx, move |_, cx| {
+            weak.update(cx, |view, cx| {
+                view.editor
+                    .update(cx, |editor, cx| editor.request_close(cx))
+            })
+            .unwrap_or(true)
+        });
         view
     }
 
     /// Network-free production-view fixture for native rendering/interaction checks.
     pub fn synthetic(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let mut view = Self::build(None, window, cx);
+        let mut view = Self::build(None, None, window, cx);
         view.title = "Synthetic Local chat".into();
         view.selected = Some("synthetic".into());
         view.state.status = "Synthetic projection · no network".into();
@@ -159,18 +189,30 @@ impl LocalViewer {
                 title: "Synthetic Local chat".into(),
                 state: "working".into(),
                 archived: false,
+                local_draft: false,
+                writable: false,
+                busy: true,
+                cwd: String::new(),
             },
             Chat {
                 id: "synthetic-two".into(),
                 title: "Transcript review".into(),
                 state: "idle".into(),
                 archived: false,
+                local_draft: false,
+                writable: false,
+                busy: false,
+                cwd: String::new(),
             },
             Chat {
                 id: "synthetic-archive".into(),
                 title: "Earlier conversation".into(),
                 state: "parked".into(),
                 archived: true,
+                local_draft: false,
+                writable: false,
+                busy: false,
+                cwd: String::new(),
             },
         ]);
         view.chats.update(cx, |list, cx| {
@@ -194,7 +236,12 @@ impl LocalViewer {
         view
     }
 
-    fn build(client: Option<LocalClient>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn build(
+        client: Option<LocalClient>,
+        writer: Option<Interaction>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let chats = cx.new(|cx| {
             ListState::new(
                 ChatList {
@@ -209,16 +256,51 @@ impl LocalViewer {
             )
             .searchable(true)
         });
-        let subscription = cx.subscribe_in(&chats, window, |view, list, event, _, cx| {
+        let subscription = cx.subscribe_in(&chats, window, |view, list, event, window, cx| {
             if let ListEvent::Confirm(ix) = event {
                 let chat = list.read(cx).delegate().at(*ix).cloned();
                 if let Some(chat) = chat {
-                    view.open(chat, cx);
+                    view.open(chat, window, cx);
                 }
             }
         });
         chats.update(cx, |list, cx| list.focus(window, cx));
         let transcript = cx.new(|cx| TranscriptView::readonly(window, cx));
+        let editor = cx.new(|cx| ChatEditor::new(writer.clone(), window, cx));
+        let editor_events =
+            cx.subscribe_in(&editor, window, |view, _, event, window, cx| match event {
+                EditorEvent::DraftsChanged => view.rebuild_nav(window, cx),
+                EditorEvent::Flushed => cx.quit(),
+                EditorEvent::OpenCreated {
+                    key,
+                    revision,
+                    target,
+                } => {
+                    view.open(
+                        Chat {
+                            id: target.clone(),
+                            title: "Local chat".into(),
+                            state: "starting".into(),
+                            archived: false,
+                            local_draft: false,
+                            writable: true,
+                            busy: true,
+                            cwd: String::new(),
+                        },
+                        window,
+                        cx,
+                    );
+                    if view.selected.as_ref() == Some(target)
+                        && let Some(writer) = &view.writer
+                    {
+                        writer.command(WriteCommand::RetireCreated {
+                            key: key.clone(),
+                            revision: *revision,
+                            target: target.clone(),
+                        });
+                    }
+                }
+            });
         Self {
             client,
             chats,
@@ -230,12 +312,25 @@ impl LocalViewer {
                 status: "Connecting to Local…".into(),
                 ..Default::default()
             },
-            _subscriptions: vec![subscription],
+            _subscriptions: vec![subscription, editor_events],
             updates: None,
+            writes: None,
+            editor,
+            writer,
+            nav_chats: Arc::new(Vec::new()),
+            nav_drafts: Vec::new(),
         }
     }
 
-    fn open(&mut self, chat: Chat, cx: &mut Context<Self>) {
+    fn open(&mut self, chat: Chat, window: &mut Window, cx: &mut Context<Self>) {
+        if chat.local_draft {
+            self.clear_chat(cx);
+            self.title = "New Local chat draft".into();
+            self.editor.update(cx, |editor, cx| {
+                editor.select(chat.id, true, false, window, cx)
+            });
+            return;
+        }
         if self.selected.as_ref() == Some(&chat.id) {
             return;
         }
@@ -249,39 +344,22 @@ impl LocalViewer {
             return;
         }
         self.generation = generation;
+        let key = format!("chat:{}", chat.id);
+        self.editor.update(cx, |editor, cx| {
+            editor.select(key, chat.writable, chat.busy, window, cx)
+        });
         self.selected = Some(chat.id);
         self.title = chat.title;
         self.state.cursor = None;
         self.state.page_busy = false;
         self.state.chat_status = "Loading chat…".into();
+        self.state.queued = 0;
         self.transcript
             .update(cx, |view, cx| view.replace_readonly(Vec::new(), true, cx));
         cx.notify();
     }
 
     fn accept(&mut self, mut state: Presentation, window: &mut Window, cx: &mut Context<Self>) {
-        if !Arc::ptr_eq(&state.chats, &self.state.chats) {
-            self.chats.update(cx, |list, cx| {
-                let selected = list
-                    .delegate()
-                    .selected
-                    .and_then(|ix| list.delegate().at(ix))
-                    .map(|chat| chat.id.clone());
-                let delegate = list.delegate_mut();
-                delegate.all = state.chats.clone();
-                delegate.filter();
-                let selected = selected
-                    .and_then(|id| {
-                        delegate
-                            .filtered
-                            .iter()
-                            .position(|ix| delegate.all[*ix].id == id)
-                    })
-                    .map(IndexPath::new);
-                list.set_selected_index(selected, window, cx);
-                cx.notify();
-            });
-        }
         if state.generation == self.generation {
             let rows = std::mem::take(&mut state.rows);
             self.transcript
@@ -292,7 +370,85 @@ impl LocalViewer {
             self.state.chats = state.chats;
             self.state.status = state.status;
         }
+        if let Some(chat) = self
+            .selected
+            .as_ref()
+            .and_then(|id| self.state.chats.iter().find(|c| &c.id == id))
+        {
+            let (writable, busy) = (chat.writable, chat.busy || self.state.queued > 0);
+            self.editor
+                .update(cx, |editor, cx| editor.permission(writable, busy, cx));
+        }
+        self.rebuild_nav(window, cx);
         cx.notify();
+    }
+
+    fn clear_chat(&mut self, cx: &mut Context<Self>) {
+        self.generation += 1;
+        self.selected = None;
+        self.state.cursor = None;
+        self.state.chat_status.clear();
+        self.state.queued = 0;
+        if let Some(client) = &self.client {
+            client.command(Command::Clear {
+                generation: self.generation,
+            });
+        }
+        self.transcript
+            .update(cx, |view, cx| view.replace_readonly(Vec::new(), true, cx));
+    }
+    fn new_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.editor.read(cx).ready() {
+            return;
+        }
+        // Do not inherit another agent's isolated working copy as a Build destination.
+        let cwd = String::new();
+        self.clear_chat(cx);
+        self.title = "New Local chat".into();
+        self.editor
+            .update(cx, |editor, cx| editor.new_draft(cwd, window, cx));
+    }
+    fn rebuild_nav(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let drafts = self.editor.read(cx).new_drafts();
+        if Arc::ptr_eq(&self.nav_chats, &self.state.chats) && drafts == self.nav_drafts {
+            return;
+        }
+        self.nav_chats = self.state.chats.clone();
+        self.nav_drafts = drafts.clone();
+        let mut all: Vec<_> = drafts
+            .into_iter()
+            .map(|(key, title)| Chat {
+                id: key,
+                title,
+                state: "Draft".into(),
+                archived: false,
+                local_draft: true,
+                writable: false,
+                busy: false,
+                cwd: String::new(),
+            })
+            .collect();
+        all.extend(self.state.chats.iter().cloned());
+        self.chats.update(cx, |list, cx| {
+            let selected = list
+                .delegate()
+                .selected
+                .and_then(|ix| list.delegate().at(ix))
+                .map(|c| c.id.clone());
+            let delegate = list.delegate_mut();
+            delegate.all = Arc::new(all);
+            delegate.filter();
+            let selected = selected
+                .and_then(|id| {
+                    delegate
+                        .filtered
+                        .iter()
+                        .position(|ix| delegate.all[*ix].id == id)
+                })
+                .map(IndexPath::new);
+            list.set_selected_index(selected, window, cx);
+            cx.notify();
+        });
     }
 }
 
@@ -303,7 +459,7 @@ impl Render for LocalViewer {
         let footer = if self.state.limited {
             "Viewer capacity reached. New entries and further history are omitted. Open Swift for the full chat."
         } else {
-            "Readonly. Composer and actions are unavailable. Images and links are disabled. Use Swift to respond."
+            "Images and links are disabled. Some structured content remains a placeholder. Swift stays available."
         };
         div()
             .h_flex()
@@ -312,6 +468,23 @@ impl Render for LocalViewer {
             .min_w_0()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
+            .on_action(
+                cx.listener(|view, _: &crate::transcript_view::Quit, _, cx| {
+                    if view
+                        .editor
+                        .update(cx, |editor, cx| editor.request_close(cx))
+                    {
+                        cx.quit();
+                    }
+                    cx.stop_propagation();
+                }),
+            )
+            .on_action(cx.listener(
+                |view, _: &crate::transcript_view::FocusComposer, window, cx| {
+                    view.editor
+                        .update(cx, |editor, cx| editor.focus(window, cx))
+                },
+            ))
             .child(
                 div()
                     .v_flex()
@@ -327,6 +500,17 @@ impl Render for LocalViewer {
                             .p_4()
                             .gap_2()
                             .child(div().font_semibold().child("Pilot Next"))
+                            .child(
+                                Button::new("new-local-chat")
+                                    .small()
+                                    .label("New chat")
+                                    .disabled(!self.editor.read(cx).ready())
+                                    .on_click(
+                                        cx.listener(|view, _, window, cx| {
+                                            view.new_chat(window, cx)
+                                        }),
+                                    ),
+                            )
                             .child(
                                 div()
                                     .text_sm()
@@ -402,6 +586,21 @@ impl Render for LocalViewer {
                             )
                             .child(
                                 div()
+                                    .text_xs()
+                                    .truncate()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(SharedString::from(
+                                        self.selected
+                                            .as_ref()
+                                            .and_then(|id| {
+                                                self.state.chats.iter().find(|chat| &chat.id == id)
+                                            })
+                                            .map(|chat| chat.cwd.clone())
+                                            .unwrap_or_default(),
+                                    )),
+                            )
+                            .child(
+                                div()
                                     .h_flex()
                                     .gap_2()
                                     .child(
@@ -433,9 +632,10 @@ impl Render for LocalViewer {
                                         div()
                                             .text_xs()
                                             .text_color(cx.theme().muted_foreground)
-                                            .child(SharedString::from(
-                                                self.state.chat_status.clone(),
-                                            )),
+                                            .child(SharedString::from(format!(
+                                                "{} · {} queued",
+                                                self.state.chat_status, self.state.queued
+                                            ))),
                                     ),
                             ),
                     )
@@ -447,6 +647,7 @@ impl Render for LocalViewer {
                             .min_w_0()
                             .child(self.transcript.clone()),
                     )
+                    .child(self.editor.clone())
                     .child(
                         div()
                             .p_4()

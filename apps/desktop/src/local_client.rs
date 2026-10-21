@@ -25,6 +25,24 @@ pub struct LocalOptions {
 }
 
 impl LocalOptions {
+    #[cfg(test)]
+    pub(crate) fn synthetic(port: u16) -> Self {
+        Self {
+            port,
+            daemon_id: "test-daemon".into(),
+            lineage_id: "test-lineage".into(),
+        }
+    }
+    pub(crate) fn host(&self) -> crate::delivery_store::Host {
+        crate::delivery_store::Host {
+            host_id: "local".into(),
+            daemon_id: self.daemon_id.clone(),
+            lineage_id: self.lineage_id.clone(),
+        }
+    }
+    pub(crate) fn loopback(&self) -> String {
+        format!("http://127.0.0.1:{}", self.port)
+    }
     /// Resolve the same Local port/data-home as pilotd, without starting it or writing state.
     pub fn discover() -> Result<Self, &'static str> {
         let port = std::env::var("PILOT_PORT")
@@ -138,6 +156,7 @@ struct Resume {
 }
 
 pub(crate) enum Command {
+    Clear { generation: u64 },
     Open { id: String, generation: u64 },
     Earlier { before: u64, generation: u64 },
     Reconnect,
@@ -158,6 +177,7 @@ pub(crate) struct Presentation {
     pub(crate) list_loaded: bool,
     pub(crate) page_revision: u64,
     pub(crate) batches: u64,
+    pub(crate) queued: usize,
 }
 
 /// Drop closes the command source; the runtime aborts every task and socket.
@@ -251,7 +271,7 @@ async fn get(
     serde_json::from_slice(&body).map_err(|_| "Invalid Local JSON response")
 }
 
-async fn gate(client: &reqwest::Client, options: &LocalOptions) -> Result<(), Failure> {
+pub(crate) async fn gate(client: &reqwest::Client, options: &LocalOptions) -> Result<(), Failure> {
     options.verify(&get(client, options, ReadRoute::Hello).await?)
 }
 
@@ -480,13 +500,18 @@ async fn run(
         tokio::select! {
             command = commands.recv() => match command {
                 Err(_) => break,
+                Ok(Command::Clear {generation})=>{
+                    if let Some(task)=chat_socket.take(){task.abort();}
+                    if let Some(task)=page_task.take(){task.abort();}
+                    selected=None;model=LiveTranscript::default();view.generation=generation;view.page_busy=false;view.chat_status.clear();view.batches=0;view.queued=0;
+                }
                 Ok(Command::Open { id, generation }) => {
                     if fenced || !local_model::valid_id(&id) { continue; }
                     if let Some(task) = chat_socket.take() { task.abort(); }
                     if let Some(task) = page_task.take() { task.abort(); }
                     selected = Some(id.clone());
                     model = LiveTranscript::default();
-                    view.generation = generation; view.page_busy = false; view.chat_status = "Loading chat…".into(); view.batches=0;
+                    view.generation = generation; view.page_busy = false; view.chat_status = "Loading chat…".into(); view.batches=0;view.queued=0;
                     chat_socket = Some(socket_task(options.clone(),client.clone(),Some(id),generation,inbox.clone()));
                 }
                 Ok(Command::Earlier { before, generation }) => {
@@ -563,6 +588,7 @@ async fn run(
         view.limited = model.limited;
         view.omitted = model.unsupported;
         view.loaded = model.loaded && !model.prefix_pending;
+        view.queued = model.queued;
         publish(&updates, &replace, view.clone());
     }
     control.abort();

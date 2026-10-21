@@ -1,4 +1,7 @@
 //! Standalone fixture view, shared by the runnable binary and focused tests.
+mod chat_editor;
+mod delivery_store;
+mod interaction;
 mod local_client;
 mod local_model;
 mod local_view;
