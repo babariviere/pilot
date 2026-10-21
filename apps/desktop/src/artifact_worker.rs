@@ -8,17 +8,26 @@ use crate::{
 };
 use serde_json::Value;
 use std::{
+    collections::BTreeMap,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 #[derive(Clone, Default)]
 pub(crate) struct Snapshot {
+    pub(crate) drawings: Arc<BTreeMap<String, DrawingFrame>>,
     pub(crate) revision: Option<Arc<Revision>>,
     pub(crate) scene: Option<Arc<Scene>>,
     pub(crate) state: Option<String>,
     pub(crate) version: u64,
     pub(crate) error: Option<Fault>,
     pub(crate) live: bool,
+}
+#[derive(Clone)]
+pub(crate) struct DrawingFrame {
+    pub(crate) version: u64,
+    pub(crate) width: f64,
+    pub(crate) height: f64,
+    pub(crate) plan: Result<Arc<crate::visual_canvas_plan::Plan>, &'static str>,
 }
 pub(crate) enum Command {
     Event {
@@ -27,9 +36,16 @@ pub(crate) enum Command {
         value: Value,
     },
     Retry,
+    Draw {
+        version: u64,
+        id: String,
+        width: f64,
+        height: f64,
+    },
 }
 pub(crate) struct Worker {
     commands: async_channel::Sender<Command>,
+    _lifetime: async_channel::Sender<()>,
 }
 fn now() -> f64 {
     SystemTime::now()
@@ -40,7 +56,14 @@ impl Worker {
     #[cfg(test)]
     pub(crate) fn synthetic() -> (Self, async_channel::Receiver<Command>) {
         let (commands, events) = async_channel::bounded(2);
-        (Self { commands }, events)
+        let (lifetime, _) = async_channel::bounded(1);
+        (
+            Self {
+                commands,
+                _lifetime: lifetime,
+            },
+            events,
+        )
     }
     pub(crate) fn start(
         options: LocalOptions,
@@ -48,6 +71,7 @@ impl Worker {
         state: Option<String>,
     ) -> Result<(Self, async_channel::Receiver<Snapshot>), &'static str> {
         let (commands, events) = async_channel::bounded(2);
+        let (lifetime, cancelled) = async_channel::bounded(1);
         let (updates, output) = async_channel::bounded(1);
         let replace = output.clone();
         std::thread::Builder::new()
@@ -57,11 +81,19 @@ impl Worker {
                     .enable_all()
                     .build()
                 {
-                    runtime.block_on(run(options, reference, state, events, updates, replace));
+                    runtime.block_on(run(
+                        options, reference, state, events, updates, replace, cancelled,
+                    ));
                 }
             })
             .map_err(|_| "Cannot start the isolated artifact reader")?;
-        Ok((Self { commands }, output))
+        Ok((
+            Self {
+                commands,
+                _lifetime: lifetime,
+            },
+            output,
+        ))
     }
     pub(crate) fn command(&self, command: Command) -> bool {
         self.commands.try_send(command).is_ok()
@@ -85,8 +117,9 @@ async fn run(
     events: async_channel::Receiver<Command>,
     updates: async_channel::Sender<Snapshot>,
     replace: async_channel::Receiver<Snapshot>,
+    cancelled: async_channel::Receiver<()>,
 ) {
-    let read = tokio::select! {biased;_=events.recv()=>return,value=crate::local_client::artifact(&options,&reference)=>value};
+    let read = tokio::select! {biased;_=cancelled.recv()=>return,value=crate::local_client::artifact(&options,&reference)=>value};
     let mut snapshot = Snapshot::default();
     let revision = match read {
         Ok(v) => Arc::new(v),
@@ -125,7 +158,7 @@ async fn run(
     if events.is_closed() || updates.is_closed() {
         return;
     }
-    let mut result = match retry(&mut session, &events).await {
+    let mut result = match retry(&mut session, &cancelled).await {
         Some(result) => result,
         None => {
             session.stop().await;
@@ -147,21 +180,51 @@ async fn run(
         };
         session.clock(now());
         let next = match command {
-            Command::Retry => retry(&mut session, &events).await,
+            Command::Retry => retry(&mut session, &cancelled).await,
             Command::Event { version, id, value } => {
-                tokio::select! {biased;_=events.recv()=>None,result=session.event(version,&id,value)=>Some(result)}
+                tokio::select! {biased;_=cancelled.recv()=>None,result=session.event(version,&id,value)=>Some(result)}
+            }
+            Command::Draw {
+                version,
+                id,
+                width,
+                height,
+            } => {
+                let drawing = tokio::select! {biased;_=cancelled.recv()=>None,drawing=session.draw(version,&id,width,height)=>Some(drawing)};
+                match drawing {
+                    None => None,
+                    Some(Err(error)) => Some(Err(error)),
+                    Some(Ok(drawing)) => {
+                        let plan =
+                            crate::visual_canvas_plan::Plan::compile(&drawing, width, height)
+                                .map(Arc::new);
+                        Arc::make_mut(&mut snapshot.drawings).insert(
+                            id,
+                            DrawingFrame {
+                                version,
+                                width,
+                                height,
+                                plan,
+                            },
+                        );
+                        Some(Ok(()))
+                    }
+                }
             }
         };
         let Some(next) = next else {
             break;
         };
+        if next.is_ok() && session.version != snapshot.version {
+            snapshot.drawings = Arc::new(BTreeMap::new());
+        }
         result = next;
     }
     session.stop().await;
 }
 async fn retry(
     session: &mut Session,
-    events: &async_channel::Receiver<Command>,
+    events: &async_channel::Receiver<()>,
 ) -> Option<Result<(), Fault>> {
     // Startup contains no user source and is always joined, never cancelled mid-spawn.
     if let Err(error) = session.prepare().await {
@@ -214,7 +277,7 @@ mod tests {
                         .starts_with(&format!("GET {path} HTTP/1.1\r\n"))
                 );
                 let value = if i == 1 {
-                    json!({"id":"art","sessionId":"owner","revision":1,"title":"Synthetic","kind":"visual","source":"({ui,state})=>{const s=state({n:0});return()=>ui.column([ui.text(String(s.n)),ui.button({label:'Increment',onClick:()=>{s.n++}})]);}","html":"never evaluated","data":null,"createdAt":1,"updatedAt":2,"visual":{"api":1,"engine":"quickjs-ng 0.17.0"}})
+                    json!({"id":"art","sessionId":"owner","revision":1,"title":"Synthetic","kind":"visual","source":"({ui,state})=>{const s=state({n:0});return()=>ui.column([ui.text(String(s.n)),ui.button({label:'Increment',onClick:()=>{s.n++}}),ui.canvas({height:120,draw:(g,{width,height})=>{g.rect(0,0,width,height,{fill:'chart1'});g.text(4,4,String(s.n));}})]);}","html":"never evaluated","data":null,"createdAt":1,"updatedAt":2,"visual":{"api":1,"engine":"quickjs-ng 0.17.0"}})
                 } else {
                     json!({"daemonId":if changed_after&&i==2{"changed"}else{"test-daemon"},"lineageId":"test-lineage","minimumClientProtocolVersion":1,"protocolVersion":1,"capabilities":{"independentExecution":true}})
                 };
@@ -260,6 +323,21 @@ mod tests {
             .unwrap();
         assert!(next.live && next.error.is_none());
         assert_eq!(next.state.as_deref(), Some("[{\"n\":1}]"));
+        assert!(worker.command(Command::Draw {
+            version: next.version,
+            id: "0.2".into(),
+            width: 320.,
+            height: 120.
+        }));
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(3), updates.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(frame.live && frame.error.is_none());
+        let drawing = &frame.drawings["0.2"];
+        assert_eq!(drawing.version, next.version);
+        assert!(drawing.plan.is_ok());
+        assert_eq!(frame.state, next.state);
         drop(worker);
         assert!(
             tokio::time::timeout(std::time::Duration::from_secs(3), updates.recv())

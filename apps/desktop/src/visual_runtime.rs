@@ -206,6 +206,36 @@ impl Process {
         Ok(bytes)
     }
     pub(crate) async fn exchange(&mut self, request: Value) -> Result<Value, Fault> {
+        self.transfer(request, |bytes| {
+            let value = visual_wire::decode(bytes)
+                .map_err(|_| Fault::new("protocol", "Invalid visual reply"))?;
+            if value["ok"] != true {
+                return Err(script_fault(&value));
+            }
+            Ok(value)
+        })
+        .await
+    }
+    pub(crate) async fn drawing(
+        &mut self,
+        request: Value,
+    ) -> Result<crate::visual_drawing::Drawing, Fault> {
+        self.transfer(request, |bytes| {
+            if bytes.starts_with(b"PV\x01") {
+                let value = visual_wire::decode(bytes)
+                    .map_err(|_| Fault::new("protocol", "Invalid drawing error reply"))?;
+                return Err(script_fault(&value));
+            }
+            crate::visual_drawing::Drawing::decode(bytes)
+                .map_err(|_| Fault::new("protocol", "Invalid drawing packet"))
+        })
+        .await
+    }
+    async fn transfer<T>(
+        &mut self,
+        request: Value,
+        decode: impl FnOnce(&[u8]) -> Result<T, Fault>,
+    ) -> Result<T, Fault> {
         let result = tokio::time::timeout(HARD, async {
             let bytes = serde_json::to_vec(&request)
                 .map_err(|_| Fault::new("request", "Invalid visual request"))?;
@@ -225,12 +255,7 @@ impl Process {
                 .await
                 .map_err(|_| Fault::new("crashed", "Visual helper input closed"))?;
             let bytes = self.read_frame().await?;
-            let value = visual_wire::decode(&bytes)
-                .map_err(|_| Fault::new("protocol", "Invalid visual reply"))?;
-            if value["ok"] != true {
-                return Err(script_fault(&value));
-            }
-            Ok(value)
+            decode(&bytes)
         })
         .await
         .map_err(|_| {
@@ -336,6 +361,48 @@ fn verify_sandbox(_: u32, _: &Path) -> bool {
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn native_canvas_packets_match_shared_commands_ops_and_strings() {
+        let corpus: Value = serde_json::from_str(include_str!(
+            "../../../packages/protocol/fixtures/visual/conformance.json"
+        ))
+        .unwrap();
+        let case = corpus["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c.get("drawings").is_some())
+            .unwrap();
+        let mut p = Process::start().await.unwrap();
+        p.exchange(json!({"kind":"load","source":case["source"],"data":case["data"],"state":case.get("state"),"seed":case["id"],"now":case["now"]})).await.unwrap();
+        for step in case["steps"].as_array().unwrap().iter().skip(1) {
+            p.exchange(json!({"kind":"event","id":step["event"]["id"],"value":step["event"]["value"],"now":case["now"]})).await.unwrap();
+        }
+        for expected in case["drawings"].as_array().unwrap() {
+            let input = &expected["input"];
+            let drawing=p.drawing(json!({"kind":"draw","id":expected["id"],"width":input["width"],"height":input["height"],"t":input["t"],"pointer":input.get("pointer")})).await.unwrap();
+            assert_eq!(
+                drawing.commands,
+                expected["commands"].as_u64().unwrap() as usize
+            );
+            assert_eq!(
+                drawing.strings,
+                expected["strings"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_str().unwrap().to_owned())
+                    .collect::<Vec<_>>()
+            );
+            let ops = expected["ops"].as_array().unwrap();
+            assert_eq!(drawing.ops.len(), ops.len());
+            for (a, b) in drawing.ops.iter().zip(ops) {
+                let b = b.as_f64().unwrap();
+                assert!((a - b).abs() <= 1e-9 * b.abs().max(1.));
+            }
+        }
+        p.stop().await;
+    }
     #[tokio::test]
     async fn shared_api_one_view_event_and_state_corpus_matches_the_native_worker() {
         let corpus: Value = serde_json::from_str(include_str!(

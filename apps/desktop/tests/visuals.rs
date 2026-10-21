@@ -26,7 +26,7 @@ fn main() {
     let mut count = 0;
     for width in [680., 1100.] {
         for mode in [ThemeMode::Light, ThemeMode::Dark] {
-            for case in 0..9 {
+            for case in 0..10 {
                 cx.update(|cx| Theme::change(mode, None, cx));
                 let (handle, view) = cx.update(|cx| {
                     gpui_kit::open_window(
@@ -46,6 +46,19 @@ fn main() {
                 });
                 cx.run_until_parked();
                 assert!(cx.update(|cx| view.read(cx).text_parsers_ready(cx)));
+                if case == 9 {
+                    let b = cx
+                        .update_window(handle, |_, window, cx| {
+                            window.render_frame(cx);
+                            window.find("0.1").bounds()
+                        })
+                        .unwrap();
+                    assert!((f32::from(b.size.height) - 180.).abs() < 0.5);
+                    view.update(&mut cx, |v, cx| {
+                        v.resize_synthetic_canvas(f32::from(b.size.width) as f64, cx)
+                    });
+                    cx.run_until_parked();
+                }
                 cx.update_window(handle, |_, window, cx| {
                     window.render_frame(cx);
                     let b = window.find("artifact-detail").bounds();
@@ -58,6 +71,32 @@ fn main() {
                 })
                 .unwrap();
                 let shot = cx.capture_screenshot(handle).unwrap();
+                if case == 9 {
+                    let b = cx
+                        .update_window(handle, |_, window, _| window.find("0.1").bounds())
+                        .unwrap();
+                    let scale = shot.width() as f32 / width;
+                    let rgba = &shot;
+                    let sample = |x: f32, y: f32| {
+                        rgba.get_pixel(
+                            ((f32::from(b.origin.x) + x) * scale) as u32,
+                            ((f32::from(b.origin.y) + y) * scale) as u32,
+                        )
+                        .0
+                    };
+                    let inside = sample(40., 60.);
+                    let outside = sample(f32::from(b.size.width) * 0.52, 60.);
+                    assert!(
+                        inside
+                            .iter()
+                            .zip(outside)
+                            .take(3)
+                            .map(|(a, b)| (*a as i32 - b as i32).abs())
+                            .sum::<i32>()
+                            > 30,
+                        "native canvas must paint, not merely mount an empty placeholder"
+                    );
+                }
                 if let Some(dir) = &directory {
                     shot.save(dir.join(format!("{}-{}-{case}.png", width as u32, mode.name())))
                         .unwrap();

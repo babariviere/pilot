@@ -11,6 +11,12 @@ use std::{
 };
 const REQUEST_CAP: usize = 4 * 1024 * 1024;
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Pointer {
+    x: f64,
+    y: f64,
+}
+#[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum Request {
     Load {
@@ -30,6 +36,7 @@ enum Request {
         width: f64,
         height: f64,
         t: f64,
+        pointer: Option<Pointer>,
     },
 }
 fn write_frame(bytes: &[u8]) -> Result<(), ()> {
@@ -127,16 +134,20 @@ fn run() -> Result<(), ()> {
                 width,
                 height,
                 t,
+                pointer,
             } => {
                 if id.len() > 256
                     || !(1. ..=2000.).contains(&width)
                     || !(24. ..=600.).contains(&height)
                     || !t.is_finite()
                     || t < 0.
+                    || pointer.as_ref().is_some_and(|p| {
+                        !p.x.is_finite() || !p.y.is_finite() || p.x.abs() > 1e6 || p.y.abs() > 1e6
+                    })
                 {
                     return Err(());
                 }
-                engine.draw(&id, width, height, t)?
+                engine.draw(&id, width, height, t, pointer.map(|p| (p.x, p.y)))?
             }
         };
         write_frame(&result.1)?;

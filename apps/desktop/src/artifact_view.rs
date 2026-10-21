@@ -66,6 +66,7 @@ impl ArtifactPane {
         self.items = Arc::new(vec![reference.clone()]);
         self.reference = Some(reference.clone());
         self.snapshot = Snapshot {
+            drawings: Default::default(),
             revision: Some(Arc::new(crate::artifact_model::Revision {
                 reference,
                 source: Arc::new(source),
@@ -81,6 +82,75 @@ impl ArtifactPane {
             error: None,
         };
         cx.notify();
+    }
+    pub(crate) fn preview_canvas(
+        &mut self,
+        reference: Reference,
+        width: f64,
+        cx: &mut Context<Self>,
+    ) {
+        let scene=crate::visual_scene::Scene::parse(json!({"api":1,"root":{"type":"column","children":[{"type":"text","size":"lg","weight":700,"runs":[{"text":"Static native canvas"}]},{"type":"canvas","id":"0.1","height":180,"animated":false,"label":"Synthetic canvas record"}]}})).unwrap();
+        self.preview(
+            reference,
+            "Synthetic expected draw packet. No source evaluation.".into(),
+            scene,
+            cx,
+        );
+        let drawing = crate::visual_drawing::Drawing::checked(
+            4,
+            vec![
+                10.,
+                1.,
+                7.,
+                0.9,
+                0.,
+                12.,
+                20.,
+                width * 0.42,
+                100.,
+                8.,
+                11.,
+                1.,
+                8.,
+                0.8,
+                0.,
+                width * 0.72,
+                70.,
+                36.,
+                12.,
+                2.,
+                0.,
+                1.,
+                1.,
+                12.,
+                138.,
+                width - 12.,
+                138.,
+                20.,
+                1.,
+                1.,
+                width / 2.,
+                170.,
+                0.,
+                2.,
+                600.,
+                1.,
+                2.,
+                0.,
+            ],
+            vec!["Synthetic drawing · native primitives".into()],
+        )
+        .unwrap();
+        let plan = crate::visual_canvas_plan::Plan::compile(&drawing, width, 180.).map(Arc::new);
+        self.snapshot.drawings = Arc::new(std::collections::BTreeMap::from([(
+            "0.1".into(),
+            crate::artifact_worker::DrawingFrame {
+                version: 1,
+                width,
+                height: 180.,
+                plan,
+            },
+        )]));
     }
     pub(crate) fn options(&mut self, options: LocalOptions) {
         if self.options.as_ref().map(LocalOptions::host) != Some(options.host()) {
@@ -169,7 +239,8 @@ impl ArtifactPane {
         snapshot: Snapshot,
         cx: &mut Context<Self>,
     ) {
-        if generation != self.generation
+        if snapshot.version < self.snapshot.version
+            || generation != self.generation
             || !self
                 .reference
                 .as_ref()
@@ -195,6 +266,45 @@ impl ArtifactPane {
         self.snapshot = snapshot;
         self.busy = false;
         cx.notify();
+    }
+    fn draw(
+        &mut self,
+        generation: u64,
+        version: u64,
+        id: String,
+        width: f64,
+        height: f64,
+        cx: &mut Context<Self>,
+    ) {
+        if generation != self.generation
+            || self.busy
+            || !self.snapshot.live
+            || version != self.snapshot.version
+            || !(1.0..=2000.).contains(&width)
+            || !self.snapshot.scene.as_ref().is_some_and(|s| {
+                s.canvases
+                    .iter()
+                    .any(|(canvas, h)| canvas == &id && (*h - height).abs() < 0.5)
+            })
+        {
+            return;
+        }
+        if self.snapshot.drawings.get(&id).is_some_and(|f| {
+            f.version == version && (f.width - width).abs() < 0.5 && (f.height - height).abs() < 0.5
+        }) {
+            return;
+        }
+        if self.worker.as_ref().is_some_and(|w| {
+            w.command(Command::Draw {
+                version,
+                id,
+                width,
+                height,
+            })
+        }) {
+            self.busy = true;
+            cx.notify();
+        }
     }
     fn event(
         &mut self,
@@ -598,7 +708,92 @@ impl ArtifactPane {
             "mermaid" => Self::note(
                 "Native Mermaid renderer is not validated yet. Diagram source is retained; no browser fallback or external fetch.",
             ),
-            "canvas" => Self::note("Canvas drawing is not wired yet. Its source remains intact."),
+            "canvas" => {
+                if value["animated"] == true {
+                    return Self::note(
+                        "Animated canvas rendering is not wired yet. Source remains intact.",
+                    );
+                }
+                let frame = self
+                    .snapshot
+                    .drawings
+                    .get(&id)
+                    .filter(|f| f.version == version)
+                    .cloned();
+                let plan = frame.as_ref().and_then(|f| f.plan.as_ref().ok()).cloned();
+                let error = frame.as_ref().and_then(|f| f.plan.as_ref().err()).copied();
+                if let Some(plan) = &plan {
+                    if plan.cost > *budget {
+                        return Self::note(
+                            "Canvas exceeds aggregate native display budget. Source retained.",
+                        );
+                    }
+                    *budget -= plan.cost;
+                }
+                let weak = cx.weak_entity();
+                let height = value["height"].as_f64().unwrap_or(160.);
+                let colors = crate::visual_canvas_view::palette(cx);
+                let mono = cx.theme().mono_font_family.clone();
+                let live = self.snapshot.live;
+                let busy = self.busy;
+                let queued = frame.clone();
+                let canvas = gpui_kit::canvas(
+                    move |bounds, window, cx| {
+                        let visible = bounds.intersect(&window.content_mask().bounds);
+                        if visible.size.width <= px(0.)
+                            || visible.size.height <= px(0.)
+                            || !live
+                            || busy
+                        {
+                            return;
+                        }
+                        let width = f32::from(bounds.size.width) as f64;
+                        if queued.as_ref().is_some_and(|f| {
+                            f.version == version
+                                && (f.width - width).abs() < 0.5
+                                && (f.height - height).abs() < 0.5
+                        }) {
+                            return;
+                        }
+                        let id = id.clone();
+                        let weak = weak.clone();
+                        window.defer(cx, move |_, cx| {
+                            let _ = weak.update(cx, |view, cx| {
+                                view.draw(generation, version, id, width, height, cx)
+                            });
+                        });
+                    },
+                    move |bounds, _, window, cx| {
+                        if let Some(plan) = &plan {
+                            crate::visual_canvas_view::paint(
+                                plan, bounds, &colors, &mono, window, cx,
+                            );
+                        }
+                    },
+                )
+                .size_full();
+                div()
+                    .id(SharedString::from(path.to_owned()))
+                    .test_support()
+                    .relative()
+                    .w_full()
+                    .h(px(height as f32))
+                    .min_h(px(height as f32))
+                    .max_h(px(height as f32))
+                    .overflow_hidden()
+                    .child(canvas)
+                    .when(error.is_some(), |d| {
+                        d.child(div().absolute().inset_0().child(Self::note(error.unwrap())))
+                    })
+                    .when(frame.is_none(), |d| {
+                        d.child(div().absolute().inset_0().text_xs().child(if live {
+                            "Drawing isolated canvas…"
+                        } else {
+                            "No canvas frame in this static snapshot."
+                        }))
+                    })
+                    .into_any_element()
+            }
             "chart" => match self
                 .snapshot
                 .scene
@@ -715,7 +910,7 @@ impl Render for ArtifactPane {
                 .text_color(cx.theme().muted_foreground)
                 .child("Local · current chat · visual controls have no file/network/tool bridge"),
         );
-        if self.busy {
+        if self.busy && self.snapshot.scene.is_none() {
             view = view.child("Loading isolated preview…");
         }
         if let Some(error) = &self.snapshot.error {
@@ -823,7 +1018,7 @@ impl Render for ArtifactPane {
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
                         .child(SharedString::from(format!(
-                            "{} validated nodes · {} canvas placeholders",
+                            "{} validated nodes · {} canvas nodes",
                             scene.nodes,
                             scene.canvases.len()
                         ))),
@@ -849,7 +1044,7 @@ mod tests {
         }
     }
     fn snapshot(reference: Reference) -> Snapshot {
-        Snapshot{revision:Some(Arc::new(crate::artifact_model::Revision{reference,source:Arc::new("synthetic source never evaluated".into()),data:Value::Null,visual_supported:true,created_at:1.,updated_at:2.})),scene:Some(Arc::new(crate::visual_scene::Scene::parse(json!({"api":1,"root":{"type":"toggle","id":"0","label":"Synthetic","value":false}})).unwrap())),state:Some("[]".into()),version:7,live:true,error:None}
+        Snapshot{drawings:Default::default(),revision:Some(Arc::new(crate::artifact_model::Revision{reference,source:Arc::new("synthetic source never evaluated".into()),data:Value::Null,visual_supported:true,created_at:1.,updated_at:2.})),scene:Some(Arc::new(crate::visual_scene::Scene::parse(json!({"api":1,"root":{"type":"toggle","id":"0","label":"Synthetic","value":false}})).unwrap())),state:Some("[]".into()),version:7,live:true,error:None}
     }
     #[gpui_kit::test]
     fn generation_revision_and_typed_event_fences_and_bounded_state_cache(cx: &mut TestAppContext) {
@@ -883,6 +1078,9 @@ mod tests {
             assert!(p.busy);
             p.event(10, 7, "0".into(), json!(true), cx);
             assert!(commands.try_recv().is_err());
+            let mut old=snapshot(reference(1));old.version=6;p.accept(10,&reference(1),old,cx);assert_eq!(p.snapshot.version,7);
+            p.busy=false;p.snapshot.scene=Some(Arc::new(crate::visual_scene::Scene::parse(json!({"api":1,"root":{"type":"canvas","id":"0","height":120,"animated":false}})).unwrap()));
+            p.draw(9,7,"0".into(),320.,120.,cx);p.draw(10,6,"0".into(),320.,120.,cx);p.draw(10,7,"wrong".into(),320.,120.,cx);p.draw(10,7,"0".into(),320.,130.,cx);assert!(commands.try_recv().is_err());p.draw(10,7,"0".into(),320.,120.,cx);assert!(matches!(commands.try_recv(),Ok(Command::Draw{version:7,..})));assert!(p.busy);
             for revision in 1..=12 {
                 let r = reference(revision);
                 p.reference = Some(r.clone());

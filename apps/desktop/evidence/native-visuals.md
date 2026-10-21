@@ -27,7 +27,28 @@ some alignment/axis/hover details, slider dragging, stacked plotting and
 out-of-domain clipping remain incomplete. Large numeric table labels are
 compact. Source/data is unchanged.
 
-Canvas and Mermaid have node-local unsupported cards; shaders are explicit
+Static canvas supports bounded native rect/circle/line/path/arc/text drawing,
+save/restore, finite transforms and opacity. PD1 validates reserved bytes/counts,
+strict UTF-8, finite words, exact op lengths, color/paint/text indices, depth,
+command/point/text aggregate caps. Off-UI display plan:512 commands,4096 weighted
+geometry/text units,4096 text bytes, bounded transforms/font/stroke and viewport
+margin. No untrusted geometry reaches native tessellation unbounded. Curves are
+polygonized (up to64 segments per circle); text metrics are approximate. Non-uniform
+strokes, rotated/mirrored text, out-of-margin clipping, animation and UI pointer
+scheduling are explicit unsupported cases. Helper pointer/time inputs match the
+shared codec corpus, but that is not animated/pointer UI parity.
+
+Draw only when visible, serialize/coalesce size requests, pin scene version/id/
+dimensions, reject late frames, invalidate after validated state changes. No
+animation timer. Drawing failures kill/reap the process and retain committed
+state; display-plan limits are node-local unsupported cards. View close has a
+separate close-only cancellation source, never consumes a queued user command.
+Canvas failure/null tests prove fresh VM recovery. Faux GET-only load/event/draw/
+close and real GPU colored-pixel assertions cover the supported static path.
+Fixture frames use actual mounted bounds (including scroll gutter), not viewport
+width guesses that can correctly be rejected as stale and silently appear blank.
+
+Animated/unsupported canvases and Mermaid have node-local cards; shaders are explicit
 deferrals, retaining mixed visual siblings. Image/SwiftUI previews are not yet
 wired. HTML/React/browser libraries/standalone shaders stay deferred. Source
 preview is bounded plain selectable text, not an editor/interpreter. Copy source
@@ -103,7 +124,15 @@ locked app/helper builds and engine-symbol separation pass.
 Synthetic GPUI images and separately
 labelled static SwiftUI mock attached internally; no real content is published.
 
-Draw/error-budget corpus, canvas codec/renderer, image/SwiftUI previews, Mermaid
+Static canvas checkpoint:92 library tests pass/one ignored workload, strict
+workspace Clippy/fmt, native fixture/browser,16 chrome and40 visual scenes,
+locked app/helper builds and symbol separation pass. Both shared PD records
+(including supplied pointer/time) match native command/ops/string output. New
+draw interrupt/null recovery and faux load/event/draw/close tests pass; viewport
+margin, geometry/transform budgets and real canvas pixels are asserted.
+
+Full draw/error-budget corpus, complete canvas transforms/animation/pointer/text
+metrics, image/SwiftUI previews, Mermaid
 candidate/license/corpus, durable reader state and complete chart/style parity
 remain unfinished. Native Wayland/macOS15, broader escape probes, OS IME and
 matched performance unverified. Count helper RSS in future measurements. No
