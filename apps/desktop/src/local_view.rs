@@ -222,7 +222,7 @@ impl LocalViewer {
             list.set_selected_index(Some(IndexPath::new(0)), window, cx);
             cx.notify();
         });
-        let rows = (1..=48)
+        let mut rows: Vec<_> = (1..=48)
             .map(|id| {
                 Message::live(
                     id,
@@ -231,11 +231,16 @@ impl LocalViewer {
                 )
             })
             .collect();
+        rows.extend(crate::tool_presentation::fixture_work());
         view.transcript
             .update(cx, |view, cx| view.replace_readonly(rows, true, cx));
         view
     }
 
+    /// Offscreen harness readiness, not a render-time gate.
+    pub fn text_parsers_ready(&self, cx: &App) -> bool {
+        self.transcript.read(cx).text_parsers_ready(cx)
+    }
     fn build(
         client: Option<LocalClient>,
         writer: Option<Interaction>,

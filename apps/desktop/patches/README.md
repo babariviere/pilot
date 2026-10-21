@@ -80,3 +80,13 @@ checks zero image requests while rendering a remote Markdown image in live mode.
 Current combined specification: 22 exact edits, still four Base source files.
 Earlier evidence documents the prior 18-edit selection/composer revision; its
 historical checksum is not the current image-policy specification checksum.
+
+## Reader-controlled work disclosures
+
+`gpui-component-0.8.0.json` pins the original Component archive separately and
+adds one method to its message scroller. `pause_following_tail(cx)` forwards to
+GPUI's existing offset-preserving pause. Expanding/collapsing work is reader
+navigation, not a request to jump to the newest output. Parser/stream updates
+do not invoke that pause; Latest and wheel-to-bottom retain Kit's behavior.
+When content still fits at the bottom, GPUI may immediately resume following.
+No default, framework version, registry or global configuration is changed.

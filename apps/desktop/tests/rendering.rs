@@ -103,7 +103,7 @@ fn main() {
         screenshot.height(),
         !large
     );
-    let (viewer, _state) = cx
+    let (viewer, state) = cx
         .update(|cx| {
             gpui_kit::open_window(
                 WindowOptions {
@@ -124,8 +124,14 @@ fn main() {
         window.render_frame(cx);
         assert!(window.find("earlier").disabled().unwrap_or(false));
         window.click("latest", cx);
+        window.click("step-toggle-call:fixture-edit", cx);
     })
     .unwrap();
+    cx.run_until_parked();
+    assert!(
+        cx.update(|cx| state.read(cx).text_parsers_ready(cx)),
+        "native work fixture must contain parsed visible details"
+    );
     let shot = cx
         .capture_screenshot(viewer)
         .expect("native readonly browser renderer");
@@ -133,6 +139,6 @@ fn main() {
         shot.save(path).unwrap();
     }
     println!(
-        "Native readonly browser rendered using 48 synthetic rows, no transport or real data."
+        "Native readonly browser rendered using 48 text rows and synthetic tool work, including expanded diff/arguments. No transport or real data."
     );
 }

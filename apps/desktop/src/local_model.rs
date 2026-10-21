@@ -1,6 +1,7 @@
 //! Bounded, content-private projection of the current Local wire contract.
 //! Background-owned wire JSON reduction and conservative ordinary-chat eligibility.
 use crate::model::Message;
+use crate::tool_presentation::Tools;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 
@@ -70,7 +71,9 @@ pub(crate) struct LiveTranscript {
     live: Option<Value>,
     live_key: u64,
     next_key: u64,
-    tools: BTreeMap<String, (u64, String)>,
+    tools: Tools,
+    block_aliases: HashMap<(u64, usize, usize), u64>,
+    live_block_keys: HashMap<usize, u64>,
     pub(crate) cursor: Option<u64>,
     pub(crate) prefix_pending: bool,
     pub(crate) loaded: bool,
@@ -93,19 +96,109 @@ impl LiveTranscript {
         (1 << 63) + self.next_key
     }
 
-    pub(crate) fn rows(&self) -> Vec<Message> {
+    pub(crate) fn rows(&mut self) -> Vec<Message> {
         let mut rows: Vec<_> = self.entries.values().flatten().cloned().collect();
-        if let Some(live) = &self.live {
-            rows.push(message(self.live_key, live, "Assistant · streaming"));
+        if let Some(live) = self.live.clone() {
+            rows.extend(self.assistant_rows(self.live_key, &live, None));
         }
-        for (key, output) in self.tools.values() {
-            rows.push(Message::live(*key, "Tool · running".into(), output.clone()));
-        }
-        rows
+        let referenced: std::collections::BTreeSet<_> = rows
+            .iter()
+            .flat_map(|row| row.tool_ids().into_iter().flatten().cloned())
+            .collect();
+        rows.extend(self.tools.active_refs().into_iter().filter(|row| {
+            row.tool_ids()
+                .is_some_and(|ids| ids.iter().all(|id| !referenced.contains(id)))
+        }));
+        self.tools.project(rows)
     }
 
     pub(crate) fn has_capacity(&self) -> bool {
         self.entries.len() < ENTRY_CAP && !self.limited
+    }
+    fn register_calls(&mut self, value: &Value) {
+        if let Some(blocks) = value["content"].as_array() {
+            for block in blocks.iter().filter(|b| b["type"] == "toolCall") {
+                if let Some(id) = block["id"]
+                    .as_str()
+                    .filter(|id| !id.is_empty() && id.len() <= 256)
+                {
+                    let key = self.tools.key(id).unwrap_or_else(|| self.key());
+                    if !self.tools.call(
+                        id,
+                        key,
+                        block["name"].as_str().unwrap_or("tool"),
+                        &block["arguments"],
+                    ) {
+                        self.limited = true;
+                    }
+                }
+            }
+        }
+    }
+    fn assistant_rows(
+        &mut self,
+        key: u64,
+        value: &Value,
+        entry: Option<(u64, usize)>,
+    ) -> Vec<Message> {
+        let value = slim_message(value);
+        self.register_calls(&value);
+        let Some(blocks) = value["content"].as_array() else {
+            return vec![message(key, &value, "assistant")];
+        };
+        let mut rows = Vec::new();
+        for (block_ix, block) in blocks.iter().enumerate() {
+            if block["type"] == "toolCall" {
+                if let Some(id) = block["id"].as_str()
+                    && let Some(key) = self.tools.key(id)
+                {
+                    rows.push(Message::tool_ref(key, id));
+                } else {
+                    rows.push(Message::live(
+                        key,
+                        "assistant".into(),
+                        "[Tool metadata unavailable or exceeds capacity]".into(),
+                    ));
+                }
+                continue;
+            }
+            let row_key = if block_ix == 0 {
+                key
+            } else if let Some((id, model_ix)) = entry {
+                if let Some(key) = self.block_aliases.get(&(id, model_ix, block_ix)) {
+                    *key
+                } else {
+                    let key = self.key();
+                    self.block_aliases.insert((id, model_ix, block_ix), key);
+                    key
+                }
+            } else if let Some(key) = self.live_block_keys.get(&block_ix) {
+                *key
+            } else {
+                let key = self.key();
+                self.live_block_keys.insert(block_ix, key);
+                key
+            };
+            let mut row = message(
+                row_key,
+                &serde_json::json!({"content":[block]}),
+                if entry.is_some() {
+                    "assistant"
+                } else {
+                    "Assistant · streaming"
+                },
+            );
+            if block["type"] == "thinking" {
+                row.mark_note();
+            }
+            if row.source() != "[No text content]" {
+                rows.push(row);
+            }
+        }
+        if rows.is_empty() {
+            rows.push(message(key, &value, "assistant"));
+        }
+        rows
     }
 
     fn entry(&mut self, entry: &Value, promote: Option<u64>) {
@@ -149,7 +242,35 @@ impl LiveTranscript {
                 } else {
                     role
                 };
-                rows.push(message(key, value, &format!("{label} · entry {id}")));
+                if role == "assistant" {
+                    rows.extend(self.assistant_rows(key, value, Some((id, ix))));
+                } else if role == "toolResult" {
+                    if let Some(call) = value["toolCallId"]
+                        .as_str()
+                        .filter(|id| !id.is_empty() && id.len() <= 256)
+                    {
+                        let known = self.tools.contains(call);
+                        let key = self.tools.key(call).unwrap_or_else(|| self.key());
+                        self.tools.result(
+                            call,
+                            key,
+                            value["toolName"].as_str().unwrap_or("tool"),
+                            value,
+                        );
+                        if !self.tools.contains(call) {
+                            self.limited = true;
+                            rows.push(Message::live(key,"toolResult".into(),"[Tool detail capacity reached. This result was not retained by the viewer.]".into()));
+                            continue;
+                        }
+                        if !known {
+                            rows.push(Message::tool_ref(key, call));
+                        }
+                    } else {
+                        rows.push(message(key, value, &format!("toolResult · entry {id}")));
+                    }
+                } else {
+                    rows.push(message(key, value, &format!("{label} · entry {id}")));
+                }
             }
             if models.len() > 32 {
                 self.unsupported += 1;
@@ -203,14 +324,17 @@ impl LiveTranscript {
                     self.cursor = active[start]["id"].as_u64();
                 }
                 self.set_live(event["generation"]["message"].clone());
-                self.tools.clear();
+                self.tools.interrupt();
                 if let Some(tools) = event["tools"].as_array() {
                     for tool in tools.iter().filter(|t| t["status"] == "running").take(32) {
                         if let Some(id) = tool["callId"].as_str().filter(|id| id.len() <= 256) {
-                            let key = self.key();
-                            self.tools.insert(
-                                id.into(),
-                                (key, bounded(tool["output"].as_str().unwrap_or(""), 65536)),
+                            let key = self.tools.key(id).unwrap_or_else(|| self.key());
+                            self.tools
+                                .start(id, key, tool["name"].as_str().unwrap_or("tool"));
+                            self.tools.update(
+                                id,
+                                key,
+                                &serde_json::json!({"set":tool["output"].as_str().unwrap_or("")}),
                             );
                         }
                     }
@@ -249,55 +373,53 @@ impl LiveTranscript {
                     }
                     *live = slim_message(live);
                 }
+                if let Some(live) = self.live.clone() {
+                    self.register_calls(&live);
+                }
             }
             "message_end" => {
                 let key = self.live.as_ref().map(|_| self.live_key);
+                if let Some(id) = event["entry"]["id"].as_u64() {
+                    for (block, key) in &self.live_block_keys {
+                        self.block_aliases.insert((id, 0, *block), *key);
+                    }
+                }
                 self.entry(&event["entry"], key);
                 self.live = None;
+                self.live_block_keys.clear();
             }
             "tool_execution_start" => {
-                if self.tools.len() >= 32 {
-                    self.limited = true;
-                    return;
-                }
                 if let Some(id) = event["toolCallId"].as_str().filter(|s| s.len() <= 256) {
-                    let key = self.key();
-                    self.tools.insert(
-                        id.into(),
-                        (key, "[Tool running; arguments are not rendered.]".into()),
-                    );
+                    let key = self.tools.key(id).unwrap_or_else(|| self.key());
+                    if !self
+                        .tools
+                        .start(id, key, event["toolName"].as_str().unwrap_or("tool"))
+                    {
+                        self.limited = true;
+                    }
                 }
             }
             "tool_execution_update" => {
-                if let Some((_, output)) = event["toolCallId"]
-                    .as_str()
-                    .and_then(|id| self.tools.get_mut(id))
-                {
-                    let update = &event["output"];
-                    if let Some(set) = update["set"].as_str() {
-                        *output = bounded(set, 65536);
-                    } else {
-                        let trim = update["trimStart"].as_u64().unwrap_or(0) as usize;
-                        let offset = output
-                            .char_indices()
-                            .nth(trim)
-                            .map_or(output.len(), |(i, _)| i);
-                        output.drain(..offset);
-                        output.push_str(update["append"].as_str().unwrap_or(""));
-                        *output = bounded(output, 65536);
+                if let Some(id) = event["toolCallId"].as_str().filter(|id| id.len() <= 256) {
+                    let key = self.tools.key(id).unwrap_or_else(|| self.key());
+                    if !self.tools.update(id, key, &event["output"]) {
+                        self.limited = true;
                     }
                 }
             }
             "tool_execution_end" => {
-                let key = event["toolCallId"]
-                    .as_str()
-                    .and_then(|id| self.tools.remove(id))
-                    .map(|(key, _)| key);
-                self.entry(&event["entry"], key);
+                if let Some(id) = event["toolCallId"].as_str().filter(|id| id.len() <= 256) {
+                    let key = self.tools.key(id).unwrap_or_else(|| self.key());
+                    self.tools.end_unknown(id, key, event["isError"] == true);
+                    if event["entry"]["id"].as_u64().is_none() {
+                        self.tools.orphan(id);
+                    }
+                }
+                self.entry(&event["entry"], None);
             }
             "run_end" => {
                 self.live = None;
-                self.tools.clear();
+                self.tools.interrupt();
             }
             // These are explicitly not actions. No permissions, queues or read tracking are changed.
             _ => {}
@@ -306,6 +428,26 @@ impl LiveTranscript {
         if !self.prefix_pending {
             self.aliases
                 .retain(|(id, _), _| self.entries.contains_key(id));
+            self.block_aliases
+                .retain(|(id, _, _), _| self.entries.contains_key(id));
+            let mut ids = std::collections::BTreeSet::new();
+            for row in self.entries.values().flatten() {
+                ids.extend(row.tool_ids().into_iter().flatten().cloned());
+            }
+            if let Some(live) = &self.live
+                && let Some(blocks) = live["content"].as_array()
+            {
+                ids.extend(
+                    blocks
+                        .iter()
+                        .filter_map(|block| block["id"].as_str())
+                        .map(String::from),
+                );
+            }
+            self.tools.retain(&ids);
+            if matches!(event["type"].as_str(), Some("snapshot" | "snapshot_prefix")) {
+                self.tools.end_snapshot(&ids);
+            }
         }
     }
 
@@ -349,8 +491,11 @@ impl LiveTranscript {
         }
         if self.live.as_ref().map(|v| &v["timestamp"]) != Some(&value["timestamp"]) {
             self.live_key = self.key();
+            self.live_block_keys.clear();
         }
-        self.live = Some(slim_message(&value));
+        let slim = slim_message(&value);
+        self.register_calls(&slim);
+        self.live = Some(slim);
     }
 
     pub(crate) fn page(&mut self, before: u64, value: &Value) {
@@ -391,6 +536,19 @@ fn slim_message(value: &Value) -> Value {
             };
             let text = block[field].as_str().unwrap_or("");
             bytes += text.len();
+            if kind == "toolCall" {
+                let encoded = serde_json::to_string(&block["arguments"]).unwrap_or_default();
+                let args = if encoded.len() <= crate::tool_presentation::ARG_CAP {
+                    block["arguments"].clone()
+                } else {
+                    serde_json::json!({"viewerOmitted":"Arguments exceed the 12 KiB viewer limit"})
+                };
+                bytes += encoded.len().min(crate::tool_presentation::ARG_CAP);
+                if bytes <= MESSAGE_CAP {
+                    content.push(serde_json::json!({"type":"toolCall","id":block["id"].as_str().map(|id|bounded(id,256)),"name":block["name"].as_str().map(|name|bounded(name,160)),"arguments":args}));
+                    continue;
+                }
+            }
             if bytes > MESSAGE_CAP {
                 content.clear();
                 content.push(serde_json::json!({"type":"text","text":"[Message exceeds 1 MiB viewer limit]"}));
@@ -471,6 +629,39 @@ fn change_message(message: &mut Value, change: &Value) {
                 } else {
                     blocks[ix][field] =
                         Value::String("[Streaming block exceeds 1 MiB viewer limit]".into());
+                }
+            }
+        }
+        "toolcall_delta" => {
+            let Some(path) = change["path"].as_array().filter(|p| p.len() <= 16) else {
+                return;
+            };
+            let mut target = &mut blocks[ix]["arguments"];
+            for part in path {
+                if let Some(key) = part.as_str() {
+                    let Some(object) = target.as_object_mut() else {
+                        return;
+                    };
+                    let Some(next) = object.get_mut(key) else {
+                        return;
+                    };
+                    target = next;
+                } else if let Some(index) = part.as_u64().filter(|i| *i < 256) {
+                    let Some(array) = target.as_array_mut() else {
+                        return;
+                    };
+                    let Some(next) = array.get_mut(index as usize) else {
+                        return;
+                    };
+                    target = next;
+                } else {
+                    return;
+                }
+            }
+            if let Some(old) = target.as_str() {
+                let delta = change["delta"].as_str().unwrap_or("");
+                if old.len() + delta.len() <= crate::tool_presentation::ARG_CAP {
+                    *target = Value::String(format!("{old}{delta}"));
                 }
             }
         }

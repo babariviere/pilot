@@ -1,0 +1,14 @@
+{
+  "crate": "gpui-component",
+  "version": "0.8.0",
+  "archiveSha256": "4097e161cc81e86323b439664be0cdd4f7c56148e867ed6f67fd72b966b6c2d1",
+  "upstream": "https://crates.io/crates/gpui-component/0.8.0",
+  "purpose": "Expose GPUI's existing offset-preserving tail pause for explicit transcript disclosures; no default behavior change.",
+  "edits": [
+    {
+      "path": "src/message_scroller.rs",
+      "old": "    /// Resume tail following and scroll to the latest row.\n    pub fn scroll_to_end",
+      "new": "    /// Pause following without moving the current viewport. An explicit disclosure\n    /// is reader navigation, not a new message or a request to jump to the end.\n    pub fn pause_following_tail(&mut self, cx: &mut Context<Self>) {\n        self.list_state.pause_following_tail();\n        cx.notify();\n    }\n\n    /// Resume tail following and scroll to the latest row.\n    pub fn scroll_to_end"
+    }
+  ]
+}

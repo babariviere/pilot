@@ -29,20 +29,23 @@ pub struct TranscriptView {
     stream_task: Option<Task<()>>,
     readonly: bool,
     text_subscriptions: HashMap<u64, Subscription>,
+    work_ui: crate::work_view::WorkUi,
 }
 
 impl TranscriptView {
     /// Readiness probe for the bounded offscreen harness, not a render-time gate.
     pub fn text_parsers_ready(&self, cx: &App) -> bool {
-        self.transcript
-            .messages()
-            .iter()
-            .zip(&self.text_states)
-            .all(|(row, state)| {
-                state.as_ref().is_none_or(|state| {
-                    state.read(cx).rendered_text().source() == row.display_source()
+        self.work_ui.parsers_ready(cx)
+            && self
+                .transcript
+                .messages()
+                .iter()
+                .zip(&self.text_states)
+                .all(|(row, state)| {
+                    state.as_ref().is_none_or(|state| {
+                        state.read(cx).rendered_text().source() == row.display_source()
+                    })
                 })
-            })
     }
 
     pub fn bind_keys(cx: &mut App) {
@@ -111,6 +114,7 @@ impl TranscriptView {
             stream_task: None,
             readonly,
             text_subscriptions: HashMap::new(),
+            work_ui: Default::default(),
         };
         view.text_states = (0..view.transcript.messages().len())
             .map(|ix| view.create_text_state(ix, cx))
@@ -128,6 +132,9 @@ impl TranscriptView {
         cx: &mut Context<Self>,
     ) -> Option<Entity<TextViewState>> {
         let row = &self.transcript.messages()[ix];
+        if row.work_data().is_some() {
+            return None;
+        }
         // User input is not Markdown: a typed image URL cannot trigger a fetch.
         if row.label().starts_with("You") && !self.readonly {
             return None;
@@ -182,18 +189,34 @@ impl TranscriptView {
             self.text_subscriptions.clear();
         }
         self.transcript.replace_readonly(rows);
+        self.work_ui.sync(
+            self.transcript
+                .messages()
+                .iter()
+                .filter_map(|row| row.work_data().cloned())
+                .collect(),
+            reset,
+            cx,
+        );
         for ix in 0..self.transcript.messages().len() {
             let row = &self.transcript.messages()[ix];
-            let state = if let Some((old, state)) = retained.remove(&row.id()) {
-                if old.source() != row.source() {
-                    if let Some(text) = &state {
-                        text.update(cx, |state, cx| state.set_text(row.display_source(), cx));
+            let state = if row.work_data().is_some() {
+                self.text_subscriptions.remove(&row.id());
+                None
+            } else if let Some((old, state)) = retained.remove(&row.id()) {
+                if state.is_none() {
+                    self.create_text_state(ix, cx)
+                } else {
+                    if old.source() != row.source() {
+                        if let Some(text) = &state {
+                            text.update(cx, |state, cx| state.set_text(row.display_source(), cx));
+                        }
+                        self.scroller.update(cx, |state, cx| {
+                            state.remeasure_items(ix..ix + 1, cx);
+                        });
                     }
-                    self.scroller.update(cx, |state, cx| {
-                        state.remeasure_items(ix..ix + 1, cx);
-                    });
+                    state
                 }
-                state
             } else {
                 self.create_text_state(ix, cx)
             };
@@ -326,8 +349,42 @@ impl TranscriptView {
         cx.notify();
     }
 
+    pub(crate) fn work_changed(
+        &mut self,
+        change: &crate::work_view::Change,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::{tool_presentation::Step, work_view::Change};
+        if matches!(change, Change::Disclosure(_)) {
+            self.scroller
+                .update(cx, |state, cx| state.pause_following_tail(cx));
+        }
+        let index = self.transcript.messages().iter().position(|row| {
+            row.work_data().is_some_and(|work| match change {
+                Change::Group(id) => work.id == *id,
+                Change::Step(id) | Change::Disclosure(id) => {
+                    work.steps.iter().any(|step| match step {
+                        Step::Tool(tool) => format!("call:{}", tool.id) == *id,
+                        Step::Note { id: key, .. } => format!("note:{key}") == *id,
+                    }) || *id == format!("group:{}", work.id)
+                }
+            })
+        });
+        if let Some(index) = index {
+            self.scroller
+                .update(cx, |state, cx| state.remeasure_items(index..index + 1, cx));
+        }
+        cx.notify();
+    }
     fn render_row(&self, ix: usize, cx: &App) -> impl IntoElement + use<> {
         let row = &self.transcript.messages()[ix];
+        if let Some(view) = self.work_ui.groups.get(&row.id()) {
+            return div()
+                .id(("message", row.id()))
+                .w_full()
+                .min_w_0()
+                .child(view.clone());
+        }
         let source = row.shared_source();
         div()
             .id(("message", row.id()))
@@ -456,6 +513,10 @@ impl Render for TranscriptView {
 #[cfg(test)]
 #[path = "readonly_tests.rs"]
 mod readonly_tests;
+
+#[cfg(test)]
+#[path = "work_tests.rs"]
+mod work_tests;
 
 #[cfg(test)]
 mod tests {
