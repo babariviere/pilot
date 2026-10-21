@@ -1,6 +1,8 @@
 # Single-scene transcript measurement
 
-**The native transcript remains opt-in. This change repairs the benchmark, not the production renderer.**
+**Historical measurement, before the default switch.** This report repairs the benchmark, not the renderer.
+Native was subsequently selected by default at the user's request, with the legacy renderer retained as
+an explicit fallback. That product choice does not change these source-pinned results or close their gaps.
 
 ## What was wrong
 
@@ -172,4 +174,5 @@ publications alone do not prove a production subscription leak.
 - Raw summaries, per-run output hashes and limitations:
   [native-transcript-single-scene-2026-10-21.json](benchmarks/native-transcript-single-scene-2026-10-21.json).
 
-**Verdict: lower CPU and memory, but not smooth enough for default. Keep the old transcript and the opt-in flag.**
+**Measurement verdict:** lower CPU and memory, but not smoothness acceptance. The recommendation at the
+time was to retain the old default. The later default switch does not establish a renderer performance fix.
